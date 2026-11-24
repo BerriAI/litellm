@@ -1,6 +1,6 @@
 from collections.abc import Mapping
 from types import MappingProxyType
-from typing import Final, TypeVar
+from typing import Final
 
 from httpx import Headers
 
@@ -9,8 +9,6 @@ from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
 
 from ..base_llm.chat.transformation import BaseLLMException
-
-_HeaderValueT = TypeVar("_HeaderValueT")
 
 
 class FireworksAIException(BaseLLMException):
@@ -42,8 +40,8 @@ def get_fireworks_session_id(litellm_params: Mapping[str, object]) -> str | None
 
 
 def with_fireworks_session_affinity(
-    headers: Mapping[str, _HeaderValueT], litellm_params: Mapping[str, object]
-) -> Mapping[str, _HeaderValueT | str]:
+    headers: Mapping[str, str], litellm_params: Mapping[str, object]
+) -> Mapping[str, str]:
     if any(key.lower() == "x-session-affinity" for key in headers):
         return headers
     session_id: Final = get_fireworks_session_id(litellm_params)
@@ -110,9 +108,7 @@ class FireworksAIMixin:
     Common Base Config functions across Fireworks AI Endpoints
     """
 
-    def get_error_class(
-        self, error_message: str, status_code: int, headers: dict[str, object] | Headers
-    ) -> BaseLLMException:
+    def get_error_class(self, error_message: str, status_code: int, headers: dict | Headers) -> BaseLLMException:
         return FireworksAIException(
             status_code=status_code,
             message=error_message,
@@ -124,14 +120,14 @@ class FireworksAIMixin:
 
     def validate_environment(
         self,
-        headers: dict[str, object],
+        headers: dict,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict[str, object],
-        litellm_params: dict[str, object],
+        optional_params: dict,
+        litellm_params: dict,
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict[str, object]:
+    ) -> dict:
         api_key = self._get_api_key(api_key)
         if api_key is None:
             raise ValueError("FIREWORKS_API_KEY is not set")
@@ -142,8 +138,6 @@ class FireworksAIMixin:
         )
         return self._add_session_affinity_header({**auth_headers, **content_type_header}, litellm_params)
 
-    def _add_session_affinity_header(
-        self, headers: dict[str, object], litellm_params: dict[str, object]
-    ) -> dict[str, object]:
+    def _add_session_affinity_header(self, headers: dict, litellm_params: dict) -> dict:
         pinned: Final = with_fireworks_session_affinity(headers, litellm_params)
         return dict(pinned)

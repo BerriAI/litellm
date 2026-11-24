@@ -2604,9 +2604,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         model: str,
         messages: list[AllMessageValues],
         optional_params: dict,
-        litellm_params: dict[str, object],
+        litellm_params: dict,
         headers: dict,
-    ) -> dict[str, object]:
+    ) -> dict:
         """
         Translate messages to anthropic format.
         """
@@ -3536,10 +3536,10 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         raw_response: httpx.Response,
         model_response: ModelResponse,
         logging_obj: LoggingClass,
-        request_data: dict[str, object],
+        request_data: dict,
         messages: list[AllMessageValues],
         optional_params: dict,
-        litellm_params: dict[str, object],
+        litellm_params: dict,
         encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
@@ -3633,9 +3633,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
     ) -> LitellmMessage | None:
         return cls._convert_tool_response_to_message(tool_calls, response_format_schema)
 
-    def get_error_class(
-        self, error_message: str, status_code: int, headers: dict[str, object] | httpx.Headers
-    ) -> BaseLLMException:
+    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
         return AnthropicError(
             status_code=status_code,
             message=error_message,
