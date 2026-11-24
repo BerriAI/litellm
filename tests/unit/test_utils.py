@@ -10931,12 +10931,27 @@ def test_extract_from_regex(duration, unit):
     assert _unit == unit
 
 
+@pytest.mark.parametrize(
+    "invalid_duration",
+    ["5dogs", "5meters", "5wolves", "10cats", "abc"],
+)
+def test_extract_from_regex_invalid(invalid_duration):
+    with pytest.raises(ValueError):
+        _extract_from_regex(duration=invalid_duration)
+
+
 def test_duration_in_seconds_basic():
     assert duration_in_seconds(duration="3s") == 3
     assert duration_in_seconds(duration="3m") == 180
     assert duration_in_seconds(duration="3h") == 10800
     assert duration_in_seconds(duration="3d") == 259200
     assert duration_in_seconds(duration="3w") == 1814400
+
+
+def test_duration_in_seconds_invalid():
+    for invalid in ["5dogs", "5meters", "5wolves", "10cats", "abc"]:
+        with pytest.raises(ValueError):
+            duration_in_seconds(duration=invalid)
 
 
 def test_get_llm_provider_ft_models():
