@@ -71,6 +71,7 @@ from litellm.types.utils import CallTypes, LlmProviders, LlmProvidersSet
 from litellm.utils import ProviderConfigManager, client
 
 from ..adapters.handler import LiteLLMMessagesToCompletionTransformationHandler, request_safeguards_evaluator
+from ..deferred_tool_emulation import deferred_tool_emulation
 from ..deferred_tools import UnknownDeferredTools, deferred_tools_setting, unknown_deferred_tools_message
 from ..responses_adapters.handler import LiteLLMMessagesToResponsesAPIHandler
 from ..safeguards import (
@@ -930,6 +931,13 @@ def anthropic_messages_handler(
             model,
             drops_unsupported_params(litellm_params.drop_params),
         )
+        request_messages: Final = cast("list[dict[str, object]]", messages)  # cast-ok: the handler takes untyped dicts
+        request_tools: Final = cast("list[dict[str, object]] | None", tools)  # cast-ok: the handler takes untyped dicts
+        emulation: Final = deferred_tool_emulation(deployment_model_info, request_tools)
+        bridged_messages: Final = request_messages if emulation is None else list(emulation.messages(request_messages))
+        bridged_tools: Final = (
+            request_tools if emulation is None or request_tools is None else list(emulation.tools(request_tools))
+        )
         if kwargs.get("compaction") is None and _should_route_to_responses_api(
             custom_llm_provider,
             original_model,
@@ -938,9 +946,9 @@ def anthropic_messages_handler(
             stop_sequences=stop_sequences,
             native_deferred_tools=native_deferred_tools,
         ):
-            return LiteLLMMessagesToResponsesAPIHandler.anthropic_messages_handler(
+            responses_result: Final = LiteLLMMessagesToResponsesAPIHandler.anthropic_messages_handler(
                 max_tokens=max_tokens,
-                messages=messages,
+                messages=bridged_messages,
                 model=bridge.model,
                 metadata=metadata,
                 stop_sequences=stop_sequences,
@@ -952,7 +960,7 @@ def anthropic_messages_handler(
                 thinking=thinking,
                 tool_choice=tool_choice,
                 tools=cast(  # cast-ok: dict tools already fit the handler's union
-                    "list[AllAnthropicToolsValues | dict[str, object]] | None", tools
+                    "list[AllAnthropicToolsValues | dict[str, object]] | None", bridged_tools
                 ),
                 top_k=top_k,
                 top_p=top_p,
@@ -963,6 +971,7 @@ def anthropic_messages_handler(
                 custom_llm_provider=custom_llm_provider,
                 **kwargs,
             )
+            return responses_result if emulation is None else emulation.restored(responses_result)
 
         chat_kwargs: Final = bridged_audio_output_request(kwargs, model, custom_llm_provider)
         if isinstance(chat_kwargs, AudioOnlyModel | AudioRequested):
@@ -971,9 +980,9 @@ def anthropic_messages_handler(
         # ``async_anthropic_messages_handler`` so it can ``await`` the
         # summarization model for ``compact_20260112``. ``context_management``
         # is passed through as a regular kwarg.
-        return LiteLLMMessagesToCompletionTransformationHandler.anthropic_messages_handler(
+        chat_result: Final = LiteLLMMessagesToCompletionTransformationHandler.anthropic_messages_handler(
             max_tokens=max_tokens,
-            messages=messages,
+            messages=bridged_messages,
             model=bridge.model,
             metadata=metadata,
             stop_sequences=stop_sequences,
@@ -984,7 +993,7 @@ def anthropic_messages_handler(
             temperature=temperature,
             thinking=thinking,
             tool_choice=tool_choice,
-            tools=cast("list[dict[str, object]] | None", tools),  # cast-ok: dict tools fit the adapter's declared union
+            tools=bridged_tools,
             top_k=top_k,
             top_p=top_p,
             _is_async=is_async,
@@ -994,6 +1003,7 @@ def anthropic_messages_handler(
             custom_llm_provider=custom_llm_provider,
             **chat_kwargs,  # pyright: ignore[reportArgumentType]  # output_format only arrives through untyped **kwargs
         )
+        return chat_result if emulation is None else emulation.restored(chat_result)
 
     if custom_llm_provider is None:
         raise ValueError(

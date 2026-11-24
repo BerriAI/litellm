@@ -4,7 +4,7 @@ from typing import Final, Literal, TypeAlias
 
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
 
-DeferredToolsMode: TypeAlias = Literal["passthrough", "native", "drop"]
+DeferredToolsMode: TypeAlias = Literal["passthrough", "native", "emulate", "drop"]
 CLAUDE_CODE_TOOL_SEARCH_NAME: Final = "ToolSearch"
 
 
@@ -21,6 +21,8 @@ def deferred_tools_setting(model_info: object) -> DeferredToolsMode | UnknownDef
             return "passthrough"
         case "native":
             return "native"
+        case "emulate":
+            return "emulate"
         case "drop":
             return "drop"
         case value:
@@ -34,7 +36,7 @@ def deferred_tools_mode(model_info: object) -> DeferredToolsMode:
 
 def unknown_deferred_tools_message(setting: UnknownDeferredTools) -> str:
     return (
-        f"model_info.deferred_tools must be one of passthrough, native, drop, got {setting.value!r}. "
+        f"model_info.deferred_tools must be one of passthrough, native, emulate, drop, got {setting.value!r}. "
         "Fix the deployment, or set drop_params to send deferred tools the default drop way"
     )
 
