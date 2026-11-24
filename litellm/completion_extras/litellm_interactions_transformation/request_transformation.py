@@ -3,8 +3,7 @@ from __future__ import annotations
 import base64
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from functools import partial
-from itertools import accumulate, chain, takewhile
+from itertools import chain, takewhile
 from types import MappingProxyType
 from typing import Final, TypeAlias
 
@@ -441,12 +440,6 @@ class _ParsedToolCall:
     signature: str | None
 
 
-@dataclass(frozen=True, slots=True)
-class _CallEmitState:
-    seen_sigs: frozenset[str]
-    emitted: tuple[JsonValue, ...] = ()
-
-
 def _parse_thought_block(block: JsonMapping) -> _ParsedThoughtBlock | None:
     sig: Final = block.get("signature")
     thinking_text: Final = block.get("thinking")
@@ -568,22 +561,19 @@ def _build_leading_thought_steps(
     return ({"type": "thought", "signature": fallback_sig},)
 
 
-def _advance_call_emit(
+def _call_steps(
     deferred_by_sig: Mapping[str, _ParsedThoughtBlock],
-    state: _CallEmitState,
-    item: _CallEmitState | _ParsedToolCall,
-) -> _CallEmitState:
-    if isinstance(item, _CallEmitState):
-        return item
-    sig: Final = item.signature
-    if sig is not None and sig not in state.seen_sigs:
-        deferred: Final = deferred_by_sig.get(sig)
-        thought_step: Final[JsonValue] = (
-            deferred.to_step() if deferred is not None else {"type": "thought", "signature": sig}
-        )
-        steps: Final[tuple[JsonValue, ...]] = (thought_step, item.step) if thought_step is not None else (item.step,)
-        return _CallEmitState(seen_sigs=state.seen_sigs | {sig}, emitted=steps)
-    return _CallEmitState(seen_sigs=state.seen_sigs, emitted=(item.step,))
+    call: _ParsedToolCall,
+    opens_its_signature: bool,
+) -> tuple[JsonValue, ...]:
+    sig: Final = call.signature
+    if sig is None or not opens_its_signature:
+        return (call.step,)
+    deferred: Final = deferred_by_sig.get(sig)
+    thought_step: Final[JsonValue] = (
+        deferred.to_step() if deferred is not None else {"type": "thought", "signature": sig}
+    )
+    return (thought_step, call.step) if thought_step is not None else (call.step,)
 
 
 def _build_assistant_steps(
@@ -629,10 +619,19 @@ def _build_assistant_steps(
 
     raw_leading_sigs: Final = tuple(_step_signature(step) for step in leading_thought_steps)
     leading_emitted_sigs: Final = frozenset(sig for sig in raw_leading_sigs if sig is not None)
-    initial_emit_state: Final = _CallEmitState(seen_sigs=leading_emitted_sigs)
-    seeded_calls: Final[tuple[_CallEmitState | _ParsedToolCall, ...]] = (initial_emit_state, *parsed_calls)
-    emit_states: Final = tuple(accumulate(seeded_calls, partial(_advance_call_emit, deferred_by_sig)))
-    fc_steps: Final = tuple(chain.from_iterable(s.emitted for s in emit_states[1:]))
+    first_call_by_sig: Final = {
+        call.signature: idx for idx, call in reversed(tuple(enumerate(parsed_calls))) if call.signature is not None
+    }
+    fc_steps: Final = tuple(
+        chain.from_iterable(
+            _call_steps(
+                deferred_by_sig,
+                call,
+                call.signature not in leading_emitted_sigs and first_call_by_sig.get(call.signature or "") == idx,
+            )
+            for idx, call in enumerate(parsed_calls)
+        )
+    )
 
     return (*leading_thought_steps, *output_steps, *fc_steps)
 
