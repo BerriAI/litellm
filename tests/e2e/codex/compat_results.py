@@ -24,6 +24,7 @@ class _Frozen(BaseModel):
 
 class Passed(_Frozen):
     status: Literal["pass"] = "pass"
+    first_attempt_error: str | None = None
 
 
 class Failed(_Frozen):

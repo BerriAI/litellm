@@ -60,6 +60,11 @@ def _matrix(cells: MappingProxyType[tuple[str, str], Outcome]) -> Matrix:
         ((Passed(), Failed(error="a"), Failed(error="b")), Failed(error="a; b")),
         ((Passed(), KnownGap(reason="no search route")), KnownGap(reason="no search route")),
         ((NotTested(reason="no credentials"), Passed()), Passed()),
+        (
+            (Passed(first_attempt_error="502"), Passed(), Passed(first_attempt_error="timed out")),
+            Passed(first_attempt_error="502; timed out"),
+        ),
+        ((Failed(error="401"), Passed(first_attempt_error="502")), Failed(error="401")),
         ((NotTested(reason="no credentials"),), NotTested(reason="no credentials")),
         ((), NotTested()),
     ),
@@ -71,8 +76,9 @@ def test_a_cell_is_as_bad_as_its_worst_test(outcomes: tuple[Outcome, ...], expec
 @pytest.mark.parametrize(
     ("attempts", "expected"),
     (
-        ((Failed(error="502"), Passed()), Passed()),
+        ((Failed(error="502"), Passed()), Passed(first_attempt_error="502")),
         ((Passed(), Failed(error="timed out")), Failed(error="timed out")),
+        ((Passed(),), Passed()),
     ),
 )
 def test_the_last_attempt_of_a_test_decides_its_cell(attempts: tuple[Outcome, ...], expected: Outcome) -> None:

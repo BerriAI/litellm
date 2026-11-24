@@ -73,7 +73,17 @@ def setup_columns(results: tuple[CellResult, ...]) -> tuple[str, ...]:
 
 
 def latest_attempts(results: tuple[CellResult, ...]) -> tuple[CellResult, ...]:
-    return tuple(MappingProxyType({result.nodeid: result for result in results}).values())
+    first_failures: Final = MappingProxyType(
+        {result.nodeid: result.outcome.error for result in reversed(results) if isinstance(result.outcome, Failed)}
+    )
+    latest: Final = MappingProxyType({result.nodeid: result for result in results})
+    return tuple(_note_rerun(result, first_failures.get(result.nodeid)) for result in latest.values())
+
+
+def _note_rerun(result: CellResult, first_failure: str | None) -> CellResult:
+    if first_failure is None or not isinstance(result.outcome, Passed):
+        return result
+    return result.model_copy(update={"outcome": Passed(first_attempt_error=first_failure)})
 
 
 def aggregate(outcomes: tuple[Outcome, ...]) -> Outcome:
@@ -83,8 +93,10 @@ def aggregate(outcomes: tuple[Outcome, ...]) -> Outcome:
     gaps: Final = tuple(outcome for outcome in outcomes if isinstance(outcome, KnownGap))
     if gaps:
         return gaps[0]
-    if any(isinstance(outcome, Passed) for outcome in outcomes):
-        return Passed()
+    passes: Final = tuple(outcome for outcome in outcomes if isinstance(outcome, Passed))
+    if passes:
+        rerun_errors: Final = tuple(outcome.first_attempt_error for outcome in passes if outcome.first_attempt_error)
+        return Passed(first_attempt_error="; ".join(rerun_errors) or None)
     skips: Final = tuple(outcome for outcome in outcomes if isinstance(outcome, NotTested))
     return skips[0] if skips else NotTested()
 

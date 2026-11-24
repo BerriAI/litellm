@@ -113,7 +113,7 @@ EXPECTED_CELLS: Final[MappingProxyType[tuple[str, str], Outcome]] = MappingProxy
         ("beta", "vertex_ai"): Failed(error="RuntimeError: could not register the model"),
         ("beta", "azure_openai"): NotTested(),
         ("beta", "bedrock_runtime"): NotTested(),
-        ("flaky", "openai"): Passed(),
+        ("flaky", "openai"): Passed(first_attempt_error="AssertionError: the first attempt failed"),
         ("flaky", "vertex_ai"): NotTested(),
         ("flaky", "azure_openai"): NotTested(),
         ("flaky", "bedrock_runtime"): NotTested(),
