@@ -4991,16 +4991,16 @@ _CHATGPT_OAUTH_CREDENTIAL_PROVIDERS: Final = LlmProviders.CHATGPT.value
 def _stamp_forwarded_client_headers(
     data: dict[str, object], *, forwarded_globally: bool, forwarded_for_model_group: bool
 ) -> None:
-    """Record which ``headers`` entries the proxy forwarded from the client, by name only since the
-    ``proxy_server_request`` reaches the logs, so a router fallback can tell them from headers a caller set."""
+    """Record which ``headers`` entries the proxy forwarded from the client, so a router fallback can tell them
+    from headers a caller or a later hook set."""
     forwarded: Final = as_str_mapping(data.get("headers"))
     proxy_server_request: Final = data.get("proxy_server_request")
     if not (forwarded_globally or forwarded_for_model_group) or forwarded is None:
         return
     if not isinstance(proxy_server_request, dict):
         return
-    proxy_server_request[FORWARDED_CLIENT_HEADERS_KEY] = ForwardedClientHeaders(
-        names=tuple(forwarded), model_group_scoped=not forwarded_globally
+    proxy_server_request[FORWARDED_CLIENT_HEADERS_KEY] = ForwardedClientHeaders.of(
+        forwarded, model_group_scoped=not forwarded_globally
     ).model_dump()
 
 

@@ -478,16 +478,22 @@ def sole_provider(deployments: Iterable[Mapping[str, object]]) -> str | None:
 
 
 def leaves_caller_key_behind(
-    request: Mapping[str, object], origin_provider: str | None, deployment_params: Mapping[str, object]
+    request: Mapping[str, object],
+    target_params: Mapping[str, object],
+    owner_provider: Callable[[], str | None],
+    deployment_params: Mapping[str, object],
 ) -> bool:
-    """Whether a fallback onto ``deployment_params`` must not send the caller's ``api_key``: the key was meant for
-    Anthropic, the fallback signs with AWS, and the caller did not point the call at a base URL of its own."""
+    """Whether an attempt onto ``deployment_params`` must not send the caller's ``api_key``: the key was meant for
+    Anthropic and the deployment signs with AWS. A blank key (which already turns off the env bearer), a fallback
+    target that sets its own key, and a call the caller or the target points at a base URL keep today's behavior."""
+    caller_key: Final = request.get("api_key")
+    redirected: Final = any(key in request or key in target_params for key in ("api_base", "base_url"))
     return (
-        origin_provider in _CALLER_KEY_ORIGIN_PROVIDERS
+        caller_key not in (None, "")
+        and "api_key" not in target_params
+        and not redirected
         and deployment_provider(deployment_params) in _AWS_SIGNED_FALLBACK_PROVIDERS
-        and request.get("api_key") is not None
-        and "api_base" not in request
-        and "base_url" not in request
+        and owner_provider() in _CALLER_KEY_ORIGIN_PROVIDERS
     )
 
 
@@ -522,31 +528,43 @@ def client_header_forwarding_admits(group: str, request: Mapping[str, object], r
     )
 
 
-def _without_headers_named(request: Mapping[str, object], names: frozenset[str]) -> Mapping[str, object]:
+def _without_forwarded_headers(
+    request: Mapping[str, object], stamp: ForwardedClientHeaders, names: frozenset[str]
+) -> Mapping[str, object]:
     headers: Final = as_str_mapping(request.get("headers"))
     if headers is None or not names:
         return request
-    kept: Final = {name: value for name, value in headers.items() if name.lower() not in names}
+    kept: Final = {
+        name: value
+        for name, value in headers.items()
+        if name.lower() not in names or not stamp.still_forwarded(name, value)
+    }
     rest: Final = without(request, "headers")
     return {**rest, "headers": kept} if kept else rest
 
 
-def fallback_inherited_request(
+def attempt_inherited_request(
     request: Mapping[str, object],
     *,
-    origin_provider: str | None,
+    target_params: Mapping[str, object],
+    owner_provider: Callable[[], str | None],
     deployment_params: Mapping[str, object],
+    rechecks_header_scope: bool,
     header_forwarding_admits: Callable[[], bool],
 ) -> Mapping[str, object]:
-    """The caller's request as a fallback attempt inherits it, before the fallback target's own params apply: without
-    a caller key meant for Anthropic on an AWS-signed deployment, and without the client headers the proxy forwarded
-    when the fallback group is outside their forwarding scope (or, for ``x-api-key``, when the key is left behind)."""
-    drops_key: Final = leaves_caller_key_behind(request, origin_provider, deployment_params)
+    """The caller's request as an attempt inherits it, before a fallback target's own params apply: without a caller
+    key meant for Anthropic on an AWS-signed deployment, and without the client headers the proxy forwarded (still
+    holding the forwarded value) when the attempt's group is outside their forwarding scope, or, for ``x-api-key``,
+    when the key is left behind. A target that sets its own ``headers`` replaces them, so they are left alone."""
+    drops_key: Final = leaves_caller_key_behind(request, target_params, owner_provider, deployment_params)
+    inherited: Final = without(request, "api_key") if drops_key else request
     stamp: Final = forwarded_client_headers(request)
-    forwarded: Final = frozenset(name.lower() for name in stamp.names) if stamp is not None else frozenset[str]()
-    out_of_scope: Final = stamp is not None and stamp.model_group_scoped and not header_forwarding_admits()
+    if stamp is None or "headers" in target_params:
+        return inherited
+    forwarded: Final = frozenset(stamp.digests)
+    out_of_scope: Final = rechecks_header_scope and stamp.model_group_scoped and not header_forwarding_admits()
     removed: Final = forwarded if out_of_scope else (forwarded & {"x-api-key"} if drops_key else frozenset[str]())
-    return _without_headers_named(without(request, "api_key") if drops_key else request, removed)
+    return _without_forwarded_headers(inherited, stamp, removed)
 
 
 def forwarded_caller_authorization(kwargs: Mapping[str, object], deployment_params: Mapping[str, object]) -> str | None:

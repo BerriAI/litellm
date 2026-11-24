@@ -120,9 +120,9 @@ from litellm.router_rust.invoke.endpoints import (
 )
 from litellm.router_rust.invoke.shaping import (
     Shaping,
+    attempt_inherited_request,
     client_header_forwarding_admits,
     deployment_provider,
-    fallback_inherited_request,
     non_stream_timeout,
     serves_caller_credentials,
     sole_provider,
@@ -5143,7 +5143,7 @@ class _Driver:
         call: Final = attempt_call(
             self._core._port,  # pyright: ignore[reportPrivateUsage]  # the driver serves its own core
             self._plan,
-            self._attempt_request(step, self._inherited_request(deployment, shape, requested)),
+            self._attempt_request(step, self._inherited_request(step, deployment, shape, requested)),
             deployment,
             group=requested,
             requested=requested,
@@ -5482,24 +5482,32 @@ class _Driver:
         return {**request, **params, "cache": cache}
 
     def _inherited_request(
-        self, deployment: Mapping[str, object], shape: "AttemptShape", group: str
+        self, step: Mapping[str, object], deployment: Mapping[str, object], shape: "AttemptShape", group: str
     ) -> Mapping[str, object]:
-        """The caller's request for this attempt, before a dict fallback target's params: a fallback hop leaves behind
-        the caller credentials and forwarded headers that belong to where the request was first sent."""
+        """The caller's request for this attempt, before a dict fallback target's params: an attempt off the
+        requested group leaves behind the caller credentials and forwarded headers that belong to it."""
         params: Final = as_str_mapping(deployment.get("litellm_params")) or {}
-        if not shape.is_fallback:
-            if self._caller_key_origin is None:
-                self._caller_key_origin = deployment_provider(params)
-            return self._request
-        return fallback_inherited_request(
+        if not shape.is_fallback and self._caller_key_origin is None:
+            self._caller_key_origin = deployment_provider(params)
+        return attempt_inherited_request(
             self._request,
-            origin_provider=self._caller_key_origin or self._requested_group_provider(),
+            target_params=as_str_mapping(step.get("params")) or {},
+            owner_provider=partial(self._caller_key_owner, shape),
             deployment_params=params,
+            rechecks_header_scope=shape.is_fallback or self._cut_deployment is not None,
             header_forwarding_admits=partial(client_header_forwarding_admits, group, self._request, self._core),
         )
 
+    def _caller_key_owner(self, shape: "AttemptShape") -> str | None:
+        """Where the caller's key was meant to go: the requested group's provider when all its deployments share
+        one, which holds for every attempt and for a stream recovered in a new walk, since that walk is built from
+        the same request. In a mixed group, the provider the call reached first, for fallback hops only."""
+        requested: Final = self._requested_group_provider()
+        if requested is not None:
+            return requested
+        return self._caller_key_origin if shape.is_fallback else None
+
     def _requested_group_provider(self) -> str | None:
-        """The provider of the requested group when no attempt reached it, if all its deployments share one."""
         model: Final = self._request.get("model")
         if not isinstance(model, str):
             return None
