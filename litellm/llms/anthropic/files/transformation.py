@@ -88,7 +88,7 @@ class AnthropicFilesConfig(BaseFilesConfig):
         self,
         error_message: str,
         status_code: int,
-        headers: dict | httpx.Headers,
+        headers: dict[str, object] | httpx.Headers,
     ) -> BaseLLMException:
         return AnthropicError(
             status_code=status_code,
@@ -98,14 +98,14 @@ class AnthropicFilesConfig(BaseFilesConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, str],
         model: str,
         messages: Sequence[object],
         optional_params: Mapping[str, object],
-        litellm_params: dict,
+        litellm_params: dict[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, str]:
         params_mapping, resolved_api_base = self._resolve_params(litellm_params, api_base)
         auth_header: Final = AnthropicModelInfo.get_auth_header(
             api_key, resolved_api_base, litellm_params=params_mapping, allow_workload_identity=True
@@ -114,14 +114,14 @@ class AnthropicFilesConfig(BaseFilesConfig):
 
     async def avalidate_environment(
         self,
-        headers: dict,  # mutable-ok: mirrors the sync validate_environment contract this overrides
+        headers: dict[str, str],  # mutable-ok: mirrors the sync validate_environment contract this overrides
         model: str,
-        messages: list,  # mutable-ok: mirrors the sync validate_environment contract this overrides
-        optional_params: dict,  # mutable-ok: mirrors the sync validate_environment contract this overrides
-        litellm_params: dict,  # mutable-ok: mirrors the sync validate_environment contract this overrides
+        messages: list[object],  # mutable-ok: mirrors the sync validate_environment contract this overrides
+        optional_params: dict[str, object],  # mutable-ok: mirrors the sync validate_environment contract this overrides
+        litellm_params: dict[str, object],  # mutable-ok: mirrors the sync validate_environment contract this overrides
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:  # mutable-ok: mirrors the sync validate_environment contract this overrides
+    ) -> dict[str, str]:  # mutable-ok: mirrors the sync validate_environment contract this overrides
         """Async counterpart of validate_environment: the WIF tier can block on a token
         exchange POST, so async callers await it off the event loop."""
         params_mapping, resolved_api_base = self._resolve_params(litellm_params, api_base)
@@ -161,10 +161,10 @@ class AnthropicFilesConfig(BaseFilesConfig):
     def map_openai_params(
         self,
         non_default_params: Mapping[str, object],
-        optional_params: dict,
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:
         return optional_params
 
     def transform_create_file_request(

@@ -200,7 +200,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         request_input: str | ResponseInputParam,
         responses_api_request: ResponsesAPIOptionalRequestParams,
         custom_llm_provider: str | None = None,
-        litellm_metadata: dict | None = None,
+        litellm_metadata: dict[str, object] | None = None,
         tool_call_provider_fields: bool = False,
         compaction_summary: CompactionSummaryStream | None = None,
     ):

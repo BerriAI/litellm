@@ -16,6 +16,7 @@ from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
     VertexAIError,
     VertexLLM,
 )
+from litellm.types.llms.openai import AllEmbeddingInputValues
 from litellm.types.llms.vertex_ai import VERTEX_CREDENTIALS_TYPES
 from litellm.types.utils import EmbeddingResponse
 
@@ -36,11 +37,11 @@ class VertexMultimodalEmbedding(VertexLLM):
     def multimodal_embedding(
         self,
         model: str,
-        input: list | str,
+        input: AllEmbeddingInputValues,
         print_verbose: object,
         model_response: EmbeddingResponse,
         custom_llm_provider: Literal["gemini", "vertex_ai"],
-        optional_params: dict,
+        optional_params: dict[str, object],
         litellm_params: Mapping[str, object],
         logging_obj: LiteLLMLoggingObj,
         api_key: str | None = None,
@@ -159,7 +160,7 @@ class VertexMultimodalEmbedding(VertexLLM):
         api_key: str | None = None,
     ) -> EmbeddingResponse:
         if client is None:
-            _params: Final = {}
+            _params: Final[dict[str, httpx.Timeout]] = {}
             if timeout is not None:
                 if isinstance(timeout, float) or isinstance(timeout, int):
                     timeout = httpx.Timeout(timeout)

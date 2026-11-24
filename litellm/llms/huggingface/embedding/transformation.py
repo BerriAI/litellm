@@ -369,7 +369,9 @@ class HuggingFaceEmbeddingConfig(BaseConfig):
         headers = {**headers, **default_headers}
         return headers
 
-    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: dict[str, object] | httpx.Headers
+    ) -> BaseLLMException:
         return HuggingFaceError(status_code=status_code, message=error_message, headers=headers)
 
     def _convert_streamed_response_to_complete_response(
@@ -519,7 +521,7 @@ class HuggingFaceEmbeddingConfig(BaseConfig):
         logging_obj: LoggingClass,
         request_data: Mapping[str, object],
         messages: list[AllMessageValues],
-        optional_params: dict,
+        optional_params: dict[str, object],
         litellm_params: dict,
         encoding: "Tokenizer | None",
         api_key: str | None = None,
