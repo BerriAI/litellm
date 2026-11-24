@@ -2118,7 +2118,7 @@ def log_guardrail_information(func):
             _sync_guardrail_info_to_logging_obj(request_data, logging_obj)
 
     @functools.wraps(func)
-    def wrapper(*args, **kwargs):
+    def wrapper(*args: object, **kwargs: object):
         if inspect.iscoroutinefunction(func):
             return async_wrapper(*args, **kwargs)
         return sync_wrapper(*args, **kwargs)

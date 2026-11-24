@@ -100,7 +100,7 @@ class VertexAITextEmbeddingConfig(LiteLLMBaseModel):
         return ["dimensions"]
 
     def map_openai_params(
-        self, non_default_params: Mapping[str, object], optional_params: dict[str, object], kwargs: dict
+        self, non_default_params: Mapping[str, object], optional_params: dict[str, object], kwargs: dict[str, object]
     ):
         for param, value in non_default_params.items():
             if param == "dimensions":

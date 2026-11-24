@@ -163,7 +163,7 @@ def create_async_endpoint_function(
         extra_headers: dict[str, object] | None = None,
         extra_query: dict[str, object] | None = None,
         extra_body: dict[str, object] | None = None,
-        **kwargs,
+        **kwargs: object,
     ):
         local_vars: Final = locals()
         try:

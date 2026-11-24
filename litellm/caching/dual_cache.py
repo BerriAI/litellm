@@ -40,7 +40,7 @@ _BACKFILL_VALUE: Final = TypeAdapter(object)
 
 
 class LimitedSizeOrderedDict(OrderedDict):
-    def __init__(self, *args, max_size: int = 100, **kwargs):
+    def __init__(self, *args: object, max_size: int = 100, **kwargs):
         super().__init__(*args, **kwargs)
         self.max_size = max_size
 
