@@ -7,11 +7,13 @@ import os
 import re
 import sys
 import time
+import traceback
 import types
 import uuid
 from collections.abc import Callable, Mapping, Sequence
 from copy import deepcopy
 from datetime import datetime
+from itertools import chain
 from typing import Final, List, TypeAlias, cast
 from unittest.mock import MagicMock, patch
 
@@ -25,7 +27,8 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_completion_messages,
 )
 from litellm.litellm_core_utils.prompt_templates.factory import (
-    _EMPTY_TEXT_PLACEHOLDER,
+    DEFAULT_USER_CONTINUE_MESSAGE,
+    EMPTY_TEXT_PLACEHOLDER,
     BEDROCK_DOCUMENT_PLACEHOLDER_TEXT,
     THOUGHT_SIGNATURE_SEPARATOR,
     BedrockConverseMessagesProcessor,
@@ -53,6 +56,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     has_tool_with_name,
     llama_2_chat_pt,
     make_valid_bedrock_tool_name,
+    map_system_message_pt,
     ollama_pt,
     parse_mime_type,
     prompt_factory,
@@ -60,6 +64,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     sanitize_anthropic_tool_use_id,
     sanitize_messages_for_tool_calling,
 )
+from litellm.litellm_core_utils.prompt_templates.tool_call_json_repair import MAX_SALVAGED_TOOL_ARGUMENT_OBJECTS
 from litellm.litellm_core_utils.prompt_templates.reasoning_utils import (
     encrypted_reasoning_signature,
 )
@@ -1083,6 +1088,34 @@ async def test_bedrock_converse_keeps_dropping_redacted_thinking_for_non_claude_
     assert assistant_content == [{"text": "hello"}]
 
 
+CONVERSE_EMPTY_USER_MESSAGES: Final = pytest.mark.parametrize(
+    "empty_user_message",
+    [
+        {"role": "user", "content": []},
+        {"role": "user", "content": None},
+        {"role": "user"},
+        {"role": "user", "content": ""},
+        {"role": "user", "content": [{"type": "text", "text": ""}]},
+    ],
+    ids=["empty-list", "null", "content-key-dropped", "empty-string", "empty-text-block"],
+)
+
+_CONVERSE_TOOL_CALL_TURN: Final = {
+    "role": "assistant",
+    "content": None,
+    "tool_calls": [{"id": "tooluse_1", "type": "function", "function": {"name": "f", "arguments": "{}"}}],
+}
+
+
+async def _converse(messages: Sequence[Mapping[str, object]], use_async: bool) -> Sequence[Mapping[str, object]]:
+    model: Final = "us.anthropic.claude-opus-5-5"
+    if use_async:
+        return await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+            messages=list(messages), model=model, llm_provider="bedrock"
+        )
+    return _bedrock_converse_messages_pt(messages=list(messages), model=model, llm_provider="bedrock")
+
+
 _HIDDEN_MODEL_ARN: Final = "arn:aws:bedrock:us-west-2:123456789012:application-inference-profile/abc123"
 
 
@@ -1092,6 +1125,7 @@ async def _converse_messages(
     base_model: str | None,
     use_async: bool,
     assistant_continue_message: str | None = None,
+    user_continue_message: ChatCompletionUserMessage | None = None,
 ) -> list[dict[str, object]]:
     return (
         await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
@@ -1100,6 +1134,7 @@ async def _converse_messages(
             llm_provider="bedrock",
             base_model=base_model,
             assistant_continue_message=assistant_continue_message,
+            user_continue_message=user_continue_message,
         )
         if use_async
         else _bedrock_converse_messages_pt(
@@ -1108,6 +1143,7 @@ async def _converse_messages(
             llm_provider="bedrock",
             base_model=base_model,
             assistant_continue_message=assistant_continue_message,
+            user_continue_message=user_continue_message,
         )
     )
 
@@ -1118,6 +1154,271 @@ def _assistant_with_thinking(placement: str, block: dict[str, object]) -> dict[s
         if placement == "thinking_blocks"
         else {"role": "assistant", "content": [block, {"type": "text", "text": "hello"}]}
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True])
+@CONVERSE_EMPTY_USER_MESSAGES
+async def test_bedrock_converse_keeps_an_empty_trailing_user_turn(
+    use_async: bool, empty_user_message: Mapping[str, object]
+) -> None:
+    result: Final = await _converse(
+        [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "hello"}, empty_user_message], use_async
+    )
+
+    assert [message["role"] for message in result] == ["user", "assistant", "user"]
+    assert result[-1]["content"] == [{"text": EMPTY_TEXT_PLACEHOLDER}]
+
+
+_ANSWERED_HISTORY: Final[tuple[dict[str, object], ...]] = (
+    {"role": "user", "content": "hi"},
+    {"role": "assistant", "content": "hello"},
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True])
+@pytest.mark.parametrize(
+    "blank_user_message",
+    [
+        {"role": "user", "content": "   "},
+        {"role": "user", "content": [{"type": "text", "text": " \n"}]},
+        {"role": "user", "content": [{"type": "guarded_text", "text": ""}]},
+    ],
+    ids=["whitespace-string", "whitespace-block", "empty-guarded-text"],
+)
+async def test_bedrock_converse_treats_a_blank_trailing_user_turn_as_empty(
+    use_async: bool, blank_user_message: Mapping[str, object]
+) -> None:
+    result: Final = await _converse([*_ANSWERED_HISTORY, blank_user_message], use_async)
+
+    assert result[-1] == {"role": "user", "content": [{"text": EMPTY_TEXT_PLACEHOLDER}]}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True])
+@pytest.mark.parametrize(
+    "model",
+    ["us.amazon.nova-2-lite-v1:0", "us.anthropic.claude-sonnet-4-5-20250929-v1:0", _HIDDEN_MODEL_ARN],
+    ids=["nova", "claude-with-prefill", "hidden-arn"],
+)
+@CONVERSE_EMPTY_USER_MESSAGES
+async def test_bedrock_converse_adds_no_placeholder_for_a_model_that_is_not_known_to_refuse_a_prefill(
+    use_async: bool, model: str, empty_user_message: dict[str, object]
+) -> None:
+    result: Final = await _converse_messages([*_ANSWERED_HISTORY, empty_user_message], model, None, use_async)
+
+    assert [message["role"] for message in result] == ["user", "assistant"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True])
+async def test_bedrock_converse_reads_a_hidden_arn_model_from_base_model_for_the_placeholder(use_async: bool) -> None:
+    result: Final = await _converse_messages(
+        [*_ANSWERED_HISTORY, {"role": "user", "content": None}],
+        _HIDDEN_MODEL_ARN,
+        "anthropic.claude-opus-5-5",
+        use_async,
+    )
+
+    assert result[-1] == {"role": "user", "content": [{"text": EMPTY_TEXT_PLACEHOLDER}]}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True])
+@pytest.mark.parametrize(
+    ("model", "turns"),
+    [
+        ("us.anthropic.claude-sonnet-4-5-20250929-v1:0", (*_ANSWERED_HISTORY, {"role": "user", "content": "   "})),
+        (
+            "us.anthropic.claude-opus-5-5",
+            (
+                *_ANSWERED_HISTORY,
+                {"role": "user", "content": "   "},
+                {"role": "assistant", "content": "again"},
+                {"role": "user", "content": "more"},
+            ),
+        ),
+    ],
+    ids=["model-with-prefill", "before-later-turns"],
+)
+async def test_bedrock_converse_leaves_a_whitespace_string_alone_unless_it_ends_a_request_that_needs_the_placeholder(
+    use_async: bool, model: str, turns: Sequence[dict[str, object]]
+) -> None:
+    result: Final = await _converse_messages(list(turns), model, None, use_async)
+
+    assert {"text": "   "} in result[2]["content"]
+    assert not _carries_the_placeholder(result)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True])
+@pytest.mark.parametrize(
+    "marked_user_message",
+    [
+        {"role": "user", "content": "", "cache_control": {"type": "ephemeral"}},
+        {"role": "user", "content": None, "cache_control": {"type": "ephemeral"}},
+        {"role": "user", "content": [{"type": "text", "text": "", "cache_control": {"type": "ephemeral"}}]},
+    ],
+    ids=["empty-string", "null", "empty-text-block"],
+)
+async def test_bedrock_converse_keeps_the_cache_mark_of_an_empty_trailing_user_turn(
+    use_async: bool, marked_user_message: Mapping[str, object]
+) -> None:
+    result: Final = await _converse([*_ANSWERED_HISTORY, marked_user_message], use_async)
+
+    assert result[-1]["content"] == [{"text": EMPTY_TEXT_PLACEHOLDER}, {"cachePoint": {"type": "default"}}]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True])
+async def test_bedrock_converse_prefers_a_user_continue_message_over_the_placeholder(use_async: bool) -> None:
+    result: Final = await _converse_messages(
+        [*_ANSWERED_HISTORY, {"role": "user", "content": "   "}],
+        "us.anthropic.claude-opus-5-5",
+        None,
+        use_async,
+        user_continue_message={"role": "user", "content": "go on"},
+    )
+
+    assert result[-1] == {"role": "user", "content": [{"text": "go on"}]}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True])
+async def test_bedrock_converse_lets_modify_params_continue_an_empty_trailing_user_turn(
+    use_async: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "modify_params", True)
+
+    result: Final = await _converse_messages(
+        [*_ANSWERED_HISTORY, {"role": "user", "content": "   "}], "us.anthropic.claude-opus-5-5", None, use_async
+    )
+
+    assert result[-1] == {"role": "user", "content": [{"text": DEFAULT_USER_CONTINUE_MESSAGE["content"]}]}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True])
+@pytest.mark.parametrize(
+    "content", ["", "   ", [{"type": "text", "text": ""}]], ids=["empty-string", "whitespace-string", "empty-text-block"]
+)
+async def test_bedrock_converse_fills_a_blank_trailing_user_turn_under_a_guardrail(
+    use_async: bool, content: object
+) -> None:
+    guarded: Final = litellm.AmazonConverseConfig._convert_consecutive_user_messages_to_guarded_text(
+        [*_ANSWERED_HISTORY, {"role": "user", "content": content}],
+        {"guardrailConfig": {"guardrailIdentifier": "guardrail", "guardrailVersion": "1"}},
+    )
+
+    result: Final = await _converse(guarded, use_async)
+
+    assert result[-1] == {"role": "user", "content": [{"text": EMPTY_TEXT_PLACEHOLDER}]}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True])
+@pytest.mark.parametrize("empty_user_first", [True, False], ids=["empty-user-then-tool", "tool-then-empty-user"])
+@CONVERSE_EMPTY_USER_MESSAGES
+async def test_bedrock_converse_empty_user_message_beside_a_tool_result_keeps_the_tool_result_only(
+    use_async: bool, empty_user_first: bool, empty_user_message: Mapping[str, object]
+) -> None:
+    tool_result: Final = {"role": "tool", "tool_call_id": "tooluse_1", "content": "ok"}
+    result: Final = await _converse(
+        [
+            {"role": "user", "content": "hi"},
+            _CONVERSE_TOOL_CALL_TURN,
+            *((empty_user_message, tool_result) if empty_user_first else (tool_result, empty_user_message)),
+        ],
+        use_async,
+    )
+
+    assert [message["role"] for message in result] == ["user", "assistant", "user"]
+    assert [list(block) for block in result[-1]["content"]] == [["toolResult"]]
+
+
+def _carries_the_placeholder(turns: Sequence[Mapping[str, object]]) -> bool:
+    blocks: Final = chain.from_iterable(turn["content"] for turn in turns)
+    return any(block.get("text") == EMPTY_TEXT_PLACEHOLDER for block in blocks)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True])
+@CONVERSE_EMPTY_USER_MESSAGES
+async def test_bedrock_converse_adds_no_placeholder_for_an_empty_user_message_before_later_turns(
+    use_async: bool, empty_user_message: Mapping[str, object]
+) -> None:
+    result: Final = await _converse(
+        [
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "content": "hello"},
+            empty_user_message,
+            {"role": "assistant", "content": "anything else?"},
+            {"role": "user", "content": "no"},
+        ],
+        use_async,
+    )
+
+    assert not _carries_the_placeholder(result)
+    assert result[-1] == {"role": "user", "content": [{"text": "no"}]}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True])
+@pytest.mark.parametrize("tool_output", ["ok", ""], ids=["tool-output", "empty-tool-output"])
+@CONVERSE_EMPTY_USER_MESSAGES
+async def test_bedrock_converse_keeps_a_tool_result_right_after_its_tool_call_across_empty_turns(
+    use_async: bool, tool_output: str, empty_user_message: Mapping[str, object]
+) -> None:
+    result: Final = await _converse(
+        [
+            {"role": "user", "content": "hi"},
+            _CONVERSE_TOOL_CALL_TURN,
+            empty_user_message,
+            {"role": "assistant", "content": ""},
+            {"role": "tool", "tool_call_id": "tooluse_1", "content": tool_output},
+        ],
+        use_async,
+    )
+
+    assert [message["role"] for message in result] == ["user", "assistant", "user"]
+    assert [list(block) for block in result[-1]["content"]] == [["toolResult"]]
+
+
+_CONVERSE_UNSENDABLE_MEDIA_TURN: Final = {
+    "role": "user",
+    "content": [{"type": "input_audio", "input_audio": {"data": "AAAA", "format": "wav"}}],
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True])
+@pytest.mark.parametrize(
+    "trailing_turns",
+    [
+        (_CONVERSE_UNSENDABLE_MEDIA_TURN,),
+        ({"role": "user", "content": ""}, _CONVERSE_UNSENDABLE_MEDIA_TURN),
+    ],
+    ids=["media-only", "empty-then-media"],
+)
+async def test_bedrock_converse_does_not_call_a_media_only_user_turn_empty(
+    use_async: bool, trailing_turns: tuple[Mapping[str, object], ...]
+) -> None:
+    result: Final = await _converse(
+        [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "hello"}, *trailing_turns], use_async
+    )
+
+    assert not _carries_the_placeholder(result)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True])
+async def test_bedrock_converse_adds_no_placeholder_before_a_leading_assistant_turn(use_async: bool) -> None:
+    result: Final = await _converse(
+        [{"role": "assistant", "content": "hello"}, {"role": "user", "content": "hi"}], use_async
+    )
+
+    assert [message["role"] for message in result] == ["assistant", "user"]
 
 
 @pytest.mark.asyncio
@@ -1646,7 +1947,7 @@ def test_anthropic_messages_pt_preserves_trailing_user_message_with_empty_conten
     )
 
     assert [message["role"] for message in result] == ["user", "assistant", "user"]
-    assert result[-1]["content"] == [{"type": "text", "text": _EMPTY_TEXT_PLACEHOLDER}]
+    assert result[-1]["content"] == [{"type": "text", "text": EMPTY_TEXT_PLACEHOLDER}]
 
 
 @EMPTY_USER_MESSAGES
@@ -1750,7 +2051,7 @@ def test_anthropic_messages_pt_keeps_every_breakpoint_of_a_long_run_of_empty_use
 
     assert (
         result[-1]["content"]
-        == [{"type": "text", "text": _EMPTY_TEXT_PLACEHOLDER, "cache_control": {"type": "ephemeral"}}] * 10_000
+        == [{"type": "text", "text": EMPTY_TEXT_PLACEHOLDER, "cache_control": {"type": "ephemeral"}}] * 10_000
     )
 
 
@@ -2453,6 +2754,314 @@ def test_gemini_tool_media_fetch_failure_preserves_tool_text() -> None:
     assert result == {"function_response": {"name": "lookup", "response": {"ok": True}}}
 
 
+def _tool_result_with(part: Mapping[str, object]) -> ChatCompletionToolMessage:
+    return cast(
+        ChatCompletionToolMessage,
+        {"role": "tool", "name": "find_clip", "content": [{"type": "text", "text": '{"ok":true}'}, part]},
+    )
+
+
+_MISSING_VIDEO_URL: Final = f"https://8.8.8.8/{uuid.uuid4()}.mp4"
+
+
+@pytest.mark.parametrize("custom_llm_provider", ["gemini", "vertex_ai"])
+@pytest.mark.parametrize(
+    "video_url",
+    [
+        pytest.param(_MISSING_VIDEO_URL, id="link-answering-404"),
+        pytest.param("data:video/mp4;base64", id="data-url-without-data"),
+    ],
+)
+def test_gemini_tool_result_video_that_fails_to_download_is_a_bad_request_unless_drop_params(
+    custom_llm_provider: str, video_url: str
+) -> None:
+    message: Final = _tool_result_with({"type": "video_url", "video_url": {"url": video_url}})
+
+    with respx.mock(assert_all_called=False) as router:
+        router.get(_MISSING_VIDEO_URL).respond(404)
+        with pytest.raises(litellm.BadRequestError, match="Could not download the video in a tool result") as excinfo:
+            convert_to_gemini_tool_call_result(message, None, custom_llm_provider=custom_llm_provider)
+        dropped: Final = convert_to_gemini_tool_call_result(
+            message, None, custom_llm_provider=custom_llm_provider, drop_params=True
+        )
+
+    assert excinfo.value.llm_provider == custom_llm_provider
+    assert dropped == {"function_response": {"name": "find_clip", "response": {"ok": True}}}
+
+
+@pytest.mark.parametrize("custom_llm_provider", ["gemini", "vertex_ai"])
+def test_failed_tool_result_video_download_keeps_its_signed_link_out_of_the_error(custom_llm_provider: str) -> None:
+    signature: Final = uuid.uuid4().hex
+    signed_url: Final = f"https://8.8.8.8/{uuid.uuid4()}.mp4?X-Goog-Signature={signature}"
+    message: Final = _tool_result_with({"type": "video_url", "video_url": {"url": signed_url}})
+
+    with respx.mock as router:
+        router.get(signed_url).respond(404)
+        with pytest.raises(litellm.BadRequestError) as excinfo:
+            convert_to_gemini_tool_call_result(message, None, custom_llm_provider=custom_llm_provider)
+
+    assert signature not in str(excinfo.value)
+    assert signature not in "".join(traceback.format_exception(excinfo.value))
+
+
+@pytest.mark.parametrize(
+    ("part_type", "drop_params"),
+    [pytest.param("video_url", True, id="video-under-drop-params"), pytest.param("image_url", False, id="image")],
+)
+def test_dropped_tool_result_media_keeps_its_signed_link_out_of_the_logs(
+    part_type: str, drop_params: bool, caplog: pytest.LogCaptureFixture
+) -> None:
+    signature: Final = uuid.uuid4().hex
+    signed_url: Final = f"https://8.8.8.8/{uuid.uuid4()}.mp4?X-Goog-Signature={signature}"
+    message: Final = _tool_result_with({"type": part_type, part_type: {"url": signed_url}})
+
+    with respx.mock as router, caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        router.get(signed_url).respond(404)
+        dropped: Final = convert_to_gemini_tool_call_result(
+            message, None, custom_llm_provider="gemini", drop_params=drop_params
+        )
+
+    assert dropped == {"function_response": {"name": "find_clip", "response": {"ok": True}}}
+    assert caplog.records
+    assert signature not in caplog.text
+
+
+_MP4_BYTES: Final = b"\x00\x00\x00\x18ftypmp42\x00\x00\x00\x00mp42isom"
+_HEIC_BYTES: Final = b"\x00\x00\x00\x18ftypheic\x00\x00\x00\x00mif1heic"
+_XAVC_BYTES: Final = b"\x00\x00\x00\x18ftypXAVC\x00\x00\x00\x00XAVCmp42"
+_QUICKTIME_BYTES: Final = b"\x00\x00\x00\x14ftypqt  \x00\x00\x00\x00qt  "
+
+
+@pytest.mark.parametrize(
+    ("part_type", "suffix", "body", "mime_type"),
+    [
+        pytest.param("video_url", ".mp4", _MP4_BYTES, "video/mp4", id="mp4-link"),
+        pytest.param("video_url", "", _MP4_BYTES, "video/mp4", id="mp4-bytes"),
+        pytest.param("video_url", "", _XAVC_BYTES, "video/mp4", id="xavc-bytes"),
+        pytest.param("video_url", "", _QUICKTIME_BYTES, "video/mov", id="quicktime-bytes"),
+        pytest.param("image_url", "", _HEIC_BYTES, "image/heic", id="heic-bytes"),
+    ],
+)
+def test_gemini_tool_result_media_served_as_octet_stream_keeps_its_real_type(
+    part_type: str, suffix: str, body: bytes, mime_type: str
+) -> None:
+    media_url: Final = f"https://8.8.8.8/{uuid.uuid4()}{suffix}"
+    message: Final = _tool_result_with({"type": part_type, part_type: {"url": media_url}})
+
+    with respx.mock as router:
+        router.get(media_url).respond(200, content=body, headers={"content-type": "application/octet-stream"})
+        delivered: Final = convert_to_gemini_tool_call_result(message, None, custom_llm_provider="gemini")
+
+    assert delivered == [
+        {
+            "function_response": {
+                "name": "find_clip",
+                "response": {"ok": True},
+                "parts": [{"inline_data": {"data": base64.b64encode(body).decode(), "mime_type": mime_type}}],
+            }
+        }
+    ]
+
+
+_YOUTUBE_LINK: Final = "https://www.youtube.com/watch?v=aqz-KE-bpKQ"
+_YOUTUBE_TOOL_RESULT: Final = {
+    "role": "tool",
+    "name": "find_clip",
+    "content": [
+        {"type": "text", "text": '{"ok":true}'},
+        {"type": "video_url", "video_url": {"url": _YOUTUBE_LINK}},
+    ],
+}
+
+
+def test_gemini_tool_result_youtube_video_reaches_vertex_by_reference() -> None:
+    with respx.mock:
+        delivered: Final = convert_to_gemini_tool_call_result(
+            _YOUTUBE_TOOL_RESULT, None, custom_llm_provider="vertex_ai"
+        )
+
+    assert delivered == [
+        {
+            "function_response": {
+                "name": "find_clip",
+                "response": {"ok": True},
+                "parts": [{"file_data": {"mime_type": "video/mp4", "file_uri": _YOUTUBE_LINK}}],
+            }
+        }
+    ]
+
+
+def test_gemini_tool_result_youtube_video_on_ai_studio_is_a_bad_request_instead_of_a_page_download() -> None:
+    with respx.mock, pytest.raises(litellm.BadRequestError, match="require inline media data"):
+        convert_to_gemini_tool_call_result(_YOUTUBE_TOOL_RESULT, None, custom_llm_provider="gemini")
+
+
+@pytest.mark.parametrize(
+    "part",
+    [
+        pytest.param({"type": "video_url", "video_url": {"url": _YOUTUBE_LINK}}, id="video_url"),
+        pytest.param({"type": "file", "file": {"file_id": _YOUTUBE_LINK}}, id="file"),
+    ],
+)
+def test_drop_params_drops_a_youtube_link_from_an_ai_studio_tool_result(part: dict[str, object]) -> None:
+    with respx.mock:
+        delivered: Final = convert_to_gemini_tool_call_result(
+            _tool_result_with(part), None, custom_llm_provider="gemini", drop_params=True
+        )
+
+    assert delivered == {"function_response": {"name": "find_clip", "response": {"ok": True}}}
+
+
+_CLIP_WITH_SETTINGS_RESULT: Final = {
+    "role": "tool",
+    "name": "find_clip",
+    "content": [
+        {"type": "text", "text": '{"ok":true}'},
+        {
+            "type": "video_url",
+            "video_url": {"url": "data:video/mp4;base64,AAAAGGZ0eXA=", "detail": "high", "video_metadata": {"fps": 2}},
+        },
+    ],
+}
+
+
+def test_gemini_tool_result_video_carries_its_detail_and_metadata_into_the_function_response() -> None:
+    delivered: Final = convert_to_gemini_tool_call_result(
+        _CLIP_WITH_SETTINGS_RESULT, None, custom_llm_provider="gemini", model="gemini-3.8-flash"
+    )
+
+    assert delivered == [
+        {
+            "function_response": {
+                "name": "find_clip",
+                "response": {"ok": True},
+                "parts": [
+                    {
+                        "inline_data": {"data": "AAAAGGZ0eXA=", "mime_type": "video/mp4"},
+                        "media_resolution": {"level": "MEDIA_RESOLUTION_HIGH"},
+                        "video_metadata": {"fps": 2},
+                    }
+                ],
+            }
+        }
+    ]
+
+
+def test_vertex_tool_result_video_settings_are_a_bad_request_since_vertex_ignores_them() -> None:
+    with pytest.raises(litellm.BadRequestError, match="Vertex ignores detail and video_metadata") as excinfo:
+        convert_to_gemini_tool_call_result(
+            _CLIP_WITH_SETTINGS_RESULT, None, custom_llm_provider="vertex_ai", model="gemini-3.8-flash"
+        )
+
+    assert (excinfo.value.llm_provider, excinfo.value.model) == ("vertex_ai", "gemini-3.8-flash")
+
+
+@pytest.mark.parametrize(
+    "settings",
+    [pytest.param({"detail": "auto"}, id="detail-auto"), pytest.param({"video_metadata": {"label": "x"}}, id="no-op-metadata")],
+)
+def test_vertex_tool_result_video_settings_that_change_nothing_are_sent_without_error(
+    settings: dict[str, object],
+) -> None:
+    delivered: Final = convert_to_gemini_tool_call_result(
+        _tool_result_with({"type": "video_url", "video_url": {"url": "data:video/mp4;base64,AAAAGGZ0eXA=", **settings}}),
+        None,
+        custom_llm_provider="vertex_ai",
+        model="gemini-3.8-flash",
+    )
+
+    assert delivered == [
+        {
+            "function_response": {
+                "name": "find_clip",
+                "response": {"ok": True},
+                "parts": [{"inline_data": {"data": "AAAAGGZ0eXA=", "mime_type": "video/mp4"}}],
+            }
+        }
+    ]
+
+
+def test_drop_params_sends_a_vertex_tool_result_video_without_its_settings() -> None:
+    delivered: Final = convert_to_gemini_tool_call_result(
+        _CLIP_WITH_SETTINGS_RESULT, None, custom_llm_provider="vertex_ai", model="gemini-3.8-flash", drop_params=True
+    )
+
+    assert delivered == [
+        {
+            "function_response": {
+                "name": "find_clip",
+                "response": {"ok": True},
+                "parts": [{"inline_data": {"data": "AAAAGGZ0eXA=", "mime_type": "video/mp4"}}],
+            }
+        }
+    ]
+
+
+def test_gemini_tool_result_image_carries_its_detail_into_the_function_response() -> None:
+    delivered: Final = convert_to_gemini_tool_call_result(
+        {
+            "role": "tool",
+            "name": "find_clip",
+            "content": [{"type": "image_url", "image_url": {"url": "data:image/png;base64,iVBORw0KGgo=", "detail": "low"}}],
+        },
+        None,
+        custom_llm_provider="gemini",
+        model="gemini-3.8-flash",
+    )
+
+    assert delivered[0]["function_response"]["parts"] == [
+        {
+            "inline_data": {"data": "iVBORw0KGgo=", "mime_type": "image/png"},
+            "media_resolution": {"level": "MEDIA_RESOLUTION_LOW"},
+        }
+    ]
+
+
+@pytest.mark.parametrize("custom_llm_provider", ["gemini", "vertex_ai"])
+def test_gemini_tool_result_video_url_linking_a_web_page_is_a_bad_request_instead_of_sending_html(
+    monkeypatch: pytest.MonkeyPatch, custom_llm_provider: str
+) -> None:
+    monkeypatch.setattr(litellm, "user_url_validation", False)
+    page_url: Final = f"https://videos.example/watch/{uuid.uuid4()}"
+    page_result: Final = {
+        "role": "tool",
+        "name": "find_clip",
+        "content": [{"type": "text", "text": '{"ok":true}'}, {"type": "video_url", "video_url": {"url": page_url}}],
+    }
+
+    with respx.mock:
+        respx.get(page_url).mock(
+            return_value=httpx.Response(200, text="<html>clip</html>", headers={"content-type": "text/html"})
+        )
+        with pytest.raises(litellm.BadRequestError, match="but it holds text/html") as excinfo:
+            convert_to_gemini_tool_call_result(page_result, None, custom_llm_provider=custom_llm_provider)
+        dropped: Final = convert_to_gemini_tool_call_result(
+            page_result, None, custom_llm_provider=custom_llm_provider, drop_params=True
+        )
+
+    assert excinfo.value.llm_provider == custom_llm_provider
+    assert dropped == {"function_response": {"name": "find_clip", "response": {"ok": True}}}
+
+
+def test_gemini_tool_result_video_keeps_its_settings_beside_the_function_response() -> None:
+    delivered: Final = convert_to_gemini_tool_call_result(
+        _CLIP_WITH_SETTINGS_RESULT,
+        None,
+        supports_multimodal_function_responses=False,
+        custom_llm_provider="gemini",
+        model="gemini-3.8-flash",
+    )
+
+    assert delivered == [
+        {"function_response": {"name": "find_clip", "response": {"ok": True}}},
+        {
+            "inline_data": {"data": "AAAAGGZ0eXA=", "mime_type": "video/mp4"},
+            "media_resolution": {"level": "MEDIA_RESOLUTION_HIGH"},
+            "video_metadata": {"fps": 2},
+        },
+    ]
+
+
 def test_convert_gemini_tool_call_result_with_anthropic_image_block():
     """
     Test that Anthropic-native image blocks in tool_result list content are
@@ -2996,6 +3605,16 @@ def test_bedrock_image_processor_content_type_fallback_application_octet_stream(
 
     assert content_type == "image/gif"
     assert base64_bytes == base64.b64encode(gif_content).decode("utf-8")
+
+
+def test_bedrock_sends_an_mp4_link_served_as_octet_stream_as_a_video_block() -> None:
+    video_url: Final = f"https://8.8.8.8/{uuid.uuid4()}"
+
+    with respx.mock as router:
+        router.get(video_url).respond(200, content=_MP4_BYTES, headers={"content-type": "application/octet-stream"})
+        block: Final = BedrockImageProcessor.process_image_sync(video_url)
+
+    assert block == {"video": {"source": {"bytes": base64.b64encode(_MP4_BYTES).decode()}, "format": "mp4"}}
 
 
 def test_bedrock_image_processor_content_type_with_query_params():
@@ -3698,40 +4317,70 @@ def test_bedrock_converse_tool_result_s3_media_keeps_its_bucket_owner(part: Mapp
     ]
 
 
-@pytest.mark.parametrize(
-    "file, expected_media",
-    [
-        pytest.param(
-            {"file_id": "s3://media-bucket/clips/demo.mp4"},
-            [{"video": {"format": "mp4", "source": _s3_source("s3://media-bucket/clips/demo.mp4")}}],
-            id="s3-video-is-forwarded",
-        ),
-        pytest.param(
-            {"file_data": "data:video/mp4;base64,AAAAGGZ0eXBtcDQy"},
-            [],
-            id="inline-video-is-dropped",
-        ),
-    ],
+_OCTET_STREAM_MP4_URL: Final = "https://8.8.8.8/clip"
+_NON_S3_TOOL_RESULT_VIDEOS: Final = (
+    pytest.param({"type": "file", "file": {"file_data": "data:video/mp4;base64,AAAAGGZ0eXBtcDQy"}}, id="inline-file"),
+    pytest.param({"type": "image_url", "image_url": {"url": _OCTET_STREAM_MP4_URL}}, id="octet-stream-mp4-link"),
 )
-def test_bedrock_converse_tool_result_video_is_forwarded_only_from_s3(
-    file: Mapping[str, object], expected_media: list[Mapping[str, object]]
-):
+
+
+async def _converse_tool_result_content(
+    part: Mapping[str, object], run_async: bool, drop_params: bool
+) -> Sequence[Mapping[str, object]]:
     messages: Final = [
         {"role": "user", "content": "Describe the clip."},
         {
             "tool_call_id": "tooluse_video_1",
             "role": "tool",
             "name": "fetch_clip",
-            "content": [{"type": "text", "text": "clip:"}, {"type": "file", "file": file}],
+            "content": [{"type": "text", "text": "clip:"}, part],
         },
     ]
-
-    with respx.mock:
-        converted: Final = _bedrock_converse_messages_pt(
-            messages=messages, model=_S3_MEDIA_MODEL, llm_provider="bedrock"
+    with respx.mock(assert_all_called=False) as router:
+        router.get(_OCTET_STREAM_MP4_URL).respond(
+            200, content=_MP4_BYTES, headers={"content-type": "application/octet-stream"}
         )
+        converted: Final = (
+            await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+                messages=messages, model=_S3_MEDIA_MODEL, llm_provider="bedrock", drop_params=drop_params
+            )
+            if run_async
+            else _bedrock_converse_messages_pt(
+                messages=messages, model=_S3_MEDIA_MODEL, llm_provider="bedrock", drop_params=drop_params
+            )
+        )
+    return converted[-1]["content"][-1]["toolResult"]["content"]
 
-    assert converted[-1]["content"][-1]["toolResult"]["content"] == [{"text": "clip:"}, *expected_media]
+
+@pytest.mark.parametrize("run_async", [False, True], ids=["sync", "async"])
+async def test_bedrock_converse_tool_result_s3_video_is_forwarded(run_async: bool):
+    content: Final = await _converse_tool_result_content(
+        {"type": "file", "file": {"file_id": "s3://media-bucket/clips/demo.mp4"}}, run_async, drop_params=False
+    )
+
+    assert content == [
+        {"text": "clip:"},
+        {"video": {"format": "mp4", "source": _s3_source("s3://media-bucket/clips/demo.mp4")}},
+    ]
+
+
+@pytest.mark.parametrize("run_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize("part", _NON_S3_TOOL_RESULT_VIDEOS)
+async def test_bedrock_converse_tool_result_video_not_on_s3_is_a_bad_request(
+    part: Mapping[str, object], run_async: bool
+):
+    with pytest.raises(litellm.BadRequestError) as excinfo:
+        await _converse_tool_result_content(part, run_async, drop_params=False)
+
+    assert "drop_params=True" in excinfo.value.message
+
+
+@pytest.mark.parametrize("run_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize("part", _NON_S3_TOOL_RESULT_VIDEOS)
+async def test_drop_params_drops_a_bedrock_tool_result_video_not_on_s3(part: Mapping[str, object], run_async: bool):
+    content: Final = await _converse_tool_result_content(part, run_async, drop_params=True)
+
+    assert content == [{"text": "clip:"}]
 
 
 @pytest.mark.parametrize("bucket_owner", [111122223333, ""], ids=["int", "empty-string"])
@@ -7550,6 +8199,101 @@ def test_ensure_alternating_roles(messages, expected_messages, user_continue_mes
     assert messages == expected_messages
 
 
+@pytest.mark.parametrize(
+    "messages",
+    [
+        pytest.param([{"role": "assistant", "content": "Hello!"}], id="before_a_first_assistant_message"),
+        pytest.param(
+            [
+                {"role": "user", "content": "Hi"},
+                {"role": "assistant", "content": "Hello!"},
+                {"role": "assistant", "content": "Still there?"},
+            ],
+            id="between_adjacent_assistant_messages",
+        ),
+        pytest.param(
+            [
+                {"role": "user", "content": "Hi"},
+                {"role": "assistant", "content": "Hello!"},
+                {"role": "tool", "tool_call_id": "call_1", "content": "42"},
+                {"role": "assistant", "content": "Still there?"},
+            ],
+            id="between_assistant_messages_split_by_a_tool_result",
+        ),
+        pytest.param(
+            [{"role": "user", "content": "Hi"}, {"role": "assistant", "content": "Hello!"}],
+            id="after_a_last_assistant_message",
+        ),
+        pytest.param(
+            [{"role": "user", "content": "Hi"}, {"role": "user", "content": "Anyone there?"}],
+            id="between_adjacent_user_messages",
+        ),
+    ],
+)
+def test_folding_a_system_prompt_into_an_inserted_continue_message_never_changes_a_later_request(
+    messages: list[dict[str, str]],
+) -> None:
+    def completion_messages() -> list[dict[str, str]]:
+        return get_completion_messages(
+            messages=messages,
+            assistant_continue_message=None,
+            user_continue_message=None,
+            ensure_alternating_roles=True,
+        )
+
+    first: Final = completion_messages()
+    untouched: Final = json.loads(json.dumps(first))
+    for inserted in (message for message in first if message not in messages):
+        map_system_message_pt([{"role": "system", "content": "First tenant secret"}, inserted])
+
+    assert completion_messages() == untouched
+
+
+_STRICT_TEMPLATE_API_BASE: Final = "https://strict-template.example.com/v1"
+_STRICT_TEMPLATE_REPLY: Final = {
+    "id": "chatcmpl-strict",
+    "object": "chat.completion",
+    "created": 0,
+    "model": "strict-template-model",
+    "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+}
+
+
+@pytest.mark.parametrize(
+    "user_continue_message", [None, {"role": "user", "content": "Keep going"}], ids=["default", "configured"]
+)
+def test_a_system_prompt_folded_into_the_continue_message_never_reaches_a_later_request(
+    respx_mock: respx.MockRouter, user_continue_message: dict[str, str] | None
+) -> None:
+    route: Final = respx_mock.post(f"{_STRICT_TEMPLATE_API_BASE}/chat/completions").mock(
+        return_value=httpx.Response(200, json=_STRICT_TEMPLATE_REPLY)
+    )
+
+    def send(messages: list[dict[str, str]]) -> None:
+        litellm.completion(
+            model="openai/strict-template-model",
+            api_base=_STRICT_TEMPLATE_API_BASE,
+            api_key="test-key",
+            messages=messages,
+            ensure_alternating_roles=True,
+            supports_system_message=False,
+            user_continue_message=user_continue_message,
+        )
+
+    send(
+        [
+            {"role": "user", "content": "Hi"},
+            {"role": "assistant", "content": "Hello!"},
+            {"role": "system", "content": "First tenant secret"},
+            {"role": "assistant", "content": "Anything else?"},
+        ]
+    )
+    send([{"role": "user", "content": "Hi"}, {"role": "assistant", "content": "Hello!"}])
+
+    assert "First tenant secret" not in json.dumps(json.loads(route.calls.last.request.read())["messages"])
+
+
 def test_ensure_alternating_roles_with_tool_calls():
     """Fixes Regression in #18685"""
     messages = [
@@ -9677,3 +10421,174 @@ def test_wrong_type_template_field_in_requests_leaves_the_deployments_in_rotatio
     response = router.completion(model="template-group", messages=TEMPLATE_MESSAGES, mock_response="Blue")
 
     assert response.choices[0].message.content == "Blue"
+
+
+def _history_with_concatenated_tool_arguments(
+    *payloads: dict[str, object], sibling_id: str = "call_1__concat_1", truncated_tail: str = ""
+) -> list[dict[str, object]]:
+    return [
+        {"role": "user", "content": "List files in /a and /b"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {"name": "ls", "arguments": _concatenated_json(*payloads) + truncated_tail},
+                },
+                {
+                    "id": sibling_id,
+                    "type": "function",
+                    "function": {"name": "ls", "arguments": '{"path": "/c"}'},
+                },
+            ],
+        },
+        {"role": "tool", "tool_call_id": "call_1", "content": "a.txt"},
+        {"role": "tool", "tool_call_id": sibling_id, "content": "c.txt"},
+    ]
+
+
+_UNSPLIT_TURN_REUSING_CALL_1 = (
+    {"role": "user", "content": "List files in /z"},
+    {
+        "role": "assistant",
+        "content": None,
+        "tool_calls": [{"id": "call_1", "type": "function", "function": {"name": "ls", "arguments": '{"path": "/z"}'}}],
+    },
+    {"role": "tool", "tool_call_id": "call_1", "content": "z.txt"},
+)
+
+
+async def _bedrock_converse_messages(messages: list[dict[str, object]], use_async: bool) -> list[dict[str, object]]:
+    model = "anthropic.claude-sonnet-4-5-20250929-v1:0"
+    if use_async:
+        return await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(messages, model, "bedrock")
+    return _bedrock_converse_messages_pt(messages, model, "bedrock")
+
+
+def _bedrock_tool_use_ids(message: dict[str, object]) -> list[str]:
+    return [block["toolUse"]["toolUseId"] for block in message["content"] if "toolUse" in block]
+
+
+def _bedrock_results_by_id(message: dict[str, object]) -> dict[str, object]:
+    return {
+        block["toolResult"]["toolUseId"]: block["toolResult"]["content"]
+        for block in message["content"]
+        if "toolResult" in block
+    }
+
+
+def test_anthropic_messages_pt_splits_concatenated_tool_arguments_and_answers_every_tool_use():
+    messages = _history_with_concatenated_tool_arguments({"path": "/a"}, {"path": "/b"})
+
+    _, assistant, tool_results = anthropic_messages_pt(messages, model="claude-sonnet-4-5", llm_provider="anthropic")
+
+    tool_uses = [block for block in assistant["content"] if block["type"] == "tool_use"]
+    assert [block["input"] for block in tool_uses] == [{"path": "/a"}, {"path": "/b"}, {"path": "/c"}]
+    tool_use_ids = [block["id"] for block in tool_uses]
+    assert len(set(tool_use_ids)) == 3
+    results_by_id = {block["tool_use_id"]: block["content"] for block in tool_results["content"]}
+    assert results_by_id == {tool_use_ids[0]: "a.txt", tool_use_ids[1]: "a.txt", tool_use_ids[2]: "c.txt"}
+
+
+def test_anthropic_messages_pt_rejects_truncated_concatenated_tool_arguments():
+    messages = _history_with_concatenated_tool_arguments({"path": "/a"}, {"path": "/b"}, truncated_tail='{"path": ')
+
+    with pytest.raises(ValueError, match="Failed to parse tool call arguments for tool 'ls'"):
+        anthropic_messages_pt(messages, model="claude-sonnet-4-5", llm_provider="anthropic")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True])
+async def test_bedrock_converse_messages_pt_answers_every_tool_use_split_from_concatenated_arguments(use_async: bool):
+    messages = _history_with_concatenated_tool_arguments({"path": "/a"}, {"path": "/b"}, sibling_id="call_1_1")
+
+    _, assistant, tool_results = await _bedrock_converse_messages(messages, use_async)
+
+    tool_uses = [block["toolUse"] for block in assistant["content"] if "toolUse" in block]
+    assert [block["input"] for block in tool_uses] == [{"path": "/a"}, {"path": "/b"}, {"path": "/c"}]
+    tool_use_ids = _bedrock_tool_use_ids(assistant)
+    assert len(set(tool_use_ids)) == 3
+    assert _bedrock_results_by_id(tool_results) == {
+        tool_use_ids[0]: [{"text": "a.txt"}],
+        tool_use_ids[1]: [{"text": "a.txt"}],
+        tool_use_ids[2]: [{"text": "c.txt"}],
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True])
+async def test_bedrock_converse_messages_pt_copies_results_only_into_the_turn_that_split(use_async: bool):
+    messages = [
+        *_UNSPLIT_TURN_REUSING_CALL_1,
+        *_history_with_concatenated_tool_arguments({"path": "/a"}, {"path": "/b"}),
+    ]
+
+    _, unsplit_assistant, unsplit_results, split_assistant, split_results = await _bedrock_converse_messages(
+        messages, use_async
+    )
+
+    assert _bedrock_results_by_id(unsplit_results) == {_bedrock_tool_use_ids(unsplit_assistant)[0]: [{"text": "z.txt"}]}
+    assert set(_bedrock_results_by_id(split_results)) == set(_bedrock_tool_use_ids(split_assistant))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True])
+async def test_bedrock_converse_messages_pt_rejects_more_split_tool_uses_than_the_cap(use_async: bool):
+    payloads = [{"path": f"/{index}"} for index in range(MAX_SALVAGED_TOOL_ARGUMENT_OBJECTS + 1)]
+    messages = _history_with_concatenated_tool_arguments(*payloads)
+
+    with pytest.raises(litellm.BadRequestError, match="concatenated JSON argument objects"):
+        await _bedrock_converse_messages(messages, use_async)
+
+
+_CALL_1_SPLIT_IN_TWO = {
+    "role": "assistant",
+    "content": None,
+    "tool_calls": [
+        {"id": "call.1", "type": "function", "function": {"name": "ls", "arguments": '{"path": "/a"}{"path": "/b"}'}}
+    ],
+}
+_CALL_1_REPEATED_IN_ONE_TURN = (
+    {"role": "user", "content": "List files in /a and /b"},
+    _CALL_1_SPLIT_IN_TWO,
+    _CALL_1_SPLIT_IN_TWO,
+    {"role": "tool", "tool_call_id": "call.1", "content": "a.txt"},
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True])
+async def test_bedrock_converse_messages_pt_answers_a_split_call_repeated_in_one_turn(use_async: bool):
+    _, assistant, tool_results = await _bedrock_converse_messages(list(_CALL_1_REPEATED_IN_ONE_TURN), use_async)
+
+    assert set(_bedrock_results_by_id(tool_results)) == set(_bedrock_tool_use_ids(assistant))
+
+
+def test_anthropic_messages_pt_answers_a_split_call_with_an_unsanitized_id_repeated_in_one_turn():
+    _, assistant, tool_results = anthropic_messages_pt(
+        list(_CALL_1_REPEATED_IN_ONE_TURN), model="claude-sonnet-4-5", llm_provider="anthropic"
+    )
+
+    tool_use_ids = {block["id"] for block in assistant["content"] if block["type"] == "tool_use"}
+    assert len(tool_use_ids) == 2
+    assert {block["tool_use_id"] for block in tool_results["content"]} == tool_use_ids
+
+
+def test_anthropic_messages_pt_copies_results_only_into_the_turn_that_split():
+    messages = [
+        *_UNSPLIT_TURN_REUSING_CALL_1,
+        *_history_with_concatenated_tool_arguments({"path": "/a"}, {"path": "/b"}),
+    ]
+
+    _, unsplit_assistant, unsplit_results, split_assistant, split_results = anthropic_messages_pt(
+        messages, model="claude-sonnet-4-5", llm_provider="anthropic"
+    )
+
+    assert [block["tool_use_id"] for block in unsplit_results["content"] if block["type"] == "tool_result"] == [
+        block["id"] for block in unsplit_assistant["content"] if block["type"] == "tool_use"
+    ]
+    assert {block["tool_use_id"] for block in split_results["content"]} == {
+        block["id"] for block in split_assistant["content"] if block["type"] == "tool_use"
+    }

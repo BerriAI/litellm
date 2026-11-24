@@ -212,7 +212,7 @@ def pre_call_request() -> "NativeRequestRedis | None":
 
 def post_call_request() -> "NativeRequestRedis | None":
     batches: Final = active_request_redis_batches()
-    return None if batches is None else batches.native_post_call()
+    return None if batches is None else batches.native()
 
 
 def _auth(data: Mapping[str, object]) -> UserAPIKeyAuth | None:
@@ -665,7 +665,7 @@ async def _lookups(
     groups: Final = {candidate: limiter.model_group_resolver(candidate) for candidate in named}
     resolved: Final = tuple(dict.fromkeys(group or candidate for candidate, group in groups.items()))
     settings: Final = litellm.priority_reservation_settings
-    borrowers: Final = frozenset() if settings is None else settings.model_limit_borrowing_entities
+    borrowers: Final[frozenset[str]] = frozenset() if settings is None else settings.model_limit_borrowing_entities
     dynamic: Final = "dynamic" in (_member(limits, "rpm_limit_type"), _member(limits, "tpm_limit_type"))
     requested_group: Final = (groups.get(model) or model) if model else None
     ceiling: Final = (
@@ -958,8 +958,8 @@ def limiter_policy(limiter: "ParallelRequestLimiterHook") -> Mapping[str, object
         _force_redis_hash_tag_grouping_from_litellm_settings,  # pyright: ignore[reportPrivateUsage]  # the default resolver reads the raw setting
     )
 
-    fail_closed: Final = limiter.fail_closed_resolver  # read live per call like the Python limiter
-    force_grouping: Final = limiter.force_hash_tag_grouping_resolver  # read live per call like the Python limiter
+    fail_closed: Final = limiter.fail_closed_resolver
+    force_grouping: Final = limiter.force_hash_tag_grouping_resolver
     return policy(
         None if fail_closed is _fail_closed_rate_limit_enforcement_from_general_settings else fail_closed,
         None if force_grouping is _force_redis_hash_tag_grouping_from_litellm_settings else force_grouping,

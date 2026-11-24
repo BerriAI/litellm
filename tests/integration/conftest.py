@@ -70,6 +70,11 @@ def pytest_configure(config: pytest.Config) -> None:
     config.addinivalue_line("markers", "integration: owned real-service integration contracts")
     config.addinivalue_line("markers", "covers(*ids): legacy contract IDs kept for existing tests, not enforced")
     config.addinivalue_line("markers", "shares_worker_state: owned proxies here share the worker DB and Redis")
+    config.addinivalue_line(
+        "markers",
+        "billed_against_real_provider_by_cost_tracking_reconciliation_automation: "
+        "the daily automation also sends this case to the real provider and checks the bill",
+    )
     config.stash[REPORTS] = []
     config.stash[SHARD_FILES] = _shard_files(SHARD_PATH.validate_python(config.getoption("integration_shard_files")))
     config.pluginmanager.register(IntegrationReportPlugin(config))

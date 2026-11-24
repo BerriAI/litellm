@@ -61,7 +61,7 @@ class _TextCompletionRequest:
     def __init__(self, body: dict[str, object]) -> None:
         self.body = body
 
-    def get_messages(self) -> list[dict]:
+    def get_messages(self) -> list[dict[str, object]]:
         return [{"role": "user", "content": self.body["prompt"]}]
 
     # This mutates the original dict, but we'll still return it anyways
@@ -123,7 +123,7 @@ class PangeaHandler(CustomGuardrail):
             self.api_base,
         )
 
-    async def _call_pangea_ai_guard(self, api: str, payload: dict, hook_name: str) -> Mapping[str, object]:
+    async def _call_pangea_ai_guard(self, api: str, payload: dict[str, object], hook_name: str) -> Mapping[str, object]:
         """
         Makes the API call to the Pangea AI Guard endpoint.
         The function itself will raise an error in the case that a response
@@ -183,9 +183,9 @@ class PangeaHandler(CustomGuardrail):
         self,
         user_api_key_dict: UserAPIKeyAuth,
         cache: DualCache,
-        data: dict,
+        data: dict[str, object],
         call_type: str,
-    ):
+    ) -> dict[str, object] | None:
         transformer = None
         messages: object = None
         if call_type == "text_completion" or call_type == "atext_completion":
@@ -194,7 +194,7 @@ class PangeaHandler(CustomGuardrail):
         else:
             messages = data.get("messages")
 
-        ai_guard_payload: Final = {
+        ai_guard_payload: Final[dict[str, object]] = {
             "debug": False,
             "input": {"messages": messages, "tools": data.get("tools")},
             "event_type": "input",
@@ -247,7 +247,7 @@ class PangeaHandler(CustomGuardrail):
 
     async def _async_post_call_success_hook(
         self,
-        data: dict,
+        data: dict[str, object],
         user_api_key_dict: UserAPIKeyAuth,
         # This union isn't actually correct -- it can get other response types depending on the API called
         response: LLMResponseTypes,
@@ -265,7 +265,7 @@ class PangeaHandler(CustomGuardrail):
 
         if choices := response.get("choices"):
             if isinstance(choices, list):
-                serialized_choices: Final = []
+                serialized_choices: Final[list[object]] = []
                 for c in choices:
                     if isinstance(c, Choices):
                         try:
@@ -280,7 +280,7 @@ class PangeaHandler(CustomGuardrail):
                         serialized_choices.append(c)
                 choices = serialized_choices
 
-        ai_guard_payload: Final = {
+        ai_guard_payload: Final[dict[str, object]] = {
             "debug": False,
             "input": {
                 "messages": input_messages,

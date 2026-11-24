@@ -234,6 +234,9 @@ class CustomCodeGuardrail(CustomGuardrail):
                 self._compile_error = f"Failed to compile custom code: {e}"
                 raise CustomCodeCompilationError(self._compile_error) from e
 
+    def scans_each_text_separately(self) -> bool:
+        return False
+
     @log_guardrail_information
     async def apply_guardrail(
         self,

@@ -17,6 +17,7 @@ pub struct PythonServed;
 pub type Out<T> = Result<T, PythonServed>;
 
 pub const GENAI_CALL_TYPES: [&str; 4] = genai::CALL_TYPES;
+pub use genai::config_field as genai_config_field;
 const CHARS_PER_TOKEN: i128 = 4;
 const RESPONSES: [&str; 2] = ["aresponses", "responses"];
 const EMBEDDING: [&str; 2] = ["aembedding", "embedding"];
@@ -37,7 +38,7 @@ const MEDIA_TYPES: [&str; 10] = [
 
 /// Every top-level request member the estimator reads. A host may leave out any other member whose
 /// value it cannot hand over as JSON, since no estimate depends on it.
-pub const REQUEST_KEYS: [&str; 18] = [
+pub const REQUEST_KEYS: [&str; 19] = [
     "messages",
     "prompt",
     "input",
@@ -50,6 +51,7 @@ pub const REQUEST_KEYS: [&str; 18] = [
     "fields",
     "config",
     "generationConfig",
+    "generation_config",
     "contents",
     "systemInstruction",
     "system_instruction",
@@ -103,7 +105,7 @@ pub fn explicit_output_cap(
     cap: &CapSettings,
 ) -> Out<Option<i128>> {
     if genai::CALL_TYPES.contains(&call_type) {
-        let Some(config) = genai::request_config(request) else {
+        let Some(config) = genai::request_config(request)? else {
             return Ok(None);
         };
         let mut found: Option<i128> = None;
@@ -151,7 +153,7 @@ fn candidate_value(value: &Value) -> Out<Option<i128>> {
 
 pub fn output_candidate_count(request: &Map<String, Value>, call_type: &str) -> Out<i128> {
     let config = if genai::CALL_TYPES.contains(&call_type) {
-        genai::request_config(request)
+        genai::request_config(request)?
     } else {
         None
     };
@@ -441,6 +443,16 @@ mod tests {
     )]
     // Embeddings generate no output.
     #[case::embedding(json!({"input": "abcdefgh"}), "aembedding", None, None, (2, 0))]
+    #[case::genai_snake_case_config(
+        json!({"contents": [{"role": "user", "parts": [{"text": "hello world!"}]}],
+               "generation_config": {"max_output_tokens": 40, "candidate_count": 2}}),
+        "agenerate_content", None, None, (3, 80)
+    )]
+    #[case::genai_empty_config_yields(
+        json!({"contents": [{"role": "user", "parts": [{"text": "hello world!"}]}],
+               "config": {}, "generationConfig": {"maxOutputTokens": 30}}),
+        "generate_content", None, None, (3, 30)
+    )]
     fn the_estimate_matches_the_python_estimator(
         #[case] data: Value,
         #[case] call_type: &str,

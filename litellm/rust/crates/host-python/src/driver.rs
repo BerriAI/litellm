@@ -28,11 +28,8 @@ type ProtocolOf<H> = <H as PythonBinding>::Protocol;
 type ErrorOf<H> = <ProtocolOf<H> as Protocol>::Error;
 type ResponseOf<H> = <ProtocolOf<H> as Protocol>::Response;
 type Interruption<H> = Option<HostFailure<ErrorOf<H>>>;
-type StartMachine<P, M> = Box<
-    dyn FnOnce(Python<'_>, &Bound<'_, PyDict>, <P as Protocol>::Request) -> PyResult<M>
-        + Send
-        + Sync,
->;
+type StartMachine<D, M> =
+    Box<dyn FnOnce(Python<'_>, &Bound<'_, PyDict>, D) -> PyResult<M> + Send + Sync>;
 type Body = Coroutine<Yielded, PyResult<Py<PyAny>>>;
 
 pub struct CallOptions {
@@ -131,7 +128,7 @@ where
     caller: PythonCaller,
     parts: SharedParts<H, L>,
     native: NativeMachine<M>,
-    start: Option<StartMachine<ProtocolOf<H>, M>>,
+    start: Option<StartMachine<<H as PythonBinding>::Decoded, M>>,
     streaming: bool,
     detached: bool,
     drains: bool,
@@ -461,15 +458,24 @@ where
     }
 
     async fn machine_failed(&mut self, error: ErrorOf<H>) -> PyResult<Py<PyAny>> {
+        let origin = if self.detached {
+            FailureOrigin::DetachedStream
+        } else {
+            FailureOrigin::Call
+        };
         let error = {
             let mut parts = self.parts();
             parts.observation.ended_at.get_or_insert_with(epoch_seconds);
-            Python::attach(|py| match parts.interrupted.take() {
-                Some(retained) => PyErr::from_value(retained.into_bound(py).into_any()),
-                None => classified(py, &parts.binding, error),
+            Python::attach(|py| {
+                if !self.detached
+                    && let Some(retained) = parts.interrupted.take()
+                {
+                    return PyErr::from_value(retained.into_bound(py).into_any());
+                }
+                classified(py, &parts.binding, error)
             })
         };
-        self.failure(error, FailureOrigin::Call).await
+        self.failure(error, origin).await
     }
 
     /// The terminal hooks may suspend. Until they finish, the selected response is held
@@ -496,8 +502,8 @@ where
             .ok_or_else(|| Error::MissingState.into())
     }
 
-    /// As [`Self::succeeded`], with the selected exception held as its value and raised
-    /// again once the hooks finish.
+    /// Notify hooks with the selected exception, then raise it or restore the
+    /// caller's interruption if the upstream failed during a detached drain.
     async fn failure(&mut self, error: PyErr, origin: FailureOrigin) -> PyResult<Py<PyAny>> {
         let step = {
             let mut parts = self.parts();
@@ -519,9 +525,20 @@ where
             })?
         };
         self.settle(step).await?;
-        let mut parts = self.parts();
-        parts.observation.finish();
-        let selected = parts.selected.take().ok_or(Error::MissingState)?;
+        let (selected, interrupted) = {
+            let mut parts = self.parts();
+            parts.observation.finish();
+            (
+                parts.selected.take().ok_or(Error::MissingState)?,
+                parts.interrupted.take(),
+            )
+        };
+        if origin == FailureOrigin::DetachedStream {
+            return Python::attach(|py| match interrupted {
+                Some(cancelled) => Err(PyErr::from_value(cancelled.into_bound(py).into_any())),
+                None => Ok(py.None()),
+            });
+        }
         Err(Python::attach(|py| {
             PyErr::from_value(selected.into_bound(py))
         }))
@@ -641,11 +658,7 @@ where
 
 pub fn run_call<H, M, L>(
     py: Python<'_>,
-    start: impl FnOnce(
-        Python<'_>,
-        &Bound<'_, PyDict>,
-        <H::Protocol as Protocol>::Request,
-    ) -> PyResult<M>
+    start: impl FnOnce(Python<'_>, &Bound<'_, PyDict>, H::Decoded) -> PyResult<M>
     + Send
     + Sync
     + 'static,

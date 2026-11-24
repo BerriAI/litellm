@@ -252,7 +252,7 @@ class AnthropicMessagesToolUseParam(TypedDict, total=False):
     type: Required[Literal["tool_use"]]
     id: str
     name: str
-    input: dict
+    input: ReadOnly[object]
     cache_control: dict | ChatCompletionCachedContent | None
     caller: ToolCaller | None
 
@@ -456,6 +456,10 @@ class AnthropicMessageThread(TypedDict, total=False):
     previous_message_id: ReadOnly[str]
 
 
+class AnthropicMessagesDiagnostics(TypedDict):
+    previous_message_id: ReadOnly[str | None]
+
+
 class AnthropicMessagesRequestOptionalParams(TypedDict, total=False):
     max_tokens: int | None
     metadata: AnthropicMetadata | dict | None
@@ -481,6 +485,7 @@ class AnthropicMessagesRequestOptionalParams(TypedDict, total=False):
     safeguards: ReadOnly[list[dict[str, object]] | None]
     service_tier: ReadOnly[str | None]
     thread: ReadOnly[AnthropicMessageThread | None]
+    diagnostics: ReadOnly[AnthropicMessagesDiagnostics | None]
 
 
 class AnthropicMessagesRequest(AnthropicMessagesRequestOptionalParams, total=False):

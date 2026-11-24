@@ -10,13 +10,14 @@ from litellm.proxy import proxy_server
 from litellm.proxy._types import (
     LiteLLM_JWTAuth,
     LitellmUserRoles,
+    ProxyErrorTypes,
     ProxyException,
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth import core
 from litellm.proxy.auth.host.python import PythonAuthHost
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+from litellm.caching.dual_cache import DualCache
 from litellm.rust_bridge._native import RustAuth, RustAuthSettings, RustDenial, RustPlan
 
 JWT: Final = "eyJhbGciOiJSUzI1NiIsImtpZCI6ImsifQ.eyJzdWIiOiJ1In0.c2ln"
@@ -82,11 +83,11 @@ async def test_a_host_failure_the_core_cannot_skip_propagates_unchanged(
         core.HostFacts(master_key=None, premium=True, has_db=False),
     )
 
-    class _Unreadable(UserApiKeyCache):
+    class _Unreadable(DualCache):
         async def async_get_cache(self, *args: object, **kwargs: object) -> object:
             raise ConnectionError("cache down")
 
-    failing: Final = dataclasses.replace(auth_host(), user_api_key_cache=_Unreadable())
+    failing: Final = dataclasses.replace(auth_host(), jwks_cache=_Unreadable())
     token: Final = "eyJhbGciOiJSUzI1NiIsImtpZCI6ImsifQ.eyJzdWIiOiJ1In0.c2ln"
 
     with pytest.raises(ConnectionError, match="cache down"):
@@ -204,3 +205,26 @@ async def test_a_master_key_loaded_while_serving_admits_the_next_request(monkeyp
     monkeypatch.setattr(proxy_server, "master_key", "sk-after-reload")
 
     assert (await _authenticate("Bearer sk-after-reload")).user_role == LitellmUserRoles.PROXY_ADMIN
+
+
+@pytest.mark.parametrize(
+    ("database_url_configured", "code", "error_type"),
+    [
+        pytest.param(False, "401", ProxyErrorTypes.auth_error, id="no_database_configured"),
+        pytest.param(True, "400", ProxyErrorTypes.no_db_connection, id="configured_database_not_connected"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_a_wrong_key_without_a_database_is_an_outage_only_when_one_is_configured(
+    monkeypatch: pytest.MonkeyPatch, database_url_configured: bool, code: str, error_type: ProxyErrorTypes
+) -> None:
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    monkeypatch.setattr(proxy_server, "database_url_configured", database_url_configured)
+    monkeypatch.setattr(proxy_server, "user_custom_auth", None)
+    monkeypatch.setattr(proxy_server, "master_key", "sk-the-master-key")
+
+    assert (await _authenticate("Bearer sk-the-master-key")).user_role == LitellmUserRoles.PROXY_ADMIN
+    with pytest.raises(ProxyException) as denied:
+        _ = await _authenticate("Bearer sk-not-the-master-key")
+    assert (denied.value.code, denied.value.type) == (code, error_type), denied.value.message

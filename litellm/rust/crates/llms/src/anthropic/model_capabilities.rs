@@ -1,11 +1,13 @@
 use std::sync::LazyLock;
 
+use crate::anthropic::common_utils::supports_effort_param;
 use crate::base_llm::messages::context::{
     BedrockCapabilities, MessagesModelCapabilities, NativeOutputSupport, SupportedEffortTiers,
 };
 use crate::bedrock::common_utils::{
     bedrock_base_model, is_bedrock_application_inference_profile_arn, strip_bedrock_routing_prefix,
 };
+use crate::bedrock_mantle::messages::transformation::mantle_capability_lookup;
 use fancy_regex::Regex;
 use litellm_auth_aws::is_bedrock_region;
 use litellm_core_utils::get_llm_provider_logic::get_custom_llm_provider;
@@ -69,7 +71,7 @@ pub fn anthropic_model_capabilities(
     };
     let probe = Probe::new(catalog, model, name, provider, declared);
     let thinking_always_on = probe.supports("thinking_always_on");
-    MessagesModelCapabilities {
+    let capabilities = MessagesModelCapabilities {
         supports_reasoning: probe.supports("supports_reasoning"),
         supports_adaptive_thinking: probe.supports("supports_adaptive_thinking"),
         thinking_always_on,
@@ -101,12 +103,80 @@ pub fn anthropic_model_capabilities(
             xhigh: probe.supports("supports_xhigh_reasoning_effort"),
             max: probe.supports("supports_max_reasoning_effort"),
         },
+        bedrock: BedrockCapabilities::default(),
+    };
+    MessagesModelCapabilities {
         bedrock: if provider == BEDROCK {
-            bedrock_model_capabilities(catalog, requested, declared)
+            with_invoke_flags(
+                bedrock_model_capabilities(catalog, requested, declared),
+                &capabilities,
+            )
         } else {
             BedrockCapabilities::default()
         },
+        ..capabilities
     }
+}
+
+/// `bedrock` with the flags the Bedrock Invoke helpers read off `invoke`, the capabilities probed
+/// under `bedrock` for the model the Invoke transform receives.
+pub fn with_invoke_flags(
+    bedrock: BedrockCapabilities,
+    invoke: &MessagesModelCapabilities,
+) -> BedrockCapabilities {
+    BedrockCapabilities {
+        supports_adaptive_thinking: invoke.supports_adaptive_thinking,
+        supports_effort_param: supports_effort_param(invoke),
+        ..bedrock
+    }
+}
+
+/// Python's Mantle routes gate sampling and speed on the `requested` model, run the shared
+/// Anthropic transform on `route` and the Bedrock Invoke helpers on `invoke`.
+fn mantle_capabilities(
+    requested: &MessagesModelCapabilities,
+    route: MessagesModelCapabilities,
+    invoke: &MessagesModelCapabilities,
+    bedrock: BedrockCapabilities,
+) -> MessagesModelCapabilities {
+    MessagesModelCapabilities {
+        supports_sampling_params: requested.supports_sampling_params,
+        supports_speed: requested.supports_speed,
+        bedrock: with_invoke_flags(bedrock, invoke),
+        ..route
+    }
+}
+
+/// `anthropic_model_capabilities`, except on the Mantle routes, which probe the keys
+/// `mantle_capability_lookup` names.
+pub fn messages_route_capabilities(
+    catalog: &Catalog,
+    model: &str,
+    custom_llm_provider: Option<&str>,
+    base_model: Option<&str>,
+    declared: &dyn Fn(&str) -> Option<bool>,
+) -> MessagesModelCapabilities {
+    let requested =
+        anthropic_model_capabilities(catalog, model, custom_llm_provider, base_model, declared);
+    let Some(lookup) = get_custom_llm_provider(model, custom_llm_provider)
+        .and_then(|resolved| mantle_capability_lookup(resolved.custom_llm_provider, model))
+    else {
+        return requested;
+    };
+    let invoke =
+        anthropic_model_capabilities(catalog, &lookup.model, Some(BEDROCK), None, declared);
+    mantle_capabilities(
+        &requested,
+        anthropic_model_capabilities(
+            catalog,
+            &lookup.model,
+            Some(lookup.provider),
+            None,
+            declared,
+        ),
+        &invoke,
+        invoke.bedrock,
+    )
 }
 
 pub fn bedrock_model_capabilities(
@@ -150,6 +220,7 @@ pub fn bedrock_model_capabilities(
             ) == Some(false)
                 && !opted_out,
         },
+        ..BedrockCapabilities::default()
     }
 }
 
@@ -352,7 +423,9 @@ mod tests {
     use rstest::{fixture, rstest};
     use serde_json::Value;
 
-    use super::{anthropic_model_capabilities, bedrock_model_capabilities};
+    use super::{
+        anthropic_model_capabilities, bedrock_model_capabilities, messages_route_capabilities,
+    };
     use crate::base_llm::messages::context::{BedrockCapabilities, NativeOutputSupport};
     use litellm_llms_types::formats::messages::EffortLevel;
 
@@ -389,6 +462,17 @@ mod tests {
             "mode": "chat",
             "supports_reasoning": true,
             "supports_adaptive_thinking": true
+        },
+        "bedrock_mantle/anthropic.claude-mantle-split-5": {
+            "litellm_provider": "bedrock_mantle",
+            "mode": "chat",
+            "supports_adaptive_thinking": false
+        },
+        "anthropic.claude-mantle-split-5": {
+            "litellm_provider": "bedrock",
+            "mode": "chat",
+            "supports_adaptive_thinking": true,
+            "supports_output_config": true
         },
         "vertex_ai/claude-test-5": {
             "litellm_provider": "vertex_ai-anthropic_models",
@@ -451,6 +535,52 @@ mod tests {
                 capabilities.supports_sampling_params,
             ),
             expected
+        );
+    }
+
+    #[rstest]
+    #[case::bedrock_mantle("bedrock_mantle/anthropic.claude-mantle-split-5", None, (false, true, true))]
+    #[case::bedrock_mantle_region(
+        "bedrock_mantle/us-west-2/anthropic.claude-mantle-split-5",
+        None,
+        (false, true, true)
+    )]
+    #[case::bedrock_mantle_configured("anthropic.claude-mantle-split-5", Some("bedrock_mantle"), (false, true, true))]
+    #[case::mantle_route("bedrock/mantle/anthropic.claude-mantle-split-5", None, (true, true, true))]
+    fn mantle_routes_shape_on_the_route_row_and_run_invoke_helpers_on_the_bedrock_row(
+        catalog: Catalog,
+        #[case] model: &str,
+        #[case] custom_llm_provider: Option<&str>,
+        #[case] expected: (bool, bool, bool),
+    ) {
+        let capabilities =
+            messages_route_capabilities(&catalog, model, custom_llm_provider, None, &|_| None);
+
+        assert_eq!(
+            (
+                capabilities.supports_adaptive_thinking,
+                capabilities.bedrock.supports_adaptive_thinking,
+                capabilities.bedrock.supports_effort_param,
+            ),
+            expected
+        );
+    }
+
+    #[rstest]
+    #[case::anthropic("anthropic/claude-test-5", None)]
+    #[case::bedrock_invoke("bedrock/us.anthropic.claude-test-5-v1:0", None)]
+    #[case::bedrock_converse("bedrock/converse/anthropic.claude-test-5-v1:0", None)]
+    #[case::bedrock_claude_platform("bedrock/claude_platform/mantle/claude-test-5", None)]
+    #[case::bedrock_bare_split_row("anthropic.claude-mantle-split-5", Some("bedrock"))]
+    #[case::vertex("vertex_ai/claude-test-5", None)]
+    fn other_routes_keep_their_own_lookup(
+        catalog: Catalog,
+        #[case] model: &str,
+        #[case] custom_llm_provider: Option<&str>,
+    ) {
+        assert_eq!(
+            messages_route_capabilities(&catalog, model, custom_llm_provider, None, &|_| None),
+            anthropic_model_capabilities(&catalog, model, custom_llm_provider, None, &|_| None)
         );
     }
 
@@ -596,6 +726,7 @@ mod tests {
                     mapped,
                     replaces_unforceable_tool,
                 },
+            ..
         } = capabilities;
         (
             output_config_effort_ceiling,

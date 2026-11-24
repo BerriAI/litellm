@@ -4,10 +4,13 @@ from urllib.parse import urlsplit
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.get_llm_provider_logic import (
     get_llm_provider,
     resolve_model_and_provider_for_metadata,
 )
+from litellm.litellm_core_utils.prompt_templates.common_utils import is_whitespace_user_message
+from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import message_field
 from litellm.llms.azure_ai.chat.transformation import AzureAIGPT5Config
 from litellm.llms.azure_ai.common_utils import (
     azure_ai_supports_native_responses,
@@ -15,8 +18,11 @@ from litellm.llms.azure_ai.common_utils import (
     is_foundry_project_agent,
 )
 from litellm.llms.openai.chat.gpt_reasoning_transformation import OpenAIGPT5Config
+from litellm.llms.vertex_ai.common_utils import VertexAIModelRoute, get_vertex_ai_model_route
+from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexGeminiConfig
+from litellm.llms.vertex_ai.responses.transformation import is_vertex_muse_model
 from litellm.secret_managers.main import get_secret_str
-from litellm.types.llms.openai import OpenAIWebSearchOptions
+from litellm.types.llms.openai import ChatCompletionUserMessage, OpenAIWebSearchOptions
 from litellm.types.utils import LlmProviders
 from litellm.utils import ProviderConfigManager, get_model_info_helper, model_cost_registration_row
 
@@ -148,6 +154,10 @@ def _chat_gate_refuses_reasoning_effort_none(model: str, custom_llm_provider: st
             return OpenAIGPT5Config.refuses_reasoning_effort_level(model, "none")
 
 
+def serves_only_responses(model: str, custom_llm_provider: str) -> bool:
+    return custom_llm_provider == LlmProviders.VERTEX_AI.value and is_vertex_muse_model(model)
+
+
 def responses_api_bridge_check(
     model: str,
     custom_llm_provider: str,
@@ -186,6 +196,9 @@ def responses_api_bridge_check(
         model_info["mode"] = "chat"
 
     if custom_llm_provider == LlmProviders.AZURE_AI.value and is_foundry_project_agent(model):
+        model_info["mode"] = "responses"
+
+    if serves_only_responses(model, custom_llm_provider):
         model_info["mode"] = "responses"
 
     if web_search_options is not None and custom_llm_provider == "xai":
@@ -313,3 +326,59 @@ def chat_completion_ends_in_responses_api(
         deployment_model_info=deployment_model_info,
     )
     return model_info.get("mode") == "responses"
+
+
+_USER_TURN_ROLES: Final = frozenset({"user", "tool", "function"})
+
+
+def _with_deployment_base_model(litellm_params: Mapping[str, object]) -> Mapping[str, object]:
+    deployment_model_info: Final = as_str_mapping(litellm_params.get("model_info"))
+    if litellm_params.get("base_model") or deployment_model_info is None:
+        return litellm_params
+    return {**litellm_params, "base_model": deployment_model_info.get("base_model")}
+
+
+def _uses_gemini_converter(model: str, provider: LlmProviders, litellm_params: Mapping[str, object]) -> bool:
+    if provider == LlmProviders.VERTEX_AI:
+        return (
+            get_vertex_ai_model_route(model, _with_deployment_base_model(litellm_params)) == VertexAIModelRoute.GEMINI
+        )
+    return isinstance(
+        ProviderConfigManager.get_provider_chat_config(model=model, provider=provider), VertexGeminiConfig
+    )
+
+
+def target_rejects_model_turn_end(
+    model: str, custom_llm_provider: str | None, litellm_params: Mapping[str, object]
+) -> bool:
+    try:
+        bare_model, provider, _, _ = get_llm_provider(model=model, custom_llm_provider=custom_llm_provider)
+        return _uses_gemini_converter(bare_model, LlmProviders(provider), litellm_params)
+    except (litellm.BadRequestError, ValueError):
+        return False
+
+
+def needs_empty_user_turn_back(
+    caller_last_message: Mapping[str, object] | None,
+    sent_messages: Sequence[object],
+    model: str,
+    custom_llm_provider: str | None,
+    litellm_params: Mapping[str, object],
+) -> bool:
+    if not is_whitespace_user_message(caller_last_message):
+        return False
+    if sent_messages and message_field(sent_messages[-1], "role") in _USER_TURN_ROLES:
+        return False
+    return target_rejects_model_turn_end(model, custom_llm_provider, litellm_params)
+
+
+def empty_user_turn_for_model_turn_end(
+    caller_last_message: Mapping[str, object] | None,
+    sent_messages: Sequence[object],
+    model: str,
+    custom_llm_provider: str | None,
+    litellm_params: Mapping[str, object],
+) -> tuple[ChatCompletionUserMessage, ...]:
+    if not needs_empty_user_turn_back(caller_last_message, sent_messages, model, custom_llm_provider, litellm_params):
+        return ()
+    return (ChatCompletionUserMessage(role="user", content=""),)

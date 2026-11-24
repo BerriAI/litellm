@@ -67,6 +67,7 @@ describe("BulkCreateUsersButton", () => {
     fireEvent.change(fileInput, { target: { files: [csvFile()] } });
 
     expect(await screen.findByText("new.hire@example.com")).toBeInTheDocument();
+    expect(screen.getByRole("cell", { name: "Internal User" })).toBeInTheDocument();
   });
 
   it("parses a CSV dropped onto the drop zone", async () => {

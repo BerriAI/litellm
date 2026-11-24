@@ -56,7 +56,12 @@ _PNG: Final = base64.b64decode(
 _IMAGE_USAGE: Final[dict[str, JsonValue]] = {
     "total_tokens": 1553,
     "input_tokens": 263,
-    "input_tokens_details": {"image_tokens": 258, "text_tokens": 5},
+    "input_tokens_details": {
+        "image_tokens": 258,
+        "text_tokens": 5,
+        "cached_tokens": 0,
+        "cached_tokens_details": None,
+    },
     "output_tokens": 1290,
     "output_tokens_details": {"image_tokens": 1290, "text_tokens": 0},
 }

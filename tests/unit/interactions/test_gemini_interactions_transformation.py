@@ -24,6 +24,7 @@ from litellm.types.llms.openai import (
     OutputTextDeltaEvent,
     ResponseCompletedEvent,
     ResponseCreatedEvent,
+    ResponseIncompleteEvent,
 )
 from litellm.types.router import GenericLiteLLMParams
 
@@ -405,6 +406,36 @@ class TestStreamingIterator:
         # consumers can correlate the start and completion events by id.
         assert emitted[0].id == "item_1"
         assert emitted[-1].id == "item_1"
+
+    @pytest.mark.parametrize(
+        ("terminal_event_class", "interaction_status"),
+        [(ResponseCompletedEvent, "completed"), (ResponseIncompleteEvent, "incomplete")],
+    )
+    def test_terminal_event_sets_the_interaction_status(self, terminal_event_class, interaction_status):
+        terminal_event = MagicMock(spec=terminal_event_class)
+        terminal_event.response = MagicMock(id="resp_999")
+        sync_iter = MagicMock()
+        sync_iter.__iter__ = lambda self: self
+        sync_iter.__next__ = MagicMock(side_effect=[self._make_text_delta("hi"), terminal_event, StopIteration])
+
+        emitted = list(
+            LiteLLMResponsesInteractionsStreamingIterator(
+                model="gpt-5.4",
+                litellm_custom_stream_wrapper=sync_iter,
+                request_input="hi",
+                optional_params={},
+            )
+        )
+
+        assert [e.event_type for e in emitted] == [
+            "interaction.created",
+            "step.start",
+            "step.delta",
+            "step.stop",
+            "interaction.completed",
+        ]
+        assert emitted[-1].status == interaction_status
+        assert emitted[-1].steps == [{"type": "model_output", "content": [{"type": "text", "text": "hi"}]}]
 
 
 class TestInteractionOperationUrls:

@@ -299,7 +299,12 @@ async def test_count_tokens_anthropic_format_with_tool_use_and_tool_result(monke
     assert result is not None
     assert result.total_tokens == 64
     sent: Final = decoded_json_object(json.loads(route.calls.last.request.content))
-    assert sent["instructions"] == "Be precise."
+    assert "instructions" not in sent
+    assert sent["input"][0] == {
+        "type": "message",
+        "role": "developer",
+        "content": [{"type": "input_text", "text": "Be precise."}],
+    }
     assert sent["tools"] == [
         {
             "type": "function",
@@ -1160,7 +1165,14 @@ async def test_anthropic_count_with_thinking_counts_the_system_mistral_chat_send
         monkeypatch, model, messages, messages_format="anthropic", system=system
     )
 
-    assert counted.get("instructions") == (chat_systems[0] if chat_systems else None)
+    assert "instructions" not in counted
+    assert counted["input"] == [
+        *[
+            {"type": "message", "role": "developer", "content": [{"type": "input_text", "text": text}]}
+            for text in chat_systems
+        ],
+        {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Capital of France?"}]},
+    ]
     assert counted == without_thinking
 
 
@@ -1176,7 +1188,11 @@ async def test_anthropic_count_joins_system_blocks_the_way_mistral_chat_does(mon
 
     counted: Final = await _sent_count_body(monkeypatch, model, messages, messages_format="anthropic", system=system)
 
-    assert counted["instructions"] == chat_system["content"]
+    assert "instructions" not in counted
+    assert counted["input"] == [
+        {"type": "message", "role": "developer", "content": [{"type": "input_text", "text": chat_system["content"]}]},
+        {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Capital of France?"}]},
+    ]
 
 
 @pytest.mark.parametrize(
