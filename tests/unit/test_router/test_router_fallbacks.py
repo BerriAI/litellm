@@ -1712,7 +1712,11 @@ async def test_mid_stream_continuation_from_an_aws_hop_does_not_bring_the_caller
                 "litellm_params": {"model": "anthropic/claude-haiku-4-5", "api_key": "sk-ant-deployment"},
             },
             {"model_name": "mantle-cut", "litellm_params": dict(mantle_params)},
-            {"model_name": "mantle-backup", "litellm_params": dict(mantle_params)},
+            {
+                "model_name": "mantle-backup",
+                "litellm_params": dict(mantle_params),
+                "model_info": {"supports_assistant_prefill": True},
+            },
         ],
         fallbacks=[{"claude": ["mantle-cut"]}, {"mantle-cut": ["mantle-backup"]}],
         num_retries=0,
@@ -1736,6 +1740,7 @@ async def test_mid_stream_continuation_from_an_aws_hop_does_not_bring_the_caller
         "AWS4-HMAC-SHA256 ",
     )
     assert not any(_carries_caller_key(call.request) for call in mantle.calls)
+    assert json.loads(mantle.calls[1].request.content)["messages"][-1]["role"] == "assistant"
 
 
 @pytest.mark.asyncio
