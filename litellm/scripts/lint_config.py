@@ -280,6 +280,18 @@ def _model_info_findings(
             )
 
 
+def _declared_value(value: object, environ: Mapping[str, str]) -> str:
+    text: Final = "" if value is None else str(value)
+    return environ.get(text.removeprefix(_ENV_PREFIX), "") if text.startswith(_ENV_PREFIX) else text
+
+
+def _provider_model(params: Mapping[str, object], model: str) -> str:
+    provider: Final = params.get("custom_llm_provider")
+    if not isinstance(provider, str) or not provider or model.startswith(f"{provider}/"):
+        return model
+    return f"{provider}/{model}"
+
+
 def _credential_findings(
     model: str, params: Mapping[str, object], path: PathKey, environ: Mapping[str, str]
 ) -> Iterator[Finding]:
@@ -287,7 +299,7 @@ def _credential_findings(
     from litellm.litellm_core_utils.get_llm_provider_logic import declared_authenticating_provider
     from litellm.types.router import GenericLiteLLMParams
 
-    if declared_authenticating_provider(model) is not None:
+    if declared_authenticating_provider(model) is not None or params.get("litellm_credential_name") is not None:
         return
 
     def given(name: str) -> str | None:
@@ -304,7 +316,9 @@ def _credential_findings(
     provider: Final = {name.partition("_")[0].lower().removesuffix("ai") for name in missing}
     fields: Final = [name for name in GenericLiteLLMParams.model_fields if name.partition("_")[0] in provider | {"api"}]
     set_params: Final = {key for key, value in params.items() if value is not None}
-    has_other_auth: Final = any(_ALTERNATIVE_AUTH.search(key) for key in set_params.intersection(fields))
+    has_other_auth: Final = any(_ALTERNATIVE_AUTH.search(key) for key in set_params.intersection(fields)) or (
+        "azure" in provider and "client_secret" in set_params
+    )
     for name in missing:
         setting: Final = name.lower().partition("_")[2]
         names: Final = [field for field in fields if setting in (field, field.partition("_")[2])]
@@ -346,7 +360,8 @@ def _model_list_findings(model_list: object, environ: Mapping[str, str]) -> Iter
         if not isinstance(model, str) or not model:
             yield Finding("error", (*path, "litellm_params"), "missing model")
             continue
-        yield from _credential_findings(model, params, (*path, "litellm_params"), environ)
+        provider_model: Final = _provider_model(params, model)
+        yield from _credential_findings(provider_model, params, (*path, "litellm_params"), environ)
         if entry.get("model_info") is None:
             model_info: Mapping[str, object] = {}
         elif (parsed_info := _mapping(entry["model_info"])) is None:
@@ -354,7 +369,7 @@ def _model_list_findings(model_list: object, environ: Mapping[str, str]) -> Iter
             continue
         else:
             model_info = parsed_info
-        yield from _model_info_findings(model, params, model_info, path)
+        yield from _model_info_findings(provider_model, params, model_info, path)
 
 
 def _model_names(config: Mapping[str, object]) -> frozenset[str]:
@@ -450,7 +465,7 @@ def lint_config(config: Mapping[str, object], environ: Mapping[str, str]) -> Ite
         declared: Final = _mapping(config.get("environment_variables")) or {}
         yield from _model_list_findings(
             config["model_list"],
-            {**{name: "" if value is None else str(value) for name, value in declared.items()}, **environ},
+            {**environ, **{str(name): _declared_value(value, environ) for name, value in declared.items()}},
         )
     yield from _section_findings(config, _model_names(config))
     yield from _env_findings(config, environ)

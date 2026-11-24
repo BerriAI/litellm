@@ -390,6 +390,35 @@ def test_provider_key_declared_under_environment_variables_is_accepted(tmp_path:
     assert _lint(tmp_path, text, {}) == []
 
 
+@pytest.mark.parametrize(
+    ("litellm_params", "expected"),
+    [
+        (
+            "{model: gpt-4o, custom_llm_provider: azure, api_base: https://example.com, api_version: v}",
+            [
+                "config.yaml:3: warning: model_list[0].litellm_params: azure/gpt-4o needs "
+                "AZURE_API_KEY in the environment or litellm_params.api_key"
+            ],
+        ),
+        ("{model: azure/gpt-4o, litellm_credential_name: shared}", []),
+        (
+            "{model: azure/gpt-4o, api_base: https://example.com, api_version: v, "
+            "tenant_id: t, client_id: c, client_secret: s}",
+            [],
+        ),
+    ],
+)
+def test_provider_field_and_stored_credentials_decide_what_a_model_needs(
+    tmp_path: Path, litellm_params: str, expected: list[str]
+) -> None:
+    assert _lint(tmp_path, _model_entry(litellm_params), {}) == expected
+
+
+def test_declared_environment_variable_wins_over_the_process_environment(tmp_path: Path) -> None:
+    text: Final = _model_entry("{model: openai/gpt-5}") + "environment_variables:\n  OPENAI_API_KEY: sk-test\n"
+    assert _lint(tmp_path, text, {"OPENAI_API_KEY": ""}) == []
+
+
 def test_provider_key_value_declared_under_environment_variables_is_used(tmp_path: Path) -> None:
     text: Final = _model_entry("{model: gnani/prisma-v2.5}") + "environment_variables:\n  GNANI_API_KEY: test\n"
     assert _lint(tmp_path, text, {}) == []
