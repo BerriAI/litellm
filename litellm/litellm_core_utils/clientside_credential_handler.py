@@ -95,14 +95,14 @@ def github_copilot_caller_endpoint_keys(
     return tuple(key for key in ("api_base", "base_url") if is_github_copilot and request_kwargs.get(key))
 
 
-def is_clientside_credential(request_kwargs: dict) -> bool:
+def is_clientside_credential(request_kwargs: Mapping[str, object]) -> bool:
     """
     Check if the credential is a clientside credential.
     """
     return any(key in request_kwargs for key in clientside_credential_keys)
 
 
-def get_dynamic_litellm_params(litellm_params: dict, request_kwargs: dict) -> dict:
+def get_dynamic_litellm_params(litellm_params: dict, request_kwargs: Mapping[str, object]) -> dict:
     """
     Generate a unique model_id for the deployment.
 

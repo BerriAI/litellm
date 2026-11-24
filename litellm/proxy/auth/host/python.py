@@ -68,6 +68,7 @@ from litellm.proxy.auth.host.facts import (
     TeamMissing,
     end_user_params,
     team_facts,
+    team_member_facts,
     with_project,
 )
 from litellm.proxy.auth.host.identity import auto_registered_key
@@ -99,6 +100,7 @@ from litellm.proxy.common_utils.user_api_key_cache import (
 )
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.redis.stores.auth_cache import AuthObject
+from litellm.redis.stores.auth_cache.handle import TeamRoster
 from litellm.repositories.user_repository import UserRepository
 from litellm.repositories.verification_token_repository import VerificationTokenRepository
 from litellm.rust_bridge._native import RustIdentity
@@ -342,6 +344,7 @@ class PythonAuthHost:
                             **key.model_dump(exclude_none=True),
                             **team_grants(team, membership, user.user_id),
                             "user_role": get_user_role(user),
+                            "user_email": user.user_email,
                             "models": () if team is not None else user_models(user),
                         }
                     )
@@ -368,6 +371,7 @@ class PythonAuthHost:
             parent_otel_span=self.parent_otel_span,
             proxy_logging_obj=self.proxy_logging_obj,
             check_cache_only=True,
+            for_auth=True,
         )
 
     async def with_team(self, token: UserAPIKeyAuth, team: LiteLLM_TeamTableCachedObj) -> UserAPIKeyAuth:
@@ -449,6 +453,7 @@ class PythonAuthHost:
                     user_api_key_cache=self.user_api_key_cache,
                     parent_otel_span=self.parent_otel_span,
                     proxy_logging_obj=self.proxy_logging_obj,
+                    for_auth=True,
                 )
         except HTTPException:
             return None
@@ -549,8 +554,8 @@ class PythonAuthHost:
 
     @with_service_target(AUTH_OBJECTS_TARGET)
     async def cached_key_mapping(self, claim_field: str, claim_value: str, issuer: str | None) -> object:
-        return await self.user_api_key_cache.async_get_cache(
-            AuthObject.jwt_key_mapping(claim_field, claim_value, issuer)
+        return _DECODED_JSON.validate_python(
+            await self.user_api_key_cache.async_get_cache(AuthObject.jwt_key_mapping(claim_field, claim_value, issuer))
         )
 
     @with_service_target(AUTH_OBJECTS_TARGET)
@@ -588,14 +593,24 @@ class PythonAuthHost:
         return TeamMissing.UNREADABLE
 
     async def team(self, team_id: str, upsert: bool) -> FoundTeam | TeamMissing:
+        if self.prisma_client is not None:
+            cached: Final = await self.user_api_key_cache.get_team_snapshot(AuthObject.team(team_id))
+            if cached is not None:
+                return team_facts(*cached)
         return await self._team(team_id, upsert=upsert)
 
     async def granting_team(self, team_id: str) -> FoundTeam | TeamMissing:
         return await self._team(team_id, check_db_only=True)
 
+    async def bind_team_member(self, team: LiteLLM_TeamTable, roster: TeamRoster, user_id: str) -> FoundTeam:
+        return team_member_facts(team, roster, user_id)
+
     async def team_by_alias(self, alias: str) -> FoundTeam | AliasMissing:
         if self.prisma_client is None:
             return AliasMissing.NO_DB
+        cached: Final = await self.user_api_key_cache.get_team_snapshot(AuthObject.team_alias(alias))
+        if cached is not None:
+            return team_facts(*cached)
         try:
             team: Final = await get_team_object_by_alias(
                 team_alias=alias,

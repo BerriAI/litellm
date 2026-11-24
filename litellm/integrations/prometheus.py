@@ -127,8 +127,8 @@ class _DeploymentFailureLabelValues(TypedDict):
     user_agent: ReadOnly[object]
 
 
-_BudgetRowT: Final = TypeVar("_BudgetRowT")
-_TableRowT: Final = TypeVar("_TableRowT", bound=BaseModel)
+_BudgetRowT = TypeVar("_BudgetRowT")
+_TableRowT = TypeVar("_TableRowT", bound=BaseModel)
 
 _DEFAULT_BUDGET_METRICS_PER_REQUEST_TIMEOUT: Final = 5.0
 
@@ -209,7 +209,7 @@ def _customer_budget_metrics_enabled() -> bool:
     return litellm.enable_end_user_cost_tracking_prometheus_only is True and not litellm.disable_end_user_cost_tracking
 
 
-_MetricT: Final = TypeVar("_MetricT", bound="MetricWrapperBase")
+_MetricT = TypeVar("_MetricT", bound="MetricWrapperBase")
 
 
 class _LabeledMetric(Generic[_MetricT]):
@@ -294,7 +294,7 @@ class _LabeledMetric(Generic[_MetricT]):
 
 _MetricLike: TypeAlias = "NoOpMetric | _LabeledMetric[_MetricT] | _MetricT"
 
-_SeriesLimitT: Final = TypeVar("_SeriesLimitT", int, float)
+_SeriesLimitT = TypeVar("_SeriesLimitT", int, float)
 _REQUEST_METADATA_ADAPTER: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
 _POSITIVE_SERIES_CAP: Final[TypeAdapter[int]] = TypeAdapter(Annotated[int, Field(gt=0)])
 _POSITIVE_SERIES_TTL: Final[TypeAdapter[float]] = TypeAdapter(Annotated[float, Field(gt=0)])
@@ -645,7 +645,7 @@ class PrometheusLogger(CustomLogger):
 
     def __init__(
         self,
-        **kwargs,
+        **kwargs: object,
     ):
         try:
             from prometheus_client import Counter, Gauge, Histogram
@@ -1610,7 +1610,7 @@ class PrometheusLogger(CustomLogger):
     ) -> Callable[..., NoOpMetric | _MetricT | _LabeledMetric[_MetricT]]:
         """Create a factory function that returns either a real metric or a no-op metric"""
 
-        def factory(*args, **kwargs) -> NoOpMetric | _MetricT | _LabeledMetric[_MetricT]:
+        def factory(*args: object, **kwargs) -> NoOpMetric | _MetricT | _LabeledMetric[_MetricT]:
             # Extract metric name from the first argument or 'name' keyword argument
             metric_name: Final = str(args[0] if args else kwargs.get("name", ""))
 
@@ -1797,7 +1797,7 @@ class PrometheusLogger(CustomLogger):
         counter.labels(**_labels).inc(amount)
         self._track_end_user_metric_series(counter, metric_name, _labels)
 
-    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+    async def async_log_success_event(self, kwargs, response_obj: object, start_time: datetime, end_time: datetime):
         # Define prometheus client
         verbose_logger.debug(
             "prometheus Logging - Enters success logging function (kwargs keys: %s)",
@@ -2930,7 +2930,7 @@ class PrometheusLogger(CustomLogger):
                 _labels,
             )
 
-    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time) -> None:
+    async def async_log_failure_event(self, kwargs, response_obj: object, start_time: object, end_time: object) -> None:
         verbose_logger.debug(
             "prometheus Logging - Enters failure logging function (kwargs keys: %s)",
             list(kwargs.keys()) if isinstance(kwargs, dict) else type(kwargs).__name__,
@@ -3011,7 +3011,7 @@ class PrometheusLogger(CustomLogger):
 
     def _extract_status_code(
         self,
-        kwargs: dict | None = None,
+        kwargs: Mapping[str, object] | None = None,
         enum_values: UserAPIKeyLabelValues | None = None,
         exception: Exception | None = None,
     ) -> int | None:
@@ -3320,7 +3320,9 @@ class PrometheusLogger(CustomLogger):
         except Exception as e:
             verbose_logger.exception("prometheus Layer Error(): Exception occured - %s", e)
 
-    async def async_post_call_success_hook(self, data: dict, user_api_key_dict: UserAPIKeyAuth, response):
+    async def async_post_call_success_hook(
+        self, data: Mapping[str, object], user_api_key_dict: UserAPIKeyAuth, response: object
+    ):
         """
         Proxy level tracking - triggered when the proxy responds with a success response to the client
 
@@ -3709,8 +3711,8 @@ class PrometheusLogger(CustomLogger):
     def set_llm_deployment_success_metrics(
         self,
         request_kwargs: dict,
-        start_time,
-        end_time,
+        start_time: datetime,
+        end_time: datetime,
         enum_values: UserAPIKeyLabelValues,
         output_tokens: float = 1.0,
         label_context: PrometheusLabelFactoryContext | None = None,
@@ -5393,7 +5395,7 @@ def prometheus_label_factory(
     return filtered_labels
 
 
-def get_custom_labels_from_metadata(metadata: dict) -> dict[str, str]:
+def get_custom_labels_from_metadata(metadata: Mapping[str, object]) -> dict[str, str]:
     """
     Get custom labels from metadata
     """

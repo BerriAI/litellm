@@ -9,6 +9,7 @@ from itertools import chain, dropwhile, takewhile
 from typing import TYPE_CHECKING, Final, Literal, Optional
 
 from fastapi import HTTPException
+from pydantic import ConfigDict, TypeAdapter
 
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_guardrail import (
@@ -27,11 +28,14 @@ from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import GenericGuardrailAPIInputs
 
 if TYPE_CHECKING:
+    import httpx
+
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.types.guardrails import LitellmParams
     from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
 
 DEFAULT_GUARDRAIL_TIMEOUT: Final = 5.0
+_ZSCALER_RESPONSE: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(strict=True))
 
 
 class ZscalerAIGuard(CustomGuardrail):
@@ -297,7 +301,7 @@ class ZscalerAIGuard(CustomGuardrail):
             "blockingDetectors": blocking_detectors,
         }
 
-    def _create_user_facing_error(self, reason: str):
+    def _create_user_facing_error(self, reason: str) -> Mapping[str, str]:
         """
         create an error dictionary that return to use
         """
@@ -306,7 +310,7 @@ class ZscalerAIGuard(CustomGuardrail):
             "reason": reason,
         }
 
-    def _prepare_headers(self, api_key, **kwargs):
+    def _prepare_headers(self, api_key: str | None, **kwargs: str) -> dict[str, str]:
         headers: Final = {
             "Content-Type": "application/json",
             "Authorization": f"Bearer {api_key}",
@@ -329,7 +333,7 @@ class ZscalerAIGuard(CustomGuardrail):
         verbose_proxy_logger.debug("extra_headers: %s", extra_headers)
         return extra_headers
 
-    async def _send_request(self, url, headers, data):
+    async def _send_request(self, url: str, headers: dict[str, str], data: dict[str, object]):
         async_client: Final = get_async_httpx_client(llm_provider=httpxSpecialProvider.LoggingCallback)
 
         response: Final = await async_client.post(
@@ -341,7 +345,7 @@ class ZscalerAIGuard(CustomGuardrail):
         response.raise_for_status()
         return response
 
-    def _handle_response(self, response, direction):
+    def _handle_response(self, response: "httpx.Response", direction: str) -> Mapping[str, object]:
         # Raise exceptions on critical errors to stop the request
         if response.status_code == 429:  # Rate limit
             verbose_proxy_logger.error("Zscaler AI Guard rate limit reached. Blocking request.")
@@ -357,7 +361,7 @@ class ZscalerAIGuard(CustomGuardrail):
             raise HTTPException(status_code=500, detail=user_facing_error)
 
         if response.status_code == 200:
-            json_response: Final = response.json()
+            json_response: Final = _ZSCALER_RESPONSE.validate_python(response.json())
             statusCode_in_response: Final = json_response.get("statusCode", None)
             if statusCode_in_response == 200:
                 guardrail_result: Final = json_response.get("action", None)
@@ -408,15 +412,15 @@ class ZscalerAIGuard(CustomGuardrail):
         direction: str,
         content: str,
         user: str | None = None,
-        **kwargs,
-    ):
+        **kwargs: str,
+    ) -> Mapping[str, object]:
         """
         Makes an API call to the Zscaler AI Guard service and handles retries, errors, and response parsing.
         """
 
         extra_headers: Final = self._prepare_headers(api_key, **kwargs)
 
-        data: Final = {
+        data: Final[dict[str, object]] = {
             "direction": direction,
             "content": content,
         }

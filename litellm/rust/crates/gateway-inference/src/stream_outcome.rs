@@ -14,7 +14,7 @@ use futures_util::{
     StreamExt, TryStreamExt,
     stream::{self, BoxStream},
 };
-use litellm_framer::sse::{self, SseBlock};
+use litellm_framer::sse::SseBlock;
 use litellm_host::{call::CallOutput, protocol::Protocol};
 use litellm_inference::Error as InferenceError;
 use litellm_router_core::{
@@ -49,8 +49,8 @@ pub(crate) fn bytes<R, H, E: 'static>(
     }
 }
 
-/// How a stream went: the tokens it counted, or the failure that ended it.
-pub(crate) type Outcome = Result<u64, AttemptError>;
+/// How a stream went: what it counted, or the failure that ended it.
+pub(crate) type Outcome = Result<Counts, AttemptError>;
 
 fn lost_connection() -> AttemptError {
     AttemptError::new(FailureKind::ApiConnection, None)
@@ -114,7 +114,7 @@ where
                 }
             }
             (Some(Err(error)), Some(_)) => (None, Some(Err(broke(error)))),
-            (None, Some(counted)) => (None, Some(Ok(counted.total()))),
+            (None, Some(counted)) => (None, Some(Ok(counted))),
         };
         if let Some(outcome) = outcome {
             report(outcome).await;
@@ -152,46 +152,39 @@ async fn record_failure<C: RouterCache>(
     }
 }
 
-/// `chunks` of a stream `deployment` serves, as the blocks they carry, the stream's outcome
-/// reported to the router.
+/// `blocks` of a stream `deployment` serves, the stream's outcome reported to the router.
 pub(crate) fn reporting_outcome<H: routing::Host>(
     gateway: &Gateway<H>,
     deployment: &Arc<Deployment>,
-    chunks: BoxStream<'static, Result<Bytes, litellm_host_http::Error<InferenceError>>>,
+    blocks: routing::RouteChunks,
     read: Read,
-) -> BoxStream<'static, Result<SseBlock, litellm_host_http::Error<InferenceError>>> {
+) -> routing::RouteChunks {
     let router = gateway.router.clone();
     let routing = gateway.routing.clone();
     let deployment = deployment.clone();
-    watched(
-        sse::blocks(chunks).boxed(),
-        read,
-        broke,
-        move |outcome: Outcome| {
-            let (router, routing, deployment) =
-                (router.clone(), routing.clone(), deployment.clone());
-            async move {
-                let total_tokens = match outcome {
-                    Ok(total_tokens) => total_tokens,
-                    Err(failure) => {
-                        return record_failure(&router, &*routing, &deployment, &failure).await;
-                    }
-                };
-                let recorded = router
-                    .report_success(
-                        &*routing,
-                        &deployment.id,
-                        total_tokens as f64,
-                        0.0,
-                        SuccessReport::default(),
-                    )
-                    .await;
-                if let Err(error) = recorded {
-                    tracing::warn!(deployment_id = %deployment.id, %error, "stream outcome was not recorded");
+    watched(blocks, read, broke, move |outcome: Outcome| {
+        let (router, routing, deployment) = (router.clone(), routing.clone(), deployment.clone());
+        async move {
+            let total_tokens = match outcome {
+                Ok(counted) => counted.total(),
+                Err(failure) => {
+                    return record_failure(&router, &*routing, &deployment, &failure).await;
                 }
+            };
+            let recorded = router
+                .report_success(
+                    &*routing,
+                    &deployment.id,
+                    total_tokens as f64,
+                    0.0,
+                    SuccessReport::default(),
+                )
+                .await;
+            if let Err(error) = recorded {
+                tracing::warn!(deployment_id = %deployment.id, %error, "stream outcome was not recorded");
             }
-        },
-    )
+        }
+    })
 }
 
 #[cfg(test)]
@@ -199,6 +192,7 @@ mod tests {
     use std::sync::Arc;
 
     use futures_util::stream;
+    use litellm_framer::sse;
     use parking_lot::Mutex;
     use rstest::rstest;
 
@@ -231,8 +225,11 @@ mod tests {
             stream::iter(chunks).map(|chunk| chunk.map(|text| Bytes::from_static(text.as_bytes())));
         let blocks = sse::blocks(chunks).boxed();
         let delivered = watched(blocks, read, dropped, move |outcome: Outcome| {
-            sink.lock()
-                .push(outcome.map_err(|failure| (failure.status, failure.kind)));
+            sink.lock().push(
+                outcome
+                    .map(Counts::total)
+                    .map_err(|failure| (failure.status, failure.kind)),
+            );
             async {}
         })
         .take(take)

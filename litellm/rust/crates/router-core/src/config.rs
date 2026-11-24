@@ -280,19 +280,8 @@ impl RouterConfig {
     ) -> Result<(Self, RouterDynamicConfig), ConfigError> {
         let object = |map: &Option<Map<String, Value>>| map.clone().map(Value::Object);
         let config = Self {
-            routing_strategy: settings
-                .routing_strategy
-                .as_deref()
-                .and_then(|name| name.parse().ok())
-                .unwrap_or_default(),
-            routing_groups: decoded(
-                "routing_groups",
-                settings
-                    .routing_groups
-                    .clone()
-                    .map(|groups| Value::Array(groups.into_iter().map(Value::Object).collect())),
-            )?
-            .unwrap_or_default(),
+            routing_strategy: settings.routing_strategy.clone().unwrap_or_default(),
+            routing_groups: settings.routing_groups.clone().unwrap_or_default(),
             cooldown_time: settings.cooldown_time,
             disable_cooldowns: settings.disable_cooldowns.unwrap_or(false),
             allowed_fails_policy: decoded(

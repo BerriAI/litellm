@@ -1,36 +1,31 @@
 //! `POST /v1/messages`, as the Python proxy's `anthropic_response` serves it.
 
-use litellm_gateway_auth::AuthenticatedRequest;
-use std::sync::Arc;
-
-use axum::{
-    Extension, Json,
-    body::Bytes,
-    extract::State,
-    http::HeaderMap,
-    response::{IntoResponse, Response},
-};
+use axum::{Json, body::Bytes, http::HeaderMap, response::Response};
+use futures_util::StreamExt;
 use litellm_cache_response::CachePolicy;
+use litellm_framer::sse;
 use litellm_host::call::CallOutput;
 use litellm_host_http::Sse;
 use litellm_inference_messages::{
     MessagesBody, MessagesCall, MessagesRoute, MessagesShaping, messages_body, route::Messages,
 };
+use litellm_llms_types::formats::chat_completions::ChatCompletionsUsage;
 use litellm_llms_types::formats::messages::{
     MessagesOptionalParams,
     streaming::{MessagesStreamEvent, MessagesStreamUsage},
 };
 use litellm_llms_types::headers::{ProviderSpecificHeader, ProviderSpecificHeaders};
-use litellm_router_core::{Attempt, Deployment, Op, Served};
+use litellm_router_core::{Attempt, Deployment, Op};
 use serde_json::{Map, Value};
 
 use crate::{
-    Ended, Error, Gateway, JsonObject, RequestId,
+    Error, Gateway, JsonObject,
     caching::CacheHeaders,
-    headers::Routing,
+    error::ErrorFormat,
+    hooks::CallType,
     model_restamp::{ReportedModel, Stamp},
-    request,
     routing::{self, Host, RouteAttempt, RouteChunks},
+    serve::{self, Call, Endpoint},
     stream_event::{Counts, Kind, Read, Reading},
     stream_outcome::{self, Streamed},
 };
@@ -45,66 +40,11 @@ const ANTHROPIC_API_HEADER_PROVIDERS: &str =
     "anthropic,bedrock,bedrock_mantle,vertex_ai,openrouter,deepseek";
 const TOOLS: &str = "tools";
 
-pub async fn create<H: Host>(
-    State(gateway): State<Arc<Gateway<H>>>,
-    identity: AuthenticatedRequest,
-    RequestId(request_id): RequestId,
-    headers: HeaderMap,
-    body: Result<JsonObject, Error>,
-) -> impl IntoResponse {
-    let result = match body {
-        Ok(JsonObject(body)) => handle(&gateway, &identity, &headers, body).await,
-        Err(error) => Err(error.into()),
-    };
-    result.map_err(|ended| {
-        (
-            ended.error.status(),
-            ended.routing(),
-            Json(ended.error.body(request_id.as_deref())),
-        )
+pub async fn create<H: Host>(call: Call<H>, body: Result<JsonObject, Error>) -> Response {
+    serve::run(&call, body.map(|JsonObject(body)| body), |body| {
+        MessagesAttempt::new(&call, body)
     })
-}
-
-async fn handle<H: Host>(
-    gateway: &Gateway<H>,
-    identity: &AuthenticatedRequest,
-    headers: &HeaderMap,
-    body: Map<String, Value>,
-) -> Result<Response, Ended> {
-    let model = request::model(&body)?.to_owned();
-    let (body, cache_options) = crate::caching::prepare(identity, body)?;
-    let route = gateway.messages.clone();
-    let route = match &gateway.cache {
-        Some(cache) => route.with_cache(litellm_cache_response::ScopedCache::new(
-            cache.clone(),
-            cache_options.scope.clone(),
-        )),
-        None => route,
-    };
-    let attempt = MessagesAttempt {
-        gateway,
-        route,
-        body,
-        headers,
-        policy: cache_options.policy,
-    };
-    let routed = routing::call(
-        gateway,
-        identity,
-        Op::ANTHROPIC_MESSAGES,
-        "/v1/messages",
-        &model,
-        &attempt,
-    )
-    .await?;
-    let routing = Routing::served(&routed);
-    let reported = ReportedModel::of(&model, &routed);
-    let (ran, cache) = routed.output.response;
-    let stream =
-        Sse::<Messages, _, _>::new(Json, |error| Bytes::from(Error::from(error).sse_frame()));
-    let ran = reported.answer(ran, message_start);
-    let response = litellm_host_http::render(stream, stream_outcome::bytes(ran))?;
-    Ok((Extension(routing), cache.apply(response)).into_response())
+    .await
 }
 
 /// Where a Messages stream names its model: the `message_start` event, the first one that is
@@ -137,10 +77,62 @@ struct MessagesAttempt<'a, H> {
     policy: CachePolicy,
 }
 
+impl<'a, H: Host> MessagesAttempt<'a, H> {
+    fn new(call: &'a Call<H>, body: Map<String, Value>) -> Result<Self, Error> {
+        let gateway = &*call.gateway;
+        let (body, cache_options) = crate::caching::prepare(&call.identity, body)?;
+        let route = gateway.messages.clone();
+        let route = match &gateway.cache {
+            Some(cache) => route.with_cache(litellm_cache_response::ScopedCache::new(
+                cache.clone(),
+                cache_options.scope,
+            )),
+            None => route,
+        };
+        Ok(Self {
+            gateway,
+            route,
+            body,
+            headers: &call.headers,
+            policy: cache_options.policy,
+        })
+    }
+}
+
+impl<H: Host> Endpoint for MessagesAttempt<'_, H> {
+    const CALL_TYPE: CallType = CallType::AnthropicMessages;
+    const OP: Op = Op::ANTHROPIC_MESSAGES;
+    const PATH: &'static str = "/v1/messages";
+    const ERRORS: ErrorFormat = ErrorFormat::Anthropic;
+
+    fn counts((ran, _): &Self::Outcome) -> Option<Counts> {
+        let usage = match ran {
+            CallOutput::Complete(MessagesBody::Message(message)) => message.usage.as_ref(),
+            CallOutput::Complete(MessagesBody::Unchecked(fields)) => fields.get("usage"),
+            CallOutput::Stream { .. } => None,
+        }?;
+        serde_json::from_value::<MessagesStreamUsage>(usage.clone())
+            .ok()
+            .map(Counts::from)
+    }
+
+    fn usage(counts: Counts) -> Option<ChatCompletionsUsage> {
+        Some(counts.messages_usage())
+    }
+
+    fn render((ran, cache): Self::Outcome, reported: ReportedModel<'_>) -> Result<Response, Error> {
+        let stream =
+            Sse::<Messages, _, _>::new(Json, |error| Bytes::from(Error::from(error).sse_frame()));
+        let ran = reported.answer(ran, message_start);
+        let response = litellm_host_http::render(stream, stream_outcome::bytes(ran))?;
+        Ok(cache.apply(response))
+    }
+}
+
 impl<H: Host> RouteAttempt for MessagesAttempt<'_, H> {
     type Outcome = (Streamed<Messages>, CacheHeaders);
 
-    async fn run(&self, attempt: &Attempt) -> Result<Served<Self::Outcome>, Error> {
+    async fn run(&self, attempt: &Attempt) -> Result<Self::Outcome, Error> {
         let deployment = &attempt.deployment;
         let call = MessagesCall {
             timeout: routing::timeout(attempt, routing::streamed(&self.body)),
@@ -154,23 +146,23 @@ impl<H: Host> RouteAttempt for MessagesAttempt<'_, H> {
         let machine = self.route.clone().machine(call, self.policy);
         let cache = CacheHeaders::default();
         let ran = litellm_host_http::run(machine, (), cache.clone(), None).await?;
-        Ok(match ran {
-            CallOutput::Complete(body) => {
-                let total_tokens = routing::total_tokens(match &body {
-                    MessagesBody::Message(message) => message.usage.as_ref(),
-                    MessagesBody::Unchecked(fields) => fields.get("usage"),
-                });
-                Served::new((CallOutput::Complete(body), cache), total_tokens)
-            }
-            CallOutput::Stream { head, chunks } => {
-                let chunks =
-                    stream_outcome::reporting_outcome(self.gateway, deployment, chunks, read_event);
-                Served {
-                    deferred: true,
-                    ..Served::new((CallOutput::Stream { head, chunks }, cache), 0)
-                }
-            }
-        })
+        let ran = match ran {
+            CallOutput::Complete(body) => CallOutput::Complete(body),
+            CallOutput::Stream { head, chunks } => CallOutput::Stream {
+                head,
+                chunks: sse::blocks(chunks).boxed(),
+            },
+        };
+        Ok((ran, cache))
+    }
+
+    fn total_tokens((ran, _): &Self::Outcome) -> u64 {
+        let usage = match ran {
+            CallOutput::Complete(MessagesBody::Message(message)) => message.usage.as_ref(),
+            CallOutput::Complete(MessagesBody::Unchecked(fields)) => fields.get("usage"),
+            CallOutput::Stream { .. } => None,
+        };
+        routing::total_tokens(usage)
     }
 
     fn held(outcome: &mut Self::Outcome) -> Option<(&mut RouteChunks, Read)> {
@@ -295,6 +287,8 @@ impl From<MessagesStreamUsage> for Counts {
         Self {
             input_tokens: usage.input_tokens,
             output_tokens: usage.output_tokens,
+            cache_creation_input_tokens: usage.cache_creation_input_tokens,
+            cache_read_input_tokens: usage.cache_read_input_tokens,
         }
     }
 }

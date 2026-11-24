@@ -27,6 +27,7 @@ litellm-db-resolve.workspace = true
 litellm-repositories.workspace = true
 litellm-spend-log-writer.workspace = true
 fancy-regex.workspace = true
+litellm-redaction.workspace = true
 litellm-tracing.workspace = true
 litellm-spend-clickhouse.workspace = true
 litellm-storage-clickhouse.workspace = true
@@ -83,10 +84,11 @@ litellm-coroutine.workspace = true
 litellm-host-python.workspace = true
 parking_lot.workspace = true
 litellm-model-catalog.workspace = true
+litellm-cost.workspace = true
 litellm-model-catalog-refresh.workspace = true
 litellm-token-counter = { path = "../token-counter", default-features = false }
 indexmap = "2.14.0"
-pyo3 = { workspace = true, features = ["chrono", "indexmap"] }
+pyo3 = { workspace = true, features = ["chrono", "indexmap", "jiff-02"] }
 prost.workspace = true
 pyo3-async-runtimes.workspace = true
 reqwest.workspace = true

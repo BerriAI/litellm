@@ -75,9 +75,9 @@ class GithubCopilotConfig(OpenAIConfig):
 
     def _transform_messages(
         self,
-        messages,
+        messages: list[AllMessageValues],
         model: str,
-    ):
+    ) -> list[AllMessageValues]:
         import litellm
 
         # Check if system-to-assistant conversion is disabled
@@ -87,7 +87,7 @@ class GithubCopilotConfig(OpenAIConfig):
             return messages
 
         # Default behavior: convert system messages to assistant for compatibility
-        transformed_messages: Final = []
+        transformed_messages: Final[list[AllMessageValues]] = []
         for message in messages:
             if message.get("role") == "system":
                 # Convert system message to assistant message
@@ -273,7 +273,7 @@ class GithubCopilotConfig(OpenAIConfig):
         else:
             finish_reason = "length"
 
-        message: Final[dict] = {
+        message: Final[dict[str, object]] = {
             "role": "assistant",
             "content": content if content or not tool_calls else None,
         }

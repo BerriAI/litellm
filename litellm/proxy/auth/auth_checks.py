@@ -48,6 +48,7 @@ from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.decisions_pricing import decisions_pricing_fields, decisions_request_price
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+from litellm.litellm_core_utils.llm_cost_calc.pricing_bridge import rate_card
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.litellm_core_utils.tool_fields import DropPolicy
 from litellm.llms.base_llm.managed_resources.utils import (
@@ -58,6 +59,8 @@ from litellm.models.project import LiteLLM_ProjectTable
 from litellm.models.team import LiteLLM_TeamRebuiltFromToken
 from litellm.proxy._types import (
     MODEL_LIST_ROUTES,
+    REQUIRED_CUSTOMER_HEADERS_ADAPTER,
+    REQUIRED_CUSTOMER_HEADERS_SETTING,
     UI_TEAM_ID,
     CallInfo,
     ConfigGeneralSettings,
@@ -181,7 +184,7 @@ from litellm.repositories.verification_token_repository import VerificationToken
 from litellm.responses.additional_tools import additional_tools_in_input
 from litellm.router import Router
 from litellm.router_api import RegistryReader
-from litellm.rust_bridge._native import NativeDatabaseFailure
+from litellm.rust_bridge._native import NativeDatabaseFailure, NativeRateCard
 from litellm.secret_managers.main import str_to_bool
 from litellm.types.proxy.auth.auth_checks import UserNotFoundError
 from litellm.types.proxy.model_access_group_budget import ModelAccessGroupBudget
@@ -330,7 +333,7 @@ def _raw_cache(cache: _RawCacheRead) -> _RawCacheRead:
     return cache
 
 
-def _typed_request_body(request_body: dict) -> Mapping[str, object]:
+def _typed_request_body(request_body: Mapping[str, object]) -> Mapping[str, object]:
     return request_body
 
 
@@ -338,6 +341,7 @@ typed_general_settings: Final = _typed_request_body
 
 
 _TRACE_ID_METADATA_ADAPTER: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
+_REQUEST_HEADERS_ADAPTER: Final[TypeAdapter[Mapping[str, str]]] = TypeAdapter(Mapping[str, str])
 
 
 def _metadata_mapping_has_trace_id(metadata: Mapping[str, object]) -> bool:
@@ -361,6 +365,80 @@ def _team_metadata_requires_trace_id(team_object: LiteLLM_TeamTable) -> bool:
     return (
         team_object.metadata.get("require_trace_id")  # pyright: ignore[reportUnknownMemberType]  # narrowed to dict
         is True
+    )
+
+
+def _scope_required_customer_headers(scope: object) -> tuple[str, ...]:
+    if not _metadata_is_mapping(scope):
+        return ()
+    return REQUIRED_CUSTOMER_HEADERS_ADAPTER.validate_python(
+        _TRACE_ID_METADATA_ADAPTER.validate_python(scope).get(REQUIRED_CUSTOMER_HEADERS_SETTING) or ()
+    )
+
+
+def _metadata_is_mapping(metadata: object) -> bool:
+    return isinstance(metadata, Mapping)
+
+
+class _MetadataScope(Protocol):
+    @property
+    def metadata(self) -> object: ...
+
+
+def _scope_metadata(scope: _MetadataScope | None) -> object:
+    return scope.metadata if scope is not None else None
+
+
+def _required_customer_headers(scopes: tuple[object, object, object]) -> tuple[str, ...]:
+    return tuple(chain.from_iterable(map(_scope_required_customer_headers, scopes)))
+
+
+def _missing_customer_header(headers: Mapping[str, str], required: tuple[str, ...]) -> str | None:
+    present: Final = frozenset(name.lower() for name, value in headers.items() if value.strip())
+    return next((header for header in required if header.lower() not in present), None)
+
+
+def _is_pass_through_route(route: str, request: Request | None) -> bool:
+    return RouteChecks.check_route_access(
+        route=route,
+        allowed_routes=LiteLLMRoutes.passthrough_routes_wildcard.value,
+    ) or request_dispatched_to_pass_through_endpoint(request)
+
+
+def _route_requires_customer_headers(route: str, request: Request | None) -> bool:
+    return (
+        RouteChecks.runs_inference_checks(route) or _is_pass_through_route(route, request)
+    ) and not RouteChecks.is_info_route(route)
+
+
+async def missing_required_customer_header(
+    request: Request | None,
+    route: str,
+    authenticated: UserAPIKeyAuth,
+    prisma_client: PrismaClient | None,
+    user_api_key_cache: UserApiKeyCache,
+) -> str | None:
+    """The first header this route's required-customer-header policy needs that the request lacks, or None."""
+    from litellm.proxy import proxy_server
+
+    if not _route_requires_customer_headers(route, request):
+        return None
+    team: Final = (
+        await get_team_object(
+            team_id=authenticated.team_id, prisma_client=prisma_client, user_api_key_cache=user_api_key_cache
+        )
+        if authenticated.team_id is not None and authenticated.team_id != UI_TEAM_ID
+        else None
+    )
+    return _missing_customer_header(
+        _REQUEST_HEADERS_ADAPTER.validate_python(safe_get_request_headers(request=request)),
+        _required_customer_headers(
+            (
+                getattr(proxy_server, "general_settings", None),
+                _scope_metadata(team),
+                _scope_metadata(authenticated),
+            )
+        ),
     )
 
 
@@ -637,14 +715,21 @@ def _is_cost_explicitly_configured(deployments: Sequence[DeploymentTypedDict]) -
     It also reaches a deployment that prices itself through its ``model_info`` block, whose entry
     lands in the cost map under the deployment id.
     """
-    for deployment in deployments:
-        model_id = (deployment.get("model_info") or _EMPTY_COST_ENTRY).get("id")
-        if model_id is None:
-            continue
-        raw_entry = litellm.model_cost.get(model_id, _EMPTY_COST_ENTRY)
-        if "input_cost_per_token" in raw_entry or "output_cost_per_token" in raw_entry:
-            return True
-    return False
+    return any(
+        (card := _deployment_rate_card(deployment)) is not None and card.token_rate_key for deployment in deployments
+    )
+
+
+def _deployment_rate_card(deployment: DeploymentTypedDict) -> NativeRateCard | None:
+    """The rate card of the cost map row a deployment registered under its id."""
+    model_id: Final = (deployment.get("model_info") or _EMPTY_COST_ENTRY).get("id")
+    return rate_card(model_id) if isinstance(model_id, str) else None
+
+
+def _prices_tokens_above_zero(card: NativeRateCard | None) -> bool:
+    return card is not None and any(
+        rate is not None and rate > 0 for rate in (card.input_cost_per_token, card.output_cost_per_token)
+    )
 
 
 def _has_explicit_positive_cost(deployments: Sequence[DeploymentTypedDict]) -> bool:
@@ -660,10 +745,8 @@ def _has_explicit_positive_cost(deployments: Sequence[DeploymentTypedDict]) -> b
         if model_id is None:
             continue
         raw_entry = as_str_mapping(litellm.model_cost.get(model_id)) or _EMPTY_COST_ENTRY
-        if (
-            _is_positive_cost(raw_entry.get("input_cost_per_token"))
-            or _is_positive_cost(raw_entry.get("output_cost_per_token"))
-            or _is_positive_cost(_deployment_query_price(deployment["litellm_params"], raw_entry))
+        if _prices_tokens_above_zero(_deployment_rate_card(deployment)) or _is_positive_cost(
+            _deployment_query_price(deployment["litellm_params"], raw_entry)
         ):
             return True
     return False
@@ -798,7 +881,9 @@ async def _run_project_checks(
         )
 
 
-def _enforce_user_param_check(general_settings: dict, request: Request, request_body: dict, route: str) -> None:
+def _enforce_user_param_check(
+    general_settings: Mapping[str, object], request: Request, request_body: Mapping[str, object], route: str
+) -> None:
     if not general_settings.get("enforce_user_param", False):
         return
 
@@ -814,7 +899,10 @@ def _enforce_user_param_check(general_settings: dict, request: Request, request_
 
 
 def _reject_clientside_metadata_tags_check(
-    general_settings: dict, request_body: dict, route: str, request: Request | None = None
+    general_settings: Mapping[str, object],
+    request_body: Mapping[str, object],
+    route: str,
+    request: Request | None = None,
 ) -> None:
     if not general_settings.get("reject_clientside_metadata_tags", False):
         return
@@ -855,7 +943,7 @@ def _global_proxy_budget_check(global_proxy_spend: float | None, skip_budget_che
             raise native.error()
 
 
-_GUARDRAIL_MODIFICATION_KEYS: Final[tuple] = (
+_GUARDRAIL_MODIFICATION_KEYS: Final[tuple[str, ...]] = (
     "guardrails",
     "disable_global_guardrails",
     "disable_global_guardrail",
@@ -1234,7 +1322,7 @@ async def common_checks(
     user_object: LiteLLM_UserTable | None,
     end_user_object: LiteLLM_EndUserTable | None,
     global_proxy_spend: float | None,
-    general_settings: dict,
+    general_settings: Mapping[str, object],
     route: str,
     llm_router: Router | None,
     proxy_logging_obj: ProxyLogging,
@@ -1445,10 +1533,7 @@ async def common_checks(
                         code=status.HTTP_400_BAD_REQUEST,
                     )
 
-    pass_through_route: Final = RouteChecks.check_route_access(
-        route=route,
-        allowed_routes=LiteLLMRoutes.passthrough_routes_wildcard.value,
-    ) or request_dispatched_to_pass_through_endpoint(request)
+    pass_through_route: Final = _is_pass_through_route(route, request)
     headers_only: Final = (
         RouteChecks.check_route_access(
             route=route,
@@ -1496,6 +1581,33 @@ async def common_checks(
             type=ProxyErrorTypes.bad_request_error,
             param="trace_id",
             code=status.HTTP_400_BAD_REQUEST,
+        )
+
+    required_customer_headers: Final = (
+        _required_customer_headers(
+            (
+                general_settings,  # pyright: ignore[reportUnknownArgumentType]  # validated to Mapping[str, object] inside
+                _scope_metadata(team_object),
+                _scope_metadata(valid_token),
+            )
+        )
+        if _route_requires_customer_headers(route, request)
+        else ()
+    )
+    missing_customer_header: Final = (
+        _missing_customer_header(
+            _REQUEST_HEADERS_ADAPTER.validate_python(safe_get_request_headers(request=request)),
+            required_customer_headers,
+        )
+        if required_customer_headers
+        else None
+    )
+    if missing_customer_header is not None:
+        raise ProxyException(
+            message=f"Missing required customer header {missing_customer_header}",
+            type=ProxyErrorTypes.auth_error,
+            param=missing_customer_header,
+            code=status.HTTP_403_FORBIDDEN,
         )
 
     await can_agent_call_model(
@@ -1604,12 +1716,12 @@ async def common_checks(
                 return
 
             await _user_multi_budget_check(user_object)
-            if user_object.max_budget is None:
+            user_budget: Final = user_object.effective_max_budget()
+            if user_budget is None:
                 return
 
             from litellm.proxy.proxy_server import get_current_spend
 
-            user_budget: Final = user_object.max_budget
             user_spend: Final = await get_current_spend(
                 counter_key=user_counter(user_object.user_id),
                 fallback_spend=user_object.spend or 0.0,
@@ -2005,8 +2117,11 @@ def resolve_effective_team_member_budget(
     member_budget: LiteLLM_BudgetTable | None,
     team_default_budget: LiteLLM_BudgetTable | None,
     now: datetime,
+    membership: LiteLLM_TeamMembership | None = None,
 ) -> float | None:
     if member_budget is not None and member_budget.max_budget is not None:
+        if membership is not None:
+            return membership.effective_budget_with_rollover(now)
         return member_budget.effective_max_budget(now)
     if team_default_budget is None or team_default_budget.max_budget is None or team_default_budget.max_budget <= 0:
         return None
@@ -3617,11 +3732,24 @@ class AccessGroupNotFoundError(HTTPException):
         )
 
 
+async def _find_team_retrying_a_lost_connection(
+    team_id: str, prisma_client: PrismaClient, *, use_writer: bool
+) -> LiteLLM_TeamTableCachedObj | None:
+    teams: Final = TeamRepository(prisma_client)
+    try:
+        return await teams.find_with_model_aliases(team_id, use_writer=use_writer)
+    except NativeDatabaseFailure as error:
+        if error.kind != "unreachable":
+            raise
+        verbose_proxy_logger.warning("Team read lost its database connection, retrying once: %s", error)
+    return await teams.find_with_model_aliases(team_id, use_writer=use_writer)
+
+
 async def _get_team_db_check(
     team_id: str, prisma_client: PrismaClient, team_id_upsert: bool | None = None, *, use_writer: bool = False
 ) -> LiteLLM_TeamTableCachedObj | None:
     response: LiteLLM_TeamTableCachedObj | None = await bounded_db_lookup(
-        TeamRepository(prisma_client).find_with_model_aliases(team_id, use_writer=use_writer), name="team"
+        _find_team_retrying_a_lost_connection(team_id, prisma_client, use_writer=use_writer), name="team"
     )
 
     if response is None and team_id_upsert:
@@ -3718,7 +3846,12 @@ async def get_team_object_from_cache(
     key: AuthObject,
     user_api_key_cache: UserApiKeyCache,
     parent_otel_span: Span | None,
+    *,
+    for_auth: bool = False,
+    auth_user_id: str | None = None,
 ) -> LiteLLM_TeamTableCachedObj | None:
+    if for_auth:
+        return await user_api_key_cache.get_auth_team(key, auth_user_id)
     decoded: Final = await user_api_key_cache.async_get_cache(
         key=key,
         model_type=LiteLLM_TeamTableCachedObj,
@@ -3743,6 +3876,9 @@ async def read_team(
     check_cache_only: bool | None = None,
     check_db_only: bool | None = None,
     team_id_upsert: bool | None = None,
+    *,
+    for_auth: bool = False,
+    auth_user_id: str | None = None,
 ) -> LiteLLM_TeamTableCachedObj | TeamReadFailed:
     if prisma_client is None:
         raise Exception("No DB Connected. See - https://docs.litellm.ai/docs/proxy/virtual_keys")
@@ -3755,6 +3891,8 @@ async def read_team(
             key=key,
             user_api_key_cache=user_api_key_cache,
             parent_otel_span=parent_otel_span,
+            for_auth=for_auth,
+            auth_user_id=auth_user_id,
         )
 
         if cached_team_obj is not None:
@@ -3768,7 +3906,7 @@ async def read_team(
 
     # else, check db
     try:
-        return await _get_team_object_from_user_api_key_cache(
+        team: Final = await _get_team_object_from_user_api_key_cache(
             team_id=team_id,
             prisma_client=prisma_client,
             user_api_key_cache=user_api_key_cache,
@@ -3779,6 +3917,16 @@ async def read_team(
             team_id_upsert=team_id_upsert,
             use_writer=bool(check_db_only),
         )
+        if not for_auth:
+            return team
+        member: Final = (
+            next((member for member in team.members_with_roles if member.user_id == auth_user_id), None)
+            if auth_user_id is not None
+            else None
+        )
+        return team.model_copy(
+            update={"members_with_roles": [] if member is None else [member], "members": [], "admins": []}
+        ).model_copy(deep=True)
     except TeamNotFoundError:
         raise
     except Exception as error:
@@ -3794,6 +3942,9 @@ async def get_team_object(
     check_cache_only: bool | None = None,
     check_db_only: bool | None = None,
     team_id_upsert: bool | None = None,
+    *,
+    for_auth: bool = False,
+    auth_user_id: str | None = None,
 ) -> LiteLLM_TeamTableCachedObj:
     """
     - Check if team id in proxy Team Table
@@ -3812,6 +3963,8 @@ async def get_team_object(
         check_cache_only=check_cache_only,
         check_db_only=check_db_only,
         team_id_upsert=team_id_upsert,
+        for_auth=for_auth,
+        auth_user_id=auth_user_id,
     )
     if isinstance(read, TeamReadFailed):
         raise HTTPException(
@@ -7395,6 +7548,7 @@ async def _check_team_member_budget(
             member_budget=member_budget_row,
             team_default_budget=team_default_budget,
             now=now,
+            membership=loaded_membership,
         )
 
         if team_member_budget is not None:
@@ -7982,7 +8136,7 @@ _organization_max_budget_check: Final = organization_max_budget_check
 
 
 async def _tag_max_budget_check(
-    request_body: dict,
+    request_body: Mapping[str, object],
     prisma_client: PrismaClient | None,
     user_api_key_cache: UserApiKeyCache,
     proxy_logging_obj: ProxyLogging,
@@ -8529,7 +8683,7 @@ async def _cached_object_permission(
 
 
 async def vector_store_access_check(
-    request_body: dict,
+    request_body: Mapping[str, object],
     team_object: LiteLLM_TeamTable | None,
     valid_token: UserAPIKeyAuth | None,
     *,
