@@ -45,6 +45,40 @@ def test_qwen3_asr_is_available_for_openai_compatible_transcription(local_model_
     assert litellm.supports_audio_input(model)
 
 
+@pytest.mark.parametrize("model", ("hy4-flash", "inkling-2-small", "qwen4-max"))
+def test_fireworks_serverless_model_resolves_to_its_registry_row(
+    local_model_cost_map: None, prices: CostMap, model: str
+) -> None:
+    key: Final = f"fireworks_ai/accounts/fireworks/models/{model}"
+    row: Final = prices[key]
+    info: Final = litellm.get_model_info(key)
+    assert info["litellm_provider"] == "fireworks_ai"
+    assert (info["mode"], info["supported_endpoints"], info["input_cost_per_token"], info["output_cost_per_token"]) == (
+        row["mode"],
+        row["supported_endpoints"],
+        row["input_cost_per_token"],
+        row["output_cost_per_token"],
+    )
+
+
+@pytest.mark.parametrize(
+    "model",
+    ("gpt-6.2-astra", "gpt-6.2-sol", "gpt-image-2.5-flare", "gpt-image-2.5-sunburst"),
+)
+def test_foundry_openai_models_resolve_to_their_own_registry_rows(
+    local_model_cost_map: None, prices: CostMap, model: str
+) -> None:
+    key: Final = f"azure_ai/{model}"
+    row: Final = prices[key]
+    azure: Final = prices[f"azure/{model}"]
+    info: Final = litellm.get_model_info(key)
+    assert info["litellm_provider"] == "azure_ai"
+    assert (info["mode"], info["supported_endpoints"]) == (azure["mode"], azure["supported_endpoints"])
+    assert {name: value for name, value in row.items() if name.startswith(("input_cost_", "output_cost_", "cache_"))} == {
+        name: value for name, value in azure.items() if name.startswith(("input_cost_", "output_cost_", "cache_"))
+    }
+
+
 @pytest.mark.parametrize("model", ("azure/gpt-audio-1.5-2026-02-23", "azure/gpt-audio-mini-2025-10-06"))
 def test_azure_audio_snapshot_capabilities_match_declared_modalities(model: str, local_model_cost_map: None) -> None:
     catalog: Final = TypeAdapter(dict[str, JsonValue]).validate_json(PRICES_PATH.read_bytes())
