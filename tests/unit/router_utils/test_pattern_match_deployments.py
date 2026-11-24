@@ -325,6 +325,22 @@ async def test_route_with_no_matching_pattern():
         )
 
 
+def _anthropic_message_response() -> httpx.Response:
+    return httpx.Response(
+        200,
+        json={
+            "id": "msg_1",
+            "type": "message",
+            "role": "assistant",
+            "model": "my-custom-model",
+            "content": [{"type": "text", "text": "Hi"}],
+            "stop_reason": "end_turn",
+            "usage": {"input_tokens": 1, "output_tokens": 1},
+        },
+        request=httpx.Request("POST", "https://api.anthropic.com/v1/messages"),
+    )
+
+
 def test_router_pattern_match_e2e():
     """
     Tests the end to end flow of the router
@@ -341,7 +357,7 @@ def test_router_pattern_match_e2e():
         ]
     )
 
-    with patch.object(client, "post", new=MagicMock()) as mock_post:
+    with patch.object(client, "post", new=MagicMock(return_value=_anthropic_message_response())) as mock_post:
 
         router.completion(
             model="llmengine/my-custom-model",

@@ -150,6 +150,13 @@ class RouterVectorStoreEmbeddingExecutor:
 
 
 class BaseVectorStoreConfig:
+    def combine_search_filters(self, registered: object, requested: object) -> object:
+        if registered is None:
+            return requested
+        if requested is None or registered == requested:
+            return registered
+        return {"type": "and", "filters": [registered, requested]}
+
     def validate_create_vector_store(self) -> None:
         return None
 

@@ -2,6 +2,7 @@
 
 from collections.abc import Mapping
 from copy import deepcopy
+from types import MappingProxyType
 from typing import Final
 
 import litellm
@@ -30,23 +31,28 @@ class CredentialAccessor:
         credential: Final = CredentialAccessor.find_credential(credential_name)
         if credential is None:
             return {}
-        return deepcopy(dict(credential_api_key_secret_reference(credential.credential_values)))
+        return deepcopy(
+            {
+                key: value
+                for key, value in credential_api_key_secret_reference(credential.credential_values).items()
+                if key != "github_copilot_app_private_key"
+            }
+        )
 
     @staticmethod
-    def upsert_credentials(credentials: list[CredentialItem]):
-        """Add a credential to the list of credentials."""
+    def upsert_credentials(credentials: list[CredentialItem]) -> None:
+        """Replace the first loaded credential with each incoming name, append names not loaded at call start."""
 
-        credential_names: Final = [cred.credential_name for cred in litellm.credential_list]
+        first_index_by_name: Final = MappingProxyType(
+            {cred.credential_name: i for i, cred in reversed(tuple(enumerate(litellm.credential_list)))}
+        )
 
         for credential in credentials:
-            if credential.credential_name in credential_names:
-                # Find and replace the existing credential in the list
-                for i, existing_cred in enumerate(litellm.credential_list):
-                    if existing_cred.credential_name == credential.credential_name:
-                        litellm.credential_list[i] = credential
-                        break
-            else:
-                litellm.credential_list.append(credential)
+            match first_index_by_name.get(credential.credential_name):
+                case None:
+                    litellm.credential_list.append(credential)
+                case existing_index:
+                    litellm.credential_list[existing_index] = credential
 
 
 def sends_api_key_secret_reference(params: Mapping[str, object]) -> bool:

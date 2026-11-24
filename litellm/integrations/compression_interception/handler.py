@@ -5,11 +5,13 @@ CustomLogger that compresses inbound Anthropic Messages requests and fulfills
 litellm_content_retrieve tool calls server-side via the typed agentic loop plan.
 """
 
+import itertools
 import time
 import uuid
 from collections.abc import Mapping, Sequence
 from typing import Any, ClassVar, Final, Protocol, cast
 
+from pydantic import TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_logger
@@ -17,6 +19,8 @@ from litellm.compression import compress
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.allowed_tools_tool_choice import allowed_tools_tool_choice_with_function
 from litellm.litellm_core_utils.asyncify import asyncify
+from litellm.litellm_core_utils.core_helpers import int_of
+from litellm.llms.anthropic.messages.utils import object_mapping
 from litellm.types.integrations.compression_interception import (
     CompressionInterceptionConfig,
     CompressionSavingsMetadata,
@@ -29,6 +33,7 @@ from litellm.types.utils import CallTypes
 
 LITELLM_CONTENT_RETRIEVE_TOOL_NAME: Final = "litellm_content_retrieve"
 _CACHE_TTL_SECONDS: Final = 15 * 60
+_CONTENT_BLOCKS: Final = TypeAdapter(list[Mapping[str, object]])
 
 
 class _AgenticLoopParams(TypedDict, total=False):
@@ -42,6 +47,19 @@ class _AgenticLoopLoggingObj(Protocol):
 
     @property
     def model_call_details(self) -> Mapping[str, _AgenticLoopParams]: ...
+
+
+def _text_blocks_streamed_before_first_tool_use(response: object) -> tuple[Mapping[str, str], ...]:
+    message: Final = object_mapping(response)
+    if message is None:
+        return ()
+    try:
+        blocks: Final = _CONTENT_BLOCKS.validate_python(message.get("content"))
+    except ValidationError:
+        return ()
+    leading_blocks: Final = itertools.takewhile(lambda block: block.get("type") != "tool_use", blocks)
+    texts: Final = (block.get("text") for block in leading_blocks if block.get("type") == "text")
+    return tuple({"type": "text", "text": text} for text in texts if isinstance(text, str) and text)
 
 
 def _compression_savings_from_counts(
@@ -136,13 +154,13 @@ class CompressionInterceptionLogger(CustomLogger):
         return CompressionInterceptionLogger.from_config_yaml(compression_params)
 
     async def async_pre_call_deployment_hook(
-        self, kwargs: dict[str, Any], call_type: CallTypes | None
+        self, kwargs: dict[str, object], call_type: CallTypes | None
     ) -> dict[str, object] | None:
         if not self.enabled:
             return None
         if call_type is not None and call_type != CallTypes.anthropic_messages:
             return None
-        if int(kwargs.get("_agentic_loop_depth", 0) or 0) > 0:
+        if int_of(kwargs.get("_agentic_loop_depth", 0) or 0) > 0:
             return None
 
         messages: Final = kwargs.get("messages")
@@ -257,10 +275,12 @@ class CompressionInterceptionLogger(CustomLogger):
         call_id: Final = self._resolve_call_id(logging_obj=logging_obj, kwargs=kwargs)
         cache: Final = self._get_cache(call_id=call_id)
         retrieval_results: Final = [self._resolve_retrieval_content(tc, cache) for tc in tool_calls]
+        streamed_text_blocks: Final = _text_blocks_streamed_before_first_tool_use(response) if stream else ()
 
         assistant_message: Final = {
             "role": "assistant",
             "content": thinking_blocks
+            + list(streamed_text_blocks)
             + [
                 {
                     "type": "tool_use",

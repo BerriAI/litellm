@@ -20,6 +20,7 @@ from litellm.types.llms.openai import (
     OutputTextDeltaEvent,
     ResponseCompletedEvent,
     ResponseCreatedEvent,
+    ResponseIncompleteEvent,
     ResponseInProgressEvent,
     ResponsesAPIStreamingResponse,
 )
@@ -104,12 +105,12 @@ class LiteLLMResponsesInteractionsStreamingIterator:
             index=0,
         )
 
-    def _build_completion_event(self, response_id: str) -> InteractionsAPIStreamingResponse:
+    def _build_completion_event(self, response_id: str, status: str = "completed") -> InteractionsAPIStreamingResponse:
         return InteractionsAPIStreamingResponse(
             event_type="interaction.completed",
             id=response_id,
             object="interaction",
-            status="completed",
+            status=status,
             model=self.model,
             steps=[
                 {
@@ -174,7 +175,7 @@ class LiteLLMResponsesInteractionsStreamingIterator:
         # and completion events by id (response.id may differ from the item_id
         # used to derive the initial id when the stream starts directly with a
         # text delta).
-        if isinstance(responses_chunk, ResponseCompletedEvent):
+        if isinstance(responses_chunk, (ResponseCompletedEvent, ResponseIncompleteEvent)):
             self.finished = True
             response: Final = responses_chunk.response
             response_id = self._interaction_id or getattr(response, "id", None) or f"interaction_{id(self)}"
@@ -182,7 +183,12 @@ class LiteLLMResponsesInteractionsStreamingIterator:
             terminal: Final[list[InteractionsAPIStreamingResponse]] = []
             if self.sent_content_start:
                 terminal.append(self._build_content_stop_event(response_id))
-            terminal.append(self._build_completion_event(response_id))
+            terminal.append(
+                self._build_completion_event(
+                    response_id,
+                    status="incomplete" if isinstance(responses_chunk, ResponseIncompleteEvent) else "completed",
+                )
+            )
             self._sent_completion_event = True
             return terminal
 

@@ -303,6 +303,27 @@ def test_qdrant_semantic_cache_get_cache_sets_metadata_on_below_threshold_miss()
     assert metadata["semantic-similarity"] == 0.7
 
 
+def test_qdrant_semantic_lookup_accepts_score_above_request_cutoff():
+    from litellm.constants import SEMANTIC_CACHE_POLICY_KEY
+    from litellm.types.semantic_cache import SemanticCacheParams, SemanticCachePolicy
+
+    cache, _ = _mock_qdrant_get_cache_result(
+        [{"score": 0.7, "payload": {"text": "Original", "response": '{"id": "cached"}', "litellm_cache_key": "key"}}]
+    )
+    with patch("litellm.embedding", return_value={"data": [{"embedding": [1.0, 0.0]}]}):
+        result = cache.get_cache(
+            "key",
+            messages=[{"role": "user", "content": "Similar request"}],
+            cache={
+                SEMANTIC_CACHE_POLICY_KEY: SemanticCachePolicy(
+                    scope="key", params=SemanticCacheParams(similarity_threshold=0.6)
+                )
+            },
+        )
+
+    assert result == {"id": "cached"}
+
+
 def test_qdrant_semantic_cache_get_cache_miss():
     """
     Test QDRANT semantic cache get method when there's a cache miss.
@@ -995,10 +1016,10 @@ def test_qdrant_semantic_cache_defaults_embedding_timeout():
 
 @pytest.mark.asyncio
 async def test_qdrant_async_embedding_truncates_off_the_event_loop(monkeypatch):
-    from tests.large_text import text
     from tests.unit.litellm_core_utils.event_loop_lag import (
         assert_loop_stayed_free,
         timed_with_loop_lags,
+        uncounted_text,
         warm_tokenizer,
     )
 
@@ -1019,7 +1040,7 @@ async def test_qdrant_async_embedding_truncates_off_the_event_loop(monkeypatch):
         _router_proxy_module(router, "sem-embed"),
     )
 
-    response, took, lags = await timed_with_loop_lags(lambda: cache._get_async_embedding(text * 100))
+    response, took, lags = await timed_with_loop_lags(lambda: cache._get_async_embedding(uncounted_text()))
 
     assert response["data"][0]["embedding"] == [0.1, 0.2]
     assert _token_count("sem-embed", router.aembedding.call_args.kwargs["input"]) == 5

@@ -175,7 +175,7 @@ def extract_original_video_id(encoded_video_id: str) -> str:
     return decoded.get("video_id", encoded_video_id)
 
 
-def encode_character_id_with_provider(character_id: str, provider: str, model_id: str | None = None) -> str:
+def encode_character_id_with_provider(character_id: str, provider: object, model_id: str | None = None) -> str:
     """Encode provider and model_id into character_id using base64."""
     if not provider or not character_id:
         return character_id

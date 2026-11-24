@@ -3994,6 +3994,33 @@ async def _drain_surface_hook(guardrail, chunks, request_data=None):
     ]
 
 
+_ANTHROPIC_SSE_CARD_ON_A_DATA_LINE_NO_SCAN_READS: Final = (
+    b'event: content_block_delta\n data: {"type":"content_block_delta","index":0,'
+    b'"delta":{"type":"text_delta","text":" and 5500-0000-0000-0004"}}\n\n'
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "visible_text_frames", (_ANTHROPIC_SSE_CHUNKS[2:3], ()), ids=("beside-visible-text", "as-the-only-text")
+)
+async def test_streaming_hook_never_forwards_text_on_a_line_the_scan_could_not_read(
+    visible_text_frames: tuple[bytes, ...],
+):
+    chunks: Final = (
+        *_ANTHROPIC_SSE_CHUNKS[:2],
+        *visible_text_frames,
+        _ANTHROPIC_SSE_CARD_ON_A_DATA_LINE_NO_SCAN_READS,
+        *_ANTHROPIC_SSE_CHUNKS[3:],
+    )
+    guardrail: Final = _surface_guardrail()
+
+    with patch.object(guardrail.async_handler, "post", _armor_post_mock(_MODEL_ARMOR_CLEAN)):
+        delivered: Final = await _drain_surface_hook(guardrail, chunks)
+
+    assert b"5500-0000-0000-0004" not in b"".join(delivered)
+
+
 @pytest.mark.asyncio
 async def test_streaming_hook_scans_raw_anthropic_sse_instead_of_crashing():
     """A /v1/messages stream arrives as raw SSE bytes and must be assembled, then scanned.
@@ -4011,6 +4038,124 @@ async def test_streaming_hook_scans_raw_anthropic_sse_instead_of_crashing():
     scanned = post.call_args.kwargs["json"]["modelResponseData"]["text"]
     assert "my card is 4111-1111-1111-1111" in scanned
     assert tuple(delivered) == _ANTHROPIC_SSE_CHUNKS
+
+
+@pytest.mark.asyncio
+async def test_streaming_hook_scans_anthropic_sse_text_split_over_data_lines():
+    split_delta: Final = (
+        b'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,\n'
+        b'data: "delta":{"type":"text_delta","text":"my card is 4111-1111-1111-1111"}}\n\n'
+    )
+    chunks: Final = (*_ANTHROPIC_SSE_CHUNKS[:2], split_delta, *_ANTHROPIC_SSE_CHUNKS[3:])
+
+    def sanitize(request: httpx.Request) -> httpx.Response:
+        scanned: Final = json.loads(request.content)["modelResponseData"]["text"]
+        blocks: Final = "my card is 4111-1111-1111-1111" in scanned
+        return httpx.Response(200, json=_MODEL_ARMOR_BLOCK if blocks else _clean_armor_response())
+
+    guardrail: Final = ModelArmorGuardrail(
+        template_id="test-template",
+        project_id="test-project",
+        location="us-central1",
+        guardrail_name="model-armor-test",
+        async_handler=AsyncHTTPHandler(transport=httpx.MockTransport(sanitize)),
+        access_token_provider=_async_token_provider,
+    )
+
+    delivered: Final = await _drain_surface_hook(guardrail, chunks)
+
+    sent: Final = b"".join(item for item in delivered if isinstance(item, bytes))
+    assert b"Streaming response blocked by Model Armor" in sent
+    assert b"4111" not in sent
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("card", ["4111-1111-1111-1111", "none"])
+@pytest.mark.parametrize("is_stopped", [False, True], ids=["open-block", "stopped-block"])
+async def test_streaming_hook_scans_an_anthropic_sse_tool_call_cut_by_the_output_limit(card: str, is_stopped: bool):
+    partial_json: Final = json.dumps(f'{{"card": "{card}", "amount": "12').encode()
+    chunks: Final = (
+        _ANTHROPIC_SSE_CHUNKS[0],
+        b'event: content_block_start\ndata: {"type":"content_block_start","index":0,'
+        b'"content_block":{"type":"tool_use","id":"toolu_1","name":"pay","input":{}}}\n\n',
+        b'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,'
+        b'"delta":{"type":"input_json_delta","partial_json":' + partial_json + b"}}\n\n",
+        *((_ANTHROPIC_SSE_CHUNKS[3],) if is_stopped else ()),
+        b'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"max_tokens"},"usage":{}}\n\n',
+        b'event: message_stop\ndata: {"type":"message_stop"}\n\n',
+    )
+
+    def sanitize(request: httpx.Request) -> httpx.Response:
+        scanned: Final = json.loads(request.content)["modelResponseData"]["text"]
+        return httpx.Response(200, json=_MODEL_ARMOR_BLOCK if "4111" in scanned else _clean_armor_response())
+
+    guardrail: Final = ModelArmorGuardrail(
+        template_id="test-template",
+        project_id="test-project",
+        location="us-central1",
+        guardrail_name="model-armor-test",
+        async_handler=AsyncHTTPHandler(transport=httpx.MockTransport(sanitize)),
+        access_token_provider=_async_token_provider,
+    )
+
+    delivered: Final = await _drain_surface_hook(guardrail, chunks)
+
+    sent: Final = b"".join(item for item in delivered if isinstance(item, bytes))
+    if card == "none":
+        assert tuple(delivered) == chunks
+    else:
+        assert b"Streaming response blocked by Model Armor" in sent
+        assert b"4111" not in sent
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cards", [("none", "none"), ("4111", "none"), ("none", "4111")])
+async def test_streaming_hook_scans_every_tool_call_of_an_anthropic_sse_stream_whose_calls_overlap(
+    cards: tuple[str, str],
+):
+    starts: Final = tuple(
+        b'event: content_block_start\ndata: {"type":"content_block_start","index":%d,"content_block":'
+        b'{"type":"tool_use","id":"toolu_%d","name":"pay","input":{}}}\n\n' % (index, index)
+        for index in (1, 2)
+    )
+    inputs: Final = tuple(
+        b'event: content_block_delta\ndata: {"type":"content_block_delta","index":%d,"delta":'
+        b'{"type":"input_json_delta","partial_json":"{\\"card\\":\\"%s\\"}"}}\n\n' % (index, card.encode())
+        for index, card in enumerate(cards, start=1)
+    )
+    stops: Final = tuple(
+        b'event: content_block_stop\ndata: {"type":"content_block_stop","index":%d}\n\n' % index for index in (1, 2)
+    )
+    chunks: Final = (
+        *_ANTHROPIC_SSE_CHUNKS[:2],
+        *starts,
+        *inputs,
+        *stops,
+        b'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{}}\n\n',
+        b'event: message_stop\ndata: {"type":"message_stop"}\n\n',
+    )
+
+    def sanitize(request: httpx.Request) -> httpx.Response:
+        scanned: Final = json.loads(request.content)["modelResponseData"]["text"]
+        return httpx.Response(200, json=_MODEL_ARMOR_BLOCK if "4111" in scanned else _clean_armor_response())
+
+    guardrail: Final = ModelArmorGuardrail(
+        template_id="test-template",
+        project_id="test-project",
+        location="us-central1",
+        guardrail_name="model-armor-test",
+        async_handler=AsyncHTTPHandler(transport=httpx.MockTransport(sanitize)),
+        access_token_provider=_async_token_provider,
+    )
+
+    delivered: Final = await _drain_surface_hook(guardrail, chunks)
+
+    sent: Final = b"".join(item for item in delivered if isinstance(item, bytes))
+    if "4111" in cards:
+        assert b"Streaming response blocked by Model Armor" in sent
+        assert b"4111" not in sent
+    else:
+        assert tuple(delivered) == chunks
 
 
 @pytest.mark.asyncio
@@ -4140,6 +4285,48 @@ async def test_streaming_api_failure_frames_error_per_surface(surface):
             (b'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,'
              b'"delta":{"type":"text_delta","text":"hi"}}\n\n',),
             id="anthropic-sse-without-message-start",
+        ),
+        pytest.param(
+            (
+                _ANTHROPIC_SSE_CHUNKS[0].replace(
+                    b'"content":[]', b'"content":[{"type":"text","text":"my card is 4111-1111-1111-1111"}]'
+                ),
+                *_ANTHROPIC_SSE_CHUNKS[1:],
+            ),
+            id="anthropic-sse-with-text-in-message-start",
+        ),
+        pytest.param(
+            (
+                *_ANTHROPIC_SSE_CHUNKS[:4],
+                b'event: content_block_start\ndata: {"type":"content_block_start","index":0,'
+                b'"content_block":{"type":"text","text":"my card is 4111-1111-1111-1111"}}\n\n',
+                _ANTHROPIC_SSE_CHUNKS[3],
+                *_ANTHROPIC_SSE_CHUNKS[4:],
+            ),
+            id="anthropic-sse-reusing-a-block-index",
+        ),
+        pytest.param(
+            (
+                _ANTHROPIC_SSE_CHUNKS[0],
+                b'event: content_block_start\ndata: {"type":"content_block_start","index":0,'
+                b'"content_block":{"type":"tool_use","id":"toolu_1","name":"pay",'
+                b'"input":{"card":"4111-1111-1111-1111"}}}\n\n',
+                b'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,'
+                b'"delta":{"type":"input_json_delta","partial_json":"{}"}}\n\n',
+                *_ANTHROPIC_SSE_CHUNKS[3:],
+            ),
+            id="anthropic-sse-with-a-tool-start-input-its-streamed-input-replaces",
+        ),
+        pytest.param(
+            (
+                _ANTHROPIC_SSE_CHUNKS[0],
+                b'event: content_block_start\ndata: {"type":"content_block_start","index":0,'
+                b'"content_block":{"type":"server_tool_use","id":"srvtoolu_1","name":"web_search","input":{}}}\n\n',
+                b'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,'
+                b'"delta":{"type":"input_json_delta","partial_json":"{\\"query\\": \\"4111-1111-1111-1111"}}\n\n',
+                *_ANTHROPIC_SSE_CHUNKS[4:],
+            ),
+            id="anthropic-sse-with-an-unfinished-server-tool-input",
         ),
         pytest.param(None, id="responses-stream-without-completed-event"),
         pytest.param("created", id="responses-stream-cut-off-after-response-created"),
@@ -4328,6 +4515,52 @@ async def test_streaming_unassemblable_stream_is_forwarded_when_fail_on_error_is
 
     post.assert_not_called()
     assert tuple(delivered) == chunks
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "chunks",
+    [
+        pytest.param(
+            (
+                _ANTHROPIC_SSE_CHUNKS[0].replace(b'"content":[]', b'"content":[{"type":"text","text":"hi"}]'),
+                *_ANTHROPIC_SSE_CHUNKS[1:],
+            ),
+            id="text-in-message-start",
+        ),
+        pytest.param(
+            (
+                *_ANTHROPIC_SSE_CHUNKS[:4],
+                b'event: content_block_start\ndata: {"type":"content_block_start","index":1,'
+                b'"content_block":{"type":"server_tool_use","id":"srvtoolu_1","name":"web_search","input":{}}}\n\n',
+                b'event: content_block_delta\ndata: {"type":"content_block_delta","index":1,'
+                b'"delta":{"type":"input_json_delta","partial_json":"{\\"query\\": \\"hi"}}\n\n',
+                *_ANTHROPIC_SSE_CHUNKS[4:],
+            ),
+            id="unfinished-server-tool-input",
+        ),
+    ],
+)
+async def test_streaming_hook_failing_open_still_blocks_what_it_can_read(chunks: tuple[bytes, ...]):
+    def sanitize(request: httpx.Request) -> httpx.Response:
+        scanned: Final = json.loads(request.content)["modelResponseData"]["text"]
+        return httpx.Response(200, json=_MODEL_ARMOR_BLOCK if "4111" in scanned else _clean_armor_response())
+
+    guardrail: Final = ModelArmorGuardrail(
+        template_id="test-template",
+        project_id="test-project",
+        location="us-central1",
+        guardrail_name="model-armor-test",
+        fail_on_error=False,
+        async_handler=AsyncHTTPHandler(transport=httpx.MockTransport(sanitize)),
+        access_token_provider=_async_token_provider,
+    )
+
+    delivered: Final = await _drain_surface_hook(guardrail, chunks)
+
+    sent: Final = b"".join(item for item in delivered if isinstance(item, bytes))
+    assert b"Streaming response blocked by Model Armor" in sent
+    assert b"4111" not in sent
 
 
 @pytest.mark.asyncio
@@ -5359,3 +5592,658 @@ async def test_apply_guardrail_raises_on_flagged_when_not_logging_only():
     entries = request_data["metadata"]["standard_logging_guardrail_information"]
     flagged = [e for e in entries if e["guardrail_status"] == "guardrail_flagged"]
     assert len(flagged) == 1
+
+
+def _deidentified_armor_response(sanitized: str) -> dict[str, object]:
+    return {
+        "sanitizationResult": {
+            "filterMatchState": "MATCH_FOUND",
+            "filterResults": {
+                "sdp": {
+                    "sdpFilterResult": {"deidentifyResult": {"matchState": "MATCH_FOUND", "data": {"text": sanitized}}}
+                }
+            },
+        }
+    }
+
+
+def _post_mcp_call_guardrail(
+    responses: Sequence[dict[str, object] | Exception],
+    *,
+    mask_response_content: bool = True,
+    fail_on_error: bool = True,
+    event_hook: GuardrailEventHooks = GuardrailEventHooks.post_mcp_call,
+) -> ModelArmorGuardrail:
+    return ModelArmorGuardrail(
+        template_id="test-template",
+        project_id="test-project",
+        location="us-central1",
+        guardrail_name="model-armor-mcp",
+        event_hook=event_hook,
+        mask_response_content=mask_response_content,
+        fail_on_error=fail_on_error,
+        async_handler=_FakeArmorHandler(responses),
+        access_token_provider=_async_token_provider,
+    )
+
+
+def _scanned_texts(guardrail: ModelArmorGuardrail) -> list[object]:
+    return [
+        cast(dict[str, object], call["modelResponseData"])["text"]
+        for call in cast(_FakeArmorHandler, guardrail.async_handler).calls
+    ]
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_masks_a_deidentified_response_text():
+    guardrail = _post_mcp_call_guardrail(
+        [_deidentified_armor_response("ssn [REDACTED]"), _deidentified_armor_response("ssn [REDACTED]")]
+    )
+
+    result = await guardrail.apply_guardrail(
+        inputs={"texts": ["ssn 078-05-1120"]}, request_data={"metadata": {}}, input_type="response"
+    )
+
+    assert result == {"texts": ["ssn [REDACTED]"]}
+    assert _scanned_texts(guardrail) == ["ssn 078-05-1120"]
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_masks_each_text_from_one_scan_and_keeps_count_and_order():
+    guardrail = _post_mcp_call_guardrail([_deidentified_armor_response("ssn [REDACTED]\nplain\nphone [REDACTED]")])
+
+    result = await guardrail.apply_guardrail(
+        inputs={"texts": ["ssn 078-05-1120", "", "plain", "phone 555-0100"]},
+        request_data={"metadata": {}},
+        input_type="response",
+    )
+
+    assert result == {"texts": ["ssn [REDACTED]", "", "plain", "phone [REDACTED]"]}
+    assert _scanned_texts(guardrail) == ["ssn 078-05-1120\nplain\nphone 555-0100"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("data", [{}, {"data": {"text": ""}}])
+async def test_apply_guardrail_withholds_a_deidentify_match_without_a_rewrite_when_failing_on_error(data):
+    no_rewrite: Final = {
+        "sanitizationResult": {
+            "filterMatchState": "MATCH_FOUND",
+            "filterResults": {"sdp": {"sdpFilterResult": {"deidentifyResult": {"matchState": "MATCH_FOUND", **data}}}},
+        }
+    }
+    guardrail = _post_mcp_call_guardrail([no_rewrite], fail_on_error=True)
+    request_data: Final[dict] = {"metadata": {}}
+
+    with pytest.raises(ModelArmorAPIError) as withheld:
+        await guardrail.apply_guardrail(
+            inputs={"texts": ["ssn 078-05-1120"]}, request_data=request_data, input_type="response"
+        )
+
+    assert "078-05-1120" not in str(withheld.value)
+    entries: Final = request_data["metadata"]["standard_logging_guardrail_information"]
+    assert entries[-1]["guardrail_status"] == "guardrail_failed_to_respond"
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_blocks_when_a_rescan_matches_without_a_rewrite_even_when_failing_open():
+    rescan_without_rewrite: Final = {
+        "sanitizationResult": {
+            "filterMatchState": "MATCH_FOUND",
+            "filterResults": {"sdp": {"sdpFilterResult": {"deidentifyResult": {"matchState": "MATCH_FOUND"}}}},
+        }
+    }
+    guardrail = _post_mcp_call_guardrail(
+        [_deidentified_armor_response("card [REDACTED] end"), rescan_without_rewrite, rescan_without_rewrite],
+        fail_on_error=False,
+    )
+
+    with pytest.raises(HTTPException) as blocked:
+        await guardrail.apply_guardrail(
+            inputs={"texts": ["card 4111", "1111 end"]}, request_data={"metadata": {}}, input_type="response"
+        )
+
+    assert blocked.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_in_logging_only_mode_logs_a_deidentify_match_without_a_rewrite_as_flagged():
+    no_rewrite: Final = {
+        "sanitizationResult": {
+            "filterMatchState": "MATCH_FOUND",
+            "filterResults": {"sdp": {"sdpFilterResult": {"deidentifyResult": {"matchState": "MATCH_FOUND"}}}},
+        }
+    }
+    guardrail = _post_mcp_call_guardrail([no_rewrite], event_hook=GuardrailEventHooks.logging_only)
+    request_data: Final[dict] = {"metadata": {}}
+    inputs = {"texts": ["ssn 078-05-1120"]}
+
+    result = await guardrail.apply_guardrail(inputs=inputs, request_data=request_data, input_type="response")
+
+    assert result is inputs
+    entries: Final = request_data["metadata"]["standard_logging_guardrail_information"]
+    assert [entry["guardrail_status"] for entry in entries] == ["guardrail_flagged"]
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_returns_the_text_for_a_deidentify_match_without_a_rewrite_when_failing_open():
+    no_rewrite: Final = {
+        "sanitizationResult": {
+            "filterMatchState": "MATCH_FOUND",
+            "filterResults": {"sdp": {"sdpFilterResult": {"deidentifyResult": {"matchState": "MATCH_FOUND"}}}},
+        }
+    }
+    guardrail = _post_mcp_call_guardrail([no_rewrite], fail_on_error=False)
+    request_data: Final[dict] = {"metadata": {}}
+
+    result = await guardrail.apply_guardrail(
+        inputs={"texts": ["ssn 078-05-1120"]}, request_data=request_data, input_type="response"
+    )
+
+    assert result["texts"] == ["ssn 078-05-1120"]
+    entries: Final = request_data["metadata"]["standard_logging_guardrail_information"]
+    assert entries[-1]["guardrail_status"] == "guardrail_failed_to_respond"
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_masks_a_value_the_full_scan_found_only_with_its_neighbouring_text():
+    guardrail = _post_mcp_call_guardrail(
+        [_deidentified_armor_response("email:\n[EMAIL_ADDRESS]"), {"sanitizationResult": {}}]
+    )
+
+    result = await guardrail.apply_guardrail(
+        inputs={"texts": ["email:", "c34@corp.invalid"]}, request_data={"metadata": {}}, input_type="response"
+    )
+
+    assert result["texts"] == ["email:", "[EMAIL_ADDRESS]"]
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_masks_a_multiline_text_from_its_lines_of_the_full_redaction():
+    guardrail = _post_mcp_call_guardrail([_deidentified_armor_response("header\nmail [EMAIL]\nclean")])
+
+    result = await guardrail.apply_guardrail(
+        inputs={"texts": ["header\nmail a@b.co", "clean"]}, request_data={"metadata": {}}, input_type="response"
+    )
+
+    assert result["texts"] == ["header\nmail [EMAIL]", "clean"]
+    assert _scanned_texts(guardrail) == ["header\nmail a@b.co\nclean"]
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_returns_the_inputs_after_one_scan_when_nothing_needs_masking():
+    guardrail = _post_mcp_call_guardrail([_clean_armor_response()])
+    inputs = {"texts": ["plain one", "plain two"]}
+
+    result = await guardrail.apply_guardrail(inputs=inputs, request_data={"metadata": {}}, input_type="response")
+
+    assert result is inputs
+    assert _scanned_texts(guardrail) == ["plain one\nplain two"]
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_blocks_a_deidentified_response_when_masking_is_off():
+    guardrail = _post_mcp_call_guardrail([_deidentified_armor_response("ssn [REDACTED]")], mask_response_content=False)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await guardrail.apply_guardrail(
+            inputs={"texts": ["ssn 078-05-1120"]}, request_data={"metadata": {}}, input_type="response"
+        )
+
+    assert exc_info.value.status_code == 400
+    assert _scanned_texts(guardrail) == ["ssn 078-05-1120"]
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_masks_instead_of_blocking_when_a_rescan_trips_another_filter_out_of_context():
+    rescan_with_csam_match: Final = _deidentified_armor_response("id [EMAIL]")
+    cast(dict, rescan_with_csam_match["sanitizationResult"])["filterResults"]["csam"] = {
+        "csamFilterFilterResult": {"matchState": "MATCH_FOUND"}
+    }
+    guardrail = _post_mcp_call_guardrail([_deidentified_armor_response("row 34\nid [EMAIL]"), rescan_with_csam_match])
+
+    result = await guardrail.apply_guardrail(
+        inputs={"texts": ["row 34", "id c34@corp.invalid"]}, request_data={"metadata": {}}, input_type="response"
+    )
+
+    assert result["texts"] == ["row 34", "id [EMAIL]"]
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_in_logging_only_mode_leaves_a_flagged_maskable_response_untouched():
+    flagged_and_deidentified = {
+        "sanitizationResult": {
+            "filterMatchState": "MATCH_FOUND",
+            "filterResults": {
+                **_flagged_armor_response()["sanitizationResult"]["filterResults"],
+                **_deidentified_armor_response("ssn [REDACTED]")["sanitizationResult"]["filterResults"],
+            },
+        }
+    }
+    guardrail = _post_mcp_call_guardrail([flagged_and_deidentified], event_hook=GuardrailEventHooks.logging_only)
+    inputs = {"texts": ["ssn 078-05-1120"]}
+
+    result = await guardrail.apply_guardrail(inputs=inputs, request_data={"metadata": {}}, input_type="response")
+
+    assert result is inputs
+    assert _scanned_texts(guardrail) == ["ssn 078-05-1120"]
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_does_not_mask_request_text():
+    handler = _FakeArmorHandler([_deidentified_armor_response("ssn [REDACTED]")])
+    guardrail = ModelArmorGuardrail(
+        template_id="test-template",
+        project_id="test-project",
+        location="us-central1",
+        guardrail_name="model-armor-mcp",
+        event_hook=GuardrailEventHooks.pre_mcp_call,
+        mask_request_content=True,
+        mask_response_content=True,
+        async_handler=handler,
+        access_token_provider=_async_token_provider,
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await guardrail.apply_guardrail(
+            inputs={"texts": ["ssn 078-05-1120"]}, request_data={"metadata": {}}, input_type="request"
+        )
+
+    assert exc_info.value.status_code == 400
+    assert len(handler.calls) == 1
+
+
+@pytest.mark.parametrize("error", [ModelArmorAPIError("model armor is down"), httpx.ConnectError("boom")])
+@pytest.mark.asyncio
+async def test_apply_guardrail_raises_a_model_armor_failure_when_fail_on_error_is_true(error: Exception):
+    guardrail = _post_mcp_call_guardrail([error])
+    request_data: Final[dict] = {"metadata": {}}
+
+    with pytest.raises(type(error)):
+        await guardrail.apply_guardrail(
+            inputs={"texts": ["tool output"]}, request_data=request_data, input_type="response"
+        )
+
+    entries: Final = request_data["metadata"]["standard_logging_guardrail_information"]
+    assert [entry["guardrail_status"] for entry in entries] == ["guardrail_failed_to_respond"]
+
+
+@pytest.mark.parametrize(
+    ("fail_on_error", "event_hook"),
+    [(False, GuardrailEventHooks.post_mcp_call), (True, GuardrailEventHooks.logging_only)],
+)
+@pytest.mark.asyncio
+async def test_apply_guardrail_returns_the_inputs_on_a_model_armor_failure_when_failing_open(
+    fail_on_error: bool, event_hook: GuardrailEventHooks
+):
+    guardrail = _post_mcp_call_guardrail(
+        [httpx.ConnectError("boom")], fail_on_error=fail_on_error, event_hook=event_hook
+    )
+    request_data: Final[dict] = {"metadata": {}}
+    inputs = {"texts": ["tool output"]}
+
+    result = await guardrail.apply_guardrail(inputs=inputs, request_data=request_data, input_type="response")
+
+    assert result is inputs
+    entries: Final = request_data["metadata"]["standard_logging_guardrail_information"]
+    assert [entry["guardrail_status"] for entry in entries] == ["guardrail_failed_to_respond"]
+
+
+@pytest.mark.parametrize("error", [ModelArmorAPIError("model armor is down"), httpx.ConnectError("boom")])
+@pytest.mark.asyncio
+async def test_apply_guardrail_raises_a_model_armor_failure_on_a_single_text_rescan_when_fail_on_error_is_true(
+    error: Exception,
+):
+    guardrail = _post_mcp_call_guardrail([_deidentified_armor_response("card [REDACTED] end"), error])
+    request_data: Final[dict] = {"metadata": {}}
+
+    with pytest.raises(type(error)):
+        await guardrail.apply_guardrail(
+            inputs={"texts": ["card 4111", "1111 end"]}, request_data=request_data, input_type="response"
+        )
+
+    entries: Final = request_data["metadata"]["standard_logging_guardrail_information"]
+    assert [entry["guardrail_status"] for entry in entries] == ["success", "guardrail_failed_to_respond"]
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_in_logging_only_mode_logs_a_deidentified_response_as_flagged_after_one_scan():
+    guardrail = _post_mcp_call_guardrail(
+        [_deidentified_armor_response("ssn [REDACTED]")], event_hook=GuardrailEventHooks.logging_only
+    )
+    request_data: Final[dict] = {"metadata": {}}
+    inputs = {"texts": ["ssn 078-05-1120"]}
+
+    result = await guardrail.apply_guardrail(inputs=inputs, request_data=request_data, input_type="response")
+
+    assert result is inputs
+    assert _scanned_texts(guardrail) == ["ssn 078-05-1120"]
+    entries: Final = request_data["metadata"]["standard_logging_guardrail_information"]
+    assert [entry["guardrail_status"] for entry in entries] == ["guardrail_flagged"]
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_returns_the_unmasked_inputs_on_a_single_text_rescan_failure_when_failing_open():
+    guardrail = _post_mcp_call_guardrail(
+        [_deidentified_armor_response("card [REDACTED] end"), httpx.ConnectError("boom")], fail_on_error=False
+    )
+    request_data: Final[dict] = {"metadata": {}}
+    inputs = {"texts": ["card 4111", "1111 end"]}
+
+    result = await guardrail.apply_guardrail(inputs=inputs, request_data=request_data, input_type="response")
+
+    assert result is inputs
+    entries: Final = request_data["metadata"]["standard_logging_guardrail_information"]
+    assert [entry["guardrail_status"] for entry in entries] == ["success", "guardrail_failed_to_respond"]
+
+
+def _skipped_armor_response(matched: dict[str, object] | None = None) -> dict[str, object]:
+    return {
+        "sanitizationResult": {
+            "filterResults": {
+                "pi_and_jailbreak": {"piAndJailbreakFilterResult": {"executionState": "EXECUTION_SKIPPED"}},
+                "malicious_uris": {
+                    "maliciousUriFilterResult": {"executionState": "EXECUTION_SUCCESS", "matchState": "NO_MATCH_FOUND"}
+                },
+                **(matched or {}),
+            }
+        }
+    }
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_withholds_a_response_model_armor_skipped_a_filter_on_when_failing_on_error():
+    guardrail = _post_mcp_call_guardrail([_skipped_armor_response()], fail_on_error=True)
+
+    request_data: Final[dict] = {"metadata": {}}
+
+    with pytest.raises(ModelArmorAPIError) as withheld:
+        await guardrail.apply_guardrail(
+            inputs={"texts": ["a very large tool result"]}, request_data=request_data, input_type="response"
+        )
+
+    assert "a very large tool result" not in withheld.value.detail
+    entries: Final = request_data["metadata"]["standard_logging_guardrail_information"]
+    assert [entry["guardrail_status"] for entry in entries] == ["guardrail_failed_to_respond"]
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_passes_a_response_model_armor_skipped_a_filter_on_when_not_failing_on_error():
+    guardrail = _post_mcp_call_guardrail([_skipped_armor_response()], fail_on_error=False)
+    inputs = {"texts": ["a very large tool result"]}
+    request_data: Final[dict] = {"metadata": {}}
+
+    result = await guardrail.apply_guardrail(inputs=inputs, request_data=request_data, input_type="response")
+
+    assert result["texts"] == ["a very large tool result"]
+    entries: Final = request_data["metadata"]["standard_logging_guardrail_information"]
+    assert [entry["guardrail_status"] for entry in entries] == ["guardrail_failed_to_respond"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "event_hook",
+    [
+        GuardrailEventHooks.pre_call,
+        GuardrailEventHooks.during_call,
+        GuardrailEventHooks.post_call,
+        GuardrailEventHooks.pre_mcp_call,
+    ],
+)
+@pytest.mark.parametrize("input_type", ["request", "response"])
+async def test_apply_guardrail_fails_a_skipped_filter_only_for_post_mcp_call(event_hook, input_type):
+    guardrail = _post_mcp_call_guardrail([_skipped_armor_response()], fail_on_error=True, event_hook=event_hook)
+    request_data: Final[dict] = {"metadata": {}}
+
+    result = await guardrail.apply_guardrail(
+        inputs={"texts": ["a very large text"]}, request_data=request_data, input_type=input_type
+    )
+
+    assert result["texts"] == ["a very large text"]
+    entries: Final = request_data["metadata"]["standard_logging_guardrail_information"]
+    assert [entry["guardrail_status"] for entry in entries] == ["success"]
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_passes_a_request_with_a_skipped_filter_on_a_post_mcp_call_guardrail():
+    guardrail = _post_mcp_call_guardrail([_skipped_armor_response()], fail_on_error=True)
+
+    result = await guardrail.apply_guardrail(
+        inputs={"texts": ["a very large prompt"]}, request_data={"metadata": {}}, input_type="request"
+    )
+
+    assert result["texts"] == ["a very large prompt"]
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_scans_a_text_that_appears_twice_in_a_tool_result_once():
+    guardrail = _post_mcp_call_guardrail([_clean_armor_response()], mask_response_content=False)
+
+    result = await guardrail.apply_guardrail(
+        inputs={"texts": ["tool output", "tool output"]}, request_data={"metadata": {}}, input_type="response"
+    )
+
+    assert _scanned_texts(guardrail) == ["tool output"]
+    assert result["texts"] == ["tool output", "tool output"]
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_masks_every_copy_of_a_text_that_appears_twice_in_a_tool_result():
+    guardrail = _post_mcp_call_guardrail(
+        [_deidentified_armor_response("ssn [REDACTED]"), _deidentified_armor_response("ssn [REDACTED]")]
+    )
+
+    result = await guardrail.apply_guardrail(
+        inputs={"texts": ["ssn 078-05-1120", "", "ssn 078-05-1120"]},
+        request_data={"metadata": {}},
+        input_type="response",
+    )
+
+    assert _scanned_texts(guardrail) == ["ssn 078-05-1120"]
+    assert result["texts"] == ["ssn [REDACTED]", "", "ssn [REDACTED]"]
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_leaves_whitespace_only_texts_out_of_the_scan_and_masks_the_rest():
+    guardrail = _post_mcp_call_guardrail(
+        [_deidentified_armor_response("mail [EMAIL]"), _deidentified_armor_response("mail [EMAIL]")]
+    )
+
+    result = await guardrail.apply_guardrail(
+        inputs={"texts": [" ", "mail a@b.co", "\n"]}, request_data={"metadata": {}}, input_type="response"
+    )
+
+    assert _scanned_texts(guardrail) == ["mail a@b.co"]
+    assert result["texts"] == [" ", "mail [EMAIL]", "\n"]
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_passes_a_whitespace_only_tool_result_without_calling_model_armor():
+    guardrail = _post_mcp_call_guardrail([])
+
+    result = await guardrail.apply_guardrail(
+        inputs={"texts": [" ", "\n\t"]}, request_data={"metadata": {}}, input_type="response"
+    )
+
+    assert _scanned_texts(guardrail) == []
+    assert result["texts"] == [" ", "\n\t"]
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_does_not_release_masked_text_when_another_filter_was_skipped():
+    skipped_with_mask: Final = _skipped_armor_response(
+        cast(dict[str, object], _deidentified_armor_response("ssn [REDACTED]")["sanitizationResult"])["filterResults"]
+    )
+    guardrail = _post_mcp_call_guardrail([skipped_with_mask, skipped_with_mask], fail_on_error=True)
+
+    with pytest.raises(ModelArmorAPIError):
+        await guardrail.apply_guardrail(
+            inputs={"texts": ["ssn 078-05-1120"]}, request_data={"metadata": {}}, input_type="response"
+        )
+
+
+def _skipped_with_deidentified(sanitized: str) -> dict[str, object]:
+    return _skipped_armor_response(
+        cast(dict[str, object], _deidentified_armor_response(sanitized)["sanitizationResult"])["filterResults"]
+    )
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_masks_a_match_found_while_another_filter_was_skipped_when_not_failing_on_error():
+    guardrail = _post_mcp_call_guardrail(
+        [_skipped_with_deidentified("ssn [REDACTED]"), _skipped_with_deidentified("ssn [REDACTED]")],
+        fail_on_error=False,
+    )
+    request_data: Final[dict] = {"metadata": {}}
+
+    result = await guardrail.apply_guardrail(
+        inputs={"texts": ["ssn 078-05-1120"]}, request_data=request_data, input_type="response"
+    )
+
+    assert result["texts"] == ["ssn [REDACTED]"]
+    entries: Final = request_data["metadata"]["standard_logging_guardrail_information"]
+    assert [entry["guardrail_status"] for entry in entries] == ["guardrail_failed_to_respond"]
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_keeps_a_text_whose_rescan_skipped_a_filter_when_failing_open():
+    guardrail = _post_mcp_call_guardrail(
+        [
+            _deidentified_armor_response("[ADDRESS]\nplain\n[CARD]"),
+            _deidentified_armor_response("[ADDRESS]"),
+            _skipped_armor_response(),
+            _deidentified_armor_response("[CARD]"),
+        ],
+        fail_on_error=False,
+    )
+
+    result = await guardrail.apply_guardrail(
+        inputs={"texts": ["addr 1 Main St\nSpringfield", "plain", "card 4111\n1111"]},
+        request_data={"metadata": {}},
+        input_type="response",
+    )
+
+    assert result["texts"] == ["[ADDRESS]", "plain", "[CARD]"]
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_withholds_a_match_found_while_another_filter_was_skipped_when_failing_on_error():
+    guardrail = _post_mcp_call_guardrail(
+        [_skipped_with_deidentified("ssn [REDACTED]"), _deidentified_armor_response("ssn [REDACTED]")],
+        fail_on_error=True,
+    )
+
+    with pytest.raises(ModelArmorAPIError):
+        await guardrail.apply_guardrail(
+            inputs={"texts": ["ssn 078-05-1120"]}, request_data={"metadata": {}}, input_type="response"
+        )
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_raises_a_model_armor_error_when_a_text_rescan_skipped_a_filter_and_failing_on_error():
+    guardrail = _post_mcp_call_guardrail(
+        [_deidentified_armor_response("card [REDACTED] end"), _skipped_armor_response()],
+        fail_on_error=True,
+    )
+
+    with pytest.raises(ModelArmorAPIError):
+        await guardrail.apply_guardrail(
+            inputs={"texts": ["card 4111", "1111 end"]},
+            request_data={"metadata": {}},
+            input_type="response",
+        )
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_blocks_a_matched_response_even_when_another_filter_was_skipped():
+    guardrail = _post_mcp_call_guardrail(
+        [_skipped_armor_response({"rai": {"raiFilterResult": {"matchState": "MATCH_FOUND"}}})], fail_on_error=False
+    )
+
+    with pytest.raises(HTTPException) as blocked:
+        await guardrail.apply_guardrail(
+            inputs={"texts": ["harmful text"]}, request_data={"metadata": {}}, input_type="response"
+        )
+
+    assert blocked.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_blocks_when_a_redaction_spans_text_blocks_and_no_block_can_be_rewritten():
+    guardrail = _post_mcp_call_guardrail(
+        [_deidentified_armor_response("card [REDACTED]"), {"sanitizationResult": {}}, {"sanitizationResult": {}}]
+    )
+    request_data: Final[dict] = {"metadata": {}}
+
+    with pytest.raises(HTTPException) as blocked:
+        await guardrail.apply_guardrail(
+            inputs={"texts": ["card 4111 1111", "1111 1111"]}, request_data=request_data, input_type="response"
+        )
+
+    assert blocked.value.status_code == 400
+    assert "1111" not in str(blocked.value.detail)
+    assert _scanned_texts(guardrail)[1:] == ["card 4111 1111", "1111 1111"]
+    entries: Final = request_data["metadata"]["standard_logging_guardrail_information"]
+    assert [entry["guardrail_status"] for entry in entries] == ["success", "guardrail_flagged"]
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_rescans_only_the_span_a_line_merging_redaction_changed():
+    guardrail = _post_mcp_call_guardrail(
+        [
+            _deidentified_armor_response("head\ncard [REDACTED] end\ntail"),
+            {"sanitizationResult": {}},
+            {"sanitizationResult": {}},
+        ]
+    )
+
+    with pytest.raises(HTTPException):
+        await guardrail.apply_guardrail(
+            inputs={"texts": ["head", "card 4111", "1111 end", "tail"]},
+            request_data={"metadata": {}},
+            input_type="response",
+        )
+
+    assert _scanned_texts(guardrail)[1:] == ["card 4111", "1111 end"]
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_blocks_when_block_rewrites_miss_a_redaction_that_spans_text_blocks():
+    guardrail = _post_mcp_call_guardrail(
+        [
+            _deidentified_armor_response("mail [EMAIL]\ncard [REDACTED]"),
+            _deidentified_armor_response("mail [EMAIL]"),
+            {"sanitizationResult": {}},
+            {"sanitizationResult": {}},
+        ]
+    )
+
+    with pytest.raises(HTTPException) as blocked:
+        await guardrail.apply_guardrail(
+            inputs={"texts": ["mail a@b.co", "card 4111 1111", "1111 1111"]},
+            request_data={"metadata": {}},
+            input_type="response",
+        )
+
+    assert blocked.value.status_code == 400
+    assert "1111" not in str(blocked.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_withholds_a_response_whose_sensitive_data_inspection_was_skipped():
+    guardrail = _post_mcp_call_guardrail(
+        [
+            {
+                "sanitizationResult": {
+                    "filterResults": {
+                        "sdp": {"sdpFilterResult": {"inspectResult": {"executionState": "EXECUTION_SKIPPED"}}}
+                    }
+                }
+            }
+        ],
+        fail_on_error=True,
+    )
+
+    with pytest.raises(ModelArmorAPIError):
+        await guardrail.apply_guardrail(
+            inputs={"texts": ["a very large tool result"]}, request_data={"metadata": {}}, input_type="response"
+        )

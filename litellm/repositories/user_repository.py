@@ -7,17 +7,20 @@ import json
 from collections.abc import Generator, Mapping, Sequence
 from contextlib import AbstractAsyncContextManager, contextmanager
 from contextvars import ContextVar
+from datetime import datetime
 from itertools import chain
-from typing import TYPE_CHECKING, Final, Protocol
+from typing import TYPE_CHECKING, Final, NamedTuple, Protocol
 
-from pydantic import TypeAdapter
+from pydantic import BaseModel, ConfigDict, Json, JsonValue, TypeAdapter
 
 from litellm.litellm_core_utils.core_helpers import require_attributes
 from litellm.models.user import LiteLLM_UserTable, SCIMPlaceholder
+from litellm.repositories import rust_database
 from litellm.repositories.base_repository import BaseRepository, DbRecord, record_to_dict
 from litellm.repositories.chunked_in import IN_LIST_CHUNK_SIZE
 from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.table_repositories import PrismaTableRepository
+from litellm.rust_bridge._native import RustUserRepository
 
 if TYPE_CHECKING:
     from prisma import Prisma
@@ -50,6 +53,48 @@ def free_sso_user_creation(user_id: str | None, *, enabled: bool = True) -> Gene
         yield
     finally:
         _FREE_SSO_CREATION.reset(token)
+
+
+class NewUserDefaults(BaseModel):
+    """The keys of ``default_internal_user_params`` stored on a user created at sign-in. Its other keys are ignored."""
+
+    model_config = ConfigDict(frozen=True, extra="ignore")
+
+    user_role: str | None = None
+    max_budget: float | None = None
+    budget_duration: str | None = None
+    models: tuple[str, ...] | None = None
+    tpm_limit: int | None = None
+    rpm_limit: int | None = None
+    max_parallel_requests: int | None = None
+    user_alias: str | None = None
+    team_id: str | None = None
+    organization_id: str | None = None
+    object_permission_id: str | None = None
+    password_reset_required: bool | None = None
+    metadata: Mapping[str, JsonValue] | Json[Mapping[str, JsonValue]] | None = None
+    allowed_cache_controls: tuple[str, ...] | None = None
+    policies: tuple[str, ...] | None = None
+    model_max_budget: Mapping[str, JsonValue] | Json[Mapping[str, JsonValue]] | None = None
+
+
+def _json_text(value: Mapping[str, JsonValue] | None) -> str | None:
+    return None if value is None else json.dumps(dict(value))
+
+
+_DEFAULTS_HANDLED_ELSEWHERE: Final = frozenset({"teams", "available_teams", "budget_limits"})
+
+
+def unstored_default_keys(default_params: Mapping[str, object]) -> tuple[str, ...]:
+    """The ``default_internal_user_params`` keys a user created at sign-in is left without."""
+    return tuple(sorted(default_params.keys() - NewUserDefaults.model_fields.keys() - _DEFAULTS_HANDLED_ELSEWHERE))
+
+
+class InsertedUser(NamedTuple):
+    """The user now stored, None when the one that beat this insert is gone again, and whether this insert wrote it."""
+
+    user: LiteLLM_UserTable | None
+    created: bool
 
 
 class _UserDb(Protocol):
@@ -108,6 +153,83 @@ class UserRepository(BaseRepository[LiteLLM_UserTable]):
 
     async def find_by_id(self, id_value: str, id_field: str = "user_id") -> LiteLLM_UserTable | None:
         return await super().find_by_id(id_value, id_field)
+
+    async def resolve_for_auth(
+        self,
+        user_id: str,
+        *,
+        sso_user_id: str | None,
+        user_email: str | None,
+        email_verified: bool | None,
+        links_any_user: bool,
+        use_writer: bool = False,
+    ) -> LiteLLM_UserTable | None:
+        """The user a sign-in resolves to by id, SSO id or email, linking the SSO id or email it proves, or None."""
+        payload: Final = await rust_database.required_repository(RustUserRepository).resolve(
+            user_id,
+            sso_user_id=sso_user_id,
+            user_email=user_email,
+            email_verified=email_verified,
+            links_any_user=links_any_user,
+            use_writer=use_writer,
+        )
+        return rust_database.decode(LiteLLM_UserTable, payload)
+
+    async def email_belongs_to_another_user(self, user_email: str, user_id: str) -> bool:
+        return await rust_database.required_repository(RustUserRepository).email_belongs_to_another_user(
+            user_email, user_id
+        )
+
+    async def backfill_email(self, user_id: str, user_email: str, *, links_any_user: bool) -> str | None:
+        """The email stored on ``user_id`` once a null email is filled with ``user_email``, or None when another
+        user holds it or the row is gone."""
+        return await rust_database.required_repository(RustUserRepository).backfill_email(
+            user_id, user_email, links_any_user=links_any_user
+        )
+
+    async def set_role(self, user_id: str, user_role: str) -> LiteLLM_UserTable | None:
+        """The user with its role set to ``user_role``, or None when no row has that id."""
+        payload: Final = await rust_database.required_repository(RustUserRepository).set_role(user_id, user_role)
+        return rust_database.decode(LiteLLM_UserTable, payload)
+
+    async def insert_for_auth(
+        self,
+        user_id: str,
+        *,
+        sso_user_id: str | None,
+        user_email: str | None,
+        links_any_user: bool,
+        defaults: NewUserDefaults,
+        budget_reset_at: datetime | None,
+        budget_limits_json: str | None,
+    ) -> InsertedUser:
+        """Creates the user a sign-in names. The email is stored unless another user holds it and the SSO id only
+        while ``links_any_user`` is off. A sign-in that loses to a concurrent one gets the user that won."""
+        created, payload = await rust_database.required_repository(RustUserRepository).insert(
+            user_id,
+            sso_user_id=sso_user_id,
+            user_email=user_email,
+            links_any_user=links_any_user,
+            user_role=defaults.user_role,
+            max_budget=defaults.max_budget,
+            budget_duration=defaults.budget_duration,
+            budget_reset_at=None if budget_reset_at is None else budget_reset_at.timestamp(),
+            models=defaults.models,
+            budget_limits=budget_limits_json,
+            tpm_limit=defaults.tpm_limit,
+            rpm_limit=defaults.rpm_limit,
+            max_parallel_requests=defaults.max_parallel_requests,
+            user_alias=defaults.user_alias,
+            team_id=defaults.team_id,
+            organization_id=defaults.organization_id,
+            object_permission_id=defaults.object_permission_id,
+            password_reset_required=defaults.password_reset_required,
+            metadata=_json_text(defaults.metadata),
+            allowed_cache_controls=defaults.allowed_cache_controls,
+            policies=defaults.policies,
+            model_max_budget=_json_text(defaults.model_max_budget),
+        )
+        return InsertedUser(rust_database.decode(LiteLLM_UserTable, payload), created)
 
     async def find_by_email(self, user_email: str) -> LiteLLM_UserTable | None:
         """Find a user by email."""
@@ -320,17 +442,6 @@ class UserRepository(BaseRepository[LiteLLM_UserTable]):
             data["object_permission_id"] = object_permission_id
 
         return await self.update(user_id, data, id_field="user_id")
-
-    async def backfill_null_user_email(self, user_id: str, user_email: str) -> int:
-        """Set user_email only when the stored value is null, atomically at the database.
-
-        Returns the number of rows updated: 0 means another writer already set an email.
-        """
-        updated_count: Final[int] = await self.table.update_many(
-            where={"user_id": user_id, "user_email": None},
-            data={"user_email": user_email},
-        )
-        return updated_count
 
     async def delete_user(self, user_id: str) -> LiteLLM_UserTable | None:
         """Delete a user."""

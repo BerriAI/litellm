@@ -3,7 +3,7 @@ import base64
 import json
 from datetime import datetime
 from pathlib import Path
-from collections.abc import Generator
+from collections.abc import Generator, Sequence
 from queue import SimpleQueue
 from typing import Final, Literal, TypedDict
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -19,6 +19,7 @@ from typing_extensions import ReadOnly
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.llms.custom_llm import CustomLLM
 from litellm.types.utils import CallTypes, StandardLoggingPayload
 import os
 
@@ -249,6 +250,54 @@ def test_image_generation_keeps_an_internal_prefixed_kwarg_out_of_the_provider_r
     sent: Final = json.loads(respx_mock.calls[0].request.content)
     assert "_litellm_undeclared_sentinel" not in sent, sent
     assert sent["prompt"] == "a red circle"
+
+
+@pytest.mark.parametrize(
+    ("model", "answer"),
+    [
+        ("bedrock/stability.sd3-5-large-v1:0", {"images": ["aW1n"], "seeds": [1], "finish_reasons": [None]}),
+        ("bedrock/amazon.nova-canvas-v1:0", {"images": ["aW1n"]}),
+    ],
+)
+def test_image_generation_keeps_deployment_prompt_management_params_out_of_the_bedrock_body(
+    respx_mock: respx.MockRouter, model: str, answer: dict[str, JsonValue]
+) -> None:
+    route: Final = respx_mock.post(url__regex=r"https://bedrock-test\.invalid/.*").mock(
+        return_value=httpx.Response(200, json=answer)
+    )
+
+    litellm.image_generation(
+        model=model,
+        prompt="a red circle",
+        api_key="test-bearer",
+        aws_region_name="us-west-2",
+        aws_bedrock_runtime_endpoint="https://bedrock-test.invalid",
+        cache_control_injection_points=[{"location": "message", "role": "user"}],
+    )
+
+    sent: Final = route.calls.last.request.content.decode()
+    assert "cache_control_injection_points" not in sent, sent
+    assert "a red circle" in sent, sent
+
+
+def test_image_edit_keeps_deployment_prompt_management_params_out_of_the_provider_body(
+    respx_mock: respx.MockRouter,
+) -> None:
+    edits_route: Final = respx_mock.post("https://api.openai.com/v1/images/edits").mock(
+        return_value=httpx.Response(status_code=200, json={"created": 1792551838, "data": [{"b64_json": "aW1n"}]})
+    )
+
+    litellm.image_edit(
+        model="openai/gpt-image-2.5-sunburst",
+        image=b"\x89PNG\r\n\x1a\nfakepng",
+        prompt="make the circle blue",
+        api_key="sk-test",
+        cache_control_injection_points=[{"location": "message", "role": "user"}],
+    )
+
+    sent: Final = edits_route.calls.last.request.content
+    assert b"cache_control_injection_points" not in sent, sent
+    assert b"make the circle blue" in sent, sent
 
 
 @pytest.mark.asyncio
@@ -709,3 +758,112 @@ def test_topaz_image_variation_works_without_a_model(respx_mock: respx.MockRoute
     assert route.call_count == 1
     assert response.data is not None
     assert response.data[0].b64_json == base64.b64encode(b"enhanced-image").decode()
+
+
+_CUSTOM_IMAGE: Final = litellm.ImageResponse(created=1700000000, data=[{"b64_json": "aW1hZ2U="}])
+_OPENAI_IMAGE_PARAMS: Final = {
+    "n": 2,
+    "size": "1024x1536",
+    "quality": "low",
+    "response_format": "b64_json",
+    "user": "artist-7",
+}
+
+
+class RecordingImageHandler(CustomLLM):
+    def __init__(self, received: SimpleQueue[dict[str, object]]) -> None:
+        super().__init__()
+        self.received: Final = received
+
+    def image_generation(self, optional_params: dict[str, object], **kwargs: object) -> litellm.ImageResponse:
+        self.received.put(optional_params)
+        return _CUSTOM_IMAGE
+
+    async def aimage_generation(self, optional_params: dict[str, object], **kwargs: object) -> litellm.ImageResponse:
+        return self.image_generation(optional_params)
+
+    def image_edit(self, optional_params: dict[str, object], **kwargs: object) -> litellm.ImageResponse:
+        return self.image_generation(optional_params)
+
+    async def aimage_edit(self, optional_params: dict[str, object], **kwargs: object) -> litellm.ImageResponse:
+        return self.image_generation(optional_params)
+
+
+@pytest.fixture
+def custom_image_params(monkeypatch: pytest.MonkeyPatch) -> SimpleQueue[dict[str, object]]:
+    received: Final[SimpleQueue[dict[str, object]]] = SimpleQueue()
+    handler: Final = RecordingImageHandler(received)
+    monkeypatch.setattr(litellm, "custom_provider_map", [{"provider": "studio", "custom_handler": handler}])
+    monkeypatch.setattr(litellm, "_custom_providers", [*litellm._custom_providers])
+    monkeypatch.setattr(litellm, "provider_list", [*litellm.provider_list])
+    litellm.utils.custom_llm_setup()
+    return received
+
+
+def _caller_params(received: dict[str, object]) -> dict[str, object]:
+    return {key: received[key] for key in (*_OPENAI_IMAGE_PARAMS, "mask", "studio_preset") if key in received}
+
+
+@pytest.mark.parametrize("is_async", [False, True])
+@pytest.mark.asyncio
+async def test_custom_handler_receives_the_callers_openai_image_generation_params(
+    custom_image_params: SimpleQueue[dict[str, object]], is_async: bool
+) -> None:
+    request: Final = {"model": "studio/flare-1", "prompt": "draw", **_OPENAI_IMAGE_PARAMS, "studio_preset": "matte"}
+
+    result: Final = await litellm.aimage_generation(**request) if is_async else litellm.image_generation(**request)
+
+    assert result.data[0].b64_json == "aW1hZ2U="
+    assert _caller_params(custom_image_params.get_nowait()) == {**_OPENAI_IMAGE_PARAMS, "studio_preset": "matte"}
+
+
+@pytest.mark.parametrize("is_async", [False, True])
+@pytest.mark.asyncio
+async def test_custom_handler_receives_the_callers_openai_image_edit_params(
+    custom_image_params: SimpleQueue[dict[str, object]], is_async: bool
+) -> None:
+    request: Final = {
+        "model": "studio/flare-1",
+        "prompt": "draw",
+        "image": b"input-image",
+        "mask": b"mask-image",
+        **_OPENAI_IMAGE_PARAMS,
+        "studio_preset": "matte",
+    }
+
+    result: Final = await litellm.aimage_edit(**request) if is_async else litellm.image_edit(**request)
+
+    assert result.data[0].b64_json == "aW1hZ2U="
+    assert _caller_params(custom_image_params.get_nowait()) == {
+        **_OPENAI_IMAGE_PARAMS,
+        "mask": b"mask-image",
+        "studio_preset": "matte",
+    }
+
+
+@pytest.mark.parametrize("operation", ["generation", "edit"])
+@pytest.mark.parametrize(
+    "additional_drop_params",
+    [
+        pytest.param(["response_format", "user", "studio_preset"], id="list"),
+        pytest.param(("response_format", "user", "studio_preset"), id="tuple"),
+        pytest.param(["response_format", "user", "studio_preset", None, 1], id="list-with-non-string-entries"),
+    ],
+)
+def test_custom_image_handler_is_not_handed_additional_drop_params(
+    custom_image_params: SimpleQueue[dict[str, object]], operation: str, additional_drop_params: Sequence[object]
+) -> None:
+    request: Final = {
+        "model": "studio/flare-1",
+        "prompt": "draw",
+        **_OPENAI_IMAGE_PARAMS,
+        "studio_preset": "matte",
+        "additional_drop_params": additional_drop_params,
+    }
+
+    if operation == "edit":
+        litellm.image_edit(**request, image=b"input-image")
+    else:
+        litellm.image_generation(**request)
+
+    assert _caller_params(custom_image_params.get_nowait()) == {"n": 2, "size": "1024x1536", "quality": "low"}

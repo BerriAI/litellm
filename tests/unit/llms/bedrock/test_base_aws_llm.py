@@ -14,8 +14,9 @@ from fastapi.testclient import TestClient
 
 
 
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any, Dict, Final, Optional
 from unittest.mock import MagicMock, Mock, patch
 
@@ -34,6 +35,11 @@ from litellm.llms.bedrock.base_aws_llm import (
 )
 from tests.unit.llms.bedrock.event_loop_probe import EventLoopProbe
 from litellm.llms.bedrock.common_utils import BedrockModelInfo
+from litellm.llms.bedrock.web_identity_session_policy import (
+    BEDROCK_SESSION_POLICY,
+    S3_LOGGING_SESSION_POLICY,
+    session_policy_document,
+)
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 
@@ -310,6 +316,37 @@ def test_web_identity_token_oidc_reference_still_resolved():
             )
 
     assert exc.value.status_code == 401
+
+
+def test_configured_web_identity_policies_isolate_sts_permissions_and_cached_credentials(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("UNIT_WEB_IDENTITY_TOKEN", "policy-test-token")
+    sts: Final = MagicMock()
+    sts.assume_role_with_web_identity.side_effect = tuple(
+        {
+            "Credentials": {"AccessKeyId": key, "SecretAccessKey": "test-secret", "SessionToken": "test-session"},
+            "PackedPolicySize": 1,
+        }
+        for key in ("s3-key", "bedrock-key")
+    )
+    s3: Final = BaseAWSLLM(web_identity_session_policy=S3_LOGGING_SESSION_POLICY)
+    bedrock: Final = BaseAWSLLM()
+    with patch("boto3.client", return_value=sts):
+        credentials: Final = tuple(
+            helper.get_credentials(
+                aws_web_identity_token="oidc/env/UNIT_WEB_IDENTITY_TOKEN",
+                aws_role_name="arn:aws:iam::123456789012:role/policy-test",
+                aws_session_name="policy-test",
+                aws_region_name="eu-west-1",
+            )
+            for helper in (s3, bedrock, s3)
+        )
+    assert tuple(item.access_key for item in credentials) == ("s3-key", "bedrock-key", "s3-key")
+    assert tuple(call.kwargs["Policy"] for call in sts.assume_role_with_web_identity.call_args_list) == (
+        session_policy_document(S3_LOGGING_SESSION_POLICY),
+        session_policy_document(BEDROCK_SESSION_POLICY),
+    )
 
 
 def test_web_identity_credentials_cached_in_iam_cache():
@@ -3219,6 +3256,35 @@ class TestGetBedrockModelIdArnHandling:
         assert "%3A" in model_id, f"ARN not URL-encoded; got: {model_id}"
         assert "%2F" in model_id, f"ARN slashes not URL-encoded; got: {model_id}"
 
+    @pytest.mark.parametrize(
+        "model",
+        [
+            "bedrock/us-gov-west-1/anthropic.claude-sonnet-4-5-20250929-v1:0",
+            "bedrock/invoke/us-gov-west-1/anthropic.claude-sonnet-4-5-20250929-v1:0",
+            "invoke/us-gov-west-1/anthropic.claude-sonnet-4-5-20250929-v1:0",
+            "us-gov-west-1/anthropic.claude-sonnet-4-5-20250929-v1:0",
+        ],
+    )
+    def test_region_path_segment_selects_the_region_and_leaves_the_model_id(self, model: str, monkeypatch):
+        from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+
+        for name in ("AWS_REGION_NAME", "AWS_REGION", "AWS_DEFAULT_REGION"):
+            monkeypatch.delenv(name, raising=False)
+
+        assert (self._call(model), BaseAWSLLM()._get_aws_region_name(optional_params={}, model=model)) == (
+            "anthropic.claude-sonnet-4-5-20250929-v1:0",
+            "us-gov-west-1",
+        )
+
+    def test_explicit_region_beats_the_region_path_segment(self):
+        from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+
+        model: Final = "bedrock/us-gov-west-1/anthropic.claude-sonnet-4-5-20250929-v1:0"
+        assert (
+            BaseAWSLLM()._get_aws_region_name(optional_params={"aws_region_name": "us-gov-east-1"}, model=model)
+            == "us-gov-east-1"
+        )
+
     def test_bare_arn_is_encoded(self):
         """Direct ARN without routing prefix must also be URL-encoded."""
         model_id = self._call(self.ARN)
@@ -3527,6 +3593,81 @@ def _recording_boto3_client(recorded: dict[str, dict[str, object]]) -> Callable[
         return sts
 
     return _client
+
+
+@pytest.mark.parametrize(
+    ("identity_field", "sts_field", "first_value", "second_value"),
+    [
+        ("bedrock_session_tag_fields", "Tags", ({"Key": "user_api_key_alias", "Value": "agent-one"},),
+         ({"Key": "user_api_key_alias", "Value": "agent-two"},)),
+        ("bedrock_session_name_fields", "RoleSessionName", "agent-one", "agent-two"),
+    ],
+)
+def test_identity_sessions_reach_sts_and_do_not_share_cached_credentials(
+    monkeypatch: pytest.MonkeyPatch, identity_field: str, sts_field: str, first_value: object, second_value: object
+) -> None:
+    from litellm.types.llms.bedrock import AwsAuthParams
+
+    monkeypatch.setattr(litellm, identity_field, ["user_api_key_alias"])
+    auth = AwsAuthParams(
+        aws_access_key_id="AKIACALLER",
+        aws_secret_access_key="caller-secret",
+        aws_role_name="arn:aws:iam::123456789012:role/litellm-target",
+    )
+    recorded: dict[str, dict[str, object]] = {}
+    with (
+        patch.dict(os.environ, _os_environ_without_aws_keys(), clear=True),
+        patch("boto3.client", side_effect=_recording_boto3_client(recorded)),
+    ):
+        aws = BaseAWSLLM()
+        first = aws.resolve_credentials(auth, "us-east-1", {"metadata": {"user_api_key_alias": "agent-one"}})
+        first_params = recorded["assume_role"]
+        second = aws.resolve_credentials(auth, "us-east-1", {"litellm_metadata": {"user_api_key_alias": "agent-two"}})
+        repeated = aws.resolve_credentials(auth, "us-east-1", {"metadata": {"user_api_key_alias": "agent-one"}})
+    assert first is repeated
+    assert first is not second
+    assert first_params[sts_field] == first_value
+    assert recorded["assume_role"][sts_field] == second_value
+
+
+@pytest.mark.parametrize("attribution", ["tags", "derived-name", "static-tags"])
+@pytest.mark.parametrize("denied", [False, True])
+def test_attributed_same_role_never_uses_ambient_credentials(
+    monkeypatch: pytest.MonkeyPatch, attribution: str, denied: bool
+) -> None:
+    from botocore.exceptions import ClientError
+
+    from litellm.types.llms.bedrock import AwsAuthParams
+
+    monkeypatch.setattr(litellm, "bedrock_session_tag_fields", ["user_api_key_alias"] if attribution == "tags" else None)
+    monkeypatch.setattr(
+        litellm, "bedrock_session_name_fields", ["user_api_key_alias"] if attribution == "derived-name" else None
+    )
+    recorded: dict[str, dict[str, object]] = {}
+    sts = _recording_boto3_client(recorded)("sts")
+    sts.get_caller_identity.return_value = {
+        "Arn": "arn:aws:sts::123456789012:assumed-role/litellm-target/gateway"
+    }
+    if denied:
+        sts.assume_role.side_effect = ClientError({"Error": {"Code": "AccessDenied", "Message": "denied"}}, "AssumeRole")
+    aws = BaseAWSLLM()
+    auth = AwsAuthParams(
+        aws_role_name="arn:aws:iam::123456789012:role/litellm-target",
+        aws_session_tags=({"Key": "deployment", "Value": "static"},) if attribution == "static-tags" else None,
+    )
+    identity = {"metadata": {"user_api_key_alias": "agent-one"}}
+    with (
+        patch.dict(os.environ, _os_environ_without_aws_keys(), clear=True),
+        patch("boto3.client", return_value=sts),
+    ):
+        if denied:
+            with pytest.raises(ClientError, match="AccessDenied"):
+                aws.resolve_credentials(auth, "us-east-1", identity)
+        else:
+            credentials = aws.resolve_credentials(auth, "us-east-1", identity)
+            assert credentials.access_key == "ASIAASSUMED"
+    assert sts.assume_role.call_count == 1
+    assert sts.get_caller_identity.call_count == 0
 
 
 def test_resolve_credentials_forwards_static_keys_role_session_and_external_id():
@@ -4340,3 +4481,80 @@ async def test_extra_headers_and_authorization_override_reach_converse_and_invok
         "my-test-key",
     )
     assert (invoke_request.headers["test"], invoke_request.headers["authorization"]) == ("hello world", "my-test-key")
+
+
+@pytest.fixture
+def logged_out_sso_profile(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> str:
+    config: Final = tmp_path / "config"
+    config.write_text(
+        "[profile logged-out-sso]\n"
+        "sso_session = litellm-unit-test-session-never-logged-in\n"
+        "sso_account_id = 111111111111\n"
+        "sso_role_name = Dev\n"
+        "region = us-west-2\n"
+        "[sso-session litellm-unit-test-session-never-logged-in]\n"
+        "sso_start_url = https://example.awsapps.com/start\n"
+        "sso_region = us-west-2\n"
+    )
+    for name in ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "AWS_PROFILE"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("AWS_CONFIG_FILE", str(config))
+    monkeypatch.setenv("AWS_SHARED_CREDENTIALS_FILE", str(tmp_path / "no-credentials"))
+    monkeypatch.setenv("AWS_EC2_METADATA_DISABLED", "true")
+    return "logged-out-sso"
+
+
+_SSO_SIGNED_CALLS: Final = (
+    pytest.param(
+        lambda profile: litellm.acompletion(
+            model="bedrock/us.anthropic.claude-haiku-5-5",
+            messages=[{"role": "user", "content": "hi"}],
+            aws_profile_name=profile,
+        ),
+        id="chat",
+    ),
+    pytest.param(
+        lambda profile: litellm.acompletion(
+            model="bedrock/us.anthropic.claude-haiku-5-5",
+            messages=[{"role": "user", "content": "hi"}],
+            aws_profile_name=profile,
+            stream=True,
+        ),
+        id="chat-stream",
+    ),
+    pytest.param(
+        lambda profile: litellm.aembedding(
+            model="bedrock/amazon.titan-embed-text-v2:0", input=["hi"], aws_profile_name=profile
+        ),
+        id="embedding",
+    ),
+    pytest.param(
+        lambda profile: litellm.anthropic.messages.acreate(
+            model="bedrock/us.anthropic.claude-haiku-5-5",
+            messages=[{"role": "user", "content": "hi"}],
+            max_tokens=5,
+            aws_profile_name=profile,
+        ),
+        id="messages",
+    ),
+    pytest.param(
+        lambda profile: litellm.aresponses(
+            model="bedrock/us.anthropic.claude-haiku-5-5", input="hi", aws_profile_name=profile
+        ),
+        id="responses",
+    ),
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("call", _SSO_SIGNED_CALLS)
+async def test_an_sso_profile_without_a_usable_token_answers_401_instead_of_a_retryable_500(
+    logged_out_sso_profile: str, call: Callable[[str], Awaitable[object]]
+) -> None:
+    from botocore.exceptions import SSOTokenLoadError
+
+    with pytest.raises(litellm.AuthenticationError) as excinfo:
+        await call(logged_out_sso_profile)
+
+    assert excinfo.value.status_code == 401
+    assert type(excinfo.value.__context__) is SSOTokenLoadError

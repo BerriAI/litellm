@@ -1,3 +1,4 @@
+mod enqueued;
 mod keys;
 mod lua;
 mod scripts;
@@ -7,6 +8,7 @@ use std::{sync::Arc, time::Duration};
 
 use litellm_redis_client::{Declared, RedisBatch, RedisClient, Slot};
 
+pub use self::enqueued::EnqueuedReply;
 pub use self::keys::{Counter, Entry, Kind, Scope};
 pub use self::types::{
     AcquireReply, Applied, AtomicCounter, AtomicReply, Gauge, GuardedIncrement, GuardedReply,
@@ -15,7 +17,7 @@ pub use self::types::{
 use crate::{
     Error, Number, Pending, RequestRedis, Send,
     dual_cache::{DualCache, MemorySettings, PipelineIncrement},
-    memory::{Clock, system_clock},
+    memory::{Clock, UpdateGuard, UpdateLock, system_clock},
     remote::{Remote, RemoteSlot},
     request::pending,
 };
@@ -80,6 +82,14 @@ impl RateLimits {
             .into_iter()
             .map(|(_, members)| members)
             .collect()
+    }
+
+    pub fn memory_guard(&self) -> UpdateGuard<'_> {
+        self.cache.memory().guard()
+    }
+
+    pub fn memory_updates(&self) -> &UpdateLock {
+        self.cache.memory().updates()
     }
 
     pub fn get_local(&self, entry: &Entry) -> Result<Option<Local>, Error> {
@@ -220,6 +230,35 @@ impl RateLimits {
                 "TTL preservation failed, falling back to regular pipeline"
             );
             store.increment_many(&increments).await;
+        });
+        true
+    }
+
+    pub fn guarded_increment_post_call(
+        self: &Arc<Self>,
+        request: &RequestRedis,
+        increment: GuardedIncrement,
+        failed: String,
+    ) -> bool {
+        let Some(batch) = self.batch(Send::PostCall(request)) else {
+            return false;
+        };
+        let declared = scripts::guarded_increment(&batch, &increment);
+        let store = Arc::clone(self);
+        request.spawn(async move {
+            let Err(error) = declared.settled().await else {
+                return;
+            };
+            crate::failure_log::redis_failure!(&error, failed);
+            if increment.amount.as_f64() > 0.0 {
+                store
+                    .increment(&Increment {
+                        counter: increment.counter,
+                        amount: increment.amount,
+                        ttl: increment.ttl,
+                    })
+                    .await;
+            }
         });
         true
     }

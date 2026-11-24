@@ -28,7 +28,7 @@ vi.mock("../networking", async () => {
   const actual = await vi.importActual("../networking");
   return {
     ...actual,
-    getUiSettings: vi.fn().mockResolvedValue({ values: { enable_projects_ui: false } }),
+    getUiSettings: vi.fn().mockResolvedValue({ values: {} }),
     getPromptsList: vi.fn().mockResolvedValue({
       prompts: [{ prompt_id: "prompt-1" }, { prompt_id: "prompt-2" }],
     }),
@@ -377,6 +377,24 @@ describe("KeyEditView", () => {
     expect(JSON.parse(onSubmit.mock.calls[0][0].metadata).store_prompts_in_spend_logs).toBe(false);
   });
 
+  it("submits an explicitly disabled semantic cache in key metadata", async () => {
+    const onSubmit = vi.fn().mockResolvedValue(undefined);
+    renderWithProviders(
+      <KeyEditView
+        keyData={MOCK_KEY_DATA}
+        onCancel={() => {}}
+        onSubmit={onSubmit}
+        accessToken=""
+        userID=""
+        userRole="Admin"
+      />,
+    );
+    fireEvent.change(screen.getByLabelText("Cache mode"), { target: { value: "false" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    expect(JSON.parse(onSubmit.mock.calls[0][0].metadata).cache_params).toEqual({ enabled: false });
+  });
+
   it("should render tags", async () => {
     renderWithProviders(
       <KeyEditView
@@ -417,7 +435,7 @@ describe("KeyEditView", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     can.mockReturnValue(true);
-    vi.mocked(getUiSettings).mockResolvedValue({ values: { enable_projects_ui: false } });
+    vi.mocked(getUiSettings).mockResolvedValue({ values: {} });
     testQueryClient.removeQueries({ queryKey: ["uiSettings"] });
   });
 
@@ -1413,7 +1431,7 @@ describe("KeyEditView", () => {
       />,
     );
 
-    const maxBudgetInput = await screen.findByPlaceholderText("Max spend ($)");
+    const maxBudgetInput = await screen.findByPlaceholderText("Max Budget");
     await userEvent.clear(maxBudgetInput);
     await userEvent.type(maxBudgetInput, "200");
 
@@ -1445,7 +1463,7 @@ describe("KeyEditView", () => {
       />,
     );
 
-    const maxBudgetInput = await screen.findByPlaceholderText("Max spend ($)");
+    const maxBudgetInput = await screen.findByPlaceholderText("Max Budget");
     await userEvent.clear(maxBudgetInput);
 
     const submitButton = screen.getByRole("button", { name: /save changes/i });
@@ -1501,7 +1519,7 @@ describe("KeyEditView", () => {
           premiumUser={true}
         />,
       );
-      expect(await screen.findByPlaceholderText("Max spend ($)")).toHaveValue(5);
+      expect(await screen.findByPlaceholderText("Max Budget")).toHaveValue(5);
 
       rerender(
         <KeyEditView
@@ -1515,7 +1533,7 @@ describe("KeyEditView", () => {
         />,
       );
 
-      expect(await screen.findByPlaceholderText("Max spend ($)")).toHaveValue(99);
+      expect(await screen.findByPlaceholderText("Max Budget")).toHaveValue(99);
     });
 
     it("should say why the editor is locked when the proxy has no enterprise license", async () => {
@@ -2027,7 +2045,6 @@ describe("KeyEditView", () => {
     });
 
     it("should save an explicit project detach while keeping parents locked until reopening the editor", async () => {
-      vi.mocked(getUiSettings).mockResolvedValue({ values: { enable_projects_ui: true } });
       const onSubmit = vi.fn().mockResolvedValue(undefined);
       const onCancel = vi.fn();
       const key = { ...MOCK_KEY_DATA, organization_id: "org-1", team_id: "group-maple", project_id: "project-orbit" };
@@ -2088,7 +2105,7 @@ describe("KeyEditView", () => {
       expect(await screen.findByRole("button", { name: "Detach from project" })).toBeInTheDocument();
     });
 
-    it("keeps project key relationships locked and omits project updates when the project UI is disabled", async () => {
+    it("keeps project key relationships locked and omits project_id when the project is not detached", async () => {
       const onSubmit = vi.fn().mockResolvedValue(undefined);
       renderWithProviders(
         <KeyEditView
@@ -2929,7 +2946,7 @@ describe("KeyEditView", () => {
       renderForPayload(onSubmitMock);
       await screen.findByRole("button", { name: /save changes/i });
 
-      await pickFromCombobox(/allowed pass through routes/, /\/bria/);
+      await pickFromCombobox(/allowed pass-through routes/, /\/bria/);
       await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
 
       await waitFor(() => {

@@ -1,6 +1,7 @@
 import json
 import sqlite3
 from collections.abc import Mapping, Sequence
+from contextlib import nullcontext
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from typing import Final, cast
@@ -16,6 +17,7 @@ from litellm.proxy._types import (
     LiteLLM_TeamMembership,
     LiteLLM_TeamTable,
     LiteLLM_UserTable,
+    LitellmUserRoles,
     Member,
     UserAPIKeyAuth,
 )
@@ -307,6 +309,8 @@ async def test_handle_budget_for_entity_updates_with_existing_budget_id_in_reque
 
     budget_update: Final = AsyncMock()
     db: Final = SimpleNamespace(
+        tx=lambda: nullcontext(db),
+        query_raw=AsyncMock(return_value=[]),
         litellm_budgettable=SimpleNamespace(update=budget_update, find_unique=AsyncMock(return_value=None)),
         litellm_customermembertable=SimpleNamespace(find_many=AsyncMock(return_value=[])),
         litellm_customerteamtable=SimpleNamespace(find_many=AsyncMock(return_value=[])),
@@ -327,7 +331,7 @@ async def test_handle_budget_for_entity_updates_with_existing_budget_id_in_reque
 
     assert budget_id == "budget-1"
     budget_update.assert_awaited_once_with(
-        where={"budget_id": "budget-1"},
+        where={"budget_id": "budget-1", "rollover_max_budget": None},
         data={"budget_id": "budget-1", "max_budget": 20.0, "updated_by": "admin"},
     )
 
@@ -357,6 +361,8 @@ async def test_handle_budget_for_entity_updates_only_cleared_or_supplied_fields(
     tag: Final = TagUpdateRequest.model_validate(request_data)
     budget_update: Final = AsyncMock()
     db: Final = SimpleNamespace(
+        tx=lambda: nullcontext(db),
+        query_raw=AsyncMock(return_value=[]),
         litellm_budgettable=SimpleNamespace(update=budget_update, find_unique=AsyncMock(return_value=None)),
         litellm_customermembertable=SimpleNamespace(find_many=AsyncMock(return_value=[])),
         litellm_customerteamtable=SimpleNamespace(find_many=AsyncMock(return_value=[])),
@@ -518,6 +524,79 @@ async def test_add_new_member_budget_duration_only_clones_default_max_budget():
     assert cloned_create_data["max_budget"] == 100.0  # kept from the team default
     assert cloned_create_data["budget_duration"] == "7d"  # overridden by the caller
     assert cloned_create_data["budget_reset_at"] > datetime.now(timezone.utc)
+
+
+@pytest.mark.parametrize(
+    ("default_budget_exists", "expected_budget"),
+    [
+        pytest.param(
+            True,
+            {"budget_duration": "1d", "allowed_models": ["gpt-4o-mini"]},
+            id="team-default-budget-supplies-the-reset-and-keeps-the-cap-to-itself",
+        ),
+        pytest.param(False, {"allowed_models": ["gpt-4o-mini"]}, id="missing-team-default-budget-keeps-the-models"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_add_new_member_with_only_allowed_models_resets_on_the_team_default_window(
+    default_budget_exists: bool, expected_budget: dict[str, object]
+) -> None:
+    """A team's default_team_member_models reach here as allowed_models with no max_budget_in_team. The
+    cap is read from the team default at auth time, so it is not copied and later /team/update changes
+    still apply, but spend is only reset for a row with a reset date of its own."""
+    prisma_client: Final = AsyncMock()
+    user_row: Final = MagicMock()
+    user_row.model_dump.return_value = {
+        "user_id": "models-only-user",
+        "user_email": None,
+        "teams": ["team-mo"],
+        "user_role": "internal_user",
+    }
+    prisma_client.db.litellm_usertable.upsert = AsyncMock(return_value=user_row)
+    prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=user_row)
+    default_budget_row: Final = MagicMock()
+    default_budget_row.model_dump.return_value = {
+        "budget_id": "default-mo",
+        "max_budget": 100.0,
+        "soft_budget": None,
+        "max_parallel_requests": None,
+        "tpm_limit": 1000,
+        "rpm_limit": None,
+        "model_max_budget": None,
+        "budget_duration": "1d",
+        "allowed_models": [],
+    }
+    prisma_client.db.litellm_budgettable.find_unique = AsyncMock(
+        return_value=default_budget_row if default_budget_exists else None
+    )
+    created_budget_row: Final = MagicMock()
+    created_budget_row.budget_id = "member-mo"
+    prisma_client.db.litellm_budgettable.create = AsyncMock(return_value=created_budget_row)
+    membership_row: Final = MagicMock()
+    membership_row.model_dump.return_value = {
+        "team_id": "team-mo",
+        "user_id": "models-only-user",
+        "budget_id": "member-mo",
+        "litellm_budget_table": None,
+    }
+    prisma_client.db.litellm_teammembership.upsert = AsyncMock(return_value=membership_row)
+
+    await add_new_member(
+        new_member=Member(user_id="models-only-user", role="user"),
+        max_budget_in_team=None,
+        prisma_client=prisma_client,
+        team_id="team-mo",
+        user_api_key_dict=UserAPIKeyAuth(user_id="admin_user", user_role=LitellmUserRoles.PROXY_ADMIN),
+        litellm_proxy_admin_name="test_admin",
+        default_team_budget_id="default-mo",
+        allowed_models=["gpt-4o-mini"],
+    )
+
+    prisma_client.db.litellm_budgettable.create.assert_called_once()
+    created: Final = dict(prisma_client.db.litellm_budgettable.create.call_args.kwargs["data"])
+    reset_at: Final = created.pop("budget_reset_at", None)
+    assert created == {"created_by": "admin_user", "updated_by": "admin_user", **expected_budget}
+    assert (reset_at is not None) is default_budget_exists
 
 
 @pytest.mark.asyncio
@@ -1001,6 +1080,9 @@ async def test_team_update_reaches_inherited_members_but_not_overridden_ones():
     db: Final = _FakeDb()
     prisma_client: Final = MagicMock()
     prisma_client.db = db
+    prisma_client.writer_db.tx.return_value.__aenter__.return_value = SimpleNamespace(
+        litellm_budgettable=db.litellm_budgettable, query_raw=AsyncMock(return_value=[])
+    )
     admin: Final = UserAPIKeyAuth(user_id="admin_user", user_role=LitellmUserRoles.PROXY_ADMIN)
     team_id: Final = "team-shared-default"
     default_budget: Final = await db.litellm_budgettable.create(data={"budget_id": "team-default", "max_budget": 100.0})

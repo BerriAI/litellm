@@ -299,6 +299,42 @@ class TestAzureModelRouterCostBreakdown:
             routed_prompt_cost + routed_completion_cost + ROUTED_FEE, rel=1e-9
         )
 
+    @pytest.mark.asyncio
+    @pytest.mark.respx(assert_all_called=True)
+    async def test_model_router_responses_on_a_foundry_project_report_routed_cost_plus_flat_fee(
+        self, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+        project_base: Final = "https://example-resource.services.ai.azure.com/api/projects/example-project/openai/v1"
+        route: Final = respx_mock.post(f"{project_base}/responses").mock(
+            return_value=Response(
+                200,
+                json={
+                    "id": "resp_router",
+                    "object": "response",
+                    "created_at": 1700000000,
+                    "status": "completed",
+                    "model": ROUTED_MODEL,
+                    "output": [],
+                    "usage": {"input_tokens": 5000, "output_tokens": 2000, "total_tokens": 7000},
+                },
+            )
+        )
+        routed_prompt_cost, routed_completion_cost = _routed_model_cost()
+
+        response: Final = await litellm.aresponses(
+            model="azure_ai/model_router/model-router",
+            input="hi who is this",
+            api_base=project_base,
+            api_key="azure-ai-test-key",
+        )
+
+        assert route.call_count == 1
+        assert response.model == ROUTED_MODEL
+        assert response._hidden_params["response_cost"] == pytest.approx(
+            routed_prompt_cost + routed_completion_cost + ROUTED_FEE, rel=1e-9
+        )
+
     def test_unmapped_router_name_carries_the_fee_as_its_input_cost(self) -> None:
         logging_obj = _router_logging("azure-model-router")
         cost = completion_cost(

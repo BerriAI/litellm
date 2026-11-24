@@ -10,16 +10,16 @@ from litellm.llms.base_llm.text_to_speech.transformation import BaseTextToSpeech
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
-    get_async_httpx_client,  # pyright: ignore[reportUnknownVariableType]  # shared HTTP factory lacks typed params
-    get_httpx_client,  # pyright: ignore[reportPrivateUsage, reportUnknownVariableType]  # shared HTTP factory is private
 )
 from litellm.llms.replicate.common_utils import (
     ReplicateError,
     async_replicate_download,
     async_wait_for_replicate_prediction,
     replicate_api_base,
+    replicate_async_httpx_client,
     replicate_auth_headers,
     replicate_download,
+    replicate_httpx_client,
     replicate_model_owner,
     replicate_output_urls,
     replicate_positive_int,
@@ -28,7 +28,7 @@ from litellm.llms.replicate.common_utils import (
     replicate_prediction_request,
     wait_for_replicate_prediction,
 )
-from litellm.types.utils import LlmProviders, Usage
+from litellm.types.utils import Usage
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -46,14 +46,6 @@ def _voice_key(model: str) -> str:
     return _VOICE_KEY_BY_OWNER.get(replicate_model_owner(model), "voice")
 
 
-def _get_replicate_httpx_client(ssl_verify: object) -> HTTPHandler:
-    return get_httpx_client(params={"ssl_verify": ssl_verify})
-
-
-def _get_replicate_async_httpx_client(ssl_verify: object) -> AsyncHTTPHandler:
-    return get_async_httpx_client(llm_provider=LlmProviders.REPLICATE, params={"ssl_verify": ssl_verify})
-
-
 def _ssl_verify(logging_obj: "LiteLLMLoggingObj") -> object:
     litellm_params: Final = getattr(logging_obj, "litellm_params", None)
     return litellm_params.get("ssl_verify") if isinstance(litellm_params, Mapping) else None
@@ -62,8 +54,8 @@ def _ssl_verify(logging_obj: "LiteLLMLoggingObj") -> object:
 class ReplicateTextToSpeechConfig(BaseTextToSpeechConfig):
     def __init__(
         self,
-        sync_client_factory: Callable[[object], HTTPHandler] = _get_replicate_httpx_client,
-        async_client_factory: Callable[[object], AsyncHTTPHandler] = _get_replicate_async_httpx_client,
+        sync_client_factory: Callable[[object], HTTPHandler] = replicate_httpx_client,
+        async_client_factory: Callable[[object], AsyncHTTPHandler] = replicate_async_httpx_client,
     ) -> None:
         super().__init__()
         self._sync_client_factory: Final = sync_client_factory

@@ -7,6 +7,7 @@ import shutil
 import signal
 import sys
 import tempfile
+import termios
 import time
 import zipfile
 from collections.abc import Mapping, Sequence
@@ -14,6 +15,10 @@ from pathlib import Path
 from typing import Final, TypeAlias, cast
 
 Environment: TypeAlias = Mapping[str, str]
+SKILL_NAME: Final = "declared-fixture-skill"
+SKILL_CONTENT: Final = (
+    f"---\nname: {SKILL_NAME}\ndescription: Fixture skill\nmetadata:\n  internal: true\n---\nfixture skill\n"
+)
 
 
 def external_command(tool: str) -> None:
@@ -27,9 +32,13 @@ def external_command(tool: str) -> None:
         if os.environ["SKILL_FIXTURE_FAIL"] == "1":
             sys.exit(22)
         with zipfile.ZipFile(output, "w") as archive:
-            archive.writestr("SKILL.md", "fixture skill")
+            archive.writestr("SKILL.md", SKILL_CONTENT)
         return
     source: Final = Path(args[args.index("add") + 1])
+    if "--skill" in args and args[args.index("--skill") + 1] != SKILL_NAME:
+        sys.exit(1)
+    if "--skill" not in args and os.environ.get("INSTALL_INTERNAL_SKILLS") not in ("1", "true"):
+        sys.exit(1)
     if "--copy" in args:
         shutil.copytree(source, root / "installed")
     else:
@@ -76,6 +85,12 @@ def run(command: str, fail: bool) -> None:
                     break
                 output += chunk
                 if not sent and b"LiteLLM API key: " in output:
+                    while (
+                        cast(int, termios.tcgetattr(terminal)[3]) & termios.ECHO
+                    ):  # cast-ok: lflag is an integer bitmask
+                        if time.monotonic() >= deadline:
+                            raise TimeoutError("Terminal echo remained enabled")
+                        time.sleep(0.001)
                     os.write(terminal, f"{secret}\n".encode())
                     sent = True
         finally:
@@ -89,15 +104,24 @@ def run(command: str, fail: bool) -> None:
         curl_args: Final = cast(Sequence[str], curl["args"])  # cast-ok: fixture records argv
         installed: Final = root / "installed" / "SKILL.md"
         temporary: Final = Path(curl_args[curl_args.index("--output") + 1]).parent
-        sys.stdout.write(json.dumps({
-            "status": os.waitstatus_to_exitcode(status),
-            "header": curl["header"],
-            "installArgs": npx["args"] if npx else None,
-            "telemetry": cast(Environment, npx["env"]).get("DISABLE_TELEMETRY") if npx else None,  # cast-ok: own env
-            "secretLeaked": secret in json.dumps((output.decode(), curl_args, curl["env"], npx)),
-            "retained": installed.read_text() if installed.exists() else None,
-            "temporaryRemoved": not temporary.exists(),
-        }))
+        sys.stdout.write(
+            json.dumps(
+                {
+                    "status": os.waitstatus_to_exitcode(status),
+                    "header": curl["header"],
+                    "downloadInternalSkills": cast(Environment, curl["env"]).get(
+                        "INSTALL_INTERNAL_SKILLS"
+                    ),  # cast-ok: own env
+                    "installArgs": npx["args"] if npx else None,
+                    "telemetry": cast(Environment, npx["env"]).get("DISABLE_TELEMETRY")
+                    if npx
+                    else None,  # cast-ok: own env
+                    "secretLeaked": secret in json.dumps((output.decode(), curl_args, curl["env"], npx)),
+                    "retained": installed.read_text() if installed.exists() else None,
+                    "temporaryRemoved": not temporary.exists(),
+                }
+            )
+        )
         marker: Final = temporary / ".skill-install-fixture"
         if marker.exists() and marker.read_text() == str(root):
             shutil.rmtree(temporary)

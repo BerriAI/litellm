@@ -5,7 +5,9 @@ import io
 import math
 import re
 import struct
+import threading
 from bisect import bisect_right
+from collections import OrderedDict
 from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from functools import cached_property
@@ -615,7 +617,7 @@ def estimate_image_tokens(
 
 
 _MEDIA_FILE_CHARS_PER_TOKEN: Final = 4
-_EmbeddingInputT: Final = TypeVar("_EmbeddingInputT")
+_EmbeddingInputT = TypeVar("_EmbeddingInputT")
 
 
 def _max_input_tokens(model: str) -> int | None:
@@ -770,7 +772,7 @@ class _PdfReader(Protocol):
 
 
 EXTRAPOLATION_SAMPLES: Final = 16
-T_ParamSpec: Final = ParamSpec("T_ParamSpec")
+T_ParamSpec = ParamSpec("T_ParamSpec")
 T_Retval = TypeVar("T_Retval")
 _COUNT_OFFLOAD_LIMITER: Final = anyio.lowlevel.RunVar[anyio.CapacityLimiter]("litellm_count_offload_limiter")
 _ANTHROPIC_TOOL_KEYS_MAPPED_BY_BRIDGE: Final = frozenset(
@@ -913,7 +915,7 @@ def token_counter(
     model="",
     custom_tokenizer: dict | SelectTokenizerResponse | None = None,
     text: str | list[str] | None = None,
-    messages: Sequence[AllMessageValues | Message] | None = None,
+    messages: Sequence[AllMessageValues | Message | Mapping[str, object]] | None = None,
     count_response_tokens: bool | None = False,
     tools: list[ChatCompletionToolParam] | None = None,
     tool_choice: str | Mapping[str, object] | None = None,
@@ -1233,19 +1235,67 @@ def _evenly_spaced_samples(text: str, total_chars: int) -> tuple[str, ...]:
     )
 
 
+_MemoKey: TypeAlias = tuple[int, int, int]
+_MemoEntry: TypeAlias = tuple[object, int]
+
+
+class TokenCountMemo:
+    """Least recently used token counts of long texts, so a conversation resent with one more turn only tokenizes
+    the new turn. Entries are keyed by the tokenizer's id and the text's length and hash, never the text itself, and
+    hold their tokenizer so that id cannot be reused by another one while the entry lives."""
+
+    __slots__ = ("_counts", "_lock", "_max_entries", "_min_chars")
+
+    def __init__(self, max_entries: int = 16_384, min_chars: int = 1024) -> None:
+        self._counts: Final[OrderedDict[_MemoKey, _MemoEntry]] = OrderedDict()  # mutable-ok: an LRU evicts in place
+        self._lock: Final = threading.Lock()
+        self._max_entries: Final = max_entries
+        self._min_chars: Final = min_chars
+
+    def wrap(self, tokenizer: object, count: TokenCounterFunction) -> TokenCounterFunction:
+        def count_tokens(text: str) -> int:
+            if len(text) < self._min_chars:
+                return count(text)
+            key: Final = (id(tokenizer), len(text), hash(text))
+            with self._lock:
+                cached: Final = self._counts.get(key)
+                if cached is not None:
+                    self._counts.move_to_end(key)
+                    return cached[1]
+            counted: Final = count(text)
+            with self._lock:
+                self._counts[key] = (tokenizer, counted)
+                self._counts.move_to_end(key)
+                if len(self._counts) > self._max_entries:
+                    self._counts.popitem(last=False)
+            return counted
+
+        return count_tokens
+
+
+_TOKEN_COUNT_MEMO: Final = TokenCountMemo()
+
+
 def _get_count_function(
     model: str | None,
     custom_tokenizer: dict | SelectTokenizerResponse | None = None,
 ) -> TokenCounterFunction:
-    return _get_extrapolating_count_function(_get_exact_count_function(model, custom_tokenizer))
+    exact: Final = _resolve_exact_count(model, custom_tokenizer)
+    count: Final = _get_extrapolating_count_function(exact.count)
+    return count if custom_tokenizer is not None else _TOKEN_COUNT_MEMO.wrap(exact.tokenizer, count)
 
 
-def _get_exact_count_function(
+@dataclass(frozen=True, slots=True)
+class _ExactCount:
+    tokenizer: "Encoding | HuggingFace"
+    count: TokenCounterFunction
+
+
+def _resolve_exact_count(
     model: str | None,
     custom_tokenizer: dict | SelectTokenizerResponse | None = None,
-) -> TokenCounterFunction:
-    """
-    Get the function to count tokens based on the model and custom tokenizer."""
+) -> _ExactCount:
+    """The tokenizer and the exact count function for the model and custom tokenizer."""
     from litellm.utils import select_tokenizer
 
     if model is not None or custom_tokenizer is not None:
@@ -1256,7 +1306,7 @@ def _get_exact_count_function(
         def encode_length(text: str) -> int:
             return _encoding_count(default_encoding, text)
 
-        return _get_tiktoken_count_function(encode_length)
+        return _ExactCount(default_encoding, _get_tiktoken_count_function(encode_length))
     if tokenizer_json["type"] == "huggingface_tokenizer":
         tokenizer: Final[HuggingFace] = tokenizer_json["tokenizer"]
 
@@ -1265,14 +1315,14 @@ def _get_exact_count_function(
                 return tokenizer.count(text)
             return len(tokenizer.encode_batch_fast([text])[0])
 
-        return count_tokens
+        return _ExactCount(tokenizer, count_tokens)
     if tokenizer_json["type"] == "openai_tokenizer":
         encoding: Final = openai_tokenizer_encoding(model or "")
 
         def encode_length(text: str) -> int:
             return _encoding_count(encoding, text)
 
-        return _get_tiktoken_count_function(encode_length)
+        return _ExactCount(encoding, _get_tiktoken_count_function(encode_length))
     raise ValueError("Unsupported tokenizer type")
 
 
@@ -1884,9 +1934,11 @@ def _count_anthropic_content(
         except Exception as e:
             if default_token_count is not None:
                 return default_token_count
-            raise (UnsupportedContentTypeError if isinstance(e, UnsupportedContentTypeError) else ValueError)(
-                f"Error counting field '{field_name}': {e}"
-            )
+            raise (
+                UnsupportedContentTypeError
+                if server_fields is not None or isinstance(e, UnsupportedContentTypeError)
+                else ValueError
+            )(f"Error counting field '{field_name}': {e}")
     return tokens
 
 
@@ -2095,7 +2147,7 @@ def _format_single_function_definition(function: Mapping[str, object]) -> tuple[
     if not function_name:
         return ()
     function_description: Final = function.get("description")
-    parameters_value: Final = function.get("parameters") or {}
+    parameters_value: Final = function.get("parameters") or function.get("parametersJsonSchema") or {}
     parameters: Final = parameters_value if isinstance(parameters_value, Mapping) else {}
     properties: Final = parameters.get("properties")
     if isinstance(properties, Mapping) and properties:

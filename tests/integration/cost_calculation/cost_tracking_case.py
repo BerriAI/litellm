@@ -125,6 +125,8 @@ class CostMapEntry(BaseModel):
     output_cost_per_token_above_272k_tokens_ultrafast: float | None = None
     input_cost_per_token_above_200k_tokens_priority: float | None = None
     output_cost_per_token_above_200k_tokens_priority: float | None = None
+    input_cost_per_token_above_200k_tokens_flex: float | None = None
+    output_cost_per_token_above_200k_tokens_flex: float | None = None
     cache_read_input_token_cost_flex: float | None = None
     cache_read_input_token_cost_priority: float | None = None
     cache_read_input_token_cost_ultrafast: float | None = None
@@ -132,6 +134,7 @@ class CostMapEntry(BaseModel):
     cache_read_input_token_cost_above_272k_tokens_priority: float | None = None
     cache_read_input_token_cost_above_272k_tokens_ultrafast: float | None = None
     cache_read_input_token_cost_above_200k_tokens_priority: float | None = None
+    cache_read_input_token_cost_above_200k_tokens_flex: float | None = None
     cache_creation_input_token_cost_flex: float | None = None
     cache_creation_input_token_cost_priority: float | None = None
     cache_creation_input_token_cost_ultrafast: float | None = None

@@ -1,8 +1,11 @@
+from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 from httpx._types import RequestFiles
+from pydantic import TypeAdapter
 
+from litellm.litellm_core_utils.core_helpers import require_get
 from litellm.llms.azure_ai.common_utils import (
     AzureFoundryModelInfo,
     get_azure_ai_auth_headers,
@@ -21,11 +24,13 @@ from litellm.utils import convert_to_model_response_object
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.logging import Logging as LiteLLMLoggingObj
 
+_DECODED_JSON: Final = TypeAdapter(object)
+
 
 class AzureFoundryMAIImageEditConfig(OpenAIImageEditConfig):
     """Azure AI Foundry MAI image editing (e.g. MAI-Image-2.5)."""
 
-    def get_supported_openai_params(self, model: str) -> list:
+    def get_supported_openai_params(self, model: str) -> list[str]:
         return ["prompt", "image", "model", "n"]
 
     def validate_environment(
@@ -33,7 +38,7 @@ class AzureFoundryMAIImageEditConfig(OpenAIImageEditConfig):
         headers: dict,
         model: str,
         api_key: str | None = None,
-        litellm_params: dict | None = None,
+        litellm_params: Mapping[str, object] | None = None,
         api_base: str | None = None,
     ) -> dict:
         headers.update(
@@ -69,12 +74,12 @@ class AzureFoundryMAIImageEditConfig(OpenAIImageEditConfig):
         self,
         model: str,
         prompt: str | None,
-        image: FileTypes | None,
-        image_edit_optional_request_params: dict,
+        image: FileTypes | Sequence[FileTypes | None] | None,
+        image_edit_optional_request_params: Mapping[str, object],
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
-    ) -> tuple[dict, RequestFiles]:
-        request_params: Final = {
+        headers: Mapping[str, object],
+    ) -> tuple[dict[str, object], RequestFiles]:
+        request_params: Final[dict[str, object]] = {
             "model": model,
             **image_edit_optional_request_params,
         }
@@ -109,7 +114,9 @@ class AzureFoundryMAIImageEditConfig(OpenAIImageEditConfig):
             raise OpenAIError(message=raw_response.text, status_code=raw_response.status_code)
 
         if "usage" in response:
-            response["usage"] = AzureFoundryMAIImageGenerationConfig.normalize_mai_image_usage(response.get("usage"))
+            response["usage"] = AzureFoundryMAIImageGenerationConfig.normalize_mai_image_usage(
+                require_get(_DECODED_JSON.validate_python(response)).get("usage")
+            )
 
         logging_obj.post_call(
             input="",

@@ -317,6 +317,11 @@ class Litellm_EntityType(enum.Enum):
     CUSTOMER_ORG = "customer_org"
     CUSTOMER_TEAM = "customer_team"
     CUSTOMER_MEMBER = "customer_member"
+    APP = "app"
+    APP_CUSTOMER_ORG = "app_customer_org"
+    APP_GROUP = "app_group"
+    APP_GROUP_CUSTOMER_ORG = "app_group_customer_org"
+    APP_CUSTOMER_MEMBER = "app_customer_member"
 
     # global proxy level entity
     PROXY = "proxy"

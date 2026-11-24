@@ -3,10 +3,11 @@
 import os
 import time
 from collections.abc import Mapping
+from enum import Enum
 from typing import TYPE_CHECKING, Final, Literal, Optional, Protocol, cast
 
 from fastapi import HTTPException
-from pydantic import BaseModel, TypeAdapter
+from pydantic import BaseModel, TypeAdapter, ValidationError
 from typing_extensions import NotRequired, ReadOnly, TypedDict, Unpack
 
 from litellm._logging import verbose_proxy_logger
@@ -36,6 +37,7 @@ if TYPE_CHECKING:
 
 GRAYSWAN_BLOCK_ERROR_MSG: Final = "Blocked by Gray Swan Guardrail"
 _DECODED_JSON: Final = TypeAdapter(object)
+_MONITOR_RESPONSE_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 
 
 class _GraySwanMonitorResponse(TypedDict):
@@ -46,6 +48,7 @@ class _GraySwanMonitorResponse(TypedDict):
     violated_rule_descriptions: ReadOnly[NotRequired[list[object]]]
     mutation: ReadOnly[NotRequired[bool | None]]
     ipi: ReadOnly[NotRequired[bool | None]]
+    error: ReadOnly[NotRequired[bool]]
 
 
 class _CustomGuardrailOptions(TypedDict, total=False, extra_items=object):
@@ -113,6 +116,32 @@ class GraySwanGuardrailAPIError(Exception):
     def __init__(self, message: str, status_code: int | None = None) -> None:
         super().__init__(message)
         self.status_code = status_code
+
+
+class _MonitorDecisionError(Enum):
+    INVALID_RESPONSE = "Gray Swan returned an invalid monitor response"
+    MODERATION_FAILED = "Gray Swan moderation failed"
+    INVALID_SCORE = "Gray Swan returned an invalid violation score"
+
+
+def _parse_violation_score(response_json: object) -> float | _MonitorDecisionError:
+    try:
+        response: Final = _MONITOR_RESPONSE_ADAPTER.validate_python(response_json, strict=True)
+    except ValidationError:
+        return _MonitorDecisionError.INVALID_RESPONSE
+    if response.get("error"):
+        return _MonitorDecisionError.MODERATION_FAILED
+    score: Final = response.get("violation")
+    if isinstance(score, bool) or not isinstance(score, (int, float)) or not 0 <= score <= 1:
+        return _MonitorDecisionError.INVALID_SCORE
+    return float(score)
+
+
+def _require_violation_score(response_json: object) -> float:
+    score: Final = _parse_violation_score(response_json)
+    if isinstance(score, _MonitorDecisionError):
+        raise GraySwanGuardrailAPIError(score.value)
+    return score
 
 
 class GraySwanGuardrail(CustomGuardrail):
@@ -234,6 +263,9 @@ class GraySwanGuardrail(CustomGuardrail):
     # Unified Guardrail Interface (works with ALL endpoints automatically)
     # ------------------------------------------------------------------
 
+    def scans_each_text_separately(self) -> bool:
+        return False
+
     @log_guardrail_information
     async def apply_guardrail(
         self,
@@ -341,7 +373,7 @@ class GraySwanGuardrail(CustomGuardrail):
             status_code: Final = getattr(exc, "status_code", None) or getattr(exc, "exception_status_code", None)
             self._log_guardrail_failure(
                 exc=exc,
-                request_data=request_data or {},
+                request_data=request_data,
                 start_time=start_time,
                 end_time=end_time,
                 status_code=status_code,
@@ -405,7 +437,7 @@ class GraySwanGuardrail(CustomGuardrail):
             data: Optional request data (for passthrough exceptions)
             hook_type: Optional GuardrailEventHooks for determining behavior
         """
-        violation_score: Final = float(response_json.get("violation", 0.0) or 0.0)
+        violation_score: Final = _require_violation_score(response_json)
         violated_rules: Final = response_json.get("violated_rules", [])
         mutation_detected: Final = response_json.get("mutation")
         ipi_detected: Final = response_json.get("ipi")
@@ -530,7 +562,7 @@ class GraySwanGuardrail(CustomGuardrail):
         Raises:
             HTTPException: If content is blocked (block mode)
         """
-        violation_score: Final = float(response_json.get("violation", 0.0) or 0.0)
+        violation_score: Final = _require_violation_score(response_json)
         violated_rules: Final = response_json.get("violated_rule_descriptions", [])
         mutation_detected: Final = response_json.get("mutation")
         ipi_detected: Final = response_json.get("ipi")

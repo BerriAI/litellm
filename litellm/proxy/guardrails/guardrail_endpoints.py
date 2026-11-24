@@ -10,15 +10,21 @@ import os
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from datetime import datetime, timezone
 from types import MappingProxyType, UnionType
-from typing import TYPE_CHECKING, Any, Final, Protocol, TypeVar, Union, cast, get_args, get_origin
-from urllib.parse import urlparse
+from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypeVar, Union, cast, get_args, get_origin
+from urllib.parse import ParseResult, ParseResultBytes, urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, TypeAdapter, ValidationError
 
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
-from litellm.integrations.custom_guardrail import CustomGuardrail, GuardrailSetupError
+from litellm.integrations.custom_guardrail import (
+    CustomGuardrail,
+    GuardrailSetupError,
+    _append_slg_to_litellm_params,  # pyright: ignore[reportPrivateUsage, reportUnknownVariableType]  # share the guardrail logging bridge, which takes a bare list
+    _sync_guardrail_info_to_logging_obj,  # pyright: ignore[reportPrivateUsage, reportUnknownVariableType]  # share the guardrail logging bridge, which takes a bare dict
+)
+from litellm.litellm_core_utils.core_helpers import as_object_list, as_str_mapping
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy._types import AUDIT_ACTIONS, LitellmTableNames, LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -26,6 +32,7 @@ from litellm.proxy.common_utils.callback_utils import CALLBACK_VAR_ENCRYPTED_PRE
 from litellm.proxy.common_utils.openai_error_payload import status_typed_proxy_exception
 from litellm.proxy.common_utils.path_utils import is_within, safe_join
 from litellm.proxy.guardrails.content_filter_data import CATEGORIES_DIR, DATA_ROOTS, category_dirs, find_category_file
+from litellm.proxy.guardrails.endpoint_image_scan import ignores_messages, scan_images
 from litellm.proxy.guardrails.guardrail_hooks.custom_code.bounded_execution import (
     ExecutionTimeoutError,
     await_with_timeout,
@@ -80,9 +87,15 @@ from litellm.types.guardrails import (
     with_tolerated_stream_scope,
 )
 from litellm.types.llms.base import LiteLLMBaseModel
+from litellm.types.llms.openai import (
+    ChatCompletionImageObject,
+    ChatCompletionTextObject,
+    ChatCompletionUserMessage,
+)
 from litellm.types.proxy.guardrails.guardrail_hooks.hide_secrets import (
     HideSecretsGuardrailConfigModel,
 )
+from litellm.types.utils import GenericGuardrailAPIInputs
 
 if TYPE_CHECKING:
     from types import CodeType
@@ -807,8 +820,14 @@ class RegisterGuardrailRequest(LiteLLMBaseModel):
     guardrail_info: dict[str, object] | None = None
     team_id: str | None = None
 
-    def get_litellm_params_dict(self) -> dict[str, Any]:
+    def get_litellm_params_dict(self) -> Mapping[str, object]:
         return dict(self.litellm_params)
+
+
+def _parsed_api_base(api_base: object) -> ParseResult | ParseResultBytes:
+    return urlparse(  # pyright: ignore[reportCallIssue, reportUnknownVariableType]  # urlparse raises its own error
+        api_base  # pyright: ignore[reportArgumentType]  # urlparse raises its own error
+    )
 
 
 class RegisterGuardrailResponse(LiteLLMBaseModel):
@@ -900,7 +919,7 @@ async def register_guardrail(
             status_code=400,
             detail="litellm_params.api_base is required for generic_guardrail_api",
         )
-    parsed: Final = urlparse(api_base)
+    parsed: Final = _parsed_api_base(api_base)
     if parsed.scheme not in ("http", "https"):
         raise HTTPException(
             status_code=400,
@@ -2504,9 +2523,19 @@ def _patch_logging_obj_for_guardrail(litellm_logging_obj: _GuardrailLoggingObj, 
     """Configure the logging object so Langfuse/OTEL extract input and output correctly."""
     litellm_logging_obj.call_type = "pass_through_endpoint"
     litellm_logging_obj.model_call_details["call_type"] = "pass_through_endpoint"
-    litellm_logging_obj.update_messages(
-        request.messages if request.messages else [{"role": "user", "content": request.text}]
+    litellm_logging_obj.update_messages(request.messages if request.messages else [_logged_user_message(request)])
+
+
+def _logged_user_message(request: ApplyGuardrailRequest) -> ChatCompletionUserMessage:
+    if not request.images:
+        return {"role": "user", "content": request.text}
+    text_parts: Final[tuple[ChatCompletionTextObject, ...]] = (
+        ({"type": "text", "text": request.text},) if request.text else ()
     )
+    image_parts: Final[tuple[ChatCompletionImageObject, ...]] = tuple(
+        {"type": "image_url", "image_url": {"url": image}} for image in request.images
+    )
+    return {"role": "user", "content": [*text_parts, *image_parts]}
 
 
 async def _guardrail_response_after_success_hook(
@@ -2526,6 +2555,44 @@ async def _guardrail_response_after_success_hook(
     except Exception:
         verbose_proxy_logger.exception("apply_guardrail: post_call_success_hook failed")
     return response
+
+
+async def _run_guardrail(
+    active_guardrail: CustomGuardrail,
+    request: ApplyGuardrailRequest,
+    request_data: dict[str, object],  # mutable-ok: the guardrail records its verdict on the request dict
+    input_type: Literal["request", "response"],
+) -> GenericGuardrailAPIInputs:
+    if request.images:
+        if request.messages and not request.text and ignores_messages(active_guardrail):
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"Guardrail '{request.guardrail_name}' scans 'text' and ignores 'messages', "
+                    "so put the text to scan in 'text'."
+                ),
+            )
+        await scan_images(active_guardrail, request.images, request_data, input_type)
+        if not request.text and not request.messages:
+            return {"texts": []}
+    return await active_guardrail.apply_guardrail(
+        inputs={"texts": [request.text]},
+        request_data=request_data,
+        input_type=input_type,
+    )
+
+
+def _record_verdict_for_logging(
+    request_data: dict[str, object],  # mutable-ok: the logging bridge takes the request dict itself
+    data: dict[str, object],  # mutable-ok: the logged request receives the guardrail's verdict
+    litellm_logging_obj: object,
+) -> None:
+    metadata: Final = as_str_mapping(request_data.get("metadata")) or {}
+    records: Final = as_object_list(metadata.get("standard_logging_guardrail_information"))
+    if not records:
+        return
+    _append_slg_to_litellm_params(data, list(records))
+    _sync_guardrail_info_to_logging_obj(request_data, litellm_logging_obj)
 
 
 async def _emit_guardrail_success_logs(
@@ -2586,12 +2653,17 @@ async def apply_guardrail(
         proxy_logging_obj,
         version,
     )
-    from litellm.proxy.utils import handle_exception_on_proxy
+    from litellm.proxy.utils import (
+        GUARDRAIL_ENDPOINT_FAILURE,
+        GUARDRAIL_ENDPOINT_FAILURE_KEY,
+        handle_exception_on_proxy,
+    )
 
     data: dict[str, object] = {
         "guardrail_name": request.guardrail_name,
         "input": [request.text],
         "messages": request.messages or [],
+        **({"images": list(request.images)} if request.images else {}),
         "metadata": {"route": "/apply_guardrail"},
     }
     litellm_logging_obj = None
@@ -2631,14 +2703,14 @@ async def apply_guardrail(
         response_handler: Final = GUARDRAIL_RESPONSE_HANDLERS[request.response_format]
         request_data: Final = dict(response_handler.prepare_request_data(request))
         input_type: Final = response_handler.resolve_input_type(request, active_guardrail)
-        guardrailed_inputs: Final = await active_guardrail.apply_guardrail(
-            inputs={"texts": [request.text]},
-            request_data=request_data,
-            input_type=input_type,
-        )
+        try:
+            guardrailed_inputs: Final = await _run_guardrail(active_guardrail, request, request_data, input_type)
+        finally:
+            _record_verdict_for_logging(request_data, data, litellm_logging_obj)
         response: Final = response_handler.build_response(request, guardrailed_inputs, request_data)
     except Exception as e:
-        if litellm_logging_obj is not None and not isinstance(e, HTTPException):
+        if litellm_logging_obj is not None:
+            data[GUARDRAIL_ENDPOINT_FAILURE_KEY] = GUARDRAIL_ENDPOINT_FAILURE
             try:
                 await litellm_logging_obj.async_failure_handler(
                     exception=e,

@@ -1559,7 +1559,7 @@ class TestOpenAIChatCompletionsHandlerStreamingOutput:
         assert chunks[4].usage.completion_tokens == 7
 
     @staticmethod
-    def _two_choice_tool_call_stream_chunks() -> list:
+    def _two_choice_tool_call_stream_chunks(leading_texts: tuple[str, str] | None = None) -> list:
         from litellm.types.utils import (
             ChatCompletionDeltaToolCall,
             Delta,
@@ -1569,7 +1569,10 @@ class TestOpenAIChatCompletionsHandlerStreamingOutput:
         )
 
         def chunk(
-            choice_index: int, tool_call: ChatCompletionDeltaToolCall | None, finish_reason: Optional[str] = None
+            choice_index: int,
+            tool_call: ChatCompletionDeltaToolCall | None,
+            finish_reason: Optional[str] = None,
+            content: str | None = None,
         ) -> ModelResponseStream:
             return ModelResponseStream(
                 id="chatcmpl-123",
@@ -1579,7 +1582,7 @@ class TestOpenAIChatCompletionsHandlerStreamingOutput:
                 choices=[
                     StreamingChoices(
                         index=choice_index,
-                        delta=Delta(tool_calls=[tool_call] if tool_call else None),
+                        delta=Delta(content=content, tool_calls=[tool_call] if tool_call else None),
                         finish_reason=finish_reason,
                     )
                 ],
@@ -1590,7 +1593,11 @@ class TestOpenAIChatCompletionsHandlerStreamingOutput:
                 id=call_id, index=0, type="function", function=Function(name=name, arguments=arguments)
             )
 
+        text_chunks: Final = (
+            [chunk(index, None, content=text) for index, text in enumerate(leading_texts)] if leading_texts else []
+        )
         return [
+            *text_chunks,
             chunk(0, fragment("", name="lookup_fruit", call_id="call_1")),
             chunk(1, fragment("", name="lookup_fruit", call_id="call_2")),
             chunk(0, fragment('{"fruit": "pers')),
@@ -1639,24 +1646,36 @@ class TestOpenAIChatCompletionsHandlerStreamingOutput:
         ] == [("call_1", '{"fruit": "persimmon"}'), ("call_2", '{"fruit": "durian"}')]
 
     @pytest.mark.asyncio
-    async def test_deliver_ended_stream_tool_call_rewrite_on_multi_choice_stream_fails_closed(self):
-        from litellm.proxy.policy_engine.pipeline_executor import UndeliverableStreamRewrite
-
+    async def test_deliver_ended_stream_rewrites_each_choices_text_and_tool_call(self):
         handler = OpenAIChatCompletionsHandler()
-        chunks = self._two_choice_tool_call_stream_chunks()
+        chunks = self._two_choice_tool_call_stream_chunks(leading_texts=("look up ", "check "))
 
-        with pytest.raises(UndeliverableStreamRewrite, match="the stream carries 2 choices") as raised:
-            await handler.process_output_streaming_response(
-                responses_so_far=chunks,
-                guardrail_to_apply=MockGuardrail(guardrail_name="test"),
-                litellm_logging_obj=None,
-                deliver_ended_stream_rewrites=True,
-            )
-
-        assert raised.value.guardrail_name == "test"
-        assert raised.value.reason == (
-            "the stream carries 2 choices and tool-call rewrites are only written back on single-choice streams"
+        await handler.process_output_streaming_response(
+            responses_so_far=chunks,
+            guardrail_to_apply=MockGuardrail(guardrail_name="test"),
+            litellm_logging_obj=None,
+            deliver_ended_stream_rewrites=True,
         )
+
+        assert [
+            (
+                c.choices[0].index,
+                c.choices[0].delta.content,
+                [t.function.arguments for t in c.choices[0].delta.tool_calls or ()],
+            )
+            for c in chunks
+        ] == [
+            (0, "LOOK UP ", []),
+            (1, "CHECK ", []),
+            (0, None, ['{"fruit": "PERSIMMON"}']),
+            (1, None, ['{"fruit": "DURIAN"}']),
+            (0, None, [""]),
+            (1, None, [""]),
+            (0, None, [""]),
+            (1, None, [""]),
+            (0, None, []),
+            (1, None, []),
+        ]
 
     @pytest.mark.asyncio
     async def test_deliver_ended_stream_clean_multi_choice_stream_released_untouched(self):

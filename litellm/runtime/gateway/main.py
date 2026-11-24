@@ -10,7 +10,7 @@ Run with:
 """
 
 from collections.abc import AsyncGenerator, Mapping
-from contextlib import asynccontextmanager
+from contextlib import AsyncExitStack, asynccontextmanager
 from typing import Final
 
 from starlette.applications import Starlette
@@ -23,17 +23,18 @@ from starlette.types import Lifespan
 # CLI flow does this in proxy_cli.py; we bypass proxy_cli by uvicorn'ing the
 # app directly, so without this Prisma initializes with the placeholder URL
 # and every DB-needing endpoint returns "Database not connected".
+from litellm.proxy.db.connection_budget import configure_pool_budget_from_settings
 from litellm.proxy.db.db_url_settings import DatabaseURLSettings
 
 DatabaseURLSettings.from_env().apply_to_env()
-
-from litellm.proxy.proxy_server import app
 
 from gateway.routes.allowlist import (
     GATEWAY_EXACT_PATHS,
     GATEWAY_MOUNT_PATHS,
     GATEWAY_PATH_PREFIXES,
 )
+from litellm.proxy.common_utils.openapi_route import proxy_documentation_route_name
+from litellm.proxy.proxy_server import app
 
 
 def _is_gateway_route(route) -> bool:
@@ -48,6 +49,9 @@ def _is_gateway_route(route) -> bool:
         return False
     if isinstance(route, Mount):
         return path in GATEWAY_MOUNT_PATHS
+    documentation_route: Final = proxy_documentation_route_name(route)
+    if documentation_route is not None:
+        return documentation_route == "openapi"
     if path in GATEWAY_EXACT_PATHS:
         return True
     return any(path.startswith(prefix) for prefix in GATEWAY_PATH_PREFIXES)
@@ -65,7 +69,12 @@ _proxy_lifespan: Final = app.router.lifespan_context
 async def _gateway_lifespan(
     app_: Starlette, lifespan: Lifespan[Starlette] = _proxy_lifespan
 ) -> AsyncGenerator[Mapping[str, object], None]:
-    async with lifespan(app_) as state:
+    async with AsyncExitStack() as startup:
+        token: Final = configure_pool_budget_from_settings.set(True)
+        try:
+            state: Final = await startup.enter_async_context(lifespan(app_))
+        finally:
+            configure_pool_budget_from_settings.reset(token)
         app_.router.routes = [r for r in app_.router.routes if _is_gateway_route(r)]
         yield state if state is not None else {}
 

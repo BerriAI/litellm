@@ -14,6 +14,7 @@ from pydantic import TypeAdapter
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.litellm_logging import Logging as LitellmLogging
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.bedrock.image_edit.amazon_nova_canvas_image_edit_transformation import (
@@ -214,7 +215,10 @@ class BedrockImageEdit(BaseAWSLLM):
             BedrockImageEditPreparedRequest: The prepared request object
         """
         boto3_credentials_info: Final = self._get_boto_credentials_from_optional_params(
-            optional_params, model, bearer_token=bedrock_bearer_token(api_key)
+            optional_params,
+            model,
+            bearer_token=bedrock_bearer_token(api_key),
+            litellm_params=as_str_mapping(getattr(logging_obj, "litellm_params", None)),
         )
 
         # Use the existing ARN-aware provider detection method

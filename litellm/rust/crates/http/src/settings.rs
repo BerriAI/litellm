@@ -3,10 +3,8 @@ use std::{
     time::Duration,
 };
 
-use litellm_core_utils::{
-    serde_compat::parse_str_bool,
-    settings::{Layer, Lookup, merge},
-};
+use litellm_env::{Layer, Lookup, merge};
+use litellm_python_compat::flags::str_to_bool;
 
 use crate::proxy::EnvironmentProxies;
 
@@ -19,7 +17,7 @@ pub enum SslVerify {
 
 impl SslVerify {
     pub fn parse(value: &str) -> Self {
-        match parse_str_bool(value) {
+        match str_to_bool(value) {
             Some(true) => Self::Enabled,
             Some(false) => Self::Disabled,
             _ => Self::CaBundle(PathBuf::from(value)),
@@ -41,6 +39,7 @@ pub struct HttpSettingsLayer {
     pub ssl_certificate: Option<PathBuf>,
     pub ssl_security_level: Option<String>,
     pub ssl_ecdh_curve: Option<String>,
+    pub chacha20_excluded: Option<bool>,
     pub force_ipv4: Option<bool>,
     pub http2: Option<bool>,
     pub aiohttp_trust_env: Option<bool>,
@@ -63,6 +62,7 @@ impl HttpSettingsLayer {
             ssl_certificate: env.get("SSL_CERTIFICATE").map(PathBuf::from),
             ssl_security_level: env.get("SSL_SECURITY_LEVEL"),
             ssl_ecdh_curve: env.get("SSL_ECDH_CURVE"),
+            chacha20_excluded: None,
             force_ipv4: None,
             http2: env.enabled("LITELLM_HTTP2"),
             aiohttp_trust_env: env.enabled("AIOHTTP_TRUST_ENV"),
@@ -91,6 +91,7 @@ impl Layer for HttpSettingsLayer {
             ssl_certificate: self.ssl_certificate.or(lower.ssl_certificate),
             ssl_security_level: self.ssl_security_level.or(lower.ssl_security_level),
             ssl_ecdh_curve: self.ssl_ecdh_curve.or(lower.ssl_ecdh_curve),
+            chacha20_excluded: self.chacha20_excluded.or(lower.chacha20_excluded),
             force_ipv4: self.force_ipv4.or(lower.force_ipv4),
             http2: self.http2.or(lower.http2),
             aiohttp_trust_env: self.aiohttp_trust_env.or(lower.aiohttp_trust_env),
@@ -115,6 +116,7 @@ pub struct HttpSettings {
     pub ssl_certificate: Option<PathBuf>,
     pub ssl_security_level: Option<String>,
     pub ssl_ecdh_curve: Option<String>,
+    pub chacha20_excluded: bool,
     pub force_ipv4: bool,
     pub http2: bool,
     pub user_agent: Option<String>,
@@ -133,6 +135,7 @@ impl Default for HttpSettings {
             ssl_certificate: None,
             ssl_security_level: None,
             ssl_ecdh_curve: None,
+            chacha20_excluded: false,
             force_ipv4: false,
             http2: false,
             user_agent: None,
@@ -158,6 +161,9 @@ impl HttpSettings {
             ssl_certificate: merged.ssl_certificate,
             ssl_security_level: merged.ssl_security_level.filter(|level| !level.is_empty()),
             ssl_ecdh_curve: merged.ssl_ecdh_curve.filter(|curve| !curve.is_empty()),
+            chacha20_excluded: merged
+                .chacha20_excluded
+                .unwrap_or(defaults.chacha20_excluded),
             force_ipv4: merged.force_ipv4.unwrap_or(defaults.force_ipv4),
             http2,
             user_agent: merged.user_agent,

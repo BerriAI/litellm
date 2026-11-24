@@ -228,6 +228,7 @@ def canary_rig(
         config: Final = _config(root, provider.url, b1, configure)
         overrides: Final = {
             **LOCAL_CATALOGS,
+            "LITELLM_OFFLINE_MODE": "true",
             **{name: trap_url for name in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy")},
             **{name: "127.0.0.1,localhost" for name in ("NO_PROXY", "no_proxy")},
             "OPENAI_BASE_URL": provider.url + "/v1",

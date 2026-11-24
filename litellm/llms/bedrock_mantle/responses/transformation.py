@@ -17,6 +17,7 @@ BaseAWSLLM._sign_request after the request body is finalized.
 
 from collections.abc import Callable, Mapping, Sequence
 from functools import partial
+from types import MappingProxyType
 from typing import Final, cast  # noqa: TID251  # map_openai_params returns the filtered params as a bare dict
 
 import httpx
@@ -118,13 +119,41 @@ class BedrockMantleResponsesAPIConfig(BedrockMantleAuthMixin, OpenAIResponsesAPI
         return join_api_base(base, path)
 
     def validate_environment(self, headers: dict, model: str, litellm_params: GenericLiteLLMParams | None) -> dict:
-        litellm_params = litellm_params or GenericLiteLLMParams()
-        bearer: Final = self._resolve_bearer_token(litellm_params.api_key)
-        if bearer:
-            headers["Authorization"] = f"Bearer {bearer}"
-        if litellm_params.aws_bedrock_project_id:
-            headers["OpenAI-Project"] = litellm_params.aws_bedrock_project_id
-        return headers
+        params: Final = litellm_params or GenericLiteLLMParams()
+        return {**headers, **self._pinned_headers(params.api_key, params.aws_bedrock_project_id)}
+
+    def sign_request(
+        self,
+        headers: Mapping[str, object],
+        optional_params: Mapping[str, object],
+        request_data: Mapping[str, object],
+        api_base: str,
+        api_key: str | None = None,
+        model: str | None = None,
+        stream: bool | None = None,
+        fake_stream: bool | None = None,
+    ) -> tuple[dict[str, object], bytes | None]:  # mutable-ok: the shared HTTP handler sends the returned headers dict
+        pinned: Final = self._pinned_headers(api_key, optional_params.get("aws_bedrock_project_id"))
+        pinned_names: Final = frozenset(name.lower() for name in pinned)
+        return super().sign_request(
+            headers={**{name: value for name, value in headers.items() if name.lower() not in pinned_names}, **pinned},
+            optional_params=dict(optional_params),
+            request_data=dict(request_data),
+            api_base=api_base,
+            api_key=api_key,
+            model=model,
+            stream=stream,
+            fake_stream=fake_stream,
+        )
+
+    def _pinned_headers(self, api_key: str | None, project_id: object) -> Mapping[str, str]:
+        bearer: Final = self._resolve_bearer_token(api_key)
+        return MappingProxyType(
+            {
+                **({"Authorization": f"Bearer {bearer}"} if bearer else {}),
+                **({"OpenAI-Project": project_id} if isinstance(project_id, str) and project_id else {}),
+            }
+        )
 
     def _prompt_cache_breakpoint_to_wire(
         self, litellm_params: GenericLiteLLMParams, reads_breakpoints: bool, known_support: bool | None
