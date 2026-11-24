@@ -292,7 +292,6 @@ def test_top_level_interactions_kwargs_pass_preprocessing_with_drop_params_false
     assert json.loads(captured[0].content) == {
         "model": "gemini-3-flash-preview",
         "input": [{"type": "user_input", "content": [{"type": "text", "text": "continue"}]}],
-        "store": False,
         "response_format": {"type": "text", "mime_type": "application/json", "schema": schema},
         "generation_config": {"speech_config": [{"voice": "Kore"}]},
     }
@@ -360,7 +359,6 @@ def test_interactions_native_tool_choice_and_wav_audio_bypass_legacy_gemini_vali
     assert json.loads(captured[0].content) == {
         "model": "gemini-3-flash-preview",
         "input": [{"type": "user_input", "content": [{"type": "text", "text": "test"}]}],
-        "store": False,
         **expected_fields,
     }
 
