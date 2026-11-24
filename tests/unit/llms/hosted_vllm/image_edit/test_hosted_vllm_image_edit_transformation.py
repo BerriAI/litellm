@@ -112,7 +112,7 @@ def test_image_edit_posts_multipart_to_vllm_omni():
     assert b'name="seed"\r\n\r\n42' in request.content
 
 
-@pytest.mark.parametrize("param", ["mask", "quality", "input_fidelity"])
+@pytest.mark.parametrize("param", ["mask", "markup", "quality", "input_fidelity"])
 def test_params_vllm_omni_ignores_are_not_advertised(param: str):
     supported = HostedVLLMImageEditConfig().get_supported_openai_params(MODEL)
 
@@ -153,3 +153,28 @@ def test_image_edit_rejects_quality_unless_dropped():
     assert len(captured) == 1
     assert b'name="quality"' not in captured[0].content
     assert b'name="prompt"\r\n\r\nadd a hat' in captured[0].content
+
+
+def test_image_edit_rejects_markup_unless_dropped(monkeypatch: pytest.MonkeyPatch) -> None:
+    from typing import Final
+
+    from litellm.images.utils import ImageEditRequestUtils
+
+    monkeypatch.setattr(litellm, "drop_params", None)
+
+    with pytest.raises(litellm.UnsupportedParamsError, match="markup"):
+        ImageEditRequestUtils.get_optional_params_image_edit(
+            model=MODEL,
+            image_edit_provider_config=HostedVLLMImageEditConfig(),
+            image_edit_optional_params={"markup": PNG_BYTES},
+            drop_params=False,
+        )
+
+    dropped: Final = ImageEditRequestUtils.get_optional_params_image_edit(
+        model=MODEL,
+        image_edit_provider_config=HostedVLLMImageEditConfig(),
+        image_edit_optional_params={"markup": PNG_BYTES, "n": 1},
+        drop_params=True,
+    )
+
+    assert dropped == {"n": 1}
