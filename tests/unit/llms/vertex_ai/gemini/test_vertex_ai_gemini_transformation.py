@@ -56,7 +56,9 @@ from litellm.types.utils import Message
         ),
     ],
 )
-def test_file_inspection_preserves_slice_and_uri(version, metadata, expected):
+def test_file_inspection_preserves_slice_and_uri(
+    version: str, metadata: dict[str, object], expected: dict[str, object]
+) -> None:
     uri = f"https://generativelanguage.googleapis.com/{version}/files/report"
     messages = [
         {
@@ -76,7 +78,7 @@ def test_file_inspection_preserves_slice_and_uri(version, metadata, expected):
 
 
 @pytest.mark.parametrize("version", ["v1", "v1beta"])
-def test_tool_files_api_reference_is_nested_file_data(version):
+def test_tool_files_api_reference_is_nested_file_data(version: str) -> None:
     uri = f"https://generativelanguage.googleapis.com/{version}/files/report"
     result = gemini_convert_messages_with_history(
         _responses_tool_media_history({"type": "file", "file": {"file_id": uri, "format": "application/pdf"}}),
@@ -203,7 +205,9 @@ def test_vertex_media_uses_its_own_cost_map_flags(monkeypatch: pytest.MonkeyPatc
         ),
     ],
 )
-def test_chat_tool_file_inspection_preserves_nested_selection(source, mime_type, selection, expected_selection):
+def test_chat_tool_file_inspection_preserves_nested_selection(
+    source: str, mime_type: str, selection: dict[str, object], expected_selection: dict[str, object]
+) -> None:
     if source == "inline":
         file = {"file_data": f"data:{mime_type};base64,cGRm"}
         expected_part = {"inline_data": {"data": "cGRm", "mime_type": mime_type}}
