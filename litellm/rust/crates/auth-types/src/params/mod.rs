@@ -1,7 +1,9 @@
 mod aws;
+mod claude_platform;
 mod vertex;
 
 pub use aws::{AwsParams, AwsSessionTag};
+pub use claude_platform::{ClaudePlatformParams, UnsupportedParams, WorkspaceId};
 pub use vertex::VertexParams;
 
 /// One connection param of Python's `CredentialLiteLLMParams` and every place Python reads

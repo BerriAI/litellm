@@ -447,6 +447,159 @@ def _attempt_spend_row_kwargs(
     return row
 
 
+def _failure_route_is_trackable(request_route: str | None, request_fields: Mapping[str, object]) -> bool:
+    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import InitPassThroughEndpointHelpers
+
+    return (
+        request_route is None
+        or RouteChecks.runs_inference_checks(request_route)
+        or RouteChecks.is_info_route(route=request_route)
+        or InitPassThroughEndpointHelpers.has_configured_route_ignoring_trailing_slash(route=request_route)
+        or request_fields.get(GUARDRAIL_ENDPOINT_FAILURE_KEY) is GUARDRAIL_ENDPOINT_FAILURE
+    )
+
+
+def _failure_billed_the_provider(request_data: Mapping[str, object]) -> bool:
+    return failure_row_response_cost(request_data) > 0 or any(
+        attempt.response_cost > 0 for attempt in _billed_failed_attempts(request_data)
+    )
+
+
+def tracks_failure_spend(
+    request_data: Mapping[str, object],
+    original_exception: Exception,
+    user_api_key_dict: UserAPIKeyAuth,
+    completed_cost: bool,
+) -> bool:
+    request_route: Final = user_api_key_dict.request_route
+    request_fields: Final = _str_keyed_fields(request_data)
+    # The endpoint already wrote its own failure row.
+    if request_fields.get(FAILURE_ROW_ALREADY_WRITTEN_KEY) is FAILURE_ROW_ALREADY_WRITTEN:
+        return False
+    # Error rows are off and the failure billed nothing.
+    if (
+        ProxyDBLogger._should_track_errors_in_db() is False  # pyright: ignore[reportPrivateUsage]  # the failure writer's own setting read
+        and not completed_cost
+        and not _failure_billed_the_provider(request_data)
+    ):
+        return False
+    if ProxyDBLogger._skips_pre_routing_rejections() and is_pre_routing_rejection(  # pyright: ignore[reportPrivateUsage]  # the failure writer's own setting read
+        original_exception, _REQUEST_DATA.validate_python(request_data)
+    ):
+        return False
+    if not _failure_route_is_trackable(request_route, request_fields):
+        return False
+    return request_route is None or not RouteChecks.is_dashboard_session_info_route(
+        request_route, user_api_key_dict.team_id
+    )
+
+
+def _failure_metadata(
+    user_api_key_dict: UserAPIKeyAuth, original_exception: Exception, traceback_str: str | None
+) -> Mapping[str, object]:
+    error_information: Final = StandardLoggingPayloadSetup.get_error_information(
+        original_exception=original_exception, traceback_str=traceback_str
+    )
+    return {
+        **LiteLLMProxyRequestSetup.get_sanitized_user_information_from_key(user_api_key_dict=user_api_key_dict),
+        "user_api_key": LiteLLMProxyRequestSetup.get_logged_api_key(user_api_key_dict),
+        **LiteLLMProxyRequestSetup.get_tenant_logging_metadata(user_api_key_dict),
+        "status": "failure",
+        "error_information": {
+            key: value
+            for key, value in error_information.items()
+            if key != "traceback" or not should_suppress_spend_log_tracebacks()
+        },
+    }
+
+
+def _failure_spend_request(
+    request_data: Mapping[str, object], metadata: Mapping[str, object], request_route: str | None
+) -> Mapping[str, object]:
+    litellm_metadata: Final = _str_keyed_fields(request_data.get("litellm_metadata"))
+    stamped: Final = {
+        **_str_keyed_fields(request_data.get("metadata")),
+        **_routed_metadata_fallback(request_data),
+        **_proxy_stamped_request_fields(request_data, request_route),
+        **metadata,
+        "used_client_oauth_token": _proxy_stamped_used_client_oauth_token(request_data, request_route),
+    }
+    with_guardrails: Final = {
+        **stamped,
+        **_guardrail_info_lifted_from_litellm_metadata(
+            litellm_metadata, guardrail_info_already_set="standard_logging_guardrail_information" in stamped
+        ),
+    }
+    params: Final = _str_keyed_fields(request_data.get("litellm_params"))
+    params_metadata: Final = _str_keyed_fields(params.get("metadata"))
+    existing: Final = {**with_guardrails, **({"tags": params_metadata["tags"]} if params_metadata.get("tags") else {})}
+    held: Final = request_data.get("metadata")
+    if isinstance(held, dict):
+        held.update(existing)  # pyright: ignore[reportUnknownMemberType]  # main stamps the request's own metadata, which the stored request body shares
+    logging_obj: Final = request_data.get("litellm_logging_obj")
+    return {
+        **request_data,
+        "litellm_params": {
+            **params,
+            "proxy_server_request": request_data.get("proxy_server_request")
+            or params.get("proxy_server_request")
+            or {},
+            "metadata": {
+                **existing,
+                **_redaction_opt_in_lifted_from_litellm_metadata(
+                    litellm_metadata, caller_set_headers="headers" in existing
+                ),
+            },
+        },
+        "metadata": existing,
+        "model": request_data["model"] if "model" in request_data else params.get("model") or "",
+        "custom_llm_provider": request_data["custom_llm_provider"]
+        if "custom_llm_provider" in request_data
+        else params.get("custom_llm_provider") or "",
+        "standard_logging_object": request_data.get("standard_logging_object")
+        or (
+            None
+            if logging_obj is None
+            else _str_keyed_fields(getattr(logging_obj, "model_call_details", {})).get("standard_logging_object")
+        ),
+        "litellm_trace_id": request_data.get("litellm_trace_id")
+        if request_data.get("litellm_trace_id") is not None or logging_obj is None
+        else getattr(logging_obj, "litellm_trace_id", None),
+    }
+
+
+def failure_spend_start_time(request_data: Mapping[str, object]) -> datetime:
+    lifted: Final = request_data.get("start_time")
+    if isinstance(lifted, datetime):
+        return lifted
+    return getattr(request_data.get("litellm_logging_obj"), "start_time", None) or datetime.now()
+
+
+def failure_spend_rows(
+    request_data: Mapping[str, object],
+    original_exception: Exception,
+    user_api_key_dict: UserAPIKeyAuth,
+    traceback_str: str | None,
+) -> tuple[Mapping[str, object], ...]:
+    built: Final = _failure_spend_request(
+        request_data,
+        _failure_metadata(user_api_key_dict, original_exception, traceback_str),
+        user_api_key_dict.request_route,
+    )
+    return tuple(
+        row
+        for _, row in _failure_spend_rows(
+            built,
+            failure_row_response_cost(request_data),
+            _failure_snapshot_with_guardrails_recorded_after_it(
+                built.get("standard_logging_object"),
+                _str_keyed_fields(built.get("metadata")).get("standard_logging_guardrail_information"),
+            ),
+            _proxy_deployment,
+        )
+    )
+
+
 class _ProxyDBLogger(CustomLogger):
     def __init__(
         self,
@@ -525,24 +678,11 @@ class _ProxyDBLogger(CustomLogger):
 
         request_route: Final = user_api_key_dict.request_route
         request_fields: Final = _str_keyed_fields(request_data)
-        from litellm.proxy.pass_through_endpoints.pass_through_endpoints import InitPassThroughEndpointHelpers
-
-        route_is_trackable: Final = (
-            request_route is None
-            or RouteChecks.runs_inference_checks(request_route)
-            or RouteChecks.is_info_route(route=request_route)
-            or InitPassThroughEndpointHelpers.has_configured_route_ignoring_trailing_slash(route=request_route)
-            or request_fields.get(GUARDRAIL_ENDPOINT_FAILURE_KEY) is GUARDRAIL_ENDPOINT_FAILURE
-        )
-        if (
-            request_fields.get(FAILURE_ROW_ALREADY_WRITTEN_KEY) is FAILURE_ROW_ALREADY_WRITTEN
-            or ProxyDBLogger._should_track_errors_in_db() is False
-            and not completed_cost
-            or ProxyDBLogger._skips_pre_routing_rejections()
-            and is_pre_routing_rejection(original_exception, _REQUEST_DATA.validate_python(request_data))
-            or not route_is_trackable
-            or request_route is not None
-            and RouteChecks.is_dashboard_session_info_route(request_route, user_api_key_dict.team_id)
+        if not tracks_failure_spend(
+            request_data,  # pyright: ignore[reportUnknownArgumentType]  # untyped legacy request dict
+            original_exception,
+            user_api_key_dict,
+            completed_cost,
         ):
             return
 
@@ -634,12 +774,7 @@ class _ProxyDBLogger(CustomLogger):
             if request_data.get("litellm_trace_id") is None:
                 request_data["litellm_trace_id"] = getattr(_litellm_logging_obj, "litellm_trace_id", None)
 
-        lifted_start_time: Final = request_data.get("start_time")
-        actual_start_time: Final = (
-            lifted_start_time
-            if isinstance(lifted_start_time, datetime)
-            else getattr(_litellm_logging_obj, "start_time", None) or datetime.now()
-        )
+        actual_start_time: Final = failure_spend_start_time(request_data)  # pyright: ignore[reportUnknownArgumentType]  # untyped legacy request dict
 
         # A stream that broke mid-flight still billed the provider for the
         # chunks already delivered. ``post_call_failure_hook`` lifts that
@@ -850,9 +985,9 @@ class _ProxyDBLogger(CustomLogger):
         self,
         kwargs,  # kwargs to completion
         completion_response: (litellm.ModelResponse | object | None),  # response from completion
-        start_time=None,
-        end_time=None,  # start/end time for completion
-    ):
+        start_time: datetime | None = None,
+        end_time: datetime | None = None,  # start/end time for completion
+    ) -> None:
         from litellm.proxy.proxy_server import (
             increment_spend_counters,
             proxy_logging_obj,
@@ -1145,6 +1280,7 @@ class _ProxyDBLogger(CustomLogger):
                     prisma_client=prisma_client,
                     user_api_key_cache=user_api_key_cache,
                     proxy_logging_obj=proxy_logging_obj,
+                    for_auth=True,
                 )
                 if team_obj.team_alias is not None:
                     metadata["user_api_key_team_alias"] = team_obj.team_alias
@@ -1199,7 +1335,7 @@ def is_pre_routing_rejection(exception: Exception, request_data: Mapping[str, ob
     )
 
 
-def _write_spend_metadata_to_kwargs(kwargs: dict, metadata: dict) -> None:
+def _write_spend_metadata_to_kwargs(kwargs: dict, metadata: Mapping[str, object]) -> None:
     patch = {k: v for k, v in metadata.items() if (k.startswith("user_api_key") or k == "tags") and v is not None}
     if not patch:
         return
@@ -1282,13 +1418,13 @@ def _metadata_keys(metadata: object) -> tuple[str, ...]:
     return tuple(sorted(str(key) for key in metadata))
 
 
-def _get_budget_reservation_from_metadata(metadata: dict) -> dict[str, object] | None:
+def _get_budget_reservation_from_metadata(metadata: Mapping[str, object]) -> dict[str, object] | None:
     return budget_reservation_from_metadata(metadata)
 
 
 def _get_request_tags_for_cost_tracking(
     sl_object: StandardLoggingPayload | None,
-    metadata: dict,
+    metadata: Mapping[str, object],
 ) -> list[str] | None:
     if sl_object is not None:
         request_tags: Final = sl_object.get("request_tags", None)
@@ -1308,6 +1444,17 @@ class _LedgerCounterOptions(TypedDict):
 
 def _ledger_counter_options(ledger: object) -> _LedgerCounterOptions:
     return {"windows_from_ledger": True} if ledger is True else {}
+
+
+class _CustomerHierarchyOptions(TypedDict):
+    customer_hierarchy: ReadOnly[NotRequired[object]]
+
+
+def _customer_hierarchy_options(
+    ledger: _LedgerCounterOptions, metadata: Mapping[str, object]
+) -> _CustomerHierarchyOptions:
+    """With the ledger the Rust counter step settles the customer hierarchy itself, in the same step."""
+    return {"customer_hierarchy": metadata.get("user_api_key_customer_hierarchy")} if ledger else {}
 
 
 class _ChargeSpend(Protocol):
@@ -1373,6 +1520,7 @@ class _IncrementSpendCounters(Protocol):
         committed_spend_scope: EntitySpendCounterKeys | None = None,
         windows_from_ledger: bool = False,
         customer_counters: "Sequence[BudgetCounter]" = (),
+        customer_hierarchy: object = None,
     ) -> None: ...
 
 
@@ -1411,7 +1559,7 @@ async def _update_database_and_spend_counters(
     end_user_id: str | None,
     team_id: str | None,
     org_id: str | None,
-    kwargs: dict,
+    kwargs: dict[str, object],
     completion_response: object,
     start_time: datetime | None,
     end_time: datetime | None,
@@ -1489,7 +1637,7 @@ async def _update_database_and_spend_counters_in_batch(
     end_user_id: str | None,
     team_id: str | None,
     org_id: str | None,
-    kwargs: dict,
+    kwargs: dict[str, object],
     completion_response: object,
     start_time: datetime | None,
     end_time: datetime | None,
@@ -1545,11 +1693,12 @@ async def _update_database_and_spend_counters_in_batch(
     from litellm.proxy.proxy_server import spend_counter_store
 
     try:
-        await settle_customer_spend(
-            _OBJECT_MAPPING.validate_python(get_litellm_metadata_from_kwargs(kwargs=kwargs)),
-            response_cost,
-            spend_counter_store,
+        ledger_options: Final = _ledger_counter_options(
+            _BATCH_CALLBACK_FIELDS.validate_python(kwargs).get(ACCOUNTING_LEDGER_KWARG)
         )
+        metadata: Final = _OBJECT_MAPPING.validate_python(get_litellm_metadata_from_kwargs(kwargs=kwargs))
+        if not ledger_options:
+            await settle_customer_spend(metadata, response_cost, spend_counter_store)
         await increment_spend_counters(
             token=user_api_key,
             team_id=team_id,
@@ -1575,8 +1724,9 @@ async def _update_database_and_spend_counters_in_batch(
                     end_user_id=end_user_id,
                 )
             ),
-            **_ledger_counter_options(_BATCH_CALLBACK_FIELDS.validate_python(kwargs).get(ACCOUNTING_LEDGER_KWARG)),
+            **ledger_options,
             **_customer_counter_options(customer_counters),
+            **_customer_hierarchy_options(ledger_options, metadata),
         )
     except Exception:
         if budget_reservation is not None:
@@ -1618,7 +1768,7 @@ async def _reconcile_budget_reservation_before_db_update(
             budget_reservation["finalized"] = True  # rebind-ok: stamps the caller's shared dict for the counter update
 
 
-async def _release_budget_reservation(budget_reservation: dict | None) -> None:
+async def _release_budget_reservation(budget_reservation: dict[str, object] | None) -> None:
     if budget_reservation is None:
         return
 
@@ -1632,7 +1782,7 @@ async def _release_budget_reservation(budget_reservation: dict | None) -> None:
 
 
 async def _invalidate_budget_reservation_counters(
-    budget_reservation: dict | None,
+    budget_reservation: dict[str, object] | None,
 ) -> None:
     if budget_reservation is None:
         return

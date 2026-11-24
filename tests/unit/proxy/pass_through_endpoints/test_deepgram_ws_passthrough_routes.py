@@ -16,13 +16,13 @@ from starlette.routing import WebSocketRoute
 from starlette.websockets import WebSocketDisconnect
 
 import litellm
-from litellm.caching.dual_cache import DualCache
 from litellm.constants import WEBSOCKET_CLOSE_REASON_MAX_BYTES
 from litellm.litellm_core_utils.get_model_cost_map import ModelCostMapReloaded, install_model_cost_map
 from litellm.llms.deepgram.common_utils import DeepgramSpeakMeter
 from litellm.proxy._lazy_features import LAZY_FEATURES
 from litellm.proxy._types import LiteLLMRoutes, UserAPIKeyAuth
 from litellm.proxy.auth.auth_checks import cache_key_object
+from litellm.proxy.proxy_server import UserApiKeyCache
 from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     _websocket_relay,
     deepgram_listen_websocket_route,
@@ -389,8 +389,8 @@ def test_deepgram_listen_authenticates_the_litellm_key_and_relays_to_deepgram(mo
     ]
 
 
-async def _cache_restricted_key(virtual_key: str, models: list[str]) -> DualCache:
-    cache = DualCache()
+async def _cache_restricted_key(virtual_key: str, models: list[str]) -> UserApiKeyCache:
+    cache = UserApiKeyCache()
     await cache_key_object(
         hashed_token=hash_token(virtual_key),
         user_api_key_obj=UserAPIKeyAuth(token=hash_token(virtual_key), models=models),

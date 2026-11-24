@@ -1,11 +1,12 @@
 import asyncio
 import base64
 import json
+import math
 import re
 import sys
 import time
 from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
-from types import SimpleNamespace
+from types import MappingProxyType, SimpleNamespace
 from typing import TYPE_CHECKING, Final, Literal, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -13,7 +14,7 @@ if TYPE_CHECKING:
     from litellm.router import Router
 
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 
 import httpx
@@ -28,6 +29,7 @@ from litellm.constants import (
     DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL,
     END_USER_RESTRICTED_REGISTRY_MAX_SIZE,
     LITELLM_PROXY_MASTER_KEY_ALIAS,
+    PROXY_DB_LOOKUP_DEADLINE_SECONDS,
     PROXY_DB_LOOKUP_MAX_CONCURRENCY,
     REGISTRY_ERROR_NEGATIVE_CACHE_TTL,
     TAG_REGISTRY_MAX_SIZE,
@@ -57,7 +59,13 @@ from litellm.proxy.agent_endpoints.auth.agent_access_groups import AgentAccessGr
 from litellm.types.agents import AgentCaller
 from litellm.proxy.auth import auth_checks
 from litellm.repositories import rust_database
-from litellm.rust_bridge._native import RustTagRepository, RustTeamMembershipRepository, RustTeamRepository
+from litellm.rust_bridge._native import (
+    NativeDatabaseFailure,
+    RustObjectPermissionRepository,
+    RustTagRepository,
+    RustTeamMembershipRepository,
+    RustTeamRepository,
+)
 from litellm.proxy.auth.auth_checks import (
     LITELLM_SESSION_TOKEN_PREFIX,
     CallerTeamLoader,
@@ -75,7 +83,7 @@ from litellm.proxy.auth.auth_checks import (
     can_object_call_model,
     check_end_user_budget,
     common_checks,
-    fetch_key_object_from_db_with_reconnect,
+    load_key_object,
     get_key_object,
     get_user_object,
     read_email_verified,
@@ -83,6 +91,8 @@ from litellm.proxy.auth.auth_checks import (
     personal_key_owner_teams_with_status,
     request_skips_budget_checks,
     route_skips_budget_checks,
+    team_max_budget_alert_check,
+    team_max_budget_alert_emails_error,
     team_max_budget_check,
     team_member_max_budget_alert_check,
     vector_store_access_check,
@@ -96,20 +106,19 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_bearer_toke
 from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
 from litellm.proxy.common_utils.user_api_key_cache import (
     END_USER_RESTRICTED_REGISTRY_OVERFLOW_SENTINEL,
+    MODEL_ACCESS_GROUP_REGISTRY_OVERFLOW_SENTINEL,
     TAG_REGISTRY_OVERFLOW_SENTINEL,
     UserApiKeyCache,
-    end_user_cache_key,
-    end_user_restricted_registry_cache_key,
-    object_permission_cache_key,
-    tag_cache_key,
-    tag_registry_cache_key,
 )
+from litellm.redis.stores.auth_cache import AuthObject
 from litellm.utils import get_utc_datetime
 from litellm.vector_stores.vector_store_registry import VectorStoreRegistry
 from litellm.types.proxy.auth.auth_checks import UserNotFoundError
 from tests._master_key import MASTER_KEY
+from tests._support.clock_loops import AutojumpClockLoop
 from pydantic import BaseModel
 from pydantic_core import to_json
+from typing_extensions import ReadOnly, TypedDict
 
 from tests.unit.proxy.auth._user_table import UserTable, prisma_over, user_row
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
@@ -117,14 +126,17 @@ from litellm.proxy.utils import ProxyLogging
 from tests.unit.proxy.rust_auth_stores import FakeBudgetStore, FakeEndUserStore, FakeUserStore
 from litellm.redis.stores.connection import connect
 from litellm.redis.stores.spend_counters import SpendCounterStore
-from tests.unit.redis.stores.auth_cache_double import shared_cache
+from tests.unit.redis.stores.auth_cache_double import FakeAuthCache, shared_cache
 from tests.unit.redis.stores.spend_counters_double import FakeSpendCounters
 from tests.unit.proxy.rust_auth_stores import (
     FakeKeyStore,
+    FakeModelAccessGroupStore,
     FakeOrganizationStore,
     FakeTeamStore,
+    GroupBudget,
     RustAuthStores,
     install_rust_auth_stores,
+    native_database_failure,
 )
 
 
@@ -719,15 +731,11 @@ async def test_get_key_object_miss_keeps_the_looked_up_value_out_of_the_401_and_
     key a caller sent, a provider key included, so a miss must not log that value."""
     from litellm.constants import INVALID_API_KEY_ERROR_MESSAGE
 
-    mock_cache = MagicMock()
-    mock_cache.async_get_cache = AsyncMock(return_value=None)
-    mock_cache.async_set_cache = AsyncMock()
-
     with caplog.at_level("INFO", logger="LiteLLM Proxy"), pytest.raises(ProxyException) as exc_info:
         await get_key_object(
             hashed_token="a-secret-looking-hash",
             prisma_client=MagicMock(),
-            user_api_key_cache=mock_cache,
+            user_api_key_cache=UserApiKeyCache(),
         )
 
     assert int(exc_info.value.code) == 401
@@ -743,11 +751,11 @@ async def test_get_key_object_without_a_rust_database_raises_no_db_connected(mon
     from litellm.repositories import rust_database
 
     monkeypatch.setattr(rust_database, "repository", lambda kind: None)
-    mock_cache = MagicMock()
-    mock_cache.async_get_cache = AsyncMock(return_value=None)
 
     with pytest.raises(Exception, match="No db connected"):
-        await get_key_object(hashed_token="hashed-token", prisma_client=MagicMock(), user_api_key_cache=mock_cache)
+        await get_key_object(
+            hashed_token="hashed-token", prisma_client=MagicMock(), user_api_key_cache=UserApiKeyCache()
+        )
 
 
 @dataclass
@@ -777,11 +785,12 @@ async def test_fetch_key_object_from_db_bounds_in_flight_store_reads(monkeypatch
 
     results: Final = await asyncio.gather(
         *(
-            fetch_key_object_from_db_with_reconnect(
+            load_key_object(
                 hashed_token=f"hashed-token-{i}",
                 prisma_client=MagicMock(),
                 parent_otel_span=None,
                 proxy_logging_obj=None,
+                user_api_key_cache=UserApiKeyCache(),
             )
             for i in range(burst)
         )
@@ -790,6 +799,78 @@ async def test_fetch_key_object_from_db_bounds_in_flight_store_reads(monkeypatch
     assert len(results) == burst
     assert {r.token for r in results if r is not None} == {f"hashed-token-{i}" for i in range(burst)}
     assert store.max_in_flight == PROXY_DB_LOOKUP_MAX_CONCURRENCY
+
+
+class _SkippableClockLoop(asyncio.SelectorEventLoop):
+    """An event loop whose clock a test moves forward, so a deadline passes without anyone waiting for it."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.skipped = 0.0
+
+    def time(self) -> float:
+        return super().time() + self.skipped
+
+
+@dataclass
+class _StalledObjectPermissionStore:
+    reached: asyncio.Event = field(default_factory=asyncio.Event)
+
+    async def find_by_object_permission_id(self, object_permission_id: str, *, use_writer: bool = False) -> str | None:
+        self.reached.set()
+        await _stall_forever()
+        return None
+
+
+@pytest.mark.parametrize("check_db_only", [False, True], ids=["cached_read", "writer_read"])
+def test_get_key_object_serves_a_key_whose_object_permission_read_outlasts_its_deadline(
+    monkeypatch: pytest.MonkeyPatch, _clear_db_lookup_stall: None, check_db_only: bool
+):
+    """The object permission table does not answer, for twice the database deadline. The key the database did answer
+    for is served and cached without the permission, as it was when ``get_object_permission`` had a deadline of its
+    own. A writer read, which must see the permission, fails."""
+    from litellm.proxy.db.db_lookup_gate import DBLookupDeadlineExceeded
+
+    install_rust_auth_stores(
+        monkeypatch,
+        RustAuthStores(
+            key=FakeKeyStore(rows={"hashed-token-db": {"token": "hashed-token-db", "object_permission_id": "perm-1"}})
+        ),
+    )
+    stalled: Final = _StalledObjectPermissionStore()
+    answer: Final = rust_database.repository
+    monkeypatch.setattr(
+        rust_database,
+        "repository",
+        lambda kind: stalled if kind is RustObjectPermissionRepository else answer(kind),
+    )
+    cache: Final = UserApiKeyCache()
+    loop: Final = _SkippableClockLoop()
+
+    async def read_while_the_permission_table_stalls() -> UserAPIKeyAuth:
+        reading: Final = asyncio.ensure_future(
+            get_key_object(
+                hashed_token="hashed-token-db",
+                prisma_client=MagicMock(),
+                user_api_key_cache=cache,
+                check_db_only=check_db_only,
+            )
+        )
+        await stalled.reached.wait()
+        loop.skipped += PROXY_DB_LOOKUP_DEADLINE_SECONDS * 2
+        return await reading
+
+    try:
+        if check_db_only:
+            with pytest.raises(DBLookupDeadlineExceeded):
+                loop.run_until_complete(read_while_the_permission_table_stalls())
+            return
+        key: Final = loop.run_until_complete(read_while_the_permission_table_stalls())
+    finally:
+        loop.close()
+
+    assert (key.token, key.object_permission) == ("hashed-token-db", None)
+    assert cache.get_local(AuthObject.virtual_key("hashed-token-db")) is not None
 
 
 @pytest.fixture
@@ -832,11 +913,12 @@ async def test_fetch_key_object_from_db_fails_a_stalled_burst_within_the_deadlin
 
     results: Final = await asyncio.gather(
         *(
-            fetch_key_object_from_db_with_reconnect(
+            load_key_object(
                 hashed_token=f"hashed-token-{i}",
                 prisma_client=MagicMock(),
                 parent_otel_span=None,
                 proxy_logging_obj=None,
+                user_api_key_cache=UserApiKeyCache(),
                 deadline_seconds=0.2,
             )
             for i in range(burst)
@@ -854,11 +936,12 @@ async def test_fetch_key_object_from_db_fails_a_stalled_burst_within_the_deadlin
     after: Final = await asyncio.wait_for(
         asyncio.gather(
             *(
-                fetch_key_object_from_db_with_reconnect(
+                load_key_object(
                     hashed_token=f"after-{i}",
                     prisma_client=MagicMock(),
                     parent_otel_span=None,
                     proxy_logging_obj=None,
+                    user_api_key_cache=UserApiKeyCache(),
                 )
                 for i in range(PROXY_DB_LOOKUP_MAX_CONCURRENCY)
             )
@@ -1085,6 +1168,182 @@ async def test_a_stalled_end_user_registry_falls_back_at_the_db_lookup_deadline(
     assert db_lookup_stall_tracker.stalled_within(60)
 
 
+@dataclass
+class _StallableRegistryScanStore(FakeModelAccessGroupStore):
+    """Budget rows always answer, while the names-only registry scan hangs until ``stalled`` is cleared."""
+
+    stalled: bool = True
+    scans: int = 0
+    scan_started: asyncio.Event = field(default_factory=asyncio.Event)
+    scan_cancelled: asyncio.Event = field(default_factory=asyncio.Event)
+
+    async def names(self, limit: int) -> list[str]:
+        self.scans += 1
+        if not self.stalled:
+            return await super().names(limit)
+        self.scan_started.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            self.scan_cancelled.set()
+            raise
+        return []
+
+
+_VIRTUAL_DEADLOCK_GUARD_SECONDS: Final = 10 * (PROXY_DB_LOOKUP_DEADLINE_SECONDS + REGISTRY_ERROR_NEGATIVE_CACHE_TTL)
+
+
+def _run_on_autojump_clock(scenario: Callable[[AutojumpClockLoop], Awaitable[None]]) -> None:
+    loop: Final = AutojumpClockLoop()
+    try:
+        loop.run_until_complete(asyncio.wait_for(scenario(loop), timeout=_VIRTUAL_DEADLOCK_GUARD_SECONDS))
+    finally:
+        leftover: Final = asyncio.all_tasks(loop)
+        for task in leftover:
+            task.cancel()
+        if leftover:
+            loop.run_until_complete(asyncio.gather(*leftover, return_exceptions=True))
+        loop.run_until_complete(loop.shutdown_asyncgens())
+        loop.close()
+
+
+def _cache_on_loop_clock(loop: AutojumpClockLoop) -> UserApiKeyCache:
+    cache, _ = shared_cache(FakeAuthCache(attached=False, clock=loop.time))
+    return cache
+
+
+async def _load_model_access_group_registry(cache: UserApiKeyCache) -> frozenset[str] | None:
+    return await auth_checks._load_model_access_group_registry(prisma_client=MagicMock(), user_api_key_cache=cache)
+
+
+@pytest.fixture
+def _isolated_model_access_group_registry_lock(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A contended asyncio.Lock binds to the first loop that waits on it, so the module lock must not meet this loop.
+    monkeypatch.setattr(auth_checks, "_MODEL_ACCESS_GROUP_REGISTRY_LOAD_LOCK", asyncio.Lock())
+
+
+def test_a_stalled_model_access_group_registry_scan_frees_holder_and_waiter_at_the_db_lookup_deadline(
+    _clear_db_lookup_stall, _isolated_model_access_group_registry_lock, monkeypatch: pytest.MonkeyPatch
+):
+    """A hung registry scan must not hold the load lock forever. The request running the scan and the request
+    queued behind it both fall back to per-group reads at the lookup deadline, the scan runs once and is cancelled,
+    and the miss is negative-cached for exactly its window before the scan is retried."""
+    from litellm.proxy.db.db_lookup_gate import db_lookup_stall_tracker
+
+    async def scenario(loop: AutojumpClockLoop) -> None:
+        store: Final = _StallableRegistryScanStore(groups={"tier-a": GroupBudget(max_budget=1.0)})
+        install_rust_auth_stores(monkeypatch, RustAuthStores(model_access_group=store))
+        cache: Final = _cache_on_loop_clock(loop)
+
+        holder: Final = asyncio.ensure_future(_load_model_access_group_registry(cache))
+        await store.scan_started.wait()
+        waiter: Final = asyncio.ensure_future(_load_model_access_group_registry(cache))
+        loaded: Final = await asyncio.gather(holder, waiter)
+        released_at: Final = loop.time()
+        await store.scan_cancelled.wait()
+
+        assert (loaded, store.scans, released_at >= PROXY_DB_LOOKUP_DEADLINE_SECONDS) == ([None, None], 1, True)
+        assert await cache.async_get_cache(key=AuthObject.model_access_group_registry()) == (
+            MODEL_ACCESS_GROUP_REGISTRY_OVERFLOW_SENTINEL
+        )
+        assert db_lookup_stall_tracker.stalled_within(math.inf)
+
+        store.stalled = False
+        loop.advance(REGISTRY_ERROR_NEGATIVE_CACHE_TTL - 1)
+        assert (await _load_model_access_group_registry(cache), store.scans) == (None, 1)
+
+        loop.advance(2)
+        assert (await _load_model_access_group_registry(cache), store.scans) == (frozenset({"tier-a"}), 2)
+
+    _run_on_autojump_clock(scenario)
+
+
+def test_cancelling_a_request_mid_registry_scan_cancels_the_scan_and_frees_the_load_lock(
+    _clear_db_lookup_stall, monkeypatch: pytest.MonkeyPatch
+):
+    """Cancellation is not a database failure: it reaches the scan at once, caches nothing, and leaves the lock free
+    for the next request."""
+
+    async def scenario(loop: AutojumpClockLoop) -> None:
+        store: Final = _StallableRegistryScanStore(groups={"tier-a": GroupBudget(max_budget=1.0)})
+        install_rust_auth_stores(monkeypatch, RustAuthStores(model_access_group=store))
+        cache: Final = _cache_on_loop_clock(loop)
+
+        request: Final = asyncio.ensure_future(_load_model_access_group_registry(cache))
+        await store.scan_started.wait()
+        request.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await request
+        await store.scan_cancelled.wait()
+
+        assert loop.time() < PROXY_DB_LOOKUP_DEADLINE_SECONDS
+        assert await cache.async_get_cache(key=AuthObject.model_access_group_registry()) is None
+
+        store.stalled = False
+        assert (await _load_model_access_group_registry(cache), store.scans) == (frozenset({"tier-a"}), 2)
+
+    _run_on_autojump_clock(scenario)
+
+
+_ACCESS_GROUP_MODEL_LIST: Final = (
+    {
+        "model_name": "gpt-4o",
+        "litellm_params": {"model": "openai/gpt-4o", "api_key": "k"},
+        "model_info": {"access_groups": ["tier-a", "tier-b"]},
+    },
+)
+
+
+async def _spend_recorded_on_the_row(*, fallback_spend: float, **_: object) -> float:
+    return fallback_spend
+
+
+def test_an_over_budget_access_group_is_still_refused_when_the_registry_scan_stalls(
+    _clear_db_lookup_stall, monkeypatch: pytest.MonkeyPatch
+):
+    """With the registry unusable after the deadline, every group serving the model stays a candidate, so the
+    per-group budget read still refuses a request whose group is over budget."""
+
+    async def scenario(loop: AutojumpClockLoop) -> None:
+        store: Final = _StallableRegistryScanStore(groups={"tier-a": GroupBudget(spend=5.0, max_budget=1.0)})
+        install_rust_auth_stores(monkeypatch, RustAuthStores(model_access_group=store))
+        cache: Final = _cache_on_loop_clock(loop)
+
+        with (
+            patch(  # test-quality-ok: common_checks lazily imports prisma_client from proxy_server
+                "litellm.proxy.proxy_server.prisma_client", MagicMock()
+            ),
+            patch(  # test-quality-ok: common_checks lazily imports user_api_key_cache from proxy_server
+                "litellm.proxy.proxy_server.user_api_key_cache", cache
+            ),
+            patch(  # test-quality-ok: get_current_spend is lazily imported inside the budget check
+                "litellm.proxy.proxy_server.get_current_spend", _spend_recorded_on_the_row
+            ),
+            pytest.raises(litellm.BudgetExceededError) as exc_info,
+        ):
+            await common_checks(
+                request_body={"model": "gpt-4o", "messages": []},
+                team_object=None,
+                user_object=None,
+                end_user_object=None,
+                global_proxy_spend=None,
+                general_settings={},
+                route="/v1/chat/completions",
+                llm_router=litellm.Router(model_list=list(_ACCESS_GROUP_MODEL_LIST)),
+                proxy_logging_obj=ProxyLogging(user_api_key_cache=cache),
+                valid_token=UserAPIKeyAuth(api_key="hashed", models=["tier-a"], user_id="user-1"),
+                request=SimpleNamespace(
+                    method="POST", headers={}, query_params={}, url=SimpleNamespace(path="/v1/chat/completions")
+                ),
+                skip_budget_checks=False,
+            )
+
+        assert (exc_info.value.entity_id, store.scans, store.budget_lookups) == ("tier-a", 1, [("tier-a",)])
+        assert loop.time() >= PROXY_DB_LOOKUP_DEADLINE_SECONDS
+
+    _run_on_autojump_clock(scenario)
+
+
 @pytest.mark.asyncio
 async def test_team_lookup_fails_at_the_db_lookup_deadline_while_writes_stay_unbounded(
     _clear_db_lookup_stall, monkeypatch
@@ -1117,15 +1376,6 @@ async def test_team_lookup_fails_at_the_db_lookup_deadline_while_writes_stay_unb
     assert written == {"team_id": "slow-write"}
 
 
-def _fake_redis_cache():
-    fake_redis = MagicMock()
-    fake_redis.async_get_cache = AsyncMock(return_value=None)
-    fake_redis.async_set_cache = AsyncMock()
-    fake_redis.async_set_cache_pipeline = AsyncMock()
-    fake_redis.async_delete_cache = AsyncMock()
-    return fake_redis
-
-
 class TestAuthCacheRedisWritePolicy:
     """Redis auth-cache entries may only be written from fresh DB loads.
 
@@ -1140,9 +1390,7 @@ class TestAuthCacheRedisWritePolicy:
         rust_auth_stores.key.rows["hashed-token-db"] = {"token": "hashed-token-db"}
         mock_prisma_client = MagicMock()
 
-        fake_redis = _fake_redis_cache()
-        cache = UserApiKeyCache()
-        cache.redis_cache = fake_redis
+        cache, auth_store = shared_cache()
 
         key_obj = await get_key_object(
             hashed_token="hashed-token-db",
@@ -1151,10 +1399,22 @@ class TestAuthCacheRedisWritePolicy:
         )
 
         assert key_obj.token == "hashed-token-db"
-        fake_redis.async_set_cache.assert_awaited_once()
-        assert (
-            fake_redis.async_set_cache.await_args.kwargs.get("key") or fake_redis.async_set_cache.await_args.args[0]
-        ) == "hashed-token-db"
+        writes: Final = [command[1] for command in auth_store.commands if command[0] != "GET"]
+        assert writes == ["hashed-token-db"]
+        assert "hashed-token-db" in auth_store.redis
+
+    @pytest.mark.asyncio
+    async def test_get_key_object_for_an_unknown_key_costs_redis_nothing_beyond_the_cache_read(
+        self, rust_auth_stores: RustAuthStores
+    ):
+        """A flood of invalid keys must not buy a Redis round trip each on top of the cache read that missed."""
+        cache, auth_store = shared_cache()
+
+        with pytest.raises(ProxyException):
+            await get_key_object(hashed_token="hashed-token-db", prisma_client=MagicMock(), user_api_key_cache=cache)
+
+        assert [command[0] for command in auth_store.commands] == ["GET"]
+        assert rust_auth_stores.key.lookups == [("hashed-token-db", False)]
 
 
 def test_get_cli_jwt_auth_token_default_expiration(valid_sso_user_defined_values):
@@ -1245,71 +1505,149 @@ def test_get_cli_jwt_auth_token_no_fallback_when_budget_provided(
     assert json.loads(decrypted).get("max_budget") is None
 
 
+def _no_user_yet() -> tuple[MagicMock, MagicMock]:
+    """A Prisma double with no user row, and an empty cache."""
+    prisma_client: Final = MagicMock()
+    prisma_client.db = AsyncMock()
+    prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
+    prisma_client.db.litellm_usertable.find_first = AsyncMock(return_value=None)
+    cache: Final = MagicMock()
+    cache.async_get_cache = AsyncMock(return_value=None)
+    cache.async_set_cache = AsyncMock()
+    return prisma_client, cache
+
+
 @pytest.mark.asyncio
 async def test_default_internal_user_params_with_get_user_object(rust_auth_stores: RustAuthStores, monkeypatch):
     """Test that default_internal_user_params is used when creating a new user via get_user_object"""
-    # Set up default_internal_user_params
-    default_params = {
-        "models": ["gpt-4", "claude-3-opus"],
-        "max_budget": 200.0,
-        "user_role": "internal_user",
+    monkeypatch.setattr(
+        litellm,
+        "default_internal_user_params",
+        {"models": ["gpt-4", "claude-3-opus"], "max_budget": 200.0, "user_role": LitellmUserRoles.INTERNAL_USER},
+    )
+    prisma_client, cache = _no_user_yet()
+    _rust_stores_over_prisma(rust_auth_stores, prisma_client)
+
+    user_obj: Final = await get_user_object(
+        user_id="new_test_user",
+        prisma_client=prisma_client,
+        user_api_key_cache=cache,
+        user_id_upsert=True,
+        proxy_logging_obj=None,
+    )
+
+    assert [
+        (inserted["user_id"], inserted["models"], inserted["max_budget"], inserted["user_role"])
+        for inserted in rust_auth_stores.user.inserts
+    ] == [("new_test_user", ("gpt-4", "claude-3-opus"), 200.0, "internal_user")]
+    assert user_obj is not None
+    assert (user_obj.models, user_obj.max_budget, user_obj.user_role) == (
+        ["gpt-4", "claude-3-opus"],
+        200.0,
+        "internal_user",
+    )
+
+
+@pytest.mark.asyncio
+async def test_get_user_object_upsert_stores_the_default_rate_limits(rust_auth_stores: RustAuthStores, monkeypatch):
+    monkeypatch.setattr(
+        litellm, "default_internal_user_params", {"tpm_limit": 1000, "rpm_limit": 60, "max_parallel_requests": 4}
+    )
+    prisma_client, cache = _no_user_yet()
+    _rust_stores_over_prisma(rust_auth_stores, prisma_client)
+
+    user_obj: Final = await get_user_object(
+        user_id="jwt_upsert_rate_limits",
+        prisma_client=prisma_client,
+        user_api_key_cache=cache,
+        user_id_upsert=True,
+        proxy_logging_obj=None,
+    )
+
+    (inserted,) = rust_auth_stores.user.inserts
+    assert (inserted["tpm_limit"], inserted["rpm_limit"], inserted["max_parallel_requests"]) == (1000, 60, 4)
+    assert user_obj is not None
+    assert (user_obj.tpm_limit, user_obj.rpm_limit, user_obj.max_parallel_requests) == (1000, 60, 4)
+
+
+_OTHER_DEFAULT_COLUMNS: Final = MappingProxyType(
+    {
+        "user_alias": "new hire",
+        "team_id": "team-1",
+        "organization_id": "org-1",
+        "object_permission_id": "permission-1",
+        "password_reset_required": True,
+        "allowed_cache_controls": ["no-cache"],
+        "policies": ["policy-1"],
     }
-    monkeypatch.setattr(litellm, "default_internal_user_params", default_params)
+)
 
-    # Mock the necessary dependencies
-    mock_prisma_client = MagicMock()
-    mock_db = AsyncMock()
-    mock_prisma_client.db = mock_db
 
-    # Set up the user creation mock - create a complete user model that can be converted to a dict
-    mock_user = MagicMock()
-    mock_user.user_id = "new_test_user"
-    mock_user.models = ["gpt-4", "claude-3-opus"]
-    mock_user.max_budget = 200.0
-    mock_user.user_role = "internal_user"
-    mock_user.organization_memberships = []
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "configured",
+    [
+        pytest.param({"metadata": {"source": "jwt"}, "model_max_budget": {"gpt-4o": 5.0}}, id="yaml_mappings"),
+        pytest.param({"metadata": '{"source": "jwt"}', "model_max_budget": '{"gpt-4o": 5.0}'}, id="json_text"),
+    ],
+)
+async def test_get_user_object_upsert_stores_every_default_column_prisma_stored(
+    configured: Mapping[str, object], caplog, rust_auth_stores: RustAuthStores, monkeypatch
+):
+    monkeypatch.setattr(litellm, "default_internal_user_params", {**_OTHER_DEFAULT_COLUMNS, **configured})
+    prisma_client, cache = _no_user_yet()
+    _rust_stores_over_prisma(rust_auth_stores, prisma_client)
 
-    # Make the mock model_dump or dict method return appropriate data
-    mock_user.dict = lambda: {
-        "user_id": "new_test_user",
-        "models": ["gpt-4", "claude-3-opus"],
-        "max_budget": 200.0,
-        "user_role": "internal_user",
-        "organization_memberships": [],
-    }
-
-    # Setup the mock returns
-    _rust_stores_over_prisma(rust_auth_stores, mock_prisma_client)
-    mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
-    mock_prisma_client.db.litellm_usertable.create = AsyncMock(return_value=mock_user)
-
-    # Create a mock cache - use AsyncMock for async methods
-    mock_cache = MagicMock()
-    mock_cache.async_get_cache = AsyncMock(return_value=None)
-    mock_cache.async_set_cache = AsyncMock()
-
-    # Call get_user_object with user_id_upsert=True to trigger user creation
-    try:
-        user_obj = await get_user_object(
-            user_id="new_test_user",
-            prisma_client=mock_prisma_client,
-            user_api_key_cache=mock_cache,
+    with caplog.at_level("WARNING", logger="LiteLLM Proxy"):
+        user_obj: Final = await get_user_object(
+            user_id="jwt_upsert_other_columns",
+            prisma_client=prisma_client,
+            user_api_key_cache=cache,
             user_id_upsert=True,
             proxy_logging_obj=None,
         )
-    except Exception as e:
-        # this fails since the mock object is a MagicMock and not a LiteLLM_UserTable
-        print(e)
 
-    # Verify the user was created with the default params
-    mock_prisma_client.db.litellm_usertable.create.assert_called_once()
-    creation_args = mock_prisma_client.db.litellm_usertable.create.call_args[1]["data"]
+    (inserted,) = rust_auth_stores.user.inserts
+    assert {
+        **{key: inserted[key] for key in _OTHER_DEFAULT_COLUMNS},
+        "allowed_cache_controls": list(inserted["allowed_cache_controls"]),
+        "policies": list(inserted["policies"]),
+        "metadata": json.loads(inserted["metadata"]),
+        "model_max_budget": json.loads(inserted["model_max_budget"]),
+    } == {**_OTHER_DEFAULT_COLUMNS, "metadata": {"source": "jwt"}, "model_max_budget": {"gpt-4o": 5.0}}
+    assert user_obj is not None
+    assert (user_obj.user_alias, user_obj.organization_id, user_obj.metadata) == (
+        "new hire",
+        "org-1",
+        {"source": "jwt"},
+    )
+    assert [r.getMessage() for r in caplog.records if "default_internal_user_params" in r.getMessage()] == []
 
-    # Verify defaults were applied to the creation args
-    assert "models" in creation_args
-    assert creation_args["models"] == ["gpt-4", "claude-3-opus"]
-    assert creation_args["max_budget"] == 200.0
-    assert creation_args["user_role"] == "internal_user"
+
+@pytest.mark.asyncio
+async def test_get_user_object_upsert_warns_about_the_default_params_it_does_not_store(
+    caplog, rust_auth_stores: RustAuthStores, monkeypatch
+):
+    monkeypatch.setattr(
+        litellm,
+        "default_internal_user_params",
+        {"max_budget": 5.0, "password": "shared", "spend": 1.5, "user_email": "x@y.z", "available_teams": ["team-1"]},
+    )
+    prisma_client, cache = _no_user_yet()
+    _rust_stores_over_prisma(rust_auth_stores, prisma_client)
+
+    with caplog.at_level("WARNING", logger="LiteLLM Proxy"):
+        await get_user_object(
+            user_id="jwt_upsert_unstored_defaults",
+            prisma_client=prisma_client,
+            user_api_key_cache=cache,
+            user_id_upsert=True,
+            proxy_logging_obj=None,
+        )
+
+    assert [
+        record.getMessage() for record in caplog.records if "default_internal_user_params" in record.getMessage()
+    ] == ["default_internal_user_params keys not stored on a user created at sign-in: password, spend, user_email"]
 
 
 @pytest.mark.asyncio
@@ -1325,39 +1663,25 @@ async def test_get_user_object_upsert_sets_budget_reset_at(
     if has_budget_duration:
         default_params["budget_duration"] = "24h"
     monkeypatch.setattr(litellm, "default_internal_user_params", default_params)
+    prisma_client, cache = _no_user_yet()
+    _rust_stores_over_prisma(rust_auth_stores, prisma_client)
+    before: Final = datetime.now(timezone.utc)
 
-    mock_prisma_client = MagicMock()
-    mock_prisma_client.db = AsyncMock()
-    _rust_stores_over_prisma(rust_auth_stores, mock_prisma_client)
-    mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
-    mock_prisma_client.db.litellm_usertable.find_first = AsyncMock(return_value=None)
-    mock_prisma_client.db.litellm_usertable.create = AsyncMock(return_value=MagicMock(organization_memberships=[]))
+    user_obj: Final = await get_user_object(
+        user_id=f"jwt_upsert_reset_at_{has_budget_duration}",
+        prisma_client=prisma_client,
+        user_api_key_cache=cache,
+        user_id_upsert=True,
+        proxy_logging_obj=None,
+    )
 
-    mock_cache = MagicMock()
-    mock_cache.async_get_cache = AsyncMock(return_value=None)
-    mock_cache.async_set_cache = AsyncMock()
-
-    user_id = f"jwt_upsert_reset_at_{has_budget_duration}"
-    try:
-        await get_user_object(
-            user_id=user_id,
-            prisma_client=mock_prisma_client,
-            user_api_key_cache=mock_cache,
-            user_id_upsert=True,
-            proxy_logging_obj=None,
-        )
-    except Exception as e:
-        print(e)
-
-    mock_prisma_client.db.litellm_usertable.create.assert_called_once()
-    creation_args = mock_prisma_client.db.litellm_usertable.create.call_args[1]["data"]
-
+    assert user_obj is not None
+    (inserted,) = rust_auth_stores.user.inserts
     if has_budget_duration:
-        reset_at = creation_args.get("budget_reset_at")
-        assert isinstance(reset_at, datetime), f"expected a computed budget_reset_at, got {creation_args!r}"
-        assert reset_at > datetime.now(timezone.utc)
+        assert user_obj.budget_reset_at is not None and user_obj.budget_reset_at > before
+        assert inserted["budget_reset_at"] == user_obj.budget_reset_at.timestamp()
     else:
-        assert "budget_reset_at" not in creation_args
+        assert (inserted["budget_reset_at"], user_obj.budget_reset_at) == (None, None)
 
 
 @pytest.mark.asyncio
@@ -1374,36 +1698,54 @@ async def test_get_user_object_upsert_starts_each_default_window_with_its_own_re
             ]
         },
     )
-    prisma_client: Final = MagicMock()
-    prisma_client.db = AsyncMock()
+    prisma_client, cache = _no_user_yet()
     _rust_stores_over_prisma(rust_auth_stores, prisma_client)
-    prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
-    prisma_client.db.litellm_usertable.find_first = AsyncMock(return_value=None)
-    prisma_client.db.litellm_usertable.create = AsyncMock(return_value=MagicMock(organization_memberships=[]))
-    cache: Final = MagicMock()
-    cache.async_get_cache = AsyncMock(return_value=None)
-    cache.async_set_cache = AsyncMock()
     resets_before_call: Final = {duration: get_budget_reset_time(duration) for duration in ("1h", "30d")}
 
-    try:
-        await get_user_object(
-            user_id="jwt_upsert_windows",
-            prisma_client=prisma_client,
-            user_api_key_cache=cache,
-            user_id_upsert=True,
-            proxy_logging_obj=None,
-        )
-    except Exception as e:
-        print(e)
+    await get_user_object(
+        user_id="jwt_upsert_windows",
+        prisma_client=prisma_client,
+        user_api_key_cache=cache,
+        user_id_upsert=True,
+        proxy_logging_obj=None,
+    )
 
     resets_after_call: Final = {duration: get_budget_reset_time(duration) for duration in ("1h", "30d")}
-    windows: Final = json.loads(prisma_client.db.litellm_usertable.create.call_args[1]["data"]["budget_limits"])
+    (inserted,) = rust_auth_stores.user.inserts
+    windows: Final = json.loads(str(inserted["budget_limits"]))
     assert [window["budget_duration"] for window in windows] == ["1h", "30d"]
     assert all(
         datetime.fromisoformat(window["reset_at"])
         in (resets_before_call[window["budget_duration"]], resets_after_call[window["budget_duration"]])
         for window in windows
     )
+
+
+@pytest.mark.asyncio
+async def test_get_user_object_upsert_that_loses_to_a_concurrent_sign_in_returns_the_user_that_won(
+    rust_auth_stores: RustAuthStores, monkeypatch
+):
+    monkeypatch.setattr(litellm, "default_internal_user_params", {"teams": ["default-team"]})
+    rust_auth_stores.user.writer = {"racing_user": {"user_id": "racing_user", "user_role": "proxy_admin"}}
+    cache: Final = MagicMock()
+    cache.async_get_cache = AsyncMock(return_value=None)
+    cache.async_set_cache = AsyncMock()
+
+    with patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints.add_new_user_to_default_team",
+        new_callable=AsyncMock,
+    ) as mock_add_to_team:
+        user_obj: Final = await get_user_object(
+            user_id="racing_user",
+            prisma_client=MagicMock(),
+            user_api_key_cache=cache,
+            user_id_upsert=True,
+            proxy_logging_obj=None,
+        )
+
+    assert user_obj is not None
+    assert (user_obj.user_id, user_obj.user_role) == ("racing_user", "proxy_admin")
+    mock_add_to_team.assert_not_awaited()
 
 
 def _user_read_raising(stores: RustAuthStores, error: Exception) -> tuple[MagicMock, MagicMock]:
@@ -1514,63 +1856,27 @@ async def test_get_user_object_check_db_only_ignores_recent_miss(rust_auth_store
 
 
 @pytest.mark.asyncio
-async def test_get_user_object_upsert_includes_user_email(rust_auth_stores: RustAuthStores):
-    """Test that user_email is included when creating a new user via get_user_object upsert"""
-    # Mock the necessary dependencies
-    mock_prisma_client = MagicMock()
-    mock_db = AsyncMock()
-    mock_prisma_client.db = mock_db
+@pytest.mark.parametrize(("email_holder", "stored_email"), [(None, "test@example.com"), (MagicMock(), None)])
+async def test_get_user_object_upsert_stores_the_email_unless_another_user_holds_it(
+    rust_auth_stores: RustAuthStores, email_holder: MagicMock | None, stored_email: str | None
+):
+    prisma_client, cache = _no_user_yet()
+    prisma_client.db.litellm_usertable.find_first = AsyncMock(return_value=email_holder)
+    _rust_stores_over_prisma(rust_auth_stores, prisma_client)
 
-    # Set up the user creation mock
-    mock_user = MagicMock()
-    mock_user.user_id = "new_test_user"
-    mock_user.user_email = "test@example.com"
-    mock_user.models = []
-    mock_user.max_budget = None
-    mock_user.user_role = None
-    mock_user.organization_memberships = []
+    user_obj: Final = await get_user_object(
+        user_id="new_test_user",
+        prisma_client=prisma_client,
+        user_api_key_cache=cache,
+        user_id_upsert=True,
+        proxy_logging_obj=None,
+        user_email="test@example.com",
+    )
 
-    mock_user.dict = lambda: {
-        "user_id": "new_test_user",
-        "user_email": "test@example.com",
-        "models": [],
-        "max_budget": None,
-        "user_role": None,
-        "organization_memberships": [],
-    }
-
-    # Setup the mock returns - user does not exist
-    _rust_stores_over_prisma(rust_auth_stores, mock_prisma_client)
-    mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
-    mock_prisma_client.db.litellm_usertable.find_first = AsyncMock(return_value=None)
-    mock_prisma_client.db.litellm_usertable.create = AsyncMock(return_value=mock_user)
-
-    # Create a mock cache
-    mock_cache = MagicMock()
-    mock_cache.async_get_cache = AsyncMock(return_value=None)
-    mock_cache.async_set_cache = AsyncMock()
-
-    # Call get_user_object with user_id_upsert=True and user_email
-    try:
-        await get_user_object(
-            user_id="new_test_user",
-            prisma_client=mock_prisma_client,
-            user_api_key_cache=mock_cache,
-            user_id_upsert=True,
-            proxy_logging_obj=None,
-            user_email="test@example.com",
-        )
-    except Exception as e:
-        # May fail since mock object is not a real LiteLLM_UserTable
-        print(e)
-
-    # Verify the user was created with user_email included
-    mock_prisma_client.db.litellm_usertable.create.assert_called_once()
-    creation_args = mock_prisma_client.db.litellm_usertable.create.call_args[1]["data"]
-
-    assert "user_email" in creation_args, "user_email should be included when upserting a new user"
-    assert creation_args["user_email"] == "test@example.com"
-    assert creation_args["user_id"] == "new_test_user"
+    (inserted,) = rust_auth_stores.user.inserts
+    assert (inserted["user_id"], inserted["user_email"]) == ("new_test_user", "test@example.com")
+    assert user_obj is not None
+    assert user_obj.user_email == stored_email
 
 
 @pytest.mark.asyncio
@@ -1584,7 +1890,7 @@ async def test_get_user_object_backfills_null_email_from_cache_hit(rust_auth_sto
     """
     cache = UserApiKeyCache()
     existing = LiteLLM_UserTable(user_id="jwt-user-1", user_email=None, user_role="internal_user")
-    await cache.async_set_cache(key="jwt-user-1", value=existing, model_type=LiteLLM_UserTable)
+    await cache.async_set_cache(key=AuthObject.user("jwt-user-1"), value=existing, model_type=LiteLLM_UserTable)
 
     mock_prisma_client = MagicMock()
     _rust_stores_over_prisma(rust_auth_stores, mock_prisma_client)
@@ -1615,7 +1921,7 @@ async def test_get_user_object_backfills_null_email_from_cache_hit(rust_auth_sto
     assert update_kwargs["where"] == {"user_id": "jwt-user-1", "user_email": None}
     assert update_kwargs["data"]["user_email"] == "jwt-user-1@example.com"
 
-    refreshed = await cache.async_get_cache(key="jwt-user-1", model_type=LiteLLM_UserTable)
+    refreshed = await cache.async_get_cache(key=AuthObject.user("jwt-user-1"), model_type=LiteLLM_UserTable)
     assert refreshed is not None
     assert refreshed.user_email == "jwt-user-1@example.com"
 
@@ -1654,7 +1960,7 @@ async def test_get_user_object_backfills_null_email_from_db_read(rust_auth_store
     assert result.user_email == "jwt-user-3@example.com"
     mock_prisma_client.db.litellm_usertable.update_many.assert_called_once()
 
-    refreshed = await cache.async_get_cache(key="jwt-user-3", model_type=LiteLLM_UserTable)
+    refreshed = await cache.async_get_cache(key=AuthObject.user("jwt-user-3"), model_type=LiteLLM_UserTable)
     assert refreshed is not None
     assert refreshed.user_email == "jwt-user-3@example.com"
 
@@ -1672,7 +1978,7 @@ async def test_get_user_object_does_not_overwrite_existing_email():
         user_email="operator-set@example.com",
         user_role="internal_user",
     )
-    await cache.async_set_cache(key="jwt-user-2", value=existing, model_type=LiteLLM_UserTable)
+    await cache.async_set_cache(key=AuthObject.user("jwt-user-2"), value=existing, model_type=LiteLLM_UserTable)
 
     mock_prisma_client = MagicMock()
     mock_prisma_client.db.litellm_usertable.update_many = AsyncMock(return_value=0)
@@ -1700,7 +2006,7 @@ async def test_get_user_object_backfill_race_prefers_db_email(rust_auth_stores: 
     """
     cache = UserApiKeyCache()
     existing = LiteLLM_UserTable(user_id="jwt-user-4", user_email=None, user_role="internal_user")
-    await cache.async_set_cache(key="jwt-user-4", value=existing, model_type=LiteLLM_UserTable)
+    await cache.async_set_cache(key=AuthObject.user("jwt-user-4"), value=existing, model_type=LiteLLM_UserTable)
 
     winner_row = LiteLLM_UserTable(
         user_id="jwt-user-4",
@@ -1725,7 +2031,7 @@ async def test_get_user_object_backfill_race_prefers_db_email(rust_auth_stores: 
     assert result is not None
     assert result.user_email == "winner@example.com"
 
-    refreshed = await cache.async_get_cache(key="jwt-user-4", model_type=LiteLLM_UserTable)
+    refreshed = await cache.async_get_cache(key=AuthObject.user("jwt-user-4"), model_type=LiteLLM_UserTable)
     assert refreshed is not None
     assert refreshed.user_email == "winner@example.com"
 
@@ -1741,7 +2047,7 @@ async def test_get_user_object_backfill_caches_persisted_email_not_proposed(rust
     """
     cache = UserApiKeyCache()
     existing = LiteLLM_UserTable(user_id="jwt-user-5", user_email=None, user_role="internal_user")
-    await cache.async_set_cache(key="jwt-user-5", value=existing, model_type=LiteLLM_UserTable)
+    await cache.async_set_cache(key=AuthObject.user("jwt-user-5"), value=existing, model_type=LiteLLM_UserTable)
 
     persisted_row = LiteLLM_UserTable(
         user_id="jwt-user-5",
@@ -1766,7 +2072,7 @@ async def test_get_user_object_backfill_caches_persisted_email_not_proposed(rust
     assert result is not None
     assert result.user_email == "admin-edited@example.com"
 
-    refreshed = await cache.async_get_cache(key="jwt-user-5", model_type=LiteLLM_UserTable)
+    refreshed = await cache.async_get_cache(key=AuthObject.user("jwt-user-5"), model_type=LiteLLM_UserTable)
     assert refreshed is not None
     assert refreshed.user_email == "admin-edited@example.com"
 
@@ -1774,7 +2080,7 @@ async def test_get_user_object_backfill_caches_persisted_email_not_proposed(rust
 @pytest.mark.asyncio
 async def test_get_user_object_upsert_routes_default_team_to_membership(rust_auth_stores: RustAuthStores, monkeypatch):
     """Regression for LIT-4324: a configured default team (list of NewUserRequestTeam
-    dicts) must not be written into the Prisma create payload (teams is a String[] column
+    dicts) must not be written into the user row (teams is a String[] column
     that rejects dicts). Instead it must be routed through add_new_user_to_default_team so
     the JWT-provisioned user gets a real team membership."""
     default_params = {
@@ -1782,41 +2088,23 @@ async def test_get_user_object_upsert_routes_default_team_to_membership(rust_aut
         "teams": [{"team_id": "default-team", "user_role": "user"}],
     }
     monkeypatch.setattr(litellm, "default_internal_user_params", default_params)
-
-    mock_prisma_client = MagicMock()
-    mock_prisma_client.db = AsyncMock()
-    _rust_stores_over_prisma(rust_auth_stores, mock_prisma_client)
-    mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
-    mock_prisma_client.db.litellm_usertable.find_first = AsyncMock(return_value=None)
-
-    mock_user = MagicMock()
-    mock_user.organization_memberships = []
-    mock_prisma_client.db.litellm_usertable.create = AsyncMock(return_value=mock_user)
-
-    mock_cache = MagicMock()
-    mock_cache.async_get_cache = AsyncMock(return_value=None)
-    mock_cache.async_set_cache = AsyncMock()
+    prisma_client, cache = _no_user_yet()
+    _rust_stores_over_prisma(rust_auth_stores, prisma_client)
 
     with patch(
         "litellm.proxy.management_endpoints.internal_user_endpoints.add_new_user_to_default_team",
         new_callable=AsyncMock,
     ) as mock_add_to_team:
-        try:
-            await get_user_object(
-                user_id="new_jwt_user",
-                prisma_client=mock_prisma_client,
-                user_api_key_cache=mock_cache,
-                user_id_upsert=True,
-                proxy_logging_obj=None,
-            )
-        except Exception as e:
-            # mock_user is a MagicMock, so the post-create LiteLLM_UserTable(**dict(...))
-            # conversion raises; irrelevant to what we assert.
-            print(e)
+        user_obj: Final = await get_user_object(
+            user_id="new_jwt_user",
+            prisma_client=prisma_client,
+            user_api_key_cache=cache,
+            user_id_upsert=True,
+            proxy_logging_obj=None,
+        )
 
-    creation_args = mock_prisma_client.db.litellm_usertable.create.call_args[1]["data"]
-    assert "teams" not in creation_args, "teams must be popped before the Prisma create"
-    assert creation_args["user_role"] == "internal_user"
+    assert user_obj is not None
+    assert (user_obj.user_role, user_obj.teams) == ("internal_user", [])
 
     mock_add_to_team.assert_awaited_once()
     passed_teams = mock_add_to_team.await_args[1]["teams"]
@@ -1897,6 +2185,76 @@ async def test_get_team_db_check_does_not_call_new_team_if_exists(mock_new_team,
 
     # Verify that `new_team` was NEVER called, because the team was found.
     mock_new_team.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_writer", [False, True], ids=["reader", "writer"])
+async def test_a_team_read_that_loses_its_connection_is_retried_once_on_the_same_database(
+    monkeypatch: pytest.MonkeyPatch, use_writer: bool
+):
+    flaky: Final = AsyncMock(side_effect=[native_database_failure("unreachable"), _team_json(team_id="team-a")])
+    other: Final = AsyncMock(return_value=None)
+    _install_store(monkeypatch, RustTeamRepository, other if use_writer else flaky, flaky if use_writer else other)
+
+    team: Final = await _get_team_db_check(team_id="team-a", prisma_client=MagicMock(), use_writer=use_writer)
+
+    assert team is not None
+    assert (team.team_id, flaky.await_count, other.await_count) == ("team-a", 2, 0)
+
+
+@pytest.mark.asyncio
+async def test_a_team_read_that_loses_its_connection_twice_raises_the_retry_failure(monkeypatch: pytest.MonkeyPatch):
+    retry_failure: Final = native_database_failure("unreachable")
+    reads: Final = AsyncMock(
+        side_effect=[native_database_failure("unreachable"), retry_failure, _team_json(team_id="team-a")]
+    )
+    _install_store(monkeypatch, RustTeamRepository, reads)
+
+    with pytest.raises(NativeDatabaseFailure) as raised:
+        await _get_team_db_check(team_id="team-a", prisma_client=MagicMock())
+
+    assert (raised.value is retry_failure, reads.await_count) == (True, 2)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["capacity", "other"])
+async def test_a_team_read_that_fails_with_its_connection_intact_is_not_retried(
+    monkeypatch: pytest.MonkeyPatch, kind: Literal["capacity", "other"]
+):
+    failure: Final = native_database_failure(kind)
+    reads: Final = AsyncMock(side_effect=[failure, _team_json(team_id="team-a")])
+    _install_store(monkeypatch, RustTeamRepository, reads)
+
+    with pytest.raises(NativeDatabaseFailure) as raised:
+        await _get_team_db_check(team_id="team-a", prisma_client=MagicMock())
+
+    assert (raised.value is failure, reads.await_count) == (True, 1)
+
+
+async def _lose_the_connection_late(**kwargs: object) -> None:
+    await asyncio.sleep(PROXY_DB_LOOKUP_DEADLINE_SECONDS * 0.75)
+    raise native_database_failure("unreachable")
+
+
+def test_a_team_read_and_its_retry_share_one_lookup_deadline(_clear_db_lookup_stall, monkeypatch: pytest.MonkeyPatch):
+    from litellm.proxy.db.db_lookup_gate import DBLookupDeadlineExceeded
+
+    async def scenario(loop: AutojumpClockLoop) -> None:
+        attempts: Final = iter((_lose_the_connection_late, _stall_forever))
+
+        async def read(team_id: str) -> None:
+            await next(attempts)()
+
+        reads: Final = AsyncMock(side_effect=read)
+        _install_store(monkeypatch, RustTeamRepository, reads)
+        started: Final = loop.time()
+
+        with pytest.raises(DBLookupDeadlineExceeded):
+            await _get_team_db_check(team_id="team-a", prisma_client=MagicMock())
+
+        assert (loop.time() - started, reads.await_count) == (pytest.approx(PROXY_DB_LOOKUP_DEADLINE_SECONDS), 2)
+
+    _run_on_autojump_clock(scenario)
 
 
 # Vector Store Auth Check Tests
@@ -2999,7 +3357,7 @@ async def test_invalid_deny_by_default_value_only_denies_vector_store_requests(
 async def test_keyless_user_grant_is_read_through_the_object_permission_cache():
     cache: Final = UserApiKeyCache(default_in_memory_ttl=60)
     await cache.async_set_cache(
-        key=object_permission_cache_key("user-permission"),
+        key=AuthObject.object_permission("user-permission"),
         value=LiteLLM_ObjectPermissionTable(object_permission_id="user-permission", vector_stores=["KBSTOREA"]),
         model_type=LiteLLM_ObjectPermissionTable,
     )
@@ -3022,7 +3380,7 @@ async def test_key_and_team_grants_are_read_through_the_object_permission_cache(
     cache: Final = UserApiKeyCache(default_in_memory_ttl=60)
     for object_permission_id, vector_stores in (("key-permission", ["KBSTOREA"]), ("team-permission", ["KBSTOREB"])):
         await cache.async_set_cache(
-            key=object_permission_cache_key(object_permission_id),
+            key=AuthObject.object_permission(object_permission_id),
             value=LiteLLM_ObjectPermissionTable(object_permission_id=object_permission_id, vector_stores=vector_stores),
             model_type=LiteLLM_ObjectPermissionTable,
         )
@@ -3629,7 +3987,6 @@ async def test_can_user_call_model_no_default_models_hides_policy_detail():
 async def test_check_team_member_model_access_denied_hides_member_allowlist():
     from litellm.proxy._types import LiteLLM_TeamMembership
     from litellm.proxy.auth.auth_checks import check_team_member_model_access
-    from litellm.proxy.common_utils.user_api_key_cache import team_membership_reservation_cache_key
 
     membership = LiteLLM_TeamMembership(
         user_id="alice",
@@ -3638,7 +3995,7 @@ async def test_check_team_member_model_access_denied_hides_member_allowlist():
     )
     cache = UserApiKeyCache()
     await cache.async_set_cache(
-        key=team_membership_reservation_cache_key(user_id="alice", team_id="team-a"),
+        key=AuthObject.team_membership_reservation(user_id="alice", team_id="team-a"),
         value=membership,
         model_type=LiteLLM_TeamMembership,
     )
@@ -4002,9 +4359,9 @@ async def test_get_tag_objects_batch(rust_auth_stores: RustAuthStores):
     # Mock cache behavior - return cached tags, None for uncached
     async def mock_get_cache(*args, **kwargs):
         key = kwargs.get("key")
-        if key == "tag:cached-1":
+        if key == AuthObject.tag("cached-1"):
             return cached_tag_1
-        if key == "tag:cached-2":
+        if key == AuthObject.tag("cached-2"):
             return cached_tag_2
         return None
 
@@ -4053,7 +4410,7 @@ async def test_get_tag_objects_batch(rust_auth_stores: RustAuthStores):
     # Verify uncached tags were cached after fetching, alongside the tag-name registry
     cache_calls = mock_cache.async_set_cache.call_args_list
     cached_keys = [call.kwargs["key"] for call in cache_calls]
-    assert sorted(cached_keys) == [
+    assert sorted(key.key for key in cached_keys) == [
         "tag:uncached-1",
         "tag:uncached-2",
         "tag:uncached-3",
@@ -4135,7 +4492,7 @@ async def test_get_tag_objects_batch_fetches_only_registered_uncached_tags(rust_
 
     cache = UserApiKeyCache()
     await cache.async_set_cache(
-        key=tag_cache_key("cached-tag"),
+        key=AuthObject.tag("cached-tag"),
         value=LiteLLM_TagTable(tag_name="cached-tag", spend=7.0, models=[]),
         model_type=LiteLLM_TagTable,
     )
@@ -4174,7 +4531,7 @@ async def test_get_tag_objects_batch_caches_empty_registry(rust_auth_stores: Rus
         == {}
     )
     # "No tags registered" is a cached answer, not a cache miss (which would be None).
-    cached_registry = await cache.async_get_cache(key=tag_registry_cache_key())
+    cached_registry = await cache.async_get_cache(key=AuthObject.tag_registry())
     assert cached_registry is not None
     assert tuple(cached_registry) == ()
 
@@ -4217,8 +4574,8 @@ async def test_get_tag_objects_batch_registry_db_error_negative_caches_and_keeps
         user_api_key_cache=cache,
     )
     assert list(first) == ["tag-a"]
-    assert await cache.async_get_cache(key=tag_registry_cache_key()) == TAG_REGISTRY_OVERFLOW_SENTINEL
-    assert (tag_registry_cache_key(), REGISTRY_ERROR_NEGATIVE_CACHE_TTL) in cache.writes
+    assert await cache.async_get_cache(key=AuthObject.tag_registry()) == TAG_REGISTRY_OVERFLOW_SENTINEL
+    assert (AuthObject.tag_registry(), REGISTRY_ERROR_NEGATIVE_CACHE_TTL) in cache.writes
 
     second = await get_tag_objects_batch(
         tag_names=["tag-b"],
@@ -4229,7 +4586,7 @@ async def test_get_tag_objects_batch_registry_db_error_negative_caches_and_keeps
     assert len(rust_auth_stores.tag.name_listings) == 1
 
     # The window closing (here: the entry expiring) puts the registry back in play.
-    await cache.async_delete_cache(key=tag_registry_cache_key())
+    await cache.async_delete_cache(key=AuthObject.tag_registry().key)
     third = await get_tag_objects_batch(
         tag_names=["tag-c"],
         prisma_client=mock_prisma,
@@ -4298,7 +4655,7 @@ async def test_get_tag_objects_batch_oversized_registry_falls_back_and_stops_ref
         user_api_key_cache=cache,
     )
     assert list(first) == ["tag-a"]
-    assert await cache.async_get_cache(key=tag_registry_cache_key()) == TAG_REGISTRY_OVERFLOW_SENTINEL
+    assert await cache.async_get_cache(key=AuthObject.tag_registry()) == TAG_REGISTRY_OVERFLOW_SENTINEL
 
     second = await get_tag_objects_batch(
         tag_names=["tag-b"],
@@ -5334,6 +5691,199 @@ async def test_check_team_member_budget_dispatches_the_configured_alert_before_t
     assert call_info.max_budget_alert_emails == {"50": [], "100": ["finance@co.com"]}
 
 
+TEAM_ALERT_CONFIG: Final = {"50": ["a@co.com"], "75": ["b@co.com"], "90": ["c@co.com"]}
+
+
+class _RecordingProxyLogging:
+    def __init__(self) -> None:
+        self.alerts: Final[list[tuple[str, CallInfo]]] = []
+
+    async def budget_alerts(self, type: str, user_info: CallInfo) -> None:
+        self.alerts.append((type, user_info))
+
+
+async def _counter_spend(value: float, monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.redis.stores.connection import connect
+    from litellm.redis.stores.spend_counters import SpendCounterStore, team_counter
+
+    store: Final = SpendCounterStore(connect(None).spend_counters())
+    await store.set(team_counter("team-1"), value)
+    monkeypatch.setattr(proxy_server, "spend_counter_store", store)
+
+
+@pytest.mark.parametrize(
+    "counter_spend, expect_alert",
+    [(49.99, False), (50.0, True), (74.0, True), (90.0, True), (99.0, True)],
+)
+@pytest.mark.parametrize("send_percentage_alerts", [False, True])
+@pytest.mark.asyncio
+async def test_team_max_budget_check_dispatches_team_alert_from_the_shared_spend_counter(
+    counter_spend: float, expect_alert: bool, send_percentage_alerts: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    team_object: Final = LiteLLM_TeamTable(
+        team_id="team-1",
+        team_alias="platform",
+        spend=0.0,
+        max_budget=100.0,
+        metadata={"max_budget_alert_emails": TEAM_ALERT_CONFIG},
+    )
+    proxy_logging_obj: Final = _RecordingProxyLogging()
+
+    await _counter_spend(counter_spend, monkeypatch)
+    await team_max_budget_check(
+        team_object=team_object,
+        valid_token=UserAPIKeyAuth(token="rotating-key", team_id="team-1", user_id="owner"),
+        proxy_logging_obj=proxy_logging_obj,
+        send_percentage_alerts=send_percentage_alerts,
+    )
+    await asyncio.sleep(0)
+
+    if not expect_alert or not send_percentage_alerts:
+        assert proxy_logging_obj.alerts == []
+        return
+    assert [type for type, _ in proxy_logging_obj.alerts] == ["max_budget_alert"]
+    call_info: Final = proxy_logging_obj.alerts[0][1]
+    assert call_info.event_group == Litellm_EntityType.TEAM
+    assert (call_info.spend, call_info.max_budget) == (counter_spend, 100.0)
+    assert (call_info.team_id, call_info.team_alias) == ("team-1", "platform")
+    assert (call_info.token, call_info.user_id, call_info.user_email) == (None, None, None)
+    assert call_info.max_budget_alert_emails == {"50": ["a@co.com"], "75": ["b@co.com"], "90": ["c@co.com"]}
+
+
+@pytest.mark.parametrize("send_percentage_alerts", [False, True])
+@pytest.mark.asyncio
+async def test_team_max_budget_check_still_rejects_over_budget_after_dispatching_the_alert(
+    send_percentage_alerts: bool, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    team_object: Final = LiteLLM_TeamTable(
+        team_id="team-1",
+        max_budget=100.0,
+        metadata={"max_budget_alert_emails": TEAM_ALERT_CONFIG},
+    )
+    proxy_logging_obj: Final = _RecordingProxyLogging()
+
+    await _counter_spend(120.0, monkeypatch)
+    with pytest.raises(litellm.BudgetExceededError) as exc_info:
+        await team_max_budget_check(
+            team_object=team_object,
+            valid_token=UserAPIKeyAuth(token="tok", team_id="team-1"),
+            proxy_logging_obj=proxy_logging_obj,
+            send_percentage_alerts=send_percentage_alerts,
+        )
+    await asyncio.sleep(0)
+
+    assert (exc_info.value.entity_type, exc_info.value.entity_id) == ("team", "team-1")
+    expected: Final = ["max_budget_alert", "team_budget"] if send_percentage_alerts else ["team_budget"]
+    assert sorted(type for type, _ in proxy_logging_obj.alerts) == expected
+
+
+@pytest.mark.parametrize(
+    "max_budget, metadata, spend",
+    [
+        (None, {"max_budget_alert_emails": TEAM_ALERT_CONFIG}, 90.0),
+        (0.0, {"max_budget_alert_emails": TEAM_ALERT_CONFIG}, 90.0),
+        (-5.0, {"max_budget_alert_emails": TEAM_ALERT_CONFIG}, 90.0),
+        (float("inf"), {"max_budget_alert_emails": TEAM_ALERT_CONFIG}, 90.0),
+        (100.0, {"max_budget_alert_emails": TEAM_ALERT_CONFIG}, 0.0),
+        (100.0, None, 90.0),
+        (100.0, {"cost_center": "eng"}, 90.0),
+        (100.0, {"max_budget_alert_emails": "50"}, 90.0),
+        (100.0, {"max_budget_alert_emails": {"abc": ["a@co.com"], "0": ["a@co.com"], "101": ["a@co.com"]}}, 90.0),
+        (100.0, {"team_member_max_budget_alert_emails": TEAM_ALERT_CONFIG}, 90.0),
+        (100.0, {"soft_budget_alerting_emails": ["a@co.com"]}, 90.0),
+    ],
+)
+@pytest.mark.asyncio
+async def test_team_max_budget_alert_check_stays_silent_without_an_effective_config(
+    max_budget: float | None, metadata: dict[str, object] | None, spend: float
+) -> None:
+    proxy_logging_obj: Final = _RecordingProxyLogging()
+
+    team_max_budget_alert_check(
+        team_id="team-1",
+        team_alias="platform",
+        team_metadata=metadata,
+        max_budget=max_budget,
+        proxy_logging_obj=proxy_logging_obj,
+        spend=spend,
+    )
+    await asyncio.sleep(0)
+
+    assert proxy_logging_obj.alerts == []
+
+
+@pytest.mark.parametrize(
+    "raw_config, max_budget, expect_error",
+    [
+        ({"50": ["a@co.com"], "90": "b@co.com, c@co.com"}, 100.0, False),
+        ({}, None, False),
+        (None, None, False),
+        ({"50": ["a@co.com"]}, None, True),
+        ({"50": ["a@co.com"]}, 0.0, True),
+        ({"50": ["a@co.com"]}, float("nan"), True),
+        ("50", 100.0, True),
+        (["50"], 100.0, True),
+        ({"50": 7}, 100.0, True),
+        ({"50": ["a@co.com", 7]}, 100.0, True),
+        ({"50": []}, 100.0, True),
+        ({"50": ""}, 100.0, True),
+        ({"50": [" ", ""]}, 100.0, True),
+        ({"50": " , , "}, 100.0, True),
+        ({"50": ["ops@internal"]}, 100.0, False),
+        ({"50": ["first.last+tag@sub.example.co.uk"]}, 100.0, False),
+        ({"0": ["a@co.com"]}, 100.0, True),
+        ({"101": ["a@co.com"]}, 100.0, True),
+        ({"abc": ["a@co.com"]}, 100.0, True),
+        ({"050": ["a@co.com"]}, 100.0, True),
+        ({"7.5": ["a@co.com"]}, 100.0, True),
+    ],
+)
+def test_team_max_budget_alert_emails_error_flags_only_configs_that_could_never_alert(
+    raw_config: object, max_budget: float | None, expect_error: bool
+) -> None:
+    error: Final = team_max_budget_alert_emails_error(raw_config, max_budget)
+
+    assert (error is not None) is expect_error, error
+
+
+@pytest.mark.parametrize("pct", ["\u00b2", "\u0663\u0660", "\uff15\uff10"])
+def test_non_ascii_digit_thresholds_are_rejected_on_write_and_ignored_at_runtime(pct: str) -> None:
+    assert team_max_budget_alert_emails_error({pct: ["a@co.com"]}, 100.0) is not None
+
+
+@pytest.mark.parametrize("pct", ["\u00b2", "\u0663\u0660", "\uff15\uff10"])
+@pytest.mark.asyncio
+async def test_runtime_alert_checks_skip_non_ascii_digit_thresholds_without_raising(pct: str) -> None:
+    team_logging: Final = _RecordingProxyLogging()
+    member_logging: Final = _RecordingProxyLogging()
+    config: Final = {pct: ["bad@co.com"], "50": ["good@co.com"]}
+
+    team_max_budget_alert_check(
+        team_id="team-1",
+        team_alias="platform",
+        team_metadata={"max_budget_alert_emails": config},
+        max_budget=100.0,
+        proxy_logging_obj=team_logging,
+        spend=60.0,
+    )
+    team_member_max_budget_alert_check(
+        team_id="team-1",
+        team_alias="platform",
+        team_metadata={"team_member_max_budget_alert_emails": config},
+        organization_id=None,
+        user_id="user-1",
+        user_email=None,
+        proxy_logging_obj=member_logging,
+        spend=60.0,
+        max_budget=100.0,
+    )
+    await asyncio.sleep(0)
+
+    assert [info.max_budget_alert_emails for _, info in team_logging.alerts] == [{"50": ["good@co.com"]}]
+    assert [info.max_budget_alert_emails for _, info in member_logging.alerts] == [{"50": ["good@co.com"]}]
+
+
 @pytest.mark.asyncio
 async def test_personal_key_owner_teams_reports_over_budget_and_blocked_teams(
     monkeypatch: pytest.MonkeyPatch,
@@ -5420,7 +5970,7 @@ async def test_personal_key_owner_teams_check_db_only_refreshes_cached_owner(
         teams=[],
     )
     cache: Final = UserApiKeyCache()
-    await cache.async_set_cache(key=user_id, value=cached_owner, model_type=LiteLLM_UserTable)
+    await cache.async_set_cache(key=AuthObject.user(user_id), value=cached_owner, model_type=LiteLLM_UserTable)
     logging_obj: Final = ProxyLogging(user_api_key_cache=cache)
     prisma: Final = MagicMock()
     _rust_stores_over_prisma(rust_auth_stores, prisma)
@@ -5477,7 +6027,7 @@ async def test_personal_key_owner_teams_check_db_only_uses_fresh_membership_budg
     prisma: Final = MagicMock()
     cache: Final = UserApiKeyCache()
     await cache.async_set_cache(
-        key=auth_checks.team_membership_reservation_cache_key(user_id=user_id, team_id=team_id),
+        key=AuthObject.team_membership_reservation(user_id=user_id, team_id=team_id),
         value=cached_membership,
         model_type=LiteLLM_TeamMembership,
     )
@@ -6381,7 +6931,6 @@ def _member_without_row_prisma(max_budget: float) -> MagicMock:
 
 
 async def _check_member_without_membership_row(prisma_client: MagicMock) -> None:
-    from litellm.caching.dual_cache import DualCache
     from litellm.proxy.utils import ProxyLogging
 
     await _check_team_member_budget(
@@ -6389,7 +6938,7 @@ async def _check_member_without_membership_row(prisma_client: MagicMock) -> None
         user_object=LiteLLM_UserTable(user_id="user-1"),
         valid_token=UserAPIKeyAuth(token="tok-1", user_id="user-1", team_id="team-1"),
         prisma_client=prisma_client,
-        user_api_key_cache=DualCache(),
+        user_api_key_cache=UserApiKeyCache(),
         proxy_logging_obj=ProxyLogging(user_api_key_cache=None),
     )
 
@@ -6447,7 +6996,6 @@ async def test_team_member_budget_check_falls_back_to_team_default_budget_id(rus
     """When a member's TeamMembership has no linked budget row, the check
     should fall back to team.metadata["team_member_budget_id"] and still
     enforce the cap. Pre-fix, this path silently skipped enforcement."""
-    from litellm.caching.dual_cache import DualCache
     from litellm.proxy._types import LiteLLM_TeamMembership
     from litellm.proxy.utils import ProxyLogging
 
@@ -6486,7 +7034,7 @@ async def test_team_member_budget_check_falls_back_to_team_default_budget_id(rus
             return 70.0
         return fallback_spend
 
-    user_api_key_cache = DualCache()
+    user_api_key_cache = UserApiKeyCache()
 
     with (
         patch("litellm.proxy.proxy_server.get_current_spend", mock_get_current_spend),
@@ -6541,7 +7089,6 @@ async def test_team_member_budget_check_per_member_override_wins_over_team_defau
     """If a member has a per-member budget AND the team carries a
     team_member_budget_id default, the per-member value wins and the
     fallback prisma lookup is never performed."""
-    from litellm.caching.dual_cache import DualCache
     from litellm.proxy._types import LiteLLM_BudgetTable, LiteLLM_TeamMembership
     from litellm.proxy.utils import ProxyLogging
 
@@ -6596,7 +7143,7 @@ async def test_team_member_budget_check_per_member_override_wins_over_team_defau
             user_object=user_object,
             valid_token=valid_token,
             prisma_client=prisma_client,
-            user_api_key_cache=DualCache(),
+            user_api_key_cache=UserApiKeyCache(),
             proxy_logging_obj=proxy_logging_obj,
         )
 
@@ -6620,7 +7167,7 @@ async def test_team_member_budget_check_per_member_override_wins_over_team_defau
                 user_object=user_object,
                 valid_token=valid_token,
                 prisma_client=prisma_client,
-                user_api_key_cache=DualCache(),
+                user_api_key_cache=UserApiKeyCache(),
                 proxy_logging_obj=proxy_logging_obj,
             )
     assert exc_info.value.current_cost == 250.0
@@ -6630,7 +7177,6 @@ async def test_team_member_budget_check_per_member_override_wins_over_team_defau
 @pytest.mark.asyncio
 async def test_team_member_budget_check_null_clone_falls_back_to_team_default(rust_auth_stores: RustAuthStores):
     """Per-member NULL max_budget falls through to the team default cap."""
-    from litellm.caching.dual_cache import DualCache
     from litellm.proxy._types import LiteLLM_BudgetTable, LiteLLM_TeamMembership
     from litellm.proxy.utils import ProxyLogging
 
@@ -6683,7 +7229,7 @@ async def test_team_member_budget_check_null_clone_falls_back_to_team_default(ru
                 user_object=user_object,
                 valid_token=valid_token,
                 prisma_client=prisma_client,
-                user_api_key_cache=DualCache(),
+                user_api_key_cache=UserApiKeyCache(),
                 proxy_logging_obj=proxy_logging_obj,
             )
 
@@ -6697,7 +7243,6 @@ async def test_team_member_budget_check_null_clone_with_null_default_skips_enfor
     rust_auth_stores: RustAuthStores,
 ):
     """When per-member and team default are both NULL, enforcement still skips."""
-    from litellm.caching.dual_cache import DualCache
     from litellm.proxy._types import LiteLLM_BudgetTable, LiteLLM_TeamMembership
     from litellm.proxy.utils import ProxyLogging
 
@@ -6749,7 +7294,7 @@ async def test_team_member_budget_check_null_clone_with_null_default_skips_enfor
             user_object=user_object,
             valid_token=valid_token,
             prisma_client=prisma_client,
-            user_api_key_cache=DualCache(),
+            user_api_key_cache=UserApiKeyCache(),
             proxy_logging_obj=proxy_logging_obj,
         )
 
@@ -6759,7 +7304,6 @@ async def test_team_member_budget_check_zero_team_default_treated_as_no_cap(rust
     """A team default budget with max_budget=0.0 (likely a stale/accidental
     write) must not block every member. The fallback path treats 0 as
     "no cap"; per-member rows still respect 0 as an explicit disable."""
-    from litellm.caching.dual_cache import DualCache
     from litellm.proxy._types import LiteLLM_TeamMembership
     from litellm.proxy.utils import ProxyLogging
 
@@ -6813,7 +7357,7 @@ async def test_team_member_budget_check_zero_team_default_treated_as_no_cap(rust
             user_object=user_object,
             valid_token=valid_token,
             prisma_client=prisma_client,
-            user_api_key_cache=DualCache(),
+            user_api_key_cache=UserApiKeyCache(),
             proxy_logging_obj=proxy_logging_obj,
         )
 
@@ -6823,7 +7367,6 @@ async def test_team_member_budget_check_zero_per_member_row_still_blocks(rust_au
     """A per-member row with max_budget=0.0 is treated as an explicit admin
     disable - enforcement still blocks. Only the team-default fallback
     path treats 0 as no cap."""
-    from litellm.caching.dual_cache import DualCache
     from litellm.proxy._types import LiteLLM_BudgetTable, LiteLLM_TeamMembership
     from litellm.proxy.utils import ProxyLogging
 
@@ -6872,7 +7415,7 @@ async def test_team_member_budget_check_zero_per_member_row_still_blocks(rust_au
                 user_object=user_object,
                 valid_token=valid_token,
                 prisma_client=prisma_client,
-                user_api_key_cache=DualCache(),
+                user_api_key_cache=UserApiKeyCache(),
                 proxy_logging_obj=proxy_logging_obj,
             )
     assert exc_info.value.max_budget == 0.0
@@ -6970,7 +7513,7 @@ async def test_resolve_end_user_matches_end_user_table(_validate_flag_on, monkey
     assert result == "customer-123"
     cache.async_set_cache.assert_awaited_once()
     kwargs = cache.async_set_cache.await_args.kwargs
-    assert kwargs["key"] == "end_user_validation:customer-123"
+    assert kwargs["key"] == AuthObject.end_user_validation("customer-123")
     assert kwargs["value"] == "valid"
 
 
@@ -7278,7 +7821,7 @@ async def test_cache_team_object_writes_team_id_and_invalidates_team_alias():
 
     # (1) team_id-keyed write fires with the refreshed object
     written_keys = [(c.kwargs.get("key") or c.args[0]) for c in cache.async_set_cache.await_args_list]
-    assert written_keys == ["team_id:team-1234"], (
+    assert written_keys == [AuthObject.team("team-1234")], (
         "Only the team_id-keyed write should fire; the alias key must be "
         "deleted, NOT written. "
         f"Got writes: {written_keys}"
@@ -7318,7 +7861,7 @@ async def test_cache_team_object_writes_team_id_and_invalidates_team_alias():
         key="team_id:team-no-alias"
     )
     written_keys_aliasless = [(c.kwargs.get("key") or c.args[0]) for c in cache2.async_set_cache.await_args_list]
-    assert written_keys_aliasless == ["team_id:team-no-alias"]
+    assert written_keys_aliasless == [AuthObject.team("team-no-alias")]
 
 
 class _SharedFakeRedis(RedisCache):
@@ -7372,7 +7915,8 @@ async def test_team_update_not_shadowed_by_internal_usage_cache_lit_4391():
 
     team_id = "team-lit-4391"
     shared_redis = _SharedFakeRedis()
-    user_api_key_cache, auth_store = shared_cache(connection=shared_redis)
+    user_api_key_cache, auth_store = shared_cache()
+    user_api_key_cache.attach_redis_cache(shared_redis)
     proxy_logging_obj = MagicMock()
     proxy_logging_obj.internal_usage_cache.dual_cache = DualCache(
         redis_cache=shared_redis,
@@ -7522,7 +8066,7 @@ async def test_cache_team_object_tolerates_cache_invalidation_failures():
     )
 
     written_keys = [(c.kwargs.get("key") or c.args[0]) for c in cache.async_set_cache.await_args_list]
-    assert written_keys == ["team_id:team-cache-outage"]
+    assert written_keys == [AuthObject.team("team-cache-outage")]
 
 
 MODEL_DISCOVERY_ROUTES = [
@@ -7724,18 +8268,6 @@ async def test_virtual_key_max_budget_not_exceeded_does_not_raise():
         )
 
 
-class _TTLCapturingInMemoryCache(InMemoryCache):
-    """Records the ``ttl`` DualCache forwards into the in-memory layer."""
-
-    def __init__(self) -> None:
-        super().__init__()
-        self.last_ttl = None
-
-    def set_cache(self, key, value, **kwargs):  # type: ignore[override]
-        self.last_ttl = kwargs.get("ttl")
-        super().set_cache(key, value, **kwargs)
-
-
 class TestManagementObjectTTLHonored:
     """
     Regression for LIT-3338. ``_cache_management_object`` is the central writer on
@@ -7746,34 +8278,35 @@ class TestManagementObjectTTLHonored:
 
     @pytest.mark.asyncio
     async def test_uses_configured_user_api_key_cache_ttl(self):
-        mem = _TTLCapturingInMemoryCache()
-        cache = UserApiKeyCache(in_memory_cache=mem, default_in_memory_ttl=300)
+        cache, auth_store = shared_cache(default_in_memory_ttl=300)
 
         await _cache_management_object(
-            key="team_id:lit-3338",
+            key=AuthObject.team("lit-3338"),
             value=UserAPIKeyAuth(token="hash-lit-3338"),
             user_api_key_cache=cache,
             proxy_logging_obj=None,
             model_type=UserAPIKeyAuth,
         )
 
-        assert mem.last_ttl == 300
+        assert auth_store.memory[AuthObject.team("lit-3338").key][1] == 300
 
     @pytest.mark.asyncio
     async def test_falls_back_to_management_default_when_unconfigured(self):
-        mem = _TTLCapturingInMemoryCache()
-        cache = UserApiKeyCache(in_memory_cache=mem)
+        cache, auth_store = shared_cache()
         assert cache.default_in_memory_ttl is None
 
         await _cache_management_object(
-            key="team_id:lit-3338-default",
+            key=AuthObject.team("lit-3338-default"),
             value=UserAPIKeyAuth(token="hash-default"),
             user_api_key_cache=cache,
             proxy_logging_obj=None,
             model_type=UserAPIKeyAuth,
         )
 
-        assert mem.last_ttl == DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL
+        assert (
+            auth_store.memory[AuthObject.team("lit-3338-default").key][1]
+            == DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL
+        )
 
 
 class _BudgetSpendConcurrencyProbe:
@@ -8384,7 +8917,7 @@ async def test_organization_budget_check_carries_org_state_on_the_token():
     token = UserAPIKeyAuth(token="k1", org_id="o1")
     user_api_key_cache = UserApiKeyCache()
     await user_api_key_cache.async_set_cache(
-        key="org_id:o1:with_budget", value=org_table, model_type=LiteLLM_OrganizationTable
+        key=AuthObject.org_with_budget("o1"), value=org_table, model_type=LiteLLM_OrganizationTable
     )
 
     await organization_max_budget_check(
@@ -8426,7 +8959,7 @@ async def test_get_org_object_for_request_serves_last_known_org_through_db_outag
     user_api_key_cache = UserApiKeyCache()
     if warmed_by_auth_prefetch:
         await user_api_key_cache.async_set_cache(
-            key="org_id:org-1:with_budget",
+            key=AuthObject.org_with_budget("org-1"),
             value=LiteLLM_OrganizationTable.model_validate(org_columns),
             model_type=LiteLLM_OrganizationTable,
         )
@@ -8448,7 +8981,7 @@ async def test_get_org_object_for_request_serves_last_known_org_through_db_outag
     ):
         warm = await _lookup()
         assert warm is not None and warm.organization_alias == "platform-org"
-        await user_api_key_cache.async_delete_cache("org_id:org-1:with_budget")
+        await user_api_key_cache.async_delete_cache(AuthObject.org_with_budget("org-1").key)
 
         during_outage = await _lookup()
 
@@ -8478,7 +9011,7 @@ async def test_get_org_object_for_request_writes_the_last_known_org_only_when_ab
 
     user_api_key_cache = _WriteRecordingCache()
     await user_api_key_cache.async_set_cache(
-        key="org_id:org-1:with_budget",
+        key=AuthObject.org_with_budget("org-1"),
         value=LiteLLM_OrganizationTable(
             organization_id="org-1",
             organization_alias="platform-org",
@@ -8499,7 +9032,7 @@ async def test_get_org_object_for_request_writes_the_last_known_org_only_when_ab
         )
         assert org is not None and org.organization_alias == "platform-org"
 
-    assert user_api_key_cache.written_keys.count("org_id:org-1:with_budget:last_known") == 1
+    assert user_api_key_cache.written_keys.count(AuthObject.org_with_budget_last_known("org-1")) == 1
 
 
 @pytest.mark.parametrize(
@@ -8535,7 +9068,7 @@ async def test_organization_zero_max_budget_is_enforced(max_budget, spend, expec
     token = UserAPIKeyAuth(token="k1", org_id="o1")
     user_api_key_cache = UserApiKeyCache()
     await user_api_key_cache.async_set_cache(
-        key="org_id:o1:with_budget", value=org_table, model_type=LiteLLM_OrganizationTable
+        key=AuthObject.org_with_budget("o1"), value=org_table, model_type=LiteLLM_OrganizationTable
     )
 
     async def _spend(counter_key, fallback_spend, max_budget=None, **kwargs):
@@ -8841,7 +9374,7 @@ async def test_get_end_user_object_still_fetches_restricted_end_user(
     assert blocked.blocked is True
     mock_prisma.db.litellm_endusertable.find_unique.assert_awaited_once()
     # Without a ttl the Redis entry never expires, so a later unblock would never be picked up.
-    assert (end_user_cache_key("eu-blocked"), DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL) in cache.writes
+    assert (AuthObject.end_user("eu-blocked"), DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL) in cache.writes
 
     mock_prisma.db.litellm_endusertable.find_unique.reset_mock()
     again = await get_end_user_object(
@@ -8875,7 +9408,7 @@ async def test_get_end_user_object_caches_empty_restricted_registry(
         is None
     )
     # "Nobody is restricted" is a cached answer, not a cache miss (which would read back as None).
-    cached_registry = await cache.async_get_cache(key=end_user_restricted_registry_cache_key())
+    cached_registry = await cache.async_get_cache(key=AuthObject.end_user_restricted_registry())
     assert cached_registry is not None
     assert tuple(cached_registry) == ()
 
@@ -8920,10 +9453,10 @@ async def test_get_end_user_object_registry_db_error_negative_caches_and_keeps_p
     )
     assert first is not None and first.blocked is True
     assert (
-        await cache.async_get_cache(key=end_user_restricted_registry_cache_key())
+        await cache.async_get_cache(key=AuthObject.end_user_restricted_registry())
         == END_USER_RESTRICTED_REGISTRY_OVERFLOW_SENTINEL
     )
-    assert (end_user_restricted_registry_cache_key(), REGISTRY_ERROR_NEGATIVE_CACHE_TTL) in cache.writes
+    assert (AuthObject.end_user_restricted_registry(), REGISTRY_ERROR_NEGATIVE_CACHE_TTL) in cache.writes
 
     second = await get_end_user_object(
         end_user_id="eu-blocked-2",
@@ -8934,7 +9467,7 @@ async def test_get_end_user_object_registry_db_error_negative_caches_and_keeps_p
     mock_prisma.db.litellm_endusertable.find_many.assert_awaited_once()
 
     # The window closing (here: the entry expiring) puts the registry back in play.
-    await cache.async_delete_cache(key=end_user_restricted_registry_cache_key())
+    await cache.async_delete_cache(key=AuthObject.end_user_restricted_registry().key)
     third = await get_end_user_object(
         end_user_id="eu-blocked-3",
         prisma_client=mock_prisma,
@@ -8967,7 +9500,7 @@ async def test_registry_db_error_is_logged_at_warning(rust_auth_stores: RustAuth
 
     warnings = [_rendered_log_message(call) for call in mock_logger.warning.call_args_list]
     assert any(
-        end_user_restricted_registry_cache_key() in message and "registry query failed" in message
+        AuthObject.end_user_restricted_registry().key in message and "registry query failed" in message
         for message in warnings
     )
 
@@ -9036,7 +9569,7 @@ async def test_get_end_user_object_oversized_registry_falls_back_and_stops_refet
     )
     assert first is not None and first.blocked is True
     assert (
-        await cache.async_get_cache(key=end_user_restricted_registry_cache_key())
+        await cache.async_get_cache(key=AuthObject.end_user_restricted_registry())
         == END_USER_RESTRICTED_REGISTRY_OVERFLOW_SENTINEL
     )
 
@@ -9225,7 +9758,6 @@ async def test_get_end_user_object_caches_row_with_global_default_but_never_a_ke
     """The cached row is what post-request readers (Prometheus customer gauges) see: it must keep
     the proxy-wide default exactly as before, while a key default stays on the request copy."""
     from litellm.proxy.auth.auth_checks import get_end_user_object
-    from litellm.proxy.common_utils.user_api_key_cache import end_user_cache_key
 
     monkeypatch.setattr(litellm, "max_end_user_budget_id", "global-budget")
     monkeypatch.setattr(litellm, "validate_end_user_id_in_db", False)
@@ -9243,7 +9775,7 @@ async def test_get_end_user_object_caches_row_with_global_default_but_never_a_ke
         user_api_key_cache=cache,
         key_end_user_budget_id="svc-a-budget",
     )
-    cached = await cache.async_get_cache(key=end_user_cache_key("eu-cached"), model_type=LiteLLM_EndUserTable)
+    cached = await cache.async_get_cache(key=AuthObject.end_user("eu-cached"), model_type=LiteLLM_EndUserTable)
 
     assert for_key_a is not None and for_key_a.litellm_budget_table is not None
     assert for_key_a.litellm_budget_table.max_budget == 0.5
@@ -9401,10 +9933,9 @@ async def test_get_team_membership_db_fetch_returns_validated_membership(monkeyp
 async def test_get_team_membership_check_db_only_bypasses_stale_cache(monkeypatch):
     from litellm.proxy._types import LiteLLM_TeamMembership
     from litellm.proxy.auth.auth_checks import get_team_membership
-    from litellm.proxy.common_utils.user_api_key_cache import team_membership_reservation_cache_key
 
     cache: Final = UserApiKeyCache()
-    cache_key: Final = team_membership_reservation_cache_key(user_id="u-fresh", team_id="t-fresh")
+    cache_key: Final = AuthObject.team_membership_reservation(user_id="u-fresh", team_id="t-fresh")
     stale_membership: Final = LiteLLM_TeamMembership(user_id="u-fresh", team_id="t-fresh", spend=1.0)
     await cache.async_set_cache(key=cache_key, value=stale_membership, model_type=LiteLLM_TeamMembership)
 
@@ -9489,7 +10020,6 @@ async def test_get_team_membership_negative_caches_a_missing_row(monkeypatch):
     from litellm.proxy.auth.auth_checks import get_team_membership
     from litellm.proxy.common_utils.user_api_key_cache import (
         NO_TEAM_MEMBERSHIP_SENTINEL,
-        team_membership_reservation_cache_key,
     )
 
     store = _install_store(monkeypatch, RustTeamMembershipRepository, AsyncMock(return_value=None))
@@ -9507,7 +10037,7 @@ async def test_get_team_membership_negative_caches_a_missing_row(monkeypatch):
     assert first is None
     assert second is None
     store.reader.assert_awaited_once()
-    cached = await cache.async_get_cache(key=team_membership_reservation_cache_key(user_id="u-1", team_id="t-1"))
+    cached = await cache.async_get_cache(key=AuthObject.team_membership_reservation(user_id="u-1", team_id="t-1"))
     assert cached == NO_TEAM_MEMBERSHIP_SENTINEL
 
 
@@ -9520,12 +10050,11 @@ async def test_get_team_membership_reads_sentinel_as_no_membership_not_a_model(m
     from litellm.proxy.auth.auth_checks import get_team_membership
     from litellm.proxy.common_utils.user_api_key_cache import (
         NO_TEAM_MEMBERSHIP_SENTINEL,
-        team_membership_reservation_cache_key,
     )
 
     cache = UserApiKeyCache()
     await cache.async_set_cache(
-        key=team_membership_reservation_cache_key(user_id="u-1", team_id="t-1"),
+        key=AuthObject.team_membership_reservation(user_id="u-1", team_id="t-1"),
         value=NO_TEAM_MEMBERSHIP_SENTINEL,
     )
 
@@ -9582,7 +10111,6 @@ async def test_get_team_membership_invalidation_waits_for_in_flight_load_then_ev
     from litellm.proxy._types import LiteLLM_TeamMembership
     from litellm.proxy.auth.auth_checks import get_team_membership, invalidate_team_member_spend_state
     from litellm.proxy.common_utils.cache_pydantic_utils import CacheCodec
-    from litellm.proxy.common_utils.user_api_key_cache import team_membership_reservation_cache_key
 
     started = asyncio.Event()
     release_stale = asyncio.Event()
@@ -9599,7 +10127,7 @@ async def test_get_team_membership_invalidation_waits_for_in_flight_load_then_ev
     store = _install_store(monkeypatch, RustTeamMembershipRepository, AsyncMock(side_effect=_find_unique))
     mock_prisma_client = MagicMock()
     cache = UserApiKeyCache()
-    _key = team_membership_reservation_cache_key(user_id="u-inv", team_id="t-inv")
+    _key = AuthObject.team_membership_reservation(user_id="u-inv", team_id="t-inv")
 
     async def _load():
         return await get_team_membership(
@@ -9634,7 +10162,6 @@ async def test_get_team_membership_invalidation_waits_for_in_flight_load_then_ev
 @pytest.mark.asyncio
 async def test_get_team_membership_invalidation_during_cache_write_evicts_stale_entry(monkeypatch):
     from litellm.proxy.auth.auth_checks import get_team_membership, invalidate_team_member_spend_state
-    from litellm.proxy.common_utils.user_api_key_cache import team_membership_reservation_cache_key
 
     write_started = asyncio.Event()
     release_write = asyncio.Event()
@@ -9669,7 +10196,7 @@ async def test_get_team_membership_invalidation_during_cache_write_evicts_stale_
     stale_result = await stale
 
     assert stale_result is not None and stale_result.budget_id == "budget-old"
-    assert await cache.async_get_cache(key=team_membership_reservation_cache_key(user_id="u-w", team_id="t-w")) is None
+    assert await cache.async_get_cache(key=AuthObject.team_membership_reservation(user_id="u-w", team_id="t-w")) is None
 
 
 @pytest.mark.asyncio
@@ -9760,7 +10287,6 @@ async def test_common_checks_skips_membership_load_when_no_check_reads_it():
 @pytest.mark.asyncio
 async def test_get_team_membership_db_error_surfaces_and_retries_next_call(monkeypatch):
     from litellm.proxy.auth.auth_checks import get_team_membership
-    from litellm.proxy.common_utils.user_api_key_cache import team_membership_reservation_cache_key
 
     membership_row = _membership_json(user_id="u-fail", team_id="t-fail", spend=1.0)
     store = _install_store(
@@ -9777,7 +10303,7 @@ async def test_get_team_membership_db_error_surfaces_and_retries_next_call(monke
             user_api_key_cache=cache,
         )
     cached_after_failure = await cache.async_get_cache(
-        key=team_membership_reservation_cache_key(user_id="u-fail", team_id="t-fail")
+        key=AuthObject.team_membership_reservation(user_id="u-fail", team_id="t-fail")
     )
     recovered = await get_team_membership(
         user_id="u-fail",
@@ -9792,10 +10318,15 @@ async def test_get_team_membership_db_error_surfaces_and_retries_next_call(monke
     assert store.reader.await_count == 2
 
 
-def _restricted_member_check_deps(monkeypatch: pytest.MonkeyPatch) -> dict[str, object]:
-    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
-    from litellm.proxy.utils import ProxyLogging
+class _RestrictedMemberCheckDeps(TypedDict):
+    team_object: ReadOnly[LiteLLM_TeamTable]
+    valid_token: ReadOnly[UserAPIKeyAuth]
+    prisma_client: ReadOnly[MagicMock]
+    user_api_key_cache: ReadOnly[UserApiKeyCache]
+    proxy_logging_obj: ReadOnly[ProxyLogging]
 
+
+def _restricted_member_check_deps(monkeypatch: pytest.MonkeyPatch) -> _RestrictedMemberCheckDeps:
     _install_store(
         monkeypatch,
         RustTeamMembershipRepository,
@@ -9879,7 +10410,6 @@ async def test_invalidate_team_member_spend_state_evicts_the_negative_cache_sent
     request re-reads the DB and honors the new budget instead of serving the stale miss until TTL.
     """
     from litellm.proxy.auth.auth_checks import get_team_membership, invalidate_team_member_spend_state
-    from litellm.proxy.common_utils.user_api_key_cache import team_membership_reservation_cache_key
 
     cache = UserApiKeyCache()
     store = _install_store(
@@ -9895,7 +10425,7 @@ async def test_invalidate_team_member_spend_state_evicts_the_negative_cache_sent
     assert before is None
 
     await invalidate_team_member_spend_state(user_id="u-1", team_id="t-1", user_api_key_cache=cache)
-    assert await cache.async_get_cache(key=team_membership_reservation_cache_key(user_id="u-1", team_id="t-1")) is None
+    assert await cache.async_get_cache(key=AuthObject.team_membership_reservation(user_id="u-1", team_id="t-1")) is None
 
     after = await get_team_membership(
         user_id="u-1", team_id="t-1", prisma_client=mock_prisma_client, user_api_key_cache=cache
@@ -10967,8 +11497,10 @@ async def test_invalidate_team_member_spend_state_sets_the_spend_counter_and_cle
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 
     real_cache = UserApiKeyCache()
-    await real_cache.async_set_cache(key="team-1_user-1", value="stale-membership")
-    await real_cache.async_set_cache(key="team_membership:user-1:team-1", value="stale-membership")
+    membership: Final = AuthObject.team_membership(team_id="team-1", user_id="user-1")
+    reservation: Final = AuthObject.team_membership_reservation(user_id="user-1", team_id="team-1")
+    await real_cache.async_set_cache(key=membership, value="stale-membership")
+    await real_cache.async_set_cache(key=reservation, value="stale-membership")
 
     real_spend_counter_cache = DualCache()
     real_spend_counter_cache.in_memory_cache.set_cache(
@@ -10992,8 +11524,8 @@ async def test_invalidate_team_member_spend_state_sets_the_spend_counter_and_cle
             new_spend=0.0,
         )
 
-    assert await real_cache.async_get_cache(key="team-1_user-1") is None
-    assert await real_cache.async_get_cache(key="team_membership:user-1:team-1") is None
+    assert await real_cache.async_get_cache(key=membership) is None
+    assert await real_cache.async_get_cache(key=reservation) is None
     assert real_spend_counter_store.get_local("spend:team_member:user-1:team-1") == 0.0
     assert (
         real_spend_counter_cache.in_memory_cache.get_cache(key="spend_db_floor:spend:team_member:user-1:team-1") == 0.0
@@ -11010,7 +11542,8 @@ async def test_invalidate_team_member_spend_state_leaves_the_live_spend_counter_
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 
     real_cache = UserApiKeyCache()
-    await real_cache.async_set_cache(key="team-1_user-1", value="stale-membership")
+    membership: Final = AuthObject.team_membership(team_id="team-1", user_id="user-1")
+    await real_cache.async_set_cache(key=membership, value="stale-membership")
 
     real_spend_counter_store = SpendCounterStore(connect(None).spend_counters())
     real_spend_counter_store.set_local("spend:team_member:user-1:team-1", 999.0)
@@ -11024,7 +11557,7 @@ async def test_invalidate_team_member_spend_state_leaves_the_live_spend_counter_
             user_api_key_cache=real_cache,
         )
 
-    assert await real_cache.async_get_cache(key="team-1_user-1") is None
+    assert await real_cache.async_get_cache(key=membership) is None
     assert real_spend_counter_store.get_local("spend:team_member:user-1:team-1") == 999.0
 
 
@@ -11107,57 +11640,35 @@ async def test_invalidate_team_member_spend_state_raises_503_when_both_redis_wri
 
 
 @pytest.mark.asyncio
-async def test_invalidate_team_member_spend_state_broadcasts_the_spend_counter_to_remote_workers():
+async def test_invalidate_team_member_spend_state_broadcasts_the_spend_counter_to_remote_workers(
+    monkeypatch: pytest.MonkeyPatch,
+):
     """The test above only proves the handling worker's own spend counter is
-    cleared. A remote worker's spend counter is a separate DualCache instance;
-    if the reset never reaches it, that worker keeps enforcing the pre-reset
-    spend the moment its own Redis read for the counter fails and it falls
-    back to its own (now-stale) in-memory copy. Drives the actual message
-    published onto the invalidation channel through a second, independent
-    AuthCacheInvalidationSubscriber standing in for that remote worker, rather
-    than asserting on the publish call args."""
-    from redis.asyncio import Redis
-
+    cleared. A remote worker's spend counter is a separate cache; if the reset
+    never reaches it, that worker keeps enforcing the pre-reset spend the moment
+    its own Redis read for the counter fails and it falls back to its own
+    (now-stale) in-memory copy. Drives every message published onto the
+    invalidation channel through a peer worker, rather than asserting on the
+    publish call args."""
     from litellm.caching.dual_cache import DualCache
-    from litellm.caching.in_memory_cache import InMemoryCache
-    from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import AuthCacheInvalidationSubscriber
+    from litellm.proxy import proxy_server
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.redis.stores.cache_invalidation import PythonCaches
+    from tests.unit.redis.stores.cache_invalidation_double import Worker, channel
 
-    published: list[tuple[str, str]] = []
-
-    class _RecordingRedisClient(Redis):
-        def __init__(self) -> None:
-            pass
-
-        async def publish(self, channel: str, message: str) -> int:
-            published.append((channel, message))
-            return 1
-
-    class _FakeRedisCache:
-        def __init__(self) -> None:
-            self.namespace = None
-
-        def init_pubsub_client(self) -> object:
-            return _RecordingRedisClient()
-
-    local_spend_counter_cache = DualCache()
-
-    remote_user_api_key_cache = UserApiKeyCache()
     remote_spend_counter_in_memory_cache = InMemoryCache()
     remote_spend_counter_in_memory_cache.set_cache("spend_db_floor:spend:team_member:user-1:team-1", 999.0)
-    remote_spend_counter_store = SpendCounterStore(connect(None).spend_counters())
-    remote_spend_counter_store.set_local("spend:team_member:user-1:team-1", 999.0)
+    invalidation, fake = channel(
+        Worker(UserApiKeyCache(), PythonCaches(copies=(remote_spend_counter_in_memory_cache,)))
+    )
+    monkeypatch.setattr(proxy_server.proxy_config, "cache_invalidation", invalidation)
 
     with (
         patch(  # test-quality-ok: injects a real DualCache for the module global, not a behavior mock
-            "litellm.proxy.proxy_server.spend_counter_cache", local_spend_counter_cache
+            "litellm.proxy.proxy_server.spend_counter_cache", DualCache()
         ),
         patch(  # test-quality-ok: injects a real store for the module global, not a behavior mock
             "litellm.proxy.proxy_server.spend_counter_store", SpendCounterStore(connect(None).spend_counters())
-        ),
-        patch(  # test-quality-ok: injects a fake pub/sub-capable redis cache; no live redis in this unit test
-            "litellm.proxy.common_utils.auth_cache_invalidation_pubsub.coordination_redis_cache",
-            return_value=_FakeRedisCache(),
         ),
     ):
         await invalidate_team_member_spend_state(
@@ -11167,61 +11678,39 @@ async def test_invalidate_team_member_spend_state_broadcasts_the_spend_counter_t
             new_spend=0.0,
         )
 
-    def _published_message_for(cache_key: str) -> str:
-        matches = [message for _, message in published if json.loads(message)["cache_key"] == cache_key]
-        assert matches, f"{cache_key} never reached the cross-worker invalidation channel"
-        return matches[-1]
-
-    remote_subscriber = AuthCacheInvalidationSubscriber(
-        redis_cache=_FakeRedisCache(),
-        user_api_key_cache=remote_user_api_key_cache,
-        additional_in_memory_caches=(remote_spend_counter_in_memory_cache,),
-        spend_counters=remote_spend_counter_store,
-    )
-    for cache_key in ("spend:team_member:user-1:team-1", "spend_db_floor:spend:team_member:user-1:team-1"):
-        remote_subscriber._apply_message(  # pyright: ignore[reportPrivateUsage]  # exercising the real cross-worker message handler, not a public API
-            {"type": "message", "data": _published_message_for(cache_key)}
-        )
-
-    assert remote_spend_counter_store.get_local("spend:team_member:user-1:team-1") == 0.0
+    assert fake.published == [
+        ("spend:team_member:user-1:team-1", 0.0, 60),
+        ("spend_db_floor:spend:team_member:user-1:team-1", 0.0, 5),
+        (AuthObject.team_membership(team_id="team-1", user_id="user-1").key, None, None),
+        (AuthObject.team_membership_reservation(user_id="user-1", team_id="team-1").key, None, None),
+    ]
     assert remote_spend_counter_in_memory_cache.get_cache("spend_db_floor:spend:team_member:user-1:team-1") == 0.0, (
         "the DB-floor marker was not broadcast; a remote worker can re-raise the counter off its stale floor"
     )
 
 
 @pytest.mark.asyncio
-async def test_invalidate_team_member_spend_state_self_delivered_broadcast_does_not_erase_the_reset():
+async def test_invalidate_team_member_spend_state_self_delivered_broadcast_does_not_erase_the_reset(
+    monkeypatch: pytest.MonkeyPatch,
+):
     """The handling worker subscribes to the same invalidation channel it publishes on, so it
     receives its own reset message. A delete-style broadcast would erase the post-reset counter
     and floor marker the handler just wrote, reopening the stale-floor race the reset closed
     (regression: PR #37971 Greptile finding). The broadcast carries the reset value as a SET, so
     applying the self-delivered message must leave both keys at the post-reset value."""
-    from redis.asyncio import Redis
-
     from litellm.caching.dual_cache import DualCache
-    from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import AuthCacheInvalidationSubscriber
+    from litellm.proxy import proxy_server
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
-
-    published: list[tuple[str, str]] = []
-
-    class _RecordingRedisClient(Redis):
-        def __init__(self) -> None:
-            pass
-
-        async def publish(self, channel: str, message: str) -> int:
-            published.append((channel, message))
-            return 1
-
-    class _FakeRedisCache:
-        def __init__(self) -> None:
-            self.namespace = None
-
-        def init_pubsub_client(self) -> object:
-            return _RecordingRedisClient()
+    from litellm.redis.stores.cache_invalidation import PythonCaches
+    from tests.unit.redis.stores.cache_invalidation_double import Worker, channel
 
     local_spend_counter_cache = DualCache()
     local_spend_counter_store = SpendCounterStore(connect(None).spend_counters())
     local_user_api_key_cache = UserApiKeyCache()
+    invalidation, _ = channel(
+        Worker(local_user_api_key_cache, PythonCaches(copies=(local_spend_counter_cache.in_memory_cache,)))
+    )
+    monkeypatch.setattr(proxy_server.proxy_config, "cache_invalidation", invalidation)
 
     with (
         patch(  # test-quality-ok: injects a real DualCache for the module global, not a behavior mock
@@ -11230,27 +11719,12 @@ async def test_invalidate_team_member_spend_state_self_delivered_broadcast_does_
         patch(  # test-quality-ok: injects a real store for the module global, not a behavior mock
             "litellm.proxy.proxy_server.spend_counter_store", local_spend_counter_store
         ),
-        patch(  # test-quality-ok: injects a fake pub/sub-capable redis cache; no live redis in this unit test
-            "litellm.proxy.common_utils.auth_cache_invalidation_pubsub.coordination_redis_cache",
-            return_value=_FakeRedisCache(),
-        ),
     ):
         await invalidate_team_member_spend_state(
             user_id="user-1",
             team_id="team-1",
             user_api_key_cache=local_user_api_key_cache,
             new_spend=0.0,
-        )
-
-    own_subscriber = AuthCacheInvalidationSubscriber(
-        redis_cache=_FakeRedisCache(),
-        user_api_key_cache=local_user_api_key_cache,
-        additional_in_memory_caches=(local_spend_counter_cache.in_memory_cache,),
-        spend_counters=local_spend_counter_store,
-    )
-    for _, message in published:
-        own_subscriber._apply_message(  # pyright: ignore[reportPrivateUsage]  # exercising the real cross-worker message handler, not a public API
-            {"type": "message", "data": message}
         )
 
     assert local_spend_counter_store.get_local("spend:team_member:user-1:team-1") == 0.0, (
@@ -11279,8 +11753,11 @@ async def test_delete_cache_key_object_is_best_effort_when_the_cache_backend_fai
     hashed_token = "a" * 64
     caplog.set_level(logging.WARNING, logger="LiteLLM Proxy")
 
-    failing_cache = MagicMock()
-    failing_cache.delete_cache = MagicMock()
+    token_object: Final = AuthObject.virtual_key(hashed_token)
+    resource_key: Final = AuthObject.customer_app_key_resource(hashed_token)
+    failing_cache: Final = UserApiKeyCache()
+    failing_cache.set_cache(key=token_object, value=UserAPIKeyAuth(token=hashed_token))
+    failing_cache.set_cache(key=resource_key, value={"team_id": "team-1"})
     failing_logging_obj = MagicMock()
     failing_logging_obj.internal_usage_cache.dual_cache.async_delete_cache = AsyncMock(
         side_effect=Exception("No permissions to access a key")
@@ -11292,15 +11769,17 @@ async def test_delete_cache_key_object_is_best_effort_when_the_cache_backend_fai
         proxy_logging_obj=failing_logging_obj,
     )
 
-    failing_cache.delete_cache.assert_called_once_with(key=hashed_token)
+    assert failing_cache.get_cache(key=token_object) is None
+    assert failing_cache.get_cache(key=resource_key) is None
     failing_logging_obj.internal_usage_cache.dual_cache.async_delete_cache.assert_awaited_once_with(key=hashed_token)
     assert any("Failed to invalidate cached key entry" in record.getMessage() for record in caplog.records), (
         "a swallowed cache-eviction failure must still be logged, or a stale auth entry goes unnoticed"
     )
 
     caplog.clear()
-    healthy_cache = MagicMock()
-    healthy_cache.delete_cache = MagicMock()
+    healthy_cache: Final = UserApiKeyCache()
+    healthy_cache.set_cache(key=token_object, value=UserAPIKeyAuth(token=hashed_token))
+    healthy_cache.set_cache(key=resource_key, value={"team_id": "team-1"})
     healthy_logging_obj = MagicMock()
     healthy_logging_obj.internal_usage_cache.dual_cache.async_delete_cache = AsyncMock()
 
@@ -11310,7 +11789,8 @@ async def test_delete_cache_key_object_is_best_effort_when_the_cache_backend_fai
         proxy_logging_obj=healthy_logging_obj,
     )
 
-    healthy_cache.delete_cache.assert_called_once_with(key=hashed_token)
+    assert healthy_cache.get_cache(key=token_object) is None
+    assert healthy_cache.get_cache(key=resource_key) is None
     healthy_logging_obj.internal_usage_cache.dual_cache.async_delete_cache.assert_awaited_once_with(key=hashed_token)
     assert caplog.records == [], "a healthy eviction must stay silent, and must still reach both caches"
 
@@ -11623,7 +12103,6 @@ async def test_key_without_agent_never_consults_agent_access_groups():
 async def test_team_member_budget_check_temp_budget_increase_extends_cap(rust_auth_stores: RustAuthStores):
     """Spend above max_budget but below max_budget + active temp increase
     must not raise; once the increase expires the same spend must raise."""
-    from litellm.caching.dual_cache import DualCache
     from litellm.proxy._types import LiteLLM_TeamMembership
     from litellm.proxy.utils import ProxyLogging
 
@@ -11673,7 +12152,7 @@ async def test_team_member_budget_check_temp_budget_increase_extends_cap(rust_au
             user_object=user_object,
             valid_token=valid_token,
             prisma_client=prisma_client,
-            user_api_key_cache=DualCache(),
+            user_api_key_cache=UserApiKeyCache(),
             proxy_logging_obj=proxy_logging_obj,
         )
 
@@ -11704,7 +12183,7 @@ async def test_team_member_budget_check_temp_budget_increase_extends_cap(rust_au
                 user_object=user_object,
                 valid_token=valid_token,
                 prisma_client=prisma_client,
-                user_api_key_cache=DualCache(),
+                user_api_key_cache=UserApiKeyCache(),
                 proxy_logging_obj=proxy_logging_obj,
             )
     assert exc_info.value.current_cost == 150.0
@@ -11726,13 +12205,12 @@ async def test_team_member_budget_check_adds_temp_increase_to_live_team_default(
     """A member row that carries only the temporary pair inherits the team default
     cap live: the increase is added to it while active, the default alone applies
     once it expires, and a zero default stays uncapped."""
-    from litellm.caching.dual_cache import DualCache
     from litellm.proxy._types import LiteLLM_TeamMembership
     from litellm.proxy.utils import ProxyLogging
 
-    cache = DualCache()
+    cache = UserApiKeyCache()
     await cache.async_set_cache(
-        key="team_member_default_budget:default-budget-1",
+        key=AuthObject.team_member_default_budget("default-budget-1"),
         value=LiteLLM_BudgetTable(budget_id="default-budget-1", max_budget=default_cap),
     )
     team_object = LiteLLM_TeamTable(team_id="test-team", metadata={"team_member_budget_id": "default-budget-1"})
@@ -11810,11 +12288,10 @@ def _caller_loaders(
 
 async def _cache_with_membership(user_id: str, team_id: str, allowed_models: list[str] | None) -> UserApiKeyCache:
     from litellm.proxy._types import LiteLLM_TeamMembership
-    from litellm.proxy.common_utils.user_api_key_cache import team_membership_reservation_cache_key
 
     cache: Final = UserApiKeyCache()
     await cache.async_set_cache(
-        key=team_membership_reservation_cache_key(user_id=user_id, team_id=team_id),
+        key=AuthObject.team_membership_reservation(user_id=user_id, team_id=team_id),
         value=LiteLLM_TeamMembership(
             user_id=user_id,
             team_id=team_id,
@@ -12112,13 +12589,11 @@ async def test_managed_agent_model_policy_checks_dispatched_model(
 
 @pytest.mark.asyncio
 async def test_authoritative_key_load_bypasses_warm_key_and_permission_caches(rust_auth_stores: RustAuthStores) -> None:
-    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache, object_permission_cache_key
-
     permission: Final = LiteLLM_ObjectPermissionTable(object_permission_id="current", agents=["allowed"])
     stale: Final = UserAPIKeyAuth(token="hash", team_id="old-team", object_permission_id="old")
     cache: Final = UserApiKeyCache()
-    cache.set_cache("hash", stale)
-    cache.set_cache(object_permission_cache_key("current"), permission.model_copy(update={"agents": ["revoked"]}))
+    cache.set_cache(AuthObject.virtual_key("hash"), stale)
+    cache.set_cache(AuthObject.object_permission("current"), permission.model_copy(update={"agents": ["revoked"]}))
     rust_auth_stores.key.rows["hash"] = {"token": "hash", "team_id": "reader-team", "object_permission_id": "old"}
     rust_auth_stores.key.writer = {"hash": {"token": "hash", "team_id": "new-team", "object_permission_id": "current"}}
     database: Final = MagicMock()

@@ -15,5 +15,5 @@ class PyPiUploadTokenDetector(RegexBasedDetector):
         return "PyPI Upload Token"
 
     @property
-    def denylist(self) -> list[re.Pattern]:
+    def denylist(self) -> list[re.Pattern[str]]:
         return [re.compile(r"""pypi-AgEIcHlwaS5vcmc[A-Za-z0-9\-_]{50,1000}""")]

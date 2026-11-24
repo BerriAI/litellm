@@ -5,13 +5,13 @@ from __future__ import annotations
 import asyncio
 import os
 from collections.abc import AsyncIterator, Callable
-from dataclasses import dataclass
 from typing import Any, ClassVar
 
 import pytest
 
 from litellm.harness import runtime
 from litellm.harness.context import SessionContext
+from litellm.harness.endpoint import UsageTracker
 from litellm.harness.handlers.base import BaseHarnessHandler
 from litellm.llms.base_llm.harness.transformation import BaseHarnessConfig
 from litellm.harness.options import ClaudeCodeOptions
@@ -103,20 +103,6 @@ class FakeSandbox:
         self.closed = True
 
 
-@dataclass
-class FakeUsage:
-    input_tokens: int = 0
-    output_tokens: int = 0
-    cost: float = 0.0
-    calls: int = 0
-
-    def add(self, input_tokens: int, output_tokens: int, cost: float) -> None:
-        self.input_tokens += input_tokens
-        self.output_tokens += output_tokens
-        self.cost += cost
-        self.calls += 1
-
-
 class FakeEndpoint:
     """Stands in for ModelEndpoint; records every instance."""
 
@@ -127,7 +113,7 @@ class FakeEndpoint:
         self.model = model
         self.gateway = gateway
         self.kwargs = kwargs
-        self.usage = FakeUsage()
+        self.usage = UsageTracker()
         self.url = "http://127.0.0.1:1"
         self.token = "tok"
         self.entered = False
@@ -154,7 +140,7 @@ async def script_hello(
     else:
         ctx.input_tokens += 10
         ctx.output_tokens += 5
-        ctx.cost += 0.25
+        ctx.costs.add(0.25)
         ctx.calls += 1
 
 

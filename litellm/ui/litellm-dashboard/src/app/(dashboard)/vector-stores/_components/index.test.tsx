@@ -163,10 +163,11 @@ describe("VectorStoreManagement Indexes tab", () => {
       ],
     });
     render(<VectorStoreManagement accessToken="sk-test" userID="user-1" userRole="Admin" isViewOnly={false} />);
+    expect(screen.getByRole("heading", { level: 1, name: "Vector Stores" })).toBeInTheDocument();
     await user.click(screen.getByRole("tab", { name: "Indexes" }));
     await user.click(await screen.findByRole("button", { name: "support-docs-store" }));
     expect(await screen.findByTestId("vector-store-info-view")).toHaveTextContent("vs-1");
-    expect(screen.queryByText("Vector Store Management")).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { level: 1, name: "Vector Stores" })).not.toBeInTheDocument();
   });
 
   it("should link to the feature docs and a GitHub issue for unsupported providers on the Indexes tab", async () => {

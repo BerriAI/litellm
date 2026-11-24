@@ -44,7 +44,7 @@ class XAIRealtime(OpenAIRealtime):
         api_key: str,
         *,
         openai_beta_realtime: bool = False,
-    ) -> dict:
+    ) -> dict[str, str]:
         """
         xAI does NOT require the OpenAI-Beta header.
         Only send Authorization header.

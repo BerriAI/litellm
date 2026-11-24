@@ -11,13 +11,13 @@ from litellm.litellm_core_utils.aws_partition import is_bedrock_arn
 from litellm.litellm_core_utils.cloud_storage_security import (
     BEDROCK_MANAGED_S3_BATCH_PREFIX,
 )
+from litellm.litellm_core_utils.core_helpers import SupportsGet, require_get
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.llms.base_llm.batches.transformation import BaseBatchesConfig
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.bedrock.web_identity_session_policy import BEDROCK_BATCHES_SESSION_POLICY, WebIdentitySessionPolicy
 from litellm.types.llms.bedrock import (
     BedrockCreateBatchRequest,
-    BedrockCreateBatchResponse,
     BedrockInputDataConfig,
     BedrockOutputDataConfig,
     BedrockS3InputDataConfig,
@@ -52,6 +52,7 @@ _S3_BATCH_FILE_UUID_SUFFIX_PATTERN: Final = re.compile(
 )
 
 _BEDROCK_TAGS_ADAPTER: Final[TypeAdapter[list[BedrockTag]]] = TypeAdapter(list[BedrockTag])
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 def _build_s3_input_config(s3_uri: str, s3_bucket_owner: str | None) -> BedrockS3InputDataConfig:
@@ -150,14 +151,14 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, str],
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, str]:
         """
         Validate and prepare environment for Bedrock batch requests.
         AWS credentials are handled by BaseAWSLLM.
@@ -170,8 +171,8 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         data: CreateBatchRequest,
     ) -> str:
         """
@@ -313,11 +314,11 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
         Transform Bedrock batch creation response to LiteLLM format.
         """
         try:
-            response_data: Final[BedrockCreateBatchResponse] = raw_response.json()
+            decoded_response: Final = _DECODED_JSON.validate_python(raw_response.json())
         except Exception as e:
             raise ValueError(f"Failed to parse Bedrock batch response: {e}")
 
-        # Extract information from typed Bedrock response
+        response_data: Final = require_get(decoded_response)
         job_arn: Final = response_data.get("jobArn", "")
         status_str: Final[str] = str(response_data.get("status", "Submitted"))
 
@@ -353,27 +354,29 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
         original_request: Final = litellm_params.get("original_batch_request", {})
 
         # Create LiteLLM batch object
-        return LiteLLMBatch(
-            id=job_arn,  # Use ARN as the batch ID
-            object="batch",
-            endpoint=original_request.get("endpoint", "/v1/chat/completions"),
-            errors=None,
-            input_file_id=original_request.get("input_file_id", ""),
-            completion_window=original_request.get("completion_window", "24h"),
-            status=openai_status,
-            output_file_id=None,  # Will be populated when job completes
-            error_file_id=None,
-            created_at=int(time.time()),
-            in_progress_at=int(time.time()) if status_str == "InProgress" else None,
-            expires_at=None,
-            finalizing_at=None,
-            completed_at=None,
-            failed_at=None,
-            expired_at=None,
-            cancelling_at=None,
-            cancelled_at=None,
-            request_counts=None,
-            metadata=self._get_openai_compatible_batch_metadata(original_request.get("metadata", {})),
+        return LiteLLMBatch.model_validate(
+            {
+                "id": job_arn,  # Use ARN as the batch ID
+                "object": "batch",
+                "endpoint": original_request.get("endpoint", "/v1/chat/completions"),
+                "errors": None,
+                "input_file_id": original_request.get("input_file_id", ""),
+                "completion_window": original_request.get("completion_window", "24h"),
+                "status": openai_status,
+                "output_file_id": None,  # Will be populated when job completes
+                "error_file_id": None,
+                "created_at": int(time.time()),
+                "in_progress_at": int(time.time()) if status_str == "InProgress" else None,
+                "expires_at": None,
+                "finalizing_at": None,
+                "completed_at": None,
+                "failed_at": None,
+                "expired_at": None,
+                "cancelling_at": None,
+                "cancelled_at": None,
+                "request_counts": None,
+                "metadata": self._get_openai_compatible_batch_metadata(original_request.get("metadata", {})),
+            }
         )
 
     @staticmethod
@@ -400,8 +403,8 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
     def transform_retrieve_batch_request(
         self,
         batch_id: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
     ) -> dict[str, object]:
         """
         Transform batch retrieval request for Bedrock.
@@ -458,7 +461,9 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
             "data": None,
         }
 
-    def _parse_timestamps_and_status(self, response_data, status_str: str):
+    def _parse_timestamps_and_status(
+        self, response_data: SupportsGet, status_str: str
+    ) -> tuple[int | None, int | None, int | None, int | None, int | None, int | None]:
         """Helper to parse timestamps based on status."""
         import datetime
 
@@ -519,7 +524,7 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
     ) -> tuple[int | None, int | None, int | None, int | None, int | None, int | None]:
         return self._parse_timestamps_and_status(response_data, status_str)
 
-    def _extract_file_configs(self, response_data):
+    def _extract_file_configs(self, response_data: SupportsGet) -> tuple[object, object]:
         """Helper to extract input and output file configurations."""
         # Extract input file ID
         input_file_id = ""
@@ -539,7 +544,7 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
 
         return input_file_id, output_file_id
 
-    def _extract_errors_and_metadata(self, response_data, raw_response):
+    def _extract_errors_and_metadata(self, response_data, raw_response: Response):
         """Helper to extract errors and enriched metadata."""
         # Extract errors
         message: Final = response_data.get("message")
@@ -583,17 +588,17 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
         model: str | None,
         raw_response: Response,
         logging_obj: "LiteLLMLoggingObj",
-        litellm_params: dict,
+        litellm_params: Mapping[str, object],
     ) -> LiteLLMBatch:
         """
         Transform Bedrock batch retrieval response to LiteLLM format.
         """
-        from litellm.types.llms.bedrock import BedrockGetBatchResponse
-
         try:
-            response_data: Final[BedrockGetBatchResponse] = raw_response.json()
+            decoded_response: Final = _DECODED_JSON.validate_python(raw_response.json())
         except Exception as e:
             raise ValueError(f"Failed to parse Bedrock batch response: {e}")
+
+        response_data: Final = require_get(decoded_response)
 
         job_arn: Final = response_data.get("jobArn", "")
         status_str: Final[str] = str(response_data.get("status", "Submitted"))
@@ -641,30 +646,34 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
         # Extract errors and metadata
         errors, enriched_metadata = self._extract_errors_and_metadata(response_data, raw_response)
 
-        return LiteLLMBatch(
-            id=job_arn,
-            object="batch",
-            endpoint="/v1/chat/completions",
-            errors=errors,
-            input_file_id=input_file_id,
-            completion_window="24h",
-            status=openai_status,
-            output_file_id=output_file_id,
-            error_file_id=None,
-            created_at=created_at or int(time.time()),
-            in_progress_at=in_progress_at,
-            expires_at=expires_at,
-            finalizing_at=None,
-            completed_at=completed_at,
-            failed_at=failed_at,
-            expired_at=None,
-            cancelling_at=None,
-            cancelled_at=cancelled_at,
-            request_counts=None,
-            metadata=enriched_metadata,
+        return LiteLLMBatch.model_validate(
+            {
+                "id": job_arn,
+                "object": "batch",
+                "endpoint": "/v1/chat/completions",
+                "errors": errors,
+                "input_file_id": input_file_id,
+                "completion_window": "24h",
+                "status": openai_status,
+                "output_file_id": output_file_id,
+                "error_file_id": None,
+                "created_at": created_at or int(time.time()),
+                "in_progress_at": in_progress_at,
+                "expires_at": expires_at,
+                "finalizing_at": None,
+                "completed_at": completed_at,
+                "failed_at": failed_at,
+                "expired_at": None,
+                "cancelling_at": None,
+                "cancelled_at": cancelled_at,
+                "request_counts": None,
+                "metadata": enriched_metadata,
+            }
         )
 
-    def get_error_class(self, error_message: str, status_code: int, headers: dict | Headers) -> BaseLLMException:
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: dict[str, str] | Headers
+    ) -> BaseLLMException:
         """
         Get Bedrock-specific error class using common utility.
         """

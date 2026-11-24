@@ -6,7 +6,18 @@ from typing import Final
 import pytest
 from pydantic import TypeAdapter
 
-from litellm import CommandCheck, EvalScorecard, EvalStatus, EvalTarget, EvalTask, JudgeCheck, PredicateCheck
+from litellm import (
+    AgentInput,
+    AgentOutput,
+    CommandCheck,
+    EvalAgent,
+    EvalScorecard,
+    EvalStatus,
+    EvalTarget,
+    EvalTask,
+    JudgeCheck,
+    PredicateCheck,
+)
 from litellm.harness.evaluation.types import CheckResult, EvalRun
 from litellm.harness.types import Harness, Result, ToolCall, Usage
 
@@ -58,6 +69,35 @@ def test_should_aggregate_known_usage_and_serialize_unknown_metrics_without_auth
     assert "Agent cost (USD)" in report.to_markdown()
     assert "Judge cost (USD)" in report.to_markdown()
     assert "unknown" in report.to_markdown()
+    assert "Known subtotals" in report.to_markdown()
+
+
+def test_should_report_judge_token_counts_even_when_the_judge_price_is_unknown() -> None:
+    judged: Final = CheckResult(passed=True, detail="rubric passed", judge_usage=Usage(20, 5, 1), judge_cost=None)
+    output: Final = AgentOutput("answer", cost=0.0, usage=Usage(), events=())
+    report: Final = EvalScorecard(
+        "suite", (EvalRun("one", "task", "target", 1, EvalStatus.PASS, output, judged, 1, "rubric passed"),)
+    )
+
+    summary: Final = report.summaries[0]
+    assert summary.judge_usage == Usage(20, 5, 1)
+    assert summary.judge_cost is None
+    assert not summary.metrics_complete
+
+
+@pytest.mark.parametrize("cost", (None, 0.0, 0.25))
+def test_native_result_requires_known_cost_for_complete_eval_metrics(cost: float | None) -> None:
+    result: Final = Result("answer", None, [], [], Usage(10, 5, 1), cost, "done", "session")
+    check: Final = CheckResult(True, "passed")
+    report: Final = EvalScorecard(
+        "suite", (EvalRun("one", "task", "target", 1, EvalStatus.PASS, result, check, 1, "passed"),)
+    )
+
+    summary: Final = report.summaries[0]
+    assert summary.cost == cost
+    assert summary.usage == Usage(10, 5, 1)
+    assert summary.passed == 1
+    assert summary.metrics_complete is (cost is not None)
 
 
 def test_should_escape_multiline_labels_and_check_output_in_markdown() -> None:
@@ -123,3 +163,43 @@ def test_should_snapshot_caller_owned_inputs_before_later_trials_can_observe_mut
     assert dict(task.files) == {"input.txt": "before"}
     assert task.setup == (("prepare",),)
     assert target.tools == (tool,)
+
+
+@pytest.mark.parametrize("cost", (-1.0, float("inf"), float("nan"), True))
+def test_should_reject_invalid_custom_agent_costs(cost: float) -> None:
+    with pytest.raises(ValueError, match="finite and nonnegative"):
+        AgentOutput("answer", cost=cost)
+
+
+def test_should_require_named_custom_agents_and_readonly_identity() -> None:
+    class CustomAgent(EvalAgent):
+        async def run(self, task: AgentInput) -> AgentOutput:
+            return AgentOutput(task.prompt)
+
+    with pytest.raises(ValueError, match="agent name"):
+        CustomAgent(" ")
+    with pytest.raises(ValueError, match="agent model"):
+        CustomAgent("custom", model=" ")
+    agent: Final = CustomAgent("custom")
+    assert agent.name == "custom" and agent.model is None
+    with pytest.raises(AttributeError, match="setter"):
+        setattr(agent, "name", "changed")
+
+
+def test_should_keep_unreported_custom_metrics_unknown_and_explicit_zero_known() -> None:
+    unknown: Final = AgentOutput("answer")
+    known: Final = AgentOutput("answer", cost=0.0, usage=Usage(), events=())
+    report: Final = EvalScorecard(
+        "suite",
+        (
+            EvalRun("one", "t", "unknown", 1, EvalStatus.PASS, unknown, None, 1, "pass"),
+            EvalRun("two", "t", "known", 1, EvalStatus.PASS, known, None, 1, "pass"),
+            EvalRun("three", "t", "unknown", 2, EvalStatus.ERROR, None, None, 1, "startup failed"),
+        ),
+    )
+    incomplete, complete = report.summaries
+    assert incomplete.cost is None and incomplete.usage is None and incomplete.tool_calls is None
+    assert not incomplete.metrics_complete
+    assert (incomplete.total, incomplete.passed, incomplete.errors) == (2, 1, 1)
+    assert complete.cost == 0.0 and complete.usage == Usage() and complete.tool_calls == 0
+    assert complete.metrics_complete

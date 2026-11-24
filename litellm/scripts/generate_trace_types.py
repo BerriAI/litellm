@@ -20,7 +20,7 @@ from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter
 
 ROOT: Final = Path(__file__).resolve().parents[2]
 TOOLING: Final = ROOT / "litellm/scripts/trace_codegen"
-GENERATED: Final = ROOT / "litellm/tracing/generated"
+GENERATED: Final = ROOT / "litellm/integrations/lens/generated"
 ASSETS: Final = ROOT / "litellm/scripts/lens_assets"
 SCHEMAS: Final = TypeAdapter(dict[str, dict[str, JsonValue]])
 
