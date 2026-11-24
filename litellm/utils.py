@@ -3512,7 +3512,7 @@ def _resolve_builtin_model_cost_entry(key: str, provider: str) -> _BuiltinCostMa
     return None
 
 
-def is_generalized_model_info(model_info: ModelInfo) -> bool:
+def is_generalized_model_info(model_info: ModelInfoBase) -> bool:
     """Whether ``model_info`` came from a fallback-generalization capability rule.
 
     Detected as the resolved key missing ``litellm.model_cost`` while matching a
@@ -3529,14 +3529,27 @@ def is_generalized_model_info(model_info: ModelInfo) -> bool:
 _REGISTRATION_ATTEMPTS: Final = 3
 
 
-def lookup_model_info_for_registration(model: str, custom_llm_provider: str | None) -> ModelInfo | ModelInfoLookupMiss:
+_ModelInfoT: Final = TypeVar("_ModelInfoT", bound=ModelInfoBase)
+
+
+def _lookup_mapped_model_info(lookup: Callable[[], _ModelInfoT]) -> _ModelInfoT | ModelInfoLookupMiss:
     try:
-        info: Final = get_model_info(model=model, custom_llm_provider=custom_llm_provider)
+        info: Final = lookup()
     except ModelNotMappedError:
         return ModelInfoLookupMiss(tripped=False)
     except Exception:
         return ModelInfoLookupMiss(tripped=True)
     return ModelInfoLookupMiss(tripped=False) if is_generalized_model_info(info) else info
+
+
+def lookup_model_info_for_registration(model: str, custom_llm_provider: str | None) -> ModelInfo | ModelInfoLookupMiss:
+    return _lookup_mapped_model_info(lambda: get_model_info(model=model, custom_llm_provider=custom_llm_provider))
+
+
+def lookup_catalog_model_info(model: str, custom_llm_provider: str | None) -> ModelInfoBase | ModelInfoLookupMiss:
+    return _lookup_mapped_model_info(
+        lambda: get_model_info_helper(model=model, custom_llm_provider=custom_llm_provider, catalog_only=True)
+    )
 
 
 def _get_builtin_model_info_for_registration(
@@ -4010,6 +4023,25 @@ def _map_openai_size_to_vertex_ai_aspect_ratio(size: str | None) -> str:
     return size_to_aspect_ratio.get(size, "1:1")  # Default to square if size not recognized
 
 
+_EXTRA_BODY_FIELDS: Final = TypeAdapter(dict[str, object])
+
+
+def _without_dropped_extra_body_params(
+    optional_params: Mapping[str, object], additional_drop_params: Sequence[str] | None
+) -> Mapping[str, object]:
+    extra_body: Final = optional_params.get("extra_body")
+    if not additional_drop_params or not isinstance(extra_body, dict):
+        return optional_params
+    return {
+        **optional_params,
+        "extra_body": {
+            key: value
+            for key, value in _EXTRA_BODY_FIELDS.validate_python(extra_body).items()
+            if key not in additional_drop_params
+        },
+    }
+
+
 def _takes_openai_image_params_unmapped(custom_llm_provider: str | None) -> bool:
     if custom_llm_provider in ("openai", "azure") or custom_llm_provider in litellm.openai_compatible_providers:
         return True
@@ -4139,7 +4171,9 @@ def get_optional_params_image_gen(
     )
     # remove keys with None or empty dict/list values to avoid sending empty payloads
     optional_params = {
-        k: v for k, v in optional_params.items() if v is not None and (not isinstance(v, (dict, list)) or len(v) > 0)
+        k: v
+        for k, v in _without_dropped_extra_body_params(optional_params, additional_drop_params).items()
+        if v is not None and (not isinstance(v, (dict, list)) or len(v) > 0)
     }
     return optional_params
 
@@ -4859,6 +4893,15 @@ def pre_process_optional_params(
     return optional_params
 
 
+def catalog_entry(model: str, custom_llm_provider: str | None) -> Mapping[str, object] | None:
+    info: Final = lookup_catalog_model_info(model, custom_llm_provider)
+    return None if isinstance(info, ModelInfoLookupMiss) else GetModelCostMap.loaded_model_cost_map().get(info["key"])
+
+
+def has_catalog_entry(model: str, custom_llm_provider: str | None) -> bool:
+    return catalog_entry(model, custom_llm_provider) is not None
+
+
 def _map_params_with_provider_config(
     provider_config: BaseConfig,
     *,
@@ -5301,13 +5344,6 @@ def get_optional_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
             model=model,
-            drop_params=bool(drop_params),
-        )
-    elif custom_llm_provider == "nvidia_nim":
-        optional_params = litellm.NvidiaNimConfig().map_openai_params(
-            model=model,
-            non_default_params=non_default_params,
-            optional_params=optional_params,
             drop_params=bool(drop_params),
         )
     elif custom_llm_provider == "cerebras":
@@ -6518,6 +6554,8 @@ def get_model_info_helper(
     custom_llm_provider: str | None = None,
     api_base: str | None = None,
     api_key: str | None = None,
+    *,
+    catalog_only: bool = False,
 ) -> ModelInfoBase:
     """
     Helper for 'get_model_info'. Separated out to avoid infinite loop caused by returning 'supported_openai_param's
@@ -6553,7 +6591,7 @@ def get_model_info_helper(
         model_cost_custom_llm_provider: Final = custom_llm_provider
         #########################
         provider_config: BaseLLMModelInfo | None = None
-        if custom_llm_provider and custom_llm_provider in LlmProvidersSet:
+        if not catalog_only and custom_llm_provider and custom_llm_provider in LlmProvidersSet:
             provider_config = ProviderConfigManager.get_provider_model_info(
                 model=model, provider=LlmProviders(custom_llm_provider)
             )
@@ -6577,7 +6615,7 @@ def get_model_info_helper(
                         e,
                     )
 
-        if custom_llm_provider == "huggingface":
+        if not catalog_only and custom_llm_provider == "huggingface":
             max_tokens: Final = _get_max_position_embeddings(model_name=model)
             return ModelInfoBase(
                 key=model,
@@ -10363,6 +10401,10 @@ class ProviderConfigManager:
             return get_modelscope_image_generation_config(model)
         elif LlmProviders.EDENAI == provider:
             return litellm.EdenAIImageGenerationConfig()
+        elif LlmProviders.MINIMAX == provider:
+            from litellm.llms.minimax.image_generation import MinimaxImageGenerationConfig
+
+            return MinimaxImageGenerationConfig()
         return None
 
     @staticmethod
@@ -10537,6 +10579,10 @@ class ProviderConfigManager:
             )
 
             return BlackForestLabsImageEditConfig()
+        elif LlmProviders.MINIMAX == provider:
+            from litellm.llms.minimax.image_edit import MinimaxImageEditConfig
+
+            return MinimaxImageEditConfig()
         elif LlmProviders.FAL_AI == provider:
             from litellm.llms.fal_ai.image_edit import get_fal_ai_image_edit_config
 

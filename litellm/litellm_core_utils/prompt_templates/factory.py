@@ -57,7 +57,7 @@ from litellm.types.llms.openai import (
     ChatCompletionUserMessage,
     OpenAIMessageContentListBlock,
 )
-from litellm.types.llms.vertex_ai import BlobType
+from litellm.types.llms.vertex_ai import BlobType, FunctionResponsePartType, GeminiFileInspectionMetadata
 from litellm.types.llms.vertex_ai import FunctionCall as VertexFunctionCall
 from litellm.types.llms.vertex_ai import FunctionResponse as VertexFunctionResponse
 from litellm.types.llms.vertex_ai import PartType as VertexPartType
@@ -1132,48 +1132,67 @@ def anthropic_messages_pt_xml(messages: list):
 
 def _azure_tool_call_invoke_helper(
     function_call_params: ChatCompletionToolCallFunctionChunk,
-) -> ChatCompletionToolCallFunctionChunk | None:
+) -> ChatCompletionToolCallFunctionChunk:
     """
     Azure requires 'arguments' to be a string.
     """
-    if function_call_params.get("arguments") is None:
-        function_call_params["arguments"] = ""
-    return function_call_params
+    if function_call_params.get("arguments") is not None:
+        return function_call_params
+    return {**function_call_params, "arguments": ""}
 
 
-def _azure_image_url_helper(content: ChatCompletionImageObject):
-    if isinstance(content["image_url"], str):
-        content["image_url"] = {"url": content["image_url"]}
-    else:
-        content["image_url"] = cast(
-            ChatCompletionImageUrlObject,
-            {k: v for k, v in content["image_url"].items() if k != "format"},
-        )
+def _azure_image_url_helper(content: ChatCompletionImageObject) -> ChatCompletionImageObject:
+    image_url: Final = content["image_url"]
+    if isinstance(image_url, str):
+        return {**content, "image_url": {"url": image_url}}
+    return {
+        **content,
+        "image_url": cast(  # cast-ok: dropping format keeps the required url
+            ChatCompletionImageUrlObject, {k: v for k, v in image_url.items() if k != "format"}
+        ),
+    }
 
 
-def _azure_file_helper(content: ChatCompletionFileObject) -> None:
-    content["file"] = cast(
-        ChatCompletionFileObjectFile,
-        {k: v for k, v in content.get("file", {}).items() if k != "format"},
+def _azure_file_helper(content: ChatCompletionFileObject) -> ChatCompletionFileObject:
+    return {
+        **content,
+        "file": cast(  # cast-ok: dropping format leaves only ChatCompletionFileObjectFile keys
+            ChatCompletionFileObjectFile, {k: v for k, v in content.get("file", {}).items() if k != "format"}
+        ),
+    }
+
+
+def _azure_content_part(part: object) -> object:
+    mapping: Final = as_str_mapping(part)
+    part_type: Final = None if mapping is None else mapping.get("type")
+    if part_type == "image_url":
+        return _azure_image_url_helper(cast(ChatCompletionImageObject, part))  # cast-ok: the type tag says image_url
+    if part_type == "file":
+        return _azure_file_helper(cast(ChatCompletionFileObject, part))  # cast-ok: the type tag says file
+    return part
+
+
+def _azure_message(message: AllMessageValues) -> AllMessageValues:
+    if message["role"] == "assistant":
+        function_call: Final = message.get("function_call")
+        if function_call is None:
+            return message
+        return {**message, "function_call": _azure_tool_call_invoke_helper(function_call)}
+    if message["role"] != "user":
+        return message
+    content: Final = message.get("content")
+    if not isinstance(content, list):
+        return message
+    parts: Final[tuple[object, ...]] = tuple(content)
+    return cast(  # cast-ok: only image_url and file parts change, each to the shape Azure takes
+        AllMessageValues, {**message, "content": [_azure_content_part(part) for part in parts]}
     )
 
 
 def convert_to_azure_openai_messages(
     messages: list[AllMessageValues],
 ) -> list[AllMessageValues]:
-    for m in messages:
-        if m["role"] == "assistant":
-            function_call = m.get("function_call", None)
-            if function_call is not None:
-                m["function_call"] = _azure_tool_call_invoke_helper(function_call)
-
-        if m["role"] == "user" and isinstance(m.get("content"), list):
-            for content in m.get("content", []):
-                if isinstance(content, dict) and content.get("type") == "image_url":
-                    _azure_image_url_helper(cast(ChatCompletionImageObject, content))
-                elif isinstance(content, dict) and content.get("type") == "file":
-                    _azure_file_helper(cast(ChatCompletionFileObject, content))
-    return messages
+    return [_azure_message(message) for message in messages]
 
 
 # ------------------------------------------------------------------------------
@@ -1502,6 +1521,55 @@ def _contains_part_reference(payload: JsonValue) -> bool:
     return any(_is_part_reference(node) for node in itertools.chain.from_iterable(levels))
 
 
+def gemini_files_api_tool_uri(file: Mapping[str, object]) -> str | None:
+    from litellm.llms.vertex_ai.common_utils import GEMINI_FILES_API_URI_PREFIXES
+
+    uri: Final = next(
+        (value for key in ("file_data", "file_id", "file_url") if isinstance(value := file.get(key), str) and value),
+        None,
+    )
+    return uri if isinstance(uri, str) and uri.startswith(GEMINI_FILES_API_URI_PREFIXES) else None
+
+
+def _gemini_files_api_tool_part(file: Mapping[str, object], model: str | None) -> VertexPartType | None:
+    from litellm.llms.vertex_ai.gemini.transformation import process_gemini_media
+
+    uri: Final = gemini_files_api_tool_uri(file)
+    if uri is None:
+        return None
+    format_hint: Final = file.get("format") or file.get("mime_type") or file.get("content_type")
+    return process_gemini_media(uri, format=format_hint if isinstance(format_hint, str) else None, model=model)
+
+
+def _gemini_tool_file_options(
+    content: Mapping[str, object], *, allow_gemini_file_references: bool, model: str | None
+) -> tuple[Mapping[str, object], GeminiFileInspectionMetadata]:
+    from litellm.llms.vertex_ai.gemini.transformation import encode_gemini_file_inspection_metadata
+
+    if not allow_gemini_file_references:
+        return {}, GeminiFileInspectionMetadata()
+    fields: Final = {**content, **(as_str_mapping(content.get("file")) or {})}
+    return fields, encode_gemini_file_inspection_metadata(fields, model=model, custom_llm_provider="gemini")
+
+
+def _gemini_anthropic_tool_image_part(source: object) -> FunctionResponsePartType | None:
+    if not isinstance(source, dict) or source.get("type") != "base64":
+        return None
+    base64_source: Final = cast(  # cast-ok: Anthropic base64 source identified by its type
+        AnthropicContentParamSource, source
+    )
+    try:
+        return {
+            "inline_data": {
+                "data": base64_source.get("data", ""),
+                "mime_type": base64_source.get("media_type", "image/jpeg"),
+            }
+        }
+    except Exception as e:
+        verbose_logger.warning("Failed to process Anthropic image block in tool response: %s", e)
+        return None
+
+
 def keeps_gemini_video(
     mime_type: str | None, *, model: str | None, custom_llm_provider: str, drop_params: bool
 ) -> bool:
@@ -1614,6 +1682,8 @@ def convert_to_gemini_tool_call_result(
     last_message_with_tool_calls: dict | None,
     forward_function_call_id: bool = False,
     *,
+    allow_gemini_file_references: bool = False,
+    supports_media_in_tool_response: bool = True,
     drop_params: bool = False,
     model: str | None = None,
     custom_llm_provider: str | None = None,
@@ -1645,7 +1715,7 @@ def convert_to_gemini_tool_call_result(
     }
     """
     content_str: str = ""
-    inline_data_list: Final[list[BlobType]] = []
+    media_parts: Final[list[FunctionResponsePartType]] = []  # mutable-ok: preserve tool result media order
 
     if "content" in message:
         if isinstance(message["content"], str):
@@ -1659,7 +1729,7 @@ def convert_to_gemini_tool_call_result(
                     if len(mime_rest) == 2 and mime_rest[0].startswith("image/"):
                         # Strip any extra parameters (e.g. ";charset=UTF-8") from the MIME segment
                         clean_mime: Final = mime_rest[0].split(";")[0].strip()
-                        inline_data_list.append(BlobType(data=mime_rest[1], mime_type=clean_mime))
+                        media_parts.append({"inline_data": BlobType(data=mime_rest[1], mime_type=clean_mime)})
                         content_str = ""
                 except Exception as e:
                     verbose_logger.warning("Failed to parse data URL in tool response: %s", e)
@@ -1670,18 +1740,8 @@ def convert_to_gemini_tool_call_result(
                 if content_type == "text":
                     content_str += content.get("text", "")
                 elif content_type == "image":  # pyright: ignore[reportUnnecessaryComparison]  # loose runtime dict
-                    # Anthropic-native image block: {"type": "image", "source": {"type": "base64", ...}}
-                    source = content.get("source", {})
-                    if isinstance(source, dict) and source.get("type") == "base64":
-                        try:
-                            inline_data_list.append(
-                                BlobType(
-                                    data=source.get("data", ""),
-                                    mime_type=source.get("media_type", "image/jpeg"),
-                                )
-                            )
-                        except Exception as e:
-                            verbose_logger.warning("Failed to process Anthropic image block in tool response: %s", e)
+                    if (image_part := _gemini_anthropic_tool_image_part(content.get("source"))) is not None:
+                        media_parts.append(image_part)
                 elif content_type in ("input_image", "image_url"):
                     # Extract image for inline_data (for Computer Use screenshots and tool results)
                     image_url_data = content.get("image_url", "")
@@ -1691,15 +1751,28 @@ def convert_to_gemini_tool_call_result(
                         # Convert image to base64 blob format for Gemini
                         try:
                             image_obj = convert_to_anthropic_image_obj(image_url, format=None)
-                            inline_data_list.append(
-                                BlobType(
-                                    data=image_obj["data"],
-                                    mime_type=image_obj["media_type"],
-                                )
+                            media_parts.append(
+                                {
+                                    "inline_data": BlobType(
+                                        data=image_obj["data"],
+                                        mime_type=image_obj["media_type"],
+                                    )
+                                }
                             )
                         except Exception as e:
                             verbose_logger.warning("Failed to process image in tool response: %s", e)
                 elif content_type in ("file", "input_file"):  # pyright: ignore[reportUnnecessaryContains]  # loose runtime dict
+                    # Vertex function response parts do not support Gemini file inspection fields.
+                    file_fields, metadata = _gemini_tool_file_options(
+                        content, allow_gemini_file_references=allow_gemini_file_references, model=model
+                    )
+                    if (
+                        allow_gemini_file_references
+                        and (source_part := _gemini_files_api_tool_part(file_fields, model)) is not None
+                        and "file_data" in source_part
+                    ):
+                        media_parts.append({"file_data": source_part["file_data"], **metadata})
+                        continue
                     # Extract file for inline_data (for tool results with PDF, audio, video, etc.)
                     file_data = content.get("file_data", "")
                     if not file_data:
@@ -1716,11 +1789,11 @@ def convert_to_gemini_tool_call_result(
                         # Convert file to base64 blob format for Gemini
                         try:
                             file_obj = convert_to_anthropic_image_obj(file_data, format=None)
-                            inline_data_list.append(
-                                BlobType(
-                                    data=file_obj["data"],
-                                    mime_type=file_obj["media_type"],
-                                )
+                            media_parts.append(
+                                {
+                                    "inline_data": BlobType(data=file_obj["data"], mime_type=file_obj["media_type"]),
+                                    **metadata,
+                                }
                             )
                         except Exception as e:
                             verbose_logger.warning("Failed to process file in tool response: %s", e)
@@ -1732,7 +1805,7 @@ def convert_to_gemini_tool_call_result(
                         custom_llm_provider=custom_llm_provider or "gemini",
                     )
                 ) is not None:
-                    inline_data_list.append(video_blob)
+                    media_parts.append({"inline_data": video_blob})
     name: str | None = message.get("name", "")
 
     # Recover name from last message with tool calls
@@ -1788,8 +1861,10 @@ def convert_to_gemini_tool_call_result(
 
     # For multimodal function responses, Gemini expects media parts nested
     # inside functionResponse.parts instead of sibling content parts.
-    if inline_data_list:
-        _function_response["parts"] = [{"inline_data": inline_data} for inline_data in inline_data_list]
+    if media_parts:
+        if not supports_media_in_tool_response:
+            return [_part, *(VertexPartType(**part) for part in media_parts)]
+        _function_response["parts"] = media_parts
         return [_part]
 
     return _part

@@ -905,6 +905,29 @@ async def test_async_data_generator_mid_stream_exception_yields_error_payload(
     assert any(isinstance(item, str) and item.startswith('data: {"error":') for item in out)
 
 
+@pytest.mark.asyncio
+async def test_async_data_generator_mid_stream_error_frame_redacts_a_key_from_the_provider_message(monkeypatch):
+    _patch_logging_flags(monkeypatch)
+    monkeypatch.setattr(ps.proxy_logging_obj, "post_call_failure_hook", AsyncMock(return_value=None))
+    secret: Final = "sk-9876543210abcdef9876543210"
+    failure: Final = litellm.BadRequestError(
+        message=f"upstream rejected key {secret}", model="qwen", llm_provider="hosted_vllm"
+    )
+
+    frames: Final = [
+        line
+        async for line in async_data_generator(
+            response=_async_iter_raises(failure), user_api_key_dict=_user_auth(), request_data={}
+        )
+    ]
+
+    error_frame: Final = next(item for item in frames if isinstance(item, str) and item.startswith('data: {"error":'))
+    error: Final = json.loads(error_frame.removeprefix("data: "))["error"]
+    assert secret not in error_frame
+    assert "upstream rejected key" in error["message"]
+    assert error["type"] == "invalid_request_error"
+
+
 _UPSTREAM_BODY: Final = {
     "code": "cyber_policy",
     "message": "Upstream rejected request: flagged for possible cybersecurity risk",

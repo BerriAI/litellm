@@ -1,7 +1,7 @@
 from collections.abc import Callable, Mapping, Sequence
 from functools import lru_cache
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Protocol, cast, get_type_hints
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Protocol, cast, get_type_hints
 
 import httpx
 from openai.types.responses import ResponseReasoningItem
@@ -24,6 +24,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 )
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.litellm_core_utils.url_utils import encode_url_path_segment
+from litellm.llms.base_llm.chat.transformation import BaseLLMException, RelayOnlyBodyLLMException
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.llms.openai.chat.gpt_5_transformation import (
     is_gpt_reasoning_series_name,
@@ -59,6 +60,20 @@ if TYPE_CHECKING:
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+_ERROR_BODY: Final = TypeAdapter(dict[str, object])
+
+
+def _openai_sdk_error_body(
+    error_message: str,
+) -> dict[str, object] | None:  # mutable-ok: BaseLLMException.body is a dict
+    try:
+        decoded: Final = _ERROR_BODY.validate_json(error_message)
+    except ValidationError:
+        return None
+    nested: Final = decoded.get("error")
+    return _ERROR_BODY.validate_python(nested) if isinstance(nested, dict) else decoded
+
 
 _NO_TOOL_UPDATE: Final[Mapping[str, object]] = MappingProxyType({})
 _MODEL_FAMILIES_REJECTING_TOP_LEVEL_SCHEMA_COMBINATORS: Final = ("gpt-4", "gpt-3.5", "chatgpt-4o", "o1", "o3", "o4")
@@ -251,6 +266,8 @@ def _json_object_body(response: _JsonObjectResponse) -> dict[str, object]:
 
 
 class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
+    error_exception_class: ClassVar[type[BaseLLMException]] = RelayOnlyBodyLLMException
+
     @property
     def custom_llm_provider(self) -> LlmProviders:
         return LlmProviders.OPENAI
@@ -314,7 +331,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         return OpenAIGPT5Config.effort_resolves_to_none(model, effort)
 
     @staticmethod
-    def _supports_reasoning_param(model: str) -> bool:
+    def supports_reasoning_param(model: str) -> bool:
         from litellm.utils import get_model_info_helper
 
         try:
@@ -388,7 +405,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         if (
             self.custom_llm_provider == LlmProviders.OPENAI
             and self._requests_reasoning_effort(params.get("reasoning"))
-            and not self._supports_reasoning_param(model=model)
+            and not self.supports_reasoning_param(model=model)
         ):
             if drop_params or litellm.drop_params:
                 params.pop("reasoning", None)
@@ -1167,6 +1184,19 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         response.hidden_params["headers"] = raw_response_headers
 
         return response
+
+    def get_error_class(
+        self,
+        error_message: str,
+        status_code: int,
+        headers: dict[str, object] | httpx.Headers,  # mutable-ok: inherited contract
+    ) -> BaseLLMException:
+        raise self.error_exception_class(
+            status_code=status_code,
+            message=error_message,
+            headers=headers,
+            body=_openai_sdk_error_body(error_message),
+        )
 
     #########################################################
     ########## COMPACT RESPONSE API TRANSFORMATION ##########
