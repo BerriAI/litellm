@@ -1939,8 +1939,9 @@ class LiteLLMAnthropicMessagesAdapter:
             if choice.delta.tool_calls:
                 partial_json = ""
                 for tool in choice.delta.tool_calls:
-                    if tool.function is not None and tool.function.arguments is not None:
-                        partial_json = (partial_json or "") + tool.function.arguments
+                    arguments = tool.function.arguments if tool.function is not None else None
+                    if isinstance(arguments, str):
+                        partial_json = (partial_json or "") + arguments
             elif isinstance(choice, StreamingChoices) and (thinking_blocks := _streamed_thinking_blocks(choice.delta)):
                 for thinking_block in thinking_blocks:
                     if thinking_block["type"] == "thinking":
