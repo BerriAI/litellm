@@ -2323,9 +2323,11 @@ class _FakeFilesRouter:
         provider: str = "openai",
         gone_file_ids: frozenset[str] = frozenset(),
         covered_targets_by_model: Mapping[str, tuple[str, ...]] = MappingProxyType({}),
+        served_targets_by_model: Mapping[str, tuple[str, ...]] = MappingProxyType({}),
     ) -> None:
         self.deployments_by_model = deployments_by_model
         self.covered_targets_by_model = covered_targets_by_model
+        self.served_targets_by_model = served_targets_by_model
         self.delete_error = delete_error
         self.gone_file_ids = gone_file_ids
         self.delete_gate = delete_gate
@@ -2357,6 +2359,11 @@ class _FakeFilesRouter:
             "model_file_id_mapping": dict(zip(deployment_ids, provider_file_ids)),
             "litellm_call_id": f"call-of-{provider_file_ids[0]}",
             "covered_target_model_names": self.covered_targets_by_model.get(model, ()),
+            "target_model_names_by_deployment": {
+                deployment_id: self.served_targets_by_model[model]
+                for deployment_id in deployment_ids
+                if model in self.served_targets_by_model
+            },
         }
         return response
 
@@ -2561,6 +2568,27 @@ async def test_upload_skips_only_the_targets_an_earlier_upload_already_covers():
     assert model_mappings == {"proxy-wildcard-dep": "file-upload-1", "openai-dep": "file-upload-2"}
     assert sorted(flat_ids) == ["file-upload-1", "file-upload-2"]
     assert router.deletes == ()
+
+
+@pytest.mark.asyncio
+async def test_a_later_litellm_proxy_upload_that_serves_more_targets_is_kept_and_both_go_on_delete():
+    router: Final = _FakeFilesRouter(
+        {"gpt-a": ("proxy-wildcard-dep",), "gpt-b": ("proxy-wildcard-dep",)},
+        provider="litellm_proxy",
+        served_targets_by_model={"gpt-a": ("gpt-a",), "gpt-b": ("gpt-a", "gpt-b")},
+    )
+    managed_files, mock_prisma = _make_real_managed_files_instance()
+
+    response: Final = await _upload(managed_files, router, ["gpt-a", "gpt-b"])
+    await drain_logging_tasks(timeout=1)
+    stored: Final = mock_prisma.db.litellm_managedfiletable.upsert.await_args.kwargs["data"]["create"]
+
+    assert json.loads(stored["model_mappings"]) == {"proxy-wildcard-dep": "file-upload-2"}
+    assert router.deletes == ()
+    assert await _delete_managed_file(managed_files, mock_prisma, router, response.id) == (
+        "file-upload-2",
+        "file-upload-1",
+    )
 
 
 async def _delete_managed_file(

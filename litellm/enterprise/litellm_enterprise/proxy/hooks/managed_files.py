@@ -406,6 +406,7 @@ class _RouterFileCallKwargs(TypedDict, total=False):
 
 _MODEL_FILE_ID_MAPPING: Final = TypeAdapter(dict[str, str])
 _COVERED_TARGET_MODEL_NAMES: Final = TypeAdapter(tuple[str, ...])
+_TARGET_MODEL_NAMES_BY_DEPLOYMENT: Final = TypeAdapter(dict[str, tuple[str, ...]])
 _FILE_UPLOAD_ONLY_FIELDS: Final = frozenset({"file", "purpose", "expires_after", "extra_body"})
 _FILE_DELETE_RESERVED_FIELDS: Final = frozenset({"model", "file_id"})
 
@@ -415,6 +416,7 @@ class _ProviderUpload:
     model_id: str
     provider_file_id: str
     upload_call_id: str | None = None
+    served_target_count: int = 0
 
 
 def _file_hidden_params(file_object: OpenAIFileObject) -> dict[str, object]:
@@ -439,19 +441,24 @@ def _provider_uploads(file_object: OpenAIFileObject) -> tuple[_ProviderUpload, .
     model_file_id_mapping: Final = _MODEL_FILE_ID_MAPPING.validate_python(
         file_hidden_params.get("model_file_id_mapping") or {}
     )
+    served_targets: Final = _TARGET_MODEL_NAMES_BY_DEPLOYMENT.validate_python(
+        file_hidden_params.get("target_model_names_by_deployment") or {}
+    )
     upload_call_id: Final = file_hidden_params.get("litellm_call_id")
     return tuple(
         _ProviderUpload(
             model_id=model_id,
             provider_file_id=provider_file_id,
             upload_call_id=upload_call_id if isinstance(upload_call_id, str) else None,
+            served_target_count=len(served_targets.get(model_id, ())),
         )
         for model_id, provider_file_id in model_file_id_mapping.items()
     )
 
 
 def _is_kept_upload(uploads: Sequence[_ProviderUpload], index: int) -> bool:
-    return all(earlier.model_id != uploads[index].model_id for earlier in uploads[:index])
+    same_deployment: Final = tuple(i for i, upload in enumerate(uploads) if upload.model_id == uploads[index].model_id)
+    return max(same_deployment, key=lambda i: uploads[i].served_target_count) == index
 
 
 def _upload_from_trailing_id_fields(decoded_unified_file_id: str) -> _ProviderUpload:
@@ -2239,7 +2246,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             user_api_key_dict=user_api_key_dict,
         )
         _start_deleting_redundant_uploads(
-            llm_router, tuple(upload for upload in uploads if upload not in kept_uploads), create_file_request
+            llm_router, tuple(upload for upload in uploads[1:] if upload not in kept_uploads), create_file_request
         )
 
         # Emit Prometheus metrics for managed file creation

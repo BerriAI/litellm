@@ -707,6 +707,7 @@ def is_batch_upload(request: Mapping[str, object]) -> bool:
 
 _TARGET_MODEL_NAMES_KEY: Final = "target_model_names"
 _COVERED_TARGET_MODEL_NAMES_KEY: Final = "covered_target_model_names"
+_TARGET_MODEL_NAMES_BY_DEPLOYMENT_KEY: Final = "target_model_names_by_deployment"
 _TARGET_MODEL_NAMES: Final[TypeAdapter[tuple[str, ...]]] = TypeAdapter(tuple[str, ...])
 _NO_SERVED_NAMES: Final[Mapping[str, str]] = MappingProxyType({})
 
@@ -721,6 +722,21 @@ def _covered_targets(
     return tuple(target for target, served in names_by_target.items() if served and served.keys() <= deployment_ids)
 
 
+def _served_targets(
+    deployment_id: str,
+    targets: Sequence[str],
+    requested_target: str,
+    names_by_target: Mapping[str, Mapping[str, str]],
+) -> tuple[str, ...]:
+    return tuple(
+        dict.fromkeys(
+            target
+            for target in targets
+            if target == requested_target or deployment_id in names_by_target.get(target, _NO_SERVED_NAMES)
+        )
+    )
+
+
 def _served_target_names(
     deployment_id: str,
     targets: Sequence[str],
@@ -729,12 +745,10 @@ def _served_target_names(
 ) -> str:
     requested_target, requested_name = requested
     names: Final = (
-        requested_name
-        if target == requested_target
-        else names_by_target.get(target, _NO_SERVED_NAMES).get(deployment_id)
-        for target in targets
+        requested_name if target == requested_target else names_by_target[target][deployment_id]
+        for target in _served_targets(deployment_id, targets, requested_target, names_by_target)
     )
-    return ",".join(dict.fromkeys(name for name in names if name is not None))
+    return ",".join(dict.fromkeys(names))
 
 
 def endpoint_names() -> frozenset[str]:
@@ -2513,6 +2527,13 @@ class RustEndpoints:
             hidden[_COVERED_TARGET_MODEL_NAMES_KEY] = _covered_targets(
                 names_by_target, frozenset(_deployment_id(as_dict(d)) for d in deployments)
             )
+            hidden[_TARGET_MODEL_NAMES_BY_DEPLOYMENT_KEY] = {
+                _deployment_id(as_dict(d)): _served_targets(
+                    _deployment_id(as_dict(d)), ordered_targets, requested, names_by_target
+                )
+                for d in deployments
+                if self._is_litellm_proxy(d)
+            }
         return returned
 
     def _stripped_model_and_provider(self, params: Mapping[str, object]) -> tuple[str, object]:
@@ -2531,7 +2552,7 @@ class RustEndpoints:
     async def _stripped_names_by_target(
         self, request: Mapping[str, object], targets: Sequence[str], deployments: Sequence[object]
     ) -> Mapping[str, Mapping[str, str]]:
-        if not targets or not any(self._is_litellm_proxy(d) for d in deployments):
+        if not targets or is_batch_upload(request) or not any(self._is_litellm_proxy(d) for d in deployments):
             return MappingProxyType({})
         served: Final = await asyncio.gather(*(self._stripped_names_by_deployment(t, request) for t in targets))
         return MappingProxyType(dict(zip(targets, served, strict=True)))
