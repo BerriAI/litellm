@@ -275,6 +275,34 @@ def test_non_string_user_text_stays_on_python(messages: list[dict[str, object]],
     assert result is (python_result if serves_python else native_result)
 
 
+@pytest.mark.parametrize(
+    ("system", "serves_python"),
+    (
+        ([{"type": "text", "text": "Answer in one word"}, {"type": "text", "text": None}], True),
+        ([{"type": "text", "text": 42}], True),
+        ([{"type": "text", "text": "Answer in one word"}], False),
+        ("Answer in one word", False),
+    ),
+    ids=("null-beside-text", "number", "string-text", "string-system"),
+)
+def test_non_string_system_text_stays_on_python(system: object, serves_python: bool) -> None:
+    python_result: Final = response()
+    native_result: Final = response()
+
+    def python(*call_args: object, **call_kwargs: object) -> AnthropicMessagesResponse:  # kwargs-ok: records call shape
+        return python_result
+
+    result: Final = _DISPATCH.run(
+        (16, MESSAGES, "anthropic/claude-opus-5-5"),
+        {"system": system},
+        python=python,
+        binding=messages_binding(lambda request: native_result),
+        native=lambda hook, request, call_args, call_kwargs: hook(request),
+        rules=RUST_RULES,
+    )
+    assert result is (python_result if serves_python else native_result)
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("model", "kwargs", "general_settings", "serves_python"),

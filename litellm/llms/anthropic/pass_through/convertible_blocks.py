@@ -1,7 +1,7 @@
 from collections.abc import Iterable, Iterator, Mapping, Sequence
 from itertools import chain, starmap
 from types import MappingProxyType
-from typing import Final, NoReturn
+from typing import Final, NoReturn, TypeVar
 
 from pydantic import JsonValue, TypeAdapter, ValidationError
 from typing_extensions import assert_never
@@ -21,6 +21,7 @@ _SOURCED_BLOCK_TYPES: Final = frozenset({"image", "document"})
 _TOOL_RESULT_BLOCK_TYPES: Final = frozenset({"text", "image", "document"})
 
 
+_Block = TypeVar("_Block")  # rebind-ok: a TypeVar cannot be Final
 _JSON_MESSAGES: Final = TypeAdapter(tuple[Mapping[str, JsonValue], ...])
 
 
@@ -149,6 +150,17 @@ def non_string_user_text_error(messages: Iterable[object]) -> str | None:
     return next(chain.from_iterable(starmap(_message_text_errors, enumerate(messages))), None)
 
 
+def non_string_system_text_error(system: object) -> str | None:
+    return next(
+        (
+            f"system.{index}.text: Input should be a valid string"
+            for index, block in enumerate(_list_items(system))
+            if _is_non_string_text(block)
+        ),
+        None,
+    )
+
+
 def _without_non_string_texts(
     message: dict[str, object],  # mutable-ok: AnthropicMessagesRequest.messages is typed list[dict]
 ) -> dict[str, object] | None:  # mutable-ok: AnthropicMessagesRequest.messages is typed list[dict]
@@ -170,6 +182,25 @@ def drop_non_string_texts(
     return [kept for message in messages if (kept := _without_non_string_texts(message)) is not None]
 
 
+def without_non_string_system_texts(
+    system: Sequence[_Block],
+) -> list[_Block] | None:  # mutable-ok: AnthropicMessagesRequest.system is typed list[dict]
+    return [block for block in system if not _is_non_string_text(block)] or None
+
+
+def drop_non_string_system_texts(
+    system: str | list[dict[str, JsonValue]] | None,  # mutable-ok: AnthropicMessagesRequest.system is typed list[dict]
+    drop_params: object,
+) -> str | list[dict[str, JsonValue]] | None:  # mutable-ok: AnthropicMessagesRequest.system is typed list[dict]
+    if (
+        not isinstance(system, list)
+        or not drops_unsupported_params(drop_params)
+        or non_string_system_text_error(system) is None
+    ):
+        return system
+    return without_non_string_system_texts(system)
+
+
 def emptied_messages_error(sent: Sequence[object], kept: Sequence[object]) -> str | None:
     if kept or non_string_user_text_error(sent) is None:
         return None
@@ -180,6 +211,13 @@ def reject_non_string_user_text(messages: Iterable[object], drop_params: object,
     if drops_unsupported_params(drop_params):
         return
     error: Final = non_string_user_text_error(messages)
+    if error is None:
+        return
+    _raise_bad_request(error, model, provider)
+
+
+def reject_non_string_system_text(system: object, drop_params: object, model: str, provider: object) -> None:
+    error: Final = None if drops_unsupported_params(drop_params) else non_string_system_text_error(system)
     if error is None:
         return
     _raise_bad_request(error, model, provider)

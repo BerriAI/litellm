@@ -3526,19 +3526,28 @@ async def _count_through_the_anthropic_endpoint(
     return response, upstream
 
 
-async def _messages_sent_to_anthropic_count(
+async def _body_sent_to_anthropic_count(
     monkeypatch: pytest.MonkeyPatch,
     body: Mapping[str, JsonValue],
     deployment_params: Mapping[str, object],
     router_defaults: Mapping[str, object] = MappingProxyType({}),
-) -> JsonValue:
+) -> Mapping[str, JsonValue]:
     response, upstream = await _count_through_the_anthropic_endpoint(
         monkeypatch, "anthropic/claude-sonnet-5-5", body, deployment_params, router_defaults
     )
 
     assert isinstance(response, dict)
     assert response["input_tokens"] == 7
-    return json.loads(upstream.calls.last.request.content)["messages"]
+    return json.loads(upstream.calls.last.request.content)
+
+
+async def _messages_sent_to_anthropic_count(
+    monkeypatch: pytest.MonkeyPatch,
+    body: Mapping[str, JsonValue],
+    deployment_params: Mapping[str, object],
+    router_defaults: Mapping[str, object] = MappingProxyType({}),
+) -> JsonValue:
+    return (await _body_sent_to_anthropic_count(monkeypatch, body, deployment_params, router_defaults))["messages"]
 
 
 @pytest.mark.asyncio
@@ -3577,6 +3586,43 @@ async def test_anthropic_count_tokens_on_a_claude_deployment_drops_a_non_string_
     )
 
     assert sent == _CLEAN_PROMPT
+
+
+_SYSTEM_TEXT: Final[dict[str, JsonValue]] = {"type": "text", "text": "Answer in one word"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("text", (None, 5), ids=("null", "number"))
+@pytest.mark.parametrize(
+    ("request_params", "deployment_params", "router_defaults"),
+    (({"drop_params": True}, {}, {}), ({}, {"drop_params": True}, {}), ({}, {}, {"drop_params": True})),
+    ids=("body", "deployment", "router-defaults"),
+)
+async def test_anthropic_count_tokens_on_a_claude_deployment_drops_a_non_string_system_text_under_drop_params(
+    monkeypatch: pytest.MonkeyPatch,
+    text: JsonValue,
+    request_params: Mapping[str, JsonValue],
+    deployment_params: Mapping[str, JsonValue],
+    router_defaults: Mapping[str, JsonValue],
+) -> None:
+    non_string: Final[dict[str, JsonValue]] = {"type": "text", "text": text}
+
+    dropped: Final = await _body_sent_to_anthropic_count(
+        monkeypatch,
+        {"messages": _CLEAN_PROMPT, "system": [non_string, _SYSTEM_TEXT], **request_params},
+        deployment_params,
+        router_defaults,
+    )
+    emptied: Final = await _body_sent_to_anthropic_count(
+        monkeypatch,
+        {"messages": _CLEAN_PROMPT, "system": [non_string], **request_params},
+        deployment_params,
+        router_defaults,
+    )
+
+    assert dropped["system"] == [_SYSTEM_TEXT]
+    assert dropped["messages"] == emptied["messages"] == _CLEAN_PROMPT
+    assert emptied.get("system") is None
 
 
 @pytest.mark.asyncio
@@ -3627,8 +3673,13 @@ def _non_string_text_error(field: str) -> str:
         (_prompt_beside({"type": "text", "text": None}), {}, _non_string_text_error("messages.0.content.1.text")),
         (_prompt_beside({"type": "text", "text": 5}), {}, _non_string_text_error("messages.0.content.1.text")),
         (_BLANK_BEFORE_NULL_PROMPT, {}, _non_string_text_error("messages.0.content.1.text")),
+        (
+            _CLEAN_PROMPT,
+            {"system": [{"type": "text", "text": "Answer in one word"}, {"type": "text", "text": None}]},
+            _non_string_text_error("system.1.text"),
+        ),
     ),
-    ids=("only-null-dropped", "null-beside-text", "number-beside-text", "blank-before-null"),
+    ids=("only-null-dropped", "null-beside-text", "number-beside-text", "blank-before-null", "null-system-text"),
 )
 @pytest.mark.parametrize(
     "model",
