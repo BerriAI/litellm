@@ -5,13 +5,13 @@ use litellm_coroutine::{Co, Reply};
 use litellm_gateway_auth_core::{
     AgentIdentityFailure, AuthHost, BudgetExceeded, Error, KeyHash, OperatorHooks, Rows, Token,
     authn::{
-        jwt::{KeyMappingRow, KeyMappingWrite, MappedJwt, MappedKey},
+        jwt::{KeyMappingRow, KeyMappingWrite, MappedClaim, MappedJwt, MappedKey},
         key::{CachedTeam, Keyed},
     },
     identity::{
         jwt::{
             AliasRead, DelegatedTeam, FinishedJwt, IdentityRead, JwtIdentity, ManagedAgent,
-            ModelAccess, Org, RegisteredAgent, TeamRead, UserLookup, UserRead,
+            ModelAccess, Org, RegisteredAgent, Team, TeamRead, UserLookup, UserRead,
         },
         key::Owner,
     },
@@ -21,11 +21,15 @@ use serde_json::Value;
 
 /// A Python record the core carries without reading it: a `UserAPIKeyAuth`, a team, a user.
 #[derive(Clone)]
-pub(crate) struct PyRow(Arc<Py<PyAny>>);
+pub(crate) struct PyRow(Arc<Py<PyAny>>, Option<Arc<Py<PyAny>>>);
 
 impl PyRow {
     pub(crate) fn new(row: Py<PyAny>) -> Self {
-        Self(Arc::new(row))
+        Self(Arc::new(row), None)
+    }
+
+    pub(crate) fn team(row: Py<PyAny>, roster: Option<Py<PyAny>>) -> Self {
+        Self(Arc::new(row), roster.map(Arc::new))
     }
 
     pub(crate) fn object(&self, py: Python<'_>) -> Py<PyAny> {
@@ -77,6 +81,23 @@ impl From<&UserLookup<'_>> for Lookup {
             sso_user_id: lookup.sso_user_id.map(str::to_owned),
             upsert: lookup.upsert,
             email_verified: lookup.email_verified.cloned(),
+        }
+    }
+}
+
+/// `MappedClaim`, owned.
+pub(crate) struct OwnedClaim {
+    pub(crate) field: String,
+    pub(crate) value: String,
+    pub(crate) issuer: Option<String>,
+}
+
+impl From<MappedClaim<'_>> for OwnedClaim {
+    fn from(claim: MappedClaim<'_>) -> Self {
+        Self {
+            field: claim.field.to_owned(),
+            value: claim.value.to_owned(),
+            issuer: claim.issuer.map(str::to_owned),
         }
     }
 }
@@ -213,18 +234,28 @@ pub(crate) enum Ask {
         token: Token,
         reply: Reply<Option<Value>>,
     },
-    CachedJson {
+    CachedDocument {
         key: String,
         reply: Reply<Option<Value>>,
     },
-    CacheJson {
+    CacheDocument {
         key: String,
         value: Box<Value>,
         ttl: Duration,
         reply: Reply<()>,
     },
-    ForgetJson {
-        key: String,
+    CachedKeyMapping {
+        claim: OwnedClaim,
+        reply: Reply<Option<Value>>,
+    },
+    CacheKeyMapping {
+        claim: OwnedClaim,
+        value: Box<Value>,
+        ttl: Duration,
+        reply: Reply<()>,
+    },
+    ForgetKeyMapping {
+        claim: OwnedClaim,
         reply: Reply<()>,
     },
 
@@ -239,6 +270,12 @@ pub(crate) enum Ask {
     },
     GrantingTeam {
         team_id: String,
+        reply: Reply<TeamRead<PyRow>>,
+    },
+    BindTeamMember {
+        team: PyRow,
+        roster: Arc<Py<PyAny>>,
+        user_id: String,
         reply: Reply<TeamRead<PyRow>>,
     },
     LoadTeamMembership {
@@ -492,13 +529,13 @@ impl AuthHost for PythonAuthHost {
         })
         .await
     }
-    async fn cached_json(&self, key: &str) -> Result<Option<Value>, Error> {
+    async fn cached_document(&self, key: &str) -> Result<Option<Value>, Error> {
         let key = key.to_owned();
-        self.ask(|reply| Ask::CachedJson { key, reply }).await
+        self.ask(|reply| Ask::CachedDocument { key, reply }).await
     }
-    async fn cache_json(&self, key: &str, value: &Value, ttl: Duration) -> Result<(), Error> {
+    async fn cache_document(&self, key: &str, value: &Value, ttl: Duration) -> Result<(), Error> {
         let (key, value) = (key.to_owned(), Box::new(value.clone()));
-        self.ask(|reply| Ask::CacheJson {
+        self.ask(|reply| Ask::CacheDocument {
             key,
             value,
             ttl,
@@ -506,9 +543,30 @@ impl AuthHost for PythonAuthHost {
         })
         .await
     }
-    async fn forget_json(&self, key: &str) -> Result<(), Error> {
-        let key = key.to_owned();
-        self.ask(|reply| Ask::ForgetJson { key, reply }).await
+    async fn cached_key_mapping(&self, claim: MappedClaim<'_>) -> Result<Option<Value>, Error> {
+        let claim = OwnedClaim::from(claim);
+        self.ask(|reply| Ask::CachedKeyMapping { claim, reply })
+            .await
+    }
+    async fn cache_key_mapping(
+        &self,
+        claim: MappedClaim<'_>,
+        value: &Value,
+        ttl: Duration,
+    ) -> Result<(), Error> {
+        let (claim, value) = (OwnedClaim::from(claim), Box::new(value.clone()));
+        self.ask(|reply| Ask::CacheKeyMapping {
+            claim,
+            value,
+            ttl,
+            reply,
+        })
+        .await
+    }
+    async fn forget_key_mapping(&self, claim: MappedClaim<'_>) -> Result<(), Error> {
+        let claim = OwnedClaim::from(claim);
+        self.ask(|reply| Ask::ForgetKeyMapping { claim, reply })
+            .await
     }
 
     async fn team(&self, team_id: &str, upsert: bool) -> Result<TeamRead<PyRow>, Error> {
@@ -527,6 +585,24 @@ impl AuthHost for PythonAuthHost {
     async fn granting_team(&self, team_id: &str) -> Result<TeamRead<PyRow>, Error> {
         let team_id = team_id.to_owned();
         self.ask(|reply| Ask::GrantingTeam { team_id, reply }).await
+    }
+    async fn bind_team_member(
+        &self,
+        team: Team<PyRow>,
+        user_id: &str,
+    ) -> Result<Team<PyRow>, Error> {
+        let Some(roster) = team.row.1.clone() else {
+            return Ok(team);
+        };
+        let read = self
+            .ask(|reply| Ask::BindTeamMember {
+                team: team.row,
+                roster,
+                user_id: user_id.to_owned(),
+                reply,
+            })
+            .await?;
+        read.or_not_found(&team.team_id).map_err(Into::into)
     }
     async fn load_team_membership(
         &self,

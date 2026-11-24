@@ -4,9 +4,12 @@ use axum::{
     http::{HeaderMap, HeaderValue, Response, Uri, Version, header},
 };
 
-use crate::{Rejection, server::ClientSocket};
+use crate::{NotForwarded, client::ClientSocket};
 
 pub const PEER_HEADER: &str = "x-litellm-rust-peer";
+
+/// Who answered a response: `native`, or `python` with the reason the native app did not.
+pub const ANSWERED_BY_HEADER: &str = "x-litellm-gateway";
 
 /// The request Python receives: the client's method, target, headers and body unchanged, sent to
 /// `upstream` over HTTP/1.1 without the client connection's own headers, plus the client's TCP
@@ -16,21 +19,21 @@ pub(crate) fn upstream_request(
     upstream: &Uri,
     client: ClientSocket,
     websocket: bool,
-) -> Result<Request, Rejection> {
+) -> Result<Request, NotForwarded> {
     if !only_chunked(request.headers()) {
-        return Err(Rejection::UnsupportedTransferCoding);
+        return Err(NotForwarded::UnsupportedTransferCoding);
     }
     let path_and_query = request
         .uri()
         .path_and_query()
         .cloned()
-        .ok_or(Rejection::NoPath)?;
+        .ok_or(NotForwarded::NoPath)?;
     if let Some(host) = public_host(&request, client)? {
         request.headers_mut().insert(header::HOST, host);
     }
     let mut uri = upstream.clone().into_parts();
     uri.path_and_query = Some(path_and_query);
-    *request.uri_mut() = Uri::from_parts(uri).map_err(|_| Rejection::Internal)?;
+    *request.uri_mut() = Uri::from_parts(uri).map_err(|_| NotForwarded::Internal)?;
     *request.version_mut() = Version::HTTP_11;
     let chunked = request.body().size_hint().exact().is_none();
     let headers = request.headers_mut();
@@ -47,7 +50,7 @@ pub(crate) fn upstream_request(
     }
     headers.insert(
         PEER_HEADER,
-        HeaderValue::from_str(&client.peer.to_string()).map_err(|_| Rejection::Internal)?,
+        HeaderValue::from_str(&client.peer.to_string()).map_err(|_| NotForwarded::Internal)?,
     );
     Ok(request)
 }
@@ -56,17 +59,20 @@ pub(crate) fn upstream_request(
 // on, which behind Rust is the private loopback port. A client that sent no usable Host gets the
 // public address it connected to, which is what Python used before. h11 rejects HTTP/1.1 without
 // Host.
-fn public_host(request: &Request, client: ClientSocket) -> Result<Option<HeaderValue>, Rejection> {
+fn public_host(
+    request: &Request,
+    client: ClientSocket,
+) -> Result<Option<HeaderValue>, NotForwarded> {
     let host = request.headers().get(header::HOST);
     if host.is_some_and(|host| !host.is_empty()) {
         return Ok(None);
     }
     if host.is_none() && request.version() == Version::HTTP_11 {
-        return Err(Rejection::MissingHost);
+        return Err(NotForwarded::MissingHost);
     }
     HeaderValue::from_str(&client.local.to_string())
         .map(Some)
-        .map_err(|_| Rejection::Internal)
+        .map_err(|_| NotForwarded::Internal)
 }
 
 // hyper only decodes chunked framing, so anything else would reach Python still coded but framed

@@ -1568,4 +1568,4 @@ def test_stream_ttft_timeout_failure_exits_preserve_deployment_health_signals(
         message="No model output within stream_ttft_timeout=0.5s", model="ttft-primary", llm_provider="openai"
     )
     setattr(error, "stream_ttft_expired", True)
-    assert core.failure_exits(error, logged, "ttft-primary")["outside_deployment"] is caller
+    assert core.failure_exits(error, logged, "ttft-primary", kwargs)["outside_deployment"] is caller

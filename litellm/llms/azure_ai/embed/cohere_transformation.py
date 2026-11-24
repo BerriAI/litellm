@@ -9,6 +9,7 @@ Convers
 Docs - https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-titan-embed-text.html
 """
 
+from collections.abc import Mapping
 from typing import Final
 
 from litellm.types.llms.azure_ai import ImageEmbeddingInput, ImageEmbeddingRequest
@@ -76,7 +77,7 @@ class AzureAICohereConfig:
         return self._transform_request(input, optional_params, model)
 
     def _transform_response(self, response: EmbeddingResponse) -> EmbeddingResponse:
-        additional_headers: Final[dict | None] = response.hidden_params.get("additional_headers")
+        additional_headers: Final[Mapping[str, object] | None] = response.hidden_params.get("additional_headers")
         if additional_headers:
             # CALCULATE USAGE
             input_tokens: Final[str | None] = additional_headers.get("llm_provider-num_tokens")

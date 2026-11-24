@@ -61,7 +61,7 @@ class GeminiAgentsConfig(BaseAgentsAPIConfig):
         self,
         error_message: str,
         status_code: int,
-        headers: dict | httpx.Headers,
+        headers: Mapping[str, object] | httpx.Headers,
     ) -> Exception:
         return GeminiError(
             message=error_message,

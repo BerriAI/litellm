@@ -14,14 +14,15 @@ from __future__ import annotations
 
 import base64
 import os
-from typing import TYPE_CHECKING, Any, Final, cast
+from collections.abc import Mapping, Sequence
+from typing import TYPE_CHECKING, Any, Final, Protocol, cast
 
 import httpx
 from httpx._types import RequestFiles
 from pydantic import TypeAdapter
 
 from litellm._logging import verbose_logger
-from litellm.litellm_core_utils.core_helpers import decoded_json_object, iter_items
+from litellm.litellm_core_utils.core_helpers import decoded_json_object, has_attributes, iter_items
 from litellm.llms.base_llm.image_edit.transformation import BaseImageEditConfig
 from litellm.llms.bedrock.common_utils import BedrockError
 from litellm.types.images.main import ImageEditOptionalRequestParams
@@ -41,6 +42,14 @@ else:
     LiteLLMLoggingObj = Any
 
 _DECODED_JSON: Final = TypeAdapter(object)
+
+
+class _BinaryReadable(Protocol):
+    def read(self) -> bytes: ...
+
+
+class _Seekable(Protocol):
+    def seek(self, offset: int, /) -> object: ...
 
 
 def _nova_canvas_task_body(
@@ -134,12 +143,12 @@ def _nova_canvas_task_body(
     }
 
 
-def _file_types_to_b64(image: FileTypes | None) -> str:
+def _file_types_to_b64(image: FileTypes | Sequence[FileTypes | None] | None) -> str:
     """Encode OpenAI image input to base64 string for Nova Canvas."""
     if image is None:
         raise ValueError("Nova Canvas image edit requires an image input")
-    if hasattr(image, "read") and callable(getattr(image, "read", None)):
-        if hasattr(image, "seek"):
+    if has_attributes(image, _BinaryReadable, "read") and callable(getattr(image, "read", None)):
+        if has_attributes(image, _Seekable, "seek"):
             image.seek(0)
         image_bytes: Final = image.read()
         return base64.b64encode(image_bytes).decode("utf-8")
@@ -249,7 +258,7 @@ class BedrockAmazonNovaCanvasImageEditConfig(BaseImageEditConfig):
     ) -> BedrockError:
         return BedrockError(status_code=status_code, message=error_message, headers=headers)
 
-    def get_supported_openai_params(self, model: str) -> list:
+    def get_supported_openai_params(self, model: str) -> list[str]:
         return [
             "n",
             "size",
@@ -320,11 +329,11 @@ class BedrockAmazonNovaCanvasImageEditConfig(BaseImageEditConfig):
         self,
         model: str,
         prompt: str | None,
-        image: FileTypes | None,
+        image: FileTypes | Sequence[FileTypes | None] | None,
         image_edit_optional_request_params: dict,
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
-    ) -> tuple[dict, RequestFiles]:
+        headers: Mapping[str, object],
+    ) -> tuple[dict[str, object], RequestFiles]:
         op: Final = dict(image_edit_optional_request_params)
         image_b64: Final = _file_types_to_b64(image)
 
@@ -486,7 +495,7 @@ class BedrockAmazonNovaCanvasImageEditConfig(BaseImageEditConfig):
         self,
         model: str,
         api_base: str | None,
-        litellm_params: dict,
+        litellm_params: Mapping[str, object],
     ) -> str:
         raise NotImplementedError(
             "Nova Canvas image edit URLs are built in BedrockImageEdit._prepare_request "
@@ -496,12 +505,12 @@ class BedrockAmazonNovaCanvasImageEditConfig(BaseImageEditConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, object],
         model: str,
         api_key: str | None = None,
-        litellm_params: dict | None = None,
+        litellm_params: Mapping[str, object] | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         if headers is None:
             headers = {}
         if "Content-Type" not in headers:

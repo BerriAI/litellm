@@ -73,7 +73,7 @@ class AzureOpenAIError(BaseLLMException):
     def __init__(
         self,
         status_code,
-        message,
+        message: str,
         request: httpx.Request | None = None,
         response: httpx.Response | None = None,
         headers: httpx.Headers | dict | None = None,
@@ -249,8 +249,8 @@ def _entra_rejections_as_auth_errors(
     return call_provider
 
 
-def process_azure_headers(headers: httpx.Headers | dict) -> dict:
-    openai_headers: Final = {}
+def process_azure_headers(headers: httpx.Headers | Mapping[str, str]) -> dict[str, str]:
+    openai_headers: Final[dict[str, str]] = {}
     if "x-ratelimit-limit-requests" in headers:
         openai_headers["x-ratelimit-limit-requests"] = headers["x-ratelimit-limit-requests"]
     if "x-ratelimit-remaining-requests" in headers:
@@ -753,12 +753,12 @@ class BaseAzureLLM(BaseOpenAILLM):
         api_base: str | None,
         api_version: str | None = None,
         client: AzureOpenAI | AsyncAzureOpenAI | OpenAI | AsyncOpenAI | None = None,
-        litellm_params: dict | None = None,
+        litellm_params: dict[str, object] | None = None,
         _is_async: bool = False,
         model: str | None = None,
     ) -> AzureOpenAI | AsyncAzureOpenAI | OpenAI | AsyncOpenAI | None:
         openai_client: AzureOpenAI | AsyncAzureOpenAI | OpenAI | AsyncOpenAI | None = None
-        client_initialization_params: Final[dict] = locals()
+        client_initialization_params: Final[dict[str, object]] = locals()
         client_initialization_params["is_async"] = _is_async
         _lp: Final = litellm_params or {}
         _ad_provider: Final = _lp.get("azure_ad_token_provider")
@@ -1042,7 +1042,9 @@ class BaseAzureLLM(BaseOpenAILLM):
         return client
 
     @staticmethod
-    def _base_validate_azure_environment(headers: dict, litellm_params: GenericLiteLLMParams | None) -> dict:
+    def _base_validate_azure_environment(
+        headers: dict[str, str], litellm_params: GenericLiteLLMParams | None
+    ) -> dict[str, str]:
         litellm_params = litellm_params or GenericLiteLLMParams()
 
         # Check if api-key is already in headers; if so, use it

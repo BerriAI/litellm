@@ -82,6 +82,8 @@ from litellm.proxy.utils import PrismaClient, ProxyLogging, hash_token, update_s
 from starlette.datastructures import URL
 
 from litellm.caching.caching import DualCache
+from litellm.proxy.proxy_server import UserApiKeyCache
+from litellm.redis.stores.auth_cache import AuthObject
 from litellm.types.proxy.management_endpoints.ui_sso import (
     LiteLLM_UpperboundKeyGenerateParams,
 )
@@ -221,7 +223,7 @@ def test_generate_and_call_with_valid_key(prisma_client, api_route):
             generated_key = key.key
             bearer_token = "Bearer " + generated_key
 
-            assert generated_key not in user_api_key_cache.in_memory_cache.cache_dict
+            assert user_api_key_cache.get_local(AuthObject.virtual_key(generated_key)) is None
 
             value_from_prisma = await prisma_client.get_data(
                 token=generated_key,
@@ -426,9 +428,7 @@ def test_call_with_proxy_over_budget_stream(prisma_client):
     setattr(litellm, "max_budget", 0.00001)
     from litellm.proxy.proxy_server import user_api_key_cache
 
-    user_api_key_cache.set_cache(
-        key="{}:spend".format(litellm_proxy_budget_name), value=0
-    )
+    user_api_key_cache.set_cache(key=AuthObject.global_proxy_spend(), value=0)
     setattr(litellm.proxy.proxy_server, "user_api_key_cache", user_api_key_cache)
 
     import logging
@@ -842,7 +842,7 @@ def test_call_with_key_over_budget_no_cache(prisma_client):
         from litellm.proxy.proxy_server import ProxyDBLogger
         from litellm.proxy.proxy_server import user_api_key_cache
 
-        user_api_key_cache.in_memory_cache.cache_dict = {}
+        user_api_key_cache.flush_cache()
         setattr(litellm.proxy.proxy_server, "proxy_batch_write_at", 1)
 
         from litellm import Choices, Message, ModelResponse, Usage
@@ -2223,21 +2223,11 @@ async def test_user_api_key_auth_db_unavailable(monkeypatch, rust_auth_stores: R
             print("MockPrismaClient.connect() called")
             pass
 
-    class MockDualCache:
-        async def async_get_cache(self, *args, **kwargs):
-            return None
-
-        async def async_set_cache(self, *args, **kwargs):
-            pass
-
-        async def set_cache(self, *args, **kwargs):
-            pass
-
     rust_auth_stores.key.rows[hash_token("sk-987656789")] = httpx.ConnectError("Failed to connect to DB")
 
     # Set up test environment
     setattr(litellm.proxy.proxy_server, "prisma_client", MockPrismaClient())
-    monkeypatch.setattr(litellm.proxy.proxy_server, "user_api_key_cache", MockDualCache())
+    monkeypatch.setattr(litellm.proxy.proxy_server, "user_api_key_cache", UserApiKeyCache())
     setattr(litellm.proxy.proxy_server, "master_key", MASTER_KEY)
     setattr(
         litellm.proxy.proxy_server,
@@ -2289,21 +2279,11 @@ async def test_user_api_key_auth_db_unavailable_not_allowed(monkeypatch, rust_au
             print("MockPrismaClient.connect() called")
             pass
 
-    class MockDualCache:
-        async def async_get_cache(self, *args, **kwargs):
-            return None
-
-        async def async_set_cache(self, *args, **kwargs):
-            pass
-
-        async def set_cache(self, *args, **kwargs):
-            pass
-
     rust_auth_stores.key.rows[hash_token("sk-987656789")] = httpx.ConnectError("Failed to connect to DB")
 
     # Set up test environment
     setattr(litellm.proxy.proxy_server, "prisma_client", MockPrismaClient())
-    monkeypatch.setattr(litellm.proxy.proxy_server, "user_api_key_cache", MockDualCache())
+    monkeypatch.setattr(litellm.proxy.proxy_server, "user_api_key_cache", UserApiKeyCache())
     setattr(litellm.proxy.proxy_server, "general_settings", {})
     setattr(litellm.proxy.proxy_server, "master_key", MASTER_KEY)
 
@@ -2497,5 +2477,3 @@ def test_should_track_cost_callback():
         team_id=None,
         end_user_id="1234",
     )
-
-

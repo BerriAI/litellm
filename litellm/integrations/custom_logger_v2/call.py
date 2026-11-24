@@ -1,9 +1,9 @@
 from dataclasses import dataclass
-from typing import Final, Generic, TypeVar
+from typing import Generic, TypeVar
 
 from litellm.integrations.custom_logger_v2.enums import Hook
 
-StateT: Final = TypeVar("StateT")
+StateT = TypeVar("StateT")
 
 
 @dataclass(frozen=True, slots=True)

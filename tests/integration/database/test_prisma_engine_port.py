@@ -9,7 +9,7 @@ import pytest
 from prisma import Prisma
 from prisma.engine.errors import AlreadyConnectedError, EngineConnectionError
 
-from litellm.caching.caching import DualCache
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.db.prisma_client import PrismaWrapper
 from litellm.proxy.utils import PrismaClient, ProxyLogging
 from tests.integration._support.database import scratch_database
@@ -24,7 +24,7 @@ async def test_prisma_connect_owns_its_listening_port(occupied: bool, monkeypatc
         if occupied:
             monkeypatch.setattr("prisma.engine.utils.get_open_port", lambda: port)
         monkeypatch.delenv("DATABASE_URL_READ_REPLICA", raising=False)
-        client: Final = PrismaClient(os.environ["DATABASE_URL"], ProxyLogging(DualCache()))
+        client: Final = PrismaClient(os.environ["DATABASE_URL"], ProxyLogging(UserApiKeyCache()))
         try:
             await client.db.connect(timeout=timedelta(seconds=5))
             with pytest.raises(AlreadyConnectedError):

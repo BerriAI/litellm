@@ -8,6 +8,7 @@ from typing import Final
 from urllib.parse import parse_qs, urlparse, urlsplit, urlunsplit
 
 import httpx
+from pydantic import TypeAdapter
 
 import litellm
 from litellm.constants import DEEPGRAM_DEFAULT_API_BASE, DEEPGRAM_LISTEN_DEFAULT_MODEL, DEEPGRAM_SPEAK_DEFAULT_MODEL
@@ -33,6 +34,7 @@ DEEPGRAM_LISTEN_ADDON_PRICING_PARAMS: Final = MappingProxyType(
 )
 _DISABLED_PARAM_VALUES: Final = frozenset({"", "false"})
 _SINGLE_VALUED_PARAMS: Final = frozenset({"model", "language"})
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class DeepgramException(BaseLLMException):
@@ -257,7 +259,7 @@ class DeepgramSpeakMeter:
         counting on send can only over-bill text Deepgram discards, such as a Clear or an oversized Speak. Never
         raises, so a malformed frame can't end the session"""
         try:
-            message: Final[object] = json.loads(client_text)
+            message: Final = _DECODED_JSON.validate_python(json.loads(client_text))
         except (ValueError, RecursionError):
             return 0
         match message:

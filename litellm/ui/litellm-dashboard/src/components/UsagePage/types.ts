@@ -10,6 +10,8 @@ export interface SpendMetrics {
   failed_requests: number;
   cache_read_input_tokens: number;
   cache_creation_input_tokens: number;
+  cache_cost?: number;
+  priced_cache_tokens?: number;
   compression_saved_tokens?: number;
   compression_savings_spend?: number;
   prompt_caching_savings_spend?: number;
@@ -73,6 +75,8 @@ export interface ModelActivityData {
   total_failed_requests: number;
   total_cache_read_input_tokens: number;
   total_cache_creation_input_tokens: number;
+  total_cache_cost?: number;
+  total_priced_cache_tokens?: number;
   total_tokens: number;
   prompt_tokens: number;
   completion_tokens: number;

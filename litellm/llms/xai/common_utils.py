@@ -40,14 +40,14 @@ class XAIModelInfo(BaseLLMModelInfo):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, object],
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         if api_key is not None:
             headers["Authorization"] = f"Bearer {api_key}"
 
@@ -105,7 +105,7 @@ class XAIModelInfo(BaseLLMModelInfo):
 
         models: Final = _JSON_VALUES.validate_python(_JSON_OBJECT.validate_python(response.json())["data"])
 
-        litellm_model_names: Final = []
+        litellm_model_names: Final[list[str]] = []
         for model in models:
             stripped_model_name = _MODEL_ID.validate_python(_JSON_OBJECT.validate_python(model)["id"])
             litellm_model_name = "xai/" + stripped_model_name

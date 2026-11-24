@@ -1,19 +1,13 @@
 import { useMemo } from "react";
 import { skipToken, useQuery } from "@tanstack/react-query";
-import { parseAsInteger, parseAsString, parseAsStringLiteral, useQueryStates } from "nuqs";
+import { parseAsString, useQueryStates } from "nuqs";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
-import {
-  modelColorMap,
-  overviewTotals,
-  type Granularity,
-  type UsageMetric,
-} from "@/app/(dashboard)/usage/_components/components/overview/overviewData";
+import { overviewTotals } from "@/app/(dashboard)/usage/_components/components/overview/overviewData";
 import type { DateRangePickerValue } from "@/components/shared/date_picker_types";
 import { EMPTY_DAILY_ACTIVITY_METADATA } from "@/components/UsagePage/dailyActivityApi";
 import type { DailyData } from "@/components/UsagePage/types";
 import { customerHierarchyUsageCall, type CustomerUsageScope } from "./customerUsageApi";
-import { rankCustomerModels, rankCustomerUsage } from "./customerUsageData";
-import { CUSTOMER_USAGE_DIMENSIONS, type CustomerUsageDimension } from "./CustomerUsageRankings";
+import { customerUsageAnalysisParsers } from "./CustomerUsageAnalysis";
 import { customerAppParsers } from "./CustomerHierarchyNavigation";
 import {
   calendarDate,
@@ -28,11 +22,7 @@ const usageParsers = {
   org: parseAsString,
   team: parseAsString,
   member: parseAsString,
-  metric: parseAsStringLiteral(["spend", "tokens", "requests"] as const).withDefault("spend"),
-  breakdown: parseAsStringLiteral(CUSTOMER_USAGE_DIMENSIONS).withDefault("models"),
-  bucket: parseAsStringLiteral(["day", "week"] as const).withDefault("day"),
-  search: parseAsString.withDefault(""),
-  usagePage: parseAsInteger.withDefault(1),
+  ...customerUsageAnalysisParsers,
   ...customerUsageDateParsers,
 };
 const EMPTY_RESULTS: readonly DailyData[] = [];
@@ -88,14 +78,6 @@ export default function useCustomerHierarchyUsage() {
   const data = usage.data;
   const results = data?.results ?? EMPTY_RESULTS;
   const totals = useMemo(() => overviewTotals(data?.metadata ?? EMPTY_DAILY_ACTIVITY_METADATA, null), [data]);
-  const modelColors = useMemo(() => modelColorMap(results), [results]);
-  const rows = useMemo(
-    () =>
-      params.breakdown === "models"
-        ? rankCustomerModels(results, params.metric, totals)
-        : rankCustomerUsage(data?.[params.breakdown] ?? [], params.metric, totals),
-    [data, results, params.breakdown, params.metric, totals],
-  );
   const drillDown = (dimension: "teams" | "members", id: string) => {
     const patch = {
       ...(dimension === "teams" ? { team: id, member: null } : { member: id }),
@@ -109,14 +91,8 @@ export default function useCustomerHierarchyUsage() {
     const patch = customerDatePatch(value, selectedPreset);
     if (patch) void setParams({ ...patch, usagePage: null }, { history: "push" });
   };
-  const setDimension = (breakdown: CustomerUsageDimension) =>
-    void setParams({ breakdown, search: null, usagePage: null });
   const selectOrganization = () => void setParams(ORGANIZATION_PATCH, { history: "push" });
-  const selectTeam = () => void setParams(TEAM_PATCH, { history: "push" });
-  const setMetric = (metric: UsageMetric) => void setParams({ metric, usagePage: null });
-  const setBucket = (bucket: Granularity) => void setParams({ bucket });
-  const setSearch = (search: string) => void setParams({ search, usagePage: null });
-  const setPage = (usagePage: number) => void setParams({ usagePage });
+  const selectTeam = () => void setParams({ ...TEAM_PATCH, team: data?.team?.id ?? params.team }, { history: "push" });
   const setApp = (app_id: string | null) =>
     void setParams({ app_id, search: null, usagePage: null }, { history: "push" });
 
@@ -129,17 +105,11 @@ export default function useCustomerHierarchyUsage() {
     data,
     results,
     totals,
-    modelColors,
-    rows,
     drillDown,
     setDateRange,
-    setDimension,
     selectOrganization,
     selectTeam,
-    setMetric,
-    setBucket,
-    setSearch,
-    setPage,
     setApp,
+    appOrganizationSpend: params.app_id ? null : data?.monthlyOrganizationSpend ?? null,
   };
 }

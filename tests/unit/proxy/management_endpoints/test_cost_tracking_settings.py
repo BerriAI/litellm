@@ -6,6 +6,8 @@ Tests the GET and PATCH endpoints for managing cost discount configuration.
 
 import asyncio
 from datetime import datetime, timezone
+from pathlib import Path
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -17,6 +19,7 @@ import litellm
 from litellm._internal_context import pinned_billing_time
 from litellm.proxy._types import CostEstimateRequest
 from litellm.proxy.management_endpoints.cost_tracking_settings import (
+    get_cost_margin_config,
     router,
     update_cost_discount_config,
     update_cost_margin_config,
@@ -24,6 +27,32 @@ from litellm.proxy.management_endpoints.cost_tracking_settings import (
 from litellm.proxy.proxy_server import app
 
 client = TestClient(app)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("config_owned", (True, False))
+async def test_get_margin_reports_effective_config_ownership(config_owned: bool, tmp_path: Path) -> None:
+    from litellm.proxy import proxy_server
+
+    config: Final = proxy_server.ProxyConfig()
+    config_file: Final = tmp_path / "config.yaml"
+    config_file.write_text(
+        "litellm_settings:\n  cost_margin_config: {openai: 0.1}\n" if config_owned else "litellm_settings: {}\n"
+    )
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+        patch("litellm.proxy.proxy_server.proxy_config", config),
+        patch("litellm.proxy.proxy_server.store_model_in_db", False),
+        patch("litellm.proxy.proxy_server.user_config_file_path", str(config_file)),
+    ):
+        response: Final = await get_cost_margin_config()
+
+    assert response == {
+        "values": {"openai": 0.1} if config_owned else {},
+        "source": "config" if config_owned else "unset",
+        "editable": not config_owned,
+    }
 
 
 class TestCostTrackingSettings:
@@ -1039,6 +1068,44 @@ class TestEstimateCostPeriodTotals:
         assert response.cost_per_request == pytest.approx(0.0022)
         assert response.daily_margin_cost == pytest.approx(0.02)
         assert response.daily_cost == pytest.approx(0.22)
+
+
+class TestEstimateCostBedrockProfileBaseModel:
+    @pytest.mark.asyncio
+    async def test_a_bedrock_profile_base_model_without_prices_estimates_at_the_served_model_rates(self, monkeypatch):
+        from litellm import Router
+
+        model = "anthropic.estimate-unpriced-profile-test"
+        profile = "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/estimate-test"
+        monkeypatch.setattr(
+            litellm,
+            "model_cost",
+            {
+                **litellm.model_cost,
+                model: {
+                    "litellm_provider": "bedrock",
+                    "mode": "chat",
+                    "input_cost_per_token": 0.03,
+                    "output_cost_per_token": 0.04,
+                },
+            },
+        )
+        llm_router = Router(
+            model_list=[
+                {"model_name": "by-arn", "litellm_params": {"model": f"bedrock/{profile}"}},
+                {
+                    "model_name": AN_ALIAS,
+                    "litellm_params": {"model": f"bedrock/converse/{model}", "model_id": profile},
+                    "model_info": {"base_model": f"bedrock/{profile}"},
+                },
+            ]
+        )
+
+        response = await _estimate(llm_router)
+
+        assert response.input_cost_per_token == pytest.approx(0.03)
+        assert response.output_cost_per_token == pytest.approx(0.04)
+        assert response.cost_per_request == pytest.approx(INPUT_TOKENS * 0.03 + OUTPUT_TOKENS * 0.04)
 
 
 CACHE_READ_TOKENS = 800

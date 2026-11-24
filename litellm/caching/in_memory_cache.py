@@ -13,19 +13,20 @@ import json
 import sys
 import threading
 import time
-from collections.abc import Callable
-from typing import TYPE_CHECKING, Any, Final
+from collections.abc import Callable, Iterable, Sequence
+from typing import TYPE_CHECKING, Final
 
 if TYPE_CHECKING:
     from litellm.types.caching import RedisPipelineIncrementOperation
 
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter
 
 from litellm.constants import MAX_SIZE_PER_ITEM_IN_MEMORY_CACHE_IN_KB
 
 from .base_cache import BaseCache
 
 DEFAULT_MAX_SIZE_IN_MEMORY: Final = 200
+_UNTYPED_VALUE: Final = TypeAdapter(object)
 
 
 class InMemoryCache(BaseCache):
@@ -54,7 +55,7 @@ class InMemoryCache(BaseCache):
         self._write_lock = threading.Lock()
         self._clock = clock if clock is not None else lambda: time.time()
 
-    def check_value_size(self, value: Any):
+    def check_value_size(self, value: object):
         """
         Check if value size exceeds max_size_per_item (1MB)
         Returns True if value size is acceptable, False otherwise
@@ -103,7 +104,7 @@ class InMemoryCache(BaseCache):
     def _cache_keys(self) -> tuple[str, ...]:
         return tuple(self.cache_dict)  # pyright: ignore[reportUnknownVariableType]  # cache_dict is untyped legacy state
 
-    def _remove_key(self, key: str) -> None:
+    def _remove_key(self, key: object) -> None:
         """
         Remove a key from both cache_dict and ttl_dict
         """
@@ -172,7 +173,7 @@ class InMemoryCache(BaseCache):
         else:
             return False
 
-    def set_cache(self, key, value, **kwargs):
+    def set_cache(self, key: str, value: object, **kwargs):
         # Handle the edge case where max_size_in_memory is 0
         if self.max_size_in_memory == 0:
             return  # Don't cache anything if max size is 0
@@ -182,7 +183,7 @@ class InMemoryCache(BaseCache):
             # This keeps expiration_heap bounded even when the live cache stays
             # below max_size_in_memory and keys are reinserted after TTL expiry.
             self.evict_cache()
-            if not self.check_value_size(value):
+            if not self.check_value_size(_UNTYPED_VALUE.validate_python(value)):
                 return
 
             self.cache_dict[key] = value
@@ -194,17 +195,19 @@ class InMemoryCache(BaseCache):
                     self.ttl_dict[key] = self._clock() + self.default_ttl
                     heapq.heappush(self.expiration_heap, (self.ttl_dict[key], key))
 
-    async def async_set_cache(self, key, value, **kwargs):
+    async def async_set_cache(self, key: str, value: object, **kwargs):
         self.set_cache(key=key, value=value, **kwargs)
 
-    async def async_set_cache_pipeline(self, cache_list, ttl=None, **kwargs):
+    async def async_set_cache_pipeline(
+        self, cache_list: Iterable[tuple[str, object]], ttl: object = None, **kwargs: object
+    ):
         for cache_key, cache_value in cache_list:
             if ttl is not None:
                 self.set_cache(key=cache_key, value=cache_value, ttl=ttl)
             else:
                 self.set_cache(key=cache_key, value=cache_value)
 
-    async def async_set_cache_sadd(self, key, value: list, ttl: float | None):
+    async def async_set_cache_sadd(self, key: str, value: Sequence[object], ttl: float | None):
         """
         Add value to set
         """
@@ -226,7 +229,7 @@ class InMemoryCache(BaseCache):
             return True
         return False
 
-    def get_cache(self, key, **kwargs):
+    def get_cache(self, key, **kwargs: object):
         if key in self.cache_dict:
             if self.evict_element_if_expired(key):
                 return None
@@ -241,14 +244,14 @@ class InMemoryCache(BaseCache):
             return cached_response
         return None
 
-    def batch_get_cache(self, keys: list, **kwargs):
-        return_val: Final = []
+    def batch_get_cache(self, keys: Sequence[object], **kwargs: object):
+        return_val: Final[list[object | None]] = []
         for k in keys:
             val = self.get_cache(key=k, **kwargs)
             return_val.append(val)
         return return_val
 
-    def increment_cache(self, key, value: float, **kwargs) -> float:
+    def increment_cache(self, key: str, value: float, **kwargs: object) -> float:
         with self._increment_lock:
             # keep read-modify-write atomic
             init_value: Final = self.get_cache(key=key) or 0
@@ -256,23 +259,23 @@ class InMemoryCache(BaseCache):
             self.set_cache(key, value, **kwargs)
             return value
 
-    async def async_get_cache(self, key, **kwargs):
+    async def async_get_cache(self, key, **kwargs: object):
         return self.get_cache(key=key, **kwargs)
 
-    async def async_batch_get_cache(self, keys: list, **kwargs):
-        return_val: Final = []
+    async def async_batch_get_cache(self, keys: Sequence[object], **kwargs: object):
+        return_val: Final[list[object | None]] = []
         for k in keys:
             val = self.get_cache(key=k, **kwargs)
             return_val.append(val)
         return return_val
 
-    async def async_increment(self, key, value: float, **kwargs) -> float:
+    async def async_increment(self, key: str, value: float, **kwargs: object) -> float:
         return self.increment_cache(key=key, value=value, **kwargs)
 
     async def async_increment_pipeline(
-        self, increment_list: list["RedisPipelineIncrementOperation"], **kwargs
+        self, increment_list: list["RedisPipelineIncrementOperation"], **kwargs: object
     ) -> list[float] | None:
-        results: Final = []
+        results: Final[list[float]] = []
         for increment in increment_list:
             result = await self.async_increment(
                 increment["key"], increment["increment_value"], ttl=increment["ttl"], **kwargs
@@ -289,7 +292,7 @@ class InMemoryCache(BaseCache):
     async def disconnect(self):
         pass
 
-    def delete_cache(self, key: str) -> None:
+    def delete_cache(self, key: object) -> None:
         self._remove_key(key)
 
     async def async_get_ttl(self, key: str) -> int | None:

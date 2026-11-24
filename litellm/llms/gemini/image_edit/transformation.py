@@ -1,5 +1,5 @@
 import base64
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from io import BufferedReader, BytesIO
 from typing import TYPE_CHECKING, Any, Final, Protocol, cast
 
@@ -73,12 +73,12 @@ class GeminiImageEditConfig(BaseImageEditConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, object],
         model: str,
         api_key: str | None = None,
-        litellm_params: dict | None = None,
+        litellm_params: Mapping[str, object] | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         final_api_key: Final[str | None] = api_key or get_secret_str("GEMINI_API_KEY")
         if not final_api_key:
             raise ValueError("GEMINI_API_KEY is not set")
@@ -95,7 +95,7 @@ class GeminiImageEditConfig(BaseImageEditConfig):
         self,
         model: str,
         api_base: str | None,
-        litellm_params: dict,
+        litellm_params: Mapping[str, object],
     ) -> str:
         base_url: Final = api_base or get_secret_str("GEMINI_API_BASE") or self.DEFAULT_BASE_URL
         return join_api_base(base_url, f"models/{model}:generateContent")
@@ -104,10 +104,10 @@ class GeminiImageEditConfig(BaseImageEditConfig):
         self,
         model: str,
         prompt: str | None,
-        image: FileTypes | None,
+        image: FileTypes | Sequence[FileTypes | None] | None,
         image_edit_optional_request_params: Mapping[str, object],
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
+        headers: Mapping[str, object],
     ) -> tuple[dict[str, object], RequestFiles | None]:
         inline_parts: Final = self._prepare_inline_image_parts(image) if image else []
         if not inline_parts:
@@ -179,8 +179,8 @@ class GeminiImageEditConfig(BaseImageEditConfig):
             model_response.usage = transform_gemini_image_usage(dict(decoded_json_object(payload["usageMetadata"])))
         return model_response
 
-    def _prepare_inline_image_parts(self, image: FileTypes | list[FileTypes]) -> list[dict[str, object]]:
-        images: list[FileTypes]
+    def _prepare_inline_image_parts(self, image: FileTypes | Sequence[FileTypes | None]) -> list[dict[str, object]]:
+        images: Sequence[object]
         if isinstance(image, list):
             images = image
         else:
@@ -204,7 +204,7 @@ class GeminiImageEditConfig(BaseImageEditConfig):
 
         return inline_parts
 
-    def _read_all_bytes(self, image: FileTypes) -> bytes:
+    def _read_all_bytes(self, image: object) -> bytes:
         if isinstance(image, bytes):
             return image
         if isinstance(image, BytesIO):
