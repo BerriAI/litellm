@@ -167,10 +167,10 @@ class IBMWatsonXAIConfig(IBMWatsonXMixin, BaseConfig):
     def map_openai_params(
         self,
         non_default_params: Mapping[str, object],
-        optional_params: dict[str, object],
+        optional_params: dict,
         model: str,
         drop_params: bool,
-    ) -> dict[str, object]:
+    ) -> dict:
         extra_body: Final = {}
         for k, v in non_default_params.items():
             if k == "max_tokens":
@@ -216,7 +216,7 @@ class IBMWatsonXAIConfig(IBMWatsonXMixin, BaseConfig):
             "token": "watsonx_token",
         }
 
-    def map_special_auth_params(self, non_default_params: Mapping[str, object], optional_params: dict[str, object]):
+    def map_special_auth_params(self, non_default_params: Mapping[str, object], optional_params: dict):
         mapped_params: Final = self.get_mapped_special_auth_params()
 
         for param, value in non_default_params.items():
@@ -241,7 +241,7 @@ class IBMWatsonXAIConfig(IBMWatsonXMixin, BaseConfig):
             "us-south",
         ]
 
-    def _build_request_payload(self, model: str, prompt: str, optional_params: dict) -> dict[str, object]:
+    def _build_request_payload(self, model: str, prompt: str, optional_params: dict) -> dict:
         """Shared logic to build request payload"""
         extra_body_params: Final = optional_params.pop("extra_body", {})
         optional_params.update(extra_body_params)
@@ -263,10 +263,10 @@ class IBMWatsonXAIConfig(IBMWatsonXMixin, BaseConfig):
         self,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict[str, object],
+        optional_params: dict,
         litellm_params: Mapping[str, object],
         headers: Mapping[str, object],
-    ) -> dict[str, object]:
+    ) -> dict:
         provider: Final = model.split("/")[0]
         prompt: Final = await aconvert_watsonx_messages_to_prompt(
             model=model, messages=messages, provider=provider, custom_prompt_dict={}
@@ -277,10 +277,10 @@ class IBMWatsonXAIConfig(IBMWatsonXMixin, BaseConfig):
         self,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict[str, object],
+        optional_params: dict,
         litellm_params: Mapping[str, object],
         headers: Mapping[str, object],
-    ) -> dict[str, object]:
+    ) -> dict:
         """Sync version of transform_request"""
         provider: Final = model.split("/")[0]
         prompt: Final = convert_watsonx_messages_to_prompt(

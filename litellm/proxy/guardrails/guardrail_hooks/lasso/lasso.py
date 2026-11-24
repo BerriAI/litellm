@@ -58,7 +58,6 @@ from litellm.proxy.guardrails._content_utils import (
 )
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.llms.openai import ChatCompletionAssistantToolCall
-from litellm.types.utils import LLMResponseTypes
 
 
 class LassoResponse(TypedDict):
@@ -186,7 +185,7 @@ class LassoGuardrail(CustomGuardrail):
         self,
         user_api_key_dict: UserAPIKeyAuth,
         cache: DualCache,  # Deprecated, use global_cache instead (kept to align with CustomGuardrail interface)
-        data: dict[str, object],
+        data: dict,
         call_type: Literal[
             "completion",
             "text_completion",
@@ -199,7 +198,7 @@ class LassoGuardrail(CustomGuardrail):
             "mcp_call",
             "anthropic_messages",
         ],
-    ) -> Exception | str | dict[str, object] | None:
+    ) -> Exception | str | dict | None:
         """
         Runs before the LLM API call to validate and potentially modify input.
         Uses 'PROMPT' messageType as this is input to the model.
@@ -218,7 +217,7 @@ class LassoGuardrail(CustomGuardrail):
     @log_guardrail_information
     async def async_moderation_hook(
         self,
-        data: dict[str, object],
+        data: dict,
         user_api_key_dict: UserAPIKeyAuth,
         call_type: Literal[
             "completion",
@@ -246,9 +245,9 @@ class LassoGuardrail(CustomGuardrail):
     @log_guardrail_information
     async def async_post_call_success_hook(
         self,
-        data: dict[str, object],
+        data: dict,
         user_api_key_dict: UserAPIKeyAuth,
-        response: LLMResponseTypes,
+        response,
     ):
         """
         Runs after the LLM API call to validate the response.
@@ -453,7 +452,7 @@ class LassoGuardrail(CustomGuardrail):
         message_type: Literal["PROMPT", "COMPLETION"],
         messages: Sequence[Mapping[str, object]],
         messages_count: int,
-    ) -> dict[str, object]:
+    ) -> dict:
         """Handle masking with classifix endpoint.
 
         ``messages_count`` is the number of inspected items derived from
@@ -917,7 +916,7 @@ class LassoGuardrail(CustomGuardrail):
             >>> guardrail._check_for_blocking_actions(response)
             ['jailbreak']
         """
-        blocking_violations: Final[list[str]] = []
+        blocking_violations: Final = []
         findings: Final = response.get("findings", {})
 
         for deputy_name, deputy_findings in findings.items():
@@ -932,7 +931,7 @@ class LassoGuardrail(CustomGuardrail):
 
     def _parse_violated_deputies(self, response: LassoResponse) -> list[str]:
         """Parse the response to extract violated deputies."""
-        violated_deputies: Final[list[str]] = []
+        violated_deputies: Final = []
         if "deputies" in response:
             for deputy, is_violated in response["deputies"].items():
                 if is_violated:
