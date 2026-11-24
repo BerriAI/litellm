@@ -38,7 +38,7 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import (  # noqa: E4
 )
 from opentelemetry import trace  # noqa: E402
 from opentelemetry.sdk.trace.sampling import ALWAYS_OFF  # noqa: E402
-from opentelemetry.trace import SpanKind  # noqa: E402
+from opentelemetry.trace import SpanKind, StatusCode  # noqa: E402
 
 from litellm.constants import LITELLM_UI_ALLOW_HEADERS  # noqa: E402
 from litellm.types.services import ServiceLoggerPayload, ServiceTypes  # noqa: E402  # optional dependencies are skipped first
@@ -425,7 +425,9 @@ def test_server_spans_survive_another_tracer_wrapping_the_middleware_stack(monke
     assert client.get("/ok").status_code == 200
     assert client.get("/crash").status_code == 500
 
-    assert set(_server_spans_by_route(exporter)) == {"/ok", "/crash"}
+    server_spans: Final = [span for span in exporter.get_finished_spans() if span.kind is SpanKind.SERVER]
+    assert sorted((span.attributes or {})["http.route"] for span in server_spans) == ["/crash", "/ok"]
+    assert _server_spans_by_route(exporter)["/crash"].status.status_code is StatusCode.ERROR
     assert app.outer_tracer.paths == ["/ok", "/crash"]
     assert handled == ["/crash"]
 

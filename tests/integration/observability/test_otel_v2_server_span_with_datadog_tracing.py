@@ -49,6 +49,12 @@ def _server_spans(spans: tuple[Span, ...]) -> tuple[Span, ...]:
     return tuple(span for span in spans if span["kind"] == SERVER)
 
 
+def _has_server_and_model_call_spans(spans: tuple[Span, ...]) -> bool:
+    return bool(_server_spans(spans)) and any(
+        span["attributes"].get("gen_ai.operation.name") == "chat" for span in spans
+    )
+
+
 def test_a_request_keeps_its_server_span_and_team_identity_when_datadog_tracing_is_on(
     gateway: Gateway, audit_sinks: SpanSinks, otel_audit_config: AuditConfigWriter, tmp_path: Path
 ) -> None:
@@ -75,7 +81,7 @@ def test_a_request_keeps_its_server_span_and_team_identity_when_datadog_tracing_
         assert response.status_code == 200, response.text
         trace: Final = eventually(
             lambda: spans_for_trace(recorded_spans(audit_sinks.operator, start)[1], trace_id),
-            lambda spans: len(_server_spans(spans)) > 0,
+            _has_server_and_model_call_spans,
             seconds=60,
             return_last_on_timeout=True,
         )
