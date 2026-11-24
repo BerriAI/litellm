@@ -1130,6 +1130,46 @@ async def test_a_live_session_charges_a_delegated_response_to_the_delegated_mode
 
 
 @pytest.mark.asyncio
+async def test_svg_authoring_is_charged_to_the_author_models_budget_not_the_image_models():
+    from litellm.types.utils import ImageResponse
+
+    svg_cost: Final = (
+        1000 * litellm.model_cost["gpt-5-nano"]["input_cost_per_token"]
+        + 500 * litellm.model_cost["gpt-5-nano"]["output_cost_per_token"]
+    )
+    image_cost: Final = 0.02
+    budget: Final = {"budget_limit": 1.0, "time_period": "1d"}
+    limiter: Final = PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=DualCache())
+
+    await _log_success(
+        limiter,
+        {
+            "call_type": "aimage_generation",
+            "custom_llm_provider": "openai",
+            "standard_logging_object": {
+                "call_type": "aimage_generation",
+                "response_cost": image_cost + svg_cost,
+                "model": "gpt-image-1",
+                "model_group": "gpt-image-1",
+                "metadata": {"user_api_key_hash": KEY_HASH},
+            },
+            "litellm_params": {
+                "metadata": {"user_api_key_model_max_budget": {"gpt-image-1": budget, "gpt-5-nano": budget}}
+            },
+        },
+        response_obj=ImageResponse(
+            data=[{"b64_json": "svg"}],
+            svg_usage={"model": "gpt-5-nano", "input_tokens": 1000, "output_tokens": 500, "total_tokens": 1500},
+        ),
+    )
+
+    assert {
+        model: await _spend(limiter, f"virtual_key_spend:{KEY_HASH}:{model}:1d")
+        for model in ("gpt-image-1", "gpt-5-nano")
+    } == {"gpt-image-1": pytest.approx(image_cost), "gpt-5-nano": pytest.approx(svg_cost)}
+
+
+@pytest.mark.asyncio
 async def test_a_delegated_response_is_charged_to_every_budgeted_group_that_calls_its_model(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

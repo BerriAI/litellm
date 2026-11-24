@@ -2895,10 +2895,30 @@ def _configured_search_cost_per_query(litellm_logging_obj: LitellmLoggingObject 
 
 
 def _svg_author_deployment(litellm_logging_obj: LitellmLoggingObject | None) -> ImageSVGAuthorDeployment | None:
-    logged_params: Final = getattr(litellm_logging_obj, "litellm_params", None)
-    if logged_params is None:
-        return None
-    params: Final = _LOGGED_LITELLM_PARAMS.validate_python(logged_params)
+    logged_params: Final[object] = getattr(litellm_logging_obj, "litellm_params", None)
+    return None if logged_params is None else svg_author_deployment_in(logged_params)
+
+
+def svg_authoring_model_cost(
+    response: object, custom_llm_provider: object, logged_params: object
+) -> tuple[tuple[str, float], ...]:
+    """The model OpenAI ran to write an image response's SVG, with what it cost, priced the way the request was."""
+    from litellm.llms.openai.image_generation.cost_calculator import svg_authoring_cost
+
+    svg_usage: Final = response.svg_usage if isinstance(response, ImageResponse) else None
+    if svg_usage is None:
+        return ()
+    cost: Final = svg_authoring_cost(
+        svg_usage,
+        custom_llm_provider if isinstance(custom_llm_provider, str) else None,
+        svg_author_deployment_in(logged_params),
+    )
+    return ((svg_usage.model, cost),) if cost > 0 else ()
+
+
+def svg_author_deployment_in(logged_params: object) -> ImageSVGAuthorDeployment | None:
+    """The svg author deployment stamped on a request, when the image deployment that served it bills like it."""
+    params: Final = _metadata_bucket(logged_params)
     buckets: Final = tuple(_metadata_bucket(params.get(key)) for key in ("metadata", "litellm_metadata"))
     stamp: Final = next(
         (

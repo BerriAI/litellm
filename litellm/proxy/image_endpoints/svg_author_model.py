@@ -9,7 +9,7 @@ from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 import litellm
 from litellm.constants import SVG_AUTHOR_DEPLOYMENT_METADATA_KEY
 from litellm.litellm_core_utils.routing_common_utils import resolve_model_group_alias
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy._types import ProxyErrorTypes, ProxyException, UserAPIKeyAuth
 from litellm.proxy.auth.auth_checks import (
     can_agent_call_model,
     can_key_call_resolved_model,
@@ -18,6 +18,7 @@ from litellm.proxy.auth.auth_checks import (
     get_user_object,
     key_model_aliases_for_auth_check,
 )
+from litellm.proxy.hooks.model_max_budget_limiter import delegated_model_over_budget
 from litellm.proxy.litellm_pre_call_utils import customer_request_auth, request_served_model
 from litellm.types.images.main import ImageSVGAuthorDeployment
 from litellm.types.proxy.auth.auth_checks import UserNotFoundError
@@ -206,6 +207,38 @@ async def _check_key_owner_access(model: str, user_api_key_dict: UserAPIKeyAuth,
     )
 
 
+async def _refuse_an_author_over_its_budget(authors: tuple[str, ...], caller: UserAPIKeyAuth) -> None:
+    for author in authors:
+        if (budgeted := await delegated_model_over_budget(author, caller)) is not None:
+            raise ProxyException(
+                message=f"Budget exceeded for model={budgeted}, so svg.model cannot use {author}",
+                type=ProxyErrorTypes.budget_exceeded,
+                param="svg.model",
+                code=400,
+            )
+
+
+def _metadata_with_author_guardrails(
+    body: Mapping[str, object], served_author: str, llm_router: "Router | None"
+) -> Mapping[str, object] | None:
+    """The request metadata with the author deployment's guardrails added, or None when it has none to add."""
+    from litellm.proxy.utils import (
+        check_and_merge_model_level_guardrails,  # pyright: ignore[reportUnknownVariableType]  # takes and returns the untyped request dict
+    )
+
+    metadata: Final = _as_object(body.get("metadata")) or {}
+    merged: Final = _as_object(
+        check_and_merge_model_level_guardrails(  # pyright: ignore[reportUnknownArgumentType]  # returns the untyped request dict
+            data={**body, "metadata": dict(metadata)},
+            llm_router=llm_router,
+            trust_client_model_info=False,
+            model_alias=served_author,
+        )
+    )
+    merged_metadata: Final = _as_object((merged or {}).get("metadata")) or {}
+    return None if merged_metadata.get("guardrails") == metadata.get("guardrails") else merged_metadata
+
+
 async def svg_author_model_updates(
     body: Mapping[str, object],
     user_api_key_dict: UserAPIKeyAuth,
@@ -254,13 +287,20 @@ async def _authorized_author_updates(
             llm_router=llm_router,
         )
         await _check_key_owner_access(name, valid_token, llm_router)
+    await _refuse_an_author_over_its_budget(tuple(dict.fromkeys(name for name, _ in checks)), user_api_key_dict)
     if deployment is None:
         return {}
     provider_model: Final = _provider_and_model(deployment.litellm_params)[1]
     billed_like_author: Final = _image_deployments_billed_like(deployment, body, user_api_key_dict.team_id, llm_router)
-    metadata: Final = _as_object(body.get(metadata_variable_name)) or {}
+    guarded_metadata: Final = _metadata_with_author_guardrails(body, served_author, llm_router)
+    metadata: Final = (
+        guarded_metadata
+        if guarded_metadata is not None and metadata_variable_name == "metadata"
+        else _as_object(body.get(metadata_variable_name)) or {}
+    )
     return {
         **_rewritten_body_fields(body, provider_model),
+        **({"metadata": guarded_metadata} if guarded_metadata is not None else {}),
         **(
             {
                 metadata_variable_name: {

@@ -320,3 +320,52 @@ async def test_author_price_covers_only_image_deployments_on_the_authors_account
     authorized: Final = await _authorize(_request(_svg_top_level, "my-nano"), UserAPIKeyAuth(), two_accounts)
     stamp: Final = authorized["metadata"][SVG_AUTHOR_DEPLOYMENT_METADATA_KEY]
     assert stamp["image_deployment_ids"] == ("image-same-account",)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("spend", "denied"), [(0.5, False), (1.0, True)], ids=["under-budget", "at-budget"])
+async def test_svg_author_over_its_model_budget_is_refused(spend: float, denied: bool, router: Router) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy._types import Litellm_EntityType
+    from litellm.proxy.hooks.model_max_budget_limiter import model_budget_spend_cache_key
+
+    key: Final = UserAPIKeyAuth(
+        token="svg-budget-key",
+        models=["gpt-image-2.6", "my-nano"],
+        model_max_budget={"my-nano": {"budget_limit": 1.0, "time_period": "1d"}},
+    )
+    spend_key: Final = model_budget_spend_cache_key(
+        entity_type=Litellm_EntityType.KEY, entity_id="svg-budget-key", budget_model="my-nano", budget_duration="1d"
+    )
+    await proxy_server.model_max_budget_limiter.dual_cache.async_set_cache(spend_key, spend)
+    try:
+        if denied:
+            with pytest.raises(ProxyException) as refused:
+                await _authorize(_request(_svg_top_level, "my-nano"), key, router)
+            assert refused.value.type == "budget_exceeded"
+        else:
+            assert _author_sent(await _authorize(_request(_svg_top_level, "my-nano"), key, router)) == "gpt-5-nano"
+    finally:
+        await proxy_server.model_max_budget_limiter.dual_cache.async_delete_cache(spend_key)
+
+
+@pytest.mark.asyncio
+async def test_svg_author_deployment_guardrails_join_the_requests_own() -> None:
+    guarded: Final = Router(
+        model_list=[
+            {
+                "model_name": "gpt-image-2.6",
+                "litellm_params": {"model": "openai/gpt-image-2.6-flare", "api_key": "sk-test"},
+                "model_info": {"id": "image-deployment"},
+            },
+            {
+                "model_name": "my-nano",
+                "litellm_params": {"model": "openai/gpt-5-nano", "api_key": "sk-test", "guardrails": ["pii-mask"]},
+                "model_info": {"id": AUTHOR_DEPLOYMENT_ID},
+            },
+        ]
+    )
+    request: Final = {**_request(_svg_top_level, "my-nano"), "metadata": {"guardrails": ["caller-guard"]}}
+    authorized: Final = await _authorize(request, UserAPIKeyAuth(), guarded)
+    assert authorized["metadata"]["guardrails"] == ["caller-guard", "pii-mask"]
+    assert authorized["metadata"][SVG_AUTHOR_DEPLOYMENT_METADATA_KEY] == AUTHOR_STAMP
