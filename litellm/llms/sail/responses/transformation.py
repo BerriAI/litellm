@@ -9,25 +9,13 @@ from litellm.llms.sail.common_utils import (
     sail_provider_config,
     without_keys,
 )
-from litellm.types.llms.openai import ResponseInputParam, ResponsesAPIOptionalRequestParams
+from litellm.types.llms.openai import ResponseInputParam
 from litellm.types.router import GenericLiteLLMParams
 
 
 class SailResponsesAPIConfig(create_responses_config_class(sail_provider_config())):
-    def map_openai_params(
-        self,
-        response_api_optional_params: ResponsesAPIOptionalRequestParams,
-        model: str,
-        drop_params: bool,
-    ) -> dict:  # mutable-ok: return type fixed by the base interface
-        params: Final = responses_params_with_completion_window(
-            super().map_openai_params(
-                response_api_optional_params=response_api_optional_params, model=model, drop_params=drop_params
-            ),
-            model=model,
-            drop_params=drop_params,
-        )
-        return json_body(params)
+    def adjust_mapped_params(self, params: Mapping[str, object], model: str, drop_params: bool) -> Mapping[str, object]:
+        return json_body(responses_params_with_completion_window(params, model=model, drop_params=drop_params))
 
     def transform_responses_api_request(
         self,

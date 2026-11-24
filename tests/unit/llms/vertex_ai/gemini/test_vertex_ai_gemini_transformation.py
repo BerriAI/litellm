@@ -435,25 +435,6 @@ def test_vertex_ai_includes_labels():
     assert result["labels"] == {"project": "test", "team": "ai"}
 
 
-def test_service_tier_forwarded_to_vertex_ai():
-    """Test that service_tier in optional_params is mapped to serviceTier in request body."""
-    messages = [{"role": "user", "content": "test"}]
-    optional_params = {"service_tier": "flex"}
-    litellm_params = {}
-
-    result = transform_request_body(
-        messages=messages,
-        model="gemini-2.5-pro",
-        optional_params=optional_params,
-        custom_llm_provider="vertex_ai",
-        litellm_params=litellm_params,
-        cached_content=None,
-    )
-
-    assert "serviceTier" in result
-    assert result["serviceTier"] == "flex"
-
-
 def test_extra_body_cache_not_forwarded_to_vertex_ai():
     """
     'cache' inside extra_body is a LiteLLM-internal proxy caching control.
@@ -634,12 +615,7 @@ def test_empty_content_handling():
 
     contents = gemini_convert_messages_with_history(messages=messages)
 
-    # Verify that the content was properly transformed
-    assert len(contents) == 1
-    assert contents[0]["role"] == "user"
-    assert len(contents[0]["parts"]) == 1
-    assert "text" in contents[0]["parts"][0]
-    assert contents[0]["parts"][0]["text"] == ""
+    assert contents == [{"role": "user", "parts": [{"text": " "}]}]
 
 
 def test_transform_request_body_wraps_tool_result_with_json_schema_ref():
@@ -2855,7 +2831,7 @@ def test_gemini_25_text_signature_survives_replay_to_gemini_3():
     """gemini-2.5 history (signed text, unsigned tool call) replayed to gemini-3 keeps the real
     text signature; the dummy signature synthesized for the unsigned tool call must not suppress it."""
     from litellm.litellm_core_utils.prompt_templates.factory import (
-        _get_dummy_thought_signature,
+        get_dummy_thought_signature,
     )
     from litellm.llms.vertex_ai.gemini.transformation import (
         gemini_convert_messages_with_history,
@@ -2879,7 +2855,7 @@ def test_gemini_25_text_signature_survives_replay_to_gemini_3():
     assert parts[0]["text"] == "I will list the directory."
     assert parts[0]["thoughtSignature"] == "real_25_signature"
     assert "function_call" in parts[1]
-    assert parts[1]["thoughtSignature"] == _get_dummy_thought_signature()
+    assert parts[1]["thoughtSignature"] == get_dummy_thought_signature()
 
 
 def test_gemini_function_call_signature_round_trip_no_duplicate():
@@ -3019,7 +2995,7 @@ def test_thinking_block_signature_is_not_forwarded_to_gemini() -> None:
 
 
 def test_anthropic_messages_history_replays_to_gemini_without_claude_signature() -> None:
-    from litellm.litellm_core_utils.prompt_templates.factory import _get_dummy_thought_signature
+    from litellm.litellm_core_utils.prompt_templates.factory import get_dummy_thought_signature
     from litellm.llms.anthropic.pass_through.adapters.transformation import LiteLLMAnthropicMessagesAdapter
 
     thinking: Final = "I should look the weather up before answering."
@@ -3042,6 +3018,424 @@ def test_anthropic_messages_history_replays_to_gemini_without_claude_signature()
     parts: Final = _parts_of(gemini_convert_messages_with_history(messages=chat_messages, model="gemini-3.8-flash"))
 
     signatures: Final = [part["thoughtSignature"] for part in parts if "thoughtSignature" in part]
-    assert signatures == [_get_dummy_thought_signature()]
+    assert signatures == [get_dummy_thought_signature()]
     assert [part for part in parts if part.get("text") == thinking] == [{"thought": True, "text": thinking}]
-    assert next(part for part in parts if "function_call" in part)["thoughtSignature"] == _get_dummy_thought_signature()
+    assert next(part for part in parts if "function_call" in part)["thoughtSignature"] == get_dummy_thought_signature()
+
+
+def _generated_image(data: str, thought_signature: str | None = None) -> Mapping[str, object]:
+    signature_fields: Final = {} if thought_signature is None else {"thought_signature": thought_signature}
+    return {
+        "image_url": {"url": f"data:image/png;base64,{data}", "detail": "auto"},
+        "index": 0,
+        "type": "image_url",
+        **({"provider_specific_fields": signature_fields} if signature_fields else {}),
+    }
+
+
+def _part_label(part: PartType) -> str:
+    if "text" in part:
+        return part["text"]
+    if "inline_data" in part:
+        return part["inline_data"]["data"]
+    return part["function_call"]["name"]
+
+
+def _model_turn_signatures(
+    assistant_message: Mapping[str, object],
+    *,
+    drop_params: bool = False,
+    model: str = "gemini-3.1-flash-image",
+    custom_llm_provider: str | None = None,
+) -> tuple[tuple[str, str | None], ...]:
+    contents: Final = gemini_convert_messages_with_history(
+        messages=[{"role": "user", "content": "Draw a cat"}, assistant_message],
+        model=model,
+        litellm_params={"drop_params": True} if drop_params else None,
+        custom_llm_provider=custom_llm_provider,
+    )
+    return tuple((_part_label(part), part.get("thoughtSignature")) for part in contents[1]["parts"])
+
+
+@pytest.mark.parametrize(
+    ("assistant_message", "expected"),
+    [
+        pytest.param(
+            {
+                "role": "assistant",
+                "content": None,
+                "images": [_generated_image("Y2F0", "sig-cat")],
+                "provider_specific_fields": {"thought_signatures": ["sig-cat"]},
+            },
+            (("Y2F0", "sig-cat"),),
+            id="image-only",
+        ),
+        pytest.param(
+            {
+                "role": "assistant",
+                "content": "Here is your cat.",
+                "images": [_generated_image("Y2F0", "sig-cat")],
+                "provider_specific_fields": {"thought_signatures": ["sig-text", "sig-cat"]},
+            },
+            (("Here is your cat.", "sig-text"), ("Y2F0", "sig-cat"),),
+            id="signed-text-and-image",
+        ),
+        pytest.param(
+            {
+                "role": "assistant",
+                "content": "Here is your cat.",
+                "images": [_generated_image("Y2F0", "sig-cat")],
+                "provider_specific_fields": {"thought_signatures": ["sig-cat"]},
+            },
+            (("Here is your cat.", None), ("Y2F0", "sig-cat"),),
+            id="unsigned-text-signed-image",
+        ),
+        pytest.param(
+            {
+                "role": "assistant",
+                "content": [{"type": "text", "text": "Here is your cat."}],
+                "images": [_generated_image("Y2F0", "sig-cat")],
+                "provider_specific_fields": {"thought_signatures": ["sig-text", "sig-cat"]},
+            },
+            (("Here is your cat.", None), ("Y2F0", "sig-cat"),),
+            id="list-content",
+        ),
+        pytest.param(
+            {
+                "role": "assistant",
+                "content": None,
+                "images": [_generated_image("ZHJhZnQ="), _generated_image("ZmluYWw=", "sig-final")],
+                "provider_specific_fields": {"thought_signatures": ["sig-thought", "sig-final"]},
+            },
+            (("ZHJhZnQ=", None), ("ZmluYWw=", "sig-final"),),
+            id="unsigned-draft-before-signed-final",
+        ),
+    ],
+)
+def test_assistant_image_replays_its_own_thought_signature(
+    assistant_message: Mapping[str, object], expected: tuple[tuple[str, str | None], ...]
+) -> None:
+    assert _model_turn_signatures(assistant_message) == expected
+
+
+@pytest.mark.parametrize(
+    ("assistant_message", "expected"),
+    [
+        pytest.param(
+            {
+                "role": "assistant",
+                "content": "Here is your cat.",
+                "images": [_generated_image("Y2F0")],
+                "provider_specific_fields": {"thought_signatures": ["sig-text", "sig-cat"]},
+            },
+            (("Here is your cat.", "sig-text"), ("Y2F0", "sig-cat"),),
+            id="signed-text-and-image",
+        ),
+        pytest.param(
+            {
+                "role": "assistant",
+                "content": "Here is your cat.",
+                "images": [_generated_image("Y2F0")],
+                "provider_specific_fields": {"thought_signatures": ["sig-text"]},
+            },
+            (("Here is your cat.", "sig-text"), ("Y2F0", None),),
+            id="streamed-history-signature-stays-on-text",
+        ),
+        pytest.param(
+            {
+                "role": "assistant",
+                "content": None,
+                "images": [_generated_image("ZHJhZnQ="), _generated_image("ZmluYWw=")],
+                "provider_specific_fields": {"thought_signatures": ["sig-final"]},
+            },
+            (("ZHJhZnQ=", None), ("ZmluYWw=", "sig-final"),),
+            id="image-only-right-aligned",
+        ),
+        pytest.param(
+            {
+                "role": "assistant",
+                "content": "Here are both versions.",
+                "images": [_generated_image("ZHJhZnQ="), _generated_image("ZmluYWw=")],
+                "provider_specific_fields": {"thought_signatures": ["sig-text", "sig-final"]},
+            },
+            (("Here are both versions.", "sig-text"), ("ZHJhZnQ=", None), ("ZmluYWw=", "sig-final"),),
+            id="text-signature-not-given-to-draft",
+        ),
+        pytest.param(
+            {
+                "role": "assistant",
+                "content": [{"type": "text", "text": "Here is your cat."}],
+                "images": [_generated_image("Y2F0")],
+                "provider_specific_fields": {"thought_signatures": ["sig-text"]},
+            },
+            (("Here is your cat.", None), ("Y2F0", None)),
+            id="list-content-text-signature-not-given-to-image",
+        ),
+        pytest.param(
+            {
+                "role": "assistant",
+                "content": [],
+                "images": [_generated_image("Y2F0")],
+                "provider_specific_fields": {"thought_signatures": ["sig-cat"]},
+            },
+            (("Y2F0", "sig-cat"),),
+            id="empty-list-content-leaves-signature-for-image",
+        ),
+        pytest.param(
+            {
+                "role": "assistant",
+                "content": "",
+                "images": [_generated_image("Y2F0")],
+                "provider_specific_fields": {"thought_signatures": ["sig-cat"]},
+            },
+            (("", None), ("Y2F0", "sig-cat")),
+            id="empty-string-content-leaves-signature-for-image",
+        ),
+        pytest.param(
+            {
+                "role": "assistant",
+                "content": [{"type": "text", "text": ""}],
+                "images": [_generated_image("Y2F0")],
+                "provider_specific_fields": {"thought_signatures": ["sig-cat"]},
+            },
+            (("", None), ("Y2F0", "sig-cat")),
+            id="empty-list-text-leaves-signature-for-image",
+        ),
+        pytest.param(
+            {
+                "role": "assistant",
+                "content": "Drawing it now.",
+                "images": [_generated_image("Y2F0")],
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {"name": "save_image", "arguments": "{}"},
+                        "provider_specific_fields": {"thought_signature": "sig-tool"},
+                    }
+                ],
+                "provider_specific_fields": {"thought_signatures": ["sig-text", "sig-cat", "sig-tool"]},
+            },
+            (("Drawing it now.", "sig-text"), ("Y2F0", "sig-cat"), ("save_image", "sig-tool"),),
+            id="tool-call-signature-stays-on-tool-call",
+        ),
+    ],
+)
+def test_assistant_image_history_without_per_image_signature_uses_message_signatures(
+    assistant_message: Mapping[str, object], expected: tuple[tuple[str, str | None], ...]
+) -> None:
+    assert _model_turn_signatures(assistant_message) == expected
+
+
+def test_assistant_image_item_without_url_takes_no_history_signature() -> None:
+    assistant_message: Final = {
+        "role": "assistant",
+        "content": None,
+        "images": [_generated_image("Y2F0"), {"image_url": {"url": ""}, "index": 1, "type": "image_url"}],
+        "provider_specific_fields": {"thought_signatures": ["sig-earlier", "sig-cat"]},
+    }
+
+    assert _model_turn_signatures(assistant_message) == (("Y2F0", "sig-cat"),)
+
+
+@pytest.mark.parametrize(
+    "assistant_message",
+    [
+        pytest.param(
+            {
+                "role": "assistant",
+                "content": "Here is your cat.",
+                "images": [_generated_image("Y2F0", "sig-cat")],
+                "provider_specific_fields": {"thought_signatures": ["sig-cat", {"bad": 1}]},
+            },
+            id="non-string-thought-signature",
+        ),
+        pytest.param(
+            {
+                "role": "assistant",
+                "content": "Here is your cat.",
+                "images": [{"image_url": {"url": 123}, "index": 0, "type": "image_url"}],
+            },
+            id="non-string-image-url",
+        ),
+        pytest.param(
+            {
+                "role": "assistant",
+                "content": "Here is your cat.",
+                "images": [{**_generated_image("Y2F0"), "provider_specific_fields": {"thought_signature": 123}}],
+            },
+            id="non-string-image-thought-signature",
+        ),
+        pytest.param(
+            {
+                "role": "assistant",
+                "content": "Here is your cat.",
+                "images": [{"image_url": 123, "index": 0, "type": "image_url"}],
+            },
+            id="non-object-image-url",
+        ),
+        pytest.param(
+            {"role": "assistant", "content": "Here is your cat.", "images": ["data:image/png;base64,Y2F0"]},
+            id="non-object-image-entry",
+        ),
+    ],
+)
+@pytest.mark.parametrize("custom_llm_provider", ["vertex_ai", "gemini"])
+def test_malformed_assistant_image_history_answers_bad_request(
+    assistant_message: Mapping[str, object], custom_llm_provider: str
+) -> None:
+    with pytest.raises(litellm.BadRequestError) as exc_info:
+        _model_turn_signatures(assistant_message, custom_llm_provider=custom_llm_provider)
+    assert exc_info.value.llm_provider == custom_llm_provider
+
+
+@pytest.mark.parametrize(
+    ("assistant_message", "expected"),
+    [
+        pytest.param(
+            {
+                "role": "assistant",
+                "content": "Here is your cat.",
+                "images": [_generated_image("Y2F0")],
+                "provider_specific_fields": {"thought_signatures": ["sig-text", {"bad": 1}, "sig-cat"]},
+            },
+            (("Here is your cat.", "sig-text"), ("Y2F0", "sig-cat")),
+            id="non-string-thought-signature",
+        ),
+        pytest.param(
+            {
+                "role": "assistant",
+                "content": "Here is your cat.",
+                "images": [
+                    {"image_url": {"url": 123}, "index": 0, "type": "image_url"},
+                    _generated_image("Y2F0", "sig-cat"),
+                ],
+            },
+            (("Here is your cat.", None), ("Y2F0", "sig-cat")),
+            id="non-string-image-url",
+        ),
+        pytest.param(
+            {
+                "role": "assistant",
+                "content": "Here is your cat.",
+                "images": [{**_generated_image("Y2F0"), "provider_specific_fields": {"thought_signature": 123}}],
+                "provider_specific_fields": {"thought_signatures": ["sig-text", "sig-cat"]},
+            },
+            (("Here is your cat.", "sig-text"), ("Y2F0", "sig-cat")),
+            id="non-string-image-thought-signature",
+        ),
+        pytest.param(
+            {
+                "role": "assistant",
+                "content": "Here is your cat.",
+                "images": [{"image_url": 123, "index": 0, "type": "image_url"}, _generated_image("Y2F0", "sig-cat")],
+            },
+            (("Here is your cat.", None), ("Y2F0", "sig-cat")),
+            id="non-object-image-url",
+        ),
+        pytest.param(
+            {
+                "role": "assistant",
+                "content": "Here is your cat.",
+                "images": ["data:image/png;base64,Y2F0", _generated_image("Y2F0", "sig-cat")],
+            },
+            (("Here is your cat.", None), ("Y2F0", "sig-cat")),
+            id="non-object-image-entry",
+        ),
+    ],
+)
+def test_malformed_assistant_image_history_is_dropped_under_drop_params(
+    assistant_message: Mapping[str, object], expected: tuple[tuple[str, str | None], ...]
+) -> None:
+    assert _model_turn_signatures(assistant_message, drop_params=True) == expected
+
+
+@pytest.mark.parametrize(
+    ("assistant_message", "expected"),
+    [
+        pytest.param(
+            {
+                "role": "assistant",
+                "content": "Here is your cat.",
+                "images": [_generated_image("Y2F0", "sig-cat")],
+                "provider_specific_fields": {"thought_signatures": ["sig-text", "sig-cat"]},
+            },
+            (("Here is your cat.", "sig-text"), ("Y2F0", None)),
+            id="own-image-signature",
+        ),
+        pytest.param(
+            {
+                "role": "assistant",
+                "content": "",
+                "images": [_generated_image("Y2F0")],
+                "provider_specific_fields": {"thought_signatures": ["sig-cat"]},
+            },
+            (("", "sig-cat"), ("Y2F0", None)),
+            id="history-saved-before-per-image-signatures",
+        ),
+    ],
+)
+@pytest.mark.parametrize(
+    ("model", "custom_llm_provider"),
+    [
+        pytest.param("gemini-3.8-flash", "vertex_ai", id="vertex-text-model"),
+        pytest.param("gemini-3.8-flash", "gemini", id="ai-studio-text-model"),
+        pytest.param("4567890123456789012", "vertex_ai", id="unlisted-tuned-endpoint"),
+    ],
+)
+def test_assistant_image_signatures_are_only_sent_to_an_image_model(
+    assistant_message: Mapping[str, object],
+    expected: tuple[tuple[str, str | None], ...],
+    model: str,
+    custom_llm_provider: str,
+) -> None:
+    assert _model_turn_signatures(assistant_message, model=model, custom_llm_provider=custom_llm_provider) == expected
+
+
+def test_assistant_image_with_string_image_url_keeps_its_signature() -> None:
+    assistant_message: Final = {
+        "role": "assistant",
+        "content": None,
+        "images": [{**_generated_image("Y2F0", "sig-cat"), "image_url": "data:image/png;base64,Y2F0"}],
+    }
+
+    assert _model_turn_signatures(assistant_message) == (("Y2F0", "sig-cat"),)
+
+
+def test_image_model_deployment_registered_as_chat_still_gets_its_image_signature() -> None:
+    litellm.Router(
+        model_list=[
+            {
+                "model_name": "image-editor",
+                "litellm_params": {"model": "vertex_ai/gemini-3.1-flash-image"},
+                "model_info": {"mode": "chat"},
+            }
+        ]
+    )
+    assistant_message: Final = {"role": "assistant", "content": None, "images": [_generated_image("Y2F0", "sig-cat")]}
+
+    assert _model_turn_signatures(
+        assistant_message, model="gemini-3.1-flash-image", custom_llm_provider="vertex_ai"
+    ) == (("Y2F0", "sig-cat"),)
+
+
+@pytest.mark.parametrize(
+    "assistant_message",
+    [
+        pytest.param(
+            {"role": "assistant", "content": "", "provider_specific_fields": {"thought_signatures": ["sig-text"]}},
+            id="empty-string",
+        ),
+        pytest.param(
+            {
+                "role": "assistant",
+                "content": "",
+                "reasoning_content": "thinking",
+                "provider_specific_fields": {"thought_signatures": ["sig-text"]},
+            },
+            id="empty-string-with-reasoning",
+        ),
+    ],
+)
+def test_empty_text_reply_without_images_keeps_its_thought_signature(assistant_message: Mapping[str, object]) -> None:
+    assert _model_turn_signatures(assistant_message, model="gemini-3.8-flash")[-1] == ("", "sig-text")

@@ -13,7 +13,8 @@ Pattern Overview:
 """
 
 import json
-from collections.abc import Mapping, MutableSequence, Sequence
+import sys
+from collections.abc import Callable, Iterable, Mapping, MutableSequence, Sequence
 from copy import deepcopy
 from dataclasses import dataclass
 from itertools import chain, repeat
@@ -27,8 +28,10 @@ from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.llms.anthropic.pass_through.adapters.transformation import (
+    OPENAI_MAX_TOOL_NAME_LENGTH,
     LiteLLMAnthropicMessagesAdapter,
     is_provider_native_tool_dict,
+    truncate_tool_name,
 )
 from litellm.llms.anthropic.pass_through.stream_assembly import (
     build_complete_streaming_response,
@@ -53,6 +56,7 @@ from litellm.llms.base_llm.guardrail_translation.utils import (
     stream_item_fingerprint,
     unappliable_request_rewrite,
 )
+from litellm.router_utils.common_utils import get_request_team_id
 from litellm.types.llms.anthropic import (
     AllAnthropicToolsValues,
     AnthropicMessagesRequest,
@@ -73,6 +77,7 @@ from litellm.types.utils import (
 if TYPE_CHECKING:
     from fastapi import HTTPException
 
+    from litellm import Router
     from litellm.integrations.custom_guardrail import (
         CustomGuardrail,
         ModifyResponseException,
@@ -126,6 +131,27 @@ class ToolUseInputTarget:
 
 MessageTextTarget = MessageContentTarget | ContentBlockTextTarget | ToolResultStringTarget | ToolResultBlockTextTarget
 InputWriteBackTarget = SystemStringTarget | SystemBlockTextTarget | MessageTextTarget
+
+
+class DeploymentLookup(Protocol):
+    def get_model_list(
+        self, model_name: str | None = None, team_id: str | None = None
+    ) -> Sequence[Mapping[str, object]] | None: ...
+
+
+def _proxy_router() -> "Router | None":
+    if "litellm.proxy.proxy_server" not in sys.modules:
+        return None
+    from litellm.proxy.proxy_server import llm_router
+
+    return llm_router
+
+
+def _deployment_consumes_cache_control(deployment: Mapping[str, object]) -> bool:
+    deployment_model: Final = (as_str_mapping(deployment.get("litellm_params")) or {}).get("model")
+    return isinstance(deployment_model, str) and LiteLLMAnthropicMessagesAdapter.target_consumes_cache_control(
+        deployment_model
+    )
 
 
 def _as_str_mapping(value: Mapping[str, object]) -> Mapping[str, object]:
@@ -195,6 +221,60 @@ def _is_client_tool_use(block: Mapping[str, object]) -> bool:
         and isinstance(block.get("name"), str)
         and isinstance(block.get("input"), dict)
     )
+
+
+def _tool_use_name(block: object) -> str | None:
+    fields: Final = as_str_mapping(block)
+    if fields is None or fields.get("type") != "tool_use":
+        return None
+    return anthropic_tool_name(fields)
+
+
+def _tool_use_names(message: object) -> tuple[str, ...]:
+    return tuple(name for name in map(_tool_use_name, list_field(message, "content")) if name is not None)
+
+
+@dataclass(frozen=True, slots=True)
+class _OriginalToolNames:
+    """Caller tool names over the guardrail's limit, keyed by the shortened name the guardrail sees."""
+
+    declared: Mapping[str, str]
+    used: Mapping[str, str]
+
+
+def _restorable_names(names: Iterable[str]) -> Mapping[str, str]:
+    listed: Final = tuple(names)
+    taken: Final = frozenset(listed)
+    shortened: Final = tuple(
+        (truncate_tool_name(name), name) for name in listed if len(name) > OPENAI_MAX_TOOL_NAME_LENGTH
+    )
+    return MappingProxyType({alias: name for alias, name in shortened if alias not in taken})
+
+
+def _original_tool_names(request: Mapping[str, object]) -> _OriginalToolNames:
+    return _OriginalToolNames(
+        declared=_restorable_names(chain.from_iterable(map(anthropic_tool_names, list_field(request, "tools")))),
+        used=_restorable_names(chain.from_iterable(map(_tool_use_names, list_field(request, "messages")))),
+    )
+
+
+def _restore_tool_use_names(messages: Sequence[object], original_names: Mapping[str, str]) -> None:
+    for message in messages:
+        for block in list_field(message, "content"):
+            if (name := _tool_use_name(block)) is not None and name in original_names and isinstance(block, dict):
+                block["name"] = original_names[name]
+
+
+def _with_original_name(tool: ChatCompletionToolParam, original_names: Mapping[str, str]) -> ChatCompletionToolParam:
+    if "function" not in tool:
+        return tool
+    function: Final = tool["function"]
+    fields: Final = as_str_mapping(function)
+    name: Final = None if fields is None else fields.get("name")
+    original: Final = original_names.get(name) if isinstance(name, str) else None
+    if original is None:
+        return tool
+    return {**tool, "function": {**function, "name": original}}
 
 
 def _write_back_system_block(system: object, block_idx: int, response: str) -> None:
@@ -313,9 +393,10 @@ class AnthropicMessagesHandler(BaseTranslation):
     delivers_ended_stream_rewrites = True
     assembles_streamed_response = True
 
-    def __init__(self):
+    def __init__(self, deployment_lookup: Callable[[], DeploymentLookup | None] = _proxy_router):
         super().__init__()
         self.adapter = LiteLLMAnthropicMessagesAdapter()
+        self._deployment_lookup: Final = deployment_lookup
 
     def post_call_hook_response(self, response: object) -> object:
         if not isinstance(response, ModelResponse):
@@ -531,12 +612,12 @@ class AnthropicMessagesHandler(BaseTranslation):
             for event in AnthropicMessagesHandler._parse_sse_data_line(line)
         )
 
-    def _translate_to_openai(self, data: dict) -> ChatCompletionRequest:
+    def _translate_to_openai(self, data: dict, *, keep_cache_control: bool = False) -> ChatCompletionRequest:
         """Translate Anthropic request to OpenAI chat completion format."""
         (
             chat_completion_compatible_request,
             _tool_name_mapping,
-        ) = LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(
+        ) = LiteLLMAnthropicMessagesAdapter(keep_cache_control=keep_cache_control).translate_anthropic_to_openai(
             anthropic_message_request=cast(AnthropicMessagesRequest, data.copy()),
             preserve_midturn_system=True,
         )
@@ -578,7 +659,14 @@ class AnthropicMessagesHandler(BaseTranslation):
         # The top-level prompt is translated on its own below so it can be hoisted in front of
         # any mid-turn system entries and scanned first, aligned with that structured position.
         translation_source: Final = {key: value for key, value in data.items() if key != "system"}
-        chat_completion_compatible_request: Final = self._translate_to_openai(translation_source)
+        request_fields: Final = _as_str_mapping(data)
+        request_model: Final = request_fields.get("model")
+        keep_cache_control: Final = self._serves_cache_control(
+            request_model if isinstance(request_model, str) else "", get_request_team_id(request_fields)
+        )
+        chat_completion_compatible_request: Final = self._translate_to_openai(
+            translation_source, keep_cache_control=keep_cache_control
+        )
 
         full_structured_messages: Final = cast(
             list[AllMessageValues],
@@ -587,7 +675,9 @@ class AnthropicMessagesHandler(BaseTranslation):
         has_midturn_system_message: Final = any(
             str(message.get("role") or "").lower() == "system" for message in full_structured_messages
         )
-        hoisted_system_message: Final = None if skip_system else self._hoisted_top_level_system_message(data)
+        hoisted_system_message: Final = (
+            None if skip_system else self._hoisted_top_level_system_message(request_fields, keep_cache_control)
+        )
         if hoisted_system_message is not None:
             full_structured_messages.insert(0, hoisted_system_message)
         # skip_system already excluded the trusted top-level prompt (it is simply not hoisted);
@@ -652,6 +742,9 @@ class AnthropicMessagesHandler(BaseTranslation):
             model: Final = data.get("model")
             if model:
                 inputs["model"] = model
+            original_tool_names: Final = _original_tool_names(
+                cast(Mapping[str, object], data)  # cast-ok: Anthropic request body
+            )
             guardrailed_inputs: Final = await guardrail_to_apply.apply_guardrail(
                 inputs=inputs,
                 request_data=data,
@@ -666,7 +759,9 @@ class AnthropicMessagesHandler(BaseTranslation):
                 anthropic_config: Final = AnthropicConfig()
                 anthropic_tools: Final[list[AllAnthropicToolsValues]] = []
                 for tool in guardrailed_tools:
-                    converted_tool, mcp_server = anthropic_config.map_tool_helper(tool)
+                    converted_tool, mcp_server = anthropic_config.map_tool_helper(
+                        _with_original_name(tool, original_tool_names.declared)
+                    )
                     if converted_tool is not None:
                         anthropic_tools.append(converted_tool)
                     # Note: MCP servers are handled separately in the main transformation
@@ -699,6 +794,7 @@ class AnthropicMessagesHandler(BaseTranslation):
                     ),
                     hoisted_system_message=hoisted_system_message,
                     preserve_system_messages=has_midturn_system_message,
+                    original_tool_names=original_tool_names.used,
                 )
             else:
                 if guardrailed_texts and len(guardrailed_texts) != len(scanned):
@@ -721,7 +817,16 @@ class AnthropicMessagesHandler(BaseTranslation):
 
         return data
 
-    def _hoisted_top_level_system_message(self, data: Mapping[str, object]) -> AllMessageValues | None:
+    def _serves_cache_control(self, model: str, team_id: str | None) -> bool:
+        if LiteLLMAnthropicMessagesAdapter.target_consumes_cache_control(model):
+            return True
+        router: Final = self._deployment_lookup() if model else None
+        deployments: Final = router.get_model_list(model_name=model, team_id=team_id) if router is not None else None
+        return any(map(_deployment_consumes_cache_control, deployments or ()))
+
+    def _hoisted_top_level_system_message(
+        self, data: Mapping[str, object], keep_cache_control: bool
+    ) -> AllMessageValues | None:
         """Return the system message produced by translating the top-level prompt."""
         system: Final = data.get("system")
         if not system:
@@ -731,7 +836,8 @@ class AnthropicMessagesHandler(BaseTranslation):
                 "model": data.get("model") or "",
                 "messages": [],
                 "system": system,
-            }
+            },
+            keep_cache_control=keep_cache_control,
         )
         hoisted: Final = probe.get("messages") or []
         return hoisted[0] if hoisted else None
@@ -863,6 +969,8 @@ class AnthropicMessagesHandler(BaseTranslation):
         structured_messages: list,  # mutable-ok: API message payload
         hoisted_system_message: object = None,
         preserve_system_messages: bool = False,
+        *,
+        original_tool_names: Mapping[str, str],
     ) -> None:
         """Write a guardrail's structured-message rewrite back without losing corrections."""
         from litellm.litellm_core_utils.prompt_templates.factory import (
@@ -926,6 +1034,10 @@ class AnthropicMessagesHandler(BaseTranslation):
                 for block in content:
                     if isinstance(block, dict) and block.get("type") == "thinking":
                         block.pop("cache_control", None)
+        _restore_tool_use_names(
+            cast(Sequence[object], converted),  # cast-ok: Anthropic message payload
+            original_tool_names,
+        )
         data["messages"] = converted
 
     @staticmethod

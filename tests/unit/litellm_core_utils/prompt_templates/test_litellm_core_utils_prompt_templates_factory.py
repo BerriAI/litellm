@@ -4,6 +4,7 @@ import logging
 import os
 import re
 import time
+import traceback
 from collections.abc import Callable, Mapping, Sequence
 from copy import deepcopy
 from typing import Final, List, TypeAlias
@@ -16,7 +17,7 @@ import respx
 import litellm
 from litellm.litellm_core_utils.prompt_templates.factory import (
     BEDROCK_DOCUMENT_PLACEHOLDER_TEXT,
-    _EMPTY_TEXT_PLACEHOLDER,
+    EMPTY_TEXT_PLACEHOLDER,
     BedrockConverseMessagesProcessor,
     BedrockImageProcessor,
     _bedrock_converse_messages_pt,
@@ -34,6 +35,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     get_thought_signature_from_tool,
     get_tool_calls_from_response,
     make_valid_bedrock_tool_name,
+    map_system_message_pt,
     ollama_pt,
     parse_mime_type,
     sanitize_messages_for_tool_calling,
@@ -1121,7 +1123,7 @@ def test_anthropic_messages_pt_preserves_trailing_user_message_with_empty_conten
     )
 
     assert [message["role"] for message in result] == ["user", "assistant", "user"]
-    assert result[-1]["content"] == [{"type": "text", "text": _EMPTY_TEXT_PLACEHOLDER}]
+    assert result[-1]["content"] == [{"type": "text", "text": EMPTY_TEXT_PLACEHOLDER}]
 
 
 @EMPTY_USER_MESSAGES
@@ -1225,7 +1227,7 @@ def test_anthropic_messages_pt_keeps_every_breakpoint_of_a_long_run_of_empty_use
 
     assert (
         result[-1]["content"]
-        == [{"type": "text", "text": _EMPTY_TEXT_PLACEHOLDER, "cache_control": {"type": "ephemeral"}}] * 10_000
+        == [{"type": "text", "text": EMPTY_TEXT_PLACEHOLDER, "cache_control": {"type": "ephemeral"}}] * 10_000
     )
 
 
@@ -1822,6 +1824,279 @@ def test_convert_gemini_tool_call_result_with_image_url():
     assert len(inline_parts) == 1
 
 
+_FIND_CLIP_CALL: Final = {
+    "role": "assistant",
+    "content": None,
+    "tool_calls": [{"id": "call_1", "type": "function", "function": {"name": "find_clip", "arguments": "{}"}}],
+}
+
+
+def _find_clip_result(video_url: Mapping[str, object]) -> Mapping[str, object]:
+    return {
+        "role": "tool",
+        "tool_call_id": "call_1",
+        "content": [{"type": "text", "text": '{"ok":true}'}, {"type": "video_url", "video_url": video_url}],
+    }
+
+
+_TOOL_OUTPUT_ONLY: Final = {"function_response": {"name": "find_clip", "response": {"ok": True}}}
+_CLIP_SETTINGS: Final = ({"video_metadata": {"fps": 2}}, {"detail": "high"})
+
+
+def test_gemini_tool_result_video_url_reaches_gemini_as_inline_video() -> None:
+    delivered: Final = convert_to_gemini_tool_call_result(
+        _find_clip_result({"url": "data:video/mp4;base64,AAAAGGZ0eXA="}), _FIND_CLIP_CALL
+    )
+
+    assert delivered == [
+        {
+            "function_response": {
+                "name": "find_clip",
+                "response": {"ok": True},
+                "parts": [{"inline_data": {"data": "AAAAGGZ0eXA=", "mime_type": "video/mp4"}}],
+            }
+        }
+    ]
+
+
+_LINKS_GEMINI_CANNOT_INLINE: Final = (
+    pytest.param("https://www.youtube.com/watch?v=aqz-KE-bpKQ", id="youtube"),
+    pytest.param("gs://cloud-samples-data/video/animals.mp4", id="gcs-uri"),
+)
+
+
+@pytest.mark.parametrize("custom_llm_provider", ["gemini", "vertex_ai"])
+@pytest.mark.parametrize("video_url", _LINKS_GEMINI_CANNOT_INLINE)
+def test_gemini_tool_result_video_link_it_cannot_inline_is_a_bad_request(
+    custom_llm_provider: str, video_url: str
+) -> None:
+    with respx.mock, pytest.raises(litellm.BadRequestError, match="require inline media data"):
+        convert_to_gemini_tool_call_result(
+            _find_clip_result({"url": video_url}), _FIND_CLIP_CALL, custom_llm_provider=custom_llm_provider
+        )
+
+
+@pytest.mark.parametrize("custom_llm_provider", ["gemini", "vertex_ai"])
+@pytest.mark.parametrize("video_url", _LINKS_GEMINI_CANNOT_INLINE)
+def test_drop_params_drops_a_video_link_gemini_cannot_inline_from_a_tool_result(
+    custom_llm_provider: str, video_url: str
+) -> None:
+    with respx.mock:
+        delivered: Final = convert_to_gemini_tool_call_result(
+            _find_clip_result({"url": video_url}),
+            _FIND_CLIP_CALL,
+            drop_params=True,
+            custom_llm_provider=custom_llm_provider,
+        )
+
+    assert delivered == _TOOL_OUTPUT_ONLY
+
+
+_MISSING_VIDEO_URL: Final = f"https://8.8.8.8/{uuid.uuid4()}.mp4"
+
+
+@pytest.mark.parametrize("custom_llm_provider", ["gemini", "vertex_ai"])
+@pytest.mark.parametrize(
+    "video_url",
+    [
+        pytest.param(_MISSING_VIDEO_URL, id="link-answering-404"),
+        pytest.param("data:video/mp4;base64", id="data-url-without-data"),
+    ],
+)
+def test_gemini_tool_result_video_that_fails_to_download_is_a_bad_request_unless_drop_params(
+    custom_llm_provider: str, video_url: str
+) -> None:
+    with respx.mock(assert_all_called=False) as router:
+        router.get(_MISSING_VIDEO_URL).respond(404)
+        with pytest.raises(litellm.BadRequestError, match="Could not download the video in a tool result") as excinfo:
+            convert_to_gemini_tool_call_result(
+                _find_clip_result({"url": video_url}), _FIND_CLIP_CALL, custom_llm_provider=custom_llm_provider
+            )
+        dropped: Final = convert_to_gemini_tool_call_result(
+            _find_clip_result({"url": video_url}),
+            _FIND_CLIP_CALL,
+            custom_llm_provider=custom_llm_provider,
+            drop_params=True,
+        )
+
+    assert excinfo.value.llm_provider == custom_llm_provider
+    assert dropped == _TOOL_OUTPUT_ONLY
+
+
+@pytest.mark.parametrize("custom_llm_provider", ["gemini", "vertex_ai"])
+def test_failed_tool_result_video_download_keeps_its_signed_link_out_of_the_error(custom_llm_provider: str) -> None:
+    signature: Final = uuid.uuid4().hex
+    signed_url: Final = f"https://8.8.8.8/{uuid.uuid4()}.mp4?X-Goog-Signature={signature}"
+
+    with respx.mock as router:
+        router.get(signed_url).respond(404)
+        with pytest.raises(litellm.BadRequestError) as excinfo:
+            convert_to_gemini_tool_call_result(
+                _find_clip_result({"url": signed_url}), _FIND_CLIP_CALL, custom_llm_provider=custom_llm_provider
+            )
+
+    assert signature not in str(excinfo.value)
+    assert signature not in "".join(traceback.format_exception(excinfo.value))
+
+
+@pytest.mark.parametrize("custom_llm_provider", ["gemini", "vertex_ai"])
+def test_dropped_tool_result_video_keeps_its_signed_link_out_of_the_logs(
+    custom_llm_provider: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    signature: Final = uuid.uuid4().hex
+    signed_url: Final = f"https://8.8.8.8/{uuid.uuid4()}.mp4?X-Goog-Signature={signature}"
+
+    with respx.mock as router, caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        router.get(signed_url).respond(404)
+        dropped: Final = convert_to_gemini_tool_call_result(
+            _find_clip_result({"url": signed_url}),
+            _FIND_CLIP_CALL,
+            custom_llm_provider=custom_llm_provider,
+            drop_params=True,
+        )
+
+    assert dropped == _TOOL_OUTPUT_ONLY
+    assert caplog.records
+    assert signature not in caplog.text
+
+
+_MP4_BYTES: Final = b"\x00\x00\x00\x18ftypmp42\x00\x00\x00\x00mp42isom"
+_HEIC_BYTES: Final = b"\x00\x00\x00\x18ftypheic\x00\x00\x00\x00mif1heic"
+_XAVC_BYTES: Final = b"\x00\x00\x00\x18ftypXAVC\x00\x00\x00\x00XAVCmp42"
+_QUICKTIME_BYTES: Final = b"\x00\x00\x00\x14ftypqt  \x00\x00\x00\x00qt  "
+
+
+@pytest.mark.parametrize(
+    ("part_type", "suffix", "body", "mime_type"),
+    [
+        pytest.param("video_url", ".mp4", _MP4_BYTES, "video/mp4", id="mp4-link"),
+        pytest.param("video_url", "", _MP4_BYTES, "video/mp4", id="mp4-bytes"),
+        pytest.param("video_url", "", _XAVC_BYTES, "video/mp4", id="xavc-bytes"),
+        pytest.param("video_url", "", _QUICKTIME_BYTES, "video/mov", id="quicktime-bytes"),
+        pytest.param("image_url", "", _HEIC_BYTES, "image/heic", id="heic-bytes"),
+    ],
+)
+def test_gemini_tool_result_media_served_as_octet_stream_keeps_its_real_type(
+    part_type: str, suffix: str, body: bytes, mime_type: str
+) -> None:
+    media_url: Final = f"https://8.8.8.8/{uuid.uuid4()}{suffix}"
+    message: Final = {
+        "role": "tool",
+        "tool_call_id": "call_1",
+        "content": [{"type": "text", "text": '{"ok":true}'}, {"type": part_type, part_type: {"url": media_url}}],
+    }
+
+    with respx.mock as router:
+        router.get(media_url).respond(200, content=body, headers={"content-type": "application/octet-stream"})
+        delivered: Final = convert_to_gemini_tool_call_result(message, _FIND_CLIP_CALL)
+
+    assert delivered == [
+        {
+            "function_response": {
+                "name": "find_clip",
+                "response": {"ok": True},
+                "parts": [{"inline_data": {"data": base64.b64encode(body).decode(), "mime_type": mime_type}}],
+            }
+        }
+    ]
+
+
+def test_gemini_tool_result_video_without_a_url_is_a_bad_request_instead_of_a_silent_drop() -> None:
+    with pytest.raises(litellm.BadRequestError, match="'video_url' but it has no 'url'"):
+        convert_to_gemini_tool_call_result(_find_clip_result({}), _FIND_CLIP_CALL)
+
+
+def test_drop_params_drops_a_tool_result_video_without_a_url() -> None:
+    delivered: Final = convert_to_gemini_tool_call_result(_find_clip_result({}), _FIND_CLIP_CALL, drop_params=True)
+
+    assert delivered == _TOOL_OUTPUT_ONLY
+
+
+@pytest.mark.parametrize("settings", _CLIP_SETTINGS)
+@pytest.mark.parametrize("custom_llm_provider", ["gemini", "vertex_ai"])
+def test_gemini_tool_result_video_settings_are_a_bad_request_instead_of_a_silent_drop(
+    settings: Mapping[str, object], custom_llm_provider: str
+) -> None:
+    with pytest.raises(litellm.BadRequestError, match="cannot carry detail or video_metadata") as excinfo:
+        convert_to_gemini_tool_call_result(
+            _find_clip_result({"url": "data:video/mp4;base64,AAAAGGZ0eXA=", **settings}),
+            _FIND_CLIP_CALL,
+            model="gemini-3.8-flash",
+            custom_llm_provider=custom_llm_provider,
+        )
+
+    assert (excinfo.value.llm_provider, excinfo.value.model) == (custom_llm_provider, "gemini-3.8-flash")
+
+
+@pytest.mark.parametrize(
+    "settings",
+    [pytest.param({"detail": "auto"}, id="detail-auto"), pytest.param({"video_metadata": {"label": "x"}}, id="no-op-metadata")],
+)
+@pytest.mark.parametrize("custom_llm_provider", ["gemini", "vertex_ai"])
+def test_tool_result_video_settings_that_change_nothing_are_sent_without_error(
+    settings: Mapping[str, object], custom_llm_provider: str
+) -> None:
+    delivered: Final = convert_to_gemini_tool_call_result(
+        _find_clip_result({"url": "data:video/mp4;base64,AAAAGGZ0eXA=", **settings}),
+        _FIND_CLIP_CALL,
+        model="gemini-3.8-flash",
+        custom_llm_provider=custom_llm_provider,
+    )
+
+    assert delivered == [
+        {
+            "function_response": {
+                "name": "find_clip",
+                "response": {"ok": True},
+                "parts": [{"inline_data": {"data": "AAAAGGZ0eXA=", "mime_type": "video/mp4"}}],
+            }
+        }
+    ]
+
+
+@pytest.mark.parametrize("settings", _CLIP_SETTINGS)
+def test_drop_params_sends_a_tool_result_video_without_its_settings(settings: Mapping[str, object]) -> None:
+    delivered: Final = convert_to_gemini_tool_call_result(
+        _find_clip_result({"url": "data:video/mp4;base64,AAAAGGZ0eXA=", **settings}), _FIND_CLIP_CALL, drop_params=True
+    )
+
+    assert delivered == [
+        {
+            "function_response": {
+                "name": "find_clip",
+                "response": {"ok": True},
+                "parts": [{"inline_data": {"data": "AAAAGGZ0eXA=", "mime_type": "video/mp4"}}],
+            }
+        }
+    ]
+
+
+@pytest.mark.parametrize("custom_llm_provider", ["gemini", "vertex_ai"])
+def test_gemini_tool_result_video_url_linking_a_web_page_is_a_bad_request_instead_of_sending_html(
+    monkeypatch: pytest.MonkeyPatch, custom_llm_provider: str
+) -> None:
+    monkeypatch.setattr(litellm, "user_url_validation", False)
+    page_url: Final = f"https://videos.example/watch/{uuid.uuid4()}"
+
+    with respx.mock:
+        respx.get(page_url).mock(
+            return_value=httpx.Response(200, text="<html>clip</html>", headers={"content-type": "text/html"})
+        )
+        with pytest.raises(litellm.BadRequestError, match="but it holds text/html") as excinfo:
+            convert_to_gemini_tool_call_result(
+                _find_clip_result({"url": page_url}), _FIND_CLIP_CALL, custom_llm_provider=custom_llm_provider
+            )
+        dropped: Final = convert_to_gemini_tool_call_result(
+            _find_clip_result({"url": page_url}),
+            _FIND_CLIP_CALL,
+            custom_llm_provider=custom_llm_provider,
+            drop_params=True,
+        )
+
+    assert excinfo.value.llm_provider == custom_llm_provider
+    assert dropped == _TOOL_OUTPUT_ONLY
+
+
 def test_convert_gemini_tool_call_result_with_anthropic_image_block():
     """
     Test that Anthropic-native image blocks in tool_result list content are
@@ -2342,6 +2617,16 @@ def test_bedrock_image_processor_content_type_fallback_binary_detection():
 
     assert content_type == "image/jpeg"
     assert base64_bytes == base64.b64encode(jpeg_content).decode("utf-8")
+
+
+def test_bedrock_sends_an_mp4_link_served_as_octet_stream_as_a_video_block() -> None:
+    video_url: Final = f"https://8.8.8.8/{uuid.uuid4()}"
+
+    with respx.mock as router:
+        router.get(video_url).respond(200, content=_MP4_BYTES, headers={"content-type": "application/octet-stream"})
+        block: Final = BedrockImageProcessor.process_image_sync(video_url)
+
+    assert block == {"video": {"source": {"bytes": base64.b64encode(_MP4_BYTES).decode()}, "format": "mp4"}}
 
 
 def test_bedrock_image_processor_content_type_fallback_application_octet_stream():
@@ -3067,40 +3352,70 @@ def test_bedrock_converse_tool_result_s3_media_keeps_its_bucket_owner(part: Mapp
     ]
 
 
-@pytest.mark.parametrize(
-    "file, expected_media",
-    [
-        pytest.param(
-            {"file_id": "s3://media-bucket/clips/demo.mp4"},
-            [{"video": {"format": "mp4", "source": _s3_source("s3://media-bucket/clips/demo.mp4")}}],
-            id="s3-video-is-forwarded",
-        ),
-        pytest.param(
-            {"file_data": "data:video/mp4;base64,AAAAGGZ0eXBtcDQy"},
-            [],
-            id="inline-video-is-dropped",
-        ),
-    ],
+_OCTET_STREAM_MP4_URL: Final = "https://8.8.8.8/clip"
+_NON_S3_TOOL_RESULT_VIDEOS: Final = (
+    pytest.param({"type": "file", "file": {"file_data": "data:video/mp4;base64,AAAAGGZ0eXBtcDQy"}}, id="inline-file"),
+    pytest.param({"type": "image_url", "image_url": {"url": _OCTET_STREAM_MP4_URL}}, id="octet-stream-mp4-link"),
 )
-def test_bedrock_converse_tool_result_video_is_forwarded_only_from_s3(
-    file: Mapping[str, object], expected_media: list[Mapping[str, object]]
-):
+
+
+async def _converse_tool_result_content(
+    part: Mapping[str, object], run_async: bool, drop_params: bool
+) -> Sequence[Mapping[str, object]]:
     messages: Final = [
         {"role": "user", "content": "Describe the clip."},
         {
             "tool_call_id": "tooluse_video_1",
             "role": "tool",
             "name": "fetch_clip",
-            "content": [{"type": "text", "text": "clip:"}, {"type": "file", "file": file}],
+            "content": [{"type": "text", "text": "clip:"}, part],
         },
     ]
-
-    with respx.mock:
-        converted: Final = _bedrock_converse_messages_pt(
-            messages=messages, model=_S3_MEDIA_MODEL, llm_provider="bedrock"
+    with respx.mock(assert_all_called=False) as router:
+        router.get(_OCTET_STREAM_MP4_URL).respond(
+            200, content=_MP4_BYTES, headers={"content-type": "application/octet-stream"}
         )
+        converted: Final = (
+            await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+                messages=messages, model=_S3_MEDIA_MODEL, llm_provider="bedrock", drop_params=drop_params
+            )
+            if run_async
+            else _bedrock_converse_messages_pt(
+                messages=messages, model=_S3_MEDIA_MODEL, llm_provider="bedrock", drop_params=drop_params
+            )
+        )
+    return converted[-1]["content"][-1]["toolResult"]["content"]
 
-    assert converted[-1]["content"][-1]["toolResult"]["content"] == [{"text": "clip:"}, *expected_media]
+
+@pytest.mark.parametrize("run_async", [False, True], ids=["sync", "async"])
+async def test_bedrock_converse_tool_result_s3_video_is_forwarded(run_async: bool):
+    content: Final = await _converse_tool_result_content(
+        {"type": "file", "file": {"file_id": "s3://media-bucket/clips/demo.mp4"}}, run_async, drop_params=False
+    )
+
+    assert content == [
+        {"text": "clip:"},
+        {"video": {"format": "mp4", "source": _s3_source("s3://media-bucket/clips/demo.mp4")}},
+    ]
+
+
+@pytest.mark.parametrize("run_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize("part", _NON_S3_TOOL_RESULT_VIDEOS)
+async def test_bedrock_converse_tool_result_video_not_on_s3_is_a_bad_request(
+    part: Mapping[str, object], run_async: bool
+):
+    with pytest.raises(litellm.BadRequestError) as excinfo:
+        await _converse_tool_result_content(part, run_async, drop_params=False)
+
+    assert "drop_params=True" in excinfo.value.message
+
+
+@pytest.mark.parametrize("run_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize("part", _NON_S3_TOOL_RESULT_VIDEOS)
+async def test_drop_params_drops_a_bedrock_tool_result_video_not_on_s3(part: Mapping[str, object], run_async: bool):
+    content: Final = await _converse_tool_result_content(part, run_async, drop_params=True)
+
+    assert content == [{"text": "clip:"}]
 
 
 @pytest.mark.parametrize("bucket_owner", [111122223333, ""], ids=["int", "empty-string"])
@@ -7022,6 +7337,101 @@ def test_ensure_alternating_roles(messages, expected_messages, user_continue_mes
     print(messages)
 
     assert messages == expected_messages
+
+
+@pytest.mark.parametrize(
+    "messages",
+    [
+        pytest.param([{"role": "assistant", "content": "Hello!"}], id="before_a_first_assistant_message"),
+        pytest.param(
+            [
+                {"role": "user", "content": "Hi"},
+                {"role": "assistant", "content": "Hello!"},
+                {"role": "assistant", "content": "Still there?"},
+            ],
+            id="between_adjacent_assistant_messages",
+        ),
+        pytest.param(
+            [
+                {"role": "user", "content": "Hi"},
+                {"role": "assistant", "content": "Hello!"},
+                {"role": "tool", "tool_call_id": "call_1", "content": "42"},
+                {"role": "assistant", "content": "Still there?"},
+            ],
+            id="between_assistant_messages_split_by_a_tool_result",
+        ),
+        pytest.param(
+            [{"role": "user", "content": "Hi"}, {"role": "assistant", "content": "Hello!"}],
+            id="after_a_last_assistant_message",
+        ),
+        pytest.param(
+            [{"role": "user", "content": "Hi"}, {"role": "user", "content": "Anyone there?"}],
+            id="between_adjacent_user_messages",
+        ),
+    ],
+)
+def test_folding_a_system_prompt_into_an_inserted_continue_message_never_changes_a_later_request(
+    messages: list[dict[str, str]],
+) -> None:
+    def completion_messages() -> list[dict[str, str]]:
+        return get_completion_messages(
+            messages=messages,
+            assistant_continue_message=None,
+            user_continue_message=None,
+            ensure_alternating_roles=True,
+        )
+
+    first: Final = completion_messages()
+    untouched: Final = json.loads(json.dumps(first))
+    for inserted in (message for message in first if message not in messages):
+        map_system_message_pt([{"role": "system", "content": "First tenant secret"}, inserted])
+
+    assert completion_messages() == untouched
+
+
+_STRICT_TEMPLATE_API_BASE: Final = "https://strict-template.example.com/v1"
+_STRICT_TEMPLATE_REPLY: Final = {
+    "id": "chatcmpl-strict",
+    "object": "chat.completion",
+    "created": 0,
+    "model": "strict-template-model",
+    "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+}
+
+
+@pytest.mark.parametrize(
+    "user_continue_message", [None, {"role": "user", "content": "Keep going"}], ids=["default", "configured"]
+)
+def test_a_system_prompt_folded_into_the_continue_message_never_reaches_a_later_request(
+    respx_mock: respx.MockRouter, user_continue_message: dict[str, str] | None
+) -> None:
+    route: Final = respx_mock.post(f"{_STRICT_TEMPLATE_API_BASE}/chat/completions").mock(
+        return_value=httpx.Response(200, json=_STRICT_TEMPLATE_REPLY)
+    )
+
+    def send(messages: list[dict[str, str]]) -> None:
+        litellm.completion(
+            model="openai/strict-template-model",
+            api_base=_STRICT_TEMPLATE_API_BASE,
+            api_key="test-key",
+            messages=messages,
+            ensure_alternating_roles=True,
+            supports_system_message=False,
+            user_continue_message=user_continue_message,
+        )
+
+    send(
+        [
+            {"role": "user", "content": "Hi"},
+            {"role": "assistant", "content": "Hello!"},
+            {"role": "system", "content": "First tenant secret"},
+            {"role": "assistant", "content": "Anything else?"},
+        ]
+    )
+    send([{"role": "user", "content": "Hi"}, {"role": "assistant", "content": "Hello!"}])
+
+    assert "First tenant secret" not in json.dumps(json.loads(route.calls.last.request.read())["messages"])
 
 
 def test_ensure_alternating_roles_with_tool_calls():

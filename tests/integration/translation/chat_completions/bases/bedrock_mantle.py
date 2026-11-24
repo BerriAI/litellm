@@ -1,6 +1,7 @@
 from typing import Final
 from unittest.mock import ANY
 
+from integration._support.responses_prompt import with_leading_system_message
 from integration.translation.case import TranslationTestCase
 from integration.translation.chat_completions.templates import CHAT_COMPLETIONS_REQUEST, CHAT_COMPLETIONS_RESPONSE
 from integration.translation.templates.bedrock_mantle import (
@@ -187,13 +188,15 @@ GPT_5_4_TEST_CASE: Final = TranslationTestCase(
         "authorization": "Bearer synthetic-bedrock-mantle-key",
         "content-type": "application/json",
     },
-    expected_provider_request={
-        "model": "openai.gpt-5.4",
-        "input": [{"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Say hello."}]}],
-        "instructions": "You are a terse assistant.",
-        "max_output_tokens": 64,
-        "stream": False,
-    },
+    expected_provider_request=with_leading_system_message(
+        {
+            "model": "openai.gpt-5.4",
+            "input": [{"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Say hello."}]}],
+            "instructions": "You are a terse assistant.",
+            "max_output_tokens": 64,
+            "stream": False,
+        }
+    ),
     mock_provider_response={
         "background": False,
         "billing": {"payer": "developer"},
@@ -284,13 +287,15 @@ GPT_5_6_SOL_TEST_CASE: Final = TranslationTestCase(
         "authorization": "Bearer synthetic-bedrock-mantle-key",
         "content-type": "application/json",
     },
-    expected_provider_request={
-        "model": "openai.gpt-5.6-sol",
-        "input": [{"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Say hello."}]}],
-        "instructions": "You are a terse assistant.",
-        "max_output_tokens": 64,
-        "stream": False,
-    },
+    expected_provider_request=with_leading_system_message(
+        {
+            "model": "openai.gpt-5.6-sol",
+            "input": [{"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Say hello."}]}],
+            "instructions": "You are a terse assistant.",
+            "max_output_tokens": 64,
+            "stream": False,
+        }
+    ),
     mock_provider_response={
         "background": False,
         "billing": {"payer": "developer"},
@@ -381,13 +386,15 @@ GPT_5_6_LUNA_TEST_CASE: Final = TranslationTestCase(
         "authorization": "Bearer synthetic-bedrock-mantle-key",
         "content-type": "application/json",
     },
-    expected_provider_request={
-        "model": "openai.gpt-5.6-luna",
-        "input": [{"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Say hello."}]}],
-        "instructions": "You are a terse assistant.",
-        "max_output_tokens": 64,
-        "stream": False,
-    },
+    expected_provider_request=with_leading_system_message(
+        {
+            "model": "openai.gpt-5.6-luna",
+            "input": [{"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Say hello."}]}],
+            "instructions": "You are a terse assistant.",
+            "max_output_tokens": 64,
+            "stream": False,
+        }
+    ),
     mock_provider_response={
         "background": False,
         "billing": {"payer": "developer"},
@@ -544,7 +551,7 @@ GPT_6_1_SOL_TEST_CASE: Final = TranslationTestCase(
         "content-type": "application/json",
     },
     expected_provider_request={
-        **BEDROCK_MANTLE_OPENAI_RESPONSES_REQUEST,
+        **with_leading_system_message(BEDROCK_MANTLE_OPENAI_RESPONSES_REQUEST),
         "stream": False,
     },
     mock_provider_response={**BEDROCK_MANTLE_OPENAI_RESPONSES_RESPONSE},
@@ -606,7 +613,7 @@ GPT_6_LUNA_TEST_CASE: Final = TranslationTestCase(
         "content-type": "application/json",
     },
     expected_provider_request={
-        **BEDROCK_MANTLE_OPENAI_RESPONSES_REQUEST,
+        **with_leading_system_message(BEDROCK_MANTLE_OPENAI_RESPONSES_REQUEST),
         "model": "openai.gpt-6-luna",
         "stream": False,
     },
@@ -715,7 +722,7 @@ GPT_6_ASTRA_TEST_CASE: Final = TranslationTestCase(
         "content-type": "application/json",
     },
     expected_provider_request={
-        **BEDROCK_MANTLE_OPENAI_RESPONSES_REQUEST,
+        **with_leading_system_message(BEDROCK_MANTLE_OPENAI_RESPONSES_REQUEST),
         "model": "openai.gpt-6-astra",
         "stream": False,
     },
@@ -824,7 +831,7 @@ GPT_5_6_TERRA_TEST_CASE: Final = TranslationTestCase(
         "content-type": "application/json",
     },
     expected_provider_request={
-        **BEDROCK_MANTLE_OPENAI_RESPONSES_REQUEST,
+        **with_leading_system_message(BEDROCK_MANTLE_OPENAI_RESPONSES_REQUEST),
         "model": "openai.gpt-5.6-terra",
         "stream": False,
     },
