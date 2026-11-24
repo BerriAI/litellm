@@ -7773,9 +7773,10 @@ async def _team_multi_budget_check(
     for window in team_object.budget_limits:
         w: dict = window if isinstance(window, dict) else window.model_dump()
         window_start = get_budget_window_start(w)
-        if window_start is None and is_scheduled_duration(w["budget_duration"]):
+        duration = str(w["budget_duration"])
+        if window_start is None and is_scheduled_duration(duration):
             continue
-        window_name = window_counter_name(str(w["budget_duration"]), window_start)
+        window_name = window_counter_name(duration, window_start)
         window_spend = await get_current_spend(
             counter_key=team_window_counter(team_object.team_id, window_name),
             fallback_spend=0.0,

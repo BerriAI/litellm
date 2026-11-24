@@ -139,9 +139,10 @@ async def increment_spend_counters_batched(
             window["budget_duration"] if isinstance(window, dict) else getattr(window, "budget_duration", None)
         )
         window_start: Final = get_budget_window_start(window)
-        if window_start is None and is_scheduled_duration(duration):
+        duration_name: Final = TypeAdapter(str).validate_python(duration)
+        if window_start is None and is_scheduled_duration(duration_name):
             return None
-        duration_text: Final = window_counter_name(TypeAdapter(str).validate_python(duration), window_start)
+        duration_text: Final = window_counter_name(duration_name, window_start)
         window_reset_at: Final = (
             window.get("reset_at") if isinstance(window, dict) else getattr(window, "reset_at", None)
         )
