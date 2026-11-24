@@ -1,6 +1,7 @@
 import json
 from datetime import datetime, timezone
-from typing import Any
+from itertools import chain
+from typing import Any, Final
 from unittest.mock import AsyncMock, MagicMock
 
 import httpx
@@ -690,17 +691,14 @@ async def test_disabled_log_deliveries_do_not_enable_guardrail_analytics():
 
 
 def _entries_payload(request_id: str, entries: list[dict[str, object]]) -> dict[str, object]:
-    payload = _payload(request_id)
-    payload["metadata"] = json.dumps({"guardrail_information": entries})
-    return payload
+    return {**_payload(request_id), "metadata": json.dumps({"guardrail_information": entries})}
 
 
 def _indexed(prisma: MagicMock) -> list[tuple[str, str, str | None]]:
-    return sorted(
-        (row["request_id"], row["guardrail_id"], row["policy_id"])
-        for call in prisma.db.litellm_spendlogguardrailindex.create_many.call_args_list
-        for row in call.kwargs["data"]
+    rows: Final = chain.from_iterable(
+        call.kwargs["data"] for call in prisma.db.litellm_spendlogguardrailindex.create_many.call_args_list
     )
+    return sorted((row["request_id"], row["guardrail_id"], row["policy_id"]) for row in rows)
 
 
 def _skip_passed(monkeypatch: pytest.MonkeyPatch, value: object) -> None:
@@ -709,7 +707,7 @@ def _skip_passed(monkeypatch: pytest.MonkeyPatch, value: object) -> None:
     monkeypatch.setitem(proxy_server.general_settings, "guardrail_log_skip_passed", value)
 
 
-_ONE_RUN_PER_OUTCOME = [
+_ONE_RUN_PER_OUTCOME: Final = [
     _entries_payload("passed", [{"guardrail_id": "g", "guardrail_status": "success"}]),
     _entries_payload(
         "masked", [{"guardrail_id": "g", "guardrail_status": "success", "masked_entity_count": {"EMAIL": 0, "SSN": 2}}]
@@ -724,7 +722,7 @@ _ONE_RUN_PER_OUTCOME = [
 ]
 
 
-_EVERY_RUN = ["blocked", "flagged", "masked", "not_run", "passed", "passed-empty-counts"]
+_EVERY_RUN: Final = ["blocked", "flagged", "masked", "not_run", "passed", "passed-empty-counts"]
 
 
 @pytest.mark.asyncio
@@ -740,12 +738,12 @@ _EVERY_RUN = ["blocked", "flagged", "masked", "not_run", "passed", "passed-empty
 )
 async def test_guardrail_log_skip_passed_keeps_index_rows_only_for_runs_that_acted(monkeypatch, skip_passed, kept):
     _skip_passed(monkeypatch, skip_passed)
-    prisma = _prisma()
+    prisma: Final = _prisma()
 
     await process_spend_logs_guardrail_usage(prisma, _ONE_RUN_PER_OUTCOME)
 
     assert [request_id for request_id, _, _ in _indexed(prisma)] == kept
-    metrics_create = prisma.db.litellm_dailyguardrailmetrics.upsert.call_args.kwargs["data"]["create"]
+    metrics_create: Final = prisma.db.litellm_dailyguardrailmetrics.upsert.call_args.kwargs["data"]["create"]
     assert metrics_create == {
         "guardrail_id": "g",
         "date": "2026-08-17",
@@ -759,8 +757,8 @@ async def test_guardrail_log_skip_passed_keeps_index_rows_only_for_runs_that_act
 @pytest.mark.asyncio
 async def test_guardrail_log_skip_passed_keeps_the_row_when_any_run_of_the_guardrail_acted(monkeypatch):
     _skip_passed(monkeypatch, True)
-    prisma = _prisma()
-    logs = [
+    prisma: Final = _prisma()
+    logs: Final = [
         _entries_payload(
             "r1",
             [
