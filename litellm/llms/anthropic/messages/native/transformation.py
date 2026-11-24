@@ -825,7 +825,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             **{  # pyright: ignore[reportUnknownArgumentType]  # the request params arrive as a bare dict
                 name: value
                 for name, value in anthropic_messages_optional_request_params.items()  # pyright: ignore[reportUnknownVariableType]  # the base signature types this as a bare dict
-                if name not in dropped_sampling_params and name not in gated.dropped_params
+                if name not in dropped_sampling_params
             },
         )
         request: Final = (

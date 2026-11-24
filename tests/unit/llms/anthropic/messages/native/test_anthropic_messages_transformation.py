@@ -32,9 +32,6 @@ from litellm.types.llms.anthropic import ANTHROPIC_BETA_HEADER_VALUES, Anthropic
 from litellm.types.router import GenericLiteLLMParams
 from tests.unit.llms.anthropic.test_anthropic_wif import write_token_file
 
-LINKED_BILLING_BETA: Final = "user-profiles-billing-2026-10-01"
-BILLING_POLICY: Final = {"type": "billing_policy"}
-
 _WIF_PARAMS: Final[dict] = {
     "anthropic_federation_rule_id": "fdrl_abc123",
     "anthropic_organization_id": "org-uuid-1",
@@ -636,30 +633,21 @@ def test_messages_request_drops_clear_at_from_a_mid_conversation_system_turn_wit
     assert system_turn == {"role": "system", "content": "be terse", "clear_at": "end_turn"}
 
 
-@pytest.mark.parametrize(
-    ("headers", "drop_params", "forwarded"),
-    (
-        pytest.param({"anthropic-beta": LINKED_BILLING_BETA}, True, BILLING_POLICY, id="beta_sent"),
-        pytest.param({}, True, None, id="beta_missing_under_drop_params"),
-        pytest.param({}, False, BILLING_POLICY, id="beta_missing_as_sent"),
-    ),
-)
-def test_billing_policy_is_dropped_only_under_drop_params_when_its_beta_is_not_sent(
-    headers: dict[str, str],
-    drop_params: bool,
-    forwarded: dict[str, str] | None,
-    local_beta_headers_config: None,
+@pytest.mark.parametrize("drop_params", (False, True))
+def test_billing_policy_is_forwarded_as_sent_even_under_drop_params_without_its_beta(
+    drop_params: bool, local_beta_headers_config: None
 ) -> None:
-    """Without `user-profiles-billing-2026-10-01` the provider answers 400 "billing_policy: Extra inputs are not
-    permitted", so a leg that does not send the beta drops the field under drop_params."""
+    """`billing_policy` says who pays. Dropping it would bill the request the default way with no error, so a leg
+    that does not send `user-profiles-billing-2026-10-01` forwards it and the provider answers its own 400."""
+    billing_policy: Final = {"type": "billing_policy"}
     request: Final = AnthropicMessagesConfig().transform_anthropic_messages_request(
         model="claude-opus-4-8",
         messages=[{"role": "user", "content": "hi"}],
-        anthropic_messages_optional_request_params={"max_tokens": 64, "billing_policy": dict(BILLING_POLICY)},
+        anthropic_messages_optional_request_params={"max_tokens": 64, "billing_policy": dict(billing_policy)},
         litellm_params=GenericLiteLLMParams(drop_params=drop_params),
-        headers=headers,
+        headers={},
     )
-    assert request.get("billing_policy") == forwarded
+    assert request["billing_policy"] == billing_policy
 
 
 def test_a_provider_without_a_beta_headers_row_forwards_beta_gated_fields_under_drop_params(
