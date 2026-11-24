@@ -275,6 +275,7 @@ def _chat_cache_hit_caller_stream(
                         "role": "assistant",
                         "tool_calls": [{"index": index, **call} for index, call in enumerate(calls)],
                     },
+                    "finish_reason": None,
                 }
             ],
         },
@@ -312,7 +313,7 @@ def _chat_caller_stream_usage_event(event: dict[str, JsonValue], model: str) -> 
         "object": event["object"],
         "created": 1,
         "model": model,
-        "choices": [{"index": 0, "delta": {}}],
+        "choices": [{"index": 0, "delta": {}, "finish_reason": None}],
         "usage": {**_json_object_value(event["usage"]), "cost": 4.05e-6},
     }
 
@@ -320,7 +321,6 @@ def _chat_caller_stream_usage_event(event: dict[str, JsonValue], model: str) -> 
 def _chat_caller_stream_choice(choice: dict[str, JsonValue]) -> dict[str, JsonValue]:
     delta: Final = _json_object_value(choice["delta"])
     tool_calls: Final = JSON_MESSAGES.validate_python(delta["tool_calls"]) if "tool_calls" in delta else None
-    finish_reason: Final = choice.get("finish_reason")
     return {
         **{
             key: value
@@ -336,7 +336,7 @@ def _chat_caller_stream_choice(choice: dict[str, JsonValue]) -> dict[str, JsonVa
                 else {}
             ),
         },
-        **({"finish_reason": finish_reason} if finish_reason is not None else {}),
+        "finish_reason": choice.get("finish_reason"),
     }
 
 
