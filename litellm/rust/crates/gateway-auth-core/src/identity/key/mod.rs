@@ -23,7 +23,6 @@ pub struct KeyContext<R: Rows> {
     pub belongs: Belongs<R>,
 }
 
-/// What the key path authenticated.
 #[derive(Clone, Debug, PartialEq)]
 pub enum KeyOutcome<R: Rows> {
     /// No master key is configured, so any token, the one a pass-through endpoint read included, is let through.
