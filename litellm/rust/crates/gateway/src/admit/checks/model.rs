@@ -30,6 +30,17 @@ const HONORED_EXTRA_PARAMS: [&str; 1] = ["weight"];
 const HONORED_MODEL_INFO: [&str; 4] = ["id", "access_groups", "db_model", "blocked"];
 const BLOCKED: &str = "blocked";
 
+/// The `litellm_params` flags Python's `/model/new` stores as `false`, their default, beside the
+/// params it was given. Written `false` they ask for nothing.
+const OFF_BY_DEFAULT_PARAMS: [&str; 4] = [
+    "use_xai_oauth",
+    "use_litellm_proxy",
+    "allow_client_keepalive_override",
+    "merge_reasoning_content_in_choices",
+];
+/// `ModelInfo.member_auto_router`, which `/model/new` stores as `false`, its default.
+const OFF_BY_DEFAULT_MODEL_INFO: [&str; 1] = ["member_auto_router"];
+
 pub(super) fn model(admit: &Admit, fields: &Map<String, Value>) -> Option<Reason> {
     let model = fields.get("model").and_then(Value::as_str)?;
     let Some(reached) = admit.router.reach(model) else {
@@ -196,7 +207,10 @@ fn params(params: &LitellmParams) -> Vec<Box<str>> {
     .chain(unsent)
     .chain(other(
         "model_list.litellm_params.",
-        extra.keys(),
+        extra.iter().filter_map(|(key, value)| {
+            let off = *value == Value::Bool(false) && OFF_BY_DEFAULT_PARAMS.contains(&key.as_str());
+            (!off).then_some(key)
+        }),
         &HONORED_EXTRA_PARAMS,
     ))
     .collect()
@@ -215,7 +229,11 @@ fn deployment(model: &Model) -> Vec<Box<str>> {
         .into_iter()
         .chain(other(
             "model_list.model_info.",
-            model_info.keys(),
+            model_info.iter().filter_map(|(key, value)| {
+                let off = *value == litellm_config::Value::Bool(false)
+                    && OFF_BY_DEFAULT_MODEL_INFO.contains(&key.as_str());
+                (!off).then_some(key)
+            }),
             &HONORED_MODEL_INFO,
         ))
         .chain((*blocked == Some(true)).then(|| "model_list.blocked".into()))

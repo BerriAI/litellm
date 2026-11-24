@@ -12,8 +12,23 @@ config:
       litellm_params:
         model: anthropic/claude-haiku-5-5
         api_key: provider-key
+        use_xai_oauth: false
+        use_litellm_proxy: false
+        use_in_pass_through: false
+        allow_client_keepalive_override: false
+        merge_reasoning_content_in_choices: false
       model_info:
         id: 6f1c2a9e-stored
+        db_model: true
+        blocked: false
+        member_auto_router: false
+    - model_name: stored-through-a-proxy
+      litellm_params:
+        model: anthropic/claude-haiku-5-5
+        api_key: provider-key
+        use_litellm_proxy: true
+      model_info:
+        id: 91e0c3d2-stored
         db_model: true
         blocked: false
     - model_name: stored-blocked
@@ -39,6 +54,12 @@ requests:
     headers: {authorization: Bearer gateway-key}
     body: {model: stored, max_tokens: 16, messages: []}
     expect: rust
+  - name: stored_model_with_a_flag_turned_on
+    headers: {authorization: Bearer gateway-key}
+    body: {model: stored-through-a-proxy, max_tokens: 16, messages: []}
+    expect: python
+    reason: model
+    over: model_list.litellm_params.use_litellm_proxy
   - name: stored_model_blocked
     headers: {authorization: Bearer gateway-key}
     body: {model: stored-blocked, max_tokens: 16, messages: []}
