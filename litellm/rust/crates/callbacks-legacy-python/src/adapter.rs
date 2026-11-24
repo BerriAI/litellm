@@ -17,10 +17,6 @@ use pyo3::{
     types::{PyDateTime, PyDict, PyList, PyString},
 };
 use serde_json::Value;
-use std::sync::{
-    Arc,
-    atomic::{AtomicBool, Ordering},
-};
 
 use crate::{
     DeploymentHooks, LegacyCallbacks, LoggedCallParam, PublicCall, PythonLogger, SentRequest,
@@ -69,9 +65,6 @@ pub struct LegacyLogging {
     /// Whether the call's stream starts only on its first read, as Python's Messages iterator
     /// does.
     stream_starts_on_first_read: bool,
-    /// Set once the route sends through the host's own client, whose timed `post` already
-    /// reports the exchange.
-    host_client: Arc<AtomicBool>,
     /// The params the route's provider logs from the caller's own kwargs.
     logged_call_params: Vec<LoggedCallParam>,
 }
@@ -116,17 +109,7 @@ impl LegacyLogging {
             api_started: None,
             host_answered: false,
             stream_starts_on_first_read: false,
-            host_client: Arc::default(),
             logged_call_params: Vec::new(),
-        }
-    }
-
-    /// Shares the flag the route host sets when the call sends through its own client.
-    #[must_use]
-    pub fn with_host_client(self, host_client: Arc<AtomicBool>) -> Self {
-        Self {
-            host_client,
-            ..self
         }
     }
 
@@ -710,7 +693,7 @@ impl LegacyLogging {
         )?;
         if self.operation == LoggingOperation::Messages
             && self.asynchronous
-            && !self.host_client.load(Ordering::Acquire)
+            && !context.host_transport
             && self.times_provider_exchange(py)?
         {
             self.api_started = Some(epoch_seconds());
@@ -1654,6 +1637,7 @@ assert ('custom_llm_provider' in logger.update['litellm_params']) is in_params, 
                 optional_params: json!({}),
                 secret_fields: Vec::new(),
                 api_key: None,
+                host_transport: false,
             };
             let wire = WireRequest {
                 url: "https://provider.invalid/v1/messages".into(),
@@ -1735,6 +1719,7 @@ assert reasons == [{'kind': 'thinking_signature'}, {'kind': 'strict_tools', 'dro
                 optional_params,
                 secret_fields: secret_fields.iter().map(|name| name.to_string()).collect(),
                 api_key: Some(SecretValue::new("route-key")),
+                host_transport: false,
             };
             let wire = WireRequest {
                 url: "https://provider.invalid/ocr".into(),
@@ -1786,6 +1771,7 @@ assert reasons == [{'kind': 'thinking_signature'}, {'kind': 'strict_tools', 'dro
             optional_params: json!({}),
             secret_fields: vec![],
             api_key: Some(SecretValue::new("route-key")),
+            host_transport: false,
         }
     }
 

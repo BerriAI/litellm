@@ -146,9 +146,9 @@ class BedrockRerankHandler(BaseAWSLLM):
         self,
         model: str,
         api_base: str | None,
-        extra_headers: dict | None,
-        data: dict,
-        optional_params: dict,
+        extra_headers: dict[str, object] | None,
+        data: dict[str, object],
+        optional_params: dict[str, object],
         litellm_params: Mapping[str, object] | None = None,
     ) -> BedrockPreparedRequest:
         boto3_credentials_info: Final = self._get_boto_credentials_from_optional_params(

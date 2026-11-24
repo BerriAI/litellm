@@ -383,7 +383,7 @@ class LakeraAIGuardrail(CustomGuardrail):
         messages: Sequence[AllMessageValues],
         request_data: dict,
         event_type: GuardrailEventHooks,
-    ) -> tuple[LakeraAIResponse, dict]:
+    ) -> tuple[LakeraAIResponse, dict[str, int]]:
         """
         Call the Lakera AI v2 guard API.
         """
@@ -391,8 +391,8 @@ class LakeraAIGuardrail(CustomGuardrail):
         exception_str: str = ""
         start_time: Final[datetime] = datetime.now()
         lakera_response: LakeraAIResponse | None = None
-        request: dict = {}
-        masked_entity_count: Final[dict] = {}
+        request: dict[str, object] = {}
+        masked_entity_count: Final[dict[str, int]] = {}
         try:
             request = dict(
                 LakeraAIRequest(
@@ -448,7 +448,7 @@ class LakeraAIGuardrail(CustomGuardrail):
         self,
         messages: Sequence[AllMessageValues],
         lakera_response: LakeraAIResponse | None,
-        masked_entity_count: dict,
+        masked_entity_count: dict[str, int],
     ) -> Sequence[AllMessageValues]:
         """
         Return a copy of messages with any detected PII replaced by

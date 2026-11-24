@@ -12,6 +12,7 @@ import contextlib
 import hmac
 import inspect
 import json
+import logging
 import os
 import posixpath
 import re
@@ -33,7 +34,11 @@ from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm import get_llm_provider
-from litellm._logging import redact_internal_details_from_client_message, verbose_proxy_logger
+from litellm._logging import (
+    CALLER_ERROR_LOG_EXTRA,
+    redact_internal_details_from_client_message,
+    verbose_proxy_logger,
+)
 from litellm._uuid import uuid
 from litellm.constants import (
     ALLOWED_VERTEX_AI_PASSTHROUGH_HEADERS,
@@ -50,7 +55,12 @@ from litellm.constants import (
     PASS_THROUGH_HEADER_PREFIX,
     TYPESAFE_DANGER_ZONE_HEADER_PREFIX,
 )
-from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException
+from litellm.exceptions import (
+    AuthenticationError,
+    BlockedPiiEntityError,
+    GuardrailRaisedException,
+    ServiceUnavailableError,
+)
 from litellm.integrations.custom_guardrail import guardrail_request_data_with_streaming, is_guardrail_intervention
 from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
 from litellm.litellm_core_utils.core_helpers import (
@@ -61,6 +71,7 @@ from litellm.litellm_core_utils.core_helpers import (
     require_get,
 )
 from litellm.litellm_core_utils.fallback_generalizations import match_routing_generalization
+from litellm.litellm_core_utils.get_llm_provider_logic import resolve_model_and_provider_for_metadata
 from litellm.llms.anthropic.common_utils import (
     AnthropicModelInfo,
     anthropic_pass_through_api_base,
@@ -216,11 +227,13 @@ from litellm.types.router import LiteLLMParamsTypedDict, RouterRateLimitError
 from litellm.types.utils import (
     DEPLOYMENT_SCOPED_PRICING_FIELDS,
     SERVER_DERIVED_PRICING_FIELDS,
+    AdminApiKeySecretReference,
     CallTypes,
     LlmProviders,
+    credential_api_key_secret_reference,
 )
 from litellm.types.vector_stores import LiteLLM_ManagedVectorStore, LiteLLM_ManagedVectorStoreIndex
-from litellm.utils import ProviderConfigManager, with_named_credential
+from litellm.utils import ProviderConfigManager, aresolve_api_key_secret_reference, with_named_credential
 from litellm.vector_stores.fallbacks import native_store_id
 
 from .passthrough_endpoint_router import PassthroughEndpointRouter
@@ -259,7 +272,9 @@ def create_request_copy(request: Request):
     }
 
 
-def is_passthrough_request_using_router_model(request_body: dict, llm_router: litellm.Router | None) -> bool:
+def is_passthrough_request_using_router_model(
+    request_body: Mapping[str, object], llm_router: litellm.Router | None
+) -> bool:
     """
     Returns True if the model is in the llm_router model names
     """
@@ -274,10 +289,14 @@ class RelayRejection(TypedDict):
     error: ReadOnly[str]
 
 
+def _declared_model_and_provider(litellm_params: LiteLLMParamsTypedDict) -> tuple[str, str | None]:
+    return litellm_params.get("model", ""), litellm_params.get("custom_llm_provider")
+
+
 def _deployment_model_name(litellm_params: LiteLLMParamsTypedDict) -> str:
-    model: Final = litellm_params.get("model", "")
+    model, custom_llm_provider = _declared_model_and_provider(litellm_params)
     try:
-        return get_llm_provider(model=model, custom_llm_provider=litellm_params.get("custom_llm_provider"))[0]
+        return get_llm_provider(model=model, custom_llm_provider=custom_llm_provider)[0]
     except litellm.BadRequestError:
         return model
 
@@ -285,6 +304,25 @@ def _deployment_model_name(litellm_params: LiteLLMParamsTypedDict) -> str:
 def _models_served_by_group(llm_router: litellm.Router, model_group: str) -> frozenset[str]:
     return frozenset(
         _deployment_model_name(row["litellm_params"]) for row in llm_router.registry().deployments(model_group) or ()
+    )
+
+
+_AZURE_PASSTHROUGH_PROVIDERS: Final = frozenset((LlmProviders.AZURE.value, LlmProviders.AZURE_AI.value))
+
+
+def _is_azure_deployment(litellm_params: LiteLLMParamsTypedDict) -> bool:
+    model, custom_llm_provider = _declared_model_and_provider(litellm_params)
+    try:
+        return resolve_model_and_provider_for_metadata(model, custom_llm_provider)[1] in _AZURE_PASSTHROUGH_PROVIDERS
+    except litellm.BadRequestError:
+        return False
+
+
+def is_azure_router_model_group(llm_router: litellm.Router | None, model_group: str) -> bool:
+    if llm_router is None or not is_known_model(model_group, llm_router):
+        return False
+    return any(
+        _is_azure_deployment(row["litellm_params"]) for row in llm_router.registry().deployments(model_group) or ()
     )
 
 
@@ -1651,13 +1689,13 @@ async def handle_bedrock_passthrough_router_model(
     model: str,
     endpoint: str,
     request: Request,
-    request_body: dict,
+    request_body: Mapping[str, object],
     llm_router: litellm.Router,
     user_api_key_dict: UserAPIKeyAuth,
-    proxy_logging_obj,
+    proxy_logging_obj: ProxyLoggingType,
     general_settings: dict,
-    proxy_config,
-    select_data_generator,
+    proxy_config: ProxyConfig,
+    select_data_generator: Callable[..., object],
     user_model: str | None,
     user_temperature: float | None,
     user_request_timeout: float | None,
@@ -1767,7 +1805,11 @@ async def _bedrock_count_tokens(
     request: Request, user_api_key_dict: UserAPIKeyAuth, request_body: dict[str, object], litellm_call_id: str
 ) -> Mapping[str, object]:
     from litellm.llms.bedrock.common_utils import BedrockError
-    from litellm.llms.bedrock.count_tokens.handler import BedrockCountTokensHandler
+    from litellm.llms.bedrock.count_tokens.handler import (
+        BedrockCountTokensHandler,
+        BedrockCountTokensRequestError,
+        is_caller_refusal,
+    )
     from litellm.proxy.litellm_pre_call_utils import request_routing_metadata
     from litellm.proxy.proxy_server import route_count
 
@@ -1828,7 +1870,15 @@ async def _bedrock_count_tokens(
 
     except BedrockError as e:
         # Convert BedrockError to HTTPException for FastAPI
-        verbose_proxy_logger.error("BedrockError in handle_bedrock_count_tokens: %s", e)
+        is_caller_error: Final = is_caller_refusal(
+            e.status_code, e.message, isinstance(e, BedrockCountTokensRequestError)
+        )
+        verbose_proxy_logger.log(
+            logging.WARNING if is_caller_error else logging.ERROR,
+            "BedrockError in handle_bedrock_count_tokens: %s",
+            e,
+            extra=CALLER_ERROR_LOG_EXTRA if is_caller_error else None,
+        )
         from litellm.litellm_core_utils.llm_response_utils.get_headers import get_response_headers
 
         provider_headers: Final = e.response.headers
@@ -2894,7 +2944,7 @@ async def _relay_azure_body_model_group(
         return None
     request_body: Final = await get_request_body(request)
     model: Final = _optional_str(request_body.get("model"))
-    if model is None or not is_passthrough_request_using_router_model(request_body, llm_router):
+    if model is None or not is_azure_router_model_group(llm_router, model):
         return None
     is_streaming_request: Final = is_passthrough_request_streaming(request_body)
     return await open_sse_before_first_byte(
@@ -2965,9 +3015,7 @@ async def azure_proxy_route(
     if len(parts) > 1 and llm_router:
         for part in parts:
             # check if LLM MODEL
-            is_router_model = is_passthrough_request_using_router_model(
-                request_body={"model": part}, llm_router=llm_router
-            )
+            is_router_model = is_azure_router_model_group(llm_router, part)
             # check if vector store index
             is_vector_store_index = (
                 part == search_index_name
@@ -3916,6 +3964,19 @@ async def vertex_proxy_route(
 _OPENAI_WS_TOKEN_EXCHANGE_FAILED_REASON: Final = "OpenAI workload identity token exchange failed"
 
 
+def openai_passthrough_base_url() -> str:
+    return os.getenv("OPENAI_API_BASE") or "https://api.openai.com/"
+
+
+def openai_api_key_headers(api_key: str | None) -> Mapping[str, str]:
+    return {} if api_key is None else {"authorization": f"Bearer {api_key}", "api-key": api_key}
+
+
+async def openai_passthrough_poll_headers(base_target_url: str) -> Mapping[str, str] | None:
+    api_key: Final = await _openai_passthrough_credential(base_target_url)
+    return None if api_key is None else openai_api_key_headers(api_key)
+
+
 async def _openai_passthrough_credential(base_target_url: str) -> str | None:
     static_api_key: Final = normalize_nonempty_secret_str(
         passthrough_endpoint_router.get_credentials(
@@ -3962,7 +4023,7 @@ async def openai_proxy_route(
 
     [Docs](https://docs.litellm.ai/docs/pass_through/openai_passthrough)
     """
-    base_target_url: Final = os.getenv("OPENAI_API_BASE") or "https://api.openai.com/"
+    base_target_url: Final = openai_passthrough_base_url()
     openai_api_key: Final = await _openai_passthrough_credential(base_target_url)
     if openai_api_key is None:
         raise Exception("Required 'OPENAI_API_KEY' in environment to make pass-through calls to OpenAI.")
@@ -4197,7 +4258,7 @@ async def openai_websocket_proxy_route(
         await websocket.close(code=1008, reason=refusal.close_reason)
         return
 
-    base_target_url: Final = os.getenv("OPENAI_API_BASE") or "https://api.openai.com/"
+    base_target_url: Final = openai_passthrough_base_url()
     try:
         openai_api_key: Final = await _openai_passthrough_credential(base_target_url)
     except (openai.OpenAIError, httpx.HTTPError, LiteLLMOpenAIError):
@@ -4451,11 +4512,8 @@ class BaseOpenAIPassThroughHandler:
         custom_llm_provider: litellm.LlmProviders,
         extra_headers: Mapping[str, str] | None = None,
     ) -> dict[str, str]:
-        api_key_headers: Final[Mapping[str, str]] = (
-            {} if api_key is None else {"authorization": f"Bearer {api_key}", "api-key": api_key}
-        )
         return BaseOpenAIPassThroughHandler._append_openai_beta_header(
-            headers={**api_key_headers, **(extra_headers or {})},
+            headers={**openai_api_key_headers(api_key), **(extra_headers or {})},
             endpoint=endpoint,
             request=request,
             custom_llm_provider=custom_llm_provider,
@@ -4507,8 +4565,9 @@ async def cursor_proxy_route(
     if cursor_api_key is None:
         for credential in litellm.credential_list:
             if credential.credential_info and credential.credential_info.get("custom_llm_provider") == "cursor":
-                cursor_api_key = credential.credential_values.get("api_key")
-                credential_api_base = credential.credential_values.get("api_base")
+                credential_values = credential_api_key_secret_reference(credential.credential_values)
+                credential_api_base = credential_values.get("api_base")
+                cursor_api_key = await _cursor_credential_api_key(credential_values)
                 if credential_api_base:
                     base_target_url = credential_api_base
                 break
@@ -4544,6 +4603,22 @@ async def cursor_proxy_route(
     )
 
     return received_value
+
+
+async def _cursor_credential_api_key(credential_values: Mapping[str, object]) -> object:
+    api_key: Final = credential_values.get("api_key")
+    if not isinstance(api_key, AdminApiKeySecretReference):
+        return api_key
+    try:
+        return await aresolve_api_key_secret_reference(
+            api_key,
+            None,
+            "cursor",
+            {"api_base": credential_values.get("api_base")},
+            call_type=CallTypes.allm_passthrough_route.value,
+        )
+    except (AuthenticationError, ServiceUnavailableError) as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
 
 
 TINYFISH_JSON_OBJECT_BODY_DETAIL: Final = (

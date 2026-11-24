@@ -66,6 +66,19 @@ def _index_rows_written(prisma: MagicMock) -> list[tuple[str, str]]:
 
 
 class TestBuildToolUsageTransaction:
+    def test_oversized_names_are_not_recorded(self) -> None:
+        transaction = build_tool_usage_transaction(
+            request_id="r1",
+            start_time_iso="2026-07-25T10:00:00+00:00",
+            mcp_namespaced_tool_name=None,
+            spend=0.5,
+            total_tokens=100,
+            completion_response=_response_with_tool_calls("é" * 257, "healthy_tool"),
+        )
+
+        assert transaction is not None
+        assert transaction.tool_names == ("healthy_tool",)
+
     def test_declared_tools_never_reach_the_transaction(self):
         # Regression for the inflation bug: the builder's only non-MCP source is
         # the response's tool_calls, so a request declaring N tools while the

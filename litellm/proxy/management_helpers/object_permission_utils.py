@@ -159,7 +159,7 @@ def _decoded_tool_permissions(raw: str) -> Mapping[str, object]:
 
 
 async def handle_update_object_permission_common(
-    data_json: dict,
+    data_json: dict[str, object],
     existing_object_permission_id: str | None,
     prisma_client: PrismaClient | None,
     can_grant_apps: bool = False,

@@ -15,7 +15,7 @@ class FacebookAccessTokenDetector(RegexBasedDetector):
         return "Facebook Access Token"
 
     @property
-    def denylist(self) -> list[re.Pattern]:
+    def denylist(self) -> list[re.Pattern[str]]:
         return [
             # Facebook Access Token
             re.compile(
