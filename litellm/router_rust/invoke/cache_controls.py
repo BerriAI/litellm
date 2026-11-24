@@ -44,6 +44,22 @@ def model_cache_controls(litellm_params: Mapping[str, object], request_cache: ob
     return ModelCacheControls({**deployment_controls, **_canonical(kept)}, ignored)
 
 
+def cache_lock(litellm_params: Mapping[str, object]) -> Mapping[str, object] | None:
+    """The deployment's ``cache`` and ``allowed_cache_controls`` when it sets the list, which its
+    fallbacks then follow in place of their own."""
+    allowed: Final = litellm_params.get(ALLOWED_CACHE_CONTROLS_PARAM)
+    if not isinstance(allowed, Sequence) or isinstance(allowed, str):
+        return None
+    return {key: litellm_params[key] for key in ("cache", ALLOWED_CACHE_CONTROLS_PARAM) if key in litellm_params}
+
+
+def with_cache_lock(litellm_params: Mapping[str, object], lock: Mapping[str, object] | None) -> Mapping[str, object]:
+    """A fallback deployment's params under the lock of the model the request asked for."""
+    if lock is None:
+        return litellm_params
+    return {**without(without(litellm_params, "cache"), ALLOWED_CACHE_CONTROLS_PARAM), **lock}
+
+
 def _canonical(controls: Mapping[str, object]) -> Mapping[str, object]:
     return {_CONTROL_NAMES.get(control, control): value for control, value in controls.items()}
 

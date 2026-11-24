@@ -95,7 +95,7 @@ from litellm.router_api import (
 from litellm.router_attempt import for_requested_model, request_from_call
 from litellm.router_config import RouterConfig, RouterDynamicConfig, detached
 from litellm.router_python_host import PythonHost
-from litellm.router_rust.invoke.cache_controls import IGNORED_CACHE_CONTROLS_HEADER
+from litellm.router_rust.invoke.cache_controls import IGNORED_CACHE_CONTROLS_HEADER, cache_lock, with_cache_lock
 from litellm.router_rust.invoke.endpoints import (
     AttemptCall,
     Plan,
@@ -4655,6 +4655,10 @@ class _Driver:
         self._served: tuple[str | None, Mapping[str, object]] = (None, MappingProxyType({}))
         # The latest attempt's deployment and call, which a blocked response is raised from.
         self._latest_call: tuple[Mapping[str, object], AttemptCall] | None = None
+        # The cache lock of the requested model, which its fallbacks follow: its latest attempted
+        # deployment's, or its first configured one's when every deployment was skipped (cooled down).
+        self._cache_lock: Mapping[str, object] | None = None
+        self._cache_lock_known: bool = False
         # A sync attempt's stream is reading its first chunk, so a failure now is the stream's to log.
         self._reading_first_chunk: bool = False
         self._attempts: int = 0
@@ -5132,6 +5136,16 @@ class _Driver:
         shape: Final = step.get("shape")
         if not isinstance(shape, AttemptShape):
             raise TypeError(f"the attempt step carries no AttemptShape: {shape!r}")
+        params: Final = as_str_mapping(deployment.get("litellm_params")) or {}
+        if shape.fallback_model_group is None:
+            self._cache_lock, self._cache_lock_known = cache_lock(params), True
+        else:
+            if not self._cache_lock_known:
+                self._cache_lock, self._cache_lock_known = self._configured_cache_lock(), True
+            deployment = {  # rebind-ok: the fallback's params under the requested model's cache lock
+                **deployment,
+                "litellm_params": with_cache_lock(params, self._cache_lock),
+            }
         call: Final = attempt_call(
             self._core._port,  # pyright: ignore[reportPrivateUsage]  # the driver serves its own core
             self._plan,
@@ -5153,6 +5167,11 @@ class _Driver:
         if call.refused is None:
             self._core._endpoints.counters.started(self._plan, call)  # pyright: ignore[reportPrivateUsage]  # the driver serves its own core
         return deployment, call
+
+    def _configured_cache_lock(self) -> Mapping[str, object] | None:
+        group: Final = self._core._port.group_deployments(model_name=str(self._request.get("model")))  # pyright: ignore[reportPrivateUsage]  # the driver serves its own core
+        locks: Final = (cache_lock(as_str_mapping(member.get("litellm_params")) or {}) for member in group or ())
+        return next((lock for lock in locks if lock is not None), None)
 
     def _strip_undecryptable_reasoning(
         self,

@@ -6,6 +6,7 @@ import pytest
 from litellm.router_config import build_router_config
 from litellm.router_rust.core import RustCore
 from tests.unit.test_router.core.fallbacks_helpers import complete, headers
+from tests.unit.test_router.core.retries_health_helpers import fresh, not_found
 from tests.unit.test_router.core.scripted_host import ScriptedHost, rust_core
 
 _HEADER: Final = "x-litellm-ignored-cache-controls"
@@ -72,12 +73,48 @@ async def test_attempt_sends_the_merged_cache_controls_and_reports_ignored_ones(
     assert headers(response).get(_HEADER) == ignored
 
 
+@pytest.mark.parametrize(
+    ("primary_params", "fallback_params", "primary_cache", "fallback_cache", "ignored"),
+    [
+        pytest.param(
+            {"cache": {"ttl": 60}, "allowed_cache_controls": []},
+            {},
+            {"ttl": 60},
+            {"ttl": 60},
+            "ttl",
+            id="a fallback with no rule follows the requested model's lock",
+        ),
+        pytest.param(
+            {"cache": _OFF, "allowed_cache_controls": []},
+            {"cache": {"ttl": 600}, "allowed_cache_controls": ["ttl"]},
+            _OFF,
+            _OFF,
+            "ttl",
+            id="the requested model's lock replaces the fallback's own rule and list",
+        ),
+        pytest.param(
+            {"cache": {"ttl": 60}},
+            {"cache": {"ttl": 600}, "allowed_cache_controls": []},
+            {"ttl": 5},
+            {"ttl": 600},
+            "ttl",
+            id="without a lock on the requested model the fallback keeps its own",
+        ),
+        pytest.param({"cache": {"ttl": 60}}, {}, {"ttl": 5}, {"ttl": 5}, None, id="no lock on either model"),
+    ],
+)
 @pytest.mark.asyncio
-async def test_fallback_response_reports_only_the_controls_its_own_deployment_ignored() -> None:
+async def test_a_fallback_follows_the_cache_lock_of_the_requested_model(
+    primary_params: dict[str, object],
+    fallback_params: dict[str, object],
+    primary_cache: dict[str, object],
+    fallback_cache: dict[str, object],
+    ignored: str | None,
+) -> None:
     host: Final = ScriptedHost()
     core: Final = rust_core(
         host,
-        model_list=[_deployment("a", cache={"ttl": 60}, allowed_cache_controls=[]), _deployment("b")],
+        model_list=[_deployment("a", **primary_params), _deployment("b", **fallback_params)],
         num_retries=0,
         fallbacks=[{"a": ["b"]}],
     )
@@ -86,9 +123,30 @@ async def test_fallback_response_reports_only_the_controls_its_own_deployment_ig
     response: Final = await complete(core, cache={"ttl": 5})
 
     primary, fallback = host.calls_to("acompletion")
-    assert primary.kwargs["cache"] == {"ttl": 60}
-    assert fallback.kwargs["cache"] == {"ttl": 5}
-    assert _HEADER not in headers(response)
+    assert primary.kwargs["cache"] == primary_cache
+    assert fallback.kwargs["cache"] == fallback_cache
+    assert "allowed_cache_controls" not in fallback.kwargs
+    assert headers(response).get(_HEADER) == ignored
+
+
+@pytest.mark.asyncio
+async def test_a_fallback_follows_the_cache_lock_of_a_requested_model_that_is_cooling_down() -> None:
+    host: Final = ScriptedHost()
+    core: Final = rust_core(
+        host,
+        model_list=[_deployment("a", cache=_OFF, allowed_cache_controls=[]), _deployment("b")],
+        num_retries=0,
+        fallbacks=[{"a": ["b"]}],
+    )
+    host.answer("openai/a", fresh(not_found))
+    _ = await complete(core, cache={"ttl": 5})
+
+    response: Final = await complete(core, cache={"ttl": 5})
+
+    _, _, straight_to_fallback = host.calls_to("acompletion")
+    assert straight_to_fallback.kwargs["model"] == "openai/b"
+    assert straight_to_fallback.kwargs["cache"] == _OFF
+    assert headers(response)[_HEADER] == "ttl"
 
 
 @pytest.mark.parametrize("request_cache", [None, {"ttl": 600, "no-store": False}])
