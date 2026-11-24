@@ -20,6 +20,9 @@ from litellm.llms.github_copilot.responses.transformation import (
     GithubCopilotResponsesAPIConfig,
 )
 from litellm.types.llms.openai import ResponsesAPIOptionalRequestParams
+from litellm.types.router import GenericLiteLLMParams
+
+_USER_ITEM = {"role": "user", "content": "Hello"}
 
 
 @pytest.fixture(autouse=True)
@@ -119,45 +122,33 @@ class TestGithubCopilotResponsesAPITransformation:
         # Default headers should still be present
         assert headers["Authorization"] == "Bearer test-api-key-123"
 
-    def test_get_initiator_with_assistant_role(self):
-        """Test _get_initiator returns 'agent' for assistant role"""
+    @pytest.mark.parametrize(
+        ("input_param", "expected_initiator"),
+        [
+            ("Hello, how are you?", "user"),
+            ([_USER_ITEM], "user"),
+            ([{"role": "system", "content": "Be brief"}, _USER_ITEM], "user"),
+            ([_USER_ITEM, {"role": "assistant", "content": "Hi there"}], "agent"),
+            ([_USER_ITEM, {"role": "tool", "content": "result"}], "agent"),
+            ([_USER_ITEM, {"type": "function_call", "call_id": "call_1", "name": "ls", "arguments": "{}"}], "agent"),
+            ([_USER_ITEM, {"type": "function_call_output", "call_id": "call_1", "output": "ok"}], "agent"),
+            ([_USER_ITEM, {"type": "reasoning", "summary": []}], "agent"),
+        ],
+    )
+    def test_transform_request_sets_initiator_from_input(self, input_param, expected_initiator):
         config = GithubCopilotResponsesAPIConfig()
+        headers: dict[str, str] = {}
 
-        input_with_assistant = [
-            {"role": "user", "content": "Hello"},
-            {"role": "assistant", "content": "Hi there"},
-        ]
+        body = config.transform_responses_api_request(
+            model="gpt-5.1-codex",
+            input=input_param,
+            response_api_optional_request_params={},
+            litellm_params=GenericLiteLLMParams(),
+            headers=headers,
+        )
 
-        initiator = config._get_initiator(input_with_assistant)
-        assert initiator == "agent", "Should return 'agent' for assistant role"
-
-    def test_get_initiator_with_no_role(self):
-        """Test _get_initiator returns 'agent' for items without role"""
-        config = GithubCopilotResponsesAPIConfig()
-
-        input_without_role = [
-            {"role": "user", "content": "Hello"},
-            {"type": "reasoning", "content": "thinking..."},  # No role field
-        ]
-
-        initiator = config._get_initiator(input_without_role)
-        assert initiator == "agent", "Should return 'agent' for items without role"
-
-    def test_get_initiator_with_user_only(self):
-        """Test _get_initiator returns 'user' for user-only messages"""
-        config = GithubCopilotResponsesAPIConfig()
-
-        input_user_only = [{"role": "user", "content": "Hello"}]
-
-        initiator = config._get_initiator(input_user_only)
-        assert initiator == "user", "Should return 'user' for user-only messages"
-
-    def test_get_initiator_with_string_input(self):
-        """Test _get_initiator returns 'user' for string input"""
-        config = GithubCopilotResponsesAPIConfig()
-
-        initiator = config._get_initiator("Hello, how are you?")
-        assert initiator == "user", "Should return 'user' for string input"
+        assert headers["X-Initiator"] == expected_initiator
+        assert body["model"] == "gpt-5.1-codex"
 
     def test_has_vision_input_with_input_image(self):
         """Test _has_vision_input detects input_image type"""
@@ -230,26 +221,6 @@ class TestGithubCopilotResponsesAPITransformation:
         assert headers.get("copilot-vision-request") == "true", (
             "Should add copilot-vision-request header for vision input"
         )
-
-    @patch("litellm.llms.github_copilot.responses.transformation.Authenticator")
-    def test_validate_environment_with_x_initiator(self, mock_authenticator_class):
-        """Test that X-Initiator header is set based on input"""
-        mock_auth_instance = MagicMock()
-        mock_auth_instance.get_api_key.return_value = "test-api-key"
-        mock_authenticator_class.return_value = mock_auth_instance
-
-        config = GithubCopilotResponsesAPIConfig()
-
-        # Create mock litellm_params with input attribute
-        mock_litellm_params = SimpleNamespace()
-        mock_litellm_params.input = [
-            {"role": "user", "content": "Hello"},
-            {"role": "assistant", "content": "Hi"},
-        ]
-
-        headers = config.validate_environment(headers={}, model="gpt-5.1-codex", litellm_params=mock_litellm_params)
-
-        assert headers.get("X-Initiator") == "agent", "Should set X-Initiator to 'agent' for assistant role"
 
     def test_map_openai_params_no_transformation(self):
         """Test that map_openai_params passes through parameters unchanged"""

@@ -3,8 +3,8 @@ Constants for Copilot integration
 """
 
 import os
-from collections.abc import MutableMapping
-from typing import Final
+from collections.abc import Mapping, MutableMapping, Sequence
+from typing import Final, Literal
 from uuid import uuid4
 
 import httpx
@@ -90,6 +90,24 @@ def get_copilot_default_headers(
         "x-request-id": str(uuid4()),
         "x-vscode-user-agent-library-version": "electron-fetch",
     }
+
+
+_AGENT_ROLES: Final = frozenset({"assistant", "tool"})
+
+
+def _continues_agent_turn(item: Mapping[str, object]) -> bool:
+    if not isinstance(item, Mapping):  # pyright: ignore[reportUnnecessaryIsInstance]  # items arrive from untyped request bodies
+        return False
+    role: Final = item.get("role")
+    return not role or (isinstance(role, str) and role.lower() in _AGENT_ROLES)
+
+
+def get_copilot_initiator(input_param: str | Sequence[Mapping[str, object]]) -> Literal["user", "agent"]:
+    """Copilot bills a request as a premium user request unless X-Initiator says an agent turn is continuing.
+    Assistant, tool and role-less history items (function calls, their outputs, reasoning) mark an agent turn."""
+    if isinstance(input_param, str):
+        return "user"
+    return "agent" if any(_continues_agent_turn(item) for item in input_param) else "user"
 
 
 def pin_session_authorization(

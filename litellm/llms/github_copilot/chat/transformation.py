@@ -18,6 +18,7 @@ from ..common_utils import (
     DEFAULT_GITHUB_COPILOT_API_BASE,
     GetAccessTokenError,
     get_copilot_default_headers,
+    get_copilot_initiator,
     pin_session_authorization,
 )
 from ..per_user_auth import require_github_copilot_user_session
@@ -133,7 +134,7 @@ class GithubCopilotConfig(OpenAIConfig):
             pin_session_authorization(validated_headers, user_session.token, user_session.integration_id)
 
         # Add X-Initiator header based on message roles
-        initiator: Final = self._determine_initiator(messages)
+        initiator: Final = get_copilot_initiator(messages)
         validated_headers["X-Initiator"] = initiator
 
         # Add Copilot-Vision-Request header if request contains images
@@ -165,17 +166,6 @@ class GithubCopilotConfig(OpenAIConfig):
                 base_params.append("reasoning_effort")
 
         return base_params
-
-    def _determine_initiator(self, messages: list[AllMessageValues]) -> str:
-        """
-        Determine if request is user or agent initiated based on message roles.
-        Returns 'agent' if any message has role 'tool' or 'assistant', otherwise 'user'.
-        """
-        for message in messages:
-            role = message.get("role")
-            if role in ["tool", "assistant"]:
-                return "agent"
-        return "user"
 
     def _has_vision_content(self, messages: list[AllMessageValues]) -> bool:
         """
