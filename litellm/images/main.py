@@ -794,7 +794,6 @@ def image_edit(
     prompt: str | None = None,
     model: str | None = None,
     mask: str | None = None,
-    markup: FileTypes | None = None,
     n: int | None = None,
     quality: str | ImageGenerationRequestQuality | None = None,
     response_format: str | None = None,
@@ -808,6 +807,7 @@ def image_edit(
     timeout: float | httpx.Timeout | None = None,
     # LiteLLM specific params,
     custom_llm_provider: str | None = None,
+    markup: FileTypes | None = None,
     **kwargs,
 ) -> ImageResponse | Coroutine[object, object, ImageResponse]:
     """
@@ -1117,7 +1117,6 @@ async def aimage_edit(
     model: str,
     prompt: str,
     mask: str | None = None,
-    markup: FileTypes | None = None,
     n: int | None = None,
     quality: str | ImageGenerationRequestQuality | None = None,
     response_format: str | None = None,
@@ -1131,6 +1130,7 @@ async def aimage_edit(
     timeout: float | httpx.Timeout | None = None,
     # LiteLLM specific params,
     custom_llm_provider: str | None = None,
+    markup: FileTypes | None = None,
     **kwargs,
 ) -> ImageResponse:
     """

@@ -1,5 +1,6 @@
 from io import BufferedReader
-from typing import TYPE_CHECKING, Any, Final, cast
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 from httpx._types import RequestFiles
@@ -8,10 +9,7 @@ import litellm
 from litellm.images.utils import ImageEditRequestUtils
 from litellm.llms.base_llm.image_edit.transformation import BaseImageEditConfig
 from litellm.secret_managers.main import get_secret_str
-from litellm.types.images.main import (
-    ImageEditOptionalRequestParams,
-    ImageEditRequestParams,
-)
+from litellm.types.images.main import ImageEditOptionalRequestParams
 from litellm.types.llms.openai import FileTypes
 from litellm.types.router import GenericLiteLLMParams
 from litellm.utils import ImageResponse
@@ -70,6 +68,7 @@ class OpenAIImageEditConfig(BaseImageEditConfig):
         files_list: list[tuple[str, Any]],
         image: object,
         field_name: str,
+        default_name: str = "image.png",
     ) -> None:
         """Add an image to the files list with appropriate content type"""
         image_content_type: Final = ImageEditRequestUtils.get_image_content_type(image)
@@ -77,7 +76,7 @@ class OpenAIImageEditConfig(BaseImageEditConfig):
         if isinstance(image, BufferedReader):
             files_list.append((field_name, (image.name, image, image_content_type)))
         else:
-            files_list.append((field_name, ("image.png", image, image_content_type)))
+            files_list.append((field_name, (default_name, image, image_content_type)))
 
     def transform_image_edit_request(
         self,
@@ -95,24 +94,21 @@ class OpenAIImageEditConfig(BaseImageEditConfig):
         to support multiple images (e.g., for gpt-image-1).
         """
         # Build request params, only including non-None values
-        request_params: Final = {
-            "model": model,
-            **image_edit_optional_request_params,
-        }
-        if image is not None:
-            request_params["image"] = image
-        if prompt is not None:
-            request_params["prompt"] = prompt
-
-        request: Final = ImageEditRequestParams(**request_params)
-        request_dict: Final = cast(dict, request)
+        request_dict: Final = MappingProxyType[str, object](
+            {
+                "model": model,
+                **image_edit_optional_request_params,
+                **({"image": image} if image is not None else {}),
+                **({"prompt": prompt} if prompt is not None else {}),
+            }
+        )
 
         #########################################################
         # Separate images, masks, and markup as `files` and send other parameters as `data`
         #########################################################
         _image_list: Final = request_dict.get("image")
         _mask = request_dict.get("mask")
-        _markup = request_dict.get("markup")
+        markup: Final = request_dict.get("markup")
         data_without_files: Final = {k: v for k, v in request_dict.items() if k not in ["image", "mask", "markup"]}
         files_list: Final[list[tuple[str, Any]]] = []
 
@@ -140,21 +136,13 @@ class OpenAIImageEditConfig(BaseImageEditConfig):
                 else:
                     files_list.append(("mask", ("mask.png", _mask, mask_content_type)))
 
-        # Handle markup parameter if provided
-        if _markup is not None:
-            if isinstance(_markup, list):
-                _markup = _markup[0] if _markup else None
-
-            if _markup is not None:
-                markup_content_type: Final[str] = ImageEditRequestUtils.get_image_content_type(_markup)
-                if isinstance(_markup, BufferedReader):
-                    files_list.append(("markup", (_markup.name, _markup, markup_content_type)))
-                else:
-                    markup_name: Final = getattr(_markup, "name", None)
-                    filename: Final = (
-                        markup_name if isinstance(markup_name, str) and markup_name else "markup.png"
-                    )
-                    files_list.append(("markup", (filename, _markup, markup_content_type)))
+        if markup is not None:
+            self._add_image_to_files(
+                files_list=files_list,
+                image=markup,
+                field_name="markup",
+                default_name="markup.png",
+            )
 
         return data_without_files, files_list
 
