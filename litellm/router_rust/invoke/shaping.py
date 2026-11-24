@@ -77,9 +77,15 @@ ROUTER_CLIENTS_TARGET: Final = "router_clients"
 _MAPPING: Final = TypeAdapter(Mapping[str, object])
 _FORWARDED_CREDENTIAL_ISOLATION_PROVIDERS: Final = frozenset({"chatgpt", "anthropic"})
 _CALLER_KEY_ORIGIN_PROVIDERS: Final = frozenset({LlmProviders.ANTHROPIC.value})
-_AWS_SIGNED_FALLBACK_PROVIDERS: Final = frozenset({LlmProviders.BEDROCK.value, LlmProviders.BEDROCK_MANTLE.value})
-_AWS_ENDPOINT_OVERRIDE_PARAMS: Final = ("api_base", "base_url", "aws_bedrock_runtime_endpoint")
-_AWS_ENDPOINT_OVERRIDE_ENV_VARS: Final = ("AWS_BEDROCK_RUNTIME_ENDPOINT", "BEDROCK_MANTLE_API_BASE")
+_BEDROCK_RUNTIME_DESTINATION: Final = (
+    ("api_base", "base_url", "aws_bedrock_runtime_endpoint"),
+    ("AWS_BEDROCK_RUNTIME_ENDPOINT",),
+)
+_BEDROCK_MANTLE_ROUTE_DESTINATION: Final = (
+    ("api_base", "base_url", "aws_bedrock_runtime_endpoint"),
+    ("BEDROCK_MANTLE_API_BASE",),
+)
+_BEDROCK_MANTLE_DESTINATION: Final = (("api_base", "base_url"), ("BEDROCK_MANTLE_API_BASE",))
 _ALIAS_MARKER_FORWARDED_PARAMS_KWARG: Final = "_alias_marker_forwarded_params"
 # Generic handlers whose stream timeout is split from the request timeout.
 STREAM_TIMEOUT_AWARE_GENERIC_HANDLERS: Final = frozenset({"anthropic_messages", "aresponses", "responses"})
@@ -484,34 +490,60 @@ def leaves_caller_key_behind(
     target_params: Mapping[str, object],
     owner_provider: Callable[[], str | None],
     deployment_params: Mapping[str, object],
+    router_defaults: Mapping[str, object],
 ) -> bool:
     """Whether an attempt onto ``deployment_params`` must not send the caller's ``api_key``: the key was meant for
-    Anthropic and the deployment authenticates with AWS IAM credentials. A deployment with a bearer of its own (its
-    ``api_key`` or the provider's env bearer), a blank caller key (which already turns off the env bearer), a fallback
-    target that sets its own key, an explicit ``Authorization`` header, and a call the caller, the target or the
-    deployment points at an endpoint of its own keep today's behavior."""
+    Anthropic and the deployment authenticates with AWS IAM credentials on its default endpoint. A deployment with a
+    bearer of its own (its ``api_key``, a router default one, or the provider's env bearer), a blank caller key (which
+    already turns off the env bearer), a fallback target that sets its own key, an explicit ``Authorization`` header,
+    and a call sent to an endpoint of its own keep today's behavior. The checks read the call as the provider gets it:
+    the request and target over the router's non-None defaults over the deployment's params."""
     caller_key: Final = request.get("api_key")
-    redirected: Final = any(key in request or key in target_params for key in _AWS_ENDPOINT_OVERRIDE_PARAMS)
+    deployment: Final = {
+        **deployment_params,
+        **{key: value for key, value in router_defaults.items() if value is not None},
+    }
+    destination: Final = _aws_destination(deployment)
     return (
         caller_key not in (None, "")
         and "api_key" not in target_params
-        and not redirected
-        and not _sets_authorization_header(request, target_params, deployment_params)
-        and deployment_provider(deployment_params) in _AWS_SIGNED_FALLBACK_PROVIDERS
+        and destination is not None
+        and not _sets_authorization_header(request, target_params, deployment)
         and owner_provider() in _CALLER_KEY_ORIGIN_PROVIDERS
-        and not _targets_a_custom_aws_endpoint(deployment_params)
-        and _signs_with_aws_credentials(deployment_params)
+        and not _targets_a_custom_endpoint({**deployment, **request, **target_params}, destination)
+        and _signs_with_aws_credentials(deployment)
     )
 
 
-def _targets_a_custom_aws_endpoint(deployment_params: Mapping[str, object]) -> bool:
-    """Whether the AWS deployment overrides where it sends the call, in its params or the providers' endpoint env
-    vars. A custom endpoint may be a gateway that takes the caller's bearer, so its auth is left as it is."""
+def _aws_destination(
+    deployment_params: Mapping[str, object],
+) -> tuple[tuple[str, ...], tuple[str, ...]] | None:
+    """The params and env vars that move an AWS deployment off its default endpoint, as its route resolves them, or
+    None for a deployment this fix leaves alone: not bedrock or bedrock_mantle, or the Claude Platform route, which
+    resolves its own endpoint and bearer."""
+    from litellm.llms.bedrock.common_utils import BedrockModelInfo
+
+    provider: Final = deployment_provider(deployment_params)
+    if provider == LlmProviders.BEDROCK_MANTLE.value:
+        return _BEDROCK_MANTLE_DESTINATION
+    if provider != LlmProviders.BEDROCK.value:
+        return None
+    model: Final = deployment_params.get("model")
+    route: Final = BedrockModelInfo.named_bedrock_route(model, None) if isinstance(model, str) else None
+    if route == "claude_platform":
+        return None
+    return _BEDROCK_MANTLE_ROUTE_DESTINATION if route == "mantle" else _BEDROCK_RUNTIME_DESTINATION
+
+
+def _targets_a_custom_endpoint(
+    call: Mapping[str, object], destination: tuple[tuple[str, ...], tuple[str, ...]]
+) -> bool:
+    """Whether the call goes to an endpoint of its own: a non-empty destination param, or the route's endpoint env var.
+    A custom endpoint may be a gateway that takes the caller's bearer, so its auth is left as it is."""
     from litellm.secret_managers.main import get_secret_str
 
-    return any(deployment_params.get(key) for key in _AWS_ENDPOINT_OVERRIDE_PARAMS) or any(
-        get_secret_str(name) for name in _AWS_ENDPOINT_OVERRIDE_ENV_VARS
-    )
+    params, env_vars = destination
+    return any(call.get(key) for key in params) or any(get_secret_str(name) for name in env_vars)
 
 
 def _sets_authorization_header(*sources: Mapping[str, object]) -> bool:
@@ -592,6 +624,7 @@ def attempt_inherited_request(
     target_params: Mapping[str, object],
     owner_provider: Callable[[], str | None],
     deployment_params: Mapping[str, object],
+    router_defaults: Mapping[str, object],
     rechecks_header_scope: bool,
     header_forwarding_admits: Callable[[], bool],
 ) -> Mapping[str, object]:
@@ -599,7 +632,9 @@ def attempt_inherited_request(
     key meant for Anthropic on an AWS-signed deployment, and without the client headers the proxy forwarded (still
     holding the forwarded value) when the attempt's group is outside their forwarding scope, or, for ``x-api-key``,
     when the key is left behind. A target that sets its own ``headers`` replaces them, so they are left alone."""
-    drops_key: Final = leaves_caller_key_behind(request, target_params, owner_provider, deployment_params)
+    drops_key: Final = leaves_caller_key_behind(
+        request, target_params, owner_provider, deployment_params, router_defaults
+    )
     inherited: Final = without(request, "api_key") if drops_key else request
     stamp: Final = forwarded_client_headers(request)
     if stamp is None or "headers" in target_params:

@@ -3107,6 +3107,7 @@ class RustCore(
         *,
         fresh: bool = False,
         passthrough: "Callable[[Mapping[str, object], str], Awaitable[object]] | None" = None,
+        caller_key_origin: str | None = None,
     ) -> "tuple[_Driver, Mapping[str, object]]":
         """Drive ``call`` to its ``done`` or ``failed`` step, answering every step on the host.
         ``cut_deployment`` is the attempt whose stream failed, for a recovery call, and
@@ -3114,7 +3115,14 @@ class RustCore(
         ``fresh`` is a call from the top, through the retry and fallback wrappers, and
         ``passthrough`` serves an attempt whose pick failed."""
         driver: Final = _Driver(
-            self, plan, prepared, cut_deployment, stream_failure, fresh=fresh, passthrough=passthrough
+            self,
+            plan,
+            prepared,
+            cut_deployment,
+            stream_failure,
+            fresh=fresh,
+            passthrough=passthrough,
+            caller_key_origin=caller_key_origin,
         )
         try:
             return await self._run_steps(driver, call)
@@ -3184,8 +3192,18 @@ class RustCore(
         stream_failure: tuple[int, BaseException] | None = None,
         *,
         fresh: bool = False,
+        caller_key_origin: str | None = None,
     ) -> "tuple[_Driver, Mapping[str, object]]":
-        driver: Final = _Driver(self, plan, prepared, cut_deployment, stream_failure, sync=True, fresh=fresh)
+        driver: Final = _Driver(
+            self,
+            plan,
+            prepared,
+            cut_deployment,
+            stream_failure,
+            sync=True,
+            fresh=fresh,
+            caller_key_origin=caller_key_origin,
+        )
         try:
             return self._run_sync_steps(driver, call)
         except BaseException:
@@ -3269,12 +3287,20 @@ class RustCore(
         request: Mapping[str, object],
         origin: Mapping[str, object],
         failure: BaseException,
+        *,
+        caller_key_origin: str | None = None,
     ) -> object:
         """The fallback walk for a stream that failed before content: the fallback's response with the
-        router's headers, or the error the walk ended on."""
+        router's headers, or the error the walk ended on. ``caller_key_origin`` is where the failed stream's
+        walk first sent the caller's key."""
         call: Final = self._recovery_call(recovery, op, request, origin, failure)
         driver, step = await self._run(
-            plan_for(op), call, request, origin.get("deployment_id"), (_origin_level(origin), failure)
+            plan_for(op),
+            call,
+            request,
+            origin.get("deployment_id"),
+            (_origin_level(origin), failure),
+            caller_key_origin=caller_key_origin,
         )
         if step["kind"] == "failed":
             raise driver.failed(step)
@@ -3287,23 +3313,38 @@ class RustCore(
         request: Mapping[str, object],
         origin: Mapping[str, object],
         failure: BaseException,
+        *,
+        caller_key_origin: str | None = None,
     ) -> object:
         call: Final = self._recovery_call(recovery, op, request, origin, failure)
         driver, step = self._run_sync(
-            plan_for(op), call, request, origin.get("deployment_id"), (_origin_level(origin), failure)
+            plan_for(op),
+            call,
+            request,
+            origin.get("deployment_id"),
+            (_origin_level(origin), failure),
+            caller_key_origin=caller_key_origin,
         )
         if step["kind"] == "failed":
             raise driver.failed(step)
         return driver.finish(step)
 
     async def retry_stream(
-        self, op: str, request: Mapping[str, object], origin: Mapping[str, object], failure: BaseException
+        self,
+        op: str,
+        request: Mapping[str, object],
+        origin: Mapping[str, object],
+        failure: BaseException,
+        *,
+        caller_key_origin: str | None = None,
     ) -> "tuple[object, int, int] | BaseException":
         """A same-group retry of a stream that failed before content: the retried response (without the
         router's headers) with the retry count and budget, or the newest failure (``failure`` itself
         when no retry ran)."""
         call: Final = self._recovery_call("retry", op, request, origin, failure)
-        driver, step = await self._run(plan_for(op), call, request, origin.get("deployment_id"))
+        driver, step = await self._run(
+            plan_for(op), call, request, origin.get("deployment_id"), caller_key_origin=caller_key_origin
+        )
         try:
             await await_all(driver.outcomes.take_pending())
             if step["kind"] == "failed":
@@ -4633,6 +4674,7 @@ class _Driver:
         sync: bool = False,
         fresh: bool = False,
         passthrough: "Callable[[Mapping[str, object], str], Awaitable[object]] | None" = None,
+        caller_key_origin: str | None = None,
     ) -> None:
         self._core: Final = core
         self._sync: Final = sync
@@ -4642,7 +4684,7 @@ class _Driver:
         self._request: Final = request
         self._cut_deployment: Final = cut_deployment if isinstance(cut_deployment, str) else None
         self._last_response: object = None
-        self._caller_key_origin: str | None = None
+        self._caller_key_origin: str | None = caller_key_origin
         self._last_error: BaseException | None = None
         # The level the call raises from: a fallback walk re-entered from a failed stream starts at
         # the level that stream served, on the failure ``async_function_with_fallbacks_common_utils``
@@ -5218,6 +5260,7 @@ class _Driver:
             routed=routed if isinstance(routed, str) else None,
             slot=slot,
             explain_failure=self._hop_failure_explainer(step),
+            caller_key_origin=self._caller_key_origin,
         )
 
     def _failed(
@@ -5498,6 +5541,7 @@ class _Driver:
             target_params=as_str_mapping(step.get("params")) or {},
             owner_provider=partial(self._caller_key_owner, deployment),
             deployment_params=params,
+            router_defaults=self._core._port.shaping.default_litellm_params,  # pyright: ignore[reportPrivateUsage]  # the driver serves its own core
             rechecks_header_scope=shape.is_fallback or self._cut_deployment is not None,
             header_forwarding_admits=partial(client_header_forwarding_admits, group, self._request, self._core),
         )
