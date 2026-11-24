@@ -50610,6 +50610,7 @@
             "/v1/chat/completions"
         ],
         "supports_function_calling": true,
+        "supports_logprobs": false,
         "supports_tool_choice": true
     },
     "nvidia_nim/mistralai/mixtral-8x22b-v0.1": {
@@ -50619,6 +50620,12 @@
     "nvidia_nim/moonshotai/kimi-k2.6": {
         "litellm_provider": "nvidia_nim",
         "source": "https://integrate.api.nvidia.com/v1/models"
+    },
+    "nvidia_nim/moonshotai/kimi-k3.1-pro": {
+        "litellm_provider": "nvidia_nim",
+        "mode": "chat",
+        "source": "https://integrate.api.nvidia.com/v1/models",
+        "supports_logprobs": false
     },
     "nvidia_nim/nv-mistralai/mistral-nemo-12b-instruct": {
         "litellm_provider": "nvidia_nim",
@@ -50751,6 +50758,7 @@
             "/v1/chat/completions"
         ],
         "supports_function_calling": true,
+        "supports_logprobs": false,
         "supports_response_schema": true,
         "supports_tool_choice": true
     },
@@ -50885,7 +50893,8 @@
         "source": "https://build.nvidia.com/poolside/laguna-xs-2.1.md",
         "supported_endpoints": [
             "/v1/chat/completions"
-        ]
+        ],
+        "supports_logprobs": false
     },
     "nvidia_nim/snowflake/arctic-embed-l": {
         "litellm_provider": "nvidia_nim",

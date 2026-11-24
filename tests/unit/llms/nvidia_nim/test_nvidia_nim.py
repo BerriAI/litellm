@@ -284,30 +284,12 @@ def test_completion_nvidia_nim_forwards_logprobs_and_returns_them():
     assert response.choices[0].logprobs.content[0].logprob == token_logprob.logprob
 
 
-@pytest.mark.parametrize(
-    ("logprobs", "drop_params", "global_drop_params", "expected_body"),
-    [
-        (None, True, False, {}),
-        (None, None, True, {}),
-        (False, True, False, {"logprobs": False}),
-        (None, None, False, {"top_logprobs": 2}),
-        (True, True, False, {"logprobs": True, "top_logprobs": 2}),
-    ],
-)
-def test_completion_nvidia_nim_drops_top_logprobs_without_logprobs_only_under_drop_params(
-    monkeypatch: pytest.MonkeyPatch,
-    logprobs: bool | None,
-    drop_params: bool | None,
-    global_drop_params: bool,
-    expected_body: dict[str, bool | int],
-):
-    from openai import OpenAI
+def _nim_chat_transport() -> CapturingTransport:
     from openai.types.chat import ChatCompletion
     from openai.types.chat.chat_completion import Choice
     from openai.types.chat.chat_completion_message import ChatCompletionMessage
 
-    monkeypatch.setattr(litellm, "drop_params", global_drop_params)
-    transport: Final = CapturingTransport(
+    return CapturingTransport(
         ChatCompletion(
             id="chatcmpl-nim",
             object="chat.completion",
@@ -322,19 +304,127 @@ def test_completion_nvidia_nim_drops_top_logprobs_without_logprobs_only_under_dr
             ],
         )
     )
+
+
+def _sent_logprobs_params(transport: CapturingTransport) -> dict[str, object]:
+    request_body: Final = transport.request_bodies[0]
+    return {key: request_body[key] for key in ("logprobs", "top_logprobs") if key in request_body}
+
+
+@pytest.mark.parametrize(
+    ("logprobs", "top_logprobs", "drop_params", "global_drop_params", "allowed_openai_params", "expected_body"),
+    [
+        (None, 2, True, False, None, {}),
+        (None, 2, None, True, None, {}),
+        (False, 2, True, False, None, {"logprobs": False}),
+        (True, 2, True, False, None, {"logprobs": True, "top_logprobs": 2}),
+        (True, 2, None, False, None, {"logprobs": True, "top_logprobs": 2}),
+        (2, None, True, False, None, {}),
+        (None, 2, None, False, ["top_logprobs"], {"top_logprobs": 2}),
+        (2, None, None, False, ["logprobs"], {"logprobs": 2}),
+    ],
+)
+def test_completion_nvidia_nim_sends_logprobs_params_nim_accepts(
+    monkeypatch: pytest.MonkeyPatch,
+    logprobs: bool | int | None,
+    top_logprobs: int | None,
+    drop_params: bool | None,
+    global_drop_params: bool,
+    allowed_openai_params: list[str] | None,
+    expected_body: dict[str, object],
+):
+    from openai import OpenAI
+
+    monkeypatch.setattr(litellm, "drop_params", global_drop_params)
+    transport: Final = _nim_chat_transport()
     client: Final = OpenAI(api_key="fake-api-key", http_client=httpx.Client(transport=transport))
 
     completion(
         model="nvidia_nim/openai/gpt-oss-20b",
         messages=[{"role": "user", "content": "Say hi"}],
         logprobs=logprobs,
-        top_logprobs=2,
+        top_logprobs=top_logprobs,
         drop_params=drop_params,
+        allowed_openai_params=allowed_openai_params,
         client=client,
     )
 
-    request_body: Final = transport.request_bodies[0]
-    assert {key: request_body[key] for key in ("logprobs", "top_logprobs") if key in request_body} == expected_body
+    assert _sent_logprobs_params(transport) == expected_body
+
+
+@pytest.mark.parametrize(
+    ("logprobs", "top_logprobs", "rejected_param"),
+    [
+        (None, 2, "top_logprobs"),
+        (False, 2, "top_logprobs"),
+        (2, None, "logprobs"),
+    ],
+)
+def test_completion_nvidia_nim_rejects_logprobs_params_nim_cannot_take_without_drop_params(
+    monkeypatch: pytest.MonkeyPatch,
+    logprobs: bool | int | None,
+    top_logprobs: int | None,
+    rejected_param: str,
+):
+    from openai import OpenAI
+
+    monkeypatch.setattr(litellm, "drop_params", False)
+    transport: Final = _nim_chat_transport()
+    client: Final = OpenAI(api_key="fake-api-key", http_client=httpx.Client(transport=transport))
+
+    with pytest.raises(litellm.UnsupportedParamsError, match=rejected_param):
+        completion(
+            model="nvidia_nim/openai/gpt-oss-20b",
+            messages=[{"role": "user", "content": "Say hi"}],
+            logprobs=logprobs,
+            top_logprobs=top_logprobs,
+            client=client,
+        )
+
+    assert transport.request_bodies == ()
+
+
+@pytest.mark.parametrize(
+    ("drop_params", "expected_body"),
+    [
+        (True, {}),
+        (None, None),
+    ],
+)
+def test_completion_nvidia_nim_treats_logprobs_as_unsupported_for_models_the_cost_map_flags(
+    monkeypatch: pytest.MonkeyPatch,
+    drop_params: bool | None,
+    expected_body: dict[str, object] | None,
+):
+    from openai import OpenAI
+
+    monkeypatch.setattr(litellm, "drop_params", False)
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "nvidia_nim/acme/no-logprobs-chat",
+        {"litellm_provider": "nvidia_nim", "mode": "chat", "supports_logprobs": False},
+    )
+    transport: Final = _nim_chat_transport()
+    client: Final = OpenAI(api_key="fake-api-key", http_client=httpx.Client(transport=transport))
+
+    def send() -> None:
+        completion(
+            model="nvidia_nim/acme/no-logprobs-chat",
+            messages=[{"role": "user", "content": "Say hi"}],
+            logprobs=True,
+            top_logprobs=2,
+            drop_params=drop_params,
+            client=client,
+        )
+
+    if expected_body is None:
+        with pytest.raises(litellm.UnsupportedParamsError, match="logprobs"):
+            send()
+        assert transport.request_bodies == ()
+        return
+    send()
+    assert _sent_logprobs_params(transport) == expected_body
+
 
 def test_embedding_nvidia_nim_sends_extra_body_fields_without_an_extra_body_key():
     from openai import OpenAI
