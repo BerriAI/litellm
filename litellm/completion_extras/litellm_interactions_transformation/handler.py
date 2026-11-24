@@ -487,7 +487,9 @@ def _is_recitation_block(error_body: str) -> bool:
     return isinstance(error, dict) and error.get("code") == RECITATION_ERROR_CODE
 
 
-def _recitation_block_response(model: str, model_response: ModelResponse) -> ModelResponse:
+def _recitation_block_response(
+    model: str, model_response: ModelResponse, blocked_response: httpx.Response, url: str
+) -> ModelResponse:
     blocked: Final = transform_interactions_response_to_chat_response(
         raw_response={"steps": []},
         model=model,
@@ -496,6 +498,7 @@ def _recitation_block_response(model: str, model_response: ModelResponse) -> Mod
     blocked.choices = [
         Choices(finish_reason="content_filter", index=0, message=Message(role="assistant", content=None))
     ]
+    _attach_response_metadata(blocked, blocked_response, url)
     return blocked
 
 
@@ -718,8 +721,14 @@ class InteractionsToCompletionBridgeHandler:
             if isinstance(exc, httpx.HTTPStatusError):
                 with contextlib.suppress(httpx.HTTPError):
                     exc.response.read()
-                if not wire.is_stream and _is_recitation_block(_safe_response_text(exc.response)):
-                    return _recitation_block_response(model, model_response)
+                if not wire.is_stream and _is_recitation_block(blocked_text := _safe_response_text(exc.response)):
+                    call_logger.post_call(
+                        input=list(messages),
+                        api_key=api_key or "",
+                        original_response=blocked_text,
+                        additional_args={"complete_input_dict": wire.body},
+                    )
+                    return _recitation_block_response(model, model_response, exc.response, wire.url)
             _handle_httpx_error(
                 exc=exc,
                 model=model,
@@ -742,7 +751,7 @@ class InteractionsToCompletionBridgeHandler:
                 additional_args={"complete_input_dict": wire.body},
             )
             if not wire.is_stream and _is_recitation_block(error_body):
-                return _recitation_block_response(model, model_response)
+                return _recitation_block_response(model, model_response, raw_response, wire.url)
             provider_err: Final = _build_provider_http_error(
                 custom_llm_provider,
                 raw_response.status_code,
@@ -889,8 +898,14 @@ class InteractionsToCompletionBridgeHandler:
             if isinstance(exc, httpx.HTTPStatusError):
                 with contextlib.suppress(httpx.HTTPError):
                     await exc.response.aread()
-                if not wire.is_stream and _is_recitation_block(_safe_response_text(exc.response)):
-                    return _recitation_block_response(model, model_response)
+                if not wire.is_stream and _is_recitation_block(blocked_text := _safe_response_text(exc.response)):
+                    call_logger.post_call(
+                        input=list(messages),
+                        api_key=api_key or "",
+                        original_response=blocked_text,
+                        additional_args={"complete_input_dict": wire.body},
+                    )
+                    return _recitation_block_response(model, model_response, exc.response, wire.url)
             _handle_httpx_error(
                 exc=exc,
                 model=model,
@@ -913,7 +928,7 @@ class InteractionsToCompletionBridgeHandler:
                 additional_args={"complete_input_dict": wire.body},
             )
             if not wire.is_stream and _is_recitation_block(error_body):
-                return _recitation_block_response(model, model_response)
+                return _recitation_block_response(model, model_response, raw_response, wire.url)
             provider_err: Final = _build_provider_http_error(
                 custom_llm_provider,
                 raw_response.status_code,

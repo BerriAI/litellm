@@ -418,31 +418,37 @@ _RECITATION_BLOCK: Final = {
 @pytest.mark.asyncio
 async def test_answer_blocked_for_recitation_comes_back_as_a_content_filter_finish_sync_and_async() -> None:
     def blocked(_req: httpx.Request) -> httpx.Response:
-        return httpx.Response(400, json=_RECITATION_BLOCK)
+        return httpx.Response(400, json=_RECITATION_BLOCK, headers={"x-goog-request-id": "blocked-1"})
 
     bridge: Final = InteractionsToCompletionBridgeHandler()
-    with httpx.Client(transport=httpx.MockTransport(blocked)) as sync_client:
-        sync_answer: Final = bridge.completion(
-            model="gemini-3-flash-preview",
-            messages=[{"role": "user", "content": "recite it"}],
-            model_response=ModelResponse(id="fallback"),
-            logging_obj=_logging_stub("gemini-3-flash-preview"),
-            api_key="test-gemini-key",
-            client=sync_client,
-            custom_llm_provider="gemini",
-        )
-    async with httpx.AsyncClient(transport=httpx.MockTransport(blocked)) as async_client:
-        async_answer: Final = await bridge.acompletion(
-            model="gemini-3-flash-preview",
-            messages=[{"role": "user", "content": "recite it"}],
-            model_response=ModelResponse(id="fallback"),
-            logging_obj=_logging_stub("gemini-3-flash-preview"),
-            api_key="test-gemini-key",
-            client=async_client,
-            custom_llm_provider="gemini",
-        )
+    sync_client: Final = HTTPHandler()
+    sync_client.client = httpx.Client(transport=httpx.MockTransport(blocked))
+    async_client: Final = AsyncHTTPHandler()
+    async_client.client = httpx.AsyncClient(transport=httpx.MockTransport(blocked))
+    sync_log: Final = _logging_stub("gemini-3-flash-preview")
+    async_log: Final = _logging_stub("gemini-3-flash-preview")
+    sync_answer: Final = bridge.completion(
+        model="gemini-3-flash-preview",
+        messages=[{"role": "user", "content": "recite it"}],
+        model_response=ModelResponse(id="fallback"),
+        logging_obj=sync_log,
+        api_key="test-gemini-key",
+        client=sync_client,
+        custom_llm_provider="gemini",
+    )
+    async_answer: Final = await bridge.acompletion(
+        model="gemini-3-flash-preview",
+        messages=[{"role": "user", "content": "recite it"}],
+        model_response=ModelResponse(id="fallback"),
+        logging_obj=async_log,
+        api_key="test-gemini-key",
+        client=async_client,
+        custom_llm_provider="gemini",
+    )
 
-    for answer in (sync_answer, async_answer):
+    for answer, log in ((sync_answer, sync_log), (async_answer, async_log)):
         assert isinstance(answer, ModelResponse)
         assert answer.choices[0].finish_reason == "content_filter"
         assert answer.choices[0].message.content is None
+        assert answer._hidden_params["headers"]["x-goog-request-id"] == "blocked-1"
+        assert "recitation" in str(log.model_call_details["original_response"])
