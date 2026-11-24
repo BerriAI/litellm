@@ -678,7 +678,7 @@ class TestDailyLimits:
 
     @pytest.mark.asyncio
     async def test_router_counts_a_streamed_response_against_the_deployment_tpm(self):
-        router = Router(
+        router: Final = Router(
             model_list=[
                 {
                     "model_name": "streamed-group",
@@ -693,20 +693,20 @@ class TestDailyLimits:
             ],
             num_retries=0,
         )
-        usage = _memory_usage()
-        check = _check(usage=usage, clock=Clock(DAY_ONE))
+        usage: Final = _memory_usage()
+        check: Final = _check(usage=usage, clock=Clock(DAY_ONE))
         router.optional_callbacks = [check]
         litellm.logging_callback_manager.add_litellm_callback(check)
-        tpm_counter = UsageCounter.for_deployment(
+        tpm_counter: Final = UsageCounter.for_deployment(
             "streamed-deployment", "openai/gpt-4.1-mini", "tpm", DAY_ONE.strftime("%H-%M")
         )
         try:
-            stream = await router.acompletion(
+            stream: Final = await router.acompletion(
                 model="streamed-group", messages=[{"role": "user", "content": "hi"}], stream=True
             )
             async for _ in stream:
                 pass
-            logged_tokens = await _tokens_once_logged(usage, tpm_counter)
+            logged_tokens: Final = await _tokens_once_logged(usage, tpm_counter)
             with pytest.raises(litellm.RateLimitError):
                 await router.acompletion(
                     model="streamed-group", messages=[{"role": "user", "content": "hi"}], stream=True
