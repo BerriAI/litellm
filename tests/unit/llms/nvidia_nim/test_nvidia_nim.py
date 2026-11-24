@@ -8,7 +8,7 @@ from openai.types import CreateEmbeddingResponse, Embedding
 from openai.types.create_embedding_response import Usage as EmbeddingUsage
 
 import litellm
-from litellm import completion
+from litellm import ModelResponse, completion
 from tests.capturing_transport import CapturingTransport
 
 
@@ -93,9 +93,7 @@ def test_chat_completion_nvidia_nim_with_tools():
         },
     ]
 
-    with patch.object(
-        client, "post"
-    ) as mock_client:
+    with patch.object(client, "post") as mock_client:
         try:
             completion(
                 model=model_name,
@@ -237,3 +235,103 @@ def test_completion_nvidia_nim():
         assert request_body["model"] == "databricks/dbrx-instruct"
         assert request_body["frequency_penalty"] == 0.1
         assert request_body["presence_penalty"] == 0.5
+
+
+def test_completion_nvidia_nim_forwards_logprobs_and_returns_them():
+    from openai import OpenAI
+    from openai.types.chat import ChatCompletion
+    from openai.types.chat.chat_completion import Choice, ChoiceLogprobs
+    from openai.types.chat.chat_completion_message import ChatCompletionMessage
+    from openai.types.chat.chat_completion_token_logprob import ChatCompletionTokenLogprob, TopLogprob
+
+    token_logprob: Final = ChatCompletionTokenLogprob(
+        token="hi",
+        logprob=-0.25,
+        bytes=[104, 105],
+        top_logprobs=[TopLogprob(token="hi", logprob=-0.25, bytes=[104, 105])],
+    )
+    transport: Final = CapturingTransport(
+        ChatCompletion(
+            id="chatcmpl-nim",
+            object="chat.completion",
+            created=1,
+            model="openai/gpt-oss-20b",
+            choices=[
+                Choice(
+                    index=0,
+                    finish_reason="stop",
+                    message=ChatCompletionMessage(role="assistant", content="hi"),
+                    logprobs=ChoiceLogprobs(content=[token_logprob]),
+                )
+            ],
+        )
+    )
+    client: Final = OpenAI(api_key="fake-api-key", http_client=httpx.Client(transport=transport))
+
+    response: Final = completion(
+        model="nvidia_nim/openai/gpt-oss-20b",
+        messages=[{"role": "user", "content": "Say hi"}],
+        logprobs=True,
+        top_logprobs=1,
+        client=client,
+    )
+
+    request_body: Final = transport.request_bodies[0]
+    assert request_body["logprobs"] is True
+    assert request_body["top_logprobs"] == 1
+    assert isinstance(response, ModelResponse)
+    assert response.choices[0].logprobs.content[0].token == token_logprob.token
+    assert response.choices[0].logprobs.content[0].logprob == token_logprob.logprob
+
+
+@pytest.mark.parametrize(
+    ("logprobs", "drop_params", "global_drop_params", "expected_body"),
+    [
+        (None, True, False, {}),
+        (None, None, True, {}),
+        (False, True, False, {"logprobs": False}),
+        (None, None, False, {"top_logprobs": 2}),
+        (True, True, False, {"logprobs": True, "top_logprobs": 2}),
+    ],
+)
+def test_completion_nvidia_nim_drops_top_logprobs_without_logprobs_only_under_drop_params(
+    monkeypatch: pytest.MonkeyPatch,
+    logprobs: bool | None,
+    drop_params: bool | None,
+    global_drop_params: bool,
+    expected_body: dict[str, bool | int],
+):
+    from openai import OpenAI
+    from openai.types.chat import ChatCompletion
+    from openai.types.chat.chat_completion import Choice
+    from openai.types.chat.chat_completion_message import ChatCompletionMessage
+
+    monkeypatch.setattr(litellm, "drop_params", global_drop_params)
+    transport: Final = CapturingTransport(
+        ChatCompletion(
+            id="chatcmpl-nim",
+            object="chat.completion",
+            created=1,
+            model="openai/gpt-oss-20b",
+            choices=[
+                Choice(
+                    index=0,
+                    finish_reason="stop",
+                    message=ChatCompletionMessage(role="assistant", content="hi"),
+                )
+            ],
+        )
+    )
+    client: Final = OpenAI(api_key="fake-api-key", http_client=httpx.Client(transport=transport))
+
+    completion(
+        model="nvidia_nim/openai/gpt-oss-20b",
+        messages=[{"role": "user", "content": "Say hi"}],
+        logprobs=logprobs,
+        top_logprobs=2,
+        drop_params=drop_params,
+        client=client,
+    )
+
+    request_body: Final = transport.request_bodies[0]
+    assert {key: request_body[key] for key in ("logprobs", "top_logprobs") if key in request_body} == expected_body
