@@ -57,6 +57,30 @@ def configured_display_names(
     )
 
 
+def configured_descriptions(
+    entries: Sequence[tuple[str, str]],
+    llm_router: Router | None,
+) -> Mapping[str, str]:
+    if llm_router is None:
+        return MappingProxyType({})
+    registry: Final = llm_router.registry()
+    deployments: Final = (
+        (response_id, registry.deployments(lookup_id, source="first_in_group")) for response_id, lookup_id in entries
+    )
+    descriptions: Final = (
+        (response_id, deployment.model_info["description"])
+        for response_id, deployment in deployments
+        if deployment is not None and "description" in deployment.model_info
+    )
+    return MappingProxyType(
+        {
+            response_id: description
+            for response_id, description in descriptions
+            if isinstance(description, str) and description
+        }
+    )
+
+
 def _unmarked(name: str) -> str:
     return name[: -len(_ONE_MILLION_SUFFIX)] if name.lower().endswith(_ONE_MILLION_SUFFIX) else name
 
