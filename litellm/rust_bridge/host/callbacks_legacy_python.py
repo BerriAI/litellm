@@ -31,6 +31,7 @@ from typing_extensions import ReadOnly, TypedDict
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.rust_bridge._native import NativeReceipt
 
 
 class MetadataUpdater(Protocol):
@@ -339,6 +340,24 @@ def record_response(
     details: Final = logger.model_call_details  # the call's own logger: recording on it is the point
     details["httpx_response"] = response
     details["response_headers"] = dict(response.headers)
+
+
+def record_route_cost(
+    logger: Logging,
+    receipt: NativeReceipt | None,
+    service_tier: str | None,
+    data_residency: str | None,
+    vertex_location: str | None,
+) -> None:
+    """Stores the price the Rust route settled, with its breakdown, so the call's logging bills it unrepriced. No
+    receipt yet means a stream the route prices once its usage is final."""
+    if receipt is None:
+        logger.record_route_metering()
+        return
+    from litellm.cost_calculator import store_receipt_breakdown
+
+    store_receipt_breakdown(logger, receipt, service_tier, data_residency, vertex_location)
+    logger.record_route_cost(receipt.total)
 
 
 class _ThinkingSignatureRetry(TypedDict):

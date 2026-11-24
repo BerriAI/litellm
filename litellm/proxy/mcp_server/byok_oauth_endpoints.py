@@ -191,7 +191,8 @@ async def _session_key_is_live(session_key: str | None) -> bool:
     return True
 
 
-async def get_authenticated_browser_user_id(request: Request) -> str | None:
+async def live_browser_session(request: Request) -> tuple[str, str | None] | None:
+    """``(cookie user_id, session key user_id)`` when the dashboard cookie's session key is still live, else None."""
     from datetime import datetime, timezone
 
     from pydantic import TypeAdapter, ValidationError
@@ -217,14 +218,19 @@ async def get_authenticated_browser_user_id(request: Request) -> str | None:
         )
     except Exception:
         return None
-    if auth is None or auth.user_id != user_id or auth.blocked or auth.expires is None:
+    if auth is None or auth.blocked or auth.expires is None:
         return None
     try:
         expiration: Final = TypeAdapter(datetime).validate_python(auth.expires)
     except ValidationError:
         return None
     expires: Final = expiration.replace(tzinfo=timezone.utc) if expiration.tzinfo is None else expiration
-    return user_id if expires > datetime.now(timezone.utc) else None
+    return (user_id, auth.user_id) if expires > datetime.now(timezone.utc) else None
+
+
+async def get_authenticated_browser_user_id(request: Request) -> str | None:
+    session: Final = await live_browser_session(request)
+    return session[0] if session is not None and session[0] == session[1] else None
 
 
 async def _byok_session_auth(request: Request) -> UserAPIKeyAuth:

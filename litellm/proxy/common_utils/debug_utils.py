@@ -26,6 +26,7 @@ from litellm.proxy.common_utils.resource_ownership import is_proxy_admin
 
 if TYPE_CHECKING:
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.utils import ProxyLogging
     from litellm.router import Router
 
 router: Final = APIRouter()
@@ -82,7 +83,7 @@ async def get_active_tasks_stats():
     active_tasks: Final = [t for t in all_tasks if not t.done()]
 
     # Count how many active tasks exist, grouped by coroutine function name.
-    counter: Final = Counter()
+    counter: Final[Counter[object]] = Counter()
     for idx, task in enumerate(active_tasks):
         # reasonable max circuit breaker
         if idx >= MAX_TASKS_TO_CHECK:
@@ -505,7 +506,10 @@ def _get_uncollectable_objects_info() -> Mapping[str, object]:
 
 
 def _get_cache_memory_stats(
-    user_api_key_cache: "UserApiKeyCache", llm_router: "Router | None", proxy_logging_obj, redis_usage_cache
+    user_api_key_cache: "UserApiKeyCache",
+    llm_router: "Router | None",
+    proxy_logging_obj: "ProxyLogging",
+    redis_usage_cache,
 ) -> Mapping[str, object]:
     """Calculate memory usage for all caches."""
     cache_stats: Final[dict[str, object]] = {}

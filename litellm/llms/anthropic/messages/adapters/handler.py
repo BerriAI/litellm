@@ -821,7 +821,21 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         if openai_request is None:
             raise ValueError("Failed to translate request to OpenAI format")
 
-        completion_kwargs: Final[_CompletionKwargs] = {**openai_request}
+        from litellm.responses.bridge_check import empty_user_turn_for_model_turn_end
+
+        completion_kwargs: Final[_CompletionKwargs] = {
+            **openai_request,
+            "messages": [
+                *openai_request["messages"],
+                *empty_user_turn_for_model_turn_end(
+                    messages[-1] if messages else None,
+                    openai_request["messages"],
+                    model,
+                    target_provider,
+                    provider_kwargs,
+                ),
+            ],
+        }
 
         if stream:
             completion_kwargs["stream"] = stream
