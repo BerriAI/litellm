@@ -2,7 +2,7 @@
 ## Controller file for Predibase Integration - https://predibase.com/
 
 import json
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from functools import partial
 from typing import TYPE_CHECKING, Final
 
@@ -26,7 +26,7 @@ if TYPE_CHECKING:
 async def make_call(
     client: AsyncHTTPHandler,
     api_base: str,
-    headers: dict,
+    headers: dict[str, object],
     data: str,
     model: str,
     messages: Sequence[object],
@@ -59,14 +59,14 @@ class PredibaseChatCompletion:
         model: str,
         messages: list,
         api_base: str,
-        custom_prompt_dict: dict,
+        custom_prompt_dict: Mapping[str, object],
         model_response: ModelResponse,
         print_verbose: Callable[..., object],
         encoding: "Tokenizer",
         api_key: str,
         logging_obj: LiteLLMLoggingObj,
         optional_params: dict,
-        litellm_params: dict,
+        litellm_params: Mapping[str, object],
         tenant_id: str,
         timeout: float | httpx.Timeout,
         acompletion: bool | None = None,
@@ -208,9 +208,9 @@ class PredibaseChatCompletion:
         data: dict,
         optional_params: dict,
         timeout: float | httpx.Timeout,
-        litellm_params=None,
+        litellm_params: Mapping[str, object] | None = None,
         logger_fn: object = None,
-        headers={},
+        headers: dict[str, object] = {},
         predibase_config: "litellm.PredibaseConfig | None" = None,
     ) -> ModelResponse:
         if predibase_config is None:
@@ -261,7 +261,7 @@ class PredibaseChatCompletion:
         optional_params: object = None,
         litellm_params: object = None,
         logger_fn: object = None,
-        headers={},
+        headers: dict[str, object] = {},
     ) -> CustomStreamWrapper:
         data["stream"] = True
 

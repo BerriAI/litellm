@@ -211,7 +211,7 @@ class NomaV2Guardrail(CustomGuardrail):
         return payload
 
     @staticmethod
-    def _sanitize_payload_for_transport(payload: Mapping[str, object]) -> dict:
+    def _sanitize_payload_for_transport(payload: Mapping[str, object]) -> dict[str, object]:
         def _default(obj: object) -> object:
             model_dump: Final[Callable[[], Mapping[str, object]] | None] = getattr(obj, "model_dump", None)
             if model_dump is not None:

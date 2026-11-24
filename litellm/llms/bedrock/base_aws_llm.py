@@ -46,6 +46,7 @@ from litellm.types.llms.bedrock import AWS_AUTH_PARAM_KEYS, AwsAuthParams, AwsSe
 if TYPE_CHECKING:
     from botocore.awsrequest import AWSPreparedRequest
     from botocore.credentials import Credentials
+    from types_boto3_sts.type_defs import AssumeRoleResponseTypeDef
 else:
     Credentials = Any
     AWSPreparedRequest = Any
@@ -1131,7 +1132,7 @@ class BaseAWSLLM(SignsRequestsWithAWS):
         ssl_verify: bool | str | None = None,
         aws_region_name: str | None = None,
         aws_session_tags: Sequence[AwsSessionTag] | None = None,
-    ) -> dict:
+    ) -> "AssumeRoleResponseTypeDef":
         """Handle cross-account role assumption for IRSA."""
         ensure_optional_import("boto3")
         import boto3
@@ -1197,7 +1198,7 @@ class BaseAWSLLM(SignsRequestsWithAWS):
         ssl_verify: bool | str | None = None,
         aws_region_name: str | None = None,
         aws_session_tags: Sequence[AwsSessionTag] | None = None,
-    ) -> dict:
+    ) -> "AssumeRoleResponseTypeDef":
         """Handle same-account role assumption for IRSA."""
         ensure_optional_import("boto3")
         import boto3
@@ -1225,7 +1226,7 @@ class BaseAWSLLM(SignsRequestsWithAWS):
             **_assume_role_params(aws_role_name, aws_session_name, aws_external_id, aws_session_tags)
         )
 
-    def _extract_credentials_and_ttl(self, sts_response: dict) -> tuple[Credentials, int | None]:
+    def _extract_credentials_and_ttl(self, sts_response: "AssumeRoleResponseTypeDef") -> tuple[Credentials, int | None]:
         """Extract credentials and TTL from STS response.
 
         The TTL carries the same safety margin as the non-IRSA assume path, so a cached entry is

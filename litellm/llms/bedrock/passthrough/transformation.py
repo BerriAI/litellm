@@ -606,7 +606,7 @@ class BedrockPassthroughConfig(BaseAWSLLM, BedrockModelInfo, BedrockEventStreamD
         model: str,
         endpoint: str,
         request_query_params: dict[str, object] | None,
-        litellm_params: dict,
+        litellm_params: dict[str, object],
     ) -> tuple["URL", str]:
         optional_params: Final = litellm_params.copy()
         model_id: Final = optional_params.get("model_id", None)
@@ -650,7 +650,7 @@ class BedrockPassthroughConfig(BaseAWSLLM, BedrockModelInfo, BedrockEventStreamD
         request_data: dict[str, object] | None,
         api_base: str,
         model: str | None = None,
-    ) -> tuple[dict, bytes | None]:
+    ) -> tuple[dict[str, str], bytes | None]:
         action: Final = _bedrock_endpoint_action(api_base)
         body: Final[Mapping[str, object]] = request_data or {}
         optional_params: Final = litellm_params.copy()

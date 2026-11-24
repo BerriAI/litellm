@@ -446,7 +446,7 @@ def filter_team_based_models(
         if matches_requested_model:
             return healthy_deployments
 
-    ids_to_remove: Final = set()
+    ids_to_remove: Final[set[object]] = set()
     if isinstance(healthy_deployments, dict):
         # A deployment asked for by id is filtered like any other: another team's is not served.
         return [] if _owner_team(healthy_deployments) not in (None, request_team_id) else healthy_deployments  # pyright: ignore[reportUnknownArgumentType, reportUnknownVariableType]  # the legacy untyped deployment dict

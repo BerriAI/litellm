@@ -451,7 +451,9 @@ class GeminiModelInfo(BaseLLMModelInfo):
         litellm_model_names: Final = self.process_model_name(listing["models"])
         return litellm_model_names
 
-    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: dict[str, object] | httpx.Headers
+    ) -> BaseLLMException:
         return GeminiError(status_code=status_code, message=error_message, headers=headers)
 
     def get_token_counter(self) -> BaseTokenCounter | None:

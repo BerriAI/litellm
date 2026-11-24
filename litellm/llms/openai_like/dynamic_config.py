@@ -309,7 +309,7 @@ def create_config_class(provider: SimpleProviderConfig):
             """Build complete URL for the API endpoint"""
             return ensure_api_route(api_base or provider.default_base_url(model), "chat/completions")
 
-        def get_supported_openai_params(self, model: str) -> list:
+        def get_supported_openai_params(self, model: str) -> list[str]:
             """Get supported OpenAI params, excluding tool-related params for models
             that don't support function calling."""
             from litellm.utils import supports_function_calling, supports_reasoning
