@@ -91,7 +91,12 @@ impl SupportedDbObjects {
     /// The setting in `settings`, which is the config with the database already layered in, since
     /// the proxy reads it from its live `general_settings`.
     pub fn of(settings: &GeneralSettings) -> Self {
-        match settings.additional_fields.get(SUPPORTED_DB_OBJECTS) {
+        Self::written(settings.additional_fields.get(SUPPORTED_DB_OBJECTS))
+    }
+
+    /// The setting as a config document writes it, before it is typed.
+    pub fn written(value: Option<&Value>) -> Self {
+        match value {
             None | Some(Value::Null) => Self::All,
             Some(Value::Sequence(names)) => Self::Only(
                 names
