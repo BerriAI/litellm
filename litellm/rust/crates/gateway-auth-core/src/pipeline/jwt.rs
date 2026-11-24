@@ -2178,7 +2178,7 @@ mod tests {
                 org: Some(Org {
                     organization_id: "o1".to_owned(),
                 }),
-                end_user: Some("end-user e1".to_owned()),
+                end_user: Some(crate::testing::end_user("end-user e1")),
                 ..Belongs::default()
             }
         );

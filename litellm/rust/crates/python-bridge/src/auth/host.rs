@@ -13,7 +13,7 @@ use litellm_gateway_auth_core::{
             AliasRead, DelegatedTeam, FinishedJwt, IdentityRead, JwtIdentity, ManagedAgent,
             ModelAccess, Org, RegisteredAgent, Team, TeamRead, UserLookup, UserRead,
         },
-        key::{ObjectPermissionRecord, Owner, ProjectRecord},
+        key::{EndUserRecord, ObjectPermissionRecord, Owner, ProjectRecord},
     },
 };
 use pyo3::{Py, PyAny, Python};
@@ -56,7 +56,6 @@ impl Rows for PyRows {
     type Key = PyRow;
     type User = PyRow;
     type Team = PyRow;
-    type EndUser = PyRow;
     type Membership = PyRow;
 }
 
@@ -144,7 +143,7 @@ pub(crate) enum Ask {
     },
     EndUser {
         end_user_id: Option<String>,
-        reply: Reply<Result<PyRow, BudgetExceeded>>,
+        reply: Reply<Result<EndUserRecord, BudgetExceeded>>,
     },
     CachedKey {
         hash: KeyHash,
@@ -169,7 +168,7 @@ pub(crate) enum Ask {
     },
     DbKey {
         hash: KeyHash,
-        end_user: PyRow,
+        end_user: EndUserRecord,
         reply: Reply<Option<Keyed<PyRow>>>,
     },
     WithTempBudget {
@@ -182,7 +181,7 @@ pub(crate) enum Ask {
     },
     PrefetchAuthObjects {
         key: PyRow,
-        end_user: PyRow,
+        end_user: EndUserRecord,
         reply: Reply<()>,
     },
     KeyOwner {
@@ -320,7 +319,7 @@ pub(crate) enum Ask {
     },
     JwtEndUser {
         end_user_id: String,
-        reply: Reply<PyRow>,
+        reply: Reply<EndUserRecord>,
     },
     FinishJwt {
         finished: Finished,
@@ -408,7 +407,7 @@ impl AuthHost for PythonAuthHost {
         })
         .await
     }
-    async fn end_user(&self, end_user_id: Option<&str>) -> Result<PyRow, Error> {
+    async fn end_user(&self, end_user_id: Option<&str>) -> Result<EndUserRecord, Error> {
         let end_user_id = owned(end_user_id);
         self.ask(|reply| Ask::EndUser { end_user_id, reply })
             .await?
@@ -437,7 +436,7 @@ impl AuthHost for PythonAuthHost {
     async fn db_key(
         &self,
         hash: &KeyHash,
-        end_user: &PyRow,
+        end_user: &EndUserRecord,
     ) -> Result<Option<Keyed<PyRow>>, Error> {
         let (hash, end_user) = (hash.clone(), end_user.clone());
         self.ask(|reply| Ask::DbKey {
@@ -455,7 +454,11 @@ impl AuthHost for PythonAuthHost {
         let key = key.clone();
         self.ask(|reply| Ask::NormalizeModel { key, reply }).await
     }
-    async fn prefetch_auth_objects(&self, key: &PyRow, end_user: &PyRow) -> Result<(), Error> {
+    async fn prefetch_auth_objects(
+        &self,
+        key: &PyRow,
+        end_user: &EndUserRecord,
+    ) -> Result<(), Error> {
         let (key, end_user) = (key.clone(), end_user.clone());
         self.ask(|reply| Ask::PrefetchAuthObjects {
             key,
@@ -668,7 +671,7 @@ impl AuthHost for PythonAuthHost {
         let alias = alias.to_owned();
         self.ask(|reply| Ask::OrgByAlias { alias, reply }).await
     }
-    async fn jwt_end_user(&self, end_user_id: &str) -> Result<PyRow, Error> {
+    async fn jwt_end_user(&self, end_user_id: &str) -> Result<EndUserRecord, Error> {
         let end_user_id = end_user_id.to_owned();
         self.ask(|reply| Ask::JwtEndUser { end_user_id, reply })
             .await

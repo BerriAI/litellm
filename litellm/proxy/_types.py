@@ -4973,7 +4973,6 @@ class JWTAuthBuilderResult(TypedDict):
     is_proxy_admin: bool
     team_object: LiteLLM_TeamTable | None
     user_object: LiteLLM_UserTable | None
-    end_user_object: LiteLLM_EndUserTable | None
     token: str
     team_id: str | None
     user_id: str | None

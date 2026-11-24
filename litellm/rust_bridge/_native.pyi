@@ -25,7 +25,7 @@ from litellm.models.team import LiteLLM_TeamTable, LiteLLM_TeamTableCachedObj
 from litellm.models.team_membership import LiteLLM_TeamMembership
 from litellm.models.user import LiteLLM_UserTable
 from litellm.proxy._types import LiteLLM_JWTAuth
-from litellm.proxy.auth.host.facts import EndUserRow, ObjectPermissionFields
+from litellm.proxy.auth.host.facts import EndUserParams, EndUserRow, ObjectPermissionFields
 from litellm.redis.store_settings import RedisBreakerSettings, RedisStoreSettings
 from litellm.redis.stores.auth_cache.handle import TeamRoster
 from litellm.redis.stores.router_session_pins.keys import PinKey
@@ -937,20 +937,20 @@ class RustIdentity:
     @final
     class CachedAdmin(RustIdentity):
         __match_args__: tuple[Literal["key"], Literal["end_user"]] = ("key", "end_user")
-        def __new__(cls, key: UserAPIKeyAuth, end_user: EndUserRow) -> RustIdentity.CachedAdmin: ...
+        def __new__(cls, key: UserAPIKeyAuth, end_user: RustEndUser) -> RustIdentity.CachedAdmin: ...
         @property
         def key(self) -> UserAPIKeyAuth: ...
         @property
-        def end_user(self) -> EndUserRow: ...
+        def end_user(self) -> RustEndUser: ...
 
     @final
     class MasterKey(RustIdentity):
         __match_args__: tuple[Literal["hash"], Literal["end_user"]] = ("hash", "end_user")
-        def __new__(cls, hash: str, end_user: EndUserRow) -> RustIdentity.MasterKey: ...
+        def __new__(cls, hash: str, end_user: RustEndUser) -> RustIdentity.MasterKey: ...
         @property
         def hash(self) -> str: ...
         @property
-        def end_user(self) -> EndUserRow: ...
+        def end_user(self) -> RustEndUser: ...
 
     @final
     class VirtualKey(RustIdentity):
@@ -1069,7 +1069,7 @@ class RustIdentity:
             user: LiteLLM_UserTable | None,
             team: LiteLLM_TeamTable | None,
             membership: LiteLLM_TeamMembership | None,
-            end_user: EndUserRow | None,
+            end_user: RustEndUser | None,
         ) -> RustIdentity.Jwt: ...
         @property
         def claims(self) -> dict[str, object]: ...
@@ -1096,7 +1096,7 @@ class RustIdentity:
         @property
         def membership(self) -> LiteLLM_TeamMembership | None: ...
         @property
-        def end_user(self) -> EndUserRow | None: ...
+        def end_user(self) -> RustEndUser | None: ...
 
 _AuthenticatedIdentity = (
     RustIdentity.NoMasterKey
@@ -1109,6 +1109,25 @@ _AuthenticatedIdentity = (
     | RustIdentity.FinishedJwt
     | RustIdentity.Jwt
 )
+
+@final
+class RustEndUser:
+    def __new__(
+        cls,
+        *,
+        end_user_id: str | None = None,
+        found: bool = False,
+        object_permission: ObjectPermissionFields | None = None,
+        params: EndUserParams | None = None,
+    ) -> RustEndUser: ...
+    @property
+    def end_user_id(self) -> str | None: ...
+    @property
+    def found(self) -> bool: ...
+    @property
+    def object_permission(self) -> ObjectPermissionFields | None: ...
+    @property
+    def params(self) -> EndUserParams: ...
 
 @final
 class RustProject:
@@ -1165,7 +1184,7 @@ class RustKeyContext:
     def __new__(
         cls,
         key: UserAPIKeyAuth,
-        end_user: EndUserRow,
+        end_user: RustEndUser,
         *,
         owner: LiteLLM_UserTable | None = None,
         team: RustTeamGrant,
@@ -1174,7 +1193,7 @@ class RustKeyContext:
     @property
     def key(self) -> UserAPIKeyAuth: ...
     @property
-    def end_user(self) -> EndUserRow: ...
+    def end_user(self) -> RustEndUser: ...
     @property
     def owner(self) -> LiteLLM_UserTable | None: ...
     @property
@@ -1384,11 +1403,11 @@ class RustAuthStep:
     @final
     class DbKey(RustAuthStep):
         __match_args__: tuple[Literal["hash"], Literal["end_user"]] = ("hash", "end_user")
-        def __new__(cls, hash: str, end_user: EndUserRow) -> RustAuthStep.DbKey: ...
+        def __new__(cls, hash: str, end_user: RustEndUser) -> RustAuthStep.DbKey: ...
         @property
         def hash(self) -> str: ...
         @property
-        def end_user(self) -> EndUserRow: ...
+        def end_user(self) -> RustEndUser: ...
 
     @final
     class WithTempBudget(RustAuthStep):
@@ -1407,11 +1426,11 @@ class RustAuthStep:
     @final
     class PrefetchAuthObjects(RustAuthStep):
         __match_args__: tuple[Literal["key"], Literal["end_user"]] = ("key", "end_user")
-        def __new__(cls, key: UserAPIKeyAuth, end_user: EndUserRow) -> RustAuthStep.PrefetchAuthObjects: ...
+        def __new__(cls, key: UserAPIKeyAuth, end_user: RustEndUser) -> RustAuthStep.PrefetchAuthObjects: ...
         @property
         def key(self) -> UserAPIKeyAuth: ...
         @property
-        def end_user(self) -> EndUserRow: ...
+        def end_user(self) -> RustEndUser: ...
 
     @final
     class KeyOwner(RustAuthStep):
@@ -1954,7 +1973,8 @@ class RustAuth:
     def done(self) -> None: ...
     def budget_exceeded(self, error: _BudgetExceeded) -> None: ...
     def found(self, found: bool) -> None: ...
-    def row(self, row: UserAPIKeyAuth | EndUserRow | LiteLLM_UserTable) -> None: ...
+    def row(self, row: UserAPIKeyAuth | LiteLLM_UserTable) -> None: ...
+    def end_user(self, row: EndUserRow) -> None: ...
     def found_row(
         self,
         row: LiteLLM_TeamTableCachedObj | LiteLLM_TeamMembership | None = None,
@@ -2776,6 +2796,7 @@ __all__ = [
     "RustBudgetRepository",
     "RustClaimIdentity",
     "RustDenial",
+    "RustEndUser",
     "RustEndUserRepository",
     "RustIdentity",
     "RustJwtKeyMappingRepository",

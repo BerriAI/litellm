@@ -4280,13 +4280,12 @@ def _no_end_user_row_yet() -> None:
     return None
 
 
-def _jwt_token(end_user_id: str | None, end_user_object: LiteLLM_EndUserTable | None) -> UserAPIKeyAuth:
+def _jwt_token(end_user_id: str | None) -> UserAPIKeyAuth:
     return proxy_jwt.auth_from_result(
         JWTAuthBuilderResult(
             is_proxy_admin=False,
             team_object=None,
             user_object=None,
-            end_user_object=end_user_object,
             token="jwt",
             team_id=None,
             user_id=None,
@@ -4301,11 +4300,11 @@ def _jwt_token(end_user_id: str | None, end_user_object: LiteLLM_EndUserTable | 
 
 
 def _jwt_token_with_an_end_user_claim() -> UserAPIKeyAuth:
-    return _jwt_token(end_user_id="eu-1", end_user_object=_end_user_linked_to_the_capped_budget())
+    return _jwt_token(end_user_id="eu-1")
 
 
 def _jwt_token_naming_the_end_user_only_in_the_body() -> UserAPIKeyAuth:
-    return _jwt_token(end_user_id=None, end_user_object=None)
+    return _jwt_token(end_user_id=None)
 
 
 async def _run_centralized_checks_for_end_user(
@@ -10723,7 +10722,6 @@ def test_jwt_builder_returns_every_team_grant_the_key_path_gets(is_proxy_admin):
             is_proxy_admin=is_proxy_admin,
             team_object=team,
             user_object=None,
-            end_user_object=None,
             token="jwt",
             team_id="team-jwt-aliases",
             user_id="jwt-user",

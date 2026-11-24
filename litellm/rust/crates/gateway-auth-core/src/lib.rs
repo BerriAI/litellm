@@ -26,9 +26,7 @@ pub use error::{
     KeyDenial, KeyError, KeyFailure, ModelAccessDenied, PremiumRequired, RbacDenial, Searched,
     TeamDenial, TokenError, VerifyDenial,
 };
-pub use host::{
-    AuthHost, EndUserRow, KeyRow, MembershipRow, OperatorHooks, Row, Rows, TeamRow, UserRow,
-};
+pub use host::{AuthHost, KeyRow, MembershipRow, OperatorHooks, Row, Rows, TeamRow, UserRow};
 pub use outcome::{Identity, Outcome, Refused};
 pub use public::{ErrorType, PublicDenial};
 pub use request::Request;

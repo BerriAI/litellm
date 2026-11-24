@@ -11,7 +11,7 @@ use crate::{
     authn::key::KeyRecord,
     identity::{
         jwt::Org,
-        key::{KeyContext, KeyOutcome, ObjectPermissionRecord, ProjectRecord},
+        key::{EndUserRecord, KeyContext, KeyOutcome, ObjectPermissionRecord, ProjectRecord},
     },
     outcome::Identity,
 };
@@ -39,7 +39,7 @@ pub struct Belongs<R: Rows> {
     pub org: Option<Org>,
     pub project: Option<ProjectRecord>,
     /// The key path always reads one, which is empty for a request that names no end user.
-    pub end_user: Option<R::EndUser>,
+    pub end_user: Option<EndUserRecord>,
 }
 
 impl<R: Rows> Default for Belongs<R> {
@@ -155,7 +155,6 @@ mod tests {
         type Key = KeyRecord;
         type User = String;
         type Team = String;
-        type EndUser = String;
         type Membership = String;
     }
 
@@ -170,7 +169,7 @@ mod tests {
         Box::new(KeyContext {
             key: record,
             belongs: Belongs {
-                end_user: Some("end-user".to_owned()),
+                end_user: Some(crate::testing::end_user("end-user")),
                 ..Belongs::default()
             },
         })
@@ -182,7 +181,7 @@ mod tests {
                 is_proxy_admin: true,
                 ..stored("stored")
             },
-            end_user: "end-user".to_owned(),
+            end_user: crate::testing::end_user("end-user"),
         }
     }
 
@@ -233,7 +232,7 @@ mod tests {
     fn the_master_key_is_an_admin_with_no_row() {
         let master = Identity::<Stored>::Key(KeyOutcome::MasterKey {
             hash: Token::new("sk-master").hash(),
-            end_user: "end-user".to_owned(),
+            end_user: crate::testing::end_user("end-user"),
         });
 
         let caller = Caller::try_from(master).unwrap();

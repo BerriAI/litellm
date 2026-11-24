@@ -103,7 +103,7 @@ from litellm.redis.stores.auth_cache import AuthObject
 from litellm.redis.stores.auth_cache.handle import TeamRoster
 from litellm.repositories.user_repository import UserRepository
 from litellm.repositories.verification_token_repository import VerificationTokenRepository
-from litellm.rust_bridge._native import RustIdentity
+from litellm.rust_bridge._native import RustEndUser, RustIdentity
 from litellm.types.agents import AgentResponse
 from litellm.types.proxy.agent_identity import AgentIdentityFailure, ManagedAgentContext
 from litellm.types.proxy.auth.auth_checks import UserNotFoundError
@@ -380,7 +380,7 @@ class PythonAuthHost:
             update={f"team_{name}": value for name, value in _attributes(team).items() if f"team_{name}" in fields}
         )
 
-    async def db_key(self, hash: str, end_user: EndUserRow) -> UserAPIKeyAuth | None:
+    async def db_key(self, hash: str, end_user: RustEndUser) -> UserAPIKeyAuth | None:
         try:
             with tracer.trace("litellm.proxy.auth.get_key_object_from_db"):
                 token: Final = IdentityStore.key_from_principal(await self._store().resolve(hashed_token=hash))
@@ -405,7 +405,7 @@ class PythonAuthHost:
         http: Final = self.call()
         await normalize_model_for_auth(http.request_data, token, http.request, self.route)
 
-    async def prefetch_auth_objects(self, token: UserAPIKeyAuth, end_user: EndUserRow) -> None:
+    async def prefetch_auth_objects(self, token: UserAPIKeyAuth, end_user: RustEndUser) -> None:
         await prefetch_referenced_auth_objects(
             token,
             end_user_id=end_user.end_user_id,
