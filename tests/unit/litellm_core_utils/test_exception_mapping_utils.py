@@ -47,6 +47,47 @@ from litellm.proxy.common_utils.responses_stream_errors import ResponsesStreamEr
 from litellm.types.utils import LlmProviders
 
 
+def _moderation_blocked_image_rejection() -> openai.BadRequestError:
+    # Body shape from a customer report (Pylon #12371) and a live OpenAI repro on 2026-11-24
+    body: Final = {
+        "error": {
+            "message": "Your request was rejected by the safety system. If you believe this is an error, contact us "
+            "at help.openai.com and include the request ID req_unit.",
+            "type": "image_generation_user_error",
+            "param": None,
+            "code": "moderation_blocked",
+        }
+    }
+    client: Final = OpenAI(
+        api_key="sk-test",
+        max_retries=0,
+        http_client=httpx.Client(transport=httpx.MockTransport(lambda request: httpx.Response(400, json=body))),
+    )
+    with pytest.raises(openai.BadRequestError) as rejected:
+        client.images.generate(model="gpt-image-1", prompt="a scripted cat")
+    return rejected.value
+
+
+@pytest.mark.parametrize("shape", ["async_raw", "sync_wrapped"])
+def test_openai_moderation_blocked_image_rejection_is_a_content_policy_violation(shape: str) -> None:
+    raw: Final = _moderation_blocked_image_rejection()
+    original: Final = (
+        raw
+        if shape == "async_raw"
+        else OpenAIError(status_code=raw.status_code, message=str(raw), response=raw.response)
+    )
+    with pytest.raises(litellm.ContentPolicyViolationError) as caught:
+        exception_type(
+            model="gpt-image-1",
+            original_exception=original,
+            custom_llm_provider="openai",
+            completion_kwargs={},
+            extra_kwargs={},
+        )
+    assert caught.value.status_code == 400
+    assert caught.value.llm_provider == "openai"
+
+
 @pytest.mark.parametrize("shape", ["sdk", "http"])
 @pytest.mark.parametrize("code", ["cyber_policy", "invalid_prompt"])
 def test_openai_cyber_policy_uses_the_structured_error_code(shape: str, code: str) -> None:
