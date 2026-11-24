@@ -39439,6 +39439,8 @@ export interface components {
             output_cost_per_image_token?: number | null;
             /** Output Cost Per Image Token Batches */
             output_cost_per_image_token_batches?: number | null;
+            /** Output Cost Per Image Token Flex */
+            output_cost_per_image_token_flex?: number | null;
             /** Output Cost Per Image Token Priority */
             output_cost_per_image_token_priority?: number | null;
             /** Output Cost Per Pixel */
@@ -56947,6 +56949,8 @@ export interface components {
             output_cost_per_image_token?: number | null;
             /** Output Cost Per Image Token Batches */
             output_cost_per_image_token_batches?: number | null;
+            /** Output Cost Per Image Token Flex */
+            output_cost_per_image_token_flex?: number | null;
             /** Output Cost Per Image Token Priority */
             output_cost_per_image_token_priority?: number | null;
             /** Output Cost Per Pixel */
