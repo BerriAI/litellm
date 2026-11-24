@@ -1,6 +1,7 @@
 import base64
 import contextlib
 import json
+import re
 import uuid
 from collections.abc import Iterator, Mapping
 from concurrent.futures import ThreadPoolExecutor
@@ -15,7 +16,7 @@ import pytest
 import yaml
 from pydantic import JsonValue
 
-from tests.integration._support.client import Gateway, gateway_from_environment
+from tests.integration._support.client import JSON_OBJECT, Gateway, gateway_from_environment, string_value
 from tests.integration._support.database import read_rows, write_rows
 from tests.integration._support.process import OWNED_STATE_VARIABLE, OwnedState, owned_proxy
 from tests.integration._support.wire import Reply, Request, wire_server
@@ -25,6 +26,10 @@ pytestmark: Final = [pytest.mark.timeout(300), pytest.mark.shares_worker_state]
 CLIENT_ID: Final = "integration-sso-client"
 CLIENT_SECRET: Final = "integration-sso-secret"
 IDP_PROVIDER: Final = "integration-idp"
+CLI_SOURCE: Final = "litellm-cli"
+POLL_SECRET_HEADER: Final = "x-litellm-cli-poll-secret"
+COMPLETE_TOKEN_FIELD: Final = re.compile(r'name="browser_complete_token" value="([^"]+)"')
+COMPLETE_FORM_ACTION: Final = re.compile(r'action="([^"]+/sso/cli/complete/[^"]+)"')
 
 
 def _idp_reply(request: Request) -> Reply:
@@ -136,6 +141,33 @@ def _sign_in(gateway: Gateway, subject: str) -> httpx.Response:
         at_idp: Final = browser.get(f"{start.headers['location']}&{urlencode({'login_hint': subject})}")
         assert at_idp.status_code == 302, f"{at_idp.status_code} {at_idp.text}"
         return browser.get(at_idp.headers["location"])
+
+
+def _cli_sign_in(gateway: Gateway, subject: str) -> Mapping[str, JsonValue]:
+    started: Final = gateway.client.post("/sso/cli/start")
+    assert started.status_code == 200, started.text
+    flow: Final = JSON_OBJECT.validate_json(started.content)
+    login_id: Final = string_value(flow["login_id"])
+    proxy_url: Final = str(gateway.client.base_url).rstrip("/")
+    with httpx.Client(follow_redirects=False, trust_env=False, timeout=30) as browser:
+        link: Final = browser.get(f"{proxy_url}/sso/key/generate?{urlencode({'source': CLI_SOURCE, 'key': login_id})}")
+        assert link.is_redirect, f"{link.status_code} {link.text}"
+        at_idp: Final = browser.get(f"{link.headers['location']}&{urlencode({'login_hint': subject})}")
+        assert at_idp.status_code == 302, f"{at_idp.status_code} {at_idp.text}"
+        page: Final = browser.get(at_idp.headers["location"])
+        token: Final = COMPLETE_TOKEN_FIELD.search(page.text)
+        action: Final = COMPLETE_FORM_ACTION.search(page.text)
+        assert token is not None and action is not None, f"{page.status_code} {page.text}"
+        done: Final = browser.post(
+            action.group(1),
+            data={"user_code": string_value(flow["user_code"]), "browser_complete_token": token.group(1)},
+        )
+        assert done.status_code == 200, f"{done.status_code} {done.text}"
+    ready: Final = gateway.client.get(
+        f"/sso/cli/poll/{login_id}", headers={POLL_SECRET_HEADER: string_value(flow["poll_secret"])}
+    )
+    assert ready.status_code == 200, ready.text
+    return JSON_OBJECT.validate_json(ready.content)
 
 
 def _delete_user(gateway: Gateway, subject: str) -> None:
@@ -269,3 +301,23 @@ def test_sso_sign_in_with_db_team_mappings_creates_the_team_id_jwt_field_team_an
         )
         user: Final = gateway.rows('SELECT teams FROM "LiteLLM_UserTable" WHERE user_id = %s', (subject,))
         assert (teams, user) == ([{"team_id": team_id}], [{"teams": [team_id]}])
+
+
+def test_a_first_cli_sso_sign_in_session_carries_the_team_from_the_groups_claim(tmp_path: Path) -> None:
+    subject: Final = f"sso-cli-first-user-{uuid.uuid4().hex[:12]}"
+    team_id: Final = _group(subject)
+    jwtauth: Final = {"litellm_jwtauth": {"team_ids_jwt_field": "groups"}}
+    with _sso_gateway(tmp_path, {}, jwtauth) as gateway, contextlib.ExitStack() as cleanups:
+        cleanups.callback(gateway.request, "POST", "/team/delete", {"team_ids": [team_id]})
+        created: Final = gateway.request("POST", "/team/new", {"team_id": team_id})
+        assert created.status_code == 200, created.text
+        cleanups.callback(_delete_user, gateway, subject)
+
+        session: Final = _cli_sign_in(gateway, subject)
+
+        assert (session["status"], session["user_id"], session["team_id"], session["teams"]) == (
+            "ready",
+            subject,
+            team_id,
+            [team_id],
+        )

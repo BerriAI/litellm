@@ -2009,6 +2009,7 @@ async def test_get_user_info_from_db_user_not_exists_creates_user(rust_auth_stor
         ) as mock_upsert,
         patch(
             "litellm.proxy.management_endpoints.ui_sso.SSOAuthenticationHandler.add_user_to_teams_from_sso_response",
+            return_value=("team-1", "team-2"),
         ) as mock_add_teams,
     ):
         # Act
@@ -2033,8 +2034,7 @@ async def test_get_user_info_from_db_user_not_exists_creates_user(rust_auth_stor
         assert add_teams_call_args.kwargs["result"] == sso_result
         assert add_teams_call_args.kwargs["user_info"] == mock_new_user
 
-        # Should return the new user
-        assert user_info == mock_new_user
+        assert user_info == mock_new_user.model_copy(update={"teams": ["team-1", "team-2"]})
 
 
 @pytest.mark.asyncio
@@ -7001,6 +7001,25 @@ class TestAddMissingTeamMember:
 
         lookup.assert_not_awaited()
         assert added == []
+
+    @pytest.mark.asyncio
+    async def test_add_missing_team_member_returns_only_the_teams_it_joined(self):
+        from litellm.proxy.management_endpoints.ui_sso import add_missing_team_member
+
+        async def add_fails_for_team_beta(team_id: str, user_info: NewUserResponse | LiteLLM_UserTable) -> object:
+            return None if team_id == "team-beta" else {"team_id": team_id}
+
+        async def only_alpha_beta_gamma(team_ids: Sequence[str]) -> frozenset[str]:
+            return frozenset({"team-alpha", "team-beta", "team-gamma"}) & frozenset(team_ids)
+
+        joined: Final = await add_missing_team_member(
+            user_info=LiteLLM_UserTable(user_id="group-sync-user", teams=["team-held"]),
+            sso_teams=["team-gamma", "grp-not-a-team", "team-held", "team-beta", "team-alpha"],
+            add_team_member=add_fails_for_team_beta,
+            existing_team_ids=only_alpha_beta_gamma,
+        )
+
+        assert joined == ("team-gamma", "team-alpha")
 
     @pytest.mark.asyncio
     async def test_find_existing_team_ids_reads_the_writer_and_returns_none_when_the_db_cannot_answer(self):
