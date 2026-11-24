@@ -1,0 +1,2061 @@
+{
+ "source": "main f631dbd13213 litellm.cost_calculator.completion_cost",
+ "cases": [
+  {
+   "name": "anthropic_plain",
+   "provider": "anthropic",
+   "model": "claude-opus-4-8",
+   "row_key": "claude-opus-4-8",
+   "row_given": false,
+   "row": {
+    "input_cost_per_token": 5e-06,
+    "output_cost_per_token": 2.5e-05,
+    "cache_read_input_token_cost": 5e-07,
+    "cache_creation_input_token_cost": 6.25e-06,
+    "cache_creation_input_token_cost_above_1hr": 1e-05,
+    "max_input_tokens": 1000000,
+    "max_output_tokens": 128000,
+    "search_context_size_medium": 0.01,
+    "search_context_size_high": 0.01,
+    "provider_specific_entry": {
+     "us": 1.1,
+     "fast": 2.0
+    }
+   },
+   "usage": {
+    "prompt_tokens": 1234,
+    "input": {
+     "text": 1234
+    },
+    "cache_read": {
+     "text": 0
+    },
+    "cache_write": {
+     "default": 0,
+     "one_hour": 0
+    },
+    "output": {
+     "text": 567
+    },
+    "reasoning": 0
+   },
+   "service_tier": null,
+   "vertex_location": null,
+   "discount": {},
+   "margin": {},
+   "expected": {
+    "total": 0.020345000000000002,
+    "breakdown": {
+     "input_cost": 0.00617,
+     "output_cost": 0.014175,
+     "total_cost": 0.020345000000000002,
+     "cost_for_built_in_tools_cost_usd_dollar": 0.0,
+     "additional_costs": null,
+     "original_cost": 0.020345000000000002,
+     "discount_percent": 0.0,
+     "discount_amount": 0.0,
+     "margin_percent": 0.0,
+     "margin_fixed_amount": 0.0,
+     "margin_total_amount": 0.0,
+     "cache_read_cost": 0.0,
+     "cache_creation_cost": 0.0,
+     "reasoning_cost": 0.0,
+     "service_tier": null,
+     "data_residency": null,
+     "vertex_location": null,
+     "billed_token_rates": {
+      "input": 5e-06,
+      "output": 2.5e-05,
+      "cache_read": 5e-07,
+      "cache_write": 6.25e-06,
+      "cache_write_1h": 1e-05,
+      "reasoning": 2.5e-05
+     }
+    },
+    "cache_savings": 0.0
+   }
+  },
+  {
+   "name": "anthropic_cache_read",
+   "provider": "anthropic",
+   "model": "claude-opus-4-8",
+   "row_key": "claude-opus-4-8",
+   "row_given": false,
+   "row": {
+    "input_cost_per_token": 5e-06,
+    "output_cost_per_token": 2.5e-05,
+    "cache_read_input_token_cost": 5e-07,
+    "cache_creation_input_token_cost": 6.25e-06,
+    "cache_creation_input_token_cost_above_1hr": 1e-05,
+    "max_input_tokens": 1000000,
+    "max_output_tokens": 128000,
+    "search_context_size_medium": 0.01,
+    "search_context_size_high": 0.01,
+    "provider_specific_entry": {
+     "us": 1.1,
+     "fast": 2.0
+    }
+   },
+   "usage": {
+    "prompt_tokens": 40321,
+    "input": {
+     "text": 321
+    },
+    "cache_read": {
+     "text": 40000
+    },
+    "cache_write": {
+     "default": 0,
+     "one_hour": 0
+    },
+    "output": {
+     "text": 77
+    },
+    "reasoning": 0
+   },
+   "service_tier": null,
+   "vertex_location": null,
+   "discount": {},
+   "margin": {},
+   "expected": {
+    "total": 0.02353,
+    "breakdown": {
+     "input_cost": 0.021605,
+     "output_cost": 0.001925,
+     "total_cost": 0.02353,
+     "cost_for_built_in_tools_cost_usd_dollar": 0.0,
+     "additional_costs": null,
+     "original_cost": 0.02353,
+     "discount_percent": 0.0,
+     "discount_amount": 0.0,
+     "margin_percent": 0.0,
+     "margin_fixed_amount": 0.0,
+     "margin_total_amount": 0.0,
+     "cache_read_cost": 0.02,
+     "cache_creation_cost": 0.0,
+     "reasoning_cost": 0.0,
+     "service_tier": null,
+     "data_residency": null,
+     "vertex_location": null,
+     "billed_token_rates": {
+      "input": 5e-06,
+      "output": 2.5e-05,
+      "cache_read": 5e-07,
+      "cache_write": 6.25e-06,
+      "cache_write_1h": 1e-05,
+      "reasoning": 2.5e-05
+     }
+    },
+    "cache_savings": 0.18
+   }
+  },
+  {
+   "name": "anthropic_cache_write_5m",
+   "provider": "anthropic",
+   "model": "claude-opus-4-8",
+   "row_key": "claude-opus-4-8",
+   "row_given": false,
+   "row": {
+    "input_cost_per_token": 5e-06,
+    "output_cost_per_token": 2.5e-05,
+    "cache_read_input_token_cost": 5e-07,
+    "cache_creation_input_token_cost": 6.25e-06,
+    "cache_creation_input_token_cost_above_1hr": 1e-05,
+    "max_input_tokens": 1000000,
+    "max_output_tokens": 128000,
+    "search_context_size_medium": 0.01,
+    "search_context_size_high": 0.01,
+    "provider_specific_entry": {
+     "us": 1.1,
+     "fast": 2.0
+    }
+   },
+   "usage": {
+    "prompt_tokens": 9011,
+    "input": {
+     "text": 11
+    },
+    "cache_read": {
+     "text": 0
+    },
+    "cache_write": {
+     "default": 9000,
+     "one_hour": 0
+    },
+    "output": {
+     "text": 3
+    },
+    "reasoning": 0
+   },
+   "service_tier": null,
+   "vertex_location": null,
+   "discount": {},
+   "margin": {},
+   "expected": {
+    "total": 0.05638,
+    "breakdown": {
+     "input_cost": 0.056305,
+     "output_cost": 7.500000000000001e-05,
+     "total_cost": 0.05638,
+     "cost_for_built_in_tools_cost_usd_dollar": 0.0,
+     "additional_costs": null,
+     "original_cost": 0.05638,
+     "discount_percent": 0.0,
+     "discount_amount": 0.0,
+     "margin_percent": 0.0,
+     "margin_fixed_amount": 0.0,
+     "margin_total_amount": 0.0,
+     "cache_read_cost": 0.0,
+     "cache_creation_cost": 0.05625,
+     "reasoning_cost": 0.0,
+     "service_tier": null,
+     "data_residency": null,
+     "vertex_location": null,
+     "billed_token_rates": {
+      "input": 5e-06,
+      "output": 2.5e-05,
+      "cache_read": 5e-07,
+      "cache_write": 6.25e-06,
+      "cache_write_1h": 1e-05,
+      "reasoning": 2.5e-05
+     }
+    },
+    "cache_savings": -0.01125
+   }
+  },
+  {
+   "name": "anthropic_cache_write_1h",
+   "provider": "anthropic",
+   "model": "claude-opus-4-8",
+   "row_key": "claude-opus-4-8",
+   "row_given": false,
+   "row": {
+    "input_cost_per_token": 5e-06,
+    "output_cost_per_token": 2.5e-05,
+    "cache_read_input_token_cost": 5e-07,
+    "cache_creation_input_token_cost": 6.25e-06,
+    "cache_creation_input_token_cost_above_1hr": 1e-05,
+    "max_input_tokens": 1000000,
+    "max_output_tokens": 128000,
+    "search_context_size_medium": 0.01,
+    "search_context_size_high": 0.01,
+    "provider_specific_entry": {
+     "us": 1.1,
+     "fast": 2.0
+    }
+   },
+   "usage": {
+    "prompt_tokens": 9011,
+    "input": {
+     "text": 11
+    },
+    "cache_read": {
+     "text": 0
+    },
+    "cache_write": {
+     "default": 0,
+     "one_hour": 9000
+    },
+    "output": {
+     "text": 3
+    },
+    "reasoning": 0
+   },
+   "service_tier": null,
+   "vertex_location": null,
+   "discount": {},
+   "margin": {},
+   "expected": {
+    "total": 0.09013000000000002,
+    "breakdown": {
+     "input_cost": 0.09005500000000001,
+     "output_cost": 7.500000000000001e-05,
+     "total_cost": 0.09013000000000002,
+     "cost_for_built_in_tools_cost_usd_dollar": 0.0,
+     "additional_costs": null,
+     "original_cost": 0.09013000000000002,
+     "discount_percent": 0.0,
+     "discount_amount": 0.0,
+     "margin_percent": 0.0,
+     "margin_fixed_amount": 0.0,
+     "margin_total_amount": 0.0,
+     "cache_read_cost": 0.0,
+     "cache_creation_cost": 0.09000000000000001,
+     "reasoning_cost": 0.0,
+     "service_tier": null,
+     "data_residency": null,
+     "vertex_location": null,
+     "billed_token_rates": {
+      "input": 5e-06,
+      "output": 2.5e-05,
+      "cache_read": 5e-07,
+      "cache_write": 6.25e-06,
+      "cache_write_1h": 1e-05,
+      "reasoning": 2.5e-05
+     }
+    },
+    "cache_savings": -0.045000000000000005
+   }
+  },
+  {
+   "name": "anthropic_cache_mixed",
+   "provider": "anthropic",
+   "model": "claude-sonnet-4-6",
+   "row_key": "claude-sonnet-4-6",
+   "row_given": false,
+   "row": {
+    "input_cost_per_token": 3e-06,
+    "output_cost_per_token": 1.5e-05,
+    "cache_read_input_token_cost": 3e-07,
+    "cache_creation_input_token_cost": 3.75e-06,
+    "cache_creation_input_token_cost_above_1hr": 6e-06,
+    "max_input_tokens": 1000000,
+    "max_output_tokens": 128000,
+    "search_context_size_medium": 0.01,
+    "search_context_size_high": 0.01,
+    "provider_specific_entry": {
+     "us": 1.1
+    }
+   },
+   "usage": {
+    "prompt_tokens": 15673,
+    "input": {
+     "text": 503
+    },
+    "cache_read": {
+     "text": 12345
+    },
+    "cache_write": {
+     "default": 777,
+     "one_hour": 2048
+    },
+    "output": {
+     "text": 911
+    },
+    "reasoning": 0
+   },
+   "service_tier": null,
+   "vertex_location": null,
+   "discount": {},
+   "margin": {},
+   "expected": {
+    "total": 0.034079250000000005,
+    "breakdown": {
+     "input_cost": 0.020414250000000002,
+     "output_cost": 0.013665,
+     "total_cost": 0.034079250000000005,
+     "cost_for_built_in_tools_cost_usd_dollar": 0.0,
+     "additional_costs": null,
+     "original_cost": 0.034079250000000005,
+     "discount_percent": 0.0,
+     "discount_amount": 0.0,
+     "margin_percent": 0.0,
+     "margin_fixed_amount": 0.0,
+     "margin_total_amount": 0.0,
+     "cache_read_cost": 0.0037034999999999998,
+     "cache_creation_cost": 0.01520175,
+     "reasoning_cost": 0.0,
+     "service_tier": null,
+     "data_residency": null,
+     "vertex_location": null,
+     "billed_token_rates": {
+      "input": 3e-06,
+      "output": 1.5e-05,
+      "cache_read": 3e-07,
+      "cache_write": 3.75e-06,
+      "cache_write_1h": 6e-06,
+      "reasoning": 1.5e-05
+     }
+    },
+    "cache_savings": 0.02660475
+   }
+  },
+  {
+   "name": "anthropic_geo_us",
+   "provider": "anthropic",
+   "model": "claude-opus-4-8",
+   "row_key": "claude-opus-4-8",
+   "row_given": false,
+   "row": {
+    "input_cost_per_token": 5e-06,
+    "output_cost_per_token": 2.5e-05,
+    "cache_read_input_token_cost": 5e-07,
+    "cache_creation_input_token_cost": 6.25e-06,
+    "cache_creation_input_token_cost_above_1hr": 1e-05,
+    "max_input_tokens": 1000000,
+    "max_output_tokens": 128000,
+    "search_context_size_medium": 0.01,
+    "search_context_size_high": 0.01,
+    "provider_specific_entry": {
+     "us": 1.1,
+     "fast": 2.0
+    }
+   },
+   "usage": {
+    "prompt_tokens": 2134,
+    "input": {
+     "text": 1234
+    },
+    "cache_read": {
+     "text": 900
+    },
+    "cache_write": {
+     "default": 0,
+     "one_hour": 0
+    },
+    "output": {
+     "text": 567
+    },
+    "reasoning": 0,
+    "inference_geo": "us"
+   },
+   "service_tier": null,
+   "vertex_location": null,
+   "discount": {},
+   "margin": {},
+   "expected": {
+    "total": 0.022874500000000002,
+    "breakdown": {
+     "input_cost": 0.007282,
+     "output_cost": 0.015592500000000002,
+     "total_cost": 0.022874500000000002,
+     "cost_for_built_in_tools_cost_usd_dollar": 0.0,
+     "additional_costs": null,
+     "original_cost": 0.022874500000000002,
+     "discount_percent": 0.0,
+     "discount_amount": 0.0,
+     "margin_percent": 0.0,
+     "margin_fixed_amount": 0.0,
+     "margin_total_amount": 0.0,
+     "cache_read_cost": 0.000495,
+     "cache_creation_cost": 0.0,
+     "reasoning_cost": 0.0,
+     "service_tier": null,
+     "data_residency": null,
+     "vertex_location": null,
+     "billed_token_rates": {
+      "input": 5.500000000000001e-06,
+      "output": 2.7500000000000004e-05,
+      "cache_read": 5.5e-07,
+      "cache_write": 6.875000000000001e-06,
+      "cache_write_1h": 1.1000000000000001e-05,
+      "reasoning": 2.7500000000000004e-05
+     }
+    },
+    "cache_savings": 0.00405
+   }
+  },
+  {
+   "name": "anthropic_geo_global",
+   "provider": "anthropic",
+   "model": "claude-opus-4-8",
+   "row_key": "claude-opus-4-8",
+   "row_given": false,
+   "row": {
+    "input_cost_per_token": 5e-06,
+    "output_cost_per_token": 2.5e-05,
+    "cache_read_input_token_cost": 5e-07,
+    "cache_creation_input_token_cost": 6.25e-06,
+    "cache_creation_input_token_cost_above_1hr": 1e-05,
+    "max_input_tokens": 1000000,
+    "max_output_tokens": 128000,
+    "search_context_size_medium": 0.01,
+    "search_context_size_high": 0.01,
+    "provider_specific_entry": {
+     "us": 1.1,
+     "fast": 2.0
+    }
+   },
+   "usage": {
+    "prompt_tokens": 1234,
+    "input": {
+     "text": 1234
+    },
+    "cache_read": {
+     "text": 0
+    },
+    "cache_write": {
+     "default": 0,
+     "one_hour": 0
+    },
+    "output": {
+     "text": 567
+    },
+    "reasoning": 0,
+    "inference_geo": "global"
+   },
+   "service_tier": null,
+   "vertex_location": null,
+   "discount": {},
+   "margin": {},
+   "expected": {
+    "total": 0.020345000000000002,
+    "breakdown": {
+     "input_cost": 0.00617,
+     "output_cost": 0.014175,
+     "total_cost": 0.020345000000000002,
+     "cost_for_built_in_tools_cost_usd_dollar": 0.0,
+     "additional_costs": null,
+     "original_cost": 0.020345000000000002,
+     "discount_percent": 0.0,
+     "discount_amount": 0.0,
+     "margin_percent": 0.0,
+     "margin_fixed_amount": 0.0,
+     "margin_total_amount": 0.0,
+     "cache_read_cost": 0.0,
+     "cache_creation_cost": 0.0,
+     "reasoning_cost": 0.0,
+     "service_tier": null,
+     "data_residency": null,
+     "vertex_location": null,
+     "billed_token_rates": {
+      "input": 5e-06,
+      "output": 2.5e-05,
+      "cache_read": 5e-07,
+      "cache_write": 6.25e-06,
+      "cache_write_1h": 1e-05,
+      "reasoning": 2.5e-05
+     }
+    },
+    "cache_savings": 0.0
+   }
+  },
+  {
+   "name": "anthropic_speed_fast",
+   "provider": "anthropic",
+   "model": "claude-opus-4-8",
+   "row_key": "claude-opus-4-8",
+   "row_given": false,
+   "row": {
+    "input_cost_per_token": 5e-06,
+    "output_cost_per_token": 2.5e-05,
+    "cache_read_input_token_cost": 5e-07,
+    "cache_creation_input_token_cost": 6.25e-06,
+    "cache_creation_input_token_cost_above_1hr": 1e-05,
+    "max_input_tokens": 1000000,
+    "max_output_tokens": 128000,
+    "search_context_size_medium": 0.01,
+    "search_context_size_high": 0.01,
+    "provider_specific_entry": {
+     "us": 1.1,
+     "fast": 2.0
+    }
+   },
+   "usage": {
+    "prompt_tokens": 1234,
+    "input": {
+     "text": 1234
+    },
+    "cache_read": {
+     "text": 0
+    },
+    "cache_write": {
+     "default": 0,
+     "one_hour": 0
+    },
+    "output": {
+     "text": 567
+    },
+    "reasoning": 0,
+    "speed": "fast"
+   },
+   "service_tier": null,
+   "vertex_location": null,
+   "discount": {},
+   "margin": {},
+   "expected": {
+    "total": 0.040690000000000004,
+    "breakdown": {
+     "input_cost": 0.01234,
+     "output_cost": 0.02835,
+     "total_cost": 0.040690000000000004,
+     "cost_for_built_in_tools_cost_usd_dollar": 0.0,
+     "additional_costs": null,
+     "original_cost": 0.040690000000000004,
+     "discount_percent": 0.0,
+     "discount_amount": 0.0,
+     "margin_percent": 0.0,
+     "margin_fixed_amount": 0.0,
+     "margin_total_amount": 0.0,
+     "cache_read_cost": 0.0,
+     "cache_creation_cost": 0.0,
+     "reasoning_cost": 0.0,
+     "service_tier": null,
+     "data_residency": null,
+     "vertex_location": null,
+     "billed_token_rates": {
+      "input": 1e-05,
+      "output": 5e-05,
+      "cache_read": 1e-06,
+      "cache_write": 1.25e-05,
+      "cache_write_1h": 2e-05,
+      "reasoning": 5e-05
+     }
+    },
+    "cache_savings": 0.0
+   }
+  },
+  {
+   "name": "anthropic_speed_fast_geo_us",
+   "provider": "anthropic",
+   "model": "claude-opus-4-8",
+   "row_key": "claude-opus-4-8",
+   "row_given": false,
+   "row": {
+    "input_cost_per_token": 5e-06,
+    "output_cost_per_token": 2.5e-05,
+    "cache_read_input_token_cost": 5e-07,
+    "cache_creation_input_token_cost": 6.25e-06,
+    "cache_creation_input_token_cost_above_1hr": 1e-05,
+    "max_input_tokens": 1000000,
+    "max_output_tokens": 128000,
+    "search_context_size_medium": 0.01,
+    "search_context_size_high": 0.01,
+    "provider_specific_entry": {
+     "us": 1.1,
+     "fast": 2.0
+    }
+   },
+   "usage": {
+    "prompt_tokens": 1534,
+    "input": {
+     "text": 1234
+    },
+    "cache_read": {
+     "text": 0
+    },
+    "cache_write": {
+     "default": 0,
+     "one_hour": 300
+    },
+    "output": {
+     "text": 567
+    },
+    "reasoning": 0,
+    "speed": "fast",
+    "inference_geo": "US"
+   },
+   "service_tier": null,
+   "vertex_location": null,
+   "discount": {},
+   "margin": {},
+   "expected": {
+    "total": 0.05135900000000001,
+    "breakdown": {
+     "input_cost": 0.020174000000000004,
+     "output_cost": 0.031185000000000004,
+     "total_cost": 0.05135900000000001,
+     "cost_for_built_in_tools_cost_usd_dollar": 0.0,
+     "additional_costs": null,
+     "original_cost": 0.05135900000000001,
+     "discount_percent": 0.0,
+     "discount_amount": 0.0,
+     "margin_percent": 0.0,
+     "margin_fixed_amount": 0.0,
+     "margin_total_amount": 0.0,
+     "cache_read_cost": 0.0,
+     "cache_creation_cost": 0.006600000000000001,
+     "reasoning_cost": 0.0,
+     "service_tier": null,
+     "data_residency": null,
+     "vertex_location": null,
+     "billed_token_rates": {
+      "input": 1.1000000000000001e-05,
+      "output": 5.500000000000001e-05,
+      "cache_read": 1.1e-06,
+      "cache_write": 1.3750000000000002e-05,
+      "cache_write_1h": 2.2000000000000003e-05,
+      "reasoning": 5.500000000000001e-05
+     }
+    },
+    "cache_savings": -0.0015
+   }
+  },
+  {
+   "name": "anthropic_over_100k",
+   "provider": "anthropic",
+   "model": "claude-haiku-5-5",
+   "row_key": "claude-haiku-5-5",
+   "row_given": false,
+   "row": {
+    "input_cost_per_token": 1e-07,
+    "output_cost_per_token": 5e-07,
+    "cache_read_input_token_cost": 1e-08,
+    "cache_creation_input_token_cost": 1.25e-07,
+    "cache_creation_input_token_cost_above_1hr": 2e-07,
+    "input_cost_per_token_above_100k_tokens": 5e-07,
+    "output_cost_per_token_above_100k_tokens": 2.5e-06,
+    "cache_read_input_token_cost_above_100k_tokens": 5e-08,
+    "cache_creation_input_token_cost_above_100k_tokens": 6.25e-07,
+    "cache_creation_input_token_cost_above_1hr_above_100k_tokens": 1e-06,
+    "max_input_tokens": 1000000,
+    "max_output_tokens": 128000,
+    "search_context_size_medium": 0.01,
+    "search_context_size_high": 0.01,
+    "provider_specific_entry": {
+     "us": 1.1
+    }
+   },
+   "usage": {
+    "prompt_tokens": 111500,
+    "input": {
+     "text": 90000
+    },
+    "cache_read": {
+     "text": 20000
+    },
+    "cache_write": {
+     "default": 1000,
+     "one_hour": 500
+    },
+    "output": {
+     "text": 4000
+    },
+    "reasoning": 0
+   },
+   "service_tier": null,
+   "vertex_location": null,
+   "discount": {},
+   "margin": {},
+   "expected": {
+    "total": 0.057125,
+    "breakdown": {
+     "input_cost": 0.047125,
+     "output_cost": 0.01,
+     "total_cost": 0.057125,
+     "cost_for_built_in_tools_cost_usd_dollar": 0.0,
+     "additional_costs": null,
+     "original_cost": 0.057125,
+     "discount_percent": 0.0,
+     "discount_amount": 0.0,
+     "margin_percent": 0.0,
+     "margin_fixed_amount": 0.0,
+     "margin_total_amount": 0.0,
+     "cache_read_cost": 0.001,
+     "cache_creation_cost": 0.0011250000000000001,
+     "reasoning_cost": 0.0,
+     "service_tier": null,
+     "data_residency": null,
+     "vertex_location": null,
+     "billed_token_rates": {
+      "input": 5e-07,
+      "output": 2.5e-06,
+      "cache_read": 5e-08,
+      "cache_write": 6.25e-07,
+      "cache_write_1h": 1e-06,
+      "reasoning": 2.5e-06
+     }
+    },
+    "cache_savings": 0.008624999999999999
+   }
+  },
+  {
+   "name": "anthropic_service_tier_priority",
+   "provider": "anthropic",
+   "model": "claude-sonnet-4-6",
+   "row_key": "claude-sonnet-4-6",
+   "row_given": true,
+   "row": {
+    "input_cost_per_token": 3e-06,
+    "output_cost_per_token": 1.5e-05,
+    "cache_read_input_token_cost": 3e-07,
+    "cache_creation_input_token_cost": 3.75e-06,
+    "cache_creation_input_token_cost_above_1hr": 6e-06,
+    "input_cost_per_token_priority": 6e-06,
+    "output_cost_per_token_priority": 3e-05,
+    "cache_read_input_token_cost_priority": 6e-07,
+    "cache_creation_input_token_cost_priority": 7.5e-06,
+    "max_input_tokens": 1000000,
+    "max_output_tokens": 128000,
+    "search_context_size_medium": 0.01,
+    "search_context_size_high": 0.01,
+    "provider_specific_entry": {
+     "us": 1.1
+    }
+   },
+   "named_row": {
+    "input_cost_per_token": 3e-06,
+    "output_cost_per_token": 1.5e-05,
+    "cache_read_input_token_cost": 3e-07,
+    "cache_creation_input_token_cost": 3.75e-06,
+    "cache_creation_input_token_cost_above_1hr": 6e-06,
+    "max_input_tokens": 1000000,
+    "max_output_tokens": 128000,
+    "search_context_size_medium": 0.01,
+    "search_context_size_high": 0.01,
+    "provider_specific_entry": {
+     "us": 1.1
+    }
+   },
+   "usage": {
+    "prompt_tokens": 3050,
+    "input": {
+     "text": 2000
+    },
+    "cache_read": {
+     "text": 1000
+    },
+    "cache_write": {
+     "default": 50,
+     "one_hour": 0
+    },
+    "output": {
+     "text": 300
+    },
+    "reasoning": 0
+   },
+   "service_tier": "priority",
+   "vertex_location": null,
+   "discount": {},
+   "margin": {},
+   "expected": {
+    "total": 0.021975,
+    "breakdown": {
+     "input_cost": 0.012975,
+     "output_cost": 0.009000000000000001,
+     "total_cost": 0.021975,
+     "cost_for_built_in_tools_cost_usd_dollar": 0.0,
+     "additional_costs": null,
+     "original_cost": 0.021975,
+     "discount_percent": 0.0,
+     "discount_amount": 0.0,
+     "margin_percent": 0.0,
+     "margin_fixed_amount": 0.0,
+     "margin_total_amount": 0.0,
+     "cache_read_cost": 0.0003,
+     "cache_creation_cost": 0.0001875,
+     "reasoning_cost": 0.0,
+     "service_tier": "priority",
+     "data_residency": null,
+     "vertex_location": null,
+     "billed_token_rates": {
+      "input": 3e-06,
+      "output": 1.5e-05,
+      "cache_read": 3e-07,
+      "cache_write": 3.75e-06,
+      "cache_write_1h": 6e-06,
+      "reasoning": 1.5e-05
+     }
+    },
+    "cache_savings": 0.005325
+   }
+  },
+  {
+   "name": "anthropic_service_tier_without_tier_prices",
+   "provider": "anthropic",
+   "model": "claude-opus-4-8",
+   "row_key": "claude-opus-4-8",
+   "row_given": false,
+   "row": {
+    "input_cost_per_token": 5e-06,
+    "output_cost_per_token": 2.5e-05,
+    "cache_read_input_token_cost": 5e-07,
+    "cache_creation_input_token_cost": 6.25e-06,
+    "cache_creation_input_token_cost_above_1hr": 1e-05,
+    "max_input_tokens": 1000000,
+    "max_output_tokens": 128000,
+    "search_context_size_medium": 0.01,
+    "search_context_size_high": 0.01,
+    "provider_specific_entry": {
+     "us": 1.1,
+     "fast": 2.0
+    }
+   },
+   "usage": {
+    "prompt_tokens": 2000,
+    "input": {
+     "text": 2000
+    },
+    "cache_read": {
+     "text": 0
+    },
+    "cache_write": {
+     "default": 0,
+     "one_hour": 0
+    },
+    "output": {
+     "text": 300
+    },
+    "reasoning": 0
+   },
+   "service_tier": "priority",
+   "vertex_location": null,
+   "discount": {},
+   "margin": {},
+   "expected": {
+    "total": 0.0175,
+    "breakdown": {
+     "input_cost": 0.01,
+     "output_cost": 0.007500000000000001,
+     "total_cost": 0.0175,
+     "cost_for_built_in_tools_cost_usd_dollar": 0.0,
+     "additional_costs": null,
+     "original_cost": 0.0175,
+     "discount_percent": 0.0,
+     "discount_amount": 0.0,
+     "margin_percent": 0.0,
+     "margin_fixed_amount": 0.0,
+     "margin_total_amount": 0.0,
+     "cache_read_cost": 0.0,
+     "cache_creation_cost": 0.0,
+     "reasoning_cost": 0.0,
+     "service_tier": "priority",
+     "data_residency": null,
+     "vertex_location": null,
+     "billed_token_rates": {
+      "input": 5e-06,
+      "output": 2.5e-05,
+      "cache_read": 5e-07,
+      "cache_write": 6.25e-06,
+      "cache_write_1h": 1e-05,
+      "reasoning": 2.5e-05
+     }
+    },
+    "cache_savings": 0.0
+   }
+  },
+  {
+   "name": "anthropic_web_search",
+   "provider": "anthropic",
+   "model": "claude-opus-4-8",
+   "row_key": "claude-opus-4-8",
+   "row_given": false,
+   "row": {
+    "input_cost_per_token": 5e-06,
+    "output_cost_per_token": 2.5e-05,
+    "cache_read_input_token_cost": 5e-07,
+    "cache_creation_input_token_cost": 6.25e-06,
+    "cache_creation_input_token_cost_above_1hr": 1e-05,
+    "max_input_tokens": 1000000,
+    "max_output_tokens": 128000,
+    "search_context_size_medium": 0.01,
+    "search_context_size_high": 0.01,
+    "provider_specific_entry": {
+     "us": 1.1,
+     "fast": 2.0
+    }
+   },
+   "usage": {
+    "prompt_tokens": 4000,
+    "input": {
+     "text": 4000
+    },
+    "cache_read": {
+     "text": 0
+    },
+    "cache_write": {
+     "default": 0,
+     "one_hour": 0
+    },
+    "output": {
+     "text": 800
+    },
+    "reasoning": 0,
+    "web_search": {
+     "requests": 3
+    }
+   },
+   "service_tier": null,
+   "vertex_location": null,
+   "discount": {},
+   "margin": {},
+   "expected": {
+    "total": 0.07,
+    "breakdown": {
+     "input_cost": 0.02,
+     "output_cost": 0.02,
+     "total_cost": 0.07,
+     "cost_for_built_in_tools_cost_usd_dollar": 0.03,
+     "additional_costs": null,
+     "original_cost": 0.07,
+     "discount_percent": 0.0,
+     "discount_amount": 0.0,
+     "margin_percent": 0.0,
+     "margin_fixed_amount": 0.0,
+     "margin_total_amount": 0.0,
+     "cache_read_cost": 0.0,
+     "cache_creation_cost": 0.0,
+     "reasoning_cost": 0.0,
+     "service_tier": null,
+     "data_residency": null,
+     "vertex_location": null,
+     "billed_token_rates": {
+      "input": 5e-06,
+      "output": 2.5e-05,
+      "cache_read": 5e-07,
+      "cache_write": 6.25e-06,
+      "cache_write_1h": 1e-05,
+      "reasoning": 2.5e-05
+     }
+    },
+    "cache_savings": 0.0
+   }
+  },
+  {
+   "name": "anthropic_discount",
+   "provider": "anthropic",
+   "model": "claude-opus-4-8",
+   "row_key": "claude-opus-4-8",
+   "row_given": false,
+   "row": {
+    "input_cost_per_token": 5e-06,
+    "output_cost_per_token": 2.5e-05,
+    "cache_read_input_token_cost": 5e-07,
+    "cache_creation_input_token_cost": 6.25e-06,
+    "cache_creation_input_token_cost_above_1hr": 1e-05,
+    "max_input_tokens": 1000000,
+    "max_output_tokens": 128000,
+    "search_context_size_medium": 0.01,
+    "search_context_size_high": 0.01,
+    "provider_specific_entry": {
+     "us": 1.1,
+     "fast": 2.0
+    }
+   },
+   "usage": {
+    "prompt_tokens": 4100,
+    "input": {
+     "text": 4000
+    },
+    "cache_read": {
+     "text": 100
+    },
+    "cache_write": {
+     "default": 0,
+     "one_hour": 0
+    },
+    "output": {
+     "text": 800
+    },
+    "reasoning": 0
+   },
+   "service_tier": null,
+   "vertex_location": null,
+   "discount": {
+    "anthropic": 0.15
+   },
+   "margin": {},
+   "expected": {
+    "total": 0.0340425,
+    "breakdown": {
+     "input_cost": 0.020050000000000002,
+     "output_cost": 0.02,
+     "total_cost": 0.0340425,
+     "cost_for_built_in_tools_cost_usd_dollar": 0.0,
+     "additional_costs": null,
+     "original_cost": 0.04005,
+     "discount_percent": 0.15,
+     "discount_amount": 0.0060075,
+     "margin_percent": 0.0,
+     "margin_fixed_amount": 0.0,
+     "margin_total_amount": 0.0,
+     "cache_read_cost": 4.9999999999999996e-05,
+     "cache_creation_cost": 0.0,
+     "reasoning_cost": 0.0,
+     "service_tier": null,
+     "data_residency": null,
+     "vertex_location": null,
+     "billed_token_rates": {
+      "input": 5e-06,
+      "output": 2.5e-05,
+      "cache_read": 5e-07,
+      "cache_write": 6.25e-06,
+      "cache_write_1h": 1e-05,
+      "reasoning": 2.5e-05
+     }
+    },
+    "cache_savings": 0.00045
+   }
+  },
+  {
+   "name": "anthropic_model_pattern_discount",
+   "provider": "anthropic",
+   "model": "claude-opus-4-8",
+   "row_key": "claude-opus-4-8",
+   "row_given": false,
+   "row": {
+    "input_cost_per_token": 5e-06,
+    "output_cost_per_token": 2.5e-05,
+    "cache_read_input_token_cost": 5e-07,
+    "cache_creation_input_token_cost": 6.25e-06,
+    "cache_creation_input_token_cost_above_1hr": 1e-05,
+    "max_input_tokens": 1000000,
+    "max_output_tokens": 128000,
+    "search_context_size_medium": 0.01,
+    "search_context_size_high": 0.01,
+    "provider_specific_entry": {
+     "us": 1.1,
+     "fast": 2.0
+    }
+   },
+   "usage": {
+    "prompt_tokens": 4000,
+    "input": {
+     "text": 4000
+    },
+    "cache_read": {
+     "text": 0
+    },
+    "cache_write": {
+     "default": 0,
+     "one_hour": 0
+    },
+    "output": {
+     "text": 800
+    },
+    "reasoning": 0
+   },
+   "service_tier": null,
+   "vertex_location": null,
+   "discount": {
+    "anthropic": 0.1,
+    "anthropic/claude-opus-*": 0.25,
+    "anthropic/claude-*": 0.2
+   },
+   "margin": {},
+   "expected": {
+    "total": 0.03,
+    "breakdown": {
+     "input_cost": 0.02,
+     "output_cost": 0.02,
+     "total_cost": 0.03,
+     "cost_for_built_in_tools_cost_usd_dollar": 0.0,
+     "additional_costs": null,
+     "original_cost": 0.04,
+     "discount_percent": 0.25,
+     "discount_amount": 0.01,
+     "margin_percent": 0.0,
+     "margin_fixed_amount": 0.0,
+     "margin_total_amount": 0.0,
+     "cache_read_cost": 0.0,
+     "cache_creation_cost": 0.0,
+     "reasoning_cost": 0.0,
+     "service_tier": null,
+     "data_residency": null,
+     "vertex_location": null,
+     "billed_token_rates": {
+      "input": 5e-06,
+      "output": 2.5e-05,
+      "cache_read": 5e-07,
+      "cache_write": 6.25e-06,
+      "cache_write_1h": 1e-05,
+      "reasoning": 2.5e-05
+     }
+    },
+    "cache_savings": 0.0
+   }
+  },
+  {
+   "name": "anthropic_margin_percent",
+   "provider": "anthropic",
+   "model": "claude-opus-4-8",
+   "row_key": "claude-opus-4-8",
+   "row_given": false,
+   "row": {
+    "input_cost_per_token": 5e-06,
+    "output_cost_per_token": 2.5e-05,
+    "cache_read_input_token_cost": 5e-07,
+    "cache_creation_input_token_cost": 6.25e-06,
+    "cache_creation_input_token_cost_above_1hr": 1e-05,
+    "max_input_tokens": 1000000,
+    "max_output_tokens": 128000,
+    "search_context_size_medium": 0.01,
+    "search_context_size_high": 0.01,
+    "provider_specific_entry": {
+     "us": 1.1,
+     "fast": 2.0
+    }
+   },
+   "usage": {
+    "prompt_tokens": 4000,
+    "input": {
+     "text": 4000
+    },
+    "cache_read": {
+     "text": 0
+    },
+    "cache_write": {
+     "default": 0,
+     "one_hour": 0
+    },
+    "output": {
+     "text": 800
+    },
+    "reasoning": 0
+   },
+   "service_tier": null,
+   "vertex_location": null,
+   "discount": {},
+   "margin": {
+    "anthropic": 0.12
+   },
+   "expected": {
+    "total": 0.0448,
+    "breakdown": {
+     "input_cost": 0.02,
+     "output_cost": 0.02,
+     "total_cost": 0.0448,
+     "cost_for_built_in_tools_cost_usd_dollar": 0.0,
+     "additional_costs": null,
+     "original_cost": 0.04,
+     "discount_percent": 0.0,
+     "discount_amount": 0.0,
+     "margin_percent": 0.12,
+     "margin_fixed_amount": 0.0,
+     "margin_total_amount": 0.0048,
+     "cache_read_cost": 0.0,
+     "cache_creation_cost": 0.0,
+     "reasoning_cost": 0.0,
+     "service_tier": null,
+     "data_residency": null,
+     "vertex_location": null,
+     "billed_token_rates": {
+      "input": 5e-06,
+      "output": 2.5e-05,
+      "cache_read": 5e-07,
+      "cache_write": 6.25e-06,
+      "cache_write_1h": 1e-05,
+      "reasoning": 2.5e-05
+     }
+    },
+    "cache_savings": 0.0
+   }
+  },
+  {
+   "name": "anthropic_discount_and_fixed_margin",
+   "provider": "anthropic",
+   "model": "claude-opus-4-8",
+   "row_key": "claude-opus-4-8",
+   "row_given": false,
+   "row": {
+    "input_cost_per_token": 5e-06,
+    "output_cost_per_token": 2.5e-05,
+    "cache_read_input_token_cost": 5e-07,
+    "cache_creation_input_token_cost": 6.25e-06,
+    "cache_creation_input_token_cost_above_1hr": 1e-05,
+    "max_input_tokens": 1000000,
+    "max_output_tokens": 128000,
+    "search_context_size_medium": 0.01,
+    "search_context_size_high": 0.01,
+    "provider_specific_entry": {
+     "us": 1.1,
+     "fast": 2.0
+    }
+   },
+   "usage": {
+    "prompt_tokens": 4000,
+    "input": {
+     "text": 4000
+    },
+    "cache_read": {
+     "text": 0
+    },
+    "cache_write": {
+     "default": 0,
+     "one_hour": 0
+    },
+    "output": {
+     "text": 800
+    },
+    "reasoning": 0,
+    "web_search": {
+     "requests": 2
+    },
+    "inference_geo": "us"
+   },
+   "service_tier": null,
+   "vertex_location": null,
+   "discount": {
+    "anthropic": 0.05
+   },
+   "margin": {
+    "global": {
+     "percentage": 0.08,
+     "fixed_amount": 0.0005
+    }
+   },
+   "expected": {
+    "total": 0.066164,
+    "breakdown": {
+     "input_cost": 0.022000000000000002,
+     "output_cost": 0.022000000000000002,
+     "total_cost": 0.066164,
+     "cost_for_built_in_tools_cost_usd_dollar": 0.02,
+     "additional_costs": null,
+     "original_cost": 0.064,
+     "discount_percent": 0.05,
+     "discount_amount": 0.0032,
+     "margin_percent": 0.08,
+     "margin_fixed_amount": 0.0005,
+     "margin_total_amount": 0.005364000000000001,
+     "cache_read_cost": 0.0,
+     "cache_creation_cost": 0.0,
+     "reasoning_cost": 0.0,
+     "service_tier": null,
+     "data_residency": null,
+     "vertex_location": null,
+     "billed_token_rates": {
+      "input": 5.500000000000001e-06,
+      "output": 2.7500000000000004e-05,
+      "cache_read": 5.5e-07,
+      "cache_write": 6.875000000000001e-06,
+      "cache_write_1h": 1.1000000000000001e-05,
+      "reasoning": 2.7500000000000004e-05
+     }
+    },
+    "cache_savings": 0.0
+   }
+  },
+  {
+   "name": "anthropic_fixed_margin_only",
+   "provider": "anthropic",
+   "model": "claude-opus-4-8",
+   "row_key": "claude-opus-4-8",
+   "row_given": false,
+   "row": {
+    "input_cost_per_token": 5e-06,
+    "output_cost_per_token": 2.5e-05,
+    "cache_read_input_token_cost": 5e-07,
+    "cache_creation_input_token_cost": 6.25e-06,
+    "cache_creation_input_token_cost_above_1hr": 1e-05,
+    "max_input_tokens": 1000000,
+    "max_output_tokens": 128000,
+    "search_context_size_medium": 0.01,
+    "search_context_size_high": 0.01,
+    "provider_specific_entry": {
+     "us": 1.1,
+     "fast": 2.0
+    }
+   },
+   "usage": {
+    "prompt_tokens": 10,
+    "input": {
+     "text": 10
+    },
+    "cache_read": {
+     "text": 0
+    },
+    "cache_write": {
+     "default": 0,
+     "one_hour": 0
+    },
+    "output": {
+     "text": 10
+    },
+    "reasoning": 0
+   },
+   "service_tier": null,
+   "vertex_location": null,
+   "discount": {},
+   "margin": {
+    "anthropic": {
+     "fixed_amount": 0.001
+    },
+    "global": 0.5
+   },
+   "expected": {
+    "total": 0.0013,
+    "breakdown": {
+     "input_cost": 5e-05,
+     "output_cost": 0.00025,
+     "total_cost": 0.0013,
+     "cost_for_built_in_tools_cost_usd_dollar": 0.0,
+     "additional_costs": null,
+     "original_cost": 0.00030000000000000003,
+     "discount_percent": 0.0,
+     "discount_amount": 0.0,
+     "margin_percent": 0.0,
+     "margin_fixed_amount": 0.001,
+     "margin_total_amount": 0.001,
+     "cache_read_cost": 0.0,
+     "cache_creation_cost": 0.0,
+     "reasoning_cost": 0.0,
+     "service_tier": null,
+     "data_residency": null,
+     "vertex_location": null,
+     "billed_token_rates": {
+      "input": 5e-06,
+      "output": 2.5e-05,
+      "cache_read": 5e-07,
+      "cache_write": 6.25e-06,
+      "cache_write_1h": 1e-05,
+      "reasoning": 2.5e-05
+     }
+    },
+    "cache_savings": 0.0
+   }
+  },
+  {
+   "name": "bedrock_claude_platform_geo_us",
+   "provider": "bedrock",
+   "model": "claude_platform/claude-opus-5",
+   "row_key": "bedrock/claude_platform/claude-opus-5",
+   "row_given": false,
+   "row": {
+    "input_cost_per_token": 5e-06,
+    "output_cost_per_token": 2.5e-05,
+    "cache_read_input_token_cost": 5e-07,
+    "cache_creation_input_token_cost": 6.25e-06,
+    "cache_creation_input_token_cost_above_1hr": 1e-05,
+    "max_input_tokens": 1000000,
+    "max_output_tokens": 128000,
+    "search_context_size_medium": 0.01,
+    "search_context_size_high": 0.01,
+    "provider_specific_entry": {
+     "us": 1.1
+    }
+   },
+   "usage": {
+    "prompt_tokens": 2234,
+    "input": {
+     "text": 1234
+    },
+    "cache_read": {
+     "text": 900
+    },
+    "cache_write": {
+     "default": 0,
+     "one_hour": 100
+    },
+    "output": {
+     "text": 567
+    },
+    "reasoning": 0,
+    "speed": "fast",
+    "inference_geo": "us"
+   },
+   "service_tier": null,
+   "vertex_location": null,
+   "discount": {},
+   "margin": {},
+   "expected": {
+    "total": 0.023974500000000003,
+    "breakdown": {
+     "input_cost": 0.008382,
+     "output_cost": 0.015592500000000002,
+     "total_cost": 0.023974500000000003,
+     "cost_for_built_in_tools_cost_usd_dollar": 0.0,
+     "additional_costs": null,
+     "original_cost": 0.023974500000000003,
+     "discount_percent": 0.0,
+     "discount_amount": 0.0,
+     "margin_percent": 0.0,
+     "margin_fixed_amount": 0.0,
+     "margin_total_amount": 0.0,
+     "cache_read_cost": 0.000495,
+     "cache_creation_cost": 0.0011,
+     "reasoning_cost": 0.0,
+     "service_tier": null,
+     "data_residency": null,
+     "vertex_location": null,
+     "billed_token_rates": {
+      "input": 5.500000000000001e-06,
+      "output": 2.7500000000000004e-05,
+      "cache_read": 5.5e-07,
+      "cache_write": 6.875000000000001e-06,
+      "cache_write_1h": 1.1000000000000001e-05,
+      "reasoning": 2.7500000000000004e-05
+     }
+    },
+    "cache_savings": 0.0035499999999999998
+   }
+  },
+  {
+   "name": "bedrock_claude_platform_web_search_high",
+   "provider": "bedrock",
+   "model": "claude_platform/claude-opus-5",
+   "row_key": "bedrock/claude_platform/claude-opus-5",
+   "row_given": false,
+   "row": {
+    "input_cost_per_token": 5e-06,
+    "output_cost_per_token": 2.5e-05,
+    "cache_read_input_token_cost": 5e-07,
+    "cache_creation_input_token_cost": 6.25e-06,
+    "cache_creation_input_token_cost_above_1hr": 1e-05,
+    "max_input_tokens": 1000000,
+    "max_output_tokens": 128000,
+    "search_context_size_medium": 0.01,
+    "search_context_size_high": 0.01,
+    "provider_specific_entry": {
+     "us": 1.1
+    }
+   },
+   "usage": {
+    "prompt_tokens": 1234,
+    "input": {
+     "text": 1234
+    },
+    "cache_read": {
+     "text": 0
+    },
+    "cache_write": {
+     "default": 0,
+     "one_hour": 0
+    },
+    "output": {
+     "text": 567
+    },
+    "reasoning": 0,
+    "web_search": {
+     "requests": 2,
+     "context": "high"
+    }
+   },
+   "service_tier": null,
+   "vertex_location": null,
+   "discount": {},
+   "margin": {},
+   "expected": {
+    "total": 0.040345000000000006,
+    "breakdown": {
+     "input_cost": 0.00617,
+     "output_cost": 0.014175,
+     "total_cost": 0.040345000000000006,
+     "cost_for_built_in_tools_cost_usd_dollar": 0.02,
+     "additional_costs": null,
+     "original_cost": 0.040345000000000006,
+     "discount_percent": 0.0,
+     "discount_amount": 0.0,
+     "margin_percent": 0.0,
+     "margin_fixed_amount": 0.0,
+     "margin_total_amount": 0.0,
+     "cache_read_cost": 0.0,
+     "cache_creation_cost": 0.0,
+     "reasoning_cost": 0.0,
+     "service_tier": null,
+     "data_residency": null,
+     "vertex_location": null,
+     "billed_token_rates": {
+      "input": 5e-06,
+      "output": 2.5e-05,
+      "cache_read": 5e-07,
+      "cache_write": 6.25e-06,
+      "cache_write_1h": 1e-05,
+      "reasoning": 2.5e-05
+     }
+    },
+    "cache_savings": 0.0
+   }
+  },
+  {
+   "name": "bedrock_claude_platform_web_search_zero_requests",
+   "provider": "bedrock",
+   "model": "claude_platform/claude-opus-5",
+   "row_key": "bedrock/claude_platform/claude-opus-5",
+   "row_given": false,
+   "row": {
+    "input_cost_per_token": 5e-06,
+    "output_cost_per_token": 2.5e-05,
+    "cache_read_input_token_cost": 5e-07,
+    "cache_creation_input_token_cost": 6.25e-06,
+    "cache_creation_input_token_cost_above_1hr": 1e-05,
+    "max_input_tokens": 1000000,
+    "max_output_tokens": 128000,
+    "search_context_size_medium": 0.01,
+    "search_context_size_high": 0.01,
+    "provider_specific_entry": {
+     "us": 1.1
+    }
+   },
+   "usage": {
+    "prompt_tokens": 1234,
+    "input": {
+     "text": 1234
+    },
+    "cache_read": {
+     "text": 0
+    },
+    "cache_write": {
+     "default": 0,
+     "one_hour": 0
+    },
+    "output": {
+     "text": 567
+    },
+    "reasoning": 0,
+    "web_search": {
+     "requests": 0
+    }
+   },
+   "service_tier": null,
+   "vertex_location": null,
+   "discount": {},
+   "margin": {},
+   "expected": {
+    "total": 0.030345000000000004,
+    "breakdown": {
+     "input_cost": 0.00617,
+     "output_cost": 0.014175,
+     "total_cost": 0.030345000000000004,
+     "cost_for_built_in_tools_cost_usd_dollar": 0.01,
+     "additional_costs": null,
+     "original_cost": 0.030345000000000004,
+     "discount_percent": 0.0,
+     "discount_amount": 0.0,
+     "margin_percent": 0.0,
+     "margin_fixed_amount": 0.0,
+     "margin_total_amount": 0.0,
+     "cache_read_cost": 0.0,
+     "cache_creation_cost": 0.0,
+     "reasoning_cost": 0.0,
+     "service_tier": null,
+     "data_residency": null,
+     "vertex_location": null,
+     "billed_token_rates": {
+      "input": 5e-06,
+      "output": 2.5e-05,
+      "cache_read": 5e-07,
+      "cache_write": 6.25e-06,
+      "cache_write_1h": 1e-05,
+      "reasoning": 2.5e-05
+     }
+    },
+    "cache_savings": 0.0
+   }
+  },
+  {
+   "name": "bedrock_over_200k",
+   "provider": "bedrock",
+   "model": "anthropic.claude-sonnet-4-5-20250929-v1:0",
+   "row_key": "anthropic.claude-sonnet-4-5-20250929-v1:0",
+   "row_given": false,
+   "row": {
+    "input_cost_per_token": 3e-06,
+    "output_cost_per_token": 1.5e-05,
+    "cache_read_input_token_cost": 3e-07,
+    "cache_creation_input_token_cost": 3.75e-06,
+    "cache_creation_input_token_cost_above_1hr": 6e-06,
+    "input_cost_per_token_above_200k_tokens": 6e-06,
+    "output_cost_per_token_above_200k_tokens": 2.25e-05,
+    "cache_read_input_token_cost_above_200k_tokens": 6e-07,
+    "cache_creation_input_token_cost_above_200k_tokens": 7.5e-06,
+    "cache_creation_input_token_cost_above_1hr_above_200k_tokens": 1.2e-05,
+    "max_input_tokens": 200000,
+    "max_output_tokens": 64000,
+    "search_context_size_medium": 0.01,
+    "search_context_size_high": 0.01
+   },
+   "usage": {
+    "prompt_tokens": 211000,
+    "input": {
+     "text": 150000
+    },
+    "cache_read": {
+     "text": 60000
+    },
+    "cache_write": {
+     "default": 0,
+     "one_hour": 1000
+    },
+    "output": {
+     "text": 2000
+    },
+    "reasoning": 0
+   },
+   "service_tier": null,
+   "vertex_location": null,
+   "discount": {},
+   "margin": {},
+   "expected": {
+    "total": 0.9930000000000001,
+    "breakdown": {
+     "input_cost": 0.9480000000000001,
+     "output_cost": 0.045000000000000005,
+     "total_cost": 0.9930000000000001,
+     "cost_for_built_in_tools_cost_usd_dollar": 0.0,
+     "additional_costs": null,
+     "original_cost": 0.9930000000000001,
+     "discount_percent": 0.0,
+     "discount_amount": 0.0,
+     "margin_percent": 0.0,
+     "margin_fixed_amount": 0.0,
+     "margin_total_amount": 0.0,
+     "cache_read_cost": 0.036,
+     "cache_creation_cost": 0.012,
+     "reasoning_cost": 0.0,
+     "service_tier": null,
+     "data_residency": null,
+     "vertex_location": null,
+     "billed_token_rates": {
+      "input": 6e-06,
+      "output": 2.25e-05,
+      "cache_read": 6e-07,
+      "cache_write": 7.5e-06,
+      "cache_write_1h": 1.2e-05,
+      "reasoning": 2.25e-05
+     }
+    },
+    "cache_savings": 0.318
+   }
+  },
+  {
+   "name": "vertex_global",
+   "provider": "vertex_ai",
+   "model": "claude-opus-4-8",
+   "row_key": "vertex_ai/claude-opus-4-8",
+   "row_given": false,
+   "row": {
+    "input_cost_per_token": 5e-06,
+    "output_cost_per_token": 2.5e-05,
+    "cache_read_input_token_cost": 5e-07,
+    "cache_creation_input_token_cost": 6.25e-06,
+    "cache_creation_input_token_cost_above_1hr": 1e-05,
+    "regional_endpoint_uplift_multiplier": 1.1,
+    "max_input_tokens": 1000000,
+    "max_output_tokens": 128000,
+    "search_context_size_medium": 0.01,
+    "search_context_size_high": 0.01
+   },
+   "usage": {
+    "prompt_tokens": 2134,
+    "input": {
+     "text": 1234
+    },
+    "cache_read": {
+     "text": 900
+    },
+    "cache_write": {
+     "default": 0,
+     "one_hour": 0
+    },
+    "output": {
+     "text": 567
+    },
+    "reasoning": 0
+   },
+   "service_tier": null,
+   "vertex_location": "global",
+   "discount": {},
+   "margin": {},
+   "expected": {
+    "total": 0.020795,
+    "breakdown": {
+     "input_cost": 0.00662,
+     "output_cost": 0.014175,
+     "total_cost": 0.020795,
+     "cost_for_built_in_tools_cost_usd_dollar": 0.0,
+     "additional_costs": null,
+     "original_cost": 0.020795,
+     "discount_percent": 0.0,
+     "discount_amount": 0.0,
+     "margin_percent": 0.0,
+     "margin_fixed_amount": 0.0,
+     "margin_total_amount": 0.0,
+     "cache_read_cost": 0.00045,
+     "cache_creation_cost": 0.0,
+     "reasoning_cost": 0.0,
+     "service_tier": null,
+     "data_residency": null,
+     "vertex_location": "global",
+     "billed_token_rates": {
+      "input": 5e-06,
+      "output": 2.5e-05,
+      "cache_read": 5e-07,
+      "cache_write": 6.25e-06,
+      "cache_write_1h": 1e-05,
+      "reasoning": 2.5e-05
+     }
+    },
+    "cache_savings": 0.00405
+   }
+  },
+  {
+   "name": "vertex_regional",
+   "provider": "vertex_ai",
+   "model": "claude-opus-4-8",
+   "row_key": "vertex_ai/claude-opus-4-8",
+   "row_given": false,
+   "row": {
+    "input_cost_per_token": 5e-06,
+    "output_cost_per_token": 2.5e-05,
+    "cache_read_input_token_cost": 5e-07,
+    "cache_creation_input_token_cost": 6.25e-06,
+    "cache_creation_input_token_cost_above_1hr": 1e-05,
+    "regional_endpoint_uplift_multiplier": 1.1,
+    "max_input_tokens": 1000000,
+    "max_output_tokens": 128000,
+    "search_context_size_medium": 0.01,
+    "search_context_size_high": 0.01
+   },
+   "usage": {
+    "prompt_tokens": 2174,
+    "input": {
+     "text": 1234
+    },
+    "cache_read": {
+     "text": 900
+    },
+    "cache_write": {
+     "default": 40,
+     "one_hour": 0
+    },
+    "output": {
+     "text": 567
+    },
+    "reasoning": 0
+   },
+   "service_tier": null,
+   "vertex_location": "us-east5",
+   "discount": {},
+   "margin": {},
+   "expected": {
+    "total": 0.023149500000000003,
+    "breakdown": {
+     "input_cost": 0.007557000000000001,
+     "output_cost": 0.015592500000000002,
+     "total_cost": 0.023149500000000003,
+     "cost_for_built_in_tools_cost_usd_dollar": 0.0,
+     "additional_costs": null,
+     "original_cost": 0.023149500000000003,
+     "discount_percent": 0.0,
+     "discount_amount": 0.0,
+     "margin_percent": 0.0,
+     "margin_fixed_amount": 0.0,
+     "margin_total_amount": 0.0,
+     "cache_read_cost": 0.000495,
+     "cache_creation_cost": 0.00027500000000000007,
+     "reasoning_cost": 0.0,
+     "service_tier": null,
+     "data_residency": null,
+     "vertex_location": "us-east5",
+     "billed_token_rates": {
+      "input": 5.500000000000001e-06,
+      "output": 2.7500000000000004e-05,
+      "cache_read": 5.5e-07,
+      "cache_write": 6.875000000000001e-06,
+      "cache_write_1h": 1.1000000000000001e-05,
+      "reasoning": 2.7500000000000004e-05
+     }
+    },
+    "cache_savings": 0.0044
+   }
+  },
+  {
+   "name": "vertex_regional_over_100k_web_search",
+   "provider": "vertex_ai",
+   "model": "claude-haiku-5-5",
+   "row_key": "vertex_ai/claude-haiku-5-5",
+   "row_given": false,
+   "row": {
+    "input_cost_per_token": 1e-07,
+    "output_cost_per_token": 5e-07,
+    "cache_read_input_token_cost": 1e-08,
+    "cache_creation_input_token_cost": 1.25e-07,
+    "cache_creation_input_token_cost_above_1hr": 2e-07,
+    "input_cost_per_token_above_100k_tokens": 5e-07,
+    "output_cost_per_token_above_100k_tokens": 2.5e-06,
+    "cache_read_input_token_cost_above_100k_tokens": 5e-08,
+    "cache_creation_input_token_cost_above_100k_tokens": 6.25e-07,
+    "cache_creation_input_token_cost_above_1hr_above_100k_tokens": 1e-06,
+    "regional_endpoint_uplift_multiplier": 1.1,
+    "max_input_tokens": 1000000,
+    "max_output_tokens": 128000,
+    "search_context_size_medium": 0.01,
+    "search_context_size_high": 0.01
+   },
+   "usage": {
+    "prompt_tokens": 125333,
+    "input": {
+     "text": 120000
+    },
+    "cache_read": {
+     "text": 5000
+    },
+    "cache_write": {
+     "default": 0,
+     "one_hour": 333
+    },
+    "output": {
+     "text": 999
+    },
+    "reasoning": 0,
+    "web_search": {
+     "requests": 1
+    }
+   },
+   "service_tier": null,
+   "vertex_location": "europe-west1",
+   "discount": {},
+   "margin": {},
+   "expected": {
+    "total": 0.07938855,
+    "breakdown": {
+     "input_cost": 0.0666413,
+     "output_cost": 0.0027472500000000006,
+     "total_cost": 0.07938855,
+     "cost_for_built_in_tools_cost_usd_dollar": 0.01,
+     "additional_costs": null,
+     "original_cost": 0.07938855,
+     "discount_percent": 0.0,
+     "discount_amount": 0.0,
+     "margin_percent": 0.0,
+     "margin_fixed_amount": 0.0,
+     "margin_total_amount": 0.0,
+     "cache_read_cost": 0.000275,
+     "cache_creation_cost": 0.0003663,
+     "reasoning_cost": 0.0,
+     "service_tier": null,
+     "data_residency": null,
+     "vertex_location": "europe-west1",
+     "billed_token_rates": {
+      "input": 5.5e-07,
+      "output": 2.7500000000000004e-06,
+      "cache_read": 5.5e-08,
+      "cache_write": 6.875000000000001e-07,
+      "cache_write_1h": 1.1e-06,
+      "reasoning": 2.7500000000000004e-06
+     }
+    },
+    "cache_savings": 0.0022918500000000002
+   }
+  },
+  {
+   "name": "azure_ai_plain",
+   "provider": "azure_ai",
+   "model": "claude-opus-4-8",
+   "row_key": "azure_ai/claude-opus-4-8",
+   "row_given": false,
+   "row": {
+    "input_cost_per_token": 5e-06,
+    "output_cost_per_token": 2.5e-05,
+    "cache_read_input_token_cost": 5e-07,
+    "cache_creation_input_token_cost": 6.25e-06,
+    "cache_creation_input_token_cost_above_1hr": 1e-05,
+    "max_input_tokens": 1000000,
+    "max_output_tokens": 128000,
+    "search_context_size_medium": 0.01,
+    "search_context_size_high": 0.01
+   },
+   "usage": {
+    "prompt_tokens": 2198,
+    "input": {
+     "text": 1234
+    },
+    "cache_read": {
+     "text": 900
+    },
+    "cache_write": {
+     "default": 0,
+     "one_hour": 64
+    },
+    "output": {
+     "text": 567
+    },
+    "reasoning": 0,
+    "web_search": {
+     "requests": 1
+    }
+   },
+   "service_tier": null,
+   "vertex_location": null,
+   "discount": {},
+   "margin": {},
+   "expected": {
+    "total": 0.031435,
+    "breakdown": {
+     "input_cost": 0.00726,
+     "output_cost": 0.014175,
+     "total_cost": 0.031435,
+     "cost_for_built_in_tools_cost_usd_dollar": 0.01,
+     "additional_costs": null,
+     "original_cost": 0.031435,
+     "discount_percent": 0.0,
+     "discount_amount": 0.0,
+     "margin_percent": 0.0,
+     "margin_fixed_amount": 0.0,
+     "margin_total_amount": 0.0,
+     "cache_read_cost": 0.00045,
+     "cache_creation_cost": 0.00064,
+     "reasoning_cost": 0.0,
+     "service_tier": null,
+     "data_residency": null,
+     "vertex_location": null,
+     "billed_token_rates": {
+      "input": 5e-06,
+      "output": 2.5e-05,
+      "cache_read": 5e-07,
+      "cache_write": 6.25e-06,
+      "cache_write_1h": 1e-05,
+      "reasoning": 2.5e-05
+     }
+    },
+    "cache_savings": 0.00373
+   }
+  },
+  {
+   "name": "azure_ai_over_100k",
+   "provider": "azure_ai",
+   "model": "claude-haiku-5-5",
+   "row_key": "azure_ai/claude-haiku-5-5",
+   "row_given": false,
+   "row": {
+    "input_cost_per_token": 1e-07,
+    "output_cost_per_token": 5e-07,
+    "cache_read_input_token_cost": 1e-08,
+    "cache_creation_input_token_cost": 1.25e-07,
+    "cache_creation_input_token_cost_above_1hr": 2e-07,
+    "input_cost_per_token_above_100k_tokens": 5e-07,
+    "output_cost_per_token_above_100k_tokens": 2.5e-06,
+    "cache_read_input_token_cost_above_100k_tokens": 5e-08,
+    "cache_creation_input_token_cost_above_100k_tokens": 6.25e-07,
+    "cache_creation_input_token_cost_above_1hr_above_100k_tokens": 1e-06,
+    "max_input_tokens": 1000000,
+    "max_output_tokens": 128000,
+    "search_context_size_medium": 0.01,
+    "search_context_size_high": 0.01
+   },
+   "usage": {
+    "prompt_tokens": 100008,
+    "input": {
+     "text": 100001
+    },
+    "cache_read": {
+     "text": 0
+    },
+    "cache_write": {
+     "default": 7,
+     "one_hour": 0
+    },
+    "output": {
+     "text": 10
+    },
+    "reasoning": 0
+   },
+   "service_tier": null,
+   "vertex_location": null,
+   "discount": {},
+   "margin": {},
+   "expected": {
+    "total": 0.050029874999999994,
+    "breakdown": {
+     "input_cost": 0.050004875,
+     "output_cost": 2.5e-05,
+     "total_cost": 0.050029874999999994,
+     "cost_for_built_in_tools_cost_usd_dollar": 0.0,
+     "additional_costs": null,
+     "original_cost": 0.050029874999999994,
+     "discount_percent": 0.0,
+     "discount_amount": 0.0,
+     "margin_percent": 0.0,
+     "margin_fixed_amount": 0.0,
+     "margin_total_amount": 0.0,
+     "cache_read_cost": 0.0,
+     "cache_creation_cost": 4.3750000000000005e-06,
+     "reasoning_cost": 0.0,
+     "service_tier": null,
+     "data_residency": null,
+     "vertex_location": null,
+     "billed_token_rates": {
+      "input": 5e-07,
+      "output": 2.5e-06,
+      "cache_read": 5e-08,
+      "cache_write": 6.25e-07,
+      "cache_write_1h": 1e-06,
+      "reasoning": 2.5e-06
+     }
+    },
+    "cache_savings": -8.750000000000005e-07
+   }
+  }
+ ]
+}

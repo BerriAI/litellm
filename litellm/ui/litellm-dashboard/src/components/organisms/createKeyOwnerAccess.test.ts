@@ -4,6 +4,7 @@ import type { Member } from "../networking";
 import {
   administersTeam,
   anotherUserScope,
+  canCreateKeyInTeam,
   effectiveKeyOwner,
   isTeamMemberOwner,
   teamMemberOwnerOptions,
@@ -107,6 +108,66 @@ describe("administersTeam", () => {
     ["a team whose member list is null", { members_with_roles: null }],
   ])("is false for %s", (_label, team) => {
     expect(administersTeam(team, VIEWER)).toBe(false);
+  });
+});
+
+describe("canCreateKeyInTeam", () => {
+  const member = { userRole: "Internal User", userId: VIEWER };
+
+  it("uses the service-account endpoint permission only for service-account owners", () => {
+    const serviceTeam = { ...joined, team_member_permissions: ["/key/service-account/generate"] };
+    expect(canCreateKeyInTeam(serviceTeam, member, "service_account")).toBe(true);
+    expect(canCreateKeyInTeam(serviceTeam, member, "you")).toBe(false);
+    expect(canCreateKeyInTeam(serviceTeam, member, "another_user")).toBe(false);
+    expect(
+      canCreateKeyInTeam({ ...joined, team_member_permissions: ["/key/generate"] }, member, "service_account"),
+    ).toBe(false);
+  });
+
+  it.each([[], null, undefined, ["/key/*"]])("does not default to service-account permission for %j", (permissions) => {
+    expect(canCreateKeyInTeam({ ...joined, team_member_permissions: permissions }, member, "service_account")).toBe(
+      false,
+    );
+  });
+
+  it("requires service-account team membership except for proxy admins", () => {
+    const serviceTeam = { ...foreign, team_member_permissions: ["/key/service-account/generate"] };
+    expect(canCreateKeyInTeam(serviceTeam, member, "service_account")).toBe(false);
+    expect(canCreateKeyInTeam(serviceTeam, { ...member, userId: null }, "service_account")).toBe(false);
+    expect(canCreateKeyInTeam(serviceTeam, { ...member, userRole: "Admin" }, "service_account")).toBe(true);
+    expect(canCreateKeyInTeam({ ...administered, team_member_permissions: [] }, member, "service_account")).toBe(true);
+  });
+
+  it("offers a plain member only the teams that grant members key creation", () => {
+    const teams = [
+      { ...joined, team_id: "grants-create", team_member_permissions: ["/key/info", "/key/generate"] },
+      { ...joined, team_id: "grants-other-routes", team_member_permissions: ["/key/info", "/key/regenerate"] },
+      { ...joined, team_id: "grants-nothing", team_member_permissions: [] },
+      { ...joined, team_id: "wildcard-route", team_member_permissions: ["/key/*"] },
+      { ...joined, team_id: "default-permissions", team_member_permissions: null },
+      { ...joined, team_id: "permissions-absent" },
+    ];
+
+    expect(teams.filter((team) => canCreateKeyInTeam(team, member)).map((team) => team.team_id)).toStrictEqual([
+      "grants-create",
+    ]);
+  });
+
+  it("offers a team admin their team even when members cannot create keys", () => {
+    expect(canCreateKeyInTeam({ ...administered, team_member_permissions: [] }, member)).toBe(true);
+  });
+
+  it("does not offer a non-member a team that grants members key creation", () => {
+    expect(canCreateKeyInTeam({ ...foreign, team_member_permissions: ["/key/generate"] }, member)).toBe(false);
+    expect(
+      canCreateKeyInTeam({ ...joined, team_member_permissions: ["/key/generate"] }, { ...member, userId: null }),
+    ).toBe(false);
+  });
+
+  it("offers a proxy admin a team they are not a member of", () => {
+    expect(canCreateKeyInTeam({ ...foreign, team_member_permissions: [] }, { userRole: "Admin", userId: VIEWER })).toBe(
+      true,
+    );
   });
 });
 

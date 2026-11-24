@@ -5,12 +5,16 @@ import inspect
 import json
 import logging
 import os
+import queue
+import re
 import runpy
 import sys
+import threading
 import types
 import urllib.parse as urlparse
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from contextlib import nullcontext
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Final
@@ -19,27 +23,32 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import click
 import httpx
 import pytest
+import respx
 import uvicorn
 import yaml
-from gunicorn.config import Config as GunicornConfig
 from click.testing import CliRunner
 from fastapi.testclient import TestClient
+from gunicorn.config import Config as GunicornConfig
 from pydantic import SecretStr, TypeAdapter
 from uvicorn.config import LOOP_FACTORIES
 from uvicorn.importer import import_from_string
 
 import litellm
 from litellm._logging import turn_on_json
-from litellm.constants import DEFAULT_MAX_REQUEST_HEADER_SIZE, GRACEFUL_SHUTDOWN_TEARDOWN_HEADROOM_SECONDS
+from litellm.constants import (
+    DEFAULT_MAX_REQUEST_HEADER_SIZE,
+    GRACEFUL_SHUTDOWN_TEARDOWN_HEADROOM_SECONDS,
+    HEALTH_CHECK_TIMEOUT_SECONDS,
+)
 from litellm.proxy import proxy_cli
+from litellm.proxy.control_plane.main import serve as serve_control_plane
+from litellm.proxy.control_plane.settings import ControlPlaneSettings
 from litellm.proxy.db.connection_budget import RUST_READER_CONNECTIONS_ENV_VAR, RUST_WRITER_CONNECTIONS_ENV_VAR
 from litellm.proxy.db.db_url_settings import PRISMA_APPLICATION_NAME
 from litellm.proxy.proxy_cli import CliDependencies, ProxyInitializationHelpers, run_server
 from litellm.proxy.rust_forward.server import Listener, Server
 from litellm.proxy.server_listener import AssignedPort, InheritedFd
 from litellm.proxy.shutdown.graceful_shutdown_manager import DEFAULT_GRACEFUL_SHUTDOWN_TIMEOUT, GracefulShutdownManager
-from litellm.proxy.control_plane.main import serve as serve_control_plane
-from litellm.proxy.control_plane.settings import ControlPlaneSettings
 from tests.unit.proxy.control_plane.support import MASTER_KEY, Licensed
 
 
@@ -123,10 +132,9 @@ def test_request_header_size_preserves_parser_selection(server: str, limit: int 
 async def test_segmented_request_headers(
     monkeypatch: pytest.MonkeyPatch, server: str, parser: str, limit: int, header_bytes: int, expected_status: int
 ) -> None:
-    from uvicorn.server import ServerState
-
     from uvicorn.protocols.http.h11_impl import H11Protocol
     from uvicorn.protocols.http.httptools_impl import HttpToolsProtocol
+    from uvicorn.server import ServerState
 
     selected_protocol: Final = H11Protocol if parser == "h11" else HttpToolsProtocol
     monkeypatch.setattr("uvicorn.protocols.http.auto.AutoHTTPProtocol", selected_protocol)
@@ -154,6 +162,71 @@ async def test_segmented_request_headers(
         protocol.connection_lost(None)
 
 
+_CLI_TEST_PROXY: Final = "http://127.0.0.1:24871"
+_CLI_TEST_PROXY_ARGS: Final = ("--host", "127.0.0.1", "--port", "24871")
+
+
+def _cli_test_completion_reply(request: httpx.Request) -> httpx.Response:
+    body: Final = json.loads(request.content)
+    if "max_tokens" in body:
+        return httpx.Response(
+            400, json={"error": {"message": "Unsupported parameter: 'max_tokens' is not supported with this model."}}
+        )
+    if request.url.path == "/completions":
+        return httpx.Response(
+            200,
+            json={"id": "cmpl-1", "object": "text_completion", "created": 1, "model": body["model"], "choices": []},
+        )
+    if body.get("stream"):
+        chunk: Final = {
+            "id": "chunk-1",
+            "object": "chat.completion.chunk",
+            "created": 1,
+            "model": body["model"],
+            "choices": [],
+        }
+        return httpx.Response(
+            200, headers={"content-type": "text/event-stream"}, text=f"data: {json.dumps(chunk)}\n\ndata: [DONE]\n\n"
+        )
+    return httpx.Response(
+        200, json={"id": "chatcmpl-1", "object": "chat.completion", "created": 1, "model": body["model"], "choices": []}
+    )
+
+
+def _mock_cli_test_completions(proxy: str = _CLI_TEST_PROXY) -> Sequence[respx.models.Call]:
+    return (
+        respx.post(url__regex=rf"^{re.escape(proxy)}/(chat/)?completions$")
+        .mock(side_effect=_cli_test_completion_reply)
+        .calls
+    )
+
+
+def _mock_cli_test_model_list(models_response: httpx.Response, proxy: str = _CLI_TEST_PROXY) -> respx.Route:
+    return respx.get(f"{proxy}/v1/models", params={"return_wildcard_routes": "true"}).mock(
+        return_value=models_response
+    )
+
+
+def _rejecting_proxy(request_lines: "queue.SimpleQueue[tuple[str, str]]") -> ThreadingHTTPServer:
+    class RejectEveryRequest(BaseHTTPRequestHandler):
+        def reject(self) -> None:
+            self.rfile.read(int(self.headers.get("Content-Length", 0)))
+            request_lines.put((self.path, self.headers.get("Authorization", "")))
+            body: Final = b'{"error": {"message": "rejected"}}'
+            self.send_response(401)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        do_GET = do_POST = reject
+
+        def log_message(self, format: str, *args: object) -> None:
+            pass
+
+    return ThreadingHTTPServer(("127.0.0.1", 0), RejectEveryRequest)
+
+
 @pytest.mark.xdist_group("proxy_cli")
 class TestProxyInitializationHelpers:
     @patch("importlib.metadata.version")
@@ -169,52 +242,327 @@ class TestProxyInitializationHelpers:
         mock_version.assert_called_once_with("litellm")
         mock_echo.assert_called_once_with("\nLiteLLM: Current Version = 1.0.0\n")
 
-    @patch("httpx.get")
-    @patch("builtins.print")
-    @patch("json.dumps")
-    def test_run_health_check(self, mock_dumps, mock_print, mock_get):
-        # Setup
-        mock_response = MagicMock()
-        mock_response.json.return_value = {"status": "healthy"}
-        mock_get.return_value = mock_response
-        mock_dumps.return_value = '{"status": "healthy"}'
+    @pytest.mark.parametrize(
+        ("host", "sends_master_key"),
+        [
+            pytest.param("127.0.0.1", True, id="loopback"),
+            pytest.param("localhost", True, id="localhost"),
+            pytest.param("0.0.0.0", True, id="unspecified"),
+            pytest.param("10.20.30.40", False, id="private-network"),
+            pytest.param("proxy.example.com", False, id="remote-name"),
+            pytest.param("app.localhost", False, id="localhost-subdomain"),
+        ],
+    )
+    @respx.mock
+    def test_health_flag_sends_the_master_key_only_to_a_local_host(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], host: str, sends_master_key: bool
+    ) -> None:
+        monkeypatch.setenv("LITELLM_MASTER_KEY", "sk-cli-master")
+        health: Final = respx.get(f"http://{host}:24871/health").respond(json={"healthy_count": 1})
 
-        # Execute
-        ProxyInitializationHelpers._run_health_check("localhost", 8000)
+        run_server.main(["--health", "--host", host, "--port", "24871"], standalone_mode=False)
 
-        # Assert
-        mock_get.assert_called_once_with(url="http://localhost:8000/health")
-        mock_response.json.assert_called_once()
-        mock_dumps.assert_called_once_with({"status": "healthy"}, indent=4)
+        assert ("sk-cli-master" in health.calls.last.request.headers["Authorization"]) is sends_master_key
+        assert '"healthy_count": 1' in capsys.readouterr().out
 
-    @patch("openai.OpenAI")
-    @patch("click.echo")
-    @patch("builtins.print")
-    def test_run_test_chat_completion(self, mock_print, mock_echo, mock_openai):
-        # Setup
-        mock_client = MagicMock()
-        mock_openai.return_value = mock_client
+    @pytest.mark.parametrize(
+        ("status_code", "names_the_master_key"),
+        [
+            pytest.param(401, True, id="unauthorized"),
+            pytest.param(403, True, id="forbidden"),
+            pytest.param(503, False, id="server-error"),
+        ],
+    )
+    @respx.mock
+    def test_health_flag_fails_when_the_proxy_answers_an_error(
+        self, capsys: pytest.CaptureFixture[str], status_code: int, names_the_master_key: bool
+    ) -> None:
+        respx.get(f"{_CLI_TEST_PROXY}/health").respond(status_code, text="proxy said no")
 
-        mock_response = MagicMock()
-        mock_client.chat.completions.create.return_value = mock_response
+        with pytest.raises(click.ClickException) as raised:
+            run_server.main(["--health", *_CLI_TEST_PROXY_ARGS], standalone_mode=False)
 
-        mock_stream_response = MagicMock()
-        mock_stream_response.__iter__.return_value = [MagicMock(), MagicMock()]
-        mock_client.chat.completions.create.side_effect = [
-            mock_response,
-            mock_stream_response,
-        ]
+        assert f"/health answered {status_code}: proxy said no" in raised.value.message
+        assert ("LITELLM_MASTER_KEY" in raised.value.message) is names_the_master_key
+        assert "proxy said no" not in capsys.readouterr().out
 
-        # Execute
-        with pytest.raises(ValueError, match="Invalid test value"):
-            ProxyInitializationHelpers._run_test_chat_completion("localhost", 8000, "gpt-3.5-turbo", True)
+    @respx.mock
+    def test_health_flag_waits_out_a_model_check_that_takes_the_proxy_default_timeout(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        def slow_proxy(request: httpx.Request) -> httpx.Response:
+            read_timeout: Final = request.extensions["timeout"]["read"]
+            if read_timeout is not None and read_timeout <= HEALTH_CHECK_TIMEOUT_SECONDS:
+                raise httpx.ReadTimeout("timed out", request=request)
+            return httpx.Response(200, json={"healthy_count": 2})
 
-        # Test with valid string test value
-        ProxyInitializationHelpers._run_test_chat_completion("localhost", 8000, "gpt-3.5-turbo", "http://test-url")
+        respx.get(f"{_CLI_TEST_PROXY}/health").mock(side_effect=slow_proxy)
 
-        # Assert
-        mock_openai.assert_called_once_with(api_key="My API Key", base_url="http://test-url")
-        mock_client.chat.completions.create.assert_called()
+        run_server.main(["--health", *_CLI_TEST_PROXY_ARGS], standalone_mode=False)
+
+        assert '"healthy_count": 2' in capsys.readouterr().out
+
+    @respx.mock
+    def test_health_flag_gives_up_on_a_proxy_that_never_answers(self) -> None:
+        def silent_proxy(request: httpx.Request) -> httpx.Response:
+            if request.extensions["timeout"]["read"] is None:
+                pytest.fail("--health would wait forever on a proxy that never answers")
+            raise httpx.ReadTimeout("timed out", request=request)
+
+        respx.get(f"{_CLI_TEST_PROXY}/health").mock(side_effect=silent_proxy)
+
+        with pytest.raises(httpx.ReadTimeout):
+            run_server.main(["--health", *_CLI_TEST_PROXY_ARGS], standalone_mode=False)
+
+    @pytest.mark.parametrize(
+        ("listed_models", "expected_model"),
+        [
+            pytest.param(
+                [
+                    {"id": "speech-model", "mode": "audio_speech"},
+                    {"id": "retired-chat-model", "mode": "chat"},
+                    {"id": "served-chat-model", "mode": "chat"},
+                ],
+                "served-chat-model",
+                id="skips-non-chat-and-retired",
+            ),
+            pytest.param(
+                [{"id": "retired-chat-model", "mode": "chat"}, {"id": "unlabeled-model"}],
+                "unlabeled-model",
+                id="unlabeled-counts-as-chat",
+            ),
+            pytest.param(
+                [{"id": "embedding-model", "mode": "embedding"}, {"id": "retired-chat-model", "mode": "chat"}],
+                "retired-chat-model",
+                id="every-chat-model-retired",
+            ),
+            pytest.param(
+                [
+                    {"id": "retired-chat-model", "mode": "chat"},
+                    {"id": "*"},
+                    {"id": "wildcard-expanded-chat-model", "mode": "chat"},
+                ],
+                "retired-chat-model",
+                id="never-a-wildcard-expansion",
+            ),
+            pytest.param(
+                [{"id": "openai/retired-chat-model", "mode": "chat"}, {"id": "served-chat-model", "mode": "chat"}],
+                "served-chat-model",
+                id="skips-a-retired-model-behind-a-provider-prefix",
+            ),
+            pytest.param(
+                [{"id": "team-a/retired-chat-model", "mode": "chat"}, {"id": "served-chat-model", "mode": "chat"}],
+                "team-a/retired-chat-model",
+                id="a-non-provider-prefix-is-part-of-the-name",
+            ),
+            pytest.param(
+                [{"id": "azure/retired-chat-model", "mode": "chat"}, {"id": "served-chat-model", "mode": "chat"}],
+                "azure/retired-chat-model",
+                id="a-current-provider-entry-wins-over-the-retired-bare-name",
+            ),
+            pytest.param(
+                [{"id": "embedding-model", "mode": "embedding"}, {"id": "responses-only-model", "mode": "responses"}],
+                "responses-only-model",
+                id="responses-mode-counts-as-chat",
+            ),
+        ],
+    )
+    @respx.mock
+    def test_test_flag_sends_every_request_for_a_model_the_proxy_serves(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        listed_models: list[dict[str, str]],
+        expected_model: str,
+    ) -> None:
+        monkeypatch.setenv("LITELLM_MASTER_KEY", "sk-cli-master")
+        monkeypatch.setitem(litellm.model_cost, "retired-chat-model", {"deprecation_date": "2000-01-01"})
+        monkeypatch.setitem(litellm.model_cost, "azure/retired-chat-model", {"mode": "chat"})
+        models: Final = _mock_cli_test_model_list(httpx.Response(200, json={"data": listed_models}))
+        completions: Final = _mock_cli_test_completions()
+
+        run_server.main(["--test", *_CLI_TEST_PROXY_ARGS], standalone_mode=False)
+
+        assert models.called
+        assert [json.loads(call.request.content)["model"] for call in completions] == [expected_model] * 3
+        assert {call.request.headers["Authorization"] for call in respx.calls} == {"Bearer sk-cli-master"}
+
+    @respx.mock
+    def test_test_flag_with_a_model_skips_the_model_list(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("LITELLM_MASTER_KEY", "sk-cli-master")
+        models: Final = respx.get(f"{_CLI_TEST_PROXY}/v1/models")
+        completions: Final = _mock_cli_test_completions()
+
+        run_server.main(["--test", "--model", "picked-by-user", *_CLI_TEST_PROXY_ARGS], standalone_mode=False)
+
+        assert not models.called
+        assert [json.loads(call.request.content)["model"] for call in completions] == ["picked-by-user"] * 3
+
+    @respx.mock
+    def test_test_flag_never_sends_the_openai_key_to_the_proxy(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("LITELLM_MASTER_KEY", raising=False)
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-openai-upstream")
+        _mock_cli_test_model_list(httpx.Response(200, json={"data": [{"id": "served-chat-model", "mode": "chat"}]}))
+        _mock_cli_test_completions()
+
+        run_server.main(["--test", *_CLI_TEST_PROXY_ARGS], standalone_mode=False)
+
+        assert len(respx.calls) == 4
+        assert all("sk-openai-upstream" not in call.request.headers["Authorization"] for call in respx.calls)
+
+    @pytest.mark.parametrize(
+        ("host", "proxy"),
+        [
+            pytest.param("::", "http://[::]:24871", id="unspecified"),
+            pytest.param("::1", "http://[::1]:24871", id="loopback"),
+            pytest.param("[::1]", "http://[::1]:24871", id="bracketed-loopback"),
+        ],
+    )
+    @respx.mock
+    def test_test_and_health_flags_reach_an_ipv6_host(
+        self, monkeypatch: pytest.MonkeyPatch, host: str, proxy: str
+    ) -> None:
+        monkeypatch.setenv("LITELLM_MASTER_KEY", "sk-cli-master")
+        health: Final = respx.get(f"{proxy}/health").respond(json={"healthy_count": 1})
+        _mock_cli_test_model_list(httpx.Response(200, json={"data": [{"id": "served-chat-model"}]}), proxy)
+        completions: Final = _mock_cli_test_completions(proxy)
+
+        run_server.main(["--health", "--host", host, "--port", "24871"], standalone_mode=False)
+        run_server.main(["--test", "--host", host, "--port", "24871"], standalone_mode=False)
+
+        assert health.called
+        assert len(completions) == 3
+        assert {call.request.headers["Authorization"] for call in respx.calls} == {"Bearer sk-cli-master"}
+
+    @pytest.mark.parametrize(
+        ("command", "first_path"),
+        [
+            pytest.param(("--health",), "/health", id="health"),
+            pytest.param(("--test",), "/v1/models?return_wildcard_routes=true", id="test-model-list"),
+            pytest.param(("--test", "--model", "picked-by-user"), "/chat/completions", id="test-completion"),
+        ],
+    )
+    def test_requests_to_a_local_proxy_skip_the_proxy_set_in_the_environment(
+        self, monkeypatch: pytest.MonkeyPatch, command: tuple[str, ...], first_path: str
+    ) -> None:
+        monkeypatch.setenv("LITELLM_MASTER_KEY", "sk-cli-master")
+        request_lines: Final = queue.SimpleQueue[tuple[str, str]]()
+        server: Final = _rejecting_proxy(request_lines)
+        port: Final = server.server_address[1]
+        for proxy_variable in ("HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy"):
+            monkeypatch.setenv(proxy_variable, f"http://127.0.0.1:{port}")
+        for bypass_variable in ("NO_PROXY", "no_proxy"):
+            monkeypatch.delenv(bypass_variable, raising=False)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+
+        try:
+            with pytest.raises(click.ClickException) as raised:
+                run_server.main([*command, "--host", "127.0.0.1", "--port", str(port)], standalone_mode=False)
+        finally:
+            server.shutdown()
+            server.server_close()
+
+        assert "LITELLM_MASTER_KEY" in raised.value.message
+        assert request_lines.get_nowait() == (first_path, "Bearer sk-cli-master")
+
+    @pytest.mark.parametrize(
+        "master_key",
+        [
+            pytest.param("sk-cli-master\n", id="trailing-newline"),
+            pytest.param("sk-cli-master ", id="trailing-space"),
+            pytest.param("sk-cli-mäster", id="non-ascii"),
+        ],
+    )
+    @pytest.mark.parametrize(
+        "command",
+        [
+            pytest.param(("--health",), id="health"),
+            pytest.param(("--test",), id="test"),
+            pytest.param(("--test", "--model", "picked-by-user"), id="test-with-model"),
+        ],
+    )
+    @respx.mock
+    def test_a_master_key_no_header_can_carry_is_named_before_any_request(
+        self, monkeypatch: pytest.MonkeyPatch, master_key: str, command: tuple[str, ...]
+    ) -> None:
+        monkeypatch.setenv("LITELLM_MASTER_KEY", master_key)
+
+        with pytest.raises(click.ClickException) as raised:
+            run_server.main([*command, *_CLI_TEST_PROXY_ARGS], standalone_mode=False)
+
+        assert "LITELLM_MASTER_KEY" in raised.value.message
+        assert respx.calls.call_count == 0
+
+    @respx.mock
+    def test_test_flag_with_a_model_names_the_master_key_when_the_proxy_rejects_it(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("LITELLM_MASTER_KEY", raising=False)
+        respx.post(f"{_CLI_TEST_PROXY}/chat/completions").respond(401, text="proxy said no")
+
+        with pytest.raises(click.ClickException) as raised:
+            run_server.main(["--test", "--model", "picked-by-user", *_CLI_TEST_PROXY_ARGS], standalone_mode=False)
+
+        assert raised.value.message == (
+            f"POST {_CLI_TEST_PROXY}/chat/completions answered 401: proxy said no. "
+            "--test and --health send LITELLM_MASTER_KEY as the key, and only to a local --host"
+        )
+
+    @respx.mock
+    def test_test_flag_never_sends_the_master_key_to_a_remote_host(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("LITELLM_MASTER_KEY", "sk-cli-master")
+        remote_proxy: Final = "http://proxy.example.com:24871"
+        _mock_cli_test_model_list(httpx.Response(401, text="Invalid proxy server token passed"), remote_proxy)
+        completions: Final = _mock_cli_test_completions(remote_proxy)
+
+        with pytest.raises(click.ClickException) as raised:
+            run_server.main(["--test", "--host", "proxy.example.com", "--port", "24871"], standalone_mode=False)
+
+        assert "LITELLM_MASTER_KEY" in raised.value.message
+        assert [call.request.headers["Authorization"] for call in respx.calls] == ["Bearer My API Key"]
+        assert completions == []
+
+    @pytest.mark.parametrize(
+        ("models_response", "expected_message"),
+        [
+            pytest.param(
+                httpx.Response(401, text="Invalid proxy server token passed"),
+                "/v1/models?return_wildcard_routes=true answered 401: Invalid proxy server token passed. "
+                "--test and --health send LITELLM_MASTER_KEY as the key, and only to a local --host",
+                id="rejected-key",
+            ),
+            pytest.param(
+                httpx.Response(200, json={"data": [{"id": "embedding-model", "mode": "embedding"}]}),
+                "lists no chat model by name, pass one with --model",
+                id="no-chat-model",
+            ),
+            pytest.param(
+                httpx.Response(
+                    200,
+                    json={
+                        "data": [
+                            {"id": "embedding-model", "mode": "embedding"},
+                            {"id": "openai/*"},
+                            {"id": "wildcard-expanded-chat-model", "mode": "chat"},
+                        ]
+                    },
+                ),
+                "lists no chat model by name, pass one with --model",
+                id="only-wildcard-routes-serve-chat",
+            ),
+        ],
+    )
+    @respx.mock
+    def test_test_flag_stops_before_any_completion_when_no_model_can_be_picked(
+        self, models_response: httpx.Response, expected_message: str
+    ) -> None:
+        _mock_cli_test_model_list(models_response)
+        completions: Final = _mock_cli_test_completions()
+
+        with pytest.raises(click.ClickException) as raised:
+            run_server.main(["--test", *_CLI_TEST_PROXY_ARGS], standalone_mode=False)
+
+        assert expected_message in raised.value.message
+        assert completions == []
 
     def test_get_default_unvicorn_init_args(self):
         # Test without log_config
@@ -999,6 +1347,7 @@ class TestProxyInitializationHelpers:
                 "general_settings": {
                     "database_url": "postgresql://test:test@localhost:5432/test",
                     "database_connection_pool_limit": 5,
+                    "use_spend_logs_ledger": False,
                     **timeout_config,
                 }
             }
@@ -1597,10 +1946,10 @@ class TestProxyInitializationHelpers:
                 max_request_header_size=None,
             )
 
-    @patch("uvicorn.run")
+    @patch("litellm.proxy.dev_reload.run_uvicorn_with_recycling")
     @patch("builtins.print")
     @patch("litellm.proxy.db.prisma_client.PrismaManager.setup_database")
-    def test_max_requests_before_restart_flag(self, mock_setup_db, mock_print, mock_uvicorn_run):
+    def test_max_requests_before_restart_flag(self, mock_setup_db, mock_print, mock_run_with_recycling):
         """Test that the max_requests_before_restart flag is passed to uvicorn as limit_max_requests"""
         from click.testing import CliRunner
 
@@ -1642,16 +1991,13 @@ class TestProxyInitializationHelpers:
             result: Final = runner.invoke(run_server, ["--local", "--max_requests_before_restart", "123"])
 
             assert result.exit_code == 0, f"exit_code={result.exit_code}, output={result.output}"
-            mock_uvicorn_run.assert_called_once()
+            mock_run_with_recycling.assert_called_once()
+            assert mock_run_with_recycling.call_args.args[0]["limit_max_requests"] == 123
 
-            # Check that uvicorn.run was called with limit_max_requests parameter
-            call_args = mock_uvicorn_run.call_args
-            assert call_args[1]["limit_max_requests"] == 123
-
-    @patch("uvicorn.run")
+    @patch("litellm.proxy.dev_reload.run_uvicorn_with_recycling")
     @patch("builtins.print")
     @patch("litellm.proxy.db.prisma_client.PrismaManager.setup_database")
-    def test_max_requests_before_restart_jitter_flag(self, mock_setup_db, mock_print, mock_uvicorn_run):
+    def test_max_requests_before_restart_jitter_flag(self, mock_setup_db, mock_print, mock_run_with_recycling):
         """--max_requests_before_restart_jitter maps to uvicorn limit_max_requests_jitter"""
         from click.testing import CliRunner
 
@@ -1697,10 +2043,10 @@ class TestProxyInitializationHelpers:
             )
 
             assert result.exit_code == 0, f"exit_code={result.exit_code}, output={result.output}"
-            mock_uvicorn_run.assert_called_once()
-            call_args = mock_uvicorn_run.call_args
-            assert call_args[1]["limit_max_requests"] == 1000
-            assert call_args[1]["limit_max_requests_jitter"] == 50
+            mock_run_with_recycling.assert_called_once()
+            options: Final = mock_run_with_recycling.call_args.args[0]
+            assert options["limit_max_requests"] == 1000
+            assert options["limit_max_requests_jitter"] == 50
 
     @patch("litellm.proxy.proxy_cli.ProxyInitializationHelpers.run_gunicorn_server")
     @patch("uvicorn.run")
@@ -1793,9 +2139,9 @@ class TestProxyInitializationHelpers:
         assert "gunicorn accepts no connections" in warning
         assert "uvicorn exits" not in warning
 
-    @patch("uvicorn.run")
+    @patch("litellm.proxy.dev_reload.run_uvicorn_with_recycling")
     @patch("litellm.proxy.db.prisma_client.PrismaManager.setup_database")
-    def test_single_worker_max_requests_warning_printed_on_uvicorn(self, mock_setup_db, mock_uvicorn_run):
+    def test_single_worker_max_requests_warning_printed_on_uvicorn(self, mock_setup_db, mock_run_with_recycling):
         """uvicorn single-worker startup prints the does-not-recycle warning"""
         from click.testing import CliRunner
 
@@ -1831,11 +2177,11 @@ class TestProxyInitializationHelpers:
             assert "uvicorn exits the process" in result.output
 
     @patch("litellm.proxy.proxy_cli.start_query_engine_reaper")
-    @patch("uvicorn.run")
+    @patch("litellm.proxy.dev_reload.run_uvicorn_with_recycling")
     @patch("builtins.print")
     @patch("litellm.proxy.db.prisma_client.PrismaManager.setup_database")
     def test_single_worker_max_requests_no_warning_with_two_workers(
-        self, mock_setup_db, mock_print, mock_uvicorn_run, mock_start_reaper
+        self, mock_setup_db, mock_print, mock_run_with_recycling, mock_start_reaper
     ):
         """num_workers 2 with --max_requests_before_restart prints no warning"""
         from click.testing import CliRunner
@@ -1989,6 +2335,30 @@ class TestProxyInitializationHelpers:
 
         assert captured["options"]["max_requests"] == 1000
         assert captured["options"]["max_requests_jitter"] == 50
+
+    @pytest.mark.skipif(os.name == "nt", reason="gunicorn server path skips Windows")
+    def test_gunicorn_banner_curl_authenticates_and_names_no_model(self, capsys: pytest.CaptureFixture[str]) -> None:
+        pytest.importorskip("gunicorn")
+
+        with (
+            patch("gunicorn.app.base.BaseApplication.run"),
+            patch(  # test-quality-ok: option tests must not start a thread or change the pytest worker's child ownership
+                "litellm.proxy.proxy_cli.start_query_engine_reaper"
+            ),
+        ):
+            ProxyInitializationHelpers._run_gunicorn_server(
+                host="127.0.0.1",
+                port=4012,
+                app=MagicMock(),
+                num_workers=1,
+                ssl_certfile_path=None,
+                ssl_keyfile_path=None,
+            )
+
+        banner: Final = capsys.readouterr().out
+        assert "curl --location --noproxy '*' 'http://0.0.0.0:4012/chat/completions'" in banner
+        assert '--header "Authorization: Bearer $LITELLM_MASTER_KEY"' in banner
+        assert '"model": "<your-model-name>"' in banner
 
     @pytest.mark.skipif(os.name == "nt", reason="gunicorn server path skips Windows")
     @pytest.mark.parametrize("max_request_header_size", [DEFAULT_MAX_REQUEST_HEADER_SIZE, 128 * 1024])
@@ -2959,14 +3329,16 @@ class TestRunServerDbSetup:
         with patch("httpx.get", return_value=httpx.Response(200, json={})) as mock_get:
             run_server.main(["--health", "--enforce_prisma_migration_check"], standalone_mode=False)
 
-        mock_get.assert_called_once_with(url="http://0.0.0.0:4000/health")
+        assert mock_get.call_args.kwargs["url"] == "http://0.0.0.0:4000/health"
         assert "--enforce_prisma_migration_check is deprecated and has no effect" in capsys.readouterr().out
 
     def test_the_retired_enforce_prisma_migration_check_opt_in_warns_on_test(
         self, capsys: pytest.CaptureFixture[str]
     ) -> None:
         """`--test` returns before the config is read too, and prints the deprecation line before its request."""
-        with pytest.raises(ValueError, match="Invalid test value"):
+        with respx.mock:
+            respx.get("http://0.0.0.0:4000/v1/models").respond(json={"data": [{"id": "served-chat-model"}]})
+            _mock_cli_test_completions("http://0.0.0.0:4000")
             run_server.main(["--test", "--enforce_prisma_migration_check"], standalone_mode=False)
 
         assert "--enforce_prisma_migration_check is deprecated and has no effect" in capsys.readouterr().out
@@ -3579,7 +3951,9 @@ def test_prisma_writer_gives_the_rust_pool_its_share_and_keeps_its_name(
     """The writer limit loses the Rust pool's share, which the worker reads back, and gets Prisma's
     application_name unless the operator named it. DIRECT_URL (migrations) keeps the whole configured limit."""
     config_path: Final = tmp_path / "config.yaml"
-    config_path.write_text(yaml.dump({"model_list": [], "general_settings": general_settings}))
+    config_path.write_text(
+        yaml.dump({"model_list": [], "general_settings": {**general_settings, "use_spend_logs_ledger": False}})
+    )
 
     captured: Final = _CAPTURED_URLS.validate_python(
         _run_server_and_capture_urls(
@@ -3620,6 +3994,67 @@ def test_a_writer_limit_with_no_room_for_the_rust_pool_refuses_to_start(
     assert "DATABASE_URL connection_limit" in capsys.readouterr().err
 
 
+@pytest.mark.parametrize(
+    "general_settings, expected_writer, expected_rust_writer, expected_line",
+    [
+        pytest.param(
+            {},
+            "6",
+            "4",
+            "1 worker(s) x (writer connection_limit 6 + rust writer pool 4 + reader connection_limit 48"
+            " + rust reader pool 2) = up to 60 connections",
+            id="ledger_on_by_default",
+        ),
+        pytest.param(
+            {"database_connection_pool_limit": 30, "use_spend_logs_ledger": True},
+            "26",
+            "4",
+            "1 worker(s) x (writer connection_limit 26 + rust writer pool 4 + reader connection_limit 48"
+            " + rust reader pool 2) = up to 80 connections",
+            id="ledger_on_with_a_configured_limit",
+        ),
+        pytest.param(
+            {"use_spend_logs_ledger": False},
+            "8",
+            "2",
+            "1 worker(s) x (writer connection_limit 8 + rust writer pool 2 + reader connection_limit 48"
+            " + rust reader pool 2) = up to 60 connections",
+            id="ledger_off",
+        ),
+    ],
+)
+def test_the_ledger_carves_two_more_rust_writer_connections_out_of_the_writer_limit(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    general_settings: dict[str, object],
+    expected_writer: str,
+    expected_rust_writer: str,
+    expected_line: str,
+) -> None:
+    """The spend log writer writes only on the writer, so the reader keeps the base reserve."""
+    config_path: Final = tmp_path / "config.yaml"
+    config_path.write_text(yaml.dump({"model_list": [], "general_settings": general_settings}))
+
+    captured: Final = _CAPTURED_URLS.validate_python(
+        _run_server_and_capture_urls(
+            str(config_path),
+            direct_url="postgresql://t:t@localhost:5432/t",
+            read_replica_url="postgresql://t:t@reader:5432/t?connection_limit=50",
+        )
+    )
+
+    def limit(name: str) -> list[str]:
+        return urlparse.parse_qs(urlparse.urlparse(captured[name]).query)["connection_limit"]
+
+    assert (limit("DATABASE_URL"), captured[RUST_WRITER_CONNECTIONS_ENV_VAR]) == (
+        [expected_writer],
+        expected_rust_writer,
+    )
+    assert (limit("DATABASE_URL_READ_REPLICA"), captured[RUST_READER_CONNECTIONS_ENV_VAR]) == (["48"], "2")
+    assert limit("DIRECT_URL") == ["30" if "database_connection_pool_limit" in general_settings else "10"]
+    assert expected_line in capsys.readouterr().out
+
+
 class TestReadReplicaConnectionParams:
     """The reader is a second Prisma client with its own pool. Without the
     configured params on DATABASE_URL_READ_REPLICA it sizes itself from Prisma's
@@ -3642,6 +4077,7 @@ class TestReadReplicaConnectionParams:
                         "database_socket_timeout": 120,
                         "database_disable_prepared_statements": True,
                         "database_statement_timeout": 60,
+                        "use_spend_logs_ledger": False,
                     },
                 }
             )
@@ -3676,6 +4112,7 @@ class TestReadReplicaConnectionParams:
                     "general_settings": {
                         "database_connection_pool_limit": 3,
                         "database_connection_pool_timeout": 20,
+                        "use_spend_logs_ledger": False,
                     },
                 }
             )
@@ -3710,7 +4147,12 @@ class TestReadReplicaConnectionParams:
     def test_writer_and_reader_each_give_their_own_rust_pool_its_share(self, tmp_path: Path) -> None:
         config_path: Final = tmp_path / "config.yaml"
         config_path.write_text(
-            yaml.dump({"model_list": [], "general_settings": {"database_connection_pool_limit": 10}})
+            yaml.dump(
+                {
+                    "model_list": [],
+                    "general_settings": {"database_connection_pool_limit": 10, "use_spend_logs_ledger": False},
+                }
+            )
         )
 
         captured: Final = _CAPTURED_URLS.validate_python(
@@ -3732,7 +4174,14 @@ class TestReadReplicaConnectionParams:
         import yaml
 
         config_path: Final = tmp_path / "config.yaml"
-        config_path.write_text(yaml.dump({"model_list": [], "general_settings": {"database_connection_pool_limit": 3}}))
+        config_path.write_text(
+            yaml.dump(
+                {
+                    "model_list": [],
+                    "general_settings": {"database_connection_pool_limit": 3, "use_spend_logs_ledger": False},
+                }
+            )
+        )
 
         _run_server_and_capture_urls(
             str(config_path),
@@ -3770,7 +4219,14 @@ class TestReadReplicaConnectionParams:
         import yaml
 
         config_path: Final = tmp_path / "config.yaml"
-        config_path.write_text(yaml.dump({"model_list": [], "general_settings": {"database_connection_pool_limit": 3}}))
+        config_path.write_text(
+            yaml.dump(
+                {
+                    "model_list": [],
+                    "general_settings": {"database_connection_pool_limit": 3, "use_spend_logs_ledger": False},
+                }
+            )
+        )
 
         _run_server_and_capture_urls(
             str(config_path),
@@ -3794,6 +4250,7 @@ class TestReadReplicaConnectionParams:
                     "model_list": [],
                     "general_settings": {
                         "database_connection_pool_limit": 3,
+                        "use_spend_logs_ledger": False,
                         "database_extra_connection_params": {
                             "options": "-c search_path=writer_schema",
                             "schema": "writer_schema",
@@ -4814,6 +5271,32 @@ def test_control_plane_cli_serves_the_real_app_with_uvicorn_options(monkeypatch:
     assert call["limit_concurrency"] == 250
     response: Final = TestClient(call["app"]).get("/healthz")
     assert (response.status_code, response.json()) == (200, {"status": "ok"})
+
+
+@pytest.mark.parametrize(
+    ("argv", "env_timeout", "expected"),
+    [
+        ([], None, 95),
+        ([], "0", 0),
+        ([], "5", 5),
+        (["--keepalive_timeout", "0"], "5", 0),
+        (["--keepalive_timeout", "5"], "0", 5),
+    ],
+)
+def test_uvicorn_serves_the_effective_keepalive_timeout(
+    argv: list[str], env_timeout: str | None, expected: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    for name in ("DATABASE_URL", "DIRECT_URL", "KEEPALIVE_TIMEOUT", "LITELLM_RUST_FIRST"):
+        monkeypatch.delenv(name, raising=False)
+    if env_timeout is not None:
+        monkeypatch.setenv("KEEPALIVE_TIMEOUT", env_timeout)
+
+    with patch("uvicorn.run") as serve:
+        result: Final = CliRunner().invoke(run_server, ["--local", "--port", "45999", *argv])
+
+    assert result.exit_code == 0, result.output
+    serve.assert_called_once()
+    assert serve.call_args.kwargs["timeout_keep_alive"] == expected
 
 
 def test_limit_concurrency_environment_reaches_control_plane_serve(

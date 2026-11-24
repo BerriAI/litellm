@@ -1,5 +1,6 @@
 use std::borrow::Cow;
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
+use std::sync::Arc;
 
 use encoding_rs::Encoding;
 use indexmap::{IndexMap, IndexSet};
@@ -10,6 +11,7 @@ use crate::error::{Error, Loaded, Rejects, Repr, pointer_child, pointer_for_key}
 use crate::fallback::{CapabilityRules, FallbackGeneralizations, FallbackRule};
 use crate::model::Model;
 use crate::store::{Rows, Store};
+use crate::view::CatalogView;
 use crate::wire::{EntryWire, Fields};
 
 const SAMPLE_SPEC: &str = "sample_spec";
@@ -490,6 +492,25 @@ impl Catalog {
 
     pub fn capability_rules(&self) -> &CapabilityRules {
         &self.capability_rules
+    }
+}
+
+/// The Rust host's document, which has no registrations. A row is lowered each time it is priced
+impl CatalogView for Catalog {
+    fn contains(&self, key: &str) -> bool {
+        self.rows().contains(key)
+    }
+
+    fn find_key(&self, name: &str) -> Option<String> {
+        self.store.find_key(name)
+    }
+
+    fn fields(&self, key: &str) -> Option<Arc<Fields>> {
+        self.get(key).cloned().map(Arc::new)
+    }
+
+    fn registered_fields(&self, _key: &str) -> BTreeSet<String> {
+        BTreeSet::new()
     }
 }
 

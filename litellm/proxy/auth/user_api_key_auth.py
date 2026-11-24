@@ -14,7 +14,7 @@ import secrets
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from datetime import datetime, timezone
 from functools import partial, reduce
-from typing import TYPE_CHECKING, Final, Protocol, cast
+from typing import TYPE_CHECKING, Final, Protocol, TypeVar, cast
 
 import anyio
 import fastapi
@@ -31,7 +31,6 @@ from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm._service_logger import ServiceLogging
 from litellm.constants import (
     CLIENT_REQUESTED_MODEL_SCOPE_KEY,
-    GLOBAL_PROXY_SPEND_CACHE_KEY,
     LITELLM_PROXY_BUDGET_NAME,
     MODEL_GROUP_ALIAS_RESOLVED_SCOPE_KEY,
 )
@@ -41,6 +40,7 @@ from litellm.integrations.otel.runtime import (
     phase_span,
     seed_request_identity,
 )
+from litellm.litellm_core_utils.core_helpers import attribute_or_none
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.routing_common_utils import resolve_model_group_alias
 from litellm.models.end_user import LiteLLM_EndUserTable
@@ -112,6 +112,7 @@ from litellm.proxy.auth.auth_object_prefetch import (
 )
 from litellm.proxy.auth.auth_utils import (
     abbreviate_api_key,
+    bearer_credential,
     checks_team_s3_buckets_in_handler,
     fallback_target_model_name,
     get_end_user_id_from_request_body,
@@ -126,10 +127,12 @@ from litellm.proxy.auth.auth_utils import (
     pre_db_read_auth_checks,
     request_dispatched_to_pass_through_endpoint,
     request_dispatched_to_provider_pass_through,
+    request_fields_for_body_check,
     route_in_additonal_public_routes,
 )
 from litellm.proxy.auth.customer_hierarchy_auth import (
     CustomerBudgetExceededError,
+    CustomerIdentityHeaderNames,
     customer_identity_from_request,
     resolve_customer_hierarchy,
 )
@@ -176,12 +179,7 @@ from litellm.proxy.common_utils.realtime_utils import (  # noqa: F401  # legacy 
     _realtime_request_body,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     realtime_request_body,
 )
-from litellm.proxy.common_utils.user_api_key_cache import (
-    UserApiKeyCache,
-    end_user_cache_key,
-    end_user_restricted_registry_cache_key,
-    model_access_group_registry_cache_key,
-)
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.db.db_lookup_gate import bounded_db_lookup
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.proxy.litellm_pre_call_utils import (
@@ -210,6 +208,7 @@ from litellm.proxy.utils import (
     ProxyLogging,
     normalize_route_for_root_path,
 )
+from litellm.redis.stores.auth_cache import AuthObject
 from litellm.redis.stores.spend_counters import (
     SpendCounterStore,
 )
@@ -222,9 +221,12 @@ from litellm.router_api import (
 )
 from litellm.rust_bridge._native import RustAuth, RustDenial, RustIdentity, RustPlan
 from litellm.types.proxy.auth.auth_checks import UserNotFoundError
+from litellm.types.semantic_cache import semantic_cache_params
 from litellm.types.services import ServiceTypes
 
 if TYPE_CHECKING:
+    from opentelemetry.trace import Span as _Span
+
     from litellm.proxy.auth.host.python import PythonAuthHost
     from litellm.rust_bridge._native import RustAuthOutcome, RustAuthSettings
 
@@ -296,6 +298,7 @@ def get_model_from_request_context(
 _CLAUDE_MODEL_ROUTES: Final = frozenset(
     f"/{prefix}{endpoint}" for prefix in ("", "v1/") for endpoint in ("messages", "chat/completions", "responses")
 )
+_FetchedT = TypeVar("_FetchedT")
 _CLAUDE_MODEL_NORMALIZED: Final = "litellm.claude_model_normalized"
 _GENERAL_SETTINGS_ADAPTER: Final = TypeAdapter(dict[str, object])
 _KEY_METADATA_ADAPTER: Final = TypeAdapter(dict[str, object])
@@ -303,7 +306,7 @@ _REQUEST_HEADERS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 
 
 async def _normalize_claude_model(
-    request_data: dict, valid_token: UserAPIKeyAuth, request: Request | None, route: str
+    request_data: dict[str, object], valid_token: UserAPIKeyAuth, request: Request | None, route: str
 ) -> None:
     from litellm.proxy.proxy_server import llm_router, prisma_client, proxy_config, proxy_logging_obj
 
@@ -1193,6 +1196,12 @@ async def check_key_model_budget_with_fallback(
             request.scope["path_params"]["model"] = fallback_model  # rebind-ok: route handlers use the fallback model
 
 
+def _is_master_key(api_key: str) -> bool:
+    from litellm.proxy.proxy_server import master_key  # noqa: PLC0415  # runtime globals
+
+    return master_key is not None and secrets.compare_digest(api_key.encode(), master_key.encode())
+
+
 def _get_bearer_token_or_received_api_key(api_key: str) -> str:
     if api_key.startswith("Bearer "):  # ensure Bearer token passed in
         api_key = api_key.replace("Bearer ", "")  # extract the token
@@ -1200,6 +1209,8 @@ def _get_bearer_token_or_received_api_key(api_key: str) -> str:
         api_key = api_key.replace("Basic ", "")  # handle langfuse input
     elif api_key.startswith("bearer "):
         api_key = api_key.replace("bearer ", "")
+    elif (credential := bearer_credential(api_key)) is not None and not _is_master_key(api_key):
+        return credential
     elif api_key.startswith("AWS4-HMAC-SHA256"):
         # Handle AWS Signature V4 format from LangChain
         # Format: AWS4-HMAC-SHA256 Credential=Bearer $LITELLM_MASTER_KEY/date/region/service/aws4_request, SignedHeaders=..., Signature=...
@@ -1273,6 +1284,8 @@ def get_bearer_token(
         api_key = api_key.replace("Basic ", "")  # handle langfuse input
     elif api_key.startswith("bearer "):
         api_key = api_key.replace("bearer ", "")
+    elif (credential := bearer_credential(api_key)) is not None:
+        return credential
     elif api_key.startswith("AWS4-HMAC-SHA256"):
         # Handle AWS Signature V4 format from LangChain
         # Format: AWS4-HMAC-SHA256 Credential=Bearer $LITELLM_MASTER_KEY/date/region/service/aws4_request, SignedHeaders=..., Signature=...
@@ -1407,12 +1420,10 @@ async def user_api_key_auth_websocket_for_model(
             await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
             raise HTTPException(status_code=403, detail="No API key provided")
     else:
-        # Extract the API key from the Bearer token
-        if not authorization.startswith("Bearer "):
+        api_key = bearer_credential(authorization)
+        if api_key is None:
             await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
             raise HTTPException(status_code=403, detail="Invalid Authorization header format")
-
-        api_key = authorization[len("Bearer ") :].strip()
 
     # Call user_api_key_auth with the extracted API key
     # Note: You'll need to modify this to work with WebSocket context if needed
@@ -1472,7 +1483,7 @@ _global_spend_coordinator: Final = EventDrivenCacheCoordinator(log_prefix="[GLOB
 
 
 async def fetch_global_spend_with_event_coordination(
-    cache_key: str,
+    cache_key: AuthObject,
     user_api_key_cache: UserApiKeyCache,
     prisma_client: PrismaClient,
 ) -> float | None:
@@ -1493,7 +1504,7 @@ async def fetch_global_spend_with_event_coordination(
 
     return await _global_spend_coordinator.get_or_load(
         cache_key=cache_key,
-        cache=user_api_key_cache,  # pyright: ignore[reportArgumentType]
+        cache=user_api_key_cache,
         load_fn=_load_global_spend,
     )
 
@@ -1511,7 +1522,7 @@ async def get_global_proxy_spend(
     global_proxy_spend = None
     if litellm.max_budget > 0 and prisma_client is not None:  # user set proxy max budget
         # Use event-driven coordination to prevent cache stampede
-        cache_key: Final = GLOBAL_PROXY_SPEND_CACHE_KEY
+        cache_key: Final = AuthObject.global_proxy_spend()
         global_proxy_spend = (  # rebind-ok: pre-existing rebinding on a rename-only line
             await fetch_global_spend_with_event_coordination(
                 cache_key=cache_key,
@@ -1587,7 +1598,7 @@ def get_api_key(
     elif pass_through_endpoints is not None:
         for endpoint in pass_through_endpoints:
             if endpoint.get("path", "") == route:
-                headers: dict | None = endpoint.get("headers", None)
+                headers: Mapping[str, object] | None = endpoint.get("headers", None)
                 if headers is not None:
                     header_key: str = headers.get("litellm_user_api_key", "")
                     if request.headers.get(header_key) is not None:
@@ -1597,7 +1608,7 @@ def get_api_key(
 
 
 def _route_pass_through_endpoints(
-    route: str, pass_through_endpoints: list[dict] | None
+    route: str, pass_through_endpoints: Sequence[object] | None
 ) -> tuple[Mapping[str, object], ...]:
     return tuple(
         endpoint
@@ -1606,7 +1617,7 @@ def _route_pass_through_endpoints(
     )
 
 
-def pass_through_auth_off(route: str, pass_through_endpoints: list[dict] | None) -> bool:
+def pass_through_auth_off(route: str, pass_through_endpoints: Sequence[object] | None) -> bool:
     """A configured pass-through endpoint on ``route`` turns auth off. ``auth`` defaults to on: a raw config
     dict without the key must never become an unauthenticated forwarder."""
     return any(
@@ -1625,7 +1636,7 @@ def _endpoint_key(key: str, endpoint: Mapping[str, object]) -> str:
 def pass_through_key(
     request: Request,
     route: str,
-    pass_through_endpoints: list[dict] | None,
+    pass_through_endpoints: Sequence[object] | None,
     api_key: str,
 ) -> str:
     """The key a pass-through route authenticates: a ``litellm_user_api_key`` header on a mapped provider
@@ -1678,7 +1689,8 @@ def _ensure_parent_otel_span_on_request_state(request: Request) -> None:
 
     if open_telemetry_logger is None:
         return
-    if (existing_span := getattr(request.state, "parent_otel_span", None)) is not None:
+    existing_span: Final[_Span | None] = getattr(request.state, "parent_otel_span", None)
+    if existing_span is not None:
         set_request_parent_otel_span(existing_span)
         return
     parent_otel_span: Final = open_telemetry_logger.create_litellm_proxy_request_started_span(
@@ -1808,8 +1820,9 @@ def _team_fields_newer_than_key(key: UserAPIKeyAuth, team: LiteLLM_TeamTableCach
     if team.last_refreshed_at <= key.last_refreshed_at:
         return MappingProxyType({})
     key_fields: Final = type(key).model_fields
+    team_fields: Final[Mapping[str, object]] = MappingProxyType(team.__dict__)
     return MappingProxyType(
-        {f"team_{name}": value for name, value in team.__dict__.items() if f"team_{name}" in key_fields}
+        {f"team_{name}": value for name, value in team_fields.items() if f"team_{name}" in key_fields}
     )
 
 
@@ -1820,7 +1833,10 @@ async def _cached_team_fields_for_key(
         return MappingProxyType({})
     try:
         team: Final = await get_team_object_from_cache(
-            key=f"team_id:{key.team_id}", user_api_key_cache=user_api_key_cache, parent_otel_span=parent_otel_span
+            key=AuthObject.team(key.team_id),
+            user_api_key_cache=user_api_key_cache,
+            parent_otel_span=parent_otel_span,
+            for_auth=True,
         )
         return None if team is None else _team_fields_newer_than_key(key, team)
     except Exception:  # noqa: BLE001  # an unreadable team entry is treated like a team cache miss
@@ -2005,7 +2021,7 @@ async def _core_outcome(
     settings: "RustAuthSettings",
     host: "PythonAuthHost",
     request: Request,
-    pass_through_endpoints: list[dict] | None,
+    pass_through_endpoints: Sequence[object] | None,
 ) -> "RustAuthOutcome":
     match path:
         case RustPlan.Key:
@@ -2024,7 +2040,7 @@ async def _core_outcome(
 async def user_api_key_auth_builder(
     request: Request,
     api_key: str,
-    azure_api_key_header: str,
+    azure_api_key_header: str | None,
     anthropic_api_key_header: str | None,
     google_ai_studio_api_key_header: str | None,
     azure_apim_header: str | None,
@@ -2299,7 +2315,7 @@ async def _impersonate_or_raise(
             )
 
 
-async def _safe_fetch(label: str, awaitable):
+async def _safe_fetch(label: str, awaitable: Awaitable[_FetchedT]) -> _FetchedT | None:
     """Run an awaitable and return its result. Re-raises authentication /
     authorization failures (HTTPException, ProxyException,
     BudgetExceededError) so they propagate to the caller.
@@ -2553,7 +2569,7 @@ async def run_centralized_common_checks(
     if not sub_call and getattr(request.state, "deferred_model_body_check", False) is True:
         body_model: Final = request_data.get("model")
         is_request_body_safe(
-            request_body=request_data,
+            request_body=request_fields_for_body_check(request, request_data),
             general_settings=_GENERAL_SETTINGS_ADAPTER.validate_python(general_settings),
             llm_router=llm_router,
             model=body_model if isinstance(body_model, str) else "",
@@ -2631,6 +2647,8 @@ async def run_centralized_common_checks(
                     user_api_key_cache=user_api_key_cache,
                     parent_otel_span=parent_otel_span,
                     proxy_logging_obj=proxy_logging_obj,
+                    for_auth=True,
+                    auth_user_id=user_api_key_auth_obj.user_id,
                 ),
             )
         )
@@ -2751,6 +2769,10 @@ async def run_centralized_common_checks(
         )
 
     user_object: LiteLLM_UserTable | None = user_result if isinstance(user_result, LiteLLM_UserTable) else None
+    if user_object is not None:
+        user_api_key_auth_obj.apply_user_semantic_cache_params(
+            semantic_cache_params(attribute_or_none(user_object, "metadata"))
+        )
     project_object: Final[LiteLLM_ProjectTableCachedObj | None] = (
         None if isinstance(project_result, BaseException) else project_result
     )
@@ -3040,7 +3062,7 @@ async def _apply_key_end_user_default_budget_to_token(
 
 async def _reserve_budget_after_common_checks(
     user_api_key_auth_obj: UserAPIKeyAuth,
-    request_data: dict,
+    request_data: Mapping[str, object],
     route: str,
     llm_router: litellm.Router | None,
     team_object: LiteLLM_TeamTableCachedObj | None,
@@ -3049,7 +3071,7 @@ async def _reserve_budget_after_common_checks(
     user_api_key_cache: UserApiKeyCache,
     proxy_logging_obj: ProxyLogging,
     skip_budget_checks: bool,
-    general_settings: dict,
+    general_settings: Mapping[str, object],
     end_user_id: str | None = None,
     end_user_object: LiteLLM_EndUserTable | None = None,
     request: Request | None = None,
@@ -3210,13 +3232,14 @@ async def _authorize_authenticated_request_checks(
         )
 
         request_headers: Final = _REQUEST_HEADERS_ADAPTER.validate_python(safe_get_request_headers(request))
+        customer_header_names: Final = CustomerIdentityHeaderNames.from_settings(
+            cast("Mapping[str, object]", general_settings),  # cast-ok: proxy settings are a string-keyed dict
+        )
         customer_identity: Final = customer_identity_from_request(
             request_headers,
             user_api_key_auth_obj.jwt_claims,
             litellm_jwtauth,
-            general_settings=cast(  # cast-ok: proxy settings are a string-keyed dict without type parameters
-                "Mapping[str, object]", general_settings
-            ),
+            names=customer_header_names,
         )
         user_api_key_auth_obj.customer_hierarchy = None  # rebind-ok: request state, never inherited from a cached key
         received_at: Final = getattr(getattr(request, "state", None), "litellm_received_at", None)
@@ -3238,7 +3261,7 @@ async def _authorize_authenticated_request_checks(
                     with tracer.trace("litellm.proxy.auth.resolve_customer_hierarchy"):  # pyright: ignore[reportUnknownMemberType]  # tracer is the untyped proxy tracer
                         hierarchy: Final = await resolve_registered_customer(
                             customer_identity,
-                            partial(registration_refusal, prisma_client, user_api_key_auth_obj),
+                            partial(registration_refusal, prisma_client, user_api_key_auth_obj, request, route),
                             lambda register, register_organization: resolve_customer_hierarchy(
                                 identity=customer_identity,
                                 prisma_client=prisma_client,
@@ -3249,7 +3272,9 @@ async def _authorize_authenticated_request_checks(
                                 key_metadata=key_metadata,
                                 register=register,
                                 register_organization=register_organization,
+                                header_names=customer_header_names,
                             ),
+                            header_names=customer_header_names,
                         )
                     user_api_key_auth_obj.customer_hierarchy = hierarchy  # rebind-ok: request state
                 if user_api_key_auth_obj.customer_hierarchy is not None or RouteChecks.runs_inference_checks(route):
@@ -3382,16 +3407,16 @@ def _spend_counter_store() -> SpendCounterStore:
     return spend_counter_store
 
 
-def identity_cache_keys(api_key: str, *, end_user_id: str | None, key_is_resolved: bool) -> tuple[str, ...]:
+def identity_cache_keys(api_key: str, *, end_user_id: str | None, key_is_resolved: bool) -> tuple[AuthObject, ...]:
     """Cache keys auth reads before it knows the key's owners, all known from the request alone. A key object is
     cached under the hash of the bearer, so the bearer itself never reaches Redis."""
     return tuple(
         key
         for key in (
-            None if key_is_resolved else hash_token(api_key),
-            None if not end_user_id else end_user_cache_key(end_user_id),
-            None if not end_user_id else end_user_restricted_registry_cache_key(),
-            model_access_group_registry_cache_key(),
+            None if key_is_resolved else AuthObject.virtual_key(hash_token(api_key)),
+            None if not end_user_id else AuthObject.end_user(end_user_id),
+            None if not end_user_id else AuthObject.end_user_restricted_registry(),
+            AuthObject.model_access_group_registry(),
         )
         if key is not None
     )
@@ -3467,7 +3492,7 @@ def _seed_request_destinations(user_api_key_dict: UserAPIKeyAuth, request: Reque
 async def user_api_key_auth(
     request: Request,
     api_key: str = fastapi.Security(api_key_header),
-    azure_api_key_header: str = fastapi.Security(azure_api_key_header),
+    azure_api_key_header: str | None = fastapi.Security(azure_api_key_header),
     anthropic_api_key_header: str | None = fastapi.Security(anthropic_api_key_header),
     google_ai_studio_api_key_header: str | None = fastapi.Security(google_ai_studio_api_key_header),
     azure_apim_header: str | None = fastapi.Security(azure_apim_header),
@@ -3617,8 +3642,9 @@ async def return_user_api_key_auth_obj(
             user_rpm_limit=user_obj.rpm_limit,
             user_email=user_obj.user_email,
             user_spend=getattr(user_obj, "spend", None),
-            user_max_budget=getattr(user_obj, "max_budget", None),
+            user_max_budget=user_obj.effective_max_budget(),
             user_model_max_budget=getattr(user_obj, "model_max_budget", None),
+            user_semantic_cache_params=semantic_cache_params(attribute_or_none(user_obj, "metadata")),
         )
     if user_obj is not None and is_user_proxy_admin(user_obj=user_obj):
         user_api_key_kwargs.update(
@@ -3691,8 +3717,8 @@ async def _lookup_end_user_and_apply_budget(
     route: str,
     parent_otel_span: Span | None,
     prisma_client,
-    user_api_key_cache,
-    proxy_logging_obj,
+    user_api_key_cache: UserApiKeyCache,
+    proxy_logging_obj: ProxyLogging | None,
 ):
     """Look up end_user from DB and apply budget limits to valid_token."""
     end_user_object = None
@@ -3754,7 +3780,7 @@ async def enforce_key_and_fallback_model_access(
     request_data: dict,
     route: str,
     request: Request | None,
-    llm_model_list: list | None,
+    llm_model_list: Sequence[object] | None,
     llm_router: litellm.Router | None,
 ) -> None:
     """

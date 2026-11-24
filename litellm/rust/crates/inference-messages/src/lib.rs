@@ -3,13 +3,17 @@ mod constants;
 mod encoding;
 mod handler;
 mod host_answer;
+mod host_services;
 mod pre_request;
+mod pricing;
 mod reads;
 mod relay;
+mod request;
 pub mod route;
 mod safeguards;
 mod transport;
 mod types;
+mod usage;
 mod workload_identity;
 
 use futures_util::FutureExt;
@@ -26,8 +30,13 @@ use crate::common_utils::messages_provider;
 pub use common_utils::merge_messages_header_sources;
 pub use encoding::DecodingError;
 pub use host_answer::HostAnswer;
+pub use host_services::{
+    CacheCall, MessagesHostCall, MessagesHostServices, SafeguardsCall, Sent, SentBody,
+    TransportCall,
+};
 pub use litellm_inference::Error;
 pub use pre_request::PreRequestHooks;
+pub use pricing::{PricedCall, Pricing, PricingIdentity, billable_tier, price_call};
 pub use safeguards::Safeguards;
 pub use transport::{
     Delivered, Transport, TransportRequest, TransportResponse, UnencodableHeader, UnsendableUrl,
@@ -50,6 +59,8 @@ pub struct MessagesRoute {
     pre_request_hooks: Option<Arc<dyn PreRequestHooks>>,
     safeguards: Option<Arc<dyn Safeguards>>,
     host_answer: Option<Arc<dyn HostAnswer>>,
+    pricing: Option<Arc<dyn Pricing>>,
+    host_services: MessagesHostServices,
 }
 
 impl MessagesRoute {
@@ -69,6 +80,8 @@ impl MessagesRoute {
             pre_request_hooks: None,
             safeguards: None,
             host_answer: None,
+            pricing: None,
+            host_services: MessagesHostServices::default(),
         }
     }
 
@@ -119,6 +132,24 @@ impl MessagesRoute {
     pub fn with_host_answer(self, host_answer: Arc<dyn HostAnswer>) -> Self {
         Self {
             host_answer: Some(host_answer),
+            ..self
+        }
+    }
+
+    /// Prices each call that carries a pricing identity, see [`PricingIdentity`]
+    #[must_use]
+    pub fn with_pricing(self, pricing: Arc<dyn Pricing>) -> Self {
+        Self {
+            pricing: Some(pricing),
+            ..self
+        }
+    }
+
+    /// The services the host answers for each call the route's machine runs.
+    #[must_use]
+    pub fn with_host_services(self, host_services: MessagesHostServices) -> Self {
+        Self {
+            host_services,
             ..self
         }
     }

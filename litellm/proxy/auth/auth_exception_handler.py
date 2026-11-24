@@ -74,7 +74,10 @@ def _as_proxy_exception(e: Exception) -> ProxyException:
         )
     if isinstance(e, ProxyException):
         return e
-    if PrismaDBExceptionHandler.is_database_service_unavailable_error(e):
+    database_unavailable: Final = PrismaDBExceptionHandler.is_database_connection_error(e) or (
+        PrismaDBExceptionHandler.is_database_service_unavailable_error(e)
+    )
+    if database_unavailable:
         return PrismaDBExceptionHandler.service_unavailable_proxy_exception(e)
     return ProxyException(
         message="Authentication Error, " + str(e),

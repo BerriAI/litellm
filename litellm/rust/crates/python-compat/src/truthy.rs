@@ -1,3 +1,5 @@
+//! Python truthiness: `bool(value)` and the `a or b` operator over [`Value`].
+
 use num_bigint::Sign;
 
 use crate::Value;
@@ -37,6 +39,11 @@ pub fn first_truthy(values: impl IntoIterator<Item = Option<String>>) -> Option<
         Some(chosen) if !chosen.is_empty() => Some(chosen),
         _ => value,
     })
+}
+
+/// `first or second`: the first value when it is truthy, else the second.
+pub fn or<'a>(first: &'a Value, second: &'a Value) -> &'a Value {
+    if truthy(first) { first } else { second }
 }
 
 #[cfg(test)]

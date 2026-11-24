@@ -130,12 +130,12 @@ You are producing plain text that will later be styled by the CLI. Follow these 
 class ChatGPTAuthError(BaseLLMException):
     def __init__(
         self,
-        status_code,
-        message,
+        status_code: int,
+        message: str,
         request: httpx.Request | None = None,
         response: httpx.Response | None = None,
-        headers: httpx.Headers | dict | None = None,
-        body: dict | None = None,
+        headers: httpx.Headers | dict[str, object] | None = None,
+        body: dict[str, object] | None = None,
     ):
         super().__init__(
             status_code=status_code,

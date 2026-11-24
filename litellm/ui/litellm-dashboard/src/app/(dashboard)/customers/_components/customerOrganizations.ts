@@ -11,6 +11,7 @@ import {
 } from "./customerBudgetUsage";
 import { mergeCustomerActivityPages } from "./customerUsageData";
 import { customerUsageTotals } from "./customerUsageTotals";
+import type { CustomerUsageEntity } from "./customerUsageApi";
 
 export type CustomerOrganization = components["schemas"]["Organization"];
 type OrganizationList = components["schemas"]["ListResponse_Organization_"];
@@ -88,7 +89,7 @@ export const customerOrganizationRows = (organizations: readonly CustomerOrganiz
   const totals = customerUsageTotals(monthlyUsage.results);
   return organizations.map((organization) => {
     const monthlySpend = totals.get(organization.customer_org_id)?.spend ?? 0;
-    const budgetEntity = {
+    const budgetEntity: CustomerUsageEntity = {
       id: organization.customer_org_id,
       label: organization.alias || organization.customer_org_id,
       spend: organization.spend,
@@ -97,12 +98,15 @@ export const customerOrganizationRows = (organizations: readonly CustomerOrganiz
       budgetLimits: organization.budget?.budget_limits ?? [],
       budgetResetAt: organization.budget_reset_at ?? null,
       budgetUsage: organization.budget_usage,
+      rateLimits: organization.budget ?? undefined,
     };
     const budgets = customerBudgetUsage(budgetEntity);
     const monthlyBudgets = budgets.filter((budget) => customerBudgetPeriod(budget.budget_duration) === "monthly");
     return {
       organization,
+      entity: budgetEntity,
       monthlySpend,
+      totalMonthlySpend: monthlyUsage.metadata.total_spend,
       monthlyBudgets,
       budgetLimit: customerBudgetLimit(budgetEntity),
       displaySpend: monthlyBudgets.length > 0 ? monthlyBudgets[0].spend : monthlySpend,

@@ -73,6 +73,7 @@ const UserDropdown: React.FC<UserDropdownProps> = ({ onLogout, variant = "navbar
   const {
     userId,
     userEmail,
+    userAlias,
     userRole: role,
     userRoleLabel: userRole,
     isViewOnly,
@@ -222,9 +223,9 @@ const UserDropdown: React.FC<UserDropdownProps> = ({ onLogout, variant = "navbar
   );
 
   const seed = userEmail || userId || "user";
-  const initials = initialsFromIdentity(userEmail, userId);
+  const initials = initialsFromIdentity(userEmail?.trim() || userAlias, userId);
   const hue = hueFromString(seed);
-  const displayName = navAccountDisplayName(userEmail, userId);
+  const displayName = navAccountDisplayName(userEmail, userId, userAlias);
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
@@ -239,7 +240,7 @@ const UserDropdown: React.FC<UserDropdownProps> = ({ onLogout, variant = "navbar
               )}
               aria-label={t("shell.userMenu.triggerAria", {
                 role: userRole ?? t("shell.userMenu.unknownRole"),
-                identity: userEmail || userId || t("shell.userMenu.unknownIdentity"),
+                identity: displayName,
               })}
               aria-haspopup="dialog"
               title={collapsed ? displayName : undefined}
@@ -269,7 +270,7 @@ const UserDropdown: React.FC<UserDropdownProps> = ({ onLogout, variant = "navbar
               className="flex! max-w-[min(200px,34vw)] items-center gap-2 rounded-md! py-0.5! pl-1! pr-2! transition-colors hover:bg-accent!"
               aria-label={t("shell.userMenu.triggerAria", {
                 role: userRole ?? t("shell.userMenu.unknownRole"),
-                identity: userEmail || userId || t("shell.userMenu.unknownIdentity"),
+                identity: displayName,
               })}
               aria-haspopup="dialog"
             />

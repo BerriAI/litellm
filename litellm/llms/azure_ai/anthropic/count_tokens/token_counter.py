@@ -5,7 +5,7 @@ Azure AI Anthropic Token Counter implementation using the CountTokens API.
 import os
 from collections.abc import Mapping, Sequence
 from types import MappingProxyType
-from typing import Any, Final
+from typing import Final
 
 from pydantic import JsonValue
 
@@ -64,7 +64,7 @@ class AzureAIAnthropicTokenCounter(BaseTokenCounter):
         model_to_use: str,
         messages: list[dict[str, JsonValue]] | None,
         contents: list[dict[str, object]] | None,
-        deployment: dict[str, Any] | None = None,
+        deployment: Mapping[str, object] | None = None,
         request_model: str = "",
         tools: list[dict[str, JsonValue]] | None = None,
         system: object | None = None,
