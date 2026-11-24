@@ -2601,6 +2601,20 @@ def test_bedrock_tools_pt_follows_a_chain_of_root_refs_for_claude() -> None:
     assert sent == _ADDRESS_SCHEMA
 
 
+@pytest.mark.parametrize("hops", [32, 40])
+def test_bedrock_tools_pt_keeps_the_arguments_of_a_root_ref_chain_past_the_hop_limit_for_claude(hops: int) -> None:
+    aliases: Final = {f"Alias{i}": {"$ref": f"#/$defs/Alias{i + 1}"} for i in range(hops)}
+    defs: Final = {**aliases, f"Alias{hops}": _ADDRESS_SCHEMA}
+    tools: Final = [
+        {"type": "function", "function": {"name": "save_address", "parameters": {"$ref": "#/$defs/Alias0", "$defs": defs}}}
+    ]
+
+    sent: Final = _bedrock_tools_pt(tools, model="us.anthropic.claude-sonnet-5-5")[0]["toolSpec"]["inputSchema"]["json"]
+
+    assert sent["properties"] == _ADDRESS_SCHEMA["properties"]
+    assert sent["required"] == _ADDRESS_SCHEMA["required"]
+
+
 _ORDER_SCHEMA: Final = {
     "type": "object",
     "properties": {"street": {"type": "string"}, "city": {"type": "string"}},
