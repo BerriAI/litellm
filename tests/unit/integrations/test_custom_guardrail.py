@@ -3566,12 +3566,17 @@ class TestPreCallHookResponseIsNotLoggedVerbatim:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
-        ("returned_texts", "expected_action"),
-        [(["SECRET_PROMPT"], None), (["[MASKED]"], "mask")],
-        ids=["returns_fewer_keys_unchanged", "returns_rewritten_text"],
+        ("given_texts", "returned_texts", "expected_action"),
+        [
+            (["SECRET_PROMPT"], ["SECRET_PROMPT"], None),
+            (["SECRET_PROMPT"], ["[MASKED]"], "mask"),
+            (None, [], None),
+            (["SECRET_PROMPT"], [], "mask"),
+        ],
+        ids=["returns_fewer_keys_unchanged", "returns_rewritten_text", "returns_empty_for_missing", "returns_emptied"],
     )
     async def test_apply_guardrail_logs_a_masking_action_only_when_a_returned_value_changed(
-        self, returned_texts: list[str], expected_action: str | None
+        self, given_texts: list[str] | None, returned_texts: list[str], expected_action: str | None
     ):
         class TextsOnlyGuardrail(CustomGuardrail):
             @log_guardrail_information
@@ -3585,7 +3590,11 @@ class TestPreCallHookResponseIsNotLoggedVerbatim:
 
         data: Final = self._request()
         await TextsOnlyGuardrail(guardrail_name="g").apply_guardrail(
-            inputs={"texts": ["SECRET_PROMPT"], "model": "gpt-4.1-mini"}, request_data=data, input_type="request"
+            inputs={"model": "gpt-4.1-mini"}
+            if given_texts is None
+            else {"texts": given_texts, "model": "gpt-4.1-mini"},
+            request_data=data,
+            input_type="request",
         )
 
         assert self._logged_action(data) == expected_action

@@ -1773,15 +1773,17 @@ class CustomGuardrail(CustomLogger):
     ) -> bool:
         """True when the hook's return value changed the content. A pre_call hook returns the whole
         request, so a content key it removed is a change. ``apply_guardrail`` may return only some
-        of its inputs, so only the keys it returned are compared."""
+        of its inputs, so only the keys it returned are compared. A key that is missing on one side
+        and empty on the other is not a change."""
         returned: Final = as_str_mapping(response)
         if original_inputs is None or returned is None:
             return False
-        if event_type == GuardrailEventHooks.pre_call:
-            return any(original_inputs.get(key) != returned.get(key) for key in _PRE_CALL_CONTENT_KEYS)
-        return any(
-            original_inputs.get(key) != value for key, value in returned.items() if key not in _STREAM_CONTROL_KEYS
+        compared_keys: Final = (
+            _PRE_CALL_CONTENT_KEYS
+            if event_type == GuardrailEventHooks.pre_call
+            else returned.keys() - _STREAM_CONTROL_KEYS
         )
+        return any(_holds_another_value(original_inputs.get(key), returned.get(key)) for key in compared_keys)
 
     def _summary_and_change(
         self,
@@ -1977,6 +1979,11 @@ _PRE_CALL_CONTENT_KEYS: Final = frozenset(
     {"messages", "input", "prompt", "system", "instructions", "tools", "functions", "function_call", "tool_choice"}
 )
 _STREAM_CONTROL_KEYS: Final = frozenset({"stream_holdback_chars"})
+
+
+def _holds_another_value(before: object, after: object) -> bool:
+    """False when both are equal, or both are empty (a missing key reads as None)."""
+    return before != after and bool(before or after)
 
 
 def _original_inputs_for(
