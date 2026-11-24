@@ -655,3 +655,36 @@ def test_a_provider_key_under_its_alternate_environment_name_is_not_reported_mis
         [line.partition(" or ")[0] for line in _lint(tmp_path, text, environ)]
         for environ in ({}, {alternate: "sk-test"})
     ] == [[needs_key], []]
+
+
+def test_openai_workload_identity_settings_count_as_authentication(tmp_path: Path) -> None:
+    assert [
+        _lint(tmp_path, _model_entry(f"{{model: openai/gpt-4o{extra}}}"), {})
+        for extra in ("", ", openai_identity_token_file: /var/run/token")
+    ] == [
+        [
+            "config.yaml:3: warning: model_list[0].litellm_params: openai/gpt-4o needs OPENAI_API_KEY "
+            "in the environment or litellm_params.api_key"
+        ],
+        [],
+    ]
+
+
+def test_an_empty_declared_environment_variable_does_not_count_as_set(tmp_path: Path) -> None:
+    text: Final = "environment_variables:\n  OPENAI_API_KEY:\n" + _model_entry("{model: openai/gpt-4o}")
+    assert _lint(tmp_path, text, {"OPENAI_API_KEY": "sk-test"}) == [
+        "config.yaml:5: warning: model_list[0].litellm_params: openai/gpt-4o needs OPENAI_API_KEY "
+        "in the environment or litellm_params.api_key"
+    ]
+
+
+def test_an_api_key_param_satisfies_a_provider_whose_environment_name_is_a_token(tmp_path: Path) -> None:
+    assert [
+        [
+            line.partition(" needs ")[2]
+            for line in _lint(
+                tmp_path, _model_entry(f"{{model: datarobot/lint-model{extra}}}", "{base_model: gpt-4o}"), {}
+            )
+        ]
+        for extra in ("", ", api_key: sk-test")
+    ] == [["DATAROBOT_API_TOKEN in the environment"], []]

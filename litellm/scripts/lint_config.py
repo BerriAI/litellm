@@ -348,7 +348,7 @@ def _credential_findings(
     def given(name: str) -> str | None:
         return None if params.get(name) is None else str(params[name])
 
-    with patch.dict(os.environ, environ, clear=True):
+    with patch.dict(os.environ, {name: value for name, value in environ.items() if value}, clear=True):
         try:
             required: Final[list[str]] = litellm.validate_environment(
                 model=model, api_key=given("api_key"), api_base=given("api_base"), api_version=given("api_version")
@@ -356,7 +356,8 @@ def _credential_findings(
         except Exception:  # noqa: BLE001  # an unrecognized provider has no known requirements
             return
     missing: Final = [name for name in required if not environ.get(name)]
-    provider: Final = {name.partition("_")[0].lower().removesuffix("ai") for name in missing}
+    prefixes: Final = {name.partition("_")[0].lower() for name in missing}
+    provider: Final = prefixes | {prefix.removesuffix("ai") for prefix in prefixes}
     fields: Final = [name for name in GenericLiteLLMParams.model_fields if name.partition("_")[0] in provider | {"api"}]
     set_params: Final = {key for key, value in params.items() if value is not None}
     has_other_auth: Final = any(_ALTERNATIVE_AUTH.search(key) for key in set_params.intersection(fields)) or (
@@ -366,7 +367,11 @@ def _credential_findings(
     for name in missing:
         setting: Final = name.lower().partition("_")[2]
         names: Final = [field for field in fields if setting in (field, field.partition("_")[2])]
-        if set_params.intersection(names) or (has_other_auth and _SECRET_NAME.search(name)):
+        if (
+            set_params.intersection(names)
+            or (has_other_auth and _SECRET_NAME.search(name))
+            or (name.endswith("_TOKEN") and "api_key" in set_params)
+        ):
             continue
         hint: Final = f" or litellm_params.{names[0]}" if names else ""
         yield Finding("warning", path, f"{model} needs {name} in the environment{hint}")
