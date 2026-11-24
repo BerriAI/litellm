@@ -86,7 +86,7 @@ const SCRIPTS: [(&str, &str); 8] = [
     ),
     (
         "window_guarded_token_increment",
-        "fec058661fefb81df4e5da0cc045df5f4a3f0a00",
+        "bc4372cfc57eea9d481c8ab5e20c82b01e8c0bd2",
     ),
     (
         "parallel_acquire",
@@ -491,6 +491,26 @@ async fn guarded_increment_only_settles_the_window_it_was_reserved_in(
     assert_eq!(
         raw_text(&raw, "{team:t1}:tokens").await,
         Some("180".to_owned())
+    );
+
+    let _: i64 = raw
+        .send(commands::eval(
+            &Script::new("return redis.call('DEL', KEYS[1])"),
+            &["{team:t1}:tokens"],
+            Vec::<String>::new(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        guarded(window_start.to_string(), -180).await,
+        GuardedReply {
+            applied: true,
+            count: 0
+        }
+    );
+    assert_eq!(
+        raw_text(&raw, "{team:t1}:tokens").await,
+        Some("0".to_owned())
     );
 }
 

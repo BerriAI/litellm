@@ -1,4 +1,4 @@
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import ClassVar, Final, cast
 
 import litellm
@@ -13,8 +13,9 @@ from litellm.types.llms.openai import AllMessageValues, ChatCompletionFileObject
 from litellm.types.llms.vertex_ai import ContentType, PartType
 from litellm.utils import supports_reasoning
 
-from ...vertex_ai.gemini.transformation import GEMINI_FILES_API_URI_PREFIX, gemini_convert_messages_with_history
-from ...vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexGeminiConfig
+from ...vertex_ai.common_utils import gemini_fetches_url_itself
+from ...vertex_ai.gemini.transformation import gemini_convert_messages_with_history
+from ...vertex_ai.gemini.vertex_and_google_ai_studio_gemini import GEMINI_SERVICE_TIER_ALIASES, VertexGeminiConfig
 
 
 def _image_url_fields(img_element: ChatCompletionImageObject) -> tuple[str | None, str | None, str | None]:
@@ -50,6 +51,8 @@ class GoogleAIStudioGeminiConfig(VertexGeminiConfig):
     """
 
     _route: ClassVar[str] = "gemini"
+    _removes_undeclared_thinking_levels: ClassVar[bool] = True
+    _service_tier_aliases: ClassVar[Mapping[str, str]] = GEMINI_SERVICE_TIER_ALIASES
 
     temperature: float | None = None
     max_output_tokens: int | None = None
@@ -67,9 +70,9 @@ class GoogleAIStudioGeminiConfig(VertexGeminiConfig):
         top_p: float | None = None,
         top_k: int | None = None,
         response_mime_type: str | None = None,
-        response_schema: dict | None = None,
+        response_schema: Mapping[str, object] | None = None,
         candidate_count: int | None = None,
-        stop_sequences: list | None = None,
+        stop_sequences: Sequence[object] | None = None,
     ) -> None:
         locals_: Final[Mapping[str, object]] = dict(locals())
         for key, value in locals_.items():
@@ -117,7 +120,7 @@ class GoogleAIStudioGeminiConfig(VertexGeminiConfig):
         self,
         messages: list[AllMessageValues],
         model: str | None = None,
-        litellm_params: dict | None = None,
+        litellm_params: dict[str, object] | None = None,
     ) -> list[ContentType]:
         """
         Google AI Studio Gemini does not support HTTP/HTTPS URLs for files.
@@ -131,11 +134,7 @@ class GoogleAIStudioGeminiConfig(VertexGeminiConfig):
                     if element.get("type") == "image_url":
                         img_element = cast(ChatCompletionImageObject, element)  # cast-ok: runtime type tag checked
                         _image_url, format, detail = _image_url_fields(img_element)
-                        if (
-                            _image_url
-                            and "https://" in _image_url
-                            and not _image_url.startswith(GEMINI_FILES_API_URI_PREFIX)
-                        ):
+                        if _image_url and "https://" in _image_url and not gemini_fetches_url_itself(_image_url):
                             image_obj = convert_to_anthropic_image_obj(_image_url, format=format)
                             converted_image_url = convert_generic_image_chunk_to_openai_image_obj(image_obj)
                             if detail is not None:
@@ -158,7 +157,7 @@ class GoogleAIStudioGeminiConfig(VertexGeminiConfig):
                         if (
                             file_id
                             and ("http://" in file_id or "https://" in file_id)
-                            and not file_id.startswith(GEMINI_FILES_API_URI_PREFIX)
+                            and not gemini_fetches_url_itself(file_id)
                         ):
                             # Convert HTTP/HTTPS file URL to base64 data
                             try:

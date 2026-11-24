@@ -19,6 +19,7 @@ import litellm
 from litellm import Router
 from litellm.constants import DEFAULT_AUTO_ROUTER_MAX_INPUT_CHARS, ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
 from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
 from litellm.litellm_core_utils.litellm_logging import Logging
@@ -431,12 +432,12 @@ async def test_usage_based_routing_refuses_the_next_websocket_turn_before_the_fi
 ):
     router: Final = _usage_based_routing_router(monkeypatch, "ws-tpm-v2-early", tpm=30)
     routed, admit_turn, record_turn = await _websocket_turn_hooks(monkeypatch, router, "ws-tpm-v2-early")
-    await admit_turn()
+    await admit_turn({})
 
     await record_turn(_open_websocket_turn(routed, "ws-tpm-v2-early-turn").litellm_params, 35)
 
     with pytest.raises(litellm.RateLimitError, match="ws-tpm-v2-early"):
-        await admit_turn()
+        await admit_turn({})
 
 
 @pytest.mark.asyncio
@@ -447,7 +448,7 @@ async def test_websocket_turn_counted_before_its_logging_is_not_counted_again_wh
     router: Final = _usage_based_routing_router(monkeypatch, "ws-tpm-v2-once", tpm=69)
     routed, admit_turn, record_turn = await _websocket_turn_hooks(monkeypatch, router, "ws-tpm-v2-once")
     opened: Final = await _usage_now(router, "ws-tpm-v2-once")
-    await admit_turn()
+    await admit_turn({})
     first_turn: Final = _open_websocket_turn(routed, "ws-tpm-v2-once-first")
 
     await record_turn(first_turn.litellm_params, 35)
@@ -455,10 +456,10 @@ async def test_websocket_turn_counted_before_its_logging_is_not_counted_again_wh
     await _complete_35_token_turn(first_turn)
 
     assert await _usage_after(router, "ws-tpm-v2-once", opened) == (35, 1)
-    await admit_turn()
+    await admit_turn({})
     await record_turn(_open_websocket_turn(routed, "ws-tpm-v2-once-second").litellm_params, 35)
     with pytest.raises(litellm.RateLimitError, match="ws-tpm-v2-once"):
-        await admit_turn()
+        await admit_turn({})
 
 
 @pytest.mark.asyncio
@@ -512,15 +513,15 @@ async def test_usage_based_routing_counts_a_websocket_turn_whose_early_count_fai
         ),
     )
     routed, admit_turn, record_turn = await _websocket_turn_hooks(monkeypatch, router, "ws-tpm-v2-count-fails")
-    await admit_turn()
+    await admit_turn({})
     turn: Final = _open_websocket_turn(routed, "ws-tpm-v2-count-fails-turn")
 
     await record_turn(turn.litellm_params, 35)
-    await admit_turn()
+    await admit_turn({})
     await _complete_35_token_turn(turn)
 
     with pytest.raises(litellm.RateLimitError, match="ws-tpm-v2-count-fails"):
-        await admit_turn()
+        await admit_turn({})
 
 
 @pytest.mark.asyncio
@@ -585,7 +586,7 @@ async def test_websocket_turn_not_attributed_to_a_deployment_does_not_throttle_t
     router: Final = _usage_based_routing_router(monkeypatch, "ws-tpm-v2-unrouted", tpm=30)
     routed, admit_turn, record_turn = await _websocket_turn_hooks(monkeypatch, router, "ws-tpm-v2-unrouted")
     opened: Final = await _usage_now(router, "ws-tpm-v2-unrouted")
-    await admit_turn()
+    await admit_turn({})
     turn: Final = _open_websocket_turn(
         {**routed, "litellm_metadata": {"model_group": "ws-tpm-v2-unrouted", **deployment_metadata}},
         "ws-tpm-v2-unrouted-turn",
@@ -593,7 +594,7 @@ async def test_websocket_turn_not_attributed_to_a_deployment_does_not_throttle_t
 
     await record_turn(turn.litellm_params, 35)
 
-    await admit_turn()
+    await admit_turn({})
     assert (await _usage_after(router, "ws-tpm-v2-unrouted", opened))[0] == 0
 
 
@@ -2107,6 +2108,61 @@ def test_handle_clientside_credential_with_deployment_model_name(model_list):
         pytest.fail(f"Failed with deployment model_name: {e}")
 
     print("✓ _handle_clientside_credential test passed!")
+
+
+class _UrlRecordingClient(AsyncHTTPHandler):
+    urls: tuple[str, ...] = ()
+
+    async def post(self, url: str, *args: object, **kwargs: object) -> httpx.Response:
+        self.urls = (*self.urls, url)
+        return httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-1",
+                "object": "chat.completion",
+                "created": 0,
+                "model": "us.openai.gpt-6.1-sol",
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            },
+            request=httpx.Request("POST", url),
+        )
+
+
+@pytest.mark.parametrize(
+    "caller_params",
+    [
+        {"api_base": "https://caller.example.com/openai/v1/chat/completions"},
+        {"api_base": "https://caller.example.com"},
+        {"api_base": None},
+        {},
+    ],
+)
+@pytest.mark.asyncio
+async def test_caller_api_base_does_not_move_a_deployment_pinned_to_a_bedrock_runtime_endpoint(
+    caller_params: dict[str, str | None],
+) -> None:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "gpt",
+                "litellm_params": {
+                    "model": "bedrock/us.openai.gpt-6.1-sol",
+                    "aws_region_name": "us-east-1",
+                    "aws_access_key_id": "test-key-id",
+                    "aws_secret_access_key": "test-secret",
+                    "aws_bedrock_runtime_endpoint": "https://runtime.example.com",
+                },
+            }
+        ]
+    )
+    client: Final = _UrlRecordingClient()
+
+    await router.acompletion(
+        model="gpt", messages=[{"role": "user", "content": "hi"}], client=client, num_retries=0, **caller_params
+    )
+
+    assert client.urls == ("https://runtime.example.com/openai/v1/chat/completions",)
 
 
 def test_resolve_model_name_from_model_id():

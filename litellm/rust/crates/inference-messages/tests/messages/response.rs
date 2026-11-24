@@ -494,6 +494,45 @@ fn a_body_that_does_not_parse_is_an_invalid_request(#[case] raw: Value) {
     );
 }
 
+const UNPARSED_SYSTEMS: [&str; 4] = [
+    r#"[{"type": "text", "text": "be terse"}, 5]"#,
+    r#"{"type": "text"}"#,
+    "5",
+    "true",
+];
+
+#[rstest]
+fn a_system_prompt_that_does_not_parse_is_kept_as_python_keeps_it(
+    #[values(0, 1, 2, 3)] system: usize,
+    #[values(
+        "anthropic/claude-sonnet-4-5",
+        "vertex_ai/claude-sonnet-4-5",
+        "azure_ai/claude-sonnet-4-5"
+    )]
+    model: &str,
+) {
+    let system: Value = serde_json::from_str(UNPARSED_SYSTEMS[system]).unwrap();
+    let body = object(json!({"model": model, "messages": [], "max_tokens": 16, "system": system}));
+    match messages_body(body) {
+        Err(error) => {
+            assert!(system.is_number() || system.is_boolean(), "{error:?}");
+            let text = litellm_error::Report::new(&error).to_string();
+            assert!(
+                text.contains("system must be a string or a list of content blocks"),
+                "{text}"
+            );
+        }
+        Ok(request) => {
+            assert!(
+                request
+                    .params
+                    .system
+                    .is_some_and(|system| system.known().is_none())
+            );
+        }
+    }
+}
+
 #[rstest]
 #[tokio::test]
 async fn message_route_summary_excludes_payload_diagnostics(

@@ -2,9 +2,10 @@
 Azure Anthropic messages transformation config - extends AnthropicMessagesConfig with Azure authentication
 """
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Final
 
+from litellm.llms.anthropic.messages.api_versions import requested_api_version
 from litellm.llms.anthropic.messages.native.transformation import (
     AnthropicMessagesConfig,
 )
@@ -27,13 +28,16 @@ class AzureAnthropicMessagesConfig(AnthropicMessagesConfig):
     def should_strip_billing_metadata(self) -> bool:
         return True
 
+    def anthropic_api_version(self, headers: Mapping[str, object], api_base: str | None) -> str | None:
+        return requested_api_version(headers)
+
     def validate_anthropic_messages_environment(
         self,
-        headers: dict,
+        headers: dict[str, str],
         model: str,
         messages: Sequence[object],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object] | GenericLiteLLMParams | None,
         api_key: str | None = None,
         api_base: str | None = None,
     ) -> tuple[dict, str | None]:
@@ -80,8 +84,8 @@ class AzureAnthropicMessagesConfig(AnthropicMessagesConfig):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         stream: bool | None = None,
     ) -> str:
         """
@@ -99,40 +103,13 @@ class AzureAnthropicMessagesConfig(AnthropicMessagesConfig):
 
         return azure_anthropic_messages_url(api_base)
 
-    def _remove_scope_from_cache_control(self, anthropic_messages_request: dict) -> None:
-        """
-        Remove `scope` field from cache_control for Azure AI Foundry.
-
-        Azure AI Foundry's Anthropic endpoint does not support the `scope` field
-        (e.g., "global" for cross-request caching). Only `type` and `ttl` are supported.
-
-        Processes both `system` and `messages` content blocks.
-        """
-
-        def _process_content_list(content: list) -> None:
-            for item in content:
-                if isinstance(item, dict) and "cache_control" in item and isinstance(item["cache_control"], dict):
-                    item["cache_control"].pop("scope", None)
-
-        if "system" in anthropic_messages_request:
-            system: Final = anthropic_messages_request["system"]
-            if isinstance(system, list):
-                _process_content_list(system)
-
-        if "messages" in anthropic_messages_request:
-            for message in anthropic_messages_request["messages"]:
-                if isinstance(message, dict) and "content" in message:
-                    content = message["content"]
-                    if isinstance(content, list):
-                        _process_content_list(content)
-
     def transform_anthropic_messages_request(
         self,
         model: str,
-        messages: list[dict],
-        anthropic_messages_optional_request_params: dict,
+        messages: list[dict[str, object]],
+        anthropic_messages_optional_request_params: dict[str, object],
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
+        headers: dict[str, str],
     ) -> dict:
         anthropic_messages_request: Final = super().transform_anthropic_messages_request(
             model=model,

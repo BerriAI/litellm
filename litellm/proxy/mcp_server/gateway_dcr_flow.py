@@ -283,9 +283,7 @@ class ConsentTeam(LiteLLMBaseModel):
 class LookupVendorCredential(Protocol):
     """Injected read of a user's vendor credential for one server."""
 
-    def __call__(
-        self, user_id: str, server_id: str, requested_scopes: tuple[str, ...] = (), /
-    ) -> Awaitable[VendorCredentialState]: ...
+    def __call__(self, user_id: str, server_id: str, /) -> Awaitable[VendorCredentialState]: ...
 
 
 class LookupServerReachability(Protocol):
@@ -329,9 +327,7 @@ async def _refuse_assertion(
     )
 
 
-async def _unavailable_vendor_credential(
-    user_id: str, server_id: str, requested_scopes: tuple[str, ...] = ()
-) -> VendorCredentialState:
+async def _unavailable_vendor_credential(user_id: str, server_id: str) -> VendorCredentialState:
     return "unavailable"
 
 
@@ -513,6 +509,12 @@ def open_gateway_dcr_client(client_id: str) -> GatewayDcrClient | None:
     return _open_sealed(client_id, GATEWAY_DCR_CLIENT_ID_PREFIX, GatewayDcrClient, _CLIENT_RECORD_DEBUG_KEY)
 
 
+def _bounded_redirect_uri_strings(raw_uris: Sequence[object]) -> tuple[str, ...] | None:
+    """Return the entries as strings, or ``None`` when any entry is not a string within the length limit."""
+    uris: Final = tuple(uri for uri in raw_uris if isinstance(uri, str) and len(uri) <= MAX_REDIRECT_URI_LENGTH)
+    return uris if len(uris) == len(raw_uris) else None
+
+
 async def register_aggregate_client(
     request: Request, request_body: Mapping[str, object], token_exchange_available: bool
 ) -> Response:
@@ -544,13 +546,14 @@ async def register_aggregate_client(
             "invalid_redirect_uri",
             f"redirect_uris must be a list of 1 to {MAX_REDIRECT_URIS} URIs",
         )
-    if not all(isinstance(uri, str) and len(uri) <= MAX_REDIRECT_URI_LENGTH for uri in raw_uris):
+    uris: Final = _bounded_redirect_uri_strings(raw_uris)
+    if uris is None:
         return _oauth_error(
             400,
             "invalid_redirect_uri",
             f"each redirect URI must be a string of at most {MAX_REDIRECT_URI_LENGTH} characters",
         )
-    for uri in raw_uris:
+    for uri in uris:
         parsed = urlparse(uri)
         try:
             if validate_redirect_uri_shape(parsed):
@@ -568,7 +571,7 @@ async def register_aggregate_client(
         )
     now: Final = datetime.now(timezone.utc)
     client_id: Final = _seal(
-        GATEWAY_DCR_CLIENT_ID_PREFIX, GatewayDcrClient(redirect_uris=tuple(raw_uris), iat=int(now.timestamp()))
+        GATEWAY_DCR_CLIENT_ID_PREFIX, GatewayDcrClient(redirect_uris=uris, iat=int(now.timestamp()))
     )
     if len(client_id) > MAX_CLIENT_ID_LENGTH:
         return _oauth_error(400, "invalid_client_metadata", "registered metadata is too large")
@@ -577,7 +580,7 @@ async def register_aggregate_client(
         content={
             "client_id": client_id,
             "client_id_issued_at": int(now.timestamp()),
-            "redirect_uris": list(raw_uris),
+            "redirect_uris": list(uris),
             "token_endpoint_auth_method": "none",
             "grant_types": list(supported_grant_types(token_exchange_available)),
             "response_types": ["code"],
@@ -1126,11 +1129,7 @@ async def _describe_interactive_target(
     scopes: tuple[str, ...],
     lookup_vendor_credential: LookupVendorCredential,
 ) -> ConnectFlowDescription | Response:
-    credential: Final = (
-        await lookup_vendor_credential(flow.user_id, server.server_id, scopes)
-        if scopes
-        else await lookup_vendor_credential(flow.user_id, server.server_id)
-    )
+    credential: Final = await lookup_vendor_credential(flow.user_id, server.server_id)
     if credential == "unavailable":
         return _oauth_error(503, "temporarily_unavailable", _DB_UNAVAILABLE_DESCRIPTION)
     described: Final[ConnectFlowDescription] = {
@@ -1445,7 +1444,7 @@ class _SingleUseGuard:
         from litellm.proxy.proxy_server import redis_usage_cache  # noqa: PLC0415  # circular import at module load
 
         # Resolve the shared authority HERE rather than trusting the injected cache: callers pass
-        # user_api_key_cache, which only carries a redis_cache when enable_redis_auth_cache is set
+        # mcp_state_cache, which only carries a redis_cache when enable_redis_auth_cache is set
         # (off by default), so a guard that read its injected cache silently degraded every claim to
         # a per-worker count on a stock multi-worker deployment. redis_usage_cache is the store the
         # proxy already treats as cross-worker, so no call site can wire the guarantee away.

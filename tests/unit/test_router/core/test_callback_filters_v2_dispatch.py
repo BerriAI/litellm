@@ -209,15 +209,34 @@ async def test_a_v2_callback_abort_ends_the_filters_as_an_error(make_core: MakeC
     assert journal == ["before", ("v2", "g", ("a", "b", "c"))]
 
 
+async def test_a_v2_callback_abort_carrying_an_exception_raises_it_as_a_filter_error_would(
+    make_core: MakeCore, host: ScriptedHost
+) -> None:
+    journal: Final[list[object]] = []  # mutable-ok: the shared call log
+    error: Final = RuntimeError("no capacity")
+    checks: Final = _checks(make_core)
+    _install(
+        host,
+        [Picker(journal, outcome=Abort(status=429, message="ignored", exception=error)), Narrow("after", journal)],
+        inert=False,
+    )
+
+    with pytest.raises(RuntimeError) as raised:
+        await checks.filter_deployments("g", _deployments(), None, {})
+
+    assert raised.value is error
+    assert journal == [("v2", "g", ("a", "b", "c"))]
+
+
 async def test_only_a_v2_callback_that_filters_makes_the_core_ask_for_filters(
     make_core: MakeCore, host: ScriptedHost
 ) -> None:
     checks: Final = _checks(make_core)
     host.lists["callbacks"].append(Inert())
-    without_filter: Final = checks.has_filters()
+    without_filter: Final = checks.has_filters({})
     host.lists["callbacks"].append(Picker([]))
 
-    assert (without_filter, checks.has_filters()) == (False, True)
+    assert (without_filter, checks.has_filters({})) == (False, True)
 
 
 async def test_the_pick_honours_a_v2_callback_between_legacy_filters(make_core: MakeCore, host: ScriptedHost) -> None:

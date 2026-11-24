@@ -865,7 +865,9 @@ def test_function_tools_bridge_only_when_chat_rejects_the_effective_effort(
         model=model,
         custom_llm_provider=provider,
         tools=[_FUNCTION_TOOL],
-        reasoning_effort=bridge_reasoning_effort(effort, extra_body),
+        reasoning_effort=bridge_reasoning_effort(
+            effort, extra_body, custom_llm_provider=provider, api_base="https://api.openai.com/v1"
+        ),
         api_base="https://api.openai.com/v1",
     )
     assert info.get("mode") == expected
@@ -1107,7 +1109,7 @@ def test_backend_serves_chat_completions_reads_the_shared_row(
 def test_bridge_reasoning_effort_reads_only_a_string_or_mapping_effort_nested_in_extra_body(
     extra_body: JsonValue, expected: JsonValue
 ) -> None:
-    assert bridge_reasoning_effort(None, extra_body) == expected
+    assert bridge_reasoning_effort(None, extra_body, custom_llm_provider="openai", api_base=None) == expected
 
 
 @pytest.mark.parametrize("asynchronous", [False, True])
@@ -1475,3 +1477,13 @@ async def test_bridge_sends_text_verbosity_on_a_client_tool_search_follow_up_tur
         ],
         "verbosity": verbosity,
     }
+
+
+@pytest.mark.parametrize(
+    ("model", "bridged"), [("chat-latest", True), ("gpt-chat-latest", False), ("my-gpt-chat-latest", False)]
+)
+def test_only_openais_own_chat_latest_sends_a_reasoning_summary_to_the_responses_api(model: str, bridged: bool) -> None:
+    info, _ = responses_api_bridge_check(
+        model=model, custom_llm_provider="openai", reasoning_effort="medium", reasoning_summary="auto"
+    )
+    assert (info.get("mode") == "responses") is bridged

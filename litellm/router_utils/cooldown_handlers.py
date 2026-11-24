@@ -9,11 +9,13 @@ Router cooldown handlers
 import asyncio
 import math
 from collections.abc import Collection, Mapping, Sequence
+from dataclasses import dataclass
 from datetime import datetime
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final
 
 from pydantic import TypeAdapter, ValidationError
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_router_logger
@@ -26,6 +28,8 @@ from litellm.constants import (
 )
 from litellm.exceptions import MidStreamFallbackError, MissingMessageRoleError
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
+from litellm.litellm_core_utils.get_litellm_params import AWS_CREDENTIAL_KWARGS_KEYS
+from litellm.litellm_core_utils.get_llm_provider_logic import inferred_provider
 from litellm.litellm_core_utils.litellm_logging import mask_api_base_credentials
 from litellm.router_deprecated import renamed_router_param
 from litellm.router_utils.cooldown_cache import CooldownCacheValue
@@ -57,6 +61,59 @@ else:
 _ADVISOR_ORCHESTRATION_FAILURE_ATTR: Final = "_litellm_advisor_orchestration_failure"
 _DEPLOYMENT_SELECTION_FAILURE_ATTR: Final = "_litellm_deployment_selection_failure"
 _CREDENTIAL_VALUES_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+
+
+@dataclass(frozen=True, slots=True)
+class _AnyFailure:
+    pass
+
+
+@dataclass(frozen=True, slots=True)
+class _OnlyStatuses:
+    statuses: frozenset[int]
+
+
+@dataclass(frozen=True, slots=True)
+class _CallerField:
+    name: str
+    blamed_for: _AnyFailure | _OnlyStatuses
+    configured_as: tuple[str, ...] = ()
+
+
+_ANY_FAILURE: Final = _AnyFailure()
+_NOT_FOUND: Final = _OnlyStatuses(frozenset({404}))
+_AUTH_REJECTED: Final = _OnlyStatuses(frozenset({401, 403}))
+_AUTH_REJECTED_OR_NOT_FOUND: Final = _OnlyStatuses(frozenset({401, 403, 404}))
+_AWS_FIELDS: Final = (
+    *(_CallerField(name, _ANY_FAILURE) for name in sorted(AWS_CREDENTIAL_KWARGS_KEYS - {"aws_region_name"})),
+    _CallerField("aws_region_name", _NOT_FOUND),
+)
+_VERTEX_FIELDS: Final = (
+    _CallerField("vertex_credentials", _AUTH_REJECTED_OR_NOT_FOUND, ("vertex_ai_credentials",)),
+    _CallerField("vertex_ai_credentials", _AUTH_REJECTED_OR_NOT_FOUND, ("vertex_credentials",)),
+    _CallerField("vertex_project", _NOT_FOUND, ("vertex_ai_project",)),
+    _CallerField("vertex_ai_project", _NOT_FOUND, ("vertex_project",)),
+    _CallerField("vertex_location", _NOT_FOUND, ("vertex_ai_location",)),
+    _CallerField("vertex_ai_location", _NOT_FOUND, ("vertex_location",)),
+)
+_AZURE_FIELDS: Final = (_CallerField("azure_ad_token", _AUTH_REJECTED), _CallerField("api_version", _NOT_FOUND))
+_OPENAI_FIELDS: Final = (_CallerField("organization", _AUTH_REJECTED),)
+_CALLER_FIELDS_BY_PROVIDER: Final[Mapping[str, tuple[_CallerField, ...]]] = MappingProxyType(
+    {
+        "bedrock": _AWS_FIELDS,
+        "bedrock_mantle": _AWS_FIELDS,
+        "sagemaker": _AWS_FIELDS,
+        "sagemaker_chat": _AWS_FIELDS,
+        "sagemaker_nova": _AWS_FIELDS,
+        "vertex_ai": _VERTEX_FIELDS,
+        "vertex_ai_beta": _VERTEX_FIELDS,
+        "azure": _AZURE_FIELDS,
+        "azure_text": _AZURE_FIELDS,
+        "azure_ai": _AZURE_FIELDS,
+        "openai": _OPENAI_FIELDS,
+        "text-completion-openai": _OPENAI_FIELDS,
+    }
+)
 
 
 def mark_advisor_orchestration_failure(exception: BaseException) -> None:
@@ -163,6 +220,11 @@ def _first_present(*sources: Mapping[str, object] | None, key: str) -> int | flo
     return None
 
 
+class _CooldownPolicyModelInfo(TypedDict, total=False):
+    allowed_fails_policy: ReadOnly[object]
+    allowed_fails: ReadOnly[int | None]
+
+
 def _get_deployment_cooldown_policy(
     ctx: "RoutingContext",
     deployment: str,
@@ -179,7 +241,7 @@ def _get_deployment_cooldown_policy(
     dep: Final = ctx.registry().deployment_dict(deployment)
     if dep is None:
         return None, None
-    mi: Final[Mapping[str, Any]] = dep.get("model_info") or MappingProxyType({})
+    mi: Final[_CooldownPolicyModelInfo] = dep.get("model_info") or _CooldownPolicyModelInfo()
     raw: Final = mi.get("allowed_fails_policy")
     policy: Final[Mapping[str, int] | None] = raw if isinstance(raw, dict) else None
     allowed: Final[int | None] = mi.get("allowed_fails")
@@ -333,13 +395,11 @@ def _is_cooldown_required(
 
 def _is_per_user_provider_request(request_kwargs: Mapping[str, object]) -> bool:
     from litellm.llms.github_copilot.per_user_auth import (
-        github_copilot_user_session_from,
         is_github_copilot_per_user_request,
     )
 
-    return (
-        is_github_copilot_per_user_request(request_kwargs)
-        or github_copilot_user_session_from(request_kwargs.get("litellm_params")) is not None
+    return is_github_copilot_per_user_request(request_kwargs) or is_github_copilot_per_user_request(
+        request_kwargs.get("litellm_params")
     )
 
 
@@ -884,22 +944,74 @@ def is_caller_entra_credential_failure(
         return False
     from litellm.llms.azure_ai.common_utils import AZURE_ENTRA_LITELLM_PARAM_KEYS, azure_entra_environment_defaults
 
-    call_params: Final = _CREDENTIAL_VALUES_ADAPTER.validate_python(model_call_details.get("litellm_params") or {})
-
-    credential_name: Final = deployment.litellm_params.litellm_credential_name
-    configured_by_precedence: Final[tuple[Mapping[str, object], ...]] = (
-        router_defaults,
-        _CREDENTIAL_VALUES_ADAPTER.validate_python(deployment.litellm_params.model_dump(exclude_none=True)),
-        _CREDENTIAL_VALUES_ADAPTER.validate_python(
-            CredentialAccessor.get_credential_values(credential_name) if credential_name is not None else {}
-        ),
-    )
+    call_params: Final = _call_credential_values(model_call_details)
+    configured_by_precedence: Final = _configured_by_precedence(deployment, router_defaults)
     environment: Final = azure_entra_environment_defaults()
     return any(
         call_params.get(key) is not None
         and (call_params.get(key) or environment.get(key))
         != (_first_configured(configured_by_precedence, key) or environment.get(key))
         for key in AZURE_ENTRA_LITELLM_PARAM_KEYS
+    )
+
+
+def is_caller_credential_failure(
+    deployment: Deployment | None,
+    router_defaults: Mapping[str, object],
+    model_call_details: Mapping[str, object],
+    exception_status: object,
+) -> bool:
+    if deployment is None:
+        return False
+    provider: Final = deployment.litellm_params.custom_llm_provider or inferred_provider(
+        deployment.litellm_params.model
+    )
+    status: Final = cast_exception_status_to_int(exception_status)
+    call_params: Final = _call_credential_values(model_call_details)
+    sent: Final = tuple(
+        field
+        for field in _CALLER_FIELDS_BY_PROVIDER.get(provider or "", ())
+        if _blamed(field.blamed_for, status) and call_params.get(field.name)
+    )
+    if not sent:
+        return False
+    configured_by_precedence: Final = _configured_by_precedence(deployment, router_defaults)
+    return any(call_params.get(field.name) != _configured_value(configured_by_precedence, field) for field in sent)
+
+
+def _blamed(blamed_for: _AnyFailure | _OnlyStatuses, status: int) -> bool:
+    match blamed_for:
+        case _AnyFailure():
+            return True
+        case _OnlyStatuses(statuses=statuses):
+            return status in statuses
+
+
+def _configured_value(sources: tuple[Mapping[str, object], ...], field: _CallerField) -> object:
+    return next(
+        (
+            value
+            for name in (field.name, *field.configured_as)
+            if (value := _first_configured(sources, name)) is not None
+        ),
+        None,
+    )
+
+
+def _call_credential_values(model_call_details: Mapping[str, object]) -> Mapping[str, object]:
+    return _CREDENTIAL_VALUES_ADAPTER.validate_python(model_call_details.get("litellm_params") or {})
+
+
+def _configured_by_precedence(
+    deployment: Deployment, router_defaults: Mapping[str, object]
+) -> tuple[Mapping[str, object], ...]:
+    credential_name: Final = deployment.litellm_params.litellm_credential_name
+    return (
+        router_defaults,
+        _CREDENTIAL_VALUES_ADAPTER.validate_python(deployment.litellm_params.model_dump(exclude_none=True)),
+        _CREDENTIAL_VALUES_ADAPTER.validate_python(
+            CredentialAccessor.get_credential_values(credential_name) if credential_name is not None else {}
+        ),
     )
 
 

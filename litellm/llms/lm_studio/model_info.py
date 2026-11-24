@@ -92,7 +92,7 @@ class _Unavailable(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
 
-_Models: Final = TypeVar("_Models", _ModelsV1, _ModelsV0)
+_Models = TypeVar("_Models", _ModelsV1, _ModelsV0)
 
 
 async def get_lm_studio_model_info(
@@ -107,7 +107,7 @@ async def get_lm_studio_model_info(
         base: Final = httpx.URL(api_base)
     except (ValueError, httpx.InvalidURL):
         return None
-    if base.scheme not in ("http", "https") or not base.host or base.username or base.password:
+    if base.scheme not in ("http", "https") or not base.host or any((base.username, base.password)):
         return None
     raw_path, separator, query = base.raw_path.partition(b"?")
     path: Final = raw_path.rstrip(b"/")

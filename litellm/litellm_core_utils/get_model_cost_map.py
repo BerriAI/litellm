@@ -52,6 +52,7 @@ from litellm.rust_bridge._native import (
 
 _CLI_ENTRYPOINT_NAMES: Final = frozenset({"lite", "litellm-proxy"})
 _CATALOG_ADAPTER: Final = TypeAdapter(dict[str, dict[str, object]])
+_BUNDLED_DOCUMENT_ADAPTER: Final = TypeAdapter(dict[str, object])
 FALLBACK_GENERALIZATIONS_KEY: Final = "fallback_generalizations"
 RESERVED_TOP_LEVEL_KEYS: Final = frozenset({"sample_spec", FALLBACK_GENERALIZATIONS_KEY})
 RETRYABLE_FETCH_STATUS_CODES: Final = frozenset({429, 500, 502, 503, 504})
@@ -78,6 +79,7 @@ def _uses_bundled_map_only() -> bool:
 class _LoadedSnapshot:
     rows: Mapping[str, Mapping[str, object]]
     fields: frozenset[str]
+    keys_by_casefold: Mapping[str, str]
 
 
 @lru_cache(maxsize=1)
@@ -86,6 +88,7 @@ def _loaded_snapshot(revision: str) -> _LoadedSnapshot:
     return _LoadedSnapshot(
         rows=MappingProxyType({key: MappingProxyType(entry) for key, entry in raw.items()}),
         fields=frozenset(chain.from_iterable(entry.keys() for entry in raw.values())),
+        keys_by_casefold=MappingProxyType({key.casefold(): key for key in raw}),
     )
 
 
@@ -101,14 +104,20 @@ class GetModelCostMap:
         return GetModelCostMap.read_local_model_cost_map_bytes().decode("utf-8")
 
     @staticmethod
-    def load_local_model_cost_map() -> dict:
+    def load_local_model_cost_map() -> dict[str, object]:
         """Load the local backup model cost map bundled with the package."""
-        return json.loads(GetModelCostMap.read_local_model_cost_map_bytes())
+        return _BUNDLED_DOCUMENT_ADAPTER.validate_json(GetModelCostMap.read_local_model_cost_map_bytes())
 
     @staticmethod
     def loaded_model_cost_map() -> Mapping[str, Mapping[str, object]]:
         """The catalog as last loaded (bundled or remote), untouched by ``register_model`` or router registrations."""
         return _loaded_snapshot(model_cost_inputs.provenance.revision).rows
+
+    @staticmethod
+    def loaded_model_cost_map_key(key: str) -> str | None:
+        """``key`` as the loaded catalog spells it, matched exactly first and then ignoring case."""
+        snapshot: Final = _loaded_snapshot(model_cost_inputs.provenance.revision)
+        return key if key in snapshot.rows else snapshot.keys_by_casefold.get(key.casefold())
 
     @staticmethod
     def loaded_model_cost_map_fields() -> frozenset[str]:
@@ -485,7 +494,7 @@ def fetch_registration_document(url: str) -> dict[str, dict[str, object]] | None
 
 
 def _finalize_model_cost_map(  # pyright: ignore[reportUnusedFunction]  # main's private name, downstream code calls it
-    model_cost: dict,  # mutable-ok: main's signature, pops the rules block
+    model_cost: dict[str, object],  # mutable-ok: main's signature, pops the rules block
 ) -> dict:
     """Compat for main's callers. Use ``model_cost_inputs.install``."""
     match NativeModelCostMap.finalize(json.dumps(model_cost).encode()):

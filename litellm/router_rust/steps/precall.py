@@ -2,7 +2,7 @@
 Host-side facts for the Rust core's ``enable_pre_call_checks`` filter.
 
 The Rust core decides which deployments the pre-call checks drop and which error a group with
-nothing left raises (``router-core/src/precall.rs``). What needs live Python objects is answered
+nothing left raises (``router-core/src/precall/mod.rs``). What needs live Python objects is answered
 here, on a ``pre_call`` select step: the prompt's token count (messages, Responses input and
 instructions, tools and an Anthropic ``system`` block), each deployment's context window from
 its router model info, and which requested params each deployment takes. Ported from the Python
@@ -15,14 +15,15 @@ deployment records rather than a step, and those need not be in the Rust registr
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from functools import partial
-from itertools import accumulate, groupby
+from itertools import accumulate, chain, groupby
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Protocol
 
 from litellm._logging import verbose_router_logger
-from litellm.litellm_core_utils.core_helpers import as_str_mapping
+from litellm.litellm_core_utils.core_helpers import allowed_openai_param_names, as_str_mapping
 from litellm.litellm_core_utils.deployment_pricing import deployment_backend_models
 from litellm.litellm_core_utils.get_llm_provider_logic import declared_authenticating_provider
+from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import parts_of
 from litellm.litellm_core_utils.prompt_templates.tpm_media_utils import is_plain_embedding_text
 from litellm.litellm_core_utils.token_counter import (
     offload_token_count,
@@ -33,6 +34,12 @@ from litellm.litellm_core_utils.token_counter import (
 from litellm.router_attempt import for_requested_model
 from litellm.router_python_host import python_host
 from litellm.router_strategy.complexity_router.context_compaction import compaction_pending
+from litellm.types.decisions import (
+    DecisionsIRMessages,
+    DecisionsIRState,
+    OpenAIDecisionInputJSON,
+    OpenAIDecisionInputMessage,
+)
 from litellm.types.router import LiteLLM_Params
 
 if TYPE_CHECKING:
@@ -204,8 +211,7 @@ def _is_list(value: object) -> bool:
 
 
 def _declared_param_allowlist(params: Mapping[str, object]) -> frozenset[str]:
-    declared: Final = params.get("allowed_openai_params")
-    return frozenset(entry for entry in _items(declared) if isinstance(entry, str))
+    return frozenset(allowed_openai_param_names(params.get("allowed_openai_params")))
 
 
 def _capability_model_and_provider(deployment_params: Mapping[str, object], group: str) -> tuple[str, str]:
@@ -456,7 +462,7 @@ def pre_call_checks(
     skip_inline_token_count: bool = False,
     request_deployments: Sequence[Mapping[str, object]] | None = None,
 ) -> Sequence[Mapping[str, object]]:
-    """``_pre_call_checks`` over the given deployments, as ``router-core/src/precall.rs`` decides it."""
+    """``_pre_call_checks`` over the given deployments, as ``router-core/src/precall/mod.rs`` decides it."""
     import litellm.exceptions as litellm_exceptions
 
     pool: Final = (
@@ -580,7 +586,7 @@ def _route_capability_resolvers() -> Mapping[str, Callable[[str, "LlmProviders"]
     }
 
 
-# ``_DECISIONS_MEDIA_CALL_TYPES``: the calls whose audio or videos some deployments refuse.
+# ``_DECISIONS_MEDIA_CALL_TYPES``: the calls whose audio, videos or JSON input some deployments refuse.
 DECISIONS_MEDIA_CALL_TYPES: Final = frozenset({"adecisions", "decisions", "asystemone", "systemone"})
 
 
@@ -608,10 +614,36 @@ def cannot_serve_route(deployment: Mapping[str, object], group: str, handler: st
         return False
 
 
+def _is_json_input_part(part: object) -> bool:
+    match part:
+        case {"type": "input_json"} | OpenAIDecisionInputJSON():
+            return True
+        case _:
+            return False
+
+
+def _content_parts(message: object) -> Sequence[object]:
+    if isinstance(message, OpenAIDecisionInputMessage):
+        return () if isinstance(message.content, str) else message.content
+    return parts_of((as_str_mapping(message) or {}).get("content"))
+
+
+def request_carries_json_input(request_input: object) -> bool:
+    """A Decisions ``input`` holding an ``input_json`` part, as sent or as validated messages."""
+    messages: Final = parts_of(request_input)
+    return any(map(_is_json_input_part, chain.from_iterable(map(_content_parts, messages))))
+
+
 def refuses_decisions_media(
-    deployment: Mapping[str, object], group: str, sent_kwargs: Mapping[str, object], *, audio: bool, videos: bool
+    deployment: Mapping[str, object],
+    group: str,
+    sent_kwargs: Mapping[str, object],
+    *,
+    audio: bool,
+    videos: bool,
+    decision_input: DecisionsIRState | DecisionsIRMessages | None,
 ) -> bool:
-    """``_decisions_deployment_refuses_media``."""
+    """``_decisions_deployment_refuses_media``, JSON input parts included."""
     from litellm.decisions.call import deployment_refuses_media
 
     model_info: Final = as_str_mapping(deployment.get("model_info")) or {}
@@ -619,7 +651,13 @@ def refuses_decisions_media(
     try:
         model, custom_llm_provider = _capability_model_and_provider(params, group)
         return deployment_refuses_media(
-            model, custom_llm_provider, model_info, {**params, **sent_kwargs}, audio=audio, videos=videos
+            model,
+            custom_llm_provider,
+            model_info,
+            {**params, **sent_kwargs},
+            audio=audio,
+            videos=videos,
+            decision_input=decision_input,
         )
     except Exception as e:  # noqa: BLE001  # best-effort filter: a deployment it cannot resolve answers for itself
         verbose_router_logger.debug(

@@ -5,7 +5,9 @@ import io
 import math
 import re
 import struct
+import threading
 from bisect import bisect_right
+from collections import OrderedDict
 from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from functools import cached_property
@@ -50,7 +52,10 @@ from litellm.constants import (
 from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.litellm_core_utils.core_helpers import as_object_list, as_str_mapping
 from litellm.litellm_core_utils.prompt_templates.chat_template_tools import (
+    OPENAI_TOOL_CHOICE_TOKENS,
     ChatTemplateToolSection,
+    ToolChoiceTokens,
+    chat_template_tool_choice_tokens,
     chat_template_tool_section,
 )
 from litellm.litellm_core_utils.tokenizer import HuggingFaceTokenizer, OpenAIEncoding
@@ -612,7 +617,7 @@ def estimate_image_tokens(
 
 
 _MEDIA_FILE_CHARS_PER_TOKEN: Final = 4
-_EmbeddingInputT: Final = TypeVar("_EmbeddingInputT")
+_EmbeddingInputT = TypeVar("_EmbeddingInputT")
 
 
 def _max_input_tokens(model: str) -> int | None:
@@ -767,7 +772,7 @@ class _PdfReader(Protocol):
 
 
 EXTRAPOLATION_SAMPLES: Final = 16
-T_ParamSpec: Final = ParamSpec("T_ParamSpec")
+T_ParamSpec = ParamSpec("T_ParamSpec")
 T_Retval = TypeVar("T_Retval")
 _COUNT_OFFLOAD_LIMITER: Final = anyio.lowlevel.RunVar[anyio.CapacityLimiter]("litellm_count_offload_limiter")
 _ANTHROPIC_TOOL_KEYS_MAPPED_BY_BRIDGE: Final = frozenset(
@@ -814,9 +819,9 @@ class _MessageCountParams:
     def __init__(
         self,
         model: str,
-        custom_tokenizer: dict | SelectTokenizerResponse | None,
+        custom_tokenizer: Mapping[str, object] | SelectTokenizerResponse | None,
     ):
-        from litellm.utils import print_verbose
+        from litellm.utils import huggingface_tokenizer_kind, print_verbose
 
         actual_model: Final = _fix_model_name(model)
         if uses_legacy_message_accounting(model):
@@ -831,11 +836,27 @@ class _MessageCountParams:
             self.tokens_per_name = 1
         self.count_function = _get_count_function(model, custom_tokenizer)
         self.tool_section = chat_template_tool_section(model)
+        self.tool_choice_tokens = _tool_choice_tokens(
+            model or "",
+            self.tool_section,
+            bills_no_tool_choice=huggingface_tokenizer_kind(model or "") == "deepseek"
+            or "gemini" in (model or "").lower(),
+        )
         self._model = model
 
     @cached_property
     def pdf_pricing(self) -> PdfPagePricing:
         return pdf_page_pricing(self._model)
+
+
+def _tool_choice_tokens(
+    model: str, tool_section: ChatTemplateToolSection | None, bills_no_tool_choice: bool
+) -> ToolChoiceTokens | None:
+    if tool_section is not None:
+        return chat_template_tool_choice_tokens(model, tool_section)
+    if bills_no_tool_choice:
+        return None
+    return OPENAI_TOOL_CHOICE_TOKENS
 
 
 def _is_openai_chat_model(model: str) -> bool:
@@ -891,10 +912,10 @@ def reads_pdf_pages(model: str) -> bool:
 
 
 def token_counter(
-    model="",
-    custom_tokenizer: dict | SelectTokenizerResponse | None = None,
+    model: str = "",
+    custom_tokenizer: Mapping[str, object] | SelectTokenizerResponse | None = None,
     text: str | list[str] | None = None,
-    messages: Sequence[AllMessageValues | Message] | None = None,
+    messages: Sequence[AllMessageValues | Message | Mapping[str, object]] | None = None,
     count_response_tokens: bool | None = False,
     tools: list[ChatCompletionToolParam] | None = None,
     tool_choice: str | Mapping[str, object] | None = None,
@@ -951,7 +972,12 @@ def token_counter(
         if count_response_tokens is False:
             includes_system_message: Final = any(message.get("role", None) == "system" for message in new_messages)
             num_tokens += _count_extra(
-                params.count_function, tools, tool_choice, includes_system_message, params.tool_section
+                params.count_function,
+                tools,
+                tool_choice,
+                includes_system_message,
+                params.tool_section,
+                params.tool_choice_tokens,
             )
 
     else:
@@ -987,7 +1013,9 @@ def messages_reach_token_count(
     )
     running_totals: Final = accumulate(
         per_message_counts,
-        initial=_count_extra(params.count_function, tools, None, includes_system_message, params.tool_section),
+        initial=_count_extra(
+            params.count_function, tools, None, includes_system_message, params.tool_section, params.tool_choice_tokens
+        ),
     )
     return any(total >= threshold for total in running_totals)
 
@@ -1101,6 +1129,7 @@ def _count_extra(
     tool_choice: str | Mapping[str, object] | None,
     includes_system_message: bool,
     tool_section: ChatTemplateToolSection | None,
+    tool_choice_tokens: ToolChoiceTokens | None,
 ) -> int:
     """Count extra tokens for function definitions and tool choices.
     Args:
@@ -1109,17 +1138,13 @@ def _count_extra(
         tool_choice (Optional[ChatCompletionNamedToolChoiceParam]): The tool choice.
         includes_system_message (bool): Whether the messages include a system message.
         tool_section (Optional[ChatTemplateToolSection]): How the model's chat template renders tools, if known.
+        tool_choice_tokens (Optional[ToolChoiceTokens]): What the model's chat template adds per tool choice, if any.
     """
     reply_primer_tokens: Final = 3
-    tool_choice_tokens: Final = (
-        _count_tool_choice(count_function, tool_choice)
-        if tool_section is None or tool_section.counts_tool_choice
-        else 0
-    )
     return (
         reply_primer_tokens
         + _count_tool_definitions(count_function, tools, includes_system_message, tool_section)
-        + tool_choice_tokens
+        + (_count_tool_choice(count_function, tool_choice, tool_choice_tokens) if tools else 0)
     )
 
 
@@ -1140,16 +1165,17 @@ def _count_tool_definitions(
 def _count_tool_choice(
     count_function: TokenCounterFunction,
     tool_choice: str | Mapping[str, object] | None,
+    tool_choice_tokens: ToolChoiceTokens | None,
 ) -> int:
+    if tool_choice_tokens is None:
+        return 0
     match tool_choice:
-        case "none":
-            return 1
-        case {"function": {"name": str() as name}}:
-            return 7 + count_function(name)
-        case {"type": "none"}:
-            return 1
-        case {"name": str() as name}:
-            return 7 + count_function(name)
+        case "none" | {"type": "none"}:
+            return tool_choice_tokens.none
+        case "required" | {"type": "any"}:
+            return tool_choice_tokens.required
+        case {"function": {"name": str() as name}} | {"name": str() as name}:
+            return tool_choice_tokens.named + count_function(name)
         case _:
             return 0
 
@@ -1209,19 +1235,67 @@ def _evenly_spaced_samples(text: str, total_chars: int) -> tuple[str, ...]:
     )
 
 
+_MemoKey: TypeAlias = tuple[int, int, int]
+_MemoEntry: TypeAlias = tuple[object, int]
+
+
+class TokenCountMemo:
+    """Least recently used token counts of long texts, so a conversation resent with one more turn only tokenizes
+    the new turn. Entries are keyed by the tokenizer's id and the text's length and hash, never the text itself, and
+    hold their tokenizer so that id cannot be reused by another one while the entry lives."""
+
+    __slots__ = ("_counts", "_lock", "_max_entries", "_min_chars")
+
+    def __init__(self, max_entries: int = 16_384, min_chars: int = 1024) -> None:
+        self._counts: Final[OrderedDict[_MemoKey, _MemoEntry]] = OrderedDict()  # mutable-ok: an LRU evicts in place
+        self._lock: Final = threading.Lock()
+        self._max_entries: Final = max_entries
+        self._min_chars: Final = min_chars
+
+    def wrap(self, tokenizer: object, count: TokenCounterFunction) -> TokenCounterFunction:
+        def count_tokens(text: str) -> int:
+            if len(text) < self._min_chars:
+                return count(text)
+            key: Final = (id(tokenizer), len(text), hash(text))
+            with self._lock:
+                cached: Final = self._counts.get(key)
+                if cached is not None:
+                    self._counts.move_to_end(key)
+                    return cached[1]
+            counted: Final = count(text)
+            with self._lock:
+                self._counts[key] = (tokenizer, counted)
+                self._counts.move_to_end(key)
+                if len(self._counts) > self._max_entries:
+                    self._counts.popitem(last=False)
+            return counted
+
+        return count_tokens
+
+
+_TOKEN_COUNT_MEMO: Final = TokenCountMemo()
+
+
 def _get_count_function(
     model: str | None,
-    custom_tokenizer: dict | SelectTokenizerResponse | None = None,
+    custom_tokenizer: Mapping[str, object] | SelectTokenizerResponse | None = None,
 ) -> TokenCounterFunction:
-    return _get_extrapolating_count_function(_get_exact_count_function(model, custom_tokenizer))
+    exact: Final = _resolve_exact_count(model, custom_tokenizer)
+    count: Final = _get_extrapolating_count_function(exact.count)
+    return count if custom_tokenizer is not None else _TOKEN_COUNT_MEMO.wrap(exact.tokenizer, count)
 
 
-def _get_exact_count_function(
+@dataclass(frozen=True, slots=True)
+class _ExactCount:
+    tokenizer: "Encoding | HuggingFace"
+    count: TokenCounterFunction
+
+
+def _resolve_exact_count(
     model: str | None,
-    custom_tokenizer: dict | SelectTokenizerResponse | None = None,
-) -> TokenCounterFunction:
-    """
-    Get the function to count tokens based on the model and custom tokenizer."""
+    custom_tokenizer: Mapping[str, object] | SelectTokenizerResponse | None = None,
+) -> _ExactCount:
+    """The tokenizer and the exact count function for the model and custom tokenizer."""
     from litellm.utils import select_tokenizer
 
     if model is not None or custom_tokenizer is not None:
@@ -1232,7 +1306,7 @@ def _get_exact_count_function(
         def encode_length(text: str) -> int:
             return _encoding_count(default_encoding, text)
 
-        return _get_tiktoken_count_function(encode_length)
+        return _ExactCount(default_encoding, _get_tiktoken_count_function(encode_length))
     if tokenizer_json["type"] == "huggingface_tokenizer":
         tokenizer: Final[HuggingFace] = tokenizer_json["tokenizer"]
 
@@ -1241,14 +1315,14 @@ def _get_exact_count_function(
                 return tokenizer.count(text)
             return len(tokenizer.encode_batch_fast([text])[0])
 
-        return count_tokens
+        return _ExactCount(tokenizer, count_tokens)
     if tokenizer_json["type"] == "openai_tokenizer":
         encoding: Final = openai_tokenizer_encoding(model or "")
 
         def encode_length(text: str) -> int:
             return _encoding_count(encoding, text)
 
-        return _get_tiktoken_count_function(encode_length)
+        return _ExactCount(encoding, _get_tiktoken_count_function(encode_length))
     raise ValueError("Unsupported tokenizer type")
 
 
@@ -1860,14 +1934,26 @@ def _count_anthropic_content(
         except Exception as e:
             if default_token_count is not None:
                 return default_token_count
-            raise (UnsupportedContentTypeError if isinstance(e, UnsupportedContentTypeError) else ValueError)(
-                f"Error counting field '{field_name}': {e}"
+            if isinstance(e, UnsupportedContentTypeError):
+                raise
+            raise (
+                UnsupportedContentTypeError(
+                    f"The token counter can't read the {field_name} field of a {content_type} block: {e}"
+                )
+                if server_fields is not None
+                else ValueError(f"Error counting field '{field_name}': {e}")
             )
     return tokens
 
 
 _TEXT_FIELD_BY_BLOCK_TYPE: Final = MappingProxyType(
-    {"text": "text", "thinking": "thinking", "redacted_thinking": "thinking", "compaction": "content"}
+    {
+        "text": "text",
+        "thinking": "thinking",
+        "redacted_thinking": "thinking",
+        "compaction": "content",
+        "fallback": "text",
+    }
 )
 
 
@@ -1971,19 +2057,18 @@ def _count_content_list(
             else:
                 content_type = c.get("type", type(c).__name__) if isinstance(c, dict) else type(c).__name__
                 raise UnsupportedContentTypeError(
-                    f"Invalid content item type: {content_type}. "
-                    f"Expected str or dict with 'type' field "
-                    f"(text, image_url, image, document, file, tool_use, tool_result, thinking, redacted_thinking, "
-                    f"compaction, tool_reference, tool_addition, tool_removal, search_result, "
-                    f"or Anthropic server tool blocks)."
+                    f"The token counter can't count content blocks of type {content_type}"
                 )
         return num_tokens
     except Exception as e:
         if default_token_count is not None:
             return default_token_count
-        error_type: Final = UnsupportedContentTypeError if isinstance(e, UnsupportedContentTypeError) else ValueError
-        raise error_type(
-            f"Error getting number of tokens from content list: {e}, default_token_count={default_token_count}"
+        raise (
+            e
+            if isinstance(e, UnsupportedContentTypeError)
+            else ValueError(
+                f"Error getting number of tokens from content list: {e}, default_token_count={default_token_count}"
+            )
         )
 
 
@@ -2001,7 +2086,8 @@ def _tool_change_tokens(count_function: TokenCounterFunction, tool: Mapping[str,
             return count_function(server_name)
         case _:
             raise UnsupportedContentTypeError(
-                f"Invalid tool change target type: {None if tool is None else tool.get('type')}"
+                f"The token counter can't count tool changes whose target type is "
+                f"{None if tool is None else tool.get('type')}"
             )
 
 
@@ -2009,7 +2095,7 @@ def _format_function_definitions(tools: Sequence[object]) -> str:
     """Formats tool definitions in the format that OpenAI appears to use.
     Based on https://github.com/forestwanglin/openai-java/blob/main/jtokkit/src/main/java/xyz/felh/openai/jtokkit/utils/TikTokenUtils.java
     """
-    lines: Final = []
+    lines: Final[list[str]] = []
     lines.append("namespace functions {")
     lines.append("")
     for function in _function_definitions(tools):
@@ -2071,7 +2157,7 @@ def _format_single_function_definition(function: Mapping[str, object]) -> tuple[
     if not function_name:
         return ()
     function_description: Final = function.get("description")
-    parameters_value: Final = function.get("parameters") or {}
+    parameters_value: Final = function.get("parameters") or function.get("parametersJsonSchema") or {}
     parameters: Final = parameters_value if isinstance(parameters_value, Mapping) else {}
     properties: Final = parameters.get("properties")
     if isinstance(properties, Mapping) and properties:
@@ -2089,13 +2175,13 @@ def _format_single_function_definition(function: Mapping[str, object]) -> tuple[
     )
 
 
-def _format_object_parameters(parameters, indent):
+def _format_object_parameters(parameters: Mapping[str, object], indent: int) -> str:
     properties: Final = parameters.get("properties")
     if not isinstance(properties, Mapping) or not properties:
         return ""
     required: Final = parameters.get("required")
     required_params: Final = tuple(required) if isinstance(required, list) else ()
-    lines: Final = []
+    lines: Final[list[str]] = []
     for key, props in properties.items():
         description = props.get("description") if isinstance(props, Mapping) else None
         if description:
@@ -2107,7 +2193,7 @@ def _format_object_parameters(parameters, indent):
     return "\n".join([" " * max(0, indent) + line for line in lines])
 
 
-def _format_type(props, indent):
+def _format_type(props: object, indent: int) -> str:
     if not isinstance(props, Mapping):
         return "any"
     type: Final = props.get("type")

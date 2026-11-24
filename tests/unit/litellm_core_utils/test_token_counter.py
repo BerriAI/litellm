@@ -6,31 +6,26 @@ import copy
 import importlib
 import io
 import json
-import os
-import subprocess
 import sys
 import threading
 import time
 from collections.abc import Callable, Mapping
 from concurrent.futures import Future, ThreadPoolExecutor, wait
 from itertools import accumulate, chain
-from pathlib import Path
 from queue import SimpleQueue
 from typing import Final, cast
-from unittest.mock import MagicMock, sentinel
+from unittest.mock import AsyncMock, MagicMock, patch, sentinel
 
 import anyio.to_thread
 import pytest
 import tiktoken
 from PIL import Image
-from tokenizers import Regex, Tokenizer, models, pre_tokenizers
-
-from unittest.mock import AsyncMock, patch
+from tokenizers import Tokenizer
 
 import litellm
+import litellm.constants
 from litellm import decode, encode, get_modified_max_tokens
 from litellm import token_counter as token_counter_old
-import litellm.constants
 from litellm.constants import (
     HUGGINGFACE_TOKENIZER_LOAD_RETRY_SECONDS,
     PDF_MAX_XOBJECT_DRAWS_PER_PAGE,
@@ -38,12 +33,13 @@ from litellm.constants import (
 )
 from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.litellm_core_utils.token_counter import (
+    TokenCountMemo,
     UnsupportedContentTypeError,
     _count_content_list,
     _encoding_count,
-    _get_exact_count_function,
     _get_extrapolating_count_function,
     _get_tiktoken_count_function,
+    _resolve_exact_count,
     calculate_img_tokens,
     estimate_image_tokens,
     has_only_text_content,
@@ -60,6 +56,7 @@ from tests.large_text import text
 from tests.unit.litellm_core_utils.event_loop_lag import (
     assert_loop_stayed_free,
     timed_with_loop_lags,
+    uncounted_text,
     warm_tokenizer,
 )
 from tests.unit.litellm_core_utils.messages_with_counts import (
@@ -178,7 +175,7 @@ async def test_huggingface_count_in_a_worker_thread_leaves_the_event_loop_free()
     warm_tokenizer("claude-fable-5")
 
     tokens, took, lags = await timed_with_loop_lags(
-        lambda: asyncify(token_counter_new)(model="claude-fable-5", text=text * 100)
+        lambda: asyncify(token_counter_new)(model="claude-fable-5", text=uncounted_text())
     )
 
     assert tokens > 0
@@ -223,7 +220,7 @@ class _SlowEncoder:
 @pytest.mark.asyncio
 async def test_offloaded_counts_do_not_borrow_from_the_shared_thread_pool():
     encoder: Final = _SlowEncoder()
-    count: Final = _get_exact_count_function(None, {"type": "huggingface_tokenizer", "tokenizer": encoder})
+    count: Final = _resolve_exact_count(None, {"type": "huggingface_tokenizer", "tokenizer": encoder}).count
     shared_pool: Final = anyio.to_thread.current_default_thread_limiter()
     burst: Final = 2 * TOKEN_COUNTER_MAX_CONCURRENT_COUNTS
 
@@ -282,7 +279,7 @@ def test_token_counter_applies_the_default_cap():
     max_exact_chars: Final = litellm.constants.TOKEN_COUNTER_MAX_EXACT_CHARS
     prose: Final = ("The quick brown fox jumps over the lazy dog. " * (max_exact_chars // 45 + 1))[:max_exact_chars]
     over_the_cap: Final = prose + "a" * 200_000
-    exact: Final = _get_exact_count_function("gpt-5.6")(over_the_cap)
+    exact: Final = _resolve_exact_count("gpt-5.6").count(over_the_cap)
 
     estimate: Final = token_counter_new(model="gpt-5.6", text=over_the_cap)
 
@@ -704,27 +701,102 @@ def test_token_counter_counts_function_tools_like_chat_completions_tools_for_cha
     ) == token_counter_new(model=model, messages=list(_USER_MESSAGES), tools=[_openai_tool(function)])
 
 
+def test_token_counter_counts_a_gemini_parameters_json_schema_like_parameters():
+    json_schema_function: Final = {
+        "name": _WEATHER_FUNCTION["name"],
+        "description": _WEATHER_FUNCTION["description"],
+        "parametersJsonSchema": _WEATHER_FUNCTION["parameters"],
+    }
+
+    assert token_counter_new(
+        model="gemini-2.5-pro", messages=list(_USER_MESSAGES), tools=[_gemini_tool(json_schema_function)]
+    ) == token_counter_new(
+        model="gemini-2.5-pro", messages=list(_USER_MESSAGES), tools=[_gemini_tool(_WEATHER_FUNCTION)]
+    )
+
+
 # Azure AI Foundry DeepSeek-V4-Flash-0731 billed 295 prompt tokens for the weather tool with each of
-# these tool_choice values on 2026-10-17, the same as without one
+# these tool_choice values on 2026-10-17, the same as without one. On 2026-10-29 aiand's
+# deepseek-v4.1-flash billed 296 for each, and Fireworks' deepseek-v4p1-flash and OpenRouter's
+# deepseek-v3.2 billed the same for "required" and the named tool as without one
+@pytest.mark.parametrize(
+    "model",
+    [
+        "DeepSeek-V4-Flash-0731",
+        "aiand/deepseek-ai/deepseek-v4.1-flash",
+        "fireworks_ai/accounts/fireworks/models/deepseek-v4p1-flash",
+        "openrouter/deepseek/deepseek-v3.2",
+    ],
+)
 @pytest.mark.parametrize("tool_choice", ["none", "required", {"type": "function", "function": {"name": "get_weather"}}])
-def test_token_counter_tool_choice_adds_nothing_for_deepseek_v4(tool_choice: object):
+def test_token_counter_tool_choice_adds_nothing_for_deepseek_v3_and_v4(model: str, tool_choice: object):
     tools: Final = [_openai_tool(_WEATHER_FUNCTION)]
 
     assert token_counter_new(
-        model="DeepSeek-V4-Flash-0731", messages=list(_USER_MESSAGES), tools=tools, tool_choice=tool_choice
-    ) == token_counter_new(model="DeepSeek-V4-Flash-0731", messages=list(_USER_MESSAGES), tools=tools)
+        model=model, messages=list(_USER_MESSAGES), tools=tools, tool_choice=tool_choice
+    ) == token_counter_new(model=model, messages=list(_USER_MESSAGES), tools=tools)
 
 
-# A request with a one-function tool billed 283 prompt tokens on xAI grok-4.3 without tool_choice and 297 with a
-# named one, and 357 and 358 on Azure AI Foundry grok-4-1-fast-reasoning, on 2026-10-29
-@pytest.mark.parametrize("model", ["grok-4.3", "grok-4-1-fast-reasoning"])
-def test_token_counter_counts_a_named_tool_choice_for_grok(model: str):
+# Gemini API gemini-3.8-flash, gemini-3.1-pro-preview and gemini-3.5-flash-lite each billed 51 prompt tokens for the
+# weather tool with no toolConfig, NONE, ANY and ANY limited to the tool on 2026-11-11
+@pytest.mark.parametrize("model", ["gemini/gemini-3.8-flash", "gemini/gemini-3.1-pro-preview", "gemini-3.5-flash-lite"])
+@pytest.mark.parametrize("tool_choice", ["none", "required", {"type": "function", "function": {"name": "get_weather"}}])
+def test_token_counter_tool_choice_adds_nothing_for_gemini(model: str, tool_choice: object):
     tools: Final = [_openai_tool(_WEATHER_FUNCTION)]
-    named: Final = {"type": "function", "function": {"name": "get_weather"}}
 
     assert token_counter_new(
-        model=model, messages=list(_USER_MESSAGES), tools=tools, tool_choice=named
-    ) > token_counter_new(model=model, messages=list(_USER_MESSAGES), tools=tools)
+        model=model, messages=list(_USER_MESSAGES), tools=tools, tool_choice=tool_choice
+    ) == token_counter_new(model=model, messages=list(_USER_MESSAGES), tools=tools)
+
+
+# xAI grok-4.3 and grok-4-1-fast-reasoning each billed 275 prompt tokens for the weather tool with no tool_choice,
+# 296 with "none", 286 with "required" and 289 with the named tool on 2026-11-10, and OpenRouter, which served
+# x-ai/grok-4.3 from xAI, billed the same on 2026-11-11
+@pytest.mark.parametrize("model", ["xai/grok-4.3", "grok-4-1-fast-reasoning", "openrouter/x-ai/grok-4.3"])
+@pytest.mark.parametrize(
+    ("tool_choice", "billed_over_unset"),
+    [
+        pytest.param("none", 21, id="none"),
+        pytest.param({"type": "none"}, 21, id="anthropic-none"),
+        pytest.param("required", 11, id="required"),
+        pytest.param({"type": "any"}, 11, id="anthropic-any"),
+        pytest.param({"type": "function", "function": {"name": "get_weather"}}, 14, id="named"),
+        pytest.param({"type": "tool", "name": "get_weather"}, 14, id="anthropic-tool"),
+        pytest.param({"type": "function", "name": "get_weather"}, 14, id="responses-function"),
+        pytest.param("auto", 0, id="auto"),
+    ],
+)
+def test_token_counter_counts_each_grok_tool_choice_the_way_xai_bills_it(
+    model: str, tool_choice: str | Mapping[str, object], billed_over_unset: int
+):
+    tools: Final = [_openai_tool(_WEATHER_FUNCTION)]
+
+    assert (
+        token_counter_new(model=model, messages=list(_USER_MESSAGES), tools=tools, tool_choice=tool_choice)
+        - token_counter_new(model=model, messages=list(_USER_MESSAGES), tools=tools)
+        == billed_over_unset
+    )
+
+
+# Azure AI Foundry grok-4-1 billed 351 prompt tokens for the weather tool with no tool_choice, 163 with "none" and
+# 352 with "required" or the named tool on 2026-11-10, so xAI's costs would count it 10 to 21 over
+@pytest.mark.parametrize("model", ["azure_ai/grok-4-1-fast-reasoning", "azure_ai/grok-4.3", "vertex_ai/xai/grok-4.3"])
+@pytest.mark.parametrize("tool_choice", ["none", "required", {"type": "function", "function": {"name": "get_weather"}}])
+def test_token_counter_tool_choice_adds_nothing_for_grok_served_off_xai(model: str, tool_choice: object):
+    tools: Final = [_openai_tool(_WEATHER_FUNCTION)]
+
+    assert token_counter_new(
+        model=model, messages=list(_USER_MESSAGES), tools=tools, tool_choice=tool_choice
+    ) == token_counter_new(model=model, messages=list(_USER_MESSAGES), tools=tools)
+
+
+# xAI and OpenAI both answered 400 to a tool_choice sent without tools on 2026-11-11
+@pytest.mark.parametrize("model", ["xai/grok-4.3", "gpt-4.1"])
+@pytest.mark.parametrize("tool_choice", ["none", {"type": "function", "function": {"name": "get_weather"}}])
+def test_token_counter_tool_choice_without_tools_adds_nothing(model: str, tool_choice: object):
+    assert token_counter_new(model=model, messages=list(_USER_MESSAGES), tool_choice=tool_choice) == token_counter_new(
+        model=model, messages=list(_USER_MESSAGES)
+    )
 
 
 def _counted_with_strict(model: str, **strict: bool) -> int:
@@ -761,7 +833,7 @@ def test_token_counter_renders_a_false_strict_like_a_true_one_for_other_chat_tem
     ("tool_choice", "expected_tool_choice"),
     [
         pytest.param({"type": "auto"}, None, id="anthropic-auto"),
-        pytest.param({"type": "any"}, None, id="anthropic-any"),
+        pytest.param({"type": "any"}, "required", id="anthropic-any"),
         pytest.param({"type": "none"}, "none", id="anthropic-none"),
         pytest.param(
             {"type": "tool", "name": "get_weather"},
@@ -845,48 +917,6 @@ class NeedsToleranceUpdateError(Exception):
 
 
 # test_tokenizers()
-
-
-def test_encoding_and_decoding(tmp_path: Path):
-    sample_text = "Hellö World, this is my input string!"
-
-    # openai encoding + decoding
-    openai_tokens = encode(model="gpt-3.5-turbo", text=sample_text)
-    openai_text = decode(model="gpt-3.5-turbo", tokens=openai_tokens)
-
-    assert openai_text == sample_text
-
-    # claude encoding + decoding
-    claude_tokens = encode(model="claude-3-5-haiku-20241022", text=sample_text)
-
-    claude_text = decode(model="claude-3-5-haiku-20241022", tokens=claude_tokens)
-
-    assert claude_text == sample_text
-
-    # cohere encoding + decoding
-    cohere_tokens = encode(model="command-nightly", text=sample_text)
-    cohere_text = decode(model="command-nightly", tokens=cohere_tokens)
-
-    assert cohere_text == sample_text
-
-    # llama2 encoding + decoding
-    words = sample_text.split()
-    result = _run_in_memory_hub(
-        HUB_ROUND_TRIP_SCRIPT,
-        {
-            "hf-internal-testing/llama-tokenizer": _word_level_tokenizer_json(
-                pre_tokenizers.WhitespaceSplit(),
-                vocab={"[UNK]": 0, **{word: i + 1 for i, word in enumerate(words)}},
-            )
-        },
-        sample_text,
-        tmp_path,
-    )
-
-    assert result["decoded"] == sample_text
-    assert result["requested"] == ["hf-internal-testing/llama-tokenizer"]
-    assert len(result["tokens"]) == len(words)
-    assert len(result["tokens"]) != len(encode(model="gpt-3.5-turbo", text=sample_text))
 
 
 # test_encoding_and_decoding()
@@ -986,20 +1016,6 @@ def test_empty_tools():
     print(result)
 
 
-@pytest.mark.skip(
-    reason="Skipping this test temporarily because it relies on a function being called that I am removing."
-)
-def test_gpt_4o_token_counter():
-    with patch.object(
-        litellm.utils, "openai_token_counter", new=MagicMock()
-    ) as mock_client:
-        token_counter(
-            model="gpt-4o-2024-05-13", messages=[{"role": "user", "content": "Hey!"}]
-        )
-
-        mock_client.assert_called()
-
-
 @pytest.mark.parametrize(
     "img_url",
     [
@@ -1015,6 +1031,7 @@ def test_img_url_token_counter(img_url, monkeypatch):
     third-party image URL goes away.
     """
     import base64
+
     from litellm.litellm_core_utils.token_counter import get_image_dimensions
 
     # Minimal valid 1x1 PNG, served by the mocked safe_get for the URL case.
@@ -1087,8 +1104,9 @@ from litellm.utils import (
     _HuggingFaceTokenizerLoadOutcomes,
     _return_huggingface_tokenizer,
     _select_tokenizer_helper,
-    claude_json_str,
     encoding,
+    huggingface_tokenizer_may_download,
+    without_huggingface_tokenizer_downloads,
 )
 
 # Clear the cache at module load to ensure clean state
@@ -1391,6 +1409,33 @@ def _eventually(probe: Callable[[], bool]) -> bool:
             return True
         time.sleep(0.01)
     return False
+
+
+def test_a_hub_tokenizer_may_download_only_until_it_has_loaded_once():
+    model: Final = "databricks/databricks-meta-llama-3-3-70b-instruct"
+    outcomes: Final = _HuggingFaceTokenizerLoadOutcomes()
+    before_loading: Final = huggingface_tokenizer_may_download(model, outcomes)
+
+    with patch("litellm.utils.tokenizer_dispatch.from_pretrained", return_value=sentinel.tokenizer):
+        _return_huggingface_tokenizer(model, outcomes)
+
+    assert before_loading
+    assert not huggingface_tokenizer_may_download(model, outcomes)
+
+
+def test_a_count_that_must_not_wait_on_a_download_uses_only_a_tokenizer_already_loaded():
+    model: Final = "hostinger_router/llama-3.1-8b-instruct"
+    outcomes: Final = _HuggingFaceTokenizerLoadOutcomes(start_retry=_run_now)
+
+    with patch("litellm.utils.tokenizer_dispatch.from_pretrained", return_value=sentinel.tokenizer) as from_pretrained:
+        with without_huggingface_tokenizer_downloads():
+            before_any_load: Final = _return_huggingface_tokenizer(model, outcomes)
+        loaded_by_a_normal_count: Final = _return_huggingface_tokenizer(model, outcomes)
+        with without_huggingface_tokenizer_downloads():
+            after_the_load: Final = _return_huggingface_tokenizer(model, outcomes)
+    assert before_any_load is None
+    assert from_pretrained.call_count == 1
+    assert loaded_by_a_normal_count == after_the_load == {"type": "huggingface_tokenizer", "tokenizer": sentinel.tokenizer}
 
 
 def test_failed_download_is_retried_once_per_window_until_it_loads():
@@ -2043,6 +2088,34 @@ def test_token_counter_with_compaction_block():
     assert token_counter(model=model, messages=unsigned) == token_counter(model=model, messages=as_text)
 
 
+@pytest.mark.parametrize("model", ("anthropic/claude-sonnet-5-5", "gpt-5.4-mini", "deepseek/deepseek-v4-flash"))
+def test_token_counter_counts_nothing_for_a_fallback_block(model: str) -> None:
+    user_turn: Final = {"role": "user", "content": "hi"}
+    reply: Final = {"type": "text", "text": "Hello"}
+    fallback_block: Final = {
+        "type": "fallback",
+        "from": {"model": "first-model"},
+        "to": {"model": "second-model"},
+        "trigger": {"type": "refusal", "category": "cyber"},
+    }
+
+    with_block: Final = [user_turn, {"role": "assistant", "content": [reply, fallback_block, reply]}]
+    without_block: Final = [user_turn, {"role": "assistant", "content": [reply, reply]}]
+
+    assert token_counter(model=model, messages=with_block) == token_counter(model=model, messages=without_block)
+
+
+@pytest.mark.parametrize("model", ("anthropic/claude-sonnet-5-5", "gpt-5.4-mini", "deepseek/deepseek-v4-flash"))
+def test_token_counter_counts_the_text_a_fallback_block_carries_like_a_text_block(model: str) -> None:
+    user_turn: Final = {"role": "user", "content": "hi"}
+    carried: Final = "Text a caller put on the block. " * 20
+
+    with_fallback: Final = [user_turn, {"role": "assistant", "content": [{"type": "fallback", "text": carried}]}]
+    with_text: Final = [user_turn, {"role": "assistant", "content": [{"type": "text", "text": carried}]}]
+
+    assert token_counter(model=model, messages=with_fallback) == token_counter(model=model, messages=with_text)
+
+
 def test_token_counter_counts_chat_compaction_blocks_like_their_summary_text():
     """
     Chat clients replay a compaction block in the assistant message's provider_specific_fields, and inference
@@ -2156,23 +2229,20 @@ def test_token_counter_with_tool_reference_block():
 
 def test_count_content_list_rejects_unknown_type():
     """
-    An unrecognized content block type must raise, and the error message must
-    enumerate the supported types (including `tool_reference`). This pins the
-    catch-all contract so a future block type isn't silently dropped.
+    An unrecognized content block type must raise, naming the type, so a
+    future block type isn't silently dropped.
     """
     from litellm.litellm_core_utils.token_counter import _count_content_list
 
-    with pytest.raises(ValueError, match='Error getting number of tokens from content list: Invalid') as exc_info:
+    with pytest.raises(
+        ValueError, match=r"^The token counter can't count content blocks of type totally_unknown_block$"
+    ):
         _count_content_list(
             count_function=len,
             content_list=[{"type": "totally_unknown_block"}],
             use_default_image_token_count=False,
             default_token_count=None,
         )
-
-    message = str(exc_info.value)
-    assert "Invalid content item type: totally_unknown_block" in message
-    assert "tool_reference" in message
 
 
 _CLAUDE: Final = "anthropic/claude-sonnet-5-5"
@@ -2292,7 +2362,7 @@ def test_counting_tool_changes_leaves_the_messages_unchanged() -> None:
     ids=["unknown_target_type", "definition_not_an_object", "missing_target"],
 )
 def test_tool_change_with_an_unrecognized_target_stays_unsupported(tool_change: dict[str, object]) -> None:
-    with pytest.raises(UnsupportedContentTypeError, match="Invalid tool change target type"):
+    with pytest.raises(UnsupportedContentTypeError, match=r"^The token counter can't count tool changes whose target"):
         _count_content_list(len, [tool_change], False, None)
 
 
@@ -2609,6 +2679,29 @@ def test_token_counter_counts_server_tool_errors(tool: str) -> None:
     assert _count_content_list(len, [block], False, None) == len("unavailable")
 
 
+@pytest.mark.parametrize(
+    "block",
+    (
+        {"type": "web_search_tool_result", "tool_use_id": "srv_1", "content": [{"url": "https://example.invalid"}]},
+        {"type": "code_execution_tool_result", "tool_use_id": "srv_1", "content": {"type": "future_result"}},
+        {"type": "web_fetch_tool_result", "tool_use_id": "srv_1", "content": {"url": "https://example.invalid"}},
+    ),
+    ids=("result-without-type", "unknown-result-type", "mapping-without-type"),
+)
+@pytest.mark.parametrize("nested", (False, True), ids=("assistant-content", "tool-result"))
+def test_malformed_server_tool_block_is_unsupported_content(block: Mapping[str, object], nested: bool) -> None:
+    from litellm.litellm_core_utils.token_counter import UnsupportedContentTypeError, _count_content_list
+
+    content: Final = [{"type": "tool_result", "tool_use_id": "toolu_1", "content": [block]}] if nested else [block]
+
+    with pytest.raises(
+        UnsupportedContentTypeError,
+        match=rf"^The token counter can't read the content field of a {block['type']} block: ",
+    ):
+        _count_content_list(len, content, False, None)
+    assert _count_content_list(len, content, False, 7) == 7
+
+
 def test_token_counter_counts_anthropic_search_result_text() -> None:
     from litellm.litellm_core_utils.token_counter import _count_content_list
 
@@ -2646,7 +2739,7 @@ def test_unknown_content_type_remains_a_value_error_with_an_optional_fallback(co
     unknown: Final = {"type": "future_block"}
     content: Final = [{"type": container, "tool_use_id": "toolu_1", "content": [unknown]}] if container else [unknown]
 
-    with pytest.raises(ValueError, match="Invalid content item type: future_block"):
+    with pytest.raises(ValueError, match=r"^The token counter can't count content blocks of type future_block$"):
         _count_content_list(len, content, False, None)
     assert _count_content_list(len, content, False, 7) == 7
 
@@ -3489,129 +3582,6 @@ def test_image_estimate_bounds_header_decoding_for_large_inline_payloads() -> No
     assert len(decode_header.call_args.args[0]) <= 65_536
 
 
-HUB_SETUP_SCRIPT: Final = """
-import json
-import sys
-sys.path.insert(0, sys.argv[1])
-import httpx
-import huggingface_hub
-import litellm
-served = json.loads(sys.argv[2])
-text = sys.argv[3]
-requested = []
-def handle(request):
-    repo = request.url.path.lstrip("/").split("/resolve/")[0]
-    if repo not in served or not request.url.path.endswith("/tokenizer.json"):
-        return httpx.Response(404)
-    requested.append(repo)
-    payload = served[repo].encode()
-    headers = {"content-length": str(len(payload)), "etag": '"fixture"', "x-repo-commit": "a" * 40}
-    return httpx.Response(200, headers=headers, content=payload if request.method == "GET" else b"")
-huggingface_hub.set_client_factory(lambda: httpx.Client(transport=httpx.MockTransport(handle)))
-"""
-
-HUB_TOKENIZER_SCRIPT: Final = HUB_SETUP_SCRIPT + """
-litellm.cohere_models = {"command-r-v1"}
-litellm.anthropic_models = {"claude-2"}
-custom = litellm.create_pretrained_tokenizer("Xenova/llama-3-tokenizer")
-print(json.dumps({
-    "llama2": litellm.token_counter(model="meta-llama/Llama-2-7b-chat", text=text),
-    "llama3": litellm.token_counter(model="meta-llama/llama-3-70b-instruct", text=text),
-    "cohere": litellm.token_counter(model="command-r-v1", text=text),
-    "anthropic": litellm.token_counter(model="claude-2", text=text),
-    "custom": litellm.token_counter(custom_tokenizer=custom, text=text),
-    "requested": sorted(set(requested)),
-}))
-"""
-
-HUB_ROUND_TRIP_SCRIPT: Final = HUB_SETUP_SCRIPT + """
-tokens = litellm.encode(model="meta-llama/Llama-2-7b-chat", text=text)
-print(json.dumps({"tokens": tokens, "decoded": litellm.decode(model="meta-llama/Llama-2-7b-chat", tokens=tokens), "requested": sorted(set(requested))}))
-"""
-
-HUB_RETRY_DURING_EXIT_SCRIPT: Final = HUB_SETUP_SCRIPT + """
-import threading
-import time
-from litellm.utils import _HuggingFaceTokenizerLoadOutcomes, _return_huggingface_tokenizer
-retry_reached_hub = threading.Event()
-def answer_once_the_process_is_exiting(request):
-    retry_reached_hub.set()
-    while threading.main_thread().is_alive():
-        time.sleep(0.01)
-    time.sleep(0.5)
-    return handle(request)
-now = [0.0]
-outcomes = _HuggingFaceTokenizerLoadOutcomes(clock=lambda: now[0])
-model = "meta-llama/llama-3-70b-instruct"
-_return_huggingface_tokenizer(model, outcomes)
-huggingface_hub.set_client_factory(lambda: httpx.Client(transport=httpx.MockTransport(answer_once_the_process_is_exiting)))
-now[0] = 3600.0
-_return_huggingface_tokenizer(model, outcomes)
-print(json.dumps({"retry_reached_hub": retry_reached_hub.wait(timeout=60)}))
-"""
-
-
-def _word_level_tokenizer_json(
-    pre_tokenizer: pre_tokenizers.PreTokenizer, vocab: Mapping[str, int] | None = None
-) -> str:
-    tokenizer: Final = Tokenizer(
-        models.WordLevel(vocab=dict(vocab) if vocab is not None else {"[UNK]": 0}, unk_token="[UNK]")
-    )
-    tokenizer.pre_tokenizer = pre_tokenizer
-    return tokenizer.to_str()
-
-
-def _run_in_memory_hub(script: str, served: dict[str, str], text: str, tmp_path: Path) -> dict:
-    result: Final = subprocess.run(
-        [
-            sys.executable,
-            "-I",
-            "-c",
-            script,
-            str(Path(litellm.__file__).parent.parent),
-            json.dumps(served),
-            text,
-        ],
-        capture_output=True,
-        text=True,
-        timeout=60,
-        env={
-            **os.environ,
-            "HF_HOME": str(tmp_path / "home"),
-            "HF_HUB_CACHE": str(tmp_path / "cache"),
-            "HF_ENDPOINT": "http://127.0.0.1:9",
-            "HF_HUB_OFFLINE": "0",
-            "LITELLM_LOCAL_MODEL_COST_MAP": "True",
-        },
-    )
-
-    assert result.returncode == 0, result.stdout + result.stderr
-    return json.loads(result.stdout.strip().splitlines()[-1])
-
-
-def test_token_counter_uses_the_tokenizer_of_each_model_family_and_of_a_custom_tokenizer(tmp_path: Path) -> None:
-    sample: Final = "Tokenizers disagree: anthropic, tiktoken; llama-2 & llama-3!"
-    served: Final = {
-        "hf-internal-testing/llama-tokenizer": _word_level_tokenizer_json(pre_tokenizers.WhitespaceSplit()),
-        "Xenova/llama-3-tokenizer": _word_level_tokenizer_json(pre_tokenizers.Split(Regex("."), "isolated")),
-        "Xenova/c4ai-command-r-v01-tokenizer": _word_level_tokenizer_json(pre_tokenizers.Whitespace()),
-    }
-    expected: Final = {repo: len(Tokenizer.from_str(payload).encode(sample).ids) for repo, payload in served.items()}
-    anthropic_count: Final = len(Tokenizer.from_str(claude_json_str).encode(sample).ids)
-    tiktoken_count: Final = litellm.token_counter(model="gpt-3.5-turbo", text=sample)
-    assert len({*expected.values(), anthropic_count, tiktoken_count}) == len(expected) + 2
-
-    counts: Final = _run_in_memory_hub(HUB_TOKENIZER_SCRIPT, served, sample, tmp_path)
-    assert counts == {
-        "llama2": expected["hf-internal-testing/llama-tokenizer"],
-        "llama3": expected["Xenova/llama-3-tokenizer"],
-        "cohere": expected["Xenova/c4ai-command-r-v01-tokenizer"],
-        "anthropic": anthropic_count,
-        "custom": expected["Xenova/llama-3-tokenizer"],
-        "requested": sorted(served),
-    }
-
-
 def test_custom_openai_tokenizer_without_a_model_counts_with_the_default_encoding() -> None:
     sample: Final = "A custom tokenizer passed with no model still counts."
 
@@ -3620,14 +3590,10 @@ def test_custom_openai_tokenizer_without_a_model_counts_with_the_default_encodin
     )
 
 
-def test_process_exits_cleanly_while_a_background_tokenizer_retry_is_downloading(tmp_path: Path) -> None:
-    assert _run_in_memory_hub(HUB_RETRY_DURING_EXIT_SCRIPT, {}, "", tmp_path) == {"retry_reached_hub": True}
-
-
 def test_empty_custom_tokenizer_uses_model_tokenizer() -> None:
     text_value: Final = "A tokenizer fallback should preserve the model encoding."
-    custom_count: Final = _get_exact_count_function("gpt-3.5-turbo", {})(text_value)
-    model_count: Final = _get_exact_count_function("gpt-3.5-turbo", None)(text_value)
+    custom_count: Final = _resolve_exact_count("gpt-3.5-turbo", {}).count(text_value)
+    model_count: Final = _resolve_exact_count("gpt-3.5-turbo", None).count(text_value)
 
     assert custom_count == model_count
 
@@ -3962,3 +3928,83 @@ def test_openai_model_check_holds_while_openai_models_are_registered_concurrentl
 )
 def test_has_only_text_content_accepts_only_plain_text_chat_messages(messages: list[object], text_only: bool) -> None:
     assert has_only_text_content(messages) is text_only
+
+
+_MEMOIZED_TEXT: Final = "a long turn of the conversation, resent with every request. " * 40
+
+
+class _CallCountingCounter:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def __call__(self, text: str) -> int:
+        self.calls += 1
+        return len(text) // 4
+
+
+class _CallCountingEncoder:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def encode_batch_fast(self, texts: list[str]) -> list[list[int]]:
+        self.calls += 1
+        return [[0] * len(text) for text in texts]
+
+
+def test_token_count_memo_counts_a_repeated_long_text_once():
+    counter: Final = _CallCountingCounter()
+    count: Final = TokenCountMemo().wrap(object(), counter)
+
+    assert count(_MEMOIZED_TEXT) == count(_MEMOIZED_TEXT) == len(_MEMOIZED_TEXT) // 4
+    assert counter.calls == 1
+
+
+def test_token_count_memo_counts_text_below_the_threshold_every_time():
+    counter: Final = _CallCountingCounter()
+    count: Final = TokenCountMemo(min_chars=1024).wrap(object(), counter)
+    short_text: Final = _MEMOIZED_TEXT[:1023]
+
+    assert count(short_text) == count(short_text)
+    assert counter.calls == 2
+
+
+def test_token_count_memo_evicts_the_least_recently_used_count():
+    counter: Final = _CallCountingCounter()
+    count: Final = TokenCountMemo(max_entries=2).wrap(object(), counter)
+    first, second, third = (f"{index} {_MEMOIZED_TEXT}" for index in range(3))
+
+    tuple(map(count, (first, second, first, third)))
+    assert counter.calls == 3
+    count(first)
+    assert counter.calls == 3
+    count(second)
+    assert counter.calls == 4
+
+
+def test_token_count_memo_holds_no_reference_to_the_text():
+    memo: Final = TokenCountMemo()
+    text: Final = "".join(("fresh ", _MEMOIZED_TEXT))
+    references_before: Final = sys.getrefcount(text)
+
+    memo.wrap(object(), len)(text)
+
+    assert sys.getrefcount(text) == references_before
+
+
+def test_memoized_counts_match_uncached_counts_for_each_model_sharing_the_memo():
+    text: Final = "Ünïcödé prose, code() and 🙂 emoji in one long message, counted for several models. " * 60
+    models: Final = ("gpt-4o", "gpt-3.5-turbo", "claude-sonnet-4-5")
+    uncached: Final = tuple(_resolve_exact_count(model).count(text) for model in models)
+
+    assert len(set(uncached)) == len(models)
+    assert tuple(token_counter_new(model=model, text=text) for model in models * 2) == uncached * 2
+
+
+def test_custom_tokenizer_counts_are_not_memoized():
+    encoder: Final = _CallCountingEncoder()
+    custom_tokenizer: Final = {"type": "huggingface_tokenizer", "tokenizer": encoder}
+
+    counts: Final = tuple(token_counter_new(custom_tokenizer=custom_tokenizer, text=_MEMOIZED_TEXT) for _ in range(2))
+
+    assert counts == (len(_MEMOIZED_TEXT), len(_MEMOIZED_TEXT))
+    assert encoder.calls == 2

@@ -1,7 +1,7 @@
 use std::{sync::Arc, time::Duration};
 
 use litellm_circuit_breaker::{Breaker, Config as BreakerConfig};
-use litellm_core_utils::settings::Lookup;
+use litellm_env::Lookup;
 use litellm_redis_client::{
     Credentials, CredentialsProvider, DEFAULT_TIMEOUT, Namespace, RedisClient, RedisConfig,
     RedisEvents, Target, Timeouts,

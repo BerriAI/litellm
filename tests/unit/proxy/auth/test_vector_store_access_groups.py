@@ -16,8 +16,10 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.auth.auth_checks import vector_store_access_check
 from litellm.proxy.auth.user_api_key_auth import _team_obj_from_token
+from litellm.redis.stores.auth_cache import AuthObject
 from litellm.types.vector_stores import LiteLLM_ManagedVectorStore
 from litellm.vector_stores.vector_store_registry import VectorStoreRegistry
+from tests.unit.proxy.rust_auth_stores import RustAuthStores, install_rust_auth_stores
 from tests.unit.proxy.vector_store_access_group_state import (
     TEAM_ID,
     TOKEN,
@@ -26,6 +28,11 @@ from tests.unit.proxy.vector_store_access_group_state import (
     make_team,
     own_permission,
 )
+
+
+@pytest.fixture
+def rust_auth_stores(monkeypatch: pytest.MonkeyPatch) -> RustAuthStores:
+    return install_rust_auth_stores(monkeypatch)
 
 
 @pytest.fixture
@@ -309,7 +316,9 @@ async def test_a_strict_team_layer_keeps_the_stand_in_team_and_is_refused_as_on_
 
 
 @pytest.mark.asyncio
-async def test_deleted_group_grants_nothing_and_does_not_fail_the_request(proxy: ProxyState) -> None:
+async def test_deleted_group_grants_nothing_and_does_not_fail_the_request(
+    proxy: ProxyState, rust_auth_stores: RustAuthStores
+) -> None:
     assert await _request_is_allowed(make_key(team_id=TEAM_ID), make_team(groups=("deleted",)), "store-b") is True
     assert (
         await _request_is_allowed(make_key(("store-x",), team_id=TEAM_ID), make_team(groups=("deleted",)), "store-b")
@@ -320,7 +329,7 @@ async def test_deleted_group_grants_nothing_and_does_not_fail_the_request(proxy:
 @pytest.mark.asyncio
 async def test_group_cached_before_the_upgrade_keeps_the_callers_own_list(proxy: ProxyState) -> None:
     await proxy.cache.async_set_cache(
-        key="access_group_id:old",
+        key=AuthObject.access_group("old"),
         value={"access_group_id": "old", "access_group_name": "old", "assigned_team_ids": [TEAM_ID]},
     )
 

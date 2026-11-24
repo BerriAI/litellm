@@ -1,7 +1,7 @@
 use std::time::{Duration, SystemTime};
 
 use litellm_auth_aws::{AwsAuthService, SigningScope, presign_url};
-use litellm_core_utils::settings::Lookup;
+use litellm_env::Lookup;
 use litellm_redis_types::AwsIamAuth;
 
 use crate::Error;

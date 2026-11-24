@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { menuGroups } from "@/components/leftnav";
+import { menuGroups } from "@/components/LeftNav";
 import { legacyPageRedirectHref } from "./legacyPageRoutes";
 
 const redirect = (query: string) => legacyPageRedirectHref(new URLSearchParams(query));

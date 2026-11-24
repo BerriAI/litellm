@@ -30,8 +30,17 @@ def _sum(contributions: tuple[Contribution, ...]) -> Contribution:
         for column, value in chain.from_iterable(item.values for item in contributions)
         if column == "started_at" and value
     )
+    reset: Final = next(
+        (
+            value
+            for column, value in chain.from_iterable(item.values for item in contributions)
+            if column == "reset_at" and value
+        ),
+        None,
+    )
     values: Final = tuple(
-        (column, min(starts) if column == "started_at" and starts else value) for column, value in first.values
+        (column, min(starts) if column == "started_at" and starts else reset if column == "reset_at" else value)
+        for column, value in first.values
     )
     return Contribution(first.table, first.key, increments, values)
 
@@ -41,8 +50,10 @@ def project_deliveries(deliveries: Iterable[DeliveryProjection]) -> tuple[Contri
     return tuple(_sum(tuple(group)) for _, group in groupby(ordered, key=_destination))
 
 
-def entity_transactions(contributions: tuple[Contribution, ...]) -> "DBSpendUpdateTransactions":
-    return {
+def entity_transactions(
+    contributions: tuple[Contribution, ...],
+) -> "DBSpendUpdateTransactions":
+    base: Final[DBSpendUpdateTransactions] = {
         "user_list_transactions": dict(_entity_totals(contributions, "LiteLLM_UserTable")),
         "end_user_list_transactions": dict(_entity_totals(contributions, "LiteLLM_EndUserTable")),
         "key_list_transactions": dict(_entity_totals(contributions, "LiteLLM_VerificationToken")),
@@ -60,6 +71,18 @@ def entity_transactions(contributions: tuple[Contribution, ...]) -> "DBSpendUpda
         "customer_team_list_transactions": dict(_entity_totals(contributions, "LiteLLM_CustomerTeamTable")),
         "customer_member_list_transactions": dict(_entity_totals(contributions, "LiteLLM_CustomerMemberTable")),
     }
+    if not any(item.table == "LiteLLM_AppTable" for item in contributions):
+        return base
+    return {
+        **base,
+        "app_list_transactions": dict(_entity_totals(contributions, "LiteLLM_AppTable")),
+        "app_group_list_transactions": dict(_entity_totals(contributions, "LiteLLM_AppGroupTable")),
+        "app_group_customer_org_list_transactions": dict(
+            _entity_totals(contributions, "LiteLLM_AppGroupCustomerOrgTable")
+        ),
+        "app_customer_org_list_transactions": dict(_entity_totals(contributions, "LiteLLM_AppCustomerOrgTable")),
+        "app_customer_member_list_transactions": dict(_entity_totals(contributions, "LiteLLM_AppCustomerMemberTable")),
+    }
 
 
 def _entity_totals(contributions: tuple[Contribution, ...], table: str) -> tuple[tuple[str, float], ...]:
@@ -70,6 +93,11 @@ def _entity_totals(contributions: tuple[Contribution, ...], table: str) -> tuple
 
 def _entity_key(item: Contribution) -> str:
     fields: Final = dict(item.key)
+    if item.table == "LiteLLM_AppGroupCustomerOrgTable":
+        return f"{fields['app_group_id']}:{fields['customer_org_id']}"
+    if item.table in ("LiteLLM_AppCustomerOrgTable", "LiteLLM_AppCustomerMemberTable"):
+        column: Final = "customer_org_id" if item.table == "LiteLLM_AppCustomerOrgTable" else "customer_member_id"
+        return f"{fields['app_id']}:{fields[column]}"
     if item.table == "LiteLLM_TeamMembership":
         return f"team_id::{fields['team_id']}::user_id::{fields['user_id']}"
     if item.table == "LiteLLM_OrganizationMembership":
