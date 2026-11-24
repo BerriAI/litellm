@@ -74,6 +74,12 @@ impl<H: Host> Gateway<H> {
         &self.routing
     }
 
+    /// The routing state itself, so a gateway built for a new config keeps the cooldowns, usage and
+    /// health this one counted.
+    pub fn shared_routing(&self) -> Arc<RoutingCache> {
+        self.routing.clone()
+    }
+
     /// How the messages route shapes a call to deployment `id`.
     pub(crate) fn shaping(&self, id: &str) -> MessagesShaping {
         self.shaping.get(id).cloned().unwrap_or_default()
@@ -85,7 +91,7 @@ impl<H: Host> Gateway<H> {
         secrets: Arc<dyn SecretSource>,
         router: litellm_router_core::Router,
         shaping: HashMap<String, MessagesShaping>,
-        routing: RoutingCache,
+        routing: impl Into<Arc<RoutingCache>>,
         host: H,
     ) -> Result<Self, litellm_http::Error> {
         let provider = resources.pool.client(&http, ClientVariant::Provider)?;
@@ -93,7 +99,7 @@ impl<H: Host> Gateway<H> {
         Ok(Self {
             host,
             cache: None,
-            routing: Arc::new(routing),
+            routing: routing.into(),
             shaping,
             messages: MessagesRoute::new(provider, auth.clone(), secrets.clone()),
             ocr: OcrRoute::new(OcrClient::new(

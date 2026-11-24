@@ -9,6 +9,7 @@ mod license;
 mod live;
 pub mod middleware;
 mod redis;
+mod reload;
 mod resources;
 mod state;
 mod stored;
@@ -23,6 +24,7 @@ pub use callbacks::{
 pub use error::Error;
 pub use live::{Live, Served};
 pub use redis::RedisClients;
+pub use reload::{Poller, Source, reload_every};
 pub use resources::Resources;
 pub use state::AppState;
 pub use stored::{Loaded, StoredConfig};
@@ -42,7 +44,7 @@ use litellm_http::{
     media::PublicDnsResolver,
 };
 use litellm_model_catalog::{BUNDLED_REGISTRY, Catalog};
-use litellm_redis_store::{Remote, active_teams::ActiveTeams};
+use litellm_redis_store::{Remote, active_teams::ActiveTeams, rate_limits::RateLimits};
 use litellm_secrets::{OidcResolver, SecretManagerState, SecretResolver};
 
 /// The config at `path`, its `os.environ/` references read from the process environment, with
@@ -52,9 +54,10 @@ pub async fn load_config(path: impl AsRef<Path>) -> Result<Loaded, Error> {
     let lookup = |name: &str| std::env::var(name).ok();
     let settings = HttpSettings::from_layers([HttpSettingsLayer::from_environment(&lookup)]);
     let client = pool.client(&Resolution::from(&settings).config, ClientVariant::Provider)?;
-    Box::pin(stored::load(path.as_ref(), || {
-        environment_secrets(Arc::new(ProcessEnvironment), client.clone())
-    }))
+    Box::pin(stored::load(
+        path.as_ref(),
+        Arc::new(move || environment_secrets(Arc::new(ProcessEnvironment), client.clone())),
+    ))
     .await
 }
 
@@ -91,10 +94,23 @@ pub async fn build_inference(
     routing: RoutingCache,
     redis: &RedisClients,
 ) -> Result<Inference, Error> {
+    let counters = parallel_request_limiter::counters(redis.coordination.clone());
+    inference_over(config, environment, resources, routing, redis, counters).await
+}
+
+/// [`build_inference`] over the routing state and the limiters' counters a previous config's
+/// inference counted in, so a new config keeps its cooldowns and rate limit windows.
+pub(crate) async fn inference_over(
+    config: &Config,
+    environment: &Environment,
+    resources: &Resources,
+    routing: impl Into<Arc<RoutingCache>>,
+    redis: &RedisClients,
+    counters: Arc<RateLimits>,
+) -> Result<Inference, Error> {
     let catalog = Catalog::parse(BUNDLED_REGISTRY)?.value;
     let (router, shaping) = boot::router(config, &catalog).await?;
     let limits = parallel_request_limiter::Settings::read(config, environment);
-    let counters = parallel_request_limiter::counters(redis.coordination.clone());
     let key_limiter = KeyLimiter::new(limits, counters.clone(), router.clone());
     let licensed = resources.environment.get(LICENSE).is_some();
     let model_capacity = model_capacity::Settings::read(config, limits, licensed).map(|read| {

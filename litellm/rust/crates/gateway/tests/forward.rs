@@ -101,6 +101,7 @@ async fn gateway(python: SocketAddr, admits: bool, root_path: &str) -> SocketAdd
                 keys: None,
                 entitlements: Arc::new(Entitlements::Community),
                 environment: Arc::new(litellm_env::ProcessEnvironment),
+                counters: litellm_gateway::parallel_request_limiter::counters(None),
             },
             &config,
         ),

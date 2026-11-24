@@ -1,8 +1,8 @@
-//! The config the proxy stores in its database, read once at boot and layered into the config file
-//! the way the Python proxy layers it when `store_model_in_db` is on: the `LiteLLM_Config` settings
+//! The config the proxy stores in its database, read at boot and layered into the config file the
+//! way the Python proxy layers it when `store_model_in_db` is on: the `LiteLLM_Config` settings
 //! rows under the file, then the `LiteLLM_ProxyModelTable` rows added to its models with the
 //! `LiteLLM_CredentialsTable` credentials filled in, all before any `os.environ/` reference is
-//! read.
+//! read. The poller in `reload.rs` reads and layers it again the same way.
 //!
 //! Every stored string is decrypted the way Python decrypts it before it is layered in: each
 //! top-level string of a model's `litellm_params` (`_resolve_db_litellm_param`), each credential
@@ -12,9 +12,9 @@
 //!
 //! Boot never fails over the database. When `store_model_in_db` is on and the stored config
 //! cannot be read, the native app runs the file alone and [`StoredConfig::Unread`] has `admit`
-//! refuse every request.
+//! refuse every request until a later read loads it.
 
-use std::{collections::BTreeMap, path::Path};
+use std::{collections::BTreeMap, path::Path, sync::Arc};
 
 use litellm_at_rest::AtRestKey;
 use litellm_config::{
@@ -35,10 +35,13 @@ use litellm_repositories::{
 use litellm_secret_value::SecretValue;
 use litellm_secrets::SecretResolver;
 
-use crate::{Error, Resources};
+use crate::{Error, Resources, reload::Source};
 
 const SALT_KEY: &str = "LITELLM_SALT_KEY";
 const MASTER_KEY: &str = "LITELLM_MASTER_KEY";
+
+/// What reads every `os.environ/` reference of the config, made fresh for each resolve.
+pub(crate) type Secrets = dyn Fn() -> SecretResolver + Send + Sync;
 
 /// Whether the config the proxy stores in its database is part of the config the native app runs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -57,15 +60,17 @@ pub enum StoredConfig {
 pub struct Loaded {
     pub config: Config,
     pub stored: StoredConfig,
+    /// Where the poller reads the stored config again, `None` when `store_model_in_db` is off or
+    /// the gateway has no database to read it from.
+    pub source: Option<Source>,
 }
 
-/// Why the stored config could not be layered in.
-#[derive(Debug, thiserror::Error)]
-enum Unloaded {
-    #[error("could not read the stored config")]
-    Read(#[from] litellm_db::Error),
-    #[error("the config with the stored config layered in does not load")]
-    Load(#[from] litellm_config_load::Error),
+/// The stored config one read found, every string decrypted.
+#[derive(Clone, Default)]
+pub(crate) struct Fetched {
+    pub(crate) settings: SettingsRows,
+    pub(crate) models: Vec<DbModel>,
+    pub(crate) credentials: Vec<DbCredential>,
 }
 
 /// The rows the stored config is read from.
@@ -97,10 +102,9 @@ impl StoredRows for Database {
 
 /// The config at `path` with the config the proxy stores in its database layered in when
 /// `store_model_in_db` is on. Only a config file that does not load fails, never the database.
-pub(crate) async fn load(
-    path: &Path,
-    secrets: impl Fn() -> SecretResolver,
-) -> Result<Loaded, Error> {
+/// When it is on, the database pool boot read it with is kept in the [`Source`] the poller reads
+/// it again from.
+pub(crate) async fn load(path: &Path, secrets: Arc<Secrets>) -> Result<Loaded, Error> {
     let document = Document::read(path)?;
     let file = document.clone().resolve(secrets()).await?;
     let resources = Resources::build(&file)?;
@@ -118,25 +122,42 @@ pub(crate) async fn load(
         }
         return Ok(without_stored(file, on));
     };
-    let loaded = layered(document, file, &*environment, &database, &secrets).await;
-    pools.close().await;
-    Ok(loaded)
+    let key = salt_key(&*environment, &file);
+    let (loaded, fetched) = layered(
+        document.clone(),
+        file,
+        &*environment,
+        &database,
+        key.as_ref(),
+        &*secrets,
+    )
+    .await;
+    if loaded.stored == StoredConfig::Unused {
+        pools.close().await;
+        return Ok(loaded);
+    }
+    let source = Source::new(document, key, secrets, database, pools, fetched);
+    Ok(Loaded {
+        source: Some(source),
+        ..loaded
+    })
 }
 
 /// `document` with the config stored in `rows` layered in, or `file`, the same document resolved
-/// alone, when `store_model_in_db` is off or the rows cannot be read. `environment` is the file's
-/// `environment_variables` in front of the process environment.
+/// alone, when `store_model_in_db` is off or the rows cannot be read, and what the read found
+/// when it was layered in. `environment` is the file's `environment_variables` in front of the
+/// process environment.
 pub(crate) async fn layered(
     document: Document,
     file: Config,
     environment: &dyn Lookup,
     rows: &impl StoredRows,
-    secrets: &impl Fn() -> SecretResolver,
-) -> Loaded {
+    key: Option<&AtRestKey>,
+    secrets: &Secrets,
+) -> (Loaded, Option<Fetched>) {
     let switched_on = file.general_settings.store_model_in_db;
-    let key = salt_key(environment, &file);
     let settings = match rows.settings().await {
-        Ok(found) => settings_rows(&found, key.as_ref()),
+        Ok(found) => settings_rows(&found, key),
         Err(error) => {
             let on = store_model_in_db(switched_on, environment, &SettingsRows::default());
             tracing::warn!(
@@ -144,23 +165,37 @@ pub(crate) async fn layered(
                 store_model_in_db = on,
                 "could not read the settings the proxy stores in its database"
             );
-            return without_stored(file, on);
+            return (without_stored(file, on), None);
         }
     };
     if !store_model_in_db(switched_on, environment, &settings) {
-        return without_stored(file, false);
+        return (without_stored(file, false), None);
     }
-    match stored(document, &settings, rows, key.as_ref(), secrets).await {
-        Ok(config) => Loaded {
-            config,
-            stored: StoredConfig::Loaded,
-        },
+    let fetched = match fetch(&document, settings, rows, key).await {
+        Ok(fetched) => fetched,
         Err(error) => {
             tracing::warn!(
                 error = %Report::new(&error),
-                "python answers every request until the gateway restarts"
+                "could not read the models the proxy stores in its database, so python answers every request until a later read loads them"
             );
-            without_stored(file, true)
+            return (without_stored(file, true), None);
+        }
+    };
+    match build(document, &fetched, secrets).await {
+        Ok(config) => (
+            Loaded {
+                config,
+                stored: StoredConfig::Loaded,
+                source: None,
+            },
+            Some(fetched),
+        ),
+        Err(error) => {
+            tracing::warn!(
+                error = %Report::new(&error),
+                "the config with the stored config layered in does not load, so python answers every request until a later read loads it"
+            );
+            (without_stored(file, true), None)
         }
     }
 }
@@ -173,25 +208,20 @@ fn without_stored(file: Config, on: bool) -> Loaded {
             true => StoredConfig::Unread,
             false => StoredConfig::Unused,
         },
+        source: None,
     }
 }
 
-async fn stored(
-    document: Document,
-    settings: &SettingsRows,
+/// The stored models and credentials beside `settings`. The models are read only when
+/// `supported_db_objects`, with the stored settings under the file, loads them.
+pub(crate) async fn fetch(
+    document: &Document,
+    settings: SettingsRows,
     rows: &impl StoredRows,
     key: Option<&AtRestKey>,
-    secrets: &impl Fn() -> SecretResolver,
-) -> Result<Config, Unloaded> {
-    let (document, shadowed) = document.overlay(settings);
-    for shadowed in &shadowed {
-        tracing::warn!(
-            section = <&str>::from(shadowed.section),
-            key = shadowed.key,
-            "the config file sets this key, so the value the database stores for it is ignored"
-        );
-    }
-    let models: Vec<DbModel> = match document.supported_db_objects().loads(DbObject::Models) {
+) -> Result<Fetched, litellm_db::Error> {
+    let (overlaid, _) = document.clone().overlay(&settings);
+    let models: Vec<DbModel> = match overlaid.supported_db_objects().loads(DbObject::Models) {
         true => rows
             .models()
             .await?
@@ -206,8 +236,34 @@ async fn stored(
         .into_iter()
         .filter_map(|row| stored_credential(row, key))
         .collect();
-    let (config, missing) =
-        without_unloadable_models(document, models, credentials, secrets).await?;
+    Ok(Fetched {
+        settings,
+        models,
+        credentials,
+    })
+}
+
+/// The config `document` describes with `fetched` layered in.
+pub(crate) async fn build(
+    document: Document,
+    fetched: &Fetched,
+    secrets: &Secrets,
+) -> Result<Config, litellm_config_load::Error> {
+    let (document, shadowed) = document.overlay(&fetched.settings);
+    for shadowed in &shadowed {
+        tracing::warn!(
+            section = <&str>::from(shadowed.section),
+            key = shadowed.key,
+            "the config file sets this key, so the value the database stores for it is ignored"
+        );
+    }
+    let (config, missing) = without_unloadable_models(
+        document,
+        fetched.models.clone(),
+        fetched.credentials.clone(),
+        secrets,
+    )
+    .await?;
     for missing in &missing {
         tracing::warn!(
             model_name = missing.model_name,
@@ -229,7 +285,7 @@ async fn without_unloadable_models(
     document: Document,
     models: Vec<DbModel>,
     credentials: Vec<DbCredential>,
-    secrets: &impl Fn() -> SecretResolver,
+    secrets: &Secrets,
 ) -> Result<(Config, Box<[MissingCredential]>), litellm_config_load::Error> {
     let whole = merged(
         document.clone(),
@@ -271,7 +327,7 @@ async fn merged(
     document: Document,
     models: impl IntoIterator<Item = DbModel>,
     credentials: impl IntoIterator<Item = DbCredential>,
-    secrets: &impl Fn() -> SecretResolver,
+    secrets: &Secrets,
 ) -> Result<(Config, Box<[MissingCredential]>), litellm_config_load::Error> {
     let (document, missing) = document.merge(models, credentials)?;
     Ok((document.resolve(secrets()).await?, missing))
@@ -315,7 +371,7 @@ fn decrypted_object(column: &RawJson, key: Option<&AtRestKey>) -> Option<Object>
 
 /// The settings rows by section. A row that is `null` or not an object is an empty section, and
 /// a stored variable that is not a string is left out, as `os.environ` takes only strings.
-fn settings_rows(rows: &[ConfigParam], key: Option<&AtRestKey>) -> SettingsRows {
+pub(crate) fn settings_rows(rows: &[ConfigParam], key: Option<&AtRestKey>) -> SettingsRows {
     let section = |section: Section| {
         rows.iter()
             .find(|row| row.param_name == <&str>::from(section))
@@ -380,80 +436,18 @@ fn stored_credential(row: Credential, key: Option<&AtRestKey>) -> Option<DbCrede
 
 #[cfg(test)]
 mod tests {
-    use std::{io::Write, sync::Arc};
+    use std::io::Write;
 
     use litellm_at_rest::Algorithm;
-    use litellm_secrets::{OidcResolver, SecretManagerState};
     use rstest::rstest;
 
     use super::*;
+    use crate::test_support::{Rows, Variables, credential, environment, model, secrets, setting};
 
     const MASTER_KEY: &str = "sk-master";
     const FILE: &str = "model_list:\n  - model_name: file\n    litellm_params:\n      model: anthropic/claude-haiku-5-5\n";
     const ON: &str = "general_settings:\n  store_model_in_db: true\n";
     const STORED: &str = r#"{"model": "anthropic/claude-haiku-5-5", "api_key": "stored-key"}"#;
-
-    type Variables = &'static [(&'static str, &'static str)];
-
-    /// What each read of the stored config returns, `None` for a read that fails.
-    #[derive(Default)]
-    struct Rows {
-        settings: Option<Vec<ConfigParam>>,
-        models: Option<Vec<ProxyModel>>,
-        credentials: Option<Vec<Credential>>,
-    }
-
-    fn read<T: Clone>(rows: &Option<Vec<T>>) -> Result<Vec<T>, litellm_db::Error> {
-        rows.clone().ok_or(litellm_db::Error::TransactionTimedOut)
-    }
-
-    impl StoredRows for Rows {
-        async fn settings(&self) -> Result<Vec<ConfigParam>, litellm_db::Error> {
-            read(&self.settings)
-        }
-
-        async fn models(&self) -> Result<Vec<ProxyModel>, litellm_db::Error> {
-            read(&self.models)
-        }
-
-        async fn credentials(&self) -> Result<Vec<Credential>, litellm_db::Error> {
-            read(&self.credentials)
-        }
-    }
-
-    fn json(text: &str) -> RawJson {
-        serde_json::from_str(text).unwrap()
-    }
-
-    fn setting(name: &str, value: &str) -> ConfigParam {
-        ConfigParam {
-            param_name: name.into(),
-            param_value: Some(json(value)),
-            reload_revision: 0,
-        }
-    }
-
-    fn model(name: &str, litellm_params: &str) -> ProxyModel {
-        ProxyModel {
-            model_id: format!("{name}-id"),
-            model_name: name.into(),
-            litellm_params: json(litellm_params),
-            model_info: None,
-            blocked: false,
-            created_at: chrono::NaiveDateTime::default(),
-            created_by: "admin".into(),
-            updated_at: chrono::NaiveDateTime::default(),
-            updated_by: "admin".into(),
-        }
-    }
-
-    fn credential(name: &str, values: &str) -> Credential {
-        Credential {
-            credential_name: name.into(),
-            credential_values: json(values),
-            credential_info: None,
-        }
-    }
 
     fn encrypted(salt_key: &str, plaintext: &str) -> String {
         AtRestKey::from_salt_key(&SecretValue::new(salt_key.to_owned()))
@@ -463,25 +457,6 @@ mod tests {
 
     fn params_with_api_key(api_key: &str) -> String {
         format!(r#"{{"model": "anthropic/claude", "api_key": "{api_key}"}}"#)
-    }
-
-    fn environment(variables: Variables) -> impl Lookup + Send + Sync + 'static {
-        move |name: &str| {
-            variables
-                .iter()
-                .find(|(key, _)| *key == name)
-                .map(|(_, value)| (*value).to_owned())
-        }
-    }
-
-    fn secrets(variables: Variables) -> impl Fn() -> SecretResolver {
-        move || {
-            SecretResolver::new_python_compatible(
-                Arc::new(SecretManagerState::default()),
-                Arc::new(environment(variables)),
-                OidcResolver::new(litellm_http::Client::for_test()),
-            )
-        }
     }
 
     /// The config file `yaml` with `rows` layered in, with `variables` as the process environment.
@@ -494,14 +469,17 @@ mod tests {
             .resolve(secrets(variables)())
             .await
             .unwrap();
+        let key = salt_key(&environment(variables), &config);
         layered(
             document,
             config,
             &environment(variables),
             rows,
+            key.as_ref(),
             &secrets(variables),
         )
         .await
+        .0
     }
 
     fn served(loaded: &Loaded) -> (StoredConfig, Vec<&str>) {
