@@ -235,7 +235,7 @@ class OTELGenAISemconvMixin:
 
     def _emit_inference_details_event(
         self,
-        kwargs: dict,
+        kwargs: dict[str, object],
         response_obj: dict,
         provider: str | None,
         otel_logger,

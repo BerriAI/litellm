@@ -67,7 +67,9 @@ class GuardrailsAI(CustomGuardrail):
         self.guardrails_ai_api_input_format = guardrails_ai_api_input_format
         super().__init__(supported_event_hooks=list(self.get_supported_event_hooks()), **kwargs)
 
-    async def make_guardrails_ai_api_request(self, llm_output: str, request_data: dict) -> GuardrailsAIResponse:
+    async def make_guardrails_ai_api_request(
+        self, llm_output: str, request_data: dict[str, object]
+    ) -> GuardrailsAIResponse:
         from httpx import URL
 
         data: Final = {
@@ -96,7 +98,9 @@ class GuardrailsAI(CustomGuardrail):
             )
         return _json_response
 
-    async def make_guardrails_ai_api_request_pre_call_request(self, text_input: str, request_data: dict) -> str:
+    async def make_guardrails_ai_api_request_pre_call_request(
+        self, text_input: str, request_data: dict[str, object]
+    ) -> str:
         from httpx import URL
 
         # This branch of code does not work with current version of GuardrailsAI API (as of July 2025), and it is unclear if it ever worked.
@@ -169,7 +173,7 @@ class GuardrailsAI(CustomGuardrail):
         self,
         user_api_key_dict: UserAPIKeyAuth,
         cache: litellm.DualCache,
-        data: dict,
+        data: dict[str, object],
         call_type: Literal[
             "completion",
             "text_completion",
@@ -186,7 +190,9 @@ class GuardrailsAI(CustomGuardrail):
     ):  # raise exception if invalid, return a str for the user to receive - if rejected, or return a modified dictionary for passing into litellm
         return await self.process_input(data=data, call_type=call_type)
 
-    async def async_logging_hook(self, kwargs: dict, result: object, call_type: str) -> tuple[dict, object]:
+    async def async_logging_hook(
+        self, kwargs: dict[str, object], result: object, call_type: str
+    ) -> tuple[dict, object]:
         if call_type == "acompletion" or call_type == "completion":
             kwargs = await self.process_input(data=kwargs, call_type=call_type)
 
@@ -195,7 +201,7 @@ class GuardrailsAI(CustomGuardrail):
     @log_guardrail_information
     async def async_post_call_success_hook(
         self,
-        data: dict,
+        data: dict[str, object],
         user_api_key_dict: UserAPIKeyAuth,
         response: "LLMResponseTypes",
     ):

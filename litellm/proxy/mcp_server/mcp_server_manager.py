@@ -241,6 +241,7 @@ from litellm.types.mcp_server.mcp_server_manager import (
     MCPInfo,
     MCPOAuthMetadata,
     MCPServer,
+    MCPServerEventsConfig,
     parse_pinned_tools,
 )
 from litellm.types.utils import CallTypes
@@ -1829,6 +1830,22 @@ def _warn_config_id_jag_server_outruns_sso(server: MCPServer) -> None:
     )
 
 
+def _stored_events_config(value: object) -> MCPServerEventsConfig | None:
+    if isinstance(value, MCPServerEventsConfig):
+        return value
+    if not isinstance(value, (str, Mapping)) or not value:
+        return None
+    try:
+        return (
+            MCPServerEventsConfig.model_validate_json(value)
+            if isinstance(value, str)
+            else MCPServerEventsConfig.model_validate(value)
+        )
+    except ValidationError:
+        verbose_logger.warning("Ignoring an unreadable MCP server events configuration")
+        return None
+
+
 def _deserialize_json_dict(data: str | _StringMap | None) -> dict[str, str] | None:
     """
     Deserialize optional JSON mappings stored in the database.
@@ -2983,6 +3000,7 @@ class MCPServerManager:
                 token_exchange_profile=server_config.get("token_exchange_profile", "rfc8693"),
                 allow_sampling=bool(server_config.get("allow_sampling", False)),
                 allow_elicitation=bool(server_config.get("allow_elicitation", False)),
+                events=_stored_events_config(server_config.get("events", None)),
                 timeout=server_config.get("timeout", None),
                 max_concurrent_requests=server_config.get("max_concurrent_requests", None),
                 rpm=server_config.get("rpm", None),
@@ -3025,22 +3043,10 @@ class MCPServerManager:
         store) onto its in-memory object so token refresh authenticates after a restart. A
         best-effort no-op when the DB is unreachable at config-load time."""
         from litellm.proxy.mcp_server.discoverable_endpoints import (  # noqa: PLC0415  # circular import
-            hydrate_config_server_dcr_client,
+            hydrate_config_dcr_clients,
         )
 
-        for server in servers if servers is not None else self.config_mcp_servers.values():
-            try:
-                if await hydrate_config_server_dcr_client(server):
-                    verbose_logger.debug(
-                        "hydrated persisted DCR client onto config MCP server server_id=%s",
-                        server.server_id,
-                    )
-            except Exception as exc:  # noqa: BLE001  # best-effort hydration; never fail config load
-                verbose_logger.debug(
-                    "load_servers_from_config: failed to hydrate DCR client for server_id=%s: %s",
-                    server.server_id,
-                    exc,
-                )
+        await hydrate_config_dcr_clients(servers if servers is not None else tuple(self.config_mcp_servers.values()))
 
     async def _register_openapi_tools(self, spec_path: str, server: MCPServer, base_url: str):
         """
@@ -3590,6 +3596,7 @@ class MCPServerManager:
             timeout=getattr(mcp_server, "timeout", None),
             max_concurrent_requests=getattr(mcp_server, "max_concurrent_requests", None),
             rpm=mcp_server.rpm,
+            events=_stored_events_config(getattr(mcp_server, "events", None)),
         )
         _warn_legacy_delegate_auth_if_applicable(new_server, source="database")
         if register_oauth_discovery:
@@ -6853,7 +6860,7 @@ class MCPServerManager:
         mcp_server: MCPServer,
         original_tool_name: str,
         arguments: _ToolArguments,
-        tasks: list,
+        tasks: list[asyncio.Task[object]],
         mcp_auth_header: str | None,
         mcp_server_auth_headers: dict[str, dict[str, str]] | None,
         oauth2_headers: dict[str, str] | None,
@@ -7996,6 +8003,7 @@ class MCPServerManager:
             timeout=server.timeout,
             max_concurrent_requests=server.max_concurrent_requests,
             rpm=server.rpm,
+            events=server.events,
         )
 
     async def get_all_mcp_servers_with_health_and_teams(
@@ -8120,6 +8128,7 @@ class MCPServerManager:
             timeout=server.timeout,
             max_concurrent_requests=server.max_concurrent_requests,
             rpm=server.rpm,
+            events=server.events,
         )
 
     _build_mcp_server_table = build_mcp_server_table

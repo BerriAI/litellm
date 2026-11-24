@@ -231,7 +231,7 @@ def image_generation(
     custom_llm_provider: str | None = None,
     *,
     aimg_generation: Literal[True],
-    **kwargs,
+    **kwargs: object,
 ) -> Coroutine[object, object, ImageResponse | AsyncImageStream]:
     ...
 
@@ -255,7 +255,7 @@ def image_generation(
     custom_llm_provider: str | None = None,
     *,
     aimg_generation: Literal[False] = False,
-    **kwargs,
+    **kwargs: object,
 ) -> ImageResponse: 
     ...
 
@@ -700,7 +700,7 @@ def image_generation(
 
 
 @client
-async def aimage_variation(*args, **kwargs) -> ImageResponse:
+async def aimage_variation(*args: object, **kwargs) -> ImageResponse:
     """
     Asynchronously calls the `image_variation` function with the given arguments and keyword arguments.
 
@@ -1233,7 +1233,7 @@ async def aimage_edit(
     timeout: float | httpx.Timeout | None = None,
     # LiteLLM specific params,
     custom_llm_provider: str | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> ImageResponse | AsyncImageStream | ImageStream:
     """
     Asynchronously calls the `image_edit` function with the given arguments and keyword arguments.

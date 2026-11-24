@@ -329,7 +329,7 @@ class ResponsesAPIRequestUtils:
     @staticmethod
     def _check_valid_arg(
         supported_params: list[str] | None,
-        non_default_params: dict,
+        non_default_params: Mapping[str, object],
         drop_params: bool | None,
         custom_llm_provider: str | None,
         model: str,
@@ -357,7 +357,7 @@ class ResponsesAPIRequestUtils:
         allowed_openai_params: Sequence[str] | None = None,
         drop_params: bool | None = None,
         declared_reasoning_efforts: Collection[str] | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Get optional parameters for the responses API.
 

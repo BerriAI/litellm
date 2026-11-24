@@ -188,7 +188,7 @@ class CatoNetworksGuardrail(CustomGuardrail):
         cache: DualCache,
         data: dict[str, object],
         call_type: CallTypesLiteral,
-    ) -> Exception | str | dict | None:
+    ) -> Exception | str | dict[str, object] | None:
         verbose_proxy_logger.debug("Inside Cato Pre-Call Hook")
         # /embeddings carries documents being indexed, not a conversation to inspect.
         if is_non_conversational_call_type(call_type) and not self.inspect_embeddings:
@@ -206,7 +206,7 @@ class CatoNetworksGuardrail(CustomGuardrail):
         data: dict[str, object],
         user_api_key_dict: UserAPIKeyAuth,
         call_type: CallTypesLiteral,
-    ) -> Exception | str | dict | None:
+    ) -> Exception | str | dict[str, object] | None:
         verbose_proxy_logger.debug("Inside Cato Moderation Hook")
         if is_non_conversational_call_type(call_type) and not self.inspect_embeddings:
             verbose_proxy_logger.debug("Cato: skipping non-conversational call type %s", call_type)
@@ -739,7 +739,7 @@ class CatoNetworksGuardrail(CustomGuardrail):
         await websocket.send(json.dumps({"done": True}))
 
     @staticmethod
-    def get_config_model() -> type["GuardrailConfigModel"] | None:
+    def get_config_model() -> type["GuardrailConfigModel[BaseModel]"] | None:
         from litellm.types.proxy.guardrails.guardrail_hooks.cato_networks import (
             CatoNetworksGuardrailConfigModel,
         )

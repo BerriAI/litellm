@@ -1403,7 +1403,7 @@ class BaseLitellmParams(ContentFilterConfigModel):  # works for new and patch up
         check_fields=False,
     )
     @classmethod
-    def normalize_lowercase(cls, v: object):
+    def normalize_lowercase(cls, v: object) -> object:
         """Normalize string and list fields to lowercase for ALL guardrail types."""
         if isinstance(v, str):
             return v.lower()

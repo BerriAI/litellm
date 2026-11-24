@@ -59,10 +59,10 @@ class FalAIIdeogramV3Config(FalAIBaseConfig):
     def map_openai_params(
         self,
         non_default_params: Mapping[str, object],
-        optional_params: dict,
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Map OpenAI-style parameters onto Ideogram's request schema.
         """

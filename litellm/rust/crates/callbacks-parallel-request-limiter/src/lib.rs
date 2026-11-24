@@ -41,10 +41,11 @@ pub use estimate::{
 };
 pub use hosted::write_output_cap;
 pub use limiter::{
-    BatchResponseFacts, CallIdFacts, Candidate, CapSettings, FailureFacts, LogPrepareInputs,
-    ModelFacts, NAME, ParallelRequestLimiter, Phase, Plan, PolicyFacts, PostCallFailureFacts,
-    PostCallFailureInputs, PostCallSuccessFacts, PostCallSuccessInputs, PreCallFacts,
-    PreCallInputs, PriorResponse, PtuFacts, SuccessFacts, TargetFacts, manifest, prior_response,
+    BatchResponseFacts, CallIdFacts, Candidate, CapSettings, EMBEDDING_CALL_TYPES, FailureFacts,
+    LogPrepareInputs, ModelFacts, NAME, ParallelRequestLimiter, Phase, Plan, PolicyFacts,
+    PostCallFailureFacts, PostCallFailureInputs, PostCallSuccessFacts, PostCallSuccessInputs,
+    PreCallFacts, PreCallInputs, PriorResponse, PtuFacts, SocketClose, SuccessFacts, TargetFacts,
+    manifest, prior_response,
 };
 pub use logged::{
     LoggedCall, LoggedObject, RESPONSES_WEBSOCKET_CALL_TYPE, Resolved, SettledModel, UsageObject,
