@@ -1751,18 +1751,18 @@ class CustomGuardrail(CustomLogger):
             start_time=start_time,
             end_time=end_time,
             event_type=event_type,
-            tracing_detail=self._acted_tracing_detail(response, guardrail_response, event_type),
+            tracing_detail=self._acted_tracing_detail(isinstance(response, str), guardrail_response, event_type),
         )
         return response
 
     @staticmethod
     def _acted_tracing_detail(
-        response: object, guardrail_response: object, event_type: GuardrailEventHooks | None
+        returned_text: bool, guardrail_response: object, event_type: GuardrailEventHooks | None
     ) -> GuardrailTracingDetail | None:
         """The ``guardrail_action`` of a run that acted while its status reads as success: a pre_call
         hook that returned its rejection message, which the proxy turns into a 400, or a hook that
         changed the content."""
-        if isinstance(response, str):
+        if returned_text:
             return {"guardrail_action": GUARDRAIL_ACTION_BLOCK} if event_type == GuardrailEventHooks.pre_call else None
         return {"guardrail_action": GUARDRAIL_ACTION_MASK} if guardrail_response == "mask" else None
 

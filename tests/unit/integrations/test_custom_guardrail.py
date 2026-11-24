@@ -3424,9 +3424,8 @@ class TestPreCallHookResponseIsNotLoggedVerbatim:
     def _logged_action(request_data: dict[str, object]) -> object:
         metadata: Final = request_data["litellm_metadata"]
         assert isinstance(metadata, dict)
-        entries: Final = metadata["standard_logging_guardrail_information"]
-        assert len(entries) == 1
-        return entries[0].get("guardrail_action")
+        (entry,) = metadata["standard_logging_guardrail_information"]
+        return entry.get("guardrail_action")
 
     @staticmethod
     def _request() -> dict[str, object]:

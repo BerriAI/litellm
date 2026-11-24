@@ -773,7 +773,9 @@ async def test_guardrail_log_skip_passed_keeps_index_rows_only_for_runs_that_act
         ),
     ],
 )
-async def test_guardrail_log_skip_passed_keeps_a_run_that_acted_with_a_passed_status(monkeypatch, skip_passed, kept):
+async def test_guardrail_log_skip_passed_keeps_a_run_that_acted_with_a_passed_status(
+    monkeypatch: pytest.MonkeyPatch, skip_passed: object, kept: list[str]
+) -> None:
     _skip_passed(monkeypatch, skip_passed)
     prisma: Final = _prisma()
     passed: Final = {"guardrail_id": "g", "guardrail_status": "success"}
