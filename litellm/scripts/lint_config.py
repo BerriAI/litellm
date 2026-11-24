@@ -285,8 +285,8 @@ _AZURE_CLIENT_LOGIN: Final = ("tenant_id", "client_id", "client_secret")
 
 def _with_declared(environ: Mapping[str, str], item: tuple[object, object]) -> Mapping[str, str]:
     text: Final = "" if item[1] is None else str(item[1])
-    value: Final = environ.get(text.removeprefix(_ENV_PREFIX), "") if text.startswith(_ENV_PREFIX) else text
-    return {**environ, str(item[0]): value}
+    value: Final = environ.get(text.removeprefix(_ENV_PREFIX)) if text.startswith(_ENV_PREFIX) else text
+    return environ if value is None else {**environ, str(item[0]): value}
 
 
 def _effective_environ(declared: Mapping[str, object], environ: Mapping[str, str]) -> Mapping[str, str]:

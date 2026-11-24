@@ -458,3 +458,17 @@ def test_linting_leaves_the_process_environment_unchanged(tmp_path: Path, monkey
     _lint(tmp_path, VALID)
     assert os.environ["LINT_CONFIG_SENTINEL"] == "kept"
     assert "LITELLM_MASTER_KEY" not in os.environ
+
+
+def test_declared_environment_variable_pointing_at_an_unset_one_stays_unset(
+    tmp_path: Path,
+) -> None:
+    text: Final = _model_entry("{model: openai/gpt-5}") + (
+        "environment_variables:\n  OPENAI_API_KEY: os.environ/LATER_KEY\n  LATER_KEY: sk-test\n"
+    )
+    needs: Final = [
+        "config.yaml:3: warning: model_list[0].litellm_params: openai/gpt-5 needs "
+        "OPENAI_API_KEY in the environment or litellm_params.api_key"
+    ]
+    assert _lint(tmp_path, text, {}) == needs
+    assert _lint(tmp_path, text, {"OPENAI_API_KEY": "sk-process"}) == []
