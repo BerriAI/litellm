@@ -17,6 +17,7 @@ use litellm_callbacks::{
 use litellm_callbacks_budgets::Budgets;
 use litellm_callbacks_spend_logger::{SpendLogCallback, SpendLogParts};
 use litellm_coroutine::CoroutineState;
+use litellm_redaction::TokenRedactor;
 use litellm_redis_store::{
     Number,
     spend_counters::{SpendCounter, SpendCounters},
@@ -25,7 +26,6 @@ use litellm_repositories::SpendLogWrite;
 use litellm_spend_log_writer::{
     LedgerStore, QueuedSpendLog, SpendLogFlusher, SpendLogWriter, WriterSettings,
 };
-use litellm_tracing::TokenRedactor;
 use rstest::{fixture, rstest};
 use serde_json::{Value as Json, json};
 
@@ -819,9 +819,12 @@ async fn a_claimed_job_row_keeps_the_metadata_fields_of_its_request_settings(
         .map(String::as_str)
         .collect();
     assert_eq!(
-        names
-            .iter()
-            .all(|name| ["cold_storage_object_key", "status"].contains(name)),
+        names.iter().all(|name| [
+            "cold_storage_object_key",
+            "litellm_previous_response_ids",
+            "status"
+        ]
+        .contains(name)),
         cut,
         "{names:?}"
     );

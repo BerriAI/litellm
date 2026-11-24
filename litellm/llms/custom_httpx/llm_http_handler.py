@@ -37,6 +37,7 @@ from typing import (
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 import httpx
+import openai
 from h2.events import ConnectionTerminated
 from httpx import USE_CLIENT_DEFAULT
 from httpx._types import FileContent
@@ -55,6 +56,7 @@ from litellm.anthropic_beta_headers_manager import (
     update_headers_with_filtered_beta,
 )
 from litellm.constants import MAX_FILE_LIST_LIMIT, REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES
+from litellm.exceptions import with_provider_reply
 from litellm.files.types import FileContentStreamingResult
 from litellm.images.fan_out import (
     merge_billed_image_responses,
@@ -546,6 +548,44 @@ class _WebsocketsModule(Protocol):
 
 
 _ResponseT = TypeVar("_ResponseT")
+_IMAGE_EDIT_CHUNK_SIZE: Final = 1024 * 1024
+
+
+def _image_edit_chunks(body: str) -> Iterator[bytes]:
+    for start in range(0, len(body), _IMAGE_EDIT_CHUNK_SIZE):
+        yield body[start : start + _IMAGE_EDIT_CHUNK_SIZE].encode("ascii")
+
+
+class _ImageEditContent:
+    def __init__(self, body: str) -> None:
+        self._body = body
+
+    def __iter__(self) -> Iterator[bytes]:
+        return _image_edit_chunks(self._body)
+
+
+class _AsyncImageEditContent:
+    def __init__(self, body: str) -> None:
+        self._body = body
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        for chunk in _image_edit_chunks(self._body):
+            yield chunk
+
+
+def _ascii_image_edit_stream_body(data: object, files: object) -> str | None:
+    if isinstance(data, str) and data.isascii() and not files:
+        return data
+    return None
+
+
+def _image_edit_stream_headers(
+    headers: Mapping[str, str], body: str
+) -> dict[str, str]:  # mutable-ok: HTTPHandler.post and AsyncHTTPHandler.post require dict headers
+    return {
+        **{key: value for key, value in headers.items() if key.lower() not in ("content-length", "transfer-encoding")},
+        "Content-Length": str(len(body)),
+    }
 
 
 class _DeleteRequestKwargs(TypedDict, total=False):
@@ -2587,7 +2627,7 @@ class BaseLLMHTTPHandler:
                     timeout=timeout,
                 )
         except httpx.HTTPStatusError as e:
-            raise provider_config.get_http_error_class(e)
+            raise with_provider_reply(provider_config.get_http_error_class(e), e.response)
         except Exception as e:
             raise self._handle_error(e=e, provider_config=provider_config)
 
@@ -2695,7 +2735,7 @@ class BaseLLMHTTPHandler:
                     timeout=timeout,
                 )
         except httpx.HTTPStatusError as e:
-            raise provider_config.get_http_error_class(e)
+            raise with_provider_reply(provider_config.get_http_error_class(e), e.response)
         except Exception as e:
             raise self._handle_error(e=e, provider_config=provider_config)
 
@@ -3461,13 +3501,7 @@ class BaseLLMHTTPHandler:
             )
             result: Final = final_response if final_response is not None else initial_response
             if converted_stream_requested(agentic_kwargs) and not agentic_kwargs.get("_agentic_loop_depth"):
-                return self._wrap_responses_response_as_fake_stream(
-                    result=result,
-                    model=model,
-                    responses_api_provider_config=responses_api_provider_config,
-                    logging_obj=logging_obj,
-                    custom_llm_provider=custom_llm_provider,
-                )
+                return replay_as_stream(response=self._completed_result_as_raw_response(result))
             return result
 
         return initial_response
@@ -3682,13 +3716,7 @@ class BaseLLMHTTPHandler:
             and converted_stream_requested(agentic_kwargs)
             and not agentic_kwargs.get("_agentic_loop_depth")
         ):
-            return self._wrap_responses_response_as_fake_stream(
-                result=result,
-                model=model,
-                responses_api_provider_config=responses_api_provider_config,
-                logging_obj=logging_obj,
-                custom_llm_provider=custom_llm_provider,
-            )
+            return replay_as_stream(response=self._completed_result_as_raw_response(result))
         return result
 
     async def async_delete_response_api_handler(
@@ -5930,12 +5958,7 @@ class BaseLLMHTTPHandler:
         except Exception as e:
             raise self._handle_error(e=e, provider_config=provider_config)
 
-        if response.status_code >= 400:
-            raise provider_config.get_error_class(
-                error_message=response.text,
-                status_code=response.status_code,
-                headers=response.headers,
-            )
+        self._raise_for_provider_error_status(response=response, provider_config=provider_config)
 
         return provider_config.transform_file_content_response(
             raw_response=response,
@@ -5976,12 +5999,7 @@ class BaseLLMHTTPHandler:
         except Exception as e:
             raise self._handle_error(e=e, provider_config=provider_config)
 
-        if response.status_code >= 400:
-            raise provider_config.get_error_class(
-                error_message=response.text,
-                status_code=response.status_code,
-                headers=response.headers,
-            )
+        self._raise_for_provider_error_status(response=response, provider_config=provider_config)
 
         return provider_config.transform_file_content_response(
             raw_response=response,
@@ -6028,14 +6046,10 @@ class BaseLLMHTTPHandler:
             raise self._handle_error(e=e, provider_config=provider_config)
 
         anchor_handler_to(response, async_httpx_client)
-        if response.status_code >= 400:
-            error_body: Final = await response.aread()
+        if httpx.codes.is_error(response.status_code):
+            await response.aread()
             await response.aclose()
-            raise provider_config.get_error_class(
-                error_message=error_body.decode("utf-8", errors="replace"),
-                status_code=response.status_code,
-                headers=response.headers,
-            )
+            self._raise_for_provider_error_status(response=response, provider_config=provider_config)
 
         return await provider_config.transform_file_content_stream(
             stream_iterator=aiter_bytes_then_close(response, chunk_size=chunk_size),
@@ -6450,35 +6464,10 @@ class BaseLLMHTTPHandler:
                 str(e),
             )
 
-    def _wrap_responses_response_as_fake_stream(
-        self,
-        result: ResponsesAPIResponse,
-        model: str,
-        responses_api_provider_config: BaseResponsesAPIConfig,
-        logging_obj: "LiteLLMLoggingObj",
-        custom_llm_provider: str,
-    ) -> MockResponsesAPIStreamingIterator:
-        """
-        Wrap a completed responses result as a synthetic stream.
-
-        Used when an interceptor forced stream=False to run the agentic loop on
-        the non-streaming path, but the caller originally asked for streaming.
-        """
-        import httpx
-
-        from litellm.responses.streaming_iterator import (
-            MockResponsesAPIStreamingIterator,
-        )
-
+    @staticmethod
+    def _completed_result_as_raw_response(result: ResponsesAPIResponse) -> httpx.Response:
         payload: Final = result.model_dump() if hasattr(result, "model_dump") else result
-        raw_response: Final = httpx.Response(status_code=200, json=payload)
-        return MockResponsesAPIStreamingIterator(
-            response=raw_response,
-            model=model,
-            responses_api_provider_config=responses_api_provider_config,
-            logging_obj=logging_obj,
-            custom_llm_provider=custom_llm_provider,
-        )
+        return httpx.Response(status_code=200, json=payload)
 
     def _maybe_wrap_in_fake_stream(
         self,
@@ -6845,11 +6834,15 @@ class BaseLLMHTTPHandler:
     ) -> None:
         if not httpx.codes.is_error(response.status_code):
             return
-        raise provider_config.get_error_class(
-            error_message=response.text,
-            status_code=response.status_code,
-            headers=response.headers,
-        )
+        try:
+            provider_error: Final = provider_config.get_error_class(
+                error_message=response.text,
+                status_code=response.status_code,
+                headers=response.headers,
+            )
+        except (BaseLLMException, openai.APIError) as raised_by_config:
+            raise with_provider_reply(raised_by_config, response)
+        raise with_provider_reply(provider_error, response)
 
     def _handle_error(
         self,
@@ -6900,21 +6893,27 @@ class BaseLLMHTTPHandler:
             error_headers = {}
 
         if provider_config is None:
-            raise BaseLLMException(
-                status_code=status_code,
-                message=error_text,
-                headers=error_headers,
-                status_code_is_synthesized=not isinstance(received_status_code, int),
+            raise with_provider_reply(
+                BaseLLMException(
+                    status_code=status_code,
+                    message=error_text,
+                    headers=error_headers,
+                    status_code_is_synthesized=not isinstance(received_status_code, int),
+                ),
+                error_response,
             )
 
-        provider_error: Final = provider_config.get_error_class(
-            error_message=error_text,
-            status_code=status_code,
-            headers=error_headers,
-        )
+        try:
+            provider_error: Final = provider_config.get_error_class(
+                error_message=error_text,
+                status_code=status_code,
+                headers=error_headers,
+            )
+        except (BaseLLMException, openai.APIError) as raised_by_config:
+            raise with_provider_reply(raised_by_config, error_response)
         if not isinstance(received_status_code, int):
             provider_error.status_code_is_synthesized = True
-        raise provider_error
+        raise with_provider_reply(provider_error, error_response)
 
     def handle_error(
         self,
@@ -7664,8 +7663,22 @@ class BaseLLMHTTPHandler:
             },
         )
 
+        request_count: Final = image_edit_provider_config.get_request_count(
+            model,
+            image_edit_optional_request_params,  # pyright: ignore[reportUnknownArgumentType]  # legacy handler params are untyped dicts
+        )
+        multipart: Final = image_edit_provider_config.use_multipart_form_data()
+        stream_body: Final = _ascii_image_edit_stream_body(data, files)
+
         def send() -> httpx.Response:
-            if image_edit_provider_config.use_multipart_form_data():
+            if stream_body is not None:
+                return sync_httpx_client.post(  # pyright: ignore[reportUnknownMemberType]  # legacy post signature has untyped parameters
+                    url=api_base,
+                    headers=_image_edit_stream_headers(headers, stream_body),  # pyright: ignore[reportUnknownArgumentType]  # legacy provider headers are untyped
+                    content=_ImageEditContent(stream_body),
+                    timeout=timeout,
+                )
+            if multipart:
                 return sync_httpx_client.post(
                     url=api_base,
                     headers=headers,
@@ -7680,15 +7693,7 @@ class BaseLLMHTTPHandler:
                 timeout=timeout,
             )
 
-        responses, failure = split_outcomes(
-            run_concurrently(
-                image_edit_provider_config.get_request_count(
-                    model,
-                    image_edit_optional_request_params,  # pyright: ignore[reportUnknownArgumentType]  # legacy handler params are untyped dicts
-                ),
-                send,
-            )
-        )
+        responses, failure = split_outcomes(run_concurrently(request_count, send))
         served: Final = [
             image_edit_provider_config.transform_image_edit_response(
                 model=model,
@@ -7772,8 +7777,22 @@ class BaseLLMHTTPHandler:
             },
         )
 
+        request_count: Final = image_edit_provider_config.get_request_count(
+            model,
+            image_edit_optional_request_params,  # pyright: ignore[reportUnknownArgumentType]  # legacy handler params are untyped dicts
+        )
+        multipart: Final = image_edit_provider_config.use_multipart_form_data()
+        stream_body: Final = _ascii_image_edit_stream_body(data, files)
+
         async def send() -> httpx.Response:
-            if image_edit_provider_config.use_multipart_form_data():
+            if stream_body is not None:
+                return await async_httpx_client.post(  # pyright: ignore[reportUnknownMemberType]  # legacy post signature has untyped parameters
+                    url=api_base,
+                    headers=_image_edit_stream_headers(headers, stream_body),  # pyright: ignore[reportUnknownArgumentType]  # legacy provider headers are untyped
+                    content=_AsyncImageEditContent(stream_body),
+                    timeout=timeout,
+                )
+            if multipart:
                 return await async_httpx_client.post(
                     url=api_base,
                     headers=headers,
@@ -7788,10 +7807,6 @@ class BaseLLMHTTPHandler:
                 timeout=timeout,
             )
 
-        request_count: Final = image_edit_provider_config.get_request_count(
-            model,
-            image_edit_optional_request_params,  # pyright: ignore[reportUnknownArgumentType]  # legacy handler params are untyped dicts
-        )
         responses, failure = split_outcomes(
             await asyncio.gather(*(send() for _ in range(request_count)), return_exceptions=True)
         )

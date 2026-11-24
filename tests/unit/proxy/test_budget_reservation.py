@@ -202,19 +202,12 @@ def test_tiered_reservation_is_all_or_nothing_with_output_tier_from_input_length
             "litellm.proxy.spend_tracking.budget_reservation._get_model_cost_info",
             return_value={"tiered_pricing": tiered_pricing, "max_output_tokens": 200000},
         ),
-        patch(
-            "litellm.proxy.spend_tracking.budget_reservation._estimate_input_tokens",
-            return_value=input_tokens,
-        ),
-        patch(
-            "litellm.proxy.spend_tracking.budget_reservation._estimate_output_tokens",
-            return_value=output_tokens,
-        ),
     ):
         estimated = estimate_request_max_cost(
-            request_body=_request_body(),
+            request_body={**_request_body(), "max_tokens": output_tokens},
             route="/chat/completions",
             llm_router=None,
+            input_token_counts={"gpt-4o-mini": input_tokens},
         )
 
     expected = (input_tokens * 4e-06) + (output_tokens * 8e-06)
@@ -247,19 +240,12 @@ def test_tiered_reservation_uses_higher_reasoning_output_rate():
             "litellm.proxy.spend_tracking.budget_reservation._get_model_cost_info",
             return_value={"tiered_pricing": tiered_pricing, "max_output_tokens": 200000},
         ),
-        patch(
-            "litellm.proxy.spend_tracking.budget_reservation._estimate_input_tokens",
-            return_value=input_tokens,
-        ),
-        patch(
-            "litellm.proxy.spend_tracking.budget_reservation._estimate_output_tokens",
-            return_value=output_tokens,
-        ),
     ):
         estimated = estimate_request_max_cost(
-            request_body=_request_body(),
+            request_body={**_request_body(), "max_tokens": output_tokens},
             route="/chat/completions",
             llm_router=None,
+            input_token_counts={"gpt-4o-mini": input_tokens},
         )
 
     expected = (input_tokens * 1e-06) + (output_tokens * 4e-06)
@@ -286,19 +272,12 @@ def test_flat_reservation_uses_higher_reasoning_output_rate():
                 "max_output_tokens": 200000,
             },
         ),
-        patch(
-            "litellm.proxy.spend_tracking.budget_reservation._estimate_input_tokens",
-            return_value=input_tokens,
-        ),
-        patch(
-            "litellm.proxy.spend_tracking.budget_reservation._estimate_output_tokens",
-            return_value=output_tokens,
-        ),
     ):
         estimated = estimate_request_max_cost(
-            request_body=_request_body(),
+            request_body={**_request_body(), "max_tokens": output_tokens},
             route="/chat/completions",
             llm_router=None,
+            input_token_counts={"gpt-4o-mini": input_tokens},
         )
 
     expected = (input_tokens * 1e-06) + (output_tokens * 4e-06)
@@ -932,7 +911,9 @@ async def _model_access_group_counters(stores: RustAuthStores, matched, **max_bu
 
 
 @pytest.mark.asyncio
-async def test_model_access_group_with_a_budget_reserves_against_the_reset_jobs_counter_key(rust_auth_stores: RustAuthStores):
+async def test_model_access_group_with_a_budget_reserves_against_the_reset_jobs_counter_key(
+    rust_auth_stores: RustAuthStores,
+):
     counters = await _model_access_group_counters(rust_auth_stores, ["premium"], premium=25.0)
 
     assert len(counters) == 1

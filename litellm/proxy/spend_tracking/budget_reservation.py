@@ -13,7 +13,7 @@ from types import MappingProxyType
 from typing import Final, Literal, NoReturn, SupportsFloat, SupportsIndex, SupportsInt, TypeAlias, cast
 
 from fastapi import HTTPException, Request, status
-from pydantic import ConfigDict, TypeAdapter
+from pydantic import ConfigDict, TypeAdapter, ValidationError
 
 import litellm
 from litellm._internal_context import with_service_target
@@ -103,6 +103,7 @@ from litellm.redis.stores.spend_counters.types import customer_window_counter
 from litellm.responses.main import will_bridge_to_chat_completions
 from litellm.router import Router
 from litellm.router_api import RoutingContext
+from litellm.rust_bridge._native import BOUND_DEFAULT_MAX_OUTPUT_TOKENS
 from litellm.types.proxy.auth.customer_hierarchy import (
     AppDurationLimit,
     CustomerScopeKey,
@@ -188,6 +189,7 @@ def _customer_window_counter(
 
 _CACHED_VALUE: Final = TypeAdapter(object)
 _WINDOW_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
+_PRICING_TIERS: Final = TypeAdapter(tuple[Mapping[str, object], ...])
 
 
 class _CounterReservationUnavailable(Exception):
@@ -1292,7 +1294,7 @@ def estimate_request_max_cost(
     input_token_counts: Mapping[str, int | None] | None = None,
     path_params: Mapping[str, object] | None = None,
 ) -> float | None:
-    estimates = [
+    return _highest_estimate(
         _estimate_request_max_cost_for_model(
             request_body=request_body,
             route=route,
@@ -1303,11 +1305,7 @@ def estimate_request_max_cost(
         for model_name in _get_request_models(
             request_body=request_body, route=route, llm_router=llm_router, path_params=path_params
         )
-    ]
-    estimates = [estimate for estimate in estimates if estimate is not None]
-    if not estimates:
-        return None
-    return max(cast(list[float], estimates))
+    )
 
 
 def estimate_request_input_cost(
@@ -1324,9 +1322,10 @@ def estimate_request_input_cost(
     cancelled in-flight request has already incurred. A cancelled reservation is
     reconciled to this instead of being refunded to zero.
     """
-    estimates = [
+    body: Final = _WINDOW_OBJECT.validate_python(request_body)
+    return _highest_estimate(
         _estimate_request_input_cost_for_model(
-            request_body=request_body,
+            request_body=body,
             route=route,
             model=model_name,
             llm_router=llm_router,
@@ -1335,15 +1334,16 @@ def estimate_request_input_cost(
         for model_name in _get_request_models(
             request_body=request_body, route=route, llm_router=llm_router, path_params=path_params
         )
-    ]
-    estimates = [estimate for estimate in estimates if estimate is not None]
-    if not estimates:
-        return None
-    return max(cast("list[float]", estimates))
+    )
+
+
+def _highest_estimate(estimates: Iterable[float | None]) -> float | None:
+    known: Final = tuple(estimate for estimate in estimates if estimate is not None)
+    return max(known) if known else None
 
 
 def _estimate_request_input_cost_for_model(
-    request_body: dict,
+    request_body: Mapping[str, object],
     route: str,
     model: str,
     llm_router: Router | None,
@@ -1363,7 +1363,7 @@ def _estimate_request_input_cost_for_model(
 
 
 def _input_cost_for_cost_info(
-    request_body: dict,
+    request_body: Mapping[str, object],
     route: str,
     pricing: _DeploymentPricing,
     input_tokens: int | None,
@@ -1587,12 +1587,8 @@ def _lists_price(model_info: Mapping[str, object], cost_keys: Sequence[str]) -> 
 def _modality_rate(model_info: Mapping[str, object], prompt_tokens: int, uplift: float, cost_key: str) -> float:
     """The `cost_key` price a prompt of `prompt_tokens` bills at, read from its tier or `_above_<n>_tokens` price, and
     0.0 when the entry lists none, so the text price stands."""
-    tiered_pricing: Final = model_info.get("tiered_pricing")
-    tier: Final = (
-        select_tier_for_input(tiered_pricing=tiered_pricing, input_tokens=prompt_tokens)
-        if isinstance(tiered_pricing, list) and tiered_pricing
-        else None
-    )
+    tiers: Final = _pricing_tiers(model_info.get("tiered_pricing"))
+    tier: Final = select_tier_for_input(tiered_pricing=tiers, input_tokens=prompt_tokens) if tiers else None
     listed_rate: Final = (
         tier_rate(tier, cost_key)
         if tier is not None
@@ -1608,6 +1604,15 @@ def _modality_rate(model_info: Mapping[str, object], prompt_tokens: int, uplift:
         )
     )
     return (listed_rate or 0.0) * uplift
+
+
+def _pricing_tiers(tiered_pricing: object) -> tuple[Mapping[str, object], ...]:
+    if not isinstance(tiered_pricing, list):
+        return ()
+    try:
+        return _PRICING_TIERS.validate_python(tiered_pricing)
+    except ValidationError:
+        return ()
 
 
 def _provider(model_info: Mapping[str, object]) -> str | None:
@@ -1860,7 +1865,7 @@ def _estimate_input_tokens(model_info: Mapping[str, object], counted_input_token
     return _to_int(model_info.get("max_input_tokens"))
 
 
-DEFAULT_MAX_OUTPUT_TOKENS_FALLBACK: Final = 16384
+DEFAULT_MAX_OUTPUT_TOKENS_FALLBACK: Final = BOUND_DEFAULT_MAX_OUTPUT_TOKENS
 
 
 def _estimate_output_tokens(
