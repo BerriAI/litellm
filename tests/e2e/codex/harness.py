@@ -83,6 +83,10 @@ class CodexHarness:
     def codex_home(self) -> Path:
         return self.home / ".codex"
 
+    @step('Run Codex on {model} through the proxy with the flags {flags} and the prompt "{prompt}"')
+    def exec_with_flags(self, prompt: str, *, model: str, cwd: Path, flags: tuple[str, ...]) -> CodexRun:
+        return self._run(("exec",), (*flags, "--model", model, "--", prompt), cwd)
+
     @step("Create a workspace folder holding the test's files")
     def new_workspace(self, files: Mapping[str, str]) -> Path:
         workspace: Final = Path(tempfile.mkdtemp(prefix="workspace-", dir=self.home)).resolve()
@@ -195,6 +199,7 @@ def _mcp_server_table(name: str, server: McpServer) -> str:
         f"args = {json.dumps(server.args)}\n"
         f"env = {{ {env} }}\n"
         'default_tools_approval_mode = "approve"\n'
+        "required = true\n"
     )
 
 
