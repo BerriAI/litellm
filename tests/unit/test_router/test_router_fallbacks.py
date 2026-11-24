@@ -1430,7 +1430,8 @@ def _carries_caller_key(request: httpx.Request) -> bool:
 @pytest.fixture
 def _aws_without_env_bearer(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-    monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
+    for name in ("AWS_BEARER_TOKEN_BEDROCK", "BEDROCK_MANTLE_API_KEY"):
+        monkeypatch.delenv(name, raising=False)
 
 
 @pytest.mark.asyncio
@@ -1735,3 +1736,87 @@ async def test_mid_stream_continuation_from_an_aws_hop_does_not_bring_the_caller
         "AWS4-HMAC-SHA256 ",
     )
     assert not any(_carries_caller_key(call.request) for call in mantle.calls)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("target", "deployment_key", "env_bearers", "expected_authorization"),
+    (
+        pytest.param("bedrock", "gateway-key", {}, f"Bearer {_CALLER_ANTHROPIC_KEY}", id="bedrock-deployment-bearer"),
+        pytest.param(
+            "bedrock_mantle", "gateway-key", {}, f"Bearer {_CALLER_ANTHROPIC_KEY}", id="mantle-deployment-bearer"
+        ),
+        pytest.param(
+            "bedrock",
+            None,
+            {"AWS_BEARER_TOKEN_BEDROCK": "env-bearer"},
+            f"Bearer {_CALLER_ANTHROPIC_KEY}",
+            id="bedrock-env-bearer",
+        ),
+        pytest.param(
+            "bedrock_mantle",
+            None,
+            {"BEDROCK_MANTLE_API_KEY": "env-bearer"},
+            f"Bearer {_CALLER_ANTHROPIC_KEY}",
+            id="mantle-env-bearer",
+        ),
+        pytest.param(
+            "bedrock_mantle",
+            None,
+            {"AWS_BEARER_TOKEN_BEDROCK": "env-bearer"},
+            f"Bearer {_CALLER_ANTHROPIC_KEY}",
+            id="mantle-falls-back-to-the-bedrock-env-bearer",
+        ),
+        pytest.param(
+            "bedrock_mantle",
+            "",
+            {"BEDROCK_MANTLE_API_KEY": "env-bearer"},
+            f"Bearer {_CALLER_ANTHROPIC_KEY}",
+            id="mantle-empty-key-still-reads-its-env-bearer",
+        ),
+        pytest.param(
+            "bedrock",
+            "",
+            {"AWS_BEARER_TOKEN_BEDROCK": "env-bearer"},
+            "AWS4-HMAC-SHA256 ",
+            id="bedrock-empty-key-is-iam",
+        ),
+        pytest.param("bedrock_mantle", None, {}, "AWS4-HMAC-SHA256 ", id="mantle-iam-only"),
+    ),
+)
+async def test_anthropic_fallback_onto_aws_drops_the_caller_key_only_where_the_deployment_signs_with_iam(
+    _aws_without_env_bearer: None,
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    target: str,
+    deployment_key: str | None,
+    env_bearers: dict[str, str],
+    expected_authorization: str,
+) -> None:
+    for name, value in env_bearers.items():
+        monkeypatch.setenv(name, value)
+    aws_params: Final = {
+        "model": _AWS_FALLBACK_TARGETS[target][0],
+        **_AWS_DEPLOYMENT_CREDENTIALS,
+        **({"api_key": deployment_key} if deployment_key is not None else {}),
+    }
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "claude",
+                "litellm_params": {"model": "anthropic/claude-haiku-4-5", "api_key": "sk-ant-deployment"},
+            },
+            {"model_name": "claude-aws", "litellm_params": aws_params},
+        ],
+        fallbacks=[{"claude": ["claude-aws"]}],
+        num_retries=0,
+    )
+    respx_mock.post("https://api.anthropic.com/v1/messages").mock(return_value=_anthropic_overloaded())
+    aws: Final = respx_mock.post(host=_AWS_FALLBACK_TARGETS[target][1]).mock(return_value=_aws_answer(target))
+
+    await router.acompletion(
+        model="claude", messages=[{"role": "user", "content": "hi"}], api_key=_CALLER_ANTHROPIC_KEY
+    )
+
+    sent: Final = aws.calls[0].request.headers["authorization"]
+    assert sent[: len(expected_authorization)] == expected_authorization, sent
