@@ -61,7 +61,7 @@ from litellm.responses.litellm_completion_transformation.handler import (
 )
 from litellm.responses.mcp.request_context import MCPRequestContext
 from litellm.responses.mcp.tool_precheck import may_name_litellm_mcp_gateway
-from litellm.responses.utils import ResponsesAPIRequestUtils
+from litellm.responses.utils import ResponsesAPIRequestUtils, answered_by_the_chat_bridge
 from litellm.types.llms.openai import (
     PromptObject,
     Reasoning,
@@ -483,17 +483,6 @@ def _bridges_to_chat_completions(
 
 
 _RESPONSES_ONLY_REQUEST_FIELDS_NEVER_BRIDGED: Final = frozenset({"client_metadata"})
-
-
-_CHAT_COMPLETION_ID_PREFIX: Final = "chatcmpl-"
-
-
-def answered_by_the_chat_bridge(response_id: object) -> bool:
-    return isinstance(
-        response_id, str
-    ) and ResponsesAPIRequestUtils.decode_previous_response_id_to_original_previous_response_id(response_id).startswith(
-        _CHAT_COMPLETION_ID_PREFIX
-    )
 
 
 def follows_a_bridged_model_router_turn(

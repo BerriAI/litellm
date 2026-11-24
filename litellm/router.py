@@ -77,7 +77,7 @@ from litellm.constants import (
     SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY,
 )
 from litellm.decisions.call import validate_router_connection
-from litellm.exceptions import UnresolvablePreviousResponseError
+from litellm.exceptions import UnknownPreviousResponseError, UnresolvablePreviousResponseError
 from litellm.integrations.custom_guardrail import is_guardrail_intervention
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.otel.routing import routing_decision_attributes
@@ -8072,7 +8072,7 @@ class Router:
             disable_fallbacks is True
             or original_model_group is None
             or is_guardrail_intervention(e)
-            or isinstance(e, UnresolvablePreviousResponseError)
+            or isinstance(e, UnknownPreviousResponseError)
             or unsupported_params_without_fallback
         ):
             raise e

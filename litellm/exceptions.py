@@ -401,6 +401,10 @@ class UnresolvablePreviousResponseError(MalformedRequestFieldError):
     pass
 
 
+class UnknownPreviousResponseError(UnresolvablePreviousResponseError):
+    pass
+
+
 class UnprocessableEntityError(openai.UnprocessableEntityError):
     def __init__(
         self,

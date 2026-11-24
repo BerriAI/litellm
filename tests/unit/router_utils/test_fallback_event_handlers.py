@@ -17,6 +17,7 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils import get_llm_provider_logic
 from litellm.exceptions import UnresolvablePreviousResponseError
 from litellm.responses.litellm_completion_transformation.transformation import previous_response_not_found
+from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.router_utils.cooldown_handlers import mark_advisor_orchestration_failure
 from litellm.router_utils.fallback_event_handlers import (
     MID_STREAM_FALLBACK_CONTROLS_KEY,
@@ -130,11 +131,17 @@ async def test_run_async_fallback_raises_when_all_fallbacks_fail():
         )
 
 
+_PROVIDER_HELD_RESPONSE_ID: Final = ResponsesAPIRequestUtils._build_responses_api_response_id(
+    custom_llm_provider="openai", model_id="native-primary-1", response_id="resp_turn_one"
+)
+
+
 class RefusingFallbackRouter:
     fallback_access_check = None
     fallback_budget_check = None
 
-    def __init__(self) -> None:
+    def __init__(self, previous_response_id: str) -> None:
+        self.previous_response_id: Final = previous_response_id
         self.attempted_model_groups: tuple[object, ...] = ()
 
     def log_retry(self, kwargs: dict[str, object], e: Exception) -> dict[str, object]:
@@ -143,26 +150,63 @@ class RefusingFallbackRouter:
     async def async_function_with_fallbacks(self, *args: object, **kwargs: object) -> StreamingWrapper:
         self.attempted_model_groups = (*self.attempted_model_groups, kwargs.get("model"))
         if kwargs.get("model") == "bridged-hop":
-            raise previous_response_not_found("resp_unknown", "gpt-5.4-mini", "openai")
+            raise previous_response_not_found((self.previous_response_id,), "gpt-5.4-mini", "openai")
+        if kwargs.get("model") == "failing-fallback":
+            raise litellm.InternalServerError("fallback failed", "openai", "gpt-5.4-mini")
         return StreamingWrapper()
 
 
+async def _walk(router: RefusingFallbackRouter, fallback_model_group: list[str]) -> object:
+    return await run_async_fallback(
+        litellm_router=router,
+        fallback_model_group=fallback_model_group,
+        original_model_group="native-primary",
+        original_exception=litellm.InternalServerError("upstream failed", "openai", "gpt-5.4-mini"),
+        max_fallbacks=3,
+        fallback_depth=0,
+        model="native-primary",
+    )
+
+
 @pytest.mark.asyncio
-async def test_a_follow_up_refused_on_a_fallback_ends_the_walk_before_the_next_group():
-    router: Final = RefusingFallbackRouter()
+@pytest.mark.parametrize(
+    "previous_response_id",
+    [
+        "resp_unknown",
+        ResponsesAPIRequestUtils._build_responses_api_response_id(
+            custom_llm_provider="azure_ai", model_id="bridged-1", response_id="chatcmpl-turn-one"
+        ),
+    ],
+    ids=["unknown-id", "id-the-chat-bridge-answered"],
+)
+async def test_a_follow_up_refused_on_a_fallback_ends_the_walk_before_the_next_group(previous_response_id: str):
+    router: Final = RefusingFallbackRouter(previous_response_id)
 
     with pytest.raises(UnresolvablePreviousResponseError):
-        await run_async_fallback(
-            litellm_router=router,
-            fallback_model_group=["bridged-hop", "native-fallback"],
-            original_model_group="native-primary",
-            original_exception=litellm.InternalServerError("upstream failed", "openai", "gpt-5.4-mini"),
-            max_fallbacks=3,
-            fallback_depth=0,
-            model="native-primary",
-        )
+        await _walk(router, ["bridged-hop", "native-fallback"])
 
     assert router.attempted_model_groups == ("bridged-hop",)
+
+
+@pytest.mark.asyncio
+async def test_a_fallback_that_cannot_rebuild_a_response_a_provider_holds_hands_it_to_the_next_group():
+    router: Final = RefusingFallbackRouter(_PROVIDER_HELD_RESPONSE_ID)
+
+    response: Final = await _walk(router, ["bridged-hop", "native-fallback"])
+
+    assert isinstance(response, StreamingWrapper)
+    assert router.attempted_model_groups == ("bridged-hop", "native-fallback")
+
+
+@pytest.mark.asyncio
+async def test_a_walk_that_fails_after_a_refusal_answers_with_the_refusal():
+    router: Final = RefusingFallbackRouter(_PROVIDER_HELD_RESPONSE_ID)
+
+    with pytest.raises(UnresolvablePreviousResponseError) as refused:
+        await _walk(router, ["bridged-hop", "failing-fallback"])
+
+    assert refused.value.param == "previous_response_id"
+    assert router.attempted_model_groups == ("bridged-hop", "failing-fallback")
 
 
 class RecordingRouter:
@@ -942,7 +986,7 @@ class TestTriggerCooldownForFailedDeployment:
                 }
             ]
         )
-        refusal: Final = previous_response_not_found("resp_unknown", "gpt-5.4-mini", "openai")
+        refusal: Final = previous_response_not_found(("resp_unknown",), "gpt-5.4-mini", "openai")
         refusal.failed_deployment_id = "fallback-deployment"
 
         _trigger_cooldown_for_failed_deployment(litellm_router=router, kwargs={}, exception=refusal)

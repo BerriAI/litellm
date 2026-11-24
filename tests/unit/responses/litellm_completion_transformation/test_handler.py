@@ -595,15 +595,97 @@ async def test_a_follow_up_refused_on_a_fallback_reaches_the_caller_as_the_400()
 
 
 @pytest.mark.asyncio
-async def test_a_follow_up_refused_by_the_failover_deployment_skips_the_next_fallback(
-    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize(
+    "client_id_fields",
+    [
+        pytest.param({}, id="previous_response_id_only"),
+        pytest.param({ADDRESSED_RESPONSE_ID_FIELD: "resp_the_client_held"}, id="with_the_id_the_client_sent"),
+    ],
+)
+async def test_a_follow_up_to_a_native_turn_a_bridged_fallback_cannot_rebuild_goes_on_to_a_native_fallback(
+    client_id_fields: Mapping[str, str],
 ):
+    native_params: Final = {
+        "model": "openai/gpt-5.4-mini",
+        "api_key": "fake-api-key",
+        "mock_response": "answered by the native fallback",
+    }
+    router: Final = litellm.Router(
+        model_list=[
+            {"model_name": "native", "litellm_params": native_params, "model_info": {"id": "n1"}},
+            {
+                "model_name": "bridged",
+                "litellm_params": {
+                    "model": "azure_ai/claude-sonnet-4-6",
+                    "api_base": "https://fake-foundry-resource.services.ai.azure.com",
+                    "api_key": "fake-api-key",
+                },
+                "model_info": {"id": "d1"},
+            },
+            {"model_name": "native-fallback", "litellm_params": native_params, "model_info": {"id": "n2"}},
+        ],
+        fallbacks=[{"native": ["bridged", "native-fallback"]}],
+    )
+    native_turn_id: Final = ResponsesAPIRequestUtils._build_responses_api_response_id(
+        custom_llm_provider="openai", model_id="n1", response_id="resp_turn_one"
+    )
+
+    with patch("litellm.proxy.proxy_server.prisma_client", None):
+        response: Final = await router.aresponses(
+            model="native",
+            input="Double it",
+            previous_response_id=native_turn_id,
+            mock_testing_fallbacks=True,
+            **client_id_fields,
+        )
+
+    assert response._hidden_params["model_id"] == "n2"
+
+
+@pytest.mark.asyncio
+async def test_a_follow_up_to_a_native_turn_the_bridged_group_cannot_rebuild_goes_to_its_fallback():
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "bridged",
+                "litellm_params": {
+                    "model": "azure_ai/claude-sonnet-4-6",
+                    "api_base": "https://fake-foundry-resource.services.ai.azure.com",
+                    "api_key": "fake-api-key",
+                },
+                "model_info": {"id": "d1"},
+            },
+            {
+                "model_name": "native",
+                "litellm_params": {
+                    "model": "openai/gpt-5.4-mini",
+                    "api_key": "fake-api-key",
+                    "mock_response": "answered by the native fallback",
+                },
+                "model_info": {"id": "n1"},
+            },
+        ],
+        fallbacks=[{"bridged": ["native"]}],
+    )
+    native_turn_id: Final = ResponsesAPIRequestUtils._build_responses_api_response_id(
+        custom_llm_provider="openai", model_id="native-elsewhere", response_id="resp_turn_one"
+    )
+
+    with patch("litellm.proxy.proxy_server.prisma_client", None):
+        response: Final = await router.aresponses(model="bridged", input="Double it", previous_response_id=native_turn_id)
+
+    assert response._hidden_params["model_id"] == "n1"
+
+
+def _mixed_group_whose_native_deployment_is_down(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, fallback_answers: bool = True
+) -> litellm.Router:
     monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
     litellm.in_memory_llm_clients_cache.flush_cache()
     respx_mock.post("https://api.openai.com/v1/responses").mock(
         return_value=httpx.Response(500, json={"error": {"message": "down", "type": "server_error"}})
     )
-    router: Final = litellm.Router(
+    return litellm.Router(
         model_list=[
             {
                 "model_name": "mixed",
@@ -625,7 +707,7 @@ async def test_a_follow_up_refused_by_the_failover_deployment_skips_the_next_fal
                 "litellm_params": {
                     "model": "openai/gpt-5.4-mini",
                     "api_key": "fake-api-key",
-                    "mock_response": "answered by the next fallback without the history",
+                    **({"mock_response": "answered by the next fallback without the history"} if fallback_answers else {}),
                 },
                 "model_info": {"id": "fallback"},
             },
@@ -636,11 +718,50 @@ async def test_a_follow_up_refused_by_the_failover_deployment_skips_the_next_fal
         fallbacks=[{"mixed": ["native-fallback"]}],
     )
 
+
+@pytest.mark.asyncio
+async def test_a_follow_up_refused_by_the_failover_deployment_skips_the_next_fallback(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    router: Final = _mixed_group_whose_native_deployment_is_down(respx_mock, monkeypatch)
+
     with patch("litellm.proxy.proxy_server.prisma_client", None):
         with pytest.raises(litellm.BadRequestError) as refused:
             await router.aresponses(model="mixed", input="Double it", previous_response_id=_TURN_ONE_ID)
 
     assert refused.value.code == "previous_response_not_found"
+
+
+@pytest.mark.asyncio
+async def test_a_follow_up_to_a_native_turn_the_failover_deployment_cannot_rebuild_goes_on_to_the_next_fallback(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    router: Final = _mixed_group_whose_native_deployment_is_down(respx_mock, monkeypatch)
+    native_turn_id: Final = ResponsesAPIRequestUtils._build_responses_api_response_id(
+        custom_llm_provider="openai", model_id="native", response_id="resp_turn_one"
+    )
+
+    with patch("litellm.proxy.proxy_server.prisma_client", None):
+        response: Final = await router.aresponses(model="mixed", input="Double it", previous_response_id=native_turn_id)
+
+    assert response._hidden_params["model_id"] == "fallback"
+
+
+@pytest.mark.asyncio
+async def test_a_follow_up_to_a_native_turn_whose_fallbacks_all_fail_after_the_failover_deployment_refused_gets_the_400(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    router: Final = _mixed_group_whose_native_deployment_is_down(respx_mock, monkeypatch, fallback_answers=False)
+    native_turn_id: Final = ResponsesAPIRequestUtils._build_responses_api_response_id(
+        custom_llm_provider="openai", model_id="native", response_id="resp_turn_one"
+    )
+
+    with patch("litellm.proxy.proxy_server.prisma_client", None):
+        with pytest.raises(litellm.BadRequestError) as refused:
+            await router.aresponses(model="mixed", input="Double it", previous_response_id=native_turn_id)
+
+    assert (refused.value.status_code, refused.value.code) == (400, "previous_response_not_found")
+    assert respx_mock.calls.call_count == 2
 
 
 class _CountedLookups:
