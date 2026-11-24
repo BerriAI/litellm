@@ -16,6 +16,7 @@ from litellm.constants import PTU_SENTINEL_API_KEY, SUBSCRIPTION_BACKED_PROVIDER
 from litellm.proxy._types import CommonProxyErrors
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.proxy.spend_tracking.key_metadata_recovery import (
+    KeyMetadataDict,
     attach_user_details,
     recover_cli_session_key_metadata,
     recover_double_hashed_key_metadata,
@@ -58,7 +59,7 @@ from litellm.types.repositories.daily_activity import (
     SpendLogsWindow,
 )
 
-_T: Final = TypeVar("_T")
+_T = TypeVar("_T")
 
 
 @dataclass(frozen=True, slots=True)
@@ -164,6 +165,12 @@ class DailySpendRecord(Protocol):
     def autorouter_savings_spend(self) -> float: ...
 
     @property
+    def guardrail_spend(self) -> float: ...
+
+    @property
+    def customer_margin_spend(self) -> float: ...
+
+    @property
     def api_requests(self) -> int: ...
 
     @property
@@ -245,11 +252,19 @@ def update_metrics(existing_metrics: SpendMetrics, record: DailySpendRecord) -> 
     existing_metrics.total_tokens += prompt_tokens + completion_tokens
     existing_metrics.cache_read_input_tokens += record.cache_read_input_tokens or 0
     existing_metrics.cache_creation_input_tokens += record.cache_creation_input_tokens or 0
+    cache_cost: Final[object] = getattr(record, "cache_cost", None)
+    priced_cache_tokens: Final[object] = getattr(record, "priced_cache_tokens", None)
+    if isinstance(cache_cost, (int, float)):
+        existing_metrics.cache_cost += cache_cost  # rebind-ok: accumulates in place
+    if isinstance(priced_cache_tokens, int):
+        existing_metrics.priced_cache_tokens += priced_cache_tokens  # rebind-ok: accumulates in place
     existing_metrics.compression_saved_tokens += record.compression_saved_tokens or 0
     existing_metrics.compression_savings_spend += record.compression_savings_spend or 0
     existing_metrics.prompt_caching_savings_spend += record.prompt_caching_savings_spend or 0
     existing_metrics.gateway_injected_caching_savings_spend += record.gateway_injected_caching_savings_spend or 0
     existing_metrics.autorouter_savings_spend += record.autorouter_savings_spend or 0
+    existing_metrics.guardrail_spend += record.guardrail_spend or 0  # rebind-ok: callers rely on in-place accumulation
+    existing_metrics.customer_margin_spend += record.customer_margin_spend or 0  # rebind-ok: accumulates in place
     existing_metrics.api_requests += record.api_requests or 0
     existing_metrics.successful_requests += record.successful_requests or 0
     existing_metrics.failed_requests += record.failed_requests or 0
@@ -527,14 +542,14 @@ class _ProxyDailyActivityReads:
             self.prisma_client, api_keys - frozenset(result)
         )
         still_missing: Final = api_keys - frozenset(result) - frozenset(from_session_keys)
-        from_reverse_hash: Final = (
+        from_reverse_hash: Final[Mapping[str, KeyMetadataDict]] = (
             await recover_double_hashed_key_metadata(self.prisma_client, still_missing)
             if still_missing
             else MappingProxyType({})
         )
         after_token_recovery: Final = MappingProxyType({**result, **from_session_keys, **from_reverse_hash})
         unresolved: Final = api_keys - frozenset(after_token_recovery)
-        from_spend_logs: Final = (
+        from_spend_logs: Final[Mapping[str, KeyMetadataDict]] = (
             await recover_key_metadata_from_spend_logs(self.prisma_client, unresolved, window)
             if unresolved and window is not None
             else MappingProxyType({})
@@ -731,11 +746,15 @@ def sum_spend_metrics(metrics: Sequence[SpendMetrics]) -> SpendMetrics:
         completion_tokens=sum(metric.completion_tokens for metric in metrics),
         cache_read_input_tokens=sum(metric.cache_read_input_tokens for metric in metrics),
         cache_creation_input_tokens=sum(metric.cache_creation_input_tokens for metric in metrics),
+        cache_cost=sum(metric.cache_cost for metric in metrics),
+        priced_cache_tokens=sum(metric.priced_cache_tokens for metric in metrics),
         compression_saved_tokens=sum(metric.compression_saved_tokens for metric in metrics),
         compression_savings_spend=sum(metric.compression_savings_spend for metric in metrics),
         prompt_caching_savings_spend=sum(metric.prompt_caching_savings_spend for metric in metrics),
         gateway_injected_caching_savings_spend=sum(metric.gateway_injected_caching_savings_spend for metric in metrics),
         autorouter_savings_spend=sum(metric.autorouter_savings_spend for metric in metrics),
+        guardrail_spend=sum(metric.guardrail_spend for metric in metrics),
+        customer_margin_spend=sum(metric.customer_margin_spend for metric in metrics),
         total_tokens=sum(metric.total_tokens for metric in metrics),
         successful_requests=sum(metric.successful_requests for metric in metrics),
         failed_requests=sum(metric.failed_requests for metric in metrics),
@@ -761,11 +780,15 @@ def _record_to_spend_metrics(record: RollupMetricsRow) -> SpendMetrics:
         total_tokens=prompt_tokens + completion_tokens,
         cache_read_input_tokens=record.cache_read_input_tokens or 0,
         cache_creation_input_tokens=record.cache_creation_input_tokens or 0,
+        cache_cost=record.cache_cost or 0.0,
+        priced_cache_tokens=record.priced_cache_tokens or 0,
         compression_saved_tokens=record.compression_saved_tokens or 0,
         compression_savings_spend=record.compression_savings_spend or 0,
         prompt_caching_savings_spend=record.prompt_caching_savings_spend or 0,
         gateway_injected_caching_savings_spend=record.gateway_injected_caching_savings_spend or 0,
         autorouter_savings_spend=record.autorouter_savings_spend or 0,
+        guardrail_spend=record.guardrail_spend or 0,
+        customer_margin_spend=record.customer_margin_spend or 0,
         api_requests=record.api_requests or 0,
         successful_requests=record.successful_requests or 0,
         failed_requests=record.failed_requests or 0,
@@ -969,6 +992,8 @@ async def get_daily_activity(
     resolve_entity_metadata: Callable[[Sequence[DailySpendRecord]], Awaitable[dict[str, dict[str, object]]]]
     | None = None,
     team_ids: tuple[str, ...] | None = None,
+    app_id: str | None = None,
+    app_group_id: str | None = None,
 ) -> SpendAnalyticsPaginatedResponse:
     if prisma_client is None:
         raise HTTPException(status_code=500, detail={"error": CommonProxyErrors.db_not_connected_error.value})
@@ -995,7 +1020,7 @@ async def get_daily_activity(
             timezone_offset_minutes,
             include_current_utc_day,
         )
-        scope: Final = replace(base_scope, team_ids=team_ids)
+        scope: Final = replace(base_scope, team_ids=team_ids, app_id=app_id, app_group_id=app_group_id)
         repository: Final = daily_activity_repository(prisma_client)
         page_data: Final = await repository.daily_rows(scope, page=page, page_size=page_size)
         daily_spend_data: Final = page_data.rows
@@ -1045,11 +1070,14 @@ async def get_daily_activity(
                 total_failed_requests=metadata_metrics.failed_requests,
                 total_cache_read_input_tokens=metadata_metrics.cache_read_input_tokens,
                 total_cache_creation_input_tokens=metadata_metrics.cache_creation_input_tokens,
+                total_cache_cost=metadata_metrics.cache_cost,
+                total_priced_cache_tokens=metadata_metrics.priced_cache_tokens,
                 total_compression_saved_tokens=metadata_metrics.compression_saved_tokens,
                 total_compression_savings_spend=metadata_metrics.compression_savings_spend,
                 total_prompt_caching_savings_spend=metadata_metrics.prompt_caching_savings_spend,
                 total_gateway_injected_caching_savings_spend=metadata_metrics.gateway_injected_caching_savings_spend,
                 total_autorouter_savings_spend=metadata_metrics.autorouter_savings_spend,
+                total_customer_margin_spend=metadata_metrics.customer_margin_spend,
                 total_response_time_ms=metadata_metrics.total_response_time_ms,
                 total_timed_requests=metadata_metrics.timed_requests,
                 page=page,
@@ -1255,6 +1283,8 @@ async def get_daily_activity_aggregated(
                 total_failed_requests=aggregated["totals"].failed_requests,
                 total_cache_read_input_tokens=aggregated["totals"].cache_read_input_tokens,
                 total_cache_creation_input_tokens=aggregated["totals"].cache_creation_input_tokens,
+                total_cache_cost=aggregated["totals"].cache_cost,
+                total_priced_cache_tokens=aggregated["totals"].priced_cache_tokens,
                 total_compression_saved_tokens=aggregated["totals"].compression_saved_tokens,
                 total_compression_savings_spend=aggregated["totals"].compression_savings_spend,
                 total_prompt_caching_savings_spend=aggregated["totals"].prompt_caching_savings_spend,
@@ -1262,6 +1292,7 @@ async def get_daily_activity_aggregated(
                     "totals"
                 ].gateway_injected_caching_savings_spend,
                 total_autorouter_savings_spend=aggregated["totals"].autorouter_savings_spend,
+                total_customer_margin_spend=aggregated["totals"].customer_margin_spend,
                 total_response_time_ms=aggregated["totals"].total_response_time_ms,
                 total_timed_requests=aggregated["totals"].timed_requests,
                 page=1,

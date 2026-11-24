@@ -939,6 +939,20 @@
               ],
               "title": "Access Skill Names"
             },
+            "access_vector_store_ids": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Vector Store Ids"
+            },
             "assigned_key_ids": {
               "anyOf": [
                 {
@@ -1128,6 +1142,21 @@
               "title": "Access Skill Names",
               "type": "array"
             },
+            "access_vector_store_ids": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Access Vector Store Ids",
+              "type": "array"
+            },
+            "access_vector_stores": {
+              "items": {
+                "$ref": "#/components/schemas/AccessGroupResource"
+              },
+              "title": "Access Vector Stores",
+              "type": "array"
+            },
             "assigned_key_ids": {
               "items": {
                 "type": "string"
@@ -1227,6 +1256,7 @@
             "assigned_key_ids",
             "access_mcp_servers",
             "access_agents",
+            "access_vector_stores",
             "assigned_teams",
             "assigned_keys",
             "created_at",
@@ -1303,6 +1333,20 @@
                 }
               ],
               "title": "Access Skill Names"
+            },
+            "access_vector_store_ids": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Vector Store Ids"
             },
             "assigned_key_ids": {
               "anyOf": [
@@ -3948,6 +3992,11 @@
               "title": "Total Autorouter Savings Spend",
               "type": "number"
             },
+            "total_cache_cost": {
+              "default": 0.0,
+              "title": "Total Cache Cost",
+              "type": "number"
+            },
             "total_cache_creation_input_tokens": {
               "default": 0,
               "title": "Total Cache Creation Input Tokens",
@@ -3973,6 +4022,12 @@
               "title": "Total Compression Savings Spend",
               "type": "number"
             },
+            "total_customer_margin_spend": {
+              "default": 0.0,
+              "description": "Surcharge in USD added to requests made for a customer, already included in total_spend",
+              "title": "Total Customer Margin Spend",
+              "type": "number"
+            },
             "total_failed_requests": {
               "default": 0,
               "title": "Total Failed Requests",
@@ -3991,6 +4046,11 @@
             "total_pages": {
               "default": 1,
               "title": "Total Pages",
+              "type": "integer"
+            },
+            "total_priced_cache_tokens": {
+              "default": 0,
+              "title": "Total Priced Cache Tokens",
               "type": "integer"
             },
             "total_prompt_caching_savings_spend": {
@@ -4842,6 +4902,12 @@
               "title": "Autorouter Savings Spend",
               "type": "number"
             },
+            "cache_cost": {
+              "default": 0.0,
+              "description": "Recorded cache read and write cost in USD for customer usage",
+              "title": "Cache Cost",
+              "type": "number"
+            },
             "cache_creation_input_tokens": {
               "default": 0,
               "title": "Cache Creation Input Tokens",
@@ -4867,6 +4933,12 @@
               "title": "Compression Savings Spend",
               "type": "number"
             },
+            "customer_margin_spend": {
+              "default": 0.0,
+              "description": "Surcharge in USD added to requests made for a customer, already included in spend, so cost before the surcharge is spend - customer_margin_spend",
+              "title": "Customer Margin Spend",
+              "type": "number"
+            },
             "failed_requests": {
               "default": 0,
               "title": "Failed Requests",
@@ -4881,6 +4953,18 @@
               "default": 0.0,
               "title": "Gateway Injected Caching Savings Spend",
               "type": "number"
+            },
+            "guardrail_spend": {
+              "default": 0.0,
+              "description": "Guardrail spend in USD, already included in spend, so model spend is spend - guardrail_spend. Rows recorded before this field existed report 0 even when their spend includes guardrail cost",
+              "title": "Guardrail Spend",
+              "type": "number"
+            },
+            "priced_cache_tokens": {
+              "default": 0,
+              "description": "Cache tokens with a recorded cost for customer usage",
+              "title": "Priced Cache Tokens",
+              "type": "integer"
             },
             "prompt_caching_savings_spend": {
               "default": 0.0,
@@ -5138,6 +5222,18 @@
                 "minimum": 1,
                 "title": "Api Key Limit",
                 "type": "integer"
+              }
+            },
+            {
+              "description": "Include per-entity usage and key counts.",
+              "in": "query",
+              "name": "include_entity_breakdown",
+              "required": false,
+              "schema": {
+                "default": true,
+                "description": "Include per-entity usage and key counts.",
+                "title": "Include Entity Breakdown",
+                "type": "boolean"
               }
             },
             {
@@ -5838,6 +5934,18 @@
                 ],
                 "title": "Format",
                 "type": "string"
+              }
+            },
+            {
+              "description": "Add key_metadata and user_metadata for admin callers. Ignored for everyone else.",
+              "in": "query",
+              "name": "include_metadata",
+              "required": false,
+              "schema": {
+                "default": false,
+                "description": "Add key_metadata and user_metadata for admin callers. Ignored for everyone else.",
+                "title": "Include Metadata",
+                "type": "boolean"
               }
             },
             {
@@ -10748,6 +10856,145 @@
       }
     }
   },
+  "cursor_cli_passthrough": {
+    "components": {
+      "schemas": {
+        "HTTPValidationError": {
+          "properties": {
+            "detail": {
+              "items": {
+                "$ref": "#/components/schemas/ValidationError"
+              },
+              "title": "Detail",
+              "type": "array"
+            }
+          },
+          "title": "HTTPValidationError",
+          "type": "object"
+        },
+        "ValidationError": {
+          "properties": {
+            "ctx": {
+              "title": "Context",
+              "type": "object"
+            },
+            "input": {
+              "title": "Input"
+            },
+            "loc": {
+              "items": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "integer"
+                  }
+                ]
+              },
+              "title": "Location",
+              "type": "array"
+            },
+            "msg": {
+              "title": "Message",
+              "type": "string"
+            },
+            "type": {
+              "title": "Error Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "loc",
+            "msg",
+            "type"
+          ],
+          "title": "ValidationError",
+          "type": "object"
+        }
+      }
+    },
+    "paths": {
+      "/cursor-cli/{endpoint}": {
+        "post": {
+          "description": "Forward the signed-in Cursor CLI's agent session using a separate x-litellm-api-key. Set network.useHttp1ForAgent to true in the CLI's cli-config.json, then run `agent --agent-endpoint https://YOUR_PROXY/cursor-cli --header \"x-litellm-api-key: Bearer YOUR_KEY\"`. Leave --endpoint unchanged. Login, bootstrap and model discovery stay direct to Cursor. Use an unrestricted virtual key or master key. JWT and custom-auth credentials are unsupported. Keys bound to LiteLLM agents are unsupported. Model restrictions, token limits, spend budgets and content guardrails are unsupported. Configured moderation, content guardrails or policy-engine rules disable this relay, even when not selected by this request. Request limits count RPCs, not agent sessions. Allow overlapping stream and append calls. Logs describe HTTP transport status, not the agent's outcome. The client owns login and token refresh.",
+          "operationId": "cursor_cli_passthrough_cursor_cli__endpoint__post",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "endpoint",
+              "required": true,
+              "schema": {
+                "enum": [
+                  "agent.v1.AgentService/RunSSE",
+                  "aiserver.v1.BidiService/BidiAppend"
+                ],
+                "title": "Endpoint",
+                "type": "string"
+              }
+            }
+          ],
+          "requestBody": {
+            "content": {
+              "application/connect+proto": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
+              },
+              "application/proto": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                },
+                "application/proto": {
+                  "schema": {
+                    "format": "binary",
+                    "type": "string"
+                  }
+                },
+                "text/event-stream": {
+                  "schema": {
+                    "type": "string"
+                  }
+                }
+              },
+              "description": "Unchanged native Cursor response bytes, including streamed agent events"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Cursor Cli Passthrough",
+          "tags": [
+            "cursor_cli_passthrough"
+          ]
+        }
+      }
+    }
+  },
   "decisions": {
     "components": {
       "schemas": {
@@ -11314,12 +11561,39 @@
           "title": "OpenAIChoiceProbability",
           "type": "object"
         },
+        "OpenAIDecisionCacheWriteTokensDetails": {
+          "additionalProperties": true,
+          "properties": {
+            "ttl_12h_tokens": {
+              "default": 0,
+              "title": "Ttl 12H Tokens",
+              "type": "integer"
+            },
+            "ttl_30m_tokens": {
+              "default": 0,
+              "title": "Ttl 30M Tokens",
+              "type": "integer"
+            }
+          },
+          "title": "OpenAIDecisionCacheWriteTokensDetails",
+          "type": "object"
+        },
         "OpenAIDecisionInputTokensDetails": {
           "properties": {
             "cache_write_tokens": {
               "default": 0,
               "title": "Cache Write Tokens",
               "type": "integer"
+            },
+            "cache_write_tokens_details": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/OpenAIDecisionCacheWriteTokensDetails"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             "cached_tokens": {
               "default": 0,
@@ -11734,6 +12008,39 @@
                                         {
                                           "additionalProperties": false,
                                           "properties": {
+                                            "prompt_cache_breakpoint": {
+                                              "anyOf": [
+                                                {
+                                                  "additionalProperties": true,
+                                                  "properties": {
+                                                    "mode": {
+                                                      "const": "explicit",
+                                                      "title": "Mode",
+                                                      "type": "string"
+                                                    },
+                                                    "ttl": {
+                                                      "anyOf": [
+                                                        {
+                                                          "type": "string"
+                                                        },
+                                                        {
+                                                          "type": "null"
+                                                        }
+                                                      ],
+                                                      "title": "Ttl"
+                                                    }
+                                                  },
+                                                  "required": [
+                                                    "mode"
+                                                  ],
+                                                  "title": "OpenAIDecisionPromptCacheBreakpoint",
+                                                  "type": "object"
+                                                },
+                                                {
+                                                  "type": "null"
+                                                }
+                                              ]
+                                            },
                                             "text": {
                                               "title": "Text",
                                               "type": "string"
@@ -11769,6 +12076,39 @@
                                               "title": "Image Url",
                                               "type": "string"
                                             },
+                                            "prompt_cache_breakpoint": {
+                                              "anyOf": [
+                                                {
+                                                  "additionalProperties": true,
+                                                  "properties": {
+                                                    "mode": {
+                                                      "const": "explicit",
+                                                      "title": "Mode",
+                                                      "type": "string"
+                                                    },
+                                                    "ttl": {
+                                                      "anyOf": [
+                                                        {
+                                                          "type": "string"
+                                                        },
+                                                        {
+                                                          "type": "null"
+                                                        }
+                                                      ],
+                                                      "title": "Ttl"
+                                                    }
+                                                  },
+                                                  "required": [
+                                                    "mode"
+                                                  ],
+                                                  "title": "OpenAIDecisionPromptCacheBreakpoint",
+                                                  "type": "object"
+                                                },
+                                                {
+                                                  "type": "null"
+                                                }
+                                              ]
+                                            },
                                             "type": {
                                               "const": "input_image",
                                               "title": "Type",
@@ -11781,6 +12121,38 @@
                                           ],
                                           "title": "OpenAIDecisionInputImage",
                                           "type": "object"
+                                        },
+                                        {
+                                          "additionalProperties": false,
+                                          "properties": {
+                                            "data": {
+                                              "anyOf": [
+                                                {
+                                                  "additionalProperties": true,
+                                                  "type": "object"
+                                                },
+                                                {
+                                                  "items": {
+                                                    "additionalProperties": true,
+                                                    "type": "object"
+                                                  },
+                                                  "type": "array"
+                                                }
+                                              ],
+                                              "title": "Data"
+                                            },
+                                            "type": {
+                                              "const": "input_json",
+                                              "title": "Type",
+                                              "type": "string"
+                                            }
+                                          },
+                                          "required": [
+                                            "type",
+                                            "data"
+                                          ],
+                                          "title": "OpenAIDecisionInputJSON",
+                                          "type": "object"
                                         }
                                       ]
                                     },
@@ -11790,8 +12162,12 @@
                                 "title": "Content"
                               },
                               "role": {
-                                "const": "user",
                                 "default": "user",
+                                "enum": [
+                                  "user",
+                                  "developer",
+                                  "system"
+                                ],
                                 "title": "Role",
                                 "type": "string"
                               },
@@ -11811,13 +12187,61 @@
                           "type": "array"
                         }
                       ],
-                      "description": "The text being judged, or user messages whose content mixes input_text and input_image parts",
+                      "description": "The text being judged, or user, developer, and system messages. Developer and system messages are input text. User messages can mix input text, images, and JSON.",
                       "title": "Input"
                     },
                     "model": {
                       "description": "A decision model from the proxy model_list",
                       "title": "Model",
                       "type": "string"
+                    },
+                    "prompt_cache_key": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "description": "Partitions prompt-cache reuse. Sent to OpenAI and dropped for other providers",
+                      "title": "Prompt Cache Key"
+                    },
+                    "prompt_cache_options": {
+                      "anyOf": [
+                        {
+                          "additionalProperties": true,
+                          "properties": {
+                            "mode": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "title": "Mode"
+                            },
+                            "ttl": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "title": "Ttl"
+                            }
+                          },
+                          "title": "OpenAIDecisionPromptCacheOptions",
+                          "type": "object"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
                     },
                     "questions": {
                       "description": "Predicate, choice and score questions. Answers come back in the same order",
@@ -13140,6 +13564,39 @@
                                         {
                                           "additionalProperties": false,
                                           "properties": {
+                                            "prompt_cache_breakpoint": {
+                                              "anyOf": [
+                                                {
+                                                  "additionalProperties": true,
+                                                  "properties": {
+                                                    "mode": {
+                                                      "const": "explicit",
+                                                      "title": "Mode",
+                                                      "type": "string"
+                                                    },
+                                                    "ttl": {
+                                                      "anyOf": [
+                                                        {
+                                                          "type": "string"
+                                                        },
+                                                        {
+                                                          "type": "null"
+                                                        }
+                                                      ],
+                                                      "title": "Ttl"
+                                                    }
+                                                  },
+                                                  "required": [
+                                                    "mode"
+                                                  ],
+                                                  "title": "OpenAIDecisionPromptCacheBreakpoint",
+                                                  "type": "object"
+                                                },
+                                                {
+                                                  "type": "null"
+                                                }
+                                              ]
+                                            },
                                             "text": {
                                               "title": "Text",
                                               "type": "string"
@@ -13175,6 +13632,39 @@
                                               "title": "Image Url",
                                               "type": "string"
                                             },
+                                            "prompt_cache_breakpoint": {
+                                              "anyOf": [
+                                                {
+                                                  "additionalProperties": true,
+                                                  "properties": {
+                                                    "mode": {
+                                                      "const": "explicit",
+                                                      "title": "Mode",
+                                                      "type": "string"
+                                                    },
+                                                    "ttl": {
+                                                      "anyOf": [
+                                                        {
+                                                          "type": "string"
+                                                        },
+                                                        {
+                                                          "type": "null"
+                                                        }
+                                                      ],
+                                                      "title": "Ttl"
+                                                    }
+                                                  },
+                                                  "required": [
+                                                    "mode"
+                                                  ],
+                                                  "title": "OpenAIDecisionPromptCacheBreakpoint",
+                                                  "type": "object"
+                                                },
+                                                {
+                                                  "type": "null"
+                                                }
+                                              ]
+                                            },
                                             "type": {
                                               "const": "input_image",
                                               "title": "Type",
@@ -13187,6 +13677,38 @@
                                           ],
                                           "title": "OpenAIDecisionInputImage",
                                           "type": "object"
+                                        },
+                                        {
+                                          "additionalProperties": false,
+                                          "properties": {
+                                            "data": {
+                                              "anyOf": [
+                                                {
+                                                  "additionalProperties": true,
+                                                  "type": "object"
+                                                },
+                                                {
+                                                  "items": {
+                                                    "additionalProperties": true,
+                                                    "type": "object"
+                                                  },
+                                                  "type": "array"
+                                                }
+                                              ],
+                                              "title": "Data"
+                                            },
+                                            "type": {
+                                              "const": "input_json",
+                                              "title": "Type",
+                                              "type": "string"
+                                            }
+                                          },
+                                          "required": [
+                                            "type",
+                                            "data"
+                                          ],
+                                          "title": "OpenAIDecisionInputJSON",
+                                          "type": "object"
                                         }
                                       ]
                                     },
@@ -13196,8 +13718,12 @@
                                 "title": "Content"
                               },
                               "role": {
-                                "const": "user",
                                 "default": "user",
+                                "enum": [
+                                  "user",
+                                  "developer",
+                                  "system"
+                                ],
                                 "title": "Role",
                                 "type": "string"
                               },
@@ -13217,13 +13743,61 @@
                           "type": "array"
                         }
                       ],
-                      "description": "The text being judged, or user messages whose content mixes input_text and input_image parts",
+                      "description": "The text being judged, or user, developer, and system messages. Developer and system messages are input text. User messages can mix input text, images, and JSON.",
                       "title": "Input"
                     },
                     "model": {
                       "description": "A decision model from the proxy model_list",
                       "title": "Model",
                       "type": "string"
+                    },
+                    "prompt_cache_key": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "description": "Partitions prompt-cache reuse. Sent to OpenAI and dropped for other providers",
+                      "title": "Prompt Cache Key"
+                    },
+                    "prompt_cache_options": {
+                      "anyOf": [
+                        {
+                          "additionalProperties": true,
+                          "properties": {
+                            "mode": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "title": "Mode"
+                            },
+                            "ttl": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "title": "Ttl"
+                            }
+                          },
+                          "title": "OpenAIDecisionPromptCacheOptions",
+                          "type": "object"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
                     },
                     "questions": {
                       "description": "Predicate, choice and score questions. Answers come back in the same order",
@@ -16137,6 +16711,22 @@
               "title": "Guardrail Name",
               "type": "string"
             },
+            "images": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "maxItems": 1,
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "One image to scan, as a base64 data URI. Only Bedrock guardrails scan images.",
+              "title": "Images"
+            },
             "input_type": {
               "default": "request",
               "title": "Input Type",
@@ -16185,13 +16775,13 @@
               "default": "standard"
             },
             "text": {
+              "default": "",
               "title": "Text",
               "type": "string"
             }
           },
           "required": [
-            "guardrail_name",
-            "text"
+            "guardrail_name"
           ],
           "title": "ApplyGuardrailRequest",
           "type": "object"
@@ -16755,6 +17345,30 @@
               ],
               "description": "When True, this pre_call guardrail always evaluates the request as it was before any guardrail in this hook ran, regardless of its position in the guardrails list -- so the YAML order of guardrails can never change whether this one blocks. Use only for block-only guardrails: any data this guardrail returns is discarded, same contract as run_in_parallel, since an earlier guardrail's masking must not be undone by this one.",
               "title": "Scan Raw Request"
+            },
+            "scan_tool_calls_as_text": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "For the bedrock guardrail, whose ApplyGuardrail API has no tool-call content type. When True, the name and arguments of every tool call are also scanned as text: tool calls in the request history as input, tool calls generated by the model as output. A blocked tool call blocks the request or response. A tool call the policy masks is blocked too: masked text is never written into the arguments, so they stay valid JSON. Costs one extra guardrail call when tool calls are present.",
+              "title": "Scan Tool Calls As Text"
+            },
+            "scan_tool_descriptions_as_text": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "For text-only guardrails (panw_prisma_airs, presidio, bedrock). Guardrails whose APIs accept the request's tools[] already scan it natively. When True, a pre_call guardrail also scans every description string in tools[] (tool and parameter descriptions) as text, blocking or masking them like message text. Costs one extra guardrail call per tool that has a description.",
+              "title": "Scan Tool Descriptions As Text"
             },
             "sensitive_data_route_to_model": {
               "anyOf": [
@@ -19805,6 +20419,30 @@
               ],
               "description": "When True, this pre_call guardrail always evaluates the request as it was before any guardrail in this hook ran, regardless of its position in the guardrails list -- so the YAML order of guardrails can never change whether this one blocks. Use only for block-only guardrails: any data this guardrail returns is discarded, same contract as run_in_parallel, since an earlier guardrail's masking must not be undone by this one.",
               "title": "Scan Raw Request"
+            },
+            "scan_tool_calls_as_text": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "For the bedrock guardrail, whose ApplyGuardrail API has no tool-call content type. When True, the name and arguments of every tool call are also scanned as text: tool calls in the request history as input, tool calls generated by the model as output. A blocked tool call blocks the request or response. A tool call the policy masks is blocked too: masked text is never written into the arguments, so they stay valid JSON. Costs one extra guardrail call when tool calls are present.",
+              "title": "Scan Tool Calls As Text"
+            },
+            "scan_tool_descriptions_as_text": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "For text-only guardrails (panw_prisma_airs, presidio, bedrock). Guardrails whose APIs accept the request's tools[] already scan it natively. When True, a pre_call guardrail also scans every description string in tools[] (tool and parameter descriptions) as text, blocking or masking them like message text. Costs one extra guardrail call per tool that has a description.",
+              "title": "Scan Tool Descriptions As Text"
             },
             "send_user_api_key_alias": {
               "anyOf": [
@@ -23344,6 +23982,38 @@
           "summary": "Langfuse Proxy Route",
           "tags": [
             "langfuse_passthrough"
+          ]
+        }
+      }
+    }
+  },
+  "live_sessions": {
+    "components": {
+      "schemas": {}
+    },
+    "paths": {
+      "/v1/live/sessions": {
+        "post": {
+          "description": "Create a GPT-Live session over WebRTC. The body carries the session and the browser's SDP offer,\nand the response carries the SDP answer. The returned `session.id` attaches a sideband on\n`/v1/live/sessions/{session_id}/attach`.",
+          "operationId": "create_live_session_v1_live_sessions_post",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Create Live Session",
+          "tags": [
+            "live_sessions"
           ]
         }
       }
@@ -35368,6 +36038,61 @@
                 "title": "Response Id",
                 "type": "string"
               }
+            },
+            {
+              "description": "An item ID to list items after, used in pagination",
+              "in": "query",
+              "name": "after",
+              "required": false,
+              "schema": {
+                "type": "string"
+              }
+            },
+            {
+              "description": "An item ID to list items before, used in pagination",
+              "in": "query",
+              "name": "before",
+              "required": false,
+              "schema": {
+                "type": "string"
+              }
+            },
+            {
+              "description": "Additional fields to include in the response, forwarded to the provider",
+              "in": "query",
+              "name": "include",
+              "required": false,
+              "schema": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
+            {
+              "description": "How many items to return, with the range enforced by the provider",
+              "in": "query",
+              "name": "limit",
+              "required": false,
+              "schema": {
+                "default": 20,
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            {
+              "description": "The order to return the input items in",
+              "in": "query",
+              "name": "order",
+              "required": false,
+              "schema": {
+                "default": "desc",
+                "enum": [
+                  "asc",
+                  "desc"
+                ],
+                "type": "string"
+              }
             }
           ],
           "responses": {
@@ -38111,6 +38836,45 @@
           "title": "MCPEnvVarScope",
           "type": "string"
         },
+        "MCPServerEventsConfig": {
+          "additionalProperties": false,
+          "properties": {
+            "allowed_events": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "minItems": 1,
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Event names or globs this server may publish. Omit for every event; set enabled false for none.",
+              "title": "Allowed Events"
+            },
+            "enabled": {
+              "default": false,
+              "title": "Enabled",
+              "type": "boolean"
+            },
+            "legacy_webhook_id_equals_event_id": {
+              "default": false,
+              "title": "Legacy Webhook Id Equals Event Id",
+              "type": "boolean"
+            },
+            "min_poll_interval_ms": {
+              "default": 1000,
+              "minimum": 0.0,
+              "title": "Min Poll Interval Ms",
+              "type": "integer"
+            }
+          },
+          "title": "MCPServerEventsConfig",
+          "type": "object"
+        },
         "NewMCPServerRequest": {
           "properties": {
             "alias": {
@@ -38300,6 +39064,16 @@
                 }
               ],
               "title": "Env Vars"
+            },
+            "events": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/MCPServerEventsConfig"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             "extra_headers": {
               "anyOf": [
@@ -39568,6 +40342,14 @@
               "title": "Flow",
               "type": "string"
             },
+            "server": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Server",
+              "type": "array"
+            },
             "team_id": {
               "anyOf": [
                 {
@@ -40128,6 +40910,16 @@
                 }
               ],
               "title": "Env Vars"
+            },
+            "events": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/MCPServerEventsConfig"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             "extra_headers": {
               "items": {
@@ -40939,6 +41731,45 @@
           "title": "MCPEnvVarScope",
           "type": "string"
         },
+        "MCPServerEventsConfig": {
+          "additionalProperties": false,
+          "properties": {
+            "allowed_events": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "minItems": 1,
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Event names or globs this server may publish. Omit for every event; set enabled false for none.",
+              "title": "Allowed Events"
+            },
+            "enabled": {
+              "default": false,
+              "title": "Enabled",
+              "type": "boolean"
+            },
+            "legacy_webhook_id_equals_event_id": {
+              "default": false,
+              "title": "Legacy Webhook Id Equals Event Id",
+              "type": "boolean"
+            },
+            "min_poll_interval_ms": {
+              "default": 1000,
+              "minimum": 0.0,
+              "title": "Min Poll Interval Ms",
+              "type": "integer"
+            }
+          },
+          "title": "MCPServerEventsConfig",
+          "type": "object"
+        },
         "NewMCPServerRequest": {
           "properties": {
             "alias": {
@@ -41128,6 +41959,16 @@
                 }
               ],
               "title": "Env Vars"
+            },
+            "events": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/MCPServerEventsConfig"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             "extra_headers": {
               "anyOf": [
@@ -42143,7 +42984,7 @@
       },
       "/authorize/complete": {
         "post": {
-          "description": "Finish an aggregate connect flow: mint the gateway authorization code for the\nsigned-in user and hand it back to the DCR client, by 303 redirect (default) or, for\na loopback client on a different machine, as a copyable callback URL\n(``delivery=manual``). POST plus the per-flow HttpOnly cookie set at /authorize; an\nanonymous or bad-flow request just 400s. The native-client consent page adds\n``decision`` (approve or deny) and the ``team_id`` the credential is attributed to.",
+          "description": "Finish an aggregate connect flow: mint the gateway authorization code for the\nsigned-in user and hand it back to the DCR client, by 303 redirect (default) or, for\na loopback client on a different machine, as a copyable callback URL\n(``delivery=manual``). POST plus the per-flow HttpOnly cookie set at /authorize; an\nanonymous or bad-flow request just 400s. The native-client consent page adds\n``decision`` (approve or deny) and the ``team_id`` the credential is attributed to.\nEach ``server`` field is the id of a server the connect page shows as on.",
           "operationId": "authorize_complete_authorize_complete_post",
           "requestBody": {
             "content": {
@@ -43327,6 +44168,16 @@
                 }
               ],
               "title": "Env Vars"
+            },
+            "events": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/MCPServerEventsConfig"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             "extra_headers": {
               "items": {
@@ -44652,6 +45503,45 @@
           "title": "MCPOAuthUserCredentialStatus",
           "type": "object"
         },
+        "MCPServerEventsConfig": {
+          "additionalProperties": false,
+          "properties": {
+            "allowed_events": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "minItems": 1,
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Event names or globs this server may publish. Omit for every event; set enabled false for none.",
+              "title": "Allowed Events"
+            },
+            "enabled": {
+              "default": false,
+              "title": "Enabled",
+              "type": "boolean"
+            },
+            "legacy_webhook_id_equals_event_id": {
+              "default": false,
+              "title": "Legacy Webhook Id Equals Event Id",
+              "type": "boolean"
+            },
+            "min_poll_interval_ms": {
+              "default": 1000,
+              "minimum": 0.0,
+              "title": "Min Poll Interval Ms",
+              "type": "integer"
+            }
+          },
+          "title": "MCPServerEventsConfig",
+          "type": "object"
+        },
         "MCPServerUserCredentialListItem": {
           "description": "One user's stored credential for an MCP server, as an admin sees it. Never carries the secret.",
           "properties": {
@@ -45171,6 +46061,16 @@
                 }
               ],
               "title": "Env Vars"
+            },
+            "events": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/MCPServerEventsConfig"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             "extra_headers": {
               "anyOf": [
@@ -45727,6 +46627,16 @@
               ],
               "title": "Env Vars"
             },
+            "events": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/MCPServerEventsConfig"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "extra_headers": {
               "anyOf": [
                 {
@@ -45821,6 +46731,12 @@
             "per_server_oauth_discovery": {
               "default": false,
               "title": "Per Server Oauth Discovery",
+              "type": "boolean"
+            },
+            "preserve_explicit_oauth_settings": {
+              "default": false,
+              "description": "Keep explicitly supplied OAuth settings on upstream or auth changes, even when their values match the saved settings.",
+              "title": "Preserve Explicit Oauth Settings",
               "type": "boolean"
             },
             "registration_url": {
@@ -48446,6 +49362,45 @@
           "title": "MCPEnvVarScope",
           "type": "string"
         },
+        "MCPServerEventsConfig": {
+          "additionalProperties": false,
+          "properties": {
+            "allowed_events": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "minItems": 1,
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Event names or globs this server may publish. Omit for every event; set enabled false for none.",
+              "title": "Allowed Events"
+            },
+            "enabled": {
+              "default": false,
+              "title": "Enabled",
+              "type": "boolean"
+            },
+            "legacy_webhook_id_equals_event_id": {
+              "default": false,
+              "title": "Legacy Webhook Id Equals Event Id",
+              "type": "boolean"
+            },
+            "min_poll_interval_ms": {
+              "default": 1000,
+              "minimum": 0.0,
+              "title": "Min Poll Interval Ms",
+              "type": "integer"
+            }
+          },
+          "title": "MCPServerEventsConfig",
+          "type": "object"
+        },
         "NewMCPServerRequest": {
           "properties": {
             "alias": {
@@ -48635,6 +49590,16 @@
                 }
               ],
               "title": "Env Vars"
+            },
+            "events": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/MCPServerEventsConfig"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             "extra_headers": {
               "anyOf": [
@@ -59652,6 +60617,39 @@
   "skill_hub": {
     "components": {
       "schemas": {
+        "Body_edit_submission_archive_skill_hub_submissions__submission_id__upload_put": {
+          "properties": {
+            "expected_revision": {
+              "minimum": 0.0,
+              "title": "Expected Revision",
+              "type": "integer"
+            },
+            "file": {
+              "contentMediaType": "application/octet-stream",
+              "description": "Replacement ZIP retaining the registered and declared skill names",
+              "title": "File",
+              "type": "string"
+            },
+            "version": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Explicit SemVer, or omit/send empty for automatic versioning on approval",
+              "title": "Version"
+            }
+          },
+          "required": [
+            "file",
+            "expected_revision"
+          ],
+          "title": "Body_edit_submission_archive_skill_hub_submissions__submission_id__upload_put",
+          "type": "object"
+        },
         "Body_replace_skill_archive_skill_hub_skills__name__upload_put": {
           "properties": {
             "expected_updated_at": {
@@ -59668,7 +60666,7 @@
             },
             "file": {
               "contentMediaType": "application/octet-stream",
-              "description": "Replacement Agent Skills ZIP with the same declared skill name",
+              "description": "Replacement ZIP retaining the registered and declared skill names",
               "title": "File",
               "type": "string"
             },
@@ -59697,6 +60695,22 @@
               "description": "Agent Skills ZIP with SKILL.md and optional supporting files",
               "title": "File",
               "type": "string"
+            },
+            "metadata": {
+              "anyOf": [
+                {
+                  "contentMediaType": "application/json",
+                  "contentSchema": {
+                    "$ref": "#/components/schemas/SkillHubUpload"
+                  },
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional JSON registry metadata",
+              "title": "Metadata"
             },
             "version": {
               "anyOf": [
@@ -59730,7 +60744,19 @@
           "type": "object"
         },
         "ImportSkillRequest": {
+          "additionalProperties": false,
           "properties": {
+            "metadata": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/SkillHubUpload"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional registry name and metadata overrides"
+            },
             "path": {
               "anyOf": [
                 {
@@ -59783,6 +60809,33 @@
             "url"
           ],
           "title": "ImportSkillRequest",
+          "type": "object"
+        },
+        "PluginAuthor": {
+          "description": "Plugin author information.",
+          "properties": {
+            "email": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Author email",
+              "title": "Email"
+            },
+            "name": {
+              "description": "Author name",
+              "title": "Name",
+              "type": "string"
+            }
+          },
+          "required": [
+            "name"
+          ],
+          "title": "PluginAuthor",
           "type": "object"
         },
         "PluginDownloadEvent": {
@@ -60000,86 +61053,6 @@
           "title": "SkillHubList",
           "type": "object"
         },
-        "SkillHubMetadata": {
-          "additionalProperties": false,
-          "properties": {
-            "description": {
-              "anyOf": [
-                {
-                  "maxLength": 1024,
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Description"
-            },
-            "domain": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Domain"
-            },
-            "expected_updated_at": {
-              "anyOf": [
-                {
-                  "format": "date-time",
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Published updated_at read by the editor. A stale value returns 409",
-              "title": "Expected Updated At"
-            },
-            "keywords": {
-              "anyOf": [
-                {
-                  "items": {
-                    "type": "string"
-                  },
-                  "type": "array"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Keywords"
-            },
-            "namespace": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Namespace"
-            },
-            "version": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Explicit higher SemVer, or omit/null for an automatic patch bump",
-              "title": "Version"
-            }
-          },
-          "title": "SkillHubMetadata",
-          "type": "object"
-        },
         "SkillHubPendingSkill": {
           "properties": {
             "action": {
@@ -60121,6 +61094,27 @@
                 }
               ]
             },
+            "author": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/PluginAuthor"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "category": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Category"
+            },
             "description": {
               "anyOf": [
                 {
@@ -60142,6 +61136,17 @@
                 }
               ],
               "title": "Domain"
+            },
+            "homepage": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Homepage"
             },
             "keywords": {
               "anyOf": [
@@ -60206,9 +61211,138 @@
           "title": "SkillHubPublication",
           "type": "object"
         },
+        "SkillHubRegistration": {
+          "additionalProperties": false,
+          "properties": {
+            "author": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/PluginAuthor"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "category": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Category"
+            },
+            "description": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Description"
+            },
+            "domain": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Domain"
+            },
+            "homepage": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Homepage"
+            },
+            "keywords": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Keywords"
+            },
+            "name": {
+              "description": "Registry skill name",
+              "pattern": "^[a-z0-9-]+$",
+              "title": "Name",
+              "type": "string"
+            },
+            "namespace": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Namespace"
+            },
+            "source": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "description": "Repository or HTTPS archive source reference",
+              "title": "Source",
+              "type": "object"
+            },
+            "version": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": "1.0.0",
+              "description": "Semantic version, defaults to 1.0.0 on creation",
+              "title": "Version"
+            }
+          },
+          "required": [
+            "name",
+            "source"
+          ],
+          "title": "SkillHubRegistration",
+          "type": "object"
+        },
         "SkillHubRejection": {
           "additionalProperties": false,
           "properties": {
+            "expected_revision": {
+              "anyOf": [
+                {
+                  "minimum": 0.0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Expected Revision"
+            },
             "reason": {
               "anyOf": [
                 {
@@ -60223,6 +61357,47 @@
             }
           },
           "title": "SkillHubRejection",
+          "type": "object"
+        },
+        "SkillHubRestore": {
+          "additionalProperties": false,
+          "properties": {
+            "expected_skill_id": {
+              "description": "Current skill ID read by the editor",
+              "title": "Expected Skill Id",
+              "type": "string"
+            },
+            "expected_updated_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Current updated_at read by the editor, including null",
+              "title": "Expected Updated At"
+            },
+            "version": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Higher semantic version, or omit/null for an automatic patch bump",
+              "title": "Version"
+            }
+          },
+          "required": [
+            "expected_skill_id",
+            "expected_updated_at"
+          ],
+          "title": "SkillHubRestore",
           "type": "object"
         },
         "SkillHubReviewResponse": {
@@ -60275,6 +61450,27 @@
                 }
               ],
               "title": "Approved By"
+            },
+            "author": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/PluginAuthor"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "category": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Category"
             },
             "content_url": {
               "anyOf": [
@@ -60354,6 +61550,17 @@
                 }
               ],
               "title": "Download Url"
+            },
+            "homepage": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Homepage"
             },
             "id": {
               "title": "Id",
@@ -60477,6 +61684,12 @@
               ],
               "title": "Base Updated At"
             },
+            "can_edit": {
+              "default": false,
+              "description": "Whether the caller may edit or withdraw this pending submission",
+              "title": "Can Edit",
+              "type": "boolean"
+            },
             "created_at": {
               "format": "date-time",
               "title": "Created At",
@@ -60535,6 +61748,13 @@
               ],
               "title": "Reviewed By"
             },
+            "revision": {
+              "default": 0,
+              "description": "Proposal revision used to prevent stale edits and reviews",
+              "minimum": 0.0,
+              "title": "Revision",
+              "type": "integer"
+            },
             "skill_name": {
               "title": "Skill Name",
               "type": "string"
@@ -60543,7 +61763,8 @@
               "enum": [
                 "pending_review",
                 "approved",
-                "rejected"
+                "rejected",
+                "withdrawn"
               ],
               "title": "Status",
               "type": "string"
@@ -60594,6 +61815,133 @@
           "title": "SkillHubSubmissionDetail",
           "type": "object"
         },
+        "SkillHubSubmissionEdit": {
+          "additionalProperties": false,
+          "properties": {
+            "author": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/PluginAuthor"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Omit to preserve, null to clear"
+            },
+            "category": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Omit to preserve, null to clear",
+              "title": "Category"
+            },
+            "description": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Omit to preserve, null to clear the registry description",
+              "title": "Description"
+            },
+            "domain": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Omit to preserve, null to clear",
+              "title": "Domain"
+            },
+            "expected_revision": {
+              "description": "Revision read from the submission detail",
+              "minimum": 0.0,
+              "title": "Expected Revision",
+              "type": "integer"
+            },
+            "expected_updated_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Published updated_at read by the editor. A stale value returns 409",
+              "title": "Expected Updated At"
+            },
+            "homepage": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Omit to preserve, null to clear",
+              "title": "Homepage"
+            },
+            "keywords": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Omit to preserve, null or an empty list to clear",
+              "title": "Keywords"
+            },
+            "namespace": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Omit to preserve, null to clear",
+              "title": "Namespace"
+            },
+            "version": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Explicit SemVer, or omit/null for automatic versioning on approval",
+              "title": "Version"
+            }
+          },
+          "required": [
+            "expected_revision"
+          ],
+          "title": "SkillHubSubmissionEdit",
+          "type": "object"
+        },
         "SkillHubSubmissionList": {
           "properties": {
             "count": {
@@ -60618,6 +61966,263 @@
             "has_more"
           ],
           "title": "SkillHubSubmissionList",
+          "type": "object"
+        },
+        "SkillHubSubmissionRevision": {
+          "additionalProperties": false,
+          "properties": {
+            "expected_revision": {
+              "description": "Revision read from the submission detail",
+              "minimum": 0.0,
+              "title": "Expected Revision",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "expected_revision"
+          ],
+          "title": "SkillHubSubmissionRevision",
+          "type": "object"
+        },
+        "SkillHubUpdate": {
+          "additionalProperties": false,
+          "properties": {
+            "author": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/PluginAuthor"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Omit to preserve, null to clear"
+            },
+            "category": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Omit to preserve, null to clear",
+              "title": "Category"
+            },
+            "description": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Omit to preserve, null to clear the registry description",
+              "title": "Description"
+            },
+            "domain": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Omit to preserve, null to clear",
+              "title": "Domain"
+            },
+            "expected_updated_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Published updated_at read by the editor. A stale value returns 409",
+              "title": "Expected Updated At"
+            },
+            "homepage": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Omit to preserve, null to clear",
+              "title": "Homepage"
+            },
+            "keywords": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Omit to preserve, null or an empty list to clear",
+              "title": "Keywords"
+            },
+            "namespace": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Omit to preserve, null to clear",
+              "title": "Namespace"
+            },
+            "source": {
+              "anyOf": [
+                {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Explicit replacement source reference. Omit/null to preserve the stored source and archive",
+              "title": "Source"
+            },
+            "version": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Explicit higher SemVer, or omit/null for an automatic patch bump",
+              "title": "Version"
+            }
+          },
+          "title": "SkillHubUpdate",
+          "type": "object"
+        },
+        "SkillHubUpload": {
+          "additionalProperties": false,
+          "properties": {
+            "author": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/PluginAuthor"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "category": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Category"
+            },
+            "description": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Description"
+            },
+            "domain": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Domain"
+            },
+            "homepage": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Homepage"
+            },
+            "keywords": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Keywords"
+            },
+            "name": {
+              "description": "Registry skill name",
+              "pattern": "^[a-z0-9-]+$",
+              "title": "Name",
+              "type": "string"
+            },
+            "namespace": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Namespace"
+            },
+            "version": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": "1.0.0",
+              "description": "Semantic version, defaults to 1.0.0 on creation",
+              "title": "Version"
+            }
+          },
+          "required": [
+            "name"
+          ],
+          "title": "SkillHubUpload",
           "type": "object"
         },
         "SkillHubVersion": {
@@ -61119,6 +62724,16 @@
                 "title": "Sort Order",
                 "type": "string"
               }
+            },
+            {
+              "in": "query",
+              "name": "enabled_only",
+              "required": false,
+              "schema": {
+                "default": false,
+                "title": "Enabled Only",
+                "type": "boolean"
+              }
             }
           ],
           "responses": {
@@ -61156,13 +62771,21 @@
       },
       "/skill-hub/skills/import": {
         "post": {
-          "description": "Import a public skills.sh or GitHub skill as a portable snapshot.",
+          "description": "Register a source reference, or import a public skills.sh/GitHub URL as a portable snapshot.",
           "operationId": "import_skill_skill_hub_skills_import_post",
           "requestBody": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ImportSkillRequest"
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/SkillHubRegistration"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ImportSkillRequest"
+                    }
+                  ],
+                  "title": "Body"
                 }
               }
             },
@@ -61351,7 +62974,7 @@
           ]
         },
         "put": {
-          "description": "Replace registry metadata, preserving files. Members submit an immutable proposal for admin review.",
+          "description": "Update supplied registry fields. Omitted metadata is retained, null clears it, and version defaults to a bump.",
           "operationId": "replace_skill_metadata_skill_hub_skills__name__put",
           "parameters": [
             {
@@ -61368,7 +62991,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/SkillHubMetadata"
+                  "$ref": "#/components/schemas/SkillHubUpdate"
                 }
               }
             },
@@ -61514,6 +63137,54 @@
           ]
         }
       },
+      "/skill-hub/skills/{name}/downloads/export": {
+        "get": {
+          "description": "Export all recorded authenticated downloads. Anonymous downloads remain totals-only.",
+          "operationId": "export_skill_downloads_skill_hub_skills__name__downloads_export_get",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "name",
+              "required": true,
+              "schema": {
+                "title": "Name",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "text/csv": {
+                  "schema": {
+                    "type": "string"
+                  }
+                }
+              },
+              "description": "Authenticated download history as CSV"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Export Skill Downloads",
+          "tags": [
+            "skill_hub"
+          ]
+        }
+      },
       "/skill-hub/skills/{name}/publish": {
         "post": {
           "description": "Make a skill public using the existing Hub publication policy.",
@@ -61646,7 +63317,7 @@
       },
       "/skill-hub/skills/{name}/upload": {
         "put": {
-          "description": "Replace skill files, retaining registry fields. Members propose an update against the original editor timestamp.",
+          "description": "Replace files and refresh their inherited description, retaining registry overrides and other metadata.",
           "operationId": "replace_skill_archive_skill_hub_skills__name__upload_put",
           "parameters": [
             {
@@ -61840,7 +63511,7 @@
       },
       "/skill-hub/skills/{name}/versions/{version_id}/archive": {
         "get": {
-          "description": "Download a retained publication as a portable ZIP with SKILL.md at its root.",
+          "description": "Download a retained skill ZIP, preserving legacy packages without portable frontmatter.",
           "operationId": "download_skill_version_skill_hub_skills__name__versions__version_id__archive_get",
           "parameters": [
             {
@@ -61891,6 +63562,73 @@
             }
           ],
           "summary": "Download Skill Version",
+          "tags": [
+            "skill_hub"
+          ]
+        }
+      },
+      "/skill-hub/skills/{name}/versions/{version_id}/restore": {
+        "post": {
+          "description": "Proxy admins may republish retained bytes and metadata as a new version, preserving visibility and grants.",
+          "operationId": "restore_skill_version_skill_hub_skills__name__versions__version_id__restore_post",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "name",
+              "required": true,
+              "schema": {
+                "title": "Name",
+                "type": "string"
+              }
+            },
+            {
+              "in": "path",
+              "name": "version_id",
+              "required": true,
+              "schema": {
+                "title": "Version Id",
+                "type": "string"
+              }
+            }
+          ],
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SkillHubRestore"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/SkillHubSkill"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Restore Skill Version",
           "tags": [
             "skill_hub"
           ]
@@ -61992,7 +63730,8 @@
                     "enum": [
                       "pending_review",
                       "approved",
-                      "rejected"
+                      "rejected",
+                      "withdrawn"
                     ],
                     "type": "string"
                   },
@@ -62062,7 +63801,7 @@
       },
       "/skill-hub/submissions/{submission_id}": {
         "get": {
-          "description": "Read an immutable proposal and its currently visible published skill.",
+          "description": "Read a proposal revision and its currently visible published skill.",
           "operationId": "get_submission_skill_hub_submissions__submission_id__get",
           "parameters": [
             {
@@ -62106,6 +63845,62 @@
           "tags": [
             "skill_hub"
           ]
+        },
+        "put": {
+          "description": "Update supplied proposal metadata. Omit/null version uses automatic versioning on approval.",
+          "operationId": "edit_submission_skill_hub_submissions__submission_id__put",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "submission_id",
+              "required": true,
+              "schema": {
+                "title": "Submission Id",
+                "type": "string"
+              }
+            }
+          ],
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SkillHubSubmissionEdit"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/SkillHubSubmission"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Edit Submission",
+          "tags": [
+            "skill_hub"
+          ]
         }
       },
       "/skill-hub/submissions/{submission_id}/approve": {
@@ -62123,6 +63918,23 @@
               }
             }
           ],
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/SkillHubSubmissionRevision"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "title": "Body"
+                }
+              }
+            }
+          },
           "responses": {
             "200": {
               "content": {
@@ -62158,7 +63970,7 @@
       },
       "/skill-hub/submissions/{submission_id}/archive": {
         "get": {
-          "description": "Download an owned proposal as a private portable ZIP. Legacy nonportable archives return 404.",
+          "description": "Download an owned proposal as a private ZIP, preserving legacy packages without portable frontmatter.",
           "operationId": "download_submission_skill_hub_submissions__submission_id__archive_get",
           "parameters": [
             {
@@ -62376,6 +64188,122 @@
             }
           ],
           "summary": "Start Skill Scan",
+          "tags": [
+            "skill_hub"
+          ]
+        }
+      },
+      "/skill-hub/submissions/{submission_id}/upload": {
+        "put": {
+          "description": "Replace a pending proposal's files using the upload limits. Only its original submitting user may edit.",
+          "operationId": "edit_submission_archive_skill_hub_submissions__submission_id__upload_put",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "submission_id",
+              "required": true,
+              "schema": {
+                "title": "Submission Id",
+                "type": "string"
+              }
+            }
+          ],
+          "requestBody": {
+            "content": {
+              "multipart/form-data": {
+                "schema": {
+                  "$ref": "#/components/schemas/Body_edit_submission_archive_skill_hub_submissions__submission_id__upload_put"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/SkillHubSubmission"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Edit Submission Archive",
+          "tags": [
+            "skill_hub"
+          ]
+        }
+      },
+      "/skill-hub/submissions/{submission_id}/withdraw": {
+        "put": {
+          "description": "Withdraw a pending proposal without publishing it. Only its original submitting user may withdraw.",
+          "operationId": "withdraw_submission_skill_hub_submissions__submission_id__withdraw_put",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "submission_id",
+              "required": true,
+              "schema": {
+                "title": "Submission Id",
+                "type": "string"
+              }
+            }
+          ],
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SkillHubSubmissionRevision"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/SkillHubSubmission"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Withdraw Submission",
           "tags": [
             "skill_hub"
           ]

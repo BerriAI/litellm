@@ -9,7 +9,8 @@ The rules are the Python router core's, ported (never imported).
 """
 
 import dataclasses
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
+from itertools import chain
 from typing import TYPE_CHECKING, Final
 
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
@@ -17,11 +18,10 @@ from litellm.router_utils.health_state_cache import DeploymentHealthCache
 from litellm.types.router import AllowedFailsPolicy
 
 if TYPE_CHECKING:
-    from litellm.caching.caching import DualCache
+    from litellm.redis.stores.deployment_health import DeploymentHealthStore
     from litellm.router_config import RouterConfig
     from litellm.types.router import Deployment, DeploymentTypedDict
 
-HEALTH_STATE_KEY: Final = DeploymentHealthCache.CACHE_KEY
 # The failover flags the Python core keeps as plain router attributes, with their defaults.
 FAILOVER_FLAGS: Final = ("enable_weighted_failover", "fallback_on_unsupported_params")
 
@@ -75,8 +75,8 @@ class HealthRouting:
             else None,
         }
 
-    def health_checks(self, cache: "DualCache") -> DeploymentHealthCache:
-        return DeploymentHealthCache(cache=cache, staleness_threshold=self.health_check_staleness)
+    def health_checks(self, store: "DeploymentHealthStore") -> DeploymentHealthCache:
+        return DeploymentHealthCache(store=store, staleness_threshold=self.health_check_staleness)
 
 
 def failover_document(plain: Mapping[str, object]) -> Mapping[str, object]:
@@ -122,34 +122,45 @@ def fully_blocked_model_names(
     return {name for name, fully in blocked_by_name.items() if fully}
 
 
+def _health_names(deployment: Mapping[str, object]) -> tuple[str, ...]:
+    candidates: Final = (deployment.get("model_name"), _model_info(deployment).get("team_public_model_name"))
+    return tuple(name for name in candidates if isinstance(name, str) and name)
+
+
+def _all_unhealthy_names(
+    deployments: Sequence[Mapping[str, object]], unhealthy_ids: Collection[str]
+) -> set[str]:  # mutable-ok: the core's type, a fresh set
+    unhealthy_by_name: Final[dict[str, bool]] = {}  # mutable-ok: built here
+    for deployment in deployments:
+        unhealthy = _model_info(deployment).get("id") in unhealthy_ids
+        for name in _health_names(deployment):
+            unhealthy_by_name[name] = unhealthy_by_name.get(name, True) and unhealthy
+    return {name for name, fully in unhealthy_by_name.items() if fully}
+
+
 async def fully_unhealthy_model_names(
     model_list: Sequence[Mapping[str, object]], health_checks: DeploymentHealthCache, policy: object
 ) -> set[str]:  # mutable-ok: the core's type, a fresh set
     """``_core_async_get_fully_unhealthy_model_names``: groups (and team public names) whose
-    every deployment failed its health check; nothing under an allowed_fails_policy."""
+    every unpaused deployment failed its health check, or every deployment when all are paused;
+    nothing under an allowed_fails_policy."""
     if policy is not None:
         return set()
     unhealthy_ids: Final = await health_checks.async_get_unhealthy_deployment_ids()
     if not unhealthy_ids:
         return set()
-    unhealthy_by_name: Final[dict[str, bool]] = {}  # mutable-ok: built here
-    for deployment in model_list:
-        model_info = _model_info(deployment)
-        names = [deployment.get("model_name") or ""]
-        team_public_model_name = model_info.get("team_public_model_name")
-        if team_public_model_name:
-            names.append(team_public_model_name)
-        unhealthy = model_info.get("id") in unhealthy_ids
-        for name in names:
-            if not isinstance(name, str) or not name:
-                continue
-            unhealthy_by_name[name] = unhealthy_by_name.get(name, True) and unhealthy
-    return {name for name, fully in unhealthy_by_name.items() if fully}
+    unpaused: Final = tuple(
+        deployment for deployment in model_list if _model_info(deployment).get("blocked") is not True
+    )
+    paused: Final = tuple(deployment for deployment in model_list if _model_info(deployment).get("blocked") is True)
+    unpaused_names: Final = frozenset(chain.from_iterable(map(_health_names, unpaused)))
+    return _all_unhealthy_names(unpaused, unhealthy_ids) | (
+        _all_unhealthy_names(paused, unhealthy_ids) - unpaused_names
+    )
 
 
 __all__ = [
     "FAILOVER_FLAGS",
-    "HEALTH_STATE_KEY",
     "HealthRouting",
     "all_blocked",
     "failover_document",

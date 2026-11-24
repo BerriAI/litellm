@@ -11,6 +11,9 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import ANTHROPIC_BATCHES_ROUTE
 from litellm.litellm_core_utils.core_helpers import (
+    claude_subscription_usage,
+    json_contains,
+    loads_json_object,
     native_messages_reported_cost,
     override_stamped_response_cost,
     response_cost_in_hidden_params,
@@ -22,6 +25,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 )
 from litellm.llms.anthropic import get_anthropic_config
 from litellm.llms.anthropic.messages.stream_assembly import (
+    anthropic_sse_events_before_upstream_error,
     build_complete_streaming_response,
     build_complete_streaming_response_legacy,
     build_usage_only_response_from_chunks,
@@ -31,7 +35,6 @@ from litellm.llms.anthropic.messages.stream_assembly import (
 from litellm.llms.bedrock.common_utils import BEDROCK_INVOKE_TRACE_FIELD
 from litellm.llms.custom_httpx.sse_lines import split_sse_lines
 from litellm.proxy._types import PassThroughEndpointLoggingTypedDict
-from litellm.proxy.auth.auth_utils import get_end_user_id_from_request_body
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.batch_attribution import (
     is_collection_route,
     log_batch_registration_result,
@@ -58,6 +61,7 @@ else:
     EndpointType = Any
 
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 def _event_payload(event: str) -> Mapping[str, object] | None:
@@ -114,7 +118,7 @@ class AnthropicPassthroughLoggingHandler:
         start_time: datetime,
         end_time: datetime,
         cache_hit: bool,
-        request_body: dict | None = None,
+        request_body: dict[str, object] | None = None,
         **kwargs,
     ) -> PassThroughEndpointLoggingTypedDict:
         """
@@ -188,6 +192,8 @@ class AnthropicPassthroughLoggingHandler:
     ) -> str | None:
         request_body: Final = passthrough_logging_payload.get("request_body")
         if request_body:
+            from litellm.proxy.auth.auth_utils import get_end_user_id_from_request_body
+
             return get_end_user_id_from_request_body(request_body)
         return None
 
@@ -241,7 +247,7 @@ class AnthropicPassthroughLoggingHandler:
     ) -> ModelResponse | TextCompletionResponse | None:
         try:
             assembled: Final = AnthropicPassthroughLoggingHandler.build_complete_streaming_response(
-                all_chunks=all_chunks,
+                all_chunks=anthropic_sse_events_before_upstream_error(all_chunks),
                 litellm_logging_obj=litellm_logging_obj,
                 model=model,
                 speed=speed,
@@ -332,6 +338,18 @@ class AnthropicPassthroughLoggingHandler:
     ) -> float:
         if logging_obj.model_call_details.get("cache_hit") is True:
             return 0.0
+        subscription_usage: Final = claude_subscription_usage(
+            {
+                **logging_obj.model_call_details,
+                "custom_llm_provider": logging_obj.model_call_details.get("custom_llm_provider") or "anthropic",
+            },
+            litellm_model_response,
+        )
+        if subscription_usage is not None and not subscription_usage["is_overage"]:
+            return 0.0
+        route_cost: Final = logging_obj.route_priced_cost
+        if isinstance(route_cost, float):
+            return route_cost
         custom_llm_provider: Final = logging_obj.model_call_details.get("custom_llm_provider")
         model_for_cost: Final = (
             f"{custom_llm_provider}/{model}"
@@ -366,11 +384,8 @@ class AnthropicPassthroughLoggingHandler:
             for line in split_sse_lines(text):
                 if not line.startswith("data:"):
                     continue
-                try:
-                    data = _JSON_OBJECT.validate_python(json.loads(line[len("data:") :].strip()))
-                except (json.JSONDecodeError, ValueError):
-                    continue
-                if not isinstance(data, dict):
+                data = loads_json_object(line[len("data:") :])
+                if data is None:
                     continue
                 if data.get("type") == "message_start":
                     value = _JSON_OBJECT.validate_python(data.get("message") or {}).get(field)
@@ -406,9 +421,8 @@ class AnthropicPassthroughLoggingHandler:
             for line in reversed(split_sse_lines(text)):
                 if not line.startswith("data:"):
                     continue
-                try:
-                    data = _JSON_OBJECT.validate_python(json.loads(line[len("data:") :].strip()))
-                except (json.JSONDecodeError, ValueError):
+                data = loads_json_object(line[len("data:") :])
+                if data is None:
                     continue
                 etype = data.get("type")
                 if etype == "message_delta":
@@ -532,7 +546,7 @@ class AnthropicPassthroughLoggingHandler:
         litellm_logging_obj: LiteLLMLoggingObj,
         passthrough_success_handler_obj: PassThroughEndpointLogging,
         url_route: str,
-        request_body: dict,
+        request_body: Mapping[str, object],
         endpoint_type: EndpointType,
         start_time: datetime,
         all_chunks: list[str],
@@ -596,7 +610,7 @@ class AnthropicPassthroughLoggingHandler:
         end_time: datetime,
         cache_hit: bool,
         request_body: dict | None = None,
-        **kwargs,
+        **kwargs: object,
     ) -> PassThroughEndpointLoggingTypedDict:
         """
         Handle Anthropic batch creation passthrough logging.
@@ -609,10 +623,10 @@ class AnthropicPassthroughLoggingHandler:
         from litellm.types.utils import Choices, SpecialEnums
 
         try:
-            _json_response: Final = httpx_response.json()
+            _json_response: Final = _DECODED_JSON.validate_python(httpx_response.json())
 
             # Only handle successful batch job creation (POST requests with 201 status)
-            if httpx_response.status_code == 200 and "id" in _json_response:
+            if httpx_response.status_code == 200 and json_contains(_json_response, "id"):
                 # Transform Anthropic response to LiteLLM batch format
                 anthropic_batches_config: Final = AnthropicBatchesConfig()
                 litellm_batch_response: Final = anthropic_batches_config.transform_retrieve_batch_response(
@@ -626,7 +640,7 @@ class AnthropicPassthroughLoggingHandler:
                 litellm_batch_response.status = "validating"
 
                 # Extract batch ID from the response
-                batch_id: Final = _json_response.get("id", "")
+                batch_id: Final = litellm_batch_response.id
 
                 # Get model from request body (batch response doesn't include model)
                 request_body = request_body or {}
@@ -638,7 +652,7 @@ class AnthropicPassthroughLoggingHandler:
                     if model_name == "unknown":
                         # Anthropic batches: look under requests[0].params.model
                         requests_list: Final = request_body.get("requests", [])
-                        if isinstance(requests_list, list) and len(requests_list) > 0:
+                        if isinstance(requests_list, list) and requests_list:
                             first_req: Final = requests_list[0]
                             if isinstance(first_req, dict):
                                 params: Final = first_req.get("params", {})

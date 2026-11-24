@@ -106,3 +106,4 @@ def test_image_embedding(case: _Case, respx_mock: MockRouter) -> None:
     else:
         assert body["inputImage"] == png_b64
     assert response.data[0]["embedding"] == [0.11, 0.22, 0.33]
+

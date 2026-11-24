@@ -1086,7 +1086,7 @@ async def test_model_cost_map_reload_does_not_publish_config_change() -> None:
     from litellm.proxy import proxy_server
     from litellm.proxy.proxy_server import ProxyConfig, _set_redis_usage_cache
     from litellm.proxy.utils import litellm_config_cache
-    from litellm.rust_bridge.host.model_cost import publish
+    from litellm.litellm_core_utils.model_cost_table import publish
 
     litellm_config_cache.flush_cache()
     prisma_client = _reload_config_prisma_client()
@@ -1184,8 +1184,9 @@ async def test_proxy_config_subscriber_applies_published_model_ids_from_the_db(
     router.registry.return_value.deployments.return_value = ["deployment"]
     installed: List[object] = []
 
-    def install(db_models: object) -> None:
+    def install(db_models: object) -> int:
         installed.append(db_models)
+        return 0
 
     monkeypatch.setattr(proxy_server, "prisma_client", prisma_client)
     monkeypatch.setattr(proxy_server, "store_model_in_db", True)

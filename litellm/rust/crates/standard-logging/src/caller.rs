@@ -1,0 +1,57 @@
+use serde_json::{Map, Value};
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Budget {
+    pub spend: Option<f64>,
+    pub max: Option<f64>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Named {
+    pub id: Option<String>,
+    pub alias: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Key {
+    pub hash: Option<String>,
+    pub alias: Option<String>,
+    pub budget: Budget,
+    pub budget_reset_at: Option<String>,
+    pub metadata: Option<Map<String, Value>>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct User {
+    pub id: Option<String>,
+    pub email: Option<String>,
+    pub budget: Budget,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Team {
+    pub id: Option<String>,
+    pub alias: Option<String>,
+    pub budget: Budget,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Customer {
+    pub member: Named,
+    pub team: Named,
+    pub organization: Named,
+    pub budget_scopes: Option<String>,
+    pub hierarchy: Option<Value>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Caller {
+    pub key: Key,
+    pub user: User,
+    pub team: Team,
+    pub organization: Named,
+    pub project: Named,
+    pub customer: Customer,
+    pub end_user_id: Option<String>,
+    pub request_route: Option<String>,
+}

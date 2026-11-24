@@ -14,7 +14,7 @@ from litellm.llms.bedrock.common_utils import BedrockModelInfo
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.types.utils import ModelInfoBase
 from litellm.utils import supports_native_structured_output
-from litellm.rust_bridge.host.model_cost import publish
+from litellm.litellm_core_utils.model_cost_table import publish
 import os
 from unittest.mock import MagicMock, patch
 
@@ -161,7 +161,7 @@ def _enforce_bedrock_converse_models(
             info.get("litellm_provider") == "bedrock"
             and info.get("mode") == "chat"
             and model not in whitelist_models
-            and BedrockModelInfo.get_bedrock_route(model) != "claude_platform"
+            and BedrockModelInfo.get_bedrock_route(model) not in ("claude_platform", "mantle")
             and not (
                 (base_model := BedrockModelInfo.get_base_model(model)) != model
                 and model_cost.get(base_model, {}).get("litellm_provider") == "bedrock_converse"
@@ -172,7 +172,7 @@ def _enforce_bedrock_converse_models(
 
 
 def _read_whitelisted_bedrock_models() -> tuple[str, ...]:
-    path: Final = Path(__file__).resolve().parents[2] / "whitelisted_bedrock_models.txt"
+    path: Final = Path(__file__).with_name("whitelisted_bedrock_models.txt")
     return tuple(path.read_text().splitlines())
 
 
@@ -191,7 +191,7 @@ def test_model_info_bedrock_converse(monkeypatch):
     litellm.model_cost = litellm.get_model_cost_map(url="")
     try:
         # Load whitelist models from file
-        with open("whitelisted_bedrock_models.txt", "r") as file:
+        with open(Path(__file__).with_name("whitelisted_bedrock_models.txt"), "r") as file:
             whitelist_models = [line.strip() for line in file.readlines()]
     except FileNotFoundError:
         pytest.skip("whitelisted_bedrock_models.txt not found")
@@ -217,7 +217,7 @@ def test_model_info_bedrock_converse_enforcement(monkeypatch):
 
     try:
         # Load whitelist models from file
-        with open("whitelisted_bedrock_models.txt", "r") as file:
+        with open(Path(__file__).with_name("whitelisted_bedrock_models.txt"), "r") as file:
             whitelist_models = [line.strip() for line in file.readlines()]
 
         # Check for unwhitelisted models
@@ -292,7 +292,7 @@ def test_get_model_info_bedrock_models():
                 continue
             base_model_info = litellm.model_cost[base_model_key]
             for base_model_key, base_model_value in base_model_info.items():
-                if "invoke/" in k:
+                if "invoke/" in k or "mantle/" in k:
                     continue
                 if base_model_key.startswith("supports_"):
                     assert (

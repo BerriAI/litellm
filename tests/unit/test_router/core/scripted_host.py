@@ -450,7 +450,10 @@ class ScriptedHost(PythonHost):
         error, response = self._finish(op, call, outcome)
         if error is not None:
             await self.log_async(call, error, response)
-            raise error
+            try:
+                raise error
+            finally:
+                del error, outcome
         if not self._logs_at_stream_end(call, response):
             await self.log_async(call, None, response)
         return response
@@ -460,7 +463,10 @@ class ScriptedHost(PythonHost):
         error, response = self._finish(op, call, outcome)
         if error is not None:
             self.log_sync(call, error, response)
-            raise error
+            try:
+                raise error
+            finally:
+                del error, outcome
         if not self._logs_at_stream_end(call, response):
             self.log_sync(call, None, response)
         return response

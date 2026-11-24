@@ -1,3 +1,4 @@
+import json
 from collections.abc import Iterator
 from typing import Final
 
@@ -345,7 +346,7 @@ def test_an_unsupported_capture_message_content_is_rejected_on_key_logging_metad
 
 
 @pytest.mark.usefixtures("otel_v2_on")
-@pytest.mark.parametrize("callback_var", ["capture_message_content", "excluded_services"])
+@pytest.mark.parametrize("callback_var", ["capture_message_content", "excluded_services", "baggage_metadata_keys"])
 def test_key_logging_metadata_rejects_non_string_destination_callback_vars(callback_var: str) -> None:
     error: Final = logging_metadata_config_error(
         {
@@ -507,6 +508,85 @@ _INLINE: Final = {"callback_name": "langfuse", "callback_vars": {"langfuse_publi
 _SIBLING: Final = {"callback_name": "arize", "callback_vars": {"arize_endpoint": "http://attacker.example/v1/traces"}}
 
 
+@pytest.mark.parametrize("value", ["not json", '{"a":1}', "[null]", {"bad": 1}, 3])
+def test_logging_metadata_validation_rejects_invalid_shapes(value: object) -> None:
+    error: Final = logging_metadata_config_error({"logging": value})
+    assert error is not None and "metadata.logging must be a list of objects" in error
+
+
+@pytest.mark.parametrize("serialized", [False, True])
+def test_json_string_logging_cannot_bypass_callback_configuration_validation(serialized: bool) -> None:
+    entries: Final = [{"callback_name": "langfuse", "callback_vars": {"langfuse_environment": "Production"}}]
+    error: Final = logging_metadata_config_error({"logging": json.dumps(entries) if serialized else entries})
+    assert error is not None and "langfuse_environment" in error
+
+
+@pytest.mark.parametrize("callback_vars", [None, [], "invalid", 1])
+@pytest.mark.parametrize("serialized", [False, True])
+def test_logging_metadata_requires_callback_vars_to_be_an_object(callback_vars: object, serialized: bool) -> None:
+    entries: Final = [{"callback_name": "langfuse", "callback_vars": callback_vars}]
+    error: Final = logging_metadata_config_error({"logging": json.dumps(entries) if serialized else entries})
+    assert error is not None and "callback_vars must be an object" in error
+
+
+def test_stored_credential_reference_still_requires_an_admin_with_a_malformed_sibling() -> None:
+    rejection: Final = credential_reference_rejection({"logging": []}, [_REFERENCE, None], is_proxy_admin=False)
+    assert rejection is not None and rejection.status_code == 403
+
+
+@pytest.mark.parametrize("is_proxy_admin, expected_status", [(False, 403), (True, 400)])
+def test_json_string_logging_cannot_bypass_credential_authorization(is_proxy_admin: bool, expected_status: int) -> None:
+    rejection: Final = credential_reference_rejection(
+        {"logging": json.dumps([_REFERENCE])}, None, is_proxy_admin=is_proxy_admin, is_defined=lambda _: False
+    )
+    assert rejection is not None and rejection.status_code == expected_status
+
+
+@pytest.mark.parametrize("stored_as_string", [False, True])
+def test_credential_reference_round_trip_requires_reapproval_for_legacy_strings(stored_as_string: bool) -> None:
+    rejection: Final = credential_reference_rejection(
+        {"logging": [_REFERENCE] if stored_as_string else json.dumps([_REFERENCE])},
+        json.dumps([_REFERENCE]) if stored_as_string else [_REFERENCE],
+        is_proxy_admin=False,
+        is_defined=lambda _: False,
+    )
+    assert (rejection.status_code if rejection is not None else None) == (403 if stored_as_string else None)
+
+
+def test_non_admin_can_resave_a_legacy_string_without_credential_references() -> None:
+    entries: Final = [{"callback_name": "langfuse", "callback_vars": {}}]
+    assert (
+        credential_reference_rejection(
+            {"logging": entries}, json.dumps(entries), is_proxy_admin=False, is_defined=lambda _: False
+        )
+        is None
+    )
+
+
+@pytest.mark.parametrize("defined, expected_status", [(False, 400), (True, None)])
+def test_admin_reapproving_a_legacy_reference_must_use_a_defined_credential(
+    defined: bool, expected_status: int | None
+) -> None:
+    rejection: Final = credential_reference_rejection(
+        {"logging": [_REFERENCE]}, json.dumps([_REFERENCE]), is_proxy_admin=True, is_defined=lambda _: defined
+    )
+    assert (rejection.status_code if rejection is not None else None) == expected_status
+
+
+@pytest.mark.parametrize("stored_logging", ["not json", {"bad": 1}, [None]])
+@pytest.mark.parametrize(
+    "is_proxy_admin, references, expected_status",
+    [(False, [], None), (False, [_REFERENCE], 403), (True, [_REFERENCE], 400)],
+)
+def test_invalid_stored_logging_does_not_break_credential_authorization(
+    stored_logging: object, is_proxy_admin: bool, references: list[dict[str, object]], expected_status: int | None
+) -> None:
+    rejection: Final = credential_reference_rejection(
+        {"logging": references}, stored_logging, is_proxy_admin=is_proxy_admin, is_defined=lambda _: False
+    )
+    assert (rejection.status_code if rejection is not None else None) == expected_status
+
+
 @pytest.mark.parametrize(
     ("requested", "stored_logging", "is_proxy_admin", "expected_status"),
     [
@@ -575,3 +655,72 @@ def test_a_non_string_credential_name_is_not_a_reference(name: object) -> None:
         credential_reference_rejection({"logging": [entry]}, None, is_proxy_admin=False, is_defined=lambda _: False)
         is None
     )
+
+
+@pytest.mark.usefixtures("otel_v2_on")
+@pytest.mark.parametrize("callback_name", ["langfuse_otel", "arize", "weave_otel", "newrelic"])
+def test_baggage_metadata_keys_is_accepted_on_every_otel_v2_destination(callback_name: str) -> None:
+    assert (
+        callback_config_error(
+            callback_name, {"baggage_metadata_keys": "requester_metadata.tenant_id, requester_metadata.order.id"}
+        )
+        is None
+    )
+
+
+@pytest.mark.usefixtures("otel_v2_on")
+@pytest.mark.parametrize("callback_name", ["langfuse", "datadog", "otel", "arize_phoenix", None])
+def test_baggage_metadata_keys_is_rejected_where_it_would_never_take_effect(callback_name: str | None) -> None:
+    error: Final = callback_config_error(callback_name, {"baggage_metadata_keys": "requester_metadata.tenant_id"})
+    assert error is not None and "baggage_metadata_keys" in error and "newrelic" in error
+
+
+@pytest.mark.usefixtures("otel_v2_on")
+@pytest.mark.parametrize(
+    ("value", "reason"),
+    [
+        ("tenant_id", "requester_metadata.<key>"),
+        ("requester_metadata.", "requester_metadata.<key>"),
+        ("requester_metadata.tenant_id,", "requester_metadata.<key>"),
+        ("user_api_key_user_id", "requester_metadata.<key>"),
+        ("requester_metadata.user_api_key_user_id", "proxy identity attribute"),
+        ("requester_metadata.user_api_key_hash", "proxy identity attribute"),
+        ("requester_metadata.requester_ip_address", "proxy identity attribute"),
+        ("requester_metadata.headers.x-internal-token", "would export request headers"),
+        ("requester_metadata.headers", "would export request headers"),
+        ("requester_metadata.Headers.authorization", "would export request headers"),
+        (",".join(f"requester_metadata.k{index}" for index in range(21)), "at most 20 keys"),
+    ],
+)
+def test_unusable_baggage_metadata_keys_are_rejected(value: str, reason: str) -> None:
+    error: Final = callback_config_error("newrelic", {"newrelic_api_key": "nr-key", "baggage_metadata_keys": value})
+    assert error is not None and reason in error, error
+
+
+def test_baggage_metadata_keys_is_rejected_while_otel_v2_is_off(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.integrations.otel.model.config import is_otel_v2_enabled
+
+    monkeypatch.delenv("LITELLM_OTEL_V2", raising=False)
+    is_otel_v2_enabled.cache_clear()
+    try:
+        error: Final = callback_config_error("newrelic", {"baggage_metadata_keys": "requester_metadata.tenant_id"})
+    finally:
+        is_otel_v2_enabled.cache_clear()
+    assert error is not None and "baggage_metadata_keys" in error and "LITELLM_OTEL_V2" in error
+
+
+@pytest.mark.parametrize(
+    ("stored", "rejected"),
+    [
+        ("requester_metadata.b, requester_metadata.a", False),
+        ("requester_metadata.a", True),
+    ],
+)
+def test_entries_for_one_backend_share_one_baggage_metadata_keys_list(stored: str, rejected: bool) -> None:
+    error: Final = conflicting_callback_var_error(
+        "newrelic",
+        "baggage_metadata_keys",
+        {"baggage_metadata_keys": "requester_metadata.a,requester_metadata.b"},
+        [("newrelic", {"baggage_metadata_keys": stored})],
+    )
+    assert (error is not None) is rejected, error

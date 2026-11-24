@@ -60,6 +60,7 @@ async def test_async_response_api_handler_merges_trace_id_without_error():
         previous_response_client_ids: tuple[str, ...] = (),
         input_replaces_history: bool = False,
         stored_turns: StoredTurns | None = None,
+        request_input: str | None = None,
     ) -> dict[str, object]:
         litellm_completion_request["litellm_trace_id"] = "session-trace"
         return litellm_completion_request
@@ -583,6 +584,61 @@ def test_streamed_responses_over_anthropic_emit_the_responses_event_sequence(res
     assert deltas == "Argentina won."
     assert completed.response.status == "completed"
     assert completed.response.output[0].content[0].text == "Argentina won."
+
+
+@pytest.mark.parametrize(
+    "non_object_frame",
+    [
+        b"data: 5\n\n",
+        b"event: ping\ndata: []\n\n",
+        b'data: "x"\n\n',
+        b"data: " + b'{"a": ' * 100_000 + b"1" + b"}" * 100_000 + b"\n\n",
+    ],
+    ids=["number", "array", "string", "deep-object"],
+)
+def test_streamed_responses_over_anthropic_skip_a_data_line_that_is_not_an_object(
+    respx_mock: respx.MockRouter, non_object_frame: bytes
+) -> None:
+    respx_mock.post("https://api.anthropic.com/v1/messages").mock(
+        return_value=httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            content=_anthropic_sse(
+                {
+                    "type": "message_start",
+                    "message": {
+                        "id": "msg_responses_non_object",
+                        "type": "message",
+                        "role": "assistant",
+                        "model": "claude-sonnet-5-5",
+                        "content": [],
+                        "usage": {"input_tokens": 9, "output_tokens": 1},
+                    },
+                },
+                {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+            )
+            + non_object_frame
+            + _anthropic_sse(
+                {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "Argentina won."}},
+                {"type": "content_block_stop", "index": 0},
+                {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 4}},
+                {"type": "message_stop"},
+            ),
+        )
+    )
+
+    events: Final = tuple(
+        litellm.responses(
+            model="anthropic/claude-sonnet-5-5",
+            input="Who won the World Cup in 2022?",
+            max_output_tokens=100,
+            stream=True,
+            api_key="mock_api_key",
+        )
+    )
+
+    assert events[-1].type == ResponsesAPIStreamEvents.RESPONSE_COMPLETED
+    assert events[-1].response.output[0].content[0].text == "Argentina won."
 
 
 _ANTHROPIC_MESSAGES_URL: Final = "https://api.anthropic.com/v1/messages"
@@ -1608,7 +1664,7 @@ async def test_previous_response_id_keeps_the_tools_an_earlier_codex_tool_search
         [("tool_use", "toolu_standup")],
         [("tool_result", "toolu_standup"), ("text", None)],
     ]
-    assert prisma_client.db.queries == 1
+    assert prisma_client.db.queries == 2
 
 
 _WEATHER_TOOL: Final = {
@@ -2457,3 +2513,170 @@ async def test_codex_tool_search_follow_up_text_verbosity_follows_provider_param
 
     assert dropped == without_text
     assert allowed == {**without_text, "verbosity": "low"}
+
+
+_FLAT_ALLOWED_WEATHER: Final = {
+    "type": "allowed_tools",
+    "mode": "required",
+    "tools": [{"type": "function", "name": "get_weather"}],
+}
+_RESPONSES_TOOLS: Final = (
+    {"type": "function", "name": "get_weather", "parameters": {"type": "object", "properties": {}}},
+    {"type": "function", "name": "get_time", "parameters": {"type": "object", "properties": {}}},
+)
+
+
+def _chat_answer() -> httpx.Response:
+    return httpx.Response(
+        200,
+        json={
+            "id": "chatcmpl-echo",
+            "object": "chat.completion",
+            "created": 1739462947,
+            "model": "the-model",
+            "choices": [{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "done"}}],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+        },
+    )
+
+
+@pytest.mark.usefixtures(httpx_transport.__name__)
+@pytest.mark.parametrize("use_async", [False, True])
+@pytest.mark.asyncio
+async def test_responses_reports_auto_for_an_allowed_tools_choice_it_dropped(
+    respx_mock: respx.MockRouter, use_async: bool
+) -> None:
+    route: Final = respx_mock.post(_ANTHROPIC_MESSAGES_URL).mock(
+        return_value=_anthropic_message({"type": "text", "text": "done"})
+    )
+    call: Final = {
+        "model": "anthropic/claude-haiku-4-5",
+        "input": "What is the weather?",
+        "tools": list(_RESPONSES_TOOLS),
+        "tool_choice": _FLAT_ALLOWED_WEATHER,
+        "drop_params": True,
+        "api_key": "sk-ant-fake",
+    }
+
+    response: Final = await litellm.aresponses(**call) if use_async else litellm.responses(**call)
+
+    assert "tool_choice" not in json.loads(route.calls[0].request.content)
+    assert response.tool_choice == "auto"
+
+
+@pytest.mark.usefixtures(httpx_transport.__name__)
+@pytest.mark.asyncio
+async def test_responses_drop_the_choice_beside_a_tool_the_provider_runs(respx_mock: respx.MockRouter) -> None:
+    route: Final = respx_mock.post(_ANTHROPIC_MESSAGES_URL).mock(
+        return_value=_anthropic_message({"type": "text", "text": "done"})
+    )
+
+    response: Final = await litellm.aresponses(
+        model="anthropic/claude-haiku-4-5",
+        input="What is the weather?",
+        tools=[{"type": "mcp", "server_label": "docs", "server_url": "https://mcp.example.com/sse"}],
+        tool_choice=_FLAT_ALLOWED_WEATHER,
+        drop_params=True,
+        api_key="sk-ant-fake",
+    )
+
+    assert "tool_choice" not in json.loads(route.calls[0].request.content)
+    assert response.tool_choice == "auto"
+
+
+@pytest.mark.usefixtures(httpx_transport.__name__)
+def test_responses_report_auto_when_an_old_azure_api_version_dropped_the_choice(respx_mock: respx.MockRouter) -> None:
+    route: Final = respx_mock.post(url__regex=r"https://azure-bridge\.example\.com/.*chat/completions.*").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-old-azure",
+                "object": "chat.completion",
+                "created": 1,
+                "model": "gpt-4o",
+                "choices": [
+                    {"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "done"}}
+                ],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            },
+        )
+    )
+
+    response: Final = litellm.responses(
+        model="azure/gpt-4o",
+        input="What is the weather?",
+        tools=list(_RESPONSES_TOOLS),
+        tool_choice=_FLAT_ALLOWED_WEATHER,
+        drop_params=True,
+        use_chat_completions_api=True,
+        api_key="fake",
+        api_base="https://azure-bridge.example.com",
+        api_version="2023-07-01-preview",
+    )
+
+    assert "tool_choice" not in json.loads(route.calls[0].request.content)
+    assert response.tool_choice == "auto"
+
+
+def test_streamed_responses_report_auto_for_an_allowed_tools_choice_it_dropped(respx_mock: respx.MockRouter) -> None:
+    respx_mock.post(_ANTHROPIC_MESSAGES_URL).mock(
+        return_value=httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            content=_anthropic_sse(
+                {
+                    "type": "message_start",
+                    "message": {
+                        "id": "msg_dropped_choice",
+                        "type": "message",
+                        "role": "assistant",
+                        "model": "claude-haiku-4-5",
+                        "content": [],
+                        "usage": {"input_tokens": 9, "output_tokens": 1},
+                    },
+                },
+                {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+                {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "done"}},
+                {"type": "content_block_stop", "index": 0},
+                {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 4}},
+                {"type": "message_stop"},
+            ),
+        )
+    )
+
+    events: Final = tuple(
+        litellm.responses(
+            model="anthropic/claude-haiku-4-5",
+            input="What is the weather?",
+            tools=list(_RESPONSES_TOOLS),
+            tool_choice=_FLAT_ALLOWED_WEATHER,
+            drop_params=True,
+            stream=True,
+            api_key="sk-ant-fake",
+        )
+    )
+
+    reported: Final = tuple(
+        event.response.tool_choice
+        for event in events
+        if event.type in (ResponsesAPIStreamEvents.RESPONSE_CREATED, ResponsesAPIStreamEvents.RESPONSE_COMPLETED)
+    )
+    assert reported == ("auto", "auto")
+
+
+def test_responses_through_chat_keeps_reporting_a_choice_the_provider_received(respx_mock: respx.MockRouter) -> None:
+    route: Final = respx_mock.post("http://localhost:12346/v1/chat/completions").mock(return_value=_chat_answer())
+
+    response: Final = litellm.responses(
+        model="openai/gpt-5.5",
+        input="What is the weather?",
+        tools=list(_RESPONSES_TOOLS),
+        tool_choice=_FLAT_ALLOWED_WEATHER,
+        use_chat_completions_api=True,
+        api_base="http://localhost:12346/v1",
+        api_key="sk-fake",
+    )
+
+    assert json.loads(route.calls[0].request.content)["tool_choice"]["type"] == "allowed_tools"
+    assert response.tool_choice["type"] == "allowed_tools"
+    assert list(response.tool_choice["tools"]) == _FLAT_ALLOWED_WEATHER["tools"]

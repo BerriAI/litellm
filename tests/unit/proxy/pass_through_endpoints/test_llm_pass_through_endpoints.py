@@ -8,7 +8,8 @@ import logging
 import os
 import re
 import traceback
-from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Mapping
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Mapping, Sequence
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from types import MappingProxyType, SimpleNamespace
@@ -24,33 +25,37 @@ from botocore.auth import SigV4Auth
 from botocore.awsrequest import AWSRequest
 from botocore.credentials import Credentials
 from fastapi import FastAPI, HTTPException, Request, Response
-from fastapi.routing import APIRoute
 from fastapi.responses import StreamingResponse
+from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
 from starlette.datastructures import FormData
 
-
+from litellm.redis.stores.auth_cache import AuthObject
 import litellm
+from litellm._logging import LevelRoutingStreamHandler
+from litellm.caching.caching import DualCache
+from litellm.constants import LITELLM_PROXY_MASTER_KEY_ALIAS
+from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException, ModifyResponseException
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.prometheus import PrometheusLogger
-from tests._master_key import MASTER_KEY as SHARED_MASTER_KEY
-from litellm.caching.caching import DualCache
-from litellm.types.utils import CallTypes, CallTypesLiteral
-from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
-from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException, ModifyResponseException
-from litellm.proxy._types import AwsErrorTypeProxyException, ProxyException
-from litellm.proxy.spend_tracking.spend_tracking_utils import get_spend_logs_id
-from litellm.proxy.utils import ProxyLogging, hash_token
-from litellm.passthrough.main import raise_for_provider_status
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.bedrock.common_utils import BedrockError
-from tests.unit.llms.bedrock.event_loop_probe import EventLoopProbe
-from tests.unit.llms.bedrock.event_loop_probe import host_in_loop_probing_vault
-from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stubs
-from litellm.constants import LITELLM_PROXY_MASTER_KEY_ALIAS
+from litellm.llms.eu_jev.common_utils import eu_jev_scoped_model, eu_jev_upstream_body
+from litellm.passthrough.main import raise_for_provider_status
+from litellm.proxy._types import (
+    AwsErrorTypeProxyException,
+    LiteLLM_JWTAuth,
+    LitellmUserRoles,
+    ProxyException,
+    SpecialHeaders,
+    UserAPIKeyAuth,
+)
+from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+from litellm.proxy.proxy_server import UserApiKeyCache
 from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     BaseOpenAIPassThroughHandler,
-    RouteChecks,
     _fal_target,
     _join_url_paths,
     _proxy_general_settings,
@@ -60,32 +65,49 @@ from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     bedrock_llm_proxy_route,
     bedrock_passthrough_error_response,
     bedrock_proxy_route,
-    create_pass_through_route,
     cursor_proxy_route,
-    eu_jev_proxy_route,
     fal_ai_proxy_route,
     get_azure_ai_search_index_from_endpoint,
     get_vertex_base_url,
-    is_azure_ai_search_service_level_index_create,
     gigachat_proxy_route,
     handle_bedrock_passthrough_router_model,
+    is_azure_ai_search_service_level_index_create,
     llm_passthrough_factory_proxy_route,
     milvus_proxy_route,
     mistral_proxy_route,
-    relay_nvidia_nim_request,
+    openai_passthrough_poll_headers,
     openai_proxy_route,
     openrouter_proxy_route,
+    relay_nvidia_nim_request,
     typesafe_proxy_route,
     vertex_discovery_proxy_route,
     vertex_proxy_route,
     vllm_proxy_route,
 )
-from litellm.proxy._types import LitellmUserRoles, SpecialHeaders, UserAPIKeyAuth
-from litellm.proxy.auth.handle_jwt import JWTHandler
-from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.pass_through_endpoints.background_response_creator import (
+    BackgroundResponseCreateContext,
+    PrismaBackgroundResponseCreatorStore,
+)
+from litellm.proxy.pass_through_endpoints.background_response_polling import (
+    BackgroundResponsePoller,
+    BackgroundResponsePollRequest,
+    Fetched,
+    FetchOutcome,
+)
+from litellm.proxy.pass_through_endpoints.background_response_settlement import (
+    PrismaBackgroundResponseSettlementStore,
+)
+from litellm.proxy.pass_through_endpoints.success_handler import PassThroughEndpointLogging
+from litellm.proxy.spend_tracking.spend_tracking_utils import get_spend_logs_id
+from litellm.proxy.utils import ProxyLogging, hash_token
 from litellm.types.guardrails import GuardrailEventHooks
+from litellm.types.litellm_params import RoutingStrategyName
 from litellm.types.passthrough_endpoints.vertex_ai import VertexPassThroughCredentials
-from litellm.llms.eu_jev.common_utils import eu_jev_scoped_model, eu_jev_upstream_body
+from litellm.types.utils import CallTypes, CallTypesLiteral
+from tests._master_key import MASTER_KEY as SHARED_MASTER_KEY
+from tests.unit.proxy._prisma import prisma_with_empty_config
+from tests.unit.llms.bedrock.event_loop_probe import EventLoopProbe, host_in_loop_probing_vault
+from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stubs
 
 
 def _assert_bedrock_processing_data_classification(data: dict[str, object], is_streaming: bool) -> None:
@@ -344,6 +366,7 @@ class TestVertexAIPassThroughHandler:
                 custom_headers={"Authorization": f"Bearer {test_token}"},
                 is_streaming_request=False,
                 upstream_headers_filter=mock.ANY,
+                upstream_request_filter=mock.ANY,
             )
 
     @pytest.mark.asyncio
@@ -436,6 +459,7 @@ class TestVertexAIPassThroughHandler:
                 custom_headers={"Authorization": f"Bearer {test_token}"},
                 is_streaming_request=False,
                 upstream_headers_filter=mock.ANY,
+                upstream_request_filter=mock.ANY,
             )
 
     @pytest.mark.parametrize(
@@ -528,6 +552,7 @@ class TestVertexAIPassThroughHandler:
                 custom_headers={"Authorization": f"Bearer {default_credentials}"},
                 is_streaming_request=False,
                 upstream_headers_filter=mock.ANY,
+                upstream_request_filter=mock.ANY,
             )
 
     @pytest.mark.asyncio
@@ -1350,11 +1375,23 @@ async def test_mistral_passthrough_accepts_multipart_without_json_parsing():
     assert captured_kwargs["custom_headers"] == {"Authorization": "Bearer mistral-test-key"}
 
 
+BEDROCK_PROXY_MODEL: Final = "anthropic.claude-sonnet-5-5"
+BEDROCK_PROXY_CALLER_BEARER: Final = "sk-caller-virtual-key"
+BEDROCK_PROXY_ROUTES: Final = pytest.mark.parametrize(
+    ("path_model", "uses_router"),
+    [
+        pytest.param("bedrock-sonnet", True, id="router_model"),
+        pytest.param(BEDROCK_PROXY_MODEL, False, id="direct_model"),
+    ],
+)
+
+
 class TestBedrockLLMProxyRoute:
     @pytest.mark.asyncio
     async def test_bedrock_llm_proxy_route_application_inference_profile(self):
         mock_request = Mock()
         mock_request.method = "POST"
+        mock_request.headers = {}
         mock_response = Mock()
         mock_user_api_key_dict = Mock()
         mock_request_body = {"messages": [{"role": "user", "content": "test"}]}
@@ -1397,6 +1434,7 @@ class TestBedrockLLMProxyRoute:
     async def test_bedrock_llm_proxy_route_regular_model(self):
         mock_request = Mock()
         mock_request.method = "POST"
+        mock_request.headers = {}
         mock_response = Mock()
         mock_user_api_key_dict = Mock()
         mock_request_body = {"messages": [{"role": "user", "content": "test"}]}
@@ -1444,6 +1482,7 @@ class TestBedrockLLMProxyRoute:
     ) -> None:
         mock_request: Final = Mock()
         mock_request.method = "POST"
+        mock_request.headers = {}
         mock_processor: Final = Mock()
         mock_processor.base_passthrough_process_llm_request = AsyncMock(return_value="success")
         request_body: Final = {"messages": [{"role": "user", "content": "test"}]}
@@ -1484,6 +1523,7 @@ class TestBedrockLLMProxyRoute:
     ) -> None:
         mock_request: Final = Mock()
         mock_request.method = "POST"
+        mock_request.headers = {}
         mock_processor: Final = Mock()
         mock_processor.base_passthrough_process_llm_request = AsyncMock(return_value="success")
         request_body: Final = {"messages": [{"role": "user", "content": "test"}]}
@@ -1515,6 +1555,91 @@ class TestBedrockLLMProxyRoute:
         processing_data: Final = processor_constructor.call_args.kwargs["data"]
         _assert_bedrock_processing_data_classification(processing_data, is_streaming)
 
+    @BEDROCK_PROXY_ROUTES
+    def test_invoke_signs_the_caller_x_pass_header_and_sends_no_caller_credential(
+        self, monkeypatch: pytest.MonkeyPatch, httpx_transport: None, path_model: str, uses_router: bool
+    ) -> None:
+        caller_cookie: Final = "proxy_session=caller-secret"
+
+        sent, _ = _bedrock_invoke_through_proxy(
+            monkeypatch,
+            path_model,
+            uses_router,
+            {
+                "x-pass-X-Amzn-Bedrock-Service-Tier": "priority",
+                "Authorization": f"Bearer {BEDROCK_PROXY_CALLER_BEARER}",
+                "Cookie": caller_cookie,
+            },
+        )
+
+        signed_headers: Final = sent.headers["authorization"].split("SignedHeaders=")[1].split(",")[0].split(";")
+        assert sent.headers["x-amzn-bedrock-service-tier"] == "priority"
+        assert "x-amzn-bedrock-service-tier" in signed_headers
+        assert [name for name in sent.headers if name.startswith("x-pass-") or name == "cookie"] == []
+        assert [
+            value for value in sent.headers.values() if BEDROCK_PROXY_CALLER_BEARER in value or caller_cookie in value
+        ] == []
+
+    @BEDROCK_PROXY_ROUTES
+    @pytest.mark.parametrize("caller_trace", [None, "DISABLED", "enabled"])
+    def test_invoke_sends_the_caller_guardrail_trace_exactly_as_sent(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        httpx_transport: None,
+        path_model: str,
+        uses_router: bool,
+        caller_trace: str | None,
+    ) -> None:
+        trace_header: Final = {} if caller_trace is None else {"x-pass-X-Amzn-Bedrock-Trace": caller_trace}
+
+        sent, _ = _bedrock_invoke_through_proxy(
+            monkeypatch,
+            path_model,
+            uses_router,
+            {
+                "x-pass-X-Amzn-Bedrock-GuardrailIdentifier": "caller-guardrail",
+                "x-pass-X-Amzn-Bedrock-GuardrailVersion": "9",
+                **trace_header,
+            },
+        )
+
+        assert (
+            sent.headers["x-amzn-bedrock-guardrailidentifier"],
+            sent.headers["x-amzn-bedrock-guardrailversion"],
+            sent.headers.get("x-amzn-bedrock-trace"),
+        ) == ("caller-guardrail", "9", caller_trace)
+
+    @BEDROCK_PROXY_ROUTES
+    def test_invoke_keeps_protected_x_pass_values_from_bedrock_guardrails_and_the_logged_body(
+        self, monkeypatch: pytest.MonkeyPatch, httpx_transport: None, path_model: str, uses_router: bool
+    ) -> None:
+        protected_values: Final = (
+            "Bearer upstream-secret",
+            "upstream-api-key",
+            "forged-session-token",
+            "session=upstream-cookie",
+            "Basic upstream-proxy-secret",
+        )
+
+        sent, guardrail_data = _bedrock_invoke_through_proxy(
+            monkeypatch,
+            path_model,
+            uses_router,
+            {
+                "x-pass-authorization": protected_values[0],
+                "x-pass-x-api-key": protected_values[1],
+                "x-pass-X-Amz-Security-Token": protected_values[2],
+                "x-pass-cookie": protected_values[3],
+                "x-pass-proxy-authorization": protected_values[4],
+                "x-pass-X-Amzn-Bedrock-GuardrailIdentifier": "caller-guardrail",
+            },
+        )
+
+        logged_body: Final = json.dumps(guardrail_data["proxy_server_request"]["body"], default=str)
+        assert sent.headers["x-amzn-bedrock-guardrailidentifier"] == "caller-guardrail"
+        assert guardrail_data["request_headers"] == {"x-pass-x-amzn-bedrock-guardrailidentifier": "caller-guardrail"}
+        assert [value for value in protected_values if value in str(sent.headers.raw) or value in logged_body] == []
+
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
         ("model_id", "action"),
@@ -1526,6 +1651,7 @@ class TestBedrockLLMProxyRoute:
     async def test_bedrock_direct_model_id_does_not_imply_streaming(self, model_id: str, action: str) -> None:
         mock_request: Final = Mock()
         mock_request.method = "POST"
+        mock_request.headers = {}
         mock_processor: Final = Mock()
         mock_processor.base_passthrough_process_llm_request = AsyncMock(return_value="success")
         request_body: Final = {"messages": [{"role": "user", "content": "test"}]}
@@ -1562,6 +1688,7 @@ class TestBedrockLLMProxyRoute:
     async def test_bedrock_router_model_id_does_not_imply_streaming(self, model_id: str, action: str) -> None:
         mock_request: Final = Mock()
         mock_request.method = "POST"
+        mock_request.headers = {}
         mock_processor: Final = Mock()
         mock_processor.base_passthrough_process_llm_request = AsyncMock(return_value="success")
         request_body: Final = {"messages": [{"role": "user", "content": "test"}]}
@@ -1865,6 +1992,84 @@ class TestBedrockLLMProxyRoute:
         assert "Blocked by guardrail" in str(exc_info.value.detail)
 
 
+class _RequestDataCaptureGuardrail(CustomGuardrail):
+    def __init__(self) -> None:
+        super().__init__(guardrail_name="request-data-capture", default_on=True, event_hook="pre_call")
+        self.data: dict[str, object] = {}
+
+    async def async_pre_call_hook(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        cache: DualCache,
+        data: dict[str, object],
+        call_type: CallTypesLiteral,
+    ) -> dict[str, object]:
+        self.data = data
+        return data
+
+
+def _bedrock_invoke_through_proxy(
+    monkeypatch: pytest.MonkeyPatch, path_model: str, uses_router: bool, headers: Mapping[str, str]
+) -> tuple[httpx.Request, dict[str, object]]:
+    from litellm.proxy import proxy_server
+
+    for ambient in (*TestBedrockAgentRuntimePassthroughVirtualKeyLeak.AMBIENT_AWS_ENV, "AWS_BEDROCK_RUNTIME_ENDPOINT"):
+        monkeypatch.delenv(ambient, raising=False)
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "AKIATESTACCESSKEY")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "test-secret")
+    monkeypatch.setenv("AWS_REGION_NAME", "us-east-1")
+    router: Final = (
+        litellm.Router(
+            model_list=[
+                {
+                    "model_name": "bedrock-sonnet",
+                    "litellm_params": {"model": f"bedrock/{BEDROCK_PROXY_MODEL}", "aws_region_name": "us-east-1"},
+                }
+            ]
+        )
+        if uses_router
+        else None
+    )
+    guardrail: Final = _RequestDataCaptureGuardrail()
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(litellm, "callbacks", [guardrail])
+    monkeypatch.setitem(
+        proxy_server.app.dependency_overrides,
+        user_api_key_auth,
+        lambda: UserAPIKeyAuth(api_key=BEDROCK_PROXY_CALLER_BEARER),
+    )
+
+    with respx.mock(assert_all_called=True) as upstream:
+        invoke: Final = upstream.post(
+            f"https://bedrock-runtime.us-east-1.amazonaws.com/model/{BEDROCK_PROXY_MODEL}/invoke"
+        ).mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "id": "msg_bedrock",
+                    "type": "message",
+                    "role": "assistant",
+                    "model": BEDROCK_PROXY_MODEL,
+                    "content": [{"type": "text", "text": "ok"}],
+                    "stop_reason": "end_turn",
+                    "usage": {"input_tokens": 5, "output_tokens": 1},
+                },
+            )
+        )
+        response: Final = TestClient(proxy_server.app).post(
+            f"/bedrock/model/{path_model}/invoke",
+            json={
+                "anthropic_version": "bedrock-2023-05-31",
+                "max_tokens": 16,
+                "messages": [{"role": "user", "content": "hi"}],
+            },
+            headers=dict(headers),
+        )
+
+    assert response.status_code == 200, response.text
+    return invoke.calls.last.request, guardrail.data
+
+
 _THROTTLE_TYPE: Final = "ThrottlingException:http://internal.amazon.com/coral/com.amazon.bedrock/"
 _THROTTLE_BODY: Final = b'{"message":"Too many requests, please wait before trying again."}'
 
@@ -1934,7 +2139,7 @@ class TestBedrockPassthroughAwsErrors:
             ProxyBaseLLMRequestProcessing(data={}),
             error,
             UserAPIKeyAuth(api_key="test-key"),
-            ProxyLogging(user_api_key_cache=DualCache()),
+            ProxyLogging(user_api_key_cache=UserApiKeyCache()),
         )
 
     @pytest.mark.asyncio
@@ -3199,7 +3404,7 @@ class TestForwardHeaders:
         # Mock the request body
         mock_request_body = {"test": "data"}
 
-        mock_user_api_key_dict = MagicMock()
+        mock_user_api_key_dict = UserAPIKeyAuth()
 
         # Custom headers that should be merged with user headers
         custom_headers = {
@@ -3296,7 +3501,7 @@ class TestForwardHeaders:
         mock_request.query_params = {}
 
         mock_request_body = {"test": "data"}
-        mock_user_api_key_dict = MagicMock()
+        mock_user_api_key_dict = UserAPIKeyAuth()
 
         # Only these custom headers should be sent
         custom_headers = {
@@ -4307,6 +4512,263 @@ async def test_openai_passthrough_never_sends_workload_identity_token_to_foreign
     assert upstream.calls.call_count == 0
 
 
+@pytest.mark.asyncio
+async def test_a_resumed_background_response_poll_reads_with_the_configured_openai_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-configured-upstream")
+
+    headers: Final = await openai_passthrough_poll_headers("https://api.openai.com/")
+
+    assert headers == {"authorization": "Bearer sk-configured-upstream", "api-key": "sk-configured-upstream"}
+
+
+@pytest.mark.asyncio
+async def test_a_resumed_background_response_poll_reads_with_the_workload_identity_token_without_a_key(
+    openai_wif_env: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    with respx.mock(assert_all_called=True) as upstream:
+        upstream.post("https://auth.openai.com/oauth/token").mock(
+            return_value=httpx.Response(200, json={"access_token": "wif-bearer", "expires_in": 3600})
+        )
+
+        headers: Final = await openai_passthrough_poll_headers("https://api.openai.com/")
+
+    assert headers is not None
+    assert headers["authorization"] == "Bearer wif-bearer"
+
+
+@pytest.mark.asyncio
+async def test_a_resumed_background_response_poll_has_no_headers_without_an_openai_credential(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_IDENTITY_PROVIDER_ID", raising=False)
+    monkeypatch.delenv("OPENAI_SERVICE_ACCOUNT_ID", raising=False)
+    monkeypatch.delenv("OPENAI_IDENTITY_TOKEN_FILE", raising=False)
+
+    assert await openai_passthrough_poll_headers("https://api.openai.com/") is None
+
+
+DELETED_RESPONSE_ID: Final = "resp_080b10ff5d740c69006ad3de732e5087"
+DELETED_RESPONSE_CREATOR_CALL_ID: Final = "0d4b7e19-6a2c-4f83-9e51-2c8a7f3b6d40"
+FINISHED_BACKGROUND_RESPONSE: Final = {
+    "id": DELETED_RESPONSE_ID,
+    "object": "response",
+    "created_at": 1792269939,
+    "status": "completed",
+    "background": True,
+    "model": "gpt-5.4-mini-2026-03-17",
+    "output": [],
+    "parallel_tool_calls": True,
+    "tool_choice": "auto",
+    "tools": [],
+    "usage": {
+        "input_tokens": 11,
+        "input_tokens_details": {"cached_tokens": 0},
+        "output_tokens": 5,
+        "output_tokens_details": {"reasoning_tokens": 0},
+        "total_tokens": 16,
+    },
+}
+
+
+@dataclass(frozen=True, slots=True)
+class _TrackedCreatorRow:
+    response_id: str
+    upstream_url: str
+    create_context: object
+
+
+class _TrackedCreators:
+    def __init__(self) -> None:
+        context: Final = BackgroundResponseCreateContext(
+            model="gpt-5.4-mini",
+            custom_llm_provider="openai",
+            litellm_call_id=DELETED_RESPONSE_CREATOR_CALL_ID,
+            litellm_trace_id="5f1d2c3b-8e7a-4b69-9c0d-1a2b3c4d5e6f",
+            start_time=datetime(2026, 10, 17, 13, 47, 3, tzinfo=timezone.utc),
+            metadata={"user_api_key_team_id": "team-creator"},
+        )
+        self.rows: Final = {
+            DELETED_RESPONSE_ID: _TrackedCreatorRow(
+                DELETED_RESPONSE_ID, "https://api.openai.com/v1/responses", context.model_dump(mode="json")
+            )
+        }
+
+    async def find_unique(self, *, where: Mapping[str, str]) -> _TrackedCreatorRow | None:
+        return self.rows.get(where["response_id"])
+
+    async def delete_many(self, *, where: Mapping[str, str]) -> int:
+        return int(self.rows.pop(where["response_id"], None) is not None)
+
+
+class _SettlementClaims:
+    def __init__(self) -> None:
+        self.claimed: Final[set[str]] = set()
+
+    async def create_many(self, data: list[Mapping[str, str]], *, skip_duplicates: bool) -> int:
+        new_ids: Final = {row["response_id"] for row in data} - self.claimed
+        self.claimed.update(new_ids)
+        return len(new_ids)
+
+    async def delete_many(self, *, where: Mapping[str, str]) -> int:
+        self.claimed.discard(where["response_id"])
+        return 1
+
+
+class _ReadBeforeDelete:
+    def __init__(self, answer: FetchOutcome | Exception) -> None:
+        self.answer: Final = answer
+        self.requests: Final[list[BackgroundResponsePollRequest]] = []
+
+    async def __call__(self, request: BackgroundResponsePollRequest) -> FetchOutcome:
+        self.requests.append(request)
+        if isinstance(self.answer, Exception):
+            raise self.answer
+        return self.answer
+
+
+def _delete_tracked_response(
+    client: TestClient,
+    creators: _TrackedCreators,
+    fetch: _ReadBeforeDelete,
+    events: list[str],
+    endpoint: str = f"v1/responses/{DELETED_RESPONSE_ID}",
+) -> object:
+    from litellm.proxy import proxy_server
+
+    async def record_creator_bill(*, logging_obj: LiteLLMLoggingObj, **kwargs: object) -> None:
+        if logging_obj.litellm_call_id == DELETED_RESPONSE_CREATOR_CALL_ID:
+            events.append(f"billed {logging_obj.litellm_call_id}")
+
+    def forward(upstream_request: httpx.Request) -> httpx.Response:
+        events.append("forwarded")
+        return httpx.Response(200, json={"id": DELETED_RESPONSE_ID, "object": "response", "deleted": True})
+
+    admit: Final = proxy_server.proxy_logging_obj.pre_call_hook
+
+    async def admitted(*args: object, **kwargs: object) -> object:
+        admitted_body: Final = await admit(*args, **kwargs)
+        events.append("admitted")
+        return admitted_body
+
+    claims: Final = _SettlementClaims()
+    passthrough_logging: Final = PassThroughEndpointLogging(
+        log_dispatch=record_creator_bill,
+        background_response_settlement=PrismaBackgroundResponseSettlementStore(table=lambda: claims, timeout_seconds=5),
+        background_response_creators=PrismaBackgroundResponseCreatorStore(table=lambda: creators, timeout_seconds=5),
+        background_response_poller=BackgroundResponsePoller(fetch=fetch, database_configured=lambda: True),
+    )
+    with (
+        patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.pass_through_endpoint_logging",
+            passthrough_logging,
+        ),
+        patch.object(proxy_server.proxy_logging_obj, "pre_call_hook", admitted),
+        respx.mock(assert_all_called=True) as upstream,
+    ):
+        upstream.delete(f"https://api.openai.com/{endpoint}").mock(side_effect=forward)
+        deleted: Final = client.delete(f"/openai_passthrough/{endpoint}")
+    return deleted.json()
+
+
+def test_deleting_a_finished_background_response_bills_its_creator_once_after_admission_and_before_forwarding(
+    openai_passthrough_client: TestClient, local_model_cost_map
+) -> None:
+    creators: Final = _TrackedCreators()
+    fetch: Final = _ReadBeforeDelete(Fetched(body=FINISHED_BACKGROUND_RESPONSE))
+    events: Final[list[str]] = []
+
+    deleted: Final = _delete_tracked_response(openai_passthrough_client, creators, fetch, events)
+
+    assert deleted == {"id": DELETED_RESPONSE_ID, "object": "response", "deleted": True}
+    assert events == ["admitted", f"billed {DELETED_RESPONSE_CREATOR_CALL_ID}", "forwarded"]
+    (read,) = fetch.requests
+    assert read.url == httpx.URL(f"https://api.openai.com/v1/responses/{DELETED_RESPONSE_ID}")
+    assert ("authorization", "Bearer sk-upstream") in read.headers
+    assert creators.rows == {}
+
+
+def test_deleting_a_tracked_background_response_still_forwards_when_settling_it_fails(
+    openai_passthrough_client: TestClient, local_model_cost_map
+) -> None:
+    creators: Final = _TrackedCreators()
+    events: Final[list[str]] = []
+
+    deleted: Final = _delete_tracked_response(
+        openai_passthrough_client, creators, _ReadBeforeDelete(RuntimeError("provider unreachable")), events
+    )
+
+    assert deleted == {"id": DELETED_RESPONSE_ID, "object": "response", "deleted": True}
+    assert events == ["admitted", "forwarded"]
+    assert set(creators.rows) == {DELETED_RESPONSE_ID}
+
+
+@pytest.mark.parametrize(
+    ("endpoint", "answer", "reads"),
+    [
+        pytest.param(
+            f"v1/responses/{DELETED_RESPONSE_ID}",
+            {**FINISHED_BACKGROUND_RESPONSE, "status": "in_progress", "usage": None},
+            1,
+            id="still_running",
+        ),
+        pytest.param("v1/responses/resp_untracked", FINISHED_BACKGROUND_RESPONSE, 0, id="untracked"),
+        pytest.param(f"v1/responses/{DELETED_RESPONSE_ID}/input_items", FINISHED_BACKGROUND_RESPONSE, 0, id="sub_route"),
+    ],
+)
+def test_a_delete_with_nothing_finished_to_settle_bills_nobody_and_forwards(
+    openai_passthrough_client: TestClient,
+    endpoint: str,
+    answer: Mapping[str, object],
+    reads: int,
+    local_model_cost_map,
+) -> None:
+    creators: Final = _TrackedCreators()
+    fetch: Final = _ReadBeforeDelete(Fetched(body=answer))
+    events: Final[list[str]] = []
+
+    deleted: Final = _delete_tracked_response(openai_passthrough_client, creators, fetch, events, endpoint)
+
+    assert deleted == {"id": DELETED_RESPONSE_ID, "object": "response", "deleted": True}
+    assert events == ["admitted", "forwarded"]
+    assert len(fetch.requests) == reads
+    assert set(creators.rows) == {DELETED_RESPONSE_ID}
+
+
+@pytest.mark.asyncio
+async def test_a_delete_through_a_configured_openai_route_bills_the_creator_with_that_route_credential(
+    local_model_cost_map,
+) -> None:
+    billed: Final[list[str]] = []
+
+    async def record_creator_bill(*, logging_obj: LiteLLMLoggingObj, **kwargs: object) -> None:
+        billed.append(logging_obj.litellm_call_id)
+
+    creators: Final = _TrackedCreators()
+    fetch: Final = _ReadBeforeDelete(Fetched(body=FINISHED_BACKGROUND_RESPONSE))
+    claims: Final = _SettlementClaims()
+    passthrough_logging: Final = PassThroughEndpointLogging(
+        log_dispatch=record_creator_bill,
+        background_response_settlement=PrismaBackgroundResponseSettlementStore(table=lambda: claims, timeout_seconds=5),
+        background_response_creators=PrismaBackgroundResponseCreatorStore(table=lambda: creators, timeout_seconds=5),
+        background_response_poller=BackgroundResponsePoller(fetch=fetch, database_configured=lambda: True),
+    )
+
+    await passthrough_logging.settle_background_response_before_delete(
+        "DELETE",
+        f"https://api.openai.com/v1/responses/{DELETED_RESPONSE_ID}",
+        {"authorization": "Bearer sk-configured-route"},
+    )
+
+    (read,) = fetch.requests
+    assert ("authorization", "Bearer sk-configured-route") in read.headers
+    assert billed == [DELETED_RESPONSE_CREATOR_CALL_ID]
+    assert creators.rows == {}
+
+
 class TestCursorProxyRoute:
     """Tests for the Cursor Cloud Agents pass-through route."""
 
@@ -4432,6 +4894,75 @@ class TestCursorProxyRoute:
 
             expected_auth = base64.b64encode(b"crsr_ui_test_key:").decode("ascii")
             assert call_args["custom_headers"]["Authorization"] == f"Basic {expected_auth}"
+
+    def test_cursor_proxy_route_sends_the_secret_behind_a_ui_credential_oidc_reference(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from litellm.proxy.proxy_server import app
+        from litellm.types.utils import CredentialItem
+
+        monkeypatch.delenv("CURSOR_API_KEY", raising=False)
+        monkeypatch.delenv("SERVER_ROOT_PATH", raising=False)
+        monkeypatch.setenv("CURSOR_UI_TOKEN", "crsr_resolved_key")
+        monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+        monkeypatch.setattr(
+            litellm,
+            "credential_list",
+            [
+                CredentialItem(
+                    credential_name="my-cursor-oidc",
+                    credential_values={"api_key": "oidc/env/CURSOR_UI_TOKEN", "api_base": "https://api.cursor.com"},
+                    credential_info={"custom_llm_provider": "cursor"},
+                )
+            ],
+        )
+        litellm.in_memory_llm_clients_cache.flush_cache()
+        monkeypatch.setitem(app.dependency_overrides, user_api_key_auth, lambda: UserAPIKeyAuth(api_key="sk-virtual"))
+
+        with respx.mock(assert_all_called=True) as upstream:
+            route: Final = upstream.get("https://api.cursor.com/v0/models").mock(
+                return_value=httpx.Response(200, json={"models": []})
+            )
+            response: Final = TestClient(app).get("/cursor/v0/models")
+
+        expected_auth: Final = base64.b64encode(b"crsr_resolved_key:").decode("ascii")
+        assert (response.status_code, response.json()) == (200, {"models": []})
+        assert route.calls.last.request.headers["authorization"] == f"Basic {expected_auth}"
+
+    @pytest.mark.asyncio
+    async def test_cursor_proxy_route_refuses_a_ui_credential_google_reference(self):
+        from litellm.types.utils import CredentialItem
+
+        ui_credential = CredentialItem(
+            credential_name="my-cursor-google",
+            credential_values={"api_key": "oidc/google/https://api.cursor.com"},
+            credential_info={"custom_llm_provider": "cursor"},
+        )
+
+        with (
+            patch(
+                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.passthrough_endpoint_router.get_credentials",
+                return_value=None,
+            ),
+            patch(
+                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.litellm.credential_list",
+                [ui_credential],
+            ),
+            patch(
+                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route"
+            ) as mock_create_route,
+            pytest.raises(HTTPException) as caught,
+        ):
+            await cursor_proxy_route(
+                endpoint="v0/models",
+                request=MagicMock(spec=Request),
+                fastapi_response=MagicMock(spec=Response),
+                user_api_key_dict=MagicMock(),
+            )
+
+        assert caught.value.status_code == 401
+        assert "pass-through routes do not fetch Google ID tokens" in caught.value.detail
+        mock_create_route.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_cursor_proxy_route_custom_api_base(self):
@@ -5089,8 +5620,8 @@ class TestVertexCredentiallessPassthroughVirtualKeyLeak:
                     user_id="jwt-subject",
                     jwt_claims={
                         **LITELLM_JWT_CLAIMS,
-                        JWTHandler.LITELLM_JWT_ISSUER_CLAIM: "https://idp.example.com",
-                        JWTHandler.LITELLM_USER_ID_CLAIM: "jwt-subject",
+                        "_litellm_jwt_issuer": "https://idp.example.com",
+                        "_litellm_user_id": "jwt-subject",
                     },
                 ),
                 id="multi-issuer-jwt-auth-normalized-claims",
@@ -6399,7 +6930,11 @@ class TestVertexAILiveWebsocketPassthrough:
             ),
             (
                 "projects/other/locations/us-central1/publishers/google/models/gemini-2.0-flash",
-                "projects/other/locations/us-central1/publishers/google/models/gemini-2.0-flash",
+                "projects/proj-db/locations/global/publishers/google/models/gemini-2.0-flash",
+            ),
+            (
+                "projects/other/locations/us-central1/endpoints/1234",
+                "projects/proj-db/locations/global/endpoints/1234",
             ),
         ],
     )
@@ -6425,7 +6960,9 @@ class TestVertexAILiveWebsocketPassthrough:
         rewriter = passthrough_module._build_vertex_live_setup_model_rewriter(
             vertex_project="proj-db",
             vertex_location="global",
+            configured_location="global",
             llm_router=llm_router,
+            keeps_caller_resource_path=False,
         )
 
         assert rewriter is not None
@@ -6517,6 +7054,402 @@ class TestVertexAILiveWebsocketPassthrough:
         assert "default_vertex_config" in close_kwargs["reason"]
         assert len(close_kwargs["reason"].encode("utf-8")) <= 123
 
+    def _pinned_live_router(self, extra_params: Mapping[str, object]) -> litellm.Router:
+        return litellm.Router(
+            model_list=[
+                {
+                    "model_name": "gemini-live",
+                    "litellm_params": {
+                        "model": "vertex_ai/gemini-live-2.5-flash",
+                        "use_in_pass_through": True,
+                        "vertex_project": "proj-db",
+                        "vertex_location": "global",
+                        "vertex_credentials": '{"type": "service_account"}',
+                        **extra_params,
+                    },
+                }
+            ]
+        )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "query, field",
+        [
+            ({"vertex_location": "us-central1"}, "vertex_location"),
+            ({"vertex_project": "caller-project"}, "vertex_project"),
+            ({"vertex_project": "proj-db", "vertex_location": "us-central1"}, "vertex_location"),
+        ],
+    )
+    async def test_query_overriding_a_pinned_deployment_closes_before_minting_a_token(
+        self, monkeypatch, query: Mapping[str, str], field: str
+    ):
+        from litellm.proxy.pass_through_endpoints import (
+            llm_passthrough_endpoints as passthrough_module,
+        )
+
+        monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", self._pinned_live_router({}))
+        monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
+        monkeypatch.setattr(passthrough_module.passthrough_endpoint_router, "default_vertex_config", None)
+        self._clear_vertex_env(monkeypatch)
+        websocket = self._websocket()
+        ensure_token = AsyncMock(return_value=("token-abc", "proj-db"))
+        ws_passthrough = AsyncMock()
+
+        with (
+            patch.object(passthrough_module.vertex_llm_base, "ensure_access_token_async", ensure_token),
+            patch.object(passthrough_module, "websocket_passthrough_request", ws_passthrough),
+        ):
+            await passthrough_module.vertex_ai_live_websocket_passthrough(
+                websocket=websocket,
+                user_api_key_dict=UserAPIKeyAuth(),
+                **query,
+            )
+
+        close_kwargs = websocket.close.await_args.kwargs
+        assert close_kwargs["code"] == 1008
+        assert field in close_kwargs["reason"]
+        assert len(close_kwargs["reason"].encode("utf-8")) <= 123
+        ensure_token.assert_not_awaited()
+        ws_passthrough.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "extra_params, general_settings, query, expected_location",
+        [
+            ({}, {}, {"vertex_project": "proj-db", "vertex_location": "global"}, "global"),
+            (
+                {"configurable_clientside_auth_params": ["vertex_location"]},
+                {},
+                {"vertex_location": "us-central1"},
+                "us-central1",
+            ),
+            ({}, {"allow_client_side_credentials": True}, {"vertex_location": "us-central1"}, "us-central1"),
+        ],
+        ids=["matches_the_pin", "deployment_opt_in", "proxy_wide_opt_in"],
+    )
+    async def test_query_the_admin_allows_reaches_vertex(
+        self,
+        monkeypatch,
+        extra_params: Mapping[str, object],
+        general_settings: Mapping[str, object],
+        query: Mapping[str, str],
+        expected_location: str,
+    ):
+        from litellm.proxy.pass_through_endpoints import (
+            llm_passthrough_endpoints as passthrough_module,
+        )
+
+        monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", self._pinned_live_router(extra_params))
+        monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", dict(general_settings))
+        monkeypatch.setattr(passthrough_module.passthrough_endpoint_router, "default_vertex_config", None)
+        self._clear_vertex_env(monkeypatch)
+        websocket = self._websocket()
+        ensure_token = AsyncMock(return_value=("token-abc", "proj-db"))
+        ws_passthrough = AsyncMock()
+
+        with (
+            patch.object(passthrough_module.vertex_llm_base, "ensure_access_token_async", ensure_token),
+            patch.object(passthrough_module, "websocket_passthrough_request", ws_passthrough),
+        ):
+            await passthrough_module.vertex_ai_live_websocket_passthrough(
+                websocket=websocket,
+                user_api_key_dict=UserAPIKeyAuth(),
+                **query,
+            )
+
+        websocket.close.assert_not_awaited()
+        rewriter = ws_passthrough.await_args.kwargs["setup_model_rewriter"]
+        assert rewriter("gemini-live") == (
+            f"projects/proj-db/locations/{expected_location}/publishers/google/models/gemini-live-2.5-flash"
+        )
+
+    def _use_default_vertex_config(self, monkeypatch, general_settings: Mapping[str, object], vertex_location):
+        from litellm.proxy.pass_through_endpoints import (
+            llm_passthrough_endpoints as passthrough_module,
+        )
+        from litellm.types.passthrough_endpoints.vertex_ai import (
+            VertexPassThroughCredentials,
+        )
+
+        monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None)
+        monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", dict(general_settings))
+        monkeypatch.setattr(
+            passthrough_module.passthrough_endpoint_router,
+            "default_vertex_config",
+            VertexPassThroughCredentials(
+                vertex_project="proj-env",
+                vertex_location=vertex_location,
+                vertex_credentials='{"type": "env_account"}',
+            ),
+        )
+        monkeypatch.setattr(passthrough_module.passthrough_endpoint_router, "deployment_key_to_vertex_credentials", {})
+        self._clear_vertex_env(monkeypatch)
+
+    async def _open_live(self, query: Mapping[str, str]):
+        from litellm.proxy.pass_through_endpoints import (
+            llm_passthrough_endpoints as passthrough_module,
+        )
+
+        websocket = self._websocket()
+        ensure_token = AsyncMock(
+            side_effect=lambda credentials, project_id, custom_llm_provider: ("token-abc", project_id or "proj-env")
+        )
+        ws_passthrough = AsyncMock()
+        with (
+            patch.object(passthrough_module.vertex_llm_base, "ensure_access_token_async", ensure_token),
+            patch.object(passthrough_module, "websocket_passthrough_request", ws_passthrough),
+        ):
+            await passthrough_module.vertex_ai_live_websocket_passthrough(
+                websocket=websocket,
+                user_api_key_dict=UserAPIKeyAuth(),
+                **query,
+            )
+        return websocket, ensure_token, ws_passthrough
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "query, field",
+        [
+            ({"vertex_project": "caller-project"}, "vertex_project"),
+            ({"vertex_location": "us-central1"}, "vertex_location"),
+            ({"vertex_project": "proj-env", "vertex_location": "us-central1"}, "vertex_location"),
+        ],
+    )
+    async def test_query_moving_default_vertex_config_closes_before_minting_a_token(
+        self, monkeypatch, query: Mapping[str, str], field: str
+    ):
+        self._use_default_vertex_config(monkeypatch, {}, vertex_location="europe-west4")
+
+        websocket, ensure_token, ws_passthrough = await self._open_live(query)
+
+        close_kwargs = websocket.close.await_args.kwargs
+        assert close_kwargs["code"] == 1008
+        assert f"{field} is pinned by default_vertex_config" in close_kwargs["reason"]
+        assert len(close_kwargs["reason"].encode("utf-8")) <= 123
+        ensure_token.assert_not_awaited()
+        ws_passthrough.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "general_settings, default_location, query, expected_project, expected_location",
+        [
+            (
+                {},
+                "europe-west4",
+                {"vertex_project": "proj-env", "vertex_location": "europe-west4"},
+                "proj-env",
+                "europe-west4",
+            ),
+            ({}, None, {"vertex_location": "us-central1"}, "proj-env", "us-central1"),
+            (
+                {"allow_client_side_credentials": True},
+                "europe-west4",
+                {"vertex_project": "caller-project", "vertex_location": "us-central1"},
+                "caller-project",
+                "us-central1",
+            ),
+        ],
+        ids=["matches_the_pin", "location_left_unset", "proxy_wide_opt_in"],
+    )
+    async def test_default_vertex_config_serves_the_queries_it_allows(
+        self,
+        monkeypatch,
+        general_settings: Mapping[str, object],
+        default_location,
+        query: Mapping[str, str],
+        expected_project: str,
+        expected_location: str,
+    ):
+        self._use_default_vertex_config(monkeypatch, general_settings, vertex_location=default_location)
+
+        websocket, ensure_token, ws_passthrough = await self._open_live(query)
+
+        websocket.close.assert_not_awaited()
+        assert ensure_token.await_args.kwargs["project_id"] == expected_project
+        rewriter = ws_passthrough.await_args.kwargs["setup_model_rewriter"]
+        assert rewriter("gemini-live-2.5-flash") == (
+            f"projects/{expected_project}/locations/{expected_location}/publishers/google/models/gemini-live-2.5-flash"
+        )
+
+    @pytest.mark.asyncio
+    async def test_a_registered_project_and_location_pair_still_serves_its_query(self, monkeypatch):
+        from litellm.proxy.pass_through_endpoints import (
+            llm_passthrough_endpoints as passthrough_module,
+        )
+        from litellm.types.passthrough_endpoints.vertex_ai import (
+            VertexPassThroughCredentials,
+        )
+
+        self._use_default_vertex_config(monkeypatch, {}, vertex_location="europe-west4")
+        monkeypatch.setattr(
+            passthrough_module.passthrough_endpoint_router,
+            "deployment_key_to_vertex_credentials",
+            {
+                "caller-project-us-central1": VertexPassThroughCredentials(
+                    vertex_project="caller-project",
+                    vertex_location="us-central1",
+                    vertex_credentials='{"type": "registered_account"}',
+                )
+            },
+        )
+
+        websocket, ensure_token, _ = await self._open_live(
+            {"vertex_project": "caller-project", "vertex_location": "us-central1"}
+        )
+
+        websocket.close.assert_not_awaited()
+        ensure_token.assert_awaited_once_with(
+            credentials='{"type": "registered_account"}',
+            project_id="caller-project",
+            custom_llm_provider="vertex_ai_beta",
+        )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "general_settings, expected",
+        [
+            ({}, "projects/proj-env/locations/europe-west4/publishers/google/models/gemini-2.0-flash"),
+            (
+                {"allow_client_side_credentials": True},
+                "projects/caller-project/locations/us-central1/publishers/google/models/gemini-2.0-flash",
+            ),
+        ],
+        ids=["pinned", "proxy_wide_opt_in"],
+    )
+    async def test_setup_frame_resource_path_cannot_move_the_session_to_another_project(
+        self, monkeypatch, general_settings: Mapping[str, object], expected: str
+    ):
+        self._use_default_vertex_config(monkeypatch, general_settings, vertex_location="europe-west4")
+
+        _, _, ws_passthrough = await self._open_live({})
+
+        rewriter = ws_passthrough.await_args.kwargs["setup_model_rewriter"]
+        assert (
+            rewriter("projects/caller-project/locations/us-central1/publishers/google/models/gemini-2.0-flash")
+            == expected
+        )
+
+    def _pin_no_vertex_project(
+        self,
+        monkeypatch,
+        general_settings: Mapping[str, object],
+        default_vertex_config: VertexPassThroughCredentials | None,
+    ):
+        from litellm.proxy.pass_through_endpoints import (
+            llm_passthrough_endpoints as passthrough_module,
+        )
+
+        monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None)
+        monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", dict(general_settings))
+        monkeypatch.setattr(
+            passthrough_module.passthrough_endpoint_router, "default_vertex_config", default_vertex_config
+        )
+        monkeypatch.setattr(passthrough_module.passthrough_endpoint_router, "deployment_key_to_vertex_credentials", {})
+        self._clear_vertex_env(monkeypatch)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "default_vertex_config",
+        [None, VertexPassThroughCredentials(vertex_location="europe-west4")],
+        ids=["no_default_vertex_config", "default_vertex_config_without_a_project"],
+    )
+    async def test_caller_named_project_closes_before_any_upstream_connect_when_nothing_pins_one(
+        self, monkeypatch, default_vertex_config: VertexPassThroughCredentials | None
+    ):
+        self._pin_no_vertex_project(monkeypatch, {}, default_vertex_config)
+
+        websocket, ensure_token, ws_passthrough = await self._open_live({"vertex_project": "other-project"})
+
+        ws_passthrough.assert_not_awaited()
+        ensure_token.assert_not_awaited()
+        close_kwargs = websocket.close.await_args.kwargs
+        assert close_kwargs["code"] == 1008
+        assert "vertex_project" in close_kwargs["reason"]
+        assert len(close_kwargs["reason"].encode("utf-8")) <= 123
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "configured_by, default_vertex_config",
+        [
+            ("VERTEXAI_PROJECT", None),
+            ("DEFAULT_VERTEXAI_PROJECT", VertexPassThroughCredentials(vertex_location="europe-west4")),
+        ],
+        ids=["vertexai_project_env", "default_vertexai_project_env"],
+    )
+    async def test_with_nothing_pinned_the_caller_may_name_the_project_the_admin_configured(
+        self, monkeypatch, configured_by: str, default_vertex_config: VertexPassThroughCredentials | None
+    ):
+        self._pin_no_vertex_project(monkeypatch, {}, default_vertex_config)
+        monkeypatch.setattr(litellm, "vertex_project", None)
+        monkeypatch.delenv("VERTEXAI_PROJECT", raising=False)
+        monkeypatch.setenv(configured_by, "proj-configured")
+
+        websocket, _, ws_passthrough = await self._open_live(
+            {"vertex_project": "proj-configured", "vertex_location": "europe-west4"}
+        )
+
+        websocket.close.assert_not_awaited()
+        assert ws_passthrough.await_args.kwargs["custom_headers"]["x-goog-user-project"] == "proj-configured"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "general_settings, query, expected_project, expected_location",
+        [
+            ({}, {"vertex_location": "europe-west4"}, "proj-env", "europe-west4"),
+            (
+                {"allow_client_side_credentials": True},
+                {"vertex_project": "other-project", "vertex_location": "europe-west4"},
+                "other-project",
+                "europe-west4",
+            ),
+        ],
+        ids=["caller_region", "proxy_wide_opt_in"],
+    )
+    async def test_with_nothing_pinned_the_caller_keeps_the_region_and_the_opt_in_keeps_the_project(
+        self,
+        monkeypatch,
+        general_settings: Mapping[str, object],
+        query: Mapping[str, str],
+        expected_project: str,
+        expected_location: str,
+    ):
+        self._pin_no_vertex_project(monkeypatch, general_settings, None)
+
+        websocket, _, ws_passthrough = await self._open_live(query)
+
+        websocket.close.assert_not_awaited()
+        passthrough_kwargs = ws_passthrough.await_args.kwargs
+        assert passthrough_kwargs["custom_headers"]["x-goog-user-project"] == expected_project
+        assert passthrough_kwargs["setup_model_rewriter"]("gemini-2.0-flash") == (
+            f"projects/{expected_project}/locations/{expected_location}/publishers/google/models/gemini-2.0-flash"
+        )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "setup_model, expected",
+        [
+            (
+                "projects/proj-env/locations/europe-west4/publishers/google/models/gemini-2.0-flash",
+                "projects/proj-env/locations/europe-west4/publishers/google/models/gemini-2.0-flash",
+            ),
+            (
+                "projects/caller-project/locations/europe-west4/publishers/google/models/gemini-2.0-flash",
+                "projects/proj-env/locations/europe-west4/publishers/google/models/gemini-2.0-flash",
+            ),
+        ],
+        ids=["own_project", "other_project"],
+    )
+    async def test_setup_frame_keeps_its_region_when_no_region_is_pinned(
+        self, monkeypatch, setup_model: str, expected: str
+    ):
+        self._use_default_vertex_config(monkeypatch, {}, vertex_location=None)
+
+        websocket, _, ws_passthrough = await self._open_live({})
+
+        websocket.close.assert_not_awaited()
+        rewriter = ws_passthrough.await_args.kwargs["setup_model_rewriter"]
+        assert rewriter(setup_model) == expected
+
     @pytest.mark.asyncio
     @pytest.mark.parametrize("model, expected_model", [("gemini-3.8-live", "gemini-3.8-live"), (None, "")])
     async def test_credential_failure_logs_the_named_model_under_vertex_ai(
@@ -6543,7 +7476,7 @@ class TestVertexAILiveWebsocketPassthrough:
         recorder: Final = _FailureRecorder()
         monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None)
         monkeypatch.setattr(
-            "litellm.proxy.proxy_server.proxy_logging_obj", ProxyLogging(user_api_key_cache=DualCache())
+            "litellm.proxy.proxy_server.proxy_logging_obj", ProxyLogging(user_api_key_cache=UserApiKeyCache())
         )
         monkeypatch.setattr(litellm, "callbacks", [recorder])
         monkeypatch.setattr(passthrough_module.passthrough_endpoint_router, "default_vertex_config", None)
@@ -6672,6 +7605,256 @@ class TestAnthropicProxyRoute:
         assert custom_headers["anthropic-beta"] == "oauth-2025-04-20"
         assert sync_calls == []
         assert thread_ids and thread_ids[0] != threading.get_ident()
+
+
+_HAIKU_PRICING: Final = MappingProxyType({"input_cost_per_token": 1e-07, "output_cost_per_token": 5e-07})
+
+
+def _anthropic_deployment(
+    deployment_id: str,
+    model_name: str = "claude-haiku-5-5",
+    backend: str = "anthropic/claude-haiku-5-5",
+    model_info_pricing: Mapping[str, float] = _HAIKU_PRICING,
+    params_pricing: Mapping[str, float] = MappingProxyType({}),
+    team_id: str | None = None,
+) -> dict[str, object]:
+    return {
+        "model_name": model_name,
+        "litellm_params": {"model": backend, "api_key": "sk-ant-test", **params_pricing},
+        "model_info": {"id": deployment_id, **model_info_pricing, **({"team_id": team_id} if team_id else {})},
+    }
+
+
+def _passthrough_pricing(
+    monkeypatch: pytest.MonkeyPatch,
+    *deployments: dict[str, object],
+    request_body: Mapping[str, object] = MappingProxyType({"model": "claude-haiku-5-5"}),
+    team_id: str | None = None,
+) -> Mapping[str, object] | None:
+    from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+        anthropic_deployment_pricing_model_info,
+    )
+
+    monkeypatch.setattr(litellm, "model_cost", dict(litellm.model_cost))
+    router: Final = litellm.Router(model_list=[*deployments])
+    return anthropic_deployment_pricing_model_info(router, request_body, team_id)
+
+
+def test_anthropic_passthrough_prices_with_the_one_deployment_serving_the_requested_model(monkeypatch):
+    model_info: Final = _passthrough_pricing(monkeypatch, _anthropic_deployment("haiku-dep"))
+
+    assert model_info is not None
+    assert model_info["id"] == "haiku-dep"
+    assert {key: model_info[key] for key in _HAIKU_PRICING} == _HAIKU_PRICING
+
+
+def test_anthropic_passthrough_reads_custom_pricing_set_in_litellm_params(monkeypatch):
+    model_info: Final = _passthrough_pricing(
+        monkeypatch,
+        _anthropic_deployment("haiku-dep", model_info_pricing=MappingProxyType({}), params_pricing=_HAIKU_PRICING),
+    )
+
+    assert model_info is not None
+    assert model_info["id"] == "haiku-dep"
+    assert {key: model_info[key] for key in _HAIKU_PRICING} == _HAIKU_PRICING
+
+
+def test_anthropic_passthrough_prices_a_deployment_configured_with_the_alias_the_caller_sends(monkeypatch):
+    model_info: Final = _passthrough_pricing(
+        monkeypatch,
+        _anthropic_deployment(
+            "haiku-latest-dep", model_name="claude-haiku-latest", backend="anthropic/claude-haiku-latest"
+        ),
+        request_body={"model": "claude-haiku-latest"},
+    )
+
+    assert model_info is not None
+    assert model_info["id"] == "haiku-latest-dep"
+
+
+@pytest.mark.parametrize(
+    ("caller_team_id", "priced"),
+    [
+        pytest.param("team-a", True, id="owning-team"),
+        pytest.param("team-b", False, id="other-team"),
+        pytest.param(None, False, id="teamless-key"),
+    ],
+)
+def test_anthropic_passthrough_prices_a_team_deployment_only_for_its_team(monkeypatch, caller_team_id, priced):
+    model_info: Final = _passthrough_pricing(
+        monkeypatch, _anthropic_deployment("team-a-haiku-dep", team_id="team-a"), team_id=caller_team_id
+    )
+
+    assert (model_info is not None) is priced
+
+
+@pytest.mark.parametrize(
+    "deployments",
+    [
+        pytest.param(
+            (
+                _anthropic_deployment("haiku-dep-a"),
+                _anthropic_deployment("haiku-dep-b", model_info_pricing={"input_cost_per_token": 9e-07}),
+            ),
+            id="two-deployments-could-bill-either-price",
+        ),
+        pytest.param(
+            (_anthropic_deployment("opus-dep", backend="anthropic/claude-opus-5-5"),),
+            id="group-serves-a-different-upstream-model",
+        ),
+        pytest.param(
+            (_anthropic_deployment("bedrock-dep", backend="bedrock/claude-haiku-5-5"),),
+            id="deployment-is-not-anthropic",
+        ),
+        pytest.param(
+            (_anthropic_deployment("other-group-dep", model_name="haiku-alias"),),
+            id="model-group-not-requested",
+        ),
+        pytest.param(
+            (_anthropic_deployment("unpriced-dep", model_info_pricing=MappingProxyType({})),),
+            id="deployment-has-no-custom-pricing",
+        ),
+    ],
+)
+def test_anthropic_passthrough_attaches_no_deployment_pricing_without_one_priced_match(monkeypatch, deployments):
+    assert _passthrough_pricing(monkeypatch, *deployments) is None
+
+
+_RELAY_HAIKU_PRICING: Final = MappingProxyType({"input_cost_per_token": 1e-03, "output_cost_per_token": 2e-03})
+_RELAY_OPUS_PRICING: Final = MappingProxyType({"input_cost_per_token": 5e-03, "output_cost_per_token": 6e-03})
+_RELAY_MESSAGES: Final = ({"role": "user", "content": "hi"},)
+
+
+async def _hook_passes_body_through(*, data: dict[str, object], **_: object) -> dict[str, object]:
+    return data
+
+
+async def _hook_upgrades_to_opus(*, data: dict[str, object], **_: object) -> dict[str, object]:
+    return {**data, "model": "claude-opus-5-5"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("request_body", "pre_call_hook", "forwarded_model", "pricing"),
+    [
+        pytest.param(
+            {"model": "claude-haiku-5-5", "messages": [*_RELAY_MESSAGES]},
+            _hook_passes_body_through,
+            "claude-haiku-5-5",
+            _RELAY_HAIKU_PRICING,
+            id="requested-model",
+        ),
+        pytest.param(
+            {"model": "claude-haiku-5-5", "custom_body": {"model": "claude-opus-5-5", "messages": [*_RELAY_MESSAGES]}},
+            _hook_passes_body_through,
+            "claude-opus-5-5",
+            _RELAY_OPUS_PRICING,
+            id="custom-body-envelope",
+        ),
+        pytest.param(
+            {"model": "claude-haiku-5-5", "messages": [*_RELAY_MESSAGES]},
+            _hook_upgrades_to_opus,
+            "claude-opus-5-5",
+            _RELAY_OPUS_PRICING,
+            id="pre-call-hook-rewrite",
+        ),
+    ],
+)
+async def test_anthropic_proxy_route_bills_the_custom_price_of_the_forwarded_model(
+    monkeypatch, request_body, pre_call_hook, forwarded_model, pricing
+):
+    for name in (
+        "ANTHROPIC_AUTH_TOKEN",
+        "ANTHROPIC_API_BASE",
+        "ANTHROPIC_BASE_URL",
+        "ANTHROPIC_FEDERATION_RULE_ID",
+        "ANTHROPIC_ORGANIZATION_ID",
+        "ANTHROPIC_IDENTITY_TOKEN_FILE",
+        "ANTHROPIC_IDENTITY_TOKEN",
+        "SERVER_ROOT_PATH",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+    monkeypatch.setattr(litellm, "model_cost", dict(litellm.model_cost))
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.llm_router",
+        litellm.Router(
+            model_list=[
+                _anthropic_deployment("haiku-dep", model_info_pricing=_RELAY_HAIKU_PRICING),
+                _anthropic_deployment(
+                    "opus-dep",
+                    model_name="claude-opus-5-5",
+                    backend="anthropic/claude-opus-5-5",
+                    model_info_pricing=_RELAY_OPUS_PRICING,
+                ),
+            ]
+        ),
+    )
+    upstream_response: Final = httpx.Response(
+        200,
+        json={
+            "id": "msg_relay",
+            "type": "message",
+            "role": "assistant",
+            "model": forwarded_model,
+            "content": [{"type": "text", "text": "pong"}],
+            "stop_reason": "end_turn",
+            "usage": {"input_tokens": 18, "output_tokens": 4},
+        },
+        request=httpx.Request("POST", "https://api.anthropic.com/v1/messages"),
+    )
+    httpx_client: Final = MagicMock()
+    httpx_client.build_request = MagicMock(return_value=MagicMock())
+    httpx_client.send = AsyncMock(return_value=upstream_response)
+    client_wrapper: Final = MagicMock()
+    client_wrapper.client = httpx_client
+    body: Final = json.dumps(request_body).encode()
+
+    async def receive() -> dict[str, object]:
+        return {"type": "http.request", "body": body, "more_body": False}
+
+    request: Final = Request(
+        {
+            "type": "http",
+            "http_version": "1.1",
+            "method": "POST",
+            "scheme": "https",
+            "path": "/anthropic/v1/messages",
+            "raw_path": b"/anthropic/v1/messages",
+            "root_path": "",
+            "query_string": b"",
+            "headers": [(b"content-type", b"application/json")],
+            "client": ("127.0.0.1", 51234),
+            "server": ("proxy.local", 4000),
+            "state": {},
+        },
+        receive,
+    )
+
+    with (
+        patch(  # test-quality-ok: the upstream http client is the boundary, it answers with a real Anthropic body
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_async_httpx_client",
+            return_value=client_wrapper,
+        ),
+        patch(  # test-quality-ok: the relay calls these hooks, and they need a db this test has no use for
+            "litellm.proxy.proxy_server.proxy_logging_obj"
+        ) as mock_logging_obj,
+    ):
+        mock_logging_obj.pre_call_hook = AsyncMock(side_effect=pre_call_hook)
+        mock_logging_obj.post_call_success_hook = AsyncMock()
+        mock_logging_obj.post_call_failure_hook = AsyncMock()
+        mock_logging_obj.post_call_response_headers_hook = AsyncMock(return_value={})
+
+        response: Final = await anthropic_proxy_route(
+            endpoint="v1/messages",
+            request=request,
+            fastapi_response=MagicMock(spec=Response),
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-caller-virtual-key"),
+        )
+
+    assert float(response.headers["x-litellm-response-cost"]) == pytest.approx(
+        18 * pricing["input_cost_per_token"] + 4 * pricing["output_cost_per_token"]
+    )
 
 
 class TestAnthropicProxyRouteCallerAuthHeaders:
@@ -6960,6 +8143,11 @@ class TestPassthroughRouterModelBudgetReservation:
             "is_passthrough_request_using_router_model",
             lambda request_body, llm_router=None: request_body.get("model") in ("gpt-5", "router-model"),
         )
+        monkeypatch.setattr(
+            ep,
+            "is_azure_router_model_group",
+            lambda llm_router, model_group: model_group in ("gpt-5", "router-model"),
+        )
         return captured
 
     def _assert_metadata_carries_attribution(self, captured: list[dict], user_api_key_dict: UserAPIKeyAuth) -> None:
@@ -7063,6 +8251,11 @@ class TestAzureRouterModelStreamingDispatch:
             "is_passthrough_request_using_router_model",
             lambda request_body, llm_router=None: request_body.get("model") in ("gpt-5", "router-model"),
         )
+        monkeypatch.setattr(
+            ep,
+            "is_azure_router_model_group",
+            lambda llm_router, model_group: model_group in ("gpt-5", "router-model"),
+        )
 
         request = MagicMock(spec=Request)
         request.method = "POST"
@@ -7126,6 +8319,11 @@ class TestAzureRouterModelStreamingKeepalive:
             ep,
             "is_passthrough_request_using_router_model",
             lambda request_body, llm_router=None: request_body.get("model") in ("gpt-5", "router-model"),
+        )
+        monkeypatch.setattr(
+            ep,
+            "is_azure_router_model_group",
+            lambda llm_router, model_group: model_group in ("gpt-5", "router-model"),
         )
 
         request = MagicMock(spec=Request)
@@ -7197,6 +8395,11 @@ class TestRouterModelRelayUpstreamContract:
             ep,
             "is_passthrough_request_using_router_model",
             lambda request_body, llm_router=None: request_body.get("model") in ("gpt-5", "router-model"),
+        )
+        monkeypatch.setattr(
+            ep,
+            "is_azure_router_model_group",
+            lambda llm_router, model_group: model_group in ("gpt-5", "router-model"),
         )
 
     def _recording_router(self, captured: list[dict]):
@@ -7384,12 +8587,12 @@ class TestRouterModelRelayUpstreamContract:
         assert (response.status_code, response.headers.get("retry-after")) == (429, "7")
         assert not deployment_route.called
 
-
     @pytest.mark.asyncio
     async def test_azure_relay_keeps_a_later_deployment_failure_after_an_entra_rejection(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         from azure.core.exceptions import ClientAuthenticationError
+
         from litellm.llms.base_llm.chat.transformation import BaseLLMException
 
         def rejected_token() -> str:
@@ -7424,9 +8627,9 @@ class TestRouterModelRelayUpstreamContract:
         self._install_router(monkeypatch, router, {"model": "gpt-5", "stream": False})
 
         with respx.mock:
-            unreachable_route: Final = respx.post(url__startswith="https://litellm-qa-unreachable.openai.azure.com").mock(
-                side_effect=httpx.ConnectError("Connection refused")
-            )
+            unreachable_route: Final = respx.post(
+                url__startswith="https://litellm-qa-unreachable.openai.azure.com"
+            ).mock(side_effect=httpx.ConnectError("Connection refused"))
             with pytest.raises(BaseLLMException) as excinfo:
                 await azure_proxy_route(
                     endpoint="openai/deployments/gpt-5/chat/completions",
@@ -7664,34 +8867,57 @@ _BEDROCK_COUNT_BODY: Final = MappingProxyType(
 )
 
 
+def _bedrock_count_deployment(
+    model_name: str, model: str, model_info: Mapping[str, object], tags: Sequence[str] = ()
+) -> dict[str, object]:
+    return {
+        "model_name": model_name,
+        "litellm_params": {
+            "model": model,
+            "aws_region_name": "us-east-1",
+            "aws_access_key_id": "AKIATESTACCESSKEY",
+            "aws_secret_access_key": "test-secret",
+            **({"tags": list(tags)} if tags else {}),
+        },
+        "model_info": dict(model_info),
+    }
+
+
 async def _bedrock_native_count(
     monkeypatch: pytest.MonkeyPatch,
     respx_mock: respx.MockRouter,
     aws_reply: httpx.Response,
+    fastapi_response: Response,
     request_body: Mapping[str, object] = _BEDROCK_COUNT_BODY,
+    model_list: Sequence[Mapping[str, object]] = (
+        _bedrock_count_deployment(_BEDROCK_COUNT_ALIAS, _BEDROCK_COUNT_MODEL, {"id": "count-log-bedrock-deployment"}),
+    ),
+    caller: UserAPIKeyAuth | None = None,
+    cooled_down_ids: Sequence[str] = (),
+    enable_tag_filtering: bool = False,
+    routing_strategy: RoutingStrategyName = "simple-shuffle",
+    teams_served_first: Sequence[str] = (),
 ) -> dict[str, object]:
     from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
         handle_bedrock_count_tokens,
     )
 
     monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
-    monkeypatch.setattr(
-        "litellm.proxy.proxy_server.llm_router",
-        litellm.Router(
-            model_list=[
-                {
-                    "model_name": _BEDROCK_COUNT_ALIAS,
-                    "litellm_params": {
-                        "model": _BEDROCK_COUNT_MODEL,
-                        "aws_region_name": "us-east-1",
-                        "aws_access_key_id": "AKIATESTACCESSKEY",
-                        "aws_secret_access_key": "test-secret",
-                    },
-                    "model_info": {"id": "count-log-bedrock-deployment"},
-                }
-            ]
-        ),
+    router: Final = litellm.Router(
+        model_list=[dict(deployment) for deployment in model_list],
+        enable_tag_filtering=enable_tag_filtering,
+        routing_strategy=routing_strategy,
     )
+    for deployment_id in cooled_down_ids:
+        router.health().cooldowns.add_deployment_to_cooldown(deployment_id, Exception("429 throttled"), 429, 60)
+    for team_id in teams_served_first:
+        await router.acompletion(
+            model=_BEDROCK_COUNT_ALIAS,
+            messages=[{"role": "user", "content": "hi"}],
+            mock_response="ok",
+            metadata={"user_api_key_team_id": team_id},
+        )
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", router)
     respx_mock.post(host="bedrock-runtime.us-east-1.amazonaws.com", path__regex=r"/count-tokens$").mock(
         return_value=aws_reply
     )
@@ -7706,8 +8932,8 @@ async def _bedrock_native_count(
     return await handle_bedrock_count_tokens(
         endpoint=f"model/{_BEDROCK_COUNT_ALIAS}/count-tokens",
         request=request,
-        fastapi_response=Response(),
-        user_api_key_dict=MagicMock(),
+        fastapi_response=fastapi_response,
+        user_api_key_dict=caller or MagicMock(),
         request_body=dict(request_body),
     )
 
@@ -7719,9 +8945,13 @@ async def test_bedrock_native_count_tokens_logs_the_count_against_the_router_mod
     respx_mock: respx.MockRouter,
     token_count_log_lines: Callable[[], tuple[dict[str, object], ...]],
 ) -> None:
-    result: Final = await _bedrock_native_count(monkeypatch, respx_mock, httpx.Response(200, json={"inputTokens": 12}))
+    fastapi_response: Final = Response()
+    result: Final = await _bedrock_native_count(
+        monkeypatch, respx_mock, httpx.Response(200, json={"inputTokens": 12}), fastapi_response
+    )
 
     assert result == {"input_tokens": 12}
+    assert fastapi_response.headers.get("x-litellm-call-id") == "bedrock-native-count"
     assert len(respx_mock.calls) == 1
     assert respx_mock.calls.last.request.url.path == "/model/anthropic.claude-haiku-4-5-20251001-v1:0/count-tokens"
     assert token_count_log_lines() == (
@@ -7738,6 +8968,331 @@ async def test_bedrock_native_count_tokens_logs_the_count_against_the_router_mod
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("team_id", "expected_path"),
+    (
+        ("team-a", "/model/anthropic.claude-sonnet-4-5-20250929-v1:0/count-tokens"),
+        ("team-b", "/model/anthropic.claude-haiku-4-5-20251001-v1:0/count-tokens"),
+    ),
+)
+async def test_bedrock_native_count_tokens_counts_on_the_deployment_the_callers_team_routes_to(
+    monkeypatch: pytest.MonkeyPatch,
+    httpx_transport: None,
+    respx_mock: respx.MockRouter,
+    team_id: str,
+    expected_path: str,
+) -> None:
+    result: Final = await _bedrock_native_count(
+        monkeypatch,
+        respx_mock,
+        httpx.Response(200, json={"inputTokens": 12}),
+        Response(),
+        model_list=(
+            _bedrock_count_deployment(_BEDROCK_COUNT_ALIAS, _BEDROCK_COUNT_MODEL, {"id": "global-deployment"}),
+            _bedrock_count_deployment(
+                "model_name_team-a_1",
+                "bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+                {"id": "team-a-deployment", "team_id": "team-a", "team_public_model_name": _BEDROCK_COUNT_ALIAS},
+            ),
+        ),
+        caller=UserAPIKeyAuth(team_id=team_id),
+    )
+
+    assert result == {"input_tokens": 12}
+    assert respx_mock.calls.last.request.url.path == expected_path
+
+
+@pytest.mark.asyncio
+async def test_bedrock_native_count_tokens_keeps_the_deployments_region_and_keys_while_it_is_cooling_down(
+    monkeypatch: pytest.MonkeyPatch,
+    httpx_transport: None,
+    respx_mock: respx.MockRouter,
+) -> None:
+    result: Final = await _bedrock_native_count(
+        monkeypatch,
+        respx_mock,
+        httpx.Response(200, json={"inputTokens": 12}),
+        Response(),
+        caller=UserAPIKeyAuth(api_key="sk-cooldown-caller"),
+        cooled_down_ids=("count-log-bedrock-deployment",),
+    )
+
+    assert result == {"input_tokens": 12}
+    assert respx_mock.calls.last.request.url.path == "/model/anthropic.claude-haiku-4-5-20251001-v1:0/count-tokens"
+    assert respx_mock.calls.last.request.headers["authorization"].startswith(
+        "AWS4-HMAC-SHA256 Credential=AKIATESTACCESSKEY/"
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("team_id", "expected_path"),
+    (
+        ("team-a", "/model/anthropic.claude-sonnet-4-5-20250929-v1:0/count-tokens"),
+        ("team-b", "/model/anthropic.claude-haiku-4-5-20251001-v1:0/count-tokens"),
+    ),
+)
+async def test_bedrock_native_count_tokens_counts_on_the_callers_own_deployment_when_every_one_is_at_its_rpm_cap(
+    monkeypatch: pytest.MonkeyPatch,
+    httpx_transport: None,
+    respx_mock: respx.MockRouter,
+    team_id: str,
+    expected_path: str,
+) -> None:
+    result: Final = await _bedrock_native_count(
+        monkeypatch,
+        respx_mock,
+        httpx.Response(200, json={"inputTokens": 12}),
+        Response(),
+        model_list=(
+            _bedrock_count_deployment(
+                "model_name_team-a_1",
+                "bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+                {
+                    "id": "team-a-deployment",
+                    "team_id": "team-a",
+                    "team_public_model_name": _BEDROCK_COUNT_ALIAS,
+                    "rpm": 1,
+                },
+            ),
+            _bedrock_count_deployment(
+                _BEDROCK_COUNT_ALIAS, _BEDROCK_COUNT_MODEL, {"id": "global-deployment", "rpm": 1}
+            ),
+        ),
+        caller=UserAPIKeyAuth(api_key=f"sk-{team_id}-caller", team_id=team_id),
+        routing_strategy="usage-based-routing-v2",
+        teams_served_first=("team-a", "team-b"),
+    )
+
+    assert result == {"input_tokens": 12}
+    assert respx_mock.calls.last.request.url.path == expected_path
+
+
+@pytest.mark.asyncio
+async def test_bedrock_native_count_tokens_counts_a_proxy_admins_call_on_a_cooling_down_team_deployment(
+    monkeypatch: pytest.MonkeyPatch,
+    httpx_transport: None,
+    respx_mock: respx.MockRouter,
+) -> None:
+    result: Final = await _bedrock_native_count(
+        monkeypatch,
+        respx_mock,
+        httpx.Response(200, json={"inputTokens": 12}),
+        Response(),
+        model_list=(
+            _bedrock_count_deployment(
+                "model_name_team-a_1",
+                "bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+                {"id": "team-a-deployment", "team_id": "team-a", "team_public_model_name": _BEDROCK_COUNT_ALIAS},
+            ),
+        ),
+        caller=UserAPIKeyAuth(api_key="sk-admin-caller", user_role=LitellmUserRoles.PROXY_ADMIN),
+        cooled_down_ids=("team-a-deployment",),
+    )
+
+    assert result == {"input_tokens": 12}
+    assert respx_mock.calls.last.request.url.path == "/model/anthropic.claude-sonnet-4-5-20250929-v1:0/count-tokens"
+
+
+@pytest.mark.asyncio
+async def test_bedrock_native_count_tokens_keeps_a_proxy_admins_call_off_team_deployments_in_a_mixed_group(
+    monkeypatch: pytest.MonkeyPatch,
+    httpx_transport: None,
+    respx_mock: respx.MockRouter,
+) -> None:
+    result: Final = await _bedrock_native_count(
+        monkeypatch,
+        respx_mock,
+        httpx.Response(200, json={"inputTokens": 12}),
+        Response(),
+        model_list=(
+            _bedrock_count_deployment(
+                _BEDROCK_COUNT_ALIAS,
+                "bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+                {"id": "team-a-deployment", "team_id": "team-a"},
+            ),
+            _bedrock_count_deployment(_BEDROCK_COUNT_ALIAS, _BEDROCK_COUNT_MODEL, {"id": "global-deployment"}),
+        ),
+        caller=UserAPIKeyAuth(api_key="sk-admin-caller", user_role=LitellmUserRoles.PROXY_ADMIN),
+        cooled_down_ids=("team-a-deployment", "global-deployment"),
+    )
+
+    assert result == {"input_tokens": 12}
+    assert respx_mock.calls.last.request.url.path == "/model/anthropic.claude-haiku-4-5-20251001-v1:0/count-tokens"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("tag", "expected_path"),
+    (
+        ("account-a", "/model/anthropic.claude-haiku-4-5-20251001-v1:0/count-tokens"),
+        ("account-b", "/model/anthropic.claude-sonnet-4-5-20250929-v1:0/count-tokens"),
+    ),
+)
+async def test_bedrock_native_count_tokens_counts_on_a_deployment_the_callers_tags_allow_when_every_one_is_cooling_down(
+    monkeypatch: pytest.MonkeyPatch,
+    httpx_transport: None,
+    respx_mock: respx.MockRouter,
+    tag: str,
+    expected_path: str,
+) -> None:
+    result: Final = await _bedrock_native_count(
+        monkeypatch,
+        respx_mock,
+        httpx.Response(200, json={"inputTokens": 12}),
+        Response(),
+        request_body={**_BEDROCK_COUNT_BODY, "tags": [tag]},
+        model_list=(
+            _bedrock_count_deployment(
+                _BEDROCK_COUNT_ALIAS, _BEDROCK_COUNT_MODEL, {"id": "account-a-deployment"}, tags=("account-a",)
+            ),
+            _bedrock_count_deployment(
+                _BEDROCK_COUNT_ALIAS,
+                "bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+                {"id": "account-b-deployment"},
+                tags=("account-b",),
+            ),
+        ),
+        caller=UserAPIKeyAuth(api_key="sk-tagged-caller"),
+        cooled_down_ids=("account-a-deployment", "account-b-deployment"),
+        enable_tag_filtering=True,
+    )
+
+    assert result == {"input_tokens": 12}
+    assert respx_mock.calls.last.request.url.path == expected_path
+
+
+@pytest.mark.asyncio
+async def test_bedrock_native_count_tokens_refuses_a_cooled_down_count_when_no_deployment_allows_the_callers_tags(
+    monkeypatch: pytest.MonkeyPatch,
+    httpx_transport: None,
+    respx_mock: respx.MockRouter,
+) -> None:
+    with pytest.raises(HTTPException) as refused:
+        await _bedrock_native_count(
+            monkeypatch,
+            respx_mock,
+            httpx.Response(200, json={"inputTokens": 12}),
+            Response(),
+            request_body={**_BEDROCK_COUNT_BODY, "tags": ["account-c"]},
+            model_list=(
+                _bedrock_count_deployment(
+                    _BEDROCK_COUNT_ALIAS, _BEDROCK_COUNT_MODEL, {"id": "account-a-deployment"}, tags=("account-a",)
+                ),
+            ),
+            caller=UserAPIKeyAuth(api_key="sk-tagged-caller"),
+            cooled_down_ids=("account-a-deployment",),
+            enable_tag_filtering=True,
+        )
+
+    assert refused.value.status_code == 429
+    assert len(respx_mock.calls) == 0
+
+
+@pytest.mark.asyncio
+async def test_bedrock_native_count_tokens_refuses_a_caller_whose_tags_no_deployment_allows(
+    monkeypatch: pytest.MonkeyPatch,
+    httpx_transport: None,
+    respx_mock: respx.MockRouter,
+) -> None:
+    with pytest.raises(HTTPException) as refused:
+        await _bedrock_native_count(
+            monkeypatch,
+            respx_mock,
+            httpx.Response(200, json={"inputTokens": 12}),
+            Response(),
+            request_body={**_BEDROCK_COUNT_BODY, "tags": ["other-team"]},
+            model_list=(
+                _bedrock_count_deployment(
+                    _BEDROCK_COUNT_ALIAS, _BEDROCK_COUNT_MODEL, {"id": "tagged-deployment"}, tags=("team-tag",)
+                ),
+            ),
+            caller=UserAPIKeyAuth(api_key="sk-tagged-caller"),
+            enable_tag_filtering=True,
+        )
+
+    assert refused.value.status_code == 401
+    assert len(respx_mock.calls) == 0
+
+
+@pytest.mark.asyncio
+async def test_bedrock_native_count_tokens_never_counts_on_another_teams_deployment_named_by_id(
+    monkeypatch: pytest.MonkeyPatch,
+    httpx_transport: None,
+    respx_mock: respx.MockRouter,
+) -> None:
+    with pytest.raises(HTTPException):
+        await _bedrock_native_count(
+            monkeypatch,
+            respx_mock,
+            httpx.Response(200, json={"inputTokens": 12}),
+            Response(),
+            request_body={**_BEDROCK_COUNT_BODY, "model": "team-a-deployment"},
+            model_list=(
+                _bedrock_count_deployment(
+                    "model_name_team-a_1",
+                    "bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+                    {"id": "team-a-deployment", "team_id": "team-a", "team_public_model_name": _BEDROCK_COUNT_ALIAS},
+                ),
+            ),
+            caller=UserAPIKeyAuth(api_key="sk-team-b-caller", team_id="team-b"),
+        )
+
+    assert len(respx_mock.calls) == 0
+
+
+@pytest.mark.asyncio
+async def test_bedrock_native_count_tokens_refuses_a_saved_alias_target_the_key_may_not_call(
+    monkeypatch: pytest.MonkeyPatch,
+    httpx_transport: None,
+    respx_mock: respx.MockRouter,
+) -> None:
+    with pytest.raises(ProxyException) as refused:
+        await _bedrock_native_count(
+            monkeypatch,
+            respx_mock,
+            httpx.Response(200, json={"inputTokens": 12}),
+            Response(),
+            model_list=(
+                _bedrock_count_deployment(_BEDROCK_COUNT_ALIAS, _BEDROCK_COUNT_MODEL, {"id": "public-deployment"}),
+                _bedrock_count_deployment("private-bedrock", _BEDROCK_COUNT_MODEL, {"id": "private-deployment"}),
+            ),
+            caller=UserAPIKeyAuth(
+                models=[_BEDROCK_COUNT_ALIAS],
+                router_settings={"model_group_alias": {_BEDROCK_COUNT_ALIAS: "private-bedrock"}},
+            ),
+        )
+
+    assert str(refused.value.code) == "403"
+    assert len(respx_mock.calls) == 0
+
+
+@pytest.mark.asyncio
+async def test_bedrock_native_count_tokens_for_a_model_the_router_does_not_serve_logs_no_error(
+    monkeypatch: pytest.MonkeyPatch,
+    httpx_transport: None,
+    respx_mock: respx.MockRouter,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    monkeypatch.setenv("AWS_REGION_NAME", "us-east-1")
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "AKIAENVACCESSKEY")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "env-secret")
+    with caplog.at_level(logging.ERROR, logger="LiteLLM Proxy"):
+        result: Final = await _bedrock_native_count(
+            monkeypatch,
+            respx_mock,
+            httpx.Response(200, json={"inputTokens": 7}),
+            Response(),
+            request_body={**_BEDROCK_COUNT_BODY, "model": "anthropic.claude-haiku-4-5-20251001-v1:0"},
+            caller=UserAPIKeyAuth(api_key="sk-direct-caller"),
+        )
+
+    assert result == {"input_tokens": 7}
+    assert respx_mock.calls.last.request.url.path == "/model/anthropic.claude-haiku-4-5-20251001-v1:0/count-tokens"
+    assert [record.getMessage() for record in caplog.records if record.levelno >= logging.ERROR] == []
+
+
+@pytest.mark.asyncio
 async def test_bedrock_native_count_tokens_logs_the_provider_status_when_the_count_fails(
     monkeypatch: pytest.MonkeyPatch,
     httpx_transport: None,
@@ -7746,9 +9301,12 @@ async def test_bedrock_native_count_tokens_logs_the_provider_status_when_the_cou
 ) -> None:
     rejected: Final = httpx.Response(400, json={"message": "The provided model doesn't support counting tokens."})
     with pytest.raises(HTTPException) as exc_info:
-        await _bedrock_native_count(monkeypatch, respx_mock, rejected)
+        await _bedrock_native_count(monkeypatch, respx_mock, rejected, Response())
 
-    assert exc_info.value.status_code == 400
+    assert (exc_info.value.status_code, (exc_info.value.headers or {}).get("x-litellm-call-id")) == (
+        400,
+        "bedrock-native-count",
+    )
     assert token_count_log_lines() == (
         {
             "litellm_call_id": "bedrock-native-count",
@@ -7760,6 +9318,65 @@ async def test_bedrock_native_count_tokens_logs_the_provider_status_when_the_cou
             "status_code": 400,
         },
     )
+
+
+@pytest.mark.parametrize(
+    ("aws_status", "aws_message", "log_level", "stream"),
+    [
+        # Bedrock us-east-1 answered a count for Claude Opus 5.5 with this message on 2026-11-22
+        (400, "The provided model doesn't support counting tokens.", logging.WARNING, "stdout"),
+        (429, "Too many requests, please wait before trying again.", logging.WARNING, "stdout"),
+        (400, "The provided model identifier is invalid.", logging.ERROR, "stderr"),
+        (400, "`max_tokens` must be greater than `thinking.budget_tokens`", logging.ERROR, "stderr"),
+        (
+            400,
+            "The provided model doesn't support counting tokens.: Extra inputs are not permitted",
+            logging.ERROR,
+            "stderr",
+        ),
+        (403, "The security token included in the request is invalid.", logging.ERROR, "stderr"),
+        (404, "The count failed.", logging.ERROR, "stderr"),
+        (500, "The count failed.", logging.ERROR, "stderr"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_bedrock_native_count_tokens_logs_caller_errors_as_stdout_warnings_and_other_failures_as_errors(
+    monkeypatch: pytest.MonkeyPatch,
+    httpx_transport: None,
+    respx_mock: respx.MockRouter,
+    caplog: pytest.LogCaptureFixture,
+    capsys: pytest.CaptureFixture[str],
+    aws_status: int,
+    aws_message: str,
+    log_level: int,
+    stream: Literal["stdout", "stderr"],
+) -> None:
+    aws_reply: Final = httpx.Response(aws_status, json={"message": aws_message})
+    with caplog.at_level(logging.INFO, logger="LiteLLM Proxy"), pytest.raises(HTTPException) as exc_info:
+        await _bedrock_native_count(monkeypatch, respx_mock, aws_reply, Response())
+
+    assert exc_info.value.status_code == aws_status
+    alerts: Final = _proxy_alerts(caplog)
+    assert [(record.name, record.levelno) for record in alerts] == [("LiteLLM Proxy", log_level)]
+    assert _default_handler_stream(alerts[0], capsys) == stream
+
+
+def _proxy_alerts(caplog: pytest.LogCaptureFixture) -> list[logging.LogRecord]:
+    return [
+        record
+        for record in caplog.records
+        if record.name.startswith("LiteLLM Proxy") and record.levelno >= logging.WARNING
+    ]
+
+
+def _default_handler_stream(record: logging.LogRecord, capsys: pytest.CaptureFixture[str]) -> str:
+    _ = capsys.readouterr()
+    routing: Final = LevelRoutingStreamHandler()
+    routing.setFormatter(logging.Formatter("%(message)s"))
+    routing.emit(record)
+    written: Final = capsys.readouterr()
+    line: Final = f"{record.getMessage()}\n"
+    return {(line, ""): "stdout", ("", line): "stderr"}.get((written.out, written.err), "both or neither")
 
 
 @pytest.mark.parametrize(
@@ -7776,16 +9393,21 @@ async def test_bedrock_native_count_tokens_answers_400_for_a_malformed_body_with
     monkeypatch: pytest.MonkeyPatch,
     httpx_transport: None,
     respx_mock: respx.MockRouter,
+    caplog: pytest.LogCaptureFixture,
+    capsys: pytest.CaptureFixture[str],
     request_body: Mapping[str, object],
     problem: str,
 ) -> None:
-    with pytest.raises(HTTPException) as exc_info:
+    with caplog.at_level(logging.INFO, logger="LiteLLM Proxy"), pytest.raises(HTTPException) as exc_info:
         await _bedrock_native_count(
-            monkeypatch, respx_mock, httpx.Response(200, json={"inputTokens": 12}), request_body
+            monkeypatch, respx_mock, httpx.Response(200, json={"inputTokens": 12}), Response(), request_body
         )
 
     assert (exc_info.value.status_code, exc_info.value.detail) == (400, {"error": problem})
     assert len(respx_mock.calls) == 0
+    alerts: Final = _proxy_alerts(caplog)
+    assert [(record.name, record.levelno) for record in alerts] == [("LiteLLM Proxy", logging.WARNING)]
+    assert _default_handler_stream(alerts[0], capsys) == "stdout"
 
 
 @pytest.mark.parametrize(
@@ -7821,7 +9443,9 @@ async def test_bedrock_native_count_tokens_for_a_bare_region_prefix_answers_bedr
     respx_mock.post(host="bedrock-runtime.us-east-1.amazonaws.com", path=f"/model/{model_id}/count-tokens").mock(
         return_value=httpx.Response(400, json=invalid_model)
     )
-    request: Final = Request({"type": "http", "method": "POST", "path": f"/bedrock/model/{model}/count-tokens", "headers": []})
+    request: Final = Request(
+        {"type": "http", "method": "POST", "path": f"/bedrock/model/{model}/count-tokens", "headers": []}
+    )
 
     with pytest.raises(HTTPException) as exc_info:
         await handle_bedrock_count_tokens(
@@ -7873,6 +9497,33 @@ async def test_bedrock_native_count_tokens_without_a_model_logs_the_400_it_answe
             "count_source": None,
             "status_code": 400,
         },
+    )
+
+
+@pytest.mark.asyncio
+async def test_bedrock_native_count_tokens_without_a_model_answers_the_call_id_its_count_line_names(
+    token_count_log_lines: Callable[[], tuple[dict[str, object], ...]],
+) -> None:
+    from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+        handle_bedrock_count_tokens,
+    )
+
+    request: Final = Request(
+        {"type": "http", "method": "POST", "path": f"/bedrock/model/{_BEDROCK_COUNT_ALIAS}/count-tokens", "headers": []}
+    )
+    with pytest.raises(HTTPException) as exc_info:
+        await handle_bedrock_count_tokens(
+            endpoint=f"model/{_BEDROCK_COUNT_ALIAS}/count-tokens",
+            request=request,
+            fastapi_response=Response(),
+            user_api_key_dict=MagicMock(),
+            request_body={"messages": [{"role": "user", "content": "hi"}]},
+        )
+
+    (line,) = token_count_log_lines()
+    assert (exc_info.value.status_code, (exc_info.value.headers or {}).get("x-litellm-call-id")) == (
+        400,
+        line["litellm_call_id"],
     )
 
 
@@ -8010,21 +9661,28 @@ async def _azure_relay_json_upstream() -> httpx.Response:
     return httpx.Response(200, json={"id": "resp_1", "model": "gpt-5.4-fallback"}, headers={"x-request-id": "r-1"})
 
 
+_AZURE_RELAY_GROUP_MODELS: Final = (("gpt-5.4", "azure/gpt-5.4-primary"), ("azure-gpt-5.4", "azure/gpt-5.4-fallback"))
+
+
 class _AzureBodyModelGroupRouter:
-    def __init__(self, captured: list[dict], upstream: _AzureRelayUpstream = _azure_relay_json_upstream) -> None:
+    def __init__(
+        self,
+        captured: list[dict],
+        upstream: _AzureRelayUpstream = _azure_relay_json_upstream,
+        group_models: tuple[tuple[str, str], ...] = _AZURE_RELAY_GROUP_MODELS,
+    ) -> None:
         self.captured = captured
         self.upstream = upstream
+        self.rows = [
+            {"model_name": group, "litellm_params": {"model": model, "api_key": "k"}} for group, model in group_models
+        ]
         route_entry_points_to_stubs(self)
 
     def get_model_names(self, team_id=None):
-        return ["gpt-5.4", "azure-gpt-5.4"]
+        return [row["model_name"] for row in self.rows]
 
     def get_model_list(self, model_name=None, team_id=None):
-        rows = [
-            {"model_name": "gpt-5.4", "litellm_params": {"model": "azure/gpt-5.4-primary", "api_key": "k"}},
-            {"model_name": "azure-gpt-5.4", "litellm_params": {"model": "azure/gpt-5.4-fallback", "api_key": "k"}},
-        ]
-        return [row for row in rows if model_name is None or row["model_name"] == model_name]
+        return [row for row in self.rows if model_name is None or row["model_name"] == model_name]
 
     async def allm_passthrough_route(self, **kwargs):
         self.captured.append(kwargs)
@@ -8037,6 +9695,7 @@ class TestAzureBodyModelGroupRelay:
         monkeypatch: pytest.MonkeyPatch,
         body: dict,
         upstream: _AzureRelayUpstream = _azure_relay_json_upstream,
+        group_models: tuple[tuple[str, str], ...] = _AZURE_RELAY_GROUP_MODELS,
     ) -> list[dict]:
         import litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints as ep
         from litellm.proxy import proxy_server
@@ -8046,7 +9705,7 @@ class TestAzureBodyModelGroupRelay:
         async def fake_get_request_body(_request: Request) -> dict:
             return body
 
-        monkeypatch.setattr(proxy_server, "llm_router", _AzureBodyModelGroupRouter(captured, upstream))
+        monkeypatch.setattr(proxy_server, "llm_router", _AzureBodyModelGroupRouter(captured, upstream, group_models))
         monkeypatch.setattr(ep, "get_request_body", fake_get_request_body)
         monkeypatch.delenv("AZURE_API_BASE", raising=False)
         return captured
@@ -8214,6 +9873,67 @@ class TestAzureBodyModelGroupRelay:
         assert captured == []
         (route,) = routes
         assert route["target"] == "https://operator.openai.azure.com/openai/v1/fine_tuning/jobs"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "group_models",
+        [
+            pytest.param((("gpt-5.4", "openai/gpt-4o"),), id="openai_group"),
+            pytest.param((("gpt-5.4", "bedrock/anthropic.claude-sonnet-4-5"),), id="bedrock_group"),
+        ],
+    )
+    @pytest.mark.parametrize(
+        "endpoint",
+        ["openai/v1/responses", "openai/v1/chat/completions", "openai/deployments/gpt-5.4/chat/completions"],
+    )
+    async def test_model_group_not_served_by_azure_goes_to_the_operator_azure_endpoint(
+        self, monkeypatch, group_models, endpoint
+    ):
+        import litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints as ep
+
+        captured = self._install(monkeypatch, {"model": "gpt-5.4", "input": "ping"}, group_models=group_models)
+        monkeypatch.setenv("AZURE_API_BASE", "https://operator.openai.azure.com")
+        monkeypatch.setenv("AZURE_API_KEY", "operator-key")
+        routes: list[dict] = []
+
+        def fake_create_pass_through_route(**kwargs):
+            routes.append(kwargs)
+            return AsyncMock(return_value=Response(content=b"{}", status_code=200))
+
+        monkeypatch.setattr(ep, "create_pass_through_route", fake_create_pass_through_route)
+
+        result = await azure_proxy_route(
+            endpoint=endpoint,
+            request=self._request(),
+            fastapi_response=MagicMock(spec=Response),
+            user_api_key_dict=UserAPIKeyAuth(api_key="hashed-token"),
+        )
+
+        assert result.status_code == 200
+        assert captured == []
+        (route,) = routes
+        assert route["target"] == f"https://operator.openai.azure.com/{endpoint}"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "group_models",
+        [
+            pytest.param((("gpt-5.4", "azure_ai/gpt-5.4"),), id="azure_ai_group"),
+            pytest.param((("gpt-5.4", "openai/gpt-4o"), ("gpt-5.4", "azure/gpt-5.4-primary")), id="mixed_group"),
+        ],
+    )
+    async def test_model_group_with_an_azure_deployment_is_relayed_through_the_router(self, monkeypatch, group_models):
+        captured = self._install(monkeypatch, {"model": "gpt-5.4", "input": "ping"}, group_models=group_models)
+
+        result = await azure_proxy_route(
+            endpoint="openai/v1/responses",
+            request=self._request(),
+            fastapi_response=MagicMock(spec=Response),
+            user_api_key_dict=UserAPIKeyAuth(api_key="hashed-token"),
+        )
+
+        assert result.status_code == 200
+        assert [relay["model"] for relay in captured] == ["gpt-5.4"]
 
 
 AZURE_SPEECH_SHORT_AUDIO_ENDPOINT: Final = "/speech/recognition/conversation/cognitiveservices/v1"
@@ -8679,11 +10399,11 @@ class TestAzureSpeechProxyRoutePathTraversal:
         assert AZURE_SPEECH_FAST_ENDPOINT in str(denied.value.detail)
 
 
-def _azure_speech_real_auth_attrs() -> dict[str, object]:
+def _azure_speech_real_auth_attrs(custom_auth: object | None = None) -> dict[str, object]:
     from litellm.caching.caching import DualCache
     from litellm.proxy.utils import ProxyLogging
 
-    user_api_key_cache: Final = DualCache()
+    user_api_key_cache: Final = UserApiKeyCache()
     return {
         "prisma_client": None,
         "user_api_key_cache": user_api_key_cache,
@@ -8693,8 +10413,8 @@ def _azure_speech_real_auth_attrs() -> dict[str, object]:
         "llm_model_list": [],
         "llm_router": None,
         "open_telemetry_logger": None,
-        "user_custom_auth": None,
-        "jwt_handler": None,
+        "user_custom_auth": custom_auth,
+        "litellm_jwtauth": LiteLLM_JWTAuth(),
     }
 
 
@@ -8878,7 +10598,7 @@ class TestVertexPassthroughAuthenticatesOncePerRequest:
         litellm.in_memory_llm_clients_cache.flush_cache()
         with (
             patch.multiple(  # test-quality-ok: the real user_api_key_auth reads proxy_server module globals (custom auth, master_key, caches) that have no injection seam
-                "litellm.proxy.proxy_server", **{**_azure_speech_real_auth_attrs(), "user_custom_auth": custom_auth}
+                "litellm.proxy.proxy_server", **_azure_speech_real_auth_attrs(custom_auth)
             ),
             patch(  # test-quality-ok: the route mints its Google token through its own VertexBase, nothing injects the credential loader
                 "litellm.llms.vertex_ai.vertex_llm_base.VertexBase.load_auth",
@@ -9015,11 +10735,8 @@ class TestVertexPassthroughAuthenticatesOncePerRequest:
         assert recorder.served_user_ids == ()
         assert not google.called
 
-
     @pytest.mark.parametrize("path", [f"/vertex_ai/{GENERATE_CONTENT}", f"/vertex_ai/discovery/{DISCOVERY_SEARCH}"])
-    def test_request_without_a_key_hands_custom_auth_none(
-        self, monkeypatch: pytest.MonkeyPatch, path: str
-    ) -> None:
+    def test_request_without_a_key_hands_custom_auth_none(self, monkeypatch: pytest.MonkeyPatch, path: str) -> None:
         custom_auth: Final = _CountingCustomAuth(only_accepts=self.VIRTUAL_KEY)
         with respx.mock(assert_all_called=False) as upstream:
             google: Final = upstream.route().mock(return_value=httpx.Response(200))
@@ -9030,6 +10747,7 @@ class TestVertexPassthroughAuthenticatesOncePerRequest:
         assert custom_auth.api_keys_seen == (None,)
         assert recorder.served_user_ids == ()
         assert not google.called
+
 
 class TestTypeSafePassthroughRoute:
     @staticmethod
@@ -9123,15 +10841,12 @@ class TestTypeSafePassthroughRoute:
         from litellm.caching.caching import DualCache
         from litellm.proxy import proxy_server
         from litellm.proxy.hooks.cache_control_check import PROXY_CacheControlCheck
-        from litellm.proxy.hooks.parallel_request_limiter_v3 import (
-            PROXY_MaxParallelRequestsHandler_v3,
-            get_request_stash,
-        )
         from litellm.proxy.utils import InternalUsageCache, ProxyLogging
+        from tests._support.rust_parallel_request_limiter import RustParallelRequestLimiter, get_request_stash
 
         cache: Final = DualCache()
-        limiter: Final = PROXY_MaxParallelRequestsHandler_v3(internal_usage_cache=InternalUsageCache(cache))
-        monkeypatch.setattr(litellm, "callbacks", list((limiter, PROXY_CacheControlCheck())))
+        limiter: Final = RustParallelRequestLimiter(internal_usage_cache=InternalUsageCache(cache))
+        monkeypatch.setattr(litellm, "callbacks", list((limiter.native_logger, PROXY_CacheControlCheck())))
         monkeypatch.setattr(proxy_server, "proxy_logging_obj", ProxyLogging(user_api_key_cache=cache))
         monkeypatch.setenv("OPENROUTER_API_KEY", "openrouter-test-key")
         monkeypatch.setenv("OPENROUTER_API_BASE", "https://typesafe.example/base")
@@ -9370,9 +11085,7 @@ class TestEuJevPassthroughRoute:
         monkeypatch.setattr(proxy_server, "llm_router", team_router)
         with respx.mock(assert_all_called=False) as upstream:
             team_server: Final = upstream.route(host="team-a-server.example").respond(200, json={"answers": {}})
-            eu_jev: Final = upstream.post("https://eu-jev.example/base/v1/systemone").respond(
-                200, json={"answers": {}}
-            )
+            eu_jev: Final = upstream.post("https://eu-jev.example/base/v1/systemone").respond(200, json={"answers": {}})
             response: Final = client.post("/eu_jev/v1/systemone", json={"state": "team b data"})
 
         assert response.status_code == 200
@@ -9573,7 +11286,9 @@ class TestEuJevPassthroughRoute:
 
         monkeypatch.setitem(app.dependency_overrides, user_api_key_auth, add_the_pass_through_after_routing)
         with respx.mock(assert_all_called=False) as upstream, TestClient(app) as client:
-            built_in: Final = upstream.post("https://eu-jev.example/base/v1/systemone").respond(200, json={"answers": {}})
+            built_in: Final = upstream.post("https://eu-jev.example/base/v1/systemone").respond(
+                200, json={"answers": {}}
+            )
             operator: Final = upstream.route(host="operator.example").respond(200, json={"operator": True})
             response: Final = client.post("/eu_jev/v1/systemone", json={"model": "eu-jeff-latest", "state": "x"})
 
@@ -9692,12 +11407,12 @@ class TestOssDecisionPassthroughRoute:
         self, client: TestClient, monkeypatch: pytest.MonkeyPatch, metadata_slot: str, provider: str, checkpoint: str
     ) -> None:
         from litellm.integrations.custom_logger import CustomLogger
-        from litellm.proxy.hooks.parallel_request_limiter_v3 import PROXY_MaxParallelRequestsHandler_v3
-        from litellm.proxy.utils import InternalUsageCache
         from litellm.proxy.proxy_server import app
+        from litellm.proxy.utils import InternalUsageCache
+        from tests._support.rust_parallel_request_limiter import RustParallelRequestLimiter
 
         cache: Final = DualCache()
-        limiter: Final = PROXY_MaxParallelRequestsHandler_v3(internal_usage_cache=InternalUsageCache(cache))
+        limiter: Final = RustParallelRequestLimiter(internal_usage_cache=InternalUsageCache(cache))
         auth: Final = UserAPIKeyAuth(
             api_key="oss-native-rpm",
             metadata={"model_rpm_limit": {f"{provider}/{checkpoint}": 1}},
@@ -9796,6 +11511,20 @@ class TestFalAIPassthroughRoute:
             assert sent.headers["authorization"] == "Key fal-test-key"
             assert json.loads(sent.content or b"{}") == body
 
+    def test_flat_video_submit_is_accepted(self, client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setitem(
+            litellm.model_cost,
+            "fal_ai/fal-ai/test-flat-video",
+            {"litellm_provider": "fal_ai", "mode": "video_generation", "output_cost_per_video": 0.37},
+        )
+        with respx.mock(assert_all_called=True) as upstream:
+            upstream.post("https://queue.fal.run/fal-ai/test-flat-video").mock(
+                return_value=httpx.Response(200, json={"request_id": "req-flat", "status": "IN_QUEUE"})
+            )
+            response: Final = client.post("/fal_ai/fal-ai/test-flat-video", json={"prompt": "A lake"})
+            assert response.status_code == 200, response.text
+            assert response.json() == {"request_id": "req-flat", "status": "IN_QUEUE"}
+
     def test_status_get_forwards_to_queue_fal_run(self, client: TestClient) -> None:
         with respx.mock(assert_all_called=True) as upstream:
             route = upstream.get("https://queue.fal.run/fal-ai/trellis-2/requests/req-1/status").mock(
@@ -9867,6 +11596,108 @@ class TestFalAIPassthroughRoute:
             assert response.status_code == 400, response.text
             assert "no pricing entry" in response.text
             assert not route.calls
+
+    def test_submit_to_endpoint_billed_by_reported_units_returns_400_without_upstream_call(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setitem(
+            litellm.model_cost,
+            "fal_ai/acme/unit-billed-model",
+            {
+                "litellm_provider": "fal_ai",
+                "mode": "image_generation",
+                "output_cost_per_billable_unit": 1.0,
+                "output_cost_per_image": 0.04,
+            },
+        )
+        with respx.mock(assert_all_called=False) as upstream:
+            route = upstream.post("https://queue.fal.run/acme/unit-billed-model").mock(
+                return_value=httpx.Response(200, json={"request_id": "req-1"})
+            )
+            response = client.post("/fal_ai/acme/unit-billed-model", json={"prompt": "a red boat"})
+
+            assert response.status_code == 400, response.text
+            assert "no pricing entry" in response.text
+            assert not route.calls
+
+    @pytest.mark.parametrize(
+        "path",
+        (
+            "/fal_ai/acme/x/requests/%2e%2e/%2e%2e/unit-billed-model",
+            "/fal_ai/acme/unit-billed-model/requests/%2e%2e",
+            "/fal_ai/acme/unit-billed-model%3Fa=/requests/x",
+            "/fal_ai/acme/unit-billed-model%23/requests/x",
+        ),
+    )
+    def test_submit_gate_prices_the_upstream_path_not_the_spelling_of_the_request_path(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch, path: str
+    ) -> None:
+        monkeypatch.setitem(
+            litellm.model_cost,
+            "fal_ai/acme/unit-billed-model",
+            {"litellm_provider": "fal_ai", "mode": "image_generation", "output_cost_per_billable_unit": 1.0},
+        )
+        with respx.mock(assert_all_called=False) as upstream:
+            route: Final = upstream.post("https://queue.fal.run/acme/unit-billed-model").mock(
+                return_value=httpx.Response(200, json={"request_id": "req-1"})
+            )
+            response: Final = client.post(path, json={"prompt": "a red boat"})
+
+            assert response.status_code == 400, response.text
+            assert "no pricing entry" in response.text
+            assert not route.calls
+
+    def test_submit_gate_rejects_an_encoded_spelling_that_stays_encoded_upstream(self, client: TestClient) -> None:
+        with respx.mock(assert_all_called=False) as upstream:
+            route: Final = upstream.post(url__regex=r"https://queue\.fal\.run/.*").mock(
+                return_value=httpx.Response(200, json={"request_id": "req-1"})
+            )
+            plain: Final = client.post(
+                "/fal_ai/fal-ai/trellis-2", json={"image_url": "https://example.com/in.png", "resolution": 1536}
+            )
+            encoded: Final = client.post(
+                "/fal_ai/fal-ai/trellis%2525252D2", json={"image_url": "https://example.com/in.png", "resolution": 1536}
+            )
+
+            assert plain.status_code == 200, plain.text
+            assert encoded.status_code == 400, encoded.text
+            assert [str(call.request.url) for call in route.calls] == ["https://queue.fal.run/fal-ai/trellis-2"]
+
+    @pytest.mark.parametrize(
+        ("queue_base", "sent_base"),
+        (
+            ("https://queue.example/base", "https://queue.example/base"),
+            ("https://queue.example/fal%2Dqueue", "https://queue.example/fal-queue"),
+            ("https://queue.example/fal%252Dqueue", "https://queue.example/fal%2Dqueue"),
+        ),
+    )
+    def test_submit_gate_strips_the_queue_base_path_before_pricing(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch, queue_base: str, sent_base: str
+    ) -> None:
+        monkeypatch.setenv("FAL_AI_QUEUE_API_BASE", queue_base)
+        monkeypatch.setitem(
+            litellm.model_cost,
+            "fal_ai/acme/unit-billed-model",
+            {"litellm_provider": "fal_ai", "mode": "image_generation", "output_cost_per_billable_unit": 1.0},
+        )
+        with respx.mock(assert_all_called=False) as upstream:
+            priced_route: Final = upstream.post(f"{sent_base}/fal-ai/trellis-2").mock(
+                return_value=httpx.Response(200, json={"request_id": "req-1"})
+            )
+            unit_billed_route: Final = upstream.post(f"{sent_base}/acme/unit-billed-model").mock(
+                return_value=httpx.Response(200, json={"request_id": "req-2"})
+            )
+            priced: Final = client.post(
+                "/fal_ai/fal-ai/trellis-2", json={"image_url": "https://example.com/in.png", "resolution": 1536}
+            )
+            unit_billed: Final = client.post(
+                "/fal_ai/acme/x/requests/%2e%2e/%2e%2e/unit-billed-model", json={"prompt": "a red boat"}
+            )
+
+            assert priced.status_code == 200, priced.text
+            assert unit_billed.status_code == 400, unit_billed.text
+            assert len(priced_route.calls) == 1
+            assert not unit_billed_route.calls
 
     def test_submit_gate_prices_the_request_body_not_an_empty_one(
         self, client: TestClient, monkeypatch: pytest.MonkeyPatch
@@ -10830,7 +12661,11 @@ class TestOpenSearchProxyRoute:
                 id="multipart-parameter",
             ),
             pytest.param(
-                "_doc", "application/json; boundary=x", b'{"title":"a"}', "application/json", id="content-type-parameter"
+                "_doc",
+                "application/json; boundary=x",
+                b'{"title":"a"}',
+                "application/json",
+                id="content-type-parameter",
             ),
             pytest.param("_doc?pipeline=reroute", JSON_TYPE, b'{"title":"a"}', "pipeline", id="pipeline-query"),
             pytest.param("_search", JSON_TYPE, b'{/*c*/"query":{"match_all":{}}}', "could not parse", id="comment"),
@@ -10873,7 +12708,12 @@ class TestOpenSearchProxyRoute:
     )
     @pytest.mark.parametrize("content_type", [NDJSON_TYPE, "application/json"])
     def test_an_ndjson_body_without_index_references_is_sent_byte_for_byte(
-        self, opensearch_client: TestClient, monkeypatch: pytest.MonkeyPatch, api: str, body: bytes, content_type: str
+        self,
+        opensearch_client: TestClient,
+        monkeypatch: pytest.MonkeyPatch,
+        api: str,
+        body: bytes,
+        content_type: str,
     ) -> None:
         monkeypatch.setattr("litellm.proxy.proxy_server.master_key", SHARED_MASTER_KEY)
         with respx.mock(assert_all_called=True) as upstream:
@@ -10901,18 +12741,22 @@ class TestOpenSearchProxyRoute:
         ids=["model", "api_base", "base_url"],
     )
     def test_a_document_field_named_like_an_llm_param_is_written_for_a_model_limited_key(
-        self, opensearch_client: TestClient, monkeypatch: pytest.MonkeyPatch, document: bytes
+        self,
+        opensearch_client: TestClient,
+        monkeypatch: pytest.MonkeyPatch,
+        document: bytes,
     ) -> None:
         from litellm.proxy import proxy_server
 
         key: Final = "sk-opensearch-model-limited-writer"
         grant: Final = {"allowed_vector_store_indexes": [{"index_name": "docs", "index_permissions": ["write"]}]}
-        cache: Final = DualCache()
+        cache: Final = UserApiKeyCache()
         cache.set_cache(
-            key=hash_token(key), value=UserAPIKeyAuth(token=hash_token(key), models=["gpt-x"], metadata=grant)
+            AuthObject.virtual_key(hash_token(key)),
+            UserAPIKeyAuth(token=hash_token(key), models=["gpt-x"], metadata=grant),
         )
         monkeypatch.setattr(proxy_server, "master_key", SHARED_MASTER_KEY)
-        monkeypatch.setattr(proxy_server, "prisma_client", "test-database")
+        monkeypatch.setattr(proxy_server, "prisma_client", prisma_with_empty_config())
         monkeypatch.setattr(proxy_server, "user_api_key_cache", cache)
         with respx.mock(assert_all_called=True) as upstream:
             route = upstream.post(f"{DOCS_UPSTREAM}/_doc").mock(
@@ -11000,10 +12844,10 @@ class TestOpenSearchProxyRoute:
     def test_document_fields_named_like_request_params_leave_the_rate_limiter_alone(
         self, opensearch_client: TestClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        from litellm.proxy.hooks.parallel_request_limiter_v3 import PROXY_MaxParallelRequestsHandler_v3
         from litellm.proxy.utils import InternalUsageCache
+        from tests._support.rust_parallel_request_limiter import RustParallelRequestLimiter
 
-        limiter: Final = PROXY_MaxParallelRequestsHandler_v3(internal_usage_cache=InternalUsageCache(DualCache()))
+        limiter: Final = RustParallelRequestLimiter(internal_usage_cache=InternalUsageCache(DualCache()))
 
         class RateLimit(CustomLogger):
             async def async_pre_call_hook(

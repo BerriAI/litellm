@@ -481,10 +481,6 @@ def test_stream_generate_content_adapts_openai_sse_to_gemini_frames(gateway: Gat
 
 
 def test_generate_content_adapter_accepts_snake_case_generation_config(gateway: Gateway) -> None:
-    pytest.skip(
-        "BUG: top-level snake_case generation_config is dropped on the completion-adapter path, no max_tokens, temperature, stop or response_format"
-    )
-
     def respond(request: Request) -> Reply:
         assert request.method == "POST"
         assert request.target == "/v1/chat/completions"

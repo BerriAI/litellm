@@ -751,11 +751,46 @@ async def test_health_check_routing_uses_every_deployment_when_all_are_unhealthy
     core: Final = make_core(model_list=group("a", "b"), enable_health_check_routing=True)
     core.health().health_checks.set_deployment_health_states(unhealthy("a", "b"))  # pyright: ignore[reportArgumentType]  # health states
 
-    for _ in range(12):
+    for _ in range(40):
         await attempt(core)
 
     assert set(host.deployments_called("acompletion")) == {"a", "b"}
     assert await core.health().fully_unhealthy_model_names() == {"g"}
+
+
+@pytest.mark.asyncio
+async def test_health_check_routing_falls_back_to_unhealthy_deployments_beside_an_unprobed_paused_one(
+    make_core: MakeCore, host: ScriptedHost
+) -> None:
+    core: Final = make_core(
+        model_list=[*group("a"), deployment("g", "p", model_info={"blocked": True})],
+        enable_health_check_routing=True,
+    )
+    core.health().health_checks.set_deployment_health_states(unhealthy("a"))  # pyright: ignore[reportArgumentType]  # health states
+
+    for _ in range(4):
+        await attempt(core)
+
+    assert host.deployments_called("acompletion") == ["a"] * 4
+    assert await core.health().fully_unhealthy_model_names() == {"g"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("failed", "expected"),
+    [(("p1", "p2"), {"g"}), (("p1",), set())],
+    ids=["all_failed", "one_failed"],
+)
+async def test_a_group_of_only_paused_deployments_is_fully_unhealthy_when_every_one_failed(
+    make_core: MakeCore, failed: tuple[str, ...], expected: set[str]
+) -> None:
+    core: Final = make_core(
+        model_list=[deployment("g", deployment_id, model_info={"blocked": True}) for deployment_id in ("p1", "p2")],
+        enable_health_check_routing=True,
+    )
+    core.health().health_checks.set_deployment_health_states(unhealthy(*failed))  # pyright: ignore[reportArgumentType]  # health states
+
+    assert await core.health().fully_unhealthy_model_names() == expected
 
 
 @pytest.mark.parametrize(
@@ -781,7 +816,7 @@ async def test_health_check_state_is_ignored(
     core: Final = make_core(model_list=group("a", "b"), **arguments)
     core.health().health_checks.set_deployment_health_states(unhealthy("a", age=age))  # pyright: ignore[reportArgumentType]  # health states
 
-    for _ in range(12):
+    for _ in range(40):
         await attempt(core)
 
     assert set(host.deployments_called("acompletion")) == {"a", "b"}

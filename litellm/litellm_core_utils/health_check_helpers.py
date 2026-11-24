@@ -5,9 +5,11 @@ Helper functions for health check calls.
 import base64
 import itertools
 import re
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal
+
+from pydantic import TypeAdapter
 
 from litellm.llms.base_llm.ocr.transformation import DocumentType
 from litellm.rust_bridge import runtime
@@ -156,9 +158,9 @@ class HealthCheckHelpers:
     async def ahealth_check_wildcard_models(
         model: str,
         custom_llm_provider: str,
-        model_params: dict,
+        model_params: dict[str, object],
         litellm_logging_obj: "Logging",
-    ) -> dict:
+    ) -> dict[str, object]:
         from litellm import acompletion
 
         probe_models: Final = wildcard_health_check_models(wildcard=model, custom_llm_provider=custom_llm_provider)
@@ -176,8 +178,8 @@ class HealthCheckHelpers:
 
     @staticmethod
     def update_model_params_with_health_check_tracking_information(
-        model_params: dict,
-    ) -> dict:
+        model_params: dict[str, object],
+    ) -> dict[str, object]:
         """
         Updates the health check model params with tracking information.
 
@@ -190,7 +192,10 @@ class HealthCheckHelpers:
         from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 
         _metadata_variable_name: Final = "litellm_metadata"
-        litellm_metadata: Final = HealthCheckHelpers._get_metadata_for_health_check_call()
+        litellm_metadata: Final[Mapping[str, object]] = {
+            **HealthCheckHelpers._get_metadata_for_health_check_call(),
+            "model_info": TypeAdapter(dict[str, object]).validate_python(model_params).get("model_info") or {},
+        }
         model_params[_metadata_variable_name] = litellm_metadata
         model_params = LiteLLMProxyRequestSetup.add_user_api_key_auth_to_request_metadata(
             data=model_params,
@@ -217,9 +222,9 @@ class HealthCheckHelpers:
     @staticmethod
     async def _batch_health_check(
         custom_llm_provider: str,
-        model_params: dict,
+        model_params: dict[str, object],
         filtered_model_params: dict,
-    ) -> dict:
+    ) -> object:
         """
         Health check for batch mode.
 
@@ -261,7 +266,7 @@ class HealthCheckHelpers:
         custom_llm_provider: str,
         model_params: dict,
         prompt: str | None = None,
-        input: list | None = None,
+        input: Sequence[object] | None = None,
     ) -> dict[
         Literal[
             "chat",
@@ -281,7 +286,7 @@ class HealthCheckHelpers:
             "decisions",
             "extraction",
         ],
-        Callable,
+        Callable[[], Awaitable[object]],
     ]:
         """
         Returns a dictionary of mode handlers for health check calls.
@@ -323,8 +328,9 @@ class HealthCheckHelpers:
             ),
             "audio_speech": lambda: litellm.aspeech(
                 **{
+                    "voice": "alloy",
                     **_filter_model_params(model_params=model_params),
-                    **({"voice": "alloy"} if "voice" not in _filter_model_params(model_params=model_params) else {}),
+                    "stream": False,
                 },
                 input=prompt or "test",
             ),
