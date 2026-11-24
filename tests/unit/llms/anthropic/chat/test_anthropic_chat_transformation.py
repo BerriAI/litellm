@@ -5211,8 +5211,14 @@ def test_strip_advisor_blocks_when_no_advisor_tool():
     assert len(assistant_content) == 2
 
 
-@pytest.mark.parametrize("drop_params", [False, True], ids=["kept-for-the-provider", "dropped-under-drop-params"])
-def test_transform_request_drops_an_advisor_block_with_a_list_id_only_under_drop_params(drop_params: bool) -> None:
+@pytest.mark.parametrize(
+    ("drop_params", "dropped"),
+    [(False, False), (True, True), ("true", True)],
+    ids=["kept-for-the-provider", "dropped-under-drop-params", "dropped-under-a-string-flag"],
+)
+def test_transform_request_drops_an_advisor_block_with_a_list_id_only_under_drop_params(
+    drop_params: bool | str, dropped: bool
+) -> None:
     list_id_result: Final = {"type": "advisor_tool_result", "tool_use_id": ["srvtoolu_01"], "content": "ok"}
     result: Final = AnthropicConfig().transform_request(
         model="claude-sonnet-5-5",
@@ -5233,7 +5239,7 @@ def test_transform_request_drops_an_advisor_block_with_a_list_id_only_under_drop
         headers={},
     )
     kept_types: Final = [block["type"] for block in result["messages"][1]["content"]]
-    assert kept_types == (["text"] if drop_params else ["advisor_tool_result", "text"])
+    assert kept_types == (["text"] if dropped else ["advisor_tool_result", "text"])
 
 
 def test_strip_advisor_blocks_no_op_when_no_advisor_blocks():

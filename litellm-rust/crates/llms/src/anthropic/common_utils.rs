@@ -465,6 +465,31 @@ pub fn strip_advisor_blocks(messages: Vec<Message>) -> Vec<Message> {
         .collect()
 }
 
+fn is_advisor_block(block: &ContentBlock) -> bool {
+    (block.is_type(ContentBlockType::ServerToolUse) && block.name.as_deref() == Some("advisor"))
+        || block.is_type(ContentBlockType::AdvisorToolResult)
+}
+
+pub fn drop_advisor_blocks(messages: Vec<Message>) -> Vec<Message> {
+    messages
+        .into_iter()
+        .map(|message| {
+            if message.role != "assistant" {
+                return message;
+            }
+            let MessageContent::Blocks(blocks) = &message.content else {
+                return message;
+            };
+            let kept: Vec<ContentBlock> = blocks
+                .iter()
+                .filter(|block| !is_advisor_block(block))
+                .cloned()
+                .collect();
+            message.with_blocks(kept)
+        })
+        .collect()
+}
+
 #[derive(Deserialize)]
 struct ReplayedWebSearchResult {
     #[serde(default)]

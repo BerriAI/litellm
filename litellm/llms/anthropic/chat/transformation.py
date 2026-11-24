@@ -2646,9 +2646,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             without_stale_tool_search_results(
                 anthropic_messages
                 if _has_advisor
-                else strip_advisor_blocks_from_messages(
-                    anthropic_messages, drop_params=litellm_params.get("drop_params") is True
-                ),
+                else strip_advisor_blocks_from_messages(anthropic_messages, drop_params=drop_params),
                 _TOOLS_ADAPTER.validate_python(_all_tools),
             )
         )
