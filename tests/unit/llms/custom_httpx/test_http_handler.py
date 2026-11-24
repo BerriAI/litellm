@@ -1,5 +1,6 @@
 import asyncio
 import gc
+import io
 import json
 import logging
 import os
@@ -32,11 +33,11 @@ from litellm.llms.custom_httpx.aiohttp_transport import LiteLLMAiohttpTransport
 from litellm.llms.custom_httpx.http_handler import (
     _CLIENT_REFCOUNT_WHEN_HANDLER_IS_SOLE_REFERRER,
     _STREAMING_ERROR_BODY_READ_TIMEOUT_SECONDS,
-    _prepare_request_data_and_content,
     AsyncHTTPHandler,
     HTTPHandler,
     HTTPResponseLimitError,
     MaskedHTTPStatusError,
+    _prepare_request_data_and_content,
     get_httpx_client,
     get_shared_realtime_ssl_context,
     get_ssl_configuration,
@@ -1562,6 +1563,43 @@ async def test_connection_error_retry_forwards_content(method: str):
         await getattr(handler, method)("https://api.example.com/runs/batch", content=body)
 
         assert captured == [(method.upper(), body)]
+        await handler.close()
+
+
+@pytest.mark.asyncio
+async def test_async_post_connection_error_retry_forwards_files():
+    captured_requests: Final[list[httpx.Request]] = []
+
+    async def raise_connection_error(request: httpx.Request) -> httpx.Response:
+        await request.aread()
+        raise httpx.ConnectError("connection dropped", request=request)
+
+    async def capture_and_succeed(request: httpx.Request) -> httpx.Response:
+        await request.aread()
+        captured_requests.append(request)
+        return httpx.Response(200, request=request)
+
+    first: Final = httpx.AsyncClient(transport=httpx.MockTransport(raise_connection_error))
+    retry: Final = httpx.AsyncClient(transport=httpx.MockTransport(capture_and_succeed))
+    async with first, retry:
+        handler: Final = _RetryClientHandler(first=first, retry=retry)
+
+        file_obj = io.BytesIO(b"fake image bytes")
+        files = {"image": ("test.png", file_obj, "image/png")}
+        data = {"model": "dall-e-2"}
+
+        response = await handler.post(
+            "https://api.example.com/v1/images/edits",
+            data=data,
+            files=files,
+        )
+        assert response.status_code == 200
+        assert len(captured_requests) == 1
+        retried_req = captured_requests[0]
+        content_type = retried_req.headers.get("content-type", "")
+        assert content_type.startswith("multipart/form-data")
+        assert b"fake image bytes" in retried_req.content
+        assert b"dall-e-2" in retried_req.content
         await handler.close()
 
 
