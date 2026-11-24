@@ -31,7 +31,7 @@ pub struct DeploymentFacts {
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct PreCallFacts {
-    /// The request carries `messages` or `input`: without either no check runs.
+    /// Whether the request has `messages` or `input` for token-related checks.
     pub has_input: bool,
     /// The prompt may be counted against a context window (no compaction is pending).
     pub countable: bool,
@@ -89,7 +89,12 @@ pub fn filter(
     pool: &[Arc<Deployment>],
     facts: &PreCallFacts,
 ) -> Result<Vec<Arc<Deployment>>, Error> {
-    if !facts.has_input {
+    // Region policy also applies to OCR, rerank, and other input-less calls.
+    let enforce_region = facts
+        .allowed_model_region
+        .as_ref()
+        .is_some_and(|allowed| !allowed.is_null());
+    if !facts.has_input && !enforce_region {
         return Ok(candidates);
     }
     let mut invalid = vec![false; candidates.len()];
@@ -241,6 +246,29 @@ mod tests {
         found.input_tokens = Some(100);
         found.has_input = false;
         assert_eq!(filter("g", vec![small], &[], &found).unwrap().len(), 1);
+    }
+
+    #[rstest]
+    fn without_input_still_enforces_allowed_model_region() {
+        let eu = deployment(
+            "eu",
+            json!({"model": "openai/a", "region_name": "eu"}),
+            json!({}),
+        );
+        let us = deployment(
+            "us",
+            json!({"model": "openai/b", "region_name": "us"}),
+            json!({}),
+        );
+        let mut found = facts(&[]);
+        found.has_input = false;
+        found.countable = false;
+        found.allowed_model_region = Some(json!("eu"));
+        let kept = filter("g", vec![eu, us], &[], &found).unwrap();
+        assert_eq!(
+            kept.iter().map(|d| d.id.as_str()).collect::<Vec<_>>(),
+            ["eu"]
+        );
     }
 
     #[rstest]

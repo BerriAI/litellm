@@ -462,9 +462,9 @@ async def test_allowed_model_region_is_ignored_without_enable_pre_call_checks(ma
 
 
 @pytest.mark.asyncio
-async def test_allowed_model_region_is_ignored_without_messages_or_input(make_core: MakeCore) -> None:
+async def test_allowed_model_region_is_enforced_without_messages_or_input(make_core: MakeCore) -> None:
     core: Final = _regional(make_core)
-    assert await _picked(core, request_kwargs={"allowed_model_region": "eu"}) == {"eu", "us", "none"}
+    assert await _picked(core, request_kwargs={"allowed_model_region": "eu"}) == {"eu"}
 
 
 @pytest.mark.asyncio

@@ -415,9 +415,10 @@ class PreCallFacts:
             return None
 
     def _answer(self, input_tokens: int | None) -> Mapping[str, object]:
-        if not self._has_input:
-            return {"has_input": False}
         request: Final[Mapping[str, object]] = self._request if self._request is not None else {}
+        if not self._has_input:
+            # Region restrictions apply even when no tokenizable prompt exists.
+            return {"has_input": False, "allowed_model_region": request.get("allowed_model_region")}
         params: Final = (
             _requested_params(request)
             if self._request is not None and self._host.dynamic().drop_params is False
