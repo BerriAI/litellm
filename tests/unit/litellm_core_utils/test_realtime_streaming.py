@@ -3,7 +3,7 @@ import base64
 import contextlib
 import json
 from collections.abc import Callable, Coroutine, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Final, Literal
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -7195,9 +7195,7 @@ async def test_a_turn_the_provider_started_while_limits_cannot_be_checked_runs_a
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(litellm, "gemini_live_defer_setup", False, raising=False)
-    limiter: Final = _ScriptedTurnLimiter(
-        check_error=ServiceUnavailableError(message="limits unreachable", llm_provider="litellm_proxy", model="m")
-    )
+    limiter: Final = _ScriptedTurnLimiter(check_error=RuntimeError("redis exploded with internal detail"))
     backend: Final = _closable_backend(
         (json.dumps({"setupComplete": {}}), _GEMINI_TURN_STARTED, _GEMINI_TURN_USAGE), stays_open_after_frames=False
     )
@@ -7213,9 +7211,7 @@ async def test_a_turn_the_provider_started_while_limits_cannot_be_checked_runs_a
 
 @pytest.mark.asyncio
 async def test_an_openai_turn_the_provider_started_while_limits_cannot_be_checked_is_not_cancelled() -> None:
-    limiter: Final = _ScriptedTurnLimiter(
-        check_error=ServiceUnavailableError(message="limits unreachable", llm_provider="litellm_proxy", model="m")
-    )
+    limiter: Final = _ScriptedTurnLimiter(check_error=RuntimeError("redis exploded with internal detail"))
     streaming, client_ws, backend_ws = _scripted_session(
         limiter, backend_frames=(_response_created("resp_vad"), _response_done(300, "resp_vad"))
     )
@@ -7226,6 +7222,79 @@ async def test_an_openai_turn_the_provider_started_while_limits_cannot_be_checke
     sent: Final = [json.loads(call.args[0])["type"] for call in client_ws.send_text.await_args_list]
     assert sent == ["response.created", "response.done"]
     assert [charge[1] for charge in limiter.charges] == [300]
+
+
+@pytest.mark.asyncio
+async def test_an_openai_turn_the_provider_started_while_fail_closed_limits_cannot_be_verified_is_cancelled() -> None:
+    limiter: Final = _ScriptedTurnLimiter(
+        check_error=ServiceUnavailableError(message="limits unverifiable", llm_provider="litellm_proxy", model="m")
+    )
+    streaming, client_ws, backend_ws = _scripted_session(
+        limiter, backend_frames=(_response_created("resp_vad"), _response_done(300, "resp_vad"))
+    )
+
+    await streaming.backend_to_client_send_messages()
+
+    cancels: Final = [json.loads(call.args[0]) for call in backend_ws.send.await_args_list]
+    assert [(event["type"], event.get("response_id")) for event in cancels] == [("response.cancel", "resp_vad")]
+    sent: Final = [json.loads(call.args[0]) for call in client_ws.send_text.await_args_list]
+    assert [(event["type"], event.get("error", {}).get("type")) for event in sent] == [
+        ("error", "server_error"),
+        ("response.created", None),
+        ("response.done", None),
+    ]
+    assert [charge[1] for charge in limiter.charges] == [300]
+
+
+def _response_text_delta(response_id: str) -> str:
+    return json.dumps(
+        {"type": "response.output_text.delta", "response_id": response_id, "item_id": "item_1", "delta": "partial"}
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_refused_turn_the_provider_started_sends_none_of_its_output_but_still_counts_its_tokens() -> None:
+    limiter: Final = _over_limit_turn_limiter()
+    streaming, client_ws, _backend_ws = _scripted_session(
+        limiter,
+        backend_frames=(
+            _response_created("resp_vad"),
+            _response_text_delta("resp_vad"),
+            _response_done(300, "resp_vad"),
+            _response_text_delta("resp_next"),
+        ),
+    )
+
+    await streaming.backend_to_client_send_messages()
+
+    sent: Final = [json.loads(call.args[0])["type"] for call in client_ws.send_text.await_args_list]
+    assert sent == ["error", "response.created", "response.done", "response.output_text.delta"]
+    assert [charge[1] for charge in limiter.charges] == [300]
+
+
+@dataclass(slots=True)
+class _ChargeThatNeverSettles(_ScriptedTurnLimiter):
+    charge_started: asyncio.Event = field(default_factory=asyncio.Event)
+
+    async def charge_realtime_turn_usage(
+        self, user_api_key_dict: UserAPIKeyAuth, requested_model: str | None, usage: Usage
+    ) -> None:
+        self.charge_started.set()
+        await asyncio.Event().wait()
+
+
+@pytest.mark.asyncio
+async def test_a_turn_still_being_counted_when_the_client_leaves_stays_in_the_session_spend_log() -> None:
+    limiter: Final = _ChargeThatNeverSettles()
+    streaming, _client_ws, _backend_ws = _scripted_session(limiter, backend_frames=(_response_done(300, "resp_1"),))
+    relay: Final = asyncio.create_task(streaming.backend_to_client_send_messages())
+    await asyncio.wait_for(limiter.charge_started.wait(), timeout=5)
+
+    relay.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await relay
+
+    assert [message["type"] for message in streaming.messages] == ["response.done"]
 
 
 @pytest.mark.asyncio

@@ -578,6 +578,7 @@ class RealTimeStreaming:
             turn_limiters, user_api_key_dict, logging_obj.model_call_details, model
         )
         self._ended_over_token_limit: bool = False
+        self._refused_response_ids: frozenset[str] = frozenset()
         self._over_limit_usage_wait: asyncio.Task[None] | None = None
         # Violation counter for end_session_after_n_fails support
         self._violation_count: int = 0
@@ -1689,19 +1690,26 @@ class RealTimeStreaming:
     async def _session_ended_by_turn_limits(self, event: Mapping[str, object]) -> bool:
         if self._turn_limits is None:
             return False
-        if event.get("type") == "response.done":
-            await self._turn_limits.charge(event)
-            return False
+        response_id: Final = realtime_response_id(event)
+        if event.get("type") != "response.done" and response_id in self._refused_response_ids:
+            return True
         if self._listens_only or event.get("type") != "response.created":
             return False
         refusal: Final = await self._turn_limits.refusal()
-        if refusal is None or not refusal.over_limit:
+        if refusal is None or not refusal.stops_started_turn:
             return False
-        if await self._send_guardrail_cancel(realtime_response_id(event)):
+        if response_id is not None:
+            self._refused_response_ids = self._refused_response_ids | {response_id}
+        if await self._send_guardrail_cancel(response_id):
             await self.websocket.send_text(refusal.event)
             return False
         await self._end_session_after_refused_response(refusal, client_was_told=self._turn_limits.turn_refused)
         return True
+
+    async def _charge_finished_turn(self, event: object) -> None:
+        finished: Final = as_str_mapping(event)
+        if self._turn_limits is not None and finished is not None and finished.get("type") == "response.done":
+            await self._turn_limits.charge(finished)
 
     async def _session_ended_by_transcription_limits(self, event: Mapping[str, object]) -> bool:
         if self._turn_limits is None or not self._is_transcription_session or turn_token_usage(event) is None:
@@ -1710,7 +1718,7 @@ class RealTimeStreaming:
         if self._listens_only:
             return False
         refusal: Final = await self._turn_limits.refusal()
-        if refusal is None or not refusal.over_limit:
+        if refusal is None or not refusal.stops_started_turn:
             return False
         await self._end_session_over_token_limit(refusal)
         return True
@@ -2016,6 +2024,7 @@ class RealTimeStreaming:
                 continue
             ## LOGGING
             self.store_message(event_str)
+            await self._charge_finished_turn(event)
             await self._send_event_to_client(event, event_str)
 
     async def _complete_deferred_backend_setup(self) -> None:
@@ -2132,6 +2141,7 @@ class RealTimeStreaming:
                 if await self._session_ended_by_turn_limits(event):
                     continue
                 self.store_message(event)
+                await self._charge_finished_turn(event)
 
                 if not self._client_wants_beta:
                     await self.websocket.send_text(json.dumps(event))

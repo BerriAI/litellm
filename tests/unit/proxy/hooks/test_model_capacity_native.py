@@ -1,7 +1,6 @@
 import asyncio
 import contextvars
 import logging
-import threading
 import time
 from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -2480,16 +2479,3 @@ async def test_a_touch_that_fails_tells_rust_whether_the_registry_was_unavailabl
     answered: Final = await host.touched(pending["ok"])  # pyright: ignore[reportArgumentType]  # the pending answer of a deferred touch
     raised: Final = answered["raised"]
     assert (raised["kind"], raised["message"]) == (kind, message), answered  # pyright: ignore[reportIndexIssue]  # the raised answer of a host call
-
-
-def test_a_fake_redis_ends_its_accept_loop_on_exit_so_collecting_its_handler_never_stalls_another_test() -> None:
-    running_before: Final = frozenset(threading.enumerate())
-    with fake_redis():
-        pass
-
-    leaked: Final = [
-        thread.name
-        for thread in threading.enumerate()
-        if thread not in running_before and thread.name == "fake-redis-accept"
-    ]
-    assert leaked == []

@@ -311,7 +311,7 @@ async def _ended_turn_over_limit(
     if turn_limits is None or provider_event.get("type") != "response.created":
         return False
     refusal: Final = await turn_limits.refusal()
-    if refusal is None or not refusal.over_limit:
+    if refusal is None or not refusal.stops_started_turn:
         return False
     if not turn_limits.turn_refused:
         with contextlib.suppress(Exception):

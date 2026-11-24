@@ -53,18 +53,21 @@ def registered_realtime_turn_limiters() -> Sequence[object]:
 @dataclass(frozen=True, slots=True)
 class TurnRefusal:
     event: str
-    over_limit: bool
+    stops_started_turn: bool
 
 
 def _refusal(error: Exception) -> TurnRefusal:
     match error:
         case RateLimitError():
-            return TurnRefusal(realtime_error_event(str(error), error_type="rate_limit_exceeded"), over_limit=True)
+            return TurnRefusal(
+                realtime_error_event(str(error), error_type="rate_limit_exceeded"), stops_started_turn=True
+            )
         case ServiceUnavailableError():
-            return TurnRefusal(realtime_error_event(str(error), error_type="server_error"), over_limit=False)
+            return TurnRefusal(realtime_error_event(str(error), error_type="server_error"), stops_started_turn=True)
         case _:
             return TurnRefusal(
-                realtime_error_event(TURN_LIMIT_CHECK_FAILED_MESSAGE, error_type="server_error"), over_limit=False
+                realtime_error_event(TURN_LIMIT_CHECK_FAILED_MESSAGE, error_type="server_error"),
+                stops_started_turn=False,
             )
 
 
@@ -93,7 +96,7 @@ def turn_token_usage(event: Mapping[str, object]) -> Usage | None:
 
 def realtime_response_id(event: Mapping[str, object]) -> str | None:
     response: Final = as_str_mapping(event.get("response"))
-    response_id: Final = None if response is None else response.get("id")
+    response_id: Final = event.get("response_id") if response is None else response.get("id")
     return response_id if isinstance(response_id, str) and response_id else None
 
 
