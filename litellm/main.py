@@ -2951,21 +2951,29 @@ def _complete_hosted_vllm(ctx: CompletionDispatchContext) -> _CompletionDispatch
 
 
 def _openai_compatible_embedding_target_error(
-    provider: str, model: str, api_base: str | None, api_key: str | None
+    provider: str, model: str, api_base: str | None, api_key: str | None, client: object
 ) -> BadRequestError | AuthenticationError | None:
+    if isinstance(client, openai.OpenAI | openai.AsyncOpenAI):
+        return None
     if api_base is None:
         return BadRequestError(
             message=f"{provider} has no default api_base for embeddings. Pass api_base.",
             model=model,
             llm_provider=provider,
         )
-    if api_key is None:
+    if not api_key:
         return AuthenticationError(
             message=f"Missing API key for {provider}. Set the provider's API key env var or pass api_key.",
             llm_provider=provider,
             model=model,
         )
     return None
+
+
+def _openai_compatible_embedding_api_base(provider: str, api_base: str | None) -> str | None:
+    if provider == "docker_model_runner" and api_base is not None:
+        return ensure_api_route(api_base, "v1")
+    return api_base
 
 
 def _openai_key_fallback(custom_llm_provider: str | None) -> str | None:
@@ -8334,7 +8342,13 @@ def embedding(
             )
         elif custom_llm_provider in litellm.openai_compatible_providers:
             if (
-                target_error := _openai_compatible_embedding_target_error(custom_llm_provider, model, api_base, api_key)
+                target_error := _openai_compatible_embedding_target_error(
+                    custom_llm_provider,
+                    model,
+                    api_base,
+                    api_key,
+                    cast(object, client),  # cast-ok: client arrives untyped in request kwargs
+                )
             ) is not None:
                 raise target_error
             if headers:
@@ -8342,7 +8356,7 @@ def embedding(
             response = openai_chat_completions.embedding(  # rebind-ok: dispatch chain binds response per branch
                 model=model,
                 input=input,
-                api_base=api_base,
+                api_base=_openai_compatible_embedding_api_base(custom_llm_provider, api_base),
                 api_key=api_key,
                 logging_obj=logging,
                 timeout=timeout,

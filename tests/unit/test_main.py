@@ -1450,17 +1450,62 @@ def test_custom_openai_embedding_forwards_dimensions_to_the_custom_base(respx_mo
     assert json.loads(route.calls.last.request.content)["dimensions"] == 2
 
 
+@pytest.mark.parametrize("key_kwargs", [{}, {"api_key": ""}], ids=["no_key", "empty_key"])
 def test_openai_compatible_embedding_without_a_provider_key_never_sends_the_openai_key(
-    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+    key_kwargs: Mapping[str, str], respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.delenv("GROQ_API_KEY", raising=False)
     monkeypatch.setenv("OPENAI_API_KEY", "openai-key-that-must-stay-home")
     route: Final = respx_mock.post(url__regex=r".*").respond(json=_EMBEDDING_RESPONSE)
 
     with pytest.raises(litellm.AuthenticationError, match="Missing API key for groq"):
-        litellm.embedding(model="groq/test-embedding-model", input=["hello world"])
+        litellm.embedding(
+            model="groq/test-embedding-model",
+            input=["hello world"],
+            api_base="http://caller-chosen.test/v1",
+            **key_kwargs,
+        )
 
     assert not route.called
+
+
+def test_openai_compatible_embedding_uses_a_passed_client_without_a_separate_key(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("DEEPINFRA_API_KEY", raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "openai-key-that-must-stay-home")
+    route: Final = respx_mock.post("http://client-base.test/v1/embeddings").respond(json=_EMBEDDING_RESPONSE)
+
+    litellm.embedding(
+        model="deepinfra/Qwen/Qwen3-Embedding-8B",
+        input=["hello world"],
+        client=OpenAI(api_key="client-key", base_url="http://client-base.test/v1"),
+    )
+
+    assert route.calls.last.request.headers["authorization"] == "Bearer client-key"
+
+
+@pytest.mark.parametrize(
+    ("api_base_kwargs", "expected_url"),
+    [
+        ({}, "http://localhost:22088/engines/llama.cpp/v1/embeddings"),
+        (
+            {"api_base": "http://docker-host.test:12434/engines/llama.cpp"},
+            "http://docker-host.test:12434/engines/llama.cpp/v1/embeddings",
+        ),
+    ],
+    ids=["default_base", "custom_base"],
+)
+def test_docker_model_runner_embedding_hits_the_v1_embeddings_url(
+    api_base_kwargs: Mapping[str, str], expected_url: str, respx_mock: respx.MockRouter
+) -> None:
+    route: Final = respx_mock.post(expected_url).respond(json=_EMBEDDING_RESPONSE)
+
+    litellm.embedding(
+        model="docker_model_runner/ai/embeddinggemma", input=["hello world"], api_key="dmr", **api_base_kwargs
+    )
+
+    assert route.called
 
 
 def test_openai_compatible_embedding_without_an_api_base_never_falls_back_to_openai(
