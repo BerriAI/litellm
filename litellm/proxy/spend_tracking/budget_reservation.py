@@ -613,7 +613,7 @@ async def release_budget_reservation_on_cancel(
 
 
 async def invalidate_budget_reservation_counters(
-    budget_reservation: dict | None,
+    budget_reservation: dict[str, object] | None,
 ) -> None:
     if budget_reservation is None:
         return

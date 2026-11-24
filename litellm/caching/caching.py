@@ -53,6 +53,8 @@ from .redis_semantic_cache import RedisSemanticCache
 from .s3_cache import S3Cache
 
 RESPONSE_CACHE_TARGET: Final = "llm_response"
+_IN_MEMORY_TIER_CACHE_TYPES: Final = (LiteLLMCacheType.LOCAL, LiteLLMCacheType.REDIS)
+_REQUEST_TTL_TYPES: Final = (int, float, str)
 _ALWAYS_KEYED_PROVIDER_PARAMS: Final = frozenset(
     {"continuation_token", "return_token_ids", "responseFormat", "generationConfig", "generation_config"}
 )
@@ -371,6 +373,16 @@ def kwargs_for_input(
             else {}
         ),
     }
+
+
+def _is_positive_finite_ttl(value: object) -> bool:
+    if not isinstance(value, _REQUEST_TTL_TYPES) or type(value) not in _REQUEST_TTL_TYPES:
+        return False
+    try:
+        seconds: Final = float(value)
+    except (ValueError, OverflowError):
+        return False
+    return math.isfinite(seconds) and seconds > 0
 
 
 class Cache:
@@ -1064,11 +1076,22 @@ class Cache:
                     if self.type == LiteLLMCacheType.LOCAL:
                         return cache_key, cached_data, {**kwargs, "ttl": ttl, "replace_ttl": True}
                     return cache_key, cached_data, {**kwargs, "ttl": ttl}
+                if self._request_ttl_replaces_live_expiry(kwargs, _cache_kwargs):
+                    return cache_key, cached_data, {**kwargs, "replace_ttl": True}
                 return cache_key, cached_data, kwargs
             else:
                 raise Exception("cache key is None")
         except Exception as e:
             raise e
+
+    def _request_ttl_replaces_live_expiry(
+        self, write_kwargs: Mapping[str, object], cache_controls: Mapping[str, object] | None
+    ) -> bool:
+        if cache_controls is None or "replace_ttl" in write_kwargs:
+            return False
+        if self.type not in _IN_MEMORY_TIER_CACHE_TYPES:
+            return False
+        return _is_positive_finite_ttl(cache_controls.get("ttl"))
 
     def add_cache(self, result: object, **kwargs: object):
         """

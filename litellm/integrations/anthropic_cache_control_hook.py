@@ -1396,7 +1396,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
 
     @staticmethod
     def apply_to_anthropic_messages_request(
-        messages: list[dict],
+        messages: list[dict[str, object]],
         system: str | list | None,
         injection_points: Sequence[CacheControlInjectionPoint],
         openai_dialect: bool = False,
