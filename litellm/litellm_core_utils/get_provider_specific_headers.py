@@ -122,6 +122,25 @@ def _contributed_headers(scoped_header: ProviderSpecificHeader, configured_names
     return {name: value for name, value in headers.items() if name.lower() not in configured_names}
 
 
+_PROVIDER_HEADER: Final = TypeAdapter(ProviderSpecificHeader)
+
+
+def _without_credential_conditions(scoped_header: ProviderSpecificHeader) -> ProviderSpecificHeader:
+    return _PROVIDER_HEADER.validate_python({**scoped_header, "configured_credential_headers": ()})
+
+
+def where_only_the_deployment_credential_authenticates(
+    provider_specific_header: object,
+) -> tuple[ProviderSpecificHeader, ...]:
+    validated: Final = _PROVIDER_HEADERS.validate_python(provider_specific_header)
+    scoped_headers: Final = (validated,) if isinstance(validated, dict) else validated or ()
+    return tuple(
+        _without_credential_conditions(scoped_header)
+        for scoped_header in scoped_headers
+        if not scoped_header.get("without_configured_credential")
+    )
+
+
 class ProviderSpecificHeaderUtils:
     @staticmethod
     def validated_provider_specific_headers(

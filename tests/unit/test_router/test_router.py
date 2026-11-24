@@ -21449,6 +21449,90 @@ async def test_anthropic_caller_rate_limit_does_not_block_other_credentials(
         await client.close()
 
 
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("isolate_litellm_state")
+@pytest.mark.parametrize("surface", ["chat", "messages"])
+@pytest.mark.parametrize(
+    "caller_body, pin, deployment_headers, expected_profile",
+    [
+        ({"extra_headers": {"Authorization": "Bearer sk-ant-oat01-caller"}}, "uprof_pinned", {}, "uprof_pinned"),
+        (
+            {"headers": {"Authorization": "Bearer sk-ant-oat01-caller"}},
+            None,
+            {"anthropic-user-profile-id": "uprof_deployment"},
+            "uprof_deployment",
+        ),
+    ],
+    ids=["key-pin", "deployment-id-over-the-client-header"],
+)
+async def test_a_caller_oauth_token_does_not_unpin_a_managed_oauth_deployment(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    surface: str,
+    caller_body: dict[str, object],
+    pin: str | None,
+    deployment_headers: dict[str, str],
+    expected_profile: str,
+) -> None:
+    from litellm.llms.anthropic.messages.native import handler as python_messages
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+    from litellm.proxy.litellm_pre_call_utils import add_provider_specific_headers_to_request
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "anthropic_messages", python_messages.anthropic_messages)
+    token_url: Final = f"https://idp.example.com/{surface}-{expected_profile}-token"
+    respx_mock.post(token_url).mock(return_value=httpx.Response(200, json={"access_token": "managed-token"}))
+    route: Final = respx_mock.post("https://provider.example.com/v1/messages").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "msg-managed",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-sonnet-5-5",
+                "content": [{"type": "text", "text": "ok"}],
+                "stop_reason": "end_turn",
+                "usage": {"input_tokens": 2, "output_tokens": 2},
+            },
+        )
+    )
+    request: Final = dict(caller_body)
+    add_provider_specific_headers_to_request(request, {"anthropic-user-profile-id": "uprof_caller"}, pin)
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "claude",
+                "litellm_params": {
+                    "model": "anthropic/claude-sonnet-5-5",
+                    "api_base": "https://provider.example.com",
+                    "oauth_client_credentials": True,
+                    "oauth_token_url": token_url,
+                    "oauth_client_id": "client",
+                    "oauth_client_secret": "secret",
+                    "extra_headers": deployment_headers,
+                },
+            }
+        ],
+    )
+    client: Final = AsyncHTTPHandler(transport=httpx.AsyncHTTPTransport())
+    try:
+        if surface == "messages":
+            await router.aanthropic_messages(
+                model="claude", messages=[{"role": "user", "content": "hello"}], max_tokens=16, client=client, **request
+            )
+        else:
+            await router.acompletion(
+                model="claude", messages=[{"role": "user", "content": "hello"}], client=client, **request
+            )
+    finally:
+        await GLOBAL_LOGGING_WORKER.flush()
+        await client.close()
+
+    sent: Final = route.calls[0].request.headers
+    assert sent["authorization"] == "Bearer managed-token"
+    assert sent["anthropic-user-profile-id"] == expected_profile
+
+
 _FALLBACK_VALIDATION_MODEL_LIST: Final = (
     {"model_name": "gpt-4", "litellm_params": {"model": "openai/gpt-4", "api_key": "fake-key"}},
     {"model_name": "gpt-3.5", "litellm_params": {"model": "openai/gpt-3.5-turbo", "api_key": "fake-key"}},

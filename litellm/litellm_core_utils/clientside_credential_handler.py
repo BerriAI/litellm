@@ -92,7 +92,7 @@ def is_clientside_credential(request_kwargs: Mapping[str, object]) -> bool:
     return any(key in request_kwargs for key in clientside_credential_keys)
 
 
-def _uses_provider_oauth(params: Mapping[str, object]) -> bool:
+def uses_provider_oauth(params: Mapping[str, object]) -> bool:
     if "oauth_client_credentials" in params:
         return params["oauth_client_credentials"] is True
     name: Final = params.get("litellm_credential_name")
@@ -112,7 +112,7 @@ def get_dynamic_litellm_params(litellm_params: dict, request_kwargs: Mapping[str
     from litellm.llms.github_copilot.app_auth import app_config
 
     app_params: Final = cast("dict[str, object]", litellm_params)  # cast-ok: the existing request boundary is untyped
-    if is_clientside_credential(request_kwargs) and _uses_provider_oauth(app_params):
+    if is_clientside_credential(request_kwargs) and uses_provider_oauth(app_params):
         raise BadRequestError(
             message="OAuth client credentials deployments do not accept client-side credential or endpoint overrides.",
             llm_provider=None,

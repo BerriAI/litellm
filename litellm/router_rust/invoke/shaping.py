@@ -29,6 +29,7 @@ from litellm.litellm_core_utils.clientside_credential_handler import (
     clientside_credential_keys,
     get_dynamic_litellm_params,  # pyright: ignore[reportUnknownVariableType]  # litellm's untyped helpers and request values
     is_clientside_credential,  # pyright: ignore[reportUnknownVariableType]  # litellm's untyped helpers and request values
+    uses_provider_oauth,
 )
 from litellm.litellm_core_utils.completion_timeout import CompletionTimeout
 from litellm.litellm_core_utils.core_helpers import allowed_openai_param_names, as_str_mapping, without
@@ -688,6 +689,13 @@ def update_kwargs_with_deployment(
 ) -> None:
     """``_update_kwargs_with_deployment``, in place on the attempt's kwargs."""
     deployment_params: Final = as_dict(deployment.get("litellm_params"))
+    if uses_provider_oauth(deployment_params) and kwargs.get("provider_specific_header") is not None:
+        from litellm.litellm_core_utils.get_provider_specific_headers import (
+            where_only_the_deployment_credential_authenticates,
+        )
+
+        scoped: Final = where_only_the_deployment_credential_authenticates(kwargs["provider_specific_header"])
+        kwargs["provider_specific_header"] = scoped  # rebind-ok: the attempt's kwargs are shaped in place
     for key in _forwarded_alias_marker_keys_the_deployment_sets(
         deployment_params, kwargs.pop(_ALIAS_MARKER_FORWARDED_PARAMS_KWARG, ())
     ):
