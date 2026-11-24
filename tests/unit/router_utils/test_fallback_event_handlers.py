@@ -15,6 +15,7 @@ import litellm
 from litellm import Router
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils import get_llm_provider_logic
+from litellm.exceptions import UnresolvablePreviousResponseError
 from litellm.responses.litellm_completion_transformation.transformation import previous_response_not_found
 from litellm.router_utils.cooldown_handlers import mark_advisor_orchestration_failure
 from litellm.router_utils.fallback_event_handlers import (
@@ -127,6 +128,41 @@ async def test_run_async_fallback_raises_when_all_fallbacks_fail():
             fallback_depth=0,
             include_fallback_errors=True,
         )
+
+
+class RefusingFallbackRouter:
+    fallback_access_check = None
+    fallback_budget_check = None
+
+    def __init__(self) -> None:
+        self.attempted_model_groups: tuple[object, ...] = ()
+
+    def log_retry(self, kwargs: dict[str, object], e: Exception) -> dict[str, object]:
+        return kwargs
+
+    async def async_function_with_fallbacks(self, *args: object, **kwargs: object) -> StreamingWrapper:
+        self.attempted_model_groups = (*self.attempted_model_groups, kwargs.get("model"))
+        if kwargs.get("model") == "bridged-hop":
+            raise previous_response_not_found("resp_unknown", "gpt-5.4-mini", "openai")
+        return StreamingWrapper()
+
+
+@pytest.mark.asyncio
+async def test_a_follow_up_refused_on_a_fallback_ends_the_walk_before_the_next_group():
+    router: Final = RefusingFallbackRouter()
+
+    with pytest.raises(UnresolvablePreviousResponseError):
+        await run_async_fallback(
+            litellm_router=router,
+            fallback_model_group=["bridged-hop", "native-fallback"],
+            original_model_group="native-primary",
+            original_exception=litellm.InternalServerError("upstream failed", "openai", "gpt-5.4-mini"),
+            max_fallbacks=3,
+            fallback_depth=0,
+            model="native-primary",
+        )
+
+    assert router.attempted_model_groups == ("bridged-hop",)
 
 
 class RecordingRouter:

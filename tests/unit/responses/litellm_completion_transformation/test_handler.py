@@ -597,6 +597,19 @@ async def test_a_follow_up_refused_on_a_retry_is_not_retried_again():
 
 
 @pytest.mark.asyncio
+async def test_a_refused_sdk_follow_up_is_not_rerun_for_num_retries():
+    spend_logs: Final = _CountedLookups()
+
+    with patch("litellm.proxy.proxy_server.prisma_client", SimpleNamespace(db=spend_logs)):
+        with pytest.raises(litellm.BadRequestError, match="not found"):
+            await _bridged_follow_up(
+                True, _RecordingAnthropicHandler(_ANTHROPIC_MESSAGE_PAYLOAD), proxy_fields={"num_retries": 2}
+            )
+
+    assert spend_logs.lookups == RESPONSES_SESSION_LOOKUP_MAX_ATTEMPTS
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
 async def test_an_sdk_install_without_the_proxy_extras_gets_the_400_for_a_follow_up(
     asynchronous: bool, monkeypatch: pytest.MonkeyPatch

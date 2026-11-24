@@ -11,6 +11,7 @@ import httpx
 
 import litellm
 from litellm._logging import verbose_router_logger
+from litellm.exceptions import UnresolvablePreviousResponseError
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.core_helpers import get_metadata_variable_name_from_kwargs, safe_deep_copy
 from litellm.litellm_core_utils.get_llm_provider_logic import inferred_provider
@@ -846,6 +847,8 @@ async def run_async_fallback(
                 original_exception=original_exception,
             )
             return response
+        except UnresolvablePreviousResponseError:
+            raise
         except Exception as e:
             error_from_fallbacks = e
             fallback_errors = fallback_errors + (get_fallback_error_info(e),)
