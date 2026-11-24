@@ -1,6 +1,7 @@
 import base64
 import uuid
 from collections.abc import Mapping
+from typing import Final
 from urllib.parse import parse_qs
 
 import httpx
@@ -41,7 +42,7 @@ class _IdP:
             raise self.outcome
         if self.outcome is not None:
             return self.outcome
-        target = form.get("audience") or form.get("scope", "")
+        target: Final = form.get("audience") or form.get("scope", "")
         return {"access_token": f"exchanged:{form.get('subject_token') or form.get('assertion')}:{target}"}
 
 
@@ -58,7 +59,7 @@ async def _exchange(
     caller: UserAPIKeyAuth | None = None,
     exchanger: OboTokenExchanger | None = None,
 ) -> Mapping[str, str]:
-    exchanged = await exchange_agent_token(
+    exchanged: Final = await exchange_agent_token(
         {"token_exchange": dict(block), "model": "agent"},
         agent_id,
         "https://agent.example.com",
@@ -73,9 +74,9 @@ async def test_the_callers_token_is_exchanged_for_the_agent_bearer_with_env_expa
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("AGENT_OBO_SECRET", _SECRET)
-    idp = _IdP()
+    idp: Final = _IdP()
 
-    header = await _exchange(idp, {**_BLOCK, "client_secret": "os.environ/AGENT_OBO_SECRET"})
+    header: Final = await _exchange(idp, {**_BLOCK, "client_secret": "os.environ/AGENT_OBO_SECRET"})
 
     assert header == {"Authorization": f"Bearer exchanged:{_SUBJECT}:api://agent"}
     assert idp.forms == [
@@ -91,9 +92,9 @@ async def test_the_callers_token_is_exchanged_for_the_agent_bearer_with_env_expa
 
 
 async def test_the_entra_obo_profile_sends_the_callers_token_as_the_assertion() -> None:
-    idp = _IdP()
+    idp: Final = _IdP()
 
-    header = await _exchange(idp, {**_BLOCK, "profile": "entra_obo", "scopes": ["api://agent/.default"]})
+    header: Final = await _exchange(idp, {**_BLOCK, "profile": "entra_obo", "scopes": ["api://agent/.default"]})
 
     assert header == {"Authorization": f"Bearer exchanged:{_SUBJECT}:api://agent/.default"}
     assert idp.forms[0]["assertion"] == _SUBJECT
@@ -101,8 +102,8 @@ async def test_the_entra_obo_profile_sends_the_callers_token_as_the_assertion() 
 
 
 async def test_exchanges_are_cached_per_agent_and_per_tenant() -> None:
-    idp = _IdP()
-    exchanger = OboTokenExchanger(idp)
+    idp: Final = _IdP()
+    exchanger: Final = OboTokenExchanger(idp)
 
     await _exchange(idp, exchanger=exchanger)
     await _exchange(idp, exchanger=exchanger)
@@ -117,7 +118,7 @@ async def test_exchanges_are_cached_per_agent_and_per_tenant() -> None:
     [{}, {"authorization": "Bearer sk-virtual-key"}, {"authorization": "Bearer opaque", "x-litellm-api-key": "opaque"}],
 )
 async def test_a_caller_without_an_identity_token_gets_a_401_before_the_idp(headers: Mapping[str, str]) -> None:
-    idp = _IdP()
+    idp: Final = _IdP()
 
     with pytest.raises(HTTPException) as refused:
         await _exchange(idp, headers=headers, caller=UserAPIKeyAuth(api_key="hashed-key"))
@@ -153,7 +154,7 @@ async def test_an_idp_refusal_maps_to_the_public_status_without_leaking_secrets(
 
 @pytest.mark.parametrize("block", ["not-a-mapping", {**_BLOCK, "profile": "unknown"}])
 async def test_an_invalid_block_is_a_500_that_never_echoes_the_secret(block: object) -> None:
-    idp = _IdP()
+    idp: Final = _IdP()
 
     with pytest.raises(HTTPException) as refused:
         await exchange_agent_token(
@@ -170,18 +171,18 @@ async def test_backend_auth_sends_the_exchanged_bearer_and_strips_the_block_from
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-    subject = f"eyJ.{uuid.uuid4().hex}"
-    idp = respx.post("https://idp.example.com/token").mock(
+    subject: Final = f"eyJ.{uuid.uuid4().hex}"
+    idp: Final = respx.post("https://idp.example.com/token").mock(
         return_value=httpx.Response(200, json={"access_token": "agent-bound", "token_type": "Bearer"})
     )
-    agent = AgentResponse(
+    agent: Final = AgentResponse(
         agent_id=f"agent-{uuid.uuid4().hex}",
         agent_name="obo-agent",
         agent_card_params={"url": "https://agent.example.com"},
         litellm_params={"token_exchange": _BLOCK, "api_key": "static-key"},
     )
 
-    auth = await _resolve_backend_auth(
+    auth: Final = await _resolve_backend_auth(
         {"token_exchange": _BLOCK, "api_key": "static-key"},
         None,
         agent=agent,
@@ -195,7 +196,7 @@ async def test_backend_auth_sends_the_exchanged_bearer_and_strips_the_block_from
 
 
 async def test_an_unset_env_reference_is_a_500_naming_the_field_and_never_reaches_the_idp() -> None:
-    idp = _IdP()
+    idp: Final = _IdP()
 
     with pytest.raises(HTTPException) as refused:
         await _exchange(idp, {**_BLOCK, "audience": "os.environ/A2A_OBO_AUDIENCE_NOT_SET"})
@@ -207,7 +208,7 @@ async def test_an_unset_env_reference_is_a_500_naming_the_field_and_never_reache
 
 @pytest.mark.parametrize("disabled", [False, None])
 async def test_a_null_or_false_token_exchange_keeps_the_agents_static_auth(disabled: object) -> None:
-    auth = await _resolve_backend_auth(
+    auth: Final = await _resolve_backend_auth(
         {"token_exchange": disabled, "api_key": "static-key"},
         None,
         agent=_agent(),
@@ -226,7 +227,7 @@ async def test_a_null_or_false_token_exchange_keeps_the_agents_static_auth(disab
 async def test_an_empty_or_garbage_token_exchange_block_is_a_500_not_the_static_credential(
     block: object, reason: str
 ) -> None:
-    idp = respx.route(host="idp.example.com")
+    idp: Final = respx.route(host="idp.example.com")
 
     with pytest.raises(HTTPException) as refused:
         await _resolve_backend_auth(
@@ -243,7 +244,7 @@ async def test_an_empty_or_garbage_token_exchange_block_is_a_500_not_the_static_
 
 
 async def test_an_unset_env_reference_inside_scopes_is_a_500_naming_scopes() -> None:
-    idp = _IdP()
+    idp: Final = _IdP()
 
     with pytest.raises(HTTPException) as refused:
         await _exchange(idp, {**_BLOCK, "scopes": ["os.environ/A2A_OBO_SCOPE_NOT_SET", "ok"]})
@@ -255,7 +256,7 @@ async def test_an_unset_env_reference_inside_scopes_is_a_500_naming_scopes() -> 
 
 async def test_env_references_inside_scopes_are_expanded(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("A2A_OBO_SCOPE", "api://agent/.default")
-    idp = _IdP()
+    idp: Final = _IdP()
 
     await _exchange(idp, {**_BLOCK, "scopes": ["os.environ/A2A_OBO_SCOPE", "offline_access"]})
 
@@ -273,7 +274,7 @@ def _agent() -> AgentResponse:
 
 @pytest.mark.parametrize("unknown", [{"audiance": "api://typo"}, {"header_name": "X-Other"}])
 async def test_an_unknown_key_in_the_block_is_a_500_naming_it_without_its_value(unknown: Mapping[str, str]) -> None:
-    idp = _IdP()
+    idp: Final = _IdP()
 
     with pytest.raises(HTTPException) as refused:
         await _exchange(idp, {**_BLOCK, **unknown})
@@ -286,7 +287,7 @@ async def test_an_unknown_key_in_the_block_is_a_500_naming_it_without_its_value(
 
 @respx.mock
 async def test_an_obo_agent_with_a_custom_llm_provider_is_a_400_before_the_idp() -> None:
-    idp = respx.route(host="idp.example.com")
+    idp: Final = respx.route(host="idp.example.com")
 
     with pytest.raises(HTTPException) as refused:
         await _resolve_backend_auth(

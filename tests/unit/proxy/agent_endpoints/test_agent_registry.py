@@ -1648,7 +1648,7 @@ _OBO_BLOCK: Final = {
 
 
 def test_redact_sensitive_agent_litellm_params_masks_only_the_token_exchange_client_secret():
-    redacted = redact_sensitive_agent_litellm_params({"token_exchange": _OBO_BLOCK})
+    redacted: Final = redact_sensitive_agent_litellm_params({"token_exchange": _OBO_BLOCK})
 
     assert redacted == {"token_exchange": {**_OBO_BLOCK, "client_secret": REDACTED_BY_LITELM_STRING}}
 
@@ -1671,7 +1671,7 @@ async def test_editing_a_token_exchange_block_keeps_the_stored_secret_unless_a_n
     mock_prisma.db.litellm_agentstable.find_unique = AsyncMock(
         return_value=_stored_agent_row({"litellm_params": {"token_exchange": _OBO_BLOCK}, "object_permission_id": None})
     )
-    saved = MagicMock()
+    saved: Final = MagicMock()
     saved.model_dump.return_value = {
         "agent_id": "agent-123",
         "agent_name": "Test Agent",
@@ -1754,7 +1754,7 @@ def test_redact_sensitive_agent_litellm_params_masks_a_token_exchange_value_that
 
 
 def test_redact_sensitive_agent_litellm_params_only_exempts_token_exchange_fields_inside_the_block():
-    redacted = redact_sensitive_agent_litellm_params(
+    redacted: Final = redact_sensitive_agent_litellm_params(
         {"other": {"token_exchange_endpoint": "https://u:pw@idp.example.com/", "subject_token_type": "x"}}
     )
 
@@ -1778,9 +1778,9 @@ def test_restore_redacted_litellm_params_round_trips_what_the_read_masked(stored
 
 
 def test_restore_redacted_litellm_params_lets_an_edit_drop_a_plain_token_exchange_field():
-    edited = {key: value for key, value in _OBO_BLOCK.items() if key != "subject_token_type"}
+    edited: Final = {key: value for key, value in _OBO_BLOCK.items() if key != "subject_token_type"}
 
-    restored = _restore_redacted_litellm_params({"token_exchange": edited}, {"token_exchange": _OBO_BLOCK})
+    restored: Final = _restore_redacted_litellm_params({"token_exchange": edited}, {"token_exchange": _OBO_BLOCK})
 
     assert restored == {"token_exchange": edited}
 
