@@ -510,39 +510,34 @@ def leaves_caller_key_behind(
     }
     if _sets_authorization_header(request, target_params, deployment):
         return False
-    call: Final = {**deployment, **request, **target_params}
     anthropic_key: Final = isinstance(caller_key, str) and caller_key.startswith(_ANTHROPIC_API_KEY_PREFIX)
-    if not _destination_has_its_own_auth(deployment, call, anthropic_key):
-        return False
-    return owner_provider() in _CALLER_KEY_ORIGIN_PROVIDERS
-
-
-def _destination_has_its_own_auth(
-    deployment: Mapping[str, object], call: Mapping[str, object], anthropic_key: bool
-) -> bool:
     aws: Final = _aws_destination(deployment)
-    if aws is not None:
-        if _targets_a_custom_endpoint(call, aws):
-            return False
-        auth: Final = _aws_auth(deployment)
-        return auth == "sigv4" or (anthropic_key and auth == "bearer")
-    return (
-        anthropic_key
-        and deployment_provider(deployment) == LlmProviders.OPENAI.value
-        and not litellm.api_base
-        and not _targets_a_custom_endpoint(call, _OPENAI_DESTINATION)
-        and _resolves_its_own_openai_key(deployment)
+    reaches_openai: Final = (
+        anthropic_key and aws is None and deployment_provider(deployment) == LlmProviders.OPENAI.value
     )
+    if (aws is None and not reaches_openai) or owner_provider() not in _CALLER_KEY_ORIGIN_PROVIDERS:
+        return False
+    call: Final = {**deployment, **request, **target_params}
+    if aws is None:
+        return (
+            not litellm.api_base
+            and not _targets_a_custom_endpoint(call, _OPENAI_DESTINATION)
+            and _resolves_its_own_openai_key(deployment)
+        )
+    if _targets_a_custom_endpoint(call, aws):
+        return False
+    auth: Final = _aws_auth(deployment)
+    return auth == "sigv4" or (anthropic_key and auth == "bearer")
 
 
 def _resolves_its_own_openai_key(deployment: Mapping[str, object]) -> bool:
     """Whether the OpenAI deployment has a key without the caller's, as the OpenAI handlers resolve it."""
-    from litellm.secret_managers.main import get_secret_str
+    from litellm.llms.openai.workload_identity import openai_static_api_key
 
     key: Final = deployment.get("api_key")
-    return bool(
-        (isinstance(key, str) and key) or litellm.api_key or litellm.openai_key or get_secret_str("OPENAI_API_KEY")
-    )
+    if key is not None and not isinstance(key, str):
+        return False
+    return bool(openai_static_api_key(key))
 
 
 def _aws_destination(

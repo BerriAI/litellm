@@ -2555,3 +2555,64 @@ async def test_openai_fallback_drops_the_proxy_forwarded_key_header_only_with_th
 
     sent: Final = route.calls[-1].request.headers
     assert (sent["authorization"], sent.get("x-api-key")) == expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_openai_without_env_or_global_credentials")
+async def test_explicit_authorization_header_keeps_the_forwarded_caller_key_on_an_openai_fallback(
+    respx_mock: respx.MockRouter,
+) -> None:
+    from litellm.types.router import ForwardedClientHeaders
+
+    stamp: Final = ForwardedClientHeaders.of(
+        {"x-api-key": _CALLER_ANTHROPIC_KEY}, model_group_scoped=False
+    ).model_dump()
+    router: Final = _anthropic_to_openai_router(_OPENAI_DEPLOYMENT_KEY)
+    route: Final = _mock_anthropic_and_openai_hosts(respx_mock, stream=False)
+
+    await _complete_after_anthropic_fails(
+        router,
+        "claude",
+        False,
+        api_key=_CALLER_ANTHROPIC_KEY,
+        headers={"Authorization": "Bearer gateway-token", "x-api-key": _CALLER_ANTHROPIC_KEY},
+        proxy_server_request={"forwarded_client_headers": stamp},
+    )
+
+    sent: Final = route.calls[-1].request.headers
+    assert (sent["authorization"], sent.get("x-api-key")) == ("Bearer gateway-token", _CALLER_ANTHROPIC_KEY)
+
+
+def _primary_openai_fails(request: httpx.Request) -> httpx.Response:
+    if json.loads(request.content)["model"] == "gpt-5.5":
+        return httpx.Response(500, json={"error": {"message": "primary unavailable", "type": "server_error"}})
+    return _fallback_chat_response("gpt-5.6", "served by openai")
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_openai_without_env_or_global_credentials")
+@pytest.mark.parametrize(
+    ("requested", "expected_models"),
+    (
+        pytest.param("gpt", frozenset({"gpt-5.6"}), id="direct-openai-group"),
+        pytest.param("gpt-primary", frozenset({"gpt-5.5", "gpt-5.6"}), id="openai-to-openai-fallback"),
+    ),
+)
+async def test_anthropic_shaped_caller_key_stays_on_openai_without_an_anthropic_origin(
+    respx_mock: respx.MockRouter, requested: str, expected_models: frozenset[str]
+) -> None:
+    router: Final = Router(
+        model_list=[
+            {"model_name": "gpt-primary", "litellm_params": {"model": "openai/gpt-5.5", **_OPENAI_DEPLOYMENT_KEY}},
+            {"model_name": "gpt", "litellm_params": {"model": "openai/gpt-5.6", **_OPENAI_DEPLOYMENT_KEY}},
+        ],
+        fallbacks=[{"gpt-primary": ["gpt"]}],
+        num_retries=0,
+    )
+    route: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(side_effect=_primary_openai_fails)
+
+    await _complete_after_anthropic_fails(router, requested, False, api_key=_CALLER_ANTHROPIC_KEY)
+
+    models: Final = frozenset(json.loads(call.request.content)["model"] for call in route.calls)
+    authorizations: Final = frozenset(call.request.headers["authorization"] for call in route.calls)
+    assert (models, authorizations) == (expected_models, frozenset({f"Bearer {_CALLER_ANTHROPIC_KEY}"}))
