@@ -25,6 +25,7 @@ from litellm import verbose_logger
 from litellm.constants import REDACTED_BY_LITELLM
 from litellm.litellm_core_utils.core_helpers import as_object_list, as_str_mapping
 from litellm.router_utils.batch_utils import InMemoryFile
+from litellm.types.llms.anthropic import ANTHROPIC_UNRENDERED_BLOCK_TYPES
 from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionAssistantMessage,
@@ -166,6 +167,17 @@ def extract_search_results_text(search_results: object) -> str:
         if citations is not None:
             texts += json.dumps(citations, separators=(",", ":"))
     return texts
+
+
+def is_unrendered_block(block: object) -> bool:
+    fields: Final = as_str_mapping(block)
+    block_type: Final = None if fields is None else fields.get("type")
+    return isinstance(block_type, str) and block_type in ANTHROPIC_UNRENDERED_BLOCK_TYPES
+
+
+def is_unrendered_block_without_text(block: object) -> bool:
+    fields: Final = as_str_mapping(block)
+    return fields is not None and is_unrendered_block(fields) and "text" not in fields
 
 
 def convert_content_list_to_str(
@@ -3393,3 +3405,7 @@ def text_completion_prompt_to_messages(prompt: object) -> tuple[AllMessageValues
     if string_entries and len(string_entries) == len(entries):
         return tuple(ChatCompletionUserMessage(role="user", content=entry) for entry in string_entries)
     raise ValueError(f"`prompt` must be a non-empty string or a non-empty list of strings. Got: {prompt_type_name}.")
+
+
+def invalid_type_message(field_path: str, value: object, expected: str = "a string") -> str:
+    return f"Invalid type for '{field_path}': expected {expected}, got {type(value).__name__}"

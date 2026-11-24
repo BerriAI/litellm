@@ -28,6 +28,7 @@ from litellm.litellm_core_utils.core_helpers import as_object_list, as_str_mappi
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_file_ids_from_messages,
     is_encrypted_reasoning_block,
+    is_unrendered_block,
     is_unsignable_thinking_block,
     native_redacted_thinking_data,
 )
@@ -160,6 +161,32 @@ def is_anthropic_messages_url(url: str) -> bool:
     """Check whether a URL addresses Anthropic's Messages API."""
     parsed_url: Final = urlparse(url)
     return parsed_url.hostname == "api.anthropic.com" or parsed_url.path.removesuffix("/").endswith("/v1/messages")
+
+
+def _message_blocks(message: object) -> Sequence[object]:
+    fields: Final = as_str_mapping(message)
+    blocks: Final = validated_object_list(fields.get("content")) if fields is not None else None
+    return blocks or ()
+
+
+def _is_fallback_block(block: object) -> bool:
+    fields: Final = as_str_mapping(block)
+    return fields is not None and fields.get("type") == "fallback"
+
+
+def carries_fallback_block(messages: Sequence[object]) -> bool:
+    return any(map(_is_fallback_block, chain.from_iterable(map(_message_blocks, messages))))
+
+
+def _without_unrendered_content(message: Mapping[str, object]) -> Mapping[str, object]:
+    blocks: Final = as_object_list(message.get("content"))
+    if blocks is None:
+        return message
+    return {**message, "content": [block for block in blocks if not is_unrendered_block(block)]}
+
+
+def without_unrendered_blocks(messages: Sequence[Mapping[str, object]]) -> tuple[Mapping[str, object], ...]:
+    return tuple(map(_without_unrendered_content, messages))
 
 
 def requires_native_compaction_beta(
