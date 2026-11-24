@@ -1,3 +1,4 @@
+from collections.abc import Awaitable, Callable
 from typing import Final, cast
 
 import httpx
@@ -140,7 +141,7 @@ async def _aconvert_watsonx_messages_core(
     messages: list[AllMessageValues],
     provider: str,
     custom_prompt_dict: dict,
-    apply_template_fn,
+    apply_template_fn: Callable[..., Awaitable[str | None]],
 ) -> str:
     """Async core logic for converting watsonx messages to prompt"""
     from litellm.types.llms.watsonx import WatsonXModelPattern
@@ -172,7 +173,7 @@ def _convert_watsonx_messages_core(
     messages: list[AllMessageValues],
     provider: str,
     custom_prompt_dict: dict,
-    apply_template_fn,
+    apply_template_fn: Callable[..., str | None],
 ) -> str:
     """Sync core logic for converting watsonx messages to prompt"""
     from litellm.types.llms.watsonx import WatsonXModelPattern

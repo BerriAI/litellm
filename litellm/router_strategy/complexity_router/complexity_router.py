@@ -1297,7 +1297,7 @@ class _ClassifierCircuitBreaker:
         self._clock = clock
         self._state = self.CLOSED
         self._opened_at: float | None = None
-        self._generation = 0
+        self._generation: int = 0
         self._lock = Lock()
 
     def acquire_permit(self) -> int | None:
@@ -3206,8 +3206,8 @@ class ComplexityRouter(CustomLogger):
         self,
         tier: ComplexityTier | str,
         raw_messages: list[dict[str, object]] | None,
-        resolved_messages: list[dict[str, object]] | None,
-        request_kwargs: dict,
+        resolved_messages: Sequence[Mapping[str, object]] | None,
+        request_kwargs: dict[str, object],
         allowed_models: tuple[str, ...] | None = None,
         retained_pin: _SessionAffinityPin | None = None,
     ) -> str:
@@ -4317,7 +4317,9 @@ class ComplexityRouter(CustomLogger):
                 routelayer = await asyncio.to_thread(self._get_or_create_semantic_routelayer)
             return routelayer
 
-    async def _semantic_tier_override(self, user_message: str, request_kwargs: dict) -> ComplexityTier | str | None:
+    async def _semantic_tier_override(
+        self, user_message: str, request_kwargs: dict[str, object]
+    ) -> ComplexityTier | str | None:
         """Match the prompt against keyword_tier_rules by embedding similarity.
 
         Embeds the query ourselves (instead of letting SemanticRouter.acall embed it

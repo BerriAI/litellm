@@ -71,7 +71,7 @@ class MilvusVectorStoreConfig(BaseQueryEmbeddingVectorStoreConfig):
 
         return headers
 
-    def get_auth_credentials(self, litellm_params: dict) -> BaseVectorStoreAuthCredentials:
+    def get_auth_credentials(self, litellm_params: Mapping[str, object]) -> BaseVectorStoreAuthCredentials:
         api_key: Final = litellm_params.get("api_key")
         if not api_key:
             raise ValueError(
@@ -96,7 +96,9 @@ class MilvusVectorStoreConfig(BaseQueryEmbeddingVectorStoreConfig):
             ],
         }
 
-    def map_openai_params(self, non_default_params: dict, optional_params: dict, drop_params: bool) -> dict:
+    def map_openai_params(
+        self, non_default_params: Mapping[str, object], optional_params: dict, drop_params: bool
+    ) -> dict:
         for param, value in non_default_params.items():
             if param in MILVUS_OPTIONAL_PARAMS:
                 optional_params[param] = value
@@ -105,7 +107,7 @@ class MilvusVectorStoreConfig(BaseQueryEmbeddingVectorStoreConfig):
     def get_complete_url(
         self,
         api_base: str | None,
-        litellm_params: dict,
+        litellm_params: Mapping[str, object],
     ) -> str:
         """
         Get the base endpoint for Milvus API
@@ -284,7 +286,7 @@ class MilvusVectorStoreConfig(BaseQueryEmbeddingVectorStoreConfig):
         self,
         vector_store_create_optional_params: VectorStoreCreateOptionalRequestParams,
         api_base: str,
-    ) -> tuple[str, dict]:
+    ) -> tuple[str, dict[str, object]]:
         raise NotImplementedError
 
     def transform_create_vector_store_response(self, response: httpx.Response) -> VectorStoreCreateResponse:

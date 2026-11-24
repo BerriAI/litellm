@@ -11,6 +11,7 @@ Endpoint
 Docs - https://help.aliyun.com/zh/model-studio/text-embedding-synchronous-api
 """
 
+from collections.abc import Mapping
 from typing import Final, Protocol, runtime_checkable
 
 import httpx
@@ -80,7 +81,7 @@ class DashScopeEmbeddingConfig(BaseEmbeddingConfig):
 
     def map_openai_params(
         self,
-        non_default_params: dict,
+        non_default_params: Mapping[str, object],
         optional_params: dict,
         model: str,
         drop_params: bool = False,
@@ -109,14 +110,14 @@ class DashScopeEmbeddingConfig(BaseEmbeddingConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: Mapping[str, object],
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         return {
             "Content-Type": "application/json",
             "Authorization": f"Bearer {self._resolve_api_key(api_key)}",
@@ -128,8 +129,8 @@ class DashScopeEmbeddingConfig(BaseEmbeddingConfig):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         stream: bool | None = None,
     ) -> str:
         return ensure_api_route(self._resolve_embedding_api_base(api_base), "embeddings")
@@ -138,10 +139,10 @@ class DashScopeEmbeddingConfig(BaseEmbeddingConfig):
         self,
         model: str,
         input: AllEmbeddingInputValues,
-        optional_params: dict,
-        headers: dict,
-    ) -> dict:
-        data: Final[dict] = {
+        optional_params: Mapping[str, object],
+        headers: Mapping[str, object],
+    ) -> dict[str, object]:
+        data: Final[dict[str, object]] = {
             "model": model,
             "input": input,
         }
@@ -158,9 +159,9 @@ class DashScopeEmbeddingConfig(BaseEmbeddingConfig):
         model_response: EmbeddingResponse,
         logging_obj: LiteLLMLoggingObj,
         api_key: str | None,
-        request_data: dict,
-        optional_params: dict,
-        litellm_params: dict,
+        request_data: Mapping[str, object],
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
     ) -> EmbeddingResponse:
         try:
             response_json: Final = _DECODED_JSON.validate_python(raw_response.json())

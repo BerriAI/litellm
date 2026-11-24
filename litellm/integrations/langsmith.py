@@ -6,6 +6,7 @@ import os
 import random
 import traceback
 import types
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from typing import Final
 
@@ -132,7 +133,7 @@ class LangsmithLogger(CustomBatchLogger):
             LANGSMITH_TENANT_ID=_credentials_tenant_id,
         )
 
-    def _extract_metadata_fields(self, metadata: dict, credentials: LangsmithCredentialsObject):
+    def _extract_metadata_fields(self, metadata: Mapping[str, object], credentials: LangsmithCredentialsObject):
         return {
             "project_name": metadata.get("project_name", credentials["LANGSMITH_PROJECT"]),
             "run_name": metadata.get("run_name", self.langsmith_default_run_name),
@@ -143,7 +144,7 @@ class LangsmithLogger(CustomBatchLogger):
             "dotted_order": metadata.get("dotted_order", None),
         }
 
-    def _redact_metadata(self, metadata: dict) -> dict:
+    def _redact_metadata(self, metadata: Mapping[str, object]) -> dict:
         # helper is shallow; also scrub nested requester_metadata since
         # LangSmith forwards the whole dict into the run
         redacted: Final = redact_user_api_key_info(metadata=dict(metadata))
@@ -152,7 +153,7 @@ class LangsmithLogger(CustomBatchLogger):
             redacted["requester_metadata"] = redact_user_api_key_info(metadata=nested)
         return redacted
 
-    def _build_extra_metadata(self, metadata: dict):
+    def _build_extra_metadata(self, metadata: Mapping[str, object]):
         extra_metadata: Final = dict(metadata)
         requester_metadata: Final = extra_metadata.get("requester_metadata")
         if requester_metadata and isinstance(requester_metadata, dict):
@@ -177,7 +178,7 @@ class LangsmithLogger(CustomBatchLogger):
         }
         return outputs
 
-    def _ensure_required_ids(self, data: dict, run_id: str | None):
+    def _ensure_required_ids(self, data: dict[str, object], run_id: object):
         resolved_id: Final = run_id or str(uuid.uuid4())
         if "id" not in data or data["id"] is None:
             data["id"] = resolved_id
@@ -547,7 +548,7 @@ class LangsmithLogger(CustomBatchLogger):
 
         return _RUN_RESPONSE.validate_python(response.json())
 
-    def make_dot_order(self, run_id: str):
+    def make_dot_order(self, run_id: object):
         st: Final = datetime.now(timezone.utc)
         id_: Final = run_id
         return st.strftime("%Y%m%dT%H%M%S%fZ") + str(id_)

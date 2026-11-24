@@ -187,7 +187,7 @@ class LangfusePromptManagement(LangFuseLogger, PromptManagementBase, CustomLogge
     def _compile_prompt(
         self,
         langfuse_prompt_client: PROMPT_CLIENT,
-        langfuse_prompt_variables: dict | None,
+        langfuse_prompt_variables: Mapping[str, object] | None,
         call_type: Literal["completion", "text_completion"],
     ) -> list[AllMessageValues]:
         compiled_prompt: str | list | None = None
@@ -204,7 +204,7 @@ class LangfusePromptManagement(LangFuseLogger, PromptManagementBase, CustomLogge
 
         return compiled_prompt
 
-    def _get_optional_params_from_langfuse(self, langfuse_prompt_client: PROMPT_CLIENT) -> dict:
+    def _get_optional_params_from_langfuse(self, langfuse_prompt_client: PROMPT_CLIENT) -> dict[str, object]:
         return dict(_params_without_model(langfuse_prompt_client.config))
 
     async def async_get_chat_completion_prompt(
