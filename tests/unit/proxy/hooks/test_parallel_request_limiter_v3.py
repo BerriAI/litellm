@@ -2069,7 +2069,7 @@ async def _served_request(handler: NativeLimiter, auth: UserAPIKeyAuth, model: s
         ModelResponse(
             id=request_id,
             object="chat.completion",
-            created=int(datetime.now().timestamp()),
+            created=1_760_000_000,
             model=model,
             usage=Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150),
             choices=[],
