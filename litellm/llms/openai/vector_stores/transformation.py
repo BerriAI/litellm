@@ -85,7 +85,7 @@ class OpenAIVectorStoreConfig(BaseVectorStoreConfig):
     def get_complete_url(
         self,
         api_base: str | None,
-        litellm_params: dict,
+        litellm_params: dict[str, object],
     ) -> str:
         """
         Get the Base endpoint for OpenAI Vector Stores API
@@ -107,7 +107,7 @@ class OpenAIVectorStoreConfig(BaseVectorStoreConfig):
         vector_store_search_optional_params: VectorStoreSearchOptionalRequestParams,
         api_base: str,
         litellm_logging_obj: LiteLLMLoggingObj,
-        litellm_params: dict,
+        litellm_params: dict[str, object],
         extra_body: dict[str, object] | None = None,
     ) -> tuple[str, dict[str, object]]:
         encoded_vector_store_id: Final = encode_url_path_segment(vector_store_id, field_name="vector_store_id")

@@ -129,7 +129,7 @@ class AzureAIAgentsConfig(BaseConfig):
     def map_openai_params(
         self,
         non_default_params: Mapping[str, object],
-        optional_params: dict,
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
     ) -> dict:
@@ -196,7 +196,7 @@ class AzureAIAgentsConfig(BaseConfig):
         self,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
+        optional_params: dict[str, object],
         litellm_params: Mapping[str, object],
         headers: Mapping[str, object],
     ) -> dict[str, object]:
@@ -324,7 +324,7 @@ class AzureAIAgentsConfig(BaseConfig):
         api_key: str | None,
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
-        optional_params: dict,
+        optional_params: dict[str, object],
         litellm_params: Mapping[str, object],
         timeout: float | str | httpx.Timeout | None,
         acompletion: bool,
