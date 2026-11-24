@@ -164,7 +164,7 @@ class NvidiaNimRerankConfig(BaseRerankConfig):
         api_key: str | None = None,
         optional_params: Mapping[str, object] | None = None,
         litellm_params: Mapping[str, object] | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Validate that the Nvidia NIM API key is present.
         """

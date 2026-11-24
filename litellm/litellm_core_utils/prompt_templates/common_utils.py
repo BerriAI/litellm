@@ -1272,7 +1272,7 @@ def unpack_legacy_defs(
     return schema
 
 
-def sanitize_input_schema_for_anthropic(input_schema: dict) -> "AnthropicInputSchema":
+def sanitize_input_schema_for_anthropic(input_schema: Mapping[str, object]) -> "AnthropicInputSchema":
     """Coerce an arbitrary tool input_schema into the shape Anthropic accepts.
 
     Anthropic requires ``type == "object"``, only recognises ``$defs`` (legacy

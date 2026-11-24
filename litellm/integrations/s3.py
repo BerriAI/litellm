@@ -166,7 +166,7 @@ class S3Logger:
 
     async def _async_log_event(
         self,
-        kwargs,
+        kwargs: object,
         response_obj: object,
         start_time: datetime,
         end_time: object,

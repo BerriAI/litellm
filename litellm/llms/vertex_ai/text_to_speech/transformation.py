@@ -652,7 +652,7 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
         optional_params: dict,
         voice: str | dict[str, object] | None = None,
         drop_params: bool = False,
-        kwargs: dict = {},
+        kwargs: dict[str, object] = {},
     ) -> tuple[str | None, dict[str, object]]:
         """
         Map OpenAI parameters to Vertex AI TTS parameters
@@ -724,11 +724,11 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, str],
         model: str,
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, str]:
         """
         Validate Vertex AI environment and set up authentication headers
 
@@ -747,7 +747,7 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
         self,
         model: str,
         api_base: str | None,
-        litellm_params: dict,
+        litellm_params: dict[str, object],
     ) -> str:
         """
         Get the complete URL for Vertex AI TTS request
@@ -842,7 +842,7 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
         voice: str | None,
         optional_params: dict,
         litellm_params: dict,
-        headers: dict,
+        headers: dict[str, str],
     ) -> TextToSpeechRequestData:
         """
         Transform OpenAI TTS request to Vertex AI TTS format
@@ -1126,7 +1126,7 @@ class VertexAILyriaTextToSpeechConfig(VertexAITextToSpeechConfig):
         voice: str | None,
         optional_params: dict,  # mutable-ok: inherited provider interface accepts concrete mapped parameters
         litellm_params: dict,  # mutable-ok: inherited provider interface accepts concrete LiteLLM parameters
-        headers: dict,  # mutable-ok: inherited provider interface accepts and updates concrete HTTP headers
+        headers: dict[str, str],  # mutable-ok: inherited provider interface accepts and updates concrete HTTP headers
     ) -> TextToSpeechRequestData:
         access_token, project = self._ensure_access_token(
             credentials=self.safe_get_vertex_ai_credentials(litellm_params),

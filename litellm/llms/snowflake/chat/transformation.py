@@ -273,7 +273,7 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
         litellm_params: dict[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         headers = super().validate_environment(
             headers=headers,
             model=model,

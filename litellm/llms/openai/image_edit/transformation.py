@@ -170,7 +170,7 @@ class OpenAIImageEditConfig(BaseImageEditConfig):
         headers: dict,
         model: str,
         api_key: str | None = None,
-        litellm_params: dict | None = None,
+        litellm_params: dict[str, object] | None = None,
         api_base: str | None = None,
     ) -> dict:
         bearer_token: Final = resolve_openai_bearer_token(
@@ -183,7 +183,7 @@ class OpenAIImageEditConfig(BaseImageEditConfig):
         self,
         model: str,
         api_base: str | None,
-        litellm_params: dict,
+        litellm_params: dict[str, object],
     ) -> str:
         """
         Get the endpoint for OpenAI responses API
