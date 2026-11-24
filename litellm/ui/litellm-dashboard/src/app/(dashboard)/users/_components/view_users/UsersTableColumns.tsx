@@ -1,5 +1,6 @@
 "use client";
 
+import { availableRoleDisplayLabel } from "@/utils/roles";
 import { ColumnDef } from "@tanstack/react-table";
 import type { TFunction } from "i18next";
 import { ChartColumn, Copy, Info, KeyRound, MoreHorizontal, Pencil, Trash2 } from "lucide-react";
@@ -171,7 +172,9 @@ export const getUsersTableColumns = ({
       enableSorting: true,
       cell: ({ row }) => (
         <span className="text-sm">
-          {(row.original.user_role && possibleUIRoles?.[row.original.user_role]?.ui_label) || "-"}
+          {(row.original.user_role &&
+            availableRoleDisplayLabel(row.original.user_role, possibleUIRoles?.[row.original.user_role]?.ui_label)) ||
+            "-"}
         </span>
       ),
     },

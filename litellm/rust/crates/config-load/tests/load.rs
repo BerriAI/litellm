@@ -131,3 +131,27 @@ async fn resolves_nested_includes_once_in_breadth_first_order(secrets: SecretRes
     );
     assert!(config.include.is_empty());
 }
+
+#[rstest]
+#[tokio::test]
+async fn a_key_the_config_leaves_unset_is_read_from_a_variable_it_exports(
+    directory: TempDir,
+    secrets: SecretResolver,
+) {
+    let path = directory.path().join("config.yaml");
+    std::fs::write(
+        &path,
+        "environment_variables:\n  LITELLM_DROP_PARAMS: \"true\"\n",
+    )
+    .unwrap();
+
+    let config = litellm_config_load::load(path, secrets).await.unwrap();
+
+    assert_eq!(
+        (
+            config.litellm_settings.drop_params,
+            config.origins.variable("litellm_settings.drop_params")
+        ),
+        (Some(true), Some("LITELLM_DROP_PARAMS"))
+    );
+}

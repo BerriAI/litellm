@@ -119,7 +119,7 @@ class BedrockModelLister(BaseAWSLLM):
         from botocore.awsrequest import AWSRequest
 
         credentials: Final = self.resolve_credentials(
-            AwsAuthParams.model_validate(self._aws_params), self._aws_region_name
+            AwsAuthParams.model_validate(self._aws_params), self._aws_region_name, self._aws_params
         )
         request: Final = AWSRequest(method="GET", url=url, data="")
         SigV4Auth(credentials, "bedrock", self._aws_region_name).add_auth(request)

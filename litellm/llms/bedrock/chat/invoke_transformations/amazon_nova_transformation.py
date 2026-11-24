@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Final, TypeVar
 import httpx
 from pydantic import TypeAdapter, ValidationError
 
+import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.types.llms.bedrock import (
     BedrockInvokeNovaRequest,
@@ -25,7 +26,11 @@ from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponse
 
 from ...common_utils import served_service_tier
-from ..converse_transformation import AmazonConverseConfig
+from ..converse_transformation import (
+    AmazonConverseConfig,
+    messages_with_guard_content_as_text,
+    system_with_guard_content_as_text,
+)
 from .base_invoke_transformation import AmazonInvokeConfig
 
 if TYPE_CHECKING:
@@ -122,8 +127,10 @@ class AmazonInvokeNovaConfig(AmazonInvokeConfig, AmazonConverseConfig):
             litellm_params=litellm_params,
             headers=headers,
         )
+        _nova_request: Final = BedrockInvokeNovaRequest(**_transformed_nova_request)
+        _drops_guard_content: Final = litellm.drop_params is True or litellm_params.get("drop_params") is True
         _bedrock_invoke_nova_request: Final = self._inline_cache_points(
-            BedrockInvokeNovaRequest(**_transformed_nova_request)
+            self._with_guard_content_as_text(_nova_request) if _drops_guard_content else _nova_request
         )
         self._remove_empty_system_messages(_bedrock_invoke_nova_request)
         bedrock_invoke_nova_request: Final = self._filter_allowed_fields(_bedrock_invoke_nova_request)
@@ -178,6 +185,14 @@ class AmazonInvokeNovaConfig(AmazonInvokeConfig, AmazonConverseConfig):
                 )
                 for message in request.get("messages", [])
             ],
+        }
+
+    @staticmethod
+    def _with_guard_content_as_text(request: BedrockInvokeNovaRequest) -> BedrockInvokeNovaRequest:
+        return {
+            **request,
+            "system": list(system_with_guard_content_as_text(request.get("system", ()))),
+            "messages": list(messages_with_guard_content_as_text(request.get("messages", ()))),
         }
 
     def _filter_allowed_fields(self, bedrock_invoke_nova_request: BedrockInvokeNovaRequest) -> dict:

@@ -235,6 +235,15 @@ def _held_counter_key(entry: object) -> str | None:
     return counter_key if isinstance(counter_key, str) else None
 
 
+def reservation_inputs(
+    reservation: Mapping[str, object] | None,
+) -> tuple[BudgetReservation | None, tuple[str | None, ...]]:
+    """The reservation as the typed record the Rust engine reads, and each entry's window reset."""
+    if not reservation:
+        return None, ()
+    return _reservation_record(reservation), tuple(map(_window_reset, _held_entries(reservation.get("entries") or ())))
+
+
 async def _observed_spend(counter_key: str | None) -> float | None:
     if counter_key is None:
         return None

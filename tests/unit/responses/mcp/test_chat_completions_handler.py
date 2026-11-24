@@ -3115,3 +3115,21 @@ async def test_a_gateway_mcp_entry_that_allows_no_converted_tool_sends_none_and_
 
     assert sent == ("none",)
     call_tool.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_an_mcp_choice_forcing_a_gateway_server_answers_400_instead_of_reaching_the_model(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    call_tool: Final = AsyncMock()
+    _served_by_a_recording_mcp_server(monkeypatch, call_tool)
+
+    with pytest.raises(litellm.BadRequestError) as exc:
+        await _call_echo_on_openai_with_the_demo_server(
+            respx_mock, monkeypatch, (_ok(_CHAT_ROUND_TWO),), {"type": "mcp", "server_label": "demo"}
+        )
+
+    assert exc.value.status_code == 400
+    assert "cannot force `demo`, which runs on the LiteLLM MCP gateway" in exc.value.message
+    assert not respx_mock.calls
+    call_tool.assert_not_awaited()

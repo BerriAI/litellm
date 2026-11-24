@@ -1,34 +1,49 @@
-mod auth;
+mod admit;
+mod boot;
+mod callbacks;
+mod db;
 mod error;
+mod gateway_requests;
+mod health;
+pub mod host;
+mod license;
+pub mod middleware;
+mod periodic;
 mod redis;
-pub use error::Error;
-pub use redis::RedisClients;
-
-use std::{path::Path, sync::Arc, time::Instant};
-
-use axum::{
-    Router,
-    body::{Body, Bytes},
-    extract::Request,
-    middleware::Next,
-    response::Response,
+mod resources;
+mod state;
+#[cfg(test)]
+mod test_support;
+pub use admit::{Admit, Reason, Refused};
+pub use callbacks::{
+    Callbacks, Registered, Unregistrable,
+    model_capacity::{self, ModelCapacity},
+    parallel_request_limiter::{self, KeyLimiter},
 };
-use http_body_util::BodyExt;
+pub use error::Error;
+pub use gateway_requests::{Category, GatewayRequests};
+pub use periodic::PeriodicJob;
+pub use redis::RedisClients;
+pub use resources::Resources;
+pub use state::AppState;
 
-use litellm_config::Config;
-use litellm_config_load::{ConfigEnvironment, environment_values};
+/// The gateway served through the native host.
+pub type Gateway = litellm_gateway_inference::Gateway<host::NativeHost>;
+
+use std::{path::Path, sync::Arc};
+
+use axum::Router;
+
+use litellm_config::{Config, Environment};
 use litellm_env::{Lookup, ProcessEnvironment};
-use litellm_gateway_auth::Auth;
-use litellm_gateway_inference::{Gateway, ModelRouter};
+use litellm_gateway_inference::RoutingCache;
 use litellm_http::{
-    ClientVariant, HttpClientPool, HttpSettings, HttpSettingsLayer, Resolution, SslVerify,
+    ClientVariant, HttpClientPool, HttpSettings, HttpSettingsLayer, Resolution,
     media::PublicDnsResolver,
 };
-use litellm_inference::resources::CoreResources;
 use litellm_model_catalog::{BUNDLED_REGISTRY, Catalog};
+use litellm_redis_store::{Remote, active_teams::ActiveTeams};
 use litellm_secrets::{OidcResolver, SecretManagerState, SecretResolver};
-use litellm_tracing::ByteChunk;
-use uuid::Uuid;
 
 /// The config at `path`, its `os.environ/` references read from the process environment.
 pub async fn load_config(path: impl AsRef<Path>) -> Result<Config, Error> {
@@ -40,7 +55,7 @@ pub async fn load_config(path: impl AsRef<Path>) -> Result<Config, Error> {
     Ok(litellm_config_load::load(path, secrets).await?)
 }
 
-fn environment_secrets(
+pub(crate) fn environment_secrets(
     environment: Arc<dyn Lookup + Send + Sync>,
     client: litellm_http::Client,
 ) -> SecretResolver {
@@ -51,40 +66,61 @@ fn environment_secrets(
     )
 }
 
-pub fn build_inference(config: &Config) -> Result<Arc<Gateway>, Error> {
-    let pool = Arc::new(HttpClientPool::new(Arc::new(PublicDnsResolver)));
-    let environment = Arc::new(ConfigEnvironment::new(
-        environment_values(&config.environment_variables)?,
-        Arc::new(ProcessEnvironment),
-    ));
-    let lookup = |name: &str| environment.get(name);
+/// The inference routes of a config, and the limiter that counts their calls against each key's
+/// own limits.
+pub struct Inference {
+    pub gateway: Arc<Gateway>,
+    pub key_limiter: Arc<KeyLimiter>,
+}
+
+/// Whether a license is set at all is all the proxy asks before it honors a reserved priority.
+const LICENSE: &str = "LITELLM_LICENSE";
+
+/// The inference routes of `config` with the callbacks the gateway runs around their calls, in
+/// the order the proxy registers them: the config's `callbacks`, of which only the dynamic rate
+/// limiter is built, then the proxy's own key limiter. The keys' limits and the model groups'
+/// capacity are counted in `redis`'s coordination client when there is one, and in this process's
+/// memory otherwise.
+pub async fn build_inference(
+    config: &Config,
+    environment: &Environment,
+    resources: &Resources,
+    routing: RoutingCache,
+    redis: &RedisClients,
+) -> Result<Inference, Error> {
     let catalog = Catalog::parse(BUNDLED_REGISTRY)?.value;
-    let router = ModelRouter::from_config(config, &catalog);
-    let settings = &config.litellm_settings;
-    let http_settings = HttpSettings::from_layers([
-        HttpSettingsLayer::from_environment(&lookup),
-        HttpSettingsLayer {
-            ssl_verify: settings.ssl_verify.as_ref().map(|value| match value {
-                litellm_config::Spelled::Value(true) => SslVerify::Enabled,
-                litellm_config::Spelled::Value(false) => SslVerify::Disabled,
-                litellm_config::Spelled::Text(value) => SslVerify::parse(value),
-            }),
-            ssl_certificate: settings.ssl_certificate.as_ref().map(Into::into),
-            ssl_security_level: settings.ssl_security_level.clone(),
-            ssl_ecdh_curve: settings.ssl_ecdh_curve.clone(),
-            force_ipv4: settings.force_ipv4,
-            http2: settings.http2,
-            aiohttp_trust_env: settings.aiohttp_trust_env,
-            disable_aiohttp_trust_env: settings.disable_aiohttp_trust_env,
-            disable_aiohttp_transport: settings.disable_aiohttp_transport,
-            ..Default::default()
-        },
-    ]);
-    let http = Resolution::from(&http_settings).config;
-    let client = pool.client(&http, ClientVariant::Provider)?;
-    let secrets = Arc::new(environment_secrets(environment.clone(), client));
-    let resources = CoreResources::new(pool);
-    Ok(Arc::new(Gateway::new(resources, http, secrets, router)?))
+    let (router, shaping) = boot::router(config, &catalog).await?;
+    let limits = parallel_request_limiter::Settings::read(config, environment);
+    let counters = parallel_request_limiter::counters(redis.coordination.clone());
+    let key_limiter = KeyLimiter::new(limits, counters.clone(), router.clone());
+    let licensed = resources.environment.get(LICENSE).is_some();
+    let model_capacity = model_capacity::Settings::read(config, limits, licensed).map(|read| {
+        let active = ActiveTeams::new(redis.coordination.clone().map(|client| Remote {
+            client,
+            default_ttl: parallel_request_limiter::REDIS_DEFAULT_TTL,
+        }));
+        ModelCapacity::new(read, counters, active, router.clone())
+    });
+    let callbacks = Callbacks::new(
+        model_capacity
+            .iter()
+            .map(|capacity| capacity.registered())
+            .chain([key_limiter.registered()])
+            .collect(),
+    )?;
+    let gateway = Gateway::new(
+        resources.core.clone(),
+        resources.http.clone(),
+        resources.secrets.clone(),
+        router,
+        shaping,
+        routing,
+        host::NativeHost::new(Arc::new(callbacks)),
+    )?;
+    Ok(Inference {
+        gateway: Arc::new(gateway),
+        key_limiter,
+    })
 }
 
 pub fn install_crypto_provider() {
@@ -93,206 +129,14 @@ pub fn install_crypto_provider() {
     }
 }
 
-pub async fn build_redis(
-    config: &Config,
-    pool: &HttpClientPool,
-    http: &litellm_http::HttpClientConfig,
-) -> Result<RedisClients, Error> {
-    let environment = Arc::new(environment_values(&config.environment_variables)?);
-    let lookup: litellm_redis_connect::SharedEnvironment = Arc::new(move |name: &str| {
-        environment
-            .get(name)
-            .map(|value| value.expose().to_owned())
-            .or_else(|| std::env::var(name).ok())
-    });
-    let resources = redis::Resources {
-        http: pool.client(http, ClientVariant::Provider)?,
-        lookup: lookup.clone(),
-    };
-    redis::connect(config, &*lookup, &resources).await
-}
-
-pub async fn build_mcp(
-    config: &Config,
-    shutdown: tokio_util::sync::CancellationToken,
-    pool: &HttpClientPool,
-    http: &litellm_http::HttpClientConfig,
-) -> Result<Option<litellm_gateway_mcp::ConfiguredGateway>, Error> {
-    if !config.mcp_tools.is_empty() {
-        return Err(Error::McpSetting("mcp_tools".into()));
-    }
-    if config.mcp_servers.is_empty() {
-        return Ok(None);
-    }
-    if let Some(setting) = config
-        .general_settings
-        .additional_fields
-        .keys()
-        .chain(config.litellm_settings.additional_fields.keys())
-        .find(|key| key.starts_with("mcp_"))
-    {
-        return Err(Error::McpSetting(setting.clone()));
-    }
-    if !config.guardrails.is_empty()
-        || !config.policies.is_empty()
-        || !config.policy_attachments.is_empty()
-    {
-        return Err(Error::McpGuardrails);
-    }
-    Auth::from_config(config).validate().await?;
-    let client = pool.client(http, ClientVariant::NoRedirect)?;
-    Ok(Some(
-        litellm_gateway_mcp::ConfiguredGateway::connect(
-            &config.mcp_servers,
-            (*client).clone(),
-            shutdown,
-        )
-        .await?,
-    ))
-}
-
-pub fn router(
-    inference: Arc<Gateway>,
-    config: &Config,
-    ui: Option<Router>,
-    mcp: Option<Router>,
-) -> Router {
-    let auth = Auth::from_config(config);
-    let inference = litellm_gateway_inference::router(inference)
-        .merge(mcp.unwrap_or_default())
-        .route_layer(axum::middleware::from_fn(auth::bind_session_owner))
-        .route_layer(axum::middleware::from_fn_with_state(
-            auth,
-            litellm_gateway_auth::authenticate,
-        ))
-        .layer(axum::middleware::from_fn(log_request));
-    let health = Router::new().route("/health/readiness", axum::routing::get(readiness));
-    match ui {
-        Some(ui) => inference.merge(ui).merge(health),
-        None => inference.merge(health),
-    }
-}
-
-async fn readiness() -> axum::Json<serde_json::Value> {
-    axum::Json(serde_json::json!({"status": "healthy", "db": "Not connected"}))
-}
-
-async fn log_request(request: Request, next: Next) -> Response {
-    let request_id = Uuid::new_v4().to_string();
-    let log_body_chunks = tracing::enabled!(tracing::Level::DEBUG);
-    let method = request.method().clone();
-    let path = request.uri().path().to_owned();
-    let started = Instant::now();
-    let request = if log_body_chunks {
-        request.map(|body| logged_body(body, request_id.clone(), "input"))
-    } else {
-        request
-    };
-    let response = next.run(request).await;
-    tracing::info!(
-        %request_id,
-        %method,
-        %path,
-        status = response.status().as_u16(),
-        time_to_headers_ms = started.elapsed().as_secs_f64() * 1000.0,
-        "response headers"
-    );
-    if log_body_chunks {
-        response.map(|body| logged_body(body, request_id, "output"))
-    } else {
-        response
-    }
-}
-
-fn logged_body(body: Body, request_id: String, direction: &'static str) -> Body {
-    Body::new(body.map_frame(move |frame| {
-        if let Some(data) = frame.data_ref() {
-            log_chunk(&request_id, direction, data);
-        }
-        frame
-    }))
-}
-
-fn log_chunk(request_id: &str, direction: &str, data: &Bytes) {
-    let chunk = ByteChunk::new(data);
-    tracing::debug!(request_id, direction, encoding = chunk.encoding(), chunk = %chunk, "body chunk");
-}
-
-#[cfg(test)]
-mod tests {
-    use std::{convert::Infallible, sync::mpsc};
-
-    use axum::{body::to_bytes, http::StatusCode, routing::post};
-    use futures_util::stream;
-    use litellm_tracing::{Logger, Metadata, Record, Sink};
-    use rstest::rstest;
-    use serde_json::{Value, json};
-    use tower::ServiceExt;
-
-    use super::*;
-
-    struct LogSink(mpsc::Sender<Value>);
-
-    impl Sink for LogSink {
-        fn enabled(&self, _: &Metadata<'_>) -> bool {
-            true
-        }
-
-        fn emit(&self, record: &Record) {
-            self.0
-                .send(json!({"message": record.message, "fields": record.fields}))
-                .unwrap();
-        }
-    }
-
-    #[rstest]
-    #[tokio::test]
-    async fn logs_each_body_chunk_without_changing_streamed_bytes() {
-        let app = Router::new()
-            .route(
-                "/stream",
-                post(|_: Bytes| async {
-                    (
-                        StatusCode::OK,
-                        Body::from_stream(stream::iter([
-                            Ok::<_, Infallible>(Bytes::from_static(b"event: first\n\n")),
-                            Ok(Bytes::from_static(b"event: second\n\n")),
-                        ])),
-                    )
-                }),
-            )
-            .layer(axum::middleware::from_fn(log_request));
-        let request_chunks = [
-            Ok::<_, Infallible>(Bytes::from_static(b"hello")),
-            Ok(Bytes::from_static(b" world")),
-        ];
-        let request = Request::post("/stream")
-            .body(Body::from_stream(stream::iter(request_chunks)))
-            .unwrap();
-        let (sender, receiver) = mpsc::channel();
-        let logger = Logger::new(LogSink(sender));
-
-        let output = logger
-            .instrument(async {
-                let response = app.oneshot(request).await.unwrap();
-                to_bytes(response.into_body(), 1024).await.unwrap()
-            })
-            .await;
-
-        assert_eq!(output, "event: first\n\nevent: second\n\n");
-        let records: Vec<Value> = receiver.try_iter().collect();
-        assert_eq!(records.len(), 5);
-        assert_eq!(records[0]["fields"]["chunk"], "hello");
-        assert_eq!(records[1]["fields"]["chunk"], " world");
-        assert_eq!(records[2]["fields"]["status"], 200);
-        assert_eq!(records[3]["fields"]["chunk"], "event: first\n\n");
-        assert_eq!(records[4]["fields"]["chunk"], "event: second\n\n");
-        let request_id = &records[2]["fields"]["request_id"];
-        assert!(request_id.as_str().is_some());
-        assert!(
-            records
-                .iter()
-                .all(|record| &record["fields"]["request_id"] == request_id)
-        );
-    }
+pub fn router(state: AppState, config: &Config) -> Router {
+    let inference = middleware::rate_limited(
+        litellm_gateway_inference::router(state.inference.clone()),
+        state.key_limiter.clone(),
+    )
+    .route_layer(axum::middleware::from_fn_with_state(
+        state.auth(config),
+        litellm_gateway_auth::authenticate::<host::NativeRows>,
+    ));
+    middleware::inference(inference).merge(health::router(state))
 }

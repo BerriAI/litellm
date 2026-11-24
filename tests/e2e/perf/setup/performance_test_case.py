@@ -23,6 +23,7 @@ GuardrailMode = Literal["pre_call", "post_call"]
 Metric = Literal[
     "unexpected_status_count",
     "gateway_added_seconds",
+    "client_total_seconds",
     "time_to_first_token_seconds",
     "memory_growth_megabytes",
     "postgres_calls_per_request",
@@ -37,7 +38,6 @@ Metric = Literal[
     "prometheus_redis_latency_mean_seconds",
     "postgres_active_sessions",
     "postgres_slowest_statement_seconds",
-    "postgres_peak_connections",
     "sustained_rps",
 ]
 

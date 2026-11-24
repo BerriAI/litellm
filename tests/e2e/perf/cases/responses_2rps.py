@@ -3,13 +3,22 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import Final
 
 from .direct_vs_bridge import direct_vs_bridge
 
-CASE: Final = direct_vs_bridge(
+_BASE: Final = direct_vs_bridge(
     "responses_2rps",
     "responses",
     direct="gpt-6-luna",
     bridge="claude-sonnet-5",
+)
+
+CASE: Final = replace(
+    _BASE,
+    limits=tuple(
+        replace(limit, max=0.144) if limit.metric == "litellm_overhead_seconds" and limit.percentile == 50 else limit
+        for limit in _BASE.limits
+    ),
 )

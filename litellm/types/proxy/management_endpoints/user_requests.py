@@ -1,11 +1,10 @@
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from typing import Annotated, Final, Literal
 
 from pydantic import AfterValidator, Field, field_validator, model_validator
 
-from litellm.models.team import BudgetLimitEntry
+from litellm.models.budget import BudgetRolloverCap
 from litellm.models.user import LiteLLM_UserTable
-from litellm.proxy.common_utils.timezone_utils import budget_duration_error
 from litellm.types.proxy.auth.user_roles import LitellmUserRoles
 from litellm.types.proxy.management_endpoints.request_base import GenerateRequestBase
 from litellm.types.utils import LiteLLMPydanticObjectBase
@@ -26,25 +25,12 @@ def _validate_custom_user_id(value: str) -> str:
     return normalized
 
 
-def _validate_user_windows(windows: Sequence[BudgetLimitEntry] | None) -> Sequence[BudgetLimitEntry] | None:
-    if windows is None:
-        return None
-    if len({window.budget_duration for window in windows}) != len(windows):
-        raise ValueError("Each budget duration may appear only once")
-    for window in windows:
-        if (error := budget_duration_error(window.budget_duration)) is not None:
-            raise ValueError(error)
-        if not 0 <= window.max_budget < float("inf"):
-            raise ValueError("Window max_budget must be finite and non-negative")
-    return windows
-
-
 class NewUserRequest(GenerateRequestBase):
-    _validate_windows = field_validator("budget_limits")(_validate_user_windows)
     user_id: Annotated[str, AfterValidator(_validate_custom_user_id)] | None = None
     tpm_limit: int | None = Field(default=None, ge=0)
     rpm_limit: int | None = Field(default=None, ge=0)
     max_budget: float | None = None
+    rollover_max_budget: BudgetRolloverCap | None = None
     user_email: str | None = None
     user_alias: str | None = None
     user_role: (
@@ -75,7 +61,6 @@ class NewUserRequest(GenerateRequestBase):
 
 
 class UpdateUserRequestNoUserIDorEmail(GenerateRequestBase):  # shared with BulkUpdateUserRequest
-    _validate_windows = field_validator("budget_limits")(_validate_user_windows)
     tpm_limit: int | None = Field(default=None, ge=0)
     rpm_limit: int | None = Field(default=None, ge=0)
     # repr=False keeps the plaintext out of management-endpoint alerts, which str() the request model
@@ -93,6 +78,7 @@ class UpdateUserRequestNoUserIDorEmail(GenerateRequestBase):  # shared with Bulk
         | None
     ) = None
     max_budget: float | None = None
+    rollover_max_budget: BudgetRolloverCap | None = None
 
 
 class UpdateUserRequest(UpdateUserRequestNoUserIDorEmail):

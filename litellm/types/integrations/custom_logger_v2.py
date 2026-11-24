@@ -18,8 +18,8 @@ from pydantic import Field as Member
 
 _LOGGER: Final = logging.getLogger("LiteLLM")
 
-RecordT: Final = TypeVar("RecordT", bound=BaseModel)
-ValueT: Final = TypeVar("ValueT")
+RecordT = TypeVar("RecordT", bound=BaseModel)
+ValueT = TypeVar("ValueT")
 
 
 I64: TypeAlias = Annotated[int, Member(ge=-(2**63), le=2**63 - 1)]
@@ -167,6 +167,9 @@ class KeyIdentity(Record):
     invoked_agent_id: Scalar | None = None
     team_priority: Scalar | None = None
     key_priority: Scalar | None = None
+    customer_org_id: str | None = None
+    customer_team_id: str | None = None
+    customer_member_id: str | None = None
 
 
 class LoggedKeyIdentity(Record):
@@ -211,6 +214,20 @@ class AgentPolicy(Record):
     session_tpm_limit: Scalar | None = None
 
 
+class CustomerScope(Record):
+    """One level of the customer hierarchy a request is charged to, with the limits its budget row grants.
+    ``borrows`` marks a customer organization whose per-model limits are shares of idle capacity the dynamic
+    limiter enforces, because customer organizations are listed to borrow it."""
+
+    key: str | None = None
+    entity_id: str | None = None
+    rpm_limit: I64 | None = None
+    tpm_limit: I64 | None = None
+    model_rpm_limit: Mapping[str, I64] | None = None
+    model_tpm_limit: Mapping[str, I64] | None = None
+    borrows: Flag | None = None
+
+
 class KeyLimits(Record):
     rpm_limit: Scalar | None = None
     tpm_limit: Scalar | None = None
@@ -231,6 +248,7 @@ class KeyLimits(Record):
     estimated_output_tokens: EstimatedOutputTokens | None = None
     managed_agent_policy: AgentPolicy | None = None
     invoked_agent_policy: AgentPolicy | None = None
+    customer_scopes: tuple[CustomerScope, ...] | None = None
 
 
 class BudgetPlanCounter(Strict):
@@ -348,6 +366,24 @@ class ZeroCost(Record):
 class Cost(Record):
     response_cost: Scalar | None = None
     zero_cost: ZeroCost | None = None
+    cost_finalized: bool | None = None
+    response_cost_failure_debug_info: str | None = None
+    failure_row_response_cost: F64 | None = None
+
+
+class SpendLogId(Record):
+    id: str | None = None
+
+
+class BilledRetryAttempt(Record):
+    position: I64 | None = None
+    spend_log_id: SpendLogId | None = None
+    litellm_call_id: str | None = None
+    parent_request_id: str | None = None
+    attempted_retries: I64 | None = None
+    deployment_id: str | None = None
+    response_cost: F64 | None = None
+    usage: UsageRecord | None = None
 
 
 class ModelInfo(Record):
@@ -474,10 +510,12 @@ def coerce_value(owner: str, adapter: TypeAdapter[ValueT], raw: object) -> Value
 __all__ = [
     "AgentPolicy",
     "AttemptTiming",
+    "BilledRetryAttempt",
     "BudgetPlan",
     "BudgetPlanCounter",
     "BudgetReservation",
     "Cost",
+    "CustomerScope",
     "Deployment",
     "EstimatedOutputTokens",
     "GuardrailEntry",
@@ -502,6 +540,7 @@ __all__ = [
     "ReservationEntry",
     "Scalar",
     "ScalarItem",
+    "SpendLogId",
     "Strict",
     "Stringified",
     "Usage",

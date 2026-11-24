@@ -1,5 +1,6 @@
 from typing import Final
 
+from integration._support.responses_prompt import with_leading_system_message
 from integration.translation.case import TranslationTestCase
 from integration.translation.messages.templates import MESSAGES_BRIDGE_RESPONSE, MESSAGES_REQUEST
 from integration.translation.templates.openai import OPENAI_RESPONSES_REQUEST_FROM_MESSAGES, OPENAI_RESPONSES_RESPONSE
@@ -16,13 +17,16 @@ GPT_5_4_TEST_CASE: Final = TranslationTestCase(
     },
     expected_provider_endpoint="/responses",
     expected_provider_headers={"content-type": "application/json", "authorization": "Bearer synthetic-openai-key"},
-    expected_provider_request={
-        "model": "gpt-5.4",
-        "input": [{"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Say hello."}]}],
-        "include": ["reasoning.encrypted_content"],
-        "instructions": "You are a terse assistant.",
-        "max_output_tokens": 64,
-    },
+    expected_provider_request=with_leading_system_message(
+        {
+            "model": "gpt-5.4",
+            "input": [{"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Say hello."}]}],
+            "include": ["reasoning.encrypted_content"],
+            "instructions": "You are a terse assistant.",
+            "max_output_tokens": 64,
+        },
+        role="developer",
+    ),
     mock_provider_response={
         "id": "resp_0d51005efcef0683006ac3f00d0a3087d098c079bde6c6ee3c",
         "object": "response",
@@ -112,13 +116,16 @@ GPT_5_6_SOL_TEST_CASE: Final = TranslationTestCase(
     },
     expected_provider_endpoint="/responses",
     expected_provider_headers={"content-type": "application/json", "authorization": "Bearer synthetic-openai-key"},
-    expected_provider_request={
-        "model": "gpt-5.6-sol",
-        "input": [{"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Say hello."}]}],
-        "include": ["reasoning.encrypted_content"],
-        "instructions": "You are a terse assistant.",
-        "max_output_tokens": 64,
-    },
+    expected_provider_request=with_leading_system_message(
+        {
+            "model": "gpt-5.6-sol",
+            "input": [{"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Say hello."}]}],
+            "include": ["reasoning.encrypted_content"],
+            "instructions": "You are a terse assistant.",
+            "max_output_tokens": 64,
+        },
+        role="developer",
+    ),
     mock_provider_response={
         "id": "resp_006b1d3db27ce558006ac3f0119c5887d0b0fda575ab760d9d",
         "object": "response",
@@ -208,13 +215,16 @@ GPT_5_6_LUNA_TEST_CASE: Final = TranslationTestCase(
     },
     expected_provider_endpoint="/responses",
     expected_provider_headers={"content-type": "application/json", "authorization": "Bearer synthetic-openai-key"},
-    expected_provider_request={
-        "model": "gpt-5.6-luna",
-        "input": [{"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Say hello."}]}],
-        "include": ["reasoning.encrypted_content"],
-        "instructions": "You are a terse assistant.",
-        "max_output_tokens": 64,
-    },
+    expected_provider_request=with_leading_system_message(
+        {
+            "model": "gpt-5.6-luna",
+            "input": [{"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Say hello."}]}],
+            "include": ["reasoning.encrypted_content"],
+            "instructions": "You are a terse assistant.",
+            "max_output_tokens": 64,
+        },
+        role="developer",
+    ),
     mock_provider_response={
         "id": "resp_0fc0133ee7ba1828006ac3f015182c87d0bbc9b785a3a5a335",
         "object": "response",

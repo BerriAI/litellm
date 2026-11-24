@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any, Final, NoReturn, Protocol, runtime_checka
 import httpx
 from pydantic import TypeAdapter
 
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import EmbeddingResponse
 from litellm.types.vector_stores import (
@@ -109,7 +110,7 @@ class RouterVectorStoreEmbeddingExecutor:
     def _embedding_kwargs(self, configuration: Mapping[str, object]) -> Mapping[str, object]:
         configured_metadata: Final = configuration.get("metadata")
         metadata: Final = {
-            **(configured_metadata if isinstance(configured_metadata, Mapping) else {}),
+            **(as_str_mapping(configured_metadata) or {}),
             **self.metadata,
         }
         return {
@@ -150,6 +151,13 @@ class RouterVectorStoreEmbeddingExecutor:
 
 
 class BaseVectorStoreConfig:
+    def combine_search_filters(self, registered: object, requested: object) -> object:
+        if registered is None:
+            return requested
+        if requested is None or registered == requested:
+            return registered
+        return {"type": "and", "filters": [registered, requested]}
+
     def validate_create_vector_store(self) -> None:
         return None
 
@@ -185,7 +193,7 @@ class BaseVectorStoreConfig:
         litellm_logging_obj: LiteLLMLoggingObj,
         litellm_params: dict,
         extra_body: dict[str, object] | None = None,
-    ) -> tuple[str, dict]:
+    ) -> tuple[str, dict[str, object]]:
         pass
 
     async def atransform_search_vector_store_request(
@@ -197,7 +205,7 @@ class BaseVectorStoreConfig:
         litellm_logging_obj: LiteLLMLoggingObj,
         litellm_params: dict,
         extra_body: dict[str, object] | None = None,
-    ) -> tuple[str, dict]:
+    ) -> tuple[str, dict[str, object]]:
         """
         Optional async version of transform_search_vector_store_request.
         If not implemented, the handler will fall back to the sync version.
@@ -225,7 +233,7 @@ class BaseVectorStoreConfig:
         self,
         vector_store_create_optional_params: VectorStoreCreateOptionalRequestParams,
         api_base: str,
-    ) -> tuple[str, dict]:
+    ) -> tuple[str, dict[str, object]]:
         pass
 
     @abstractmethod

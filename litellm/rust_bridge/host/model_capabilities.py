@@ -5,11 +5,15 @@ from collections.abc import Mapping
 from functools import lru_cache
 from typing import Final, TypeAlias
 
+from pydantic import TypeAdapter
+
 import litellm
 from litellm.litellm_core_utils import fallback_generalizations
 from litellm.litellm_core_utils.core_helpers import as_object_list, as_str_mapping
 from litellm.litellm_core_utils.get_model_cost_map import FALLBACK_GENERALIZATIONS_KEY
 from litellm.litellm_core_utils.model_cost_table import ModelCostVersion, model_cost_version
+
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class _Held:
@@ -110,7 +114,7 @@ def model_cost_document(known: _CatalogVersion | None) -> tuple[_CatalogVersion,
         return current, None
     rows: Final = as_str_mapping(litellm.model_cost) or {}  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # the model map is an untyped dict of rows
     rules: Final = as_object_list(fallback_generalizations.get_fallback_generalization_rules()) or []  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # the rule registry keeps the raw untyped list
-    document: Final = json.loads(
-        json.dumps({**rows, FALLBACK_GENERALIZATIONS_KEY: {"rules": list(rules)}}, default=str)
+    document: Final = _DECODED_JSON.validate_python(
+        json.loads(json.dumps({**rows, FALLBACK_GENERALIZATIONS_KEY: {"rules": list(rules)}}, default=str))
     )
     return current, as_str_mapping(document)

@@ -70,7 +70,7 @@ test.describe("Public model hub (/ui/model_hub_table)", () => {
     await expect(page.getByRole("tab")).toHaveCount(2);
     await page.getByRole("tab", { name: "Skills Hub", exact: true }).click();
     await expect(
-      page.getByRole("textbox", { name: "Search skills, tags, or people…", exact: true }),
+      page.getByRole("textbox", { name: "Search skills, tags, or user IDs…", exact: true }),
     ).toBeVisible();
   });
 
@@ -100,7 +100,7 @@ test.describe("Public model hub (/ui/model_hub_table)", () => {
       await dismissFeedbackPopup(page);
       await page.getByRole("checkbox", { name: domain, exact: true }).check();
       await page
-        .getByRole("textbox", { name: "Search skills, tags, or people…", exact: true })
+        .getByRole("textbox", { name: "Search skills, tags, or user IDs…", exact: true })
         .fill(skillName);
       await page.getByRole("link").filter({ hasText: skillName }).click();
 

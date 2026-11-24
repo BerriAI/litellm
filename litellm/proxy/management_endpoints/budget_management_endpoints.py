@@ -15,37 +15,185 @@ All /budget management endpoints
 import math
 from collections.abc import Mapping
 from datetime import datetime, timezone
-from types import MappingProxyType
-from typing import Annotated, Final
+from typing import (
+    TYPE_CHECKING,
+    Annotated,
+    Final,
+    Protocol,
+    cast,  # noqa: TID251  # generated Prisma transactions need a structural protocol boundary
+)
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import TypeAdapter
+from pydantic import TypeAdapter, ValidationError
 
 from litellm._internal_context import service_target
 from litellm._logging import verbose_proxy_logger
-from litellm.models.budget import initialize_budget_limits
+from litellm.litellm_core_utils.core_helpers import attribute_or_none, require_attributes
+from litellm.models.budget import (
+    BudgetLimit,
+    active_rollover_credit,
+    carry_budget_limit_resets,
+    initialize_budget_limits,
+)
 from litellm.proxy._types import *
-from litellm.proxy.auth.customer_hierarchy_auth import forget_customer_hierarchies, forget_customer_organization_aliases
+from litellm.proxy.auth.customer_hierarchy_auth import (
+    forget_customer_hierarchies,
+    forget_customer_organization_aliases,
+)
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.common_utils.timezone_utils import get_budget_reset_settings, get_budget_reset_time
+from litellm.proxy.common_utils.cache_invalidation_pubsub import evict_and_broadcast
+from litellm.proxy.common_utils.timezone_utils import (
+    get_budget_reset_settings,
+    get_budget_reset_time,
+    keeps_budget_reset,
+)
 from litellm.proxy.management_endpoints.common_utils import (  # noqa: F401  # legacy module exports
+    ROLLOVER_BUDGET_FIELDS,
     _user_has_admin_view,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     user_api_key_has_admin_view,
     validate_budget_duration,
+    validate_rollover_budget_patch,
 )
-from litellm.proxy.management_helpers.customer_hierarchy import budget_limit_json
+from litellm.proxy.management_helpers.customer_hierarchy import (
+    BudgetGroupScope,
+    Failure,
+    PrismaRecord,
+    budget_group_ids,
+    budget_limit_json,
+    budget_row_values,
+    delete_unattached_customer_budget,
+)
 from litellm.proxy.management_helpers.utils import validate_budget_windows_update
-from litellm.proxy.utils import jsonify_object
+from litellm.proxy.utils import PrismaClient, jsonify_object
+from litellm.redis.stores.auth_cache import AuthObject
+from litellm.repositories.budget_limits_repository import BudgetLimitsTransaction, lock_budget_limits
 from litellm.repositories.budget_repository import BudgetRepository
 from litellm.repositories.chunked_in import IN_LIST_CHUNK_SIZE
+from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.table_repositories import (
     CustomerMemberRepository,
     CustomerOrganizationRepository,
     CustomerTeamRepository,
 )
 
+if TYPE_CHECKING:
+    from prisma import models as prisma_models
+
 router: Final = APIRouter()
 _WRITE_VALUES: Final = TypeAdapter(Mapping[str, object])
+
+
+class _BudgetUpdateTx(BudgetLimitsTransaction, Protocol):
+    @property
+    def litellm_budgettable(self) -> TableActions["prisma_models.LiteLLM_BudgetTable"]: ...
+
+
+def _stored_budget_limit(window: Mapping[str, object]) -> BudgetLimit | None:
+    try:
+        return BudgetLimit.model_validate(window)
+    except ValidationError:
+        return None
+
+
+def _validate_member_rollover(budget: TeamMemberBudgetWrite) -> None:
+    if (
+        budget.rollover_max_budget is not None
+        and active_rollover_credit(budget.max_budget, budget.rollover_max_budget, budget.budget_duration, None) is None
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="Member rollover requires a reset period and a positive member budget below the rollover cap.",
+        )
+
+
+async def _write_budget_update(
+    prisma_client: PrismaClient,
+    budget_id: str,
+    data: Mapping[str, object],
+    limits: tuple[BudgetLimit, ...] | None,
+) -> "prisma_models.LiteLLM_BudgetTable | None":
+    changes_rollover: Final = bool(data.keys() & ROLLOVER_BUDGET_FIELDS)
+    if not changes_rollover and "budget_limits" not in data:
+        return await BudgetRepository(prisma_client).table.update(where={"budget_id": budget_id}, data=data)
+    if data.keys() & ROLLOVER_BUDGET_FIELDS == {"max_budget"} and "budget_limits" not in data:
+        uncapped: Final = await BudgetRepository(prisma_client).table.update(
+            where={"budget_id": budget_id, "rollover_max_budget": None}, data=data
+        )
+        if uncapped is not None:
+            return uncapped
+    async with prisma_client.tx() as tx_ctx:
+        tx: Final = cast("_BudgetUpdateTx", tx_ctx)  # cast-ok: transaction exposes the same table actions
+        if "rollover_max_budget" in data and data["rollover_max_budget"] is None:
+            # Match the reset cascade's membership-first lock order.
+            await tx.query_raw(
+                'SELECT 1 AS locked FROM "LiteLLM_TeamMembership" WHERE budget_id = $1::text '
+                'ORDER BY team_id COLLATE "C", user_id COLLATE "C" FOR UPDATE',
+                budget_id,
+            )
+            await tx.execute_raw(
+                'UPDATE "LiteLLM_TeamMembership" SET rollover_credit = NULL'
+                " WHERE budget_id = $1 AND rollover_credit IS NOT NULL",
+                budget_id,
+            )
+        current: Final = await lock_budget_limits(tx, "LiteLLM_BudgetTable", budget_id)
+        duration: Final = data.get("budget_duration")
+        stored: Final = (
+            await tx.litellm_budgettable.find_unique(where={"budget_id": budget_id}) if changes_rollover else None
+        )
+        if stored is not None and changes_rollover:
+            validate_rollover_budget_patch(
+                data,
+                {
+                    "max_budget": stored.max_budget,
+                    "rollover_max_budget": stored.rollover_max_budget,
+                    "budget_duration": stored.budget_duration,
+                },
+            )
+        reset_data: Final = (
+            {"budget_reset_at": get_budget_reset_time(budget_duration=duration)}
+            if isinstance(duration, str)
+            and "budget_reset_at" not in data
+            and not keeps_budget_reset(
+                duration,
+                stored.budget_duration if stored is not None else None,
+                stored.budget_reset_at if stored is not None else None,
+            )
+            else {"budget_reset_at": None}
+            if "budget_duration" in data and duration is None and "budget_reset_at" not in data
+            else {}
+        )
+        previous: Final = tuple(
+            limit for window in current or () if (limit := _stored_budget_limit(window)) is not None
+        )
+        window_data: Final[Mapping[str, object]] = (
+            budget_row_values(
+                {
+                    "budget_limits": initialize_budget_limits(
+                        carry_budget_limit_resets(limits, previous),
+                        get_budget_reset_settings(),
+                        datetime.now(timezone.utc),
+                    )
+                    if limits is not None
+                    else None
+                }
+            )
+            if "budget_limits" in data
+            else {}
+        )
+        if limits:
+            await validate_budget_windows_update(tx, budget_id)
+        return await tx.litellm_budgettable.update(
+            where={"budget_id": budget_id}, data={**data, **window_data, **reset_data}
+        )
+
+
+class _FieldWithDefault(Protocol):
+    @property
+    def default(self) -> object: ...
+
+
+def _field_default(field: _FieldWithDefault) -> object:
+    return field.default
 
 
 async def new_budget(
@@ -93,6 +241,8 @@ async def new_budget(
         )
 
     validate_budget_duration(budget_obj.budget_duration)
+    if isinstance(budget_obj, TeamMemberBudgetWrite):
+        _validate_member_rollover(budget_obj)
 
     # Validate model_max_budget if present
     if budget_obj.model_max_budget is not None and len(budget_obj.model_max_budget) > 0:
@@ -118,7 +268,9 @@ async def new_budget(
         {
             "budget_limits": budget_limit_json(
                 initialize_budget_limits(
-                    budget_obj.budget_limits, get_budget_reset_settings(), datetime.now(timezone.utc)
+                    carry_budget_limit_resets(budget_obj.budget_limits, ()),
+                    get_budget_reset_settings(),
+                    datetime.now(timezone.utc),
                 )
             )
         }
@@ -202,43 +354,22 @@ async def update_budget(
         except ValueError as e:
             raise HTTPException(status_code=400, detail={"error": str(e)})
 
-    # recompute budget_reset_at when the duration changes, unless the caller pinned a reset time explicitly
-    recomputed_reset_at: Final = (
-        {"budget_reset_at": get_budget_reset_time(budget_duration=budget_obj.budget_duration)}
-        if budget_obj.budget_duration is not None and "budget_reset_at" not in budget_obj.model_fields_set
-        else MappingProxyType({"budget_reset_at": None})
-        if "budget_duration" in budget_obj.model_fields_set
-        and budget_obj.budget_duration is None
-        and "budget_reset_at" not in budget_obj.model_fields_set
-        else {}
-    )
-
     budget_obj_jsonified: Final = _WRITE_VALUES.validate_python(
         jsonify_object(
             {
                 **budget_obj.model_dump(exclude_unset=True),
-                **recomputed_reset_at,
                 "updated_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
             }
         )
     )
 
-    window_data: Final = (
-        {
-            "budget_limits": budget_limit_json(
-                initialize_budget_limits(
-                    budget_obj.budget_limits, get_budget_reset_settings(), datetime.now(timezone.utc)
-                )
-            )
-        }
-        if isinstance(budget_obj, BudgetWriteRequest) and budget_obj.budget_limits is not None
-        else {}
+    response: Final = await _write_budget_update(
+        prisma_client,
+        budget_obj.budget_id,
+        budget_obj_jsonified,
+        budget_obj.budget_limits if isinstance(budget_obj, BudgetWriteRequest) else None,
     )
-    if isinstance(budget_obj, BudgetWriteRequest) and budget_obj.budget_limits:
-        await validate_budget_windows_update(prisma_client.db, budget_obj.budget_id)
-    response: Final = await BudgetRepository(prisma_client).table.update(
-        where={"budget_id": budget_obj.budget_id}, data={**budget_obj_jsonified, **window_data}
-    )
+    await evict_and_broadcast((AuthObject.customer_app_budget(budget_obj.budget_id).key,), user_api_key_cache)
     members: Final = await CustomerMemberRepository(prisma_client).table.find_many(
         where={
             "OR": (
@@ -278,6 +409,13 @@ async def update_budget(
     return response
 
 
+def _budget_response(row: "prisma_models.LiteLLM_BudgetTable | None") -> Mapping[str, object] | None:
+    if row is None:
+        return None
+    excluded: Final = {"rollover_max_budget"} if row.rollover_max_budget is None else None
+    return row.model_dump(mode="json", exclude=excluded)
+
+
 @router.post(
     "/budget/new",
     tags=["budget management"],
@@ -288,7 +426,7 @@ async def new_budget_endpoint(
     budget_obj: BudgetWriteRequest,
     user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
 ) -> object:
-    return await new_budget(budget_obj, user_api_key_dict)
+    return _budget_response(await new_budget(budget_obj, user_api_key_dict))
 
 
 @router.post(
@@ -301,7 +439,7 @@ async def update_budget_endpoint(
     budget_obj: BudgetWriteRequest,
     user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
 ) -> object:
-    return await update_budget(budget_obj, user_api_key_dict)
+    return _budget_response(await update_budget(budget_obj, user_api_key_dict))
 
 
 @router.post(
@@ -330,7 +468,7 @@ async def info_budget(data: BudgetRequest):
         where={"budget_id": {"in": data.budgets}},
     )
 
-    return response
+    return tuple(_budget_response(row) for row in response)
 
 
 @router.get(
@@ -386,7 +524,7 @@ async def budget_settings(
         "budget_limits": {"type": "Object"},
     }
 
-    return_val: Final = []
+    return_val: Final[list[ConfigList]] = []
 
     for field_name, field_info in BudgetWriteRequest.model_fields.items():
         if field_name in allowed_args:
@@ -398,7 +536,7 @@ async def budget_settings(
                 field_description=field_info.description or "",
                 field_value=db_budget_row_dict.get(field_name, None),
                 stored_in_db=_stored_in_db,
-                field_default_value=field_info.default,
+                field_default_value=_field_default(field_info),
             )
             return_val.append(_response_obj)
 
@@ -430,7 +568,7 @@ async def list_budget(
 
     response: Final = await BudgetRepository(prisma_client).table.find_many()
 
-    return response
+    return tuple(_budget_response(row) for row in response)
 
 
 @router.post(
@@ -462,6 +600,14 @@ async def delete_budget(
             detail={"error": f"{CommonProxyErrors.not_allowed_access.value}, your role={user_api_key_dict.user_role}"},
         )
 
+    config: Final = require_attributes(
+        attribute_or_none(prisma_client.writer_db, "litellm_config"), TableActions[PrismaRecord], "find_unique"
+    )
+    for scope in BudgetGroupScope:
+        if data.id in await budget_group_ids(config, scope):
+            raise HTTPException(
+                status_code=409, detail={"error": f"Remove this group through {scope.value.removesuffix('_ids')}s."}
+            )
     customer_org_count: Final = await CustomerOrganizationRepository(prisma_client).table.count(
         where={"budget_template_ids": {"has": data.id}}
     )
@@ -474,6 +620,11 @@ async def delete_budget(
             },
         )
 
-    response: Final = await BudgetRepository(prisma_client).table.delete(where={"budget_id": data.id})
+    response: Final = await delete_unattached_customer_budget(BudgetRepository(prisma_client).table, data.id)
+    if isinstance(response, Failure):
+        raise HTTPException(
+            status_code=409,
+            detail={"error": "Budget is attached to a customer or app. Remove it through the owning entity."},
+        )
 
-    return response
+    return _budget_response(response)

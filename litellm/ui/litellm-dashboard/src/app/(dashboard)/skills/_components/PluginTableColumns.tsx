@@ -1,6 +1,7 @@
 "use client";
 
 import { getSkillMetadataColumns } from "@/components/claude_code_plugins/SkillMetadataColumns";
+import type { UserIdentityLookup } from "@/app/(dashboard)/hooks/users/useUsers";
 
 import { ColumnDef } from "@tanstack/react-table";
 import { Copy, MoreHorizontal, Trash2 } from "lucide-react";
@@ -65,12 +66,14 @@ function PluginRowActions({ plugin, isAdmin, onDeleteClick }: PluginRowActionsPr
 }
 
 interface PluginTableColumnsDeps {
+  users?: UserIdentityLookup;
   isAdmin: boolean;
   onPluginClick: (pluginId: string) => void;
   onDeleteClick: (pluginName: string, displayName: string) => void;
 }
 
 export const getPluginTableColumns = ({
+  users,
   isAdmin,
   onPluginClick,
   onDeleteClick,
@@ -145,7 +148,7 @@ export const getPluginTableColumns = ({
       />
     ),
   },
-  ...getSkillMetadataColumns<SkillHubSkill>(),
+  ...getSkillMetadataColumns<SkillHubSkill>(users),
   {
     id: "actions",
     meta: { className: "text-right", headerClassName: "text-right" },

@@ -446,10 +446,14 @@ def _bedrock(request: Request) -> Reply:
     return Reply(body=json.dumps(converse).encode())
 
 
+def _path_deployment(scenario: Scenario, wire: Wire, path: str, model_info: Mapping[str, JsonValue] | None) -> str:
+    return scenario.model(model=f"bedrock/{path}", api_base=wire.url, model_info=model_info, **_AWS)
+
+
 def _deployment(
     scenario: Scenario, wire: Wire, route: str, backend: str, model_info: Mapping[str, JsonValue] | None = None
 ) -> str:
-    return scenario.model(model=f"bedrock/{route}/{backend}", api_base=wire.url, model_info=model_info, **_AWS)
+    return _path_deployment(scenario, wire, f"{route}/{backend}", model_info)
 
 
 def _chat_body(model: str, marker: str, **extra: JsonValue) -> dict[str, JsonValue]:
@@ -1281,3 +1285,214 @@ def test_a_caller_output_config_bedrock_refuses_is_sent_once_on_an_opt_in_model(
         assert "pattern is too complex for structured output" in response.text, response.text
         _, body = _one_call(wire, marker_hex)
         assert body["outputConfig"] == _CALLER_OUTPUT_CONFIG, body
+
+
+_GPT: Final = "global.openai.gpt-6-luna"
+_GPT_CATALOG_ONLY: Final = "us.openai.gpt-6-luna"
+_GPT_NATIVE: Final[dict[str, JsonValue]] = {"supports_native_structured_output": True}
+_GPT_400: Final = (
+    "The model returned the following errors: Invalid schema for response_format 'risk': too many enum values"
+)
+
+
+def _strict_response_format(strict: bool | None) -> dict[str, JsonValue]:
+    flag: Final[dict[str, JsonValue]] = {} if strict is None else {"strict": strict}
+    return {"type": "json_schema", "json_schema": {"name": "risk", **flag, "schema": _SCHEMA}}
+
+
+def _additional_text(body: Mapping[str, JsonValue]) -> dict[str, JsonValue] | None:
+    text: Final = object_value(body.get("additionalModelRequestFields") or {}).get("text")
+    return None if text is None else object_value(text)
+
+
+def _text_format_strict(body: Mapping[str, JsonValue]) -> JsonValue:
+    return object_value(object_value(_additional_text(body) or {}).get("format") or {}).get("strict")
+
+
+@pytest.mark.parametrize("strict", [True, False, None], ids=["strict_true", "strict_false", "strict_omitted"])
+def test_gpt_native_structured_output_on_converse_sends_text_format_strict(
+    gateway: Gateway, strict: bool | None
+) -> None:
+    marker, marker_hex = _marker()
+    with wire_server(_bedrock) as wire, gateway.scenario() as scenario:
+        model: Final = _path_deployment(scenario, wire, f"converse/{_GPT}", _GPT_NATIVE)
+        response: Final = gateway.request(
+            "POST", "/v1/chat/completions", _chat_body(model, marker, response_format=_strict_response_format(strict))
+        )
+        assert _content_json(_chat_message(response)) == _payload(marker_hex), response.text
+        _, body = _one_call(wire, marker_hex)
+        _assert_native_without_tools(body, False, _SCHEMA)
+        assert _text_format_strict(body) is True, body
+
+
+@pytest.mark.parametrize("path", [f"converse/{_GPT}", _GPT], ids=["converse_route", "default_route"])
+def test_a_caller_output_config_on_a_gpt_native_deployment_gets_text_format_strict(gateway: Gateway, path: str) -> None:
+    marker, marker_hex = _marker()
+    with wire_server(_bedrock) as wire, gateway.scenario() as scenario:
+        model: Final = _path_deployment(scenario, wire, path, _GPT_NATIVE)
+        response: Final = gateway.request(
+            "POST", "/v1/chat/completions", _chat_body(model, marker, outputConfig=_CALLER_OUTPUT_CONFIG)
+        )
+        assert _content_json(_chat_message(response)) == _payload(marker_hex), response.text
+        request, body = _one_call(wire, marker_hex)
+        assert _model_id(request) == _GPT, request.target
+        assert body["outputConfig"] == _CALLER_OUTPUT_CONFIG, body
+        assert _text_format_strict(body) is True, body
+
+
+_PROFILE_ARN: Final = "arn:aws:bedrock:eu-west-1:123456789012:application-inference-profile/a1b2c3d4e5f6"
+
+
+def test_a_gpt_native_deployment_behind_an_application_inference_profile_sends_text_format_strict(
+    gateway: Gateway,
+) -> None:
+    marker, marker_hex = _marker()
+    with wire_server(_bedrock) as wire, gateway.scenario() as scenario:
+        model: Final = scenario.model(
+            model=f"bedrock/{_GPT}", api_base=wire.url, model_id=_PROFILE_ARN, model_info=_GPT_NATIVE, **_AWS
+        )
+        response: Final = gateway.request(
+            "POST", "/v1/chat/completions", _chat_body(model, marker, response_format=_strict_response_format(True))
+        )
+        assert _content_json(_chat_message(response)) == _payload(marker_hex), response.text
+        request, body = _one_call(wire, marker_hex)
+        assert _model_id(request) == _PROFILE_ARN, request.target
+        _assert_native_without_tools(body, False, _SCHEMA)
+        assert _text_format_strict(body) is True, body
+
+
+_GPT_BASE_MODEL: Final = f"bedrock/{_GPT}"
+_CLAUDE_BASE_MODEL: Final = f"bedrock/{_SONNET}"
+_RESPONSES_TEXT: Final[dict[str, JsonValue]] = {
+    "format": {"type": "json_schema", "name": "risk", "strict": True, "schema": _SCHEMA}
+}
+
+
+def _structured_answer(gateway: Gateway, endpoint: str, model: str, marker: str) -> JsonValue:
+    if endpoint == "chat":
+        chat: Final = _chat_body(model, marker, response_format=_strict_response_format(True))
+        return _content_json(_chat_message(gateway.request("POST", "/v1/chat/completions", chat)))
+    responses: Final[dict[str, JsonValue]] = {
+        "model": model,
+        "input": marker,
+        "max_output_tokens": 2048,
+        "text": _RESPONSES_TEXT,
+        **_NO_CACHE,
+    }
+    return _responses_text(_responses_items(gateway.request("POST", "/v1/responses", responses)))
+
+
+def _custom_named_profile_deployment(
+    scenario: Scenario, wire: Wire, name: str, base_model: str, base_model_source: str
+) -> str:
+    native: Final[dict[str, JsonValue]] = {"supports_native_structured_output": True}
+    if base_model_source == "model_info":
+        return scenario.model(
+            model=f"bedrock/converse/{name}",
+            api_base=wire.url,
+            model_id=_PROFILE_ARN,
+            model_info={**native, "base_model": base_model},
+            **_AWS,
+        )
+    return scenario.model(
+        model=f"bedrock/converse/{name}",
+        api_base=wire.url,
+        model_id=_PROFILE_ARN,
+        base_model=base_model,
+        model_info=native,
+        **_AWS,
+    )
+
+
+@pytest.mark.parametrize("name_prefix", ["team-luna", "openai-team-luna"])
+@pytest.mark.parametrize("base_model_source", ["litellm_params", "model_info"])
+@pytest.mark.parametrize("endpoint", ["chat", "responses"])
+def test_a_custom_named_gpt_deployment_behind_a_profile_sends_text_format_strict(
+    gateway: Gateway, endpoint: str, base_model_source: str, name_prefix: str
+) -> None:
+    marker, marker_hex = _marker()
+    with wire_server(_bedrock) as wire, gateway.scenario() as scenario:
+        model: Final = _custom_named_profile_deployment(
+            scenario, wire, f"{name_prefix}-{marker_hex}", _GPT_BASE_MODEL, base_model_source
+        )
+        assert _structured_answer(gateway, endpoint, model, marker) == _payload(marker_hex)
+        request, body = _one_call(wire, marker_hex)
+        assert _model_id(request) == _PROFILE_ARN, request.target
+        _assert_native_without_tools(body, False, _SCHEMA)
+        assert _text_format_strict(body) is True, body
+
+
+def test_responses_through_converse_sends_text_format_strict(gateway: Gateway) -> None:
+    marker, marker_hex = _marker()
+    with wire_server(_bedrock) as wire, gateway.scenario() as scenario:
+        model: Final = _path_deployment(scenario, wire, f"converse/{_GPT}", _GPT_NATIVE)
+        assert _structured_answer(gateway, "responses", model, marker) == _payload(marker_hex)
+        request, body = _one_call(wire, marker_hex)
+        assert _model_id(request) == _GPT, request.target
+        _assert_native_without_tools(body, False, _SCHEMA)
+        assert _text_format_strict(body) is True, body
+
+
+def test_a_custom_named_claude_deployment_behind_a_profile_sends_no_text_param(gateway: Gateway) -> None:
+    marker, marker_hex = _marker()
+    with wire_server(_bedrock) as wire, gateway.scenario() as scenario:
+        model: Final = _custom_named_profile_deployment(
+            scenario, wire, f"team-claude-{marker_hex}", _CLAUDE_BASE_MODEL, "litellm_params"
+        )
+        assert _structured_answer(gateway, "chat", model, marker) == _payload(marker_hex)
+        _, body = _one_call(wire, marker_hex)
+        assert _additional_text(body) is None, body
+
+
+def test_a_caller_text_param_next_to_gpt_native_structured_output_keeps_both_text_keys(gateway: Gateway) -> None:
+    marker, marker_hex = _marker()
+    with wire_server(_bedrock) as wire, gateway.scenario() as scenario:
+        model: Final = _path_deployment(scenario, wire, f"converse/{_GPT}", _GPT_NATIVE)
+        response: Final = gateway.request(
+            "POST",
+            "/v1/chat/completions",
+            _chat_body(model, marker, response_format=_strict_response_format(True), text={"verbosity": "low"}),
+        )
+        assert _content_json(_chat_message(response)) == _payload(marker_hex), response.text
+        _, body = _one_call(wire, marker_hex)
+        _assert_native_without_tools(body, False, _SCHEMA)
+        assert object_value(_additional_text(body) or {}).get("verbosity") == "low", body
+        assert _text_format_strict(body) is True, body
+
+
+@pytest.mark.parametrize(
+    ("path", "model_info", "response_format", "native"),
+    [
+        (f"converse/{_GPT_CATALOG_ONLY}", {"supports_native_structured_output": False}, True, False),
+        (f"converse/{_GPT}", _GPT_NATIVE, False, False),
+        (f"converse/{_SONNET}", None, True, True),
+    ],
+    ids=["gpt_catalog_json_schema", "gpt_native_no_response_format", "claude_native"],
+)
+def test_requests_without_gpt_native_structured_output_send_no_text_param(
+    gateway: Gateway, path: str, model_info: Mapping[str, JsonValue] | None, response_format: bool, native: bool
+) -> None:
+    marker, marker_hex = _marker()
+    extra: Final[dict[str, JsonValue]] = {"response_format": _strict_response_format(True)} if response_format else {}
+    with wire_server(_bedrock) as wire, gateway.scenario() as scenario:
+        model: Final = _path_deployment(scenario, wire, path, model_info)
+        response: Final = gateway.request("POST", "/v1/chat/completions", _chat_body(model, marker, **extra))
+        assert _content_json(_chat_message(response)) == _payload(marker_hex), response.text
+        _, body = _one_call(wire, marker_hex)
+        assert (_native_schema(body, False) == _SCHEMA) is native, body
+        assert ("outputConfig" in body) is native, body
+        assert (_JSON_TOOL in _tools(body, False)) is (response_format and not native), body
+        assert _additional_text(body) is None, body
+
+
+def test_a_bedrock_400_on_a_gpt_native_request_reaches_the_caller(gateway: Gateway) -> None:
+    marker, marker_hex = _marker()
+    with wire_server(_always_rejecting(_GPT_400)) as wire, gateway.scenario() as scenario:
+        model: Final = _path_deployment(scenario, wire, f"converse/{_GPT}", _GPT_NATIVE)
+        response: Final = gateway.request(
+            "POST", "/v1/chat/completions", _chat_body(model, marker, response_format=_strict_response_format(True))
+        )
+        assert response.status_code == 400, response.text
+        assert _GPT_400.split(": ", 1)[1] in response.text, response.text
+        _, body = _one_call(wire, marker_hex)
+        _assert_native_without_tools(body, False, _SCHEMA)

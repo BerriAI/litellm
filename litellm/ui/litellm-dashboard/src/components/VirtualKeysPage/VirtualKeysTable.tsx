@@ -39,10 +39,11 @@ import React, { useCallback, useMemo, useState } from "react";
 import type { ParseKeys } from "i18next";
 import { useTranslation } from "react-i18next";
 import { canModifyKey } from "@/utils/keyPermissions";
-import { isProxyAdminRole } from "@/utils/roles";
+import { hasProxyWideSpendView, isProxyAdminRole } from "@/utils/roles";
 
 import { KeyResponse, Team } from "../key_team_helpers/key_list";
 import KeyInfoView from "../templates/key_info_view";
+import { KeyDetailSkeleton } from "../templates/key_detail/KeyDetailSkeleton";
 import { getKeyTableColumns, KEY_TABLE_HIDDEN_COLUMNS, KEY_TABLE_SORT_FIELDS } from "./keyTableColumns";
 import { VirtualKeysBulkActions } from "./VirtualKeysBulkActions";
 
@@ -181,14 +182,18 @@ export function VirtualKeysTable({ headerActions }: VirtualKeysTableProps) {
   const keyList = useMemo(() => keys?.keys ?? [], [keys]);
   const rowCount = keys?.total_count ?? 0;
 
-  const teamIds = useMemo(
+  const memberBudgetUserIds = useMemo(
     () =>
-      Array.from(
-        new Set(keyList.flatMap((key) => (key.max_budget == null && key.team_id && key.user_id ? [key.team_id] : []))),
+      keyList.reduce<Record<string, string[]>>(
+        (byTeam, key) =>
+          key.max_budget == null && key.team_id && key.user_id
+            ? { ...byTeam, [key.team_id]: [...(byTeam[key.team_id] ?? []), key.user_id] }
+            : byTeam,
+        {},
       ),
     [keyList],
   );
-  const teamMemberBudgets = useTeamMemberBudgets(teamIds);
+  const teamMemberBudgets = useTeamMemberBudgets(memberBudgetUserIds);
   const applyUserBudgetToTeamKeys = useApplyUserBudgetToTeamKeys();
 
   const columnDeps = useMemo(
@@ -301,7 +306,17 @@ export function VirtualKeysTable({ headerActions }: VirtualKeysTableProps) {
 
   if (selectedKeyId) {
     if (!selectedKey && !selectedKeyLoadFailed) {
-      return <div className="p-4 text-sm text-muted-foreground">{t("apiKeys.virtualKeysTable.loadingKey")}</div>;
+      return (
+        <KeyDetailSkeleton
+          keyId={selectedKeyId}
+          backButtonText={t("keyDetail.keyInfoView.backToKeys")}
+          onBack={() => {
+            resetDetailState();
+            void setSelectedKeyId(null);
+          }}
+          showAutoRouter={hasProxyWideSpendView(userRole)}
+        />
+      );
     }
     return (
       <div className="w-full h-full overflow-hidden">
