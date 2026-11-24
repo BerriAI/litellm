@@ -3,6 +3,8 @@ Azure AI Anthropic Token Counter implementation using the CountTokens API.
 """
 
 import os
+from collections.abc import Mapping
+from types import MappingProxyType
 from typing import Any, Final
 
 from pydantic import JsonValue
@@ -55,6 +57,7 @@ class AzureAIAnthropicTokenCounter(BaseTokenCounter):
         messages_format: TokenCountMessagesFormat = "anthropic",
         output_format: JsonValue = None,
         context_management: CountContextManagement | None = None,
+        count_options: Mapping[str, JsonValue] = MappingProxyType({}),
     ) -> TokenCountResponse | None:
         """
         Count tokens using Azure AI Anthropic's CountTokens API.

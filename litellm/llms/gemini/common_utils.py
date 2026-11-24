@@ -3,6 +3,7 @@ import datetime
 import json
 import math
 from collections.abc import Mapping, Sequence
+from types import MappingProxyType
 from typing import Any, Final
 
 import httpx
@@ -529,6 +530,7 @@ class GoogleAIStudioTokenCounter(BaseTokenCounter):
         messages_format: TokenCountMessagesFormat = "openai",
         output_format: JsonValue = None,
         context_management: CountContextManagement | None = None,
+        count_options: Mapping[str, JsonValue] = MappingProxyType({}),
     ) -> TokenCountResponse | None:
         import copy
 
