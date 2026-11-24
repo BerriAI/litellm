@@ -396,7 +396,7 @@ _SERVED_ARGUMENTS: Final = frozenset(
         "ignore_invalid_deployments",
         # Read host-side by the pre-routing strategies (litellm/router_rust/steps/prerouting.py).
         "auto_router_capability_limit",
-        # Decided in router-core (precall.rs); its facts come from litellm/router_rust/steps/precall.py.
+        # Decided in router-core (precall/mod.rs); its facts come from litellm/router_rust/steps/precall.py.
         "enable_pre_call_checks",
         # Run host-side (litellm/router_rust/steps/plugins.py); router-core filters on what they leave.
         "plugins",
@@ -532,7 +532,9 @@ def _raised_before_provider(error: BaseException) -> bool:
     from litellm.exceptions import UnsupportedParamsError
 
     body: Final = getattr(error, "body", None)
-    return isinstance(error, UnsupportedParamsError) or (isinstance(body, Mapping) and body.get("param") == "priority")
+    return isinstance(error, UnsupportedParamsError) or (
+        not getattr(error, "llm_provider", "") and isinstance(body, Mapping) and body.get("param") == "priority"
+    )
 
 
 def _shares_logging(request: Mapping[str, object]) -> bool:
@@ -5325,12 +5327,14 @@ class _Driver:
         error: BaseException,
     ) -> Mapping[str, object]:
         """A routing pre-call check refused the attempt (``async_routing_strategy_pre_call_checks``):
-        a rate limit cools the deployment down (``set_cooldown_deployments``); the attempt's failure
-        is recorded by nothing else."""
+        a rate limit cools the deployment down (``set_cooldown_deployments``) unless the deployment
+        still has ITPM room for a smaller turn; the attempt's failure is recorded by nothing else."""
         import litellm.exceptions as litellm_exceptions
 
         core: Final = self._core
-        if isinstance(error, litellm_exceptions.RateLimitError):
+        if isinstance(error, litellm_exceptions.RateLimitError) and not getattr(
+            error, "deployment_has_itpm_room", False
+        ):
             deployment_id: Final = (as_str_mapping(deployment.get("model_info")) or {}).get("id")
             if isinstance(deployment_id, str):
                 failure: Final = {**attempt_failure(error), "caller_scoped": core.per_user_deployment(deployment_id)}

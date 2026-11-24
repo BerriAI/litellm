@@ -56,6 +56,7 @@ fn global(router: axum::Router) -> axum::Router {
         &litellm_gateway::middleware::Settings::default(),
         Arc::new(Entitlements::Community),
         &litellm_gateway::middleware::InFlight::new(),
+        None,
     )
 }
 
@@ -73,6 +74,8 @@ fn without_stores(inference: Inference) -> AppState {
         keys: None,
         entitlements: Arc::new(Entitlements::Community),
         environment: Arc::new(litellm_env::ProcessEnvironment),
+        gateway_requests: None,
+        gateway_requests_flush: None,
     }
 }
 
@@ -290,23 +293,26 @@ fn deployment(name: &str, id: &str, upstream: &MockServer) -> String {
     )
 }
 
-async fn routed(config: &str, model: &str) -> axum::response::Response {
-    let config = Config::from_yaml(config).unwrap();
-    let request = Request::post("/v1/messages")
+fn asking(body: &Value) -> Request<Body> {
+    Request::post("/v1/messages")
         .header("authorization", "Bearer gateway-key")
         .header("content-type", "application/json")
-        .body(Body::from(
-            json!({"model": model, "max_tokens": 8, "messages": [{"role": "user", "content": "hi"}]})
-                .to_string(),
-        ))
-        .unwrap();
+        .body(Body::from(body.to_string()))
+        .unwrap()
+}
+
+async fn app(config: &str) -> axum::Router {
+    let config = Config::from_yaml(config).unwrap();
     global(litellm_gateway::router(
         without_stores(inference_for(&config).await),
         &config,
     ))
-    .oneshot(request)
-    .await
-    .unwrap()
+}
+
+async fn routed(config: &str, model: &str) -> axum::response::Response {
+    let body =
+        json!({"model": model, "max_tokens": 8, "messages": [{"role": "user", "content": "hi"}]});
+    app(config).await.oneshot(asking(&body)).await.unwrap()
 }
 
 fn routing_headers(response: &axum::response::Response) -> Vec<(&str, &str)> {
@@ -692,6 +698,82 @@ async fn a_strategy_the_native_host_does_not_pick_by_fails_the_call() {
     assert!(provider.received_requests().await.unwrap().is_empty());
 }
 
+async fn answering() -> MockServer {
+    let upstream = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(served_message())
+        .mount(&upstream)
+        .await;
+    upstream
+}
+
+async fn reached(upstream: &MockServer) -> bool {
+    !upstream.received_requests().await.unwrap().is_empty()
+}
+
+/// A `claude` group of a deployment with a 100 token window and one with a 1000 token window,
+/// with the pre-call checks on.
+fn two_windows(small: &MockServer, large: &MockServer) -> String {
+    let sized = |id: &str, upstream: &MockServer, window: u32| {
+        format!(
+            "  - model_name: claude\n    litellm_params:\n      model: anthropic/claude-unlisted-9\n      api_base: {}\n      api_key: test-key\n    model_info:\n      id: {id}\n      max_input_tokens: {window}\n",
+            upstream.uri()
+        )
+    };
+    format!(
+        "model_list:\n{}{}router_settings:\n  enable_pre_call_checks: true\ngeneral_settings:\n  master_key: gateway-key\n",
+        sized("small", small, 100),
+        sized("large", large, 1000),
+    )
+}
+
+/// One user message of `words` words, a few tokens over `words` as the gateway estimates it.
+fn prompt(words: usize) -> Value {
+    json!({
+        "model": "claude", "max_tokens": 8,
+        "messages": [{"role": "user", "content": "word ".repeat(words)}],
+    })
+}
+
+#[rstest]
+#[case::every_deployment_it_fits(10, (true, true))]
+#[case::no_deployment_it_is_over(200, (false, true))]
+#[tokio::test]
+async fn a_prompt_reaches(#[case] words: usize, #[case] expected: (bool, bool)) {
+    let (small, large) = (answering().await, answering().await);
+    let app = app(&two_windows(&small, &large)).await;
+
+    for _ in 0..30 {
+        let response = app.clone().oneshot(asking(&prompt(words))).await.unwrap();
+        assert_eq!(response.status().as_u16(), 200);
+    }
+
+    assert_eq!((reached(&small).await, reached(&large).await), expected);
+}
+
+#[tokio::test]
+async fn a_prompt_no_deployment_fits_is_refused_before_any_provider_call() {
+    let (small, large) = (answering().await, answering().await);
+    let app = app(&two_windows(&small, &large)).await;
+
+    let response = app.oneshot(asking(&prompt(2000))).await.unwrap();
+
+    let status = response.status().as_u16();
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let answer: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(
+        (
+            status,
+            answer["error"]["type"].as_str(),
+            reached(&small).await,
+            reached(&large).await
+        ),
+        (400, Some("invalid_request_error"), false, false)
+    );
+}
+
 fn streamed(events: &str) -> ResponseTemplate {
     ResponseTemplate::new(200).set_body_raw(events.to_owned(), "text/event-stream")
 }
@@ -1074,7 +1156,7 @@ async fn a_stream_no_other_attempt_may_answer_goes_out_as_the_provider_sent_it(
     #[case] error: &str,
 ) {
     let sent = failing.concat();
-    let (app, _, second) = streamed_app(&sent, "backup", settings).await;
+    let (app, first, second) = streamed_app(&sent, "backup", settings).await;
 
     let response = app.oneshot(stream_of("primary")).await.unwrap();
 
@@ -1086,9 +1168,10 @@ async fn a_stream_no_other_attempt_may_answer_goes_out_as_the_provider_sent_it(
         (
             body.matches("event: ").count(),
             body.contains(error),
+            first.received_requests().await.unwrap().len(),
             second.received_requests().await.unwrap().len(),
         ),
-        (sent.matches("event: ").count(), true, 0),
+        (sent.matches("event: ").count(), true, 1, 0),
         "{body}"
     );
 }

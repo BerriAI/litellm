@@ -4,7 +4,7 @@ Sambanova Chat Completions API
 this is OpenAI compatible - no translation needed / occurs
 """
 
-from collections.abc import Coroutine, Mapping
+from collections.abc import Coroutine, Mapping, Sequence
 from typing import Final, Literal, overload
 
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
@@ -38,15 +38,15 @@ class SambanovaConfig(OpenAIGPTConfig):
     def __init__(
         self,
         max_tokens: int | None = None,
-        response_format: dict | None = None,
+        response_format: Mapping[str, object] | None = None,
         stop: str | None = None,
         stream: bool | None = None,
-        stream_options: dict | None = None,
+        stream_options: Mapping[str, object] | None = None,
         temperature: float | None = None,
         top_p: float | None = None,
         top_k: int | None = None,
         tool_choice: str | None = None,
-        tools: list | None = None,
+        tools: Sequence[object] | None = None,
     ) -> None:
         locals_: Final[Mapping[str, object]] = dict(locals())
         for key, value in locals_.items():
@@ -57,7 +57,7 @@ class SambanovaConfig(OpenAIGPTConfig):
     def get_config(cls):
         return super().get_config()
 
-    def get_supported_openai_params(self, model: str) -> list:
+    def get_supported_openai_params(self, model: str) -> list[str]:
         """
         Get the supported OpenAI params for the given model
 
@@ -85,8 +85,8 @@ class SambanovaConfig(OpenAIGPTConfig):
 
     def map_openai_params(
         self,
-        non_default_params: dict,
-        optional_params: dict,
+        non_default_params: Mapping[str, object],
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
     ) -> dict:

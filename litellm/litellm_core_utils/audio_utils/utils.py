@@ -5,8 +5,10 @@ Utils used for litellm.transcription() and litellm.atranscription()
 import base64
 import binascii
 import hashlib
+import io
 import math
 import os
+import wave
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Final, Protocol
@@ -506,3 +508,43 @@ def speech_media_type_from_audio_bytes(audio: bytes) -> str | None:
     if (audio[1] & _ADTS_SYNC_AND_LAYER_MASK) == _ADTS_SYNC_AND_LAYER:
         return _adts_aac_frame_media_type(audio)
     return _mpeg_audio_frame_media_type(audio)
+
+
+_PCM16_WAV_SHAPE: Final = (1, 2, 24000)
+_WAV_MEDIA_TYPES: Final = frozenset({FILE_MIME_TYPES[FileType.WAV], "audio/x-wav", "audio/wave", "audio/vnd.wave"})
+_WAV_HEADER_BASE64_CHARS: Final = 4096
+
+
+def _strict_b64decode(data: str) -> bytes | None:
+    try:
+        return base64.b64decode(data, validate=True)
+    except ValueError:
+        return None
+
+
+def _wav_shape(audio: bytes) -> tuple[int, int, int] | None:
+    try:
+        with wave.open(io.BytesIO(audio), "rb") as wav:
+            return (wav.getnchannels(), wav.getsampwidth(), wav.getframerate())
+    except (wave.Error, EOFError, RuntimeError):
+        return None
+
+
+def _pcm16_wav_frames(audio: bytes) -> bytes | None:
+    try:
+        with wave.open(io.BytesIO(audio), "rb") as wav:
+            shape: Final = (wav.getnchannels(), wav.getsampwidth(), wav.getframerate())
+            return wav.readframes(wav.getnframes()) if shape == _PCM16_WAV_SHAPE else None
+    except (wave.Error, EOFError, RuntimeError):
+        return None
+
+
+def as_raw_pcm16_base64(media_type: str, audio_base64: str) -> str:
+    if media_type.partition(";")[0].strip().lower() not in _WAV_MEDIA_TYPES:
+        return audio_base64
+    header: Final = _strict_b64decode(audio_base64[:_WAV_HEADER_BASE64_CHARS])
+    if header is None or _wav_shape(header) not in (None, _PCM16_WAV_SHAPE):
+        return audio_base64
+    audio: Final = _strict_b64decode(audio_base64)
+    frames: Final = _pcm16_wav_frames(audio) if audio is not None else None
+    return base64.b64encode(frames).decode("ascii") if frames else audio_base64

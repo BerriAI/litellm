@@ -33,7 +33,17 @@ import copy
 import json
 import time
 import uuid
-from collections.abc import Awaitable, Callable, Collection, Iterable, Iterator, Mapping, MutableSequence, Sequence
+from collections.abc import (
+    AsyncIterable,
+    Awaitable,
+    Callable,
+    Collection,
+    Iterable,
+    Iterator,
+    Mapping,
+    MutableSequence,
+    Sequence,
+)
 from dataclasses import dataclass
 from functools import partial
 from itertools import accumulate, chain, groupby, repeat
@@ -422,7 +432,9 @@ _TOOL_CALL_PAYLOAD_EVENT_TYPES: Final = _TOOL_CALL_PAYLOAD_DELTA_EVENT_TYPES | f
     _TOOL_CALL_PAYLOAD_DONE_EVENT_FIELDS
 )
 _OUTPUT_ITEM_EVENT_TYPES: Final = frozenset({"response.output_item.added", "response.output_item.done"})
-_OUTPUT_TEXT_EVENT_TYPES: Final = frozenset({"response.output_text.delta", "response.output_text.done"})
+_OUTPUT_TEXT_EVENT_TYPES: Final = frozenset(
+    {"response.output_text.delta", "response.output_text.done", "response.refusal.delta", "response.refusal.done"}
+)
 _TEXT_DELTA_EVENT_TYPES: Final = frozenset({"response.output_text.delta", "response.refusal.delta"})
 _REASONING_SUMMARY_TEXT_EVENT_TYPES: Final = frozenset(
     {"response.reasoning_summary_text.delta", "response.reasoning_summary_text.done"}
@@ -671,13 +683,18 @@ def _stream_part_key(event: object) -> _StreamPartKey:
     )
 
 
+def _stream_event_whole_text(event: object) -> object | None:
+    text: Final = stream_item_field(event, "text")
+    return text if isinstance(text, str) else stream_item_field(event, "refusal")
+
+
 def _carries_stream_text(event: object) -> bool:
-    return isinstance(stream_item_field(event, "text"), str) or isinstance(stream_item_field(event, "delta"), str)
+    return isinstance(_stream_event_whole_text(event), str) or isinstance(stream_item_field(event, "delta"), str)
 
 
 def _stream_part_texts(events: Sequence[object]) -> Mapping[_StreamPartKey, str]:
     keyed_events: Final = tuple(
-        (_stream_part_key(event), stream_item_field(event, "text"), stream_item_field(event, "delta"))
+        (_stream_part_key(event), _stream_event_whole_text(event), stream_item_field(event, "delta"))
         for event in events
         if _carries_stream_text(event)
     )
@@ -1263,6 +1280,24 @@ def _is_responses_input(
     return isinstance(input_data, list) and all(isinstance(item, (Mapping, ResponseCompactionItem)) for item in items)
 
 
+_StreamEventT = TypeVar("_StreamEventT")
+
+
+async def rewrite_buffered_responses_stream(
+    stream: AsyncIterable[_StreamEventT],
+    guardrail: "CustomGuardrail",
+    request_data: dict[str, object],  # mutable-ok: the per-request state dict every guardrail hook shares
+) -> tuple[_StreamEventT, ...]:
+    events: Final = [event async for event in stream]
+    await OpenAIResponsesHandler().process_output_streaming_response(
+        responses_so_far=events,
+        guardrail_to_apply=guardrail,
+        request_data=request_data,
+        deliver_ended_stream_rewrites=True,
+    )
+    return tuple(events)
+
+
 class OpenAIResponsesHandler(BaseTranslation):
     """
     Handler for processing OpenAI Responses API with guardrails.
@@ -1299,7 +1334,7 @@ class OpenAIResponsesHandler(BaseTranslation):
 
     async def process_input_messages(
         self,
-        data: dict,
+        data: dict[str, object],
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: "LiteLLMLoggingObj | None" = None,
     ) -> dict[str, object]:
@@ -1308,7 +1343,7 @@ class OpenAIResponsesHandler(BaseTranslation):
 
         Handles both string input and list of message objects.
         """
-        raw_input: Final[str | ResponseInputParam | None] = data.get("input")
+        raw_input: Final[object] = data.get("input")
         if not isinstance(raw_input, (str, list)):
             return data
         input_data: Final = cast("str | ResponseInputParam", raw_input)  # cast-ok: fields read via stream_item_field
@@ -2087,8 +2122,8 @@ class OpenAIResponsesHandler(BaseTranslation):
         spreading it over the text parts the guardrail scanned, in stream
         order: the whole rewrite on the first part and every later part
         blanked, through the same sync the envelope path uses. A scanned
-        event the sync cannot place (one that is not an ``output_text`` delta
-        or done, or lacks integer ``output_index`` / ``content_index``) makes
+        event the sync cannot place (one that is not an ``output_text`` or
+        ``refusal`` delta or done, or lacks integer ``output_index`` / ``content_index``) makes
         the rewrite undeliverable, so the pipeline executor discards it and
         releases the original events."""
         scanned_events: Final = tuple(event for event in stream_events if _carries_stream_text(event))
@@ -2111,13 +2146,62 @@ class OpenAIResponsesHandler(BaseTranslation):
 
             raise UndeliverableStreamRewrite(
                 guardrail_name,
-                "the scanned text events are not all output_text deltas with an integer output_index and "
+                "the scanned text events are not all output_text or refusal deltas with an integer output_index and "
                 "content_index, so the text rewrite has nowhere to land",
             )
         self._sync_stream_events_with_rewrites(
             stream_events=stream_events,
             rewrites_by_position=MappingProxyType(dict(zip(placeable_positions, chain((rewritten_text,), repeat(""))))),
         )
+
+    def message_part_texts(self, response: "ResponsesAPIResponse") -> Mapping[_MessageContentPosition, str]:
+        """Text of every message content part, keyed by its position in ``response.output``."""
+        texts: Final[list[str]] = []  # mutable-ok: the shared extractor below appends into caller-owned lists
+        positions: Final[list[_OutputPosition]] = []  # mutable-ok: the same extractor's position sink
+        for output_idx, output_item in _answer_output_items(stream_item_items(response, "output")):
+            self._extract_output_text_and_images(
+                output_item=output_item,
+                output_idx=output_idx,
+                texts_to_check=texts,
+                images_to_check=[],
+                task_mappings=positions,
+            )
+        return MappingProxyType(
+            {
+                position: text
+                for position, text in zip(positions, texts)
+                if isinstance(position, _MessageContentPosition)
+            }
+        )
+
+    def stream_text_fits_message_parts(self, response: "ResponsesAPIResponse", stream_events: Sequence[object]) -> bool:
+        message_positions: Final = frozenset(self.message_part_texts(response))
+        return all(
+            stream_item_field(event, "type") in _OUTPUT_TEXT_EVENT_TYPES
+            and (stream_item_field(event, "output_index"), stream_item_field(event, "content_index"))
+            in message_positions
+            for event in stream_events
+            if _carries_stream_text(event)
+        )
+
+    async def spread_text_rewrite(
+        self,
+        response: "ResponsesAPIResponse",
+        rewritten_text: str,
+        stream_events: Sequence[object] = (),
+    ) -> None:
+        """Replace all message text in ``response`` with one rewrite, for a guardrail that answers
+        one string for everything it scanned: the whole rewrite goes on the first part and every
+        later part is blanked, in the body and in any buffered events spelling out the same text."""
+        rewrites_by_position: Final[Mapping[_OutputItemPosition, str]] = MappingProxyType(
+            dict(zip(self.message_part_texts(response), chain((rewritten_text,), repeat(""))))
+        )
+        await self._apply_guardrail_responses_to_output(
+            response=response,
+            responses=list(rewrites_by_position.values()),
+            task_mappings=list(rewrites_by_position),
+        )
+        self._sync_stream_events_with_rewrites(stream_events=stream_events, rewrites_by_position=rewrites_by_position)
 
     @staticmethod
     def _write_event_field(event: object, field: str, value: object) -> None:
@@ -2635,7 +2719,9 @@ class OpenAIResponsesHandler(BaseTranslation):
         if not content:
             return
 
-        verbose_proxy_logger.debug("OpenAI Responses API: Processing output item: %s", output_item)
+        verbose_proxy_logger.debug(
+            "OpenAI Responses API: Processing output item %d with %d content parts", output_idx, len(content)
+        )
 
         for content_idx, content_item in enumerate(content):
             text_content = stream_item_field(content_item, _content_part_text_field(content_item))

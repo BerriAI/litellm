@@ -38,7 +38,7 @@ default_vertex_config: Final = None
 _DEFAULT_LANGFUSE_HOST: Final = "https://cloud.langfuse.com"
 
 
-def create_request_copy(request: Request):
+def create_request_copy(request: Request) -> dict[str, object]:
     return {
         "method": request.method,
         "url": str(request.url),
@@ -112,7 +112,7 @@ def _get_langfuse_proxy_credentials(
     dynamic_host_supplied: bool,
     dynamic_langfuse_public_key: str | None,
     dynamic_langfuse_secret_key: str | None,
-):
+) -> tuple[object, object]:
     if dynamic_host_supplied:
         if not dynamic_langfuse_public_key or not dynamic_langfuse_secret_key:
             raise HTTPException(
@@ -132,11 +132,11 @@ def _build_langfuse_proxy_target(
     endpoint: str,
     base_target_url: str,
     dynamic_host_supplied: bool,
-):
+) -> tuple[str, dict[str, str]]:
     endpoint_path: Final = _validate_langfuse_proxy_path(endpoint)
     base_url: Final = httpx.URL(_normalize_langfuse_base_url(base_target_url))
     updated_url: Final = base_url.copy_with(path=endpoint_path)
-    custom_headers: Final = {}
+    custom_headers: Final[dict[str, str]] = {}
 
     if dynamic_host_supplied and getattr(litellm, "user_url_validation", True):
         try:

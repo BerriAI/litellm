@@ -1,4 +1,5 @@
 mod auth;
+mod billable_route;
 mod budget_counters;
 mod budgets;
 mod cache;
@@ -49,6 +50,8 @@ mod _native {
         auth_managed_agent_route_allowed, auth_managed_route, auth_route_matches_denied,
         auth_route_matches_prefix, auth_route_matches_wildcard,
     };
+    #[pymodule_export]
+    use crate::billable_route::{billable_route_passthrough_prefixes, classify_billable_route};
     #[pymodule_export]
     use crate::budgets::NativeBudgets;
     #[pymodule_export]
@@ -313,7 +316,9 @@ mod tests {
                 "reserve_process_for_forking",
                 "unsupported_tls_settings",
                 "NativeBudgets",
+                "billable_route_passthrough_prefixes",
                 "billable_service_tier",
+                "classify_billable_route",
                 "budget_check_decision",
                 "NativeModelCapacity",
                 "NativeModelCapacityState",

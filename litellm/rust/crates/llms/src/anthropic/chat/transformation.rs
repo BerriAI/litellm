@@ -9,9 +9,13 @@ use litellm_core_utils::{
     },
 };
 use litellm_llms_types::{
-    formats::chat_completions::{
-        ChatCompletionThinkingBlock, ChatCompletionsChoice, ChatCompletionsChoiceMessage,
-        ChatCompletionsResponse, ChatMessage, ChatMessageContent,
+    formats::{
+        chat_completions::{
+            CacheCreationTokenDetails, ChatCompletionThinkingBlock, ChatCompletionsChoice,
+            ChatCompletionsChoiceMessage, ChatCompletionsResponse, ChatCompletionsUsage,
+            ChatMessage, ChatMessageContent, CompletionTokensDetails, PromptTokensDetails,
+        },
+        messages::{CacheCreationUsage, MessagesOutputTokensDetails},
     },
     providers::anthropic::DEFAULT_HEADERS,
 };
@@ -127,6 +131,7 @@ fn reasoning_text(blocks: &[ChatCompletionThinkingBlock]) -> String {
         .collect()
 }
 
+#[serde_with::serde_as]
 #[derive(Deserialize)]
 struct ResponseUsageProjection {
     input_tokens: u64,
@@ -135,6 +140,83 @@ struct ResponseUsageProjection {
     cache_read_input_tokens: Option<u64>,
     #[serde(default)]
     cache_creation_input_tokens: Option<u64>,
+    #[serde_as(deserialize_as = "serde_with::DefaultOnError")]
+    #[serde(default)]
+    cache_creation: Option<CacheCreationUsage>,
+    #[serde_as(deserialize_as = "serde_with::DefaultOnError")]
+    #[serde(default)]
+    output_tokens_details: Option<MessagesOutputTokensDetails>,
+    #[serde_as(deserialize_as = "serde_with::DefaultOnError")]
+    #[serde(default)]
+    inference_geo: Option<String>,
+    #[serde_as(deserialize_as = "serde_with::DefaultOnError")]
+    #[serde(default)]
+    speed: Option<String>,
+    #[serde_as(deserialize_as = "serde_with::DefaultOnError")]
+    #[serde(default)]
+    service_tier: Option<String>,
+}
+
+impl ResponseUsageProjection {
+    /// Python's `calculate_usage` for a response without `iterations`, minus its tokenizer
+    /// estimate of unreported thinking tokens.
+    fn into_usage(self, has_thinking_block: bool) -> ChatCompletionsUsage {
+        let usage = usage_from_parts(
+            self.input_tokens,
+            self.output_tokens,
+            self.cache_read_input_tokens.unwrap_or(0),
+            self.cache_creation_input_tokens.unwrap_or(0),
+        );
+        let thinking_tokens = self
+            .output_tokens_details
+            .and_then(|details| details.thinking_tokens);
+        ChatCompletionsUsage {
+            completion_tokens_details: Some(completion_tokens_details(
+                usage.completion_tokens,
+                thinking_tokens,
+                has_thinking_block,
+            )),
+            prompt_tokens_details: usage
+                .prompt_tokens_details
+                .map(|details| PromptTokensDetails {
+                    cache_creation_token_details: self.cache_creation.map(|cache_creation| {
+                        CacheCreationTokenDetails {
+                            ephemeral_5m_input_tokens: cache_creation.ephemeral_5m_input_tokens,
+                            ephemeral_1h_input_tokens: cache_creation.ephemeral_1h_input_tokens,
+                            ..CacheCreationTokenDetails::default()
+                        }
+                    }),
+                    ..details
+                }),
+            inference_geo: self.inference_geo,
+            speed: self.speed,
+            service_tier: self.service_tier,
+            ..usage
+        }
+    }
+}
+
+fn completion_tokens_details(
+    completion_tokens: u64,
+    thinking_tokens: Option<u64>,
+    has_thinking_block: bool,
+) -> CompletionTokensDetails {
+    match (thinking_tokens, has_thinking_block) {
+        (Some(thinking_tokens), _) => {
+            let reasoning_tokens = thinking_tokens.min(completion_tokens);
+            CompletionTokensDetails {
+                reasoning_tokens: Some(reasoning_tokens),
+                text_tokens: Some(completion_tokens - reasoning_tokens),
+                ..CompletionTokensDetails::default()
+            }
+        }
+        (None, true) => CompletionTokensDetails::default(),
+        (None, false) => CompletionTokensDetails {
+            reasoning_tokens: Some(0),
+            text_tokens: Some(completion_tokens),
+            ..CompletionTokensDetails::default()
+        },
+    }
 }
 
 pub struct AnthropicConfig;
@@ -222,6 +304,7 @@ impl BaseConfig for AnthropicConfig {
             .iter()
             .filter_map(ResponseBlock::thinking_block)
             .collect();
+        let usage = body.usage.into_usage(!thinking_blocks.is_empty());
         let text: String = body
             .content
             .iter()
@@ -246,12 +329,7 @@ impl BaseConfig for AnthropicConfig {
                 finish_reason: finish_reason_for(body.stop_reason.as_deref().unwrap_or(""))
                     .to_string(),
             }],
-            usage: usage_from_parts(
-                body.usage.input_tokens,
-                body.usage.output_tokens,
-                body.usage.cache_read_input_tokens.unwrap_or(0),
-                body.usage.cache_creation_input_tokens.unwrap_or(0),
-            ),
+            usage,
         })
     }
 
@@ -1103,12 +1181,140 @@ mod tests {
         .expect("response transforms");
         assert_eq!(response.usage.prompt_tokens, 18);
         assert_eq!(response.usage.total_tokens, 20);
-        assert_eq!(response.usage.prompt_tokens_details.cached_tokens, 5);
         assert_eq!(
-            response.usage.prompt_tokens_details.cache_creation_tokens,
-            3
+            serde_json::to_value(response.usage.prompt_tokens_details).unwrap(),
+            json!({"cached_tokens": 5, "text_tokens": 10, "cache_write_tokens": 3, "cache_creation_tokens": 3})
         );
-        assert_eq!(response.usage.prompt_tokens_details.text_tokens, 10);
+    }
+
+    #[rstest]
+    #[case::captured_python_proxy_output(
+        json!({
+            "input_tokens": 17, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0,
+            "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
+            "output_tokens": 4, "output_tokens_details": {"thinking_tokens": 0},
+            "service_tier": "standard", "inference_geo": "global", "speed": "standard"
+        }),
+        json!({
+            "completion_tokens": 4, "prompt_tokens": 17, "total_tokens": 21,
+            "completion_tokens_details": {"reasoning_tokens": 0, "text_tokens": 4},
+            "prompt_tokens_details": {
+                "cached_tokens": 0, "text_tokens": 17, "cache_write_tokens": 0, "cache_creation_tokens": 0,
+                "cache_creation_token_details": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0}
+            },
+            "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0,
+            "inference_geo": "global", "speed": "standard", "service_tier": "standard"
+        })
+    )]
+    #[case::without_cache_creation(
+        json!({
+            "input_tokens": 10, "cache_creation_input_tokens": 3, "cache_read_input_tokens": 5,
+            "output_tokens": 2, "inference_geo": "us", "speed": "fast", "service_tier": "priority"
+        }),
+        json!({
+            "completion_tokens": 2, "prompt_tokens": 18, "total_tokens": 20,
+            "completion_tokens_details": {"reasoning_tokens": 0, "text_tokens": 2},
+            "prompt_tokens_details": {"cached_tokens": 5, "text_tokens": 10, "cache_write_tokens": 3, "cache_creation_tokens": 3},
+            "cache_creation_input_tokens": 3, "cache_read_input_tokens": 5,
+            "inference_geo": "us", "speed": "fast", "service_tier": "priority"
+        })
+    )]
+    #[case::without_inference_geo_speed_or_service_tier(
+        json!({
+            "input_tokens": 10, "cache_creation_input_tokens": 3,
+            "cache_creation": {"ephemeral_5m_input_tokens": 1, "ephemeral_1h_input_tokens": 2},
+            "output_tokens": 2
+        }),
+        json!({
+            "completion_tokens": 2, "prompt_tokens": 13, "total_tokens": 15,
+            "completion_tokens_details": {"reasoning_tokens": 0, "text_tokens": 2},
+            "prompt_tokens_details": {
+                "cached_tokens": 0, "text_tokens": 10, "cache_write_tokens": 3, "cache_creation_tokens": 3,
+                "cache_creation_token_details": {"ephemeral_5m_input_tokens": 1, "ephemeral_1h_input_tokens": 2}
+            },
+            "cache_creation_input_tokens": 3, "cache_read_input_tokens": 0
+        })
+    )]
+    #[case::cache_creation_bucket_missing(
+        json!({
+            "input_tokens": 10, "cache_creation_input_tokens": 2,
+            "cache_creation": {"ephemeral_1h_input_tokens": 2}, "output_tokens": 2
+        }),
+        json!({
+            "completion_tokens": 2, "prompt_tokens": 12, "total_tokens": 14,
+            "completion_tokens_details": {"reasoning_tokens": 0, "text_tokens": 2},
+            "prompt_tokens_details": {
+                "cached_tokens": 0, "text_tokens": 10, "cache_write_tokens": 2, "cache_creation_tokens": 2,
+                "cache_creation_token_details": {"ephemeral_1h_input_tokens": 2}
+            },
+            "cache_creation_input_tokens": 2, "cache_read_input_tokens": 0
+        })
+    )]
+    #[case::malformed_optional_fields_are_ignored(
+        json!({
+            "input_tokens": 10, "output_tokens": 2, "cache_creation": "x",
+            "output_tokens_details": {"thinking_tokens": "x"}, "inference_geo": 1, "speed": 2, "service_tier": 3
+        }),
+        json!({
+            "completion_tokens": 2, "prompt_tokens": 10, "total_tokens": 12,
+            "completion_tokens_details": {"reasoning_tokens": 0, "text_tokens": 2},
+            "prompt_tokens_details": {"cached_tokens": 0, "text_tokens": 10, "cache_write_tokens": 0, "cache_creation_tokens": 0},
+            "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0
+        })
+    )]
+    fn reports_the_usage_python_reports(#[case] upstream_usage: Value, #[case] expected: Value) {
+        let response = transform_response(json!({
+            "model": "claude-haiku-5-5",
+            "content": [{"type": "text", "text": "pong"}],
+            "stop_reason": "end_turn",
+            "usage": upstream_usage
+        }))
+        .expect("response transforms");
+        assert_eq!(serde_json::to_value(response.usage).unwrap(), expected);
+    }
+
+    #[rstest]
+    #[case::thinking_tokens_reported(
+        json!([{"type": "thinking", "thinking": "hmm", "signature": "sig"}, {"type": "text", "text": "pong"}]),
+        json!({"thinking_tokens": 3}),
+        json!({"reasoning_tokens": 3, "text_tokens": 7})
+    )]
+    #[case::thinking_tokens_capped_at_the_completion(
+        json!([{"type": "thinking", "thinking": "hmm", "signature": "sig"}, {"type": "text", "text": "pong"}]),
+        json!({"thinking_tokens": 12}),
+        json!({"reasoning_tokens": 10, "text_tokens": 0})
+    )]
+    #[case::thinking_block_without_a_count(
+        json!([{"type": "thinking", "thinking": "hmm", "signature": "sig"}, {"type": "text", "text": "pong"}]),
+        Value::Null,
+        json!({})
+    )]
+    #[case::redacted_thinking_block_without_a_count(
+        json!([{"type": "redacted_thinking", "data": "opaque"}, {"type": "text", "text": "pong"}]),
+        json!({}),
+        json!({})
+    )]
+    #[case::no_thinking_block(
+        json!([{"type": "text", "text": "pong"}]),
+        Value::Null,
+        json!({"reasoning_tokens": 0, "text_tokens": 10})
+    )]
+    fn splits_completion_tokens_like_python(
+        #[case] content: Value,
+        #[case] output_tokens_details: Value,
+        #[case] expected: Value,
+    ) {
+        let response = transform_response(json!({
+            "model": "claude-sonnet-4-5",
+            "content": content,
+            "stop_reason": "end_turn",
+            "usage": {"input_tokens": 1, "output_tokens": 10, "output_tokens_details": output_tokens_details}
+        }))
+        .expect("response transforms");
+        assert_eq!(
+            serde_json::to_value(response.usage.completion_tokens_details).unwrap(),
+            expected
+        );
     }
 
     #[test]
