@@ -3565,6 +3565,32 @@ class TestPreCallHookResponseIsNotLoggedVerbatim:
         assert self._logged_action(data) is None
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("returned_texts", "expected_action"),
+        [(["SECRET_PROMPT"], None), (["[MASKED]"], "mask")],
+        ids=["returns_fewer_keys_unchanged", "returns_rewritten_text"],
+    )
+    async def test_apply_guardrail_logs_a_masking_action_only_when_a_returned_value_changed(
+        self, returned_texts: list[str], expected_action: str | None
+    ):
+        class TextsOnlyGuardrail(CustomGuardrail):
+            @log_guardrail_information
+            async def apply_guardrail(
+                self,
+                inputs: dict[str, object],
+                request_data: dict[str, object],
+                input_type: str,
+            ) -> dict[str, object]:
+                return {"texts": returned_texts}
+
+        data: Final = self._request()
+        await TextsOnlyGuardrail(guardrail_name="g").apply_guardrail(
+            inputs={"texts": ["SECRET_PROMPT"], "model": "gpt-4.1-mini"}, request_data=data, input_type="request"
+        )
+
+        assert self._logged_action(data) == expected_action
+
+    @pytest.mark.asyncio
     async def test_pre_call_hook_removing_legacy_functions_in_place_logs_mask(self):
         class FunctionStrippingGuardrail(CustomGuardrail):
             @log_guardrail_information

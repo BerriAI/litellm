@@ -19,6 +19,7 @@ from litellm._logging import verbose_logger
 from litellm.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.core_helpers import (
+    as_str_mapping,
     get_metadata_variable_name_from_kwargs,
     get_or_create_metadata_bucket,
     redact_nested_match_and_regex_keys,
@@ -1735,7 +1736,7 @@ class CustomGuardrail(CustomLogger):
 
         This gets logged on downsteam Langfuse, DataDog, etc.
         """
-        guardrail_response: Final = self._summarize_guardrail_response(
+        guardrail_response, changed_content = self._summary_and_change(
             response=response,
             original_inputs=original_inputs,
             event_type=event_type,
@@ -1751,20 +1752,48 @@ class CustomGuardrail(CustomLogger):
             start_time=start_time,
             end_time=end_time,
             event_type=event_type,
-            tracing_detail=self._acted_tracing_detail(isinstance(response, str), guardrail_response, event_type),
+            tracing_detail=self._acted_tracing_detail(isinstance(response, str), changed_content, event_type),
         )
         return response
 
     @staticmethod
     def _acted_tracing_detail(
-        returned_text: bool, guardrail_response: object, event_type: GuardrailEventHooks | None
+        returned_text: bool, changed_content: bool, event_type: GuardrailEventHooks | None
     ) -> GuardrailTracingDetail | None:
         """The ``guardrail_action`` of a run that acted while its status reads as success: a pre_call
         hook that returned its rejection message, which the proxy turns into a 400, or a hook that
         changed the content."""
         if returned_text:
             return {"guardrail_action": GUARDRAIL_ACTION_BLOCK} if event_type == GuardrailEventHooks.pre_call else None
-        return {"guardrail_action": GUARDRAIL_ACTION_MASK} if guardrail_response == "mask" else None
+        return {"guardrail_action": GUARDRAIL_ACTION_MASK} if changed_content else None
+
+    @staticmethod
+    def _returned_a_changed_value(
+        response: object, original_inputs: Mapping[str, object] | None, event_type: GuardrailEventHooks | None
+    ) -> bool:
+        """True when a content key the hook returned holds a value it did not hold before the hook
+        ran. A key the hook left out of what it returned is not a change."""
+        returned: Final = as_str_mapping(response)
+        if original_inputs is None or returned is None:
+            return False
+        return any(
+            original_inputs.get(key) != value
+            for key, value in returned.items()
+            if key not in _STREAM_CONTROL_KEYS
+            and (event_type != GuardrailEventHooks.pre_call or key in _PRE_CALL_CONTENT_KEYS)
+        )
+
+    def _summary_and_change(
+        self,
+        response: object,
+        original_inputs: Mapping[str, object] | None,
+        event_type: GuardrailEventHooks | None,
+    ) -> tuple[object, bool]:
+        """The loggable summary of a hook's return value, and whether that value changed the content."""
+        return (
+            self._summarize_guardrail_response(response, original_inputs, event_type),
+            self._returned_a_changed_value(response, original_inputs, event_type),
+        )
 
     def _summarize_guardrail_response(
         self,
