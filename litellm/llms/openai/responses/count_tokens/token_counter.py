@@ -13,12 +13,15 @@ from pydantic import JsonValue, TypeAdapter
 from typing_extensions import assert_never
 
 from litellm._logging import verbose_logger
+from litellm.completion_extras.litellm_responses_transformation.transformation import (
+    LiteLLMResponsesTransformationHandler,
+)
 from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.tool_fields import DropPolicy
 from litellm.llms.anthropic.count_tokens.transformation import (
     ChatCountTranslationError,
-    counted_openai_tool_choice,
+    counted_chat_tool_choice,
     counted_tool_choice,
 )
 from litellm.llms.anthropic.messages.context_management import AnthropicContextManagementError
@@ -46,12 +49,12 @@ from litellm.llms.openai.workload_identity import (
     openai_static_api_key,
     resolve_openai_workload_identity_config,
 )
-from litellm.responses.litellm_completion_transformation.transformation import LiteLLMCompletionResponsesConfig
 from litellm.types.utils import CountContextManagement, LlmProviders, TokenCountMessagesFormat, TokenCountResponse
 
 # Global handler instance - reuse across all token counting requests
 openai_count_tokens_handler: Final = OpenAICountTokensHandler()
 _RESPONSES_TOOL_CHOICE: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
+_RESPONSES_BRIDGE: Final = LiteLLMResponsesTransformationHandler()
 
 
 def _responses_tool_choice(
@@ -71,12 +74,12 @@ def _responses_tool_choice(
                         LiteLLMAnthropicToResponsesAPIAdapter.translate_tool_choice_to_responses_api(anthropic_choice)
                     )
         case "openai":
-            match counted_openai_tool_choice(chat_params.get("tool_choice") if tools else None, drops_params):
+            match counted_chat_tool_choice(chat_params.get("tool_choice") if tools else None, drops_params):
                 case ChatCountTranslationError() | None as unsent:
                     return unsent
                 case chat_choice:
                     return _RESPONSES_TOOL_CHOICE.validate_python(
-                        LiteLLMCompletionResponsesConfig.transform_tool_choice_for_responses_api_response(chat_choice)
+                        _RESPONSES_BRIDGE.normalize_tool_choice_for_responses_api(chat_choice)
                     )
         case _:
             assert_never(messages_format)

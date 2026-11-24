@@ -1802,7 +1802,6 @@ def _runtime_counted_request(count_body: Mapping[str, JsonValue]) -> tuple[str, 
 _RUNTIME_COUNTED_TOOL_CHOICES: Final[Mapping[str, JsonValue]] = MappingProxyType(
     {
         "forced-tool-choice-dropped": {"type": "tool", "name": "get_weather", "disable_parallel_tool_use": True},
-        "reasoning": {"type": "auto"},
         "forced-tool-choice": {"type": "tool", "name": "get_weather"},
     }
 )

@@ -3774,13 +3774,13 @@ def test_map_optional_params_tool_choice_chat_nested_to_responses_api():
         ),
     ],
 )
-def test_normalize_tool_choice_for_responses_api(tool_choice, expected):
+def testnormalize_tool_choice_for_responses_api(tool_choice, expected):
     from litellm.completion_extras.litellm_responses_transformation.transformation import (
         LiteLLMResponsesTransformationHandler,
     )
 
     handler = LiteLLMResponsesTransformationHandler()
-    assert handler._normalize_tool_choice_for_responses_api(tool_choice) == expected
+    assert handler.normalize_tool_choice_for_responses_api(tool_choice) == expected
 
 
 def test_convert_chat_completion_file_type_to_input_file():

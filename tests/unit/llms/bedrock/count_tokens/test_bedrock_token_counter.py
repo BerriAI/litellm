@@ -1185,9 +1185,10 @@ async def test_claude_count_sends_a_forced_tool_choice_without_tools_only_where_
     [
         ("bedrock/converse/us.anthropic.claude-sonnet-4-6", "sometimes", True),
         ("bedrock/converse/us.anthropic.claude-sonnet-4-6", {"type": "bogus"}, True),
+        ("bedrock/converse/us.anthropic.claude-sonnet-4-6", {"type": "function", "name": "get_weather"}, True),
         ("bedrock/invoke/us.anthropic.claude-sonnet-4-6", "sometimes", False),
     ],
-    ids=["converse_unknown_string", "converse_unknown_type", "invoke_unknown_string"],
+    ids=["converse_unknown_string", "converse_unknown_type", "converse_flat_function", "invoke_unknown_string"],
 )
 async def test_claude_chat_count_rejects_an_invalid_chat_tool_choice_where_inference_does(
     deployment_model: str, tool_choice: JsonValue, rejected: bool
@@ -1210,7 +1211,36 @@ async def test_claude_chat_count_rejects_an_invalid_chat_tool_choice_where_infer
     assert (result.error, result.status_code, bedrock.posted_hosts()) == (
         (True, 400, ()) if rejected else (False, None, (RUNTIME_HOST,))
     )
-    assert str(result.error_message).startswith("tool_choice.") is rejected
+    assert ("tool_choice" in str(result.error_message)) is rejected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("tool_choice", "normalized"),
+    [({"type": "auto"}, "auto"), ({"type": "required"}, "required")],
+    ids=["auto_object", "required_object"],
+)
+async def test_claude_converse_chat_count_sends_an_object_tool_choice_as_chat_inference_normalizes_it(
+    tool_choice: JsonValue, normalized: str
+) -> None:
+    as_object: Final = _Bedrock(runtime=(200, {"inputTokens": 583}), mantle=(200, {"input_tokens": 1}))
+    as_string: Final = _Bedrock(runtime=(200, {"inputTokens": 583}), mantle=(200, {"input_tokens": 1}))
+    request: Final = {
+        "model_to_use": "us.anthropic.claude-sonnet-4-6",
+        "messages": [{"role": "user", "content": "Weather in Paris?"}],
+        "contents": None,
+        "deployment": _deployment("bedrock/converse/us.anthropic.claude-sonnet-4-6"),
+        "request_model": "us.anthropic.claude-sonnet-4-6",
+        "tools": [_WEATHER_TOOL],
+        "messages_format": "openai",
+    }
+
+    result: Final = await _counter(as_object).count_tokens(**request, chat_params={"tool_choice": tool_choice})
+    await _counter(as_string).count_tokens(**request, chat_params={"tool_choice": normalized})
+
+    assert result is not None
+    assert (result.error, result.total_tokens) == (False, 583)
+    assert as_object.requests[0].content == as_string.requests[0].content
 
 
 @pytest.mark.asyncio

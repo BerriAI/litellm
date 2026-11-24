@@ -513,11 +513,20 @@ async def test_anthropic_format_counts_the_tool_choice_messages_inference_sends(
     [
         ("required", "required"),
         ({"type": "function", "function": {"name": "get_weather"}}, {"type": "function", "name": "get_weather"}),
-        ({"type": "function", "name": "get_weather"}, {"type": "function", "name": "get_weather"}),
+        ({"type": "auto"}, "auto"),
+        ({"type": "required"}, "required"),
+        ({"type": "web_search_preview"}, {"type": "web_search_preview"}),
+        (
+            {
+                "type": "allowed_tools",
+                "allowed_tools": {"mode": "required", "tools": [{"type": "function", "function": {"name": "get_weather"}}]},
+            },
+            {"type": "allowed_tools", "mode": "required", "tools": [{"type": "function", "name": "get_weather"}]},
+        ),
     ],
-    ids=["required", "named_function", "responses_named_function"],
+    ids=["required", "named_function", "auto_object", "required_object", "hosted_tool", "allowed_tools"],
 )
-async def test_openai_format_counts_a_chat_or_responses_tool_choice_in_the_responses_shape(
+async def test_openai_format_counts_the_chat_tool_choice_chat_inference_accepts_in_the_responses_shape(
     monkeypatch: pytest.MonkeyPatch, tool_choice: JsonValue, counted_tool_choice: JsonValue
 ) -> None:
     sent: Final = await _sent_count_body(
@@ -636,8 +645,8 @@ async def test_anthropic_format_unknown_tool_choice_answers_400_without_calling_
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "tool_choice",
-    ["sometimes", {"type": "bogus"}, {"type": "function"}],
-    ids=["unknown_string", "unknown_type", "function_without_name"],
+    ["sometimes", {"type": "bogus"}, {"type": "function"}, {"type": "function", "name": "get_weather"}],
+    ids=["unknown_string", "unknown_type", "function_without_name", "flat_function"],
 )
 async def test_openai_format_invalid_tool_choice_answers_400_without_calling_openai(
     monkeypatch: pytest.MonkeyPatch, tool_choice: JsonValue
@@ -659,7 +668,7 @@ async def test_openai_format_invalid_tool_choice_answers_400_without_calling_ope
     assert route.called is False
     assert result is not None
     assert (result.error, result.status_code, result.rejected_before_provider_call) == (True, 400, True)
-    assert str(result.error_message).startswith("tool_choice.")
+    assert "tool_choice" in str(result.error_message)
 
 
 @pytest.mark.asyncio

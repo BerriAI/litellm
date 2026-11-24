@@ -13,18 +13,17 @@ from types import MappingProxyType
 from typing import (
     TYPE_CHECKING,
     Final,
+    Literal,
     Protocol,
     TypeAlias,
-    TypeVar,
     cast,  # noqa: TID251  # caller chat messages go to chat inference translation as-is
 )
 
-from openai.types.chat import ChatCompletionToolChoiceOptionParam
-from openai.types.responses.response_create_params import ToolChoice as ResponsesToolChoice
 from pydantic import ConfigDict, JsonValue, TypeAdapter, ValidationError, with_config
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm.constants import ANTHROPIC_TOKEN_COUNTING_BETA_VERSION, DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS
+from litellm.exceptions import BadRequestError
 from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.litellm_core_utils.dot_notation_indexing import delete_nested_values
 from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import (
@@ -50,6 +49,7 @@ from litellm.types.llms.anthropic import ANTHROPIC_BETA_HEADER_VALUES, Anthropic
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionImageObject, ValidUserMessageContentTypes
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import TokenCountMessagesFormat, TokenCountResponse
+from litellm.utils import validate_chat_completion_tool_choice
 
 if TYPE_CHECKING:
     from litellm.llms.anthropic.messages.native.transformation import AnthropicMessagesConfig
@@ -64,13 +64,9 @@ _IMAGE_BLOCK: Final = TypeAdapter(ChatCompletionImageObject)
 _ANTHROPIC_TOOL_CHOICE: Final[TypeAdapter[AnthropicMessagesToolChoice | None]] = TypeAdapter(
     AnthropicMessagesToolChoice | None
 )
-_CHAT_TOOL_CHOICE: Final[TypeAdapter[ChatCompletionToolChoiceOptionParam | None]] = TypeAdapter(
-    ChatCompletionToolChoiceOptionParam | None
+_CHAT_TOOL_CHOICE_OPTION: Final[TypeAdapter[Literal["none", "auto", "required"] | None]] = TypeAdapter(
+    Literal["none", "auto", "required"] | None
 )
-_OPENAI_TOOL_CHOICE: Final[TypeAdapter[ChatCompletionToolChoiceOptionParam | ResponsesToolChoice | None]] = TypeAdapter(
-    ChatCompletionToolChoiceOptionParam | ResponsesToolChoice | None
-)
-_AcceptedChoiceT = TypeVar("_AcceptedChoiceT")
 COUNT_TOKEN_OPTION_NAMES: Final = ("thinking", "tool_choice", "output_config")
 _PLAIN_MESSAGE_KEYS: Final = frozenset({"role", "content"})
 _CHAT_ROLES_WITHOUT_CONTENT: Final = frozenset({"user", "assistant"})
@@ -154,15 +150,16 @@ class ChatCountTranslationError:
         )
 
 
+def _rejected_tool_choice(message: str, drops_params: bool) -> ChatCountTranslationError | None:
+    return None if drops_params else ChatCountTranslationError(message=message)
+
+
 def _invalid_tool_choice(error: ValidationError, drops_params: bool) -> ChatCountTranslationError | None:
-    return (
-        None
-        if drops_params
-        else ChatCountTranslationError(
-            message="; ".join(
-                f"{'.'.join(('tool_choice', *map(str, detail['loc'])))}: {detail['msg']}" for detail in error.errors()
-            )
-        )
+    return _rejected_tool_choice(
+        "; ".join(
+            f"{'.'.join(('tool_choice', *map(str, detail['loc'])))}: {detail['msg']}" for detail in error.errors()
+        ),
+        drops_params,
     )
 
 
@@ -175,22 +172,18 @@ def counted_tool_choice(
         return _invalid_tool_choice(e, drops_params)
 
 
-def _counted_choice_of(
-    accepted: TypeAdapter[_AcceptedChoiceT], tool_choice: JsonValue, drops_params: bool
-) -> JsonValue | ChatCountTranslationError:
-    try:
-        _ = accepted.validate_python(tool_choice)
-    except ValidationError as e:
-        return _invalid_tool_choice(e, drops_params)
-    return tool_choice
-
-
 def counted_chat_tool_choice(tool_choice: JsonValue, drops_params: bool) -> JsonValue | ChatCountTranslationError:
-    return _counted_choice_of(_CHAT_TOOL_CHOICE, tool_choice, drops_params)
-
-
-def counted_openai_tool_choice(tool_choice: JsonValue, drops_params: bool) -> JsonValue | ChatCountTranslationError:
-    return _counted_choice_of(_OPENAI_TOOL_CHOICE, tool_choice, drops_params)
+    if not isinstance(tool_choice, dict):
+        try:
+            return _CHAT_TOOL_CHOICE_OPTION.validate_python(tool_choice)
+        except ValidationError as e:
+            return _invalid_tool_choice(e, drops_params)
+    try:
+        return _COUNT_OPTION.validate_python(
+            validate_chat_completion_tool_choice(tool_choice, drop_params=drops_params)
+        )
+    except BadRequestError as e:
+        return _rejected_tool_choice(e.message, drops_params)
 
 
 @with_config(ConfigDict(extra="ignore"))

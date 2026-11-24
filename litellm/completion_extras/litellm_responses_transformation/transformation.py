@@ -1122,7 +1122,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
     def __init__(self):
         pass
 
-    def _normalize_tool_choice_for_responses_api(
+    def normalize_tool_choice_for_responses_api(
         self, tool_choice: _ToolChoiceT
     ) -> (
         _ToolChoiceT
@@ -1431,7 +1431,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                     MappingProxyType({"verbosity": value}),  # pyright: ignore[reportUnknownArgumentType]  # untyped value
                 )
             elif key == "tool_choice":
-                responses_api_request["tool_choice"] = self._normalize_tool_choice_for_responses_api(value)
+                responses_api_request["tool_choice"] = self.normalize_tool_choice_for_responses_api(value)
             elif key == "stream_options":
                 stream_options = normalize_responses_api_stream_options(value)
                 if stream_options is not None:

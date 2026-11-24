@@ -10224,10 +10224,10 @@ def validate_chat_completion_user_messages(
 
 
 def validate_chat_completion_tool_choice(
-    tool_choice: dict | str | None,
+    tool_choice: Mapping[str, object] | str | None,
     model: str = "",
     drop_params: bool = False,
-) -> dict | str | None:
+) -> dict[str, object] | str | None:
     """
     Confirm the tool choice is passed in the OpenAI format.
 
@@ -10237,7 +10237,11 @@ def validate_chat_completion_tool_choice(
         return tool_choice
     elif isinstance(tool_choice, dict):
         tool_choice_type = tool_choice.get("type")
-        if tool_choice_type in ("auto", "none", "required") and "function" not in tool_choice:
+        if (
+            isinstance(tool_choice_type, str)
+            and tool_choice_type in ("auto", "none", "required")
+            and "function" not in tool_choice
+        ):
             return tool_choice_type
         if tool_choice_type == "allowed_tools":
             allowed_tools: Final = parse_allowed_tools_tool_choice_or_refuse(
