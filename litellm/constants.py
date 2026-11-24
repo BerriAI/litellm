@@ -1617,7 +1617,7 @@ BEDROCK_CONVERSE_MODELS: Final = [
 ]
 
 
-open_ai_embedding_models: Final[set] = set(["text-embedding-ada-002"])
+open_ai_embedding_models: Final[set[str]] = {"text-embedding-ada-002"}
 cohere_embedding_models: Final[set] = set(
     [
         "embed-v4.0",

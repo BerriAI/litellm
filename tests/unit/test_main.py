@@ -1450,6 +1450,32 @@ def test_custom_openai_embedding_forwards_dimensions_to_the_custom_base(respx_mo
     assert json.loads(route.calls.last.request.content)["dimensions"] == 2
 
 
+def test_openai_compatible_embedding_without_a_provider_key_never_sends_the_openai_key(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("GROQ_API_KEY", raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "openai-key-that-must-stay-home")
+    route: Final = respx_mock.post(url__regex=r".*").respond(json=_EMBEDDING_RESPONSE)
+
+    with pytest.raises(litellm.AuthenticationError, match="Missing API key for groq"):
+        litellm.embedding(model="groq/test-embedding-model", input=["hello world"])
+
+    assert not route.called
+
+
+def test_openai_compatible_embedding_without_an_api_base_never_falls_back_to_openai(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+    monkeypatch.delenv("OPENAI_API_BASE", raising=False)
+    route: Final = respx_mock.post(url__regex=r".*").respond(json=_EMBEDDING_RESPONSE)
+
+    with pytest.raises(litellm.BadRequestError, match="ai21 has no default api_base"):
+        litellm.embedding(model="ai21/test-embedding-model", input=["hello world"], api_key="test-key")
+
+    assert not route.called
+
+
 def test_embedding_keeps_deployment_prompt_management_params_out_of_the_bedrock_body(
     respx_mock: respx.MockRouter,
 ) -> None:

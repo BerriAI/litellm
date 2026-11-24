@@ -73,7 +73,7 @@ from litellm.constants import (
     NADIR_DEFAULT_API_BASE,
     OPENAI_AUDIO_TRANSCRIPTION_PROVIDERS,
 )
-from litellm.exceptions import AuthenticationError, LiteLLMUnknownProvider
+from litellm.exceptions import AuthenticationError, BadRequestError, LiteLLMUnknownProvider
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.allowed_tools_tool_choice import (
     drops_unsupported_allowed_tools_tool_choice,
@@ -2948,6 +2948,24 @@ def _complete_hosted_vllm(ctx: CompletionDispatchContext) -> _CompletionDispatch
     logging.post_call(input=messages, api_key=api_key, original_response=response)
 
     return response
+
+
+def _openai_compatible_embedding_target_error(
+    provider: str, model: str, api_base: str | None, api_key: str | None
+) -> BadRequestError | AuthenticationError | None:
+    if api_base is None:
+        return BadRequestError(
+            message=f"{provider} has no default api_base for embeddings. Pass api_base.",
+            model=model,
+            llm_provider=provider,
+        )
+    if api_key is None:
+        return AuthenticationError(
+            message=f"Missing API key for {provider}. Set the provider's API key env var or pass api_key.",
+            llm_provider=provider,
+            model=model,
+        )
+    return None
 
 
 def _openai_key_fallback(custom_llm_provider: str | None) -> str | None:
@@ -7276,7 +7294,7 @@ def embedding(
 
 @client
 def embedding(
-    model,
+    model: str,
     input=[],
     # Optional params
     dimensions: int | None = None,
@@ -7325,8 +7343,8 @@ def embedding(
         cast(object, kwargs["drop_params"]) if "drop_params" in kwargs else None  # cast-ok: untyped request kwargs
     )
     drop_unsupported_params: Final = litellm.drop_params is True or normalize_drop_params(drop_params_kwarg) is True
-    shared_session: Final = kwargs.get("shared_session", None)
-    max_retries: Final = kwargs.get("max_retries", None)
+    shared_session: Final[ClientSession | None] = kwargs.get("shared_session", None)
+    max_retries: Final[int | None] = kwargs.get("max_retries", None)
     litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
     mock_response: Final[list[float] | None] = kwargs.get("mock_response", None)
     azure_ad_token_provider: Final = kwargs.get("azure_ad_token_provider", None)
@@ -7363,7 +7381,7 @@ def embedding(
         kwargs, excluding=(*default_params, *DynamicPromptManagementParamLiteral.list_all_params())
     )
 
-    litellm_params_dict: Final = get_litellm_params(**kwargs)
+    litellm_params_dict: Final[dict[str, object]] = get_litellm_params(**kwargs)
 
     model, custom_llm_provider, dynamic_api_key, api_base = get_llm_provider(
         model=model,
@@ -8305,6 +8323,10 @@ def embedding(
                 litellm_params={},
             )
         elif custom_llm_provider in litellm.openai_compatible_providers:
+            if (
+                target_error := _openai_compatible_embedding_target_error(custom_llm_provider, model, api_base, api_key)
+            ) is not None:
+                raise target_error
             if headers:
                 optional_params["extra_headers"] = headers
             response = openai_chat_completions.embedding(  # rebind-ok: dispatch chain binds response per branch
