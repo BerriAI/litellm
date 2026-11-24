@@ -1470,3 +1470,21 @@ def test_azure_ai_mai_rows_are_priced_for_their_mode(path: Path, model: str) -> 
     assert isinstance(row, dict)
     assert row.get("mode") == mode
     assert [name for name in cost_fields if not _positive_cost(row, name)] == []
+
+
+@pytest.mark.parametrize(("cached_tokens", "expected_input_cost"), ((0, 0.05), (1_000_000, 0.005)))
+def test_mai_code_flash_charges_per_million_tokens(
+    prices: CostMap, local_model_cost_map: None, cached_tokens: int, expected_input_cost: float
+) -> None:
+    """Global MAI-Code-2-Flash inference meters on 2026-11-23, https://prices.azure.com/api/retail/prices."""
+    model: Final = "azure_ai/MAI-Code-2-Flash"
+    litellm.register_model({model: dict(prices[model])})
+    costs: Final = litellm.cost_per_token(
+        model=model,
+        usage_object=Usage(
+            prompt_tokens=1_000_000,
+            completion_tokens=1_000_000,
+            prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=cached_tokens),
+        ),
+    )
+    assert costs == pytest.approx((expected_input_cost, 0.25))
