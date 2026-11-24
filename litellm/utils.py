@@ -10905,7 +10905,9 @@ class ProviderConfigManager:
                 LlmProviders.LITELLM_PROXY: litellm.LiteLLMProxyDecisionsConfig,
             }
             return configs[provider]()
-        return None
+        from litellm.llms.openai_like.decisions.transformation import json_provider_decisions_config
+
+        return json_provider_decisions_config(model, provider.value)
 
     @staticmethod
     def get_provider_extraction_config(model: str, provider: LlmProviders) -> BaseExtractionConfig | None:

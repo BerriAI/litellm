@@ -392,5 +392,13 @@
       "/v1/chat/completions",
       "/v1/completions"
     ]
+  },
+  "levanto": {
+    "base_url": "https://sage.levanto.ai",
+    "api_key_env": "LEVANTO_API_KEY",
+    "api_base_env": "LEVANTO_API_BASE",
+    "supported_endpoints": [
+      "/v1/systemone"
+    ]
   }
 }

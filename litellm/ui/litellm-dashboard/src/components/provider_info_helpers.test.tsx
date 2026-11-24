@@ -291,6 +291,7 @@ describe("provider_info_helpers", () => {
         Providers.HEROKU,
         Providers.Laya,
         Providers.LEMONADE,
+        Providers.LEVANTO,
         Providers.LLAMAFILE,
         Providers.MARITALK,
         Providers.Nace,
@@ -671,6 +672,20 @@ describe("provider_info_helpers", () => {
       ]);
       expect(getProviderLogoAndName("empiriolabs").displayName).toBe("EmpirioLabs AI");
       expect(getPlaceholder("EMPIRIOLABS")).toBe("empiriolabs/aplomb-1");
+    });
+
+    it("should list only Levanto decision models for the 'LEVANTO' provider key", () => {
+      const modelMap = {
+        "levanto/sage-latest": { litellm_provider: "levanto", mode: "evaluation" },
+        "levanto/levanto-sage-2": { litellm_provider: "levanto", mode: "evaluation" },
+        "typesafe/jev-latest": { litellm_provider: "typesafe", mode: "evaluation" },
+      };
+      expect(getProviderModels("LEVANTO" as Providers, modelMap)).toEqual([
+        "levanto/sage-latest",
+        "levanto/levanto-sage-2",
+      ]);
+      expect(getProviderLogoAndName("levanto").displayName).toBe("Levanto");
+      expect(getPlaceholder("LEVANTO")).toBe("levanto/sage-latest");
     });
 
     it("should list only strands_decider models for the 'StrandsDecider' provider key", () => {

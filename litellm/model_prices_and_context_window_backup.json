@@ -79621,6 +79621,28 @@
         "source": "https://docs.typesafe.ai/models",
         "supports_box_questions": true
     },
+    "levanto/levanto-sage-2": {
+        "input_cost_per_token": 5e-08,
+        "litellm_provider": "levanto",
+        "max_input_tokens": 32768,
+        "mode": "evaluation",
+        "output_cost_per_token": 1e-06,
+        "source": "https://levanto.ai/pricing",
+        "supported_endpoints": [
+            "/v1/systemone"
+        ]
+    },
+    "levanto/sage-latest": {
+        "input_cost_per_token": 5e-08,
+        "litellm_provider": "levanto",
+        "max_input_tokens": 32768,
+        "mode": "evaluation",
+        "output_cost_per_token": 1e-06,
+        "source": "https://levanto.ai/pricing",
+        "supported_endpoints": [
+            "/v1/systemone"
+        ]
+    },
     "eu_jev/eu-jeff-1.0.0": {
         "input_cost_per_token": 4.15e-08,
         "litellm_provider": "eu_jev",

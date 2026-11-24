@@ -141,6 +141,7 @@ _PROVIDERS: Final[tuple[tuple[str, str, str, str], ...]] = (
         "typesafe/jev-1.13",
     ),
     ("empiriolabs", "empiriolabs/aplomb-1", "https://api.empiriolabs.ai/v1/decisions", "aplomb-1"),
+    ("levanto", "levanto/sage-latest", "https://sage.levanto.ai/v1/systemone", "sage-latest"),
 )
 
 _OPENAI_RESPONSE: Final[Mapping[str, object]] = {
@@ -4936,6 +4937,77 @@ def test_empiriolabs_upstream_errors_keep_their_status_and_message(
 
     assert getattr(caught.value, "status_code") == status
     assert route.call_count == 1
+
+
+_LEVANTO_MODEL: Final = "levanto/sage-latest"
+_LEVANTO_DEFAULT_URL: Final = "https://sage.levanto.ai/v1/systemone"
+_LEVANTO_STATE: Final = "I was charged twice for order 4411 and want a refund today."
+_LEVANTO_QUESTIONS: Final[Mapping[str, object]] = MappingProxyType(
+    {"is_refund": {"type": "noul", "instructions": "Is the customer asking for a refund?"}}
+)
+_LEVANTO_RESPONSE: Final[Mapping[str, object]] = {
+    "model": "levanto-sage-2",
+    "answers": {"is_refund": {"type": "noul", "noul": 0.97, "confidence": 0.97}},
+    "usage": {"input_tokens": 24, "output_tokens": 2},
+}
+
+
+def test_levanto_posts_the_systemone_body_to_its_public_api_and_prices_the_call(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    monkeypatch.delenv("LEVANTO_API_BASE", raising=False)
+    route: Final = respx_mock.post(_LEVANTO_DEFAULT_URL).respond(json=_LEVANTO_RESPONSE)
+
+    response: Final = litellm.systemone(
+        model=_LEVANTO_MODEL,
+        state=_LEVANTO_STATE,
+        questions=_LEVANTO_QUESTIONS,
+        api_key="caller-key",
+    )
+
+    assert route.call_count == 1
+    assert route.calls[0].request.headers["authorization"] == "Bearer caller-key"
+    assert json.loads(route.calls[0].request.content) == {
+        "model": "sage-latest",
+        "state": _LEVANTO_STATE,
+        "questions": {"is_refund": {"type": "noul", "instructions": "Is the customer asking for a refund?"}},
+    }
+    assert response.answers["is_refund"] == NoulAnswer(type="noul", noul=0.97, confidence=0.97)
+    assert response._hidden_params["custom_llm_provider"] == "levanto"
+    assert response._hidden_params["response_cost"] == pytest.approx(
+        24 * litellm.model_cost[_LEVANTO_MODEL]["input_cost_per_token"]
+        + 2 * litellm.model_cost[_LEVANTO_MODEL]["output_cost_per_token"]
+    )
+
+
+def test_levanto_without_a_key_is_refused_before_http(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    monkeypatch.delenv("LEVANTO_API_KEY", raising=False)
+    monkeypatch.delenv("LEVANTO_API_BASE", raising=False)
+
+    with pytest.raises(litellm.AuthenticationError, match="Missing API key for Decisions provider 'levanto'"):
+        litellm.systemone(model=_LEVANTO_MODEL, state=_LEVANTO_STATE, questions=_LEVANTO_QUESTIONS)
+
+    assert len(respx_mock.calls) == 0
+
+
+def test_json_provider_serves_decisions_only_when_its_entry_lists_systemone(respx_mock: respx.MockRouter) -> None:
+    with pytest.raises(
+        litellm.BadRequestError, match=r"Unknown Decisions provider 'zerogpu'\. Supported providers"
+    ) as error:
+        litellm.systemone(
+            model="zerogpu/gpt-oss-120b",
+            state=_LEVANTO_STATE,
+            questions=_LEVANTO_QUESTIONS,
+            api_key="caller-key",
+        )
+
+    supported: Final = str(error.value).split("Supported providers: ", 1)[1].split(", ")
+    assert "levanto" in supported
+    assert len(respx_mock.calls) == 0
 
 
 _BOX_QUESTION_REQUESTS: Final[tuple[tuple[str, Mapping[str, object]], ...]] = (
