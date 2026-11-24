@@ -289,15 +289,13 @@ fn router(settings: &RouterSettings) -> impl Iterator<Item = Box<str>> + '_ {
 }
 
 /// A `request_timeout` the native call reads otherwise than Python. Python fails every call on
-/// text `float()` refuses and keeps zero as a timeout, where the native call keeps neither. And it
-/// reads the setting in place of the router's `timeout` when one is set, where the router's
-/// `timeout` or `request_timeout` comes first natively.
+/// text `float()` refuses and keeps zero as a timeout, where the native call keeps neither. And
+/// the native router takes `router_settings.request_timeout` as a timeout of its own, where the
+/// Python router derives that value from this setting instead.
 fn unkept(config: &Config) -> bool {
-    let router = &config.router_settings;
     config.litellm_settings.request_timeout.is_some()
         && (crate::boot::request_timeout(&config.litellm_settings).is_none()
-            || router.timeout.is_some()
-            || router.request_timeout.is_some())
+            || config.router_settings.request_timeout.is_some())
 }
 
 /// A callback other than `dynamic_rate_limiter_v3`, the one the native app runs.
@@ -488,10 +486,6 @@ mod tests {
         "litellm_settings:\n  request_timeout: 0\n",
         "litellm_settings.request_timeout"
     )]
-    #[case::a_request_timeout_beside_the_routers_timeout(
-        "litellm_settings:\n  request_timeout: 30\nrouter_settings:\n  timeout: 10\n",
-        "litellm_settings.request_timeout"
-    )]
     #[case::a_request_timeout_beside_the_routers_request_timeout(
         "litellm_settings:\n  request_timeout: 30\nrouter_settings:\n  request_timeout: 10\n",
         "litellm_settings.request_timeout"
@@ -507,6 +501,9 @@ mod tests {
     #[case::a_request_timeout("litellm_settings:\n  request_timeout: 30\n")]
     #[case::a_request_timeout_as_text("litellm_settings:\n  request_timeout: \"2.5\"\n")]
     #[case::the_routers_timeout_alone("router_settings:\n  timeout: 10\n")]
+    #[case::a_request_timeout_beside_the_routers_timeout(
+        "litellm_settings:\n  request_timeout: 30\nrouter_settings:\n  timeout: 10\n"
+    )]
     fn a_messages_setting_the_native_call_reads_as_python_does_is_not_named(#[case] yaml: &str) {
         assert_eq!(written(yaml), Vec::<String>::new());
     }

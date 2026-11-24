@@ -139,11 +139,16 @@ impl<H: Host> RouteAttempt for MessagesAttempt<'_, H> {
 
     async fn run(&self, attempt: &Attempt) -> Result<Self::Outcome, Error> {
         let deployment = &attempt.deployment;
+        let shaping = self.gateway.shaping(&deployment.id);
         let call = MessagesCall {
-            timeout: routing::timeout(attempt, routing::streamed(&self.body)),
+            timeout: routing::timeout(
+                attempt,
+                routing::streamed(&self.body),
+                shaping.settings.request_timeout(),
+            ),
             ..project(
                 deployment,
-                self.gateway.shaping(&deployment.id),
+                shaping,
                 routing::attempt_body(&self.body, attempt),
                 self.headers,
             )?

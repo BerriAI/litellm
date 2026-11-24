@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use serde_json::Value;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -30,37 +32,64 @@ fn parse_segments(path: &str) -> Option<Vec<Segment>> {
     Some(segments)
 }
 
-fn remove_path(value: &mut Value, segments: &[Segment]) {
-    let Some((segment, tail)) = segments.split_first() else {
-        return;
-    };
-    match (segment, value) {
-        (Segment::Field(name), Value::Object(object)) if tail.is_empty() => {
-            if object.contains_key(name) {
-                object.retain(|key, _| key != name);
+/// Every path to delete, as a tree of the segments they share. A field that ends a path is
+/// deleted from the object holding it. A path that ends on an element or `[*]` deletes nothing.
+#[derive(Default)]
+struct Removals {
+    ends: bool,
+    fields: HashMap<String, Removals>,
+    every: Option<Box<Removals>>,
+    indexes: HashMap<usize, Removals>,
+}
+
+impl Removals {
+    fn insert(&mut self, segments: &[Segment]) {
+        let Some((segment, tail)) = segments.split_first() else {
+            self.ends = true;
+            return;
+        };
+        match segment {
+            Segment::Field(name) => self.fields.entry(name.clone()).or_default().insert(tail),
+            Segment::Every => self.every.get_or_insert_default().insert(tail),
+            Segment::Index(index) => self.indexes.entry(*index).or_default().insert(tail),
+        }
+    }
+
+    fn prune(&self, value: &mut Value) {
+        match value {
+            Value::Object(object) => {
+                object.retain(|key, _| !self.fields.get(key).is_some_and(|field| field.ends));
+                object.iter_mut().for_each(|(key, item)| {
+                    if let Some(field) = self.fields.get(key) {
+                        field.prune(item);
+                    }
+                });
             }
+            Value::Array(items) => items.iter_mut().enumerate().for_each(|(index, item)| {
+                if let Some(every) = &self.every {
+                    every.prune(item);
+                }
+                if let Some(at) = self.indexes.get(&index) {
+                    at.prune(item);
+                }
+            }),
+            _ => {}
         }
-        (Segment::Field(name), Value::Object(object)) => {
-            if let Some(item) = object.get_mut(name) {
-                remove_path(item, tail);
-            }
-        }
-        (Segment::Every, Value::Array(items)) if !tail.is_empty() => {
-            items.iter_mut().for_each(|item| remove_path(item, tail));
-        }
-        (Segment::Index(index), Value::Array(items)) => {
-            if let Some(item) = items.get_mut(*index) {
-                remove_path(item, tail);
-            }
-        }
-        _ => {}
     }
 }
 
-pub fn delete_nested_value(mut value: Value, path: &str) -> Value {
-    if let Some(segments) = parse_segments(path) {
-        remove_path(&mut value, &segments);
-    }
+/// `value` without what each of `paths` addresses, in one pass over `value` however many paths
+/// there are. A path that does not parse deletes nothing.
+pub fn delete_nested_values<'a>(
+    mut value: Value,
+    paths: impl IntoIterator<Item = &'a str>,
+) -> Value {
+    let mut removals = Removals::default();
+    paths
+        .into_iter()
+        .filter_map(parse_segments)
+        .for_each(|segments| removals.insert(&segments));
+    removals.prune(&mut value);
     value
 }
 
@@ -187,7 +216,7 @@ mod tests {
         "top": 0.7
     }))]
     fn deletes_the_addressed_field(body: Value, #[case] path: &str, #[case] expected: Value) {
-        assert_eq!(delete_nested_value(body, path), expected);
+        assert_eq!(delete_nested_values(body, [path]), expected);
     }
 
     #[rstest]
@@ -208,7 +237,7 @@ mod tests {
     #[case::empty_index("tools[].name")]
     #[case::unclosed_bracket("top[0")]
     fn leaves_the_value_untouched(body: Value, #[case] path: &str) {
-        assert_eq!(delete_nested_value(body.clone(), path), body);
+        assert_eq!(delete_nested_values(body.clone(), [path]), body);
     }
 
     #[rstest]
@@ -219,7 +248,7 @@ mod tests {
         #[case] expected: &str,
     ) {
         let schema = json!({"properties": {"a": 1, "b": 2, "c": 3, "d": 4}});
-        let trimmed = delete_nested_value(schema, path);
+        let trimmed = delete_nested_values(schema, [path]);
         assert_eq!(
             serde_json::to_string(&trimmed).ok().as_deref(),
             Some(expected)
@@ -237,11 +266,28 @@ mod tests {
             .map(|n| format!("tools[*].input_schema.properties.absent{n}"))
             .collect();
         let started = std::time::Instant::now();
-        let trimmed = paths
-            .iter()
-            .fold(body.clone(), |value, path| delete_nested_value(value, path));
+        let trimmed = delete_nested_values(body.clone(), paths.iter().map(String::as_str));
         assert!(started.elapsed() < std::time::Duration::from_secs(1));
         assert_eq!(trimmed, body);
+    }
+
+    #[rstest]
+    #[case::forty_thousand_properties(40_000)]
+    fn many_present_paths_over_a_wide_schema_finish_well_inside_one_request(#[case] width: usize) {
+        let properties: serde_json::Map<String, Value> = (0..width)
+            .map(|n| (format!("p{n}"), json!({"type": "string"})))
+            .collect();
+        let body = json!({"tools": [{"name": "t", "input_schema": {"properties": properties}}]});
+        let paths: Vec<String> = (0..width)
+            .map(|n| format!("tools[*].input_schema.properties.p{n}"))
+            .collect();
+        let started = std::time::Instant::now();
+        let trimmed = delete_nested_values(body, paths.iter().map(String::as_str));
+        assert!(started.elapsed() < std::time::Duration::from_secs(1));
+        assert_eq!(
+            trimmed,
+            json!({"tools": [{"name": "t", "input_schema": {"properties": {}}}]})
+        );
     }
 
     #[rstest]
@@ -282,14 +328,22 @@ mod tests {
             {"arr2": [{"keep": 3}]}
         ]}]}),
     )]
-    fn applies_paths_in_sequence(
-        #[case] value: Value,
-        #[case] paths: &[&str],
-        #[case] expected: Value,
-    ) {
-        let deleted = paths
-            .iter()
-            .fold(value, |value, path| delete_nested_value(value, path));
-        assert_eq!(deleted, expected);
+    #[case::a_parent_and_a_field_inside_it(
+        json!({"meta": {"inner": {"drop": 1}}, "top": 0.7}),
+        &["meta.inner.drop", "meta"],
+        json!({"top": 0.7}),
+    )]
+    #[case::every_element_and_one_element_of_the_same_list(
+        json!({"tools": [{"a": 1, "b": 1, "c": 1}, {"a": 2, "b": 2, "c": 2}]}),
+        &["tools[*].a", "tools[1].b"],
+        json!({"tools": [{"b": 1, "c": 1}, {"c": 2}]}),
+    )]
+    #[case::one_path_that_does_not_parse_among_others(
+        json!({"meta": {"user": "u"}, "top": 0.7}),
+        &["top[0", "meta.user"],
+        json!({"meta": {}, "top": 0.7}),
+    )]
+    fn applies_every_path(#[case] value: Value, #[case] paths: &[&str], #[case] expected: Value) {
+        assert_eq!(delete_nested_values(value, paths.iter().copied()), expected);
     }
 }

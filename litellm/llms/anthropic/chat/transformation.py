@@ -1094,8 +1094,8 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             raise litellm.utils.UnsupportedParamsError(
                 message=(
                     f"{model} does not support speed={speed_value!r}. "
-                    "To drop unsupported params, set "
-                    "`litellm.drop_params = True`."
+                    "To drop unsupported params, set `litellm.drop_params = True`, or "
+                    "`drop_params: true` under `litellm_settings` in the proxy config."
                 ),
                 status_code=400,
             )

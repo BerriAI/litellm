@@ -579,7 +579,8 @@ async fn reasoning_auto_summary_asks_for_summarized_thinking(#[values(false, tru
 }
 
 /// A call waits for the deployment's `timeout`, else its `request_timeout`, else
-/// `litellm_settings.request_timeout`, the order of Python's `resolve_llm_passthrough_timeout`.
+/// `litellm_settings.request_timeout`, the order of Python's `resolve_llm_passthrough_timeout`,
+/// and one that runs out is answered 408 `api_error`, as Python answers its `litellm.Timeout`.
 #[rstest]
 #[case::the_deployments_timeout_first(
     json!({"timeout": 5, "request_timeout": 0.1, "num_retries": 0}),
@@ -628,9 +629,16 @@ async fn a_call_waits_for_the_first_timeout_python_reads(
     )
     .await;
 
+    let status = response.status().as_u16();
+    let waited = started.elapsed() >= delay;
+    let error_type = support::json(response).await["error"]["type"].clone();
     assert_eq!(
-        (response.status() == 200, started.elapsed() >= delay),
-        (answered, answered)
+        (status, waited, error_type),
+        if answered {
+            (200, true, Value::Null)
+        } else {
+            (408, false, json!("api_error"))
+        }
     );
 }
 

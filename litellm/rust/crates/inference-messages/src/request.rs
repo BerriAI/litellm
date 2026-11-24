@@ -22,7 +22,7 @@ use std::time::Duration;
 
 use litellm_auth::AuthServices;
 use litellm_core_utils::{
-    dot_notation_indexing::delete_nested_value,
+    dot_notation_indexing::delete_nested_values,
     get_provider_specific_headers::get_provider_specific_headers,
 };
 use litellm_env::Lookup;
@@ -451,9 +451,7 @@ fn without_additional_drop_params(
         return Ok(request);
     }
     let params = serde_json::to_value(request.params).map_err(invalid_request)?;
-    let trimmed = paths
-        .iter()
-        .fold(params, |params, path| delete_nested_value(params, path));
+    let trimmed = delete_nested_values(params, paths.iter().map(String::as_str));
     Ok(MessagesRequest {
         params: serde_json::from_value(trimmed).map_err(invalid_request)?,
         ..request

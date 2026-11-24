@@ -113,6 +113,9 @@ impl Sent {
 #[case::messages_settings("messages_settings")]
 #[case::request_timeout_float_refuses("request_timeout_float_refuses")]
 #[case::request_timeout_beside_router_timeout("request_timeout_beside_router_timeout")]
+#[case::request_timeout_beside_router_request_timeout(
+    "request_timeout_beside_router_request_timeout"
+)]
 #[tokio::test(flavor = "multi_thread")]
 async fn admit_answers_each_request_as_its_scenario_says(#[case] name: &str) {
     litellm_gateway::install_crypto_provider();

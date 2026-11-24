@@ -1085,7 +1085,8 @@ class AnthropicModelInfo(BaseLLMModelInfo):
             raise litellm.utils.UnsupportedParamsError(
                 message=(
                     f"{model} does not support {param}={value}. {supported_hint}"
-                    "To drop unsupported params, set `litellm.drop_params = True`."
+                    "To drop unsupported params, set `litellm.drop_params = True`, or "
+                    "`drop_params: true` under `litellm_settings` in the proxy config."
                 ),
                 status_code=400,
             )

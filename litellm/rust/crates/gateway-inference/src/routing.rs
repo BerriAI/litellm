@@ -431,8 +431,14 @@ pub(crate) fn streamed(body: &Map<String, Value>) -> bool {
 
 /// `resolve_llm_passthrough_timeout` over the settings the gateway reads: a streamed call's
 /// `stream_timeout` on the deployment, then the deployment's `timeout` and `request_timeout`, then
-/// the router's.
-pub(crate) fn timeout(attempt: &Attempt, streamed: bool) -> Option<Duration> {
+/// the router's, then `configured`, the process `request_timeout`. As the Python router does, a
+/// `configured` timeout stands in for the router's own, and a stream reads it right after the
+/// deployment's `stream_timeout`.
+pub(crate) fn timeout(
+    attempt: &Attempt,
+    streamed: bool,
+    configured: Option<Duration>,
+) -> Option<Duration> {
     let seconds = |written: &Option<Spelled<f64>>| {
         let seconds = match written.as_ref()? {
             Spelled::Value(seconds) => *seconds,
@@ -446,11 +452,11 @@ pub(crate) fn timeout(attempt: &Attempt, streamed: bool) -> Option<Duration> {
         Duration::try_from_secs_f64(seconds).ok()
     };
     streamed
-        .then(|| seconds(&params.stream_timeout))
+        .then(|| seconds(&params.stream_timeout).or(attempt.timeout.and(configured)))
         .flatten()
         .or_else(|| seconds(&params.timeout))
         .or_else(request_timeout)
-        .or(attempt.timeout)
+        .or(configured.or(attempt.timeout))
 }
 
 pub(crate) fn api_key(deployment: &Deployment) -> Option<String> {
@@ -566,7 +572,40 @@ mod tests {
         #[case] expected: Option<u64>,
     ) {
         assert_eq!(
-            timeout(&attempt(params, router_timeout), streamed),
+            timeout(&attempt(params, router_timeout), streamed, None),
+            expected.map(Duration::from_secs)
+        );
+    }
+
+    #[rstest]
+    #[case::the_configured_timeout_without_a_routers(json!({"model": "a/b"}), None, false, Some(2))]
+    #[case::the_configured_timeout_in_place_of_the_routers(
+        json!({"model": "a/b"}), Some(600), false, Some(2)
+    )]
+    #[case::the_deployments_timeout_before_the_configured(
+        json!({"model": "a/b", "timeout": 30}), Some(600), false, Some(30)
+    )]
+    #[case::a_stream_reads_the_configured_timeout_before_the_deployments_when_the_router_has_one(
+        json!({"model": "a/b", "timeout": 30}), Some(600), true, Some(2)
+    )]
+    #[case::a_stream_reads_the_deployments_timeout_first_when_the_router_has_none(
+        json!({"model": "a/b", "timeout": 30}), None, true, Some(30)
+    )]
+    #[case::a_stream_reads_its_own_stream_timeout_first(
+        json!({"model": "a/b", "stream_timeout": 5}), Some(600), true, Some(5)
+    )]
+    fn a_configured_request_timeout_is_read_where_python_reads_it(
+        #[case] params: Value,
+        #[case] router_timeout: Option<u64>,
+        #[case] streamed: bool,
+        #[case] expected: Option<u64>,
+    ) {
+        assert_eq!(
+            timeout(
+                &attempt(params, router_timeout),
+                streamed,
+                Some(Duration::from_secs(2))
+            ),
             expected.map(Duration::from_secs)
         );
     }

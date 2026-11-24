@@ -1,5 +1,5 @@
-# Python reads request_timeout in place of the router's timeout when both are set, where the
-# native router keeps its own.
+# Python reads request_timeout in place of the router's timeout when both are set, and so does the
+# native call.
 config:
   model_list:
     - model_name: claude
@@ -17,6 +17,4 @@ requests:
   - name: plain
     headers: {authorization: Bearer gateway-key}
     body: {model: claude, max_tokens: 16, messages: []}
-    expect: python
-    reason: settings
-    over: litellm_settings.request_timeout
+    expect: rust
