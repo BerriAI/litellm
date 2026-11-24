@@ -231,8 +231,10 @@ def _gemini_assistant_image_file_ids(value: object) -> Iterator[str]:
     for image in images:
         if (fields := as_str_mapping(image)) is None:
             continue
-        raw_image_url = fields.get("image_url")
-        url = raw_image_url if isinstance(raw_image_url, str) else (as_str_mapping(raw_image_url) or {}).get("url")
+        raw_image_url: Final = fields.get("image_url")
+        url: Final = (
+            raw_image_url if isinstance(raw_image_url, str) else (as_str_mapping(raw_image_url) or {}).get("url")
+        )
         if isinstance(url, str) and url.startswith(GEMINI_FILES_API_URI_PREFIXES):
             yield url
 
@@ -2051,7 +2053,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                 content, (str, Mapping)
             ):
                 continue
-            part_role = "user" if role in ("system", "developer") else role
+            part_role: Final = "user" if role in ("system", "developer") else role
             for part in content:
                 if (file_id := _chat_message_file_id(part, part_role)) is not None:
                     yield file_id
