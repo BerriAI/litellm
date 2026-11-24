@@ -1241,3 +1241,60 @@ def test_a_disconnect_after_done_only_tool_calls_bills_the_arguments_the_client_
 
     assert billed_for_deltas
     assert billed_for_done_only == billed_for_deltas
+
+
+def test_an_mcp_call_streams_as_its_tool_use_and_result_blocks_before_the_answer() -> None:
+    call: Final = {
+        "type": "mcp_call",
+        "id": "mcp_0abc",
+        "server_label": "docs",
+        "name": "read_wiki_structure",
+        "arguments": '{"repoName": "BerriAI/litellm"}',
+        "output": "1 Overview",
+        "error": None,
+    }
+
+    chunks: Final = _process_all(
+        [
+            {"type": "response.output_item.added", "item": {**call, "arguments": "", "output": None}},
+            {"type": "response.mcp_call_arguments.delta", "item_id": "mcp_0abc", "delta": '{"repoName"'},
+            {"type": "response.output_item.done", "item": call},
+            {"type": "response.output_item.added", "item": {"type": "message", "id": "msg_1"}},
+            {"type": "response.output_text.delta", "item_id": "msg_1", "delta": "Overview"},
+            {"type": "response.output_item.done", "item": {"type": "message", "id": "msg_1"}},
+        ]
+    )
+
+    assert chunks == [
+        {
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {
+                "type": "mcp_tool_use",
+                "id": "mcp_0abc",
+                "name": "read_wiki_structure",
+                "server_name": "docs",
+                "input": {},
+            },
+        },
+        {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {"type": "input_json_delta", "partial_json": '{"repoName": "BerriAI/litellm"}'},
+        },
+        {"type": "content_block_stop", "index": 0},
+        {
+            "type": "content_block_start",
+            "index": 1,
+            "content_block": {
+                "type": "mcp_tool_result",
+                "tool_use_id": "mcp_0abc",
+                "is_error": False,
+                "content": [{"type": "text", "text": "1 Overview"}],
+            },
+        },
+        {"type": "content_block_stop", "index": 1},
+        {"type": "content_block_start", "index": 2, "content_block": {"type": "text", "text": ""}},
+        {"type": "content_block_delta", "index": 2, "delta": {"type": "text_delta", "text": "Overview"}},
+        {"type": "content_block_stop", "index": 2},
+    ]

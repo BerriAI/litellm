@@ -68,6 +68,7 @@ from litellm.types.llms.openai import (
 
 REASONING_SUMMARY_PART_SEPARATOR: Final = "\n\n"
 RESPONSES_INCLUDE_ENCRYPTED_REASONING: Final = "reasoning.encrypted_content"
+_DECODED_JSON: Final = TypeAdapter(object)
 _MCP_TOOLSET_TYPE: Final = "mcp_toolset"
 _MCP_TOOLSET: Final = TypeAdapter(AnthropicMcpToolset)
 _MCP_SERVER: Final = TypeAdapter(AnthropicMcpServerTool)
@@ -218,6 +219,21 @@ def _requested_mcp_servers(request: AnthropicMessagesRequest) -> Sequence[object
             return ()
 
 
+def _server_name(server: object) -> str | None:
+    fields: Final = _object_map(server)
+    name: Final = None if fields is None else fields.get("name")
+    return name if isinstance(name, str) else None
+
+
+def _toolsets_naming_no_server(tools: Sequence[Mapping[str, object]], servers: Sequence[object]) -> tuple[str, ...]:
+    names: Final = frozenset(_server_name(server) for server in servers)
+    return tuple(
+        f"mcp_toolset {tool.get('mcp_server_name')!r} without a matching mcp_servers entry"
+        for tool in tools
+        if _is_mcp_toolset(tool) and tool.get("mcp_server_name") not in names
+    )
+
+
 def _mcp_server_translation(requested: object, tools: Sequence[Mapping[str, object]]) -> _ResponsesTools:
     """One Responses ``mcp`` tool per server, its access read from the server's ``mcp_toolset`` entry in ``tools``,
     else from the deprecated ``tool_configuration``."""
@@ -259,8 +275,11 @@ def _service_tier(speed: object) -> _Translation:
             return _Translation(fields={}, unsupported=(f"speed {speed!r}",))
 
 
-def _container(container: object) -> _Translation:
-    return _Translation(fields={}, unsupported=() if container is None else ("container",))
+_FIELDS_WITHOUT_EQUIVALENT: Final = ("top_k", "inference_geo", "container")
+
+
+def _no_equivalent(request: Mapping[str, object], field: str) -> _Translation:
+    return _Translation(fields={}, unsupported=() if request.get(field) is None else (field,))
 
 
 def _object_map(value: object) -> Mapping[str, object] | None:
@@ -282,8 +301,8 @@ def _field_translations(request: Mapping[str, object]) -> tuple[_Translation, ..
     return (
         _parallel_tool_calls(_object_map(request.get("tool_choice"))),
         _service_tier(request.get("speed")),
-        _container(request.get("container")),
         _text_format(_requested_output_format(request)),
+        *(_no_equivalent(request, field) for field in _FIELDS_WITHOUT_EQUIVALENT),
     )
 
 
@@ -315,7 +334,7 @@ def _unsupported_params_error(model: str, unsupported: Sequence[str]) -> litellm
         message=(
             f"{model} is served through the OpenAI Responses API, which has no equivalent for "
             f"{'; '.join(unsupported)}. To drop {pronoun}, set `litellm.drop_params=True`, or `drop_params: true` "
-            "under `litellm_settings` on the proxy"
+            "in the model's `litellm_params` or under `litellm_settings` on the proxy"
         ),
         model=model,
     )
@@ -325,6 +344,26 @@ def _output_item_mapping(item: object) -> Mapping[str, object]:
     if isinstance(item, BaseModel):
         return item.model_dump()
     return as_str_mapping(item) or MappingProxyType({})
+
+
+def _tool_input(arguments: object) -> object:
+    try:
+        return _DECODED_JSON.validate_python(json.loads(str(arguments or "{}")))
+    except json.JSONDecodeError:
+        return {}
+
+
+def _text_block_text(block: object) -> str:
+    match as_str_mapping(block):
+        case {"type": "text", "text": str(text)}:
+            return text
+        case _:
+            return ""
+
+
+def _mcp_tool_result_text(result: Mapping[str, object]) -> str:
+    content: Final = result.get("content")
+    return content if isinstance(content, str) else "".join(map(_text_block_text, iter_items(content or ())))
 
 
 class LiteLLMAnthropicToResponsesAPIAdapter:
@@ -537,9 +576,17 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
 
     @staticmethod
     def _assistant_block_group_key(indexed_block: tuple[int, Mapping[str, object]]) -> str:
-        """Group a run of consecutive thinking blocks together; keep every other block alone."""
+        """Group a run of thinking blocks, and an MCP tool use with its result; keep every other block alone."""
         index, block = indexed_block
-        return "thinking" if block.get("type") in ("thinking", "redacted_thinking") else f"block:{index}"
+        match block.get("type"):
+            case "thinking" | "redacted_thinking":
+                return "thinking"
+            case "mcp_tool_use":
+                return f"mcp:{block.get('id')}"
+            case "mcp_tool_result":
+                return f"mcp:{block.get('tool_use_id')}"
+            case _:
+                return f"block:{index}"
 
     @classmethod
     def _assistant_group_to_input_items(
@@ -559,7 +606,47 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                     "arguments": json.dumps(first.get("input", {})),
                 },
             )
+        if btype == "mcp_tool_use":
+            result: Final = next((block for block in group if block.get("type") == "mcp_tool_result"), None)
+            return (cls._mcp_call_item(first, result),)
         return ()
+
+    @staticmethod
+    def _mcp_call_item(
+        tool_use: Mapping[str, object], result: Mapping[str, object] | None
+    ) -> dict[str, object]:  # mutable-ok: API message payload
+        call: Final = {
+            "type": "mcp_call",
+            "id": tool_use.get("id", ""),
+            "server_label": tool_use.get("server_name", ""),
+            "name": tool_use.get("name", ""),
+            "arguments": json.dumps(tool_use.get("input", {})),
+        }
+        if result is None:
+            return call
+        text: Final = _mcp_tool_result_text(result)
+        return {**call, "error": text} if result.get("is_error") else {**call, "output": text}
+
+    @staticmethod
+    def mcp_blocks_from_call(item: object) -> tuple[dict[str, object], dict[str, object]]:  # mutable-ok: API payload
+        call: Final = _output_item_mapping(item)
+        call_id: Final = str(call.get("id") or "")
+        error: Final = call.get("error")
+        return (
+            {
+                "type": "mcp_tool_use",
+                "id": call_id,
+                "name": str(call.get("name") or ""),
+                "server_name": str(call.get("server_label") or ""),
+                "input": _tool_input(call.get("arguments")),
+            },
+            {
+                "type": "mcp_tool_result",
+                "tool_use_id": call_id,
+                "is_error": error is not None,
+                "content": [{"type": "text", "text": str(call.get("output") or "") if error is None else str(error)}],
+            },
+        )
 
     def translate_messages_to_responses_input(
         self,
@@ -577,6 +664,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
           assistant text     -> message(role=assistant, output_text)
           assistant thinking -> reasoning
           assistant tool_use -> function_call
+          assistant mcp_tool_use + mcp_tool_result -> mcp_call
         """
         input_items: Final[list[dict[str, object]]] = []
 
@@ -760,9 +848,8 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
 
     def _translate_tools(self, anthropic_request: AnthropicMessagesRequest) -> _Translation:
         tools: Final = cast(list[AllAnthropicToolsValues], anthropic_request.get("tools") or [])
-        mcp_servers: Final = tuple(
-            _mcp_server_translation(server, tools) for server in _requested_mcp_servers(anthropic_request)
-        )
+        requested_servers: Final = _requested_mcp_servers(anthropic_request)
+        mcp_servers: Final = tuple(_mcp_server_translation(server, tools) for server in requested_servers)
         responses_tools: Final = (
             *self.translate_tools_to_responses_api(tools),
             *chain.from_iterable(server.tools for server in mcp_servers),
@@ -773,6 +860,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
             unsupported=(
                 *chain.from_iterable(_allowed_callers_unsupported(tool) for tool in tools),
                 *chain.from_iterable(server.unsupported for server in mcp_servers),
+                *_toolsets_naming_no_server(tools, requested_servers),
                 *max_tool_calls.unsupported,
             ),
         )
@@ -1040,21 +1128,19 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                 if reasoning_block is not None:
                     content.append(reasoning_block)
             elif item_type == "function_call":
-                try:
-                    input_data = json.loads(str(item.get("arguments") or "{}"))
-                except json.JSONDecodeError:
-                    input_data = {}
                 content.append(
                     AnthropicResponseContentBlockToolUse.model_validate(
                         {
                             "type": "tool_use",
                             "id": item.get("call_id") or item.get("id") or "",
                             "name": item.get("name") or "",
-                            "input": input_data,
+                            "input": _tool_input(item.get("arguments")),
                         }
                     ).model_dump(exclude_none=True)
                 )
                 stop_reason = "tool_use"
+            elif item_type == "mcp_call":
+                content.extend(self.mcp_blocks_from_call(item))
         if response.status == "incomplete":
             stop_reason = "max_tokens"
         elif refusal_text is not None:

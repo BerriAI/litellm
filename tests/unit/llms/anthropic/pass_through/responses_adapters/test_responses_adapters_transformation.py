@@ -5,6 +5,7 @@ Tests for LiteLLMAnthropicToResponsesAPIAdapter
 
 import json
 import os
+from collections.abc import Mapping
 from typing import Any, Dict, Final, List
 from unittest.mock import MagicMock
 
@@ -2694,10 +2695,6 @@ class TestPromptCacheBreakpointToResponses:
         assert kwargs["prompt_cache_options"] == {"mode": "explicit"}
 
 
-# ---------------------------------------------------------------------------
-# Anthropic fields with a Responses equivalent map to it, the rest answer 400 unless drop_params drops them
-# ---------------------------------------------------------------------------
-
 LOOKUP_TOOL: Final = {"name": "lookup", "input_schema": {"type": "object", "properties": {}}}
 DOCS_SERVER: Final = {"type": "url", "name": "docs", "url": "https://mcp.example.com/sse"}
 DOCS_MCP_TOOL: Final = {
@@ -2823,13 +2820,11 @@ def test_an_mcp_toolset_sets_the_mcp_tools_allowlist_and_never_becomes_a_functio
     assert kwargs["tools"] == [_ADAPTER.translate_tools_to_responses_api([LOOKUP_TOOL])[0], *expected_tools]
 
 
-def test_an_mcp_toolset_for_another_server_is_ignored():
-    kwargs: Final = _translate(
-        False,
-        mcp_servers=[DOCS_SERVER],
-        tools=[{"type": "mcp_toolset", "mcp_server_name": "other", "default_config": {"enabled": False}}],
-    )
-    assert kwargs["tools"] == [DOCS_MCP_TOOL]
+def test_an_mcp_toolset_naming_no_requested_server_answers_400_unless_drop_params_drops_it():
+    tools: Final = [{"type": "mcp_toolset", "mcp_server_name": "other", "default_config": {"enabled": False}}]
+    message: Final = _unsupported_message(mcp_servers=[DOCS_SERVER], tools=tools)
+    assert "mcp_toolset 'other' without a matching mcp_servers entry" in message
+    assert _translate(True, mcp_servers=[DOCS_SERVER], tools=tools)["tools"] == [DOCS_MCP_TOOL]
 
 
 UNMAPPABLE_TOOLSETS: Final = [
@@ -2942,11 +2937,20 @@ def test_allowed_callers_answers_400_unless_drop_params_drops_it(allowed_callers
     assert _translate(True, tools=tools)["tools"] == _ADAPTER.translate_tools_to_responses_api([LOOKUP_TOOL])
 
 
-@pytest.mark.parametrize("container", ["container_abc", {"id": "container_abc"}])
-def test_container_answers_400_unless_drop_params_drops_it(container: str | Dict[str, object]):
-    message: Final = _unsupported_message(container=container)
-    assert "no equivalent for container. To drop it, set `litellm.drop_params=True`" in message
-    assert "container" not in _translate(True, container=container)
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        pytest.param("container", "container_abc", id="container-id"),
+        pytest.param("container", {"id": "container_abc"}, id="container-params"),
+        pytest.param("top_k", 40, id="top-k"),
+        pytest.param("inference_geo", "us", id="inference-geo"),
+    ],
+)
+def test_a_field_without_a_responses_equivalent_answers_400_unless_drop_params_drops_it(field: str, value: object):
+    message: Final = _unsupported_message(**{field: value})
+    assert f"no equivalent for {field}. To drop it, set `litellm.drop_params=True`" in message
+    assert "`drop_params: true` in the model's `litellm_params` or under `litellm_settings`" in message
+    assert field not in _translate(True, **{field: value})
 
 
 @pytest.mark.parametrize(
@@ -3029,3 +3033,85 @@ class TestTranslateChatBridgedResponse:
             {"type": "tool_use", "id": "call_1", "name": "get_weather", "input": {"city": "Oslo"}}
         ]
         assert result["stop_reason"] == "tool_use"
+
+
+WIKI_MCP_CALL: Final = {
+    "type": "mcp_call",
+    "id": "mcp_0abc",
+    "server_label": "docs",
+    "name": "read_wiki_structure",
+    "arguments": '{"repoName": "BerriAI/litellm"}',
+    "output": "1 Overview",
+    "error": None,
+    "status": "completed",
+}
+WIKI_MCP_TOOL_USE: Final = {
+    "type": "mcp_tool_use",
+    "id": "mcp_0abc",
+    "name": "read_wiki_structure",
+    "server_name": "docs",
+    "input": {"repoName": "BerriAI/litellm"},
+}
+
+
+@pytest.mark.parametrize(
+    ("call", "is_error", "result_text"),
+    (
+        (WIKI_MCP_CALL, False, "1 Overview"),
+        ({**WIKI_MCP_CALL, "output": None, "error": "server unreachable"}, True, "server unreachable"),
+    ),
+    ids=("output", "error"),
+)
+def test_an_mcp_call_comes_back_as_the_tool_use_and_result_blocks_anthropic_returns(
+    call: Mapping[str, object], is_error: bool, result_text: str
+) -> None:
+    response: Final = _make_mock_response(output=[call, _make_output_message(["One topic is the Overview."])])
+
+    result: Final[Any] = _ADAPTER.translate_response(response)
+
+    assert result["content"] == [
+        WIKI_MCP_TOOL_USE,
+        {
+            "type": "mcp_tool_result",
+            "tool_use_id": "mcp_0abc",
+            "is_error": is_error,
+            "content": [{"type": "text", "text": result_text}],
+        },
+        {"type": "text", "text": "One topic is the Overview."},
+    ]
+    assert result["stop_reason"] == "end_turn"
+
+
+@pytest.mark.parametrize(
+    ("call", "replayed_result"),
+    (
+        (WIKI_MCP_CALL, {"output": "1 Overview"}),
+        ({**WIKI_MCP_CALL, "output": None, "error": "server unreachable"}, {"error": "server unreachable"}),
+    ),
+    ids=("output", "error"),
+)
+def test_a_returned_mcp_call_replays_on_the_next_turn_as_the_same_call(
+    call: Mapping[str, object], replayed_result: Mapping[str, str]
+) -> None:
+    reply: Final[Any] = _ADAPTER.translate_response(
+        _make_mock_response(output=[call, _make_output_message(["One topic is the Overview."])])
+    )
+
+    items: Final = _translate_messages(
+        [
+            {"role": "user", "content": "Name one topic"},
+            {"role": "assistant", "content": reply["content"]},
+            {"role": "user", "content": "Quote what the tool returned"},
+        ]
+    )
+
+    assert items[1] == {
+        "type": "mcp_call",
+        "id": "mcp_0abc",
+        "server_label": "docs",
+        "name": "read_wiki_structure",
+        "arguments": '{"repoName": "BerriAI/litellm"}',
+        **replayed_result,
+    }
+    assert items[2]["role"] == "assistant"
+    assert sum(item.get("type") == "mcp_call" for item in items) == 1

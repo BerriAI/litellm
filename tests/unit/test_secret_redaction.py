@@ -98,6 +98,38 @@ def test_an_mcp_authorization_token_is_redacted_by_its_key_name(monkeypatch: pyt
 
 
 @pytest.mark.parametrize("native", (False, True), ids=("python", "rust"))
+def test_a_responses_mcp_tool_authorization_is_redacted_by_its_key_name(
+    monkeypatch: pytest.MonkeyPatch, native: bool
+) -> None:
+    if native:
+        pytest.importorskip("litellm.rust_bridge._native")
+    monkeypatch.setenv("LITELLM_RUST", "1" if native else "0")
+    json_body: Final = '{"tools": [{"type": "mcp", "server_label": "docs", "authorization": "opaque-mcp-credential"}]}'
+    curl_body: Final = "-d '{'tools': [{'type': 'mcp', 'authorization': 'opaque-mcp-credential'}]}'"
+    masked_header: Final = "-H 'Authorization: Bearer sk-p****abcd'"
+
+    assert redact_string(json_body) == '{"tools": [{"type": "mcp", "server_label": "docs", "REDACTED"}]}'
+    assert redact_string(curl_body) == "-d '{'tools': [{'type': 'mcp', 'REDACTED'}]}'"
+    assert redact_string(masked_header) == masked_header
+    assert redact_structured_value("authorization", "opaque-mcp-credential") == "REDACTED"
+
+
+@pytest.mark.parametrize("native", (False, True), ids=("python", "rust"))
+@pytest.mark.parametrize("masked", ("Bearer sk-p****abcd", "Bearer sk-***", "sk-p****abcd"))
+def test_an_authorization_value_litellm_already_masked_keeps_its_hint(
+    monkeypatch: pytest.MonkeyPatch, native: bool, masked: str
+) -> None:
+    if native:
+        pytest.importorskip("litellm.rust_bridge._native")
+    monkeypatch.setenv("LITELLM_RUST", "1" if native else "0")
+    json_header: Final = f'{{"Authorization": "{masked}"}}'
+
+    assert redact_structured_value("Authorization", masked) == masked
+    assert redact_string(json_header) == json_header
+    assert redact_structured_value("authorization", "Bearer opaque-mcp-credential") == "REDACTED"
+
+
+@pytest.mark.parametrize("native", (False, True), ids=("python", "rust"))
 @pytest.mark.parametrize("scheme", ("Bearer", "Basic", "bearer"))
 def test_a_value_with_an_auth_scheme_is_redacted_whole_under_a_secret_key_name(
     monkeypatch: pytest.MonkeyPatch, native: bool, scheme: str

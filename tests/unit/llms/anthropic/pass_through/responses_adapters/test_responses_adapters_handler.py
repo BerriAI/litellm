@@ -973,6 +973,36 @@ def test_client_cache_control_reaches_gpt_5_6_as_a_prompt_cache_breakpoint_on_th
     ]
 
 
+@pytest.mark.parametrize(
+    ("last_message", "marked_content"),
+    [
+        pytest.param(
+            {"role": "user", "content": [{"type": "text", "text": "look"}, {"type": "text", "text": "now"}]},
+            [{"type": "input_text", "text": "look"}, {"type": "input_text", "text": "now", "prompt_cache_breakpoint": {"mode": "explicit"}}],
+            id="block-list",
+        ),
+        pytest.param(
+            {"role": "user", "content": "now"},
+            [{"type": "input_text", "text": "now", "prompt_cache_breakpoint": {"mode": "explicit"}}],
+            id="string-content",
+        ),
+    ],
+)
+def test_top_level_cache_control_marks_the_last_block_of_the_conversation(
+    last_message: dict[str, object], marked_content: list[dict[str, object]]
+) -> None:
+    responses_kwargs: Final = _build_responses_kwargs(
+        model="openai/gpt-5.6",
+        max_tokens=1024,
+        messages=[{"role": "user", "content": "earlier"}, {"role": "assistant", "content": "ok"}, last_message],
+        extra_kwargs={**OPENAI_API, "cache_control": {**EPHEMERAL, "ttl": "1h"}},
+    )
+
+    assert "cache_control" not in responses_kwargs
+    assert responses_kwargs["input"][0]["content"] == [{"type": "input_text", "text": "earlier"}]
+    assert responses_kwargs["input"][-1] == {"type": "message", "role": "user", "content": marked_content}
+
+
 def test_client_cache_control_on_a_screenshot_inside_a_tool_result_reaches_gpt_5_6_on_that_screenshot() -> None:
     responses_kwargs: Final = _build_responses_kwargs(
         model="openai/gpt-5.6",
@@ -1831,10 +1861,12 @@ DOCS_SERVER: Final = {"type": "url", "name": "docs", "url": "https://mcp.example
     [
         pytest.param("fast", OPENAI_API, "priority", id="fast"),
         pytest.param("fast", {**OPENAI_API, "service_tier": "flex"}, "flex", id="forwarded-tier-wins-over-fast"),
+        pytest.param("fast", {**OPENAI_API, "service_tier": "auto"}, "priority", id="fast-wins-over-auto"),
         pytest.param(None, {**OPENAI_API, "service_tier": "flex"}, "flex", id="forwarded-tier"),
+        pytest.param(None, {**OPENAI_API, "service_tier": "auto"}, "auto", id="forwarded-auto"),
     ],
 )
-def test_speed_fast_asks_for_the_priority_tier_unless_a_service_tier_is_forwarded(
+def test_speed_fast_asks_for_the_priority_tier_unless_a_specific_service_tier_is_forwarded(
     speed: str | None, extra_kwargs: dict[str, object], service_tier: str
 ) -> None:
     responses_kwargs: Final = _build_responses_kwargs(
@@ -1860,9 +1892,10 @@ def test_speed_mcp_servers_and_container_never_reach_the_responses_call_raw(
         speed="fast",
         mcp_servers=[DOCS_SERVER],
         container=container,
-        extra_kwargs={**OPENAI_API, "drop_params": True},
+        top_k=40,
+        extra_kwargs={**OPENAI_API, "drop_params": True, "inference_geo": "us"},
     )
-    assert {"speed", "mcp_servers", "container"}.isdisjoint(responses_kwargs)
+    assert {"speed", "mcp_servers", "container", "top_k", "inference_geo"}.isdisjoint(responses_kwargs)
     assert responses_kwargs["tools"] == [
         {
             "type": "mcp",
@@ -1873,19 +1906,25 @@ def test_speed_mcp_servers_and_container_never_reach_the_responses_call_raw(
     ]
 
 
-@pytest.mark.parametrize("container", CONTAINERS)
-def test_container_answers_400_without_drop_params(container: str | dict[str, object]) -> None:
+@pytest.mark.parametrize(
+    ("field", "request_fields"),
+    [
+        pytest.param("container", {"container": "container_abc"}, id="container-id"),
+        pytest.param("container", {"container": {"id": "container_abc"}}, id="container-params"),
+        pytest.param("top_k", {"top_k": 40}, id="top-k"),
+        pytest.param("inference_geo", {"extra_kwargs": {**OPENAI_API, "inference_geo": "us"}}, id="inference-geo"),
+    ],
+)
+def test_a_field_without_a_responses_equivalent_answers_400_without_drop_params(
+    field: str, request_fields: dict[str, object]
+) -> None:
     with pytest.raises(litellm.UnsupportedParamsError) as rejected:
         _build_responses_kwargs(
-            model="openai/gpt-5.6",
-            max_tokens=1024,
-            messages=MESSAGES,
-            container=container,
-            extra_kwargs=OPENAI_API,
+            model="openai/gpt-5.6", max_tokens=1024, messages=MESSAGES, **{"extra_kwargs": OPENAI_API, **request_fields}
         )
 
     assert rejected.value.status_code == 400
-    assert "no equivalent for container" in rejected.value.message
+    assert f"no equivalent for {field}" in rejected.value.message
 
 
 @pytest.mark.parametrize("container", CONTAINERS)
@@ -1899,10 +1938,15 @@ def test_additional_drop_params_leaves_out_a_listed_speed_and_container(
         messages=MESSAGES,
         speed="fast",
         container=container,
-        extra_kwargs={**OPENAI_API, "additional_drop_params": ["speed", "container"]},
+        top_k=40,
+        extra_kwargs={
+            **OPENAI_API,
+            "inference_geo": "us",
+            "additional_drop_params": ["speed", "container", "top_k", "inference_geo"],
+        },
     )
 
-    assert {"service_tier", "speed", "container"}.isdisjoint(responses_kwargs)
+    assert {"service_tier", "speed", "container", "top_k", "inference_geo"}.isdisjoint(responses_kwargs)
 
 
 WIRE_RESPONSE: Final = {
