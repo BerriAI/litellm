@@ -4,10 +4,11 @@ Types for the management endpoints
 Might include fastapi/proxy requirements.txt related imports
 """
 
-from collections.abc import Iterable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from typing import Final, cast
 
 from fastapi_sso.sso.base import OpenID
+from pydantic import field_validator
 
 from litellm.proxy._types import LitellmUserRoles
 
@@ -97,3 +98,27 @@ class CustomOpenID(OpenID):
     user_role: LitellmUserRoles | None = None
     extra_fields: dict[str, object] | None = None
     email_verified: bool | None = None
+
+
+_SPECIAL_USE_SUFFIXES: Final = frozenset({"arpa", "invalid", "local", "localhost", "onion", "test"})
+
+
+class GenericOpenID(CustomOpenID):
+    @field_validator("email", mode="wrap")
+    @classmethod
+    def _validate_directory_email(cls, value: object, validate: Callable[[object], str | None]) -> str | None:
+        if not isinstance(value, str):
+            return validate(value)
+        local, _, domain = value.partition("@")
+        domain_name, _, suffix = domain.rpartition(".")
+        if not domain_name or suffix.lower() not in _SPECIAL_USE_SUFFIXES:
+            return validate(value)
+        if "@" in domain or value != value.strip() or any(char in value for char in "<>"):
+            return validate(value)
+
+        # An equal-length public-style label preserves EmailStr's syntax, IDNA and length checks.
+        validation_suffix: Final = "." + "a" * len(suffix)
+        normalized: Final = validate(f"{local}@{domain_name}{validation_suffix}")
+        if normalized is None or not normalized.endswith(validation_suffix):
+            raise ValueError("Invalid email domain")
+        return normalized.removesuffix(validation_suffix) + "." + suffix.lower()
