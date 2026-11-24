@@ -100,7 +100,9 @@ class VolcEngineResponsesAPIConfig(OpenAIResponsesAPIConfig):
             supported.remove("metadata")
         return supported
 
-    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> VolcEngineError:
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: Mapping[str, str] | httpx.Headers
+    ) -> VolcEngineError:
         typed_headers: httpx.Headers = headers if isinstance(headers, httpx.Headers) else httpx.Headers(headers or {})
         return VolcEngineError(
             status_code=status_code,
@@ -108,7 +110,9 @@ class VolcEngineResponsesAPIConfig(OpenAIResponsesAPIConfig):
             headers=typed_headers,
         )
 
-    def validate_environment(self, headers: dict, model: str, litellm_params: GenericLiteLLMParams | None) -> dict:
+    def validate_environment(
+        self, headers: Mapping[str, object], model: str, litellm_params: GenericLiteLLMParams | None
+    ) -> dict[str, object]:
         """
         Build auth headers for Volcengine Responses API.
         """
@@ -185,7 +189,7 @@ class VolcEngineResponsesAPIConfig(OpenAIResponsesAPIConfig):
         input: str | ResponseInputParam,
         response_api_optional_request_params: dict,
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
+        headers: dict[str, object],
     ) -> dict:
         """
         Volcengine rejects any undocumented fields (including extra_body). Fail fast

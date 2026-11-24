@@ -5,6 +5,7 @@ import time
 import traceback
 from collections.abc import Generator, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
+from datetime import datetime
 from itertools import chain
 from types import MappingProxyType
 from typing import Final, Literal, cast
@@ -102,7 +103,7 @@ def partition_annotations(annotations: object) -> tuple[object, tuple[object, ..
 
 
 def _normalize_images_for_message(
-    images: list[dict] | None,
+    images: list[dict[str, object]] | None,
 ) -> list[ImageURLListItem] | None:
     """
     Ensure each image has an 'index' field, as required by ImageURLListItem.
@@ -651,7 +652,7 @@ class LiteLLMResponseObjectHandler:
     def convert_to_image_response(
         response_object: dict,
         model_response_object: ImageResponse | None = None,
-        hidden_params: dict | None = None,
+        hidden_params: Mapping[str, object] | None = None,
     ) -> ImageResponse:
         response_object.update({"hidden_params": hidden_params})
 
@@ -792,9 +793,9 @@ def convert_to_model_response_object(
     response_type: Literal[
         "completion", "embedding", "image_generation", "audio_transcription", "rerank"
     ] = "completion",
-    stream=False,
-    start_time=None,
-    end_time=None,
+    stream: object = False,
+    start_time: datetime | None = None,
+    end_time: datetime | None = None,
     hidden_params: dict | None = None,
     _response_headers: dict | None = None,
     convert_tool_call_to_json_mode: bool | None = None,  # used for supporting 'json_schema' on older models

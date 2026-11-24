@@ -260,7 +260,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
     def get_config(cls):
         return super().get_config()
 
-    def get_supported_openai_params(self, model: str) -> list:
+    def get_supported_openai_params(self, model: str) -> list[str]:
         base_params: Final = [
             "frequency_penalty",
             "logit_bias",
@@ -698,7 +698,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         optional_params: dict,
         litellm_params: dict,
         headers: dict,
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Transform the overall request to be sent to the API.
 
@@ -742,7 +742,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         optional_params: dict,
         litellm_params: dict,
         headers: dict,
-    ) -> dict:
+    ) -> dict[str, object]:
         if not has_file_id_urls(messages, _PDF_URL_STARTS):
             return self.transform_request(model, messages, optional_params, litellm_params, headers)
         sent_messages: Final = self._with_provider_roles(
@@ -763,7 +763,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         finally:
             _prefetched_pdf_urls.reset(reset_token)
 
-    def _passed_in_tools(self, optional_params: dict) -> bool:
+    def _passed_in_tools(self, optional_params: dict[str, object]) -> bool:
         return optional_params.get("tools", None) is not None
 
     def _check_and_fix_if_content_is_tool_call(
@@ -805,7 +805,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         self,
         choices: list[OpenAIChatCompletionChoices],
         json_mode: bool | None = None,
-        optional_params: dict | None = None,
+        optional_params: dict[str, object] | None = None,
     ) -> list[Choices]:
         transformed_choices: Final = []
 
