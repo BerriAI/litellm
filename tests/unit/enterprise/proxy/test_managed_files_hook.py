@@ -2322,8 +2322,10 @@ class _FakeFilesRouter:
         delete_gate: asyncio.Event | None = None,
         provider: str = "openai",
         gone_file_ids: frozenset[str] = frozenset(),
+        covered_targets_by_model: Mapping[str, tuple[str, ...]] = MappingProxyType({}),
     ) -> None:
         self.deployments_by_model = deployments_by_model
+        self.covered_targets_by_model = covered_targets_by_model
         self.delete_error = delete_error
         self.gone_file_ids = gone_file_ids
         self.delete_gate = delete_gate
@@ -2354,6 +2356,7 @@ class _FakeFilesRouter:
             "custom_llm_provider": self.provider,
             "model_file_id_mapping": dict(zip(deployment_ids, provider_file_ids)),
             "litellm_call_id": f"call-of-{provider_file_ids[0]}",
+            "covered_target_model_names": self.covered_targets_by_model.get(model, ()),
         }
         return response
 
@@ -2540,6 +2543,24 @@ async def test_litellm_proxy_wildcard_keeps_its_first_upload_deletes_the_repeat_
     assert flat_ids == ["file-upload-1"]
     assert [delete[:2] for delete in router.deletes] == [("proxy-wildcard-dep", "file-upload-2")]
     assert router.target_model_names_sent == (("gpt-a", "gpt-b"), ("gpt-a", "gpt-b"))
+
+
+@pytest.mark.asyncio
+async def test_upload_skips_only_the_targets_an_earlier_upload_already_covers():
+    router: Final = _FakeFilesRouter(
+        {"gpt-a": ("proxy-wildcard-dep",), "gpt-b": ("proxy-wildcard-dep",), "gpt-c": ("openai-dep",)},
+        provider="litellm_proxy",
+        covered_targets_by_model={"gpt-a": ("gpt-b",)},
+    )
+
+    model_mappings, flat_ids, carried = await _create_managed_file(router, ["gpt-a", "gpt-b", "gpt-c"])
+    await drain_logging_tasks(timeout=1)
+
+    assert router.target_model_names_sent == (("gpt-a", "gpt-b", "gpt-c"), ("gpt-a", "gpt-b", "gpt-c"))
+    assert carried == ("proxy-wildcard-dep", "file-upload-1")
+    assert model_mappings == {"proxy-wildcard-dep": "file-upload-1", "openai-dep": "file-upload-2"}
+    assert sorted(flat_ids) == ["file-upload-1", "file-upload-2"]
+    assert router.deletes == ()
 
 
 async def _delete_managed_file(

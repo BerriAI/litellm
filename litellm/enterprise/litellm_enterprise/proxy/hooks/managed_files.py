@@ -405,6 +405,7 @@ class _RouterFileCallKwargs(TypedDict, total=False):
 
 
 _MODEL_FILE_ID_MAPPING: Final = TypeAdapter(dict[str, str])
+_COVERED_TARGET_MODEL_NAMES: Final = TypeAdapter(tuple[str, ...])
 _FILE_UPLOAD_ONLY_FIELDS: Final = frozenset({"file", "purpose", "expires_after", "extra_body"})
 _FILE_DELETE_RESERVED_FIELDS: Final = frozenset({"model", "file_id"})
 
@@ -416,10 +417,25 @@ class _ProviderUpload:
     upload_call_id: str | None = None
 
 
-def _provider_uploads(file_object: OpenAIFileObject) -> tuple[_ProviderUpload, ...]:
-    file_hidden_params: Final = cast(  # cast-ok: preserve mapping operations on dynamic file metadata
+def _file_hidden_params(file_object: OpenAIFileObject) -> dict[str, object]:
+    return cast(  # cast-ok: preserve mapping operations on dynamic file metadata
         dict[str, object], getattr(file_object, HIDDEN_PARAMS_ATTR)
     )
+
+
+def _targets_covered_by(file_objects: Sequence[OpenAIFileObject]) -> frozenset[str]:
+    return frozenset(
+        chain.from_iterable(
+            _COVERED_TARGET_MODEL_NAMES.validate_python(
+                _file_hidden_params(file_object).get("covered_target_model_names") or ()
+            )
+            for file_object in file_objects
+        )
+    )
+
+
+def _provider_uploads(file_object: OpenAIFileObject) -> tuple[_ProviderUpload, ...]:
+    file_hidden_params: Final = _file_hidden_params(file_object)
     model_file_id_mapping: Final = _MODEL_FILE_ID_MAPPING.validate_python(
         file_hidden_params.get("model_file_id_mapping") or {}
     )
@@ -2178,8 +2194,10 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
     ) -> List[OpenAIFileObject]:
         if llm_router is None:
             raise Exception("LLM Router not initialized. Ensure models added to proxy.")
-        responses = []
+        responses: List[OpenAIFileObject] = []
         for model in target_model_names_list:
+            if model in _targets_covered_by(responses):
+                continue
             individual_response = await llm_router.acreate_file(
                 model=model, target_model_names=tuple(target_model_names_list), **_create_file_request
             )

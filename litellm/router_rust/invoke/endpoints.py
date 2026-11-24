@@ -706,8 +706,19 @@ def is_batch_upload(request: Mapping[str, object]) -> bool:
 
 
 _TARGET_MODEL_NAMES_KEY: Final = "target_model_names"
+_COVERED_TARGET_MODEL_NAMES_KEY: Final = "covered_target_model_names"
 _TARGET_MODEL_NAMES: Final[TypeAdapter[tuple[str, ...]]] = TypeAdapter(tuple[str, ...])
 _NO_SERVED_NAMES: Final[Mapping[str, str]] = MappingProxyType({})
+
+
+def _deployment_id(deployment: Mapping[str, object]) -> str:
+    return str(as_dict(deployment.get("model_info")).get("id"))
+
+
+def _covered_targets(
+    names_by_target: Mapping[str, Mapping[str, str]], deployment_ids: frozenset[str]
+) -> tuple[str, ...]:
+    return tuple(target for target, served in names_by_target.items() if served and served.keys() <= deployment_ids)
 
 
 def _served_target_names(
@@ -2465,7 +2476,7 @@ class RustEndpoints:
                 kwargs_copy["file"] = file
             if provider == LlmProviders.LITELLM_PROXY.value:
                 served_names: Final = _served_target_names(
-                    str(as_dict(deployment.get("model_info")).get("id")),
+                    _deployment_id(deployment),
                     ordered_targets,
                     (requested, stripped),
                     names_by_target,
@@ -2499,6 +2510,9 @@ class RustEndpoints:
         hidden: Final = get_hidden_params(returned)
         if hidden is not None:
             hidden["model_file_id_mapping"] = mapping
+            hidden[_COVERED_TARGET_MODEL_NAMES_KEY] = _covered_targets(
+                names_by_target, frozenset(_deployment_id(as_dict(d)) for d in deployments)
+            )
         return returned
 
     def _stripped_model_and_provider(self, params: Mapping[str, object]) -> tuple[str, object]:
@@ -2536,9 +2550,7 @@ class RustEndpoints:
         records: Final = healthy if isinstance(healthy, Sequence) else (healthy,)
         return MappingProxyType(
             {
-                str(as_dict(record.get("model_info")).get("id")): self._stripped_model_and_provider(
-                    as_dict(record.get("litellm_params"))
-                )[0]
+                _deployment_id(record): self._stripped_model_and_provider(as_dict(record.get("litellm_params")))[0]
                 for record in records
             }
         )
