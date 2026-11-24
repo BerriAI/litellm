@@ -59,7 +59,7 @@ from litellm.litellm_core_utils.litellm_logging import (
 )
 from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import message_field
 from litellm.litellm_core_utils.redact_messages import numeric_compression_stats
-from litellm.litellm_core_utils.safe_json_dumps import safe_dumps, strip_null_bytes
+from litellm.litellm_core_utils.safe_json_dumps import safe_dumps, safe_json_structure, strip_null_bytes
 from litellm.litellm_core_utils.secret_redaction import redact_tokens
 from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
 from litellm.proxy._types import (
@@ -1200,12 +1200,26 @@ def _holds_nothing(value: object) -> bool:
     return False
 
 
+def _stored_prompt_field(value: object) -> object:
+    """What a prompt-carrying field is stored as when prompts are not stored: the value itself when its
+    JSON form holds nothing, otherwise ``None``.
+
+    The native row builder makes the same choice on the JSON form of the value, where an empty set is
+    ``[]``, a string of NUL bytes is ``""`` and a dict with no string key is ``{}``, so the choice is
+    made on that form here too. Two levels are enough to tell whether the form is empty.
+    """
+    if _holds_nothing(value):
+        return value
+    json_form: Final = safe_json_structure(value, max_depth=1)
+    return json_form if _holds_nothing(json_form) else None
+
+
 def _redact_prompt_fields_in_guardrail_entry(
     entry: StandardLoggingGuardrailInformation,
 ) -> StandardLoggingGuardrailInformation:
     """
-    Store ``None`` in place of every prompt-carrying field that holds a value. A field that is
-    ``None`` or an empty string, list or dict is stored as it is. Purely numeric
+    Store ``None`` in place of every prompt-carrying field that holds a value. A field whose JSON
+    form is ``None`` or an empty string, list or dict is stored as that empty form. Purely numeric
     compression stats inside ``guardrail_response`` (e.g. Headroom's
     ``tokens_saved``) cannot carry prompt content, so they are preserved as a
     stats-only dict; spend aggregation reads them via
@@ -1214,11 +1228,7 @@ def _redact_prompt_fields_in_guardrail_entry(
     preserved_stats: Final = numeric_compression_stats(entry)
     redacted: Final[StandardLoggingGuardrailInformation] = {
         **entry,
-        **{
-            key: None
-            for key, value in entry.items()
-            if key in PROMPT_CARRYING_GUARDRAIL_FIELDS and not _holds_nothing(value)
-        },
+        **{key: _stored_prompt_field(value) for key, value in entry.items() if key in PROMPT_CARRYING_GUARDRAIL_FIELDS},
     }
     if preserved_stats is None:
         return redacted

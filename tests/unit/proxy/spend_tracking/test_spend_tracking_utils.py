@@ -11,7 +11,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import Request
-from pydantic import TypeAdapter
+from pydantic import BaseModel, TypeAdapter
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
@@ -38,7 +38,7 @@ from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSet
 from litellm.litellm_core_utils.litellm_logging import get_standard_logging_object_payload
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.ocr.transformation import OCRResponse, OCRUsageInfo
-from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+from litellm.litellm_core_utils.safe_json_dumps import safe_dumps, safe_json_structure
 from litellm.proxy._types import SpendLogsMetadata, SpendLogsMetadataFields, SpendLogsPayload, UserAPIKeyAuth
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup, add_litellm_data_to_request
 from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import get_passthrough_router_request_metadata
@@ -3707,6 +3707,43 @@ def test_sanitize_guardrail_information_stores_none_for_a_prompt_field_that_hold
             "guardrail_response": None,
         }
     ]
+
+
+class _FieldlessVerdict(BaseModel):
+    pass
+
+
+class _BlankText:
+    def __str__(self) -> str:
+        return ""
+
+
+@pytest.mark.parametrize(
+    ("value", "stored"),
+    [
+        (set(), []),
+        ("\x00", ""),
+        ("\x00\x00", ""),
+        ({1: "x"}, {}),
+        (_FieldlessVerdict(), {}),
+        (_BlankText(), ""),
+        ({"a"}, None),
+        ("\x00a", None),
+        ({1: "x", "k": "v"}, None),
+        (frozenset(), None),
+    ],
+)
+@patch("litellm.proxy.proxy_server.general_settings", _PROMPTS_NOT_STORED)
+def test_sanitize_guardrail_information_stores_what_the_native_row_builder_stores(
+    value: object, stored: object
+) -> None:
+    entry: Final[dict[str, object]] = {"guardrail_name": "vendor", "guardrail_response": value}
+    native_input: Final = safe_json_structure(value)
+
+    result: Final = _sanitize_guardrail_information_for_spend_logs([entry])
+
+    assert result == [{"guardrail_name": "vendor", "guardrail_response": stored}]
+    assert stored == (native_input if native_input in ("", [], {}) else None)
 
 
 @patch("litellm.proxy.proxy_server.general_settings", _PROMPTS_NOT_STORED)
