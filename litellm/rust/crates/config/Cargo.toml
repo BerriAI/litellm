@@ -14,6 +14,7 @@ litellm-router-types.workspace = true
 litellm-secret-value.workspace = true
 litellm-starlette.workspace = true
 serde.workspace = true
+serde_json.workspace = true
 serde_with.workspace = true
 serde_yaml_ng = "0.10.0"
 url.workspace = true
@@ -24,4 +25,3 @@ veil.workspace = true
 
 [dev-dependencies]
 rstest.workspace = true
-serde_json.workspace = true

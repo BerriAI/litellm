@@ -1,4 +1,7 @@
-//! Config the proxy keeps in its database, merged into the config file's document. Callers
-//! read and decrypt the rows; nothing here does I/O or crypto.
+//! Config the proxy stores in its database, layered over the config file the way the Python proxy
+//! layers it once `store_model_in_db` is on. Nothing here reads the database or decrypts: the
+//! caller fetches the rows, decrypts them and hands them in.
 
 pub mod models;
+pub mod settings;
+pub mod switches;

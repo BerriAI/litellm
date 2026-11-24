@@ -1,6 +1,6 @@
 import { useTerminology } from "@/contexts/TerminologyContext";
-import { Page, PageContent } from "@/components/shared/Page";
-import { PageHeader, PageHeaderTitle, PageHeaderDescription, PageHeaderControls } from "@/components/shared/PageHeader";
+import { Page } from "@/components/shared/Page";
+import { PageHeader, PageHeaderTitle, PageHeaderDescription } from "@/components/shared/PageHeader";
 import i18n from "@/i18n/i18n";
 import { AgentHubData, getAgentHubTableColumns } from "@/components/AIHub/AgentHubTableColumns";
 import MakeAgentPublicForm from "@/components/AIHub/forms/MakeAgentPublicForm";
@@ -464,7 +464,7 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
   }
 
   const HubPage = isChat ? "div" : Page;
-  const HubContent = isChat ? React.Fragment : PageContent;
+  const HubContent = isChat ? React.Fragment : "div";
 
   return (
     <div data-slot="model-hub" className={isChat ? "chat-model-hub-catalog" : undefined}>
@@ -472,7 +472,24 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
         <HubPage className={isChat ? "chat-model-hub-content" : undefined}>
           <HubContent>
             {!isChat && (
-              <PageHeader>
+              <PageHeader
+                className="mb-6"
+                aside={
+                  <div className="flex min-w-0 items-center gap-4">
+                    <p>{t("aiHub.modelHubTable.hubUrlLabel")}</p>
+                    <div className="flex min-w-0 items-center bg-border px-2 py-1 rounded-sm">
+                      <p className="mr-2 break-all">{getUiPageUrl(`${getProxyBaseUrl()}/ui/model_hub_table`)}</p>
+                      <button
+                        onClick={() => void copyToClipboard(getUiPageUrl(`${getProxyBaseUrl()}/ui/model_hub_table`))}
+                        className="shrink-0 p-1 hover:bg-accent rounded-sm transition-colors"
+                        title={t("aiHub.modelHubTable.copyUrl")}
+                      >
+                        <Copy size={16} className="text-muted-foreground" />
+                      </button>
+                    </div>
+                  </div>
+                }
+              >
                 <PageHeaderTitle>
                   <LayoutGrid />
                   {term(t("aiHub.modelHubTable.title"))}
@@ -482,49 +499,37 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
                 ) : (
                   <PageHeaderDescription>{t("aiHub.modelHubTable.userDescription")}</PageHeaderDescription>
                 )}
-                <PageHeaderControls className="flex-wrap">
-                  <p>{t("aiHub.modelHubTable.hubUrlLabel")}</p>
-                  <div className="flex min-w-0 items-center bg-border px-2 py-1 rounded-sm">
-                    <p className="mr-2 break-all">{getUiPageUrl(`${getProxyBaseUrl()}/ui/model_hub_table`)}</p>
-                    <button
-                      onClick={() => void copyToClipboard(getUiPageUrl(`${getProxyBaseUrl()}/ui/model_hub_table`))}
-                      className="shrink-0 p-1 hover:bg-accent rounded-sm transition-colors"
-                      title={t("aiHub.modelHubTable.copyUrl")}
-                    >
-                      <Copy size={16} className="text-muted-foreground" />
-                    </button>
-                  </div>
-                </PageHeaderControls>
               </PageHeader>
             )}
 
             {/* Useful Links Management Section for Admins */}
             {canModify && (
-              <div>
+              <div className="mt-8 mb-2">
                 <UsefulLinksManagement accessToken={accessToken} userRole={userRole} />
               </div>
             )}
 
             {/* Tab System for Model Hub, Agent Hub, MCP Hub, and Plugin Marketplace */}
-            <Tabs defaultValue="models" className={isChat ? undefined : "gap-6"}>
+            <Tabs defaultValue="models">
               {!isChat && (
-                <TabsList
-                  variant="line"
-                  className="h-auto w-full justify-start overflow-x-auto rounded-none border-b p-0"
-                >
-                  <TabsTrigger value="models" className="flex-none rounded-none px-4 py-2">
-                    {t("aiHub.modelHubTable.tabs.models")}
-                  </TabsTrigger>
-                  <TabsTrigger value="agents" className="flex-none rounded-none px-4 py-2">
-                    {t("aiHub.modelHubTable.tabs.agents")}
-                  </TabsTrigger>
-                  <TabsTrigger value="mcp" className="flex-none rounded-none px-4 py-2">
-                    {t("aiHub.modelHubTable.tabs.mcp")}
-                  </TabsTrigger>
-                  <TabsTrigger value="skills" className="flex-none rounded-none px-4 py-2">
-                    {t("aiHub.modelHubTable.tabs.skills")}
-                  </TabsTrigger>
-                </TabsList>
+                <div className="mb-4 border-b">
+                  <div className="-mb-1.5 overflow-x-auto pb-1.5">
+                    <TabsList variant="line" className="h-auto w-full justify-start rounded-none p-0">
+                      <TabsTrigger value="models" className="flex-none rounded-none px-4 py-2">
+                        {t("aiHub.modelHubTable.tabs.models")}
+                      </TabsTrigger>
+                      <TabsTrigger value="agents" className="flex-none rounded-none px-4 py-2">
+                        {t("aiHub.modelHubTable.tabs.agents")}
+                      </TabsTrigger>
+                      <TabsTrigger value="mcp" className="flex-none rounded-none px-4 py-2">
+                        {t("aiHub.modelHubTable.tabs.mcp")}
+                      </TabsTrigger>
+                      <TabsTrigger value="skills" className="flex-none rounded-none px-4 py-2">
+                        {t("aiHub.modelHubTable.tabs.skills")}
+                      </TabsTrigger>
+                    </TabsList>
+                  </div>
+                </div>
               )}
 
               <div>

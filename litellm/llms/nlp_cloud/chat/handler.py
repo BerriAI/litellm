@@ -1,5 +1,5 @@
 import json
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import Final
 
 import litellm
@@ -28,7 +28,7 @@ def completion(
     api_key,
     logging_obj: LiteLLMLoggingObj,
     optional_params: dict,
-    litellm_params: dict,
+    litellm_params: Mapping[str, object],
     logger_fn: object = None,
     default_max_tokens_to_sample: object = None,
     client: HTTPHandler | AsyncHTTPHandler | None = None,

@@ -34,7 +34,10 @@ from litellm.integrations.websearch_interception.handler import (
     WEBSEARCH_EMIT_NATIVE_BLOCKS_KEY,
     WebSearchInterceptionLogger,
 )
-from litellm.integrations.websearch_interception.tools import get_litellm_web_search_tool
+from litellm.integrations.websearch_interception.tools import (
+    get_litellm_web_search_tool,
+    get_litellm_web_search_tool_openai,
+)
 from litellm.litellm_core_utils.agentic_followup_failure import is_agentic_followup_failure
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
@@ -54,6 +57,15 @@ from litellm.types.integrations.custom_logger import (
     AgenticLoopPlan,
     AgenticLoopRequestPatch,
     AgenticLoopSafetyError,
+)
+from litellm.types.utils import ChatCompletionMessageToolCall, Choices, Function, Message, ModelResponse
+
+from .conftest import (
+    FINAL_ANSWER,
+    OPENAI_CHAT_URL,
+    SEARCH_LIMIT_ERROR_CODE,
+    RecordingUpstream,
+    offered_tool_names,
 )
 
 INTERNAL_TOOL_NAME = "litellm_web_search"
@@ -1181,12 +1193,223 @@ class TestRebuiltStreamIsWellFormed:
         assert result_block["content"][0]["url"] == "https://example.com/h100"
 
 
+WEATHER_TOOL = {
+    "name": "get_weather",
+    "description": "Get the current weather for a city",
+    "input_schema": {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]},
+}
+
+
+class TestACappedTurnEndsWithTheModelAnswer:
+    """
+    A search the cap refuses gets Anthropic's max_uses_exceeded result instead of
+    running, and one last call without the search tool lets the model answer
+    from the results it already has.
+    """
+
+    @pytest.fixture(autouse=True)
+    def interception_capped_at_two(self, monkeypatch):
+        monkeypatch.setattr(
+            litellm,
+            "callbacks",
+            [WebSearchInterceptionLogger(enabled_providers=["anthropic", "bedrock"], max_agentic_loops=2)],
+        )
+
+    @staticmethod
+    async def _ask(max_tokens: int = 1024, **request) -> dict:
+        return await litellm.anthropic_interface.messages.acreate(
+            model="anthropic/claude-sonnet-5-5",
+            messages=[{"role": "user", "content": "What's the latest AI news?"}],
+            max_tokens=max_tokens,
+            **request,
+        )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("stream", [False, True])
+    async def test_every_call_of_the_turn_keeps_the_max_tokens_the_client_sent(
+        self, anthropic_messages_upstream, perplexity_search, stream
+    ):
+        response = await self._ask(max_tokens=2048, stream=stream, tools=[get_litellm_web_search_tool()])
+        if stream:
+            _ = [chunk async for chunk in response]
+
+        assert [body["max_tokens"] for body in anthropic_messages_upstream.bodies] == [2048] * 4
+
+    @pytest.mark.asyncio
+    async def test_capped_turn_ends_with_the_model_answer(self, anthropic_messages_upstream, perplexity_search):
+        response = await self._ask(tools=[get_litellm_web_search_tool(), WEATHER_TOOL])
+
+        assert [block.get("text") for block in response["content"] if block["type"] == "text"] == [FINAL_ANSWER]
+        assert response["stop_reason"] == "end_turn"
+        assert perplexity_search.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_the_refused_search_gets_the_limit_result_and_one_last_call_without_search(
+        self, anthropic_messages_upstream, perplexity_search
+    ):
+        await self._ask(tools=[get_litellm_web_search_tool(), WEATHER_TOOL])
+
+        bodies = anthropic_messages_upstream.bodies
+        assert [offered_tool_names(body) for body in bodies] == [
+            *[[INTERNAL_TOOL_NAME, "get_weather"]] * 3,
+            ["get_weather"],
+        ]
+        refused_result = bodies[-1]["messages"][-1]["content"][0]
+        assert refused_result["tool_use_id"] == "toolu_3"
+        assert SEARCH_LIMIT_ERROR_CODE in refused_result["content"]
+        assert all(SEARCH_LIMIT_ERROR_CODE not in json.dumps(body) for body in bodies[:-1])
+
+    @pytest.mark.asyncio
+    async def test_last_call_blocks_tool_calls_when_search_was_the_only_tool(self, anthropic_messages_upstream, perplexity_search):
+        response = await self._ask(tools=[get_litellm_web_search_tool()])
+
+        last_request = anthropic_messages_upstream.bodies[-1]
+        assert "tools" not in last_request
+        assert last_request["tool_choice"] == {"type": "none"}
+        assert [block.get("text") for block in response["content"] if block["type"] == "text"] == [FINAL_ANSWER]
+
+    @pytest.mark.asyncio
+    async def test_a_forced_search_choice_relaxes_to_auto_once_search_is_gone(
+        self, anthropic_messages_upstream, perplexity_search
+    ):
+        await self._ask(
+            tools=[get_litellm_web_search_tool(), WEATHER_TOOL],
+            tool_choice={"type": "tool", "name": INTERNAL_TOOL_NAME},
+        )
+
+        bodies = anthropic_messages_upstream.bodies
+        assert [body.get("tool_choice") for body in bodies] == [
+            *[{"type": "tool", "name": INTERNAL_TOOL_NAME}] * 3,
+            {"type": "auto"},
+        ]
+        assert offered_tool_names(bodies[-1]) == ["get_weather"]
+
+    @pytest.mark.asyncio
+    async def test_a_choice_naming_a_client_tool_survives(self, anthropic_messages_upstream, perplexity_search):
+        await self._ask(
+            tools=[get_litellm_web_search_tool(), WEATHER_TOOL],
+            tool_choice={"type": "tool", "name": "get_weather"},
+        )
+
+        assert anthropic_messages_upstream.bodies[-1]["tool_choice"] == {"type": "tool", "name": "get_weather"}
+
+    @pytest.mark.asyncio
+    async def test_a_choice_forcing_some_tool_lets_the_last_call_answer(
+        self, anthropic_messages_upstream, perplexity_search
+    ):
+        response = await self._ask(tools=[get_litellm_web_search_tool(), WEATHER_TOOL], tool_choice={"type": "any"})
+
+        assert anthropic_messages_upstream.bodies[-1]["tool_choice"] == {"type": "auto"}
+        assert [block.get("text") for block in response["content"] if block["type"] == "text"] == [FINAL_ANSWER]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "tool_choice",
+        [
+            {"type": "any", "disable_parallel_tool_use": True},
+            {"type": "tool", "name": INTERNAL_TOOL_NAME, "disable_parallel_tool_use": True},
+        ],
+        ids=["forcing some tool", "forcing the search"],
+    )
+    async def test_a_relaxed_choice_keeps_the_one_tool_call_limit(
+        self, anthropic_messages_upstream, perplexity_search, tool_choice
+    ):
+        await self._ask(tools=[get_litellm_web_search_tool(), WEATHER_TOOL], tool_choice=tool_choice)
+
+        assert anthropic_messages_upstream.bodies[-1]["tool_choice"] == {
+            "type": "auto",
+            "disable_parallel_tool_use": True,
+        }
+
+    @pytest.mark.asyncio
+    async def test_a_turn_that_ends_before_the_cap_makes_no_extra_call(
+        self, monkeypatch, anthropic_messages_upstream, perplexity_search
+    ):
+        monkeypatch.setattr(
+            litellm, "callbacks", [WebSearchInterceptionLogger(enabled_providers=["anthropic"], max_agentic_loops=8)]
+        )
+
+        await self._ask(tools=[get_litellm_web_search_tool()])
+
+        assert len(anthropic_messages_upstream.bodies) == 8
+        assert all(SEARCH_LIMIT_ERROR_CODE not in json.dumps(body) for body in anthropic_messages_upstream.bodies)
+
+    @pytest.mark.asyncio
+    async def test_bedrock_still_refuses_the_search_past_the_cap(self, perplexity_search):
+        handler = BaseLLMHTTPHandler()
+        callback = WebSearchInterceptionLogger(enabled_providers=["bedrock"], max_agentic_loops=2)
+
+        result = await handler._call_agentic_completion_hooks(
+            response=_response_asking_for_another_search(),
+            model="anthropic.claude-sonnet-5-5",
+            messages=[{"role": "user", "content": "who won the world cup"}],
+            anthropic_messages_provider_config=MagicMock(),
+            anthropic_messages_optional_request_params={"tools": [get_litellm_web_search_tool()]},
+            logging_obj=_logging_obj(callback),
+            stream=False,
+            custom_llm_provider="bedrock",
+            kwargs={"_agentic_loop_depth": 2, "max_agentic_loops": 2},
+        )
+
+        assert result["stop_reason"] == "end_turn"
+        assert INTERNAL_TOOL_NAME not in _tool_use_names(result)
+        assert perplexity_search.call_count == 0
+
+    @pytest.mark.asyncio
+    async def test_bedrock_chat_still_refuses_the_search_past_the_cap(self, perplexity_search):
+        callback = WebSearchInterceptionLogger(enabled_providers=["bedrock"], max_agentic_loops=2)
+        response_asking_for_another_search = ModelResponse(
+            choices=[
+                Choices(
+                    finish_reason="tool_calls",
+                    index=0,
+                    message=Message(
+                        role="assistant",
+                        content=None,
+                        tool_calls=[
+                            ChatCompletionMessageToolCall(
+                                id="call_3",
+                                type="function",
+                                function=Function(name=INTERNAL_TOOL_NAME, arguments='{"query": "world cup winner"}'),
+                            )
+                        ],
+                    ),
+                )
+            ],
+        )
+
+        result = await BaseLLMHTTPHandler()._call_agentic_chat_completion_hooks(
+            response=response_asking_for_another_search,
+            model="anthropic.claude-sonnet-5-5",
+            messages=[{"role": "user", "content": "who won the world cup"}],
+            optional_params={"tools": [get_litellm_web_search_tool_openai()]},
+            logging_obj=_logging_obj(callback),
+            stream=False,
+            custom_llm_provider="bedrock",
+            kwargs={"_agentic_loop_depth": 2, "max_agentic_loops": 2},
+        )
+
+        assert isinstance(result, ModelResponse)
+        assert result.choices[0].finish_reason == "stop"
+        assert not result.choices[0].message.tool_calls
+        assert perplexity_search.call_count == 0
+
+
 OPENAI_COMPATIBLE_API_BASE: Final = "https://openai-compatible.example/v1"
 SEARCHES_THE_MODEL_ASKS_FOR: Final = DEFAULT_MAX_AGENTIC_LOOPS + 2
+WORLD_CUP_ANSWER: Final = "Argentina won the 2022 World Cup."
+
+
+def _model_calls_in_a_turn_that_reaches_the_cap(loops_allowed: int) -> int:
+    return loops_allowed + 2
 
 
 def _openai_reply_asking_for_another_search_until_enough_results(request: httpx.Request) -> httpx.Response:
-    searches_done: Final = sum(1 for message in json.loads(request.content)["messages"] if message["role"] == "tool")
+    body: Final = json.loads(request.content)
+    searches_done: Final = sum(1 for message in body["messages"] if message["role"] == "tool")
+    done_searching: Final = (
+        searches_done >= SEARCHES_THE_MODEL_ASKS_FOR or INTERNAL_TOOL_NAME not in offered_tool_names(body)
+    )
     search_call: Final = {
         "id": f"call_{searches_done}",
         "type": "function",
@@ -1196,8 +1419,8 @@ def _openai_reply_asking_for_another_search_until_enough_results(request: httpx.
         },
     }
     message: Final = (
-        {"role": "assistant", "content": "Argentina won the 2022 World Cup."}
-        if searches_done >= SEARCHES_THE_MODEL_ASKS_FOR
+        {"role": "assistant", "content": WORLD_CUP_ANSWER}
+        if done_searching
         else {"role": "assistant", "content": None, "tool_calls": [search_call]}
     )
     return httpx.Response(
@@ -1234,7 +1457,7 @@ async def test_openai_chat_completion_stops_searching_at_the_agentic_loop_cap(
         side_effect=_openai_reply_asking_for_another_search_until_enough_results
     )
 
-    await litellm.acompletion(
+    response: Final = await litellm.acompletion(
         model="openai/gpt-5.6",
         messages=[{"role": "user", "content": "Who won the last World Cup?"}],
         tools=[{"type": "web_search"}],
@@ -1243,9 +1466,214 @@ async def test_openai_chat_completion_stops_searching_at_the_agentic_loop_cap(
         **request_cap,
     )
 
-    assert openai_route.call_count == loops_allowed + 1
+    assert openai_route.call_count == _model_calls_in_a_turn_that_reaches_the_cap(loops_allowed)
     assert perplexity_search.call_count == loops_allowed
+    assert response.choices[0].message.content == WORLD_CUP_ANSWER
     assert {call.request.headers["authorization"] for call in openai_route.calls} == {"Bearer sk-test"}
+
+
+GEMINI_GENERATE_CONTENT_URL: Final = r"^https://generativelanguage\.googleapis\.com/.+:generateContent"
+
+
+def _gemini_reply(searches: bool) -> httpx.Response:
+    part: Final = (
+        {"functionCall": {"name": INTERNAL_TOOL_NAME, "args": {"query": "world cup winner"}}}
+        if searches
+        else {"text": WORLD_CUP_ANSWER}
+    )
+    return httpx.Response(
+        200,
+        json={
+            "candidates": [{"content": {"role": "model", "parts": [part]}, "finishReason": "STOP", "index": 0}],
+            "usageMetadata": {"promptTokenCount": 10, "candidatesTokenCount": 5, "totalTokenCount": 15},
+        },
+    )
+
+
+def _gemini_reply_that_keeps_searching_until_told_to_answer(request: httpx.Request) -> httpx.Response:
+    """
+    Gemini 3.8 Flash called the undeclared search function at the capped call in 6 of 18
+    live replays (2026-11-23) unless the refused search result told it to answer now.
+    """
+    content: Final = request.content.decode()
+    search_offered: Final = INTERNAL_TOOL_NAME in json.dumps(json.loads(content).get("tools") or [])
+    return _gemini_reply(searches=search_offered or "answer now" not in content)
+
+
+def _gemini_reply_that_always_searches(request: httpx.Request) -> httpx.Response:
+    return _gemini_reply(searches=True)
+
+
+@pytest.fixture
+def gemini_upstream(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter, perplexity_search: respx.Route
+) -> respx.Route:
+    monkeypatch.setattr(litellm, "callbacks", [WebSearchInterceptionLogger(enabled_providers=["gemini"])])
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    return respx_mock.post(url__regex=GEMINI_GENERATE_CONTENT_URL)
+
+
+@pytest.mark.asyncio
+async def test_gemini_chat_completion_answers_instead_of_searching_again_at_the_agentic_loop_cap(
+    gemini_upstream: respx.Route,
+):
+    gemini_upstream.mock(side_effect=_gemini_reply_that_keeps_searching_until_told_to_answer)
+
+    response: Final = await litellm.acompletion(
+        model="gemini/gemini-3.8-flash",
+        messages=[{"role": "user", "content": "Who won the last World Cup?"}],
+        tools=[{"type": "web_search"}],
+        api_key="test-gemini-key",
+        max_agentic_loops=1,
+    )
+
+    assert gemini_upstream.call_count == _model_calls_in_a_turn_that_reaches_the_cap(1)
+    assert response.choices[0].message.content == WORLD_CUP_ANSWER
+    assert not response.choices[0].message.tool_calls
+
+
+@pytest.mark.asyncio
+async def test_gemini_chat_completion_never_hands_the_client_a_search_call_the_capped_call_still_made(
+    gemini_upstream: respx.Route,
+):
+    gemini_upstream.mock(side_effect=_gemini_reply_that_always_searches)
+
+    response: Final = await litellm.acompletion(
+        model="gemini/gemini-3.8-flash",
+        messages=[{"role": "user", "content": "Who won the last World Cup?"}],
+        tools=[{"type": "web_search"}],
+        api_key="test-gemini-key",
+        max_agentic_loops=1,
+    )
+
+    assert gemini_upstream.call_count == _model_calls_in_a_turn_that_reaches_the_cap(1)
+    assert response.choices[0].finish_reason == "stop"
+    assert not response.choices[0].message.tool_calls
+
+
+@pytest.mark.asyncio
+async def test_gemini_responses_never_hands_the_client_a_search_call_the_capped_call_still_made(
+    gemini_upstream: respx.Route,
+):
+    gemini_upstream.mock(side_effect=_gemini_reply_that_always_searches)
+
+    response: Final = await litellm.aresponses(
+        model="gemini/gemini-3.8-flash",
+        input="Who won the last World Cup?",
+        tools=[{"type": "web_search"}],
+        api_key="test-gemini-key",
+        max_agentic_loops=1,
+    )
+
+    assert gemini_upstream.call_count == _model_calls_in_a_turn_that_reaches_the_cap(1)
+    assert [item.type for item in response.output if item.type == "function_call"] == []
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_never_hands_the_client_a_search_call_the_capped_call_still_made(
+    monkeypatch: pytest.MonkeyPatch,
+    always_searching_anthropic_messages_upstream: RecordingUpstream,
+    perplexity_search: respx.Route,
+):
+    monkeypatch.setattr(litellm, "callbacks", [WebSearchInterceptionLogger(enabled_providers=["anthropic"])])
+
+    response: Final = await litellm.anthropic_interface.messages.acreate(
+        model="anthropic/claude-sonnet-5-5",
+        messages=[{"role": "user", "content": "Who won the last World Cup?"}],
+        max_tokens=1024,
+        tools=[get_litellm_web_search_tool()],
+        max_agentic_loops=1,
+    )
+
+    assert len(always_searching_anthropic_messages_upstream.bodies) == _model_calls_in_a_turn_that_reaches_the_cap(1)
+    assert _tool_use_names(response) == []
+
+
+def _chat_function_tool(name: str) -> dict[str, object]:
+    return {"type": "function", "function": {"name": name, "parameters": {"type": "object", "properties": {}}}}
+
+
+def _chat_allowed_tools(*entries: dict[str, object]) -> dict[str, object]:
+    return {"type": "allowed_tools", "allowed_tools": {"mode": "auto", "tools": list(entries)}}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("allowed_client_tools", "last_call_tools", "last_call_tool_choice"),
+    [
+        ((), [], None),
+        (
+            ("get_time",),
+            ["get_time", "delete_records"],
+            _chat_allowed_tools({"type": "function", "function": {"name": "get_time"}}),
+        ),
+    ],
+    ids=["only search allowed", "a client tool allowed"],
+)
+async def test_openai_chat_completion_keeps_the_allowed_tools_limit_on_the_last_call_at_the_cap(
+    allowed_client_tools: tuple[str, ...],
+    last_call_tools: list[str],
+    last_call_tool_choice: object,
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+    perplexity_search: respx.Route,
+):
+    monkeypatch.setattr(litellm, "callbacks", [WebSearchInterceptionLogger(enabled_providers=["openai"])])
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    openai_route: Final = respx_mock.post(f"{OPENAI_COMPATIBLE_API_BASE}/chat/completions").mock(
+        side_effect=_openai_reply_asking_for_another_search_until_enough_results
+    )
+
+    response: Final = await litellm.acompletion(
+        model="openai/gpt-5.6",
+        messages=[{"role": "user", "content": "Who won the last World Cup?"}],
+        tools=[{"type": "web_search"}, _chat_function_tool("get_time"), _chat_function_tool("delete_records")],
+        tool_choice=_chat_allowed_tools(
+            {"type": "web_search"}, *({"type": "function", "function": {"name": name}} for name in allowed_client_tools)
+        ),
+        api_key="sk-test",
+        api_base=OPENAI_COMPATIBLE_API_BASE,
+        max_agentic_loops=1,
+    )
+
+    last_call: Final = json.loads(openai_route.calls.last.request.content)
+    assert offered_tool_names(last_call) == last_call_tools
+    assert last_call.get("tool_choice") == last_call_tool_choice
+    assert response.choices[0].message.content == WORLD_CUP_ANSWER
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("client_tools", "last_call_parallel_tool_calls"),
+    [((), None), ((_chat_function_tool("get_time"),), False)],
+    ids=["no client tool left", "a client tool left"],
+)
+async def test_openai_chat_completion_last_call_at_the_cap_sends_parallel_tool_calls_only_with_tools(
+    client_tools: tuple[dict[str, object], ...],
+    last_call_parallel_tool_calls: bool | None,
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+    perplexity_search: respx.Route,
+):
+    monkeypatch.setattr(litellm, "callbacks", [WebSearchInterceptionLogger(enabled_providers=["openai"])])
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    openai_route: Final = respx_mock.post(f"{OPENAI_COMPATIBLE_API_BASE}/chat/completions").mock(
+        side_effect=_openai_reply_asking_for_another_search_until_enough_results
+    )
+
+    response: Final = await litellm.acompletion(
+        model="openai/gpt-5.6",
+        messages=[{"role": "user", "content": "Who won the last World Cup?"}],
+        tools=[{"type": "web_search"}, *client_tools],
+        parallel_tool_calls=False,
+        api_key="sk-test",
+        api_base=OPENAI_COMPATIBLE_API_BASE,
+        max_agentic_loops=1,
+    )
+
+    last_call: Final = json.loads(openai_route.calls.last.request.content)
+    assert last_call.get("parallel_tool_calls") == last_call_parallel_tool_calls
+    assert response.choices[0].message.content == WORLD_CUP_ANSWER
 
 
 def _round_input_tokens(searches_done: int) -> int:
@@ -1254,17 +1682,18 @@ def _round_input_tokens(searches_done: int) -> int:
 
 def _responses_reply_asking_for_searches_until(searches_wanted: int) -> Callable[[httpx.Request], httpx.Response]:
     def reply(request: httpx.Request) -> httpx.Response:
-        request_input: Final = json.loads(request.content)["input"]
-        searches_done: Final = sum(1 for item in request_input if item.get("type") == "function_call_output")
+        body: Final = json.loads(request.content)
+        searches_done: Final = sum(1 for item in body["input"] if item.get("type") == "function_call_output")
+        done_searching: Final = searches_done >= searches_wanted or INTERNAL_TOOL_NAME not in offered_tool_names(body)
         output_item: Final = (
             {
                 "type": "message",
                 "id": f"msg_{searches_done}",
                 "status": "completed",
                 "role": "assistant",
-                "content": [{"type": "output_text", "text": "Argentina won the 2022 World Cup.", "annotations": []}],
+                "content": [{"type": "output_text", "text": WORLD_CUP_ANSWER, "annotations": []}],
             }
-            if searches_done >= searches_wanted
+            if done_searching
             else {
                 "type": "function_call",
                 "id": f"fc_{searches_done}",
@@ -1320,8 +1749,11 @@ async def test_openai_chat_completion_bridged_to_the_responses_api_stops_searchi
     responses_route: Final = respx_mock.post("https://api.openai.com/v1/responses").mock(
         side_effect=_responses_reply_asking_for_another_search_until_enough_results
     )
+    chat_route: Final = respx_mock.post(OPENAI_CHAT_URL).mock(
+        side_effect=_openai_reply_asking_for_another_search_until_enough_results
+    )
 
-    await litellm.acompletion(
+    response: Final = await litellm.acompletion(
         model="openai/gpt-5.6",
         messages=[{"role": "user", "content": "Who won the last World Cup?"}],
         tools=[{"type": "web_search"}],
@@ -1329,9 +1761,42 @@ async def test_openai_chat_completion_bridged_to_the_responses_api_stops_searchi
         **request_cap,
     )
 
-    assert responses_route.call_count == loops_allowed + 1
+    model_calls: Final = (*responses_route.calls, *chat_route.calls)
+    assert len(model_calls) == _model_calls_in_a_turn_that_reaches_the_cap(loops_allowed)
     assert perplexity_search.call_count == loops_allowed
-    assert all("_agentic_loop_api_surface" not in json.loads(call.request.content) for call in responses_route.calls)
+    assert all("_agentic_loop_api_surface" not in json.loads(call.request.content) for call in model_calls)
+    assert response.choices[0].message.content == WORLD_CUP_ANSWER
+
+
+@pytest.mark.asyncio
+async def test_responses_last_call_at_the_cap_does_not_force_a_client_tool(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+    perplexity_search: respx.Route,
+):
+    monkeypatch.setattr(litellm, "callbacks", [WebSearchInterceptionLogger(enabled_providers=["openai"])])
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    responses_route: Final = respx_mock.post(f"{OPENAI_COMPATIBLE_API_BASE}/responses").mock(
+        side_effect=_responses_reply_asking_for_another_search_until_enough_results
+    )
+
+    response: Final = await litellm.aresponses(
+        model="openai/gpt-5.6",
+        input=[{"role": "user", "content": "Who won the last World Cup?"}],
+        tools=[
+            {"type": "web_search"},
+            {"type": "function", "name": "delete_records", "parameters": {"type": "object", "properties": {}}},
+        ],
+        tool_choice="required",
+        api_key="sk-test",
+        api_base=OPENAI_COMPATIBLE_API_BASE,
+        max_agentic_loops=1,
+    )
+
+    last_call: Final = json.loads(responses_route.calls.last.request.content)
+    assert offered_tool_names(last_call) == ["delete_records"]
+    assert last_call["tool_choice"] == "auto"
+    assert response.output_text == WORLD_CUP_ANSWER
 
 
 @pytest.mark.asyncio
@@ -1358,7 +1823,7 @@ async def test_responses_pinned_openai_chat_completion_keeps_its_search_follow_u
 
     assert chat_route.call_count == 0
     assert responses_route.call_count == SEARCHES_THE_MODEL_ASKS_FOR + 1
-    assert response.choices[0].message.content == "Argentina won the 2022 World Cup."
+    assert response.choices[0].message.content == WORLD_CUP_ANSWER
 
 
 class _LoggedRow(TypedDict):
@@ -1402,7 +1867,10 @@ class _ModelSpendRowRecorder(CustomLogger):
 
 
 def _every_round_input_tokens(loops_allowed: int) -> int:
-    return sum(_round_input_tokens(searches_done) for searches_done in range(loops_allowed + 1))
+    return sum(
+        _round_input_tokens(searches_done)
+        for searches_done in range(_model_calls_in_a_turn_that_reaches_the_cap(loops_allowed))
+    )
 
 
 @pytest.mark.asyncio
@@ -1413,7 +1881,7 @@ async def test_responses_pinned_openai_chat_completion_bills_every_search_round_
     respx_mock: respx.MockRouter,
     perplexity_search: respx.Route,
 ):
-    recorder: Final = _ModelSpendRowRecorder(rows_expected=loops_allowed + 1)
+    recorder: Final = _ModelSpendRowRecorder(rows_expected=_model_calls_in_a_turn_that_reaches_the_cap(loops_allowed))
     monkeypatch.setattr(
         litellm, "callbacks", [WebSearchInterceptionLogger(enabled_providers=["openai"]), recorder]
     )
@@ -1434,7 +1902,7 @@ async def test_responses_pinned_openai_chat_completion_bills_every_search_round_
         await asyncio.wait_for(recorder.all_rows_logged.wait(), timeout=5)
     await GLOBAL_LOGGING_WORKER.flush()
 
-    assert responses_route.call_count == loops_allowed + 1
+    assert responses_route.call_count == _model_calls_in_a_turn_that_reaches_the_cap(loops_allowed)
     assert sum(recorder.prompt_tokens) == _every_round_input_tokens(loops_allowed)
 
 
@@ -1579,7 +2047,7 @@ async def test_responses_pinned_openai_chat_completion_parks_one_row_billing_eve
     perplexity_search: respx.Route,
 ):
     parker: Final = _ProxyParksTheRequestSuccessLog()
-    recorder: Final = _ModelSpendRowRecorder(rows_expected=loops_allowed + 1)
+    recorder: Final = _ModelSpendRowRecorder(rows_expected=_model_calls_in_a_turn_that_reaches_the_cap(loops_allowed))
     monkeypatch.setattr(
         litellm, "callbacks", [WebSearchInterceptionLogger(enabled_providers=["openai"]), parker, recorder]
     )
@@ -1677,7 +2145,7 @@ async def test_responses_pinned_openai_chat_completion_prices_each_round_of_its_
     respx_mock: respx.MockRouter,
     perplexity_search: respx.Route,
 ):
-    expected_cost: Final = _price_of_rounds_priced_one_by_one(loops_allowed + 1)
+    expected_cost: Final = _price_of_rounds_priced_one_by_one(_model_calls_in_a_turn_that_reaches_the_cap(loops_allowed))
     parker: Final = _ProxyParksTheRequestSuccessLog()
     recorder: Final = _ModelSpendRowRecorder(rows_expected=1)
     monkeypatch.setattr(
@@ -1719,7 +2187,7 @@ async def test_streamed_responses_pinned_openai_chat_completion_prices_each_roun
     respx_mock: respx.MockRouter,
     perplexity_search: respx.Route,
 ):
-    expected_cost: Final = _price_of_rounds_priced_one_by_one(loops_allowed + 1)
+    expected_cost: Final = _price_of_rounds_priced_one_by_one(_model_calls_in_a_turn_that_reaches_the_cap(loops_allowed))
     recorder: Final = _ModelSpendRowRecorder(rows_expected=2)
     monkeypatch.setattr(
         litellm, "callbacks", [WebSearchInterceptionLogger(enabled_providers=["openai"]), recorder]

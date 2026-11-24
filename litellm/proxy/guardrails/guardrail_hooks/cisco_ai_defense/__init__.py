@@ -48,7 +48,7 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
     return _callback
 
 
-def _get_optional_value(litellm_params, optional_params, attribute_name):
+def _get_optional_value(litellm_params: object, optional_params: object, attribute_name: str):
     """Resolve Cisco optional params without inheriting sibling defaults."""
     if optional_params is not None:
         if isinstance(optional_params, dict):

@@ -63,11 +63,13 @@ fn declared_flags<'py>(
 pub(super) fn bedrock_capabilities(
     py: Python<'_>,
     model: &str,
+    base_model: Option<&str>,
     model_info: Option<Bound<'_, PyAny>>,
 ) -> PyResult<BedrockCapabilities> {
     Ok(bedrock_model_capabilities(
         &*live_catalog(py)?,
         model,
+        base_model,
         &declared_flags(model_info),
     ))
 }

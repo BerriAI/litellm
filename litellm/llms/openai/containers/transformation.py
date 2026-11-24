@@ -119,7 +119,7 @@ class OpenAIContainerConfig(BaseContainerConfig):
     def get_complete_url(
         self,
         api_base: str | None,
-        litellm_params: dict,
+        litellm_params: Mapping[str, object],
     ) -> str:
         """Get the complete URL for OpenAI container API."""
         api_base = (
@@ -362,7 +362,7 @@ class OpenAIContainerConfig(BaseContainerConfig):
         self,
         error_message: str,
         status_code: int,
-        headers: dict | httpx.Headers,
+        headers: dict[str, object] | httpx.Headers,
     ) -> BaseLLMException:
         from ...base_llm.chat.transformation import BaseLLMException
 

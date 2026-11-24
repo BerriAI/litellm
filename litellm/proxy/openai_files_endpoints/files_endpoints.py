@@ -196,7 +196,7 @@ async def _litellm_executed_batch_input_model(
     )
 
 
-_MAX_BATCH_FILE_SIZE_MB_ADAPTER: Final = TypeAdapter(int | None)
+_MAX_BATCH_FILE_SIZE_MB_ADAPTER: Final[TypeAdapter[int | None]] = TypeAdapter(int | None)
 _LISTED_FILES_ADAPTER: Final = TypeAdapter(list[OpenAIFileObject])
 _REQUEST_BODY_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _JSON_VALUE_ADAPTER: Final = TypeAdapter(object)
