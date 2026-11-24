@@ -866,7 +866,7 @@ async def a_add_message(
     role: Literal["user", "assistant"],
     content: str,
     attachments: list[Attachment] | None = None,
-    metadata: dict | None = None,
+    metadata: dict[str, object] | None = None,
     client: object | None = None,
     **kwargs: object,
 ) -> OpenAIMessage:
@@ -917,7 +917,7 @@ def add_message(
     role: Literal["user", "assistant"],
     content: str,
     attachments: list[Attachment] | None = None,
-    metadata: dict | None = None,
+    metadata: dict[str, object] | None = None,
     client=None,
     **kwargs,
 ) -> OpenAIMessage | Coroutine[None, None, OpenAIMessage]:
