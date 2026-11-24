@@ -79,8 +79,9 @@ def _sent_fields(route: respx.Route) -> dict[str, list[str]]:
         ({"extra_body": {"keyterms": ["EIN"], "diarize": True}}, {"keyterms": ["EIN"], "diarize": ["true"]}),
         (
             {"keyterms": ["TOP"], "diarize": False, "extra_body": {"keyterms": ["EXTRA"], "diarize": True}},
-            {"keyterms": ["EXTRA"], "diarize": ["true"]},
+            {"keyterms": ["TOP"], "diarize": ["false"]},
         ),
+        ({"temperature": 0.2, "extra_body": {"temperature": 0.9}}, {"temperature": ["0.2"]}),
         ({"extra_body": {"diarize": None, "keyterms": ["EIN"]}}, {"keyterms": ["EIN"]}),
         ({"extra_body": {"model_id": "scribe_v1", "extra_body": {"diarize": True}}}, {}),
         ({"model_id": "scribe_v1"}, {}),
@@ -91,8 +92,11 @@ def _sent_fields(route: respx.Route) -> dict[str, list[str]]:
             {"webhook_metadata": ['{"sent_at": "2026-01-01 00:00:00", "job": {"id": 1}}']},
         ),
         (
-            {"webhook_metadata": MappingProxyType({1: "a"}), "custom_rows": [{"job": MappingProxyType({2: "b"})}]},
-            {"webhook_metadata": ['{"1": "a"}'], "custom_rows": ['[{"job": {"2": "b"}}]']},
+            {
+                "webhook_metadata": MappingProxyType({1: "a", b"job": "b"}),
+                "custom_rows": [{"job": MappingProxyType({2: "c"})}],
+            },
+            {"webhook_metadata": ['{"1": "a", "job": "b"}'], "custom_rows": ['[{"job": {"2": "c"}}]']},
         ),
     ],
     ids=[
@@ -106,7 +110,8 @@ def _sent_fields(route: respx.Route) -> dict[str, list[str]]:
         "list-of-objects-as-json",
         "object-as-json",
         "extra-body-flattened",
-        "extra-body-wins-over-top-level",
+        "top-level-wins-over-extra-body",
+        "top-level-openai-param-wins-over-extra-body",
         "extra-body-none-dropped",
         "extra-body-cannot-set-model-or-nest",
         "top-level-model-id-cannot-override-model",
