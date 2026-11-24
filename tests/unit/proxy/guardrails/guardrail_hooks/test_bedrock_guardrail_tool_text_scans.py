@@ -764,6 +764,30 @@ async def test_logging_only_request_block_is_logged_and_skips_the_response_scan(
 
 
 @pytest.mark.asyncio
+async def test_logging_only_tool_call_block_still_scans_and_logs_the_message_text() -> None:
+    bedrock: Final = _Bedrock(blocked="forbidden")
+    guardrail: Final = _guardrail(scan_tool_calls=True, bedrock=bedrock, event_hook="logging_only")
+    kwargs: Final = {
+        "model": "gpt-4o",
+        "messages": [
+            {"role": "user", "content": "wire the funds"},
+            {"role": "assistant", "content": None, "tool_calls": [_function_tool_call('{"note": "forbidden"}')]},
+        ],
+        "optional_params": {},
+        "litellm_params": {"metadata": {}},
+        "standard_logging_object": {"guardrail_information": []},
+    }
+
+    logged_kwargs, _ = await guardrail.async_logging_hook(
+        kwargs=kwargs, result=_tool_call_only_response(), call_type="acompletion"
+    )
+
+    entries: Final = logged_kwargs["standard_logging_object"]["guardrail_information"]
+    assert sorted(entry["guardrail_status"] for entry in entries) == ["guardrail_intervened", "success"]
+    assert "wire the funds" in bedrock.scanned("INPUT")
+
+
+@pytest.mark.asyncio
 async def test_tool_descriptions_are_scanned_as_input_when_opted_in() -> None:
     bedrock: Final = _Bedrock()
     guardrail: Final = _guardrail(scan_tool_calls=False, bedrock=bedrock)

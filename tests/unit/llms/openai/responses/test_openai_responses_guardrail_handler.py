@@ -261,10 +261,13 @@ class DroppingGuardrail(CustomGuardrail):
 
 
 @pytest.mark.asyncio
-async def test_history_tool_call_answer_with_a_different_count_is_rejected_and_leaves_request_untouched() -> None:
-    from litellm.llms.base_llm.guardrail_translation.utils import UnappliableRequestRewrite
-
-    guardrail: Final = DroppingGuardrail(guardrail_name="dropper")
+@pytest.mark.parametrize(
+    "guardrail_type", [DroppingGuardrail, FlatShapeGuardrail], ids=["different-count", "no-arguments-string"]
+)
+async def test_history_tool_call_answer_that_cannot_be_written_back_is_rejected_and_leaves_request_untouched(
+    guardrail_type: type[CustomGuardrail],
+) -> None:
+    guardrail: Final = guardrail_type(guardrail_name="dropper")
     guardrail.scan_tool_calls_as_text = True
     data: Final = {
         "model": "gpt-4o",

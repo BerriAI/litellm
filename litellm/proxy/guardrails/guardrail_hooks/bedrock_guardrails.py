@@ -3638,8 +3638,8 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         """
         tool_calls: Final = inputs.get("tool_calls") or []
         try:
-            scanned_tool_calls: Final = await self._scan_tool_calls_as_text(
-                tool_calls=tool_calls, request_data=request_data, input_type=input_type
+            scanned_tool_calls: Final = await self._scan_tool_calls_logging_texts_on_failure(
+                inputs=inputs, tool_calls=tool_calls, request_data=request_data, input_type=input_type
             )
             guarded_inputs: Final = await self._apply_guardrail_to_texts(
                 inputs=inputs, request_data=request_data, input_type=input_type
@@ -3656,6 +3656,25 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                 "list[ChatCompletionToolCallChunk]", scanned_tool_calls
             ),
         }
+
+    async def _scan_tool_calls_logging_texts_on_failure(
+        self,
+        inputs: "GenericGuardrailAPIInputs",
+        tool_calls: Sequence[object],
+        request_data: dict[str, object],  # mutable-ok: proxy request body dict, mutated by the logging helper
+        input_type: Literal["request", "response"],
+    ) -> Sequence[object]:
+        try:
+            return await self._scan_tool_calls_as_text(
+                tool_calls=tool_calls, request_data=request_data, input_type=input_type
+            )
+        except Exception:
+            if self.event_hook is not None and self._event_hook_is_event_type(GuardrailEventHooks.logging_only):
+                with contextlib.suppress(Exception):
+                    await self._apply_guardrail_to_texts(
+                        inputs=inputs, request_data=request_data, input_type=input_type
+                    )
+            raise
 
     async def _apply_guardrail_to_texts(
         self,

@@ -568,8 +568,11 @@ def _write_back_history_tool_calls(
         for (_, item), sent, returned in zip(history_tool_call_items, sent_tool_calls, returned_tool_calls, strict=True)
     )
     for item, returned_arguments, sent_arguments in rewrites:
-        if isinstance(item, dict) and isinstance(returned_arguments, str) and returned_arguments != sent_arguments:
-            item[_TOOL_CALL_PAYLOAD_FIELDS[str(item.get("type"))]] = returned_arguments
+        if returned_arguments == sent_arguments:
+            continue
+        if not isinstance(item, dict) or not isinstance(returned_arguments, str):
+            raise unappliable_request_rewrite(guardrail_name)
+        item[_TOOL_CALL_PAYLOAD_FIELDS[str(item.get("type"))]] = returned_arguments
 
 
 def _scanned_tool_call(item: Mapping[str, object], index: int) -> ChatCompletionToolCallChunk:
