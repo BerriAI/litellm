@@ -26,7 +26,10 @@ pub struct DeploymentFacts {
     /// The deployment's context window (`get_router_model_info`'s `max_input_tokens`), when it
     /// declares one and resolves.
     pub max_input_tokens: Option<i64>,
+    /// The prompt's token count with this deployment's tokenizer, an inline PDF priced the way it
+    /// bills one, when the host counted it.
     pub input_tokens: Option<i64>,
+    /// The count came from a stand-in tokenizer, not the one the provider bills with.
     pub estimated: bool,
     /// `_deployment_lacks_params`: it does not support one of the requested params.
     pub lacks_params: bool,
@@ -307,7 +310,7 @@ mod tests {
             json!({"model": "openai/two"}),
             json!({"base_model": "azure/base"}),
         );
-        let found = facts(&[("one", counted(5, 9, false)), ("two", counted(6, 9, false))]);
+        let found = facts(&[("one", counted(5, 9, false)), ("two", counted(6, 8, false))]);
         let error = filter("g", vec![one, two], &[], &found).unwrap_err();
         let Error::ContextWindowExceeded {
             model,
@@ -320,7 +323,7 @@ mod tests {
         assert_eq!(model, "g");
         assert_eq!(
             detail,
-            "Model=openai/one, Max Input Tokens=5, Got=9Model=azure/base, Max Input Tokens=6, Got=9"
+            "Model=openai/one, Max Input Tokens=5, Got=9Model=azure/base, Max Input Tokens=6, Got=8"
         );
     }
 
