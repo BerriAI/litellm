@@ -3084,3 +3084,119 @@ async def test_messages_drops_diagnostics_for_a_rejecting_provider_when_asked(
 
     assert response["content"] == [{"type": "text", "text": "ok"}]
     assert "diagnostics" not in bodies[0]
+
+
+_CLAUDE_CODE_TOOL_SEARCH_TOOLS: Final = [
+    {"name": "Read", "description": "Read a file", "input_schema": {"type": "object", "properties": {}}},
+    {
+        "name": "ToolSearch",
+        "description": "Load deferred tools",
+        "input_schema": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]},
+    },
+    {
+        "name": "DeferredToolPlaceholder",
+        "description": "Never call this tool",
+        "input_schema": {"type": "object", "properties": {}},
+        "defer_loading": True,
+    },
+]
+
+
+async def _azure_messages_tool_types(model_info: Mapping[str, object] | None, **extra: object) -> set[str]:
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    with respx.mock(assert_all_called=True) as respx_mock:
+        upstream: Final = respx_mock.route().mock(side_effect=httpx.ConnectError("cut at the wire"))
+        with pytest.raises((openai.APIError, litellm.exceptions.APIConnectionError)):
+            await litellm.anthropic.messages.acreate(
+                max_tokens=100,
+                messages=[{"role": "user", "content": "What is the forecast for Paris?"}],
+                model="azure/gpt-6.1-sol",
+                api_base="https://example-resource.openai.azure.com",
+                api_key="deployment-key",
+                api_version="2026-10-01-preview",
+                tools=_CLAUDE_CODE_TOOL_SEARCH_TOOLS,
+                model_info=model_info,
+                **extra,
+            )
+    bodies: Final = [json.loads(call.request.content) for call in upstream.calls]
+    return {tool["type"] for body in bodies for tool in body["tools"]}  # comprehension-ok: flattens tools across retried upstream calls
+
+
+@pytest.mark.asyncio
+async def test_native_deferred_tools_send_azure_messages_to_responses_with_client_tool_search(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+
+    with respx.mock(assert_all_called=True) as respx_mock:
+        upstream: Final = respx_mock.route().mock(side_effect=httpx.ConnectError("cut at the wire"))
+        with pytest.raises((openai.APIError, litellm.exceptions.APIConnectionError)):
+            await litellm.anthropic.messages.acreate(
+                max_tokens=100,
+                messages=[{"role": "user", "content": "What is the forecast for Paris?"}],
+                model="azure/gpt-6.1-sol",
+                api_base="https://example-resource.openai.azure.com",
+                api_key="deployment-key",
+                api_version="2026-10-01-preview",
+                tools=_CLAUDE_CODE_TOOL_SEARCH_TOOLS,
+                model_info={"deferred_tools": "native"},
+            )
+
+    bodies: Final = [json.loads(call.request.content) for call in upstream.calls]
+    assert {call.request.url.path.rsplit("/", 1)[-1] for call in upstream.calls} == {"responses"}
+    assert {
+        tuple((tool["type"], tool.get("name"), tool.get("defer_loading")) for tool in body["tools"]) for body in bodies
+    } == {(("function", "Read", None), ("tool_search", None, None), ("function", "DeferredToolPlaceholder", True))}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "model_info, extra",
+    [
+        (None, {}),
+        ({"deferred_tools": "drop"}, {}),
+        ({"deferred_tools": "native"}, {"stop_sequences": ["END"], "drop_params": True}),
+        ({"deferred_tools": "loaded"}, {"drop_params": True}),
+    ],
+    ids=["unset", "drop", "native_with_stop_sequences", "unknown_with_drop_params"],
+)
+async def test_azure_messages_send_no_tool_search_unless_deferred_tools_is_native(
+    model_info: Mapping[str, object] | None, extra: Mapping[str, object], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+
+    assert await _azure_messages_tool_types(model_info, **extra) == {"function"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "model, model_info",
+    [
+        ("azure/gpt-6.1-sol", {"deferred_tools": "loaded"}),
+        ("bedrock/chat_completions/us.moonshotai.kimi-k3.1", {"deferred_tools": "native"}),
+    ],
+    ids=["unknown_value", "native_without_a_responses_api"],
+)
+async def test_unusable_deferred_tools_setting_is_a_400_before_any_upstream_call(
+    model: str, model_info: Mapping[str, object], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+
+    with respx.mock(assert_all_mocked=True, assert_all_called=False) as respx_mock:
+        upstream: Final = respx_mock.route().mock(side_effect=httpx.ConnectError("cut at the wire"))
+        with pytest.raises(litellm.BadRequestError, match="deferred_tools"):
+            await litellm.anthropic.messages.acreate(
+                max_tokens=100,
+                messages=[{"role": "user", "content": "ping"}],
+                model=model,
+                api_base="https://example-resource.openai.azure.com",
+                api_key="deployment-key",
+                api_version="2026-10-01-preview",
+                aws_region_name="us-east-1",
+                tools=_CLAUDE_CODE_TOOL_SEARCH_TOOLS,
+                model_info=model_info,
+            )
+
+    assert upstream.calls.call_count == 0

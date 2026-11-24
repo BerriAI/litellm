@@ -71,6 +71,7 @@ from litellm.types.utils import CallTypes, LlmProviders, LlmProvidersSet
 from litellm.utils import ProviderConfigManager, client
 
 from ..adapters.handler import LiteLLMMessagesToCompletionTransformationHandler, request_safeguards_evaluator
+from ..deferred_tools import UnknownDeferredTools, deferred_tools_setting, unknown_deferred_tools_message
 from ..responses_adapters.handler import LiteLLMMessagesToResponsesAPIHandler
 from ..safeguards import (
     SafeguardsEvaluator,
@@ -200,6 +201,7 @@ def _should_route_to_responses_api(
     resolved_model: str | None = None,
     deployment_model_info: object = None,
     stop_sequences: Sequence[str] | None = None,
+    native_deferred_tools: bool = False,
 ) -> bool:
     """Return True when the request should use the Responses API path.
 
@@ -210,12 +212,37 @@ def _should_route_to_responses_api(
         return False
     if stop_sequences:
         return False
-    if custom_llm_provider in RESPONSES_API_PROVIDERS:
+    if custom_llm_provider in RESPONSES_API_PROVIDERS or native_deferred_tools:
         return True
     if custom_llm_provider is None or requested_model is None or resolved_model is None:
         return False
     return _responses_mode_is_lost_by_prefix_strip(
         requested_model, resolved_model, custom_llm_provider, deployment_model_info
+    )
+
+
+def _serves_native_deferred_tools(
+    deployment_model_info: object, custom_llm_provider: str | None, model: str, drop_params: bool
+) -> bool:
+    setting: Final = deferred_tools_setting(deployment_model_info)
+    if isinstance(setting, UnknownDeferredTools):
+        if drop_params:
+            return False
+        raise AnthropicError(status_code=400, message=unknown_deferred_tools_message(setting))
+    if setting != "native":
+        return False
+    if custom_llm_provider is not None and ProviderConfigManager.get_provider_responses_api_config(
+        provider=custom_llm_provider, model=model
+    ):
+        return True
+    if drop_params:
+        return False
+    raise AnthropicError(
+        status_code=400,
+        message=(
+            f"model_info.deferred_tools native needs a Responses API, which provider {custom_llm_provider} lacks. "
+            "Pick passthrough or drop for this deployment, or set drop_params to send deferred tools the drop way"
+        ),
     )
 
 
@@ -896,8 +923,20 @@ def anthropic_messages_handler(
         kwargs.pop("diagnostics")  # pyright: ignore[reportUnknownMemberType]  # **kwargs of the handler is untyped
     if anthropic_messages_provider_config is None:
         # Route to Responses API for OpenAI / Azure, chat/completions for everything else.
+        deployment_model_info: Final = as_str_mapping(kwargs.get("model_info"))
+        native_deferred_tools: Final = _serves_native_deferred_tools(
+            deployment_model_info,
+            custom_llm_provider,
+            model,
+            drops_unsupported_params(litellm_params.drop_params),
+        )
         if kwargs.get("compaction") is None and _should_route_to_responses_api(
-            custom_llm_provider, original_model, model, kwargs.get("model_info"), stop_sequences=stop_sequences
+            custom_llm_provider,
+            original_model,
+            model,
+            deployment_model_info,
+            stop_sequences=stop_sequences,
+            native_deferred_tools=native_deferred_tools,
         ):
             return LiteLLMMessagesToResponsesAPIHandler.anthropic_messages_handler(
                 max_tokens=max_tokens,

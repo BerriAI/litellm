@@ -60,6 +60,7 @@ from ..context_management import AnthropicContextManagementError, PolyfillResult
 from ..context_management.constants import COMPACT_EDIT_TYPE
 from ..context_management.dispatcher import normalize_spec
 from ..convertible_blocks import reject_malformed_tool_result_text
+from ..deferred_tools import deferred_tools_mode, native_tool_search_name
 from ..safeguards import with_safeguard_results
 from ..utils import (
     KNOWN_REASONING_EFFORTS,
@@ -539,6 +540,7 @@ def _build_responses_kwargs(
         auto_summary_level=auto_reasoning_summary(model, forwarded_kwargs.get("custom_llm_provider")),
         drop_params=drop_params,
         preserve_system_instructions=preserves_system_instructions(forwarded_kwargs),
+        deferred_tools=deferred_tools_mode(forwarded_kwargs.get("model_info")),
     )
 
     caller_extra_body: Final = as_str_mapping(forwarded_kwargs.get("extra_body")) or {}
@@ -761,6 +763,7 @@ class LiteLLMMessagesToResponsesAPIHandler:
             )
 
         safeguards_evaluator: Final = request_safeguards_evaluator(kwargs, messages)
+        tool_search_name: Final = native_tool_search_name(kwargs.get("model_info"), tools)
         responses_kwargs, result = await _aresponses_without_rejected_reasoning(
             polyfill_result.messages if polyfill_result is not None else messages,
             responses_kwargs_for,
@@ -774,6 +777,7 @@ class LiteLLMMessagesToResponsesAPIHandler:
                 litellm_logging_obj=litellm_logging_obj_from_kwargs(responses_kwargs),
                 safeguards_evaluator=safeguards_evaluator,
                 applied_edits=polyfill_result.applied_edits_for_response() if polyfill_result else None,
+                tool_search_name=tool_search_name,
             )
             return wrapper.async_anthropic_sse_wrapper()
 
@@ -781,7 +785,8 @@ class LiteLLMMessagesToResponsesAPIHandler:
             raise ValueError(f"Expected ResponsesAPIResponse, got {type(result)}")
 
         served: Final = await with_safeguard_results(
-            _with_applied_edits(_ADAPTER.translate_response(result), polyfill_result), safeguards_evaluator
+            _with_applied_edits(_ADAPTER.translate_response(result, tool_search_name), polyfill_result),
+            safeguards_evaluator,
         )
         _record_bridged_response(responses_kwargs, result)
         return served
@@ -870,6 +875,7 @@ class LiteLLMMessagesToResponsesAPIHandler:
                 extra_kwargs=kwargs,
             )
 
+        tool_search_name: Final = native_tool_search_name(kwargs.get("model_info"), tools)
         responses_kwargs, result = _responses_without_rejected_reasoning(
             polyfill_result.messages if polyfill_result is not None else messages,
             responses_kwargs_for,
@@ -882,10 +888,11 @@ class LiteLLMMessagesToResponsesAPIHandler:
                 model=local_model_name(model, kwargs.get("custom_llm_provider")),
                 litellm_logging_obj=litellm_logging_obj_from_kwargs(responses_kwargs),
                 applied_edits=polyfill_result.applied_edits_for_response() if polyfill_result else None,
+                tool_search_name=tool_search_name,
             )
             return wrapper.anthropic_sse_wrapper()
 
         if not isinstance(result, ResponsesAPIResponse):
             raise ValueError(f"Expected ResponsesAPIResponse, got {type(result)}")
 
-        return _with_applied_edits(_ADAPTER.translate_response(result), polyfill_result)
+        return _with_applied_edits(_ADAPTER.translate_response(result, tool_search_name), polyfill_result)

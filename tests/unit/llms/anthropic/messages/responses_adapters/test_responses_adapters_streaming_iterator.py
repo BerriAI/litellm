@@ -1510,3 +1510,67 @@ def test_a_disconnect_after_done_only_tool_calls_bills_the_arguments_the_client_
 
     assert billed_for_deltas
     assert billed_for_done_only == billed_for_deltas
+
+
+class TestClientToolSearchStream:
+    @staticmethod
+    def _search_turn() -> list[object]:
+        done_item: Final = {
+            "type": "tool_search_call",
+            "id": "tsc_1",
+            "call_id": "call_search",
+            "execution": "client",
+            "arguments": {"query": "weather forecast"},
+            "status": "completed",
+        }
+        return [
+            {"type": "response.created"},
+            {
+                "type": "response.output_item.added",
+                "item": {
+                    "type": "tool_search_call",
+                    "id": "tsc_1",
+                    "call_id": "call_search",
+                    "execution": "client",
+                    "arguments": {},
+                    "status": "in_progress",
+                },
+            },
+            {"type": "response.output_item.done", "item": done_item},
+            {"type": "response.completed", "response": SimpleNamespace(output=[done_item], status="completed")},
+        ]
+
+    @staticmethod
+    def _drain(events: list[object], tool_search_name: str | None) -> list:
+        async def _gen():
+            for event in events:
+                yield event
+
+        async def _run() -> list:
+            wrapper = AnthropicResponsesStreamWrapper(
+                responses_stream=_gen(), model="m", tool_search_name=tool_search_name
+            )
+            return [chunk async for chunk in wrapper]
+
+        return asyncio.run(_run())
+
+    def test_search_call_streams_as_one_search_tool_use_and_stops_for_the_tool(self):
+        chunks = self._drain(self._search_turn(), "ToolSearch")
+
+        assert [c["content_block"] for c in chunks if c["type"] == "content_block_start"] == [
+            {"type": "tool_use", "id": "call_search", "name": "ToolSearch", "input": {}}
+        ]
+        streamed_input = "".join(
+            c["delta"]["partial_json"]
+            for c in chunks
+            if c["type"] == "content_block_delta" and c["delta"]["type"] == "input_json_delta"
+        )
+        assert json.loads(streamed_input) == {"query": "weather forecast"}
+        assert [c["type"] for c in chunks if c["type"] == "content_block_stop"] == ["content_block_stop"]
+        assert [c["delta"]["stop_reason"] for c in chunks if c["type"] == "message_delta"] == ["tool_use"]
+
+    def test_search_call_is_not_a_tool_use_without_a_client_search_tool(self):
+        chunks = self._drain(self._search_turn(), None)
+
+        assert not [c for c in chunks if c["type"] == "content_block_start"]
+        assert [c["delta"]["stop_reason"] for c in chunks if c["type"] == "message_delta"] == ["end_turn"]
