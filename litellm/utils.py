@@ -1277,6 +1277,10 @@ def _is_streaming_response_for_correlation(result: object) -> bool:
 def _returns_requested_stream(kwargs: dict[str, object], call_type: CallTypes | str, result: object) -> bool:
     if call_type in (CallTypes.transcription, CallTypes.atranscription):
         return isinstance(result, (openai.Stream, openai.AsyncStream))
+    if call_type in _IMAGE_STREAMING_CALL_TYPES:
+        from litellm.images.streaming import AsyncImageStream, ImageStream
+
+        return isinstance(result, (ImageStream, AsyncImageStream))
     return _is_streaming_request(kwargs=kwargs, call_type=call_type)
 
 
@@ -3167,7 +3171,18 @@ _NEVER_STREAMING_CALL_TYPES: Final = _SPEECH_CALL_TYPES | frozenset(
     }
 )
 
-_RESULT_DECIDES_STREAMING_CALL_TYPES: Final = frozenset({"get_responses", "aget_responses"})
+_IMAGE_STREAMING_CALL_TYPES: Final = frozenset(
+    {
+        CallTypes.image_generation.value,
+        CallTypes.aimage_generation.value,
+        CallTypes.image_edit.value,
+        CallTypes.aimage_edit.value,
+    }
+)
+
+_RESULT_DECIDES_STREAMING_CALL_TYPES: Final = (
+    frozenset({"get_responses", "aget_responses"}) | _IMAGE_STREAMING_CALL_TYPES
+)
 
 
 def _is_streaming_request(
@@ -5944,9 +5959,13 @@ def is_known_non_reasoning_model(model: str, custom_llm_provider: str | None) ->
     return info.get("supports_reasoning") is False or info["key"] in GetModelCostMap.loaded_model_cost_map()
 
 
-def has_catalog_entry(model: str, custom_llm_provider: str | None) -> bool:
+def catalog_entry(model: str, custom_llm_provider: str | None) -> Mapping[str, object] | None:
     info: Final = lookup_catalog_model_info(model, custom_llm_provider)
-    return not isinstance(info, ModelInfoLookupMiss) and info["key"] in GetModelCostMap.loaded_model_cost_map()
+    return None if isinstance(info, ModelInfoLookupMiss) else GetModelCostMap.loaded_model_cost_map().get(info["key"])
+
+
+def has_catalog_entry(model: str, custom_llm_provider: str | None) -> bool:
+    return catalog_entry(model, custom_llm_provider) is not None
 
 
 def _dropped_reasoning_warning(model: str, custom_llm_provider: str | None) -> str:
