@@ -43,7 +43,7 @@ mod text;
 
 use std::sync::Arc;
 
-use litellm_tracing::TokenRedactor;
+use litellm_redaction::TokenRedactor;
 
 pub use accounting::{
     AccountingSavings, AccountingWindow, LedgerColumns, LedgerInput, guardrail_information_cost,

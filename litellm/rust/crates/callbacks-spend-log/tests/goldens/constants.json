@@ -30,6 +30,7 @@
   "requester_ip_address",
   "user_agent",
   "litellm_call_id",
+  "litellm_previous_response_ids",
   "applied_guardrails",
   "mcp_tool_call_metadata",
   "vector_store_request_metadata",

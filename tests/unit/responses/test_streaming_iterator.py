@@ -752,6 +752,92 @@ async def test_output_item_added_without_an_item_streams_through_under_affinity(
     assert (added.type, added.output_index, added.item) == (ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED, 0, None)
 
 
+def _faked_reasoning_stream(
+    response: Mapping[str, object], litellm_metadata: dict[str, object]
+) -> MockResponsesAPIStreamingIterator:
+    return MockResponsesAPIStreamingIterator(
+        response=httpx.Response(200, json=response),
+        model="gpt-5-mini",
+        responses_api_provider_config=OpenAIResponsesAPIConfig(),
+        logging_obj=_logging_obj_stub(),
+        litellm_metadata=litellm_metadata,
+        custom_llm_provider="openai",
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "affinity, origin",
+    [(True, "dep-1"), (False, None)],
+    ids=["affinity-on", "affinity-off"],
+)
+async def test_faked_stream_carries_the_reasoning_and_response_ids_a_real_stream_carries(
+    affinity: bool, origin: str | None
+):
+    iterator: Final = _faked_reasoning_stream(
+        _reasoning_response_body("completed", [_STREAMED_REASONING_ITEM, _STREAMED_MESSAGE_ITEM]),
+        {"encrypted_content_affinity_enabled": affinity, "model_info": {"id": "dep-1"}},
+    )
+
+    events: Final = [event async for event in iterator]
+
+    item_records: Final = [
+        _item_record(event.item)
+        for event in events
+        if event.type in (ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED, ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE)
+    ]
+    completed: Final = next(
+        event.response for event in events if event.type == ResponsesAPIStreamEvents.RESPONSE_COMPLETED
+    )
+    output_records: Final = [_item_record(item) for item in completed.output]
+    summary_item_ids: Final = {
+        event.item_id for event in events if event.type == ResponsesAPIStreamEvents.REASONING_SUMMARY_TEXT_DELTA
+    }
+    expected_reasoning_id: Final = (
+        _REASONING_ITEM_ID
+        if origin is None
+        else ResponsesAPIRequestUtils._build_encrypted_item_id(origin, _REASONING_ITEM_ID)
+    )
+    assert {
+        record["id"] for record in [*item_records, *output_records] if record["type"] == "reasoning"
+    } | summary_item_ids == {expected_reasoning_id}
+
+    done_reasoning: Final = next(record for record in reversed(item_records) if record["type"] == "reasoning")
+    completed_reasoning: Final = next(record for record in output_records if record["type"] == "reasoning")
+    assert [
+        ResponsesAPIRequestUtils.unwrap_encrypted_content_with_model_id(str(record["encrypted_content"]))
+        for record in (done_reasoning, completed_reasoning)
+    ] == [(origin, "ciphertext"), (origin, "ciphertext")]
+
+    response_ids: Final = {event.response.id for event in events if getattr(event, "response", None) is not None}
+    assert [ResponsesAPIRequestUtils.decode_responses_api_response_id(response_id) for response_id in response_ids] == [
+        {"custom_llm_provider": "openai", "model_id": "dep-1", "response_id": "resp_affinity"}
+    ]
+
+
+@pytest.mark.asyncio
+async def test_faked_stream_of_an_already_encoded_response_keeps_its_ids():
+    litellm_metadata: Final[dict[str, object]] = {
+        "encrypted_content_affinity_enabled": True,
+        "model_info": {"id": "dep-1"},
+    }
+    encoded: Final = ResponsesAPIRequestUtils.update_responses_api_response_id_with_model_id(
+        responses_api_response=ResponsesAPIResponse.model_validate(
+            _reasoning_response_body("completed", [_STREAMED_REASONING_ITEM, _STREAMED_MESSAGE_ITEM])
+        ),
+        custom_llm_provider="openai",
+        litellm_metadata=litellm_metadata,
+    )
+
+    events: Final = [event async for event in _faked_reasoning_stream(encoded.model_dump(), litellm_metadata)]
+
+    completed: Final = next(
+        event.response for event in events if event.type == ResponsesAPIStreamEvents.RESPONSE_COMPLETED
+    )
+    assert completed.id == encoded.id
+    assert [_item_record(item) for item in completed.output] == [_item_record(item) for item in encoded.output]
+
+
 @pytest.mark.parametrize("trailing_error", _TRAILING_ERRORS, ids=type)
 def test_sync_transport_error_before_any_output_raises_fallback_error(trailing_error):
     logging_obj: Final = _failure_tracking_logging_obj()
@@ -3014,10 +3100,17 @@ async def test_synthetic_stream_preserves_terminal_status_and_success_callbacks(
     assert tuple(event.type for event in events if event.type in ("response.completed", "response.incomplete")) == (
         f"response.{status}",
     )
-    assert events[-1].response.model_dump() == transformed.model_dump()
+    expected: Final = (
+        transformed
+        if cached
+        else ResponsesAPIRequestUtils.update_responses_api_response_id_with_model_id(
+            responses_api_response=transformed.model_copy(), custom_llm_provider=None
+        )
+    ).model_dump()
+    assert events[-1].response.model_dump() == expected
     downstream_response: Final = ProxyBaseLLMRequestProcessing.extract_completed_responses_response(iterator)
     assert isinstance(downstream_response, ResponsesAPIResponse)
-    assert downstream_response.model_dump() == transformed.model_dump()
+    assert downstream_response.model_dump() == expected
     assert "".join(event.delta for event in events if event.type == "response.output_text.delta") == (
         "" if empty_output else "Checking the weather."
     )

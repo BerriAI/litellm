@@ -22,7 +22,7 @@ from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,
 )
-from litellm.llms.base_llm.guardrail_translation.utils import claude_hosted_web_tool_arguments
+from litellm.llms.base_llm.guardrail_translation.utils import hosted_web_tool_arguments
 from litellm.responses.litellm_completion_transformation.compaction_items import output_compaction_summary
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import (
@@ -229,7 +229,7 @@ class MicrosoftPurviewDLPGuardrail(PurviewGuardrailBase, CustomGuardrail):
         if not output:
             return args
         for item in output:
-            hosted_arguments = claude_hosted_web_tool_arguments(item)
+            hosted_arguments = hosted_web_tool_arguments(item)
             if hosted_arguments:
                 args.append(hosted_arguments)
             if isinstance(item, dict):
