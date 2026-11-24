@@ -1699,7 +1699,9 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             if (parsed_file_object := _parse_managed_file_object(row.file_object, row.unified_file_id)) is not None
         ]
 
-    async def check_managed_file_id_access(self, data: Dict, user_api_key_dict: UserAPIKeyAuth) -> bool:
+    async def check_managed_file_id_access(
+        self, data: Mapping[str, object], user_api_key_dict: UserAPIKeyAuth
+    ) -> bool:
         retrieve_file_id = cast(Optional[str], data.get("file_id"))
         potential_file_id = _is_base64_encoded_unified_file_id(retrieve_file_id) if retrieve_file_id else False
         if potential_file_id and retrieve_file_id:
@@ -1786,7 +1788,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                     data["model_file_id_mapping"] = model_file_id_mapping
         elif call_type == CallTypes.aresponses.value or call_type == CallTypes.responses.value:
             # Handle managed files in responses API input and tools
-            file_ids = []
+            file_ids: list[str] = []
 
             # Extract file IDs from input parameter
             input_data = data.get("input")
@@ -1958,7 +1960,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         """
         Gets file ids from messages
         """
-        file_ids = []
+        file_ids: list[str] = []
         for message in messages:
             if message.get("role") == "user":
                 content = message.get("content")
@@ -1984,7 +1986,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
           - type: "input_file" with file_id
           - content: a list that can contain items with type: "input_file" and file_id
         """
-        file_ids: List[str] = []
+        file_ids: list[str] = []
 
         if isinstance(input, str):
             return file_ids
@@ -2025,7 +2027,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             }
         ]
         """
-        file_ids: List[str] = []
+        file_ids: list[str] = []
 
         if not isinstance(tools, list):
             return file_ids
@@ -2139,7 +2141,9 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                     ),
                 )
 
-    async def get_model_file_id_mapping(self, file_ids: Sequence[str], litellm_parent_otel_span: Span | None) -> dict:
+    async def get_model_file_id_mapping(
+        self, file_ids: Sequence[str], litellm_parent_otel_span: Span | None
+    ) -> dict[str, dict[str, str]]:
         """
         Get model-specific file IDs for a list of proxy file IDs.
         Returns a dictionary mapping litellm_proxy/ file_id -> model_id -> model_file_id
@@ -2157,7 +2161,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         """
 
         file_id_mapping: Dict[str, Dict[str, str]] = {}
-        litellm_managed_file_ids = []
+        litellm_managed_file_ids: list[str] = []
 
         for file_id in file_ids:
             ## CHECK IF FILE ID IS MANAGED BY LITELM
@@ -2185,7 +2189,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
     ) -> List[OpenAIFileObject]:
         if llm_router is None:
             raise Exception("LLM Router not initialized. Ensure models added to proxy.")
-        responses = []
+        responses: list[OpenAIFileObject] = []
         for model in target_model_names_list:
             individual_response = await llm_router.acreate_file(model=model, **_create_file_request)
             responses.append(individual_response)
@@ -2479,7 +2483,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         return response
 
     @staticmethod
-    def _scope_list_page_cursors(response: AsyncCursorPage, data: List[OpenAIFileObject]) -> None:
+    def _scope_list_page_cursors(response: AsyncCursorPage[object], data: List[OpenAIFileObject]) -> None:
         """Rebuild ``first_id`` / ``last_id`` from the caller-scoped page.
 
         The upstream cursors point at rows that were just filtered out, so
