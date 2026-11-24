@@ -47,7 +47,8 @@ def sampling_params_to_drop(
     return UnsupportedParamsError(
         message=(
             f"{model} does not support {first}={params[first]}. anthropic-version {api_version} removed "
-            "temperature, top_p and top_k. To drop unsupported params, set `litellm.drop_params = True`."
+            "temperature, top_p and top_k. To drop unsupported params, set `litellm.drop_params = True`, or "
+            "`drop_params: true` under `litellm_settings` in the proxy config."
         ),
         llm_provider=provider,
         model=model,

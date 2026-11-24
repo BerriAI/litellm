@@ -430,7 +430,8 @@ pub(crate) fn streamed(body: &Map<String, Value>) -> bool {
 }
 
 /// `resolve_llm_passthrough_timeout` over the settings the gateway reads: a streamed call's
-/// `stream_timeout` on the deployment, then the deployment's `timeout`, then the router's.
+/// `stream_timeout` on the deployment, then the deployment's `timeout` and `request_timeout`, then
+/// the router's.
 pub(crate) fn timeout(attempt: &Attempt, streamed: bool) -> Option<Duration> {
     let seconds = |written: &Option<Spelled<f64>>| {
         let seconds = match written.as_ref()? {
@@ -440,10 +441,15 @@ pub(crate) fn timeout(attempt: &Attempt, streamed: bool) -> Option<Duration> {
         Duration::try_from_secs_f64(seconds).ok()
     };
     let params = &attempt.deployment.params;
+    let request_timeout = || {
+        let seconds = params.extra.get("request_timeout")?.as_f64()?;
+        Duration::try_from_secs_f64(seconds).ok()
+    };
     streamed
         .then(|| seconds(&params.stream_timeout))
         .flatten()
         .or_else(|| seconds(&params.timeout))
+        .or_else(request_timeout)
         .or(attempt.timeout)
 }
 
@@ -541,6 +547,12 @@ mod tests {
     )]
     #[case::a_stream_without_its_own_timeout_takes_the_deployments(
         json!({"model": "a/b", "timeout": 30}), Some(600), true, Some(30)
+    )]
+    #[case::the_deployments_request_timeout_after_its_timeout(
+        json!({"model": "a/b", "timeout": 30, "request_timeout": 20}), Some(600), false, Some(30)
+    )]
+    #[case::the_deployments_request_timeout_before_the_routers(
+        json!({"model": "a/b", "request_timeout": 20}), Some(600), true, Some(20)
     )]
     #[case::the_router_timeout_is_last(json!({"model": "a/b"}), Some(600), true, Some(600))]
     #[case::a_timeout_written_as_text_is_read(

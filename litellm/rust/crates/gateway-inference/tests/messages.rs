@@ -1,5 +1,7 @@
 mod support;
 
+use std::time::{Duration, Instant};
+
 use axum::{
     body::{Body, to_bytes},
     http::Request,
@@ -426,7 +428,8 @@ async fn sampling_params_under_an_api_version_anthropic_removed_them_from_are_re
         body["error"]["message"],
         "invalid request: test-model does not support temperature=1. anthropic-version \
          2026-10-21 removed temperature, top_p and top_k. To drop unsupported params, set \
-         `litellm.drop_params = True`."
+         `litellm.drop_params = True`, or `drop_params: true` under `litellm_settings` in the \
+         proxy config."
     );
 }
 
@@ -460,6 +463,175 @@ async fn sampling_params_reach_a_third_party_anthropic_api_under_an_api_version_
         .unwrap();
 
     assert_eq!(response.status(), 200, "{}", support::json(response).await);
+}
+
+/// What the provider is sent for `client` params under the deployment `shaping`, or the status
+/// the gateway answers with when it sends nothing.
+async fn sent_under(shaping: Value, client: Value) -> Result<Value, u16> {
+    let upstream = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/messages"))
+        .respond_with(message_response())
+        .mount(&upstream)
+        .await;
+    let app = support::app_with_shaping(
+        "anthropic/test-model",
+        &upstream.uri(),
+        deployment_params(json!({})),
+        shaping,
+    );
+
+    let response = support::post(
+        app,
+        "/v1/messages",
+        messages_request("public/model", client),
+    )
+    .await;
+
+    let sent = upstream.received_requests().await.unwrap();
+    match sent.first() {
+        Some(sent) if response.status() == 200 => Ok(sent.body_json().unwrap()),
+        _ => Err(response.status().as_u16()),
+    }
+}
+
+/// A request's `drop_params` decides for its call over the deployment's, and
+/// `litellm_settings.drop_params` keeps dropping on whatever the request says. The key never
+/// reaches the provider.
+#[rstest]
+#[case::the_request_turning_it_on(json!({}), json!(true), Ok(()))]
+#[case::a_flag_word(json!({}), json!("yes"), Ok(()))]
+#[case::the_request_turning_the_deployments_off(
+    json!({"drop_params": true, "drops_unsupported_params": true}),
+    json!(false),
+    Err(400)
+)]
+#[case::the_config_over_the_request(
+    json!({"drop_params": true, "drops_unsupported_params": true, "global_drop_params": true}),
+    json!(false),
+    Ok(())
+)]
+#[tokio::test]
+async fn a_requests_drop_params_decides_whether_its_unsupported_params_are_dropped(
+    #[case] shaping: Value,
+    #[case] requested: Value,
+    #[case] expected: Result<(), u16>,
+) {
+    let sent = sent_under(
+        shaping,
+        json!({"max_tokens": 16, "speed": "fast", "drop_params": requested}),
+    )
+    .await;
+
+    assert_eq!(
+        sent,
+        expected.map(|()| messages_request("test-model", json!({"max_tokens": 16})))
+    );
+}
+
+#[rstest]
+#[case::the_deployments_when_the_request_names_none(
+    json!({}),
+    json!({"max_tokens": 16, "top_k": 5})
+)]
+#[case::the_requests_in_their_place(
+    json!({"additional_drop_params": ["top_k"]}),
+    json!({"max_tokens": 16, "temperature": 0.5})
+)]
+#[tokio::test]
+async fn a_requests_additional_drop_params_replace_the_deployments(
+    #[case] requested: Value,
+    #[case] expected: Value,
+) {
+    let client = json!({"max_tokens": 16, "temperature": 0.5, "top_k": 5})
+        .as_object()
+        .unwrap()
+        .clone()
+        .into_iter()
+        .chain(requested.as_object().unwrap().clone())
+        .collect();
+
+    let sent = sent_under(
+        json!({"additional_drop_params": ["temperature"]}),
+        Value::Object(client),
+    )
+    .await;
+
+    assert_eq!(sent, Ok(messages_request("test-model", expected)));
+}
+
+#[rstest]
+#[tokio::test]
+async fn reasoning_auto_summary_asks_for_summarized_thinking(#[values(false, true)] on: bool) {
+    let thinking = json!({"type": "enabled", "budget_tokens": 1024});
+
+    let sent = sent_under(
+        json!({"reasoning_auto_summary": on, "capabilities": {"supports_reasoning": true}}),
+        json!({"max_tokens": 2048, "thinking": thinking}),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(
+        sent["thinking"].get("display"),
+        on.then(|| json!("summarized")).as_ref()
+    );
+}
+
+/// A call waits for the deployment's `timeout`, else its `request_timeout`, else
+/// `litellm_settings.request_timeout`, the order of Python's `resolve_llm_passthrough_timeout`.
+#[rstest]
+#[case::the_deployments_timeout_first(
+    json!({"timeout": 5, "request_timeout": 0.1, "num_retries": 0}),
+    json!({"request_timeout": 0.1}),
+    true
+)]
+#[case::the_deployments_request_timeout(
+    json!({"timeout": null, "request_timeout": 0.1, "num_retries": 0}),
+    json!({"request_timeout": 5}),
+    false
+)]
+#[case::the_deployments_request_timeout_before_the_configs(
+    json!({"timeout": null, "request_timeout": 5, "num_retries": 0}),
+    json!({"request_timeout": 0.1}),
+    true
+)]
+#[case::the_configs_request_timeout_last(
+    json!({"timeout": null, "num_retries": 0}),
+    json!({"request_timeout": 0.1}),
+    false
+)]
+#[tokio::test]
+async fn a_call_waits_for_the_first_timeout_python_reads(
+    #[case] litellm_params: Value,
+    #[case] shaping: Value,
+    #[case] answered: bool,
+) {
+    let delay = Duration::from_secs(1);
+    let upstream = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(message_response().set_delay(delay))
+        .mount(&upstream)
+        .await;
+    let app = support::app_with_shaping(
+        "anthropic/test-model",
+        &upstream.uri(),
+        deployment_params(litellm_params),
+        shaping,
+    );
+    let started = Instant::now();
+
+    let response = support::post(
+        app,
+        "/v1/messages",
+        messages_request("public/model", json!({"max_tokens": 16})),
+    )
+    .await;
+
+    assert_eq!(
+        (response.status() == 200, started.elapsed() >= delay),
+        (answered, answered)
+    );
 }
 
 const FIRST_EVENT: &str = "event: message_start\ndata: {}\n\n";

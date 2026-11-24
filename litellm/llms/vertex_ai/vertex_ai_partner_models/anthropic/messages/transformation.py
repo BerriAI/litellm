@@ -27,7 +27,8 @@ def _vertex_version(headers: Mapping[str, object], model: str, drop_params: bool
     return UnsupportedParamsError(
         message=(
             f"{model} does not support {_VERSION_HEADER_VERTEX_READS_FROM_BODY}={requested}. "
-            "To drop unsupported params, set `litellm.drop_params = True`."
+            "To drop unsupported params, set `litellm.drop_params = True`, or `drop_params: true` under "
+            "`litellm_settings` in the proxy config."
         ),
         llm_provider="vertex_ai",
         model=model,

@@ -1119,7 +1119,8 @@ mod tests {
             detail.to_string(),
             "claude-test does not support temperature=1. anthropic-version 2026-10-21 removed \
              temperature, top_p and top_k. To drop unsupported params, set \
-             `litellm.drop_params = True`."
+             `litellm.drop_params = True`, or `drop_params: true` under `litellm_settings` in the \
+             proxy config."
         );
     }
 

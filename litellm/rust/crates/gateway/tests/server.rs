@@ -1259,6 +1259,49 @@ async fn a_deployment_additional_drop_param_never_reaches_the_provider(
 }
 
 #[rstest]
+#[tokio::test]
+async fn a_requests_messages_settings_lay_over_the_deployments_and_never_reach_the_provider() {
+    let forwarded = forwarded_body(
+        "      additional_drop_params: [top_k]\n",
+        json!({
+            "temperature": 0.5,
+            "top_k": 5,
+            "drop_params": true,
+            "additional_drop_params": ["temperature"],
+        }),
+    )
+    .await;
+
+    assert_eq!(
+        [
+            "temperature",
+            "top_k",
+            "drop_params",
+            "additional_drop_params"
+        ]
+        .map(|key| forwarded.get(key).cloned()),
+        [None, Some(json!(5)), None, None]
+    );
+}
+
+#[rstest]
+#[case::text_python_reads_as_on("  reasoning_auto_summary: \"false\"\n", Some(json!("summarized")))]
+#[case::off("  reasoning_auto_summary: false\n", None)]
+#[tokio::test]
+async fn litellm_settings_reasoning_auto_summary_asks_for_summarized_thinking(
+    #[case] settings: &str,
+    #[case] expected: Option<Value>,
+) {
+    let forwarded = forwarded_body(
+        &format!("    model_info:\n      supports_reasoning: true\nlitellm_settings:\n{settings}"),
+        json!({"max_tokens": 2048, "thinking": {"type": "enabled", "budget_tokens": 1024}}),
+    )
+    .await;
+
+    assert_eq!(forwarded["thinking"].get("display").cloned(), expected);
+}
+
+#[rstest]
 #[case::fast_mode("supports_speed", "speed", json!("fast"))]
 #[case::adaptive_thinking("supports_adaptive_thinking", "thinking", json!({"type": "adaptive"}))]
 #[tokio::test]

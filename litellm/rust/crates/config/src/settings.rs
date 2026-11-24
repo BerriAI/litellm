@@ -221,8 +221,9 @@ pub struct LiteLlmSettings {
     pub modify_params: Option<bool>,
     #[serde_as(as = "LaxBool")]
     pub enable_anthropic_prompt_caching: Option<bool>,
-    #[serde_as(as = "LaxBool")]
-    pub reasoning_auto_summary: Option<bool>,
+    /// `bool(value)`, as Python's `litellm.reasoning_auto_summary or ...` reads the setting.
+    #[serde_as(as = "Truthy")]
+    pub reasoning_auto_summary: bool,
     #[serde_as(as = "LaxBool")]
     pub use_chat_completions_url_for_anthropic_messages: Option<bool>,
     #[serde_as(as = "LaxBool")]
