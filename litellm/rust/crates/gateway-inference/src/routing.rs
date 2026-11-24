@@ -58,7 +58,8 @@ pub trait Host: Send + Sync + Sized + 'static {
     /// The callback hooks of one call `identity` makes, which read and write the call's record.
     fn hooks(&self, identity: &Authenticated<Self::Rows>) -> Self::Hooks;
 
-    /// router-core's host for one call that runs `route` on each attempt for `identity`.
+    /// router-core's host for one call that runs `route` on each attempt for `identity`. The host
+    /// counts `route`'s [`RouteAttempt::prompt`] for the pre-call checks.
     fn router_host<'a, A: RouteAttempt>(
         &'a self,
         gateway: &'a Gateway<Self>,
@@ -79,6 +80,10 @@ pub trait RouteAttempt: Send + Sync {
     /// Required, so a new route says what it counts rather than counting nothing by default.
     fn counts(outcome: &Self::Outcome) -> Option<Counts>;
 
+    /// The request's prompt, which the host counts for the pre-call checks. `None` holds the
+    /// route's calls to no context window, so each route says so itself.
+    fn prompt(&self) -> Option<Prompt<'_>>;
+
     /// The stream of an outcome and the reader of its format: its outcome is reported to the
     /// router as it is read, and another attempt may answer in its place while it has sent no
     /// content. `None` for a complete answer.
@@ -86,6 +91,14 @@ pub trait RouteAttempt: Send + Sync {
         let _ = outcome;
         None
     }
+}
+
+/// The prompt a request carries, in the format its route reads it in. A route only hands it over,
+/// and the host decides how it is counted.
+#[derive(Clone, Copy)]
+pub enum Prompt<'a> {
+    /// A Messages body: its `system`, its `messages` and its `tools`.
+    Messages(&'a Map<String, Value>),
 }
 
 /// One attempt of `route` as router-core hears it. A complete outcome is served with the tokens
@@ -579,6 +592,10 @@ mod tests {
 
         /// Only ever a stream, whose counts are read from its events.
         fn counts(_outcome: &RouteChunks) -> Option<Counts> {
+            None
+        }
+
+        fn prompt(&self) -> Option<Prompt<'_>> {
             None
         }
 

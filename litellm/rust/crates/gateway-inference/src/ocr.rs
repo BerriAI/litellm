@@ -18,7 +18,7 @@ use crate::{
     hooks::CallType,
     model_restamp::ReportedModel,
     request::{InferenceBody, Upload},
-    routing::{self, Host, RouteAttempt},
+    routing::{self, Host, Prompt, RouteAttempt},
     serve::{self, Call, Endpoint},
     stream_event::Counts,
 };
@@ -94,6 +94,10 @@ impl Endpoint for OcrAttempt<'_> {
 
 impl RouteAttempt for OcrAttempt<'_> {
     type Outcome = Value;
+
+    fn prompt(&self) -> Option<Prompt<'_>> {
+        None
+    }
 
     async fn run(&self, attempt: &Attempt) -> Result<Value, Error> {
         let deployment = &attempt.deployment;
