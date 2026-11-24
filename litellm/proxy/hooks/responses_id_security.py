@@ -63,9 +63,9 @@ _PROXY_ADMIN_ROLES: Final = frozenset({LitellmUserRoles.PROXY_ADMIN, LitellmUser
 
 
 def _proxy_general_settings() -> Mapping[str, object]:
-    from litellm.proxy.proxy_server import general_settings
+    from litellm.proxy.proxy_server import current_general_settings
 
-    return general_settings
+    return current_general_settings()
 
 
 def _proxy_signing_key() -> str | None:
@@ -311,20 +311,23 @@ class ResponsesIDSecurity(CustomLogger):
 
         return True
 
+    def _decrypt_managed_payload(self, response_id: str) -> str | None:
+        if not response_id.startswith("resp_"):
+            return None
+
+        remaining_string: Final = response_id.removeprefix("resp_")
+        if not remaining_string:
+            return None
+
+        decrypted_value: Final = decrypt_value_helper(
+            value=remaining_string, key="response_id", exception_type="debug", return_original_value=False
+        )
+        if decrypted_value is None or not decrypted_value.startswith(SpecialEnums.LITELM_MANAGED_FILE_ID_PREFIX.value):
+            return None
+        return decrypted_value
+
     def _is_encrypted_response_id(self, response_id: str) -> bool:
-        split_result: Final = response_id.split("resp_")
-        if len(split_result) < 2:
-            return False
-
-        remaining_string: Final = split_result[1]
-        decrypted_value = decrypt_value_helper(value=remaining_string, key="response_id", return_original_value=True)
-
-        if decrypted_value is None:
-            return False
-
-        if decrypted_value.startswith(SpecialEnums.LITELM_MANAGED_FILE_ID_PREFIX.value):
-            return True
-        return False
+        return self._decrypt_managed_payload(response_id) is not None
 
     def _decrypt_response_id(self, response_id: str) -> tuple[str, str | None, str | None]:
         """
@@ -333,38 +336,21 @@ class ResponsesIDSecurity(CustomLogger):
          - user_id: the user id
          - team_id: the team id
         """
-        split_result: Final = response_id.split("resp_")
-        if len(split_result) < 2:
-            return response_id, None, None
-
-        remaining_string: Final = split_result[1]
-        decrypted_value = decrypt_value_helper(value=remaining_string, key="response_id", return_original_value=True)
-
+        decrypted_value: Final = self._decrypt_managed_payload(response_id)
         if decrypted_value is None:
             return response_id, None, None
 
-        if decrypted_value.startswith(SpecialEnums.LITELM_MANAGED_FILE_ID_PREFIX.value):
-            # Expected format: "litellm_proxy:responses_api:response_id:{response_id};user_id:{user_id}"
-            parts: Final = decrypted_value.split(";")
+        parts: Final = decrypted_value.split(";")
+        if len(parts) < 2:
+            return response_id, None, None
 
-            if len(parts) >= 2:
-                # Extract response_id from "litellm_proxy:responses_api:response_id:{response_id}"
-                response_id_part: Final = parts[0]
-                original_response_id: Final = response_id_part.split("response_id:")[-1]
+        original_response_id: Final = parts[0].split("response_id:")[-1]
+        user_id: Final = parts[1].split("user_id:")[-1]
+        team_id: Final = parts[2].split("team_id:")[-1] if len(parts) >= 3 else None
+        return original_response_id, user_id, team_id
 
-                # Extract user_id from "user_id:{user_id}"
-                user_id_part: Final = parts[1]
-                user_id: Final = user_id_part.split("user_id:")[-1]
-
-                # Extract team_id from "team_id:{team_id}"
-                team_id_part: Final = parts[2]
-                team_id: Final = team_id_part.split("team_id:")[-1]
-
-                return original_response_id, user_id, team_id
-            else:
-                # Fallback if format is unexpected
-                return response_id, None, None
-        return response_id, None, None
+    def decrypted_response_id(self, response_id: str) -> str:
+        return self._decrypt_response_id(response_id)[0]
 
     def _get_signing_key(self) -> str | None:
         return self._signing_key_reader()
@@ -479,5 +465,4 @@ class ResponsesIDSecurity(CustomLogger):
 
 def decrypted_response_id(response_id: str) -> str:
     """The id a client-facing response id stands for, the same for every encryption of one response."""
-    original_response_id, _, _ = ResponsesIDSecurity()._decrypt_response_id(response_id)
-    return original_response_id
+    return ResponsesIDSecurity().decrypted_response_id(response_id)
