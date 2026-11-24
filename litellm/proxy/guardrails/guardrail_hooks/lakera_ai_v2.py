@@ -810,7 +810,7 @@ class LakeraAIGuardrail(CustomGuardrail):
 
         # Use a copy of original_messages so _mask_pii_in_messages does not mutate data["messages"]
         post_call_messages: Final = list(copy.deepcopy(original_messages)) + response_messages
-        if not post_call_messages:
+        if not post_call_messages and (native_text_blocks is not None or isinstance(response, ModelResponse)):
             verbose_proxy_logger.warning("Lakera AI: not running guardrail. No inspectable text in request or response")
             return response
 
@@ -839,7 +839,7 @@ class LakeraAIGuardrail(CustomGuardrail):
                         choice_idx = choice_indices[idx]
                         response_dict["choices"][choice_idx]["message"]["content"] = msg.get("content", "")
                 add_guardrail_to_applied_guardrails_header(request_data=data, guardrail_name=self.guardrail_name)
-                if native_text_blocks is not None:
+                if native_text_blocks is not None or not isinstance(response, ModelResponse):
                     return response
                 return ModelResponse(**_RESPONSE_FIELDS.validate_python(response_dict))
 

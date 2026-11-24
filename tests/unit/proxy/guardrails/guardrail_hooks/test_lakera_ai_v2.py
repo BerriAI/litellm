@@ -27,7 +27,7 @@ from litellm.proxy.guardrails.guardrail_hooks.lakera_ai_v2 import (
 )
 from litellm.types.guardrails import LitellmParams, Mode
 from litellm.types.llms.openai import ResponsesAPIResponse
-from litellm.types.utils import ModelResponse
+from litellm.types.utils import EmbeddingResponse, ModelResponse, TextCompletionResponse
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 
 
@@ -45,17 +45,9 @@ async def test_lakera_post_call_success_hook_returns_model_response_when_pii_mas
             {"detector_type": "pii/email", "detected": True, "message_id": 1},
         ],
     }
-    llm_response = MagicMock()
-    llm_response.model_dump.return_value = {
-        "choices": [
-            {
-                "message": {
-                    "role": "assistant",
-                    "content": "Your email is test@example.com",
-                }
-            },
-        ]
-    }
+    llm_response = ModelResponse(
+        choices=[{"message": {"role": "assistant", "content": "Your email is test@example.com"}}]
+    )
 
     with patch.object(lakera_guardrail, "call_v2_guard", new_callable=AsyncMock) as mock_call:
         mock_call.return_value = (mock_response, {})
@@ -277,8 +269,7 @@ class TestAsyncPostCallSuccessHookSkipFlags:
             "model": "gpt-3.5-turbo",
             "metadata": {},
         }
-        llm_response = MagicMock()
-        llm_response.model_dump.return_value = {"choices": [{"message": {"role": "assistant", "content": "hi there"}}]}
+        llm_response = ModelResponse(choices=[{"message": {"role": "assistant", "content": "hi there"}}])
         with patch.object(guardrail, "call_v2_guard", new_callable=AsyncMock) as mock_call:
             mock_call.return_value = ({"flagged": False}, {})
             await guardrail.async_post_call_success_hook(
@@ -300,10 +291,7 @@ class TestAsyncPostCallSuccessHookSkipFlags:
             "model": "gpt-3.5-turbo",
             "metadata": {},
         }
-        llm_response = MagicMock()
-        llm_response.model_dump.return_value = {
-            "choices": [{"message": {"role": "assistant", "content": "my email is a@b.com"}}]
-        }
+        llm_response = ModelResponse(choices=[{"message": {"role": "assistant", "content": "my email is a@b.com"}}])
         pii_response = {
             "flagged": True,
             "breakdown": [{"detector_type": "pii/email", "detected": True, "message_id": 1}],
@@ -357,8 +345,7 @@ async def _run_during_call(guardrail: LakeraAIGuardrail, lakera_response: Mappin
 
 
 async def _run_post_call(guardrail: LakeraAIGuardrail, lakera_response: Mapping[str, object]) -> ModelResponse:
-    llm_response: Final = MagicMock()
-    llm_response.model_dump.return_value = {"choices": [{"message": {"role": "assistant", "content": "hello world"}}]}
+    llm_response: Final = ModelResponse(choices=[{"message": {"role": "assistant", "content": "hello world"}}])
     with patch.object(guardrail, "call_v2_guard", new_callable=AsyncMock, return_value=(lakera_response, {})):
         response: Final = await guardrail.async_post_call_success_hook(
             data={"messages": [], "model": "gpt-3.5-turbo", "metadata": {}},
@@ -1695,10 +1682,7 @@ class TestAdvisoryModePostCall:
             "flagged": True,
             "breakdown": [{"detector_type": "moderated_content/violence", "detected": True}],
         }
-        llm_response = MagicMock()
-        llm_response.model_dump.return_value = {
-            "choices": [{"message": {"role": "assistant", "content": "Some response content"}}]
-        }
+        llm_response = ModelResponse(choices=[{"message": {"role": "assistant", "content": "Some response content"}}])
 
         with patch.object(lakera_guardrail, "call_v2_guard", new_callable=AsyncMock) as mock_call:
             mock_call.return_value = (mock_response, {})
@@ -2355,8 +2339,7 @@ async def test_lakera_post_call_blocks_flagged_content():
     }
 
     # Mock LLM response object
-    llm_response = MagicMock()
-    llm_response.model_dump.return_value = {"choices": [{"message": {"role": "assistant", "content": "some response"}}]}
+    llm_response = ModelResponse(choices=[{"message": {"role": "assistant", "content": "some response"}}])
 
     with patch.object(lakera_guardrail, "call_v2_guard", new_callable=AsyncMock) as mock_call:
         mock_call.return_value = (mock_response, {})
@@ -2391,10 +2374,7 @@ async def test_lakera_post_call_allows_clean_content():
         "breakdown": [],
     }
 
-    llm_response = MagicMock()
-    llm_response.model_dump.return_value = {
-        "choices": [{"message": {"role": "assistant", "content": "clean response"}}]
-    }
+    llm_response = ModelResponse(choices=[{"message": {"role": "assistant", "content": "clean response"}}])
 
     with patch.object(lakera_guardrail, "call_v2_guard", new_callable=AsyncMock) as mock_call:
         mock_call.return_value = (mock_response, {})
@@ -2430,17 +2410,9 @@ async def test_lakera_post_call_masks_pii_and_allows():
         ],
     }
 
-    llm_response = MagicMock()
-    llm_response.model_dump.return_value = {
-        "choices": [
-            {
-                "message": {
-                    "role": "assistant",
-                    "content": "Your email is test@example.com",
-                }
-            },
-        ]
-    }
+    llm_response = ModelResponse(
+        choices=[{"message": {"role": "assistant", "content": "Your email is test@example.com"}}]
+    )
 
     with patch.object(lakera_guardrail, "call_v2_guard", new_callable=AsyncMock) as mock_call:
         mock_call.return_value = (mock_response, {})
@@ -2610,3 +2582,33 @@ async def test_post_call_sends_chat_prompt_text_parts_as_plain_text() -> None:
         {"role": "user", "content": "Which card?"},
         {"role": "assistant", "content": "None."},
     ]
+
+
+@pytest.mark.asyncio
+async def test_mask_returns_a_non_chat_response_unchanged_when_pii_is_in_the_prompt() -> None:
+    embedding: Final = EmbeddingResponse(model="m", data=[{"object": "embedding", "index": 0, "embedding": [0.1, 0.2]}])
+
+    result, client = await _post_call("mask", _card_verdict(0), {"model": "m", "input": f"Card {_CARD}."}, embedding)
+
+    assert result is embedding
+    assert result.data[0]["embedding"] == [0.1, 0.2]
+    assert len(client.posts) == 1
+
+
+@pytest.mark.asyncio
+async def test_text_completion_with_nothing_read_still_calls_lakera() -> None:
+    completion: Final = TextCompletionResponse(choices=[{"index": 0, "text": "Paris.", "finish_reason": "stop"}])
+
+    _, client = await _post_call("block", _CLEAN_VERDICT, {"model": "m", "prompt": "Capital of France?"}, completion)
+
+    assert client.posts[0]["json"]["messages"] == []
+
+
+@pytest.mark.asyncio
+async def test_chat_reply_with_nothing_to_inspect_skips_lakera() -> None:
+    chat_response: Final = ModelResponse(choices=[{"message": {"role": "assistant", "content": None}}])
+
+    result, client = await _post_call("block", _card_verdict(0), {"model": "m", "messages": []}, chat_response)
+
+    assert result is chat_response
+    assert client.posts == []
