@@ -74,6 +74,7 @@ from ..adapters.handler import LiteLLMMessagesToCompletionTransformationHandler,
 from ..deferred_tools import (
     native_messages_deferred_tools_refusal,
     native_tool_search_name,
+    refusal_unless_dropped,
     unknown_deferred_tools_refusal,
     unusable_deferred_tools_refusal,
     usable_deferred_tools_mode,
@@ -230,9 +231,10 @@ def _should_route_to_responses_api(
     )
 
 
-def _refuse_deferred_tools(refusal: str | None) -> None:
-    if refusal is not None:
-        raise AnthropicError(status_code=400, message=refusal)
+def _refuse_deferred_tools(refusal: str | None, drop_params: bool) -> None:
+    kept_refusal: Final = refusal_unless_dropped(refusal, drop_params)
+    if kept_refusal is not None:
+        raise AnthropicError(status_code=400, message=kept_refusal)
 
 
 _ToolChoice = TypeVar("_ToolChoice", bound=Mapping[str, object])
@@ -931,24 +933,23 @@ def anthropic_messages_handler(
         kwargs.pop("diagnostics")  # pyright: ignore[reportUnknownMemberType]  # **kwargs of the handler is untyped
     deployment_model_info: Final = as_str_mapping(kwargs.get("model_info"))
     drops_deferred_tools_setting: Final = drops_unsupported_params(litellm_params.drop_params)
-    _refuse_deferred_tools(unknown_deferred_tools_refusal(deployment_model_info, drops_deferred_tools_setting))
+    _refuse_deferred_tools(unknown_deferred_tools_refusal(deployment_model_info), drops_deferred_tools_setting)
     if anthropic_messages_provider_config is None:
         # Route to Responses API for OpenAI / Azure, chat/completions for everything else.
         _refuse_deferred_tools(
-            unusable_deferred_tools_refusal(deployment_model_info, custom_llm_provider, drops_deferred_tools_setting)
+            unusable_deferred_tools_refusal(deployment_model_info, custom_llm_provider), drops_deferred_tools_setting
         )
-        native_deferred_tools: Final = (
-            usable_deferred_tools_mode(deployment_model_info, custom_llm_provider) == "native"
-        )
+        deferred_tools: Final = usable_deferred_tools_mode(deployment_model_info, custom_llm_provider)
+        native_deferred_tools: Final = deferred_tools == "native"
         request_messages: Final = cast("list[dict[str, object]]", messages)  # cast-ok: the handler takes untyped dicts
         request_tools: Final = cast("list[dict[str, object]] | None", tools)  # cast-ok: the handler takes untyped dicts
         request_tool_choice: Final = cast(  # cast-ok: the handler takes untyped dicts
             "dict[str, object] | None", tool_choice
         )
-        from ..deferred_tool_emulation import deferred_tool_emulation
+        from ..deferred_tool_emulation import deferred_tool_emulation, deferred_tools_messages
 
         emulation: Final = deferred_tool_emulation(deployment_model_info, request_tools)
-        bridged_messages: Final = request_messages if emulation is None else list(emulation.messages(request_messages))
+        bridged_messages: Final = list(deferred_tools_messages(request_messages, emulation, deferred_tools))
         bridged_tools: Final = (
             request_tools if emulation is None or request_tools is None else list(emulation.tools(request_tools))
         )
@@ -1032,7 +1033,7 @@ def anthropic_messages_handler(
         )
 
     _refuse_deferred_tools(
-        native_messages_deferred_tools_refusal(deployment_model_info, custom_llm_provider, drops_deferred_tools_setting)
+        native_messages_deferred_tools_refusal(deployment_model_info, custom_llm_provider), drops_deferred_tools_setting
     )
     request_kwargs: Final = cast(dict[str, object], kwargs)  # cast-ok: **kwargs of the handler is untyped
     marked_tools: Final = tools_marked_for_cache_points(local_vars.get("tools"), request_kwargs)

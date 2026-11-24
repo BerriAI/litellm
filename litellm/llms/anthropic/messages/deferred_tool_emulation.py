@@ -5,7 +5,12 @@ from dataclasses import dataclass
 from typing import Final, TypeVar, cast  # noqa: TID251  # see cast-ok markers
 
 from litellm.litellm_core_utils.core_helpers import as_object_list, as_str_mapping, loads_json_object
-from litellm.llms.anthropic.messages.deferred_tools import client_tool_search_name, deferred_tools_mode, is_deferred
+from litellm.llms.anthropic.messages.deferred_tools import (
+    DeferredToolsMode,
+    client_tool_search_name,
+    deferred_tools_mode,
+    is_deferred,
+)
 from litellm.llms.anthropic.messages.native.streaming_iterator import sse_frame_event, sse_frames
 from litellm.llms.anthropic.messages.utils import anthropic_sse_frame
 from litellm.llms.custom_httpx.stream_close import aclose_if_supported
@@ -235,6 +240,16 @@ class DeferredToolEmulation:
 
     async def _restored_later(self, pending: Awaitable[object]) -> object:
         return self.restored(await pending)
+
+
+def deferred_tools_messages(
+    messages: Sequence[_Item], emulation: DeferredToolEmulation | None, deferred_tools: DeferredToolsMode
+) -> Sequence[_Item]:
+    if emulation is not None:
+        return emulation.messages(messages)
+    if deferred_tools == "passthrough":
+        return DeferredToolEmulation(deferred={}).messages(messages)
+    return messages
 
 
 def deferred_tool_emulation(model_info: object, tools: Sequence[object] | None) -> DeferredToolEmulation | None:

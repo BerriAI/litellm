@@ -72,6 +72,7 @@ from litellm.llms.anthropic.common_utils import (
 )
 from litellm.llms.anthropic.messages.deferred_tools import (
     native_messages_deferred_tools_refusal,
+    refusal_unless_dropped,
     unknown_deferred_tools_refusal,
 )
 from litellm.llms.anthropic.messages.native import handler
@@ -320,8 +321,10 @@ def _refuse_unusable_deferred_tools(request: Mapping[str, object], asynchronous:
         return
     drop_params: Final = drops_unsupported_params(request.get("drop_params"))
     provider, config = _messages_config(request)
-    refusal: Final = unknown_deferred_tools_refusal(model_info, drop_params) or (
-        None if config is None else native_messages_deferred_tools_refusal(model_info, provider, drop_params)
+    refusal: Final = refusal_unless_dropped(
+        unknown_deferred_tools_refusal(model_info)
+        or (None if config is None else native_messages_deferred_tools_refusal(model_info, provider)),
+        drop_params,
     )
     if refusal is None:
         return

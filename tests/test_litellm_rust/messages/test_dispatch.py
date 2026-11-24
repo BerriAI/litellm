@@ -300,7 +300,7 @@ def test_only_claude_bedrock_messages_routes_reach_the_messages_target(model: st
     assert result is (native_result if target is Target.MESSAGES else python_result)
 
 
-@pytest.mark.parametrize("model", ["fireworks_ai/accounts/fireworks/models/kimi-k3p1", "azure/gpt-6.1-sol"])
+@pytest.mark.parametrize("model", ["openai/gpt-6.2-sol", "azure/gpt-6.1-sol"])
 def test_count_tokens_routes_a_native_deferred_tools_deployment_the_way_its_messages_call_goes(
     model: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
