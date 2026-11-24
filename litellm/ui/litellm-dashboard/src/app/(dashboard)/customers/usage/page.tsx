@@ -40,7 +40,7 @@ export default function CustomerHierarchyUsagePage() {
 
   if (!scope)
     return (
-      <div className="px-8 py-12">
+      <div>
         <h1 className="text-xl font-semibold">{t("customerPortal.analytics.title")}</h1>
         <p className="mt-2 text-sm text-muted-foreground">{t("customerPortal.analytics.selectOrganization")}</p>
         <a className="mt-5 inline-block text-sm font-medium text-primary hover:underline" href={customersHref}>

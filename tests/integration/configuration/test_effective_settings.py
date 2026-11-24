@@ -1528,7 +1528,10 @@ def _sign_in_client_id(proxy: Gateway) -> str | None:
     if not response.is_redirect:
         assert response.status_code == 200, response.text
         return None
-    return parse_qs(urlsplit(response.headers["location"]).query)["client_id"][0]
+    location: Final = urlsplit(response.headers["location"])
+    if location.path.endswith("/ui/login"):
+        return None
+    return parse_qs(location.query)["client_id"][0]
 
 
 def test_an_sso_client_removed_from_db_environment_variables_stops_sign_in_on_every_proxy(

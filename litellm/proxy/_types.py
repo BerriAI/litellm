@@ -460,6 +460,7 @@ class LiteLLMRoutes(enum.Enum):
         "/v1/traces/query",
         "/v1/traces/query/help",
         "/v1/traces/{trace_id}",
+        "/v1/traces/{trace_id}/conversation",
         "/v1/traces/{trace_id}/spans/{span_id}",
         "/v1/traces/{trace_id}/spans/{span_id}/error",
     )
@@ -1573,6 +1574,14 @@ class NewMCPServerRequest(LiteLLMPydanticObjectBase):
 
 class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
     server_id: str
+    preserve_explicit_oauth_settings: bool = Field(
+        default=False,
+        exclude=True,
+        description=(
+            "Keep explicitly supplied OAuth settings on upstream or auth changes, "
+            "even when their values match the saved settings."
+        ),
+    )
     server_name: str | None = None
     alias: str | None = None
     description: str | None = None
@@ -2573,7 +2582,9 @@ class ScheduledJobStaggerSettings(LiteLLMPydanticObjectBase):
     )
 
 
-SPEND_LOGS_METADATA_ALWAYS_KEPT_FIELDS: Final = frozenset({"status", "cold_storage_object_key"})
+SPEND_LOGS_METADATA_ALWAYS_KEPT_FIELDS: Final = frozenset(
+    {"status", "cold_storage_object_key", "litellm_previous_response_ids"}
+)
 
 
 def _known_spend_logs_metadata_field(name: str) -> str:
@@ -4031,6 +4042,8 @@ class SpendLogsMetadata(TypedDict):
     requester_ip_address: str | None
     user_agent: ReadOnly[str | None]
     litellm_call_id: str | None
+    litellm_previous_response_ids: ReadOnly[NotRequired[Sequence[str] | None]]
+    """Spend log request ids of the bridged /v1/responses turns this turn continues, root first."""
     applied_guardrails: list[str] | None
     mcp_tool_call_metadata: StandardLoggingMCPToolCall | None
     vector_store_request_metadata: list[StandardLoggingVectorStoreRequest] | None

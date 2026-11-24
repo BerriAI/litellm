@@ -130,6 +130,10 @@ class EndpointCore(Protocol):
 
     def group_members(self, model_name: str) -> Sequence[tuple[object, object]] | None: ...
 
+    def served_deployments(self) -> tuple[Mapping[str, object], ...]:
+        """Every deployment as a pick serves it, with the litellm_params values its JSON record carries as text."""
+        ...
+
     def routed_name(self, model: object) -> str:
         """``RustCore.routed_name``: what a ``model`` that is no string raises, or the name it routes under."""
         ...
@@ -1616,7 +1620,7 @@ class RustEndpoints:
 
     def _group(self, name: str) -> list[Mapping[str, object]]:  # mutable-ok: a fresh list
         """`_core_get_model_list(model_name=name)`: the deployments of the group ``name``."""
-        records: Final = self._core.handle.deployments()
+        records: Final = self._core.served_deployments()
         return [record for record in (as_dict(r) for r in records) if record.get("model_name") == name]
 
     def _is_model_group(self, name: str) -> bool:
@@ -2302,7 +2306,7 @@ class RustEndpoints:
                 batch_api=True,
             )
         else:
-            healthy = [as_dict(r) for r in self._core.handle.deployments()]  # rebind-ok: as Python rebinds it
+            healthy = [as_dict(r) for r in self._core.served_deployments()]  # rebind-ok: as Python rebinds it
         errors: Final[list[BaseException]] = []  # mutable-ok: the request kwargs the Python router mutates in place
 
         async def try_retrieve(deployment: Mapping[str, object]) -> object:

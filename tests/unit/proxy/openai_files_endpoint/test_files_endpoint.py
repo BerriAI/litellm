@@ -720,8 +720,9 @@ BATCH_JSONL_LINE = (
 )
 
 
-def _router_with_executed_batch_model() -> Router:
+def _router_with_executed_batch_model(default_litellm_params: dict[str, object] | None = None) -> Router:
     return Router(
+        default_litellm_params=default_litellm_params,
         model_list=[
             {
                 "model_name": "my-vllm",
@@ -1043,6 +1044,68 @@ def test_batch_upload_for_a_provider_model_without_deployment_drop_params_sends_
 
     assert response.status_code == 200, response.text
     assert "drop_params" not in provider_upload.call_args.kwargs
+
+
+@pytest.mark.parametrize("model", ["vertex-batch-keep", "gemini-2.0-flash"])
+def test_batch_upload_carries_the_router_default_drop_params_over_the_deployment(
+    batch_upload_seams, monkeypatch, model: str
+):
+    _, provider_upload, _ = batch_upload_seams
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.llm_router", _router_with_executed_batch_model({"drop_params": True})
+    )
+
+    response = _upload_batch_file({"x-litellm-model": model}, {})
+
+    assert response.status_code == 200, response.text
+    assert provider_upload.call_args.kwargs["drop_params"] is True
+
+
+@pytest.mark.parametrize(
+    ("router_default", "expected"),
+    [({"drop_params": True}, {"drop_params": True}), ({"drop_params": False}, {"drop_params": False}), (None, {})],
+    ids=["router-drops", "router-keeps", "router-unset"],
+)
+def test_batch_upload_without_a_model_carries_the_router_default_drop_params(
+    batch_upload_seams, monkeypatch, router_default: dict[str, object] | None, expected: dict[str, object]
+):
+    _, provider_upload, _ = batch_upload_seams
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", _router_with_executed_batch_model(router_default))
+
+    response = client.post(
+        "/vertex_ai/v1/files",
+        files={"file": ("batch.jsonl", BATCH_JSONL_LINE, "application/jsonl")},
+        data={"purpose": "batch"},
+        headers={"Authorization": "Bearer test-key"},
+    )
+
+    assert response.status_code == 200, response.text
+    assert provider_upload.call_args.kwargs["custom_llm_provider"] == "vertex_ai"
+    assert {key: value for key, value in provider_upload.call_args.kwargs.items() if key == "drop_params"} == expected
+
+
+def test_batch_upload_without_a_model_gives_a_null_files_settings_drop_params_the_router_default(
+    batch_upload_seams, monkeypatch
+):
+    _, provider_upload, _ = batch_upload_seams
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.llm_router", _router_with_executed_batch_model({"drop_params": True})
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.openai_files_endpoints.files_endpoints.files_config",
+        [{"custom_llm_provider": "openai", "api_key": "sk-test", "drop_params": None}],
+    )
+
+    response = client.post(
+        "/openai/v1/files",
+        files={"file": ("batch.jsonl", BATCH_JSONL_LINE, "application/jsonl")},
+        data={"purpose": "batch"},
+        headers={"Authorization": "Bearer test-key"},
+    )
+
+    assert response.status_code == 200, response.text
+    assert provider_upload.call_args.kwargs["custom_llm_provider"] == "openai"
+    assert provider_upload.call_args.kwargs["drop_params"] is True
 
 
 def test_batch_upload_keeps_the_callers_drop_params_over_the_deployment(batch_upload_seams):

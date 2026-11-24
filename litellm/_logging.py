@@ -782,7 +782,7 @@ def _try_parse_embedded_python_dict(message: str) -> dict[str, object] | None:
 
 # Standard LogRecord attribute names - used to identify 'extra' fields.
 # Derived at runtime so we automatically include version-specific attrs (e.g. taskName).
-def _get_standard_record_attrs() -> frozenset:
+def _get_standard_record_attrs() -> frozenset[str]:
     """Standard LogRecord attribute names - excludes extra keys from logger.debug(..., extra={...})."""
     return frozenset(logging.LogRecord("", 0, "", 0, "", (), None).__dict__.keys())
 
@@ -800,12 +800,12 @@ class JsonFormatter(Formatter):
     def __init__(self):
         super().__init__()
 
-    def formatTime(self, record, datefmt=None):
+    def formatTime(self, record: logging.LogRecord, datefmt: str | None = None):
         # Use datetime to format the timestamp in ISO 8601 format
         dt: Final = datetime.fromtimestamp(record.created)
         return dt.isoformat()
 
-    def format(self, record):
+    def format(self, record: logging.LogRecord):
         message_str: Final = _ANSI_ESCAPE.sub("", record.getMessage())
         json_record: Final[dict[str, object]] = {
             "message": message_str,
@@ -858,6 +858,25 @@ class JsonFormatter(Formatter):
         )
 
 
+RUST_FIELDS_RECORD_ATTR: Final = "rust_fields"
+_RUST_FIELDS: Final = TypeAdapter(dict[str, object])
+
+
+def _rust_fields_suffix(record: logging.LogRecord) -> str:
+    """The fields as ``[name=value ...]``. Each value is JSON, so a newline or control code in it cannot start a
+    line, and the fields together are held to the base64 and length limits a message is."""
+    fields: Final = _record_attributes(record).get(RUST_FIELDS_RECORD_ATTR)
+    if not isinstance(fields, dict) or not fields:
+        return ""
+    named: Final = _RUST_FIELDS.validate_python(fields)
+    rendered: Final = " ".join(f"{name}={safe_dumps(value)}" for name, value in named.items())
+    base64_limit: Final = _get_max_base64_length_stdout_log()
+    collapsed: Final = _collapse_base64_runs(rendered, base64_limit) if base64_limit > 0 else rendered
+    text_limit: Final = _get_max_string_length_stdout_log() if record.levelno >= logging.INFO else 0
+    bounded: Final = _truncate_for_stdout_log(collapsed, text_limit) if 0 < text_limit < len(collapsed) else collapsed
+    return f" [{bounded}]"
+
+
 class CorrelationPlainFormatter(logging.Formatter):
     """Appends trace_id/session_id to plain-text log lines stamped by CorrelationContextFilter.
 
@@ -869,7 +888,8 @@ class CorrelationPlainFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:
         rendered: Final = super().format(record)
         uncolored: Final = rendered if self._fmt == _COLOR_LOG_FORMAT else _ANSI_ESCAPE.sub("", rendered)
-        formatted: Final = uncolored if _is_redacted(record) else redact_string(uncolored)
+        with_fields: Final = uncolored + _rust_fields_suffix(record)
+        formatted: Final = with_fields if _is_redacted(record) else redact_string(with_fields)
         trace_id: Final = getattr(record, "trace_id", None)
         session_id: Final = getattr(record, "session_id", None)
         if not trace_id and not session_id:
@@ -921,7 +941,7 @@ def _thread_message(args: threading.ExceptHookArgs) -> str:
 
 
 # Function to set up exception handlers for JSON logging
-def _setup_json_exception_handlers(formatter):
+def _setup_json_exception_handlers(formatter: Formatter):
     # Create a handler with JSON formatting for exceptions
     error_handler: Final = LevelRoutingStreamHandler()
     error_handler.setFormatter(formatter)
@@ -960,7 +980,7 @@ def _setup_json_exception_handlers(formatter):
     try:
         import asyncio
 
-        def async_json_exception_handler(loop, context):
+        def async_json_exception_handler(loop: asyncio.AbstractEventLoop, context):
             exception: Final = context.get("exception")
             if exception:
                 error_handler.handle(

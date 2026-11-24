@@ -1,4 +1,6 @@
 import json
+import logging
+import time
 from collections.abc import Sequence
 from typing import Final
 
@@ -6,6 +8,7 @@ import pytest
 from pydantic import TypeAdapter, ValidationError
 
 from litellm._internal_context import current_service_target
+from litellm._logging import verbose_logger
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.caching.redis_cache import RedisCache
 from litellm.constants import AUTH_OBJECTS_TARGET
@@ -160,6 +163,38 @@ def test_connect_invalidation_builds_the_channel_over_native_stores() -> None:
 
     assert invalidation is not None
     assert invalidation.channel == "tenant:litellm_proxy.auth_cache_invalidation"
+
+
+class _Lines(logging.Handler):
+    def __init__(self) -> None:
+        super().__init__(logging.WARNING)
+        self.lines: tuple[str, ...] = ()
+
+    def emit(self, record: logging.LogRecord) -> None:
+        self.lines = (*self.lines, record.getMessage())
+
+
+def test_a_publish_redis_refuses_is_logged_on_one_line_with_its_cache_key_escaped() -> None:
+    invalidation: Final = connect_invalidation(
+        connect(RedisCache(host="127.0.0.1", port=1)),
+        None,
+        UserApiKeyCache().store,
+        _native_spend_counters(),
+        PythonCaches(),
+    )
+    assert invalidation is not None
+    handler: Final = _Lines()
+    verbose_logger.addHandler(handler)
+    try:
+        assert invalidation.publish("team_alias:a\nforged")
+        deadline: Final = time.monotonic() + 10
+        while not handler.lines and time.monotonic() < deadline:
+            time.sleep(0.05)
+    finally:
+        verbose_logger.removeHandler(handler)
+
+    expected: Final = 'auth cache invalidation publish for "team_alias:a\\nforged" failed'
+    assert any(line.startswith(expected) and "\n" not in line for line in handler.lines), handler.lines
 
 
 class _TargetRecordingChannel(FakeChannel):

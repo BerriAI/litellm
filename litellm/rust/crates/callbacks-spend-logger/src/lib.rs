@@ -42,8 +42,8 @@ use litellm_callbacks::{
     Subscription, Verdict, typed,
 };
 use litellm_callbacks_budgets::Budgets;
+use litellm_redaction::TokenRedactor;
 use litellm_spend_log_writer::{LedgerStore, SpendLogWriter};
-use litellm_tracing::TokenRedactor;
 
 pub use hook_input::SpendLogInput;
 
