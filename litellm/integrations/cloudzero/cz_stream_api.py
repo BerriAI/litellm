@@ -19,13 +19,25 @@
 """Output modules for writing CBF data to various destinations."""
 
 import zoneinfo
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from datetime import datetime, timezone
-from typing import Final
+from typing import Final, Literal, Protocol
 
 import httpx
 import polars as pl
 from rich.console import Console
+
+
+class _ConsolePrinter(Protocol):
+    def print(self, *objects: object) -> None: ...
+
+
+class _CBFFrame(Protocol):
+    def is_empty(self) -> bool: ...
+
+    def __len__(self) -> int: ...
+
+    def iter_rows(self, *, named: Literal[True]) -> Iterator[dict[str, object]]: ...
 
 
 class CloudZeroStreamer:
@@ -36,7 +48,7 @@ class CloudZeroStreamer:
         self.api_key = api_key
         self.connection_id = connection_id
         self.base_url = "https://api.cloudzero.com"
-        self.console = Console()
+        self.console: _ConsolePrinter = Console()
 
         # Set timezone - default to UTC
         self.user_timezone: zoneinfo.ZoneInfo | timezone
@@ -153,7 +165,7 @@ class CloudZeroStreamer:
         except ValueError as e:
             raise ValueError(f"Could not parse timestamp '{timestamp_str}': {e}")
 
-    def _send_daily_batch(self, batch_date: str, batch_data: pl.DataFrame, operation: str) -> None:
+    def _send_daily_batch(self, batch_date: str, batch_data: _CBFFrame, operation: str) -> None:
         """Send a single daily batch to CloudZero API."""
         if batch_data.is_empty():
             return
@@ -189,7 +201,7 @@ class CloudZeroStreamer:
             )
             raise
 
-    def _prepare_batch_payload(self, batch_date: str, batch_data: pl.DataFrame, operation: str) -> Mapping[str, object]:
+    def _prepare_batch_payload(self, batch_date: str, batch_data: _CBFFrame, operation: str) -> Mapping[str, object]:
         """Prepare batch payload according to CloudZero AnyCost API format."""
         # Convert batch_date to month for the API (YYYY-MM format)
         try:
@@ -200,7 +212,7 @@ class CloudZeroStreamer:
             month_str = datetime.now().strftime("%Y-%m")
 
         # Convert DataFrame rows to API format
-        data_records: Final = []
+        data_records: Final[list[dict[str, object]]] = []
         for row in batch_data.iter_rows(named=True):
             record = self._convert_cbf_to_api_format(row)
             if record:

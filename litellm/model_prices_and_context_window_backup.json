@@ -30581,6 +30581,8 @@
         "supports_tool_choice": true
     },
     "gemini-2.5-flash": {
+        "supports_media_in_tool_response": false,
+        "supports_part_media_resolution": false,
         "cache_read_input_audio_token_cost": 1e-07,
         "cache_read_input_audio_token_cost_priority": 1.8e-07,
         "cache_read_input_token_cost": 3e-08,
@@ -32715,6 +32717,8 @@
         }
     },
     "gemini/gemini-2.5-flash": {
+        "supports_media_in_tool_response": false,
+        "supports_part_media_resolution": false,
         "cache_read_input_audio_token_cost": 1e-07,
         "cache_read_input_audio_token_cost_batches": 1e-07,
         "cache_read_input_audio_token_cost_flex": 1e-07,
@@ -68614,6 +68618,15 @@
                 }
             },
             {
+                "name": "claude-server-side-fallback",
+                "pattern": "claude-[a-z]+-(?:4[-._](?:[5-9]|[1-9]\\d)(?!\\d)|[5-9](?!\\d)(?:[-._]\\d{1,2}(?!\\d))?)",
+                "fill_missing_for_providers": ["bedrock", "bedrock_converse", "bedrock_mantle", "databricks"],
+                "description": "Claude at version 4.5 or higher, with the same id shapes and version boundaries as claude-per-turn-control. Bedrock Invoke rejects the server-side-fallback-2026-06-01 beta on Opus 4.1 with 400 invalid beta flag and takes it on Haiku 4.5, Sonnet 4.5 and every newer Claude. On 2026-11-23 Databricks answered 200 with the beta on databricks-claude-haiku-4-5 and databricks-claude-sonnet-4-5 and 400 invalid beta flag on databricks-claude-opus-4-1. Without drop_params, Bedrock Invoke, Mantle and Databricks forward the beta on every model and the provider answers its own 400. Under drop_params they drop it where this flag is unset. A deployment overrides the flag with model_info supports_server_side_fallback.",
+                "model_info": {
+                    "supports_server_side_fallback": true
+                }
+            },
+            {
                 "name": "wandb-reasoning-baseline",
                 "pattern": "^wandb/",
                 "description": "Any Weights & Biases Inference model id, anchored to the wandb/ namespace so only that provider's ids match. W&B's serverless catalog is reasoning-first and grows faster than this registry names it, so an id the map has not described yet is treated as reasoning-capable and keeps the caller's reasoning_effort instead of dropping it or raising UnsupportedParamsError. Rules lose to exact entries, so a mapped non-reasoning model such as wandb/meta-llama/Llama-3.1-8B-Instruct is unaffected. Carries no mode and no pricing, so cost stays on the standard unpriced behavior and the deployment does not read as catalog-mapped to the router's reasoning-effort resolver.",
@@ -68636,6 +68649,16 @@
                 "description": "OpenAI reasoning families by id shape, under any provider namespace and with an optional ft: prefix: the o-series (o1, o3-pro, o4-mini), gpt-5 through gpt-9 majors including dotted minors and suffixed variants (gpt-5.5-cyber, gpt-6-astra), and the codex, deep-research and chat-latest lines when standalone or on a gpt base. gpt-5-search-api is excluded because it is a search-only surface. Every model here is a reasoning model, and the Responses API drops the caller's reasoning param for any mapped OpenAI model whose info lacks supports_reasoning, so an id the registry has not named yet keeps its reasoning settings instead of silently losing them. Rules lose to exact entries. Carries no mode and no pricing, so cost stays on the standard unpriced behavior.",
                 "model_info": {
                     "supports_reasoning": true
+                }
+            },
+            {
+                "name": "gemini-multimodal-tool-media",
+                "pattern": "^gemini/gemini-(?!.*(?:-tts|-image|-live|-audio|-embedding|-computer-use|-robotics|-transcribe|-translate))(?:[3-9]|[1-9][0-9]+)(?:\\.\\d+)?-(?:pro|flash|argon)(?:-|$)",
+                "fill_missing_for_providers": ["gemini", "vertex_ai", "vertex_ai_beta", "vertex_ai-language-models"],
+                "description": "Gemini 3 and later chat families accept per-part media resolution and nested media in tool responses.",
+                "model_info": {
+                    "supports_media_in_tool_response": true,
+                    "supports_part_media_resolution": true
                 }
             },
             {
@@ -80348,6 +80371,8 @@
         "supports_vision": true
     },
     "vertex_ai/gemini-2.0-flash": {
+        "supports_media_in_tool_response": false,
+        "supports_part_media_resolution": false,
         "deprecation_date": "2026-06-01",
         "deprecation_source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/model-versions",
         "successor_model": "vertex_ai/gemini-3.5-flash-lite",
@@ -84868,6 +84893,8 @@
         "web_search_billing_unit": "per_query"
     },
     "gemini/gemini-4-argon": {
+        "supports_media_in_tool_response": true,
+        "supports_part_media_resolution": true,
         "cache_read_input_token_cost": 1e-07,
         "cache_read_input_token_cost_batches": 5e-08,
         "cache_read_input_token_cost_flex": 5e-08,
@@ -84927,6 +84954,8 @@
         "web_search_billing_unit": "per_query"
     },
     "vertex_ai/gemini-4-argon": {
+        "supports_media_in_tool_response": true,
+        "supports_part_media_resolution": true,
         "cache_read_input_token_cost": 1e-07,
         "cache_read_input_token_cost_batches": 5e-08,
         "cache_read_input_token_cost_priority": 1.8e-07,

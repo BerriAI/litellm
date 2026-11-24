@@ -1,4 +1,4 @@
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from types import MappingProxyType
 from typing import Final
 
@@ -15,34 +15,34 @@ class FeatherlessAIConfig(OpenAIGPTConfig):
     """
 
     frequency_penalty: int | None = None
-    function_call: str | dict | None = None
-    functions: list | None = None
-    logit_bias: dict | None = None
+    function_call: str | dict[str, object] | None = None
+    functions: list[object] | None = None
+    logit_bias: dict[str, object] | None = None
     max_tokens: int | None = None
     n: int | None = None
     presence_penalty: int | None = None
-    stop: str | list | None = None
+    stop: str | list[object] | None = None
     temperature: int | None = None
     top_p: int | None = None
-    response_format: dict | None = None
+    response_format: dict[str, object] | None = None
     tool_choice: str | None = None
-    tools: list | None = None
+    tools: list[object] | None = None
 
     def __init__(
         self,
         frequency_penalty: int | None = None,
-        function_call: str | dict | None = None,
-        functions: list | None = None,
-        logit_bias: dict | None = None,
+        function_call: str | Mapping[str, object] | None = None,
+        functions: Sequence[object] | None = None,
+        logit_bias: Mapping[str, object] | None = None,
         max_tokens: int | None = None,
         n: int | None = None,
         presence_penalty: int | None = None,
-        stop: str | list | None = None,
+        stop: str | Sequence[object] | None = None,
         temperature: int | None = None,
         top_p: int | None = None,
-        response_format: dict | None = None,
+        response_format: Mapping[str, object] | None = None,
         tool_choice: str | None = None,
-        tools: list | None = None,
+        tools: Sequence[object] | None = None,
     ) -> None:
         locals_: Final[Mapping[str, object]] = MappingProxyType(locals().copy())
         for key, value in locals_.items():
@@ -71,11 +71,11 @@ class FeatherlessAIConfig(OpenAIGPTConfig):
 
     def map_openai_params(
         self,
-        non_default_params: dict,
-        optional_params: dict,
+        non_default_params: Mapping[str, object],
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:
         supported_openai_params: Final = self.get_supported_openai_params(model=model)
         for param, value in non_default_params.items():
             if param == "tool_choice" or param == "tools":
@@ -121,14 +121,14 @@ class FeatherlessAIConfig(OpenAIGPTConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, object],
         model: str,
-        messages: list,
-        optional_params: dict,
-        litellm_params: dict,
+        messages: Sequence[object],
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         if not api_key:
             raise ValueError("Missing Featherless AI API Key")
 

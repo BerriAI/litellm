@@ -1,4 +1,5 @@
 import inspect
+import json
 import time
 import types
 from collections.abc import AsyncIterator, Callable, Coroutine, Iterable, Iterator, Mapping, Sequence
@@ -32,6 +33,13 @@ from litellm._logging import WarningLogger, verbose_logger
 from litellm.constants import DEFAULT_MAX_RETRIES
 from litellm.exceptions import UnsupportedParamsError
 from litellm.files.types import FileContentStreamingResult
+from litellm.images.streaming import (
+    ImageStream,
+    image_generation_stream_requested,
+    openai_image_generation_async_stream,
+    openai_image_generation_stream,
+)
+from litellm.litellm_core_utils.audio_utils.transcription_streaming import litellm_exception_mapper
 from litellm.litellm_core_utils.chat_completion_agentic_loop import (
     bill_first_round_on_failure,
     run_chat_completion_agentic_hooks,
@@ -1545,7 +1553,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
     async def aimage_generation(
         self,
         prompt: str,
-        data: dict,
+        data: Mapping[str, Any],
         model_response: ModelResponse,
         timeout: float,
         logging_obj: LiteLLMLoggingObj,
@@ -1581,10 +1589,19 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
             )
 
             request_data: Final = {**data, "extra_headers": headers} if headers else data
+            streams: Final = image_generation_stream_requested(data.get("stream"), data.get("extra_body"))
             raw_response: Final = await openai_aclient.images.with_raw_response.generate(
-                **request_data, timeout=timeout
+                **({**request_data, "stream": True} if streams else request_data), timeout=timeout
             )
-            stringified_response: Final = raw_response.parse().model_dump()
+            if streams:
+                async_stream: Final = openai_image_generation_async_stream(
+                    raw_response, logging_obj, litellm_exception_mapper(logging_obj.model_call_details)
+                )
+                if async_stream is not None:
+                    return async_stream
+            stringified_response: Final = (
+                json.loads(await raw_response.http_response.aread()) if streams else raw_response.parse().model_dump()
+            )
             ## LOGGING
             logging_obj.post_call(
                 input=prompt,
@@ -1613,7 +1630,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         model: str | None,
         prompt: str,
         timeout: float,
-        optional_params: dict,
+        optional_params: Mapping[str, Any],
         logging_obj: LiteLLMLoggingObj,
         api_key: str | None = None,
         api_base: str | None = None,
@@ -1623,7 +1640,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         organization: str | None = None,
         headers: dict | None = None,
         litellm_params: Mapping[str, object] | None = None,
-    ) -> ImageResponse:
+    ) -> ImageResponse | ImageStream:
         data = {}
         try:
             data = {"model": model, "prompt": prompt, **optional_params}
@@ -1672,9 +1689,19 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
 
             ## COMPLETION CALL
             request_data: Final = {**data, "extra_headers": headers} if headers else data
-            raw_response: Final = openai_client.images.with_raw_response.generate(**request_data, timeout=timeout)
-
-            response: Final = raw_response.parse().model_dump()
+            streams: Final = image_generation_stream_requested(data.get("stream"), data.get("extra_body"))
+            raw_response: Final = openai_client.images.with_raw_response.generate(
+                **({**request_data, "stream": True} if streams else request_data), timeout=timeout
+            )
+            if streams:
+                sync_stream: Final = openai_image_generation_stream(
+                    raw_response, logging_obj, litellm_exception_mapper(logging_obj.model_call_details)
+                )
+                if sync_stream is not None:
+                    return sync_stream
+            response: Final = (
+                json.loads(raw_response.http_response.read()) if streams else raw_response.parse().model_dump()
+            )
             ## LOGGING
             logging_obj.post_call(
                 input=prompt,

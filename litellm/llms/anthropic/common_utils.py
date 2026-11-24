@@ -28,7 +28,12 @@ from litellm.constants import (
     DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET,
 )
 from litellm.exceptions import UnsupportedParamsError
-from litellm.litellm_core_utils.core_helpers import as_object_list, as_str_mapping, lax_bool
+from litellm.litellm_core_utils.core_helpers import (
+    as_object_list,
+    as_str_mapping,
+    drops_unsupported_params,
+    lax_bool,
+)
 from litellm.litellm_core_utils.prompt_templates.factory import THOUGHT_SIGNATURE_SEPARATOR
 from litellm.litellm_core_utils.prompt_templates.file_id_utils import (
     get_file_ids_from_messages,
@@ -105,6 +110,11 @@ DROP_DISABLED_THINKING_WARNING: Final = (
     "Dropping `thinking={'type': 'disabled'}` for model=%s: thinking is always on for this model and cannot be "
     "disabled (the alternative is a provider 400). The model will still think adaptively, its response can contain "
     "thinking blocks, and those thinking tokens are billed as output tokens."
+)
+DROP_SERVER_SIDE_FALLBACK_BETA_WARNING: Final = (
+    "Dropping the %s beta for model=%s (drop_params=True): neither its model_info nor the model cost map lists "
+    "server-side fallback support for it. Set model_info.supports_server_side_fallback: true on a deployment whose "
+    "model supports it."
 )
 
 # Anthropic error `type` (both the JSON error body and SSE `event: error`
@@ -586,6 +596,33 @@ def merge_anthropic_beta_headers(existing: str | Sequence[str] | None, new_beta:
     joined: Final = ",".join(_beta_header_values(existing) + _beta_header_values(new_beta))
     betas: Final = frozenset(b.strip() for b in joined.split(",") if b.strip())
     return ",".join(sorted(betas))
+
+
+def supports_server_side_fallback(
+    model: str, custom_llm_provider: str, model_info: Mapping[str, object] | None
+) -> bool:
+    declared: Final = None if model_info is None else model_info.get("supports_server_side_fallback")
+    if isinstance(declared, bool):
+        return declared
+    return AnthropicModelInfo.supports_model_capability(model, "supports_server_side_fallback", custom_llm_provider)
+
+
+def without_unsupported_server_side_fallback_beta(
+    betas: Sequence[str],
+    model: str,
+    custom_llm_provider: str,
+    model_info: Mapping[str, object] | None,
+    drop_params: object,
+) -> tuple[str, ...]:
+    fallback_beta: Final = ANTHROPIC_BETA_HEADER_VALUES.SERVER_SIDE_FALLBACK_2026_06_01.value
+    if (
+        fallback_beta not in betas
+        or not drops_unsupported_params(drop_params)
+        or supports_server_side_fallback(model, custom_llm_provider, model_info)
+    ):
+        return tuple(betas)
+    litellm.verbose_logger.warning(DROP_SERVER_SIDE_FALLBACK_BETA_WARNING, fallback_beta, model)
+    return tuple(beta for beta in betas if beta != fallback_beta)
 
 
 def anthropic_oauth_token_from_header(value: object) -> str | None:
@@ -2948,7 +2985,7 @@ def normalize_cache_control_in_anthropic_payload(
     return {key: _with_portable_cache_control_in_scoped_value(key, value) for key, value in portable.items()}
 
 
-def process_anthropic_headers(headers: httpx.Headers | dict) -> dict:
+def process_anthropic_headers(headers: httpx.Headers | Mapping[str, str]) -> dict[str, str]:
     openai_headers: Final = {}
     if "anthropic-ratelimit-requests-limit" in headers:
         openai_headers["x-ratelimit-limit-requests"] = headers["anthropic-ratelimit-requests-limit"]

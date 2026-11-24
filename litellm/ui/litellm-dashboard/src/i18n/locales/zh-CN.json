@@ -18,7 +18,6 @@
     "statusUnavailable": "无法获取 Lens 连接状态",
     "notConfigured": "请配置网关的 Lens 连接以记录追踪"
   },
-
   "apps": {
     "title": "应用",
     "list": {
@@ -16343,7 +16342,42 @@
       "format": {
         "label": "格式",
         "csv": "CSV（Excel、Google 表格）",
-        "json": "JSON（包含元数据）"
+        "json": "JSON（包含元数据）",
+        "pdf": "PDF（可打印报告）"
+      },
+      "report": {
+        "frameTitle": "用量报告",
+        "summary": {
+          "title": "汇总",
+          "spend": "总花费",
+          "requests": "请求数",
+          "successful": "成功请求",
+          "failed": "失败请求",
+          "tokens": "总令牌数",
+          "promptTokens": "提示令牌",
+          "completionTokens": "补全令牌"
+        },
+        "breakdown": "明细",
+        "columns": {
+          "date": "日期",
+          "key": "密钥",
+          "model": "模型",
+          "user": "用户",
+          "spend": "花费",
+          "requests": "请求数",
+          "successful": "成功",
+          "failed": "失败",
+          "promptTokens": "提示令牌",
+          "completionTokens": "补全令牌"
+        },
+        "meta": {
+          "dateRange": "日期范围",
+          "exportType": "导出类型",
+          "filters": "筛选条件",
+          "generated": "生成时间"
+        },
+        "truncated": "仅显示前 {{shown}} 行，共 {{total}} 行。汇总涵盖所有行。如需完整明细，请导出 CSV。",
+        "empty": "此日期范围内没有用量"
       },
       "summary": {
         "filterCount_one": "{{count}} 个筛选条件",

@@ -5111,6 +5111,7 @@ def test_compact_request_drops_params_compact_rejects_under_drop_params(
             "store": False,
             "truncation": "auto",
             "max_output_tokens": 100,
+            "background_options": {"completion_window": "2h"},
             "tool_choice": "auto",
             "reasoning": {"effort": "low"},
             "include": ["reasoning.encrypted_content"],
