@@ -856,10 +856,6 @@ class _ExportLedger(SpanExporter):
 
 
 def _media_field(key: str) -> MediaField | None:
-    """Model parameters hold the request messages of a call that failed before it reached the provider. Langfuse
-    has no media field for them, so their media is filed as metadata."""
-    if key == LangfuseOtelSpanAttributes.OBSERVATION_MODEL_PARAMETERS:
-        return "metadata"
     return next((field for field, group in zip(_MEDIA_FIELDS, _TRUNCATION_GROUPS) if _in_group(key, group)), None)
 
 
