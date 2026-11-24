@@ -180,7 +180,7 @@ class VertexAIPartnerModelsTokenCounter(VertexBase):
         # Note: Partner models (especially Claude) accept Anthropic Messages API format directly
         response: Final = await async_client.post(
             endpoint_url,
-            headers=headers,
+            headers=dict(headers),
             json=request_data,
             timeout=30.0,
         )

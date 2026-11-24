@@ -167,20 +167,15 @@ def extract_search_results_text(search_results: object) -> str:
     return texts
 
 
-def _rendered_block_text(block: object) -> str:
+def is_unrendered_block(block: object) -> bool:
     fields: Final = as_str_mapping(block)
-    if fields is None or fields.get("type") in ANTHROPIC_UNRENDERED_BLOCK_TYPES:
-        return ""
-    text: Final = fields.get("text")
-    return text if isinstance(text, str) else ""
+    block_type: Final = None if fields is None else fields.get("type")
+    return isinstance(block_type, str) and block_type in ANTHROPIC_UNRENDERED_BLOCK_TYPES
 
 
-def _content_text(message: Mapping[str, object]) -> str:
-    content: Final = message.get("content")
-    if isinstance(content, str):
-        return content
-    blocks: Final = as_object_list(content)
-    return "" if blocks is None else "".join(map(_rendered_block_text, blocks))
+def is_unrendered_block_without_text(block: object) -> bool:
+    fields: Final = as_str_mapping(block)
+    return fields is not None and is_unrendered_block(fields) and "text" not in fields
 
 
 def convert_content_list_to_str(
@@ -192,7 +187,19 @@ def convert_content_list_to_str(
 
     Motivation: mistral api + azure ai don't support content as a list
     """
-    return _content_text(message) + extract_search_results_text(message.get("search_results"))
+    texts = ""
+    message_content: Final = message.get("content")
+    if message_content:
+        if message_content is not None and isinstance(message_content, list):
+            for c in message_content:
+                text_content = c.get("text")
+                if text_content:
+                    texts += text_content
+        elif message_content is not None and isinstance(message_content, str):
+            texts = message_content
+
+    texts += extract_search_results_text(message.get("search_results"))
+    return texts
 
 
 def get_str_from_messages(messages: list[AllMessageValues]) -> str:

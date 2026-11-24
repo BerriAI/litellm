@@ -2283,19 +2283,13 @@ def test_get_semantic_cache_prompt_from_messages_matches_get_str_from_messages_w
     assert get_semantic_cache_prompt_from_messages(messages) == get_str_from_messages(messages)
 
 
-def test_get_str_from_messages_leaves_out_the_text_of_an_echoed_fallback_block() -> None:
-    history: Final = [
-        {"role": "user", "content": "Hi"},
-        {"role": "assistant", "content": [{"type": "text", "text": "Hello"}]},
-    ]
-    echoed: Final = [
-        history[0],
-        {
-            "role": "assistant",
-            "content": [{"type": "fallback", "text": "not rendered"}, {"type": "text", "text": "Hello"}],
-        },
-    ]
-    assert get_str_from_messages(echoed) == get_str_from_messages(history)
+def test_get_str_from_messages_keeps_the_text_a_fallback_block_carries_like_a_text_block() -> None:
+    user_turn: Final = {"role": "user", "content": "Hi"}
+    reply: Final = {"type": "text", "text": "Hello"}
+    with_fallback: Final = [user_turn, {"role": "assistant", "content": [{"type": "fallback", "text": "carried"}, reply]}]
+    with_text: Final = [user_turn, {"role": "assistant", "content": [{"type": "text", "text": "carried"}, reply]}]
+
+    assert get_str_from_messages(with_fallback) == get_str_from_messages(with_text)
 
 
 def test_cache_control_is_replaced_by_an_explicit_prompt_cache_breakpoint_on_the_same_block() -> None:

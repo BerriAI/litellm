@@ -5198,6 +5198,31 @@ def test_convert_chat_completion_messages_to_responses_api_tool_result_with_tool
     assert function_call_output["output"] == [{"type": "input_text", "text": "1 tool found"}]
 
 
+@pytest.mark.parametrize(
+    ("carried", "expected_middle"),
+    ((None, ()), ("carried", ({"type": "output_text", "text": "carried"},))),
+)
+def test_convert_chat_completion_messages_to_responses_api_sends_only_the_text_a_fallback_block_carries(
+    carried: str | None, expected_middle: tuple[dict[str, str], ...]
+) -> None:
+    fallback_block: Final = {
+        "type": "fallback",
+        "from": {"model": "first-model"},
+        "to": {"model": "second-model"},
+        "trigger": {"type": "refusal", "category": "cyber"},
+        **({} if carried is None else {"text": carried}),
+    }
+    reply: Final = {"type": "text", "text": "Hello"}
+    sent_reply: Final = {"type": "output_text", "text": "Hello"}
+
+    response, _ = LiteLLMResponsesTransformationHandler().convert_chat_completion_messages_to_responses_api(
+        [{"role": "user", "content": "hi"}, {"role": "assistant", "content": [reply, fallback_block, reply]}]
+    )
+
+    assistant_message: Final = next(item for item in response if item.get("role") == "assistant")
+    assert assistant_message["content"] == [sent_reply, *expected_middle, sent_reply]
+
+
 def _litellm_encoded_response_id(upstream_id: str) -> str:
     from litellm.responses.utils import ResponsesAPIRequestUtils
 

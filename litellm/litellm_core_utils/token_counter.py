@@ -43,7 +43,6 @@ from litellm.litellm_core_utils.url_utils import safe_get
 from litellm.llms.custom_httpx.http_handler import get_httpx_client
 from litellm.rust_bridge.tokenizer import get_encoding
 from litellm.types.llms.anthropic import (
-    ANTHROPIC_UNRENDERED_BLOCK_TYPES,
     AnthropicContentParamSource,
     AnthropicContentParamSourceFileId,
     AnthropicContentParamSourceUrl,
@@ -972,10 +971,8 @@ def _count_content_list(
         for c in content_list:
             if isinstance(c, str):
                 num_tokens += count_function(c)
-            elif c["type"] == "text":
+            elif c["type"] in ("text", "fallback"):
                 num_tokens += count_function(str(c.get("text", "")))
-            elif c["type"] in ANTHROPIC_UNRENDERED_BLOCK_TYPES:
-                continue
             elif c["type"] == "image_url":
                 image_url = c.get("image_url")
                 num_tokens += _count_image_tokens(image_url, use_default_image_token_count)
