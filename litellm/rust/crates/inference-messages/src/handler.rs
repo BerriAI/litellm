@@ -164,6 +164,7 @@ pub(super) async fn execute(
         model,
         call,
         secrets.as_ref(),
+        route.transport.is_some(),
         context,
     )
     .boxed()

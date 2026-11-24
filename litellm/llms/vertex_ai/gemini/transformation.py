@@ -27,6 +27,7 @@ from litellm.litellm_core_utils.core_helpers import (
     has_attributes,
 )
 from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
+from litellm.litellm_core_utils.prompt_templates.common_utils import is_blank_content
 from litellm.litellm_core_utils.prompt_templates.factory import (
     THOUGHT_SIGNATURE_SEPARATOR,
     GeminiMediaSource,
@@ -1033,11 +1034,27 @@ def _gemini_history_media_part(
     return checked_gemini_video_part(content, part, model=model, custom_llm_provider=provider, drop_params=drop_params)
 
 
+def _is_blank_user_message(message: AllMessageValues) -> bool:
+    fields: Final = as_str_mapping(message)
+    return fields is not None and is_blank_content(fields.get("content"))
+
+
+def _gemini_blank_last_user_turn(
+    last_user_span: Sequence[AllMessageValues], contents: Sequence[ContentType]
+) -> ContentType | None:
+    if not last_user_span or not all(map(_is_blank_user_message, last_user_span)):
+        return None
+    if contents and contents[-1].get("role") == "user":
+        return None
+    return ContentType(role="user", parts=[PartType(text=" ")])
+
+
 def gemini_convert_messages_with_history(
     messages: list[AllMessageValues],
     model: str | None = None,
     litellm_params: dict | None = None,
     custom_llm_provider: str | None = None,
+    ends_request: bool = True,
 ) -> list[ContentType]:
     """
     Converts given messages from OpenAI format to Gemini format
@@ -1102,7 +1119,13 @@ def gemini_convert_messages_with_history(
 
                 msg_i += 1
 
-            if user_content:
+            if (
+                ends_request
+                and msg_i == len(messages)
+                and (blank_user_turn := _gemini_blank_last_user_turn(messages[init_msg_i:], contents)) is not None
+            ):
+                contents.append(blank_user_turn)
+            elif user_content:
                 """
                 check that user_content has 'text' parameter.
                     - Known Vertex Error: Unable to submit request because it must have a text parameter.
