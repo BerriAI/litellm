@@ -11,14 +11,17 @@ from __future__ import annotations
 
 import asyncio
 import threading
+from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import AbstractContextManager
 from dataclasses import dataclass, field
-from typing import Final
+from typing import Final, Protocol
 from unittest.mock import MagicMock
 
 import httpx
 import pytest
 import respx
+from fastapi.testclient import TestClient
 
 import litellm
 from litellm import Router
@@ -312,6 +315,16 @@ def test_anthropic_display_name_resolved_via_internal_team_key(client, auth_as, 
     assert (entry["id"], entry["display_name"]) == ("gpt-4-team", "Team GPT")
 
 
+class _AuthAs(Protocol):
+    def __call__(
+        self,
+        role: LitellmUserRoles | None = None,
+        *,
+        team_id: str | None = None,
+        team_models: list[str] | None = None,
+    ) -> AbstractContextManager[UserAPIKeyAuth]: ...
+
+
 @pytest.fixture
 def router_with_model_descriptions(monkeypatch: pytest.MonkeyPatch) -> Router:
     monkeypatch.setattr(litellm, "model_cost", {**litellm.model_cost})
@@ -323,6 +336,16 @@ def router_with_model_descriptions(monkeypatch: pytest.MonkeyPatch) -> Router:
                 "model_info": {"description": "A configured model description"},
             },
             {"model_name": "undescribed", "litellm_params": {"model": "openai/gpt-4", "api_key": "sk-test"}},
+            {
+                "model_name": "shared",
+                "litellm_params": {"model": "openai/gpt-4", "api_key": "sk-test"},
+                "model_info": {"team_id": "team-2", "description": "Another team's description"},
+            },
+            {
+                "model_name": "shared",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "sk-test"},
+                "model_info": {"description": "A shared description"},
+            },
             {
                 "model_name": "model_name_team-1_sonnet",
                 "litellm_params": {"model": "openai/gpt-4", "api_key": "sk-test"},
@@ -342,7 +365,9 @@ def router_with_model_descriptions(monkeypatch: pytest.MonkeyPatch) -> Router:
 
 @pytest.mark.usefixtures("router_with_model_descriptions")
 @pytest.mark.parametrize("params", [{}, {"scope": "expand"}], ids=["default", "expanded"])
-def test_anthropic_format_only_includes_configured_descriptions(client, auth_as, params):
+def test_anthropic_format_only_includes_configured_descriptions(
+    client: TestClient, auth_as: _AuthAs, params: Mapping[str, str]
+) -> None:
     with auth_as():
         response = client.get("/v1/models", params=params, headers={"anthropic-version": "2023-06-01"})
 
@@ -353,13 +378,23 @@ def test_anthropic_format_only_includes_configured_descriptions(client, auth_as,
 
 
 @pytest.mark.usefixtures("router_with_model_descriptions")
-def test_anthropic_description_uses_internal_team_lookup_id(client, auth_as):
+def test_anthropic_description_uses_internal_team_lookup_id(client: TestClient, auth_as: _AuthAs) -> None:
     with auth_as(team_id="team-1", team_models=["model_name_team-1_sonnet"]):
         response = client.get("/v1/models", headers={"anthropic-version": "2023-06-01"})
 
     assert response.status_code == 200
     (row,) = response.json()["data"]
     assert (row["id"], row.get("description")) == ("team-sonnet", "A team model description")
+
+
+@pytest.mark.usefixtures("router_with_model_descriptions")
+def test_anthropic_description_uses_team_eligible_deployment(client: TestClient, auth_as: _AuthAs) -> None:
+    with auth_as(LitellmUserRoles.INTERNAL_USER, team_id="team-1", team_models=["shared"]):
+        response = client.get("/v1/models", headers={"anthropic-version": "2023-06-01"})
+
+    assert response.status_code == 200
+    (row,) = response.json()["data"]
+    assert (row["id"], row.get("description")) == ("shared", "A shared description")
 
 
 @pytest.mark.parametrize("path", ["/v1/models", "/models"])

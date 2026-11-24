@@ -60,17 +60,34 @@ def configured_display_names(
 def configured_descriptions(
     entries: Sequence[tuple[str, str]],
     llm_router: Router | None,
+    *,
+    team_id: str | None,
+    include_all_teams: bool = False,
 ) -> Mapping[str, str]:
     if llm_router is None:
         return MappingProxyType({})
     registry: Final = llm_router.registry()
     deployments: Final = (
-        (response_id, registry.deployments(lookup_id, source="first_in_group")) for response_id, lookup_id in entries
+        (
+            response_id,
+            next(
+                (
+                    deployment
+                    for deployment in registry.deployments(lookup_id, source="named") or ()
+                    if include_all_teams or registry.includes(deployment, team_id=team_id)
+                ),
+                None,
+            ),
+        )
+        for response_id, lookup_id in entries
     )
     descriptions: Final = (
-        (response_id, deployment.model_info["description"])
+        (
+            response_id,
+            cast(Mapping[object, object], deployment["model_info"]).get("description"),  # cast-ok: dict field
+        )
         for response_id, deployment in deployments
-        if deployment is not None and "description" in deployment.model_info
+        if deployment is not None and "model_info" in deployment
     )
     return MappingProxyType(
         {
