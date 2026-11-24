@@ -2094,9 +2094,8 @@ class Logging(LiteLLMLoggingBaseClass):
         self.model_info_api_key = model_info_lookup_api_key(
             self.model,
             provider if isinstance(provider, str) else None,
-            api_key
-            if isinstance(api_key, str) and api_key
-            else _bearer_token(_REQUEST_MAPPING.validate_python(additional_args).get("headers")),
+            _bearer_token(_REQUEST_MAPPING.validate_python(additional_args).get("headers"))
+            or (api_key if isinstance(api_key, str) and api_key else None),
         )
         self.model_call_details["additional_args"] = additional_args
         self.model_call_details["log_event_type"] = "pre_api_call"

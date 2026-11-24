@@ -638,8 +638,9 @@ class TestOllamaGetModelInfo:
         ("call-key", None, "environment-key", "Bearer call-key"),
         (None, None, "environment-key", "Bearer environment-key"),
         (None, {"Authorization": "Bearer header-key"}, None, "Bearer header-key"),
+        ("call-key", {"Authorization": "Bearer header-key"}, None, "Bearer header-key"),
     ],
-    ids=["no-key", "explicit-key", "environment-key", "header-key"],
+    ids=["no-key", "explicit-key", "environment-key", "header-key", "header-overrides-key"],
 )
 @pytest.mark.parametrize(
     ("model", "generation_path", "generation_body"),
