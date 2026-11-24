@@ -1115,6 +1115,36 @@ def get_dynamic_logging_metadata(
     return callback_settings_obj
 
 
+def _callback_settings_fields(callback_settings_obj: TeamCallbackMetadata) -> Mapping[str, object]:
+    callback_vars: Final = callback_settings_obj.callback_vars
+    return {
+        "success_callback": callback_settings_obj.success_callback,
+        "failure_callback": callback_settings_obj.failure_callback,
+        **({**callback_vars, TRUSTED_CALLBACK_VARS_FIELD: callback_vars} if callback_vars is not None else {}),
+    }
+
+
+def _key_metadata(user_api_key_dict: UserAPIKeyAuth) -> Mapping[str, object]:
+    return user_api_key_dict.metadata or {}  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # bare dict field
+
+
+def key_and_team_logging_fields(user_api_key_dict: UserAPIKeyAuth, proxy_config: ProxyConfig) -> Mapping[str, object]:
+    callback_settings_obj: Final = get_dynamic_logging_metadata(
+        user_api_key_dict=user_api_key_dict, proxy_config=proxy_config
+    )
+    disabled_callbacks: Final = _key_metadata(user_api_key_dict).get("litellm_disabled_callbacks")
+    return MappingProxyType(
+        {
+            **(_callback_settings_fields(callback_settings_obj) if callback_settings_obj is not None else {}),
+            **(
+                {"litellm_disabled_callbacks": disabled_callbacks}
+                if disabled_callbacks and isinstance(disabled_callbacks, list)
+                else {}
+            ),
+        }
+    )
+
+
 _get_dynamic_logging_metadata: Final = get_dynamic_logging_metadata
 
 

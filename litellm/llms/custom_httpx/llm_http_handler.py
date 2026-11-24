@@ -3,7 +3,7 @@ import copy
 import inspect
 import json
 import ssl
-from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Coroutine, Iterator, Mapping, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine, Iterator, Mapping, Sequence
 from contextlib import asynccontextmanager
 from functools import lru_cache, partial, reduce
 from types import MappingProxyType
@@ -25,6 +25,7 @@ from typing import (
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 import httpx
+import openai
 from httpx import USE_CLIENT_DEFAULT
 from httpx._types import FileContent
 from openai.types.file_deleted import FileDeleted
@@ -38,6 +39,7 @@ import litellm.types.utils
 from litellm._logging import redact_string, verbose_logger
 from litellm.anthropic_beta_headers_manager import aload_beta_headers_config, update_headers_with_filtered_beta
 from litellm.constants import MAX_FILE_LIST_LIMIT, REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES
+from litellm.exceptions import with_provider_reply
 from litellm.files.types import FileContentStreamingResult
 from litellm.litellm_core_utils.agentic_followup_kwargs import build_agentic_followup_kwargs
 from litellm.litellm_core_utils.agentic_loop_settings import (
@@ -115,16 +117,19 @@ from litellm.llms.custom_httpx.container_handler import raise_for_error_status
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
+    anchor_handler_to,
     get_async_httpx_client,
     get_httpx_client,
     header_value,
 )
+from litellm.llms.custom_httpx.stream_close import aiter_bytes_then_close
 from litellm.responses.streaming_iterator import (
     BaseResponsesAPIStreamingIterator,
     MockResponsesAPIStreamingIterator,
     ProjectQuotaCallback,
     ResponsesAPIStreamingIterator,
     ResponsesWebSocketStreaming,
+    ResponsesWsFrameCheck,
     SyncResponsesAPIStreamingIterator,
 )
 from litellm.types.containers.main import (
@@ -466,14 +471,6 @@ def _logged_file_content_request(
     return _PreparedFileContentRequest(url=url, params=params, headers=request_headers)
 
 
-async def _aiter_bytes_then_close(response: httpx.Response, *, chunk_size: int) -> AsyncGenerator[bytes, None]:
-    try:
-        async for chunk in response.aiter_bytes(chunk_size=chunk_size):
-            yield chunk
-    finally:
-        await response.aclose()
-
-
 _DECODED_BODY_STALE_HEADERS: Final[frozenset[str]] = frozenset({"content-encoding", "content-length"})
 _OPTIONAL_PARAMS: Final = TypeAdapter(Mapping[str, object])
 _JSON_OBJECT: Final = TypeAdapter(dict[str, object])
@@ -737,7 +734,7 @@ class BaseLLMHTTPHandler:
 
         fake_stream = (
             fake_stream
-            or optional_params.pop("fake_stream", False)
+            or optional_params.pop("fake_stream", False) is True
             or provider_config.should_fake_stream(model=model, custom_llm_provider=custom_llm_provider, stream=stream)
         )
 
@@ -1526,8 +1523,65 @@ class BaseLLMHTTPHandler:
         api_base: str,
         api_key: str | None,
         headers: Mapping[str, str],
-    ) -> tuple[str, dict[str, str], dict[str, object]]:
-        outbound_headers: Final = provider_config.validate_environment(headers=headers, model=model, api_key=api_key)
+        litellm_params: Mapping[str, object],
+    ) -> tuple[str, Mapping[str, str], Mapping[str, object]]:
+        outbound_headers: Final = provider_config.validate_environment(
+            headers=headers,
+            model=model,
+            api_key=api_key,
+            litellm_params=litellm_params,
+        )
+        return self._prepare_decisions_request_with_headers(
+            model=model,
+            logging_obj=logging_obj,
+            provider_config=provider_config,
+            body=body,
+            logged_body=logged_body,
+            api_base=api_base,
+            api_key=api_key,
+            outbound_headers=outbound_headers,
+        )
+
+    async def _aprepare_decisions_request(
+        self,
+        model: str,
+        logging_obj: LiteLLMLoggingObj | None,
+        provider_config: BaseDecisionsConfig,
+        body: Mapping[str, object],
+        logged_body: Mapping[str, object],
+        api_base: str,
+        api_key: str | None,
+        headers: Mapping[str, str],
+        litellm_params: Mapping[str, object],
+    ) -> tuple[str, Mapping[str, str], Mapping[str, object]]:
+        outbound_headers: Final = await provider_config.avalidate_environment(
+            headers=headers,
+            model=model,
+            api_key=api_key,
+            litellm_params=litellm_params,
+        )
+        return self._prepare_decisions_request_with_headers(
+            model=model,
+            logging_obj=logging_obj,
+            provider_config=provider_config,
+            body=body,
+            logged_body=logged_body,
+            api_base=api_base,
+            api_key=api_key,
+            outbound_headers=outbound_headers,
+        )
+
+    def _prepare_decisions_request_with_headers(
+        self,
+        model: str,
+        logging_obj: LiteLLMLoggingObj | None,
+        provider_config: BaseDecisionsConfig,
+        body: Mapping[str, object],
+        logged_body: Mapping[str, object],
+        api_base: str,
+        api_key: str | None,
+        outbound_headers: Mapping[str, str],
+    ) -> tuple[str, Mapping[str, str], Mapping[str, object]]:
         url: Final = provider_config.get_complete_url(api_base=api_base, model=model)
         data: Final = dict(body)
         if logging_obj is not None:
@@ -1564,6 +1618,7 @@ class BaseLLMHTTPHandler:
             api_base=api_base,
             api_key=api_key,
             headers=headers,
+            litellm_params=litellm_params,
         )
         signed_headers, signed_body = provider_config.sign_request(
             headers=outbound_headers,
@@ -1578,7 +1633,7 @@ class BaseLLMHTTPHandler:
             response: Final = sync_httpx_client.post(
                 url,
                 content=signed_body,
-                json=data if signed_body is None else None,
+                json=dict(data) if signed_body is None else None,
                 headers=dict(signed_headers),
                 timeout=timeout,
                 logging_obj=logging_obj,
@@ -1605,7 +1660,7 @@ class BaseLLMHTTPHandler:
         litellm_params: Mapping[str, object],
         client: AsyncHTTPHandler | None = None,
     ) -> DecisionsIRResponse:
-        url, outbound_headers, data = self._prepare_decisions_request(
+        url, outbound_headers, data = await self._aprepare_decisions_request(
             model=model,
             logging_obj=logging_obj,
             provider_config=provider_config,
@@ -1614,6 +1669,7 @@ class BaseLLMHTTPHandler:
             api_base=api_base,
             api_key=api_key,
             headers=headers,
+            litellm_params=litellm_params,
         )
         sign: Final = partial(
             provider_config.sign_request,
@@ -1636,7 +1692,7 @@ class BaseLLMHTTPHandler:
             response: Final = await async_httpx_client.post(
                 url,
                 content=signed_body,
-                json=data if signed_body is None else None,
+                json=dict(data) if signed_body is None else None,
                 headers=dict(signed_headers),
                 timeout=timeout,
                 logging_obj=logging_obj,
@@ -2002,7 +2058,7 @@ class BaseLLMHTTPHandler:
                     timeout=timeout,
                 )
         except httpx.HTTPStatusError as e:
-            raise provider_config.get_http_error_class(e)
+            raise with_provider_reply(provider_config.get_http_error_class(e), e.response)
         except Exception as e:
             raise self._handle_error(e=e, provider_config=provider_config)
 
@@ -2106,7 +2162,7 @@ class BaseLLMHTTPHandler:
                     timeout=timeout,
                 )
         except httpx.HTTPStatusError as e:
-            raise provider_config.get_http_error_class(e)
+            raise with_provider_reply(provider_config.get_http_error_class(e), e.response)
         except Exception as e:
             raise self._handle_error(e=e, provider_config=provider_config)
 
@@ -2855,12 +2911,15 @@ class BaseLLMHTTPHandler:
             )
             result: Final = final_response if final_response is not None else initial_response
             if converted_stream_requested(agentic_kwargs) and not agentic_kwargs.get("_agentic_loop_depth"):
-                return self._wrap_responses_response_as_fake_stream(
-                    result=result,
+                return MockResponsesAPIStreamingIterator(
+                    response=self._completed_result_as_raw_response(result),
                     model=model,
-                    responses_api_provider_config=responses_api_provider_config,
                     logging_obj=logging_obj,
+                    responses_api_provider_config=responses_api_provider_config,
+                    litellm_metadata=litellm_metadata,
                     custom_llm_provider=custom_llm_provider,
+                    request_data=request_context,
+                    call_type=CallTypes.responses.value,
                 )
             return result
 
@@ -3052,12 +3111,15 @@ class BaseLLMHTTPHandler:
 
         result: Final = final_response if final_response is not None else initial_response
         if converted_stream_requested(agentic_kwargs) and not agentic_kwargs.get("_agentic_loop_depth"):
-            return self._wrap_responses_response_as_fake_stream(
-                result=result,
+            return MockResponsesAPIStreamingIterator(
+                response=self._completed_result_as_raw_response(result),
                 model=model,
-                responses_api_provider_config=responses_api_provider_config,
                 logging_obj=logging_obj,
+                responses_api_provider_config=responses_api_provider_config,
+                litellm_metadata=litellm_metadata,
                 custom_llm_provider=custom_llm_provider,
+                request_data=request_context,
+                call_type=CallTypes.responses.value,
             )
         return result
 
@@ -3470,7 +3532,7 @@ class BaseLLMHTTPHandler:
         )
 
         try:
-            response: Final = sync_httpx_client.get(url=url, headers=headers, params=params)
+            response: Final = sync_httpx_client.get(url=url, headers=headers, params=params, timeout=timeout)
             response.raise_for_status()
         except Exception as e:
             raise self._handle_error(e=e, provider_config=responses_api_provider_config)
@@ -3545,7 +3607,7 @@ class BaseLLMHTTPHandler:
         )
 
         try:
-            response: Final = await async_httpx_client.get(url=url, headers=headers, params=params)
+            response: Final = await async_httpx_client.get(url=url, headers=headers, params=params, timeout=timeout)
             response.raise_for_status()
         except Exception as e:
             raise self._handle_error(e=e, provider_config=responses_api_provider_config)
@@ -5310,12 +5372,7 @@ class BaseLLMHTTPHandler:
         except Exception as e:
             raise self._handle_error(e=e, provider_config=provider_config)
 
-        if response.status_code >= 400:
-            raise provider_config.get_error_class(
-                error_message=response.text,
-                status_code=response.status_code,
-                headers=response.headers,
-            )
+        self._raise_for_provider_error_status(response=response, provider_config=provider_config)
 
         return provider_config.transform_file_content_response(
             raw_response=response,
@@ -5356,12 +5413,7 @@ class BaseLLMHTTPHandler:
         except Exception as e:
             raise self._handle_error(e=e, provider_config=provider_config)
 
-        if response.status_code >= 400:
-            raise provider_config.get_error_class(
-                error_message=response.text,
-                status_code=response.status_code,
-                headers=response.headers,
-            )
+        self._raise_for_provider_error_status(response=response, provider_config=provider_config)
 
         return provider_config.transform_file_content_response(
             raw_response=response,
@@ -5407,17 +5459,14 @@ class BaseLLMHTTPHandler:
         except Exception as e:  # noqa: BLE001  # _handle_error maps every failure kind, like the buffered fetch
             raise self._handle_error(e=e, provider_config=provider_config)
 
-        if response.status_code >= 400:
-            error_body: Final = await response.aread()
+        anchor_handler_to(response, async_httpx_client)
+        if httpx.codes.is_error(response.status_code):
+            await response.aread()
             await response.aclose()
-            raise provider_config.get_error_class(
-                error_message=error_body.decode("utf-8", errors="replace"),
-                status_code=response.status_code,
-                headers=response.headers,
-            )
+            self._raise_for_provider_error_status(response=response, provider_config=provider_config)
 
         return await provider_config.transform_file_content_stream(
-            stream_iterator=_aiter_bytes_then_close(response, chunk_size=chunk_size),
+            stream_iterator=aiter_bytes_then_close(response, chunk_size=chunk_size),
             headers=_decoded_body_headers(response),
             request_url=str(response.request.url),
             logging_obj=logging_obj,
@@ -5858,35 +5907,10 @@ class BaseLLMHTTPHandler:
                 str(e),
             )
 
-    def _wrap_responses_response_as_fake_stream(
-        self,
-        result: ResponsesAPIResponse,
-        model: str,
-        responses_api_provider_config: BaseResponsesAPIConfig,
-        logging_obj: "LiteLLMLoggingObj",
-        custom_llm_provider: str,
-    ) -> MockResponsesAPIStreamingIterator:
-        """
-        Wrap a completed responses result as a synthetic stream.
-
-        Used when an interceptor forced stream=False to run the agentic loop on
-        the non-streaming path, but the caller originally asked for streaming.
-        """
-        import httpx
-
-        from litellm.responses.streaming_iterator import (
-            MockResponsesAPIStreamingIterator,
-        )
-
+    @staticmethod
+    def _completed_result_as_raw_response(result: ResponsesAPIResponse) -> httpx.Response:
         payload: Final = result.model_dump() if hasattr(result, "model_dump") else result
-        raw_response: Final = httpx.Response(status_code=200, json=payload)
-        return MockResponsesAPIStreamingIterator(
-            response=raw_response,
-            model=model,
-            responses_api_provider_config=responses_api_provider_config,
-            logging_obj=logging_obj,
-            custom_llm_provider=custom_llm_provider,
-        )
+        return httpx.Response(status_code=200, json=payload)
 
     async def _execute_chat_completion_agentic_plan(
         self,
@@ -6367,11 +6391,15 @@ class BaseLLMHTTPHandler:
     ) -> None:
         if not httpx.codes.is_error(response.status_code):
             return
-        raise provider_config.get_error_class(
-            error_message=response.text,
-            status_code=response.status_code,
-            headers=response.headers,
-        )
+        try:
+            provider_error: Final = provider_config.get_error_class(
+                error_message=response.text,
+                status_code=response.status_code,
+                headers=response.headers,
+            )
+        except (BaseLLMException, openai.APIError) as raised_by_config:
+            raise with_provider_reply(raised_by_config, response)
+        raise with_provider_reply(provider_error, response)
 
     def _handle_error(
         self,
@@ -6421,21 +6449,27 @@ class BaseLLMHTTPHandler:
             error_headers = {}
 
         if provider_config is None:
-            raise BaseLLMException(
-                status_code=status_code,
-                message=error_text,
-                headers=error_headers,
-                status_code_is_synthesized=not isinstance(received_status_code, int),
+            raise with_provider_reply(
+                BaseLLMException(
+                    status_code=status_code,
+                    message=error_text,
+                    headers=error_headers,
+                    status_code_is_synthesized=not isinstance(received_status_code, int),
+                ),
+                error_response,
             )
 
-        provider_error: Final = provider_config.get_error_class(
-            error_message=error_text,
-            status_code=status_code,
-            headers=error_headers,
-        )
+        try:
+            provider_error: Final = provider_config.get_error_class(
+                error_message=error_text,
+                status_code=status_code,
+                headers=error_headers,
+            )
+        except (BaseLLMException, openai.APIError) as raised_by_config:
+            raise with_provider_reply(raised_by_config, error_response)
         if not isinstance(received_status_code, int):
             provider_error.status_code_is_synthesized = True
-        raise provider_error
+        raise with_provider_reply(provider_error, error_response)
 
     def handle_error(
         self,
@@ -6872,6 +6906,7 @@ class BaseLLMHTTPHandler:
         custom_llm_provider: str | None = None,
         first_message: str | None = None,
         request_defaults: ResponsesWebSocketRequestDefaults | None = None,
+        frame_check: ResponsesWsFrameCheck | None = None,
         **kwargs: object,
     ) -> Exception | None:
         """
@@ -6904,6 +6939,7 @@ class BaseLLMHTTPHandler:
                 custom_llm_provider=custom_llm_provider,
                 first_message=first_message,
                 quota_callbacks=_ws_quota_callbacks,
+                frame_check=frame_check,
                 **kwargs,
             )
             await handler.run()
@@ -12055,7 +12091,7 @@ class BaseLLMHTTPHandler:
         )
 
         if extra_headers:
-            headers.update(extra_headers)
+            headers.update(generate_content_provider_config.transform_caller_headers(extra_headers))
 
         # Get the request body from the provider config
         data: Final = generate_content_provider_config.transform_generate_content_request(
@@ -12065,9 +12101,12 @@ class BaseLLMHTTPHandler:
             generate_content_config_dict=generate_content_config_dict,
             system_instruction=system_instruction,
         )
+        request_fields: Final = generate_content_provider_config.transform_top_level_request_fields(
+            extra_body, litellm_params
+        )
 
-        if extra_body:
-            data.update(extra_body)
+        if request_fields:
+            data.update(request_fields)
 
         ## LOGGING
         logging_obj.pre_call(
@@ -12170,7 +12209,7 @@ class BaseLLMHTTPHandler:
         )
 
         if extra_headers:
-            headers.update(extra_headers)
+            headers.update(generate_content_provider_config.transform_caller_headers(extra_headers))
 
         # Get the request body from the provider config
         data: Final = generate_content_provider_config.transform_generate_content_request(
@@ -12180,9 +12219,12 @@ class BaseLLMHTTPHandler:
             generate_content_config_dict=generate_content_config_dict,
             system_instruction=system_instruction,
         )
+        request_fields: Final = generate_content_provider_config.transform_top_level_request_fields(
+            extra_body, litellm_params
+        )
 
-        if extra_body:
-            data.update(extra_body)
+        if request_fields:
+            data.update(request_fields)
 
         ## LOGGING
         logging_obj.pre_call(

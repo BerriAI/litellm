@@ -5,8 +5,9 @@ Tests for Vertex AI (Veo) video generation transformation.
 import base64
 import json
 from collections.abc import Mapping
+from types import MappingProxyType
 from pathlib import Path
-from typing import cast
+from typing import Final, cast
 from unittest.mock import Mock, patch
 
 import httpx
@@ -970,3 +971,65 @@ class TestImageAndParametersPassthrough:
         assert "parameters" not in data["parameters"]
 
         assert url.endswith(":predictLongRunning")
+
+
+_LABEL_FIELDS: Final = ("user_api_key_alias", "user_api_key_team_alias", "spend_logs_metadata")
+_IDENTITY: Final = MappingProxyType({"user_api_key_alias": "chargeback-key", "user_api_key_team_alias": "ai-platform"})
+_PROXY_METADATA: Final = MappingProxyType({**_IDENTITY, "spend_logs_metadata": {"cost-center": "cc-1"}})
+_FORGED: Final = MappingProxyType({"user_api_key_alias": "forged", "app": "bot"})
+
+
+def _veo_request_body() -> Mapping[str, object]:
+    body, _, _ = VertexAIVideoConfig().transform_video_create_request(
+        model="veo-3.1-generate-001",
+        prompt="a lighthouse at dusk",
+        api_base="https://vertex.test/models/veo-3.1-generate-001",
+        video_create_optional_request_params={"labels": dict(_FORGED), "durationSeconds": 4},
+        litellm_params=GenericLiteLLMParams(metadata=dict(_PROXY_METADATA)),
+        headers={},
+    )
+    return cast(Mapping[str, object], body)
+
+
+def test_veo_request_carries_identity_labels_only_while_the_setting_is_on(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "vertex_request_label_fields", None)
+    setting_off: Final = _veo_request_body()
+    monkeypatch.setattr(litellm, "vertex_request_label_fields", _LABEL_FIELDS)
+    setting_on: Final = _veo_request_body()
+
+    assert setting_off == {
+        "instances": [{"prompt": "a lighthouse at dusk"}],
+        "parameters": {"labels": dict(_FORGED), "durationSeconds": 4},
+    }
+    assert setting_on == {
+        "instances": [{"prompt": "a lighthouse at dusk"}],
+        "parameters": {"durationSeconds": 4},
+        "labels": {**_IDENTITY, "app": "bot", "cost-center": "cc-1"},
+    }
+    assert list(cast(Mapping[str, str], setting_on["labels"])) == [*_IDENTITY, "app", "cost-center"]
+
+
+_FORGED_LABELS_HEADER: Final = base64.b64encode(json.dumps({"user_api_key_team_alias": "forged"}).encode()).decode()
+
+
+def _veo_request_headers() -> Mapping[str, str]:
+    headers: Final = {"X-Vertex-AI-Labels": _FORGED_LABELS_HEADER, "x-trace-id": "t-1"}
+    VertexAIVideoConfig().transform_video_create_request(
+        model="veo-3.1-generate-001",
+        prompt="a lighthouse at dusk",
+        api_base="https://vertex.test/models/veo-3.1-generate-001",
+        video_create_optional_request_params={},
+        litellm_params=GenericLiteLLMParams(metadata=dict(_PROXY_METADATA)),
+        headers=headers,
+    )
+    return headers
+
+
+def test_veo_request_drops_a_caller_labels_header_only_while_the_setting_is_on(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "vertex_request_label_fields", None)
+    setting_off: Final = _veo_request_headers()
+    monkeypatch.setattr(litellm, "vertex_request_label_fields", _LABEL_FIELDS)
+    setting_on: Final = _veo_request_headers()
+
+    assert setting_off == {"X-Vertex-AI-Labels": _FORGED_LABELS_HEADER, "x-trace-id": "t-1"}
+    assert setting_on == {"x-trace-id": "t-1"}

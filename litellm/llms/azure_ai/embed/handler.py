@@ -2,10 +2,15 @@ from collections.abc import Mapping
 from typing import Final
 from urllib.parse import urlsplit, urlunsplit
 
+import httpx
 from openai import OpenAI
 
 import litellm
-from litellm.llms.azure_ai.common_utils import is_foundry_model_inference_base
+from litellm.llms.azure_ai.common_utils import (
+    OPENAI_V1_PATH,
+    is_foundry_model_inference_base,
+    is_openai_v1_resource_base,
+)
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
@@ -27,6 +32,15 @@ def _foundry_models_route_base(api_base: str | None) -> str | None:
     if path.endswith("/models"):
         return api_base
     return urlunsplit((parts.scheme, parts.netloc, f"{path}/models", parts.query, parts.fragment))
+
+
+def _embedding_api_base(api_base: str | None) -> str | None:
+    if api_base is None:
+        return None
+    base_url: Final = httpx.URL(api_base)
+    if is_openai_v1_resource_base(base_url):
+        return str(base_url.copy_with(path="/" + "/".join(OPENAI_V1_PATH), params={}))
+    return _foundry_models_route_base(api_base)
 
 
 class AzureAIEmbedding(OpenAIChatCompletion):
@@ -172,7 +186,7 @@ class AzureAIEmbedding(OpenAIChatCompletion):
                 model_response=model_response,
                 optional_params=optional_params,
                 api_key=api_key,
-                api_base=api_base,
+                api_base=_foundry_models_route_base(api_base),
                 client=client,
             )
 
@@ -189,7 +203,7 @@ class AzureAIEmbedding(OpenAIChatCompletion):
                 model_response=model_response,
                 optional_params=optional_params,
                 api_key=api_key,
-                api_base=api_base,
+                api_base=_embedding_api_base(api_base),
                 client=client,
                 aembedding=True,
             )
@@ -228,7 +242,6 @@ class AzureAIEmbedding(OpenAIChatCompletion):
 
         assemble result in-order, and return
         """
-        resolved_api_base: Final = _foundry_models_route_base(api_base)
         if aembedding is True:
             return self.async_embedding(
                 model,
@@ -238,7 +251,7 @@ class AzureAIEmbedding(OpenAIChatCompletion):
                 model_response,
                 optional_params,
                 api_key,
-                resolved_api_base,
+                api_base,
                 client,
             )
 
@@ -260,7 +273,7 @@ class AzureAIEmbedding(OpenAIChatCompletion):
                 model_response=model_response,
                 optional_params=optional_params,
                 api_key=api_key,
-                api_base=resolved_api_base,
+                api_base=_foundry_models_route_base(api_base),
                 client=client,
             )
 
@@ -277,7 +290,7 @@ class AzureAIEmbedding(OpenAIChatCompletion):
                 model_response,
                 optional_params,
                 api_key,
-                resolved_api_base,
+                _embedding_api_base(api_base),
                 client=(client if client is not None and isinstance(client, OpenAI) else None),
                 aembedding=aembedding,
                 shared_session=shared_session,

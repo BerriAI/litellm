@@ -1,4 +1,5 @@
 
+import base64
 import copy
 import json
 from collections.abc import Mapping
@@ -38,6 +39,33 @@ def test_vertex_ai_anthropic_thinking_param(model, expected_thinking):
         assert "thinking" in supported_openai_params
     else:
         assert "thinking" not in supported_openai_params
+
+
+@pytest.mark.parametrize(
+    ("labels", "headers", "expected_header"),
+    [
+        ({"team": "triage", "env": "prod"}, {}, {"team": "triage", "env": "prod"}),
+        ({"team": "triage", "cost": 3}, {}, {"team": "triage"}),
+        ({"cost": 3}, {}, None),
+        ("team=triage", {}, None),
+        ({"team": "triage"}, {"x-vertex-ai-labels": "e30="}, {}),
+    ],
+    ids=["string_labels", "non_string_values_dropped", "no_string_values", "not_a_mapping", "caller_header_wins"],
+)
+def test_vertex_anthropic_labels_move_from_body_to_header(
+    labels: object, headers: dict[str, str], expected_header: dict[str, str] | None
+) -> None:
+    body: Final = VertexAIAnthropicConfig().transform_request(
+        model="claude-sonnet-5-5",
+        messages=[{"role": "user", "content": "Hi"}],
+        optional_params={"max_tokens": 16, "anthropic_version": "vertex-2023-10-16", "labels": labels},
+        litellm_params={},
+        headers=headers,
+    )
+    sent_labels: Final = next((value for name, value in headers.items() if name.lower() == "x-vertex-ai-labels"), None)
+
+    assert "labels" not in body
+    assert (None if sent_labels is None else json.loads(base64.b64decode(sent_labels))) == expected_header
 
 
 @pytest.mark.parametrize(
@@ -1147,3 +1175,46 @@ def test_refusal_stop_details_kept_through_vertex_anthropic_transform():
     provider_fields: Final = result.choices[0].message.provider_specific_fields
     assert provider_fields["stop_reason"] == "refusal"
     assert provider_fields["stop_details"] == ANTHROPIC_DOCS_REFUSAL_MESSAGE["stop_details"]
+
+
+@pytest.mark.parametrize(
+    ("cost_map_rows", "litellm_params", "expected_max_tokens"),
+    (
+        pytest.param({"vertex_ai/claude-unit-test@20990101": 1234}, {}, 1234, id="vertex-row-fills-unmapped-bare-id"),
+        pytest.param(
+            {"claude-unit-test@20990101": 4321, "vertex_ai/claude-unit-test@20990101": 1234},
+            {},
+            4321,
+            id="own-row-first",
+        ),
+        pytest.param(
+            {"claude-unit-test": 4321, "vertex_ai/claude-unit-test@20990101": 1234},
+            {},
+            4321,
+            id="unversioned-row-before-vertex-row",
+        ),
+        pytest.param({}, {}, None, id="no-row-keeps-default"),
+    ),
+)
+def test_vertex_ai_anthropic_default_max_tokens_reads_vertex_row(
+    monkeypatch: pytest.MonkeyPatch,
+    cost_map_rows: Mapping[str, int],
+    litellm_params: Mapping[str, object],
+    expected_max_tokens: int | None,
+) -> None:
+    from litellm.constants import DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS
+
+    for key, max_output_tokens in cost_map_rows.items():
+        monkeypatch.setitem(litellm.model_cost, key, {"max_output_tokens": max_output_tokens})
+
+    result: Final = VertexAIAnthropicConfig().transform_request(
+        model="claude-unit-test@20990101",
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={},
+        litellm_params=dict(litellm_params),
+        headers={},
+    )
+
+    assert result["max_tokens"] == (
+        DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS if expected_max_tokens is None else expected_max_tokens
+    )

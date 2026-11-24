@@ -191,6 +191,11 @@ model_list:
       model: gemini/gemini-4-argon
       api_base: http://127.0.0.1:8191
       api_key: synthetic-gemini-key
+  - model_name: gemini/gemini-4-hydrogen
+    litellm_params:
+      model: gemini/gemini-4-hydrogen
+      api_base: http://127.0.0.1:8191
+      api_key: synthetic-gemini-key
   - model_name: azure_ai/claude-haiku-4-5
     litellm_params:
       model: azure_ai/claude-haiku-4-5
@@ -623,6 +628,19 @@ model_list:
       model: azure_ai/decision-1
       api_base: http://127.0.0.1:8191
       api_key: synthetic-azure-ai-key
+    model_info:
+      base_model: azure_ai/Microsoft-Decision-1
+  - model_name: azure_ai/decision-1-entra
+    litellm_params:
+      model: azure_ai/decision-1
+      api_base: os.environ/INTEGRATION_UPSTREAM_URL
+      azure_ad_token: synthetic-decisions-entra-token
+    model_info:
+      base_model: azure_ai/Microsoft-Decision-1
+  - model_name: azure_ai/decision-1-no-credentials
+    litellm_params:
+      model: azure_ai/decision-1
+      api_base: os.environ/INTEGRATION_UPSTREAM_URL
     model_info:
       base_model: azure_ai/Microsoft-Decision-1
 general_settings:
