@@ -4,7 +4,7 @@ from typing import Final, Literal, TypedDict
 import httpx
 from openai import AsyncAzureOpenAI, AzureOpenAI
 from openai.types.shared_params.metadata import Metadata
-from typing_extensions import overload
+from typing_extensions import ReadOnly, overload
 
 from ...types.llms.openai import (
     Assistant,
@@ -31,6 +31,20 @@ class _RunThreadStreamData(TypedDict):
     metadata: Metadata | None
     model: str | None
     tools: Iterable[AssistantToolParam] | None
+
+
+class _ThreadCreateData(TypedDict, total=False):
+    messages: ReadOnly[Iterable[OpenAICreateThreadParamsMessage]]
+    metadata: ReadOnly[Metadata]
+
+
+def _thread_create_data(
+    messages: Iterable[OpenAICreateThreadParamsMessage] | None, metadata: Metadata | None
+) -> _ThreadCreateData:
+    """Build the thread-create keyword arguments, leaving out the ones that are None."""
+    messages_data: Final[_ThreadCreateData] = {"messages": messages} if messages is not None else {}
+    metadata_data: Final[_ThreadCreateData] = {"metadata": metadata} if metadata is not None else {}
+    return messages_data | metadata_data
 
 
 class AzureAssistantsAPI(BaseAzureLLM):
@@ -446,11 +460,7 @@ class AzureAssistantsAPI(BaseAzureLLM):
             litellm_params=litellm_params,
         )
 
-        data: Final = {}
-        if messages is not None:
-            data["messages"] = messages
-        if metadata is not None:
-            data["metadata"] = metadata
+        data: Final = _thread_create_data(messages=messages, metadata=metadata)
 
         message_thread: Final = await openai_client.beta.threads.create(**data)
 
@@ -542,11 +552,7 @@ class AzureAssistantsAPI(BaseAzureLLM):
             litellm_params=litellm_params,
         )
 
-        data: Final = {}
-        if messages is not None:
-            data["messages"] = messages
-        if metadata is not None:
-            data["metadata"] = metadata
+        data: Final = _thread_create_data(messages=messages, metadata=metadata)
 
         message_thread: Final = azure_openai_client.beta.threads.create(**data)
 

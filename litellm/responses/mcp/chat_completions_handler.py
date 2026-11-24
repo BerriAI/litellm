@@ -239,7 +239,7 @@ async def acompletion_with_mcp(
                 self,
                 stream_wrapper: CustomStreamWrapper,
                 messages: list[object],
-                tool_server_map,
+                tool_server_map: dict[str, str],
                 user_api_key_auth: "UserAPIKeyAuth | None",
                 mcp_auth_header: str | None,
                 mcp_server_auth_headers: dict[str, dict[str, str]] | None,
@@ -636,9 +636,7 @@ async def acompletion_with_mcp(
 
             def __next__(self):
                 # Delegate to sync iterator
-                if self._sync_iterator is None:
-                    self.__iter__()
-                return next(self._sync_iterator)
+                return next(self.__iter__())
 
             def __getattr__(self, name: str) -> object:
                 # Delegate all other attributes to original wrapper
@@ -646,7 +644,7 @@ async def acompletion_with_mcp(
 
         # Helper class to wrap async iterator for sync iteration
         class _SyncIteratorWrapper:
-            def __init__(self, async_iterator, loop: asyncio.AbstractEventLoop):
+            def __init__(self, async_iterator: MCPStreamingIterator, loop: asyncio.AbstractEventLoop):
                 self._async_iterator = async_iterator
                 self._loop = loop
                 self._iterator = None
