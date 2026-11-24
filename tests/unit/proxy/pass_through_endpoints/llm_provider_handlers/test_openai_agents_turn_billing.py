@@ -1663,6 +1663,9 @@ async def test_a_turn_row_counts_toward_the_keys_tpm_limit_on_the_legacy_limiter
     limiter: Final = PROXY_MaxParallelRequestsHandler(
         internal_usage_cache=InternalUsageCache(DualCache()), clock=lambda: CALL_TIME
     )
+    proxy_logging: Final = ProxyLogging(user_api_key_cache=DualCache())
+    proxy_logging.proxy_hook_mapping["parallel_request_limiter"] = limiter
+    clock: Final = _Clock()
     key: Final = UserAPIKeyAuth(api_key=hash_token("sk-agents-legacy-tpm"), tpm_limit=7240)
     api: Final = _AgentsApi(
         turn_pages=((_turn("turn_1", CALL_STARTED_AT + 1, "completed", TURN_USAGE),),), session=_session()
@@ -1679,7 +1682,9 @@ async def test_a_turn_row_counts_toward_the_keys_tpm_limit_on_the_legacy_limiter
 
     await call("6f8b0d2f-4b6d-4f8b-9d2f-4b6d8f0b2d01")
     await _relay_call(
-        _biller(api, _Clock()),
+        OpenAIAgentsTurnBiller(
+            get=api.get, sleep=clock.sleep, clock=clock, release_request_slot=proxy_logging.arelease_slot_before_logging
+        ),
         rows,
         EVENTS_URL,
         {"events": [INPUT_MESSAGE]},
