@@ -12,10 +12,11 @@
 //! 3. Endpoint: the endpoint selected from the login and the model map
 //! 4. Dialect: the body transformed
 //! 5. Endpoint: the URL
-//! 6. Dialect: the headers and finalization that build the wire request
+//! 6. Dialect: the body sent to that URL, then the headers and finalization that build the wire
+//!    request
 //! 7. Auth: the credential applied and the request signed
 //!
-//! The retry without native output rebuilds its body through steps 4 and 6.
+//! The retry without native output rebuilds its body through steps 4 and 6, for the same URL.
 
 use std::time::Duration;
 
@@ -39,8 +40,9 @@ use litellm_llms::base_llm::{
     },
 };
 use litellm_llms_types::{
-    formats::messages::{MessagesOptionalParams, MessagesRequest},
+    formats::messages::{MessagesOptionalParams, MessagesRequest, Speed},
     headers::ProviderSpecificHeaders,
+    recognized::Recognized,
 };
 use litellm_router_types::LitellmParams;
 use litellm_secret_value::SecretValue;
@@ -50,6 +52,7 @@ use serde_json::{Map, Value};
 use super::{
     Error, MessagesCall, MessagesShaping, WorkloadIdentity,
     common_utils::{MessagesProvider, merge_messages_header_sources, string_headers},
+    pricing::RequestedPricing,
     types::invalid_request,
 };
 
@@ -70,6 +73,7 @@ pub(super) struct ProviderCall {
     pub(super) unencodable_request_header: Option<Vec<u8>>,
     pub(super) ascii_request_headers: bool,
     pub(super) connect_retry: bool,
+    pub(super) requested_pricing: RequestedPricing,
 }
 
 impl ProviderCall {
@@ -93,14 +97,18 @@ pub(super) struct NativeOutputFallback {
     input: MessagesRequest,
     context: MessagesTransformContext,
     headers: Headers,
+    url: String,
     transform: BodyTransform,
 }
 
 impl NativeOutputFallback {
     pub(super) fn body(&self, config: &dyn BaseMessagesConfig) -> Result<Value, Error> {
+        let transformed = self
+            .transform
+            .transformed(config, self.input.clone(), &self.context)?;
         let body = self
             .transform
-            .body(config, self.input.clone(), &self.context, &self.headers)?;
+            .sent_to(config, transformed, &self.headers, &self.url)?;
         Ok(finalized(config, body, self.headers.clone(), &self.context)?.wire_body)
     }
 }
@@ -113,21 +121,26 @@ struct BodyTransform {
 }
 
 impl BodyTransform {
-    fn body(
+    fn transformed(
         self,
         config: &dyn BaseMessagesConfig,
         request: MessagesRequest,
         context: &MessagesTransformContext,
-        headers: &Headers,
     ) -> Result<MessagesRequest, Error> {
-        Ok(config.request_body(
-            self.tool_custom_field.apply(
-                config.transform_anthropic_messages_request(request, context)?,
-                self.drops_unsupported_params,
-            ),
-            headers,
-            self.drop_params,
-        )?)
+        Ok(self.tool_custom_field.apply(
+            config.transform_anthropic_messages_request(request, context)?,
+            self.drops_unsupported_params,
+        ))
+    }
+
+    fn sent_to(
+        self,
+        config: &dyn BaseMessagesConfig,
+        transformed: MessagesRequest,
+        headers: &Headers,
+        url: &str,
+    ) -> Result<MessagesRequest, Error> {
+        Ok(config.request_body(transformed, headers, url, self.drop_params)?)
     }
 }
 
@@ -144,6 +157,7 @@ pub(super) async fn provider_call(
     model: String,
     call: MessagesCall,
     secrets: &(dyn Lookup + Send + Sync),
+    host_transport: bool,
     context: &CallContext<'_, impl Interceptors<Error>>,
 ) -> Result<ProviderCall, Error> {
     let MessagesCall {
@@ -175,6 +189,11 @@ pub(super) async fn provider_call(
         &transform_context,
     )?;
     let logged_params = logged_params(config, &effective, &transform_context)?;
+    let requested_pricing = RequestedPricing {
+        service_tier: effective.params.service_tier.clone(),
+        fast: effective.params.speed == Some(Recognized::Known(Speed::Fast)),
+        inject_stream_cost: false,
+    };
     let trimmed =
         without_additional_drop_params(effective, &shaping.settings.additional_drop_params)?;
 
@@ -204,6 +223,10 @@ pub(super) async fn provider_call(
     )
     .await?;
     let env_lookup = secret_lookup(secrets, deferred.as_ref());
+    let transform_context = MessagesTransformContext {
+        keeps_unsigned_thinking: !config.checks_claude_signatures(api_base.as_deref(), &env_lookup),
+        ..transform_context
+    };
 
     let connection_params = config.select_endpoint(
         connection_params,
@@ -222,21 +245,21 @@ pub(super) async fn provider_call(
     let fallback = config
         .native_output_fallback(&trimmed, &transform_context)
         .map(|fallback_context| (trimmed.clone(), fallback_context));
-    let body = transform.body(
+    let transformed = transform.transformed(
         config,
         config.without_rejected_params(trimmed, &connection_params)?,
         &transform_context,
-        &validated.headers,
     )?;
 
     let url = config.get_complete_url(
         api_base.as_deref(),
-        &body.model,
+        &transformed.model,
         &connection_params,
-        body.params.streams(),
+        transformed.params.streams(),
         &env_lookup,
     )?;
 
+    let body = transform.sent_to(config, transformed, &validated.headers, &url)?;
     let headers = outbound_headers(
         config,
         validated.headers,
@@ -248,6 +271,7 @@ pub(super) async fn provider_call(
         input,
         context,
         headers: headers.clone(),
+        url: url.clone(),
         transform,
     });
 
@@ -259,6 +283,7 @@ pub(super) async fn provider_call(
         optional_params: logged_params,
         secret_fields: Vec::new(),
         api_key: api_key.map(SecretValue::new),
+        host_transport,
     };
     let authenticated = resolve_auth(
         auth_services,
@@ -306,6 +331,7 @@ pub(super) async fn provider_call(
         unencodable_request_header: shaping.settings.unencodable_request_header,
         ascii_request_headers: shaping.settings.ascii_request_headers,
         connect_retry: shaping.settings.connect_retry,
+        requested_pricing,
     })
 }
 
@@ -459,7 +485,7 @@ fn requested_optional_params(
         return Ok(request);
     }
     if request.params.service_tier.is_some() {
-        litellm_tracing::warn!(
+        tracing::warn!(
             "Dropping `service_tier` for model={} on provider={}. Only the Anthropic API routes accept it.",
             request.model,
             provider.as_str()
@@ -766,6 +792,7 @@ mod tests {
             model,
             call,
             secrets,
+            false,
             &context,
         )
         .await
@@ -970,6 +997,130 @@ mod tests {
                 litellm_llms::ErrorDetail::UnsupportedVertexAnthropicVersion { .. }
             )))
         ));
+    }
+
+    fn call_requesting_version(
+        shaping: MessagesShaping,
+        provider: &str,
+        api_base: Option<&str>,
+        version: &str,
+        drop_params: bool,
+    ) -> MessagesCall {
+        MessagesCall {
+            body: body(
+                json!({"model": "claude-test", "messages": [{"role": "user", "content": "hi"}], "max_tokens": 16, "temperature": 1}),
+            ),
+            api_key: Some("sk-test".into()),
+            api_base: api_base.map(Into::into),
+            custom_llm_provider: Some(provider.into()),
+            litellm_params: Default::default(),
+            extra_headers: Some(Map::from_iter([(
+                "anthropic-version".to_string(),
+                json!(version),
+            )])),
+            provider_specific_header: None,
+            timeout: None,
+            shaping: MessagesShaping {
+                settings: MessagesSettings {
+                    drop_params,
+                    ..shaping.settings
+                },
+                ..shaping
+            },
+        }
+    }
+
+    #[rstest]
+    #[case::anthropic_under_sdk_2(
+        "anthropic",
+        Some("https://api.anthropic.com"),
+        "2026-10-21",
+        None
+    )]
+    #[case::anthropic_default_base_under_sdk_2("anthropic", None, "2026-10-21", None)]
+    #[case::anthropic_under_sdk_1(
+        "anthropic",
+        Some("https://api.anthropic.com"),
+        "2023-06-01",
+        Some(json!(1))
+    )]
+    #[case::non_anthropic_api_under_sdk_2(
+        "deepseek",
+        Some("https://upstream.test"),
+        "2026-10-21",
+        Some(json!(1))
+    )]
+    #[tokio::test]
+    async fn temperature_reaches_the_wire_only_under_an_api_version_that_has_it(
+        shaping: MessagesShaping,
+        #[case] provider: &str,
+        #[case] api_base: Option<&str>,
+        #[case] version: &str,
+        #[case] temperature: Option<Value>,
+    ) {
+        let call = provider_call_for(call_requesting_version(
+            shaping, provider, api_base, version, true,
+        ))
+        .await
+        .unwrap();
+        assert_eq!(call.wire.body.get("temperature").cloned(), temperature);
+    }
+
+    #[rstest]
+    #[case::deployment_api_base(Some("https://api.deepseek.com/anthropic"), &[])]
+    #[case::api_base_env(None, &[("ANTHROPIC_API_BASE", "https://api.deepseek.com/anthropic")])]
+    #[case::base_url_env(None, &[("ANTHROPIC_BASE_URL", "https://api.deepseek.com/anthropic")])]
+    #[tokio::test]
+    async fn a_third_party_anthropic_api_receives_temperature_under_2026_10_21(
+        shaping: MessagesShaping,
+        #[case] api_base: Option<&str>,
+        #[case] secrets: &[(&str, &str)],
+        #[values(false, true)] drop_params: bool,
+    ) {
+        let lookup = |name: &str| {
+            secrets
+                .iter()
+                .find(|(key, _)| *key == name)
+                .map(|(_, value)| value.to_string())
+        };
+        let call = provider_call_with_secrets(
+            call_requesting_version(shaping, "anthropic", api_base, "2026-10-21", drop_params),
+            &lookup,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            (call.wire.url.as_str(), call.wire.body.get("temperature")),
+            (
+                "https://api.deepseek.com/anthropic/v1/messages",
+                Some(&json!(1))
+            )
+        );
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn an_api_version_without_sampling_params_refuses_them_before_the_provider_call(
+        shaping: MessagesShaping,
+    ) {
+        let Err(Error::Llm(litellm_llms::Error::InvalidRequest(detail))) =
+            provider_call_for(call_requesting_version(
+                shaping,
+                "anthropic",
+                Some("https://api.anthropic.com"),
+                "2026-10-21",
+                false,
+            ))
+            .await
+        else {
+            panic!("expected an invalid request");
+        };
+        assert_eq!(
+            detail.to_string(),
+            "claude-test does not support temperature=1. anthropic-version 2026-10-21 removed \
+             temperature, top_p and top_k. To drop unsupported params, set \
+             `litellm.drop_params = True`."
+        );
     }
 
     #[rstest]

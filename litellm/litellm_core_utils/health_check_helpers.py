@@ -5,7 +5,7 @@ Helper functions for health check calls.
 import base64
 import itertools
 import re
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal
 
@@ -162,9 +162,9 @@ class HealthCheckHelpers:
     async def ahealth_check_wildcard_models(
         model: str,
         custom_llm_provider: str,
-        model_params: dict,
+        model_params: dict[str, object],
         litellm_logging_obj: "Logging",
-    ) -> dict:
+    ) -> dict[str, object]:
         from litellm import acompletion
 
         probe_models: Final = wildcard_health_check_models(wildcard=model, custom_llm_provider=custom_llm_provider)
@@ -182,8 +182,8 @@ class HealthCheckHelpers:
 
     @staticmethod
     def update_model_params_with_health_check_tracking_information(
-        model_params: dict,
-    ) -> dict:
+        model_params: dict[str, object],
+    ) -> dict[str, object]:
         """
         Updates the health check model params with tracking information.
 
@@ -226,9 +226,9 @@ class HealthCheckHelpers:
     @staticmethod
     async def _batch_health_check(
         custom_llm_provider: str,
-        model_params: dict,
+        model_params: dict[str, object],
         filtered_model_params: dict,
-    ) -> dict:
+    ) -> object:
         """
         Health check for batch mode.
 
@@ -270,7 +270,7 @@ class HealthCheckHelpers:
         custom_llm_provider: str,
         model_params: dict,
         prompt: str | None = None,
-        input: list | None = None,
+        input: Sequence[object] | None = None,
     ) -> dict[
         Literal[
             "chat",
@@ -290,7 +290,7 @@ class HealthCheckHelpers:
             "decisions",
             "extraction",
         ],
-        Callable,
+        Callable[[], Awaitable[object]],
     ]:
         """
         Returns a dictionary of mode handlers for health check calls.

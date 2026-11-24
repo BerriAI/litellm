@@ -96,7 +96,7 @@ def resolve_inference_model(
         case "body":
             return body_model
         case "path":
-            return endpoint_model
+            return endpoint_model or body_model
         case "completion":
             return settings.get("completion_model") or cli_model or endpoint_model or body_model
     return assert_never(kind)
@@ -315,18 +315,18 @@ async def read_request_body(request: Request | None) -> dict:
             return {}
 
         # Check if we already read and parsed the body
-        _cached_request_body: Final[dict | None] = _safe_get_request_parsed_body(request=request)
+        _cached_request_body: Final[dict[str, object] | None] = _safe_get_request_parsed_body(request=request)
         if _cached_request_body is not None:
             return _cached_request_body
 
-        _request_headers: Final[dict] = safe_get_request_headers(request=request)
+        _request_headers: Final[Mapping[str, object]] = safe_get_request_headers(request=request)
         content_type: Final = _request_headers.get("content-type", "")
 
         if _normalize_media_type(content_type) in _BINARY_CONTENT_TYPES:
             binary_body: Final = await _receive_body(request)
             parsed_body = _parse_binary_body(binary_body)
         elif _is_form_content_type(content_type):
-            form_body: Final = dict(await _read_form_data(request))
+            form_body: Final[dict[str, object]] = dict(await _read_form_data(request))
             raw_metadata: Final = form_body.get("metadata")
             parsed_body = (
                 {**form_body, "metadata": _parse_form_metadata(raw_metadata)}
@@ -460,13 +460,16 @@ async def read_raw_json_body(request: Request | None) -> bytes | None:
         return None
 
 
-def _safe_get_request_parsed_body(request: Request | None) -> dict | None:
+def _safe_get_request_parsed_body(request: Request | None) -> dict[str, object] | None:
     if request is None:
         return None
     if hasattr(request, "scope") and "parsed_body" in request.scope and isinstance(request.scope["parsed_body"], tuple):
         accepted_keys, parsed_body = request.scope["parsed_body"]
         return {key: parsed_body[key] for key in accepted_keys}
     return None
+
+
+safe_get_request_parsed_body: Final = _safe_get_request_parsed_body
 
 
 def get_client_requested_model(request: Request | None) -> str | None:
@@ -493,7 +496,7 @@ _safe_get_request_query_params: Final = safe_get_request_query_params
 
 def safe_set_request_parsed_body(
     request: Request | None,
-    parsed_body: dict,
+    parsed_body: Mapping[str, object],
 ) -> None:
     try:
         if request is None:
@@ -678,7 +681,7 @@ async def convert_upload_files_to_file_data(
         if values is not None:
             # Check if it's a list of UploadFile objects
             if values and has_attributes(values[0], _ReadableUpload, "read"):
-                files = []
+                files: list[tuple[str | None, bytes, str | None]] = []
                 for f in values:
                     file_content = await require_attributes(f, _ReadableUpload, "read").read()
                     file_info = require_attributes(f, _UploadedFileInfo, "filename", "content_type")
@@ -881,7 +884,7 @@ def populate_request_with_path_params(request_data: dict, request: Request) -> d
     return request_data
 
 
-def _add_vector_store_id_from_path(request_data: dict, request: Request) -> None:
+def _add_vector_store_id_from_path(request_data: dict[str, object], request: Request) -> None:
     """
     Parse the request path to find /vector_stores/{vector_store_id}/... segments.
 

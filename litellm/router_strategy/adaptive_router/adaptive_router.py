@@ -16,7 +16,7 @@ from __future__ import annotations
 import asyncio
 import time
 from collections import OrderedDict
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
 from typing import Final, cast
 
@@ -182,7 +182,7 @@ class AdaptiveRouter:
         model: str,
         request_kwargs: dict[str, object],
         messages: list[dict[str, object]] | None = None,
-        input: str | list | None = None,
+        input: str | Sequence[object] | None = None,
         specific_deployment: bool | None = False,
         call_type: str | None = None,
     ) -> PreRoutingHookResponse | None:
@@ -252,7 +252,7 @@ class AdaptiveRouter:
 
     async def get_state_snapshot(self) -> dict[str, object]:
         """In-memory snapshot for the introspection endpoint. Cheap; no DB hit."""
-        cells: Final = []
+        cells: Final[list[dict[str, object]]] = []
         for (rt, model), cell in sorted(self._cells.items(), key=lambda kv: (kv[0][0].value, kv[0][1])):
             total = cell.alpha + cell.beta
             cells.append(

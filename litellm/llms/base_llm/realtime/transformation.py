@@ -65,10 +65,10 @@ class BaseRealtimeConfig(ABC):
     @abstractmethod
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, str],
         model: str,
         api_key: str | None = None,
-    ) -> dict:
+    ) -> dict[str, str]:
         pass
 
     @abstractmethod
@@ -101,10 +101,10 @@ class BaseRealtimeConfig(ABC):
     async def pace_backend_send(self, message: bytes) -> None:
         return None
 
-    def is_setup_message(self, msg_obj: dict) -> bool:
+    def is_setup_message(self, msg_obj: dict[str, object]) -> bool:
         return False
 
-    def is_content_message(self, msg_obj: dict) -> bool:
+    def is_content_message(self, msg_obj: dict[str, object]) -> bool:
         return False
 
     def requires_session_configuration(
@@ -116,6 +116,9 @@ class BaseRealtimeConfig(ABC):
         return None
 
     def builds_setup_from_session_update(self) -> bool:
+        return False
+
+    def setup_must_complete_before_content(self, setup_message: Mapping[str, object]) -> bool:
         return False
 
     def setup_session_update_rejection(
@@ -134,6 +137,9 @@ class BaseRealtimeConfig(ABC):
 
     def session_refusal(self) -> Exception | None:
         return None
+
+    def client_event_starts_response(self, client_event: Mapping[str, object]) -> bool:
+        return client_event.get("type") == "response.create"
 
     async def open_backend(self, url: str, headers: Mapping[str, str]) -> RealtimeBackend | None:
         return None

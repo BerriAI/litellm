@@ -47,7 +47,7 @@ from litellm.llms.anthropic.common_utils import (
     write_anthropic_server_tool_calls,
 )
 from litellm.llms.base_llm.guardrail_translation.utils import (
-    claude_hosted_web_tool_arguments,
+    hosted_web_tool_arguments,
     with_web_search_call_arguments,
 )
 from litellm.llms.custom_httpx.http_handler import (
@@ -66,6 +66,7 @@ from litellm.types.utils import (
     Message,
     ModelResponse,
     ModelResponseStream,
+    TextChoices,
     TextCompletionResponse,
 )
 
@@ -709,7 +710,7 @@ class CiscoAIDefenseGuardrail(CiscoAIDefenseMcpMixin, CustomGuardrail):
         context: _ScanContext,
         verdict: _CiscoVerdict,
         duration_ms: float,
-        request_data: dict,
+        request_data: dict[str, object],
     ) -> None:
         """Emit a single visible log line per scan.
 
@@ -793,7 +794,7 @@ class CiscoAIDefenseGuardrail(CiscoAIDefenseMcpMixin, CustomGuardrail):
     async def _inspect_chat(
         self,
         messages: list[dict[str, str]],
-        request_data: dict,
+        request_data: dict[str, object],
         user_api_key_dict: UserAPIKeyAuth,
         direction: str = "input",
         response_obj: object = None,
@@ -827,7 +828,7 @@ class CiscoAIDefenseGuardrail(CiscoAIDefenseMcpMixin, CustomGuardrail):
     def _build_chat_payload(
         self,
         messages: list[dict[str, str]],
-        request_data: dict,
+        request_data: dict[str, object],
         user_api_key_dict: UserAPIKeyAuth,
     ) -> dict[str, object]:
         return {
@@ -899,7 +900,7 @@ class CiscoAIDefenseGuardrail(CiscoAIDefenseMcpMixin, CustomGuardrail):
 
     def _build_metadata(
         self,
-        request_data: dict,
+        request_data: dict[str, object],
         user_api_key_dict: UserAPIKeyAuth,
     ) -> dict[str, object]:
         metadata: Final[dict[str, object]] = {}
@@ -1131,7 +1132,9 @@ class CiscoAIDefenseGuardrail(CiscoAIDefenseMcpMixin, CustomGuardrail):
         return inspect_response
 
     @staticmethod
-    def _stash_verdict_on_request(request_data: dict, context: _ScanContext, verdict: _CiscoVerdict) -> None:
+    def _stash_verdict_on_request(
+        request_data: dict[str, object], context: _ScanContext, verdict: _CiscoVerdict
+    ) -> None:
         """Surface the Cisco verdict on the request metadata for observability."""
         metadata_store: Final = request_data.setdefault("metadata", {})
         if not isinstance(metadata_store, dict):
@@ -1490,7 +1493,7 @@ class CiscoAIDefenseGuardrail(CiscoAIDefenseMcpMixin, CustomGuardrail):
     @classmethod
     def _redact_responses_instructions(
         cls,
-        request_data: dict,
+        request_data: dict[str, object],
         sanitized_text: str | None,
         sanitized_messages: list[dict[str, object]] | None,
     ) -> bool:
@@ -1530,7 +1533,7 @@ class CiscoAIDefenseGuardrail(CiscoAIDefenseMcpMixin, CustomGuardrail):
         return isinstance(role, str) and role.lower() in {"system", "developer"}
 
     @classmethod
-    def _clear_chat_input_tool_arguments(cls, request_data: dict) -> bool:
+    def _clear_chat_input_tool_arguments(cls, request_data: dict[str, object]) -> bool:
         messages: Final = request_data.get("messages")
         if not isinstance(messages, list):
             return False
@@ -1572,7 +1575,7 @@ class CiscoAIDefenseGuardrail(CiscoAIDefenseMcpMixin, CustomGuardrail):
 
     @staticmethod
     def _redact_model_response_choices(
-        choices: list,
+        choices: list[object],
         sanitized_text: str | None,
         sanitized_messages: list[dict[str, object]] | None,
     ) -> bool:
@@ -1616,7 +1619,7 @@ class CiscoAIDefenseGuardrail(CiscoAIDefenseMcpMixin, CustomGuardrail):
 
     @staticmethod
     def _redact_text_completion_choices(
-        choices: list,
+        choices: Sequence[TextChoices],
         sanitized_text: str | None,
         sanitized_messages: list[dict[str, object]] | None,
     ) -> bool:
@@ -1715,7 +1718,7 @@ class CiscoAIDefenseGuardrail(CiscoAIDefenseMcpMixin, CustomGuardrail):
             return False
         applied = False
         for index, item in enumerate(output_items):
-            if claude_hosted_web_tool_arguments(item):
+            if hosted_web_tool_arguments(item):
                 output_items[index] = with_web_search_call_arguments(item, "{}")  # rebind-ok: in-place redaction
                 applied = True
             content = getattr(item, "content", None) or (item.get("content") if isinstance(item, dict) else None)
@@ -1838,7 +1841,7 @@ class CiscoAIDefenseGuardrail(CiscoAIDefenseMcpMixin, CustomGuardrail):
         self,
         error: Exception,
         *,
-        request_data: dict | None = None,
+        request_data: dict[str, object] | None = None,
         start_time: datetime | None = None,
         surface: str = "chat",
         direction: str = "input",
@@ -1949,7 +1952,7 @@ class CiscoAIDefenseGuardrail(CiscoAIDefenseMcpMixin, CustomGuardrail):
         return messages
 
     @staticmethod
-    def _extract_tool_definition_text(data: dict) -> str:
+    def _extract_tool_definition_text(data: dict[str, object]) -> str:
         """Flatten request-side tool/function definitions into scannable text.
 
         Tool definitions (names, descriptions, nested JSON-schema docs) are
@@ -2107,7 +2110,7 @@ class CiscoAIDefenseGuardrail(CiscoAIDefenseMcpMixin, CustomGuardrail):
             direct = get("text")
             if isinstance(direct, str) and direct:
                 output_parts.append(direct)
-            if hosted_arguments := claude_hosted_web_tool_arguments(item):
+            if hosted_arguments := hosted_web_tool_arguments(item):
                 output_parts.append(hosted_arguments)
         joined = " ".join(output_parts)
         return [{"role": "assistant", "content": joined}] if joined else []

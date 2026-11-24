@@ -6,12 +6,16 @@ import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
+import { SearchSelect } from "@/components/shared/SearchSelect";
+import { ErrorState } from "@/components/shared/ErrorState";
+import { extractProxyErrorMessage } from "@/lib/http/client";
+import { useAppGroups } from "./appGroupApi";
 import { fetchClient } from "@/lib/http/api";
 import { uiHref } from "@/utils/uiHref";
 import {
-  budgetEditorFields,
-  budgetPolicyChanges,
-  permanentBudgetEditorValue,
+  budgetSelectionFields,
+  budgetSelectionValue,
+  changeBudgetSelection,
 } from "../../customers/_components/customerBudgetForm";
 import { useCustomerBudgetForm } from "../../customers/_components/useCustomerBudgetForm";
 import { CustomerBudgetForm } from "../../customers/_components/CustomerBudgetDialog";
@@ -23,16 +27,16 @@ import { customerAppParsers } from "../../customers/_components/CustomerHierarch
 
 const appHref = createSerializer(customerAppParsers);
 
-const appDefaultsFields = (app: App | undefined, profiles: BudgetGroups["default_budgets"]) => {
-  const customSource = app?.budget ? "custom" : "inherit";
+const appDefaultsFields = (
+  app: App | undefined,
+  profiles: BudgetGroups["default_budgets"],
+  defaultBudgetId?: string | null,
+) => {
   return {
-    budget: budgetEditorFields(app?.budget),
-    policy: app?.budget,
-    budgetSource: profiles.some((profile) => profile.budget_id === app?.budget_id)
-      ? `profile:${app?.budget_id}`
-      : customSource,
+    ...budgetSelectionFields(app, profiles, defaultBudgetId),
     autoCreate: app?.auto_create_customers ?? true,
     surcharge: appSurchargeField(app?.customer_margin),
+    appGroupId: app?.app_group_id ?? null,
   };
 };
 
@@ -40,34 +44,33 @@ export default function AppSettingsForm({
   resource,
   app,
   profiles,
+  defaultBudgetId,
   onClose,
   onPendingChange,
 }: {
   resource: AppResource;
   app?: App;
   profiles: BudgetGroups["default_budgets"];
+  defaultBudgetId?: string | null;
   onClose?: () => void;
   onPendingChange?: (pending: boolean) => void;
 }) {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
+  const appGroups = useAppGroups();
   const { fields, setFields, update, pending, error, save, dirty } = useCustomerBudgetForm(
     {
-      initial: appDefaultsFields(app, profiles),
+      initial: appDefaultsFields(app, profiles, defaultBudgetId),
       parse: (fields) => {
-        const budget =
-          fields.budgetSource === "custom"
-            ? permanentBudgetEditorValue(fields.budget, app?.budget)
-            : ({ ok: true, value: null } as const);
+        const budget = budgetSelectionValue(fields, app?.budget);
         if (!budget.ok) return { ok: false, error: t(budget.error) };
         const margin = appSurchargeValue(fields.surcharge);
         if (!margin.ok) return { ok: false, error: t("apps.surchargeInvalid") };
         return {
           ok: true,
           value: {
-            ...(fields.budgetSource === "custom"
-              ? { budget: { ...budget.value, ...budgetPolicyChanges(fields.policy, app?.budget) } }
-              : { budget_id: fields.budgetSource.startsWith("profile:") ? fields.budgetSource.slice(8) : null }),
+            ...budget.value,
+            ...(fields.appGroupId !== (app?.app_group_id ?? null) ? { app_group_id: fields.appGroupId } : {}),
             auto_create_customers: fields.autoCreate,
             customer_margin: margin.value,
           },
@@ -89,18 +92,7 @@ export default function AppSettingsForm({
   );
   const changeBudgetSource = (source: string | null) => {
     if (!source) return;
-    setFields((current) => {
-      const selected =
-        source === "custom"
-          ? profiles.find((profile) => `profile:${profile.budget_id}` === current.budgetSource)
-          : null;
-      return {
-        ...current,
-        budgetSource: source,
-        budget: { ...(selected ? budgetEditorFields(selected) : current.budget), budgetEnabled: source === "custom" },
-        policy: selected ?? current.policy,
-      };
-    });
+    setFields((current) => ({ ...current, ...changeBudgetSelection(current, source, profiles) }));
   };
   return (
     <CustomerBudgetForm
@@ -113,6 +105,24 @@ export default function AppSettingsForm({
       saveLabel={t("apps.save")}
       label={t("apps.defaultsFor", { alias: resource.alias })}
     >
+      <div className="space-y-2">
+        <label htmlFor="app-parent-group" className="text-sm font-medium">
+          {t("apps.groups.parent")}
+        </label>
+        <SearchSelect
+          id="app-parent-group"
+          className="w-full"
+          value={fields.appGroupId ?? undefined}
+          placeholder={t("apps.groups.noGroup")}
+          onValueChange={(value) => update("appGroupId", value)}
+          disabled={pending || appGroups.isPending || appGroups.isError}
+          options={(appGroups.data ?? []).map((group) => ({ value: group.app_group_id, label: group.name }))}
+        />
+        <p className="text-xs text-muted-foreground">{t("apps.groups.membershipHint")}</p>
+        {appGroups.isError && (
+          <ErrorState message={extractProxyErrorMessage(appGroups.error)} onRetry={() => void appGroups.refetch()} />
+        )}
+      </div>
       <CustomerBudgetEditor
         title={t("apps.appBudget")}
         description={t("apps.appBudgetHint")}

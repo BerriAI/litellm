@@ -15,6 +15,8 @@ pub struct Budget {
     pub(crate) budget_id: String,
     pub(crate) name: Option<String>,
     pub(crate) max_budget: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) rollover_max_budget: Option<f64>,
     pub(crate) soft_budget: Option<f64>,
     pub(crate) max_parallel_requests: Option<i32>,
     pub(crate) tpm_limit: Option<i64>,

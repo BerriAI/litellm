@@ -12,7 +12,7 @@ from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-    from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
+    from litellm.types.proxy.guardrails.guardrail_hooks.model_armor import ModelArmorGuardrailConfigModel
 
 import json
 
@@ -36,8 +36,11 @@ from litellm.llms.custom_httpx.http_handler import (
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.anthropic_sse import (
+    anthropic_sse_assembles_every_tool_input,
+    anthropic_sse_chunks_as_scanned,
     anthropic_sse_chunks_from_response,
     anthropic_sse_error_frames,
+    anthropic_sse_reads_alike,
     assemble_anthropic_sse_stream,
     is_anthropic_sse_stream,
     is_raw_sse_stream,
@@ -61,6 +64,7 @@ from litellm.types.utils import (
     Choices,
     GenericGuardrailAPIInputs,
     GuardrailStatus,
+    LLMResponseTypes,
     ModelResponse,
     ModelResponseStream,
     StandardLoggingGuardrailInformation,
@@ -187,9 +191,6 @@ class ModelArmorAPIError(Exception):
 _SCANNED_CONTENT_KEYS: Final = frozenset({"text", "sanitizedText", "findings", "maliciousUriMatchedItems"})
 
 
-RedactablePayload = dict | list | str | int | float | bool | None
-
-
 def _redact_scanned_content(payload: object, depth: int = 0) -> object:
     if depth >= DEFAULT_MAX_RECURSE_DEPTH:
         return "[REDACTED]"
@@ -281,7 +282,9 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
             return self.api_endpoint
         return f"https://modelarmor.{self.location}.rep.googleapis.com"
 
-    def _create_sanitize_request(self, content: str, source: Literal["user_prompt", "model_response"]) -> dict:
+    def _create_sanitize_request(
+        self, content: str, source: Literal["user_prompt", "model_response"]
+    ) -> dict[str, object]:
         """Create request body for Model Armor API with correct camelCase field names."""
         if source == "user_prompt":
             return {"userPromptData": {"text": content}}
@@ -372,7 +375,7 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
         self,
         content: str | None = None,
         source: Literal["user_prompt", "model_response"] = "user_prompt",
-        request_data: dict | None = None,
+        request_data: Mapping[str, object] | None = None,
         file_bytes: bytes | None = None,
         file_type: str | None = None,
     ) -> _ModelArmorResponse:
@@ -453,7 +456,7 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
             await json_response if isinstance(json_response, _AwaitableJSON) else json_response
         ).root
 
-    def sanitize_file_prompt(self, file_bytes: bytes, file_type: str, source: str = "user_prompt") -> dict:
+    def sanitize_file_prompt(self, file_bytes: bytes, file_type: str, source: str = "user_prompt") -> dict[str, object]:
         """
         Helper to build the request body for file prompt sanitization for Model Armor.
         file_type should be one of: PLAINTEXT_UTF8, PDF, WORD_DOCUMENT, EXCEL_DOCUMENT, POWERPOINT_DOCUMENT, TXT, CSV
@@ -657,7 +660,7 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
             detail={"error": f"Model Armor could not scan an attachment and blocked the request: {reason}"},
         )
 
-    async def _scan_request_files(self, messages: Sequence[AllMessageValues], data: dict) -> None:
+    async def _scan_request_files(self, messages: Sequence[AllMessageValues], data: dict[str, object]) -> None:
         """Submit inline document/file attachments to Model Armor and block on any findings.
 
         Each attachment is sent through the byte API and a MATCH_FOUND raises a 400 before the
@@ -950,7 +953,7 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
         self,
         data: dict,
         user_api_key_dict: UserAPIKeyAuth,
-        response,
+        response: LLMResponseTypes,
     ):
         """Post-call hook to sanitize model responses."""
         from litellm.proxy.common_utils.callback_utils import (
@@ -1174,14 +1177,35 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
     def _assemble_stream(
         self, all_chunks: Sequence[object], surface: _StreamSurface
     ) -> ModelResponse | TextCompletionResponse | ResponsesAPIResponse | None:
-        """Assemble the buffered stream into the scannable response its surface produces."""
+        """Assemble the buffered stream into the scannable response its surface produces.
+
+        A ``/v1/messages`` stream some client reads differently from assembly cannot be scanned in full,
+        since that client could read text the scan never saw. Failing open still scans what it can.
+        """
         if surface is _StreamSurface.ANTHROPIC_MESSAGES:
-            return assemble_anthropic_sse_stream(all_chunks, restore_identity=True)
+            scans_every_text: Final = anthropic_sse_reads_alike(
+                all_chunks
+            ) and anthropic_sse_assembles_every_tool_input(all_chunks)
+            return (
+                assemble_anthropic_sse_stream(all_chunks, restore_identity=True)
+                if scans_every_text or not self.optional_params.get("fail_on_error", True)
+                else None
+            )
         if surface is _StreamSurface.RESPONSES:
             return self._final_responses_api_response(all_chunks)
         if surface is _StreamSurface.OPAQUE_SSE:
             return None
         return self._assemble_chat_completion_stream(list(all_chunks))
+
+    @staticmethod
+    def _unsanitized_stream(
+        all_chunks: Sequence[object],
+        assembled_response: ModelResponse | TextCompletionResponse | ResponsesAPIResponse,
+        surface: _StreamSurface,
+    ) -> Sequence[object]:
+        if surface is _StreamSurface.ANTHROPIC_MESSAGES and isinstance(assembled_response, ModelResponse):
+            return anthropic_sse_chunks_as_scanned(assembled_response, all_chunks)
+        return all_chunks
 
     @staticmethod
     def _error_payload(exc: HTTPException) -> Mapping[str, object]:
@@ -1278,7 +1302,7 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
 
         if not content:
             verbose_proxy_logger.debug("Model Armor: No text content in streaming response, skipping guardrail")
-            for chunk in all_chunks:
+            for chunk in self._unsanitized_stream(all_chunks, assembled_response, surface):
                 yield chunk
             return
 
@@ -1351,7 +1375,7 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
                 raise
 
         # Return original chunks if no sanitization needed
-        for chunk in all_chunks:
+        for chunk in self._unsanitized_stream(all_chunks, assembled_response, surface):
             yield chunk
 
     @log_guardrail_information
@@ -1473,7 +1497,7 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
         return {**inputs, "texts": [rewrites.get(text, text) for text in inputs.get("texts") or ()]}
 
     @staticmethod
-    def get_config_model() -> type["GuardrailConfigModel"] | None:
+    def get_config_model() -> type["ModelArmorGuardrailConfigModel"] | None:
         """
         Get the config model for the Model Armor guardrail.
         """

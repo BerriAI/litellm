@@ -1,6 +1,7 @@
 //! Rust repositories for the objects the proxy reads from Postgres: the auth objects it reads when its auth cache
 //! misses, and the spend log sums it reseeds cold budget window counters from. The spend log repository also writes
-//! the spend logs and their ledger deliveries.
+//! the spend logs and their ledger deliveries, and the gateway request repository adds the daily gateway request
+//! counts.
 //!
 //! Each repository is a folder that owns its queries, the shaping of their rows into what their callers consume,
 //! and any memory tier private to that object. Queries are private to their folder, so every read goes through a
@@ -18,6 +19,7 @@ mod audit_log;
 mod budget;
 mod database;
 mod end_user;
+mod gateway_request;
 mod inserted;
 mod jwt_key_mapping;
 mod key;
@@ -41,6 +43,7 @@ pub use audit_log::{AuditLogRepository, NewAuditLog};
 pub use budget::{Budget, BudgetRepository};
 pub use database::{Database, Side};
 pub use end_user::{EndUserRecord, EndUserRepository};
+pub use gateway_request::{GatewayRequestCount, GatewayRequestRepository};
 pub use inserted::Inserted;
 pub use jwt_key_mapping::{JwtKeyMappingRepository, MappedClaim, NewKeyMapping};
 pub use key::{FetchedKey, KeyRepository, KeyView};

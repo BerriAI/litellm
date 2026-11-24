@@ -415,6 +415,38 @@ async def _settled_row(proxy: Proxy, metadata: Mapping[str, object]) -> Mapping[
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("customer_id", ["customer-1", None])
+async def test_a_grouped_completion_charges_its_app_and_group_with_or_without_a_customer(
+    proxy: Proxy, customer_id: str | None
+) -> None:
+    from litellm.accounting.delivery_projection import entity_transactions
+    from litellm.accounting.projection import project
+
+    row: Final = await _settled_row(
+        proxy,
+        {
+            **_KEYED,
+            "user_api_key_app_id": "app-1",
+            "user_api_key_app_group_id": "group-1",
+            **({"user_api_key_customer_org_id": customer_id} if customer_id else {}),
+        },
+    )
+    accounting: Final = _SETTINGS.validate_python(row["accounting_payload"])
+    totals: Final = entity_transactions(project(accounting))
+    cost: Final = row["spend"]
+
+    assert isinstance(cost, float) and cost > 0
+    assert _metadata(row)["user_api_key_app_group_id"] == "group-1"
+    assert totals["app_group_list_transactions"] == {"group-1": cost}
+    assert totals["app_list_transactions"] == {"app-1": cost}
+    assert totals["app_group_customer_org_list_transactions"] == (
+        {f"group-1:{customer_id}": cost} if customer_id else {}
+    )
+    assert totals["app_customer_org_list_transactions"] == ({f"app-1:{customer_id}": cost} if customer_id else {})
+    assert totals["customer_org_list_transactions"] == ({customer_id: cost} if customer_id else {})
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("margin", [0.1, 1])
 async def test_a_customer_success_is_charged_the_surcharge_main_applies(
     proxy: Proxy, monkeypatch: pytest.MonkeyPatch, margin: float
@@ -487,6 +519,18 @@ async def test_a_billed_customer_failure_row_is_charged_the_surcharge_main_appli
     expected: Final = snapshotless_cost_with_customer_margin(2.0, 0.5)
     assert rows[0]["spend"] == expected.amount == 3.0
     assert _metadata(rows[0])["cost_breakdown"] == expected.logging_breakdown()
+
+
+@pytest.mark.asyncio
+async def test_a_billed_failure_row_raises_the_spend_counters_through_the_proxy(proxy: Proxy) -> None:
+    await bill_failure_in_rust(
+        _auth(),
+        ValueError("the stream broke"),
+        {"model": "gpt-4o", "metadata": {}, "response_cost": 2.0, "combined_usage_object": litellm.Usage()},
+    )
+
+    assert len(await proxy.rows()) == 1
+    assert ps.spend_counter_store.handle.get_local("spend:user:user-1") == 2.0
 
 
 def _attempt(outcome: Outcome, metadata: Mapping[str, object]) -> HookArgs:

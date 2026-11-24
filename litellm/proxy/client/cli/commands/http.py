@@ -76,7 +76,7 @@ def request(
         litellm http request GET /health/test_connection -H "X-Custom-Header:value"
     """
     # Parse headers from key:value format
-    headers: Final = {}
+    headers: Final[dict[str, str]] = {}
     for h in header:
         try:
             key, value = h.split(":", 1)

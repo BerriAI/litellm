@@ -386,6 +386,75 @@ fn borrowing_settlement(
         .collect()
 }
 
+fn turn_borrowing_operations(
+    stash: &Stash,
+    served: &Holds,
+    tokens: i64,
+    ttl: i64,
+) -> Vec<ReservationOp> {
+    BORROWER_KINDS
+        .into_iter()
+        .flat_map(|kind| {
+            let state = stash.share(kind);
+            let (limit, cap) = match served[kind.index()].as_deref() {
+                Some(hold) => (hold.descriptor.as_ref(), hold.cap.as_ref()),
+                None => (state.limit.as_ref(), state.cap.as_ref()),
+            };
+            [
+                team_increment(limit, tokens, ttl),
+                team_increment(cap, tokens, ttl),
+            ]
+        })
+        .flatten()
+        .collect()
+}
+
+fn unsettled_usage(stash: &mut Stash, used: i64) -> i64 {
+    stash.session_settled |= used != 0;
+    match std::mem::take(&mut stash.turn_settled_tokens) {
+        0 => used,
+        settled => (used - settled).max(0),
+    }
+}
+
+fn model_usage_operations(
+    settings: &Settings,
+    model_group: &str,
+    priority: Option<&str>,
+    class_share: Option<&Descriptor>,
+    holder: Option<String>,
+    tokens: i64,
+) -> [ReservationOp; 2] {
+    let ttl = settings.window_size;
+    let priority_key = match settings.reserves_name(priority) {
+        Some(explicit) => format!("{model_group}:{explicit}"),
+        None => format!("{model_group}:default_pool"),
+    };
+    let priority_counter = match class_share {
+        None => scope(PRIORITY_MODEL, &priority_key),
+        Some(share) => scope(
+            &share.key,
+            &holder.map_or_else(
+                || share.value.clone(),
+                |holder| counter_value(model_group, &holder),
+            ),
+        ),
+    }
+    .with_kind(CounterKind::Tokens);
+    [
+        ReservationOp::Increment {
+            counter: scope(MODEL_SATURATION_CHECK, model_group).with_kind(CounterKind::Tokens),
+            amount: tokens,
+            ttl: Some(ttl),
+        },
+        ReservationOp::Increment {
+            counter: priority_counter,
+            amount: tokens,
+            ttl: Some(ttl),
+        },
+    ]
+}
+
 fn served_holds(stash: &Stash, model_group: Option<&str>) -> Holds {
     BORROWER_KINDS.map(|kind| model_group.and_then(|group| stash.share(kind).hold(group)))
 }
@@ -396,6 +465,13 @@ fn release_holds(stash: &mut Stash, served: &Holds) {
         state.clear_reservation();
         state.drop_hold(served[kind.index()].as_ref());
     }
+}
+
+pub struct TurnCharge<'a> {
+    pub model_group: &'a str,
+    pub priority: Option<&'a str>,
+    pub team_id: Option<&'a str>,
+    pub tokens: i64,
 }
 
 pub struct Settlement<'a> {
@@ -1232,17 +1308,19 @@ impl Engine {
     ) -> Result<(), CapacityError> {
         let ttl = settings.window_size;
         let group = settlement.model_group;
-        let (team_tokens, served) = match stash {
-            None => (Vec::new(), Holds::default()),
+        let (team_tokens, served, unsettled, charged_by_turns) = match stash {
+            None => (Vec::new(), Holds::default(), total_tokens, false),
             Some(stash) => {
                 let mut stash = stash.lock();
                 let served = match group {
                     Some(group) => served_holds(&stash, group.key()?),
                     None => Holds::default(),
                 };
-                let team_tokens = borrowing_settlement(&stash, &served, total_tokens, ttl);
+                let charged_by_turns = stash.turn_settled_tokens != 0;
+                let unsettled = unsettled_usage(&mut stash, total_tokens);
+                let team_tokens = borrowing_settlement(&stash, &served, unsettled, ttl);
                 release_holds(&mut stash, &served);
-                (team_tokens, served)
+                (team_tokens, served, unsettled, charged_by_turns)
             }
         };
         let Some(model_group) = group.filter(|group| group.truthy) else {
@@ -1251,17 +1329,13 @@ impl Engine {
             }
             return Ok(());
         };
-        if total_tokens == 0 && team_tokens.is_empty() {
+        if unsettled == 0 && team_tokens.is_empty() && !charged_by_turns {
             return Ok(());
         }
-        if total_tokens != 0 && !model_group.keyed {
+        if unsettled != 0 && !model_group.keyed {
             return Err(CapacityError::Type(UNCOUNTABLE_GROUP.into()));
         }
         let model_group = model_group.text.as_str();
-        let priority_key = match settings.reserves_name(priority) {
-            Some(explicit) => format!("{model_group}:{explicit}"),
-            None => format!("{model_group}:default_pool"),
-        };
         let (class_share, class_holder) = stash.map_or((None, None), |stash| {
             let stash = stash.lock();
             (
@@ -1270,37 +1344,72 @@ impl Engine {
             )
         });
         let settled_holder = class_holder.or_else(|| settlement.team_id.map(str::to_owned));
-        let priority_counter = match &class_share {
-            None => scope(PRIORITY_MODEL, &priority_key),
-            Some(share) => scope(
-                &share.key,
-                &settled_holder.map_or_else(
-                    || share.value.clone(),
-                    |holder| counter_value(model_group, &holder),
-                ),
-            ),
-        }
-        .with_kind(CounterKind::Tokens);
         let mut operations = Vec::new();
-        if total_tokens != 0 {
-            operations.push(ReservationOp::Increment {
-                counter: scope(MODEL_SATURATION_CHECK, model_group).with_kind(CounterKind::Tokens),
-                amount: total_tokens,
-                ttl: Some(ttl),
-            });
-            operations.push(ReservationOp::Increment {
-                counter: priority_counter,
-                amount: total_tokens,
-                ttl: Some(ttl),
-            });
+        if unsettled != 0 {
+            operations.extend(model_usage_operations(
+                settings,
+                model_group,
+                priority,
+                class_share.as_ref(),
+                settled_holder,
+                unsettled,
+            ));
         }
         operations.extend(team_tokens);
         if !operations.is_empty() {
             self.limiter.apply(&operations, redis).await?;
+        }
+        if !operations.is_empty() || charged_by_turns {
             self.record_team_share(settings, stash, Some(model_group), settlement, &served)
                 .await;
         }
         Ok(())
+    }
+
+    pub async fn charge_turn(
+        &self,
+        settings: &Settings,
+        stash: &SharedStash,
+        turn: &TurnCharge<'_>,
+        redis: Option<&RequestRedis>,
+    ) -> Result<(), CapacityError> {
+        if turn.tokens <= 0 {
+            return Ok(());
+        }
+        let operations = {
+            let mut stash = stash.lock();
+            if stash.session_settled {
+                return Ok(());
+            }
+            stash.turn_model_group = Some(turn.model_group.to_owned());
+            stash.turn_settled_tokens = stash.turn_settled_tokens.saturating_add(turn.tokens);
+            let served = served_holds(&stash, Some(turn.model_group));
+            let holder = stash
+                .priority_class_share_holder
+                .clone()
+                .or_else(|| turn.team_id.map(str::to_owned));
+            let mut operations = Vec::from(model_usage_operations(
+                settings,
+                turn.model_group,
+                turn.priority,
+                stash.priority_class_share.as_ref(),
+                holder,
+                turn.tokens,
+            ));
+            operations.extend(turn_borrowing_operations(
+                &stash,
+                &served,
+                turn.tokens,
+                settings.window_size,
+            ));
+            operations
+        };
+        let applied = self.limiter.apply(&operations, redis).await;
+        if applied.is_err() {
+            let mut stash = stash.lock();
+            stash.turn_settled_tokens = stash.turn_settled_tokens.saturating_sub(turn.tokens);
+        }
+        applied.map(|_| ())
     }
 
     /// Settle a failed attempt: a borrower's admitting reservation is refunded or charged the usage the attempt
@@ -1319,7 +1428,8 @@ impl Engine {
                 Some(group) => served_holds(&stash, group.key()?),
                 None => Holds::default(),
             };
-            let refund = borrowing_settlement(&stash, &failed, used, settings.window_size);
+            let unsettled = unsettled_usage(&mut stash, used);
+            let refund = borrowing_settlement(&stash, &failed, unsettled, settings.window_size);
             release_holds(&mut stash, &failed);
             (refund, failed)
         };

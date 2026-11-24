@@ -52,8 +52,8 @@ class BedrockMantleAnthropicMessagesConfig(AmazonMantleMessagesConfig):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         stream: bool | None = None,
     ) -> str:
         return build_mantle_native_messages_url(api_base=api_base, litellm_params=litellm_params)
