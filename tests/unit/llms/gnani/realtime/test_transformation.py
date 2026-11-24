@@ -124,6 +124,31 @@ def test_unsupported_client_events_report_protocol_errors(message: Mapping[str, 
         GnaniRealtimeConfig().transform_realtime_request(json.dumps(message), "prisma-v3.0")
 
 
+@pytest.mark.parametrize(("rate", "accepted_bytes"), [(8000, 64000), (24000, 192000)])
+def test_an_append_longer_than_four_seconds_at_the_client_rate_is_rejected_before_decoding(
+    rate: int, accepted_bytes: int
+) -> None:
+    config: Final = GnaniRealtimeConfig()
+    update: Final = {
+        "type": "session.update",
+        "session": {"audio": {"input": {"format": {"type": "audio/pcm", "rate": rate}}}},
+    }
+    config.transform_realtime_request(json.dumps(update), "prisma-v3.0")
+
+    def append(size: int) -> tuple[str | bytes, ...]:
+        audio: Final = base64.b64encode(bytes(size)).decode()
+        return tuple(
+            config.transform_realtime_request(
+                json.dumps({"type": "input_audio_buffer.append", "audio": audio}), "prisma-v3.0"
+            )
+        )
+
+    four_seconds_at_wire_rate: Final = 4 * 32000
+    assert four_seconds_at_wire_rate - 1024 <= len(b"".join(append(accepted_bytes))) <= four_seconds_at_wire_rate
+    with pytest.raises(RealtimeTranscriptionProtocolError, match="backlog limit"):
+        append(accepted_bytes + 4)
+
+
 def test_realtime_url_preserves_a_deployment_prefix_without_duplicating_the_stream_route() -> None:
     config: Final = GnaniRealtimeConfig()
     assert (

@@ -9,6 +9,7 @@ WIRE_RATE: Final = 16_000
 _FRAME_BYTES: Final = 1024
 _FRAME_SECONDS: Final = _FRAME_BYTES / (2 * WIRE_RATE)
 _INPUT_RATES: Final = frozenset((8_000, 16_000, 24_000, 44_100, 48_000))
+_MAX_APPEND_SECONDS: Final = 4
 
 
 class GnaniAudioStream:
@@ -25,6 +26,10 @@ class GnaniAudioStream:
         if self._sent_audio and rate != self.rate:
             raise RealtimeTranscriptionProtocolError("Open a new session to change the audio rate after sending audio")
         self.rate = rate
+
+    @property
+    def max_encoded_append_bytes(self) -> int:
+        return 4 * ((self.rate * 2 * _MAX_APPEND_SECONDS + 2) // 3)
 
     def append(self, pcm: bytes) -> tuple[bytes, ...]:
         if not pcm:

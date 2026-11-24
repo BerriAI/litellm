@@ -144,7 +144,7 @@ class GnaniRealtimeConfig(BaseRealtimeConfig):
         if isinstance(kind, str) and kind in SESSION_UPDATE_EVENT_TYPES:
             return (self._update(message),)
         if kind == "input_audio_buffer.append":
-            return self._audio.append(decode_pcm16_append(request.get("audio")))
+            return self._audio.append(decode_pcm16_append(request.get("audio"), self._audio.max_encoded_append_bytes))
         if kind == "input_audio_buffer.commit":
             return self._audio.commit()
         raise RealtimeTranscriptionProtocolError(f"Gnani transcription does not support client event {kind!r}")
