@@ -551,6 +551,7 @@ model LiteLLM_ObjectPermissionTable {
   mcp_toolsets          String[]       @default([]) // Toolset IDs granted to this key/team/user
   search_tools          String[]       @default([]) // search_tool_name values this key/team/user may call
   mcp_tool_search_enabled Boolean?
+  mcp_auth_profiles     Json?          @ignore
   skills                String[]       @default([]) // Claude Code plugin names granted to this key/team beyond the public (enabled) set
   apps                  String[]       @default([])
   teams                 LiteLLM_TeamTable[]
@@ -629,6 +630,7 @@ model LiteLLM_MCPServerTable {
   submitted_at     DateTime?
   reviewed_at      DateTime?
   review_notes     String?
+  additional_auth  Json?          @ignore
 
   @@index([approval_status])
 }
