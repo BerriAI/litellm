@@ -472,3 +472,80 @@ def test_declared_environment_variable_pointing_at_an_unset_one_stays_unset(
     ]
     assert _lint(tmp_path, text, {}) == needs
     assert _lint(tmp_path, text, {"OPENAI_API_KEY": "sk-process"}) == []
+
+
+_OPUS_PRICES: Final = (
+    "{input_cost_per_token: 1, output_cost_per_token: 1, cache_creation_input_token_cost: 1, "
+    "cache_read_input_token_cost: 1, input_cost_per_token_batches: 1, output_cost_per_token_batches: 1, "
+    "cache_creation_input_token_cost_batches: 1, cache_read_input_token_cost_batches: 1, "
+    "search_context_cost_per_query: {search_context_size_low: 1}}"
+)
+_GPT_PRICES: Final = (
+    "{input_cost_per_token: 1, output_cost_per_token: 1, cache_read_input_token_cost: 1, "
+    "input_cost_per_token_batches: 1, output_cost_per_token_batches: 1, input_cost_per_token_priority: 1, "
+    "output_cost_per_token_priority: 1, cache_read_input_token_cost_priority: 1}"
+)
+_OPUS_NEEDS_1HR: Final = [
+    "config.yaml:4: error: model_list[0].model_info: anthropic/claude-opus-4-5 would take these prices from "
+    "LiteLLM's model cost map, set them in model_info: cache_creation_input_token_cost_above_1hr"
+]
+
+
+def _lint_prices(tmp_path: Path, text: str, *, require_explicit_prices: bool = True) -> list[str]:
+    config_path: Final = tmp_path / "config.yaml"
+    config_path.write_text(text, encoding="utf-8")
+    return [
+        format_finding(Path("config.yaml"), finding)
+        for finding in lint_file(config_path, ENVIRON, require_explicit_prices=require_explicit_prices)
+    ]
+
+
+def test_require_explicit_prices_flags_a_price_the_cost_map_has_for_the_model(tmp_path: Path) -> None:
+    text: Final = _model_entry("{model: anthropic/claude-opus-4-5}", _OPUS_PRICES)
+    assert _lint_prices(tmp_path, text) == _OPUS_NEEDS_1HR
+    assert _lint_prices(tmp_path, text, require_explicit_prices=False) == []
+    assert _lint(tmp_path, text) == []
+
+
+def test_require_explicit_prices_passes_once_every_mapped_price_is_set(tmp_path: Path) -> None:
+    complete: Final = _OPUS_PRICES.replace("{input", "{cache_creation_input_token_cost_above_1hr: 1, input", 1)
+    assert _lint_prices(tmp_path, _model_entry("{model: anthropic/claude-opus-4-5}", complete)) == []
+    in_params: Final = "{model: anthropic/claude-opus-4-5, cache_creation_input_token_cost_above_1hr: 1}"
+    assert _lint_prices(tmp_path, _model_entry(in_params, _OPUS_PRICES)) == []
+
+
+def test_require_explicit_prices_only_asks_for_prices_in_that_models_map_entry(tmp_path: Path) -> None:
+    assert _lint_prices(tmp_path, _model_entry("{model: openai/gpt-4o}", _GPT_PRICES)) == []
+
+
+def test_require_explicit_prices_uses_base_model_and_counts_a_null_price_as_unset(tmp_path: Path) -> None:
+    info: Final = _OPUS_PRICES.replace(
+        "{input", "{base_model: anthropic/claude-opus-4-5, cache_creation_input_token_cost_above_1hr: null, input", 1
+    )
+    params: Final = "{model: azure/my-deployment, api_base: https://example.com, api_version: v, api_key: k}"
+    assert _lint_prices(tmp_path, _model_entry(params, info)) == _OPUS_NEEDS_1HR
+
+
+def test_require_explicit_prices_lists_every_missing_price_when_model_info_is_absent(tmp_path: Path) -> None:
+    assert _lint_prices(tmp_path, _model_entry("{model: azure/gpt-4o, api_base: b, api_version: v, api_key: k}")) == [
+        "config.yaml:2: error: model_list[0]: azure/gpt-4o would take these prices from LiteLLM's model cost map, "
+        "set them in model_info: cache_read_input_token_cost, input_cost_per_token, input_cost_per_token_batches, "
+        "output_cost_per_token, output_cost_per_token_batches"
+    ]
+
+
+def test_require_explicit_prices_skips_wildcard_and_unmapped_models(tmp_path: Path) -> None:
+    assert _lint_prices(tmp_path, _model_entry("{model: openai/*}")) == []
+    unmapped: Final = _lint_prices(tmp_path, _model_entry("{model: openai/my-own-model}"))
+    assert [line.split(": ")[1] for line in unmapped] == ["warning"]
+
+
+def test_require_explicit_prices_flag_alone_makes_the_exit_code_nonzero(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    for name, value in ENVIRON.items():
+        monkeypatch.setenv(name, value)
+    config_path: Final = tmp_path / "config.yaml"
+    config_path.write_text(_model_entry("{model: anthropic/claude-opus-4-5}", _OPUS_PRICES), encoding="utf-8")
+    assert main([str(config_path)]) == 0
+    assert main([str(config_path), "--require-explicit-prices"]) == 1

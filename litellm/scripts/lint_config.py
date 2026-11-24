@@ -237,9 +237,19 @@ def _number(value: object, *, parse_text: bool) -> float | None:
     return None
 
 
+def _is_price_key(key: str) -> bool:
+    return "cost" in key or key.endswith("_pricing")
+
+
 def _model_info_findings(
-    model: str, params: Mapping[str, object], model_info: Mapping[str, object], path: PathKey
+    model: str,
+    params: Mapping[str, object],
+    model_info: Mapping[str, object],
+    path: PathKey,
+    *,
+    require_explicit_prices: bool,
 ) -> Iterator[Finding]:
+    import litellm
     from litellm.types.router import ModelInfo as RouterModelInfo
     from litellm.utils import get_model_info_helper
 
@@ -264,7 +274,7 @@ def _model_info_findings(
     if "*" in lookup:
         return
     try:
-        get_model_info_helper(model=lookup, catalog_only=True)
+        mapped: Final = litellm.model_cost.get(get_model_info_helper(model=lookup, catalog_only=True)["key"], {})
     except Exception:  # noqa: BLE001  # get_model_info_helper raises a bare Exception for unmapped models
         missing: Final = [
             key
@@ -278,6 +288,21 @@ def _model_info_findings(
                 f"{lookup} is not in LiteLLM's model cost map, so cost tracking and token limits need "
                 f"model_info.base_model or model_info.{', model_info.'.join(missing)}",
             )
+        return
+    if not require_explicit_prices:
+        return
+    unset: Final = sorted(
+        key
+        for key, value in mapped.items()
+        if _is_price_key(key) and value is not None and model_info.get(key) is None and params.get(key) is None
+    )
+    if unset:
+        yield Finding(
+            "error",
+            info_path if model_info else path,
+            f"{lookup} would take these prices from LiteLLM's model cost map, set them in model_info: "
+            f"{', '.join(unset)}",
+        )
 
 
 _AZURE_CLIENT_LOGIN: Final = ("tenant_id", "client_id", "client_secret")
@@ -337,7 +362,9 @@ def _credential_findings(
         yield Finding("warning", path, f"{model} needs {name} in the environment{hint}")
 
 
-def _model_list_findings(model_list: object, environ: Mapping[str, str]) -> Iterator[Finding]:
+def _model_list_findings(
+    model_list: object, environ: Mapping[str, str], *, require_explicit_prices: bool
+) -> Iterator[Finding]:
     import litellm
     from litellm.types.router import GenericLiteLLMParams
 
@@ -378,7 +405,9 @@ def _model_list_findings(model_list: object, environ: Mapping[str, str]) -> Iter
             continue
         else:
             model_info = parsed_info
-        yield from _model_info_findings(provider_model, params, model_info, path)
+        yield from _model_info_findings(
+            provider_model, params, model_info, path, require_explicit_prices=require_explicit_prices
+        )
 
 
 def _model_names(config: Mapping[str, object]) -> frozenset[str]:
@@ -468,13 +497,16 @@ def _section_findings(config: Mapping[str, object], known_models: frozenset[str]
         yield from _fallback_findings(router_settings, ("router_settings",), known_models)
 
 
-def lint_config(config: Mapping[str, object], environ: Mapping[str, str]) -> Iterator[Finding]:
+def lint_config(
+    config: Mapping[str, object], environ: Mapping[str, str], *, require_explicit_prices: bool = False
+) -> Iterator[Finding]:
     yield from _unknown_keys(config, (), _known_top_level_keys())
     if config.get("model_list") is not None:
         declared: Final = _mapping(config.get("environment_variables")) or {}
         yield from _model_list_findings(
             config["model_list"],
             _effective_environ(declared, environ),
+            require_explicit_prices=require_explicit_prices,
         )
     yield from _section_findings(config, _model_names(config))
     yield from _env_findings(config, environ)
@@ -520,7 +552,9 @@ def _included_duplicates(location: str, line: int | None) -> Iterator[Finding]:
             )
 
 
-def lint_file(config_path: Path, environ: Mapping[str, str]) -> tuple[Finding, ...]:
+def lint_file(
+    config_path: Path, environ: Mapping[str, str], *, require_explicit_prices: bool = False
+) -> tuple[Finding, ...]:
     try:
         text: Final = config_path.read_text(encoding="utf-8")
         root_node: Final = yaml.compose(text, Loader=yaml.SafeLoader)
@@ -550,7 +584,10 @@ def lint_file(config_path: Path, environ: Mapping[str, str]) -> tuple[Finding, .
     replaced: Final = frozenset(
         key for key, value in included_items if not (isinstance(config.get(key), list) and isinstance(value, list))
     )
-    located: Final = (_located(found, lines, replaced, "include" in config) for found in lint_config(merged, environ))
+    located: Final = (
+        _located(found, lines, replaced, "include" in config)
+        for found in lint_config(merged, environ, require_explicit_prices=require_explicit_prices)
+    )
     included_duplicates: Final = itertools.chain.from_iterable(
         _included_duplicates(location, lines.get(("include",))) for location in locations
     )
@@ -582,10 +619,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser: Final = argparse.ArgumentParser(description="Lint a LiteLLM proxy config.yaml without starting the proxy.")
     parser.add_argument("config", type=Path, help="Path to the config.yaml to check")
     parser.add_argument("--strict", action="store_true", help="Exit 1 on warnings as well as errors")
+    parser.add_argument(
+        "--require-explicit-prices",
+        action="store_true",
+        help="Exit 1 when a model leaves out a price that LiteLLM's model cost map has for it",
+    )
     args: Final = parser.parse_args(argv)
     config_path: Final[Path] = args.config
     strict: Final[bool] = args.strict
-    findings: Final = lint_file(config_path, os.environ)
+    require_explicit_prices: Final[bool] = args.require_explicit_prices
+    findings: Final = lint_file(config_path, os.environ, require_explicit_prices=require_explicit_prices)
     errors: Final = sum(finding.severity == "error" for finding in findings)
     warnings: Final = len(findings) - errors
     report: Final = (
