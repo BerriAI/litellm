@@ -2332,7 +2332,7 @@ class Logging(LiteLLMLoggingBaseClass):
         """
         return get_masked_values(headers, ignore_sensitive_values=ignore_sensitive_headers)
 
-    def post_call(self, original_response, input=None, api_key=None, additional_args={}):
+    def post_call(self, original_response, input=None, api_key=None, additional_args={}) -> None:
         # Log the exact result from the LLM API, for streaming - log the type of response received
         if isinstance(original_response, dict):
             original_response = (
@@ -2343,7 +2343,11 @@ class Logging(LiteLLMLoggingBaseClass):
         try:
             self.model_call_details["input"] = input
             self.model_call_details["api_key"] = api_key
-            self.model_call_details["original_response"] = original_response
+            self.model_call_details["original_response"] = (
+                "first stream response received"
+                if isinstance(original_response, litellm.CustomStreamWrapper)
+                else original_response
+            )
             self.model_call_details["additional_args"] = additional_args
             self.model_call_details["log_event_type"] = "post_api_call"
 
