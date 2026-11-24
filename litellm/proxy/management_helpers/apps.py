@@ -176,15 +176,17 @@ class _AssociationBudget:
     effective: Budget | None
 
 
+def _dumped_fields(values: Mapping[str, object]) -> Mapping[str, object]:
+    return values
+
+
 def app_budget_selection(
     data: AppCreate | AppPatch | AppOrganizationPut | AppMemberPut | AppGroupBudgetPut,
     field: Literal["budget", "default_customer_member_budget", "customer_member_budget"] = "budget",
 ) -> MemberPatch:
+    selected: Final = _dumped_fields(data.model_dump(include={field, f"{field}_id"}, exclude_unset=True))
     return MemberPatch.model_validate(
-        {
-            "budget" if name == field else "budget_id": value
-            for name, value in data.model_dump(include={field, f"{field}_id"}, exclude_unset=True).items()
-        }
+        {"budget" if name == field else "budget_id": value for name, value in selected.items()}
     )
 
 

@@ -28,7 +28,7 @@ class VertexAIGoogleGenAIConfig(GoogleGenAIConfig):
         api_key: str | None,
         headers: dict | None,
         model: str,
-        litellm_params: GenericLiteLLMParams | dict | None,
+        litellm_params: GenericLiteLLMParams | Mapping[str, object] | None,
     ) -> dict:
         default_headers: Final = {
             "Content-Type": "application/json",
@@ -59,9 +59,9 @@ class VertexAIGoogleGenAIConfig(GoogleGenAIConfig):
 
     def map_generate_content_optional_params(
         self,
-        generate_content_config_dict,
+        generate_content_config_dict: Mapping[str, object],
         model: str,
-    ):
+    ) -> dict[str, object]:
         """
         Map Google GenAI parameters to provider-specific format.
 
@@ -73,7 +73,7 @@ class VertexAIGoogleGenAIConfig(GoogleGenAIConfig):
             Mapped parameters for the provider
         """
 
-        _generate_content_config_dict: Final[dict] = {}
+        _generate_content_config_dict: Final[dict[str, object]] = {}
 
         for param, value in generate_content_config_dict.items():
             camel_case_key = self._camel_to_snake(param)
@@ -87,7 +87,7 @@ class VertexAIGoogleGenAIConfig(GoogleGenAIConfig):
         tools: object | None,
         generate_content_config_dict: dict,
         system_instruction: object | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Transform the generate content request for Vertex AI.
         Since Vertex AI natively supports Google GenAI format, we can pass most fields directly.
