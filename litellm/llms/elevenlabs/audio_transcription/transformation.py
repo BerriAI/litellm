@@ -30,7 +30,8 @@ _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_i
 _JSON_OBJECTS: Final = TypeAdapter(Iterable[Mapping[str, object]], config=ConfigDict(hide_input_in_errors=True))
 _HIDDEN_PARAMS: Final = TypeAdapter(dict[str, object])
 _FORM_ITEMS: Final = TypeAdapter(tuple[object, ...])
-_EXTRA_BODY_BLOCKED_FIELDS: Final = frozenset({"model_id", "extra_body"})
+_ANY_KEY_OBJECT: Final = TypeAdapter(dict[object, object])
+_CLIENT_BLOCKED_FIELDS: Final = frozenset({"model_id", "extra_body"})
 
 
 class _JsonResponse(Protocol):
@@ -43,7 +44,7 @@ def _json_body(response: _JsonResponse) -> object:
 
 def _json_compatible(value: object) -> object:
     if isinstance(value, Mapping):
-        return _JSON_OBJECT.validate_python(value)
+        return _ANY_KEY_OBJECT.validate_python(value)
     return str(value)
 
 
@@ -124,13 +125,17 @@ class ElevenLabsAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         extra_fields: Final = _JSON_OBJECT.validate_python(extra_body if isinstance(extra_body, Mapping) else {})
         form_data: Final = {
             "model_id": model,
+            **{key: _form_value(value) for key, value in params.items() if key in openai_params and value is not None},
+            **{
+                key: _form_value(value)
+                for key, value in provider_specific_params.items()
+                if key not in _CLIENT_BLOCKED_FIELDS
+            },
             **{
                 key: _form_value(value)
                 for key, value in extra_fields.items()
-                if key not in _EXTRA_BODY_BLOCKED_FIELDS and value is not None
+                if key not in _CLIENT_BLOCKED_FIELDS and value is not None
             },
-            **{key: _form_value(value) for key, value in params.items() if key in openai_params and value is not None},
-            **{key: _form_value(value) for key, value in provider_specific_params.items() if key != "extra_body"},
         }
 
         # Prepare files
