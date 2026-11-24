@@ -24,6 +24,7 @@ from typing_extensions import Self
 
 from litellm._logging import verbose_logger
 from litellm.caching.in_memory_cache import InMemoryCache
+from litellm.proxy.mcp_server.auth_profiles import profile_secrets_digest
 from litellm.proxy.mcp_server.result_conversion import age_freshness, aggregate_freshness
 
 if TYPE_CHECKING:
@@ -62,23 +63,34 @@ class CatalogSnapshot:
     routing: MutableMapping[str, str]
 
 
+def _auth_profile_secrets_digest(server: MCPServer) -> Mapping[str, str]:
+    return (
+        {"additional_auth_secrets_digest": profile_secrets_digest(server.additional_auth)}
+        if server.additional_auth
+        else {}
+    )
+
+
 def _configuration_identity(server: MCPServer) -> str:
     return json.dumps(
-        server.model_dump(
-            mode="json",
-            exclude=frozenset(
-                (
-                    "short_prefix",
-                    "scopes",
-                    "authorization_url",
-                    "token_url",
-                    "registration_url",
-                    "authorization_response_iss_parameter_supported",
-                    "client_id_metadata_document_supported",
+        {
+            **server.model_dump(
+                mode="json",
+                exclude=frozenset(
+                    (
+                        "short_prefix",
+                        "scopes",
+                        "authorization_url",
+                        "token_url",
+                        "registration_url",
+                        "authorization_response_iss_parameter_supported",
+                        "client_id_metadata_document_supported",
+                    )
                 )
-            )
-            | (frozenset() if server.issuer_is_anchored else frozenset(("issuer",))),
-        ),
+                | (frozenset() if server.issuer_is_anchored else frozenset(("issuer",))),
+            ),
+            **_auth_profile_secrets_digest(server),
+        },
         sort_keys=True,
     )
 

@@ -1,8 +1,10 @@
-from collections.abc import Iterable
+import hashlib
+import json
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from typing import Final
 
-from pydantic import TypeAdapter, ValidationError
+from pydantic import SecretStr, TypeAdapter, ValidationError
 from typing_extensions import assert_never
 
 from litellm.types.mcp_server.auth_profile import (
@@ -71,3 +73,24 @@ def profile_credentials_error(server: str, profiles: Iterable[MCPAuthProfile]) -
         if missing:
             return InvalidAuthProfiles(f"Profile '{profile.id}' of MCP server '{server}' requires {', '.join(missing)}")
     return None
+
+
+def profile_secrets(profile: MCPAuthProfile) -> Mapping[str, SecretStr | None]:
+    match profile:
+        case ClientCredentialsAuthProfile():
+            return {"client_id": profile.client_id, "client_secret": profile.client_secret}
+        case StaticAuthProfile():
+            return {"authentication_token": profile.authentication_token}
+        case _:  # pragma: no cover - exhaustiveness guard, unreachable while the union holds
+            assert_never(profile)  # pragma: no cover
+
+
+def _revealed_secrets(profile: MCPAuthProfile) -> tuple[str, Mapping[str, str | None]]:
+    return profile.id, {
+        field: secret.get_secret_value() if secret else None for field, secret in profile_secrets(profile).items()
+    }
+
+
+def profile_secrets_digest(profiles: Iterable[MCPAuthProfile]) -> str:
+    material: Final = json.dumps([_revealed_secrets(profile) for profile in profiles], sort_keys=True)
+    return hashlib.sha256(material.encode()).hexdigest()

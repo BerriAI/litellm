@@ -4,7 +4,16 @@ from datetime import datetime
 from typing import Annotated, Any, Final, Literal, TypeAlias
 from urllib.parse import urlsplit
 
-from pydantic import AfterValidator, ConfigDict, Field, HttpUrl, TypeAdapter, field_validator, model_validator
+from pydantic import (
+    AfterValidator,
+    ConfigDict,
+    Field,
+    HttpUrl,
+    TypeAdapter,
+    ValidationInfo,
+    field_validator,
+    model_validator,
+)
 from typing_extensions import Self
 
 from litellm.types.llms.base import LiteLLMBaseModel
@@ -18,6 +27,7 @@ from litellm.types.mcp import (
     normalize_upstream_header_name,
     validate_mcp_protocol_transport,
 )
+from litellm.types.mcp_server.auth_profile import MCPAuthProfiles
 
 MAX_TOOLS_LIST_CACHE_TTL_SECONDS: Final = 365 * 24 * 60 * 60
 _TOOLS_LIST_CACHE_TTL_SECONDS: Final = TypeAdapter[int](
@@ -133,6 +143,10 @@ _PINNED_TOOLS: Final[TypeAdapter[dict[str, PinnedMCPTool] | None]] = TypeAdapter
 def parse_pinned_tools(value: object) -> dict[str, PinnedMCPTool] | None:
     decoded: Final = json.loads(value) if isinstance(value, str) and value else value
     return _PINNED_TOOLS.validate_python(decoded or None)
+
+
+def _is_empty(value: object) -> bool:
+    return not value
 
 
 class MCPServer(LiteLLMBaseModel):
@@ -308,6 +322,8 @@ class MCPServer(LiteLLMBaseModel):
     allow_sampling: bool = False
     allow_elicitation: bool = False
     events: MCPServerEventsConfig | None = None
+    additional_auth: MCPAuthProfiles | None = Field(default=None, exclude_if=_is_empty)
+    auth_profiles_unreadable: bool = Field(default=False, exclude_if=_is_empty)
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     def __repr__(self) -> str:
@@ -365,6 +381,13 @@ class MCPServer(LiteLLMBaseModel):
             )
         validate_mcp_protocol_transport(self.protocol_version, self.transport)
         return self
+
+    @field_validator("auth_profiles_unreadable")
+    @classmethod
+    def reject_unreadable_marker_beside_profiles(cls, unreadable: bool, info: ValidationInfo) -> bool:
+        if unreadable and info.data.get("additional_auth"):
+            raise ValueError("a server cannot carry readable auth profiles and report its stored ones as unreadable")
+        return unreadable
 
     @model_validator(mode="after")
     def validate_identity_binding_mode(self) -> Self:

@@ -67,6 +67,7 @@ from litellm.proxy._types import (
 from litellm.proxy.auth import auth_checks
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.mcp_server import discoverable_endpoints
+from litellm.proxy.mcp_server.auth_profiles import parse_auth_profiles
 from litellm.proxy.mcp_server.exceptions import (
     MCPServerListError,
     MCPUpstreamAuthError,
@@ -84,6 +85,7 @@ from litellm.proxy.mcp_server.mcp_server_manager import (
     _mcp_oauth_discovery_on_startup_enabled,
     _normalize_mcp_server_cost_info,
     _obo_retry_applies,
+    _redacted_registry_dump,
     _server_key_occupies_authorization,
     global_mcp_server_manager,
     listed_tools_caller_for,
@@ -23432,3 +23434,27 @@ def test_a_yaml_server_with_an_unreadable_events_block_loads_with_events_off() -
     from litellm.proxy.mcp_server.mcp_server_manager import _stored_events_config
 
     assert _stored_events_config({"enabled": True, "allowed_events": []}) is None
+
+
+@pytest.mark.parametrize("secret", ("static-profile-secret", "oauth-profile-id", "oauth-profile-secret"))
+def test_the_debug_registry_dump_hides_the_credentials_of_a_servers_profiles(secret: str) -> None:
+    profiles: Final = parse_auth_profiles(
+        "tickets",
+        [
+            {"id": "build", "auth_type": "bearer_token", "authentication_token": "static-profile-secret"},
+            {
+                "id": "ops",
+                "auth_type": "oauth2",
+                "oauth2_flow": "client_credentials",
+                "client_id": "oauth-profile-id",
+                "client_secret": "oauth-profile-secret",
+                "token_url": "https://issuer.example/token",
+            },
+        ],
+    )
+    assert isinstance(profiles, tuple)
+    server: Final = MCPServer(
+        server_id="tickets", name="tickets", transport=MCPTransport.http, additional_auth=profiles
+    )
+
+    assert secret not in json.dumps(_redacted_registry_dump({"tickets": server}))
