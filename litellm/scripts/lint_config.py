@@ -238,7 +238,7 @@ def _number(value: object, *, parse_text: bool) -> float | None:
 
 
 def _is_price_key(key: str) -> bool:
-    return "cost" in key or key.endswith("_pricing")
+    return "cost" in key or "_multiplier" in key or key.endswith("_pricing")
 
 
 def _model_info_findings(

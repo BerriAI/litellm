@@ -1,9 +1,10 @@
 import os
 from pathlib import Path
-from typing import Final
+from typing import Final, cast
 
 import pytest
 
+import litellm
 from litellm.scripts.lint_config import format_finding, lint_file, main
 
 VALID: Final = """\
@@ -474,21 +475,51 @@ def test_declared_environment_variable_pointing_at_an_unset_one_stays_unset(
     assert _lint(tmp_path, text, {"OPENAI_API_KEY": "sk-process"}) == []
 
 
+_OPUS_MAP_ENTRY: Final = {
+    "litellm_provider": "anthropic",
+    "mode": "chat",
+    "max_input_tokens": 200000,
+    "max_output_tokens": 64000,
+    "input_cost_per_token": 5e-06,
+    "output_cost_per_token": 2.5e-05,
+    "cache_creation_input_token_cost": 6.25e-06,
+    "cache_creation_input_token_cost_above_1hr": 1e-05,
+    "cache_read_input_token_cost": 5e-07,
+    "input_cost_per_token_above_200k_tokens": 1e-05,
+    "search_context_cost_per_query": {"search_context_size_low": 0.01},
+    "output_cost_per_reasoning_token": None,
+}
+_GPT_MAP_ENTRY: Final = {
+    "litellm_provider": "openai",
+    "mode": "chat",
+    "max_input_tokens": 128000,
+    "max_output_tokens": 16384,
+    "input_cost_per_token": 2.5e-06,
+    "output_cost_per_token": 1e-05,
+    "cache_read_input_token_cost": 1.25e-06,
+    "regional_processing_uplift_multiplier_eu": 1.1,
+    "fedramp_uplift_multiplier": 1.1,
+}
 _OPUS_PRICES: Final = (
     "{input_cost_per_token: 1, output_cost_per_token: 1, cache_creation_input_token_cost: 1, "
-    "cache_read_input_token_cost: 1, input_cost_per_token_batches: 1, output_cost_per_token_batches: 1, "
-    "cache_creation_input_token_cost_batches: 1, cache_read_input_token_cost_batches: 1, "
+    "cache_read_input_token_cost: 1, input_cost_per_token_above_200k_tokens: 1, "
     "search_context_cost_per_query: {search_context_size_low: 1}}"
 )
 _GPT_PRICES: Final = (
     "{input_cost_per_token: 1, output_cost_per_token: 1, cache_read_input_token_cost: 1, "
-    "input_cost_per_token_batches: 1, output_cost_per_token_batches: 1, input_cost_per_token_priority: 1, "
-    "output_cost_per_token_priority: 1, cache_read_input_token_cost_priority: 1}"
+    "regional_processing_uplift_multiplier_eu: 1, fedramp_uplift_multiplier: 1}"
 )
 _OPUS_NEEDS_1HR: Final = [
-    "config.yaml:4: error: model_list[0].model_info: anthropic/claude-opus-4-5 would take these prices from "
+    "config.yaml:4: error: model_list[0].model_info: anthropic/lint-opus would take these prices from "
     "LiteLLM's model cost map, set them in model_info: cache_creation_input_token_cost_above_1hr"
 ]
+
+
+@pytest.fixture
+def price_map(monkeypatch: pytest.MonkeyPatch) -> None:
+    model_cost: Final = cast("dict[str, object]", litellm.model_cost)  # pyright: ignore[reportUnknownMemberType]
+    monkeypatch.setitem(model_cost, "lint-opus", _OPUS_MAP_ENTRY)
+    monkeypatch.setitem(model_cost, "lint-gpt", _GPT_MAP_ENTRY)
 
 
 def _lint_prices(tmp_path: Path, text: str, *, require_explicit_prices: bool = True) -> list[str]:
@@ -500,37 +531,51 @@ def _lint_prices(tmp_path: Path, text: str, *, require_explicit_prices: bool = T
     ]
 
 
+@pytest.mark.usefixtures("price_map")
 def test_require_explicit_prices_flags_a_price_the_cost_map_has_for_the_model(tmp_path: Path) -> None:
-    text: Final = _model_entry("{model: anthropic/claude-opus-4-5}", _OPUS_PRICES)
+    text: Final = _model_entry("{model: anthropic/lint-opus}", _OPUS_PRICES)
     assert _lint_prices(tmp_path, text) == _OPUS_NEEDS_1HR
     assert _lint_prices(tmp_path, text, require_explicit_prices=False) == []
     assert _lint(tmp_path, text) == []
 
 
+@pytest.mark.usefixtures("price_map")
 def test_require_explicit_prices_passes_once_every_mapped_price_is_set(tmp_path: Path) -> None:
     complete: Final = _OPUS_PRICES.replace("{input", "{cache_creation_input_token_cost_above_1hr: 1, input", 1)
-    assert _lint_prices(tmp_path, _model_entry("{model: anthropic/claude-opus-4-5}", complete)) == []
-    in_params: Final = "{model: anthropic/claude-opus-4-5, cache_creation_input_token_cost_above_1hr: 1}"
+    assert _lint_prices(tmp_path, _model_entry("{model: anthropic/lint-opus}", complete)) == []
+    in_params: Final = "{model: anthropic/lint-opus, cache_creation_input_token_cost_above_1hr: 1}"
     assert _lint_prices(tmp_path, _model_entry(in_params, _OPUS_PRICES)) == []
 
 
+@pytest.mark.usefixtures("price_map")
 def test_require_explicit_prices_only_asks_for_prices_in_that_models_map_entry(tmp_path: Path) -> None:
-    assert _lint_prices(tmp_path, _model_entry("{model: openai/gpt-4o}", _GPT_PRICES)) == []
+    assert _lint_prices(tmp_path, _model_entry("{model: openai/lint-gpt}", _GPT_PRICES)) == []
 
 
+@pytest.mark.usefixtures("price_map")
+def test_require_explicit_prices_asks_for_billing_multipliers(tmp_path: Path) -> None:
+    info: Final = "{input_cost_per_token: 1, output_cost_per_token: 1, cache_read_input_token_cost: 1}"
+    assert _lint_prices(tmp_path, _model_entry("{model: openai/lint-gpt}", info)) == [
+        "config.yaml:4: error: model_list[0].model_info: openai/lint-gpt would take these prices from LiteLLM's "
+        "model cost map, set them in model_info: fedramp_uplift_multiplier, regional_processing_uplift_multiplier_eu"
+    ]
+
+
+@pytest.mark.usefixtures("price_map")
 def test_require_explicit_prices_uses_base_model_and_counts_a_null_price_as_unset(tmp_path: Path) -> None:
     info: Final = _OPUS_PRICES.replace(
-        "{input", "{base_model: anthropic/claude-opus-4-5, cache_creation_input_token_cost_above_1hr: null, input", 1
+        "{input", "{base_model: anthropic/lint-opus, cache_creation_input_token_cost_above_1hr: null, input", 1
     )
     params: Final = "{model: azure/my-deployment, api_base: https://example.com, api_version: v, api_key: k}"
     assert _lint_prices(tmp_path, _model_entry(params, info)) == _OPUS_NEEDS_1HR
 
 
+@pytest.mark.usefixtures("price_map")
 def test_require_explicit_prices_lists_every_missing_price_when_model_info_is_absent(tmp_path: Path) -> None:
-    assert _lint_prices(tmp_path, _model_entry("{model: azure/gpt-4o, api_base: b, api_version: v, api_key: k}")) == [
-        "config.yaml:2: error: model_list[0]: azure/gpt-4o would take these prices from LiteLLM's model cost map, "
-        "set them in model_info: cache_read_input_token_cost, input_cost_per_token, input_cost_per_token_batches, "
-        "output_cost_per_token, output_cost_per_token_batches"
+    assert _lint_prices(tmp_path, _model_entry("{model: openai/lint-gpt}")) == [
+        "config.yaml:2: error: model_list[0]: openai/lint-gpt would take these prices from LiteLLM's model cost map, "
+        "set them in model_info: cache_read_input_token_cost, fedramp_uplift_multiplier, input_cost_per_token, "
+        "output_cost_per_token, regional_processing_uplift_multiplier_eu"
     ]
 
 
@@ -540,12 +585,13 @@ def test_require_explicit_prices_skips_wildcard_and_unmapped_models(tmp_path: Pa
     assert [line.split(": ")[1] for line in unmapped] == ["warning"]
 
 
+@pytest.mark.usefixtures("price_map")
 def test_require_explicit_prices_flag_alone_makes_the_exit_code_nonzero(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     for name, value in ENVIRON.items():
         monkeypatch.setenv(name, value)
     config_path: Final = tmp_path / "config.yaml"
-    config_path.write_text(_model_entry("{model: anthropic/claude-opus-4-5}", _OPUS_PRICES), encoding="utf-8")
+    config_path.write_text(_model_entry("{model: anthropic/lint-opus}", _OPUS_PRICES), encoding="utf-8")
     assert main([str(config_path)]) == 0
     assert main([str(config_path), "--require-explicit-prices"]) == 1
