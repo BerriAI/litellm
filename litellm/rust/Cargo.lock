@@ -3511,6 +3511,7 @@ dependencies = [
  "base64 0.22.1",
  "crypto_secretbox",
  "getrandom 0.3.4",
+ "hmac 0.12.1",
  "litellm-secret-value",
  "rstest",
  "serde",
