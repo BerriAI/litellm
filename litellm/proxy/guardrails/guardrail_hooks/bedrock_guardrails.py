@@ -2910,6 +2910,11 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             log_when_nothing_new=True,
         )
         if session_scan is True:
+            data["messages"] = self._merge_filtered_messages(
+                original_messages=filter_result.original_messages or new_messages,
+                updated_target_messages=filtered_messages,
+                target_indices=filter_result.target_indices,
+            )
             add_guardrail_to_applied_guardrails_header(request_data=data, guardrail_name=self.guardrail_name)
             return data
 

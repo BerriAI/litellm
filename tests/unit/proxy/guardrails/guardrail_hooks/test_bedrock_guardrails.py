@@ -8418,13 +8418,18 @@ class _ApplyGuardrailRecorder:
 
     def __init__(self, failed_scans: int = 0, redactions: Mapping[str, str] = MappingProxyType({})) -> None:
         self.scans: tuple[tuple[str, ...], ...] = ()
+        self.output_qualifiers: tuple[tuple[tuple[str, ...], ...], ...] = ()
         self.failed_scans: Final = failed_scans
         self.redactions: Final = redactions
         self.handler: Final = AsyncHTTPHandler(transport=httpx.MockTransport(self._answer))
 
     def _answer(self, request: httpx.Request) -> httpx.Response:
-        texts: Final = tuple(item["text"]["text"] for item in json.loads(request.content)["content"])
+        body: Final = json.loads(request.content)
+        texts: Final = tuple(item["text"]["text"] for item in body["content"])
         self.scans = (*self.scans, texts)
+        if body["source"] == "OUTPUT":
+            qualifiers: Final = tuple(tuple(item["text"].get("qualifiers", ())) for item in body["content"])
+            self.output_qualifiers = (*self.output_qualifiers, qualifiers)
         if len(self.scans) <= self.failed_scans:
             return httpx.Response(
                 200, json={"Output": {"__type": "com.amazon.coral.service#InternalServerException"}, "Version": "1.0"}
@@ -8587,6 +8592,43 @@ async def test_a_session_text_whose_scan_failed_inside_a_200_is_scanned_again_on
         sorted((_SCAN_SYSTEM, _SCAN_ASK)),
         sorted((_SCAN_SYSTEM, _SCAN_ASK, _SCAN_RESULTS[0])),
     ]
+
+
+async def _responses_session_turn(guardrail: BedrockGuardrail, results: tuple[str, ...], session: str) -> None:
+    data: Final = {**_responses_request(results), "litellm_session_id": session}
+    await _moderate(guardrail, CallTypes.aresponses.value, data)
+    await guardrail.apply_guardrail(
+        inputs={"texts": ["It deploys to prod first."]}, request_data=data, input_type="response"
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_responses_session_turn_settled_in_during_call_keeps_the_grounding_context_for_the_post_call_scan() -> (
+    None
+):
+    recorder: Final = _ApplyGuardrailRecorder()
+    guardrail: Final = BedrockGuardrail(
+        guardrail_name=f"bedrock-during-post-{uuid.uuid4().hex}",
+        guardrailIdentifier="test-guardrail",
+        guardrailVersion="DRAFT",
+        event_hook=[GuardrailEventHooks.during_call, GuardrailEventHooks.post_call],
+        default_on=True,
+        aws_region_name="us-east-1",
+        aws_access_key_id="test-access-key",
+        aws_secret_access_key="test-secret-key",
+        async_handler=recorder.handler,
+        only_scan_new_messages=True,
+        contextual_grounding_from_messages=True,
+    )
+    session: Final = f"session-{uuid.uuid4().hex}"
+
+    for turn in range(2):
+        await _responses_session_turn(guardrail, _SCAN_RESULTS[:turn], session)
+
+    assert recorder.output_qualifiers == (
+        (("grounding_source",), ("query",), ("guard_content",)),
+        (("grounding_source",), ("query",), ("guard_content",)),
+    )
 
 
 _REDACTED_ASK: Final = "Summarise the [REDACTED] notes."
