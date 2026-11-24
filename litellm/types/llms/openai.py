@@ -1028,6 +1028,7 @@ class OpenAIChatCompletionDeveloperMessage(TypedDict, total=False):
 
 class ChatCompletionSystemMessage(OpenAIChatCompletionSystemMessage, total=False):
     cache_control: ChatCompletionCachedContent
+    clear_at: str
 
 
 class ChatCompletionDeveloperMessage(OpenAIChatCompletionDeveloperMessage, total=False):
