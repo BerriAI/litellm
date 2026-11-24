@@ -57,11 +57,11 @@ class SagemakerCohereEmbeddingConfig(BaseEmbeddingConfig):
 
     def map_openai_params(
         self,
-        non_default_params: dict,
-        optional_params: dict,
+        non_default_params: dict[str, object],
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:
         optional_params = BedrockCohereEmbeddingConfig().map_openai_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
@@ -70,14 +70,16 @@ class SagemakerCohereEmbeddingConfig(BaseEmbeddingConfig):
             optional_params["input_type"] = non_default_params["input_type"]
         return optional_params
 
-    def get_error_class(self, error_message: str, status_code: int, headers: dict | Headers) -> BaseLLMException:
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: dict[str, object] | Headers
+    ) -> BaseLLMException:
         return SagemakerError(message=error_message, status_code=status_code, headers=headers)
 
     def transform_embedding_request(
         self,
         model: str,
         input: "AllEmbeddingInputValues",
-        optional_params: dict,
+        optional_params: dict[str, object],
         headers: Mapping[str, object],
     ) -> dict[str, object]:
         """
