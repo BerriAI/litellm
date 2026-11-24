@@ -306,7 +306,7 @@ def test_sso_sign_in_with_db_team_mappings_creates_the_team_id_jwt_field_team_an
 def test_a_first_cli_sso_sign_in_session_carries_the_team_from_the_groups_claim(tmp_path: Path) -> None:
     subject: Final = f"sso-cli-first-user-{uuid.uuid4().hex[:12]}"
     team_id: Final = _group(subject)
-    jwtauth: Final = {"litellm_jwtauth": {"team_ids_jwt_field": "groups"}}
+    jwtauth: Final[Mapping[str, JsonValue]] = {"litellm_jwtauth": {"team_ids_jwt_field": "groups"}}
     with _sso_gateway(tmp_path, {}, jwtauth) as gateway, contextlib.ExitStack() as cleanups:
         cleanups.callback(gateway.request, "POST", "/team/delete", {"team_ids": [team_id]})
         created: Final = gateway.request("POST", "/team/new", {"team_id": team_id})

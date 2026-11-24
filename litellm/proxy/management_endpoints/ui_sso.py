@@ -2120,7 +2120,11 @@ async def get_user_info_from_db(
         )
         if user_info is None or not joined_teams:
             return user_info
-        return user_info.model_copy(update={"teams": [*(user_info.teams or ()), *joined_teams]})
+        return user_info.model_copy(
+            update={
+                "teams": [*(user_info.teams or ()), *joined_teams]  # pyright: ignore[reportUnknownMemberType]  # NewUserResponse.teams is an untyped list
+            }
+        )
     except _SSOUserAdmissionError:
         raise
     except Exception as e:
