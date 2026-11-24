@@ -224,7 +224,7 @@ impl Admit {
         if let Some(reason) = over_its_caller {
             return Err(refused(parts, body, reason));
         }
-        parts.extensions.insert(JsonObject(fields));
+        parts.extensions.insert(JsonObject(fields.into()));
         if let Ok(caller) = authenticated {
             parts.extensions.insert(Preauthenticated(caller));
         }
@@ -390,6 +390,7 @@ mod tests {
             parsed,
             serde_json::from_str::<Map<String, Value>>(sent)
                 .ok()
+                .map(litellm_gateway_inference::RequestBody::from)
                 .as_ref()
         );
         let body = axum::body::to_bytes(admitted.into_body(), usize::MAX)

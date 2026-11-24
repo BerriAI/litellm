@@ -4,9 +4,8 @@ use litellm_cache_response::{CacheOptions, CachePolicy, CacheScope};
 use litellm_gateway_auth::Authenticated;
 use litellm_gateway_auth_core::{Caller, Rows, StoredKey};
 use serde::Deserialize;
-use serde_json::{Map, Value};
 
-use crate::{BodyError, ExposedHeader};
+use crate::{BodyError, ExposedHeader, request::RequestBody};
 
 #[derive(Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -20,7 +19,7 @@ struct Controls {
     max_age: Option<f64>,
 }
 
-type Prepared = (Map<String, Value>, CacheOptions);
+type Prepared = (RequestBody, CacheOptions);
 
 /// Whose answers a cached answer may be served to. A key is named by the hash its row is stored
 /// under, so every credential that stands for one key shares its answers.
@@ -34,13 +33,14 @@ fn scope<R: Rows<Key: StoredKey>>(caller: &Caller<R>) -> String {
 
 pub(crate) fn prepare<R: Rows<Key: StoredKey>>(
     identity: &Authenticated<R>,
-    body: Map<String, Value>,
+    body: RequestBody,
 ) -> Result<Prepared, BodyError> {
-    let controls: Controls = match body.get("cache").filter(|value| !value.is_null()) {
+    let controls: Controls = match body.others().get("cache").filter(|value| !value.is_null()) {
         Some(value) => serde_json::from_value(value.clone()).map_err(BodyError::CacheControls)?,
         None => Controls::default(),
     };
     let caching: Option<bool> = body
+        .others()
         .get("caching")
         .filter(|value| !value.is_null())
         .map(|value| serde_json::from_value(value.clone()))
@@ -56,12 +56,7 @@ pub(crate) fn prepare<R: Rows<Key: StoredKey>>(
         },
         scope: CacheScope::Isolated(scope(identity)),
     };
-    Ok((
-        body.into_iter()
-            .filter(|(name, _)| !matches!(name.as_str(), "cache" | "caching"))
-            .collect(),
-        options,
-    ))
+    Ok((body.without(&["cache", "caching"]), options))
 }
 
 fn duration(seconds: f64) -> Result<Duration, BodyError> {

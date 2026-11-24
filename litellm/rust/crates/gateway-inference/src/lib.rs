@@ -42,7 +42,7 @@ pub use headers::ExposedHeader;
 pub use hooks::{CallHooks, CallType, HookError, Refusal, ServedCall};
 pub use litellm_redis_store::RouterTiers;
 pub use rate_limited::RateLimited;
-pub use request::{JsonObject, MAX_BODY_BYTES, RequestId};
+pub use request::{JsonObject, MAX_BODY_BYTES, RequestBody, RequestId};
 pub use routing::Host;
 pub use routing_cache::RoutingCache;
 

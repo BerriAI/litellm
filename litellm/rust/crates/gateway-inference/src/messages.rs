@@ -24,6 +24,7 @@ use crate::{
     error::ErrorFormat,
     hooks::CallType,
     model_restamp::{ReportedModel, Stamp},
+    request::RequestBody,
     routing::{self, Host, Prompt, RouteAttempt, RouteChunks},
     serve::{self, Call, Endpoint},
     stream_event::{Counts, Kind, Read, Reading},
@@ -72,13 +73,13 @@ fn message_start(data: &str, model: &str) -> Stamp {
 struct MessagesAttempt<'a, H> {
     gateway: &'a Gateway<H>,
     route: MessagesRoute,
-    body: Map<String, Value>,
+    body: RequestBody,
     headers: &'a HeaderMap,
     policy: CachePolicy,
 }
 
 impl<'a, H: Host> MessagesAttempt<'a, H> {
-    fn new(call: &'a Call<H>, body: Map<String, Value>) -> Result<Self, Error> {
+    fn new(call: &'a Call<H>, body: RequestBody) -> Result<Self, Error> {
         let gateway = &*call.gateway;
         let (body, cache_options) = crate::caching::prepare(&call.identity, body)?;
         let route = gateway.messages.clone();
@@ -106,7 +107,7 @@ impl<H: Host> Endpoint for MessagesAttempt<'_, H> {
     const ERRORS: ErrorFormat = ErrorFormat::Anthropic;
 
     fn prompt(&self) -> Option<Prompt<'_>> {
-        Some(Prompt::Messages(&self.body))
+        Some(Prompt::Messages(self.body.others()))
     }
 
     fn usage(counts: Counts) -> Option<ChatCompletionsUsage> {
@@ -128,7 +129,7 @@ impl<H: Host> RouteAttempt for MessagesAttempt<'_, H> {
     async fn run(&self, attempt: &Attempt) -> Result<Self::Outcome, Error> {
         let deployment = &attempt.deployment;
         let call = MessagesCall {
-            timeout: routing::timeout(attempt, routing::streamed(&self.body)),
+            timeout: routing::timeout(attempt, self.body.streamed()),
             ..project(
                 deployment,
                 self.gateway.shaping(&deployment.id),
@@ -164,9 +165,10 @@ impl<H: Host> RouteAttempt for MessagesAttempt<'_, H> {
 fn project(
     deployment: &Deployment,
     shaping: MessagesShaping,
-    body: Map<String, Value>,
+    body: RequestBody,
     headers: &HeaderMap,
 ) -> Result<MessagesCall, Error> {
+    let body = Map::from(body);
     let tools = merged_tools(deployment, body.get(TOOLS)).map(|tools| (TOOLS.to_owned(), tools));
     let params = &deployment.params;
     let client_params = body.into_iter().map(|(name, value)| match name.as_str() {

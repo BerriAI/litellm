@@ -3,9 +3,13 @@ use axum::{
     extract::{FromRequest, FromRequestParts, Multipart, Request},
     http::request::Parts,
 };
+use litellm_llms_types::as_sent::AsSent;
 use serde_json::{Map, Value};
 
 use crate::{BodyError, Error};
+
+const MODEL: &str = "model";
+const STREAM: &str = "stream";
 
 pub(crate) const MAX_FILE_BYTES: usize = 50 * 1024 * 1024;
 /// The largest request body an inference route reads.
@@ -20,7 +24,83 @@ pub(crate) struct Upload {
 /// A request's JSON object body. One already in the request's extensions is taken as parsed, so
 /// whoever read the body before the route does not make the route parse it again.
 #[derive(Clone)]
-pub struct JsonObject(pub Map<String, Value>);
+pub struct JsonObject(pub RequestBody);
+
+/// A request body as the client sent it, with the fields every route reads typed. It turns back
+/// into what was sent, explicit nulls and values of the wrong type included, with `model` and
+/// `stream` first and every other field in the order sent.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct RequestBody {
+    model: Option<AsSent<String>>,
+    stream: Option<AsSent<bool>>,
+    others: Map<String, Value>,
+}
+
+impl RequestBody {
+    /// The public model name the request asks for.
+    pub fn model(&self) -> Option<&str> {
+        self.model.as_ref()?.read().map(String::as_str)
+    }
+
+    /// Whether the client asked for a stream.
+    pub fn streamed(&self) -> bool {
+        self.stream.as_ref().and_then(AsSent::read) == Some(&true)
+    }
+
+    /// The fields no route reads typed yet, in the order sent.
+    pub fn others(&self) -> &Map<String, Value> {
+        &self.others
+    }
+
+    pub fn set_model(&mut self, model: &str) {
+        self.model = Some(AsSent::new(Value::from(model)));
+    }
+
+    /// The body with `fields` written over it, as a dict's `update` writes them.
+    #[must_use]
+    pub fn merged(self, fields: impl IntoIterator<Item = (String, Value)>) -> Self {
+        Map::from(self)
+            .into_iter()
+            .chain(fields)
+            .collect::<Map<_, _>>()
+            .into()
+    }
+
+    /// The body without the fields `names` names, which the route consumed.
+    #[must_use]
+    pub(crate) fn without(self, names: &[&str]) -> Self {
+        Self {
+            others: self
+                .others
+                .into_iter()
+                .filter(|(name, _)| !names.contains(&name.as_str()))
+                .collect(),
+            ..self
+        }
+    }
+}
+
+impl From<Map<String, Value>> for RequestBody {
+    fn from(mut sent: Map<String, Value>) -> Self {
+        Self {
+            model: sent.shift_remove(MODEL).map(AsSent::new),
+            stream: sent.shift_remove(STREAM).map(AsSent::new),
+            others: sent,
+        }
+    }
+}
+
+impl From<RequestBody> for Map<String, Value> {
+    fn from(body: RequestBody) -> Self {
+        let model = body
+            .model
+            .map(|model| (MODEL.to_owned(), model.into_sent()));
+        let stream = body
+            .stream
+            .map(|stream| (STREAM.to_owned(), stream.into_sent()));
+        model.into_iter().chain(stream).chain(body.others).collect()
+    }
+}
 
 pub struct RequestId(pub Option<String>);
 
@@ -52,13 +132,13 @@ impl<S: Send + Sync> FromRequest<S> for JsonObject {
         })?;
         match parsed {
             Some(parsed) => Ok(parsed),
-            None => Ok(Self(object(&body)?)),
+            None => Ok(Self(object(&body)?.into())),
         }
     }
 }
 
 pub(crate) struct InferenceBody {
-    pub fields: Map<String, Value>,
+    pub fields: RequestBody,
     pub upload: Option<Upload>,
 }
 
@@ -97,13 +177,6 @@ fn object(body: &[u8]) -> Result<Map<String, Value>, BodyError> {
     }
 }
 
-/// The public model name the request asks for.
-pub(crate) fn model(body: &Map<String, Value>) -> Result<&str, BodyError> {
-    body.get("model")
-        .and_then(Value::as_str)
-        .ok_or(BodyError::MissingModel)
-}
-
 async fn parse_multipart(mut multipart: Multipart) -> Result<InferenceBody, Error> {
     let mut fields = Map::new();
     let mut upload = None;
@@ -132,7 +205,10 @@ async fn parse_multipart(mut multipart: Multipart) -> Result<InferenceBody, Erro
             fields.insert(name, value);
         }
     }
-    Ok(InferenceBody { fields, upload })
+    Ok(InferenceBody {
+        fields: fields.into(),
+        upload,
+    })
 }
 
 fn multipart_error(error: axum::extract::multipart::MultipartError) -> Error {
@@ -151,6 +227,7 @@ mod tests {
         routing::post,
     };
     use rstest::{fixture, rstest};
+    use serde_json::json;
     use tower::ServiceExt;
 
     use super::*;
@@ -190,10 +267,74 @@ mod tests {
         assert_eq!(body["error"]["code"], 413);
     }
 
+    fn sent(body: &str) -> RequestBody {
+        serde_json::from_str::<Map<String, Value>>(body)
+            .unwrap()
+            .into()
+    }
+
+    fn written(body: RequestBody) -> String {
+        Value::Object(body.into()).to_string()
+    }
+
+    #[rstest]
+    #[case::typed_fields_first(
+        r#"{"max_tokens":5,"stream":true,"model":"claude","metadata":null}"#,
+        r#"{"model":"claude","stream":true,"max_tokens":5,"metadata":null}"#
+    )]
+    #[case::values_of_the_wrong_type(
+        r#"{"model":7,"stream":"yes","tools":[]}"#,
+        r#"{"model":7,"stream":"yes","tools":[]}"#
+    )]
+    #[case::explicit_nulls(r#"{"model":null,"stream":null}"#, r#"{"model":null,"stream":null}"#)]
+    #[case::neither_typed_field(r#"{"messages":[]}"#, r#"{"messages":[]}"#)]
+    fn a_body_writes_back_what_was_sent(#[case] body: &str, #[case] expected: &str) {
+        assert_eq!(written(sent(body)), expected);
+    }
+
+    #[rstest]
+    #[case::a_name(r#"{"model":"claude"}"#, Some("claude"), false)]
+    #[case::a_stream(r#"{"model":"claude","stream":true}"#, Some("claude"), true)]
+    #[case::no_stream(r#"{"stream":false}"#, None, false)]
+    #[case::not_a_name_or_a_flag(r#"{"model":7,"stream":"true"}"#, None, false)]
+    #[case::nulls(r#"{"model":null,"stream":null}"#, None, false)]
+    #[case::neither(r#"{}"#, None, false)]
+    fn reads_the_model_and_the_stream_flag_only_when_typed(
+        #[case] body: &str,
+        #[case] model: Option<&str>,
+        #[case] streamed: bool,
+    ) {
+        let body = sent(body);
+
+        assert_eq!((body.model(), body.streamed()), (model, streamed));
+    }
+
+    #[rstest]
+    fn merged_fields_write_over_the_body_and_are_read_typed() {
+        let fields = [
+            ("model".to_owned(), json!("fallback")),
+            ("stream".to_owned(), json!(true)),
+            ("max_tokens".to_owned(), json!(9)),
+            ("top_k".to_owned(), json!(3)),
+        ];
+
+        let merged = sent(r#"{"model":"claude","max_tokens":5,"system":"terse"}"#).merged(fields);
+
+        assert_eq!(
+            (merged.model(), merged.streamed(), written(merged.clone())),
+            (
+                Some("fallback"),
+                true,
+                r#"{"model":"fallback","stream":true,"max_tokens":9,"system":"terse","top_k":3}"#
+                    .to_owned()
+            )
+        );
+    }
+
     fn already_parsed(sent: &'static str) -> Request {
-        let parsed = serde_json::from_str(r#"{"model":"parsed"}"#).unwrap();
+        let parsed = serde_json::from_str::<Map<String, Value>>(r#"{"model":"parsed"}"#).unwrap();
         let mut request = Request::post("/").body(Body::from(sent)).unwrap();
-        request.extensions_mut().insert(JsonObject(parsed));
+        request.extensions_mut().insert(JsonObject(parsed.into()));
         request
     }
 
@@ -205,7 +346,7 @@ mod tests {
             .ok()
             .unwrap();
 
-        assert_eq!(body["model"], "parsed");
+        assert_eq!(body.model(), Some("parsed"));
     }
 
     #[rstest]

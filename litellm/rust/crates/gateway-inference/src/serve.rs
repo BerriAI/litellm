@@ -14,15 +14,14 @@ use axum::{
 use litellm_gateway_auth::Authenticated;
 use litellm_llms_types::formats::chat_completions::ChatCompletionsUsage;
 use litellm_router_core::Op;
-use serde_json::{Map, Value};
 
 use crate::{
-    Ended, Error, Gateway, RequestId,
+    BodyError, Ended, Error, Gateway, RequestId,
     error::ErrorFormat,
     headers::Routing,
     hooks::{self, CallType},
     model_restamp::ReportedModel,
-    request,
+    request::RequestBody,
     routing::{self, Host, Prompt, RouteAttempt},
     stream_event::Counts,
 };
@@ -79,17 +78,17 @@ pub(crate) trait Endpoint: RouteAttempt {
 /// answered here too, so it is told in the route's error format.
 pub(crate) async fn run<H, E, B>(
     call: &Call<H>,
-    body: Result<Map<String, Value>, Error>,
+    body: Result<RequestBody, Error>,
     build: B,
 ) -> Response
 where
     H: Host,
     E: Endpoint,
-    B: FnOnce(Map<String, Value>) -> Result<E, Error>,
+    B: FnOnce(RequestBody) -> Result<E, Error>,
 {
     let (gateway, identity) = (&*call.gateway, &call.identity);
-    let serve = |hooks: Arc<H::Hooks>, body: Map<String, Value>| async move {
-        let model = request::model(&body)?.to_owned();
+    let serve = |hooks: Arc<H::Hooks>, body: RequestBody| async move {
+        let model = body.model().ok_or(BodyError::MissingModel)?.to_owned();
         let endpoint = build(body)?;
         let prompt = endpoint.prompt();
         let routed =

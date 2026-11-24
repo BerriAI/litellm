@@ -11,10 +11,10 @@ use axum::{
 use futures_util::{StreamExt, stream};
 use litellm_gateway_auth::Authenticated;
 use litellm_llms_types::formats::chat_completions::ChatCompletionsUsage;
-use serde_json::{Map, Value};
 
 use crate::{
     Ended, Gateway, Host,
+    request::RequestBody,
     serve::Endpoint,
     stream_event::Counts,
     stream_outcome::{self, Outcome},
@@ -91,8 +91,8 @@ pub trait CallHooks: Send + Sync + 'static {
     /// body comes back as the callbacks left it.
     fn pre_call(
         &self,
-        body: Map<String, Value>,
-    ) -> impl Future<Output = Result<Map<String, Value>, HookError>> + Send;
+        body: RequestBody,
+    ) -> impl Future<Output = Result<RequestBody, HookError>> + Send;
 
     fn post_call_success(&self) -> impl Future<Output = Result<(), HookError>> + Send;
 
@@ -135,12 +135,12 @@ pub(crate) async fn around<H, F, Fut>(
     gateway: &Gateway<H>,
     identity: &Authenticated<H::Rows>,
     call_type: CallType,
-    body: Map<String, Value>,
+    body: RequestBody,
     serve: F,
 ) -> Result<Response, Ended>
 where
     H: Host,
-    F: FnOnce(Arc<H::Hooks>, Map<String, Value>) -> Fut,
+    F: FnOnce(Arc<H::Hooks>, RequestBody) -> Fut,
     Fut: Future<Output = Result<Answer, Ended>>,
 {
     let hooks = Arc::new(gateway.host.hooks(identity, call_type));

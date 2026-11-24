@@ -2,6 +2,7 @@
 - Own endpoint paths, request parsing, model alias resolution, and API-specific response and SSE error formats. Delegate hosted call execution and HTTP body delivery to host-http
 - Delegate inference execution to the `inference-<fmt>` crates and provider transformations and authentication to `llms` and the auth crates. Do not duplicate them in handlers
 - Let the `inference-<fmt>` crates validate inference fields and supported features, then map their errors to HTTP responses. Do not add gateway checks for temporary inference limitations
+- A request body is a `RequestBody` from the route's edge through the callback hooks to the attempt: `model` and `stream` are read typed, as `AsSent`, so a value of the wrong type is kept and written back as sent, and a route reads no field off a JSON value
 - `JsonObject` takes a body already parsed from the request's extensions and still reads the body, so the body limit holds. Whoever reads the body before the route puts it there, as the gateway's `admit` does, so a request is parsed once
 - Use injected deployments, HTTP pools, settings, and secret sources. Do not load process configuration or construct independent clients in handlers
 - Test HTTP contracts here, including status codes, forwarded headers, error envelopes, and streaming behavior. Keep inference and provider tests in their owning crates

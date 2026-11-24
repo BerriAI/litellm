@@ -8,13 +8,10 @@ use litellm_callbacks::{
     CallFacts, CallIds, CallKind, CallTarget, CallTiming, Field, FieldSet, FieldValues, Hook,
     HookInput, LoggedModelGroup, Outcome, PatchOp, Scalar, Usage, UsageRecord,
 };
-use litellm_gateway_inference::{CallType, ServedCall};
+use litellm_gateway_inference::{CallType, RequestBody, ServedCall};
 use litellm_llms_types::formats::chat_completions::ChatCompletionsUsage;
 use serde::Serialize;
 use serde_json::{Map, Value};
-
-const MODEL: &str = "model";
-const STREAM: &str = "stream";
 
 /// A patch operation the gateway has no place to write.
 #[derive(Debug, PartialEq, Eq, thiserror::Error)]
@@ -36,12 +33,12 @@ pub(super) enum Unwritable {
 /// the stream flag are read from whichever is there, so a patch to a held body is what every
 /// later reader sees.
 enum Request {
-    Held(Map<String, Value>),
+    Held(Box<RequestBody>),
     Named { model: Option<String>, stream: bool },
 }
 
 impl Request {
-    fn body(&self) -> Option<&Map<String, Value>> {
+    fn body(&self) -> Option<&RequestBody> {
         match self {
             Self::Held(body) => Some(body),
             Self::Named { .. } => None,
@@ -50,14 +47,14 @@ impl Request {
 
     fn model(&self) -> Option<&str> {
         match self {
-            Self::Held(body) => body.get(MODEL).and_then(Value::as_str),
+            Self::Held(body) => body.model(),
             Self::Named { model, .. } => model.as_deref(),
         }
     }
 
     fn stream(&self) -> bool {
         match self {
-            Self::Held(body) => body.get(STREAM).and_then(Value::as_bool) == Some(true),
+            Self::Held(body) => body.streamed(),
             Self::Named { stream, .. } => *stream,
         }
     }
@@ -70,7 +67,7 @@ impl Request {
     }
 
     /// The held body for a write to `field`.
-    fn held(&mut self, field: Field) -> Result<&mut Map<String, Value>, Unwritable> {
+    fn held(&mut self, field: Field) -> Result<&mut RequestBody, Unwritable> {
         match self {
             Self::Held(body) => Ok(body),
             Self::Named { .. } => Err(Unwritable::Routed(field)),
@@ -134,16 +131,16 @@ impl Known {
     }
 
     /// Takes the route's `body` for the pre-call hook.
-    pub(super) fn hold(&mut self, body: Map<String, Value>) {
-        self.request = Request::Held(body);
+    pub(super) fn hold(&mut self, body: RequestBody) {
+        self.request = Request::Held(Box::new(body));
     }
 
     /// The body as the callbacks left it, back to the route.
-    pub(super) fn release(&mut self) -> Map<String, Value> {
+    pub(super) fn release(&mut self) -> RequestBody {
         let named = self.request.named();
         match std::mem::replace(&mut self.request, named) {
-            Request::Held(body) => body,
-            Request::Named { .. } => Map::new(),
+            Request::Held(body) => *body,
+            Request::Named { .. } => RequestBody::default(),
         }
     }
 
@@ -163,7 +160,10 @@ impl Known {
     fn read(&self, field: Field) -> Option<Value> {
         match field {
             Field::Model => self.request.model().map(Value::from),
-            Field::RequestBody => self.request.body().cloned().map(Value::Object),
+            Field::RequestBody => self
+                .request
+                .body()
+                .map(|body| Value::Object(body.clone().into())),
             Field::RateLimitStatuses => self.rate_limit_statuses.clone(),
             Field::ResponseHeaders => Some(Value::Object(self.response_headers.clone())),
             Field::Outcome => record(self.outcome?),
@@ -223,7 +223,10 @@ impl Known {
             PatchOp::Merge {
                 field: Field::OptionalParams,
                 keys,
-            } => self.request.held(Field::OptionalParams)?.extend(keys),
+            } => {
+                let body = self.request.held(Field::OptionalParams)?;
+                *body = std::mem::take(body).merged(keys);
+            }
             PatchOp::Merge {
                 field: Field::ResponseHeaders,
                 keys,
@@ -232,9 +235,7 @@ impl Known {
                 field: Field::Model,
                 value: Value::String(model),
             } => {
-                self.request
-                    .held(Field::Model)?
-                    .insert(MODEL.to_owned(), Value::from(model));
+                self.request.held(Field::Model)?.set_model(&model);
             }
             PatchOp::Set {
                 field: Field::Model,
@@ -269,7 +270,7 @@ mod tests {
 
     fn known() -> Known {
         let mut known = Known::of(CallType::AnthropicMessages);
-        known.hold(Map::from_iter([("model".to_owned(), json!("claude"))]));
+        known.hold(Map::from_iter([("model".to_owned(), json!("claude"))]).into());
         known
     }
 
@@ -303,7 +304,7 @@ mod tests {
             (known.write(op), known.release()),
             (
                 Err(refused),
-                Map::from_iter([("model".to_owned(), json!("claude"))])
+                Map::from_iter([("model".to_owned(), json!("claude"))]).into()
             )
         );
     }
@@ -346,7 +347,7 @@ mod tests {
         assert_eq!(
             (
                 on_the_same_hook,
-                body.get(MODEL).cloned(),
+                body.model().map(Value::from),
                 told(&known, Hook::AttemptEnded)
             ),
             (seen.clone(), seen.0.clone(), seen)

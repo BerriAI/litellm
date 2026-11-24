@@ -28,6 +28,7 @@ use crate::{
     error::{Ended, NoDeployments},
     headers::Routing,
     hooks::{CallHooks, CallType},
+    request::RequestBody,
     stream_event::{Counts, Read},
     stream_hold::{self, Cause, Chunks, Held},
     stream_outcome,
@@ -438,16 +439,10 @@ async fn no_deployments<H: Host>(gateway: &Gateway<H>, model: String) -> NoDeplo
 
 /// The request as one attempt sends it: the client's params, then the params the fallback chain's
 /// dict targets merged in.
-pub(crate) fn attempt_body(body: &Map<String, Value>, attempt: &Attempt) -> Map<String, Value> {
-    body.iter()
-        .chain(attempt.params.iter().flat_map(|params| params.iter()))
-        .map(|(name, value)| (name.clone(), value.clone()))
-        .collect()
-}
-
-/// Whether the client asked for a stream.
-pub(crate) fn streamed(body: &Map<String, Value>) -> bool {
-    body.get("stream").and_then(Value::as_bool) == Some(true)
+pub(crate) fn attempt_body(body: &RequestBody, attempt: &Attempt) -> RequestBody {
+    let params = attempt.params.iter().flat_map(|params| params.iter());
+    body.clone()
+        .merged(params.map(|(name, value)| (name.clone(), value.clone())))
 }
 
 /// `resolve_llm_passthrough_timeout` over the settings the gateway reads: a streamed call's

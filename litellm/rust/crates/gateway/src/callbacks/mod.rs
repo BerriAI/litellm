@@ -17,9 +17,9 @@ use litellm_callbacks::{
 };
 use litellm_error::{Report, Source};
 use litellm_gateway_auth::Authenticated;
-use litellm_gateway_inference::{CallHooks, CallType, HookError, Refusal, ServedCall};
+use litellm_gateway_inference::{CallHooks, CallType, HookError, Refusal, RequestBody, ServedCall};
 use parking_lot::Mutex;
-use serde_json::{Map, Value};
+use serde_json::Value;
 use strum::VariantArray;
 
 use self::fields::Known;
@@ -274,7 +274,7 @@ impl Call {
 }
 
 impl CallHooks for Call {
-    async fn pre_call(&self, body: Map<String, Value>) -> Result<Map<String, Value>, HookError> {
+    async fn pre_call(&self, body: RequestBody) -> Result<RequestBody, HookError> {
         self.known.lock().hold(body);
         let ran = self.run(Point::PreCall).await;
         let body = self.known.lock().release();
@@ -316,7 +316,7 @@ mod tests {
         Callback, Field, FieldSet, HookInput, HookOutput, Manifest, Patch, Selection,
     };
     use rstest::rstest;
-    use serde_json::json;
+    use serde_json::{Map, json};
 
     use super::*;
 
@@ -439,8 +439,8 @@ mod tests {
             .begin(&crate::test_support::master(), CallType::AnthropicMessages)
     }
 
-    fn body() -> Map<String, Value> {
-        Map::from_iter([("model".to_owned(), json!("claude"))])
+    fn body() -> RequestBody {
+        Map::from_iter([("model".to_owned(), json!("claude"))]).into()
     }
 
     fn served() -> ServedCall {
@@ -479,7 +479,8 @@ mod tests {
                 Ok(Map::from_iter([
                     ("model".to_owned(), json!("claude")),
                     ("max_tokens".to_owned(), json!(5))
-                ])),
+                ])
+                .into()),
                 vec![
                     "before:PreCall:1:-".to_owned(),
                     "limiter:PreCall:1:-".to_owned(),

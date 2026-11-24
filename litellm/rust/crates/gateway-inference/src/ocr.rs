@@ -17,7 +17,7 @@ use crate::{
     error::ErrorFormat,
     hooks::CallType,
     model_restamp::ReportedModel,
-    request::{InferenceBody, Upload},
+    request::{InferenceBody, RequestBody, Upload},
     routing::{self, Host, Prompt, RouteAttempt},
     serve::{self, Call, Endpoint},
 };
@@ -42,7 +42,7 @@ struct OcrAttempt<'a> {
     route: &'a OcrRoute,
     upload: Option<Upload>,
     document: Value,
-    options: Map<String, Value>,
+    options: RequestBody,
 }
 
 impl<'a> OcrAttempt<'a> {
@@ -50,8 +50,9 @@ impl<'a> OcrAttempt<'a> {
         route: &'a OcrRoute,
         headers: &HeaderMap,
         upload: Option<Upload>,
-        body: Map<String, Value>,
+        body: RequestBody,
     ) -> Self {
+        let body = Map::from(body);
         let header_format = headers
             .get("x-req-format")
             .and_then(|value| value.to_str().ok())
@@ -70,7 +71,8 @@ impl<'a> OcrAttempt<'a> {
             .into_iter()
             .filter(|(name, _)| !matches!(name.as_str(), "model" | "document" | "req_format"))
             .chain(format.map(|value| ("req_format".into(), value)))
-            .collect();
+            .collect::<Map<_, _>>()
+            .into();
         Self {
             route,
             upload,
@@ -112,7 +114,7 @@ impl RouteAttempt for OcrAttempt<'_> {
             deployment.params.model.clone(),
             document,
             deployment.params.custom_llm_provider.as_deref(),
-            routing::attempt_body(&self.options, attempt).into(),
+            Map::from(routing::attempt_body(&self.options, attempt)).into(),
             OcrConnectionInputs {
                 api_key: deployment.params.api_key.clone(),
                 api_base: deployment.params.api_base.clone(),
