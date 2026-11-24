@@ -1017,3 +1017,19 @@ def test_streamed_image_request_answered_with_json_gets_every_image_as_a_complet
     assert [payload["b64_json"] for _, payload in events] == ["Rklyc3Q=", _STREAMED_IMAGE]
     assert ["usage" in payload for _, payload in events] == [False, True]
     assert events[-1][1]["usage"]["total_tokens"] == _STREAMED_USAGE["total_tokens"]
+
+
+def test_image_generation_streamed_through_extra_body_is_answered_with_the_provider_events(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    with _streaming_image_client(monkeypatch, respx_mock, "generation") as client:
+        response: Final = client.post(
+            "/v1/images/generations",
+            json={"model": "image-model", "prompt": "draw a tree", "extra_body": {"stream": True}},
+        )
+
+    assert response.status_code == 200, response.text
+    assert response.headers["content-type"].startswith("text/event-stream")
+    events: Final = _sse_events(response.text)
+    assert [name for name, _ in events] == ["image_generation.partial_image", "image_generation.completed"]
+    assert events[-1][1]["b64_json"] == _STREAMED_IMAGE

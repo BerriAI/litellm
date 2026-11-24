@@ -291,7 +291,7 @@ async def image_generation(
                 **(callback_headers or {}),
             }
 
-        if streams and isinstance(generated, (ImageResponse, AsyncImageStream)):
+        if isinstance(generated, AsyncImageStream) or (streams and isinstance(generated, ImageResponse)):
             return await create_response(
                 generator=image_event_sse_stream(
                     response=generated,
