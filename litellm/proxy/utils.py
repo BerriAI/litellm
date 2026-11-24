@@ -1896,7 +1896,8 @@ def _is_text_or_message_prompt(prompt: object) -> bool:
         return bool(prompt)
     if not isinstance(prompt, list) or not prompt:
         return False
-    return all(isinstance(item, str) for item in prompt) or all(isinstance(item, Mapping) for item in prompt)
+    items: Final = cast("list[object]", prompt)
+    return all(isinstance(item, str) for item in items) or all(isinstance(item, Mapping) for item in items)
 
 
 _EXCEPTION_CHAIN_MAX_DEPTH: Final = 16
