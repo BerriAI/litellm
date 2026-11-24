@@ -285,7 +285,7 @@ class LassoGuardrail(CustomGuardrail):
 
             if response_messages:
                 # Include litellm_call_id from original data for conversation_id consistency
-                response_data: Final = {
+                response_data: Final[dict[str, object]] = {
                     "messages": response_messages,
                     "litellm_call_id": data.get("litellm_call_id"),
                 }
@@ -322,7 +322,7 @@ class LassoGuardrail(CustomGuardrail):
         return response
 
     @with_service_target(GUARDRAIL_SESSIONS_TARGET)
-    def _get_or_generate_conversation_id(self, data: dict, cache: DualCache) -> str:
+    def _get_or_generate_conversation_id(self, data: dict[str, object], cache: DualCache) -> str:
         """
         Get or generate a conversation_id for this request.
 
@@ -429,11 +429,11 @@ class LassoGuardrail(CustomGuardrail):
 
     async def _handle_classification(
         self,
-        data: dict,
+        data: dict[str, object],
         cache: DualCache,
         message_type: Literal["PROMPT", "COMPLETION"],
         messages: Sequence[Mapping[str, object]],
-    ) -> dict:
+    ) -> dict[str, object]:
         """Handle classification without masking."""
         try:
             headers: Final = self._prepare_headers(data, cache)
@@ -743,7 +743,7 @@ class LassoGuardrail(CustomGuardrail):
 
         return expanded
 
-    def _prepare_headers(self, data: dict, cache: DualCache) -> dict[str, str]:
+    def _prepare_headers(self, data: dict[str, object], cache: DualCache) -> dict[str, str]:
         """Prepare headers for the Lasso API request."""
         if not self.lasso_api_key:
             raise LassoGuardrailMissingSecrets(

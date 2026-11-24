@@ -9365,6 +9365,7 @@ export interface paths {
          *     - router_settings: Optional[UpdateRouterConfig] - key-specific router settings. Example - {"model_group_retry_policy": {"gpt-4": {"RateLimitErrorRetries": 5}}}. IF null or {} then no router settings.
          *     - access_group_ids: Optional[List[str]] - List of access group IDs to associate with the key. Access groups define which models a key can access. Example - ["access_group_1", "access_group_2"].
          *     - budget_limits: Optional[list] - List of concurrent budget windows for the key. Each window specifies a budget_limit, time_period, and optional budget_duration. Example - [{"budget_limit": 10.0, "time_period": "1d"}, {"budget_limit": 50.0, "time_period": "7d"}].
+         *     - lens_enabled: Optional[bool] - Whether this key's requests are sent to Lens. `null` inherits the team default, which is on when unset.
          *
          *     Example:
          *     ```bash
@@ -9609,8 +9610,42 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Service Connection */
-        get: operations["service_connection_lens_service_get"];
+        /** Lens Service */
+        get: operations["lens_service_lens_service_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/lens/ui": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Lens Ui Entry */
+        get: operations["lens_ui_entry_lens_ui_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/lens/ui/{path}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Lens Ui */
+        get: operations["lens_ui_lens_ui__path__get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -13142,6 +13177,7 @@ export interface paths {
          *     - budget_id: *Optional[str]* - The id for a budget (tpm/rpm/max budget) for the organization.
          *     ### IF NO BUDGET ID - CREATE ONE WITH THESE PARAMS ###
          *     - max_budget: *Optional[float]* - Max budget for org
+         *     - rollover_max_budget: *Optional[float]* - Does not enable rollover for organization spend. Leave unset for organization budgets.
          *     - tpm_limit: *Optional[int]* - Max tpm limit for org
          *     - rpm_limit: *Optional[int]* - Max rpm limit for org
          *     - tpd_limit: *Optional[int]* - Max tokens per day stored on the org budget. Batch submissions enforce tpd_limit at the key, team and end user scopes only.
@@ -19052,6 +19088,7 @@ export interface paths {
          *     - object_permission: Optional[LiteLLM_ObjectPermissionBase] - team-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"], "agents": ["agent_1", "agent_2"], "agent_access_groups": ["dev_group"]}. IF null or {} then no object permission.
          *     - team_member_budget: Optional[float] - The maximum budget allocated to an individual team member.
          *     - team_member_budget_duration: Optional[str] - The duration of the budget for the team member. Doc [here](https://docs.litellm.ai/docs/proxy/team_budgets)
+         *     - team_member_rollover_max_budget: Optional[float] - Cap in USD for each member's base budget plus carried allowance. Requires a member reset period and must exceed the base member budget.
          *     - team_member_model_max_budget: Optional[dict] - Per-model budgets shared by team members without an override.
          *     - team_member_rpm_limit: Optional[int] - The RPM (Requests Per Minute) limit for individual team members.
          *     - team_member_tpm_limit: Optional[int] - The TPM (Tokens Per Minute) limit for individual team members.
@@ -19282,6 +19319,7 @@ export interface paths {
          *     - object_permission: Optional[LiteLLM_ObjectPermissionBase] - team-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"], "agents": ["agent_1", "agent_2"], "agent_access_groups": ["dev_group"]}. IF null or {} then no object permission.
          *     - team_member_budget: Optional[float] - The maximum budget allocated to an individual team member.
          *     - team_member_budget_duration: Optional[str] - The duration of the budget for the team member. Doc [here](https://docs.litellm.ai/docs/proxy/team_budgets)
+         *     - team_member_rollover_max_budget: Optional[float] - Cap in USD for each member's base budget plus carried allowance. Requires a member reset period and must exceed the base member budget. Set to null to disable rollover on the team default.
          *     - team_member_model_max_budget: Optional[dict] - Per-model budgets shared by team members without an override.
          *     - team_member_rpm_limit: Optional[int] - The RPM (Requests Per Minute) limit for individual team members.
          *     - team_member_tpm_limit: Optional[int] - The TPM (Tokens Per Minute) limit for individual team members.
@@ -20614,6 +20652,7 @@ export interface paths {
         /**
          * Ui View Users
          * @description Filter users based on partial match of user_id or email, or combined ``search``, with pagination.
+         *     Proxy admins and admin viewers can also search by alias and receive the alias in results.
          *
          *     Behaviour depends on the ``scope_user_search_to_org`` UI-setting flag
          *     (stored in the ``litellm_uisettings`` table):
@@ -20734,6 +20773,7 @@ export interface paths {
          *     - send_invite_email: Optional[bool] - Specify if an invite email should be sent.
          *     - user_role: Optional[str] - Specify a user role - "proxy_admin", "proxy_admin_viewer", "internal_user", "internal_user_viewer", "team", "customer". Info about each role here: `https://github.com/BerriAI/litellm/litellm/proxy/_types.py#L20`
          *     - max_budget: Optional[float] - Specify max budget for a given user.
+         *     - rollover_max_budget: Optional[float] - Cap in USD for the base budget plus unused allowance carried forward. Requires a reset period and must exceed the base budget.
          *     - budget_duration: Optional[str] - Budget is reset at the end of specified duration. If not set, budget is never reset. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d"), months ("1mo").
          *     - models: Optional[list] - Model_name's a user is allowed to call. (if empty, key is allowed to call all models). Set to ['no-default-models'] to block all model access. Restricting user to only team-based model access.
          *     - tpm_limit: Optional[int] - Specify tpm limit for a given user (Tokens per minute)
@@ -20873,6 +20913,7 @@ export interface paths {
          *         - send_invite_email: Optional[bool] - Specify if an invite email should be sent.
          *         - user_role: Optional[str] - Specify a user role - "proxy_admin", "proxy_admin_viewer", "internal_user", "internal_user_viewer", "team", "customer". Info about each role here: `https://github.com/BerriAI/litellm/litellm/proxy/_types.py#L20`
          *         - max_budget: Optional[float] - Specify max budget for a given user.
+         *         - rollover_max_budget: Optional[float] - Cap in USD for the base budget plus carried allowance. Requires a reset period and must exceed the base budget. Set to null to disable rollover.
          *         - budget_duration: Optional[str] - Budget is reset at the end of specified duration. If not set, budget is never reset. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d"), months ("1mo").
          *         - models: Optional[list] - Model_name's a user is allowed to call. (if empty, key is allowed to call all models)
          *         - tpm_limit: Optional[int] - Specify tpm limit for a given user (Tokens per minute)
@@ -22589,8 +22630,11 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Ingest Otlp Logs */
-        post: operations["ingest_otlp_logs_v1_logs_post"];
+        /**
+         * Forward Otlp Logs
+         * @description The agent's log events carry what its spans leave out, such as each reply; they go to Lens the same way.
+         */
+        post: operations["forward_otlp_logs_v1_logs_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -24795,6 +24839,23 @@ export interface paths {
         };
         /** Get Agent Trace */
         get: operations["get_agent_trace_v1_traces__trace_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/traces/{trace_id}/conversation": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Agent Trace Conversation */
+        get: operations["get_agent_trace_conversation_v1_traces__trace_id__conversation_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -31077,6 +31138,8 @@ export interface components {
             policies?: string[] | null;
             /** Prompts */
             prompts?: string[] | null;
+            /** Rollover Max Budget */
+            rollover_max_budget?: number | null;
             /** Rpm Limit */
             rpm_limit?: number | null;
             /** Send Invite Email */
@@ -33381,6 +33444,12 @@ export interface components {
              */
             mcp_xff_num_trusted_hops?: number | null;
             /**
+             * Meter Webrtc Calls
+             * @description Bill Realtime and GPT-Live WebRTC calls by joining each call from the proxy over a WebSocket to the provider, and answer 503 when the proxy cannot join. Set to false when the proxy cannot open that WebSocket. Calls then start without it and are not billed or counted against budgets.
+             * @default true
+             */
+            meter_webrtc_calls: boolean;
+            /**
              * Missing Session Id
              * @description What to do with LLM API requests that carry no session id (x-litellm-session-id header, metadata.session_id, etc.). 'generate' stamps one id into litellm_session_id, litellm_trace_id and metadata.session_id so SpendLogs and logging callbacks agree; 'reject' returns 400; 'omit' leaves SpendLogs.session_id null, matching callbacks such as Langfuse that only record a client-established metadata.session_id. Unset keeps the legacy behavior where SpendLogs falls back to the trace id while callbacks get no session id.
              */
@@ -34406,6 +34475,8 @@ export interface components {
         };
         /** CurrentUserResponse */
         CurrentUserResponse: {
+            /** User Alias */
+            user_alias?: string | null;
             /** User Email */
             user_email: string | null;
             /** User Id */
@@ -37836,6 +37907,8 @@ export interface components {
             model_tpm_limit?: {
                 [key: string]: number;
             } | null;
+            /** Rollover Max Budget */
+            rollover_max_budget?: number | null;
             /** Rpm Limit */
             rpm_limit?: number | null;
             /** Soft Budget */
@@ -37883,6 +37956,8 @@ export interface components {
             model_tpm_limit?: {
                 [key: string]: number;
             } | null;
+            /** Rollover Max Budget */
+            rollover_max_budget?: number | null;
             /** Rpm Limit */
             rpm_limit?: number | null;
             /** Soft Budget */
@@ -39573,6 +39648,8 @@ export interface components {
             budget_id?: string | null;
             /** Litellm Budget Table */
             litellm_budget_table?: components["schemas"]["LiteLLM_BudgetTableFull"] | components["schemas"]["LiteLLM_BudgetTable"] | null;
+            /** Rollover Credit */
+            rollover_credit?: number | null;
             /**
              * Spend
              * @default 0
@@ -39794,6 +39871,10 @@ export interface components {
              * @default []
              */
             policies: string[];
+            /** Rollover Credit */
+            rollover_credit?: number | null;
+            /** Rollover Max Budget */
+            rollover_max_budget?: number | null;
             /** Rpm Limit */
             rpm_limit?: number | null;
             /**
@@ -39825,6 +39906,8 @@ export interface components {
         };
         /** LiteLLM_UserTableFiltered */
         LiteLLM_UserTableFiltered: {
+            /** User Alias */
+            user_alias?: string | null;
             /** User Email */
             user_email?: string | null;
             /** User Id */
@@ -39893,6 +39976,10 @@ export interface components {
              * @default []
              */
             policies: string[];
+            /** Rollover Credit */
+            rollover_credit?: number | null;
+            /** Rollover Max Budget */
+            rollover_max_budget?: number | null;
             /** Rpm Limit */
             rpm_limit?: number | null;
             /**
@@ -42943,6 +43030,8 @@ export interface components {
             organization_alias: string;
             /** Organization Id */
             organization_id?: string | null;
+            /** Rollover Max Budget */
+            rollover_max_budget?: number | null;
             /** Rpm Limit */
             rpm_limit?: number | null;
             /** Soft Budget */
@@ -43066,6 +43155,8 @@ export interface components {
             project_alias?: string | null;
             /** Project Id */
             project_id?: string | null;
+            /** Rollover Max Budget */
+            rollover_max_budget?: number | null;
             /** Rpm Limit */
             rpm_limit?: number | null;
             /** Soft Budget */
@@ -43275,6 +43366,8 @@ export interface components {
             } | null;
             /** Team Member Permissions */
             team_member_permissions?: string[] | null;
+            /** Team Member Rollover Max Budget */
+            team_member_rollover_max_budget?: number | null;
             /** Team Member Rpm Limit */
             team_member_rpm_limit?: number | null;
             /** Team Member Tpm Limit */
@@ -43381,6 +43474,8 @@ export interface components {
             policies?: string[] | null;
             /** Prompts */
             prompts?: string[] | null;
+            /** Rollover Max Budget */
+            rollover_max_budget?: number | null;
             /** Rpm Limit */
             rpm_limit?: number | null;
             /** Send Invite Email */
@@ -43554,6 +43649,8 @@ export interface components {
             project_id?: string | null;
             /** Prompts */
             prompts?: string[] | null;
+            /** Rollover Max Budget */
+            rollover_max_budget?: number | null;
             router_settings?: components["schemas"]["UpdateRouterConfig"] | null;
             /** Rpm Limit */
             rpm_limit?: number | null;
@@ -44848,6 +44945,8 @@ export interface components {
             team_member_model_max_budget?: {
                 [key: string]: components["schemas"]["BudgetConfig"];
             } | null;
+            /** Team Member Rollover Max Budget */
+            team_member_rollover_max_budget?: number | null;
             /** Team Member Rpm Limit */
             team_member_rpm_limit?: number | null;
             /** Team Member Tpm Limit */
@@ -49596,6 +49695,11 @@ export interface components {
         /** ServiceConnection */
         ServiceConnection: {
             /**
+             * Browser Url
+             * @default
+             */
+            browser_url: string;
+            /**
              * Configured
              * @default false
              */
@@ -52021,10 +52125,14 @@ export interface components {
         TeamMemberInfoResponse: {
             /** Budget Id */
             budget_id?: string | null;
+            /** Effective Max Budget */
+            effective_max_budget?: number | null;
             /** Litellm Budget Table */
             litellm_budget_table?: components["schemas"]["LiteLLM_BudgetTableFull"] | components["schemas"]["LiteLLM_BudgetTable"] | null;
             /** Role */
             role?: string | null;
+            /** Rollover Credit */
+            rollover_credit?: number | null;
             /**
              * Spend
              * @default 0
@@ -52053,10 +52161,14 @@ export interface components {
              * @enum {string}
              */
             budget_source: "team_default" | "custom" | "none";
+            /** Effective Max Budget */
+            effective_max_budget?: number | null;
             /** Litellm Budget Table */
             litellm_budget_table?: components["schemas"]["LiteLLM_BudgetTableFull"] | components["schemas"]["LiteLLM_BudgetTable"] | null;
             /** Role */
             role: string;
+            /** Rollover Credit */
+            rollover_credit?: number | null;
             /**
              * Spend
              * @default 0
@@ -53099,6 +53211,32 @@ export interface components {
             /** Agents */
             agents: components["schemas"]["TraceAgent"][];
         };
+        /** TraceConversationPage */
+        TraceConversationPage: {
+            /** Next Cursor */
+            next_cursor: string | null;
+            /** Turns */
+            turns: components["schemas"]["TraceConversationTurn"][];
+        };
+        /** TraceConversationTurn */
+        TraceConversationTurn: {
+            /** Input */
+            input: string;
+            /** Input Ui */
+            input_ui: components["schemas"]["UIMessages"] | components["schemas"]["UIFields"] | components["schemas"]["UIText"];
+            /** Output */
+            output: string;
+            /** Output Ui */
+            output_ui: components["schemas"]["UIMessages"] | components["schemas"]["UIFields"] | components["schemas"]["UIText"];
+            /** Span Id */
+            span_id: string;
+            /** Start Time */
+            start_time: string;
+            /** Trace Id */
+            trace_id: string;
+            /** Trace Ref */
+            trace_ref: string;
+        };
         /** TracePage */
         TracePage: {
             /** Data */
@@ -53134,7 +53272,7 @@ export interface components {
              * Table
              * @enum {string}
              */
-            table: "otel_traces" | "agent_traces_by_key" | "spend_logs";
+            table: "otel_traces" | "otel_logs" | "agent_traces_by_key" | "spend_logs" | "lens_task_profiles";
             /** Truncated */
             truncated: boolean;
         };
@@ -53198,7 +53336,7 @@ export interface components {
              * Table
              * @enum {string}
              */
-            table: "otel_traces" | "agent_traces_by_key" | "spend_logs";
+            table: "otel_traces" | "otel_logs" | "agent_traces_by_key" | "spend_logs" | "lens_task_profiles";
             /** Truncated */
             truncated: boolean;
         };
@@ -53223,7 +53361,7 @@ export interface components {
              * Table
              * @enum {string}
              */
-            table: "otel_traces" | "agent_traces_by_key" | "spend_logs";
+            table: "otel_traces" | "otel_logs" | "agent_traces_by_key" | "spend_logs" | "lens_task_profiles";
             /** Type */
             type: string;
         };
@@ -53251,7 +53389,7 @@ export interface components {
              * Name
              * @enum {string}
              */
-            name: "otel_traces" | "agent_traces_by_key" | "spend_logs";
+            name: "otel_traces" | "otel_logs" | "agent_traces_by_key" | "spend_logs" | "lens_task_profiles";
         };
         /** TraceSQLResponse */
         TraceSQLResponse: {
@@ -53770,6 +53908,11 @@ export interface components {
             key?: string | null;
             /** Key Alias */
             key_alias?: string | null;
+            /**
+             * Lens Enabled
+             * @description Enable or disable Lens tracing for this key. Omit to retain its policy or send null to inherit the team policy. This updates only metadata.lens_enabled and preserves other stored metadata. When metadata is also supplied, this field takes precedence over metadata.lens_enabled.
+             */
+            lens_enabled?: boolean | null;
             /** Max Budget */
             max_budget?: number | null;
             /** Max Parallel Requests */
@@ -53932,6 +54075,12 @@ export interface components {
              * @default false
              */
             per_server_oauth_discovery: boolean;
+            /**
+             * Preserve Explicit Oauth Settings
+             * @description Keep explicitly supplied OAuth settings on upstream or auth changes, even when their values match the saved settings.
+             * @default false
+             */
+            preserve_explicit_oauth_settings: boolean;
             /** Registration Url */
             registration_url?: string | null;
             /** Rpm */
@@ -54116,6 +54265,8 @@ export interface components {
             project_alias?: string | null;
             /** Project Id */
             project_id: string;
+            /** Rollover Max Budget */
+            rollover_max_budget?: number | null;
             /** Rpm Limit */
             rpm_limit?: number | null;
             /** Soft Budget */
@@ -54363,6 +54514,8 @@ export interface components {
             team_member_model_max_budget?: {
                 [key: string]: components["schemas"]["BudgetConfig"];
             } | null;
+            /** Team Member Rollover Max Budget */
+            team_member_rollover_max_budget?: number | null;
             /** Team Member Rpm Limit */
             team_member_rpm_limit?: number | null;
             /** Team Member Tpm Limit */
@@ -54472,6 +54625,8 @@ export interface components {
             policies?: string[] | null;
             /** Prompts */
             prompts?: string[] | null;
+            /** Rollover Max Budget */
+            rollover_max_budget?: number | null;
             /** Rpm Limit */
             rpm_limit?: number | null;
             /** Spend */
@@ -54578,6 +54733,8 @@ export interface components {
             policies?: string[] | null;
             /** Prompts */
             prompts?: string[] | null;
+            /** Rollover Max Budget */
+            rollover_max_budget?: number | null;
             /** Rpm Limit */
             rpm_limit?: number | null;
             /** Spend */
@@ -55361,6 +55518,8 @@ export interface components {
             budget_reset_at?: string | null;
             /** Created At */
             created_at?: string | null;
+            /** Effective Max Budget */
+            effective_max_budget?: number | null;
             /** Max Budget */
             max_budget?: number | null;
             /** Metadata */
@@ -55383,6 +55542,10 @@ export interface components {
              */
             models: string[];
             object_permission?: components["schemas"]["LiteLLM_ObjectPermissionTable"] | null;
+            /** Rollover Credit */
+            rollover_credit?: number | null;
+            /** Rollover Max Budget */
+            rollover_max_budget?: number | null;
             /** Rpm Limit */
             rpm_limit?: number | null;
             /**
@@ -58734,6 +58897,7 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["TranscriptionResponse"];
                     "text/event-stream": string;
+                    "text/plain": string;
                 };
             };
             /** @description Validation Error */
@@ -70474,7 +70638,7 @@ export interface operations {
             };
         };
     };
-    service_connection_lens_service_get: {
+    lens_service_lens_service_get: {
         parameters: {
             query?: never;
             header?: never;
@@ -70490,6 +70654,57 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ServiceConnection"];
+                };
+            };
+        };
+    };
+    lens_ui_entry_lens_ui_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    lens_ui_lens_ui__path__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                path: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -86430,7 +86645,7 @@ export interface operations {
                 user_id?: string | null;
                 /** @description User email in the request parameters */
                 user_email?: string | null;
-                /** @description Combined search: matches users whose 'user_id' or 'user_email' contains the value (case-insensitive). */
+                /** @description Case-insensitive search by ID or email, or by alias for proxy admins and admin viewers. */
                 search?: string | null;
                 /** @description Team ID — used when a team admin searches for users to add to their team */
                 team_id?: string | null;
@@ -87635,6 +87850,7 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["TranscriptionResponse"];
                     "text/event-stream": string;
+                    "text/plain": string;
                 };
             };
             /** @description Validation Error */
@@ -89657,7 +89873,7 @@ export interface operations {
             };
         };
     };
-    ingest_otlp_logs_v1_logs_post: {
+    forward_otlp_logs_v1_logs_post: {
         parameters: {
             query?: never;
             header?: never;
@@ -92742,11 +92958,14 @@ export interface operations {
     list_agent_traces_v1_traces_get: {
         parameters: {
             query?: {
-                cursor?: string | null;
-                /** @description Window end, unix ms. Default: now */
-                end_ms?: number | null;
+                team_id?: string | null;
+                api_key_hash?: string | null;
                 /** @description Window start, unix ms. Default: 24h ago */
                 start_ms?: number | null;
+                /** @description Window end, unix ms. Default: now */
+                end_ms?: number | null;
+                agent?: string | null;
+                cursor?: string | null;
             };
             header?: never;
             path?: never;
@@ -92797,6 +93016,8 @@ export interface operations {
     list_trace_agents_v1_traces_agents_get: {
         parameters: {
             query?: {
+                team_id?: string | null;
+                api_key_hash?: string | null;
                 start_ms?: number | null;
                 end_ms?: number | null;
             };
@@ -92882,9 +93103,11 @@ export interface operations {
     get_agent_trace_v1_traces__trace_id__get: {
         parameters: {
             query?: {
+                team_id?: string | null;
+                api_key_hash?: string | null;
+                trace_ref?: string;
                 cursor?: string | null;
                 page_size?: number | null;
-                trace_ref?: string;
             };
             header?: never;
             path: {
@@ -92914,9 +93137,48 @@ export interface operations {
             };
         };
     };
+    get_agent_trace_conversation_v1_traces__trace_id__conversation_get: {
+        parameters: {
+            query?: {
+                team_id?: string | null;
+                api_key_hash?: string | null;
+                trace_ref?: string;
+                cursor?: string | null;
+                page_size?: number | null;
+            };
+            header?: never;
+            path: {
+                trace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TraceConversationPage"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_agent_trace_span_v1_traces__trace_id__spans__span_id__get: {
         parameters: {
             query?: {
+                team_id?: string | null;
+                api_key_hash?: string | null;
                 trace_ref?: string;
             };
             header?: never;
@@ -92951,8 +93213,10 @@ export interface operations {
     get_agent_trace_span_error_v1_traces__trace_id__spans__span_id__error_get: {
         parameters: {
             query?: {
-                cursor?: string | null;
+                team_id?: string | null;
+                api_key_hash?: string | null;
                 trace_ref?: string;
+                cursor?: string | null;
             };
             header?: never;
             path: {

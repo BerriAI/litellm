@@ -12,14 +12,14 @@ class TopazException(BaseLLMException):
 class TopazModelInfo(BaseLLMModelInfo):
     def validate_environment(
         self,
-        headers: dict,
+        headers: object,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: object,
+        litellm_params: object,
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, str]:
         if api_key is None:
             raise ValueError("API key is required for Topaz image variations. Set via `TOPAZ_API_KEY` or `api_key=..`")
         return {

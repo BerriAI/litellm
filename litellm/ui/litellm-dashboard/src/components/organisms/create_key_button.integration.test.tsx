@@ -27,6 +27,7 @@ const state = vi.hoisted(() => ({
   organizations: [] as { organization_id: string; organization_alias: string }[],
   accessGroups: [] as { access_group_id: string; access_group_name: string }[],
   projects: [] as { project_id: string; project_alias: string; team_id?: string | null; models?: string[] }[],
+  lensServiceError: false,
 }));
 
 vi.mock("@/lib/toast", () => ({
@@ -246,6 +247,7 @@ describe("CreateKey", () => {
     state.organizations = [];
     state.projects = [];
     state.accessGroups = [];
+    state.lensServiceError = false;
     vi.mocked(keyCreateCall).mockClear().mockResolvedValue({ key: "sk-created", soft_budget: null });
     vi.mocked(keyCreateServiceAccountCall)
       .mockClear()
@@ -258,7 +260,11 @@ describe("CreateKey", () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(async (input: RequestInfo | URL) => {
-        const url = String(input);
+        const url = input instanceof Request ? input.url : String(input);
+        if (url.includes("/lens/service")) {
+          if (state.lensServiceError) return Response.json({ error: "Unavailable" }, { status: 503 });
+          return Response.json({ configured: true });
+        }
         if (url.includes("openapi.json")) {
           return { ok: true, status: 200, json: async () => OPENAPI_SCHEMA } as unknown as Response;
         }
@@ -269,6 +275,71 @@ describe("CreateKey", () => {
 
   afterEach(() => {
     vi.unstubAllGlobals();
+  });
+
+  describe("Lens tracing", () => {
+    it("keeps creation available without an override when Lens status cannot be loaded", async () => {
+      state.lensServiceError = true;
+      await openModal();
+      expect(await screen.findByText("Unknown")).toBeInTheDocument();
+      expect(screen.getByText("Lens connection status is unavailable")).toBeInTheDocument();
+      expect(screen.queryByText("Off", { exact: true })).not.toBeInTheDocument();
+      expect(screen.getByRole("switch", { name: "Lens" })).toHaveAttribute("aria-disabled", "true");
+      await nameTheKey();
+      expect(screen.getByRole("button", { name: /^create key$/i })).toBeEnabled();
+      await submit();
+      const payload = await createdPayload();
+      expect(JSON.parse(String(payload.metadata))).not.toHaveProperty("lens_enabled");
+    });
+
+    it("starts on for a configured gateway without sending a key override", async () => {
+      await openModal();
+      const toggle = screen.getByRole("switch", { name: "Lens" });
+      await waitFor(() => expect(toggle).not.toHaveAttribute("aria-disabled", "true"));
+      expect(toggle).toBeChecked();
+      expect(screen.getByText("Tracing")).toBeInTheDocument();
+      await nameTheKey();
+      await submit();
+      const payload = await createdPayload();
+      expect(JSON.parse(String(payload.metadata))).not.toHaveProperty("lens_enabled");
+    });
+
+    it("stores an explicit opt-out in a new key's metadata", async () => {
+      await openModal();
+      const toggle = screen.getByRole("switch", { name: "Lens" });
+      await waitFor(() => expect(toggle).not.toHaveAttribute("aria-disabled", "true"));
+      await userEvent.click(toggle);
+      await nameTheKey();
+      await submit();
+      const payload = await createdPayload();
+      expect(JSON.parse(String(payload.metadata))).toHaveProperty("lens_enabled", false);
+    });
+
+    it("follows a disabled team without creating an accidental true override", async () => {
+      const team: Team = {
+        team_id: "lens-disabled-team",
+        team_alias: "Disabled team",
+        metadata: { lens_enabled: false },
+        models: [],
+        max_budget: null,
+        budget_duration: null,
+        tpm_limit: null,
+        rpm_limit: null,
+        organization_id: "",
+        created_at: "",
+        keys: [],
+        members_with_roles: [],
+        spend: 0,
+      };
+      await openModal({ team, teams: [team] });
+      const toggle = screen.getByRole("switch", { name: "Lens" });
+      await waitFor(() => expect(toggle).not.toHaveAttribute("aria-disabled", "true"));
+      expect(toggle).not.toBeChecked();
+      await nameTheKey();
+      await submit();
+      const payload = await createdPayload();
+      expect(JSON.parse(String(payload.metadata))).not.toHaveProperty("lens_enabled");
+    });
   });
 
   describe("submit payload contract", () => {
@@ -1555,6 +1626,23 @@ describe("CreateKey", () => {
   });
 
   describe("writers outside the submit path", () => {
+    it("shows an SSO owner's alias without changing the submitted user ID", async () => {
+      const userId = "abc301ea-49c0-47c9-aee2-53b86a550582";
+      vi.mocked(userFilterUICall).mockResolvedValue([
+        { user_id: userId, user_email: null, user_alias: "Acme Developer" },
+      ]);
+
+      await openModal();
+      await userEvent.click(screen.getByRole("radio", { name: "Another User" }));
+      await nameTheKey();
+
+      await userEvent.type(await userSearchInput(), userId.slice(0, 8));
+      await userEvent.click(await screen.findByRole("option", { name: `Acme Developer (${userId})` }));
+      await submit();
+
+      expect((await createdPayload()).user_id).toBe(userId);
+    });
+
     it("lets the selected user win over the search text typed into the same field", async () => {
       vi.mocked(userFilterUICall).mockResolvedValue([
         { user_id: "u-77", user_email: "alice@example.com" },

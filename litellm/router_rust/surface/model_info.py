@@ -35,6 +35,7 @@ from typing_extensions import overload
 import litellm
 from litellm._logging import verbose_router_logger
 from litellm.constants import DEFAULT_MAX_LRU_CACHE_SIZE
+from litellm.cost_calculator import unpriced_bedrock_arn
 from litellm.litellm_core_utils.add_retry_fallback_headers import (
     apply_quality_router_decision_headers,
     apply_remaining_usage_headers,
@@ -44,7 +45,7 @@ from litellm.litellm_core_utils.add_retry_fallback_headers import (
     prepare_response_for_header_attachment,
 )
 from litellm.litellm_core_utils.batch_utils import deployment_supported_endpoints
-from litellm.litellm_core_utils.core_helpers import as_str_mapping, coerce_token_limit
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, coerce_token_limit, without
 from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.litellm_core_utils.litellm_logging import resolve_vertex_location_for_cost
 from litellm.litellm_core_utils.reasoning_effort_capability import (
@@ -139,6 +140,14 @@ def _drive_model_info(
                 raise (exception if isinstance(exception, type) else ValueError)(step.get("error_detail"))
             raise RuntimeError(f"router-core ({step.get('error_kind')}): {step.get('error')}")
         outcome = answer(step)
+
+
+def _without_unpriced_bedrock_base_model(entry: object) -> object:
+    mapping: Final = as_str_mapping(entry)
+    base_model: Final = mapping.get("base_model") if mapping is not None else None
+    if mapping is None or not isinstance(base_model, str) or not unpriced_bedrock_arn(base_model):
+        return entry
+    return without(mapping, "base_model")
 
 
 def _configured_model_info(deployment: Mapping[str, object]) -> Mapping[str, object]:
@@ -608,7 +617,11 @@ class HostModelInfo:
             case "cost_entry":
                 key: Final = str(step["key"])
                 model_cost: Final = litellm.model_cost if step["process"] else self._host.dynamic().model_cost
-                return {"entry": wire.to_wire(model_cost.get(key))} if key in model_cost else None
+                return (
+                    {"entry": wire.to_wire(_without_unpriced_bedrock_base_model(model_cost[key]))}
+                    if key in model_cost
+                    else None
+                )
             case "pattern_models":
                 return self._pattern_models(str(step["name"]), wire)
             case "bedrock_base":

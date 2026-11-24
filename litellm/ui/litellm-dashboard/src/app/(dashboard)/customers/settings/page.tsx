@@ -7,7 +7,7 @@ import { parseAsStringLiteral, useQueryState } from "nuqs";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { isProxyAdminRole } from "@/utils/roles";
 import { ErrorState } from "@/components/shared/ErrorState";
-import { Page, PageContent, PageTabs, PageTabsContent, PageTabsList, PageTabsTrigger } from "@/components/shared/Page";
+import { PageContent, PageTabs, PageTabsContent, PageTabsList, PageTabsTrigger } from "@/components/shared/Page";
 import { PageHeader, PageHeaderTitle, PageHeaderDescription, PageHeaderControls } from "@/components/shared/PageHeader";
 import { Button } from "@/components/ui/button";
 import { uiHref } from "@/utils/uiHref";
@@ -30,7 +30,7 @@ export default function CustomerSettings() {
   const canManage = Boolean(accessToken && isProxyAdminRole(userRole));
   if (!canManage) return <ErrorState message={t("customerPortal.hierarchy.adminOnly")} />;
   return (
-    <Page>
+    <>
       <PageTabs value={tab} onValueChange={changeTab}>
         <PageHeader>
           <PageHeaderTitle>
@@ -39,7 +39,7 @@ export default function CustomerSettings() {
           </PageHeaderTitle>
           <PageHeaderDescription>{t("customerPortal.budgetGroups.settingsHint")}</PageHeaderDescription>
           <PageHeaderControls className="flex-wrap">
-            <PageTabsList aria-label={t("customerPortal.budgetGroups.title")} className="min-w-0 flex-1">
+            <PageTabsList aria-label={t("customerPortal.budgetGroups.title")} className="min-w-0 basis-full sm:flex-1">
               {catalogs.map(({ scope, label }) => (
                 <PageTabsTrigger key={scope} value={scope}>
                   {t(label)}
@@ -59,6 +59,6 @@ export default function CustomerSettings() {
           ))}
         </PageContent>
       </PageTabs>
-    </Page>
+    </>
   );
 }

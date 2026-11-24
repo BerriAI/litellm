@@ -22,6 +22,7 @@ from tests.integration._support.client import (
     JSON_OBJECT,
     Gateway,
     Scenario,
+    delete_key_if_present,
     eventually,
     string_value,
 )
@@ -134,7 +135,13 @@ def _customer(scenario: Scenario) -> Customer:
     return Customer(organization, organization, member, other)
 
 
-def _app(scenario: Scenario, model: str, name: str) -> tuple[str, str]:
+def _rotatable_key(scenario: Scenario, **fields: JsonValue) -> str:
+    key: Final = string_value(scenario.gateway.post("/key/generate", fields)["key"])
+    scenario.cleanups.callback(delete_key_if_present, scenario.gateway, key)
+    return key
+
+
+def _app(scenario: Scenario, model: str, name: str, *, rotatable: bool = False) -> tuple[str, str]:
     alias: Final = f"{name}-{uuid.uuid4().hex}"
     definition: Final = scenario.gateway.request("GET", f"{_APPS}/definition")
     resource_type: Final = AppDefinition.model_validate_json(definition.content).resource_type
@@ -144,7 +151,13 @@ def _app(scenario: Scenario, model: str, name: str) -> tuple[str, str]:
         if resource_type is AppResourceType.PROJECT
         else None
     )
-    key: Final = scenario.key(team_id=team, project_id=project, models=[model], key_alias=alias)
+    key_fields: Final[dict[str, JsonValue]] = {
+        "team_id": team,
+        "project_id": project,
+        "models": [model],
+        "key_alias": alias,
+    }
+    key: Final = _rotatable_key(scenario, **key_fields) if rotatable else scenario.key(**key_fields)
     discovered: Final = scenario.gateway.request("GET", f"{_APPS}/resources")
     assert discovered.status_code == 200, discovered.text
     resources: Final = TypeAdapter(tuple[AppResource, ...]).validate_json(discovered.content)
@@ -417,7 +430,7 @@ def test_rotating_a_virtual_key_keeps_its_customer_app_budget_and_spend(
             output_cost_per_token=0.002,
         )
         customer: Final = _customer(scenario)
-        app_id, key = _app(scenario, model, "rotating")
+        app_id, key = _app(scenario, model, "rotating", rotatable=True)
         _budget(app_gateway, app_id, customer, 0.05)
         assert _chat(app_gateway, key, model, customer).status_code == 200
         eventually(

@@ -860,7 +860,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
                         return True
         return False
 
-    def is_tool_search_used(self, tools: list | None) -> bool:
+    def is_tool_search_used(self, tools: Sequence[Mapping[str, object]] | None) -> bool:
         """
         Check if tool search tools are present in the tools list.
         """
@@ -876,7 +876,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
                 return True
         return False
 
-    def is_programmatic_tool_calling_used(self, tools: list | None) -> bool:
+    def is_programmatic_tool_calling_used(self, tools: Sequence[Mapping[str, object]] | None) -> bool:
         """
         Check if programmatic tool calling is being used (tools with allowed_callers field).
 
@@ -902,7 +902,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
 
         return False
 
-    def is_input_examples_used(self, tools: list | None) -> bool:
+    def is_input_examples_used(self, tools: Sequence[Mapping[str, object]] | None) -> bool:
         """
         Check if input_examples is being used in any tools.
 
@@ -963,7 +963,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
 
     @staticmethod
     def _apply_sampling_param(
-        optional_params: dict,
+        optional_params: dict[str, object],
         model: str,
         param: str,
         value: object,
@@ -1333,7 +1333,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
 
     def is_effort_used(
         self,
-        optional_params: dict | None,
+        optional_params: Mapping[str, object] | None,
         model: str | None = None,
         *,
         custom_llm_provider: str,
@@ -1367,7 +1367,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
 
         return False
 
-    def is_code_execution_tool_used(self, tools: list | None) -> bool:
+    def is_code_execution_tool_used(self, tools: Sequence[Mapping[str, object]] | None) -> bool:
         """
         Check if code execution tool is being used.
 
@@ -1382,7 +1382,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
                 return True
         return False
 
-    def is_container_with_skills_used(self, optional_params: dict | None) -> bool:
+    def is_container_with_skills_used(self, optional_params: Mapping[str, object] | None) -> bool:
         """
         Check if container with skills is being used.
 
@@ -1423,7 +1423,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
     def get_anthropic_beta_list(
         self,
         model: str,
-        optional_params: dict | None = None,
+        optional_params: Mapping[str, object] | None = None,
         computer_tool_used: str | None = None,
         prompt_caching_set: bool = False,
         file_id_used: bool = False,
@@ -1442,7 +1442,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         """
         from litellm.types.llms.anthropic import ANTHROPIC_EFFORT_BETA_HEADER
 
-        betas: Final = []
+        betas: Final[list[str]] = []
 
         # Detect features
         effort_used: Final = self.is_effort_used(optional_params, model, custom_llm_provider=custom_llm_provider)
@@ -1535,8 +1535,8 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         thinking: AnthropicThinkingParam | None = None,
         is_mid_conversation_tool_change_used: bool = False,
         wif_minted: bool = False,
-    ) -> dict:
-        betas: Final = set()
+    ) -> dict[str, str]:
+        betas: Final[set[str]] = set()
         # Anthropic no longer requires the prompt-caching beta header
         # Prompt caching now works automatically when cache_control is used in messages
         # Reference: https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching
@@ -1893,7 +1893,7 @@ def strip_advisor_blocks_from_messages(messages: list[_MessageT], replace_with_t
             continue
 
         # Collect advisor server_tool_use ids and their advice text (for replace mode).
-        advisor_id_to_text: dict = {}
+        advisor_id_to_text: dict[object, object] = {}
         for block in content:
             if isinstance(block, dict) and block.get("type") == "server_tool_use" and block.get("name") == "advisor":
                 bid = block.get("id")
@@ -2210,7 +2210,7 @@ def _with_native_redacted_data(block: object) -> object:
 
 def strip_encrypted_reasoning_blocks_from_anthropic_messages(
     messages: Sequence[dict],  # mutable-ok: Anthropic message payload shape
-) -> list[dict]:  # mutable-ok: AnthropicMessagesRequest.messages is typed list[dict]
+) -> list[dict[str, object]]:  # mutable-ok: AnthropicMessagesRequest.messages is typed list[dict]
     """
     Drop thinking / redacted_thinking blocks that carry another provider's encrypted
     reasoning (a turn the Responses API bridge served) before the request reaches
@@ -2948,7 +2948,7 @@ def normalize_cache_control_in_anthropic_payload(
     return {key: _with_portable_cache_control_in_scoped_value(key, value) for key, value in portable.items()}
 
 
-def process_anthropic_headers(headers: httpx.Headers | dict) -> dict:
+def process_anthropic_headers(headers: httpx.Headers | Mapping[str, str]) -> dict[str, str]:
     openai_headers: Final = {}
     if "anthropic-ratelimit-requests-limit" in headers:
         openai_headers["x-ratelimit-limit-requests"] = headers["anthropic-ratelimit-requests-limit"]

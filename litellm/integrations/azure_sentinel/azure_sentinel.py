@@ -251,7 +251,7 @@ class AzureSentinelLogger(CustomBatchLogger):
 
         return self.oauth_token
 
-    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+    async def async_log_success_event(self, kwargs, response_obj: object, start_time: object, end_time: object):
         """
         Async Log success events to Azure Sentinel
 
@@ -278,7 +278,7 @@ class AzureSentinelLogger(CustomBatchLogger):
         except Exception as e:
             verbose_logger.exception("Azure Sentinel Layer Error - %s\n%s", e, traceback.format_exc())
 
-    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+    async def async_log_failure_event(self, kwargs, response_obj: object, start_time: object, end_time: object):
         """
         Async Log failure events to Azure Sentinel
 

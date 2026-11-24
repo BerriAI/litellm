@@ -9,7 +9,7 @@ import asyncio
 import json
 import os
 import warnings
-from collections.abc import AsyncGenerator, AsyncIterable, Mapping
+from collections.abc import AsyncGenerator, AsyncIterable, Coroutine, Mapping
 from datetime import datetime
 from typing import (
     TYPE_CHECKING,
@@ -54,7 +54,7 @@ SENSITIVE_DATA_DETECTOR_KEYS: Final[list[str]] = ["sensitiveData", "dataDetector
 # Type aliases
 MessageRole = Literal["user", "assistant"]
 LLMResponse = object
-_LLMResponseT: Final = TypeVar("_LLMResponseT")
+_LLMResponseT = TypeVar("_LLMResponseT")
 _LEGACY_NOMA_DEPRECATION_WARNED = False
 _DECODED_JSON: Final = TypeAdapter(object)
 
@@ -158,7 +158,7 @@ class NomaGuardrail(CustomGuardrail):
 
     def _create_background_noma_check(
         self,
-        coro,
+        coro: Coroutine[object, object, None],
     ) -> None:
         """Create a background task for Noma API calls without blocking the main flow"""
         try:
@@ -246,7 +246,7 @@ class NomaGuardrail(CustomGuardrail):
 
     async def _process_llm_response_check(
         self,
-        request_data: dict,
+        request_data: dict[str, object],
         response: LLMResponse,
         user_auth: UserAPIKeyAuth,
         event_type: GuardrailEventHooks | None = None,
@@ -525,7 +525,7 @@ class NomaGuardrail(CustomGuardrail):
 
     async def _check_user_message_background(
         self,
-        request_data: dict,
+        request_data: dict[str, object],
         user_auth: UserAPIKeyAuth,
     ) -> None:
         """Check user message in background for monitor mode - non-blocking"""
@@ -536,7 +536,7 @@ class NomaGuardrail(CustomGuardrail):
 
     async def _check_llm_response_background(
         self,
-        request_data: dict,
+        request_data: dict[str, object],
         response: LLMResponse,
         user_auth: UserAPIKeyAuth,
     ) -> None:
@@ -715,10 +715,10 @@ class NomaGuardrail(CustomGuardrail):
 
     async def _check_user_message(
         self,
-        request_data: dict,
+        request_data: dict[str, object],
         user_auth: UserAPIKeyAuth,
         event_type: GuardrailEventHooks | None = None,
-    ) -> Exception | str | dict | None:
+    ) -> Exception | str | dict[str, object] | None:
         """Check user message for policy violations"""
         user_message: Final = await self._process_user_message_check(request_data, user_auth, event_type)
         if not user_message:
@@ -728,7 +728,7 @@ class NomaGuardrail(CustomGuardrail):
 
     async def _check_llm_response(
         self,
-        request_data: dict,
+        request_data: dict[str, object],
         response: _LLMResponseT,
         user_auth: UserAPIKeyAuth,
         event_type: GuardrailEventHooks | None = None,
@@ -742,7 +742,7 @@ class NomaGuardrail(CustomGuardrail):
 
     async def _call_noma_api(
         self,
-        payload: dict,
+        payload: Mapping[str, object],
         llm_request_id: str | None,
         request_data: dict,
         user_auth: UserAPIKeyAuth,

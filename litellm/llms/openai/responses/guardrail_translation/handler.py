@@ -69,12 +69,12 @@ from litellm.llms.base_llm.guardrail_translation.utils import (
     list_field,
     merge_guardrailed_scoped_messages,
     role_out_of_guardrail_scope,
+    scanned_hosted_web_tool_call,
     scoped_structured_message_indices,
     stream_item_field,
     stream_item_fingerprint,
     stream_item_items,
     unappliable_request_rewrite,
-    web_search_call,
     with_web_search_call_arguments,
 )
 from litellm.llms.openai.responses.guardrail_translation.tool_merge import (
@@ -84,7 +84,7 @@ from litellm.llms.openai.responses.guardrail_translation.tool_merge import (
 from litellm.responses.additional_tools import additional_tools_in_input
 from litellm.responses.litellm_completion_transformation.compaction_items import (
     compaction_summary,
-    decode_compaction_item,
+    output_compaction_summary,
     with_compaction_summary,
 )
 from litellm.responses.litellm_completion_transformation.custom_tools import without_malformed_tool_flags
@@ -96,15 +96,14 @@ from litellm.responses.litellm_completion_transformation.tool_search import is_s
 from litellm.responses.litellm_completion_transformation.transformation import (
     TOOL_CALL_OUTPUT_ITEM_TYPES,
     LiteLLMCompletionResponsesConfig,
-    claude_web_search_call_tool_call,
     tool_output_to_chat_content,
 )
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import (
     AllMessageValues,
     BaseLiteLLMOpenAIResponseObject,
-    ChatCompletionAssistantToolCall,
     ChatCompletionToolCallChunk,
+    ChatCompletionToolCallFunctionChunk,
     ChatCompletionToolParam,
     ContentPartAddedEvent,
     ContentPartDoneEvent,
@@ -180,13 +179,6 @@ _OutputItemPosition: TypeAlias = _AnswerPosition | _ReasoningPosition
 _ReasoningTextPosition: TypeAlias = _ReasoningPosition | _ProviderThinkingBlockPosition
 _OutputPosition: TypeAlias = _OutputItemPosition | _ProviderThinkingBlockPosition
 _REASONING_POSITION_TYPES: Final = (_ReasoningSummaryPosition, _ReasoningContentPosition, _ThinkingBlockPosition)
-
-
-def _output_compaction_summary(item: object) -> str | None:
-    if stream_item_field(item, "type") != "compaction":
-        return None
-    block: Final = decode_compaction_item(stream_item_field(item, "encrypted_content"))
-    return None if block is None else block.summary
 
 
 def _reasoning_output_texts(item: object, output_index: int) -> tuple[tuple[_ReasoningPosition, str], ...]:
@@ -500,22 +492,23 @@ def _joins_assistant_turn(item: object) -> bool:
     return _is_tool_call_item(item) or _is_tool_search_item(item)
 
 
-def _claude_web_search_tool_call(item: object) -> ChatCompletionAssistantToolCall | None:
-    search: Final = web_search_call(item)
-    return None if search is None else claude_web_search_call_tool_call(search)
-
-
-def _claude_web_tool_call(item: object, index: int) -> ChatCompletionToolCallChunk | None:
-    tool_call: Final = _claude_web_search_tool_call(item)
-    if tool_call is None:
+def _hosted_web_tool_call(item: object, index: int) -> ChatCompletionToolCallChunk | None:
+    hosted_call: Final = scanned_hosted_web_tool_call(item)
+    if hosted_call is None:
         return None
-    return ChatCompletionToolCallChunk(id=tool_call["id"], type="function", function=tool_call["function"], index=index)
+    tool_id, name, arguments = hosted_call
+    return ChatCompletionToolCallChunk(
+        id=tool_id,
+        type="function",
+        function=ChatCompletionToolCallFunctionChunk(name=name, arguments=arguments),
+        index=index,
+    )
 
 
 def _is_output_tool_call_item(item: object) -> bool:
     return (
         stream_item_field(item, "type") in _OUTPUT_TOOL_CALL_ITEM_TYPES
-        or _claude_web_search_tool_call(item) is not None
+        or scanned_hosted_web_tool_call(item) is not None
     )
 
 
@@ -553,7 +546,7 @@ def _scanned_tool_call_item(item: Mapping[str, object]) -> Mapping[str, object]:
 
 
 def _scanned_tool_call(item: Mapping[str, object], index: int) -> ChatCompletionToolCallChunk:
-    web_tool_call: Final = _claude_web_tool_call(item, index)
+    web_tool_call: Final = _hosted_web_tool_call(item, index)
     if web_tool_call is not None:
         return web_tool_call
     return tool_call_dict_from_output_item(_scanned_tool_call_item(item), index)
@@ -581,7 +574,7 @@ def _rewritten_tool_search_call(item: object, payload: str | None) -> object:
     return item
 
 
-_RewriteKey: Final = TypeVar("_RewriteKey")
+_RewriteKey = TypeVar("_RewriteKey")
 
 
 def _delta_replacements(rewrites: Mapping[_RewriteKey, str]) -> Mapping[_RewriteKey, Iterator[str]]:
@@ -1060,7 +1053,7 @@ def tool_output_texts(item: object) -> tuple[tuple[int | None, str], ...]:
     return ((None, tool_content),) if isinstance(tool_content, str) and tool_content else ()
 
 
-_Grouped: Final = TypeVar("_Grouped")
+_Grouped = TypeVar("_Grouped")
 
 
 def _pair_call_id(pair: tuple[str, object]) -> str:
@@ -1284,7 +1277,9 @@ class OpenAIResponsesHandler(BaseTranslation):
     delivers_ended_stream_rewrites = True
     assembles_streamed_response = True
 
-    def get_structured_messages(self, data: dict, *, keep_tool_errors: bool = False) -> list[AllMessageValues] | None:
+    def get_structured_messages(
+        self, data: dict[str, object], *, keep_tool_errors: bool = False
+    ) -> list[AllMessageValues] | None:
         """
         Convert Responses API request data to OpenAI-spec structured messages.
 
@@ -1304,7 +1299,7 @@ class OpenAIResponsesHandler(BaseTranslation):
 
     async def process_input_messages(
         self,
-        data: dict,
+        data: dict[str, object],
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: "LiteLLMLoggingObj | None" = None,
     ) -> dict[str, object]:
@@ -1313,7 +1308,7 @@ class OpenAIResponsesHandler(BaseTranslation):
 
         Handles both string input and list of message objects.
         """
-        raw_input: Final[str | ResponseInputParam | None] = data.get("input")
+        raw_input: Final[object] = data.get("input")
         if not isinstance(raw_input, (str, list)):
             return data
         input_data: Final = cast("str | ResponseInputParam", raw_input)  # cast-ok: fields read via stream_item_field
@@ -1534,7 +1529,7 @@ class OpenAIResponsesHandler(BaseTranslation):
 
     def _apply_guardrailed_tools_to_data(
         self,
-        data: dict,
+        data: dict[str, object],
         original_tools: Sequence[Mapping[str, object]],
         flattened_tool_groups: Sequence[Sequence[Mapping[str, object]]],
         guardrailed_tools: Sequence[ChatCompletionToolParam] | None,
@@ -1645,7 +1640,7 @@ class OpenAIResponsesHandler(BaseTranslation):
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: "LiteLLMLoggingObj | None" = None,
         user_api_key_dict: "UserAPIKeyAuth | None" = None,
-        request_data: dict | None = None,
+        request_data: dict[str, object] | None = None,
     ) -> Union["ResponsesAPIResponse", ResponseOutputEnvelope]:
         """
         Process output response by applying guardrails to text content and tool calls.
@@ -1919,11 +1914,11 @@ class OpenAIResponsesHandler(BaseTranslation):
         # ------------------------------------------------------------------ #
         if final_chunk.get("type") == "response.output_item.done":
             finished_item: Final = stream_item_field(final_chunk, "item")
-            finished_summary: Final = _output_compaction_summary(finished_item)
+            finished_summary: Final = output_compaction_summary(finished_item)
             model_response_stream: Final = (
                 OpenAiResponsesToChatCompletionStreamIterator.translate_responses_chunk_to_openai_stream(final_chunk)
             )
-            finished_web_tool_call: Final = _claude_web_tool_call(finished_item, 0)
+            finished_web_tool_call: Final = _hosted_web_tool_call(finished_item, 0)
             tool_calls: Final = [
                 *cast(list[ChatCompletionToolCallChunk], model_response_stream.choices[0].delta.tool_calls or []),
                 *(() if finished_web_tool_call is None else (finished_web_tool_call,)),
@@ -2507,7 +2502,7 @@ class OpenAIResponsesHandler(BaseTranslation):
         part_texts: Final = tuple(
             text for part in message_parts if isinstance(text := stream_item_field(part, "text"), str) and text
         )
-        summaries: Final = tuple(summary for item in output_items if (summary := _output_compaction_summary(item)))
+        summaries: Final = tuple(summary for item in output_items if (summary := output_compaction_summary(item)))
         reasoning_texts: Final = chain.from_iterable(
             _reasoning_output_texts(item, output_index) for output_index, item in enumerate(output_items)
         )
@@ -2612,7 +2607,7 @@ class OpenAIResponsesHandler(BaseTranslation):
                 tool_calls_to_check.append(_scanned_tool_call(tool_call_item, output_idx))
             return
 
-        summary: Final = _output_compaction_summary(output_item)
+        summary: Final = output_compaction_summary(output_item)
         if summary is not None:
             texts_to_check.append(summary)
             task_mappings.append(_CompactionSummaryPosition(output_idx))

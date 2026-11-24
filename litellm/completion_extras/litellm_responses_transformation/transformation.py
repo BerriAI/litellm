@@ -1390,7 +1390,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             {**existing, **update},
         )
 
-    def _build_sanitized_litellm_params(self, litellm_params: dict) -> dict[str, object]:
+    def _build_sanitized_litellm_params(self, litellm_params: Mapping[str, object]) -> dict[str, object]:
         """Build sanitized litellm_params with merged metadata."""
         responses_optional_param_keys: Final = set(ResponsesAPIOptionalRequestParams.__annotations__.keys())
         sanitized: Final[dict[str, object]] = {
@@ -1431,12 +1431,12 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         self,
         model: str,
         messages: list["AllMessageValues"],
-        optional_params: dict,
+        optional_params: dict[str, object],
         litellm_params: dict[str, object],
-        headers: dict,
+        headers: dict[str, object],
         litellm_logging_obj: "LiteLLMLoggingObj",
         client: object | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         request_params: Final = cast("Mapping[str, object]", optional_params)  # cast-ok: untyped dict
         sent_params: Final = (
             request_params,
@@ -1816,10 +1816,10 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         raw_response: "BaseModel",
         model_response: "ModelResponse",
         logging_obj: object,
-        request_data: dict,
+        request_data: dict[str, object],
         messages: list["AllMessageValues"],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         encoding: object,
         api_key: str | None = None,
         json_mode: bool | None = None,
