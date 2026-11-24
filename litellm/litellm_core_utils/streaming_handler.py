@@ -36,6 +36,7 @@ from litellm.litellm_core_utils.core_helpers import (
     as_str_mapping,
     attribute_or_none,
     chunk_usage,
+    concatenated,
     decoded_json_object,
     has_attributes,
     json_contains,
@@ -469,6 +470,7 @@ class _VllmCompletionOutputLike(Protocol):
 class _ParsedChunkHiddenParams(LiteLLMBaseModel):
     provider_specific_fields: Mapping[str, object] | None = None
     upstream_provider: str | None = None
+    anthropic_message_start: bool = False
 
 
 _DECODED_JSON: Final = TypeAdapter(object)
@@ -515,6 +517,7 @@ def _provider_hidden_params(
                     "upstream_provider",
                     parsed.upstream_provider if parsed is not None and parsed.upstream_provider else upstream_provider,
                 ),
+                ("anthropic_message_start", True if parsed is not None and parsed.anthropic_message_start else None),
             )
             if value is not None
         }
@@ -541,7 +544,7 @@ class CustomStreamWrapper:
         custom_llm_provider: str | None = None,
         stream_options=None,
         make_call: Callable | None = None,
-        _response_headers: dict | httpx.Headers | None = None,
+        _response_headers: Mapping[str, object] | httpx.Headers | None = None,
         count_prompt_tokens: Callable[[], int] | None = None,
         is_mock: bool = False,
         response_cost: float | None = None,
@@ -557,6 +560,7 @@ class CustomStreamWrapper:
         self.logging_obj: LiteLLMLoggingObject = logging_obj
         self.completion_stream = completion_stream
         self.sent_first_chunk = False
+        self._choice_indexes_given_role: frozenset[int] = frozenset()
         self.sent_last_chunk = False
         self._openai_handler_receives_chunk_objects = False
         self._failure_logging: asyncio.Task[None] | None = None
@@ -592,7 +596,7 @@ class CustomStreamWrapper:
         self.complete_response = ""
         self.response_uptil_now = ""
         self._emitted_disqualifying_content = False
-        _model_info: Final[dict] = litellm_params.model_info or {}
+        _model_info: Final[Mapping[str, object]] = litellm_params.model_info or {}
 
         _api_base: Final = get_api_base(
             model=model or "",
@@ -785,7 +789,7 @@ class CustomStreamWrapper:
                     )
         self._restore_consumer_correlation_context()
 
-    def check_send_stream_usage(self, stream_options: dict | None):
+    def check_send_stream_usage(self, stream_options: Mapping[str, object] | None):
         return stream_options is not None and stream_options.get("include_usage", False) is True
 
     def check_is_function_call(self, logging_obj) -> bool:
@@ -854,7 +858,7 @@ class CustomStreamWrapper:
                 llm_provider="",
             )
 
-    def check_special_tokens(self, chunk: str, finish_reason: str | None):
+    def check_special_tokens(self, chunk: object, finish_reason: str | None):
         """
         Output parse <s> / </s> special tokens for sagemaker + hf streaming.
         """
@@ -864,14 +868,14 @@ class CustomStreamWrapper:
 
         if finish_reason:
             for token in self.special_tokens:
-                if token in chunk:
-                    chunk = chunk.replace(token, "")
+                if json_contains(chunk, token):
+                    chunk = require_attributes(chunk, _Replaceable, "replace").replace(token, "")
             return hold, chunk
 
         if self.sent_first_chunk is True:
             return hold, chunk
 
-        curr_chunk = self.holding_chunk + chunk
+        curr_chunk = concatenated(self.holding_chunk, chunk)
         curr_chunk = curr_chunk.strip()
 
         for token in self.special_tokens:
@@ -1033,7 +1037,7 @@ class CustomStreamWrapper:
         except Exception as e:
             raise e
 
-    def handle_azure_text_completion_chunk(self, chunk):
+    def handle_azure_text_completion_chunk(self, chunk: object):
         try:
             text = ""
             is_finished = False
@@ -1080,7 +1084,7 @@ class CustomStreamWrapper:
         except Exception as e:
             raise e
 
-    def handle_triton_stream(self, chunk):
+    def handle_triton_stream(self, chunk: object):
         try:
             if isinstance(chunk, dict):
                 parsed_response = chunk
@@ -1259,7 +1263,7 @@ class CustomStreamWrapper:
                 and model_response.choices[0].delta.annotations is not None
             )
             or (
-                not self.sent_first_chunk
+                _response_choice_index(response_obj) not in self._choice_indexes_given_role
                 and hasattr(model_response.choices[0].delta, "role")
                 and model_response.choices[0].delta.role is not None
             )
@@ -1274,10 +1278,9 @@ class CustomStreamWrapper:
         """
         Strip the role from the delta.
         """
-        if self.sent_first_chunk is False:
+        if self._claim_role_for_choice(model_response.choices[0].index):
             model_response.choices[0].delta["role"] = "assistant"
-            self.sent_first_chunk = True
-        elif self.sent_first_chunk is True and hasattr(model_response.choices[0].delta, "role"):
+        elif hasattr(model_response.choices[0].delta, "role"):
             _initial_delta: Final = without(model_response.choices[0].delta.model_dump(), "role")
             set_extra_attribute(model_response.choices[0], "delta", Delta(**_keyword_fields(_initial_delta)))
         return model_response
@@ -1302,11 +1305,23 @@ class CustomStreamWrapper:
             return None
         return _delta_from_upstream(upstream_delta)
 
+    def _claim_role_for_choice(self, choice_index: int | None) -> bool:
+        index: Final = 0 if choice_index is None else choice_index
+        if index in self._choice_indexes_given_role:
+            return False
+        self._choice_indexes_given_role = self._choice_indexes_given_role | {index}
+        self.sent_first_chunk = True
+        return True
+
     def _set_role_on_fresh_delta(self, model_response: ModelResponseStream) -> None:
+        first_choice_claimed: Final = self._claim_role_for_choice(model_response.choices[0].index)
+        for choice in model_response.choices[1:]:
+            set_extra_attribute(
+                choice.delta, "role", "assistant" if self._claim_role_for_choice(choice.index) else None
+            )
         delta: Final = model_response.choices[0].delta
-        if self.sent_first_chunk is False:
+        if first_choice_claimed:
             set_extra_attribute(delta, "role", "assistant")
-            self.sent_first_chunk = True
             return
         if not _holds_only_scalars(delta):
             self.strip_role_from_delta(model_response)
@@ -1353,7 +1368,7 @@ class CustomStreamWrapper:
         """
         return delta is not None and stored_attribute(delta, attribute_name) is not None
 
-    def _copy_delta_attribute(self, source_delta, target_delta, attribute_name: str) -> None:
+    def _copy_delta_attribute(self, source_delta: object, target_delta: object, attribute_name: str) -> None:
         """
         Copy a specific attribute from source delta to target delta.
         """
@@ -1369,7 +1384,7 @@ class CustomStreamWrapper:
                 return True
         return False
 
-    def _handle_special_delta_attributes(self, delta, model_response: "ModelResponseStream") -> None:
+    def _handle_special_delta_attributes(self, delta: object, model_response: "ModelResponseStream") -> None:
         """
         Handle special delta attributes (audio, image) by copying them to model_response.
         """
@@ -1380,7 +1395,7 @@ class CustomStreamWrapper:
 
     def return_processed_chunk_logic(  # noqa: C901
         self,
-        completion_obj: dict[str, Any],
+        completion_obj: dict[str, object],
         model_response: ModelResponseStream,
         response_obj: Mapping[str, Any],
         plain_delta_created: bool = False,
@@ -1445,7 +1460,7 @@ class CustomStreamWrapper:
                                 - _closing_only_fields_to_hold_back(original_chunk, upstream_choice),
                             )
                         else:
-                            choices: Final = []
+                            choices: Final[list[StreamingChoices]] = []
                             for choice in upstream_chunk.choices:
                                 try:
                                     if isinstance(choice, BaseModel):
@@ -1483,13 +1498,12 @@ class CustomStreamWrapper:
                 else:
                     ## else
                     completion_obj["content"] = model_response_str
-                    if self.sent_first_chunk is False:
+                    _index: Final = _delta_choice_index(completion_obj, response_obj)
+                    if self._claim_role_for_choice(_index if isinstance(_index, int) else 0):
                         completion_obj["role"] = "assistant"
-                        self.sent_first_chunk = True
                     if response_obj.get("provider_specific_fields") is not None:
                         completion_obj["provider_specific_fields"] = response_obj["provider_specific_fields"]
                     model_response.choices[0].delta = Delta(**_keyword_fields(completion_obj))
-                    _index: Final = _delta_choice_index(completion_obj, response_obj)
                     if _index is not None:
                         set_extra_attribute(model_response.choices[0], "index", _index)
 
@@ -2098,7 +2112,7 @@ class CustomStreamWrapper:
             setattr(e, "message", str(e))
             raise self._map_stream_exception(e)
 
-    def set_logging_event_loop(self, loop):
+    def set_logging_event_loop(self, loop: asyncio.AbstractEventLoop):
         """
         import litellm, asyncio
 
@@ -2250,7 +2264,7 @@ class CustomStreamWrapper:
         if not cache_hit and self.logging_obj.llm_caching_handler is not None:
             await self.logging_obj.llm_caching_handler.add_streaming_response_to_cache(processed_chunk)
 
-    def run_success_logging_and_cache_storage(self, processed_chunk, cache_hit: bool):
+    def run_success_logging_and_cache_storage(self, processed_chunk: object, cache_hit: bool):
         """
         Runs success logging in a thread and adds the response to the cache
         """
@@ -3315,7 +3329,7 @@ def _apply_copilot_cache_counts(returned_usage: Usage, latest_usage_chunk: Usage
     backfill_missing_cache_usage_fields(returned_usage)
 
 
-def generic_chunk_has_all_required_fields(chunk: dict) -> bool:
+def generic_chunk_has_all_required_fields(chunk: Mapping[str, object]) -> bool:
     """
     Checks if every key in the chunk dictionary is a GenericStreamingChunk field.
 
