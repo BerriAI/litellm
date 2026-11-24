@@ -799,7 +799,7 @@ def decrypted_callback_metadata(metadata: object) -> object:
 def env_reference_check_metadata(metadata: object) -> object:
     fields: Final = string_keyed(metadata)
     logging_value: Final = fields.get("logging")
-    if not isinstance(metadata, dict) or not isinstance(logging_value, str):
+    if not isinstance(logging_value, str):
         return decrypted_callback_metadata(metadata)
     entries: Final = normalize_logging_entries(logging_value, skip_invalid=True)
     listed: Final = [] if isinstance(entries, InvalidLoggingMetadata) else [dict(entry) for entry in entries]
