@@ -263,7 +263,7 @@ def test_image_edit_forwards_scalar_array_as_repeated_fields():
     assert b"style_a" in body and b"style_b" in body and b"style_c" in body
 
 
-@pytest.mark.parametrize("model", ["openai/dall-e-2", "recraft/recraftv3"])
+@pytest.mark.parametrize("model", ["openai/dall-e-2", "recraft/recraftv3", "azure/gpt-image-2.5-flare"])
 def test_image_edit_ignores_markup_for_a_model_that_does_not_support_it(model: str) -> None:
     captured: Final[dict[str, object]] = {}  # mutable-ok: the MockTransport callback records the request
     client: Final = HTTPHandler(

@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from io import BufferedReader
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final
@@ -27,6 +28,7 @@ else:
 
 
 _UPLOAD_TUPLE: Final = TypeAdapter(tuple[object, ...])
+_UPLOAD_LIST: Final = TypeAdapter(list[object])
 
 
 def _upload_file_name(upload: object, default_name: str) -> object:
@@ -38,6 +40,14 @@ def _as_upload_tuple(upload: object) -> tuple[object, ...] | None:
     if not isinstance(upload, tuple):
         return None
     return _UPLOAD_TUPLE.validate_python(raw)
+
+
+def _first_upload(upload: object) -> object:
+    raw: Final[object] = upload
+    if not isinstance(upload, list):
+        return upload
+    uploads: Final = _UPLOAD_LIST.validate_python(raw)
+    return uploads[0] if uploads else None
 
 
 def _build_upload_part(upload: object, default_name: str) -> tuple[object, ...]:
@@ -63,7 +73,7 @@ class OpenAIImageEditConfig(BaseImageEditConfig):
     Used for models like gpt-image-1 that support multiple images.
     """
 
-    def get_supported_openai_params(self, model: str) -> list:
+    def get_supported_openai_params(self, model: str) -> list[str]:  # mutable-ok: BaseImageEditConfig contract
         """
         All OpenAI Image Edits params are supported
         """
@@ -134,8 +144,22 @@ class OpenAIImageEditConfig(BaseImageEditConfig):
         # Separate images, masks, and markup as `files` and send other parameters as `data`
         #########################################################
         _image_list: Final = request_dict.get("image")
-        _mask = request_dict.get("mask")
-        markup: Final = request_dict.get("markup")
+        single_file_uploads: Final = (
+            ("mask", _first_upload(request_dict.get("mask"))),
+            ("markup", _first_upload(request_dict.get("markup"))),
+        )
+        json_reference_field: Final = next(
+            (field_name for field_name, upload in single_file_uploads if isinstance(upload, Mapping)), None
+        )
+        if json_reference_field is not None:
+            raise litellm.BadRequestError(
+                message=(
+                    f"'{json_reference_field}' must be an uploaded image file. "
+                    "A JSON image reference cannot be sent in a multipart image edit."
+                ),
+                model=model,
+                llm_provider=litellm_params.custom_llm_provider or "openai",
+            )
         data_without_files: Final = {k: v for k, v in request_dict.items() if k not in ["image", "mask", "markup"]}
         files_list: Final[list[tuple[str, Any]]] = []
 
@@ -150,27 +174,14 @@ class OpenAIImageEditConfig(BaseImageEditConfig):
                         image=_image,
                         field_name="image[]",
                     )
-        # Handle mask parameter if provided
-        if _mask is not None:
-            # Handle case where mask can be a list (extract first mask)
-            if isinstance(_mask, list):
-                _mask = _mask[0] if _mask else None
-
-            if _mask is not None:
+        for field_name, upload in single_file_uploads:
+            if upload is not None:
                 self._add_image_to_files(
                     files_list=files_list,
-                    image=_mask,
-                    field_name="mask",
-                    default_name="mask.png",
+                    image=upload,
+                    field_name=field_name,
+                    default_name=f"{field_name}.png",
                 )
-
-        if markup is not None:
-            self._add_image_to_files(
-                files_list=files_list,
-                image=markup,
-                field_name="markup",
-                default_name="markup.png",
-            )
 
         return data_without_files, files_list
 
