@@ -3,7 +3,9 @@
 from collections.abc import Mapping
 from datetime import datetime
 from functools import partial
-from typing import Final
+from typing import Final, TypedDict
+
+from typing_extensions import ReadOnly, Required
 
 import litellm
 from litellm import ModelResponse, verbose_logger
@@ -44,6 +46,18 @@ def _as_rate(value: object) -> float | None:
     return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else None
 
 
+class _LoggedLitellmParams(TypedDict, total=False):
+    metadata: ReadOnly[Mapping[str, object] | None]
+    model_info: ReadOnly[Mapping[str, object]]
+
+
+class _SuccessEventKwargs(TypedDict, total=False):
+    """The logging call details a success callback reads."""
+
+    call_type: ReadOnly[object]
+    litellm_params: Required[ReadOnly[_LoggedLitellmParams]]
+
+
 class LowestCostLoggingHandler(CustomLogger):
     test_flag: bool = False
     logged_success: int = 0
@@ -53,17 +67,20 @@ class LowestCostLoggingHandler(CustomLogger):
         self.router_cache = router_cache
 
     @with_service_target(ROUTER_USAGE_TARGET)
-    def log_success_event(self, kwargs, response_obj: object, start_time: object, end_time: object):
+    def log_success_event(
+        self, kwargs: _SuccessEventKwargs, response_obj: object, start_time: object, end_time: object
+    ):
         if is_batch_retrieve_call_type(kwargs.get("call_type")):
             return
         try:
             """
             Update usage on success
             """
-            if kwargs["litellm_params"].get("metadata") is None:
+            metadata: Final = kwargs["litellm_params"].get("metadata")
+            if metadata is None:
                 pass
             else:
-                model_group: Final = kwargs["litellm_params"]["metadata"].get("model_group", None)
+                model_group: Final = metadata.get("model_group", None)
 
                 id = kwargs["litellm_params"].get("model_info", {}).get("id", None)
                 if model_group is None or id is None:
@@ -129,17 +146,20 @@ class LowestCostLoggingHandler(CustomLogger):
             )
 
     @with_service_target(ROUTER_USAGE_TARGET)
-    async def async_log_success_event(self, kwargs, response_obj: object, start_time: object, end_time: object):
+    async def async_log_success_event(
+        self, kwargs: _SuccessEventKwargs, response_obj: object, start_time: object, end_time: object
+    ):
         if is_batch_retrieve_call_type(kwargs.get("call_type")):
             return
         try:
             """
             Update cost usage on success
             """
-            if kwargs["litellm_params"].get("metadata") is None:
+            metadata: Final = kwargs["litellm_params"].get("metadata")
+            if metadata is None:
                 pass
             else:
-                model_group: Final = kwargs["litellm_params"]["metadata"].get("model_group", None)
+                model_group: Final = metadata.get("model_group", None)
 
                 id = kwargs["litellm_params"].get("model_info", {}).get("id", None)
                 if model_group is None or id is None:
