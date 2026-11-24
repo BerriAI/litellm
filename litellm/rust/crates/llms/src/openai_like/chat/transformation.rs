@@ -263,8 +263,8 @@ fn sanitize_usage(usage: Map<String, Value>) -> Map<String, Value> {
         .collect()
 }
 
-/// Python's `Usage` fails on a field outside its contract, while this keeps every field that
-/// parses on its own and reads a count that does not parse as 0.
+/// Keeps every field that parses on its own, reads a count sent as a numeric string or a whole
+/// float as that number, and reads a top-level count that does not parse as 0.
 fn host_usage(usage: Map<String, Value>) -> ChatCompletionsUsage {
     let counts: Map<String, Value> = USAGE_COUNTS
         .into_iter()
@@ -275,6 +275,12 @@ fn host_usage(usage: Map<String, Value>) -> ChatCompletionsUsage {
     };
     let readable: Map<String, Value> = usage
         .into_iter()
+        .filter_map(|(key, value)| match value {
+            Value::Object(details) if DETAILS.contains(&key.as_str()) => {
+                (!details.is_empty()).then(|| (key, Value::Object(readable_details(details))))
+            }
+            value => Some((key, value)),
+        })
         .filter(|(key, value)| {
             parses(
                 &counts
@@ -290,14 +296,40 @@ fn host_usage(usage: Map<String, Value>) -> ChatCompletionsUsage {
     parses(&readable).unwrap_or_default()
 }
 
+const DETAILS: [&str; 2] = ["prompt_tokens_details", "completion_tokens_details"];
+
+/// Python drops a null detail and reads a `*_tokens` detail the way it reads a top-level count,
+/// where it fails on a detail that does not parse and this drops only that detail.
+fn readable_details(details: Map<String, Value>) -> Map<String, Value> {
+    details
+        .into_iter()
+        .filter_map(|(key, value)| match value {
+            Value::Null => None,
+            Value::Object(nested) if key == "cache_creation_token_details" => {
+                Some((key, Value::Object(readable_details(nested))))
+            }
+            _ if key == "cache_creation_token_details" => None,
+            value if key.ends_with("_tokens") => whole_number(&value).map(|count| (key, json!(count))),
+            value => Some((key, value)),
+        })
+        .collect()
+}
+
 fn token_count(count: Option<&Value>) -> u64 {
-    count
-        .and_then(|count| count.as_u64().or_else(|| count.as_str()?.parse().ok()))
-        .unwrap_or(0)
+    count.and_then(whole_number).unwrap_or(0)
+}
+
+fn whole_number(count: &Value) -> Option<u64> {
+    let whole = |number: f64| (number.fract() == 0.0 && number >= 0.0).then_some(number as u64);
+    match count {
+        Value::Number(number) => number.as_u64().or_else(|| whole(number.as_f64()?)),
+        Value::String(text) => text.parse().ok().or_else(|| whole(text.parse().ok()?)),
+        _ => None,
+    }
 }
 
 /// Python's `Usage` constructor: top-level cache and reasoning counts move into the details
-/// objects, the details' cache write aliases agree, and an empty details object is dropped.
+/// objects and the details' cache write aliases agree.
 fn python_usage(usage: ChatCompletionsUsage) -> ChatCompletionsUsage {
     let top_level_count = |key: &str| usage.extra.get(key).and_then(Value::as_u64);
     let reasoning_tokens = top_level_count("reasoning_tokens").filter(|tokens| *tokens > 0);
@@ -306,16 +338,12 @@ fn python_usage(usage: ChatCompletionsUsage) -> ChatCompletionsUsage {
         .or(top_level_count("prompt_cache_hit_tokens"));
     ChatCompletionsUsage {
         completion_tokens_details: completion_details(
-            usage
-                .completion_tokens_details
-                .filter(|details| *details != CompletionTokensDetails::default()),
+            usage.completion_tokens_details,
             reasoning_tokens,
             usage.completion_tokens,
         ),
         prompt_tokens_details: prompt_details(
-            usage
-                .prompt_tokens_details
-                .filter(|details| *details != PromptTokensDetails::default()),
+            usage.prompt_tokens_details,
             cached_tokens,
             usage.cache_creation_input_tokens,
         ),
@@ -799,6 +827,29 @@ mod tests {
         }),
         json!({"prompt_tokens": 3, "completion_tokens": 5, "total_tokens": 8})
     )]
+    #[case::kimi_k3_capture(
+        json!({
+            "prompt_tokens": 105, "completion_tokens": 134, "total_tokens": 239,
+            "completion_tokens_details": {"reasoning_tokens": 121}, "prompt_tokens_details": {"cache_write_tokens": 0}
+        }),
+        json!({
+            "prompt_tokens": 105, "completion_tokens": 134, "total_tokens": 239,
+            "completion_tokens_details": {"reasoning_tokens": 121},
+            "prompt_tokens_details": {"cache_write_tokens": 0, "cache_creation_tokens": 0}
+        })
+    )]
+    #[case::fireworks_deepseek_capture(
+        json!({
+            "prompt_tokens": 50, "completion_tokens": 38, "total_tokens": 88, "prompt_tokens_details": {"cached_tokens": 0},
+            "completion_tokens_details": {
+                "accepted_prediction_tokens": null, "reasoning_tokens": 35, "rejected_prediction_tokens": null
+            }
+        }),
+        json!({
+            "prompt_tokens": 50, "completion_tokens": 38, "total_tokens": 88, "prompt_tokens_details": {"cached_tokens": 0},
+            "completion_tokens_details": {"reasoning_tokens": 35}
+        })
+    )]
     fn maps_host_cache_and_reasoning_counts_like_python(
         #[case] usage: Value,
         #[case] expected: Value,
@@ -825,24 +876,57 @@ mod tests {
         json!({"prompt_tokens": "3", "completion_tokens": 1, "total_tokens": 4}),
         json!({"completion_tokens": 1, "prompt_tokens": 3, "total_tokens": 4})
     )]
+    #[case::count_sent_as_a_whole_float(
+        json!({"prompt_tokens": 3.0, "completion_tokens": "1.0", "total_tokens": 4}),
+        json!({"completion_tokens": 1, "prompt_tokens": 3, "total_tokens": 4})
+    )]
+    #[case::detail_sent_as_a_numeric_string(
+        json!({
+            "prompt_tokens": 3, "completion_tokens": 1, "total_tokens": 4,
+            "prompt_tokens_details": {"cached_tokens": "2", "cache_creation_token_details": {"ephemeral_5m_input_tokens": "4"}},
+            "completion_tokens_details": {"reasoning_tokens": 1.0}
+        }),
+        json!({
+            "completion_tokens": 1, "prompt_tokens": 3, "total_tokens": 4,
+            "prompt_tokens_details": {"cached_tokens": 2, "cache_creation_token_details": {"ephemeral_5m_input_tokens": 4}},
+            "completion_tokens_details": {"reasoning_tokens": 1}
+        })
+    )]
+    #[case::null_detail(
+        json!({"prompt_tokens": 3, "completion_tokens": 1, "total_tokens": 4, "completion_tokens_details": {"reasoning_tokens": null}}),
+        json!({"completion_tokens": 1, "prompt_tokens": 3, "total_tokens": 4, "completion_tokens_details": {}})
+    )]
+    fn reads_a_count_the_way_python_coerces_it(#[case] usage: Value, #[case] expected: Value) {
+        assert_eq!(usage_of(Some(usage)), expected);
+    }
+
+    #[rstest]
     #[case::count_that_is_not_a_token_count(
         json!({"prompt_tokens": "three", "completion_tokens": 1, "total_tokens": 4}),
         json!({"completion_tokens": 1, "prompt_tokens": 0, "total_tokens": 4})
     )]
     #[case::detail_that_is_not_a_token_count(
-        json!({"prompt_tokens": 3, "completion_tokens": 1, "total_tokens": 4, "prompt_tokens_details": {"cached_tokens": "2"}}),
-        json!({"completion_tokens": 1, "prompt_tokens": 3, "total_tokens": 4})
+        json!({
+            "prompt_tokens": 3, "completion_tokens": 1, "total_tokens": 4,
+            "prompt_tokens_details": {"cached_tokens": "two", "text_tokens": 3}
+        }),
+        json!({"completion_tokens": 1, "prompt_tokens": 3, "total_tokens": 4, "prompt_tokens_details": {"text_tokens": 3}})
+    )]
+    #[case::nested_detail_that_is_not_a_token_count(
+        json!({
+            "prompt_tokens": 3, "completion_tokens": 1, "total_tokens": 4,
+            "prompt_tokens_details": {
+                "cached_tokens": 2, "cache_creation_token_details": {"ephemeral_5m_input_tokens": "x", "ephemeral_1h_input_tokens": 1}
+            }
+        }),
+        json!({
+            "completion_tokens": 1, "prompt_tokens": 3, "total_tokens": 4,
+            "prompt_tokens_details": {"cached_tokens": 2, "cache_creation_token_details": {"ephemeral_1h_input_tokens": 1}}
+        })
     )]
     #[case::details_that_are_not_an_object(
         json!({"prompt_tokens": 3, "completion_tokens": 1, "total_tokens": 4, "completion_tokens_details": "none"}),
         json!({"completion_tokens": 1, "prompt_tokens": 3, "total_tokens": 4})
-    )]
-    #[case::one_unreadable_details_object_keeps_the_other(
-        json!({
-            "prompt_tokens": 3, "completion_tokens": 1, "total_tokens": 4,
-            "prompt_tokens_details": {"cached_tokens": 2}, "completion_tokens_details": {"reasoning_tokens": 2.5}
-        }),
-        json!({"completion_tokens": 1, "prompt_tokens": 3, "total_tokens": 4, "prompt_tokens_details": {"cached_tokens": 2}})
     )]
     #[case::unreadable_top_level_field_keeps_every_other_field(
         json!({
