@@ -18,6 +18,7 @@ from typing import (
     cast,  # noqa: TID251  # caller chat messages go to chat inference translation as-is
 )
 
+from openai.types.chat import ChatCompletionToolChoiceOptionParam
 from pydantic import ConfigDict, JsonValue, TypeAdapter, ValidationError, with_config
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
@@ -60,6 +61,9 @@ _SYSTEM_BLOCKS: Final = TypeAdapter(list[JsonValue])
 _IMAGE_BLOCK: Final = TypeAdapter(ChatCompletionImageObject)
 _ANTHROPIC_TOOL_CHOICE: Final[TypeAdapter[AnthropicMessagesToolChoice | None]] = TypeAdapter(
     AnthropicMessagesToolChoice | None
+)
+_CHAT_TOOL_CHOICE: Final[TypeAdapter[ChatCompletionToolChoiceOptionParam | None]] = TypeAdapter(
+    ChatCompletionToolChoiceOptionParam | None
 )
 COUNT_TOKEN_OPTION_NAMES: Final = ("thinking", "tool_choice", "output_config")
 _PLAIN_MESSAGE_KEYS: Final = frozenset({"role", "content"})
@@ -144,21 +148,33 @@ class ChatCountTranslationError:
         )
 
 
+def _invalid_tool_choice(error: ValidationError, drops_params: bool) -> ChatCountTranslationError | None:
+    return (
+        None
+        if drops_params
+        else ChatCountTranslationError(
+            message="; ".join(
+                f"{'.'.join(('tool_choice', *map(str, detail['loc'])))}: {detail['msg']}" for detail in error.errors()
+            )
+        )
+    )
+
+
 def counted_tool_choice(
     tool_choice: object, drops_params: bool
 ) -> AnthropicMessagesToolChoice | ChatCountTranslationError | None:
     try:
         return _ANTHROPIC_TOOL_CHOICE.validate_python(tool_choice)
     except ValidationError as e:
-        return (
-            None
-            if drops_params
-            else ChatCountTranslationError(
-                message="; ".join(
-                    f"{'.'.join(('tool_choice', *map(str, error['loc'])))}: {error['msg']}" for error in e.errors()
-                )
-            )
-        )
+        return _invalid_tool_choice(e, drops_params)
+
+
+def counted_chat_tool_choice(tool_choice: JsonValue, drops_params: bool) -> JsonValue | ChatCountTranslationError:
+    try:
+        _ = _CHAT_TOOL_CHOICE.validate_python(tool_choice)
+    except ValidationError as e:
+        return _invalid_tool_choice(e, drops_params)
+    return tool_choice
 
 
 @with_config(ConfigDict(extra="ignore"))

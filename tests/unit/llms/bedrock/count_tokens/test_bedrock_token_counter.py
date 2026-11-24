@@ -1093,6 +1093,150 @@ async def test_claude_runtime_count_drops_an_invalid_tool_choice_under_drop_para
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("deployment_model", "tool_choice", "counted_tool_choice"),
+    [
+        (
+            "bedrock/converse/us.anthropic.claude-sonnet-4-6",
+            {"type": "auto", "disable_parallel_tool_use": True},
+            None,
+        ),
+        (
+            "bedrock/converse/us.anthropic.claude-sonnet-4-6",
+            {"type": "any", "disable_parallel_tool_use": True},
+            {"type": "any"},
+        ),
+        (
+            "bedrock/us.anthropic.claude-sonnet-4-6",
+            {"type": "auto", "disable_parallel_tool_use": True},
+            {"type": "auto", "disable_parallel_tool_use": True},
+        ),
+    ],
+    ids=["converse_auto", "converse_any", "invoke_auto"],
+)
+async def test_claude_messages_count_leaves_out_the_parallel_flag_only_where_messages_inference_drops_it(
+    deployment_model: str, tool_choice: dict[str, JsonValue], counted_tool_choice: dict[str, JsonValue] | None
+) -> None:
+    bedrock: Final = _Bedrock(runtime=(200, {"inputTokens": 583}), mantle=(200, {"input_tokens": 1}))
+    model: Final = deployment_model.rsplit("/", 1)[-1]
+
+    result: Final = await _counter(bedrock).count_tokens(
+        model_to_use=model,
+        messages=[{"role": "user", "content": "Weather in Paris?"}],
+        contents=None,
+        deployment=_deployment(deployment_model),
+        request_model=model,
+        tools=[_WEATHER_INPUT_TOOL],
+        count_options={"tool_choice": tool_choice},
+    )
+
+    assert result is not None
+    assert (result.error, result.total_tokens) == (False, 583)
+    assert _counted_body(bedrock.requests[0]).get("tool_choice") == counted_tool_choice
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("deployment_model", "messages_format", "count_options", "chat_params", "counted_tool_choice"),
+    [
+        ("bedrock/converse/us.anthropic.claude-sonnet-4-6", "anthropic", {"tool_choice": {"type": "any"}}, {}, None),
+        ("bedrock/converse/us.anthropic.claude-sonnet-4-6", "openai", {}, {"tool_choice": "required"}, None),
+        ("bedrock/us.anthropic.claude-sonnet-4-6", "openai", {}, {"tool_choice": "required"}, None),
+        (
+            "bedrock/us.anthropic.claude-sonnet-4-6",
+            "anthropic",
+            {"tool_choice": {"type": "any"}},
+            {},
+            {"type": "any"},
+        ),
+        ("bedrock/invoke/us.anthropic.claude-sonnet-4-6", "openai", {}, {"tool_choice": "required"}, {"type": "any"}),
+    ],
+    ids=["converse_messages", "converse_chat", "default_chat", "invoke_messages", "invoke_chat"],
+)
+async def test_claude_count_sends_a_forced_tool_choice_without_tools_only_where_inference_sends_it(
+    deployment_model: str,
+    messages_format: TokenCountMessagesFormat,
+    count_options: dict[str, JsonValue],
+    chat_params: dict[str, JsonValue],
+    counted_tool_choice: dict[str, JsonValue] | None,
+) -> None:
+    bedrock: Final = _Bedrock(runtime=(200, {"inputTokens": 31}), mantle=(200, {"input_tokens": 1}))
+    model: Final = deployment_model.rsplit("/", 1)[-1]
+
+    result: Final = await _counter(bedrock).count_tokens(
+        model_to_use=model,
+        messages=[{"role": "user", "content": "Weather in Paris?"}],
+        contents=None,
+        deployment=_deployment(deployment_model),
+        request_model=model,
+        messages_format=messages_format,
+        count_options=count_options,
+        chat_params=chat_params,
+    )
+
+    assert result is not None
+    assert (result.error, result.total_tokens) == (False, 31)
+    assert _counted_body(bedrock.requests[0]).get("tool_choice") == counted_tool_choice
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("deployment_model", "tool_choice", "rejected"),
+    [
+        ("bedrock/converse/us.anthropic.claude-sonnet-4-6", "sometimes", True),
+        ("bedrock/converse/us.anthropic.claude-sonnet-4-6", {"type": "bogus"}, True),
+        ("bedrock/invoke/us.anthropic.claude-sonnet-4-6", "sometimes", False),
+    ],
+    ids=["converse_unknown_string", "converse_unknown_type", "invoke_unknown_string"],
+)
+async def test_claude_chat_count_rejects_an_invalid_chat_tool_choice_where_inference_does(
+    deployment_model: str, tool_choice: JsonValue, rejected: bool
+) -> None:
+    bedrock: Final = _Bedrock(runtime=(200, {"inputTokens": 583}), mantle=(200, {"input_tokens": 1}))
+    model: Final = deployment_model.rsplit("/", 1)[-1]
+
+    result: Final = await _counter(bedrock).count_tokens(
+        model_to_use=model,
+        messages=[{"role": "user", "content": "Weather in Paris?"}],
+        contents=None,
+        deployment=_deployment(deployment_model),
+        request_model=model,
+        tools=[_WEATHER_TOOL],
+        messages_format="openai",
+        chat_params={"tool_choice": tool_choice},
+    )
+
+    assert result is not None
+    assert (result.error, result.status_code, bedrock.posted_hosts()) == (
+        (True, 400, ()) if rejected else (False, None, (RUNTIME_HOST,))
+    )
+    assert str(result.error_message).startswith("tool_choice.") is rejected
+
+
+@pytest.mark.asyncio
+async def test_claude_converse_chat_count_drops_an_invalid_chat_tool_choice_under_drop_params() -> None:
+    with_choice: Final = _Bedrock(runtime=(200, {"inputTokens": 583}), mantle=(200, {"input_tokens": 1}))
+    without_choice: Final = _Bedrock(runtime=(200, {"inputTokens": 583}), mantle=(200, {"input_tokens": 1}))
+    deployment_model: Final = "bedrock/converse/us.anthropic.claude-sonnet-4-6"
+    request: Final = {
+        "model_to_use": "us.anthropic.claude-sonnet-4-6",
+        "messages": [{"role": "user", "content": "Weather in Paris?"}],
+        "contents": None,
+        "deployment": {"litellm_params": {**DEPLOYMENT["litellm_params"], "model": deployment_model, "drop_params": True}},
+        "request_model": "us.anthropic.claude-sonnet-4-6",
+        "tools": [_WEATHER_TOOL],
+        "messages_format": "openai",
+    }
+
+    result: Final = await _counter(with_choice).count_tokens(**request, chat_params={"tool_choice": "sometimes"})
+    await _counter(without_choice).count_tokens(**request)
+
+    assert result is not None
+    assert (result.error, result.total_tokens) == (False, 583)
+    assert with_choice.requests[0].content == without_choice.requests[0].content
+
+
+@pytest.mark.asyncio
 async def test_mantle_retry_leaves_out_the_tool_choice_drop_params_left_out_of_the_runtime_count() -> None:
     with_choice: Final = _Bedrock(runtime=(400, UNSUPPORTED), mantle=(200, {"input_tokens": 31}))
     without_choice: Final = _Bedrock(runtime=(400, UNSUPPORTED), mantle=(200, {"input_tokens": 31}))

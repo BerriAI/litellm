@@ -543,12 +543,8 @@ _FORCED_CHOICE_WITHOUT_TOOLS: Final = pytest.mark.parametrize(
 
 
 @pytest.mark.asyncio
-@_FORCED_CHOICE_WITHOUT_TOOLS
-async def test_forced_tool_choice_without_tools_reaches_openai_so_the_caller_gets_its_400(
+async def test_anthropic_format_forced_tool_choice_without_tools_reaches_openai_so_the_caller_gets_its_400(
     monkeypatch: pytest.MonkeyPatch,
-    messages_format: TokenCountMessagesFormat,
-    count_options: dict[str, JsonValue],
-    chat_params: dict[str, JsonValue],
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     with respx.mock:
@@ -563,15 +559,31 @@ async def test_forced_tool_choice_without_tools_reaches_openai_so_the_caller_get
             contents=None,
             deployment={"litellm_params": {"api_key": "sk-test"}},
             request_model="openai/gpt-4o",
-            messages_format=messages_format,
-            count_options=count_options,
-            chat_params=chat_params,
+            messages_format="anthropic",
+            count_options={"tool_choice": {"type": "any"}},
         )
         sent: Final = json.loads(route.calls.last.request.content)
 
     assert result is not None
     assert (result.error, result.status_code) == (True, 400)
     assert sent["tool_choice"] == "required"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "tool_choice",
+    ["required", {"type": "function", "function": {"name": "get_weather"}}, "sometimes"],
+    ids=["required", "named_function", "unknown"],
+)
+async def test_openai_format_leaves_a_tool_choice_without_tools_out_of_the_count_as_chat_inference_does(
+    monkeypatch: pytest.MonkeyPatch, tool_choice: JsonValue
+) -> None:
+    sent: Final = await _sent_count_body(
+        monkeypatch, _WEATHER_ASK, system=None, messages_format="openai", chat_params={"tool_choice": tool_choice}
+    )
+
+    assert isinstance(sent, dict)
+    assert "tool_choice" not in sent
 
 
 @pytest.mark.asyncio
@@ -618,6 +630,58 @@ async def test_anthropic_format_unknown_tool_choice_answers_400_without_calling_
     assert result is not None
     assert (result.error, result.status_code, result.rejected_before_provider_call) == (True, 400, True)
     assert str(result.error_message).startswith("tool_choice.type: ")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "tool_choice",
+    ["sometimes", {"type": "bogus"}, {"type": "function"}],
+    ids=["unknown_string", "unknown_type", "function_without_name"],
+)
+async def test_openai_format_invalid_tool_choice_answers_400_without_calling_openai(
+    monkeypatch: pytest.MonkeyPatch, tool_choice: JsonValue
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    with respx.mock:
+        route: Final = respx.post(COUNT_URL).mock(return_value=httpx.Response(200, json={"input_tokens": 1}))
+        result: Final = await OpenAITokenCounter().count_tokens(
+            model_to_use="gpt-4o",
+            messages=_WEATHER_ASK,
+            contents=None,
+            deployment={"litellm_params": {"api_key": "sk-test"}},
+            request_model="openai/gpt-4o",
+            tools=[_CHAT_WEATHER_TOOL],
+            messages_format="openai",
+            chat_params={"tool_choice": tool_choice},
+        )
+
+    assert route.called is False
+    assert result is not None
+    assert (result.error, result.status_code, result.rejected_before_provider_call) == (True, 400, True)
+    assert str(result.error_message).startswith("tool_choice.")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "tool_choice",
+    ["sometimes", {"type": "bogus"}],
+    ids=["unknown_string", "unknown_type"],
+)
+async def test_drop_params_counts_the_chat_tools_without_an_invalid_chat_tool_choice(
+    monkeypatch: pytest.MonkeyPatch, tool_choice: JsonValue
+) -> None:
+    count: Final = {
+        "messages": _WEATHER_ASK,
+        "system": None,
+        "messages_format": "openai",
+        "tools": [_CHAT_WEATHER_TOOL],
+        "litellm_params": {"drop_params": True},
+    }
+
+    sent: Final = await _sent_count_body(monkeypatch, **count, chat_params={"tool_choice": tool_choice})
+    sent_without_choice: Final = await _sent_count_body(monkeypatch, **count)
+
+    assert sent == sent_without_choice
 
 
 @pytest.mark.asyncio

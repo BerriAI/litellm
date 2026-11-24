@@ -16,7 +16,11 @@ from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.tool_fields import DropPolicy
-from litellm.llms.anthropic.count_tokens.transformation import ChatCountTranslationError, counted_tool_choice
+from litellm.llms.anthropic.count_tokens.transformation import (
+    ChatCountTranslationError,
+    counted_chat_tool_choice,
+    counted_tool_choice,
+)
 from litellm.llms.anthropic.messages.context_management import AnthropicContextManagementError
 from litellm.llms.anthropic.messages.convertible_blocks import deployment_drops_params, unconvertible_blocks_error
 from litellm.llms.anthropic.messages.responses_adapters.handler import (
@@ -54,6 +58,7 @@ def _responses_tool_choice(
     messages_format: TokenCountMessagesFormat,
     count_options: Mapping[str, JsonValue],
     chat_params: Mapping[str, JsonValue],
+    tools: Sequence[Mapping[str, object]] | None,
     drops_params: bool,
 ) -> JsonValue | ChatCountTranslationError:
     match messages_format:
@@ -66,14 +71,13 @@ def _responses_tool_choice(
                         LiteLLMAnthropicToResponsesAPIAdapter.translate_tool_choice_to_responses_api(anthropic_choice)
                     )
         case "openai":
-            chat_choice: Final = chat_params.get("tool_choice")
-            return (
-                None
-                if chat_choice is None
-                else _RESPONSES_TOOL_CHOICE.validate_python(
-                    LiteLLMCompletionResponsesConfig.transform_tool_choice_for_responses_api_response(chat_choice)
-                )
-            )
+            match counted_chat_tool_choice(chat_params.get("tool_choice") if tools else None, drops_params):
+                case ChatCountTranslationError() | None as unsent:
+                    return unsent
+                case chat_choice:
+                    return _RESPONSES_TOOL_CHOICE.validate_python(
+                        LiteLLMCompletionResponsesConfig.transform_tool_choice_for_responses_api_response(chat_choice)
+                    )
         case _:
             assert_never(messages_format)
 
@@ -214,7 +218,7 @@ class OpenAITokenCounter(BaseTokenCounter):
                 status_code=400,
                 rejected_before_provider_call=True,
             )
-        tool_choice: Final = _responses_tool_choice(messages_format, count_options, chat_params, drops_params)
+        tool_choice: Final = _responses_tool_choice(messages_format, count_options, chat_params, tools, drops_params)
         if isinstance(tool_choice, ChatCountTranslationError):
             return tool_choice.response(request_model, model_to_use, "openai_api")
 
