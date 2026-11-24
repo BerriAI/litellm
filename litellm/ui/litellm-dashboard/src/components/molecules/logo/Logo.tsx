@@ -9,6 +9,7 @@ type LogoProps = {
   className?: string;
   fallback?: React.ReactNode;
   referrerPolicy?: React.HTMLAttributeReferrerPolicy;
+  onError?: () => void;
 } & (
   | { provider: string; src?: never; label?: string }
   | { provider?: never; src: string | null | undefined; label: string }
@@ -26,6 +27,7 @@ export const Logo: React.FC<LogoProps> = ({
   className = "w-4 h-4",
   fallback,
   referrerPolicy,
+  onError,
 }) => {
   const { t } = useTranslation();
   const [erroredSrc, setErroredSrc] = useState<string | null>(null);
@@ -42,6 +44,11 @@ export const Logo: React.FC<LogoProps> = ({
   }
 
   const treatment = logoTreatmentFor(resolvedSrc);
+  const handleError = () => {
+    console.warn(`Logo failed to load: ${resolvedSrc}`);
+    setErroredSrc(resolvedSrc);
+    onError?.();
+  };
 
   return (
     <img
@@ -49,10 +56,7 @@ export const Logo: React.FC<LogoProps> = ({
       alt={t("shell.logo.alt", { name: name || "-" })}
       className={treatment === undefined ? className : cn(className, DARK_TREATMENT_CLASS[treatment])}
       referrerPolicy={referrerPolicy}
-      onError={() => {
-        console.warn(`Logo failed to load: ${resolvedSrc}`);
-        setErroredSrc(resolvedSrc);
-      }}
+      onError={handleError}
     />
   );
 };

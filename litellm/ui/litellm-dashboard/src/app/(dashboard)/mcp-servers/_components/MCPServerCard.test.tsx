@@ -92,6 +92,20 @@ describe("MCPServerCard logo", () => {
     expect(screen.queryByRole("img", { name: "demo_server logo" })).not.toBeInTheDocument();
     expect(screen.getByText("DE")).toBeInTheDocument();
   });
+
+  it("tries each parent favicon in order before falling back to initials", () => {
+    renderCard({ url: "https://qa.mcp.example.com/mcp" });
+
+    const getLogo = () => screen.getByRole("img", { name: "demo_server logo" });
+    expect(getLogo()).toHaveAttribute("src", "https://qa.mcp.example.com/favicon.ico");
+    fireEvent.error(getLogo());
+    expect(getLogo()).toHaveAttribute("src", "https://mcp.example.com/favicon.ico");
+    fireEvent.error(getLogo());
+    expect(getLogo()).toHaveAttribute("src", "https://example.com/favicon.ico");
+    fireEvent.error(getLogo());
+    expect(screen.queryByRole("img", { name: "demo_server logo" })).not.toBeInTheDocument();
+    expect(screen.getByText("DE")).toBeInTheDocument();
+  });
 });
 
 describe("MCPServerCard per-user credentials", () => {
