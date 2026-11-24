@@ -539,6 +539,34 @@ def _is_pass_through_all_models_enabled(llm_router: Any) -> bool:
         return False
 
 
+def _is_registered_deployment_id(registry: Any, model_name: str) -> bool:
+    """Return True when ``model_name`` matches a registered deployment ``model_info.id``."""
+    try:
+        has_deployment = registry.has_deployment(model_name)
+        if isinstance(has_deployment, bool):
+            return has_deployment
+    except Exception:
+        pass
+    try:
+        return any((d.get("model_info") or {}).get("id") == model_name for d in registry.deployments())
+    except Exception:
+        return False
+
+
+def _can_resolve_backend_model_waiver(model_name: str, llm_router: RegistryReader) -> bool:
+    """Return True when ``model_name`` may fall back to backend-name zero-cost resolution."""
+    if _is_pass_through_all_models_enabled(llm_router):
+        return False
+    registry = llm_router.registry()
+    if _is_registered_deployment_id(registry, model_name):
+        return False
+    try:
+        team_public_names = registry.names(kind="team_public")
+    except Exception:
+        team_public_names = frozenset()
+    return model_name not in team_public_names
+
+
 def _get_router_zero_cost_cache(llm_router: RegistryReader) -> dict[str, bool] | None:
     """
     Return the router's per-instance zero-cost cache, or ``None`` for objects
@@ -587,23 +615,9 @@ def is_model_cost_zero(model: str | Sequence[str] | None, llm_router: RegistryRe
             model_group_info = llm_router.registry().group(model_name, include_hidden=True)
 
             if model_group_info is None:
-                if _is_pass_through_all_models_enabled(llm_router):
+                if not _can_resolve_backend_model_waiver(model_name, llm_router):
                     verbose_proxy_logger.debug(
-                        "Router has pass_through_all_models enabled; backend model %s takes direct provider dispatch, retaining budget enforcement",
-                        model_name,
-                    )
-                    if zero_cost_cache is not None:
-                        zero_cost_cache[model_name] = False
-                    return False
-
-                try:
-                    team_public_names = llm_router.registry().names(kind="team_public")
-                except Exception:
-                    team_public_names = frozenset()
-
-                if model_name in team_public_names:
-                    verbose_proxy_logger.debug(
-                        "Backend model %s has team-specific route taking precedence, retaining budget enforcement",
+                        "Backend model %s is ineligible for zero-cost fallback waiver, retaining budget enforcement",
                         model_name,
                     )
                     if zero_cost_cache is not None:
@@ -766,13 +780,7 @@ def _deployments_served_for(model: str, llm_router: RegistryReader) -> Sequence[
     )
     if pattern_deployments:
         return pattern_deployments
-    if _is_pass_through_all_models_enabled(llm_router):
-        return ()
-    try:
-        team_public_names = registry.names(kind="team_public")
-    except Exception:
-        team_public_names = frozenset()
-    if model in team_public_names:
+    if not _can_resolve_backend_model_waiver(model, llm_router):
         return ()
     backend_matches = tuple(
         d

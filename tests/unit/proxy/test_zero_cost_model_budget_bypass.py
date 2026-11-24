@@ -1099,3 +1099,43 @@ def test_backend_model_waiver_rejected_when_team_public_route_exists() -> None:
     assert is_model_cost_zero("free-group", router) is True
     # openai/gpt-4o-mini is claimed by a team_public_model_name, so backend waiver is rejected
     assert is_model_cost_zero("openai/gpt-4o-mini", router) is False
+
+
+def test_backend_model_waiver_rejected_when_matching_registered_deployment_id() -> None:
+    """When a model string is a registered deployment ID, backend waiver must not match another group."""
+    from litellm.proxy.auth.auth_checks import _deployments_served_for
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "free-group",
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "api_key": "sk-free",
+                    "input_cost_per_token": 0.0,
+                    "output_cost_per_token": 0.0,
+                },
+                "model_info": {
+                    "id": "free-group-id",
+                    "input_cost_per_token": 0.0,
+                    "output_cost_per_token": 0.0,
+                },
+            },
+            {
+                "model_name": "paid-group",
+                "litellm_params": {
+                    "model": "openai/gpt-4o",
+                    "api_key": "sk-paid",
+                    "input_cost_per_token": 0.00001,
+                    "output_cost_per_token": 0.00003,
+                },
+                "model_info": {
+                    "id": "openai/gpt-4o-mini",
+                },
+            },
+        ]
+    )
+
+    assert is_model_cost_zero("free-group", router) is True
+    assert is_model_cost_zero("openai/gpt-4o-mini", router) is False
+    assert _deployments_served_for("openai/gpt-4o-mini", router) == ()
