@@ -74,6 +74,12 @@ class _AsyncGetClient(Protocol):
     def get(self, url: str, *, timeout: float | None = None) -> Awaitable[httpx.Response]: ...
 
 
+class _ReleaseCache(Protocol):
+    def get_cache(self, key: str) -> object: ...
+
+    def set_cache(self, key: str, value: object, *, ttl: int) -> None: ...
+
+
 _latest_release_cache: Final = InMemoryCache(max_size_in_memory=1, default_ttl=LATEST_RELEASE_CACHE_TTL_SECONDS)
 _latest_release_fetch_lock: Final = asyncio.Lock()
 
@@ -207,13 +213,13 @@ async def fetch_latest_release(client: _AsyncGetClient) -> LatestReleaseInfo | L
     )
 
 
-def _cached_release(cache: InMemoryCache) -> LatestReleaseInfo | LatestReleaseUnavailable | None:
+def _cached_release(cache: _ReleaseCache) -> LatestReleaseInfo | LatestReleaseUnavailable | None:
     cached: Final = cache.get_cache(LATEST_RELEASE_CACHE_KEY)
     return cached if isinstance(cached, (LatestReleaseInfo, LatestReleaseUnavailable)) else None
 
 
 async def get_latest_release_info(
-    client: _AsyncGetClient, cache: InMemoryCache, fetch_lock: asyncio.Lock
+    client: _AsyncGetClient, cache: _ReleaseCache, fetch_lock: asyncio.Lock
 ) -> LatestReleaseInfo | LatestReleaseUnavailable:
     cached: Final = _cached_release(cache)
     if cached is not None:
@@ -232,7 +238,7 @@ async def get_latest_release_info(
         return result
 
 
-async def refresh_latest_release_info(client: _AsyncGetClient, cache: InMemoryCache, fetch_lock: asyncio.Lock) -> None:
+async def refresh_latest_release_info(client: _AsyncGetClient, cache: _ReleaseCache, fetch_lock: asyncio.Lock) -> None:
     result: Final = await get_latest_release_info(client=client, cache=cache, fetch_lock=fetch_lock)
     if isinstance(result, LatestReleaseUnavailable):
         verbose_proxy_logger.warning("LiteLLM: latest release info unavailable: %s", result.reason)

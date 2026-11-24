@@ -4,16 +4,13 @@ Utility functions for A2A protocol.
 
 import hashlib
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Final, Protocol
+from typing import Final, Protocol
 
 from pydantic import TypeAdapter
 
 import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, has_attributes
-
-if TYPE_CHECKING:
-    from a2a.types import SendMessageRequest, SendStreamingMessageRequest
 
 _OBJECT_ITEMS: Final = TypeAdapter(tuple[object, ...])
 
@@ -111,7 +108,7 @@ class A2ARequestUtils:
 
     @staticmethod
     def get_input_message_from_request(
-        request: "SendMessageRequest | SendStreamingMessageRequest",
+        request: object,
     ) -> object:
         """
         Extract the input message from an A2A request.
@@ -148,7 +145,7 @@ class A2ARequestUtils:
 
     @staticmethod
     def calculate_usage_from_request_response(
-        request: "SendMessageRequest | SendStreamingMessageRequest",
+        request: object,
         response_dict: Mapping[str, object],
     ) -> tuple[int, int, int]:
         """
