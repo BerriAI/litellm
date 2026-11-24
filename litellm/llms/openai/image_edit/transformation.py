@@ -42,6 +42,7 @@ class OpenAIImageEditConfig(BaseImageEditConfig):
             "prompt",
             "background",
             "input_fidelity",
+            "markup",
             "mask",
             "model",
             "n",
@@ -107,11 +108,12 @@ class OpenAIImageEditConfig(BaseImageEditConfig):
         request_dict: Final = cast(dict, request)
 
         #########################################################
-        # Separate images and masks as `files` and send other parameters as `data`
+        # Separate images, masks, and markup as `files` and send other parameters as `data`
         #########################################################
         _image_list: Final = request_dict.get("image")
         _mask = request_dict.get("mask")
-        data_without_files: Final = {k: v for k, v in request_dict.items() if k not in ["image", "mask"]}
+        _markup = request_dict.get("markup")
+        data_without_files: Final = {k: v for k, v in request_dict.items() if k not in ["image", "mask", "markup"]}
         files_list: Final[list[tuple[str, Any]]] = []
 
         # Handle image parameter
@@ -137,6 +139,22 @@ class OpenAIImageEditConfig(BaseImageEditConfig):
                     files_list.append(("mask", (_mask.name, _mask, mask_content_type)))
                 else:
                     files_list.append(("mask", ("mask.png", _mask, mask_content_type)))
+
+        # Handle markup parameter if provided
+        if _markup is not None:
+            if isinstance(_markup, list):
+                _markup = _markup[0] if _markup else None
+
+            if _markup is not None:
+                markup_content_type: Final[str] = ImageEditRequestUtils.get_image_content_type(_markup)
+                if isinstance(_markup, BufferedReader):
+                    files_list.append(("markup", (_markup.name, _markup, markup_content_type)))
+                else:
+                    markup_name: Final = getattr(_markup, "name", None)
+                    filename: Final = (
+                        markup_name if isinstance(markup_name, str) and markup_name else "markup.png"
+                    )
+                    files_list.append(("markup", (filename, _markup, markup_content_type)))
 
         return data_without_files, files_list
 

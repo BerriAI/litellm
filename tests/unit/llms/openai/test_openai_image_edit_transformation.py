@@ -311,3 +311,91 @@ def test_input_fidelity_passes_through_optional_param_filter():
     assert filtered["input_fidelity"] == "low"
     assert filtered["quality"] == "high"
     assert "unknown_param" not in filtered
+
+
+def test_transform_image_edit_request_with_markup(
+    image_edit_config: OpenAIImageEditConfig,
+):
+    """Markup upload must be sent as a multipart file part, not a text form field."""
+    import io
+
+    png_bytes = (
+        b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01"
+        b"\x08\x06\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\rIDATx\x9cc`\x00\x00"
+        b"\x00\x02\x00\x01\xe2!\xbc3\x00\x00\x00\x00IEND\xaeB`\x82"
+    )
+    markup = io.BytesIO(png_bytes)
+    markup.name = "markup.png"
+    image = io.BytesIO(png_bytes)
+    image.name = "square.png"
+
+    assert "markup" in image_edit_config.get_supported_openai_params(model="gpt-image-2.5-flare")
+
+    data, files = image_edit_config.transform_image_edit_request(
+        model="gpt-image-2.5-flare",
+        prompt="Apply the marked changes",
+        image=[image],
+        image_edit_optional_request_params={"markup": [markup]},
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    assert "markup" not in data
+    markup_part = next((f for f in files if f[0] == "markup"), None)
+    assert markup_part is not None
+    assert markup_part[1][0] == "markup.png"
+    assert markup_part[1][1] is markup
+    assert markup_part[1][2] == "image/png"
+
+
+@pytest.mark.asyncio
+async def test_aimage_edit_sends_markup_as_multipart_file_not_repr():
+    """End-to-end SDK aimage_edit sends markup as a real file part, never str(BytesIO)."""
+    import base64
+    import io
+
+    import httpx
+
+    import litellm
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+
+    png = base64.b64decode(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNgYGD4DwABBAEAX+XDSwAAAABJRU5ErkJggg==",
+    )
+    reply = {
+        "created": 1,
+        "data": [{"b64_json": base64.b64encode(png).decode()}],
+        "usage": {
+            "input_tokens": 1,
+            "output_tokens": 1,
+            "total_tokens": 2,
+            "input_tokens_details": {"image_tokens": 1, "text_tokens": 0},
+        },
+    }
+    sent: list[httpx.Request] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        request.read()
+        sent.append(request)
+        return httpx.Response(200, json=reply)
+
+    img = io.BytesIO(png)
+    img.name = "square.png"
+    markup = io.BytesIO(png)
+    markup.name = "markup.png"
+
+    await litellm.aimage_edit(
+        model="openai/gpt-image-2.5-flare",
+        prompt="Apply the marked changes",
+        image=[img],
+        markup=markup,
+        api_key="sk-test",
+        api_base="https://openai.test/v1",
+        client=AsyncHTTPHandler(transport=httpx.MockTransport(respond)),
+    )
+
+    assert len(sent) == 1
+    req = sent[0]
+    assert req.headers["content-type"].startswith("multipart/form-data")
+    assert b'name="markup"; filename="markup.png"' in req.content
+    assert b"BytesIO" not in req.content

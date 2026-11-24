@@ -15,6 +15,7 @@ class ImageEditOptionalRequestParams(TypedDict, total=False):
 
     background: Literal["transparent", "opaque", "auto"] | None
     input_fidelity: Literal["high", "low"] | None
+    markup: FileTypes | None
     mask: str | None
     n: int | None
     quality: Literal["high", "medium", "low", "standard", "auto"] | None

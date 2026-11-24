@@ -754,6 +754,7 @@ _OBJECT_DICT_ADAPTER: Final = TypeAdapter[dict[str, object]](dict[str, object])
 _ADDITIONAL_DROP_PARAMS: Final = TypeAdapter[tuple[str, ...]](tuple[str, ...])
 _IMAGE_EDIT_OPENAI_PARAMS: Final = frozenset(get_type_hints(ImageEditOptionalRequestParams))
 _DROP_PARAM_KWARGS: Final = frozenset({"drop_params", "additional_drop_params"})
+_IGNORED_UNLESS_SUPPORTED_EDIT_PARAMS: Final = frozenset({"markup"})
 _PASSTHROUGH_EDIT_PROVIDERS: Final = frozenset({litellm.LlmProviders.MINIMAX.value})
 
 
@@ -793,6 +794,7 @@ def image_edit(
     prompt: str | None = None,
     model: str | None = None,
     mask: str | None = None,
+    markup: FileTypes | None = None,
     n: int | None = None,
     quality: str | ImageGenerationRequestQuality | None = None,
     response_format: str | None = None,
@@ -871,6 +873,7 @@ def image_edit(
             custom_optional_params: Final = _custom_handler_edit_params(
                 _OBJECT_DICT_ADAPTER.validate_python(kwargs),
                 {
+                    "markup": markup,
                     "mask": mask,
                     "n": n,
                     "quality": quality,
@@ -947,10 +950,15 @@ def image_edit(
                 message=f"`{requested_params.param}` {requested_params.reason} for {model}. "
                 "To drop it from the call, set `litellm.drop_params = True`.",
             )
+        ignored_edit_params: Final = _IGNORED_UNLESS_SUPPORTED_EDIT_PARAMS - provider_supported_params
         # Get ImageEditOptionalRequestParams with only valid parameters
         image_edit_optional_params: Final[ImageEditOptionalRequestParams] = (
             _get_ImageEditRequestUtils().get_requested_image_edit_optional_param(
-                {**local_vars, **requested_params},
+                {
+                    key: value
+                    for key, value in {**local_vars, **requested_params}.items()
+                    if key not in ignored_edit_params
+                },
                 provider_supported_params=provider_supported_params.intersection(requested_params),
             )
         )
@@ -1109,6 +1117,7 @@ async def aimage_edit(
     model: str,
     prompt: str,
     mask: str | None = None,
+    markup: FileTypes | None = None,
     n: int | None = None,
     quality: str | ImageGenerationRequestQuality | None = None,
     response_format: str | None = None,
@@ -1152,6 +1161,7 @@ async def aimage_edit(
             image=images,
             prompt=prompt,
             mask=mask,
+            markup=markup,
             model=model,
             n=n,
             quality=quality,

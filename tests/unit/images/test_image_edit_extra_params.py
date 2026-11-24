@@ -263,6 +263,28 @@ def test_image_edit_forwards_scalar_array_as_repeated_fields():
     assert b"style_a" in body and b"style_b" in body and b"style_c" in body
 
 
+@pytest.mark.parametrize("model", ["openai/dall-e-2", "recraft/recraftv3"])
+def test_image_edit_ignores_markup_for_a_model_that_does_not_support_it(model: str) -> None:
+    captured: Final[dict[str, object]] = {}  # mutable-ok: the MockTransport callback records the request
+    client: Final = HTTPHandler(
+        client=httpx.Client(transport=httpx.MockTransport(_capture_image_edit_request(captured)))
+    )
+
+    response: Final = litellm.image_edit(
+        model=model,
+        image=PNG_BYTES,
+        prompt="add a hat",
+        markup=b"\x89PNG\r\n\x1a\nmarkup",
+        api_key="sk-test",
+        api_base="https://edit.example/v1",
+        client=client,
+    )
+
+    assert response.data
+    assert isinstance(captured["body"], bytes)
+    assert b"markup" not in captured["body"]
+
+
 @pytest.mark.asyncio
 async def test_aimage_edit_forwards_extra_body():
     """aimage_edit used to drop extra_headers/extra_query/extra_body when
