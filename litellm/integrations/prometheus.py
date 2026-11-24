@@ -58,6 +58,7 @@ from litellm.litellm_core_utils.service_tier_utils import (
     get_service_tier_from_standard_logging_payload,
 )
 from litellm.llms.azure.common_utils import caused_by_entra_rejection
+from litellm.llms.gemini.empty_image_response import is_answer_without_an_image
 from litellm.llms.github_copilot.per_user_auth import is_github_copilot_per_user_request
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 from litellm.models.end_user import LiteLLM_EndUserTable
@@ -3330,14 +3331,18 @@ class PrometheusLogger(CustomLogger):
         logged: Final = _logged_fields(request_data.get("standard_logging_object"))
         if logged.get("status") == "success":
             return
-        if (
-            request_data.get("call_type") not in IMAGE_CALL_TYPES
-            or not isinstance(usage, litellm.Usage)
-            or not isinstance(response_cost, (int, float))
-        ):
+        if request_data.get("call_type") not in IMAGE_CALL_TYPES or not isinstance(usage, litellm.Usage):
+            return
+        if not isinstance(response_cost, (int, float)) or response_cost <= 0:
             return
         billed_model: Final = logged.get("model")
-        billed_values: Final = replace(enum_values, model=billed_model if isinstance(billed_model, str) else None)
+        provider: Final = logged.get("custom_llm_provider")
+        billed_values: Final = replace(
+            enum_values,
+            model=billed_model.removeprefix(f"{provider}/" if isinstance(provider, str) else "")
+            if isinstance(billed_model, str)
+            else None,
+        )
         label_context: Final = PrometheusLabelFactoryContext(billed_values)
 
         def count_billed(
@@ -3583,8 +3588,9 @@ class PrometheusLogger(CustomLogger):
             log these labels
             ["litellm_model_name", "model_id", "api_base", "api_provider"]
             """
+            refused_prompt: Final = isinstance(exception, Exception) and is_answer_without_an_image(exception)
             # Only mark a deployment outage when one was actually picked.
-            if deployment_selected:
+            if deployment_selected and not refused_prompt:
                 self.set_deployment_partial_outage(
                     litellm_model_name=litellm_model_name or "",
                     model_id=model_id,
@@ -3592,7 +3598,7 @@ class PrometheusLogger(CustomLogger):
                     api_provider=llm_provider or "",
                 )
             _deployment_label_ctx: Final = PrometheusLabelFactoryContext(enum_values)
-            if exception is not None:
+            if exception is not None and not refused_prompt:
                 PrometheusLogger._inc_labeled_counter(
                     self,
                     self.litellm_deployment_failure_responses,

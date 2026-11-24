@@ -37,6 +37,7 @@ from litellm.proxy.common_request_processing import (
     log_llm_api_exception,
     resolve_litellm_call_id,
     response_cost_with_failed_attempts,
+    stream_response_cost_header_value,
 )
 from litellm.proxy.common_utils.http_parsing_utils import (
     coerce_numeric_form_fields,
@@ -284,7 +285,9 @@ async def image_generation(
         ### ALERTING ###
         asyncio.create_task(proxy_logging_obj.update_request_status(litellm_call_id=litellm_call_id, status="success"))
 
-        async def response_headers(served: object) -> dict[str, str]:
+        request_logging_obj: Final = _REQUEST_FIELDS.validate_python(data).get("litellm_logging_obj")
+
+        async def response_headers(served: object, *, streamed: bool) -> dict[str, str]:
             hidden_params: Final = getattr(served, "_hidden_params", {}) or {}
             # Call response headers hook (matches base_process_llm_request behavior)
             callback_headers: Final = await proxy_logging_obj.post_call_response_headers_hook(
@@ -300,9 +303,12 @@ async def image_generation(
                     cache_key=hidden_params.get("cache_key", None) or "",
                     api_base=hidden_params.get("api_base", None) or "",
                     version=version,
-                    response_cost=response_cost_with_failed_attempts(
-                        hidden_params.get("response_cost"),
-                        _REQUEST_FIELDS.validate_python(data).get("litellm_logging_obj"),
+                    response_cost=(
+                        stream_response_cost_header_value(
+                            isinstance(served, ImageResponse), hidden_params, request_logging_obj
+                        )
+                        if streamed
+                        else response_cost_with_failed_attempts(hidden_params.get("response_cost"), request_logging_obj)
                     ),
                     model_region=getattr(user_api_key_dict, "allowed_model_region", ""),
                     call_id=hidden_params.get("litellm_call_id", None) or "",
@@ -321,7 +327,7 @@ async def image_generation(
                     event_prefix="image_generation",
                 ),
                 media_type="text/event-stream",
-                headers=await response_headers(generated),
+                headers=await response_headers(generated, streamed=True),
                 request=request,
                 general_settings=general_settings,
             )
@@ -331,7 +337,7 @@ async def image_generation(
             data=data, user_api_key_dict=user_api_key_dict, response=generated
         )
 
-        fastapi_response.headers.update(await response_headers(response))
+        fastapi_response.headers.update(await response_headers(response, streamed=False))
 
         return response
     except Exception as e:

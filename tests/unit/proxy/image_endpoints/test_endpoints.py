@@ -4,7 +4,7 @@ import logging
 from collections.abc import Callable, Iterator, Mapping
 from datetime import datetime
 from queue import Queue
-from types import SimpleNamespace
+from types import MappingProxyType, SimpleNamespace
 from typing import Any, Dict, Final, cast
 
 import httpx
@@ -1144,6 +1144,65 @@ def test_streamed_image_request_answered_with_json_gets_every_image_as_a_complet
     assert [payload["b64_json"] for _, payload in events] == ["Rklyc3Q=", _STREAMED_IMAGE]
     assert ["usage" in payload for _, payload in events] == [False, True]
     assert events[-1][1]["usage"]["total_tokens"] == _STREAMED_USAGE["total_tokens"]
+
+
+_OPENAI_STREAMING_BACKUP: Final = MappingProxyType(
+    {"model": "openai/gpt-image-1", "api_key": "test", "api_base": "https://openai.test/v1"}
+)
+
+
+@pytest.mark.parametrize("kind", ["generation", "edit"])
+@pytest.mark.parametrize(
+    ("backup", "cost_header"),
+    (
+        pytest.param(MappingProxyType({}), 0.75, id="backup_answers_one_image"),
+        pytest.param(_OPENAI_STREAMING_BACKUP, None, id="backup_streams_events"),
+    ),
+)
+def test_streamed_image_cost_header_after_a_fallback_is_the_whole_bill_or_absent(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+    kind: str,
+    backup: Mapping[str, object],
+    cost_header: float | None,
+) -> None:
+    path, prefix = _STREAM_ROUTES[kind]
+    respx_mock.post(f"https://openai.test/v1/images/{path}").mock(
+        return_value=httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            content=_image_event(f"{prefix}.completed", b64_json=_STREAMED_IMAGE, usage=_STREAMED_USAGE),
+        )
+    )
+    monkeypatch.setattr(litellm, "callbacks", [])
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    client, handler = _image_generation_client(
+        monkeypatch,
+        UserAPIKeyAuth(api_key="sk-test", router_settings={"fallbacks": [{"A": ["B"]}]}),
+        working_params=backup,
+    )
+    handler.owed_after_failure = (litellm.Usage(prompt_tokens=16, completion_tokens=0, total_tokens=16), 0.25)
+    handler.served_cost = 0.5
+    try:
+        with client:
+            response: Final = (
+                client.post("/v1/images/generations", json={"model": "A", "prompt": "draw a tree", "stream": True})
+                if kind == "generation"
+                else client.post(
+                    "/v1/images/edits",
+                    data={"model": "A", "prompt": "make it blue", "stream": "true"},
+                    files={"image": ("tree.png", b"\x89PNG\r\n\x1a\ntree", "image/png")},
+                )
+            )
+    finally:
+        ProxyLogging._callback_capabilities_cache.clear()
+
+    assert response.status_code == 200, response.text
+    assert response.headers["content-type"].startswith("text/event-stream")
+    assert handler.calls[0] == "failing"
+    sent_cost: Final = response.headers.get("x-litellm-response-cost")
+    assert (None if sent_cost is None else float(sent_cost)) == cost_header
 
 
 class _StreamFlagRecorder(CustomLogger):

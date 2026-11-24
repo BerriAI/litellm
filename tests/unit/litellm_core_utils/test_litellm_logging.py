@@ -16528,12 +16528,28 @@ async def test_a_recovered_attempt_bills_a_failed_agentic_follow_up_but_not_a_fa
 
 
 @pytest.mark.asyncio
-async def test_an_image_served_after_a_billed_failure_sums_the_tokens_of_both_attempts() -> None:
+@pytest.mark.parametrize(
+    ("call_type", "stream", "before_logging"),
+    [
+        pytest.param("aimage_edit", False, lambda logging_obj, served: None, id="edit"),
+        pytest.param(
+            "aimage_edit",
+            False,
+            lambda logging_obj, served: logging_obj.response_cost_calculator(result=served),
+            id="edit_already_priced_for_its_response_headers",
+        ),
+        pytest.param("aimage_generation", True, lambda logging_obj, served: None, id="generation_stream"),
+        pytest.param("aimage_edit", True, lambda logging_obj, served: None, id="edit_stream"),
+    ],
+)
+async def test_an_image_served_after_a_billed_failure_sums_the_tokens_of_both_attempts(
+    call_type: str, stream: bool, before_logging: Callable[[LitellmLogging, ImageResponse], object]
+) -> None:
     logging_obj: Final = LitellmLogging(
         model="gpt-image-2",
         messages=[],
-        stream=False,
-        call_type="aimage_edit",
+        stream=stream,
+        call_type=call_type,
         start_time=time.time(),
         litellm_call_id="recovered-image",
         function_id="recovered-image",
@@ -16543,24 +16559,24 @@ async def test_an_image_served_after_a_billed_failure_sums_the_tokens_of_both_at
     )
     logging_obj.record_served_rounds_for_failure((_FAILED_ATTEMPT,))
     logging_obj.carry_failed_attempt_usage()
-    now: Final = datetime.datetime.now()
-    await logging_obj.async_success_handler(
-        ImageResponse(
-            created=1,
-            data=[],
-            usage=ImageUsage(
-                input_tokens=9,
-                input_tokens_details=ImageUsageInputTokensDetails(image_tokens=0, text_tokens=9),
-                output_tokens=14,
-                total_tokens=23,
-            ),
+    served: Final = ImageResponse(
+        created=1,
+        data=[],
+        usage=ImageUsage(
+            input_tokens=9,
+            input_tokens_details=ImageUsageInputTokensDetails(image_tokens=0, text_tokens=9),
+            output_tokens=14,
+            total_tokens=23,
         ),
-        now,
-        now,
     )
+    before_logging(logging_obj, served)
+    now: Final = datetime.datetime.now()
+    await logging_obj.async_success_handler(served, now, now)
 
     combined: Final = logging_obj.model_call_details["combined_usage_object"]
+    logged: Final = logging_obj.model_call_details["standard_logging_object"]
     assert (combined.prompt_tokens, combined.completion_tokens, combined.total_tokens) == (1009, 514, 1523)
+    assert (logged["prompt_tokens"], logged["completion_tokens"], logged["total_tokens"]) == (1009, 514, 1523)
 
 
 def test_standard_logging_payload_reports_the_per_call_prices_the_request_was_billed_from() -> None:

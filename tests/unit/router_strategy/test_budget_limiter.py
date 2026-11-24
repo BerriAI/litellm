@@ -9,6 +9,7 @@ the callback raise before any spend was recorded, so those budgets never moved.
 from collections.abc import Mapping
 from datetime import datetime, timezone
 from functools import partial
+from types import MappingProxyType
 from typing import Final
 
 import httpx
@@ -698,7 +699,12 @@ class _ServedImageCost(CustomLogger):
 
 
 async def _billed_image_request(
-    router: Router, served: _ServedImageCost, call_id: str, primary: Mapping[str, object], backup: Mapping[str, object]
+    router: Router,
+    served: _ServedImageCost,
+    call_id: str,
+    primary: Mapping[str, object],
+    backup: Mapping[str, object],
+    request_fields: Mapping[str, object] = MappingProxyType({}),
 ) -> float | None:
     served.logged.clear()
     logging_obj, request = litellm.utils.function_setup(
@@ -708,6 +714,7 @@ async def _billed_image_request(
         model="primary",
         prompt="a single small red dot",
         litellm_call_id=call_id,
+        **request_fields,
     )
     with respx.mock(assert_all_called=False) as upstream:
         upstream.post(url__startswith="https://primary.invalid/").mock(
@@ -724,8 +731,7 @@ async def _billed_image_request(
     return served.cost
 
 
-@pytest.mark.asyncio
-async def test_billed_image_refusals_count_toward_router_budgets_once_each(disable_budget_sync, monkeypatch):
+def _budgeted_image_router(monkeypatch) -> tuple[Router, _ServedImageCost, RouterBudgetLimiting]:
     monkeypatch.setattr(litellm, "callbacks", [])
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     router: Final = Router(
@@ -748,6 +754,12 @@ async def test_billed_image_refusals_count_toward_router_budgets_once_each(disab
     litellm.logging_callback_manager.add_litellm_callback(served)
     limiter: Final = router.get_router_deployment_budget_limiter()
     assert limiter is not None
+    return router, served, limiter
+
+
+@pytest.mark.asyncio
+async def test_billed_image_refusals_count_toward_router_budgets_once_each(disable_budget_sync, monkeypatch):
+    router, served, limiter = _budgeted_image_router(monkeypatch)
 
     served_alone: Final = await _billed_image_request(router, served, "served", _SERVED_IMAGE, _SERVED_IMAGE)
     through_fallback: Final = await _billed_image_request(router, served, "fallback", _BILLED_REFUSAL, _SERVED_IMAGE)
@@ -759,3 +771,25 @@ async def test_billed_image_refusals_count_toward_router_budgets_once_each(disab
     assert await limiter._get_current_provider_spend("gemini") == pytest.approx(
         served_alone + through_fallback + 2 * refusal
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("billed_attempts", ([["usage", 1000.0]], "junk"))
+async def test_a_request_cannot_change_its_router_budget_charge_by_naming_a_billing_field(
+    disable_budget_sync, monkeypatch, billed_attempts
+):
+    router, served, limiter = _budgeted_image_router(monkeypatch)
+
+    await _billed_image_request(router, served, "honest", _SERVED_IMAGE, _SERVED_IMAGE)
+    honest: Final = await limiter._get_current_provider_spend("gemini")
+    await _billed_image_request(
+        router,
+        served,
+        "spoofed",
+        _SERVED_IMAGE,
+        _SERVED_IMAGE,
+        request_fields={"failed_attempts_billed_on_success": billed_attempts},
+    )
+
+    assert honest is not None and honest > 0
+    assert await limiter._get_current_provider_spend("gemini") == pytest.approx(2 * honest)

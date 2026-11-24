@@ -377,6 +377,7 @@ from litellm.proxy.policy_engine.response_retrieval import attach_post_call_pipe
 from litellm.types.litellm_params import STREAM_USAGE_INJECTED_FIELD
 from litellm.types.utils import (
     Choices,
+    ImageResponse,
     LLMResponseTypes,
     ModelResponse,
     ModelResponseStream,
@@ -2365,6 +2366,14 @@ def response_cost_with_failed_attempts(response_cost: object, logging_obj: objec
     return logging_obj.with_failed_attempts_owed(own_cost) or ""
 
 
+def stream_response_cost_header_value(
+    served_image: bool, hidden_params: Mapping[str, object], logging_obj: object
+) -> float | str:
+    if served_image and hidden_params.get("cache_hit") is not True:
+        return response_cost_with_failed_attempts(hidden_params.get("response_cost"), logging_obj)
+    return _response_cost_header_value(hidden_params)
+
+
 def _failed_request_response_cost(
     request_data: Mapping[str, object],
     logging_obj: LiteLLMLoggingObj | None,
@@ -3749,6 +3758,7 @@ class ProxyBaseLLMRequestProcessing:
     def _stream_response_headers(
         self,
         *,
+        served_image: bool,
         hidden_params: Mapping[str, object],
         user_api_key_dict: UserAPIKeyAuth,
         logging_obj: LiteLLMLoggingObj,
@@ -3765,7 +3775,7 @@ class ProxyBaseLLMRequestProcessing:
                     cache_key=hidden_params.get("cache_key") or "",
                     api_base=hidden_params.get("api_base") or "",
                     version=version,
-                    response_cost=_response_cost_header_value(hidden_params),
+                    response_cost=stream_response_cost_header_value(served_image, hidden_params, logging_obj),
                     model_region=getattr(user_api_key_dict, "allowed_model_region", ""),
                     fastest_response_batch_completion=hidden_params.get("fastest_response_batch_completion"),
                     request_data=self.data,
@@ -4127,7 +4137,9 @@ class ProxyBaseLLMRequestProcessing:
                     response=response,
                     request_headers=dict(request.headers),
                 )
+                served_image: Final = isinstance(response, ImageResponse)
                 custom_headers: Final = self._stream_response_headers(
+                    served_image=served_image,
                     hidden_params=hidden_params,
                     user_api_key_dict=user_api_key_dict,
                     logging_obj=logging_obj,
@@ -4138,6 +4150,7 @@ class ProxyBaseLLMRequestProcessing:
                 async def refresh_stream_headers() -> Mapping[str, str]:
                     """`custom_headers` rebuilt for whichever deployment served the stream."""
                     return self._stream_response_headers(
+                        served_image=served_image,
                         hidden_params=(
                             get_hidden_params_dict(response)
                             if getattr(response, "fallback_headers_adopted", False)
