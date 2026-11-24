@@ -5,7 +5,7 @@ import posixpath
 import re
 import time
 from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from types import MappingProxyType
 from typing import Final, Protocol, TypeAlias, TypeVar
@@ -201,6 +201,8 @@ class _MessageItemsPage(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     data: tuple[_MessageItem, ...]
+    has_more: bool = False
+    last_id: str | None = None
 
 
 _PageT: Final = TypeVar("_PageT", _TurnsPage, _SubagentsPage, _ItemsPage, _MessageItemsPage, _Session)
@@ -716,12 +718,32 @@ class OpenAIAgentsTurnBiller:
 
     async def _bill(self, turn_start: AgentsTurnStart, row: DeferredAgentsRow) -> None:
         await self._release_slot(turn_start, row)
+        priced_turn_start: Final = await self._with_session_agent(turn_start)
         outcome: Final = await _unless_set(
-            self._turn_outcome(turn_start, row.logging_obj.litellm_call_id), self._abandoning
+            self._turn_outcome(priced_turn_start, row.logging_obj.litellm_call_id), self._abandoning
         )
         await self._log(
-            row, await self._row_kwargs(turn_start, row, _UNREAD_AT_SHUTDOWN if outcome is None else outcome)
+            row,
+            await self._row_kwargs(priced_turn_start, row, _UNREAD_AT_SHUTDOWN if outcome is None else outcome),
         )
+
+    async def _with_session_agent(self, turn_start: AgentsTurnStart) -> AgentsTurnStart:
+        if turn_start.agent is not None:
+            return turn_start
+        try:
+            session: Final = await _unless_set(
+                self._fetch_page(turn_start, f"agents/sessions/{turn_start.session_id}", _Session), self._stopping
+            )
+        except Exception as e:  # noqa: BLE001  # the settled read still prices the turn when this early one breaks
+            verbose_proxy_logger.warning(
+                "OpenAI Agents passthrough: could not read the agent of session %s at call time: %r",
+                turn_start.session_id,
+                e,
+            )
+            return turn_start
+        if session is None or isinstance(session, _FetchFailed) or session.agent is None:
+            return turn_start
+        return replace(turn_start, agent=session.agent)
 
     async def _release_slot(self, turn_start: AgentsTurnStart, row: DeferredAgentsRow) -> None:
         try:
@@ -858,18 +880,25 @@ class OpenAIAgentsTurnBiller:
                 return _ClaimedTurn(turn=turn, turns_path=turns_path)
         return None
 
-    async def _started_by_call(self, turn_start: AgentsTurnStart, turns_path: str, turn: _Turn) -> bool | _FetchFailed:
+    async def _started_by_call(
+        self, turn_start: AgentsTurnStart, turns_path: str, turn: _Turn, after: str | None = None
+    ) -> bool | _FetchFailed:
         if not turn_start.input_texts:
             return True
+        cursor: Final = "" if after is None else f"&after={after}"
         items: Final = await self._fetch_page(
             turn_start,
-            f"{turns_path}/{turn.id}/items?order=asc&limit={OPENAI_AGENTS_LIST_PAGE_LIMIT}",
+            f"{turns_path}/{turn.id}/items?order=asc&limit={OPENAI_AGENTS_LIST_PAGE_LIMIT}{cursor}",
             _MessageItemsPage,
         )
         if isinstance(items, _FetchFailed):
             return items if items.retryable else False
         turn_texts: Final = itertools.chain.from_iterable(item.user_texts for item in items.data)
-        return not turn_start.input_texts.isdisjoint(turn_texts)
+        if not turn_start.input_texts.isdisjoint(turn_texts):
+            return True
+        if not items.has_more or items.last_id is None:
+            return False
+        return await self._started_by_call(turn_start, turns_path, turn, items.last_id)
 
     async def _refreshed_subagent_turns(
         self, turn_start: AgentsTurnStart, claimant: str, root: _ClaimedTurn, known: tuple[_ClaimedTurn, ...]

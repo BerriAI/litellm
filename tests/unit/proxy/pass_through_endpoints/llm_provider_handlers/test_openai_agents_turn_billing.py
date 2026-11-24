@@ -571,6 +571,43 @@ async def test_an_agent_named_in_the_events_body_never_sets_the_price(local_mode
 
 
 @pytest.mark.asyncio
+async def test_a_session_update_sent_after_an_events_call_never_reprices_its_turn(local_model_cost_map: None):
+    session_url: Final = f"{SESSIONS_URL}/{SESSION_ID}"
+    api: Final = _AgentsApi(
+        turn_pages=(
+            (_turn("turn_1", CALL_STARTED_AT + 1, "in_progress", None),),
+            (_turn("turn_1", CALL_STARTED_AT + 1, "completed", TURN_USAGE),),
+        )
+    )
+
+    async def get_with_the_session_moved_to_flex_once_polling_starts(
+        base_url: str, path: str, scope_headers: Mapping[str, str]
+    ) -> httpx.Response:
+        if f"{base_url}/{path}" != session_url:
+            return await api.get(base_url, path, scope_headers)
+        service_tier: Final = "auto" if api.turn_polls == 0 else "flex"
+        return httpx.Response(200, json=_session(service_tier), request=httpx.Request("GET", session_url))
+
+    clock: Final = _Clock()
+    rows: Final = _SpendRows()
+
+    await _relay_call(
+        OpenAIAgentsTurnBiller(
+            get=get_with_the_session_moved_to_flex_once_polling_starts, sleep=clock.sleep, clock=clock
+        ),
+        rows,
+        EVENTS_URL,
+        {"events": [INPUT_MESSAGE]},
+        None,
+        "6b8d0f2b-4d6f-4b8d-8f0b-2d4f6b8d0f2b",
+    )
+    row: Final = await rows.only_row()
+
+    assert row["spend"] == pytest.approx(_expected_cost(TURN_USAGE))
+    assert row["spend"] != pytest.approx(_expected_cost(TURN_USAGE, "flex"))
+
+
+@pytest.mark.asyncio
 async def test_a_turn_created_before_the_call_is_never_billed_to_it(local_model_cost_map: None):
     api: Final = _AgentsApi(
         turn_pages=(
@@ -1382,9 +1419,10 @@ async def test_a_settled_turns_agent_read_stops_retrying_when_refused_or_out_of_
     local_model_cost_map: None, status_code: int, reads: int
 ):
     session_url: Final = f"{SESSIONS_URL}/{SESSION_ID}"
+    call_time_reads: Final = 1
     api: Final = _AgentsApi(
         turn_pages=((_turn("turn_1", CALL_STARTED_AT + 1, "completed", TURN_USAGE),),),
-        replies={session_url: (*([status_code] * reads), _session())},
+        replies={session_url: (*([status_code] * (call_time_reads + reads)), _session())},
     )
     rows: Final = _SpendRows()
 
@@ -1398,7 +1436,7 @@ async def test_a_settled_turns_agent_read_stops_retrying_when_refused_or_out_of_
     )
     row: Final = await rows.only_row()
 
-    assert api.urls.count(session_url) == reads
+    assert api.urls.count(session_url) == call_time_reads + reads
     assert row["spend"] == 0
 
 
@@ -1478,6 +1516,38 @@ async def test_a_turn_whose_messages_cannot_be_read_is_never_claimed_by_the_call
         {"events": [INPUT_MESSAGE]},
         None,
         "3c5e7a9c-1e3a-4c5e-9a7c-9e1a3c5e7a01",
+    )
+    row: Final = await rows.only_row()
+
+    assert row["total_tokens"] == TURN_USAGE["total_tokens"]
+    assert row["spend"] == pytest.approx(_expected_cost(TURN_USAGE))
+
+
+@pytest.mark.asyncio
+async def test_a_turn_whose_message_follows_a_full_page_of_other_items_is_still_billed(local_model_cost_map: None):
+    items_url: Final = f"{SESSIONS_URL}/{SESSION_ID}/turns/turn_1/items?order=asc&limit=100"
+    image_only_message: Final = {
+        "type": "message",
+        "role": "user",
+        "content": [{"type": "input_image", "image_url": "https://example.com/chart.png"}],
+    }
+    api: Final = _AgentsApi(
+        turn_pages=((_turn("turn_1", CALL_STARTED_AT + 1, "completed", TURN_USAGE),),),
+        session=_session(),
+        replies={
+            items_url: ({**_page(*((image_only_message,) * 100)), "has_more": True, "last_id": "msg_100"},),
+            f"{items_url}&after=msg_100": (_user_messages((USER_TEXT,)),),
+        },
+    )
+    rows: Final = _SpendRows()
+
+    await _relay_call(
+        _biller(api, _Clock()),
+        rows,
+        EVENTS_URL,
+        {"events": [INPUT_MESSAGE]},
+        None,
+        "7c9e1a3c-5e7a-4c9e-9a1c-3e5a7c9e1a3c",
     )
     row: Final = await rows.only_row()
 
