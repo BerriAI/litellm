@@ -10,7 +10,7 @@ from integration._support.device_login import write_copilot_access
 from integration._support.process import OwnedState, owned_proxy
 from integration._support.wire import Reply, Request, wire_server
 from pydantic import JsonValue, TypeAdapter
-from typing_extensions import NotRequired, TypedDict
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 pytestmark: Final = pytest.mark.timeout(180)
 
@@ -21,25 +21,25 @@ _LOOKAHEAD: Final = r"^(?!__)[a-z]+$"
 
 
 class _Parameters(TypedDict):
-    type: str
-    properties: dict[str, dict[str, JsonValue]]
-    required: list[str]
+    type: ReadOnly[str]
+    properties: ReadOnly[dict[str, dict[str, JsonValue]]]
+    required: ReadOnly[list[str]]
 
 
 class _Function(TypedDict):
-    name: str
-    description: str
-    parameters: _Parameters
+    name: ReadOnly[str]
+    description: ReadOnly[str]
+    parameters: ReadOnly[_Parameters]
 
 
 class _Tool(TypedDict):
-    type: str
-    function: _Function
+    type: ReadOnly[str]
+    function: ReadOnly[_Function]
 
 
 class _ChatRequest(TypedDict):
-    tools: list[_Tool]
-    stream: NotRequired[bool]
+    tools: ReadOnly[list[_Tool]]
+    stream: NotRequired[ReadOnly[bool]]
 
 
 _CHAT_REQUEST: Final = TypeAdapter(_ChatRequest)
