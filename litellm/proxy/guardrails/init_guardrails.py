@@ -122,7 +122,7 @@ def initialize_guardrails(
 
         # set appropriate callbacks if they are default on
         default_on_callbacks: Final = set[str]()
-        callback_specific_params: Final[dict[str, object]] = {}
+        callback_specific_params: Final = {}
         for guardrail in all_guardrails:
             verbose_proxy_logger.debug(guardrail.guardrail_name)
             verbose_proxy_logger.debug(guardrail.default_on)

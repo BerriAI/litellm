@@ -4519,7 +4519,7 @@ async def _run_direct_health_check_with_instrumentation(
     model_list: list,
     details: bool | None,
     max_concurrency: int | None,
-    instrumentation_context: Mapping[str, object],
+    instrumentation_context: dict,
 ):
     """Call ``perform_health_check``, dropping exactly the optional kwarg each TypeError names.
 
@@ -4589,8 +4589,8 @@ def _schedule_background_health_check_db_save(
     prisma_client: PrismaClient | None,
     shared_health_manager: "SharedHealthCheckManager | None",
     model_list: list,
-    healthy_endpoints: list[Mapping[str, object]],
-    unhealthy_endpoints: list[Mapping[str, object]],
+    healthy_endpoints: list,
+    unhealthy_endpoints: list,
     pod_lock_manager: PodLockManager | None = None,
     lock_ttl: int | None = None,
 ) -> None:
@@ -5251,10 +5251,10 @@ def _attach_redis_usage_cache(redis_cache: RedisCache, enable_redis_auth_cache: 
 
 
 def resolve_routing_plugins(
-    plugin_paths: Sequence[object],
+    plugin_paths: list,
     config_file_path: str | None,
     source_label: str,
-) -> list[object]:
+) -> list:
     """
     Resolves a list of routing-plugin entries to live `RoutingPlugin` instances.
     Each string entry is resolved through `get_instance_fn` (the same dotted-path
@@ -6661,7 +6661,7 @@ class ProxyConfig:
             )
         os.environ[key] = value
 
-    def _warn_on_misplaced_jwt_keys(self, config: Mapping[str, object]) -> tuple[str, ...]:
+    def _warn_on_misplaced_jwt_keys(self, config: dict) -> tuple[str, ...]:
         misplaced_jwt_keys = tuple(key for key in ("enable_jwt_auth", "litellm_jwtauth") if key in config)
         if not misplaced_jwt_keys:
             return misplaced_jwt_keys
@@ -8085,9 +8085,7 @@ class ProxyConfig:
             displaced=previous.displaced + _entries_missing_from(before, after),
         )
 
-    def encrypt_env_variables(
-        self, environment_variables: Mapping[str, object], new_encryption_key: str | None = None
-    ) -> dict[str, object]:
+    def encrypt_env_variables(self, environment_variables: dict, new_encryption_key: str | None = None) -> dict:
         """
         Encrypts a dictionary of environment variables and returns them.
         """
@@ -8506,7 +8504,7 @@ class ProxyConfig:
     async def _update_config_from_db(
         self,
         prisma_client: PrismaClient,
-        config: Mapping[str, object],
+        config: dict,
         store_model_in_db: bool | None,
     ):
         if store_model_in_db is not True:
@@ -9796,7 +9794,7 @@ class ProxyConfig:
             cred for cred in litellm.credential_list if cred.credential_name in names_to_keep
         )
 
-    async def get_credentials(self, prisma_client: PrismaClient) -> list[object] | None:
+    async def get_credentials(self, prisma_client: PrismaClient):
         try:
             credentials = await CredentialsRepository(WriterPinnedClient(prisma_client.db)).find_all()
             credentials = [self.decrypt_credentials(cred) for cred in credentials]
@@ -9828,18 +9826,18 @@ async def initialize_from_worker_config(worker_config: Mapping[str, object]) -> 
 
 async def initialize(
     model=None,
-    alias: object = None,
+    alias=None,
     api_base=None,
     api_version=None,
     debug: object = False,
     detailed_debug: object = False,
     temperature=None,
-    max_tokens: object = None,
+    max_tokens=None,
     request_timeout=600,
     max_budget=None,
     drop_params: object = True,
     add_function_to_prompt: object = True,
-    headers: object = None,
+    headers=None,
     save: object = False,
     use_queue: object = False,
     config=None,
@@ -10022,7 +10020,7 @@ async def async_assistants_data_generator(response, user_api_key_dict: UserAPIKe
         yield f"data: {error_returned}\n\n"
 
 
-def _get_client_requested_model_for_streaming(request_data: Mapping[str, object]) -> str:
+def _get_client_requested_model_for_streaming(request_data: dict) -> str:
     """
     Prefer the original client-requested model (pre-alias mapping) when available.
 
@@ -10364,7 +10362,7 @@ async def _apply_streaming_chunk_hooks(
     *,
     chunk: Any,
     user_api_key_dict: UserAPIKeyAuth,
-    request_data: dict[str, object],
+    request_data: dict,
     str_so_far: str,
 ) -> tuple[object, str]:
     chunk = await proxy_logging_obj.async_post_call_streaming_hook(
@@ -11059,7 +11057,7 @@ class ProxyStartupEvent:
     _initialize_startup_logging = initialize_startup_logging
 
     @staticmethod
-    def warn_if_mock_testing_params_enabled(general_settings: Mapping[str, object]) -> None:
+    def warn_if_mock_testing_params_enabled(general_settings: dict) -> None:
         """Announce, loudly, that any caller may inject synthetic failures."""
         from litellm.proxy.route_llm_request import (
             GATED_MOCK_PARAM_NAMES,
@@ -19015,7 +19013,7 @@ def _translate_model_name_for_response(model: dict) -> dict[str, object]:
     return {**model, "model_name": team_public}
 
 
-def _get_proxy_model_info(model: dict[str, object], caller_aliases: CallerAliases = GLOBAL_ALIASES_ONLY) -> dict:
+def _get_proxy_model_info(model: dict, caller_aliases: CallerAliases = GLOBAL_ALIASES_ONLY) -> dict:
     return _translate_model_name_for_response(
         _enrich_model_info_with_litellm_data(model=model, llm_router=llm_router, caller_aliases=caller_aliases)
     )
@@ -21729,7 +21727,7 @@ def _apply_alerting_env_role_gate(env_vars: dict[str, str | None], is_full_admin
     return _redact_callback_env_vars(env_vars)
 
 
-def _apply_webhook_role_gate(webhook_map: object, is_full_admin: bool) -> object:
+def _apply_webhook_role_gate(webhook_map: object, is_full_admin: bool):
     if is_full_admin or not isinstance(webhook_map, dict):
         return webhook_map
     return {alert_type: "REDACTED" for alert_type in webhook_map}
@@ -23331,7 +23329,7 @@ if _server_root_paths:
 
 
 async def _stream_mcp_asgi_response(
-    handle_fn: Callable[[Scope, Receive, Send], Coroutine[object, object, object]], scope: Scope, receive: Receive
+    handle_fn: Callable[[Scope, Receive, Send], Coroutine[object, object, object]], scope: dict, receive: Receive
 ) -> "StreamingResponse":
     """
     Call an ASGI MCP handler and return a StreamingResponse so SSE/streaming works.
