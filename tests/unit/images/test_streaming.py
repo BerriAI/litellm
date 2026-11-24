@@ -201,38 +201,49 @@ async def test_a_stream_closed_after_its_first_event_is_still_billed_for_the_ima
 class _HeldEventStream(httpx.AsyncByteStream):
     """An event stream whose bytes arrive only once `release` is set, so a read can be cancelled mid-flight."""
 
-    def __init__(self, body: bytes) -> None:
+    def __init__(self, body: bytes, sent_first: bytes = b"") -> None:
         self.body: Final = body
+        self.sent_first: Final = sent_first
         self.read_started: Final = asyncio.Event()
         self.release: Final = asyncio.Event()
 
     async def __aiter__(self):
+        if self.sent_first:
+            yield self.sent_first
         self.read_started.set()
         await self.release.wait()
         yield self.body
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("previews_received", [0, 1])
 @pytest.mark.parametrize("kind", ["generation", "edit"])
-async def test_a_stream_whose_first_read_is_cancelled_is_still_billed_for_the_image(
-    respx_mock: respx.MockRouter, outcomes: _Outcomes, kind: str
+async def test_a_stream_whose_pending_read_is_cancelled_is_still_billed_for_the_image(
+    respx_mock: respx.MockRouter, outcomes: _Outcomes, kind: str, previews_received: int
 ) -> None:
     path, prefix = ROUTES[kind]
     _provider(respx_mock, kind, None)
     await _settled(_call(kind, True))
     unstreamed_outcome: Final = await outcomes.next_outcome()
-    held: Final = _HeldEventStream(_partial(prefix) + _completed(prefix))
+    held: Final = (
+        _HeldEventStream(_completed(prefix), sent_first=_partial(prefix))
+        if previews_received
+        else _HeldEventStream(_partial(prefix) + _completed(prefix))
+    )
     respx_mock.post(f"{API_BASE}/images/{path}").mock(
         return_value=httpx.Response(200, headers={"content-type": "text/event-stream"}, stream=held)
     )
 
     stream: Final = await _settled(_call(kind, True, stream=True, partial_images=1))
     assert isinstance(stream, AsyncImageStream)
-    first_read: Final = asyncio.ensure_future(stream.__anext__())
+    received: Final = [await stream.__anext__() for _ in range(previews_received)]
+    assert [event.model_dump()["type"] for event in received] == [f"{prefix}.partial_image"] * previews_received
+    pending_read: Final = asyncio.ensure_future(stream.__anext__())
     await held.read_started.wait()
-    first_read.cancel()
+    await asyncio.sleep(0)
+    pending_read.cancel()
     with pytest.raises(asyncio.CancelledError):
-        await first_read
+        await pending_read
     held.release.set()
     await stream.aclose()
 
