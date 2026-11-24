@@ -385,14 +385,12 @@ def _comparable_key(part: tuple[object, ...]) -> str:
 
 @dataclass(frozen=True, slots=True)
 class _TokenData:
-    token_ids: tuple[str, ...]
+    token_ids: frozenset[str]
     logprobs: str
 
     def pairs_with(self, served: "_TokenData") -> bool:
-        if any(served.token_ids):
-            return any(
-                ids and ids == served_ids for ids, served_ids in zip(self.token_ids, served.token_ids, strict=True)
-            )
+        if served.token_ids:
+            return not self.token_ids.isdisjoint(served.token_ids)
         return bool(served.logprobs) and self.logprobs == served.logprobs
 
 
@@ -405,7 +403,7 @@ def _token_data(holder: object) -> _TokenData:
         ),
     )
     return _TokenData(
-        token_ids=tuple(_comparable_key(ids) for ids in token_ids),
+        token_ids=frozenset(key for key in map(_comparable_key, token_ids) if key),
         logprobs=_comparable_key(_logprobs_key(stream_item_field(holder, "logprobs"))),
     )
 

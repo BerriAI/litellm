@@ -307,6 +307,93 @@ async def test_post_call_success_hook_drops_token_data_from_a_dict_choice_a_call
     assert (choice["logprobs"] is None) is (kept is None)
 
 
+class _TokenIdsMovingMaskingLogger(CustomLogger):
+    async def async_post_call_success_hook(
+        self, data: dict[str, object], user_api_key_dict: UserAPIKeyAuth, response: object
+    ) -> dict[str, object]:
+        assert isinstance(response, litellm.ModelResponse)
+        dumped = response.model_dump()
+        choice = dumped["choices"][0]
+        message = {
+            **choice["message"],
+            "content": _masked(choice["message"]["content"]),
+            "provider_specific_fields": {"token_ids": choice["provider_specific_fields"]["token_ids"]},
+        }
+        moved = {**choice, "token_ids": None, "provider_specific_fields": None, "message": message}
+        return {**dumped, "choices": [moved]}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("content", "kept"),
+    [
+        ("The capital of France is Paris.", None),
+        ("The capital of France is Lyon.", [785, 6722, 315, 9625, 374, 12095, 13]),
+    ],
+    ids=["masked", "untouched"],
+)
+async def test_post_call_success_hook_drops_token_ids_a_callback_moved_to_another_field_while_masking(
+    proxy_logging, make_user_api_key_auth, monkeypatch, content, kept
+):
+    monkeypatch.setattr(litellm, "callbacks", [_TokenIdsMovingMaskingLogger()])
+
+    served = await proxy_logging.post_call_success_hook(
+        data={"model": "m", "messages": [{"role": "user", "content": "capital of France?"}]},
+        response=_vllm_chat_response(content),
+        user_api_key_dict=make_user_api_key_auth(),
+    )
+
+    choice = served["choices"][0]
+    assert "Paris" not in choice["message"]["content"]
+    assert choice["message"]["provider_specific_fields"]["token_ids"] == kept
+    assert (choice["logprobs"] is None) is (kept is None)
+
+
+class _NewIdsAddingMaskingLogger(CustomLogger):
+    async def async_post_call_success_hook(
+        self, data: dict[str, object], user_api_key_dict: UserAPIKeyAuth, response: object
+    ) -> dict[str, object]:
+        assert isinstance(response, litellm.ModelResponse)
+        dumped = response.model_dump()
+        choice = dumped["choices"][0]
+        message = {**choice["message"], "content": _masked(choice["message"]["content"])}
+        return {**dumped, "choices": [{**choice, "token_ids": [1, 2, 3], "message": message}]}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("content", "provider_token_ids", "kept_token_ids", "kept_provider_token_ids"),
+    [
+        ("The capital of France is Paris.", [785, 6722, 315, 9625, 374, 12095, 13], None, None),
+        ("The capital of France is Paris.", [9, 9], None, None),
+        ("The capital of France is Lyon.", [9, 9], [1, 2, 3], [9, 9]),
+    ],
+    ids=["masked", "masked-provider-ids-differ", "untouched"],
+)
+async def test_post_call_success_hook_drops_every_token_id_field_when_a_callback_masks_and_adds_new_ids(
+    proxy_logging,
+    make_user_api_key_auth,
+    monkeypatch,
+    content,
+    provider_token_ids,
+    kept_token_ids,
+    kept_provider_token_ids,
+):
+    monkeypatch.setattr(litellm, "callbacks", [_NewIdsAddingMaskingLogger()])
+    response = _vllm_chat_response(content)
+    response.choices[0].provider_specific_fields = {"token_ids": provider_token_ids}
+
+    served = await proxy_logging.post_call_success_hook(
+        data={"model": "m", "messages": [{"role": "user", "content": "capital of France?"}]},
+        response=response,
+        user_api_key_dict=make_user_api_key_auth(),
+    )
+
+    choice = served["choices"][0]
+    assert choice["token_ids"] == kept_token_ids
+    assert choice["provider_specific_fields"]["token_ids"] == kept_provider_token_ids
+
+
 class _InPlaceToolArgumentsMaskingLogger(CustomLogger):
     async def async_post_call_success_hook(
         self, data: dict[str, object], user_api_key_dict: UserAPIKeyAuth, response: object
