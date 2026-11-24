@@ -3352,7 +3352,8 @@ def _deployment_price_of(usage: litellm.Usage) -> float:
     )
 
 
-def test_a_response_naming_a_dated_snapshot_is_billed_at_the_resolved_deployment_price(
+@pytest.mark.asyncio
+async def test_a_response_naming_a_dated_snapshot_is_billed_at_the_resolved_deployment_price(
     monkeypatch, mock_httpx_response
 ):
     logging_obj: Final = _deployment_priced_logging_obj(monkeypatch, stream=False)
@@ -3371,6 +3372,25 @@ def test_a_response_naming_a_dated_snapshot_is_billed_at_the_resolved_deployment
 
     assert result["result"].usage.prompt_tokens > 0
     assert result["kwargs"]["response_cost"] == pytest.approx(_deployment_price_of(result["result"].usage))
+
+    await logging_obj.dispatch_success_handlers(
+        result=result["result"],
+        start_time=datetime(2025, 1, 1),
+        end_time=datetime(2025, 1, 1),
+        cache_hit=False,
+        prefer_async_handlers=True,
+        **result["kwargs"],
+    )
+    event: Final = logging_obj.model_call_details["standard_logging_object"]
+    assert event["response_cost"] == pytest.approx(result["kwargs"]["response_cost"])
+    breakdown: Final = event["cost_breakdown"]
+    assert breakdown is not None
+    assert breakdown["input_cost"] == pytest.approx(
+        result["result"].usage.prompt_tokens * _DEPLOYMENT_PRICING["input_cost_per_token"]
+    )
+    assert breakdown["output_cost"] == pytest.approx(
+        result["result"].usage.completion_tokens * _DEPLOYMENT_PRICING["output_cost_per_token"]
+    )
 
 
 def test_a_stream_naming_a_dated_snapshot_is_billed_at_the_resolved_deployment_price(monkeypatch, all_chunks):

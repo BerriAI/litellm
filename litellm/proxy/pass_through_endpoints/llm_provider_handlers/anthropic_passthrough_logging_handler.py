@@ -371,6 +371,7 @@ class AnthropicPassthroughLoggingHandler:
             model=model_for_cost,
             custom_llm_provider=custom_llm_provider,
             custom_pricing=custom_pricing,
+            litellm_logging_obj=logging_obj,
             router_model_id=logging_obj.get_router_model_id(),
         )
 

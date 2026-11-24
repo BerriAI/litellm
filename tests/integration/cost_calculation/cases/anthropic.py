@@ -3959,7 +3959,6 @@ CLAUDE_SONNET_5_PASSTHROUGH_MESSAGES: Final = CostTrackingTestCase(
         output_cost=0.00618,
         prompt_tokens=1840,
         completion_tokens=412,
-        breakdown_persisted=False,
         cost_header=False,
     ),
 )
@@ -3999,7 +3998,6 @@ CLAUDE_SONNET_5_PASSTHROUGH_MESSAGES_CACHE_READ: Final = CostTrackingTestCase(
         prompt_tokens=12928,
         completion_tokens=380,
         cache_read_cost=0.0036864,
-        breakdown_persisted=False,
         cost_header=False,
     ),
 )
@@ -4039,7 +4037,6 @@ CLAUDE_SONNET_5_PASSTHROUGH_MESSAGES_STREAM_CACHE_WRITE_ON_MESSAGE_DELTA: Final 
         completion_tokens=12,
         cache_read_cost=0.007647,
         cache_creation_cost=0.03957375,
-        breakdown_persisted=False,
         cost_header=False,
     ),
 )
