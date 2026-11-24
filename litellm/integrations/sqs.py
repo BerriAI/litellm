@@ -72,7 +72,7 @@ class SQSLogger(CustomBatchLogger, BaseAWSLLM):
         sqs_aws_use_application_level_encryption: bool = False,
         sqs_app_encryption_key_b64: str | None = None,
         sqs_app_encryption_aad: str | None = None,
-        **kwargs,
+        **kwargs: object,
     ) -> None:
         try:
             verbose_logger.debug("in init sqs logger - sqs_callback_params %s", litellm.aws_sqs_callback_params)

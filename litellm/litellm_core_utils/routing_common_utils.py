@@ -161,8 +161,12 @@ def request_user_api_key_auth(request_kwargs: Mapping[str, object]) -> object:
     """The caller's auth object, from whichever metadata bucket this surface writes to."""
     metadata_value: Final = request_kwargs.get("metadata")
     litellm_metadata_value: Final = request_kwargs.get("litellm_metadata")
-    metadata: Final = metadata_value if isinstance(metadata_value, Mapping) else {}
-    litellm_metadata: Final = litellm_metadata_value if isinstance(litellm_metadata_value, Mapping) else {}
+    metadata_mapping: Final = as_str_mapping(metadata_value)
+    litellm_metadata_mapping: Final = as_str_mapping(litellm_metadata_value)
+    metadata: Final[Mapping[str, object]] = metadata_mapping if metadata_mapping is not None else {}
+    litellm_metadata: Final[Mapping[str, object]] = (
+        litellm_metadata_mapping if litellm_metadata_mapping is not None else {}
+    )
     return metadata.get("user_api_key_auth") or litellm_metadata.get("user_api_key_auth")
 
 
@@ -186,8 +190,8 @@ def get_request_team_id(request_kwargs: Mapping[str, object] | None) -> str | No
     if request_kwargs is None:
         return None
     for bucket_name in ("metadata", "litellm_metadata"):
-        bucket = request_kwargs.get(bucket_name)
-        team_id = bucket.get("user_api_key_team_id") if isinstance(bucket, Mapping) else None
+        bucket = as_str_mapping(request_kwargs.get(bucket_name))
+        team_id = bucket.get("user_api_key_team_id") if bucket is not None else None
         if isinstance(team_id, str) and team_id:
             return team_id
     return None
@@ -205,10 +209,12 @@ def resolve_model_group_alias(model_group_alias: object, model: str) -> str | No
 
     Returns the target model group, or None when the map does not rewrite ``model``.
     """
-    if not isinstance(model_group_alias, Mapping):
+    alias_map: Final = as_str_mapping(model_group_alias)
+    if alias_map is None:
         return None
-    entry: Final = model_group_alias.get(model)
-    target: Final = entry.get("model") if isinstance(entry, Mapping) else entry
+    entry: Final = alias_map.get(model)
+    entry_map: Final = as_str_mapping(entry)
+    target: Final = entry_map.get("model") if entry_map is not None else entry
     if not isinstance(target, str) or not target:
         return None
     return target
@@ -268,9 +274,10 @@ def format_fallback_outcome_message(
     def fallback_target_model_group(target: object) -> str | None:
         if isinstance(target, str):
             return target
-        if not isinstance(target, Mapping):
+        target_map: Final = as_str_mapping(target)
+        if target_map is None:
             return None
-        model: Final = target.get("model")
+        model: Final = target_map.get("model")
         return model if isinstance(model, str) else None
 
     skipped_targets: Final = frozenset(target.target for target in skipped)

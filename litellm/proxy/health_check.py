@@ -29,6 +29,7 @@ from litellm.constants import (
     DEFAULT_HEALTH_CHECK_PROMPT,
     HEALTH_CHECK_TIMEOUT_SECONDS,
 )
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.get_llm_provider_logic import resolve_model_and_provider_for_metadata
 from litellm.litellm_core_utils.health_check_helpers import native_health_check_mode
 from litellm.litellm_core_utils.routing_common_utils import deployment_model_id_pin, is_model_capability_field
@@ -314,8 +315,8 @@ async def run_with_timeout(
 
 
 def _skips_health_checks(deployment: Mapping[str, object]) -> bool:
-    info: Final = deployment.get("model_info")
-    return bool(info.get("disable_background_health_check", False)) if isinstance(info, Mapping) else False
+    info: Final = as_str_mapping(deployment.get("model_info"))
+    return bool(info.get("disable_background_health_check", False)) if info is not None else False
 
 
 def _health_check_eligible(
@@ -336,14 +337,14 @@ def _deployment_model(deployment: Mapping[str, object]) -> str | None:
 
 
 def _owner_team_id(deployment: Mapping[str, object]) -> str | None:
-    info: Final = deployment.get("model_info")
-    owner: Final = info.get("team_id") if isinstance(info, Mapping) else None
+    info: Final = as_str_mapping(deployment.get("model_info"))
+    owner: Final = info.get("team_id") if info is not None else None
     return owner if isinstance(owner, str) else None
 
 
 def _team_public_model_name(deployment: Mapping[str, object]) -> str | None:
-    info: Final = deployment.get("model_info")
-    name: Final = info.get("team_public_model_name") if isinstance(info, Mapping) else None
+    info: Final = as_str_mapping(deployment.get("model_info"))
+    name: Final = info.get("team_public_model_name") if info is not None else None
     return name if isinstance(name, str) else None
 
 
@@ -398,13 +399,13 @@ def _is_strategy_router_deployment(litellm_params: Mapping[str, object]) -> bool
 
 
 def _is_marker(deployment: Mapping[str, object]) -> bool:
-    params: Final = deployment.get("litellm_params")
-    return isinstance(params, Mapping) and _is_strategy_router_deployment(params)
+    params: Final = as_str_mapping(deployment.get("litellm_params"))
+    return params is not None and _is_strategy_router_deployment(params)
 
 
 def _deployment_id(deployment: Mapping[str, object]) -> str | None:
-    info: Final = deployment.get("model_info")
-    ident: Final = info.get("id") if isinstance(info, Mapping) else None
+    info: Final = as_str_mapping(deployment.get("model_info"))
+    ident: Final = info.get("id") if info is not None else None
     return str(ident) if ident else None
 
 
@@ -545,8 +546,8 @@ def _strategy_router_dependency_error(
     unhealthy_ids: frozenset[str],
 ) -> str | None:
     """The first dependency fault that makes this router unable to serve, if any."""
-    params: Final = deployment.get("litellm_params")
-    if not isinstance(params, Mapping):
+    params: Final = as_str_mapping(deployment.get("litellm_params"))
+    if params is None:
         return None
     return next(
         (
@@ -593,7 +594,7 @@ def _dependency_deployments_to_probe(
         names = frozenset(
             dependency.model_name
             for deployment in frontier
-            if isinstance(params := deployment.get("litellm_params"), Mapping)
+            if (params := as_str_mapping(deployment.get("litellm_params"))) is not None
             for dependency in strategy_router_dependencies(params)
             if dependency.role != "evaluation"
         )
@@ -663,7 +664,7 @@ def _finalize_strategy_router_endpoints(
     The probes exist to judge the routers that depend on them; reporting them would answer a
     targeted request with deployments the caller never asked about.
     """
-    verdicts: Final = (
+    verdicts: Final[Mapping[str, str]] = (
         _strategy_router_verdicts(healthy_endpoints, unhealthy_endpoints, checked, router)
         if router is not None
         else MappingProxyType({})
@@ -686,7 +687,7 @@ def _finalize_strategy_router_endpoints(
     )
 
 
-async def _run_model_health_check(model: dict):
+async def _run_model_health_check(model: dict) -> object:
     litellm_params = model["litellm_params"]
     model_info: Final = model.get("model_info", {})
 
@@ -716,13 +717,15 @@ async def _run_model_health_check(model: dict):
     )
 
 
-async def _run_health_checks_with_bounded_concurrency(models: list, concurrency_limit: int) -> tuple[list, int]:
+async def _run_health_checks_with_bounded_concurrency(
+    models: list, concurrency_limit: int
+) -> tuple[Sequence[object], int]:
     """
     Run health checks with at most `concurrency_limit` active tasks.
     Preserves result ordering to match `models`.
     """
-    results: Final[list] = [None] * len(models)
-    tasks_to_index: Final[dict[asyncio.Task, int]] = {}
+    results: Final[list[object]] = [None] * len(models)
+    tasks_to_index: Final[dict[asyncio.Task[object], int]] = {}
     model_iter: Final = iter(enumerate(models))
     peak_in_flight = 0
 
@@ -796,8 +799,8 @@ async def _perform_health_check(
             _rss_mb_for_log(),
         )
 
-    healthy_endpoints: Final = []
-    unhealthy_endpoints: Final = []
+    healthy_endpoints: Final[list[dict[str, object]]] = []
+    unhealthy_endpoints: Final[list[dict[str, object]]] = []
     # Exceptions keyed by model_id; returned separately so callers can use
     # them for cooldown integration without risking JSON-serialization errors
     # in the /health response.

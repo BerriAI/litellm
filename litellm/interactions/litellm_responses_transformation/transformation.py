@@ -12,7 +12,12 @@ from typing import Final, Protocol, cast
 
 from pydantic import BaseModel
 
-from litellm.litellm_core_utils.core_helpers import attribute_or_none, billed_usage_cost, has_attributes
+from litellm.litellm_core_utils.core_helpers import (
+    as_str_mapping,
+    attribute_or_none,
+    billed_usage_cost,
+    has_attributes,
+)
 from litellm.types.interactions import (
     InteractionInput,
     InteractionsAPIOptionalRequestParams,
@@ -154,7 +159,8 @@ class LiteLLMResponsesInteractionsConfig:
     @staticmethod
     def _transform_history_item(item: object) -> Mapping[str, object]:
         raw: Final = item.model_dump(exclude_none=True) if isinstance(item, Turn) else item
-        fields: Final = raw if isinstance(raw, Mapping) else {}
+        raw_fields: Final = as_str_mapping(raw)
+        fields: Final[Mapping[str, object]] = raw_fields if raw_fields is not None else {}
         role: Final = LiteLLMResponsesInteractionsConfig._responses_role(fields)
         raw_content: Final = fields.get("content")
         content_items: Final = (
@@ -183,10 +189,11 @@ class LiteLLMResponsesInteractionsConfig:
         text_type: Final = "output_text" if role == "assistant" else "input_text"
         if isinstance(item, str):
             return {"type": text_type, "text": item}
-        if isinstance(item, Mapping):
-            if item.get("type") == "text":
-                return {"type": text_type, "text": str(item.get("text", ""))}
-            return item
+        item_fields: Final = as_str_mapping(item)
+        if item_fields is not None:
+            if item_fields.get("type") == "text":
+                return {"type": text_type, "text": str(item_fields.get("text", ""))}
+            return item_fields
         if isinstance(item, BaseModel):
             return LiteLLMResponsesInteractionsConfig._transform_content_item(item.model_dump(exclude_none=True), role)
         return {"type": text_type, "text": str(item)}
