@@ -1913,8 +1913,10 @@ def _has_redaction_header(holder: object) -> bool:
 
 def _asks_for_message_redaction(request_data: Mapping[str, object]) -> bool:
     """True when the request itself opts in to redaction, by the body flag or a redaction header."""
-    if request_data.get("turn_off_message_logging") not in (None, False):
-        return True
+    flag: Final = request_data.get("turn_off_message_logging")
+    parsed: Final = flag if isinstance(flag, bool) else str_to_bool(flag) if isinstance(flag, str) else None
+    if parsed is not None:
+        return parsed
     return any(
         _has_redaction_header(request_data.get(key)) for key in ("metadata", "litellm_metadata", "proxy_server_request")
     )
