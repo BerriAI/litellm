@@ -8,7 +8,8 @@ import httpx
 import pytest
 
 import litellm
-from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException
+from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException, UnresolvablePreviousResponseError
+from litellm.responses.litellm_completion_transformation.transformation import previous_response_not_found
 from litellm.router_api import ChangeSet
 from litellm.router_core import RouterCore
 from litellm.types.utils import Usage
@@ -290,6 +291,23 @@ async def test_a_failed_fallback_group_follows_its_own_chain(make_core: MakeCore
 
     assert host.deployments_called("acompletion") == ["a", "b", "c"]
     assert headers(response)["x-litellm-model-group"] == "c"
+
+
+@pytest.mark.asyncio
+async def test_a_fallback_that_cannot_find_the_previous_response_ends_the_walk_with_its_own_400(
+    make_core: MakeCore, host: ScriptedHost
+) -> None:
+    show_router_debug(host)
+    core: Final = build(make_core, fallbacks=[{"a": ["b", "c"]}])
+    refusal: Final = previous_response_not_found("resp_unknown", "b", "openai")
+    host.answer("openai/a", server_error())
+    host.answer("openai/b", refusal)
+
+    with pytest.raises(UnresolvablePreviousResponseError) as raised:
+        await complete(core)
+
+    assert raised.value.message == refusal.message
+    assert host.deployments_called("acompletion") == ["a", "b"]
 
 
 @pytest.mark.asyncio
