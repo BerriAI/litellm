@@ -12,6 +12,7 @@ import httpx
 import pytest
 
 import litellm
+from litellm.llms.custom_httpx import llm_http_handler
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 
 
@@ -88,10 +89,17 @@ async def test_responses_api_rate_limit_marks_deployment_for_cooldown():
 async def test_openrouter_responses_connection_failure_cools_down_the_deployment(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    async def refuse_connection(*_args: object, **_kwargs: object) -> httpx.Response:
-        raise httpx.ConnectError("connection refused")
+    def refuse_connection(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("refused by the test transport", request=request)
 
-    monkeypatch.setattr(AsyncHTTPHandler, "post", refuse_connection)
+    class RefusingHandler(AsyncHTTPHandler):
+        """Also refuses on the fresh client the handler builds to retry a connection error."""
+
+        def create_client(self, *_args: object, **_kwargs: object) -> httpx.AsyncClient:
+            return httpx.AsyncClient(transport=httpx.MockTransport(refuse_connection))
+
+    # The router does not forward a caller's client, so the handler's client factory supplies it.
+    monkeypatch.setattr(llm_http_handler, "get_async_httpx_client", lambda **_kwargs: RefusingHandler())
     deployment_ids = ("deployment-a", "deployment-b")
     router = litellm.Router(
         model_list=[
@@ -111,7 +119,7 @@ async def test_openrouter_responses_connection_failure_cools_down_the_deployment
         cooldown_time=60,
     )
 
-    with pytest.raises(litellm.APIError):
+    with pytest.raises(litellm.APIError, match="refused by the test transport"):
         await router.aresponses(model="openrouter-responses", input="hi")
 
     cooldowns = await router.cooldown_cache.async_get_active_cooldowns(
