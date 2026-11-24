@@ -327,6 +327,46 @@ describe("responses_api", () => {
     );
   });
 
+  it("should report the response id and usage when the stream ends with response.incomplete", async () => {
+    async function* streamCutOffAtTheTokenLimit() {
+      yield { type: "response.output_text.delta", delta: "Hi" };
+      yield {
+        type: "response.incomplete",
+        response: {
+          id: "resp_cut_off",
+          status: "incomplete",
+          usage: { output_tokens: 16, input_tokens: 13, total_tokens: 29 },
+        },
+      };
+    }
+    mockResponsesCreate.mockResolvedValueOnce(streamCutOffAtTheTokenLimit());
+
+    const onUsageData = vi.fn();
+    const onResponseId = vi.fn();
+
+    await makeOpenAIResponsesRequest(
+      messages,
+      mockUpdateTextUI,
+      "gpt-4",
+      "test-token",
+      undefined, // tags
+      undefined, // signal
+      undefined, // onReasoningContent
+      undefined, // onTimingData
+      onUsageData,
+      undefined, // traceId
+      undefined, // vector_store_ids
+      undefined, // guardrails
+      undefined, // policies
+      undefined, // selectedMCPServers
+      undefined, // previousResponseId
+      onResponseId,
+    );
+
+    expect(onResponseId).toHaveBeenCalledWith("resp_cut_off");
+    expect(onUsageData).toHaveBeenCalledWith({ completionTokens: 16, promptTokens: 13, totalTokens: 29 }, "");
+  });
+
   it("should omit cost when the proxy reports none", async () => {
     const onUsageData = vi.fn();
 

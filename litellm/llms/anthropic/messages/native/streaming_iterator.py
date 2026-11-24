@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Any, Final
 
 import anyio
 import httpx
-from pydantic import TypeAdapter, ValidationError
+from pydantic import TypeAdapter
 from typing_extensions import TypedDict
 
 from litellm.constants import (
@@ -19,7 +19,7 @@ from litellm.constants import (
     ANTHROPIC_MESSAGES_STREAM_CLIENT_STALL_TIMEOUT_SECONDS,
     ANTHROPIC_MESSAGES_STREAM_RELAY_QUEUE_MAXSIZE,
 )
-from litellm.litellm_core_utils.core_helpers import process_response_headers
+from litellm.litellm_core_utils.core_helpers import loads_json_object, process_response_headers
 from litellm.litellm_core_utils.exception_mapping_utils import with_deployment_debug_info
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
@@ -139,16 +139,10 @@ def is_anthropic_content_delta_chunk(chunk: object) -> bool:
     return False
 
 
-_DECODED_SSE_DATA: Final = TypeAdapter(object)
-
-
 def _decoded_sse_data_line(line: bytes) -> object | None:
     if not line.startswith(b"data:"):
         return None
-    try:
-        return _DECODED_SSE_DATA.validate_python(json.loads(line[len(b"data:") :].strip()))
-    except (ValueError, TypeError):
-        return None
+    return loads_json_object(line[len(b"data:") :])
 
 
 def _anthropic_event_payload(chunk: object, event_type: str) -> Mapping[str, object] | None:
@@ -294,16 +288,11 @@ def _anthropic_content_block_start_and_deltas(
             )
         case "thinking":
             signature: Final = block.get("signature")
-            signature_deltas: Final = (
-                ({"signature": signature, "type": "signature_delta"},)
-                if isinstance(signature, str) and signature
-                else ()
-            )
             return (
                 {"thinking": "", "signature": "", "type": "thinking"},
                 (
                     {"thinking": block.get("thinking") or "", "type": "thinking_delta"},
-                    *signature_deltas,
+                    {"signature": signature if isinstance(signature, str) else "", "type": "signature_delta"},
                 ),
             )
         case "redacted_thinking":
@@ -463,26 +452,21 @@ class AnthropicMessagesStreamingResponse:
 
 
 _SSE_FRAME_END: Final = re.compile(rb"(?<=\n\n)|(?<=\r\n\r\n)")
-_SSE_FRAME_TERMINATORS: Final = (b"\n\n", b"\r\n\r\n")
-_SSE_TERMINATOR_OVERLAP: Final = max(len(terminator) for terminator in _SSE_FRAME_TERMINATORS) - 1
-_SSE_EVENT: Final = TypeAdapter(Mapping[str, object])
+SSE_FRAME_TERMINATORS: Final = (b"\n\n", b"\r\n\r\n")
+_SSE_TERMINATOR_OVERLAP: Final = max(len(terminator) for terminator in SSE_FRAME_TERMINATORS) - 1
 
 
 def _sse_data_payload(line: bytes) -> bytes | None:
     return line[len(b"data:") :].removeprefix(b" ") if line.startswith(b"data:") else None
 
 
-def _sse_frame_event(frame: bytes) -> Mapping[str, object] | None:
+def sse_frame_event(frame: bytes) -> Mapping[str, object] | None:
     payloads: Final = (_sse_data_payload(line) for line in frame.splitlines())
-    data: Final = b"\n".join(payload for payload in payloads if payload is not None)
-    try:
-        return _SSE_EVENT.validate_python(json.loads(data))
-    except (ValueError, ValidationError):
-        return None
+    return loads_json_object(b"\n".join(payload for payload in payloads if payload is not None))
 
 
 async def _stamped_sse_frame(frame: bytes, safeguard_results: StreamedSafeguardResults) -> bytes:
-    event: Final = _sse_frame_event(frame)
+    event: Final = sse_frame_event(frame)
     if event is None:
         return frame
     stamped: Final = await safeguard_results.observe(event)
@@ -490,7 +474,7 @@ async def _stamped_sse_frame(frame: bytes, safeguard_results: StreamedSafeguardR
 
 
 def _ends_a_frame(open_frame: bytearray, scan_from: int) -> bool:
-    return any(open_frame.find(terminator, scan_from) != -1 for terminator in _SSE_FRAME_TERMINATORS)
+    return any(open_frame.find(terminator, scan_from) != -1 for terminator in SSE_FRAME_TERMINATORS)
 
 
 async def _stamped_sse_frames(
@@ -508,6 +492,32 @@ async def _stamped_sse_frames(
             yield await _stamped_sse_frame(frame, safeguard_results)
     if open_frame:
         yield await _stamped_sse_frame(bytes(open_frame), safeguard_results)
+
+
+async def sse_frames(stream: AsyncIterator[bytes]) -> AsyncGenerator[bytes, None]:
+    open_frame: Final = bytearray()
+    try:
+        async for chunk in stream:
+            if not isinstance(chunk, (bytes, bytearray)):  # pyright: ignore[reportUnnecessaryIsInstance]  # bridge-path chunks are not always bytes
+                if open_frame:
+                    yield bytes(open_frame)
+                    open_frame.clear()
+                yield chunk
+                continue
+            scan_from = max(len(open_frame) - _SSE_TERMINATOR_OVERLAP, 0)
+            open_frame.extend(chunk)
+            if not _ends_a_frame(open_frame, scan_from):
+                continue
+            *frames, unterminated = _SSE_FRAME_END.split(open_frame)
+            open_frame[:] = unterminated
+            for frame in frames:
+                yield bytes(frame)
+    except Exception:
+        if open_frame:
+            yield bytes(open_frame)
+        raise
+    if open_frame:
+        yield bytes(open_frame)
 
 
 class SafeguardedAnthropicSSEStream:

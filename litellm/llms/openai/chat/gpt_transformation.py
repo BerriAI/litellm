@@ -48,6 +48,7 @@ from litellm.litellm_core_utils.prompt_templates.json_schema_utils import (
 )
 from litellm.litellm_core_utils.prompt_templates.prompt_cache_breakpoint_utils import (
     chat_completion_prompt_cache_breakpoints_for_wire,
+    with_only_content_part_prompt_cache_breakpoints,
     without_prompt_cache_breakpoints,
 )
 from litellm.litellm_core_utils.url_utils import join_api_base
@@ -239,16 +240,16 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
     def __init__(
         self,
         frequency_penalty: int | None = None,
-        function_call: str | dict | None = None,
-        functions: list | None = None,
-        logit_bias: dict | None = None,
+        function_call: str | Mapping[str, object] | None = None,
+        functions: Sequence[object] | None = None,
+        logit_bias: Mapping[str, object] | None = None,
         max_tokens: int | None = None,
         n: int | None = None,
         presence_penalty: int | None = None,
-        stop: str | list | None = None,
+        stop: str | Sequence[object] | None = None,
         temperature: int | None = None,
         top_p: int | None = None,
-        response_format: dict | None = None,
+        response_format: Mapping[str, object] | None = None,
     ) -> None:
         locals_: Final[Mapping[str, object]] = dict(locals())
         for key, value in locals_.items():
@@ -313,11 +314,11 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
 
     def _map_openai_params(
         self,
-        non_default_params: dict,
-        optional_params: dict,
+        non_default_params: dict[str, object],
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         If any supported_openai_params are in non_default_params, add them to optional_params, so they are use in API call
 
@@ -576,6 +577,11 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
             custom_llm_provider, api_base
         )
 
+    def _keeps_content_part_prompt_cache_breakpoints(self, model: str, litellm_params: Mapping[str, object]) -> bool:
+        """Whether a target that does not read OpenAI's full breakpoint dialect still takes a content part's
+        ``prompt_cache_breakpoint`` under drop_params."""
+        return False
+
     def _messages_and_tools_in_cache_mark_dialect(
         self,
         model: str,
@@ -612,6 +618,9 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
             )
         drop_params: Final = _drops_params(litellm_params)
         drops_breakpoints: Final = not reads_breakpoints and drop_params
+        keeps_content_part_breakpoints: Final = drops_breakpoints and self._keeps_content_part_prompt_cache_breakpoints(
+            model, litellm_params
+        )
         renamed: Final = (
             [
                 AnthropicCacheControlHook.cache_control_as_prompt_cache_breakpoints(
@@ -620,6 +629,8 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
                 for message in messages
             ]
             if reads_breakpoints
+            else [with_only_content_part_prompt_cache_breakpoints(message) for message in messages]
+            if keeps_content_part_breakpoints
             else [without_prompt_cache_breakpoints(message) for message in messages]
             if drops_breakpoints
             else list(messages)
@@ -1074,7 +1085,7 @@ class OpenAIChatCompletionStreamingHandler(BaseModelResponseIterator):
         return choices
 
     @staticmethod
-    def _extract_error_from_chunk(chunk: dict) -> tuple[str, int] | None:
+    def _extract_error_from_chunk(chunk: Mapping[str, object]) -> tuple[str, int] | None:
         """OpenAI-compatible backends (vLLM, sglang) can return an HTTP 200
         stream whose body carries an error payload, e.g.
         ``data: {"error": {"message": "...", "code": 400}}``."""

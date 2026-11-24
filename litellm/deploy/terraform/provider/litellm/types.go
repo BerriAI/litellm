@@ -1,5 +1,7 @@
 package litellm
 
+import "encoding/json"
+
 // ProviderConfig holds the configuration for the LiteLLM provider.
 type ProviderConfig struct {
 	APIBase            string
@@ -208,14 +210,33 @@ type MCPServerRequest struct {
 	Args            []string          `json:"args,omitempty"`
 	Env             map[string]string `json:"env,omitempty"`
 	Credentials     *MCPCredentials   `json:"credentials,omitempty"`
+
+	Issuer                string `json:"issuer,omitempty"`
+	AuthorizationURL      string `json:"authorization_url,omitempty"`
+	TokenURL              string `json:"token_url,omitempty"`
+	RegistrationURL       string `json:"registration_url,omitempty"`
+	OAuth2Flow            string `json:"oauth2_flow,omitempty"`
+	TokenExchangeEndpoint string `json:"token_exchange_endpoint,omitempty"`
+	Audience              string `json:"audience,omitempty"`
+	SubjectTokenType      string `json:"subject_token_type,omitempty"`
+	TokenExchangeProfile  string `json:"token_exchange_profile,omitempty"`
 }
 
-// MCPCredentials is the secret material the proxy uses against an MCP server.
-// The proxy encrypts it at rest and redacts it on read, so it is never read back.
 type MCPCredentials struct {
-	AuthValue    string `json:"auth_value,omitempty"`
-	ClientID     string `json:"client_id,omitempty"`
-	ClientSecret string `json:"client_secret,omitempty"`
+	Scopes                     []string `json:"scopes,omitempty"`
+	TokenEndpointAuthMethod    string   `json:"token_endpoint_auth_method,omitempty"`
+	UpstreamResource           string   `json:"upstream_resource,omitempty"`
+	ClientPrivateKeyID         string   `json:"client_private_key_id,omitempty"`
+	ClientAssertionSigningAlg  string   `json:"client_assertion_signing_alg,omitempty"`
+	IDJAGResourceTokenEndpoint string   `json:"id_jag_resource_token_endpoint,omitempty"`
+	IDJAGResource              string   `json:"id_jag_resource,omitempty"`
+	IDJAGResourceClientID      string   `json:"id_jag_resource_client_id,omitempty"`
+	IDJAGSubjectSource         string   `json:"id_jag_subject_source,omitempty"`
+	ClientPrivateKey           string   `json:"client_private_key,omitempty"`
+	IDJAGResourceClientSecret  string   `json:"id_jag_resource_client_secret,omitempty"`
+	AuthValue                  string   `json:"auth_value,omitempty"`
+	ClientID                   string   `json:"client_id,omitempty"`
+	ClientSecret               string   `json:"client_secret,omitempty"`
 }
 
 // MCPServerResponse represents a response from the API containing MCP server information.
@@ -241,6 +262,17 @@ type MCPServerResponse struct {
 	Command          string              `json:"command,omitempty"`
 	Args             []string            `json:"args,omitempty"`
 	Env              map[string]string   `json:"env,omitempty"`
+
+	Credentials           json.RawMessage `json:"credentials"`
+	Issuer                string          `json:"issuer,omitempty"`
+	AuthorizationURL      string          `json:"authorization_url,omitempty"`
+	TokenURL              string          `json:"token_url,omitempty"`
+	RegistrationURL       string          `json:"registration_url,omitempty"`
+	OAuth2Flow            string          `json:"oauth2_flow,omitempty"`
+	TokenExchangeEndpoint string          `json:"token_exchange_endpoint,omitempty"`
+	Audience              string          `json:"audience,omitempty"`
+	SubjectTokenType      string          `json:"subject_token_type,omitempty"`
+	TokenExchangeProfile  string          `json:"token_exchange_profile,omitempty"`
 }
 
 // CredentialRequest represents a request to create or update a credential.

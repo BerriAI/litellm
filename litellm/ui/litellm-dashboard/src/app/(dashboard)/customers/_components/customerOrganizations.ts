@@ -11,6 +11,7 @@ import {
 } from "./customerBudgetUsage";
 import { mergeCustomerActivityPages } from "./customerUsageData";
 import { customerUsageTotals } from "./customerUsageTotals";
+import type { CustomerUsageEntity } from "./customerUsageApi";
 
 export type CustomerOrganization = components["schemas"]["Organization"];
 type OrganizationList = components["schemas"]["ListResponse_Organization_"];
@@ -87,8 +88,8 @@ export async function customerOrganizationsUsageCall({
 export const customerOrganizationRows = (organizations: readonly CustomerOrganization[], monthlyUsage: Activity) => {
   const totals = customerUsageTotals(monthlyUsage.results);
   return organizations.map((organization) => {
-    const monthlySpend = totals[organization.customer_org_id]?.spend ?? 0;
-    const budgetEntity = {
+    const monthlySpend = totals.get(organization.customer_org_id)?.spend ?? 0;
+    const budgetEntity: CustomerUsageEntity = {
       id: organization.customer_org_id,
       label: organization.alias || organization.customer_org_id,
       spend: organization.spend,
@@ -97,12 +98,15 @@ export const customerOrganizationRows = (organizations: readonly CustomerOrganiz
       budgetLimits: organization.budget?.budget_limits ?? [],
       budgetResetAt: organization.budget_reset_at ?? null,
       budgetUsage: organization.budget_usage,
+      rateLimits: organization.budget ?? undefined,
     };
     const budgets = customerBudgetUsage(budgetEntity);
     const monthlyBudgets = budgets.filter((budget) => customerBudgetPeriod(budget.budget_duration) === "monthly");
     return {
       organization,
+      entity: budgetEntity,
       monthlySpend,
+      totalMonthlySpend: monthlyUsage.metadata.total_spend,
       monthlyBudgets,
       budgetLimit: customerBudgetLimit(budgetEntity),
       displaySpend: monthlyBudgets.length > 0 ? monthlyBudgets[0].spend : monthlySpend,
@@ -113,6 +117,17 @@ export const customerOrganizationRows = (organizations: readonly CustomerOrganiz
 };
 
 export type CustomerOrganizationRow = ReturnType<typeof customerOrganizationRows>[number];
+
+export function customerOrganizationBudgetSource(
+  organization: CustomerOrganization,
+  groups?: readonly components["schemas"]["OrganizationBudget"][],
+): { kind: "group"; name: string | null } | { kind: "custom" } | null {
+  if (!organization.budget_id) return organization.budget ? { kind: "custom" } : null;
+  const group = groups?.find((entry) => entry.budget_id === organization.budget_id);
+  const shared = organization.budget_is_shared ?? (groups ? Boolean(group) : null);
+  if (shared) return { kind: "group", name: group?.name ?? null };
+  return shared === false ? { kind: "custom" } : null;
+}
 
 const STATUS_ORDER = {
   "customerPortal.analytics.noLimit": 0,

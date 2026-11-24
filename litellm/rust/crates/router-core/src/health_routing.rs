@@ -1,5 +1,5 @@
 //! Health-check-driven routing: the background health checks' results, read from the host's
-//! [`RouterCache`](crate::cache::RouterCache) as Python's `DeploymentHealthCache` writes them, and
+//! [`RouterCache`] as Python's `DeploymentHealthCache` writes them, and
 //! the filter `_async_filter_health_check_unhealthy_deployments` /
 //! `_filter_health_check_unhealthy_deployments` run before the cooldown filter.
 
@@ -9,7 +9,12 @@ use std::{
     time::UNIX_EPOCH,
 };
 
-use crate::{cache::HealthState, health::Health, registry::Deployment, settings::Settings};
+use crate::{
+    cache::{HealthState, RouterCache},
+    health::Health,
+    registry::Deployment,
+    settings::Settings,
+};
 
 /// `_extract_unhealthy_ids`: the ids marked unhealthy whose result is younger than `staleness`.
 pub fn unhealthy_ids(
@@ -33,7 +38,7 @@ pub enum WhenAllUnhealthy {
     Nothing,
 }
 
-impl Health {
+impl<C: RouterCache> Health<C> {
     /// The deployments the background health checks have not marked unhealthy, as the
     /// router's health-check routing settings say.
     pub async fn health_check_filter(

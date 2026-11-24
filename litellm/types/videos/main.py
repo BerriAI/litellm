@@ -1,12 +1,14 @@
 import builtins
-from collections.abc import Sequence
-from typing import Any, Literal
+from collections.abc import Mapping, Sequence
+from typing import Final, Literal
 
 from openai.types.audio.transcription_create_params import FileTypes
-from pydantic import Field, PrivateAttr
+from pydantic import Field, PrivateAttr, TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm.types.llms.base import LiteLLMBaseModel
+
+_ATTRIBUTE_VALUE: Final = TypeAdapter(builtins.object)
 
 
 class VideoObject(LiteLLMBaseModel):
@@ -24,7 +26,7 @@ class VideoObject(LiteLLMBaseModel):
     seconds: str | None = None
     size: str | None = None
     model: str | None = None
-    usage: dict[str, Any] | None = None
+    usage: Mapping[str, builtins.object] | None = None
     _hidden_params: dict[str, builtins.object] = PrivateAttr(default={})
 
     @property
@@ -35,17 +37,17 @@ class VideoObject(LiteLLMBaseModel):
     def hidden_params(self, hidden_params: dict[str, builtins.object]) -> None:  # mutable-ok: API requires mutation
         self._hidden_params = hidden_params
 
-    def __contains__(self, key) -> bool:
+    def __contains__(self, key: str) -> bool:
         # Define custom behavior for the 'in' operator
         return hasattr(self, key)
 
-    def get(self, key, default=None):
+    def get(self, key: str, default: builtins.object = None):
         # Custom .get() method to access attributes with a default value if the attribute doesn't exist
         return getattr(self, key, default)
 
-    def __getitem__(self, key) -> builtins.object:
+    def __getitem__(self, key: str) -> builtins.object:
         # Allow dictionary-style access to attributes
-        return getattr(self, key)
+        return _ATTRIBUTE_VALUE.validate_python(getattr(self, key))
 
     def json(self, **kwargs):
         try:
@@ -61,14 +63,14 @@ class VideoResponse(LiteLLMBaseModel):
     data: list[VideoObject]
     hidden_params: dict[str, object] = Field(default={})
 
-    def __contains__(self, key) -> bool:
+    def __contains__(self, key: str) -> bool:
         return hasattr(self, key)
 
-    def get(self, key, default=None):
+    def get(self, key: str, default: builtins.object = None):
         return getattr(self, key, default)
 
-    def __getitem__(self, key) -> object:
-        return getattr(self, key)
+    def __getitem__(self, key: str) -> object:
+        return _ATTRIBUTE_VALUE.validate_python(getattr(self, key))
 
     def json(self, **kwargs):
         try:
@@ -154,14 +156,14 @@ class CharacterObject(LiteLLMBaseModel):
     def hidden_params(self, hidden_params: dict[str, builtins.object]) -> None:  # mutable-ok: API requires mutation
         self._hidden_params = hidden_params
 
-    def __contains__(self, key) -> bool:
+    def __contains__(self, key: str) -> bool:
         return hasattr(self, key)
 
-    def get(self, key, default=None):
+    def get(self, key: str, default: builtins.object = None):
         return getattr(self, key, default)
 
-    def __getitem__(self, key) -> builtins.object:
-        return getattr(self, key)
+    def __getitem__(self, key: str) -> builtins.object:
+        return _ATTRIBUTE_VALUE.validate_python(getattr(self, key))
 
     def json(self, **kwargs):
         try:

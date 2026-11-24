@@ -278,6 +278,75 @@ def test_streaming_redaction_drops_delta_audio(key: str) -> None:
     assert SECRET not in str(response.choices[0].delta), response
 
 
+_IMAGE_URL: Final = f"https://example.com/generated.png?signature={SECRET}"
+
+
+def _image_response() -> ModelResponse:
+    return ModelResponse(
+        choices=[
+            litellm.Choices(
+                message=litellm.Message(
+                    content=None,
+                    images=[{"index": 0, "type": "image_url", "image_url": {"url": _IMAGE_URL}}],
+                )
+            )
+        ]
+    )
+
+
+@pytest.mark.parametrize("shape", ["object", "dict", "standard"])
+def test_redaction_drops_generated_images_from_the_logged_chat_response_only(shape: str) -> None:
+    client_response: Final = _image_response()
+
+    redacted: Final = (
+        redacted_standard_logging_payload({"response": client_response.model_dump()})
+        if shape == "standard"
+        else perform_redaction({}, client_response if shape == "object" else client_response.model_dump())
+    )
+
+    assert SECRET not in str(redacted), redacted
+    assert client_response.choices[0].message.images == [
+        {"index": 0, "type": "image_url", "image_url": {"url": _IMAGE_URL}}
+    ]
+
+
+@pytest.mark.parametrize("key", ["complete_streaming_response", "async_complete_streaming_response"])
+def test_streaming_redaction_drops_delta_images(key: str) -> None:
+    response: Final = ModelResponseStream(
+        choices=[
+            litellm.utils.StreamingChoices(
+                delta=litellm.utils.Delta(images=[{"index": 0, "type": "image_url", "image_url": {"url": _IMAGE_URL}}])
+            )
+        ]
+    )
+
+    perform_redaction({"stream": True, key: response}, None)
+
+    assert SECRET not in str(response.choices[0].delta), response
+
+
+@pytest.mark.parametrize("shape", ["object", "dict", "standard"])
+def test_redaction_hides_the_image_generation_result_in_responses_api_output(shape: str) -> None:
+    response: Final = ResponsesAPIResponse(
+        id="resp_1",
+        created_at=1,
+        model="gpt-5.6",
+        object="response",
+        status="completed",
+        output=[{"id": "ig_1", "type": "image_generation_call", "status": "completed", "result": SECRET}],
+    )
+
+    redacted: Final = (
+        redacted_standard_logging_payload({"response": response.model_dump()})["response"]
+        if shape == "standard"
+        else perform_redaction({}, response if shape == "object" else response.model_dump())
+    )
+
+    item: Final = redacted.output[0].model_dump() if shape == "object" else redacted["output"][0]
+    assert (item["id"], item["status"], item["result"]) == ("ig_1", "completed", REDACTED_BY_LITELLM)
+    assert response.output[0].result == SECRET
+
+
 _SECRET_URL: Final = f"https://example.com/?q={SECRET}"
 _WEB_SEARCH_CALL: Final = TypeAdapter(ResponseFunctionWebSearch)
 
@@ -2107,6 +2176,17 @@ def test_redaction_removes_the_image_from_the_provider_request_copy() -> None:
 
 def test_one_callback_opting_out_redacts_a_query_image_only_for_itself() -> None:
     details: Final = _vector_store_search_details({"type": "base64", "media_type": "image/jpeg", "data": SECRET})
+
+    redacted: Final = redacted_model_call_details_for_custom_logger(details, TestCustomLogger(message_logging=False))
+
+    assert SECRET not in json.dumps(redacted, default=str)
+    assert SECRET in json.dumps(details, default=str)
+
+
+def test_one_callback_opting_out_redacts_an_image_sent_to_apply_guardrail_only_for_itself() -> None:
+    details: Final[dict[str, object]] = {
+        "litellm_params": {"proxy_server_request": {"body": {"images": [f"data:image/png;base64,{SECRET}"]}}},
+    }
 
     redacted: Final = redacted_model_call_details_for_custom_logger(details, TestCustomLogger(message_logging=False))
 

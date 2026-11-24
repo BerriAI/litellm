@@ -7,7 +7,7 @@ from typing import Final, TypeVar
 from litellm._logging import verbose_logger
 from litellm.constants import WEBSOCKET_TURN_LOGGING_WAIT_SECONDS
 
-_T: Final = TypeVar("_T")
+_T = TypeVar("_T")
 
 
 class SocketLogging:

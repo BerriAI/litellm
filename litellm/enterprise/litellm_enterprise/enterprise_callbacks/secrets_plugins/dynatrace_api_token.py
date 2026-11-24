@@ -15,7 +15,7 @@ class DynatraceApiTokenDetector(RegexBasedDetector):
         return "Dynatrace API Token"
 
     @property
-    def denylist(self) -> list[re.Pattern]:
+    def denylist(self) -> list[re.Pattern[str]]:
         return [
             # Dynatrace API Token
             re.compile(r"""(?i)dt0c01\.[a-z0-9]{24}\.[a-z0-9]{64}"""),

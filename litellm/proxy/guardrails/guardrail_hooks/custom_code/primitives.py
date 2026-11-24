@@ -405,7 +405,7 @@ class HttpResponseResult(TypedDict):
     """Outcome of an HTTP primitive call, as handed back to custom code."""
 
     status_code: ReadOnly[int]
-    body: ReadOnly[JsonValue]
+    body: ReadOnly[object]
     headers: ReadOnly[Mapping[str, str]]
     success: ReadOnly[bool]
     error: ReadOnly[str | None]
@@ -424,9 +424,9 @@ def _http_error_response(error: str) -> HttpResponseResult:
 
 def _http_success_response(response: httpx.Response) -> HttpResponseResult:
     """Create a standardized success response from an httpx Response."""
-    parsed_body: JsonValue
+    parsed_body: object
     try:
-        parsed_body = response.json()
+        parsed_body = _DECODED_JSON.validate_python(response.json())
     except (json.JSONDecodeError, ValueError):
         parsed_body = response.text
 
@@ -719,7 +719,7 @@ def detect_code_languages(text: str) -> list[str]:
     Returns:
         List of detected language names
     """
-    detected: Final = []
+    detected: Final[list[str]] = []
     for lang, patterns in _CODE_PATTERNS.items():
         for pattern in patterns:
             try:
