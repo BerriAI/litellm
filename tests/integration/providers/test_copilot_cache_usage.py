@@ -118,8 +118,9 @@ def copilot_gateway(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Gatewa
         ("/v1/chat/completions", "Chat reply", True),
         ("/v1/chat/completions", "Native reply", False),
         ("/v1/messages", "Native reply", False),
+        ("/v1/responses", "Chat reply", False),
     ],
-    ids=("chat", "chat-stream", "chat-native-reply", "messages"),
+    ids=("chat", "chat-stream", "chat-native-reply", "messages", "responses"),
 )
 def test_copilot_cache_token_details_are_included_in_usage(
     copilot_gateway: Gateway, endpoint: str, prompt: str, stream: bool
@@ -129,8 +130,11 @@ def test_copilot_cache_token_details_are_included_in_usage(
         endpoint,
         {
             "model": "copilot-cache",
-            "messages": [{"role": "user", "content": prompt}],
-            "max_tokens": 16,
+            **(
+                {"input": prompt, "max_output_tokens": 16}
+                if endpoint == "/v1/responses"
+                else {"messages": [{"role": "user", "content": prompt}], "max_tokens": 16}
+            ),
             "stream": stream,
             **({"stream_options": {"include_usage": True}} if stream else {}),
         },
@@ -146,6 +150,11 @@ def test_copilot_cache_token_details_are_included_in_usage(
     usage: Final = next(
         _JSON.validate_python(payload["usage"]) for payload in reversed(payloads) if payload.get("usage")
     )
+    if endpoint == "/v1/responses":
+        assert (usage["input_tokens"], usage["total_tokens"]) == (110, 115), usage
+        details: Final = _JSON.validate_python(usage["input_tokens_details"] or {})
+        assert (details.get("cached_tokens"), details.get("cache_write_tokens")) == (80, 20), usage
+        return
     assert (usage.get("cache_read_input_tokens"), usage.get("cache_creation_input_tokens")) == (80, 20), usage
     if endpoint == "/v1/chat/completions":
         assert (usage["prompt_tokens"], usage["total_tokens"]) == (110, 115), usage
