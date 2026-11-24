@@ -678,6 +678,16 @@ class _UpstreamStreamBoundary(Generic[_T]):
             raise
 
 
+class _MCPToolCallLike(Protocol):
+    """The two request attributes the during-call MCP response conversion formats."""
+
+    @property
+    def tool_name(self) -> object: ...
+
+    @property
+    def arguments(self) -> object: ...
+
+
 @runtime_checkable
 class _ClosableAsyncIterator(Protocol):
     def aclose(self) -> object: ...
@@ -2857,7 +2867,7 @@ class ProxyLogging:
             return None
 
     def _convert_llm_result_to_mcp_during_response(
-        self, llm_result: object, request_obj
+        self, llm_result: object, request_obj: "_MCPToolCallLike"
     ) -> MCPDuringCallResponseObject | None:
         """
         Convert LLM guardrail result back to MCP during call response format.
@@ -9950,7 +9960,9 @@ def get_projected_spend_over_limit(
 _get_projected_spend_over_limit: Final = get_projected_spend_over_limit
 
 
-def is_valid_team_configs(team_id=None, team_config=None, request_data=None) -> None:
+def is_valid_team_configs(
+    team_id: object = None, team_config=None, request_data: Mapping[str, object] | None = None
+) -> None:
     if team_id is None or team_config is None or request_data is None:
         return
     # check if valid model called for team
@@ -9967,7 +9979,7 @@ def is_valid_team_configs(team_id=None, team_config=None, request_data=None) -> 
 _is_valid_team_configs: Final = is_valid_team_configs
 
 
-def _to_ns(dt):
+def _to_ns(dt: datetime) -> int:
     return int(dt.timestamp() * 1e9)
 
 
