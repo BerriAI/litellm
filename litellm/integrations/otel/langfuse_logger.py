@@ -36,9 +36,9 @@ class LangfuseOpenTelemetryV2(OpenTelemetryV2):
         self,
         user_api_key_dict: "UserAPIKeyAuth",
         cache: "DualCache",
-        data: dict,
+        data: dict[str, object],
         call_type: "CallTypesLiteral",
-    ) -> dict:
+    ) -> dict[str, object]:
         # Through v1.111.0 the proxy's leaf-only override check never ran OpenTelemetryV2's pre-call identity
         # seeding for the Langfuse subclasses. The MRO-aware check that replaced it would, so this no-op keeps them
         # as they were.

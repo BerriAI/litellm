@@ -53,11 +53,11 @@ class APISerpentSearchConfig(BaseSearchConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
         **kwargs: object,
-    ) -> dict:
+    ) -> dict[str, object]:
         api_key = self.resolve_server_api_key(
             caller_api_key=api_key,
             caller_api_base=api_base,
@@ -74,7 +74,7 @@ class APISerpentSearchConfig(BaseSearchConfig):
     def get_complete_url(
         self,
         api_base: str | None,
-        optional_params: dict,
+        optional_params: Mapping[str, object],
         data: dict | list[dict] | None = None,
         **kwargs: object,
     ) -> str:
@@ -99,7 +99,7 @@ class APISerpentSearchConfig(BaseSearchConfig):
         query: str | list[str],
         optional_params: dict,
         **kwargs: object,
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Transform a unified search request into APISerpent query params.
 

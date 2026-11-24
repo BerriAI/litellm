@@ -82,7 +82,7 @@ async def async_handle_prediction_response_streaming(
     prediction_url: str,
     api_token: object,
     print_verbose: Callable[[str], object],
-    headers: dict,
+    headers: dict[str, object],
     http_client: AsyncHTTPHandler,
 ):
     previous_output = ""
@@ -135,19 +135,19 @@ async def async_handle_prediction_response_streaming(
 # Main function for prediction completion
 def completion(
     model: str,
-    messages: list,
+    messages: list[AllMessageValues],
     api_base: str,
     model_response: ModelResponse,
     print_verbose: Callable[[str], object],
-    optional_params: dict,
-    litellm_params: dict,
+    optional_params: dict[str, object],
+    litellm_params: dict[str, object],
     logging_obj: LiteLLMLoggingObj,
     api_key,
     encoding: "Tokenizer | None",
     custom_prompt_dict: object = {},
     logger_fn: object = None,
     acompletion: object = None,
-    headers={},
+    headers: dict[str, object] = {},
 ) -> ModelResponse | CustomStreamWrapper:
     headers = replicate_config.validate_environment(
         api_key=api_key,
@@ -253,15 +253,15 @@ async def async_completion(
     model: str,
     messages: list[AllMessageValues],
     encoding: "Tokenizer | None",
-    optional_params: dict,
-    litellm_params: dict,
+    optional_params: dict[str, object],
+    litellm_params: dict[str, object],
     version_id: object,
-    input_data,
-    api_key,
+    input_data: dict[str, object],
+    api_key: str | None,
     api_base: str | None,
     logging_obj: LiteLLMLoggingObj,
     print_verbose: Callable[[str], object],
-    headers: dict,
+    headers: dict[str, object],
 ) -> ModelResponse | CustomStreamWrapper:
     prediction_url = replicate_config.get_complete_url(
         api_base=api_base,

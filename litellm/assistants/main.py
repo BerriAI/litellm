@@ -867,7 +867,7 @@ async def a_add_message(
     content: str,
     attachments: list[Attachment] | None = None,
     metadata: dict | None = None,
-    client=None,
+    client: object | None = None,
     **kwargs: object,
 ) -> OpenAIMessage:
     loop: Final = asyncio.get_event_loop()
@@ -1201,7 +1201,7 @@ async def arun_thread(
     assistant_id: str,
     additional_instructions: str | None = None,
     instructions: str | None = None,
-    metadata: dict | None = None,
+    metadata: dict[str, str] | None = None,
     model: str | None = None,
     stream: bool | None = None,
     tools: Iterable[AssistantToolParam] | None = None,
@@ -1266,7 +1266,7 @@ def run_thread(
     assistant_id: str,
     additional_instructions: str | None = None,
     instructions: str | None = None,
-    metadata: dict | None = None,
+    metadata: dict[str, str] | None = None,
     model: str | None = None,
     stream: bool | None = None,
     tools: Iterable[AssistantToolParam] | None = None,

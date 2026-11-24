@@ -319,7 +319,7 @@ async def read_request_body(request: Request | None) -> dict:
         if _cached_request_body is not None:
             return _cached_request_body
 
-        _request_headers: Final[dict] = safe_get_request_headers(request=request)
+        _request_headers: Final[Mapping[str, object]] = safe_get_request_headers(request=request)
         content_type: Final = _request_headers.get("content-type", "")
 
         if _normalize_media_type(content_type) in _BINARY_CONTENT_TYPES:
@@ -840,7 +840,7 @@ def get_tags_from_request_body(request_body: Mapping[str, object]) -> list[str]:
     return [tag for tag in combined_tags if isinstance(tag, str)]
 
 
-def populate_request_with_path_params(request_data: dict, request: Request) -> dict:
+def populate_request_with_path_params(request_data: dict[str, object], request: Request) -> dict:
     """
     Copy FastAPI path params and query params into the request payload so downstream checks
     (e.g. vector store RBAC, organization RBAC) see them the same way as body params.

@@ -371,12 +371,12 @@ fn global_drop_params(py: Python<'_>) -> PyResult<bool> {
     Ok(module_global(py, "drop_params")?.is_some_and(|value| value.is(PyBool::new(py, true))))
 }
 
-fn workload_identity_fields(py: Python<'_>) -> PyResult<&'static [String]> {
+fn anthropic_auth_fields(py: Python<'_>) -> PyResult<&'static [String]> {
     static FIELDS: PyOnceLock<Vec<String>> = PyOnceLock::new();
     FIELDS
         .get_or_try_init(py, || {
             py.import(ROUTE_HOST_MODULE)?
-                .getattr("WORKLOAD_IDENTITY_FIELDS")?
+                .getattr("ANTHROPIC_AUTH_FIELDS")?
                 .extract()
         })
         .map(Vec::as_slice)
@@ -801,6 +801,8 @@ impl MessagesPythonHost {
             _ => None,
         };
         let bedrock = custom_llm_provider.as_deref() == Some(BEDROCK_PROVIDER) || mantle.is_some();
+        let base_model: Option<String> =
+            argument("base_model")?.and_then(|value| value.extract().ok());
         let capabilities = match &mantle {
             Some(_) => super::model_catalog::route_capabilities(
                 py,
@@ -815,6 +817,7 @@ impl MessagesPythonHost {
                         super::model_catalog::bedrock_capabilities(
                             py,
                             &model,
+                            base_model.as_deref(),
                             argument("model_info")?,
                         )?,
                         &requested,
@@ -842,12 +845,12 @@ impl MessagesPythonHost {
                 unencodable_request_header,
                 module_api_key: azure.as_ref().and_then(|azure| azure.api_key.clone()),
                 global_drop_params: global_drop_params(py)?,
-                base_model: argument("base_model")?.and_then(|value| value.extract().ok()),
+                base_model,
                 ..settings.settings
             },
         };
         let provider_fields: Vec<&str> = match custom_llm_provider.as_deref() {
-            Some(FEDERATING_PROVIDER) => workload_identity_fields(py)?
+            Some(FEDERATING_PROVIDER) => anthropic_auth_fields(py)?
                 .iter()
                 .map(String::as_str)
                 .collect(),

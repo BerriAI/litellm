@@ -1,6 +1,6 @@
 import asyncio
 import json
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Final, Protocol
 
@@ -245,7 +245,7 @@ class KeyManagementEventHooks:
     async def async_key_deleted_hook(
         data: KeyRequest,
         keys_being_deleted: list[LiteLLM_VerificationToken],
-        response: dict,
+        response: Mapping[str, object],
         user_api_key_dict: UserAPIKeyAuth,
         litellm_changed_by: str | None = None,
     ):

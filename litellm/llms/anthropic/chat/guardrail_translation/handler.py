@@ -930,7 +930,9 @@ class AnthropicMessagesHandler(BaseTranslation):
         )
         return chat_completion_compatible_request
 
-    def get_structured_messages(self, data: dict, *, keep_tool_errors: bool = False) -> list[AllMessageValues] | None:
+    def get_structured_messages(
+        self, data: dict[str, object], *, keep_tool_errors: bool = False
+    ) -> list[AllMessageValues] | None:
         """
         Convert Anthropic messages request data to OpenAI-spec structured messages.
 
@@ -1255,7 +1257,7 @@ class AnthropicMessagesHandler(BaseTranslation):
     @staticmethod
     def _defer_systems_inside_tool_exchanges(
         structured_messages: Sequence[Mapping[str, object]],
-    ) -> list:
+    ) -> list[Mapping[str, object]]:
         """Hold a system row until the tool exchange around it completes so the call/result pair converts together."""
         from litellm.litellm_core_utils.prompt_templates.factory import group_tool_exchanges
 
@@ -1269,8 +1271,8 @@ class AnthropicMessagesHandler(BaseTranslation):
             for group in group_tool_exchanges([structured_messages[index] for index in non_system_positions])
             if len(group) > 1
         }
-        ordered: Final[list] = []  # mutable-ok: API message payload
-        deferred_systems: Final[list] = []  # mutable-ok: API message payload
+        ordered: Final[list[Mapping[str, object]]] = []  # mutable-ok: API message payload
+        deferred_systems: Final[list[Mapping[str, object]]] = []  # mutable-ok: API message payload
         open_exchange_end = -1  # rebind-ok: advances to the enclosing exchange's last index
         for index, message in enumerate(structured_messages):
             if AnthropicMessagesHandler._is_system(message) and index < open_exchange_end:
@@ -1287,7 +1289,7 @@ class AnthropicMessagesHandler(BaseTranslation):
     @staticmethod
     def _write_back_structured_messages(
         data: dict[str, object],  # mutable-ok: API message payload
-        structured_messages: list,  # mutable-ok: API message payload
+        structured_messages: list[AllMessageValues],  # mutable-ok: API message payload
         hoisted_system_message: object = None,
         preserve_system_messages: bool = False,
         *,
@@ -1595,7 +1597,7 @@ class AnthropicMessagesHandler(BaseTranslation):
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: "LiteLLMLoggingObj | None" = None,
         user_api_key_dict: "UserAPIKeyAuth | None" = None,
-        request_data: dict | None = None,
+        request_data: dict[str, object] | None = None,
     ) -> "AnthropicMessagesResponse":
         """
         Process output response by applying guardrails to text content and tool calls.
@@ -1699,7 +1701,7 @@ class AnthropicMessagesHandler(BaseTranslation):
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: "LiteLLMLoggingObj | None" = None,
         user_api_key_dict: "UserAPIKeyAuth | None" = None,
-        request_data: dict | None = None,
+        request_data: dict[str, object] | None = None,
         stream_transform_sink: StreamTransformSink | None = None,
         deliver_ended_stream_rewrites: bool = False,
     ) -> Sequence[object]:

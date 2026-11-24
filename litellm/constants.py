@@ -27,6 +27,8 @@ MICROSOFT_365_COPILOT_DEFAULT_TOKEN_EXCHANGE_SCOPE: Final = "https://graph.micro
 RESPONSE_CACHE_EXCLUDED_PROVIDERS: Final = frozenset({"microsoft_365_copilot", "databricks_agent"})
 CLAUDE_CODE_PICKER_PATTERN: Final = re.compile(r"claude|anthropic", re.IGNORECASE)
 GATEWAY_CLIENT_HEADER: Final = "x-gateway-client"
+CONTROL_PLANE_FLEET_RECONCILE_SECONDS: Final = 5
+CONTROL_PLANE_FLEET_CONCURRENCY: Final = 4
 CLAUDE_CODE_CLIENT: Final = "claude-code"
 MICROSOFT_365_COPILOT_DEFAULT_TIME_ZONE: Final = "UTC"
 GITHUB_COPILOT_PER_USER_AUTH_TYPE: Final = "per_user_oauth"
@@ -439,6 +441,8 @@ REALTIME_CREDENTIAL_RESOLUTION_TIMEOUT_SECONDS: Final = get_env_float(
 BEDROCK_REALTIME_CLOSE_TIMEOUT_SECONDS: Final = get_env_float("BEDROCK_REALTIME_CLOSE_TIMEOUT_SECONDS", 5.0)
 REALTIME_LAZY_SETUP_DEADLINE_SECONDS: Final = 240.0
 REALTIME_LAZY_SETUP_CONTENT_GRACE_SECONDS: Final = 1.0
+REALTIME_OVER_LIMIT_USAGE_WAIT_SECONDS: Final = get_env_float("REALTIME_OVER_LIMIT_USAGE_WAIT_SECONDS", 30.0)
+REALTIME_OVER_TOKEN_LIMIT_CLOSE_CODE: Final = 1013
 
 # RFC 6455 caps the close frame payload at 125 bytes, 2 of which carry the status code
 WEBSOCKET_CLOSE_REASON_MAX_BYTES: Final = 123
@@ -768,6 +772,7 @@ LOGGING_WORKER_CONCURRENCY: Final = get_env_int("LOGGING_WORKER_CONCURRENCY", 10
 LOGGING_WORKER_MAX_QUEUE_SIZE: Final = get_env_int("LOGGING_WORKER_MAX_QUEUE_SIZE", 50_000)
 LOGGING_WORKER_MAX_TIME_PER_COROUTINE: Final = get_env_float("LOGGING_WORKER_MAX_TIME_PER_COROUTINE", 20.0)
 LOGGING_WORKER_TIMEOUT_SUMMARY_WINDOW_SECONDS: Final = 5.0
+WEBSOCKET_TURN_LOGGING_WAIT_SECONDS: Final = 5.0
 LOGGING_WORKER_CLEAR_PERCENTAGE: Final = get_env_int(
     "LOGGING_WORKER_CLEAR_PERCENTAGE", 50
 )  # Percentage of queue to clear (default: 50%)
@@ -939,6 +944,9 @@ PROVIDERS_THAT_AUTHENTICATE_ON_PROVIDER_INFO: Final = frozenset(
         "chatgpt",
     }
 )
+
+PROVIDERS_WITH_RUNTIME_MODEL_INFO_LOOKUPS: Final = frozenset({"ollama", "ollama_chat", "lemonade"})
+FAILED_MODEL_INFO_LOOKUP_RETRY_SECONDS: Final = 60
 
 SUBSCRIPTION_BACKED_PROVIDERS: Final = frozenset({"chatgpt"})
 A2A_CHAT_COMPLETION_BRIDGE_PROVIDERS: Final = frozenset({"databricks_agent"})
@@ -1751,6 +1759,7 @@ SESSION_ID_GENERATED_METADATA_KEY: Final = "litellm_session_id_generated"
 SESSION_SPEND_TOTAL_TTL_SECONDS: Final = 3600
 SESSION_ID_OMITTED_METADATA_KEY: Final = "litellm_session_id_omitted"
 CALLER_SESSION_ID_METADATA_KEY: Final = "litellm_caller_session_id"
+SESSION_ID_INHERITED_METADATA_KEY: Final = "litellm_session_id_inherited"
 PREVIOUS_RESPONSE_IDS_METADATA_KEY: Final = "litellm_previous_response_ids"
 COMPLEXITY_ROUTER_CHILD_SESSION_ID_METADATA_KEY: Final = "_complexity_router_child_session_id"
 LITELLM_TRUNCATED_PAYLOAD_FIELD: Final = "litellm_truncated"
@@ -2286,6 +2295,62 @@ HTTP_FRAMING_HEADERS: Final[frozenset[str]] = frozenset(
         "cookie",
         "proxy-authenticate",
         "proxy-authorization",
+    }
+)
+
+CREDENTIAL_HEADER_NAMES: Final[frozenset[str]] = frozenset(
+    {
+        "api-key",
+        "authorization",
+        "cookie",
+        "ocp-apim-subscription-key",
+        "proxy-authorization",
+        "set-cookie",
+        "x-amz-security-token",
+        "x-api-key",
+        "x-goog-api-key",
+        "x-litellm-api-key",
+        "x-mcp-auth",
+    }
+)
+
+PROVIDER_ERROR_BODY_ATTRIBUTE: Final = "provider_error_body"
+CREDENTIAL_FIELD_NAME_FRAGMENTS: Final[tuple[str, ...]] = (
+    "accesskey",
+    "accesstoken",
+    "apikey",
+    "authtoken",
+    "bearer",
+    "clientsecret",
+    "credential",
+    "idtoken",
+    "passphrase",
+    "passwd",
+    "password",
+    "privatekey",
+    "refreshtoken",
+    "secret",
+    "sessiontoken",
+    "signingkey",
+)
+CREDENTIAL_FIELD_NAME_WORDS: Final[frozenset[str]] = frozenset(
+    {"auth", "authorization", "cookie", "pass", "pwd", "session", "sig", "signature", "token"}
+)
+QUANTITY_FIELD_NAME_WORDS: Final[frozenset[str]] = frozenset(
+    {
+        "count",
+        "expires",
+        "expiry",
+        "length",
+        "limit",
+        "max",
+        "min",
+        "remaining",
+        "total",
+        "ttl",
+        "type",
+        "usage",
+        "used",
     }
 )
 

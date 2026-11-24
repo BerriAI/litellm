@@ -20,9 +20,11 @@ import secrets
 import traceback
 from collections.abc import Awaitable, Callable, Iterable, Iterator, Mapping, Sequence
 from datetime import datetime, timedelta, timezone
+from functools import partial
 from types import MappingProxyType, TracebackType
 from typing import (
     TYPE_CHECKING,
+    Annotated,
     Final,
     Literal,
     Optional,
@@ -210,6 +212,7 @@ from litellm.proxy.spend_tracking.spend_tracking_utils import (  # noqa: F401  #
     is_master_key,
 )
 from litellm.proxy.utils import (
+    KeyWriter,
     PrismaClient,
     ProxyLogging,
     _hash_token_if_needed,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
@@ -395,6 +398,14 @@ def _writer_project_table(
 
 
 class KeyProjectBindingError(HTTPException):
+    pass
+
+
+class KeyPersistenceError(HTTPException):
+    pass
+
+
+class KeyAliasConflictError(ProxyException):
     pass
 
 
@@ -1119,16 +1130,37 @@ def _configured_default_allowed_routes() -> tuple[str, ...] | None:
     return string_routes if len(string_routes) == len(routes) else None
 
 
+_TEAM_SERVICE_ACCOUNT_DEFAULT_EXTRA_ROUTES: Final = frozenset(
+    {
+        "/key/spend/report",
+        "/key/info",
+        "/key/health",
+        "/model/info",
+        "/v1/model/info",
+        "/v2/model/info",
+        "/model_group/info",
+    }
+)
+
+
 def _default_allowed_routes_for(request: GenerateKeyRequest, key_routes: object) -> tuple[str, ...] | None:
     configured_routes: Final = _configured_default_allowed_routes()
-    if configured_routes is None or _creates_team_service_account(request):
+    if configured_routes is None:
         return None
     if "key_type" not in request.model_fields_set or request.key_type is None:
-        return None if key_routes else configured_routes
+        return None if key_routes or _creates_team_service_account(request) else configured_routes
     match request.key_type:
         case LiteLLMKeyType.LLM_API:
             llm_api_routes: Final = _KEY_TYPE_PRESET_ROUTES[LiteLLMKeyType.LLM_API]
-            return configured_routes if all(route in configured_routes for route in llm_api_routes) else None
+            if not all(route in configured_routes for route in llm_api_routes):
+                return None
+            if _creates_team_service_account(request):
+                return tuple(
+                    route
+                    for route in configured_routes
+                    if route in llm_api_routes or route in _TEAM_SERVICE_ACCOUNT_DEFAULT_EXTRA_ROUTES
+                )
+            return configured_routes
         case _:
             return None
 
@@ -1183,7 +1215,7 @@ def _validate_caller_can_change_key_ownership(
 
 
 def _check_allowed_routes_caller_permission(
-    allowed_routes: list | None,
+    allowed_routes: Sequence[object] | None,
     user_api_key_dict: UserAPIKeyAuth,
     *,
     allowed_routes_was_provided: bool = False,
@@ -1587,6 +1619,7 @@ async def _common_key_generation_helper(
     user_api_key_dict: UserAPIKeyAuth,
     litellm_changed_by: str | None,
     team_table: LiteLLM_TeamTableCachedObj | None,
+    key_writer: KeyWriter | None = None,
 ) -> GenerateKeyResponse:
     from litellm.proxy import proxy_server
     from litellm.proxy.proxy_server import (
@@ -1688,6 +1721,11 @@ async def _common_key_generation_helper(
             if (
                 value is None
                 and (key != "budget_duration" or key not in data.model_fields_set)
+                and (
+                    key not in {"user_id", "team_id"}
+                    or key not in data.model_fields_set
+                    or user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN
+                )
                 and key
                 in [
                     "max_budget",
@@ -1902,11 +1940,6 @@ async def _common_key_generation_helper(
 
     _validate_key_alias_format(key_alias=data_json.get("key_alias", None))
 
-    await _enforce_unique_key_alias(
-        key_alias=data_json.get("key_alias", None),
-        prisma_client=prisma_client,
-    )
-
     # Reject custom key values if disabled by admin
     await _check_custom_key_allowed(data.key)
 
@@ -1967,10 +2000,19 @@ async def _common_key_generation_helper(
             )
 
     try:
-        response = await generate_key_helper_fn(
-            request_type="key", **data_json, table_name="key", llm_router=llm_router, actor=user_api_key_dict
+        await _enforce_unique_key_alias(
+            key_alias=data_json.get("key_alias", None),
+            prisma_client=prisma_client,
         )
-    except KeyProjectBindingError:
+        response = await generate_key_helper_fn(
+            request_type="key",
+            **data_json,
+            table_name="key",
+            llm_router=llm_router,
+            actor=user_api_key_dict,
+            key_writer=key_writer,
+        )
+    except (KeyProjectBindingError, KeyPersistenceError, KeyAliasConflictError):
         if prisma_client is not None:
             if created_object_permission_id is not None:
                 await ObjectPermissionRepository(prisma_client).table.delete(
@@ -2525,6 +2567,10 @@ async def _check_org_key_limits(
     )
 
 
+def _default_key_writer() -> None:
+    return None
+
+
 @router.post(
     "/key/generate",
     tags=["key management"],
@@ -2539,6 +2585,7 @@ async def generate_key_fn(
         None,
         description="The litellm-changed-by header enables tracking of actions performed by authorized users on behalf of other users, providing an audit trail for accountability",
     ),
+    key_writer: Annotated[KeyWriter | None, Depends(_default_key_writer)] = None,
 ):
     """
     Generate an API key based on the provided data.
@@ -2732,6 +2779,7 @@ async def generate_key_fn(
             user_api_key_dict=user_api_key_dict,
             litellm_changed_by=litellm_changed_by,
             team_table=team_table,
+            key_writer=key_writer,
         )
 
     except Exception as e:
@@ -3611,7 +3659,7 @@ async def _process_single_key_update(
     user_api_key_cache: UserApiKeyCache,
     proxy_logging_obj: ProxyLogging,
     llm_router: Router | None,
-    user_custom_key_update: Callable | None = None,
+    user_custom_key_update: Callable[..., Awaitable[Mapping[str, object]]] | None = None,
     existing_key_row: LiteLLM_VerificationToken | None = None,
     user_custom_key_policy: Callable[..., Awaitable[Mapping[str, object]]] | None = None,
 ) -> dict[str, object]:
@@ -5601,8 +5649,8 @@ async def generate_key_helper_fn(
     request_type: Literal["user", "key"],  # identifies if this request is from /user/new or /key/generate
     duration: str | None = None,
     models: list = [],
-    aliases: dict = {},
-    config: dict = {},
+    aliases: Mapping[str, object] = {},
+    config: Mapping[str, object] = {},
     spend: float = 0.0,
     key_max_budget: float | None = None,  # key_max_budget is used to Budget Per key
     key_budget_duration: str | None = None,
@@ -5621,24 +5669,24 @@ async def generate_key_helper_fn(
     user_email: str | None = None,
     user_role: str | None = None,
     max_parallel_requests: int | None = None,
-    metadata: dict | None = {},
+    metadata: Mapping[str, object] | None = {},
     tpm_limit: int | None = None,
     rpm_limit: int | None = None,
     tpd_limit: int | None = None,
     query_type: Literal["insert_data", "update_data"] = "insert_data",
-    update_key_values: dict | None = None,
+    update_key_values: Mapping[str, object] | None = None,
     key_alias: str | None = None,
     allowed_cache_controls: list | None = [],
-    permissions: dict | None = {},
+    permissions: Mapping[str, object] | None = {},
     model_max_budget: dict | None = {},
-    budget_fallbacks: dict | None = None,
-    model_rpm_limit: dict | None = None,
-    model_tpm_limit: dict | None = None,
-    mcp_rpm_limit: dict | None = None,
-    tag_rpm_limit: dict | None = None,
-    guardrails: list | None = None,
-    policies: list | None = None,
-    prompts: list | None = None,
+    budget_fallbacks: Mapping[str, object] | None = None,
+    model_rpm_limit: Mapping[str, object] | None = None,
+    model_tpm_limit: Mapping[str, object] | None = None,
+    mcp_rpm_limit: Mapping[str, int] | None = None,
+    tag_rpm_limit: Mapping[str, int] | None = None,
+    guardrails: Sequence[str] | None = None,
+    policies: Sequence[str] | None = None,
+    prompts: Sequence[str] | None = None,
     teams: list | None = None,
     organization_id: str | None = None,
     project_id: str | None = None,
@@ -5660,6 +5708,7 @@ async def generate_key_helper_fn(
     llm_router: Router | None = None,
     actor: UserAPIKeyAuth | None = None,
     rollover_max_budget: object = None,
+    key_writer: KeyWriter | None = None,
 ):
     customer_metadata: Final = validated_customer_key_metadata(_DECODED_JSON.validate_python(metadata), None, actor)
     from litellm.proxy.proxy_server import premium_user, prisma_client
@@ -5880,7 +5929,15 @@ async def generate_key_helper_fn(
                 "prisma_client: Creating Key= %s",
                 {**key_data, "token": hash_token(token=token)},
             )
-            create_key_response: Final = await prisma_client.insert_data(data=key_data, table_name="key")
+            insert_key: Final = (
+                prisma_client.insert_data
+                if key_writer is None
+                else partial(prisma_client.insert_data, key_writer=key_writer)
+            )
+            insert_data: Final = cast(  # cast-ok: key_data is constructed locally with string keys
+                Mapping[str, object], key_data
+            )
+            create_key_response: Final = await insert_key(data=insert_data, table_name="key")
 
             key_data["token_id"] = getattr(create_key_response, "token", None)
             created_token_hash: Final = getattr(create_key_response, "token", None)
@@ -6038,7 +6095,7 @@ async def delete_verification_tokens(
     user_api_key_cache: UserApiKeyCache,
     user_api_key_dict: UserAPIKeyAuth,
     litellm_changed_by: str | None = None,
-) -> tuple[dict | None, list[LiteLLM_VerificationToken]]:
+) -> tuple[dict[str, object] | None, list[LiteLLM_VerificationToken]]:
     """
     Helper that deletes the list of tokens from the database
 
@@ -6267,7 +6324,7 @@ async def delete_key_aliases(
     prisma_client: PrismaClient,
     user_api_key_dict: UserAPIKeyAuth,
     litellm_changed_by: str | None = None,
-) -> tuple[dict | None, list[LiteLLM_VerificationToken]]:
+) -> tuple[dict[str, object] | None, list[LiteLLM_VerificationToken]]:
     _keys_being_deleted: Final = await _prisma_table(VerificationTokenRepository(prisma_client)).find_many(
         where={"key_alias": {"in": key_aliases}}
     )
@@ -8712,19 +8769,18 @@ async def _can_user_query_key_info(
     Helper to check if the user has access to the key's info
     """
     if (
-        (
-            user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
-            or user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value
-        )
-        or (user_api_key_dict.impersonated_by is None and user_api_key_dict.api_key == key)
-        or (key_info.user_id and key_info.user_id == user_api_key_dict.user_id)
-        or await TeamMemberPermissionChecks.user_belongs_to_keys_team(
-            user_api_key_dict=user_api_key_dict,
-            existing_key_row=key_info,
-        )
-    ):
+        user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
+        or user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value
+    ) or (user_api_key_dict.impersonated_by is None and user_api_key_dict.api_key == key):
         return True
-    return False
+    if user_api_key_dict.is_team_service_account:
+        return False
+    if key_info.user_id and key_info.user_id == user_api_key_dict.user_id:
+        return True
+    return await TeamMemberPermissionChecks.user_belongs_to_keys_team(
+        user_api_key_dict=user_api_key_dict,
+        existing_key_row=key_info,
+    )
 
 
 async def test_key_logging(
@@ -8901,7 +8957,7 @@ async def _enforce_unique_key_alias(
 
         existing_key = await _prisma_table(VerificationTokenRepository(prisma_client)).find_first(where=where_clause)
         if existing_key is not None:
-            raise ProxyException(
+            raise KeyAliasConflictError(
                 message=f"Key with alias '{key_alias}' already exists. Unique key aliases across all keys are required.",
                 type=ProxyErrorTypes.bad_request_error,
                 param="key_alias",

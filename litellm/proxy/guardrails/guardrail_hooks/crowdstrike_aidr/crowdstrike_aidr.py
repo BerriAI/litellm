@@ -35,7 +35,7 @@ from litellm.types.utils import GenericGuardrailAPIInputs
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-    from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
+    from litellm.types.proxy.guardrails.guardrail_hooks.crowdstrike_aidr import CrowdStrikeAIDRGuardrailConfigModel
 
 _DECODED_JSON: Final = TypeAdapter(object)
 
@@ -580,7 +580,7 @@ class CrowdStrikeAIDRHandler(CustomGuardrail):
 
     @override
     @staticmethod
-    def get_config_model() -> type["GuardrailConfigModel"] | None:
+    def get_config_model() -> type["CrowdStrikeAIDRGuardrailConfigModel"] | None:
         from litellm.types.proxy.guardrails.guardrail_hooks.crowdstrike_aidr import (
             CrowdStrikeAIDRGuardrailConfigModel,
         )

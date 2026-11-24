@@ -710,11 +710,11 @@ class TestAnOpenAIChatRouteRequestGetsTheResponsesBridgeThinkingControls:
         self, local_model_cost_map: None
     ) -> None:
         assert "reasoning_effort" not in (
-            litellm.get_supported_openai_params(model="chat-latest", custom_llm_provider="openai") or ()
+            litellm.get_supported_openai_params(model="gpt-5-chat-latest", custom_llm_provider="openai") or ()
         )
 
         sent: Final = _chat_completion_kwargs(
-            "openai/chat-latest", "openai", thinking=None, messages=MESSAGES, output_config={"effort": "medium"}
+            "openai/gpt-5-chat-latest", "openai", thinking=None, messages=MESSAGES, output_config={"effort": "medium"}
         )
 
         assert "reasoning_effort" not in sent
