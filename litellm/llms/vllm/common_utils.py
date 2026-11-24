@@ -28,7 +28,7 @@ class VLLMError(BaseLLMException):
         message: str,
         request: httpx.Request | None = None,
         response: httpx.Response | None = None,
-        headers: httpx.Headers | dict | None = None,
+        headers: httpx.Headers | dict[str, str] | None = None,
     ):
         super().__init__(
             status_code=status_code,
@@ -95,7 +95,9 @@ class VLLMModelInfo(BaseLLMModelInfo):
     ) -> list[str]:  # mutable-ok: mirrors override contract
         return []
 
-    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: dict[str, str] | httpx.Headers
+    ) -> BaseLLMException:
         return VLLMError(status_code=status_code, message=error_message, headers=headers)
 
 

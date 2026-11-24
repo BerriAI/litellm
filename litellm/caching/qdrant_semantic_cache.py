@@ -34,6 +34,7 @@ from litellm.litellm_core_utils.core_helpers import (
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_semantic_cache_prompt_from_messages,
 )
+from litellm.types.semantic_cache import semantic_similarity_override
 from litellm.types.utils import EmbeddingResponse
 
 from ._embedding_router import (
@@ -73,12 +74,12 @@ class QdrantSemanticCache(BaseCache):
         self,
         qdrant_api_base=None,
         qdrant_api_key=None,
-        collection_name=None,
-        similarity_threshold=None,
-        quantization_config=None,
-        embedding_model="text-embedding-ada-002",
-        host_type=None,
-        vector_size=None,
+        collection_name: str | None = None,
+        similarity_threshold: float | None = None,
+        quantization_config: str | None = None,
+        embedding_model: str = "text-embedding-ada-002",
+        host_type: object = None,
+        vector_size: int | None = None,
         embedding_max_input_tokens: int | None = None,
         embedding_timeout: float | None = None,
     ):
@@ -333,7 +334,7 @@ class QdrantSemanticCache(BaseCache):
             json=data,
         )
 
-    def get_cache(self, key: str, **kwargs):
+    def get_cache(self, key: str, *, cache: object = None, **kwargs):
         print_verbose(f"sync qdrant semantic-cache get_cache, kwargs: {kwargs}")
 
         # get the messages
@@ -392,7 +393,10 @@ class QdrantSemanticCache(BaseCache):
         # update kwargs["metadata"] with similarity, don't rewrite the original metadata
         kwargs.setdefault("metadata", {})["semantic-similarity"] = similarity
 
-        if similarity >= self.similarity_threshold:
+        threshold: Final = semantic_similarity_override(cache)
+        if isinstance(similarity, (int, float)) and similarity >= (
+            self.similarity_threshold if threshold is None else threshold
+        ):
             # cache hit !
             cached_value: Final = subscript(payload, "response")
             print_verbose(
@@ -440,7 +444,7 @@ class QdrantSemanticCache(BaseCache):
             json=data,
         )
 
-    async def async_get_cache(self, key: str, **kwargs):
+    async def async_get_cache(self, key: str, *, cache: object = None, **kwargs):
         print_verbose(f"async qdrant semantic-cache get_cache, kwargs: {kwargs}")
 
         # get the messages
@@ -499,7 +503,10 @@ class QdrantSemanticCache(BaseCache):
         # update kwargs["metadata"] with similarity, don't rewrite the original metadata
         kwargs.setdefault("metadata", {})["semantic-similarity"] = similarity
 
-        if similarity >= self.similarity_threshold:
+        threshold: Final = semantic_similarity_override(cache)
+        if isinstance(similarity, (int, float)) and similarity >= (
+            self.similarity_threshold if threshold is None else threshold
+        ):
             # cache hit !
             cached_value: Final = subscript(payload, "response")
             print_verbose(
@@ -513,7 +520,7 @@ class QdrantSemanticCache(BaseCache):
     async def _collection_info(self):
         return self.collection_info
 
-    async def async_set_cache_pipeline(self, cache_list: Iterable[Sequence[object]], **kwargs):
+    async def async_set_cache_pipeline(self, cache_list: Iterable[Sequence[object]], **kwargs: object):
         tasks: Final = []
         for val in cache_list:
             tasks.append(self.async_set_cache(val[0], val[1], **kwargs))

@@ -20,6 +20,7 @@ import litellm
 from litellm import client
 from litellm.constants import request_timeout as DEFAULT_REQUEST_TIMEOUT
 from litellm.exceptions import LiteLLMUnknownProvider
+from litellm.images.streaming import AsyncImageStream, ImageStream
 from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
 from litellm.litellm_core_utils.get_llm_provider_logic import (
     invalid_provider_routing_hints_message,
@@ -142,7 +143,7 @@ def _chatgpt_image_headers(model: str, params: GenericLiteLLMParams, headers: Ma
 
 ##### Image Generation #######################
 @client
-async def aimage_generation(*args, **kwargs) -> ImageResponse:
+async def aimage_generation(*args, **kwargs) -> ImageResponse | AsyncImageStream:
     """
     Asynchronously calls the `image_generation` function with the given arguments and keyword arguments.
 
@@ -187,7 +188,7 @@ async def aimage_generation(*args, **kwargs) -> ImageResponse:
         # Await normally
         init_response: Final = await loop.run_in_executor(None, func_with_context)
 
-        response: ImageResponse | None = None
+        response: ImageResponse | AsyncImageStream | None = None
         if isinstance(init_response, dict):
             response = ImageResponse(**init_response)
         elif isinstance(init_response, ImageResponse):  ## CACHING SCENARIO
@@ -230,8 +231,8 @@ def image_generation(
     custom_llm_provider: str | None = None,
     *,
     aimg_generation: Literal[True],
-    **kwargs,
-) -> Coroutine[object, object, ImageResponse]:
+    **kwargs: object,
+) -> Coroutine[object, object, ImageResponse | AsyncImageStream]:
     ...
 
 
@@ -254,7 +255,7 @@ def image_generation(
     custom_llm_provider: str | None = None,
     *,
     aimg_generation: Literal[False] = False,
-    **kwargs,
+    **kwargs: object,
 ) -> ImageResponse: 
     ...
 
@@ -277,7 +278,7 @@ def image_generation(
     api_version: str | None = None,
     custom_llm_provider: str | None = None,
     **kwargs,
-) -> ImageResponse | Coroutine[object, object, ImageResponse]:
+) -> ImageResponse | ImageStream | Coroutine[object, object, ImageResponse | AsyncImageStream]:
     """
     Maps the https://api.openai.com/v1/images/generations endpoint.
 
@@ -385,6 +386,11 @@ def image_generation(
                 "model_info": model_info,
                 "preset_cache_key": None,
                 "stream_response": {},
+                **{
+                    field: kwargs[field]
+                    for field in CustomPricingLiteLLMParams.model_fields
+                    if field in kwargs and kwargs[field] is not None
+                },
             },
             custom_llm_provider=custom_llm_provider,
         )
@@ -487,6 +493,7 @@ def image_generation(
             litellm.LlmProviders.QWENCLOUD,
             litellm.LlmProviders.QWEN_AI_PLATFORM,
             litellm.LlmProviders.EDENAI,
+            litellm.LlmProviders.MINIMAX,
         ) or (custom_llm_provider == litellm.LlmProviders.TENCENT and image_generation_config is not None):
             if image_generation_config is None:
                 raise ValueError(f"image generation config is not supported for {custom_llm_provider}")
@@ -593,7 +600,7 @@ def image_generation(
             # Forward OpenAI organization if present (set by proxy pre-call utils)
             organization: Final[str | None] = kwargs.get("organization", None)
             sdk_max_retries: Final = 0 if is_router_call else max_retries
-            model_response = openai_chat_completions.image_generation(
+            return openai_chat_completions.image_generation(
                 model=model,
                 prompt=prompt,
                 timeout=timeout,
@@ -693,7 +700,7 @@ def image_generation(
 
 
 @client
-async def aimage_variation(*args, **kwargs) -> ImageResponse:
+async def aimage_variation(*args: object, **kwargs) -> ImageResponse:
     """
     Asynchronously calls the `image_variation` function with the given arguments and keyword arguments.
 
@@ -853,6 +860,7 @@ def image_variation(
 _IMAGE_EDIT_OPENAI_PARAMS: Final = frozenset(get_type_hints(ImageEditOptionalRequestParams))
 _DROP_PARAM_KWARGS: Final = frozenset({"drop_params", "additional_drop_params"})
 _ADDITIONAL_DROP_PARAMS: Final = TypeAdapter[tuple[object, ...]](tuple[object, ...])
+_PASSTHROUGH_EDIT_PROVIDERS: Final = frozenset({litellm.LlmProviders.TENCENT.value, litellm.LlmProviders.MINIMAX.value})
 
 
 def _listed_drop_params(additional_drop_params: object) -> tuple[str, ...]:
@@ -864,7 +872,7 @@ def _listed_drop_params(additional_drop_params: object) -> tuple[str, ...]:
         return ()
 
 
-def _tokenhub_passthrough_edit_params(
+def _passthrough_edit_params(
     non_default_params: Mapping[str, object],
     extra_body: Mapping[str, object] | None,
     mapped_params: Collection[str],
@@ -872,9 +880,10 @@ def _tokenhub_passthrough_edit_params(
 ) -> Mapping[str, object]:
     dropped: Final = frozenset(additional_drop_params or ())
     unmapped_excluded: Final = _DROP_PARAM_KWARGS | _IMAGE_EDIT_OPENAI_PARAMS | frozenset(mapped_params) | dropped
+    body_fields: Final = {} if "extra_body" in dropped else (extra_body or {})
     return {
         **{key: value for key, value in non_default_params.items() if key not in unmapped_excluded},
-        **{key: value for key, value in (extra_body or {}).items() if key not in dropped | EXTRA_BODY_ROUTING_KEYS},
+        **{key: value for key, value in body_fields.items() if key not in dropped | EXTRA_BODY_ROUTING_KEYS},
     }
 
 
@@ -906,7 +915,7 @@ def image_edit(
     # LiteLLM specific params,
     custom_llm_provider: str | None = None,
     **kwargs,
-) -> ImageResponse | Coroutine[object, object, ImageResponse]:
+) -> ImageResponse | ImageStream | Coroutine[object, object, ImageResponse | AsyncImageStream]:
     """
     Maps the image edit functionality, similar to OpenAI's images/edits endpoint.
     """
@@ -1175,13 +1184,13 @@ def image_edit(
             image_edit_optional_request_params={
                 **image_edit_request_params,
                 **(
-                    _tokenhub_passthrough_edit_params(
-                        non_default_params,
+                    _passthrough_edit_params(
+                        kept_params,
                         extra_body if isinstance(extra_body, dict) else None,
                         provider_supported_params,
                         additional_drop_params,
                     )
-                    if custom_llm_provider == litellm.LlmProviders.TENCENT.value
+                    if custom_llm_provider in _PASSTHROUGH_EDIT_PROVIDERS
                     else {}
                 ),
             },
@@ -1224,8 +1233,8 @@ async def aimage_edit(
     timeout: float | httpx.Timeout | None = None,
     # LiteLLM specific params,
     custom_llm_provider: str | None = None,
-    **kwargs,
-) -> ImageResponse:
+    **kwargs: object,
+) -> ImageResponse | AsyncImageStream | ImageStream:
     """
     Asynchronously calls the `image_edit` function with the given arguments and keyword arguments.
 

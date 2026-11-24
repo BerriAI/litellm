@@ -71,7 +71,7 @@ class GeminiAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         self,
         error_message: str,
         status_code: int,
-        headers: dict | Headers,  # mutable-ok: base signature and BaseLLMException take dict | Headers
+        headers: dict[str, object] | Headers,  # mutable-ok: base signature and BaseLLMException take dict | Headers
     ) -> BaseLLMException:
         return GeminiError(status_code=status_code, message=error_message, headers=headers)
 

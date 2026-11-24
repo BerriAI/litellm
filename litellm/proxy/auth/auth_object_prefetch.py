@@ -206,7 +206,15 @@ def _entries(refs: AuthObjectRefs, cache: UserApiKeyCache) -> tuple[_CacheEntry,
 
 
 def _missing_in_memory(entries: Sequence[_CacheEntry], cache: UserApiKeyCache) -> tuple[_CacheEntry, ...]:
-    return tuple(entry for entry in entries if cache.get_local(entry.cache_key) is None)
+    return tuple(
+        entry
+        for entry in entries
+        if (
+            not cache.has_local_team(entry.cache_key)
+            if entry.row == "team_row"
+            else cache.get_local(entry.cache_key) is None
+        )
+    )
 
 
 def _nothing_to_arm() -> None:

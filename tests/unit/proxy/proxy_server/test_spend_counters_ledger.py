@@ -1,4 +1,5 @@
 from collections import Counter
+from collections.abc import Sequence
 from typing import Final
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
@@ -53,6 +54,9 @@ class _EmptyUserCache:
     async def async_batch_get_cache(self, keys: list[str], **_: object) -> list[None]:
         self.reads.extend(keys)
         return [None for _ in keys]
+
+    async def get_team_fields(self, key: AuthObject, fields: Sequence[str] | None = None, **_: object) -> None:
+        self.reads.append(key.key)
 
     async def async_set_cache_pipeline(self, *_: object, **__: object) -> None:
         return None
