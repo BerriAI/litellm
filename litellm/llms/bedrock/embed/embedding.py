@@ -200,7 +200,8 @@ def _without_marengo_3_placed_fields(extra_body: Mapping[str, object]) -> Mappin
     remaining: Final = {k: v for k, v in extra_body.items() if k not in _MARENGO_3_PLACED_FIELDS}
     if "modelInput" not in remaining:
         return remaining
-    return {**remaining, "modelInput": _without_marengo_3_placed_fields(_fields(remaining["modelInput"]))}
+    model_input: Final = _fields(remaining["modelInput"])
+    return {**remaining, "modelInput": {k: v for k, v in model_input.items() if k not in _MARENGO_3_PLACED_FIELDS}}
 
 
 _FieldCombiner: TypeAlias = Callable[[object, object], object]
