@@ -9,6 +9,7 @@
 
 use std::{
     collections::{BTreeMap, BTreeSet},
+    ops::RangeInclusive,
     sync::LazyLock,
     time::Duration,
 };
@@ -1254,16 +1255,29 @@ fn pages_to_ranges(value: Option<&Value>) -> Result<Option<Vec<PageRange>>, Erro
 /// The page numbers Nace parses for `ranges`: in page order and once each, as Nace sorts and
 /// merges the ranges, lazily, so a range that reaches far past the document allocates nothing.
 fn requested_pages(ranges: &[PageRange]) -> impl Iterator<Item = i64> + use<> {
+    requested_spans(ranges).flatten()
+}
+
+fn requested_spans(ranges: &[PageRange]) -> impl Iterator<Item = RangeInclusive<i64>> + use<> {
     let mut sorted = ranges.to_vec();
     sorted.sort_unstable_by_key(|range| range.start);
-    sorted
-        .into_iter()
-        .scan(1, |next: &mut i64, range| {
-            let pages = range.start.max(*next)..=range.end;
-            *next = (*next).max(range.end.saturating_add(1));
-            Some(pages)
+    sorted.into_iter().scan(1, |next: &mut i64, range| {
+        let pages = range.start.max(*next)..=range.end;
+        *next = (*next).max(range.end.saturating_add(1));
+        Some(pages)
+    })
+}
+
+fn requested_pages_in_document(ranges: &[PageRange], page_count: i64) -> i64 {
+    requested_spans(ranges)
+        .map(|span| {
+            (*span.end())
+                .min(page_count)
+                .saturating_sub(*span.start())
+                .saturating_add(1)
+                .max(0)
         })
-        .flatten()
+        .sum()
 }
 
 fn normalize_job(
@@ -1322,9 +1336,15 @@ fn normalize_job(
         .filter(|count| *count > 0)
         .into_iter()
         .collect();
+    let parsed_pages = match page_ranges.is_empty() {
+        true => document.page_count,
+        false => document
+            .page_count
+            .map(|count| requested_pages_in_document(page_ranges, count)),
+    };
     Ok(LiteLLMOcrResponse {
         usage_info: Some(OcrUsageInfo {
-            pages_processed: job.units.or(document.page_count),
+            pages_processed: job.units.or(parsed_pages),
             ..Default::default()
         }),
         ..LiteLLMOcrResponse::new(
@@ -2176,11 +2196,27 @@ mod tests {
     }
 
     #[rstest]
-    #[case::units(json!(3), json!(1), Some(3))]
-    #[case::page_count_fallback(Value::Null, json!(2), Some(2))]
+    #[case::units(json!(3), json!(1), json!([]), Some(3))]
+    #[case::page_count_fallback(Value::Null, json!(2), json!([]), Some(2))]
+    #[case::units_with_page_ranges(json!(4), json!(10), json!([{"start": 1, "end": 2}]), Some(4))]
+    #[case::requested_pages_fallback(Value::Null, json!(300), json!([{"start": 1, "end": 2}]), Some(2))]
+    #[case::overlapping_ranges(
+        Value::Null,
+        json!(10),
+        json!([{"start": 2, "end": 4}, {"start": 1, "end": 3}]),
+        Some(4)
+    )]
+    #[case::ranges_past_the_document(
+        Value::Null,
+        json!(3),
+        json!([{"start": 2, "end": 5}, {"start": 9, "end": 9}]),
+        Some(2)
+    )]
+    #[case::no_page_count(Value::Null, Value::Null, json!([{"start": 1, "end": 2}]), None)]
     fn pages_processed_comes_from_billed_units(
         #[case] units: Value,
         #[case] page_count: Value,
+        #[case] page_ranges: Value,
         #[case] expected: Option<i64>,
     ) {
         let job = serde_json::from_value(json!({
@@ -2188,7 +2224,8 @@ mod tests {
             "result": {"document": {"markdown": "text", "page_count": page_count}}
         }))
         .unwrap();
-        let response = normalize_job("parse-low", job, None, &[]).unwrap();
+        let page_ranges: Vec<PageRange> = serde_json::from_value(page_ranges).unwrap();
+        let response = normalize_job("parse-low", job, None, &page_ranges).unwrap();
         assert_eq!(response.usage_info.unwrap().pages_processed, expected);
     }
 
