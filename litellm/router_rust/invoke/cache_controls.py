@@ -1,6 +1,7 @@
 """A deployment's cache controls merged with the request's, one control at a time."""
 
 import dataclasses
+import itertools
 from collections.abc import Mapping, Sequence
 from typing import Final
 
@@ -27,10 +28,10 @@ def model_cache_controls(litellm_params: Mapping[str, object], request_cache: ob
     """The deployment's ``cache`` is the default for each control and the request overrides the controls
     it sends. When the deployment sets ``allowed_cache_controls``, a request control outside that list is
     ignored and named in ``ignored``."""
-    allowed: Final = litellm_params.get(ALLOWED_CACHE_CONTROLS_PARAM)
+    allowed: Final = _listed(litellm_params.get(ALLOWED_CACHE_CONTROLS_PARAM))
     deployment_controls: Final = _canonical(as_dict(litellm_params.get("cache")))
     request_controls: Final = as_dict(request_cache)
-    if not isinstance(allowed, Sequence) or isinstance(allowed, str):
+    if allowed is None:
         if not deployment_controls or not request_controls:
             return ModelCacheControls(None)
         return ModelCacheControls({**deployment_controls, **_canonical(request_controls)})
@@ -71,10 +72,38 @@ def with_cache_lock(litellm_params: Mapping[str, object], lock: Mapping[str, obj
     }
 
 
+def strictest_cache_lock(locks: Sequence[Mapping[str, object]]) -> Mapping[str, object] | None:
+    """One lock that holds every one of ``locks`` whatever their order: a control any of them turns on
+    to skip the cache stays on, the shortest lifetime wins, and a request control needs every list."""
+    if not locks:
+        return None
+    lists: Final = [_listed(lock.get(ALLOWED_CACHE_CONTROLS_PARAM)) or () for lock in locks]
+    controls: Final = [_canonical(as_dict(lock.get("cache"))) for lock in locks]
+    names: Final = dict.fromkeys(itertools.chain.from_iterable(controls))
+    merged: Final = {name: _strictest(name, [each[name] for each in controls if name in each]) for name in names}
+    return {
+        **({"cache": merged} if merged else {}),
+        ALLOWED_CACHE_CONTROLS_PARAM: [control for control in lists[0] if all(control in each for each in lists)],
+    }
+
+
+def _strictest(name: str, values: Sequence[object]) -> object:
+    if name in {"no-cache", "no-store"}:
+        return any(values)
+    if name == "use-cache":
+        return all(values)
+    numbers: Final = [value for value in values if isinstance(value, (int, float)) and not isinstance(value, bool)]
+    return min(numbers) if len(numbers) == len(values) else values[0]
+
+
 def _listed(allowed: object) -> Sequence[object] | None:
     if not isinstance(allowed, Sequence) or isinstance(allowed, str):
         return None
-    return tuple(allowed)  # pyright: ignore[reportUnknownArgumentType, reportUnknownVariableType]  # a config list
+    return tuple(map(_canonical_name, allowed))  # pyright: ignore[reportUnknownArgumentType]  # a config list
+
+
+def _canonical_name(name: object) -> object:
+    return _CONTROL_NAMES.get(name, name) if isinstance(name, str) else name
 
 
 def _canonical(controls: Mapping[str, object]) -> Mapping[str, object]:

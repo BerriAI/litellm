@@ -19,7 +19,6 @@ core does not serve raises ``RustCoreUnsupported`` (an ``AttributeError``).
 import asyncio
 import contextlib
 import dataclasses
-import functools
 import inspect
 import itertools
 import json
@@ -96,7 +95,12 @@ from litellm.router_api import (
 from litellm.router_attempt import for_requested_model, request_from_call
 from litellm.router_config import RouterConfig, RouterDynamicConfig, detached
 from litellm.router_python_host import PythonHost
-from litellm.router_rust.invoke.cache_controls import IGNORED_CACHE_CONTROLS_HEADER, cache_lock, with_cache_lock
+from litellm.router_rust.invoke.cache_controls import (
+    IGNORED_CACHE_CONTROLS_HEADER,
+    cache_lock,
+    strictest_cache_lock,
+    with_cache_lock,
+)
 from litellm.router_rust.invoke.endpoints import (
     AttemptCall,
     Plan,
@@ -4659,7 +4663,8 @@ class _Driver:
         # The cache locks of the requested model, which its fallbacks follow: its latest attempted
         # deployment's, or every configured one's when this driver attempted none (all cooled down,
         # or a recovery call from a failed stream whose deployment is not among them).
-        self._cache_locks: tuple[Mapping[str, object], ...] | None = None
+        self._cache_lock: Mapping[str, object] | None = None
+        self._cache_lock_known: bool = False
         # A sync attempt's stream is reading its first chunk, so a failure now is the stream's to log.
         self._reading_first_chunk: bool = False
         self._attempts: int = 0
@@ -5139,14 +5144,13 @@ class _Driver:
             raise TypeError(f"the attempt step carries no AttemptShape: {shape!r}")
         params: Final = as_str_mapping(deployment.get("litellm_params")) or {}
         if shape.fallback_model_group is None:
-            attempted: Final = cache_lock(params)
-            self._cache_locks = () if attempted is None else (attempted,)
+            self._cache_lock, self._cache_lock_known = cache_lock(params), True
         else:
-            if self._cache_locks is None:
-                self._cache_locks = self._configured_cache_locks()
+            if not self._cache_lock_known:
+                self._cache_lock, self._cache_lock_known = self._configured_cache_lock(), True
             deployment = {  # rebind-ok: the fallback's params under the requested model's cache lock
                 **deployment,
-                "litellm_params": functools.reduce(with_cache_lock, self._cache_locks, params),
+                "litellm_params": with_cache_lock(params, self._cache_lock),
             }
         call: Final = attempt_call(
             self._core._port,  # pyright: ignore[reportPrivateUsage]  # the driver serves its own core
@@ -5170,9 +5174,9 @@ class _Driver:
             self._core._endpoints.counters.started(self._plan, call)  # pyright: ignore[reportPrivateUsage]  # the driver serves its own core
         return deployment, call
 
-    def _configured_cache_locks(self) -> tuple[Mapping[str, object], ...]:
+    def _configured_cache_lock(self) -> Mapping[str, object] | None:
         """The lock of the deployment a failed stream ran on, for its recovery call, else of every
-        deployment the request could route to (its alias and team resolved), which then all hold."""
+        deployment the request could route to (its alias and team resolved), the strictest of each."""
         members: Final = tuple(
             as_str_mapping(member) or {}
             for member in self._core.registry().deployments(
@@ -5185,7 +5189,7 @@ class _Driver:
             if (as_str_mapping(member.get("model_info")) or {}).get("id") == self._cut_deployment
         )
         locks: Final = (cache_lock(as_str_mapping(member.get("litellm_params")) or {}) for member in cut or members)
-        return tuple(lock for lock in locks if lock is not None)
+        return strictest_cache_lock(tuple(lock for lock in locks if lock is not None))
 
     def _strip_undecryptable_reasoning(
         self,

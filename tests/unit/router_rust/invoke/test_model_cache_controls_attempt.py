@@ -283,3 +283,34 @@ async def test_a_fallback_of_a_failed_stream_follows_the_cache_lock_of_the_reque
     assert fallback.kwargs["model"] == "openai/b"
     assert fallback.kwargs["cache"] == fallback_cache
     assert headers(response).get(_HEADER) == "ttl"
+
+
+@pytest.mark.parametrize("order", [(0, 1), (1, 0)])
+@pytest.mark.asyncio
+async def test_locks_of_one_model_combine_to_the_strictest_whatever_their_order(order: tuple[int, int]) -> None:
+    host: Final = ScriptedHost()
+    members: Final = [
+        _deployment("a", cache={"no-store": True, "ttl": 600}, allowed_cache_controls=["ttl", "no-cache"]),
+        {
+            **_deployment("a", cache={"no-store": False, "ttl": 60}, allowed_cache_controls=["no-cache"]),
+            "model_info": {"id": "a-2"},
+        },
+    ]
+    core: Final = rust_core(
+        host,
+        model_list=[members[order[0]], members[order[1]], _deployment("b")],
+        num_retries=0,
+        fallbacks=[{"a": ["b"]}],
+    )
+    request: Final = {
+        "model": "a",
+        "messages": [{"role": "user", "content": "hi"}],
+        "cache": {"ttl": 5, "no-cache": True},
+    }
+    origin: Final = {"group": "a", "depth": 0, "level": 0, "deployment_id": "gone", "routed": "a"}
+
+    response: Final = await core.recover_stream("fallback", "acompletion", request, origin, fresh(not_found))
+
+    (fallback,) = host.calls_to("acompletion")
+    assert fallback.kwargs["cache"] == {"no-store": True, "ttl": 60, "no-cache": True}
+    assert headers(response).get(_HEADER) == "ttl"

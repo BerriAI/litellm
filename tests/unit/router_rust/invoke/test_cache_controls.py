@@ -109,3 +109,14 @@ def test_a_null_list_leaves_the_model_cache_controls_and_the_request_as_they_are
     assert params == {"model": "openai/a", "cache": {"no-store": True}}
     assert merged is request
     assert ignored == ()
+
+
+def test_either_spelling_of_s_maxage_in_a_lock_and_a_fallback_list_is_the_same_control() -> None:
+    from litellm.router_rust.invoke.cache_controls import with_cache_lock
+
+    locked = with_cache_lock(
+        {"model": "openai/b", "allowed_cache_controls": ["s-maxage", "ttl"]},
+        {"cache": {"ttl": 60}, "allowed_cache_controls": ["s-max-age", "no-cache"]},
+    )
+
+    assert locked == {"model": "openai/b", "cache": {"ttl": 60}, "allowed_cache_controls": ["s-maxage"]}
