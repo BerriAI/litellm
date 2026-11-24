@@ -33,7 +33,10 @@ pub struct User {
     pub(super) rollover_credit: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) temp_budget_increase: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none", with = "utc_timestamp::option")]
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        with = "utc_timestamp::option"
+    )]
     pub(super) temp_budget_expiry: Option<NaiveDateTime>,
     pub(super) budget_limits: Option<RawJson>,
     pub(super) spend: f64,
