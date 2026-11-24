@@ -15,6 +15,7 @@ from litellm.proxy.auth.model_checks import get_provider_models
 MERAGPT_API_BASE: Final = "https://meragpt.com/v1"
 
 MERAGPT_MODELS: Final = (
+    "extractor-1",
     "fanout-1",
     "restyler-1",
 )
@@ -78,6 +79,42 @@ def test_anthropic_messages_request_is_bridged_to_meragpt_chat_completions():
 
     assert [str(request.url) for request in meragpt.requests] == [f"{MERAGPT_API_BASE}/chat/completions"]
     assert response["content"] == [{"type": "text", "text": "hi"}]
+
+
+def test_extractor_json_schema_and_image_parts_reach_meragpt_unchanged():
+    meragpt: Final = _RecordingMeraGPT({"prompt_tokens": 90, "completion_tokens": 12, "total_tokens": 102})
+    response_format: Final = {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "receipt",
+            "schema": {"type": "object", "properties": {"total": {"type": "number"}, "po": {"type": "string"}}},
+        },
+    }
+    content: Final = [
+        {"type": "text", "text": "Extract the receipt."},
+        {"type": "image_url", "image_url": {"url": "https://example.com/receipt.jpg"}},
+    ]
+
+    with meragpt.client() as client:
+        litellm.completion(
+            model="meragpt/extractor-1",
+            messages=[{"role": "user", "content": content}],
+            response_format=response_format,
+            client=client,
+        )
+
+    sent: Final = json.loads(meragpt.requests[0].content)
+    assert str(meragpt.requests[0].url) == f"{MERAGPT_API_BASE}/chat/completions"
+    assert sent["model"] == "extractor-1"
+    assert sent["response_format"] == response_format
+    assert sent["messages"] == [{"role": "user", "content": content}]
+
+
+def test_extractor_output_tokens_are_free():
+    rates: Final = litellm.model_cost["meragpt/extractor-1"]
+
+    assert rates["input_cost_per_token"] == pytest.approx(4e-08)
+    assert rates["output_cost_per_token"] == 0
 
 
 @pytest.mark.parametrize("model", MERAGPT_MODELS)
