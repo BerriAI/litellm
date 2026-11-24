@@ -10,7 +10,9 @@ from typing import Any, Final
 from pydantic import JsonValue
 from typing_extensions import assert_never
 
+import litellm
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.llms.anthropic.common_utils import without_unrendered_blocks
 from litellm.llms.anthropic.count_tokens.transformation import ChatCountTranslationError, counted_tool_choice
 from litellm.llms.anthropic.pass_through.convertible_blocks import deployment_drops_params
@@ -80,8 +82,38 @@ def _invoke_model_message(message: Mapping[str, object]) -> Mapping[str, object]
     )
 
 
+def _deployment_route(deployment: Mapping[str, object] | None) -> tuple[str, LlmProviders] | None:
+    litellm_params: Final = as_str_mapping((deployment or {}).get("litellm_params")) or {}
+    deployment_model: Final = litellm_params.get("model")
+    if not isinstance(deployment_model, str):
+        return None
+    provider_hint: Final = litellm_params.get("custom_llm_provider")
+    model, provider, _, _ = litellm.get_llm_provider(
+        model=deployment_model, custom_llm_provider=provider_hint if isinstance(provider_hint, str) else None
+    )
+    return model, LlmProviders(provider)
+
+
+def _without_parallel_tool_use_flag(options: Mapping[str, JsonValue]) -> Mapping[str, JsonValue]:
+    match options.get("tool_choice"):
+        case {"disable_parallel_tool_use": _} as tool_choice:
+            return MappingProxyType(
+                {
+                    **options,
+                    "tool_choice": {
+                        key: value for key, value in tool_choice.items() if key != "disable_parallel_tool_use"
+                    },
+                }
+            )
+        case _:
+            return options
+
+
 def _invoke_tool_choice(
-    options: Mapping[str, JsonValue], tools: Sequence[Mapping[str, object]] | None, drops_params: bool
+    options: Mapping[str, JsonValue],
+    tools: Sequence[Mapping[str, object]] | None,
+    drops_params: bool,
+    drops_choice_without_tools: bool,
 ) -> Mapping[str, JsonValue] | ChatCountTranslationError:
     tool_choice: Final = options.get("tool_choice")
     match counted_tool_choice(tool_choice, drops_params):
@@ -91,7 +123,7 @@ def _invoke_tool_choice(
             return _NO_OPTIONS
         case {"type": "auto" | "none"} as choice if not choice.get("disable_parallel_tool_use"):
             return _NO_OPTIONS
-        case _ if drops_params and not tools:
+        case _ if (drops_params or drops_choice_without_tools) and not tools:
             return _NO_OPTIONS
         case _:
             return MappingProxyType({"tool_choice": tool_choice})
@@ -163,10 +195,22 @@ class BedrockTokenCounter(BaseTokenCounter):
         use_mantle: Final = model_to_use.startswith("bedrock_mantle/")
         resolved_model: Final = get_bedrock_base_model(model_to_use.removeprefix("bedrock_mantle/"))
         primary_tokenizer: Final = MANTLE_TOKENIZER_TYPE if use_mantle else RUNTIME_TOKENIZER_TYPE
+        claude_model: Final = is_mantle_claude_model(resolved_model)
+        route: Final = _deployment_route(deployment) if claude_model else None
+        messages_bridged_through_chat: Final = (
+            route is not None and litellm.ProviderConfigManager.get_provider_anthropic_messages_config(*route) is None
+        )
+        converse_inference: Final = (
+            route is not None
+            and messages_bridged_through_chat
+            and isinstance(litellm.ProviderConfigManager.get_provider_chat_config(*route), litellm.AmazonConverseConfig)
+        )
+        claude_options: Final = count_options if claude_model else _NO_OPTIONS
         invoke_fields: Final = _invoke_tool_choice(
-            count_options if is_mantle_claude_model(resolved_model) else _NO_OPTIONS,
+            _without_parallel_tool_use_flag(claude_options) if messages_bridged_through_chat else claude_options,
             tools,
             deployment_drops_params(deployment),
+            drops_choice_without_tools=converse_inference,
         )
         if isinstance(invoke_fields, ChatCountTranslationError):
             return invoke_fields.response(request_model, model_to_use, primary_tokenizer)

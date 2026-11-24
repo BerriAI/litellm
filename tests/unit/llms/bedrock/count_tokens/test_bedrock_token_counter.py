@@ -366,6 +366,104 @@ async def test_claude_runtime_count_drops_a_forced_tool_choice_without_tools_und
     assert with_choice.requests[0].content == without_choice.requests[0].content
 
 
+_CONVERSE_DEPLOYMENT: Final = {
+    "litellm_params": {**DEPLOYMENT["litellm_params"], "model": "bedrock/converse/us.anthropic.claude-sonnet-4-6"}
+}
+_INVOKE_DEPLOYMENT: Final = {
+    "litellm_params": {**DEPLOYMENT["litellm_params"], "model": "bedrock/us.anthropic.claude-sonnet-4-6"}
+}
+_EXPLICIT_INVOKE_DEPLOYMENT: Final = {
+    "litellm_params": {**DEPLOYMENT["litellm_params"], "model": "bedrock/invoke/us.anthropic.claude-sonnet-4-6"}
+}
+
+
+def _posted_tool_choice(request: httpx.Request) -> JsonValue:
+    match _JSON_BODY.validate_json(request.content)["input"]:
+        case {"invokeModel": {"body": str() as encoded}}:
+            return _JSON_BODY.validate_json(base64.b64decode(encoded)).get("tool_choice")
+        case {"converse": {"toolConfig": {"toolChoice": tool_choice}}}:
+            return tool_choice
+        case {"converse": dict()}:
+            return None
+        case unexpected:
+            pytest.fail(f"unexpected CountTokens input {unexpected}")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("deployment", "tool_choice", "sent_tool_choice"),
+    [
+        (_CONVERSE_DEPLOYMENT, {"type": "auto", "disable_parallel_tool_use": True}, None),
+        (_CONVERSE_DEPLOYMENT, {"type": "any", "disable_parallel_tool_use": True}, {"type": "any"}),
+        (
+            _INVOKE_DEPLOYMENT,
+            {"type": "auto", "disable_parallel_tool_use": True},
+            {"type": "auto", "disable_parallel_tool_use": True},
+        ),
+        (
+            _EXPLICIT_INVOKE_DEPLOYMENT,
+            {"type": "any", "disable_parallel_tool_use": True},
+            {"type": "any", "disable_parallel_tool_use": True},
+        ),
+    ],
+    ids=["converse_auto", "converse_any", "invoke_auto", "explicit_invoke_any"],
+)
+async def test_claude_count_sends_the_parallel_tool_use_flag_only_where_messages_inference_sends_it(
+    deployment: dict[str, dict[str, str]],
+    tool_choice: dict[str, JsonValue],
+    sent_tool_choice: JsonValue,
+) -> None:
+    bedrock: Final = _Bedrock(runtime=(200, {"inputTokens": 579}), mantle=(200, {"input_tokens": 1}))
+
+    result: Final = await _counter(bedrock).count_tokens(
+        model_to_use="us.anthropic.claude-sonnet-4-6",
+        messages=[{"role": "user", "content": "Weather in Paris?"}],
+        contents=None,
+        deployment=deployment,
+        request_model="claude-sonnet-4-6",
+        tools=[{"name": "get_weather", "input_schema": {"type": "object"}}],
+        messages_format="anthropic",
+        count_options={"tool_choice": tool_choice},
+    )
+
+    assert result is not None
+    assert (result.error, result.total_tokens) == (False, 579)
+    assert bedrock.posted_hosts() == (RUNTIME_HOST,)
+    assert _posted_tool_choice(bedrock.requests[0]) == sent_tool_choice
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("deployment", "sent_tool_choice"),
+    [
+        (_CONVERSE_DEPLOYMENT, None),
+        (_INVOKE_DEPLOYMENT, {"type": "any"}),
+        (_EXPLICIT_INVOKE_DEPLOYMENT, {"type": "any"}),
+    ],
+    ids=["converse", "invoke", "explicit_invoke"],
+)
+async def test_claude_count_sends_a_forced_tool_choice_without_tools_only_where_messages_inference_sends_it(
+    deployment: dict[str, dict[str, str]],
+    sent_tool_choice: JsonValue,
+) -> None:
+    bedrock: Final = _Bedrock(runtime=(200, {"inputTokens": 11}), mantle=(200, {"input_tokens": 1}))
+
+    result: Final = await _counter(bedrock).count_tokens(
+        model_to_use="us.anthropic.claude-sonnet-4-6",
+        messages=[{"role": "user", "content": "Weather in Paris?"}],
+        contents=None,
+        deployment=deployment,
+        request_model="claude-sonnet-4-6",
+        messages_format="anthropic",
+        count_options={"tool_choice": {"type": "any"}},
+    )
+
+    assert result is not None
+    assert (result.error, result.total_tokens) == (False, 11)
+    assert bedrock.posted_hosts() == (RUNTIME_HOST,)
+    assert _posted_tool_choice(bedrock.requests[0]) == sent_tool_choice
+
+
 _INVALID_TOOL_CHOICE: Final = {"type": "sometimes"}
 _WEATHER_INPUT_TOOL: Final = {"name": "get_weather", "input_schema": {"type": "object"}}
 
