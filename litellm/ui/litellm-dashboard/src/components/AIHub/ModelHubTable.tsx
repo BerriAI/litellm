@@ -512,23 +512,24 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
             {/* Tab System for Model Hub, Agent Hub, MCP Hub, and Plugin Marketplace */}
             <Tabs defaultValue="models">
               {!isChat && (
-                <TabsList
-                  variant="line"
-                  className="mb-4 h-auto w-full justify-start overflow-x-auto rounded-none border-b p-0"
-                >
-                  <TabsTrigger value="models" className="flex-none rounded-none px-4 py-2">
-                    {t("aiHub.modelHubTable.tabs.models")}
-                  </TabsTrigger>
-                  <TabsTrigger value="agents" className="flex-none rounded-none px-4 py-2">
-                    {t("aiHub.modelHubTable.tabs.agents")}
-                  </TabsTrigger>
-                  <TabsTrigger value="mcp" className="flex-none rounded-none px-4 py-2">
-                    {t("aiHub.modelHubTable.tabs.mcp")}
-                  </TabsTrigger>
-                  <TabsTrigger value="skills" className="flex-none rounded-none px-4 py-2">
-                    {t("aiHub.modelHubTable.tabs.skills")}
-                  </TabsTrigger>
-                </TabsList>
+                <div className="mb-4 border-b">
+                  <div className="-mb-1.5 overflow-x-auto pb-1.5">
+                    <TabsList variant="line" className="h-auto w-full justify-start rounded-none p-0">
+                      <TabsTrigger value="models" className="flex-none rounded-none px-4 py-2">
+                        {t("aiHub.modelHubTable.tabs.models")}
+                      </TabsTrigger>
+                      <TabsTrigger value="agents" className="flex-none rounded-none px-4 py-2">
+                        {t("aiHub.modelHubTable.tabs.agents")}
+                      </TabsTrigger>
+                      <TabsTrigger value="mcp" className="flex-none rounded-none px-4 py-2">
+                        {t("aiHub.modelHubTable.tabs.mcp")}
+                      </TabsTrigger>
+                      <TabsTrigger value="skills" className="flex-none rounded-none px-4 py-2">
+                        {t("aiHub.modelHubTable.tabs.skills")}
+                      </TabsTrigger>
+                    </TabsList>
+                  </div>
+                </div>
               )}
 
               <div>

@@ -180,20 +180,22 @@ const CacheDashboard: React.FC<CachePageProps> = ({ accessToken, token, userRole
       </PageHeader>
       <Tabs defaultValue="analytics" className="w-full gap-2">
         <div className="flex w-full items-center justify-between gap-2 border-b">
-          <TabsList variant="line" className="h-auto min-w-0 justify-start overflow-x-auto rounded-none p-0">
-            <TabsTrigger value="analytics" className="flex-none rounded-none px-4 py-2">
-              {t("caching.dashboard.tabs.analytics")}
-            </TabsTrigger>
-            <TabsTrigger value="health" className="flex-none rounded-none px-4 py-2">
-              {t("caching.dashboard.tabs.health")}
-            </TabsTrigger>
-            <TabsTrigger value="settings" className="flex-none rounded-none px-4 py-2">
-              {t("caching.dashboard.tabs.settings")}
-            </TabsTrigger>
-            <TabsTrigger value="coordination" className="flex-none rounded-none px-4 py-2">
-              {t("caching.dashboard.tabs.coordination")}
-            </TabsTrigger>
-          </TabsList>
+          <div className="-mb-1.5 min-w-0 overflow-x-auto pb-1.5">
+            <TabsList variant="line" className="h-auto rounded-none p-0">
+              <TabsTrigger value="analytics" className="flex-none rounded-none px-4 py-2">
+                {t("caching.dashboard.tabs.analytics")}
+              </TabsTrigger>
+              <TabsTrigger value="health" className="flex-none rounded-none px-4 py-2">
+                {t("caching.dashboard.tabs.health")}
+              </TabsTrigger>
+              <TabsTrigger value="settings" className="flex-none rounded-none px-4 py-2">
+                {t("caching.dashboard.tabs.settings")}
+              </TabsTrigger>
+              <TabsTrigger value="coordination" className="flex-none rounded-none px-4 py-2">
+                {t("caching.dashboard.tabs.coordination")}
+              </TabsTrigger>
+            </TabsList>
+          </div>
 
           <div className="flex shrink-0 items-center space-x-2">
             {lastRefreshed && (
