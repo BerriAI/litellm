@@ -7,12 +7,15 @@
 //! leaves this crate as a `bool`. Two keys are read as the proxy reads them instead.
 //! `reasoning_auto_summary` is on when the config's value is truthy or its variable is `true` in
 //! any case, even under a config that sets it to `false`. `request_timeout` is read from
-//! `REQUEST_TIMEOUT`, the name the proxy reads it by, as `float()` reads its text.
+//! `REQUEST_TIMEOUT`, the name the proxy reads it by, as `float()` reads its text, and only from
+//! the process's own environment, since the proxy reads it once when `litellm` is imported, before
+//! the config's `environment_variables` are exported, so a timeout the config exports times
+//! nothing out there.
 //!
-//! The proxy differs in two places, and neither is kept. It reads some of these variables only
-//! when it starts, before the config's `environment_variables` are exported, where the variable
-//! here is read from whatever `environment` is given. It reads each flag variable by a rule of its
-//! own, one of which takes any word as on, where a word that is no flag leaves the key unset here.
+//! The proxy differs in two places, and neither is kept. It reads some of the `LITELLM_<KEY>`
+//! variables only when it starts too, where the variable here is read from whatever `environment`
+//! is given. It reads each flag variable by a rule of its own, one of which takes any word as on,
+//! where a word that is no flag leaves the key unset here.
 
 use std::collections::BTreeMap;
 
@@ -168,16 +171,9 @@ impl Config {
         );
         let (reasoning_auto_summary, summarized) =
             reasoning_auto_summary(litellm_settings.reasoning_auto_summary, environment);
-        let (request_timeout, timed) = filled(
-            litellm_settings.request_timeout,
-            environment,
-            "litellm_settings.request_timeout",
-            "REQUEST_TIMEOUT".to_owned(),
-        );
         Self {
             litellm_settings: LiteLlmSettings {
                 reasoning_auto_summary,
-                request_timeout,
                 ..litellm_settings
             },
             origins: Origins(
@@ -186,9 +182,27 @@ impl Config {
                     .into_iter()
                     .chain(origins.into_iter().flatten())
                     .chain(summarized)
-                    .chain(timed)
                     .collect(),
             ),
+            ..self
+        }
+    }
+
+    /// This config with the process's own environment, `process`, under the keys the proxy reads
+    /// only from it.
+    pub fn with_process_environment(self, process: &dyn Lookup) -> Self {
+        let (request_timeout, timed) = filled(
+            self.litellm_settings.request_timeout,
+            process,
+            "litellm_settings.request_timeout",
+            "REQUEST_TIMEOUT".to_owned(),
+        );
+        Self {
+            litellm_settings: LiteLlmSettings {
+                request_timeout,
+                ..self.litellm_settings
+            },
+            origins: Origins(self.origins.0.into_iter().chain(timed).collect()),
             ..self
         }
     }
@@ -290,7 +304,10 @@ mod tests {
                 .flatten()
                 .map(str::to_owned)
         };
-        Config::from_yaml(yaml).unwrap().with_environment(&lookup)
+        Config::from_yaml(yaml)
+            .unwrap()
+            .with_environment(&lookup)
+            .with_process_environment(&lookup)
     }
 
     #[rstest]

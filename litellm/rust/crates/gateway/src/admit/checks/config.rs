@@ -544,7 +544,9 @@ mod tests {
 
     fn set_by(variable: &'static str, value: &'static str) -> Config {
         let lookup = move |name: &str| (name == variable).then(|| value.to_owned());
-        Config::default().with_environment(&lookup)
+        Config::default()
+            .with_environment(&lookup)
+            .with_process_environment(&lookup)
     }
 
     #[rstest]
