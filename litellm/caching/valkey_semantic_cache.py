@@ -65,7 +65,7 @@ class ValkeySemanticCache(RedisSemanticCache):
         embedding_model: str = "text-embedding-ada-002",
         index_name: str | None = None,
         ssl: bool = False,
-        startup_nodes: list | None = None,
+        startup_nodes: Sequence[object] | None = None,
         sync_client: Redis | None = None,
         async_client: AsyncRedis | None = None,
         embedding_max_input_tokens: int | None = None,

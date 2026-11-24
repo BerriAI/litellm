@@ -21,6 +21,7 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
 )
 from litellm.types.llms.vertex_ai import (
+    VERTEX_CREDENTIALS_TYPES,
     GeminiEmbeddingInput,
     VertexAIBatchEmbeddingsRequestBody,
     VertexAIBatchEmbeddingsResponseObject,
@@ -160,17 +161,17 @@ class GoogleBatchEmbeddings(VertexLLM):
         self,
         model: str,
         input: GeminiEmbeddingInput,
-        print_verbose,
+        print_verbose: object,
         model_response: EmbeddingResponse,
         custom_llm_provider: Literal["gemini", "vertex_ai"],
         optional_params: dict,
         logging_obj: "LiteLLMLoggingObj",
         api_key: str | None = None,
         api_base: str | None = None,
-        encoding=None,
-        vertex_project=None,
-        vertex_location=None,
-        vertex_credentials=None,
+        encoding: object = None,
+        vertex_project: str | None = None,
+        vertex_location: str | None = None,
+        vertex_credentials: VERTEX_CREDENTIALS_TYPES | None = None,
         aembedding: bool | None = False,
         timeout: float | httpx.Timeout | None = 300,
         client=None,
@@ -336,7 +337,7 @@ class GoogleBatchEmbeddings(VertexLLM):
         model_response: EmbeddingResponse,
         input: GeminiEmbeddingInput,
         timeout: float | httpx.Timeout | None,
-        headers={},
+        headers: dict[str, str] = {},
         client: AsyncHTTPHandler | None = None,
         use_embed_content: bool = False,
         api_key: str | None = None,
@@ -345,7 +346,7 @@ class GoogleBatchEmbeddings(VertexLLM):
         drop_params: bool = False,
     ) -> EmbeddingResponse:
         if client is None:
-            _params: Final = {}
+            _params: Final[dict[str, httpx.Timeout]] = {}
             if timeout is not None:
                 if isinstance(timeout, float) or isinstance(timeout, int):
                     _httpx_timeout: Final = httpx.Timeout(timeout)
