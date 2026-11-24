@@ -317,7 +317,8 @@ class ElevenLabsEventTransformer:
         self._session_started: bool = False
         self._refusal: ElevenLabsException | None = None
         self._uncommitted_audio: bool = False
-        self._discards_next_commit: bool = False
+        # One entry per commit forwarded upstream and not yet answered, oldest first: True when it was a clear
+        self._pending_commits: tuple[bool, ...] = ()
 
     @property
     def refusal(self) -> ElevenLabsException | None:
@@ -332,10 +333,19 @@ class ElevenLabsEventTransformer:
         if not self._uncommitted_audio:
             return False
         self._uncommitted_audio = False
-        if discard:
-            self._discards_next_commit = True
+        awaits_kept_transcript: Final = False in self._pending_commits
+        self._pending_commits = (*self._pending_commits, discard)
+        if discard and not awaits_kept_transcript:
             self._turn = None
         return True
+
+    def _answers_cleared_commit(self) -> bool:
+        """Match a committed transcript to the oldest forwarded commit; True when that commit was a clear."""
+        if not self._pending_commits:
+            return False
+        cleared: Final = self._pending_commits[0]
+        self._pending_commits = self._pending_commits[1:]
+        return cleared
 
     def take_unbilled_usage(self) -> RealtimeInputAudioTranscriptionUsage | None:
         seconds: Final = self._unbilled_seconds
@@ -369,7 +379,7 @@ class ElevenLabsEventTransformer:
         return error_event(error.message, "invalid_request_error" if error.status_code < 500 else "server_error")
 
     def _partial(self, text: str) -> tuple[OpenAIRealtimeEvents, ...]:
-        if not text or self._discards_next_commit:
+        if not text or True in self._pending_commits:
             return ()
         turn: Final = self._turn
         current: Final = turn if turn is not None else _Turn(item_id=self._new_item_id(), emitted="", previous=None)
@@ -383,8 +393,7 @@ class ElevenLabsEventTransformer:
     def _committed(self, text: str) -> tuple[OpenAIRealtimeEvents, ...]:
         turn: Final = self._turn
         self._turn = None
-        if self._discards_next_commit:
-            self._discards_next_commit = False
+        if self._answers_cleared_commit():
             return ()
         if turn is None and not text:
             return ()

@@ -708,6 +708,40 @@ async def test_clear_discards_the_uncommitted_turn_and_bills_its_audio_with_the_
     assert (kept[-1]["transcript"], kept[-1]["usage"]) == ("Hello there.", {"type": "duration", "seconds": 1.5})
 
 
+COMMIT: Final = json.dumps({"type": "input_audio_buffer.commit"})
+CLEAR: Final = json.dumps({"type": "input_audio_buffer.clear"})
+
+
+async def test_clear_after_an_unanswered_commit_drops_only_the_cleared_segment():
+    config, backend = await _audio_session()
+    await _send_audio(config, backend, b"\x00\x00" * 2_400)
+    committed: Final = config.transform_realtime_request(COMMIT, SCRIBE_REALTIME_MODEL)
+    await _send_audio(config, backend, b"\x00\x00" * 2_400)
+    cleared: Final = config.transform_realtime_request(CLEAR, SCRIBE_REALTIME_MODEL)
+    first: Final = _response(config, _frame("committed_transcript", text="Keep this."))
+    second: Final = _response(config, _frame("committed_transcript", text="Drop this."))
+
+    assert (len(committed), len(cleared)) == (1, 1)
+    assert first[-1]["transcript"] == "Keep this."
+    assert second == []
+
+
+async def test_two_clears_before_their_transcripts_drop_both_segments():
+    config, backend = await _audio_session()
+    for _ in range(2):
+        await _send_audio(config, backend, b"\x00\x00" * 2_400)
+        assert len(config.transform_realtime_request(CLEAR, SCRIBE_REALTIME_MODEL)) == 1
+    dropped: Final = [
+        *_response(config, _frame("committed_transcript", text="First.")),
+        *_response(config, _frame("committed_transcript", text="Second.")),
+    ]
+    await _send_audio(config, backend, b"\x00\x00" * 2_400)
+    kept: Final = _response(config, _frame("committed_transcript", text="Third."))
+
+    assert dropped == []
+    assert kept[-1]["transcript"] == "Third."
+
+
 @pytest.mark.parametrize("rate", [16_000, 48_000])
 async def test_completed_transcripts_bill_the_seconds_of_audio_sent(rate: int):
     upstream: Final = MagicMock(spec=RealtimeBackend)

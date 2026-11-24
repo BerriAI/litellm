@@ -1699,28 +1699,35 @@ class RealTimeStreaming:
         await asyncio.sleep(REALTIME_OVER_LIMIT_USAGE_WAIT_SECONDS)
         await self.backend_ws.close()
 
-    async def _dropped_after_token_limit_end(self, frame: object) -> bool:
+    async def _dropped_after_token_limit_end(self, frame: object, *, logged: bool = False) -> bool:
+        """Drop a frame once the session ended over its token limit, still billing it.
+
+        `logged` frames were already logged for billing before the batch's client sends, so they are only counted.
+        """
         if not self._ended_over_token_limit:
             return False
         event: Final = as_str_mapping(frame)
         if event is None:
             return True
         if self._turn_limits is not None:
-            await self._count_billed_frame(event, self._turn_limits)
+            await self._count_billed_frame(event, self._turn_limits, logged=logged)
         if self._over_limit_usage_wait is not None and event.get("type") == "response.done":
             await self.backend_ws.close()
         return True
 
-    async def _count_billed_frame(self, event: Mapping[str, object], turn_limits: RealtimeTurnLimits) -> None:
+    async def _count_billed_frame(
+        self, event: Mapping[str, object], turn_limits: RealtimeTurnLimits, *, logged: bool = False
+    ) -> None:
         event_type: Final = event.get("type")
         is_transcription: Final = (
             self._is_transcription_session and event_type == "conversation.item.input_audio_transcription.completed"
         )
         if event_type != "response.done" and not is_transcription:
             return
-        self.store_message(dict(event))
-        if is_transcription:
-            self._capture_transcription_usage(dict(event))
+        if not logged:
+            self.store_message(dict(event))
+            if is_transcription:
+                self._capture_transcription_usage(dict(event))
         await turn_limits.charge(event)
 
     async def _forward_unparsed_backend_frame(self, raw_response: str) -> None:
@@ -2029,8 +2036,12 @@ class RealTimeStreaming:
         self.current_delta_type = returned_object["current_delta_type"]
         self.session_configuration_request = returned_object["session_configuration_request"]
         events: Final = transformed_response if isinstance(transformed_response, list) else [transformed_response]
+        billed_before_sends: Final = self._bill_completed_transcriptions_before_sends(events)
         for event in events:
-            if await self._dropped_after_token_limit_end(event) or self._should_drop_event_from_client(event):
+            billed: Final = any(event is billed_event for billed_event in billed_before_sends)
+            if await self._dropped_after_token_limit_end(event, logged=billed) or self._should_drop_event_from_client(
+                event
+            ):
                 continue
             if isinstance(event, dict):
                 self._detect_transcription_session_from_backend(event)
@@ -2074,8 +2085,9 @@ class RealTimeStreaming:
             if isinstance(event, dict) and event.get("type") == "conversation.item.input_audio_transcription.completed":
                 transcript = event.get("transcript", "")
                 self._collect_user_input_from_backend_event(cast(dict, event))
-                self.store_message(event_str)
-                self._capture_transcription_usage(event)
+                if not billed:
+                    self.store_message(event_str)
+                    self._capture_transcription_usage(event)
                 await self._send_event_to_client(event, event_str)
                 if await self._session_ended_by_transcription_limits(event):
                     continue
@@ -2087,6 +2099,28 @@ class RealTimeStreaming:
             self.store_message(event_str)
             await self._charge_finished_turn(event)
             await self._send_event_to_client(event, event_str)
+
+    def _bill_completed_transcriptions_before_sends(self, events: Sequence[object]) -> tuple[object, ...]:
+        """Log every completed transcription in a provider batch before any of the batch reaches the client.
+
+        The batch's earlier events (deltas, speech_stopped) are awaited client sends. If the client disconnects
+        during one, the relay is cancelled, and usage captured only when the completed event's turn came would be
+        lost while the provider has already taken it off its unbilled total. The token-limit drop path logs its own
+        completed events, so nothing is billed here once the session ended over its limit.
+        """
+        if self._ended_over_token_limit:
+            return ()
+        completed: Final = tuple(
+            event
+            for event in events
+            if isinstance(event, dict)
+            and event.get("type") == "conversation.item.input_audio_transcription.completed"
+            and not self._should_drop_event_from_client(event)
+        )
+        for event in completed:
+            self.store_message(json.dumps(event))
+            self._capture_transcription_usage(event)
+        return completed
 
     async def _complete_deferred_backend_setup(self) -> None:
         if not self._uses_deferred_backend_setup() or self._backend_setup_complete:

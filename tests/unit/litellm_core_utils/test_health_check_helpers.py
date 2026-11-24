@@ -818,6 +818,7 @@ def test_native_health_check_mode_routes_mantle_claude_to_messages_and_soniox_re
         ("elevenlabs/scribe_v2_realtime", "elevenlabs/scribe_v2_realtime", "realtime"),
         ("elevenlabs/scribe_v2", "scribe_v2", "audio_transcription"),
         ("elevenlabs/eleven_v3", "eleven_v3", "audio_speech"),
+        ("elevenlabs/scribe_v3_realtime", "scribe_v3_realtime", "realtime"),
     ),
 )
 def test_elevenlabs_health_checks_use_the_websocket_only_for_the_realtime_scribe_model(
@@ -827,8 +828,9 @@ def test_elevenlabs_health_checks_use_the_websocket_only_for_the_realtime_scribe
         litellm,
         "model_cost",
         {
-            "elevenlabs/scribe_v2_realtime": {"mode": "audio_transcription"},
-            "elevenlabs/scribe_v2": {"mode": "audio_transcription"},
+            "elevenlabs/scribe_v2_realtime": {"mode": "audio_transcription", "supported_endpoints": ["/v1/realtime"]},
+            "elevenlabs/scribe_v3_realtime": {"mode": "audio_transcription", "supported_endpoints": ["/v1/realtime"]},
+            "elevenlabs/scribe_v2": {"mode": "audio_transcription", "supported_endpoints": ["/v1/audio/transcriptions"]},
             "elevenlabs/eleven_v3": {"mode": "audio_speech"},
         },
     )
