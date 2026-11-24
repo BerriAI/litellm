@@ -17324,3 +17324,55 @@ def test_get_custom_headers_leave_a_plain_request_without_a_fallback_reason() ->
 
     assert headers["x-litellm-attempted-fallbacks"] == "0"
     assert "x-litellm-fallback-reason" not in headers
+
+
+_RESPONSES_TOOL_TURN_INPUT: Final = (
+    {"role": "user", "content": "What is the weather in Bogota?"},
+    {"type": "function_call", "call_id": "call_1", "name": "get_weather", "arguments": '{"city": "Bogota"}'},
+    {"type": "function_call_output", "call_id": "call_1", "output": '{"temp_c": 14}'},
+)
+_STRAY_MESSAGES: Final = ({"role": "user", "content": "stray messages field"},)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("route_type", "path", "body", "logged"),
+    [
+        pytest.param(
+            "aresponses",
+            "/v1/responses",
+            {"model": "gpt-4o", "input": list(_RESPONSES_TOOL_TURN_INPUT), "messages": list(_STRAY_MESSAGES)},
+            list(_RESPONSES_TOOL_TURN_INPUT),
+            id="responses-input-wins-over-a-messages-field",
+        ),
+        pytest.param(
+            "aresponses",
+            "/v1/responses",
+            {"model": "gpt-4o", "messages": list(_STRAY_MESSAGES)},
+            list(_STRAY_MESSAGES),
+            id="responses-messages-only-body-still-logs-messages",
+        ),
+        pytest.param(
+            "acompletion",
+            "/v1/chat/completions",
+            {"model": "gpt-4o", "messages": list(_STRAY_MESSAGES)},
+            list(_STRAY_MESSAGES),
+            id="chat-completions-logs-messages",
+        ),
+    ],
+)
+async def test_pre_call_logged_input_keeps_every_responses_input_item(
+    route_type: Literal["aresponses", "acompletion"], path: str, body: dict[str, object], logged: list[dict[str, str]]
+) -> None:
+    from litellm.proxy.proxy_server import ProxyConfig as RealProxyConfig
+
+    _, logging_obj = await ProxyBaseLLMRequestProcessing(data=copy.deepcopy(body)).common_processing_pre_call_logic(
+        request=Request({"type": "http", "method": "POST", "path": path, "query_string": b"", "headers": []}),
+        general_settings={},
+        user_api_key_dict=ProxyUserAPIKeyAuth(api_key="sk-test", user_role=LitellmUserRoles.INTERNAL_USER),
+        proxy_logging_obj=ProxyLogging(user_api_key_cache=UserApiKeyCache()),
+        proxy_config=RealProxyConfig(),
+        route_type=route_type,
+    )
+
+    assert logging_obj.model_call_details["messages"] == logged

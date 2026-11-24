@@ -1157,6 +1157,7 @@ async def aresponses(
                     merged_input=merged_input,
                 ),
             )
+            litellm_logging_obj.update_messages(input)
             requested_provider: Final = custom_llm_provider
             if model != original_model:
                 custom_llm_provider = _resolve_prompt_swapped_provider(
@@ -1364,6 +1365,7 @@ def _apply_prompt_management_to_responses_call(
                 merged_input=merged_input,
             ),
         )
+        litellm_logging_obj.update_messages(input)
         local_vars["input"] = input
         local_vars["model"] = model
         resolved_provider: Final = (

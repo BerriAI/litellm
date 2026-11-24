@@ -1724,7 +1724,7 @@ class Logging(LiteLLMLoggingBaseClass):
             **additional_params,
         )
 
-    def update_messages(self, messages: list[AllMessageValues]):
+    def update_messages(self, messages: str | Sequence[object]):
         """
         Update the logged value of the messages in the model_call_details
 

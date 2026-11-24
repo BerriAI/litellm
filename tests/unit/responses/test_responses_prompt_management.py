@@ -15,6 +15,8 @@ Covers:
 
 from importlib import import_module
 import asyncio
+import copy
+from datetime import datetime
 from typing import List, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -668,3 +670,55 @@ def test_sync_guardrail_block_from_prompt_hook_reaches_caller_unwrapped():
         litellm.responses(input="Hi", model="gpt-4o", prompt_id="blocked", litellm_logging_obj=logging_obj)
 
     assert exc_info.value is block
+
+
+_TOOL_TURN_INPUT = [
+    {"role": "system", "content": "You are a weather assistant"},
+    {"role": "user", "content": "What is the weather in Bogota?"},
+    {"type": "function_call", "call_id": "call_1", "name": "get_weather", "arguments": '{"city": "Bogota"}'},
+    {"type": "function_call_output", "call_id": "call_1", "output": '{"temp_c": 14}'},
+]
+
+def _real_logging_obj() -> LiteLLMLoggingObj:
+    return LiteLLMLoggingObj(
+        model="gpt-4o",
+        messages=copy.deepcopy(_TOOL_TURN_INPUT),
+        stream=False,
+        call_type="aresponses",
+        start_time=datetime(2026, 1, 1),
+        litellm_call_id="call-id",
+        function_id="function-id",
+    )
+
+
+@pytest.mark.asyncio
+async def test_async_cache_control_injection_logs_role_less_input_items():
+    logging_obj = _real_logging_obj()
+
+    patches = _patch_responses_dispatch()
+    with patches[0], patches[1], patches[2]:
+        await litellm.aresponses(
+            input=copy.deepcopy(_TOOL_TURN_INPUT),
+            model="gpt-4o",
+            cache_control_injection_points=[{"location": "message", "role": "system"}],
+            litellm_logging_obj=logging_obj,
+        )
+
+    assert logging_obj.model_call_details["messages"] == _TOOL_TURN_INPUT
+    assert logging_obj.messages == _TOOL_TURN_INPUT
+
+
+def test_sync_cache_control_injection_logs_role_less_input_items():
+    logging_obj = _real_logging_obj()
+
+    patches = _patch_responses_dispatch()
+    with patches[0], patches[1], patches[2]:
+        litellm.responses(
+            input=copy.deepcopy(_TOOL_TURN_INPUT),
+            model="gpt-4o",
+            cache_control_injection_points=[{"location": "message", "role": "system"}],
+            litellm_logging_obj=logging_obj,
+        )
+
+    assert logging_obj.model_call_details["messages"] == _TOOL_TURN_INPUT
+    assert logging_obj.messages == _TOOL_TURN_INPUT

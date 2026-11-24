@@ -3437,7 +3437,9 @@ class ProxyBaseLLMRequestProcessing:
         # add_litellm_data_to_request predates that mutation.
         refresh_proxy_server_request_body_snapshot(self.data, guardrails_applied=True)
 
-        if "messages" in self.data and self.data["messages"]:
+        if self.data.get("messages") and not (
+            route_type in {"aresponses", "_aresponses_websocket"} and self.data.get("input")
+        ):
             logging_obj.update_messages(self.data["messages"])
 
         if (

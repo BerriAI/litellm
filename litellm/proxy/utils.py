@@ -3355,6 +3355,7 @@ class ProxyLogging:
                     client_input=client_messages,
                     merged_input=messages,
                 )
+                litellm_logging_obj.update_messages(data["input"])
             else:
                 data["messages"] = messages
             # prevent re-processing the prompt template
