@@ -4,7 +4,7 @@ Translates from OpenAI's `/v1/chat/completions` to Docker Model Runner's `/engin
 Docker Model Runner API Reference: https://docs.docker.com/ai/model-runner/api-reference/
 """
 
-from collections.abc import Coroutine
+from collections.abc import Coroutine, Mapping
 from typing import Final, Literal, overload
 
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
@@ -81,8 +81,8 @@ class DockerModelRunnerChatConfig(OpenAIGPTConfig):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         stream: bool | None = None,
     ) -> str:
         """
@@ -124,7 +124,7 @@ class DockerModelRunnerChatConfig(OpenAIGPTConfig):
 
     def map_openai_params(
         self,
-        non_default_params: dict,
+        non_default_params: Mapping[str, object],
         optional_params: dict,
         model: str,
         drop_params: bool,

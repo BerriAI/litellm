@@ -116,7 +116,7 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
         """Return the GitHub Copilot provider identifier."""
         return LlmProviders.GITHUB_COPILOT
 
-    def get_supported_openai_params(self, model: str) -> list:
+    def get_supported_openai_params(self, model: str) -> list[str]:
         """
         Get supported parameters for GitHub Copilot Responses API.
 
@@ -129,7 +129,7 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
         response_api_optional_params: ResponsesAPIOptionalRequestParams,
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Map parameters for GitHub Copilot Responses API.
 
@@ -151,7 +151,7 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
             logging_obj=logging_obj,
         )
 
-    def _normalize_stream_item_id(self, parsed_chunk: dict) -> dict:
+    def _normalize_stream_item_id(self, parsed_chunk: dict[str, object]) -> dict[str, object]:
         """Rewrite streamed item ids to one stable id per output_index.
 
         GitHub Copilot tags each event of a single output item with a different
@@ -195,10 +195,10 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: Mapping[str, object],
         model: str,
         litellm_params: GenericLiteLLMParams | None,
-    ) -> dict:
+    ) -> dict[str, str]:
         """
         Validate environment and set up headers for GitHub Copilot API.
 
@@ -264,7 +264,7 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
     def get_complete_url(
         self,
         api_base: str | None,
-        litellm_params: dict,
+        litellm_params: Mapping[str, object],
     ) -> str:
         """
         Get the complete URL for GitHub Copilot Responses API endpoint.
