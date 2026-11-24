@@ -563,6 +563,23 @@ class _ShutdownRow(BaseModel):
     deprecation_date: str | None = None
 
 
+@pytest.mark.parametrize(
+    ("model", "retirement"),
+    (
+        ("Llama-3.3-70B-Instruct", "2027-02-03"),
+        ("Llama-4-Maverick-17B-128E-Instruct-FP8", "2027-02-03"),
+        ("Llama-4-Scout-17B-16E-Instruct", "2027-02-03"),
+        ("deepseek-v4.1-flash-1017", "2027-03-06"),
+    ),
+)
+def test_foundry_retirement_dates_match_schedule(prices: CostMap, model: str, retirement: str) -> None:
+    """Foundry schedule as of 2026-11-24.
+
+    https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule
+    """
+    assert _ShutdownRow.model_validate(prices[f"azure_ai/{model}"]).deprecation_date == retirement
+
+
 @pytest.mark.parametrize("path", (PRICES_PATH, BACKUP_PRICES_PATH), ids=("main", "backup"))
 @pytest.mark.parametrize("alias", sorted(OPENAI_GPT_4_SERIES_SNAPSHOTS))
 def test_openai_gpt_4_series_aliases_retire_with_their_snapshots(path: Path, alias: str) -> None:
@@ -1458,3 +1475,19 @@ def test_foundry_mai_image_models_resolve_with_token_rates(
         for name in ("input_cost_per_token", "input_cost_per_image_token", "output_cost_per_image_token")
     )
     assert all(isinstance(value, (int, float)) and value > 0 for value in rates)
+
+
+@pytest.mark.parametrize(("cached_tokens", "expected_input_cost"), ((0, 0.05), (1_000_000, 0.005)))
+def test_mai_code_flash_charges_per_million_tokens(
+    local_model_cost_map: None, cached_tokens: int, expected_input_cost: float
+) -> None:
+    """Global MAI-Code-2-Flash inference meters on 2026-11-24, https://prices.azure.com/api/retail/prices."""
+    costs: Final = litellm.cost_per_token(
+        model="azure_ai/MAI-Code-2-Flash",
+        usage_object=Usage(
+            prompt_tokens=1_000_000,
+            completion_tokens=1_000_000,
+            prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=cached_tokens),
+        ),
+    )
+    assert costs == pytest.approx((expected_input_cost, 0.25))
