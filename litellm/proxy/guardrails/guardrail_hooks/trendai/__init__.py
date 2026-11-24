@@ -3,10 +3,10 @@ from typing import TYPE_CHECKING, Final
 import httpx
 
 import litellm
-from litellm.types.guardrails import GuardrailEventHooks, Mode
+from litellm.types.guardrails import GuardrailEventHooks, Mode, SupportedGuardrailIntegrations
 
 from ._models import TrendAISettings
-from .trendai import GUARDRAIL_NAME, TrendAIGuardrail
+from .trendai import TrendAIGuardrail
 
 if TYPE_CHECKING:
     from litellm.types.guardrails import Guardrail, LitellmParams
@@ -45,7 +45,11 @@ def initialize_guardrail(
     return callback
 
 
-guardrail_initializer_registry: Final = {GUARDRAIL_NAME: initialize_guardrail}
-guardrail_class_registry: Final = {GUARDRAIL_NAME: TrendAIGuardrail}
+guardrail_initializer_registry: Final = {
+    SupportedGuardrailIntegrations.TRENDAI.value: initialize_guardrail,
+}
+guardrail_class_registry: Final = {
+    SupportedGuardrailIntegrations.TRENDAI.value: TrendAIGuardrail,
+}
 
 __all__ = ("TrendAIGuardrail",)

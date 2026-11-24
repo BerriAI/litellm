@@ -164,6 +164,7 @@ class SupportedGuardrailIntegrations(Enum):
     WINGBACK = "wingback"
     DECISION_MODEL = "decision_model"
     COLLIEAI = "collieai"
+    TRENDAI = "trendai"
 
 
 class Role(Enum):

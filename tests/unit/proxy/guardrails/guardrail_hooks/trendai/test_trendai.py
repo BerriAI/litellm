@@ -33,7 +33,7 @@ from litellm.proxy.guardrails.guardrail_hooks.trendai.trendai import (
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import UnifiedLLMGuardrails
 from litellm.proxy.guardrails.guardrail_registry import InMemoryGuardrailHandler
-from litellm.types.guardrails import GuardrailEventHooks, LitellmParams
+from litellm.types.guardrails import GuardrailEventHooks, LitellmParams, SupportedGuardrailIntegrations
 from litellm.types.secret_managers.main import KeyManagementSettings, KeyManagementSystem
 from litellm.types.utils import (
     CallTypes,
@@ -276,8 +276,9 @@ def test_guardrail_is_discovered_by_global_registries() -> None:
         guardrail_initializer_registry,
     )
 
-    assert guardrail_class_registry["trendai"] is TrendAIGuardrail
-    assert "trendai" in guardrail_initializer_registry
+    assert SupportedGuardrailIntegrations.TRENDAI.value == "trendai"
+    assert guardrail_class_registry[SupportedGuardrailIntegrations.TRENDAI.value] is TrendAIGuardrail
+    assert SupportedGuardrailIntegrations.TRENDAI.value in guardrail_initializer_registry
 
 
 @pytest.mark.parametrize(

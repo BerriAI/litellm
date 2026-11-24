@@ -27,7 +27,7 @@ from litellm.llms.custom_httpx.http_handler import (
     httpxSpecialProvider,
 )
 from litellm.secret_managers.main import get_secret_str
-from litellm.types.guardrails import GuardrailEventHooks, Mode
+from litellm.types.guardrails import GuardrailEventHooks, Mode, SupportedGuardrailIntegrations
 from litellm.types.utils import GenericGuardrailAPIInputs, GuardrailStatus
 
 from ._models import (
@@ -46,7 +46,7 @@ from ._text import apply_window_redaction, locate_request_prompt, redact_request
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
-GUARDRAIL_NAME: Final = "trendai"
+GUARDRAIL_NAME: Final = SupportedGuardrailIntegrations.TRENDAI.value
 OPENAI_CHAT_COMPLETION_RESPONSE_V1: Final = "OpenAIChatCompletionResponseV1"
 RESPONSE_CONTENT_CHUNK_SIZE_BYTES: Final = 49_500
 TMV1_CLIENT_NAME: Final = "litellm"
