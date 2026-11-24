@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from datetime import date
+from typing import Final
 
 import polars as pl
 
@@ -62,8 +63,8 @@ def test_should_omit_missing_organization_fields_from_tags():
     assert tags["team_id"] == "team-1"
 
 
-def test_should_include_project_tags_only_when_present_and_keep_team_subaccounts():
-    frame = pl.DataFrame(
+def test_should_include_project_tags_only_when_present_and_keep_team_subaccounts() -> None:
+    frame: Final = pl.DataFrame(
         {
             "date": [date(2024, 1, 2)] * 3,
             "spend": [1.25] * 3,
@@ -80,9 +81,9 @@ def test_should_include_project_tags_only_when_present_and_keep_team_subaccounts
         }
     )
 
-    normalized = FocusTransformer().transform(frame)
+    normalized: Final = FocusTransformer().transform(frame)
 
-    tags = [json.loads(value) for value in normalized["Tags"]]
+    tags: Final = [json.loads(value) for value in normalized["Tags"]]
     assert [{key: value for key, value in row.items() if key.startswith("project_")} for row in tags] == [
         {"project_id": "project-1", "project_alias": "Production"},
         {"project_id": "project-2"},

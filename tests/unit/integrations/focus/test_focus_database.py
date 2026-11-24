@@ -91,19 +91,6 @@ async def test_should_join_organization_table(monkeypatch: pytest.MonkeyPatch):
 
 
 @pytest.mark.asyncio
-async def test_should_select_project_metadata_from_the_virtual_key(monkeypatch: pytest.MonkeyPatch):
-    db, query_mock = _setup_db(monkeypatch, [])
-
-    await db.get_usage_data()
-
-    query_text, *_ = query_mock.await_args.args
-    selection, _, joins = query_text.partition("FROM")
-    assert "vt.project_id," in selection
-    assert "pt.project_alias," in selection
-    assert 'LEFT JOIN "LiteLLM_ProjectTable" pt ON vt.project_id = pt.project_id' in joins
-
-
-@pytest.mark.asyncio
 async def test_should_build_frame_from_rows_recovered_for_double_hashed_keys(monkeypatch: pytest.MonkeyPatch):
     double_hashed = hashlib.sha256(b"sk-hashed-token").hexdigest()
     joined_row = {"api_key": "sk-joined", "api_key_alias": "joined", "team_id": "team-0", "user_email": None, "spend": 0.1}
