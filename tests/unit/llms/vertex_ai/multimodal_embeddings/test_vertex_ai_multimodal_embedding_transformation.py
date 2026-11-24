@@ -219,6 +219,36 @@ def test_a_request_shaped_extra_body_reaches_the_multimodal_predict_body_at_the_
     }
 
 
+def test_extra_body_clip_settings_join_the_video_generated_for_the_input(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(google.auth, "default", lambda scopes: (_StaticGoogleCredentials(), "test-project"))
+    route = respx_mock.post(host="us-central1-aiplatform.googleapis.com").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "predictions": [
+                    {"videoEmbeddings": [{"embedding": [0.1, 0.2], "startOffsetSec": 1, "endOffsetSec": 5}]}
+                ]
+            },
+        )
+    )
+
+    litellm.embedding(
+        model="vertex_ai/multimodalembedding@001",
+        input=["gs://bucket/video.mp4"],
+        vertex_project="test-project",
+        vertex_location="us-central1",
+        extra_body={
+            "instances": [{"video": {"gcsUri": "gs://other/ignored.mp4", "videoSegmentConfig": {"startOffsetSec": 1}}}]
+        },
+    )
+
+    assert json.loads(route.calls.last.request.content) == {
+        "instances": [{"video": {"gcsUri": "gs://bucket/video.mp4", "videoSegmentConfig": {"startOffsetSec": 1}}}]
+    }
+
+
 LABEL_FIELDS: Final = ("user_api_key_alias", "user_api_key_team_alias", "spend_logs_metadata")
 IDENTITY: Final = MappingProxyType({"user_api_key_alias": "chargeback-key", "user_api_key_team_alias": "ai-platform"})
 PROXY_METADATA: Final = MappingProxyType({**IDENTITY, "spend_logs_metadata": {"cost-center": "cc-1"}})

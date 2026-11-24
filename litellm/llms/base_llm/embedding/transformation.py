@@ -60,11 +60,45 @@ def over_extra_body_items(
     extra_items: Sequence[object], items: Sequence[Mapping[str, object]]
 ) -> list[dict[str, object]]:  # mutable-ok: serialized as the request body
     """Each generated item over the caller's ``extra_body`` item at the same position, so the caller adds fields to an
-    input but never replaces what was generated for it."""
+    input, and to an object generated for it, but never replaces what was generated."""
     return [
-        {**(_BODY_FIELDS.validate_python(extra) if isinstance(extra, Mapping) else {}), **item}
-        for item, extra in zip(items, itertools.chain(extra_items, itertools.repeat(None)))
+        {
+            **extra,
+            **{
+                k: {**_BODY_FIELDS.validate_python(extra[k]), **v}
+                if isinstance(v, Mapping) and isinstance(extra.get(k), Mapping)
+                else v
+                for k, v in item.items()
+            },
+        }
+        for item, extra in zip(
+            items,
+            (
+                _BODY_FIELDS.validate_python(extra) if isinstance(extra, Mapping) else {}
+                for extra in itertools.chain(extra_items, itertools.repeat(None))
+            ),
+        )
     ]
+
+
+REQUEST_ITEM_FIELDS: Final = ("instances", "requests")
+
+
+def extra_body_for_inputs(extra_body: object, kept_input_indexes: Sequence[int]) -> object:
+    """The ``extra_body`` with its per-input arrays cut down to the inputs still being sent, so each remaining input
+    keeps the item the caller wrote for it."""
+    if not isinstance(extra_body, Mapping):
+        return extra_body
+    return {
+        k: _inputs_kept(_BODY_ITEMS.validate_python(v), kept_input_indexes)
+        if k in REQUEST_ITEM_FIELDS and isinstance(v, (list, tuple))
+        else v
+        for k, v in _BODY_FIELDS.validate_python(extra_body).items()
+    }
+
+
+def _inputs_kept(items: Sequence[object], kept_input_indexes: Sequence[int]) -> Sequence[object]:
+    return [items[i] for i in kept_input_indexes if i < len(items)]
 
 
 class _EmbeddingItems(BaseModel):

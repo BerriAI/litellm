@@ -52,7 +52,9 @@ def cohere_extra_body_params(
     explicit argument still wins. Image input keeps the ``image`` type the transform sets."""
     if not isinstance(config, SagemakerCohereEmbeddingConfig) or "input_type" not in extra_body:
         return {}
-    if any(isinstance(item, str) and is_base64_encoded(item) for item in input):
+    if any(
+        isinstance(item, str) and is_base64_encoded(item) for item in ([input] if isinstance(input, str) else input)
+    ):
         return {}
     return {"input_type": extra_body["input_type"]}
 

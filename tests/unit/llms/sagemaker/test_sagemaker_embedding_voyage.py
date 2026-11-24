@@ -705,3 +705,37 @@ def test_cohere_endpoint_sends_the_extra_body_input_type_instead_of_the_default(
         "truncate": "END",
     }
     assert response.data[0]["embedding"] == [0.1, 0.2]
+
+
+IMAGE: Final = "data:image/png;base64,aGVsbG8="
+
+
+@pytest.mark.parametrize("image_input", [IMAGE, [IMAGE]], ids=["single_string", "list"])
+def test_cohere_endpoint_keeps_the_image_input_type_over_an_extra_body_text_input_type(
+    image_input: str | list[str],
+) -> None:
+    client = MagicMock()
+    client.invoke_endpoint.return_value = {
+        "Body": MagicMock(
+            read=MagicMock(
+                return_value=json.dumps(
+                    {"embeddings": [[0.1, 0.2]], "meta": {"billed_units": {"input_tokens": 1}}}
+                ).encode()
+            )
+        )
+    }
+    session = MagicMock()
+    session.client.return_value = client
+
+    with patch("boto3.Session", return_value=session):
+        response = embedding(
+            model="sagemaker/cohere-embed-v4-endpoint",
+            input=image_input,
+            aws_region_name="us-east-1",
+            aws_access_key_id="test-access-key",
+            aws_secret_access_key="test-secret-key",
+            extra_body={"input_type": "search_query"},
+        )
+
+    assert json.loads(client.invoke_endpoint.call_args.kwargs["Body"])["input_type"] == "image"
+    assert response.data[0]["embedding"] == [0.1, 0.2]

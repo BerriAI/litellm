@@ -38,6 +38,7 @@ from litellm.litellm_core_utils.llm_response_utils.response_metadata import (
 from litellm.litellm_core_utils.logging_utils import (
     assemble_complete_response_from_streaming_chunks,
 )
+from litellm.llms.base_llm.embedding.transformation import extra_body_for_inputs
 from litellm.llms.custom_httpx.sse_lines import split_sse_lines
 from litellm.types.caching import CACHED_STREAM_EVENTS_KEY, EMBEDDING_CACHE_FORMAT_VERSION, CachedEmbedding
 from litellm.types.integrations.custom_logger import converted_stream_requested
@@ -777,6 +778,11 @@ class LLMCachingHandler:
             else:
                 non_null_list.append((idx, cr))
         kwargs["input"] = remaining_list
+        if non_null_list and "extra_body" in kwargs:
+            kept_input_indexes: Final = [idx for idx, cr in enumerate(cached_result) if cr is None]
+            kwargs["extra_body"] = extra_body_for_inputs(  # rebind-ok: the caller sends these kwargs, like input above
+                kwargs["extra_body"], kept_input_indexes
+            )
         if len(non_null_list) > 0:
             # Use the model from the first non-null cached result, fallback to kwargs if not present
             model_name = self._extract_model_from_cached_results(non_null_list)
