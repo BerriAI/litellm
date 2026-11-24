@@ -1,5 +1,5 @@
 from io import BufferedReader, BytesIO
-from typing import Dict
+from typing import Dict, Final
 
 import pytest
 
@@ -385,7 +385,6 @@ def test_transform_image_edit_request_unpacks_markup_tuples(
     assert markup_part[1] == expected_part
 
 
-
 def test_transform_image_edit_request_unpacks_mask_tuple(
     image_edit_config: OpenAIImageEditConfig,
 ) -> None:
@@ -402,6 +401,7 @@ def test_transform_image_edit_request_unpacks_mask_tuple(
     mask_part: Final = next((f for f in files if f[0] == "mask"), None)
     assert mask_part is not None
     assert mask_part[1] == ("cutout", b"\x89PNG\r\n\x1a\n", "image/png")
+
 
 @pytest.mark.asyncio
 async def test_aimage_edit_sends_markup_as_multipart_file_not_repr() -> None:
