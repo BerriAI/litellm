@@ -19201,11 +19201,11 @@ class TestRequestReasoningEffortOverride:
 
         assert kwargs.get("reasoning_effort") == (level if level in declared else None)
 
-    def test_classifier_call_keeps_an_effort_the_deployment_itself_lists(self, local_model_cost_map: None):
-        kwargs: Final[dict[str, object]] = {
-            "reasoning_effort": {"effort": "low"},
-            "metadata": dict(_CLASSIFIER_METADATA),
-        }
+    @pytest.mark.parametrize("level", REASONING_EFFORT_ADVERTISEMENT_ORDER)
+    def test_classifier_call_keeps_only_what_the_chat_gate_accepts_when_the_deployment_lists_every_level(
+        self, local_model_cost_map: None, level: str
+    ):
+        kwargs: Final[dict[str, object]] = {"reasoning_effort": level, "metadata": dict(_CLASSIFIER_METADATA)}
         deployment: Final[DeploymentTypedDict] = {
             "model_name": "g",
             "litellm_params": {"model": "openai/chat-latest"},
@@ -19214,7 +19214,12 @@ class TestRequestReasoningEffortOverride:
 
         litellm.Router(model_list=[])._drop_unsupported_classifier_reasoning_effort(deployment, "g", kwargs)
 
-        assert kwargs["reasoning_effort"] == {"effort": "low"}
+        try:
+            litellm.get_optional_params(model="chat-latest", custom_llm_provider="openai", reasoning_effort=level)
+        except litellm.UnsupportedParamsError:
+            assert "reasoning_effort" not in kwargs
+        else:
+            assert kwargs["reasoning_effort"] == level
 
 
 class TestPreRoutingTierDrivesFallbacks:

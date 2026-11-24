@@ -131,11 +131,6 @@ def nearest_declared_reasoning_effort(requested: str, declared: Sequence[str]) -
     return next((effort for effort in ranked if _STRENGTH_RANK[effort] >= _STRENGTH_RANK[requested]), ranked[-1])
 
 
-def deployment_reasoning_effort_levels(deployment_model_info: object) -> tuple[str, ...] | None:
-    own_info: Final = as_str_mapping(deployment_model_info)
-    return _declared_levels(own_info.get(_DECLARED_EFFORTS_KEY)) if own_info is not None else None
-
-
 def _requested_level(requested: object) -> str | None:
     if isinstance(requested, str):
         return requested
@@ -173,13 +168,13 @@ def _gpt_5_row_declared_reasoning_efforts(
 
 
 def gpt_5_row_refuses_reasoning_effort(
-    requested: object, *, model: str, custom_llm_provider: str, base_model: str | None, deployment_model_info: object
+    requested: object, *, model: str, custom_llm_provider: str, base_model: str | None
 ) -> bool:
     """Whether a gpt-5-family deployment's map row lists its levels and leaves the requested one out,
     judged on the model each provider's chat mapper reads. Both gates refuse such a level on every
     route, so a router step that adds an effort drops it, as it drops a param the deployment lacks."""
     level: Final = _requested_level(requested)
-    if level is None or level in (deployment_reasoning_effort_levels(deployment_model_info) or ()):
+    if level is None:
         return False
     declared: Final = _gpt_5_row_declared_reasoning_efforts(model, custom_llm_provider, base_model)
     return declared is not None and level not in declared
