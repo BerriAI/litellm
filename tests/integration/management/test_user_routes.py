@@ -287,8 +287,10 @@ def test_paid_fallback_obeys_the_named_admin_temporary_cap(gateway: Gateway, tmp
         allowed: Final = proxy.request("POST", "/v1/chat/completions", chat, key=key)
         assert allowed.status_code == 200, allowed.text
 
-        hold.set()
         proxy.post("/user/update", {"user_id": user, "spend": 2})
+        warmed: Final = proxy.request("POST", "/v1/chat/completions", chat, key=key)
+        assert warmed.status_code == 200, warmed.text
+        hold.set()
         with ThreadPoolExecutor(max_workers=1) as pool:
             under_cap: Final = pool.submit(proxy.request, "POST", "/v1/chat/completions", chat, key=key)
             try:

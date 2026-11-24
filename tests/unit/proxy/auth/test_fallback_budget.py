@@ -157,7 +157,8 @@ async def test_paid_target_stays_available_below_base_budget_for_jwt_during_writ
 
     now: Final = datetime(2030, 1, 1, tzinfo=timezone.utc)
     writer: Final = SimpleNamespace(litellm_usertable=SimpleNamespace(find_unique=AsyncMock(side_effect=TimeoutError)))
-    monkeypatch.setattr(proxy_server, "prisma_client", SimpleNamespace(writer_db=writer))
+    reader: Final = SimpleNamespace(litellm_usertable=SimpleNamespace(find_unique=AsyncMock(return_value={"spend": 2})))
+    monkeypatch.setattr(proxy_server, "prisma_client", SimpleNamespace(db=reader, writer_db=writer))
     token: Final = UserAPIKeyAuth(user_id="u1")
     with time_machine.travel(now, tick=False):
         token.carry_temporary_user_budget(
