@@ -16,7 +16,6 @@ import inspect
 import itertools
 import json
 import os
-import random
 import sys
 import time
 import traceback
@@ -376,6 +375,7 @@ from .types.utils import (
     FileTypes,
     HiddenParams,
     LlmProviders,
+    LlmProvidersSet,
     PromptTokensDetails,
     ProviderSpecificHeader,
 )
@@ -6272,7 +6272,7 @@ def completion(
         )
 
         provider_config: BaseConfig | None = None
-        if custom_llm_provider is not None and custom_llm_provider in [provider.value for provider in LlmProviders]:
+        if custom_llm_provider is not None and custom_llm_provider in LlmProvidersSet:
             provider_config = ProviderConfigManager.get_provider_chat_config(
                 model=model,
                 provider=LlmProviders(custom_llm_provider),

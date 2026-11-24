@@ -16,6 +16,7 @@ from litellm.utils import (
     validate_openai_optional_params,
 )
 from litellm.exceptions import UnsupportedParamsError
+from litellm.types.utils import LlmProviders
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.prompt_templates.factory import map_system_message_pt
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
@@ -2416,3 +2417,19 @@ def test_image_params_keep_the_builtin_mapping_when_a_custom_provider_reuses_its
     assert get_optional_params_image_gen(
         model="imagegeneration", custom_llm_provider=custom_provider_named, n=2, size="1024x1024"
     ) == {"sampleCount": 2, "aspectRatio": "1:1"}
+
+
+@pytest.mark.parametrize("custom_llm_provider", ["dashscope", LlmProviders.DASHSCOPE])
+def test_get_optional_params_maps_params_with_the_config_of_a_listed_provider(custom_llm_provider: str) -> None:
+    optional_params: Final = get_optional_params(
+        model="qwen-plus", custom_llm_provider=custom_llm_provider, max_completion_tokens=10
+    )
+
+    assert optional_params["max_completion_tokens"] == 10
+    assert "max_tokens" not in optional_params
+
+
+def test_get_optional_params_maps_params_for_a_provider_outside_the_provider_enum() -> None:
+    optional_params: Final = get_optional_params(model="some-model", custom_llm_provider="veniceai", temperature=0.3)
+
+    assert optional_params["temperature"] == 0.3

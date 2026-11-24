@@ -6121,7 +6121,7 @@ def get_optional_params(
     passed_params.pop("model_info", None)
     passed_params.pop("_litellm_reasoning_drop_logger", None)
     provider_config: BaseConfig | None = None
-    if custom_llm_provider is not None and custom_llm_provider in [provider.value for provider in LlmProviders]:
+    if custom_llm_provider is not None and custom_llm_provider in LlmProvidersSet:
         provider_config = ProviderConfigManager.get_provider_chat_config(
             model=model,
             provider=LlmProviders(custom_llm_provider),
