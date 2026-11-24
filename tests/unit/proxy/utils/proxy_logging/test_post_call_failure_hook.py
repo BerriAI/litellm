@@ -1290,3 +1290,120 @@ async def test_auth_failure_on_a_responses_body_with_a_json_string_metadata_is_l
 
     assert len(recorded) == 1
     assert recorded[0]["standard_logging_object"]["metadata"]["user_api_key_alias"] == "checkout-key"
+
+
+def _gemini_image_refusal() -> Exception:
+    import httpx
+
+    from litellm.llms.gemini.empty_image_response import ImageRefusalError
+
+    return ImageRefusalError(
+        message="Gemini refused to return an image, finishReason=IMAGE_SAFETY",
+        model="gemini-3.1-flash-image",
+        llm_provider="gemini",
+        response=httpx.Response(400, request=httpx.Request("POST", "https://gemini.invalid")),
+        provider_specific_fields={"finish_reason": "IMAGE_SAFETY"},
+        billed_answer=None,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("failure", "logged_deployment"),
+    (
+        pytest.param(_gemini_image_refusal(), ("dep-refused-backup", "refused-backup"), id="fallback-refusal"),
+        pytest.param(
+            litellm.InternalServerError(message="down", llm_provider="gemini", model="gemini-3.1-flash-image"),
+            ("dep-outage", "outage"),
+            id="fallback-500",
+        ),
+    ),
+)
+async def test_a_fallback_refusal_the_client_gets_is_logged_on_the_fallback_deployment(
+    proxy_logging, make_user_api_key_auth, monkeypatch, failure, logged_deployment
+):
+    from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
+    from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.proxy import proxy_server
+
+    recorded: list[dict] = []
+
+    class _RecordingLogger(CustomLogger):
+        async def async_post_call_failure_hook(
+            self, request_data, original_exception, user_api_key_dict, traceback_str=None
+        ):
+            recorded.append(dict(request_data))
+
+    monkeypatch.setattr(
+        proxy_server,
+        "llm_router",
+        litellm.Router(
+            model_list=[
+                {
+                    "model_name": group,
+                    "litellm_params": {"model": model, "api_key": "test-key"},
+                    "model_info": {"id": deployment_id},
+                }
+                for group, model, deployment_id in (
+                    ("outage", "gemini/gemini-nano-banana-2.1", "dep-outage"),
+                    ("refused-backup", "gemini/gemini-3.1-flash-image", "dep-refused-backup"),
+                )
+            ]
+        ),
+    )
+    monkeypatch.setattr(litellm, "callbacks", [_RecordingLogger()])
+    proxy_logging.alert_types = []
+    logging_obj = Logging(
+        model="outage",
+        messages=[],
+        stream=False,
+        call_type="aimage_generation",
+        start_time=datetime.now(),
+        litellm_call_id="call-fallback-refusal",
+        function_id="fn-fallback-refusal",
+    )
+    logging_obj.update_environment_variables(
+        model="outage",
+        user="",
+        optional_params={},
+        litellm_params=get_litellm_params(
+            metadata={
+                "model_info": {"id": "dep-refused-backup"},
+                "client_seen_attempt": {
+                    "model_group": "refused-backup",
+                    "deployment_id": "dep-refused-backup",
+                    "model": "gemini/gemini-3.1-flash-image",
+                    "base_model": None,
+                    "exception_type": type(failure).__name__,
+                    "exception_string": str(failure),
+                    "attempted_retries": 0,
+                },
+            }
+        ),
+    )
+    logging_obj.model_call_details["standard_logging_object"] = {
+        "id": "call-fallback-refusal",
+        "model_id": "dep-outage",
+        "model_group": "outage",
+        "model": "gemini/gemini-nano-banana-2.1",
+        "custom_llm_provider": "gemini",
+    }
+
+    await proxy_logging.post_call_failure_hook(
+        request_data={
+            "model": "outage",
+            "prompt": "a red dot",
+            "metadata": {"model_info": {"id": "dep-outage"}},
+            "litellm_logging_obj": logging_obj,
+        },
+        original_exception=failure,
+        user_api_key_dict=make_user_api_key_auth(request_route="/v1/images/generations"),
+        route="/v1/images/generations",
+    )
+
+    (seen,) = recorded
+    assert (
+        seen["standard_logging_object"]["model_id"],
+        seen["standard_logging_object"]["model_group"],
+        seen["metadata"]["model_info"]["id"],
+    ) == (*logged_deployment, logged_deployment[0])

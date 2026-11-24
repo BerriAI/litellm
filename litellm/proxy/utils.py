@@ -83,7 +83,7 @@ from litellm.litellm_core_utils.bug_report import (
     should_report_bug,
     strip_bug_report_notice,
 )
-from litellm.llms.gemini.empty_image_response import ImageRefusalError, UnservedImageError
+from litellm.llms.gemini.empty_image_response import ImageRefusalError, UnservedImageError, is_answer_without_an_image
 from litellm.proxy._types import (
     CommonProxyErrors,
     ProxyErrorTypes,
@@ -1998,11 +1998,41 @@ def _proxy_only_error_log_fields(
     )
 
 
+def _attribution_to_the_fallback_that_answered_without_an_image(
+    request_data: Mapping[str, object], standard_logging_object: object, client_seen: Mapping[str, object] | None
+) -> Mapping[str, object]:
+    from litellm.proxy.hooks.proxy_track_cost_callback import deployment_attribution
+    from litellm.proxy.proxy_server import llm_router
+
+    logged: Final = _as_str_mapping(standard_logging_object)
+    answered_id: Final = None if client_seen is None else _record_deployment_id(client_seen)
+    if llm_router is None or answered_id is None:
+        return _EMPTY_LIFT
+    if not logged or answered_id == logged.get("model_id"):
+        return _EMPTY_LIFT
+    deployment: Final = llm_router.registry().deployment(answered_id)
+    if deployment is None:
+        return _EMPTY_LIFT
+    attribution: Final = deployment_attribution(deployment)
+    metadata: Final = _as_str_mapping(request_data.get("metadata"))
+    return MappingProxyType(
+        {
+            "standard_logging_object": {**logged, **attribution, "model_id": answered_id},
+            "metadata": {
+                **metadata,
+                "model_group": attribution["model_group"],
+                "model_info": {**_as_str_mapping(metadata.get("model_info")), "id": answered_id},
+            },
+        }
+    )
+
+
 def _failure_fields_to_lift(
     request_data: Mapping[str, object],
     provider_billed: bool = False,
     dispatched_call_type: str | None = None,
     route_call_type: str | None = None,
+    answered_without_an_image: bool = False,
 ) -> Mapping[str, object]:
     """Failure-path callbacks run after ``litellm_logging_obj`` is popped from
     request_data (it is not serialisable), so the caller merges these fields
@@ -2065,7 +2095,14 @@ def _failure_fields_to_lift(
             _logging_obj.cost_allowance_allocation if isinstance(_logging_obj, Logging) else None,
         ),
     )
-    return MappingProxyType({key: value for key, value in _entries if value is not None})
+    _attribution: Final = (
+        _attribution_to_the_fallback_that_answered_without_an_image(
+            request_data, _model_call_details.get("standard_logging_object"), _client_seen
+        )
+        if answered_without_an_image
+        else _EMPTY_LIFT
+    )
+    return MappingProxyType({**{key: value for key, value in _entries if value is not None}, **_attribution})
 
 
 @dataclass(frozen=True)
@@ -4551,6 +4588,7 @@ class ProxyLogging:
                 provider_billed=_provider_billed_the_failure(original_exception),
                 dispatched_call_type=dispatched_call_type,
                 route_call_type=_call_type_for_route(user_api_key_dict.request_route),
+                answered_without_an_image=is_answer_without_an_image(original_exception),
             )
         )
 

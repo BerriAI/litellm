@@ -1096,6 +1096,113 @@ async def test_an_image_served_after_a_refusal_then_rejected_counts_its_spend_on
 
 
 @pytest.mark.asyncio
+async def test_a_billed_fallback_refusal_labels_its_spend_with_the_fallback_group() -> None:
+    from litellm.integrations.prometheus import PrometheusLogger
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    _clear_prometheus_registry()
+    try:
+        await PrometheusLogger().async_post_call_failure_hook(
+            request_data=_billed_image_failure(
+                {
+                    "model": "gemini/image-model",
+                    "model_id": "dep-backup",
+                    "model_group": "backup",
+                    "custom_llm_provider": "gemini",
+                },
+                model="primary",
+            ),
+            original_exception=_image_refusal(),
+            user_api_key_dict=UserAPIKeyAuth(token="metric-test-token"),
+        )
+        assert {
+            metric_name: [sample.labels.get("requested_model") for sample in _collected_samples(metric_name)]
+            for metric_name in ("litellm_spend_metric_total", "litellm_total_tokens_metric_total")
+        } == {"litellm_spend_metric_total": ["backup"], "litellm_total_tokens_metric_total": ["backup"]}
+    finally:
+        _clear_prometheus_registry()
+
+
+@pytest.mark.asyncio
+async def test_a_fallback_refusal_after_a_provider_failure_counts_on_the_fallback_deployment(monkeypatch) -> None:
+    import asyncio
+    from datetime import datetime
+
+    import httpx
+    import respx
+
+    from litellm import Router
+    from litellm.integrations.prometheus import PrometheusLogger
+    from litellm.utils import Rules, function_setup
+
+    class _CountedPrometheus(PrometheusLogger):
+        def __init__(self) -> None:
+            super().__init__()
+            self.failed_attempt_logged: Final = asyncio.Event()
+
+        async def async_log_failed_attempt(self, kwargs, start_time, end_time):
+            await super().async_log_failed_attempt(kwargs, start_time, end_time)
+            self.failed_attempt_logged.set()
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    _clear_prometheus_registry()
+    try:
+        prometheus: Final = _CountedPrometheus()
+        monkeypatch.setattr(litellm, "callbacks", [prometheus])
+        router: Final = Router(
+            model_list=[
+                {
+                    "model_name": group,
+                    "litellm_params": {
+                        "model": "gemini/gemini-3.1-flash-image",
+                        "api_key": "test-key",
+                        "api_base": f"https://{group}.invalid/v1",
+                    },
+                    "model_info": {"id": f"dep-{group}"},
+                }
+                for group in ("primary", "backup")
+            ],
+            fallbacks=[{"primary": ["backup"]}],
+            num_retries=0,
+        )
+        logging_obj, request = function_setup(
+            original_function="aimage_generation",
+            rules_obj=Rules(),
+            start_time=datetime.now(),
+            model="primary",
+            prompt="a single small red dot",
+            litellm_call_id="outage-then-refused",
+        )
+        with respx.mock(assert_all_called=False) as upstream:
+            upstream.post(url__startswith="https://primary.invalid/").mock(
+                return_value=httpx.Response(503, json={"error": {"code": 503, "message": "overloaded"}})
+            )
+            upstream.post(url__startswith="https://backup.invalid/").mock(
+                return_value=httpx.Response(
+                    200,
+                    json={
+                        "candidates": [{"finishReason": "IMAGE_SAFETY", "content": {"role": "model"}}],
+                        "usageMetadata": {"promptTokenCount": 9, "totalTokenCount": 9},
+                    },
+                )
+            )
+            with pytest.raises(litellm.ContentPolicyViolationError):
+                await router.aimage_generation(**request, litellm_logging_obj=logging_obj)
+            await asyncio.wait_for(prometheus.failed_attempt_logged.wait(), 10)
+
+        assert {
+            metric_name: [
+                sample.value
+                for sample in _collected_samples(metric_name)
+                if sample.labels.get("model_id") == "dep-backup"
+            ]
+            for metric_name in ("litellm_deployment_success_responses_total", "litellm_deployment_total_requests_total")
+        } == {"litellm_deployment_success_responses_total": [1.0], "litellm_deployment_total_requests_total": [1.0]}
+    finally:
+        _clear_prometheus_registry()
+
+
+@pytest.mark.asyncio
 async def test_failure_hook_labels_a_cli_session_with_the_per_user_alias_not_the_login_token():
     from litellm.integrations.prometheus import PrometheusLogger
     from litellm.proxy._types import UserAPIKeyAuth

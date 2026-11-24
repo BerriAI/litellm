@@ -397,7 +397,7 @@ def _attempt_deployment(attempt: BilledFailedAttempt, deployment_lookup: Deploym
     return None if attempt.deployment_id is None else deployment_lookup(attempt.deployment_id)
 
 
-def _deployment_attribution(deployment: Deployment) -> Mapping[str, object]:
+def deployment_attribution(deployment: Deployment) -> Mapping[str, object]:
     """The spend-log attribution fields of the deployment that served an attempt: the model string it
     was called with, its provider, its configured ``api_base`` and its model group."""
     return MappingProxyType(
@@ -424,7 +424,7 @@ def _attempt_spend_row_kwargs(
     The row is stamped ``billed_retry_attempt`` so the daily spend tables keep its spend, tokens
     and model usage without counting it as a request the caller sent."""
     suffix: Final = f"-attempt-{position}"
-    attribution: Final = _NO_ATTRIBUTION if deployment is None else _deployment_attribution(deployment)
+    attribution: Final = _NO_ATTRIBUTION if deployment is None else deployment_attribution(deployment)
     raw_params: Final = cast("Mapping[str, object]", request_data.get("litellm_params") or {})  # cast-ok: request dict
     litellm_params: Final = {
         **raw_params,

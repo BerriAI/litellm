@@ -2932,6 +2932,17 @@ class PrometheusLogger(CustomLogger):
                 _labels,
             )
 
+    def logs_failed_attempt(self, exception: BaseException) -> bool:
+        return is_answer_without_an_image(exception)
+
+    async def async_log_failed_attempt(
+        self,
+        kwargs: Mapping[str, object],
+        start_time: datetime | float | None,
+        end_time: datetime | float | None,
+    ) -> None:
+        self.set_llm_deployment_failure_metrics(dict(kwargs))
+
     async def async_log_failure_event(self, kwargs, response_obj: object, start_time: object, end_time: object) -> None:
         verbose_logger.debug(
             "prometheus Logging - Enters failure logging function (kwargs keys: %s)",
@@ -3341,11 +3352,13 @@ class PrometheusLogger(CustomLogger):
             return
         billed_model: Final = logged.get("model")
         provider: Final = logged.get("custom_llm_provider")
+        billed_group: Final = logged.get("model_group")
         billed_values: Final = replace(
             enum_values,
             model=billed_model.removeprefix(f"{provider}/" if isinstance(provider, str) else "")
             if isinstance(billed_model, str)
             else None,
+            requested_model=billed_group if isinstance(billed_group, str) else enum_values.requested_model,
         )
         label_context: Final = PrometheusLabelFactoryContext(billed_values)
 
