@@ -44,10 +44,10 @@ class MistralAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
     def map_openai_params(
         self,
         non_default_params: Mapping[str, object],
-        optional_params: dict[str, object],
+        optional_params: dict,
         model: str,
         drop_params: bool,
-    ) -> dict[str, object]:
+    ) -> dict:
         supported_params: Final = self.get_supported_openai_params(model)
         for k, v in non_default_params.items():
             if k in supported_params:
@@ -96,7 +96,7 @@ class MistralAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         self,
         model: str,
         audio_file: FileTypes,
-        optional_params: Mapping[str, object],
+        optional_params: dict,
         litellm_params: Mapping[str, object],
     ) -> AudioTranscriptionRequestData:
         processed_audio: Final = process_audio_file(audio_file)
