@@ -2174,6 +2174,9 @@ def _gateway_answering_bedrock_with_the_caller_bearer(request: httpx.Request) ->
             id="default-bearer-with-an-opaque-caller-key",
         ),
         pytest.param(
+            {"api_key": 123}, _CALLER_ANTHROPIC_KEY, "aws", _CALLER_ANTHROPIC_KEY, id="non-string-default-key"
+        ),
+        pytest.param(
             {"extra_headers": {"Authorization": "Bearer gateway-token"}},
             _CALLER_ANTHROPIC_KEY,
             "aws",
@@ -2435,6 +2438,15 @@ async def test_anthropic_caller_key_fallback_onto_openai_sends_the_key_the_deplo
             {},
             ("api.openai.com", f"Bearer {_CALLER_ANTHROPIC_KEY}"),
             id="no-credential-of-its-own",
+        ),
+        pytest.param(
+            _CALLER_ANTHROPIC_KEY,
+            {},
+            "gpt",
+            {"default_litellm_params": {"api_key": 123}},
+            {},
+            ("api.openai.com", f"Bearer {_CALLER_ANTHROPIC_KEY}"),
+            id="non-string-default-key",
         ),
         pytest.param(
             _CALLER_ANTHROPIC_KEY,
