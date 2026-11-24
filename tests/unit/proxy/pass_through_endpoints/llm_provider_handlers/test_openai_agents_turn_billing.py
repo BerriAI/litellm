@@ -1356,6 +1356,64 @@ async def test_a_failed_read_of_the_calls_own_turn_never_bills_a_later_turn_with
     assert row["spend"] == pytest.approx(_expected_cost(TURN_USAGE))
 
 
+def _one_worker(redis: _SharedRedis) -> tuple[TurnClaims, TurnClaims]:
+    claims: Final = TurnClaims(lambda: None)
+    return claims, claims
+
+
+def _two_workers(redis: _SharedRedis) -> tuple[TurnClaims, TurnClaims]:
+    return TurnClaims(lambda: redis), TurnClaims(lambda: redis)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "workers", [pytest.param(_one_worker, id="one_worker"), pytest.param(_two_workers, id="two_workers")]
+)
+async def test_an_earlier_calls_turn_that_cannot_be_read_again_never_blocks_billing_the_next_call(
+    local_model_cost_map: None, workers: Callable[[_SharedRedis], tuple[TurnClaims, TurnClaims]]
+):
+    api: Final = _AgentsApi(
+        turn_pages=(
+            (
+                _turn("turn_2", CALL_STARTED_AT + 1, "completed", SECOND_TURN_USAGE),
+                _turn("turn_1", CALL_STARTED_AT, "completed", TURN_USAGE),
+            ),
+        ),
+        session=_session(),
+        turn_texts={"turn_2": ("second message",)},
+        replies={
+            f"{SESSIONS_URL}/{SESSION_ID}/turns/turn_1/items?order=asc&limit=100": (
+                _user_messages(("first message",)),
+                503,
+            )
+        },
+    )
+    clock: Final = _Clock()
+    first_claims, second_claims = workers(_SharedRedis())
+    first: Final = _SpendRows()
+    second: Final = _SpendRows()
+
+    await _relay_call(
+        OpenAIAgentsTurnBiller(get=api.get, sleep=clock.sleep, clock=clock, claims=first_claims),
+        first,
+        EVENTS_URL,
+        {"events": [_input_message("first message")]},
+        None,
+        "3c5e7a9c-1e3a-4c5e-9a7c-9e1a3c5e7a04",
+    )
+    await _relay_call(
+        OpenAIAgentsTurnBiller(get=api.get, sleep=clock.sleep, clock=clock, claims=second_claims),
+        second,
+        EVENTS_URL,
+        {"events": [_input_message("second message")]},
+        None,
+        "3c5e7a9c-1e3a-4c5e-9a7c-9e1a3c5e7a05",
+    )
+
+    assert (await first.only_row())["total_tokens"] == TURN_USAGE["total_tokens"]
+    assert (await second.only_row())["total_tokens"] == SECOND_TURN_USAGE["total_tokens"]
+
+
 @pytest.mark.asyncio
 async def test_an_unreadable_turn_items_page_never_logs_the_conversation_text(
     local_model_cost_map: None, caplog: pytest.LogCaptureFixture

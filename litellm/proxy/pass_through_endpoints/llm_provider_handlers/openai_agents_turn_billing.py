@@ -32,9 +32,11 @@ from litellm.constants import (
 )
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.litellm_logging import (
-    get_standard_logging_object_payload,
+    get_standard_logging_object_payload,  # pyright: ignore[reportUnknownVariableType]  # kwargs is untyped upstream
 )
-from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+from litellm.llms.custom_httpx.http_handler import (
+    get_async_httpx_client,  # pyright: ignore[reportUnknownVariableType]  # shared factory leaves params untyped
+)
 from litellm.llms.custom_httpx.sse_lines import split_sse_lines
 from litellm.llms.openai.common_utils import OpenAIError as LiteLLMOpenAIError
 from litellm.passthrough.utils import BasePassthroughUtils
@@ -328,17 +330,34 @@ class TurnClaims:
         )
 
     async def claim(self, turn_id: str, claimant: str) -> bool:
-        if self._local.get_cache(turn_id) is not None:
+        if self._held_here(turn_id):
             return False
         self._local.set_cache(turn_id, claimant)
         return await self._shared_owner(turn_id, claimant) == claimant
+
+    async def taken(self, turn_id: str) -> bool:
+        return self._held_here(turn_id) or await self._shared_claimant(turn_id) is not None
+
+    def _held_here(self, turn_id: str) -> bool:
+        return self._local.get_cache(turn_id) is not None
+
+    @with_service_target("openai_agents_turn_claims")
+    async def _shared_claimant(self, turn_id: str) -> object:
+        store: Final = self._shared_store()
+        if store is None:
+            return None
+        try:
+            return await store.async_get_cache(_claim_key(turn_id))
+        except Exception as e:  # noqa: BLE001  # a Redis outage leaves the turn to claim(), which falls back to this worker
+            verbose_proxy_logger.warning("OpenAI Agents passthrough: reading a shared turn claim failed: %s", e)
+            return None
 
     @with_service_target("openai_agents_turn_claims")
     async def _shared_owner(self, turn_id: str, claimant: str) -> object:
         store: Final = self._shared_store()
         if store is None:
             return claimant
-        key: Final = f"{_TURN_CLAIM_KEY_PREFIX}{turn_id}"
+        key: Final = _claim_key(turn_id)
         try:
             _ = await store.async_set_cache(key, claimant, nx=True, ttl=int(OPENAI_AGENTS_TURN_POLL_TIMEOUT_SECONDS))
             stored: Final = await store.async_get_cache(key)
@@ -346,6 +365,10 @@ class TurnClaims:
             verbose_proxy_logger.warning("OpenAI Agents passthrough: shared turn claim failed, claiming locally: %s", e)
             return claimant
         return claimant if stored is None else stored
+
+
+def _claim_key(turn_id: str) -> str:
+    return f"{_TURN_CLAIM_KEY_PREFIX}{turn_id}"
 
 
 def _coordination_redis() -> TurnClaimStore | None:
@@ -803,6 +826,8 @@ class OpenAIAgentsTurnBiller:
             key=lambda turn: turn.created_at,
         )
         for turn in candidates:
+            if await self._claims.taken(turn.id):
+                continue
             if isinstance(started := await self._started_by_call(turn_start, turns_path, turn), _FetchFailed):
                 return started
             if started and await self._claims.claim(turn.id, claimant):
