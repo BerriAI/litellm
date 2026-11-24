@@ -2839,6 +2839,10 @@ async def test_a_partial_embedding_cache_hit_sends_each_missed_input_with_its_ow
         model="recording-embedder/m", input=["cached", "first miss", "second miss"], extra_body=extra_body
     )
     await asyncio.gather(*_PENDING_CACHE_WRITES)
+    repeated = await litellm.aembedding(
+        model="recording-embedder/m", input=["cached", "first miss", "second miss"], extra_body=extra_body
+    )
+    assert [item["embedding"] for item in repeated.data] == [[6.0], [10.0], [11.0]]
 
     assert embedder.provider_calls == (
         (("cached",), extra_body),
