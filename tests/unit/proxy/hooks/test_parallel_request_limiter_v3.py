@@ -1567,13 +1567,22 @@ async def test_embedding_served_after_a_failed_attempt_still_charges_its_tpm_est
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "request_fields",
+    [
+        {"input": [_MP4_DATA_URI]},
+        {"input": [{"image": {"bytesBase64Encoded": _JPEG_DATA_URI.split(",", 1)[1]}}]},
+        {"input": _JPEG_DATA_URI.split(",", 1)[1], "input_type": "image"},
+        {"input": ["s3://bucket/clip.mp4"], "inputType": "video"},
+    ],
+)
 async def test_embedding_media_no_deployment_prices_refunds_its_tpm_reservation_when_reported_as_zero_tokens(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, request_fields: dict[str, object]
 ) -> None:
     _, counted = await _settle_tpm_for_call(
         monkeypatch,
         call_type="aembedding",
-        data={"model": "titan-embed-image", "input": [_MP4_DATA_URI]},
+        data={"model": "titan-embed-image", **request_fields},
         usage=Usage(prompt_tokens=0, completion_tokens=0, total_tokens=0),
         media_models=("bedrock/async_invoke/us.twelvelabs.marengo-embed-3-0-v1:0",),
     )
@@ -1582,14 +1591,22 @@ async def test_embedding_media_no_deployment_prices_refunds_its_tpm_reservation_
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("embedding_input", [["s3://notes " + "word " * 40], "gs://bucket/clip.mp4"])
-async def test_embedding_text_starting_with_a_storage_link_keeps_its_tpm_charge_when_reported_as_zero_tokens(
-    monkeypatch: pytest.MonkeyPatch, embedding_input: list[str] | str
+@pytest.mark.parametrize(
+    "request_fields",
+    [
+        {"input": ["s3://notes " + "word " * 40]},
+        {"input": "gs://bucket/clip.mp4"},
+        {"input": [{"text": "word " * 40}]},
+        {"input": "s3://notes " + "word " * 40, "input_type": "text"},
+    ],
+)
+async def test_embedding_text_the_provider_reads_as_text_keeps_its_tpm_charge_when_reported_as_zero_tokens(
+    monkeypatch: pytest.MonkeyPatch, request_fields: dict[str, object]
 ) -> None:
     reserved, counted = await _settle_tpm_for_call(
         monkeypatch,
         call_type="aembedding",
-        data={"model": "titan-embed-image", "input": embedding_input},
+        data={"model": "titan-embed-image", **request_fields},
         usage=Usage(prompt_tokens=0, completion_tokens=0, total_tokens=0),
         media_models=("bedrock/async_invoke/us.twelvelabs.marengo-embed-3-0-v1:0",),
     )

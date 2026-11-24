@@ -719,8 +719,13 @@ def count_embedding_input_tokens(
 ) -> tuple[_EmbeddingInputT, int, bool]:
     """The input left to count as text, the tokens of the media priced out of it, and whether it holds media
     no deployment prices, which stays in the text."""
-    from litellm.litellm_core_utils.prompt_templates.tpm_media_utils import split_embedding_media_for_tpm
+    from litellm.litellm_core_utils.prompt_templates.tpm_media_utils import (
+        embedding_input_holds_media_read_as_text,
+        split_embedding_media_for_tpm,
+    )
 
+    if embedding_input_holds_media_read_as_text(value, input_type):
+        return value, 0, True
     text, media = split_embedding_media_for_tpm(value)
     if not media:
         return value, 0, False
