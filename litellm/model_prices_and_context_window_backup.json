@@ -85389,6 +85389,23 @@
         "supports_reasoning": true,
         "source": "https://api.openinfer.ai/v1/models"
     },
+    "mallard/thinkingmachines/inkling-2-mini": {
+        "max_tokens": 262144,
+        "max_input_tokens": 262144,
+        "max_output_tokens": 65536,
+        "input_cost_per_token": 4.0104e-08,
+        "cache_read_input_token_cost": 1.3368e-08,
+        "output_cost_per_token": 2.6736e-07,
+        "litellm_provider": "mallard",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_vision": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_prompt_caching": true,
+        "source": "https://mallardai.co.uk/pricing/"
+    },
     "openinfer/@oi/Qwen3.5-27B": {
         "max_input_tokens": 32768,
         "max_output_tokens": 32768,

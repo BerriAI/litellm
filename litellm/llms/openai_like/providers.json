@@ -392,5 +392,10 @@
       "/v1/chat/completions",
       "/v1/completions"
     ]
+  },
+  "mallard": {
+    "base_url": "https://api.mallardai.co.uk/v1",
+    "api_key_env": "MALLARD_API_KEY",
+    "api_base_env": "MALLARD_API_BASE"
   }
 }
