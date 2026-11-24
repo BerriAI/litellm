@@ -557,7 +557,11 @@ def tools_without_eager_input_streaming(request_body: Mapping[str, object]) -> S
     return [{key: value for key, value in tool.items() if key != "eager_input_streaming"} for tool in tools]
 
 
-def normalize_json_schema_custom_types_to_object(schema: dict) -> None:
+def _schema_node(value: object) -> dict[str, object] | None:
+    return value if isinstance(value, dict) else None
+
+
+def normalize_json_schema_custom_types_to_object(schema: object) -> None:
     """
     In-place: replace JSON Schema ``type: \"custom\"`` with ``\"object\"`` (iterative walk).
 
@@ -569,32 +573,19 @@ def normalize_json_schema_custom_types_to_object(schema: dict) -> None:
     stack: Final[list[object]] = [schema]
     seen: Final[set[int]] = set()
     while stack:
-        node = stack.pop()
-        if not isinstance(node, dict):
+        node = _schema_node(stack.pop())
+        if node is None or id(node) in seen:
             continue
-        node_id = id(node)
-        if node_id in seen:
-            continue
-        seen.add(node_id)
+        seen.add(id(node))
         if node.get("type") == "custom":
             node["type"] = "object"
-        items = node.get("items")
-        if isinstance(items, dict):
-            stack.append(items)
-        addl = node.get("additionalProperties")
-        if isinstance(addl, dict):
-            stack.append(addl)
-        props = node.get("properties")
-        if isinstance(props, dict):
-            for sub in props.values():
-                if isinstance(sub, dict):
-                    stack.append(sub)
+        stack.extend((node.get("items"), node.get("additionalProperties")))
+        for container in ("properties", "$defs"):
+            stack.extend((_schema_node(node.get(container)) or {}).values())
         for combiner in ("allOf", "anyOf", "oneOf"):
-            arr = node.get(combiner)
-            if isinstance(arr, list):
-                for sub in arr:
-                    if isinstance(sub, dict):
-                        stack.append(sub)
+            branches = node.get(combiner)
+            if isinstance(branches, list):
+                stack.extend(branches)
 
 
 def normalize_tool_input_schema_types_for_bedrock_invoke(request_body: dict) -> None:
@@ -1050,6 +1041,11 @@ def _bedrock_price_map_flag(model: str, flag: str) -> bool:
     return any(entry is not None and entry.get(flag) is True for entry in _bedrock_price_map_entries(model))
 
 
+def _bedrock_price_map_value(model: str, flag: str) -> bool | None:
+    values: Final = (entry.get(flag) for entry in _bedrock_price_map_entries(model) if entry is not None)
+    return next((value for value in values if isinstance(value, bool)), None)
+
+
 def _price_map_entry_lists_endpoint(entry: Mapping[str, object] | None, endpoint: str) -> bool:
     endpoints: Final = None if entry is None else entry.get("supported_endpoints")
     return isinstance(endpoints, (list, tuple)) and endpoint in endpoints
@@ -1390,6 +1386,16 @@ def _converse_target_model(model: str, base_model: str | None) -> str:
 
 def _is_claude(model: str) -> bool:
     return get_bedrock_base_model(model).startswith(("anthropic", "claude"))
+
+
+def bedrock_converse_resolves_tool_schema_defs(model: str | None) -> bool:
+    if model is None:
+        return False
+    listed: Final = (
+        _bedrock_price_map_value(model, "supports_tool_schema_defs"),
+        _bedrock_price_map_value(get_bedrock_base_model(model), "supports_tool_schema_defs"),
+    )
+    return next((flag for flag in listed if flag is not None), _is_claude_behind_any_region_prefix(model))
 
 
 def _is_claude_behind_any_region_prefix(model: str) -> bool:
