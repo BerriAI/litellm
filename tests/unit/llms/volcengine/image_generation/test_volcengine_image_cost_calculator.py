@@ -93,14 +93,14 @@ def test_input_images_bill_after_the_free_allowance() -> None:
     assert cost == 1.5
 
 
-def test_an_unpriced_model_costs_nothing_instead_of_raising() -> None:
+def test_a_deployment_per_image_price_replaces_the_shared_tier_prices() -> None:
     cost: Final = cost_calculator(
         model="doubao-seedream-5-5-261028",
         image_response=_response(("1024x1024",)),
-        model_info={},
+        model_info={"output_cost_per_image": 3.0},
     )
 
-    assert cost == 0.0
+    assert cost == 3.0
 
 
 @pytest.mark.parametrize("model", ARK_SEEDREAM_MODELS)

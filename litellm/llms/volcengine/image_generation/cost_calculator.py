@@ -8,6 +8,7 @@ from litellm.types.utils import ImageObject, ImageResponse, ModelInfo
 
 _LOW_TIER_MAX_PIXELS: Final = 2_610_000
 _PROVIDER_ENTRY_KEY: Final = "volcengine_image"
+_TIER_FIELDS: Final = frozenset({"output_cost_per_image_1K", "output_cost_per_image_2K"})
 _MAPPING: Final = TypeAdapter(Mapping[str, object])
 
 
@@ -71,16 +72,27 @@ def _input_cost(pricing: Mapping[str, object], entry: Mapping[str, object], imag
     return input_price * max(input_images - free_input_images, 0.0)
 
 
+def _pricing(model: str, model_info: ModelInfo | None) -> Mapping[str, object]:
+    shared: Final = resolve_image_model_info(
+        model=model,
+        custom_llm_provider="volcengine",
+        model_info=model_info,
+    )
+    if (
+        model_info is not None
+        and model_info.get("output_cost_per_image") is not None
+        and not any(model_info.get(field) is not None for field in _TIER_FIELDS)
+    ):
+        return {key: value for key, value in shared.items() if key not in _TIER_FIELDS}
+    return shared
+
+
 def cost_calculator(
     model: str,
     image_response: ImageResponse,
     model_info: ModelInfo | None = None,
 ) -> float:
-    pricing: Final = resolve_image_model_info(
-        model=model,
-        custom_llm_provider="volcengine",
-        model_info=model_info,
-    )
+    pricing: Final = _pricing(model, model_info)
     entry: Final = _mapping(_mapping(pricing.get("provider_specific_entry")).get(_PROVIDER_ENTRY_KEY))
     output_cost: Final = sum(_output_price(pricing, entry, image) for image in image_response.data or [])
     return output_cost + _input_cost(pricing, entry, image_response)
