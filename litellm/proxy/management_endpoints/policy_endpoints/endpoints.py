@@ -123,7 +123,7 @@ class ApplyPoliciesListResult(TypedDict):
 async def apply_policies(
     policy_names: list[str] | None,
     inputs: GenericGuardrailAPIInputs,
-    request_data: dict,
+    request_data: dict[str, object],
     input_type: Literal["request", "response"],
     proxy_logging_obj: "LiteLLMLoggingObj",
     guardrail_names: list[str] | None = None,

@@ -635,13 +635,13 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
 
     def _process_response(
         self,
-        response: dict | None,
+        response: dict[str, object] | None,
         request_data: dict,
         start_time: float | None = None,
         end_time: float | None = None,
         duration: float | None = None,
         event_type: GuardrailEventHooks | None = None,
-        original_inputs: dict | None = None,
+        original_inputs: dict[str, object] | None = None,
     ):
         """
         Override to store only the Model Armor API response, not the entire data dict.
@@ -966,7 +966,7 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
     @log_guardrail_information
     async def async_post_call_success_hook(
         self,
-        data: dict,
+        data: dict[str, object],
         user_api_key_dict: UserAPIKeyAuth,
         response: LLMResponseTypes,
     ):
@@ -1449,7 +1449,7 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
     async def apply_guardrail(
         self,
         inputs: GenericGuardrailAPIInputs,
-        request_data: dict,
+        request_data: dict[str, object],
         input_type: Literal["request", "response"],
         logging_obj: "LiteLLMLoggingObj | None" = None,
     ) -> GenericGuardrailAPIInputs:

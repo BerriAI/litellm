@@ -94,7 +94,7 @@ class OpenAIEmbeddingsHandler(BaseTranslation):
 
     async def process_input_messages(
         self,
-        data: dict,
+        data: dict[str, object],
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: "LiteLLMLoggingObj | None" = None,
     ) -> Mapping[str, object]:

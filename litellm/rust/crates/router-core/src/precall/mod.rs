@@ -30,6 +30,9 @@ pub struct DeploymentFacts {
     pub lacks_params: bool,
     /// `_deployment_rejects_params`: it lacks one the request and deployment neither drop nor allow.
     pub rejects_params: bool,
+    /// The prompt's token count for this deployment when it bills the prompt below the shared
+    /// [`PreCallFacts::input_tokens`], as Gemini and OpenAI bill an inline PDF.
+    pub input_tokens: Option<i64>,
 }
 
 /// What the host knows about a request for the pre-call checks.
@@ -193,6 +196,68 @@ mod tests {
         found.input_tokens = Some(100);
         found.countable = false;
         assert_eq!(filter("g", vec![small], &[], &found).unwrap().len(), 1);
+    }
+
+    fn counted_apart(limit: i64, tokens: i64) -> DeploymentFacts {
+        DeploymentFacts {
+            input_tokens: Some(tokens),
+            ..window(limit)
+        }
+    }
+
+    #[rstest]
+    fn a_deployment_counted_apart_is_kept_when_its_own_count_fits() {
+        let gemini = deployment("gemini", json!({"model": "gemini/a"}), json!({}));
+        let claude = deployment("claude", json!({"model": "anthropic/b"}), json!({}));
+        let mut found = facts(&[("gemini", counted_apart(50, 40)), ("claude", window(50))]);
+        found.input_tokens = Some(100);
+        let kept = filter("g", vec![gemini, claude], &[], &found).unwrap();
+        assert_eq!(
+            kept.iter().map(|d| d.id.as_str()).collect::<Vec<_>>(),
+            ["gemini"]
+        );
+    }
+
+    #[rstest]
+    fn a_deployment_counted_apart_names_its_own_count_when_it_overflows() {
+        let gemini = deployment("gemini", json!({"model": "gemini/a"}), json!({}));
+        let claude = deployment("claude", json!({"model": "anthropic/b"}), json!({}));
+        let mut found = facts(&[("gemini", counted_apart(50, 60)), ("claude", window(50))]);
+        found.input_tokens = Some(100);
+        let error = filter("g", vec![gemini, claude], &[], &found).unwrap_err();
+        let Error::ContextWindowExceeded { detail, .. } = error else {
+            panic!("expected a context window error, got {error:?}");
+        };
+        assert_eq!(
+            detail,
+            "Model=gemini/a, Max Input Tokens=50, Got=60Model=anthropic/b, Max Input Tokens=50, Got=100"
+        );
+    }
+
+    #[rstest]
+    fn a_deployment_counted_apart_fits_every_window_while_a_compaction_is_pending() {
+        let gemini = deployment("gemini", json!({"model": "gemini/a"}), json!({}));
+        let mut found = facts(&[("gemini", counted_apart(50, 60))]);
+        found.input_tokens = Some(100);
+        found.countable = false;
+        assert_eq!(filter("g", vec![gemini], &[], &found).unwrap().len(), 1);
+    }
+
+    #[rstest]
+    #[case::shared_only(json!({"max_input_tokens": 5}), None)]
+    #[case::counted_apart(json!({"max_input_tokens": 5, "input_tokens": 3}), Some(3))]
+    fn deployment_facts_read_an_own_count_only_when_the_host_sends_one(
+        #[case] wire: Value,
+        #[case] own: Option<i64>,
+    ) {
+        let read: DeploymentFacts = serde_json::from_value(wire).unwrap();
+        assert_eq!(
+            read,
+            DeploymentFacts {
+                input_tokens: own,
+                ..window(5)
+            }
+        );
     }
 
     #[rstest]

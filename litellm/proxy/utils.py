@@ -2465,8 +2465,8 @@ class ProxyLogging:
         alerting_threshold: float | None = None,
         redis_cache: RedisCache | None = None,
         alert_types: list[AlertType] | None = None,
-        alerting_args: dict | None = None,
-        alert_to_webhook_url: dict | None = None,
+        alerting_args: dict[str, object] | None = None,
+        alert_to_webhook_url: dict[str, object] | None = None,
         alert_type_config: dict | None = None,
     ):
         updated_slack_alerting: bool = False
@@ -3212,7 +3212,7 @@ class ProxyLogging:
         self,
         callback: CustomGuardrail,
         data: dict[str, object],  # mutable-ok: matches _process_guardrail_callback's own request-payload typing
-        raw_request_snapshot: dict | None,  # mutable-ok: same request-payload shape as data
+        raw_request_snapshot: dict[str, object] | None,  # mutable-ok: same request-payload shape as data
         user_api_key_dict: UserAPIKeyAuth,
         call_type: CallTypesLiteral,
     ) -> dict:  # mutable-ok: callers reassign the loop's own data from this return value
@@ -3412,7 +3412,7 @@ class ProxyLogging:
         user_api_key_dict: UserAPIKeyAuth,
         call_type: str,
         event_hook: str,
-        raw_request_snapshot: dict | None = None,  # mutable-ok: same request-payload shape as data
+        raw_request_snapshot: dict[str, object] | None = None,  # mutable-ok: same request-payload shape as data
         response: LLMResponseTypes | None = None,
     ) -> tuple[dict, LLMResponseTypes | None]:  # mutable-ok: returns the request-payload dict onward
         """
@@ -4166,7 +4166,7 @@ class ProxyLogging:
 
     async def during_call_hook(
         self,
-        data: dict,
+        data: dict[str, object],
         user_api_key_dict: UserAPIKeyAuth | None,
         call_type: CallTypesLiteral,
         guardrails_only: bool = False,
@@ -4824,7 +4824,7 @@ class ProxyLogging:
 
     async def post_call_success_hook(
         self,
-        data: dict,
+        data: dict[str, object],
         response: LLMResponseTypes,
         user_api_key_dict: UserAPIKeyAuth,
     ):
@@ -5093,7 +5093,7 @@ class ProxyLogging:
 
     async def post_call_response_headers_hook(
         self,
-        data: dict,
+        data: dict[str, object],
         user_api_key_dict: UserAPIKeyAuth,
         response: object,
         request_headers: dict[str, str] | None = None,
@@ -5229,7 +5229,7 @@ class ProxyLogging:
 
     async def async_post_call_streaming_hook(
         self,
-        data: dict,
+        data: dict[str, object],
         response: object,
         user_api_key_dict: UserAPIKeyAuth,
         str_so_far: str | None = None,
@@ -5801,10 +5801,23 @@ class ProxyLogging:
         The request stash serializes release with callbacks and clears the acquisition,
         so repeated cleanup cannot release another request's slot.
         """
+        await self.arelease_request_parallel_slot()
+
+    async def arelease_request_parallel_slot(self) -> None:
         limiter: Final = self.get_proxy_hook("parallel_request_limiter")
         if not isinstance(limiter, ParallelRequestLimiterHook):
             return
-        await limiter.async_release_max_parallel_requests_on_disconnect(user_api_key_dict)
+        await limiter.async_release_request_parallel_slot()
+
+    async def arelease_slot_before_logging(self, logging_obj: "LiteLLMLoggingObj") -> None:
+        limiter: Final = self.get_proxy_hook("parallel_request_limiter")
+        match limiter:
+            case ParallelRequestLimiterHook():
+                await limiter.async_release_request_parallel_slot()
+            case _PROXY_MaxParallelRequestsHandler():
+                await limiter.async_release_slot_before_logging(logging_obj)
+            case _:
+                return
 
     arelease_max_parallel_requests_on_disconnect = arelease_max_parallel_requests
     _arelease_max_parallel_requests_on_disconnect = arelease_max_parallel_requests

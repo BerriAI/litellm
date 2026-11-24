@@ -559,13 +559,13 @@ async def anthropic_messages(
     max_tokens: int,
     messages: list[dict],
     model: str,
-    metadata: dict | None = None,
+    metadata: dict[str, object] | None = None,
     stop_sequences: list[str] | None = None,
     stream: bool | None = False,
     system: str | list | None = None,
     temperature: float | None = None,
-    thinking: dict | None = None,
-    tool_choice: dict | None = None,
+    thinking: dict[str, object] | None = None,
+    tool_choice: dict[str, object] | None = None,
     tools: list[dict] | None = None,
     top_k: int | None = None,
     top_p: float | None = None,
@@ -723,7 +723,7 @@ def anthropic_messages_handler(
     max_tokens: int,
     messages: list[dict],
     model: str,
-    metadata: dict | None = None,
+    metadata: dict[str, object] | None = None,
     stop_sequences: list[str] | None = None,
     stream: bool | None = False,
     system: str | list | None = None,
@@ -765,7 +765,7 @@ def anthropic_messages_handler(
     metadata = validate_anthropic_api_metadata(metadata)
 
     local_vars: Final = locals()
-    is_async: Final = kwargs.pop("is_async", False)
+    is_async: Final = kwargs.pop("is_async", False) is True
     # Use provided client or create a new one
     litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
 

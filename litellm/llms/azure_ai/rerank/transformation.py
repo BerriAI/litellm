@@ -91,7 +91,7 @@ class AzureAIRerankConfig(CohereRerankConfig):
         model_response: RerankResponse,
         logging_obj: LiteLLMLoggingObj,
         api_key: str | None = None,
-        request_data: dict = {},
+        request_data: dict[str, object] = {},
         optional_params: dict = {},
         litellm_params: dict = {},
     ) -> RerankResponse:

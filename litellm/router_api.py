@@ -1610,7 +1610,8 @@ class RouterHealth(Protocol):
         ...
 
     async def fully_unhealthy_model_names(self) -> set[str]:  # mutable-ok: the core's type, a fresh set
-        """Groups whose every deployment failed its health check (was ``async_get_fully_unhealthy_model_names``)."""
+        """Groups whose every unpaused deployment failed its health check, or every deployment when all are
+        paused (was ``async_get_fully_unhealthy_model_names``)."""
         ...
 
     @overload

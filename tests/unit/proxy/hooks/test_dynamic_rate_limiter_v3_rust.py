@@ -49,6 +49,7 @@ from tests.unit.proxy.hooks.native_capacity_handler import (
     pre_call_at_saturation,
     priority_based_descriptors,
     redis_answering_counts,
+    saturation_reads,
     seed_counter,
 )
 
@@ -1915,6 +1916,237 @@ async def test_an_embedding_responses_tokens_count_against_the_team_limit(monkey
     with pytest.raises(ProxyRateLimitError) as exc:
         await _check(handler, _team_key(), saturation=0.5)
     _held_to_team_limit(exc.value, "tokens", "model_tpm_limit")
+
+
+@pytest.mark.asyncio
+async def test_an_embedding_the_provider_reports_as_zero_tokens_keeps_its_reservation_on_the_team_share(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    handler: Final = _borrowing_handler(monkeypatch, borrows=True)
+    await _check(handler, _team_key(), saturation=0.5, data={"model": "shared-model", "input": "word " * 30})
+    remaining: Final = await _team_tokens_remaining(handler)
+    assert remaining < 100
+    await _settle_tokens(
+        handler,
+        0,
+        response=litellm.EmbeddingResponse(usage=litellm.Usage(prompt_tokens=0, completion_tokens=0, total_tokens=0)),
+        call_type="aembedding",
+    )
+    assert await _team_tokens_remaining(handler) == remaining
+
+
+_PNG_PIXEL_DATA_URI: Final = (
+    "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII="
+)
+
+
+async def _embedding_tokens_toward_saturation(
+    monkeypatch: pytest.MonkeyPatch,
+    embedding_input: object,
+    prompt_tokens: int,
+    media_models: tuple[str, ...],
+    team_id: str | None = None,
+) -> Mapping[str, float]:
+    monkeypatch.setenv("LITELLM_LICENSE", "test-license-key")
+    monkeypatch.setattr(litellm, "priority_reservation", {"dev": 0.1, "prod": 0.9})
+    model: Final = "media-embedding"
+    handler: Final = DynamicRateLimitHandler(internal_usage_cache=DualCache())
+    handler.update_variables(
+        llm_router=Router(
+            model_list=[
+                {
+                    "model_name": model,
+                    "litellm_params": {"model": "gpt-3.5-turbo", "api_key": "k", "api_base": "b", "tpm": 1000},
+                }
+            ]
+        )
+    )
+    redis: Final = handler.saturation_redis()
+    handler.v3_limiter = PROXY_MaxParallelRequestsHandler_v3(
+        handler.internal_usage_cache,
+        media_model_resolver=lambda _model, asked_team_id: media_models if asked_team_id == team_id else (),
+    )
+    with redis.answering(saturation_reads(handler, model, 0.0)):
+        await handler.async_pre_call_hook(
+            UserAPIKeyAuth(api_key="sk-dev", team_id=team_id, metadata={"priority": "dev"}),
+            DualCache(),
+            {"model": model, "input": embedding_input},
+            "aembedding",
+        )
+    await handler.async_log_success_event(
+        kwargs={
+            "call_type": "aembedding",
+            "litellm_params": {
+                "metadata": {"model_group": model},
+                "proxy_server_request": {"body": {"model": model, "input": "redacted-by-litellm"}},
+            },
+            "standard_logging_object": {
+                "metadata": {"user_api_key_auth_metadata": {"priority": "dev"}},
+                "model_group": model,
+            },
+        },
+        response_obj=litellm.EmbeddingResponse(
+            usage=litellm.Usage(prompt_tokens=prompt_tokens, completion_tokens=0, total_tokens=0)
+        ),
+        start_time=None,
+        end_time=None,
+    )
+    token_keys: Final = (
+        counter_key(RateLimitScope("model_saturation_check", model).counter("tokens")),
+        counter_key(RateLimitScope("priority_model", f"{model}:dev").counter("tokens")),
+    )
+    increments: Final = redis.increments()
+    return {key: sum(amount for counted_key, amount in increments if counted_key == key) for key in token_keys}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("prompt_tokens", [0, 7])
+async def test_an_embedding_counts_its_prompt_tokens_or_else_its_pre_call_estimate_toward_saturation(
+    monkeypatch: pytest.MonkeyPatch, prompt_tokens: int
+) -> None:
+    from litellm.proxy.hooks.parallel_request_limiter_v3 import request_token_estimate
+
+    embedding_input: Final = "word " * 30
+    counted: Final = await _embedding_tokens_toward_saturation(
+        monkeypatch, embedding_input, prompt_tokens, ("bedrock/amazon.titan-embed-image-v1",)
+    )
+
+    estimate: Final = request_token_estimate(
+        data={"model": "media-embedding", "input": embedding_input},
+        model="media-embedding",
+        min_configured_tpm_limit=0,
+        call_type="aembedding",
+        team_id=None,
+    )
+    assert estimate > 0
+    assert estimate != 7
+    assert set(counted.values()) == {prompt_tokens or estimate}
+
+
+@pytest.mark.asyncio
+async def test_an_embedding_whose_media_no_deployment_prices_counts_nothing_toward_saturation_at_zero_tokens(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    counted: Final = await _embedding_tokens_toward_saturation(
+        monkeypatch,
+        ["data:video/mp4;base64,AAAAIGZ0eXBpc29t" + "A" * 4096],
+        0,
+        ("bedrock/async_invoke/us.twelvelabs.marengo-embed-3-0-v1:0",),
+    )
+
+    assert set(counted.values()) == {0}
+
+
+@pytest.mark.asyncio
+async def test_an_embedding_counts_media_only_its_teams_deployments_price_toward_saturation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy.hooks.parallel_request_limiter_v3 import request_token_estimate
+
+    titan: Final = ("bedrock/amazon.titan-embed-image-v1",)
+    embedding_input: Final = [_PNG_PIXEL_DATA_URI]
+    counted: Final = await _embedding_tokens_toward_saturation(monkeypatch, embedding_input, 0, titan, team_id="team-a")
+
+    estimate: Final = request_token_estimate(
+        data={"model": "media-embedding", "input": embedding_input},
+        model="media-embedding",
+        min_configured_tpm_limit=0,
+        call_type="aembedding",
+        team_id="team-a",
+        media_model_resolver=lambda _model, _team_id: titan,
+    )
+    assert estimate > 0
+    assert set(counted.values()) == {estimate}
+
+
+@pytest.mark.asyncio
+async def test_an_embedding_held_on_the_team_share_settles_its_reservation_without_pricing_its_media_again(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    priced: Final[list[str]] = []  # mutable-ok: records each time a request's media is priced
+
+    def resolve(model: str, _team_id: str | None) -> tuple[str, ...]:
+        priced.append(model)
+        return ("bedrock/amazon.titan-embed-image-v1",)
+
+    handler: Final = _borrowing_handler(monkeypatch, borrows=True)
+    key: Final = _team_key(team_limits={"model_tpm_limit": {"shared-model": 10_000}})
+    redis: Final = handler.saturation_redis()
+    handler.v3_limiter = PROXY_MaxParallelRequestsHandler_v3(
+        handler.internal_usage_cache, rate_limit_store=handler.logger.rate_limits, media_model_resolver=resolve
+    )
+    with redis.answering(saturation_reads(handler, "shared-model", 0.5)):
+        await handler.async_pre_call_hook(
+            key, DualCache(), {"model": "shared-model", "input": [_PNG_PIXEL_DATA_URI]}, "aembedding"
+        )
+    reserved: Final = await _team_tokens_remaining(handler, key)
+    assert reserved < 10_000
+    await _settle_tokens(
+        handler,
+        0,
+        response=litellm.EmbeddingResponse(usage=litellm.Usage(prompt_tokens=0, completion_tokens=0, total_tokens=0)),
+        call_type="aembedding",
+    )
+    assert await _team_tokens_remaining(handler, key) == reserved
+    assert priced == ["shared-model"]
+
+
+@pytest.mark.asyncio
+async def test_an_embedding_settled_on_a_model_group_that_prices_no_media_refunds_its_team_share(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    handler: Final = _borrowing_handler(monkeypatch, borrows=True)
+    key: Final = _team_key(team_limits={"model_tpm_limit": {"shared-model": 10_000}})
+    redis: Final = handler.saturation_redis()
+    handler.v3_limiter = PROXY_MaxParallelRequestsHandler_v3(
+        handler.internal_usage_cache,
+        rate_limit_store=handler.logger.rate_limits,
+        media_model_resolver=lambda model, _team_id: ("bedrock/amazon.titan-embed-image-v1",)
+        if model == "shared-model"
+        else (),
+    )
+    with redis.answering(saturation_reads(handler, "shared-model", 0.5)):
+        await handler.async_pre_call_hook(
+            key, DualCache(), {"model": "shared-model", "input": [_PNG_PIXEL_DATA_URI]}, "aembedding"
+        )
+    assert await _team_tokens_remaining(handler, key) < 10_000
+    await _settle_tokens(
+        handler,
+        0,
+        response=litellm.EmbeddingResponse(usage=litellm.Usage(prompt_tokens=0, completion_tokens=0, total_tokens=0)),
+        call_type="aembedding",
+        model_group="other-model",
+    )
+    assert await _team_tokens_remaining(handler, key) == 10_000
+
+
+@pytest.mark.asyncio
+async def test_an_embedding_whose_media_no_deployment_prices_refunds_its_team_share_without_a_logged_model_group(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    handler: Final = _borrowing_handler(monkeypatch, borrows=True)
+    redis: Final = handler.saturation_redis()
+    handler.v3_limiter = PROXY_MaxParallelRequestsHandler_v3(
+        handler.internal_usage_cache,
+        rate_limit_store=handler.logger.rate_limits,
+        media_model_resolver=lambda _model, _team_id: (),
+    )
+    with redis.answering(saturation_reads(handler, "shared-model", 0.5)):
+        await handler.async_pre_call_hook(
+            _team_key(),
+            DualCache(),
+            {"model": "shared-model", "input": ["data:video/mp4;base64,AAAAIGZ0eXBpc29t" + "A" * 40]},
+            "aembedding",
+        )
+    assert await _team_tokens_remaining(handler) < 100
+    await _settle_tokens(
+        handler,
+        0,
+        response=litellm.EmbeddingResponse(usage=litellm.Usage(prompt_tokens=0, completion_tokens=0, total_tokens=0)),
+        call_type="aembedding",
+        model_group="",
+    )
+    assert await _team_tokens_remaining(handler) == 100
 
 
 @pytest.mark.asyncio

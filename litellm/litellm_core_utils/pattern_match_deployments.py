@@ -101,7 +101,7 @@ class PatternMatchRouter:
         self.patterns: dict[str, list] = {}
         self._pattern_utils: Final = pattern_utils
 
-    def add_pattern(self, pattern: str, llm_deployment: dict):
+    def add_pattern(self, pattern: str, llm_deployment: dict[str, object]):
         """
         Add a regex pattern and the corresponding llm deployments to the patterns
 

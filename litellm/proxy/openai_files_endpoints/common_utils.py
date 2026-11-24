@@ -1253,7 +1253,7 @@ async def handle_model_based_routing(
     file_id: str,
     request: "Request",  # FastAPI Request object
     llm_router: Optional["Router"],  # Router instance
-    data: dict,
+    data: dict[str, object],
     user_api_key_dict: "UserAPIKeyAuth",
     check_file_id_encoding: bool = True,
     resolves_managed_file_ids: bool = False,
@@ -1539,7 +1539,7 @@ class FileCreationParams:
 
 async def extract_file_creation_params(
     request: "Request",
-    request_body: dict | None = None,
+    request_body: dict[str, object] | None = None,
     target_model_names_form: str | None = None,
     target_storage_form: str | None = None,
 ) -> FileCreationParams:
@@ -2067,6 +2067,13 @@ def batch_cost_poller_is_active() -> bool:
         return getattr(poller, "batch_processed_support_confirmed", False) is True
     except Exception:  # noqa: BLE001  # scheduler backends raise varied types from get_job; an unreadable scheduler means the poller cannot be relied on
         return False
+
+
+def created_batch_endpoint(provider_batch: "LiteLLMBatch", stored_batch: "LiteLLMBatch | None") -> str:
+    if stored_batch is None or not stored_batch.endpoint:
+        return provider_batch.endpoint
+    provider_named_the_endpoint: Final = provider_batch.endpoint not in ("", "/v1/chat/completions")
+    return provider_batch.endpoint if provider_named_the_endpoint else stored_batch.endpoint
 
 
 def _completed_batch_safe_to_retire(response: "LiteLLMBatch") -> bool:

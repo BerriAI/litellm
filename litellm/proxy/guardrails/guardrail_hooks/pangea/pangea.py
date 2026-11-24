@@ -226,7 +226,7 @@ class PangeaHandler(CustomGuardrail):
         self,
         user_api_key_dict: UserAPIKeyAuth,
         cache: DualCache,
-        data: dict,
+        data: dict[str, object],
         call_type: str,
     ):
         event_type: Final = GuardrailEventHooks.pre_call
@@ -315,7 +315,7 @@ class PangeaHandler(CustomGuardrail):
     @log_guardrail_information
     async def async_post_call_success_hook(
         self,
-        data: dict,
+        data: dict[str, object],
         user_api_key_dict: UserAPIKeyAuth,
         # This union isn't actually correct -- it can get other response types depending on the API called
         response: LLMResponseTypes,

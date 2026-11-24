@@ -139,25 +139,50 @@ _SPECIAL_HEADERS_CACHE: Final = frozenset(str(v.value).lower() for v in SpecialH
 _DECODED_JSON: Final = TypeAdapter(object)
 
 
-def resolve_semantic_cache_policy(auth: UserAPIKeyAuth) -> SemanticCachePolicy:
+def resolve_response_cache_policy(auth: UserAPIKeyAuth, *, semantic: bool) -> SemanticCachePolicy:
     scoped: Final[tuple[tuple[CachePolicyScope, SemanticCacheParams | None], ...]] = (
         ("key", semantic_cache_params(attribute_or_none(auth, "metadata"))),
         ("user", auth.user_semantic_cache_params),
         ("team", semantic_cache_params(auth.team_metadata)),
     )
-    return next(
-        (SemanticCachePolicy(scope=scope, params=params) for scope, params in scoped if params is not None),
+    policy: Final = next(
+        (
+            SemanticCachePolicy(scope=scope, params=params)
+            for scope, params in scoped
+            if params is not None and (semantic or params.enabled is not None or params.ttl is not None)
+        ),
         SemanticCachePolicy(scope="global"),
     )
+    if semantic or policy.params is None:
+        return policy
+    enabled: Final = next(
+        (params.enabled for _, params in scoped if params is not None and params.enabled is not None), None
+    )
+    ttl: Final = next((params.ttl for _, params in scoped if params is not None and params.ttl is not None), None)
+    return SemanticCachePolicy(scope=policy.scope, params=SemanticCacheParams(enabled=enabled, ttl=ttl))
 
 
-def _semantic_cache_fields(request: object, auth: UserAPIKeyAuth) -> Mapping[str, object]:
+def _response_cache_fields(request: object, auth: UserAPIKeyAuth) -> Mapping[str, object]:
     response_cache: Final = litellm.cache
-    if response_cache is None or response_cache.is_semantic_cache() is not True:
+    if response_cache is None:
+        return MappingProxyType({})
+    semantic: Final = response_cache.is_semantic_cache()
+    policy: Final = resolve_response_cache_policy(auth, semantic=semantic)
+    if not semantic and policy.scope == "global":
         return MappingProxyType({})
     request_fields: Final = as_str_mapping(request)
     cache_controls: Final = _request_fields(request_fields.get("cache") if request_fields is not None else None)
-    return {"cache": {**cache_controls, SEMANTIC_CACHE_POLICY_KEY: resolve_semantic_cache_policy(auth)}}
+    key_metadata: Final = as_str_mapping(attribute_or_none(auth, "metadata"))
+    key_controls: Final = as_str_mapping(key_metadata.get("cache")) if key_metadata is not None else None
+    key_opts_out: Final = (
+        not semantic
+        and key_controls is not None
+        and (key_controls.get("use-cache", True) is not True or key_controls.get("no-cache", False) is not False)
+    )
+    effective_policy: Final = (
+        SemanticCachePolicy(scope=policy.scope, params=policy.params, key_opted_out=True) if key_opts_out else policy
+    )
+    return {"cache": {**cache_controls, SEMANTIC_CACHE_POLICY_KEY: effective_policy}}
 
 
 _OBJECT_LIST_ADAPTER: Final = TypeAdapter(list[object])
@@ -458,7 +483,11 @@ from litellm.types.litellm_params import (
     STREAM_USAGE_INJECTED_FIELD,
 )
 from litellm.types.llms.anthropic import ANTHROPIC_API_HEADERS
-from litellm.types.router import BaggageMappedTagsStamp, holds_api_key_secret_reference
+from litellm.types.router import (
+    BaggageMappedTagsStamp,
+    ForwardedClientHeaders,
+    holds_api_key_secret_reference,
+)
 from litellm.types.services import ServiceTypes
 from litellm.types.utils import (
     API_KEY_SECRET_REFERENCE_REJECTION,
@@ -1382,7 +1411,7 @@ def parse_litellm_settings_drop_params(value: object) -> bool:
     return normalized is True
 
 
-def safe_add_api_version_from_query_params(data: dict, request: Request):
+def safe_add_api_version_from_query_params(data: dict[str, object], request: Request):
     try:
         if hasattr(request, "query_params"):
             query_params: Final = dict(request.query_params)
@@ -2722,7 +2751,7 @@ class LiteLLMProxyRequestSetup:
     def add_request_tag_to_metadata(
         llm_router: Router | None,
         headers: Mapping[str, str],
-        data: dict,
+        data: dict[str, object],
     ) -> list[str] | None:
         tags = None
 
@@ -2873,7 +2902,7 @@ class LiteLLMProxyRequestSetup:
 
     @staticmethod
     def apply_key_tags_pre_auth(
-        request_data: dict,
+        request_data: dict[str, object],
         user_api_key_dict: UserAPIKeyAuth,
     ) -> None:
         """Merge key metadata tags into request_data before _tag_max_budget_check."""
@@ -2897,7 +2926,7 @@ class LiteLLMProxyRequestSetup:
     @staticmethod
     def apply_client_tag_policy_pre_auth(
         request: Request,
-        request_data: dict,
+        request_data: dict[str, object],
         user_api_key_dict: UserAPIKeyAuth,
     ) -> None:
         """
@@ -3121,6 +3150,7 @@ async def add_litellm_data_to_request(
     if data.get(_metadata_variable_name, None) is None:
         data[_metadata_variable_name] = {}
 
+    _headers_before_forwarding: Final = _REQUEST_FIELDS.validate_python(data).get("headers")
     data.update(
         LiteLLMProxyRequestSetup.add_litellm_data_for_backend_llm_call(
             headers=_headers,
@@ -3129,6 +3159,7 @@ async def add_litellm_data_to_request(
             general_settings=general_settings,
         )
     )
+    _headers_after_global_forwarding: Final = _REQUEST_FIELDS.validate_python(data).get("headers")
 
     LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
         headers=_headers,
@@ -3157,6 +3188,16 @@ async def add_litellm_data_to_request(
     data = LiteLLMProxyRequestSetup.add_headers_to_llm_call_by_model_group(
         data=data, headers=_headers, user_api_key_dict=user_api_key_dict
     )
+    _forwarded_headers: Final = _REQUEST_FIELDS.validate_python(data).get("headers")
+    _forwarded_headers_stamp: Final = forwarded_client_headers_stamp(
+        _forwarded_headers,
+        forwarded_globally=_headers_after_global_forwarding is not _headers_before_forwarding,
+        forwarded_for_model_group=_forwarded_headers is not _headers_after_global_forwarding,
+    )
+    if _forwarded_headers_stamp is not None:
+        data["proxy_server_request"]["forwarded_client_headers"] = (  # rebind-ok: data is an out-param
+            _forwarded_headers_stamp
+        )
 
     # Header mappings can overwrite user_id below; the key/JWT identity is the only
     # one allowed to load per-user provider credentials.
@@ -3498,7 +3539,7 @@ async def add_litellm_data_to_request(
     data.update(
         {
             **key_and_team_logging_fields(user_api_key_dict=user_api_key_dict, proxy_config=proxy_config),
-            **_semantic_cache_fields(_DECODED_JSON.validate_python(data), user_api_key_dict),
+            **_response_cache_fields(_DECODED_JSON.validate_python(data), user_api_key_dict),
         }
     )
 
@@ -4434,7 +4475,7 @@ def check_if_token_is_service_account(valid_token: UserAPIKeyAuth) -> bool:
 
 def _enforced_params_check(
     request_body: Mapping[str, object],
-    general_settings: dict | None,
+    general_settings: dict[str, object] | None,
     user_api_key_dict: UserAPIKeyAuth,
     premium_user: bool,
 ) -> bool:
@@ -4978,8 +5019,19 @@ _ANTHROPIC_OAUTH_CREDENTIAL_PROVIDERS: Final = ",".join(sorted(ANTHROPIC_OAUTH_F
 _CHATGPT_OAUTH_CREDENTIAL_PROVIDERS: Final = LlmProviders.CHATGPT.value
 
 
+def forwarded_client_headers_stamp(
+    headers: object, *, forwarded_globally: bool, forwarded_for_model_group: bool
+) -> Mapping[str, object] | None:
+    """The record of the ``headers`` the proxy forwarded from the client, so a router fallback can tell them from
+    headers a caller or a later hook set. None when the proxy forwarded none."""
+    forwarded: Final = as_str_mapping(headers)
+    if not (forwarded_globally or forwarded_for_model_group) or forwarded is None:
+        return None
+    return ForwardedClientHeaders.of(forwarded, model_group_scoped=not forwarded_globally).model_dump()
+
+
 def add_provider_specific_headers_to_request(
-    data: dict,
+    data: dict[str, object],
     headers: Mapping[str, str],
 ) -> bool:
     from litellm.llms.anthropic.common_utils import anthropic_oauth_token_from_header, is_anthropic_oauth_key
