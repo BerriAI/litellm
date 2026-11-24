@@ -995,6 +995,10 @@ from litellm.proxy.middleware.gzip_middleware import GZipBufferedResponseMiddlew
 from litellm.proxy.middleware.in_flight_requests_middleware import (
     InFlightRequestsMiddleware,
 )
+from litellm.proxy.middleware.forwarded_host_middleware import (
+    ForwardedHostMiddleware,
+    use_x_forwarded_host,
+)
 from litellm.proxy.middleware.per_request_root_path_middleware import (
     PerRequestRootPathMiddleware,
     get_server_root_paths,
@@ -23327,6 +23331,14 @@ if _server_root_paths:
         )
     app.add_middleware(PerRequestRootPathMiddleware, root_paths=_server_root_paths)
 
+
+# Honour a front end's ``X-Forwarded-Host`` when building absolute URLs.
+# Added last on purpose - last-added is outermost, and the client-visible
+# authority must be in scope["server"] and on the ``host`` header before any
+# inner middleware or the router builds a URL. Only added when
+# USE_X_FORWARDED_HOST is set, so the default middleware stack is unchanged.
+if use_x_forwarded_host():
+    app.add_middleware(ForwardedHostMiddleware)
 
 async def _stream_mcp_asgi_response(
     handle_fn: Callable[[Scope, Receive, Send], Coroutine[object, object, object]], scope: dict, receive: Receive
