@@ -1,0 +1,151 @@
+import base64
+import io
+import json
+from typing import Final
+
+import httpx
+import pytest
+
+import litellm
+from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+API_BASE: Final = "https://ark.cn-beijing.volces.com"
+IMAGES_URL: Final = f"{API_BASE}/api/v3/images/generations"
+SEEDREAM_5_5: Final = "doubao-seedream-5-5-261028"
+
+PNG_BYTES: Final = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+)
+PNG_DATA_URL: Final = f"data:image/png;base64,{base64.b64encode(PNG_BYTES).decode()}"
+
+ARK_RESPONSE: Final[dict[str, object]] = {
+    "created": 1784696685,
+    "model": SEEDREAM_5_5,
+    "data": [{"url": "https://ark.example/edited.png", "size": "2048x2048", "output_format": "png"}],
+    "usage": {"generated_images": 1, "input_images": 1, "output_tokens": 16384, "total_tokens": 16384},
+}
+
+
+def _capturing_client(captured: dict[str, object]) -> HTTPHandler:
+    def respond(request: httpx.Request) -> httpx.Response:
+        captured["url"] = str(request.url)
+        captured["authorization"] = request.headers.get("authorization")
+        captured["content_type"] = request.headers.get("content-type")
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(200, json=ARK_RESPONSE)
+
+    return HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(respond)))
+
+
+def test_edit_uploads_a_file_as_a_data_uri_on_the_generation_route() -> None:
+    captured: Final[dict[str, object]] = {}
+
+    response: Final = litellm.image_edit(
+        model=f"volcengine/{SEEDREAM_5_5}",
+        image=PNG_BYTES,
+        prompt="make the lantern red",
+        api_key="sk-ark",
+        client=_capturing_client(captured),
+        size="2K",
+        response_format="url",
+        user="end-user-42",
+    )
+
+    assert captured["url"] == IMAGES_URL
+    assert captured["authorization"] == "Bearer sk-ark"
+    assert captured["content_type"] == "application/json"
+    assert captured["body"] == {
+        "model": SEEDREAM_5_5,
+        "prompt": "make the lantern red",
+        "size": "2K",
+        "response_format": "url",
+        "safety_identifier": "end-user-42",
+        "image": [PNG_DATA_URL],
+    }
+    assert response.data[0].url == "https://ark.example/edited.png"
+    assert response.size == "2048x2048"
+
+
+def test_edit_sends_urls_as_is_and_keeps_every_reference_image() -> None:
+    captured: Final[dict[str, object]] = {}
+
+    litellm.image_edit(
+        model=f"volcengine/{SEEDREAM_5_5}",
+        image=["https://ark.example/style.png", io.BytesIO(PNG_BYTES)],
+        prompt="merge these into one poster",
+        api_key="sk-ark",
+        client=_capturing_client(captured),
+        watermark=False,
+    )
+
+    assert captured["body"] == {
+        "model": SEEDREAM_5_5,
+        "prompt": "merge these into one poster",
+        "watermark": False,
+        "image": ["https://ark.example/style.png", PNG_DATA_URL],
+    }
+
+
+def test_edit_coerces_multipart_string_values_into_ark_types() -> None:
+    captured: Final[dict[str, object]] = {}
+
+    litellm.image_edit(
+        model=f"volcengine/{SEEDREAM_5_5}",
+        image=PNG_BYTES,
+        prompt="split the lantern into layers",
+        api_key="sk-ark",
+        client=_capturing_client(captured),
+        watermark="false",
+        layer_decomposition="true",
+        layer_decomposition_options='{"max_images": 5}',
+    )
+
+    assert captured["body"] == {
+        "model": SEEDREAM_5_5,
+        "prompt": "split the lantern into layers",
+        "watermark": False,
+        "layer_decomposition": True,
+        "layer_decomposition_options": {"max_images": 5},
+        "image": [PNG_DATA_URL],
+    }
+
+
+def test_edit_with_n_fans_out_and_never_sends_n_upstream() -> None:
+    bodies: Final[list[dict[str, object]]] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        bodies.append(json.loads(request.content))
+        return httpx.Response(200, json={**ARK_RESPONSE, "data": [{"url": "https://ark.example/one.png"}]})
+
+    response: Final = litellm.image_edit(
+        model=f"volcengine/{SEEDREAM_5_5}",
+        image=PNG_BYTES,
+        prompt="make the lantern red",
+        api_key="sk-ark",
+        client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(respond))),
+        n=2,
+    )
+
+    assert len(bodies) == 2
+    assert all(
+        body == {"model": SEEDREAM_5_5, "prompt": "make the lantern red", "image": [PNG_DATA_URL]} for body in bodies
+    )
+    assert len(response.data) == 2
+
+
+def test_edit_surfaces_the_ark_error_message() -> None:
+    def respond(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            400, json={"error": {"code": "InvalidParameter", "message": "image 2 exceeds 10 reference images"}}
+        )
+
+    with pytest.raises(litellm.BadRequestError) as exc_info:
+        litellm.image_edit(
+            model=f"volcengine/{SEEDREAM_5_5}",
+            image=PNG_BYTES,
+            prompt="merge these",
+            api_key="sk-ark",
+            client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(respond))),
+        )
+
+    assert "exceeds 10 reference images" in str(exc_info.value)
