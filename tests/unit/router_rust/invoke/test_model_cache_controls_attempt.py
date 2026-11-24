@@ -3,6 +3,8 @@ from typing import Final
 
 import pytest
 
+from litellm.router_config import build_router_config
+from litellm.router_rust.core import RustCore
 from tests.unit.test_router.core.fallbacks_helpers import complete, headers
 from tests.unit.test_router.core.scripted_host import ScriptedHost, rust_core
 
@@ -106,3 +108,30 @@ async def test_a_lock_without_a_model_rule_keeps_the_router_default_cache_contro
 
     (call,) = host.calls_to("acompletion")
     assert call.kwargs["cache"] == _OFF
+
+
+@pytest.mark.parametrize(
+    ("cache_params", "request_cache", "sent_cache"),
+    [
+        pytest.param(
+            {"cache": _OFF, "allowed_cache_controls": []},
+            {"ttl": 600, "no-cache": False, "no-store": False},
+            _OFF,
+            id="a locked off model stays off",
+        ),
+        pytest.param(
+            {"cache": _OFF}, {"ttl": 600}, {**_OFF, "ttl": 600}, id="a request ttl leaves the model's opt out"
+        ),
+    ],
+)
+def test_sync_text_completion_sends_the_merged_cache_controls(
+    cache_params: Mapping[str, object], request_cache: Mapping[str, object], sent_cache: Mapping[str, object]
+) -> None:
+    host: Final = ScriptedHost()
+    _ = RustCore.build(
+        build_router_config({"model_list": [_deployment("a", **cache_params)], "num_retries": 0}), host
+    ).text_completion(model="a", prompt="hi", cache=request_cache)
+
+    (call,) = host.calls_to("text_completion")
+    assert call.kwargs["cache"] == sent_cache
+    assert "allowed_cache_controls" not in call.kwargs

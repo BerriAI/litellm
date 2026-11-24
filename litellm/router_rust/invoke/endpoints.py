@@ -2279,7 +2279,14 @@ class RustEndpoints:
                 specific_deployment=kwargs.pop("specific_deployment", None),  # pyright: ignore[reportArgumentType]  # the request's value, as given
                 request_kwargs=kwargs,
             )
-        data: Final = as_dict(deployment.get("litellm_params"))
+        params: Final = as_dict(deployment.get("litellm_params"))
+        cache: Final = model_cache_controls(params, kwargs.get("cache"))
+        data: Final = without(params, ALLOWED_CACHE_CONTROLS_PARAM)
+        if cache.controls is not None or ALLOWED_CACHE_CONTROLS_PARAM in params:
+            _ = data.pop("cache", None)
+            _ = kwargs.pop("cache", None)
+            if cache.controls:
+                kwargs["cache"] = cache.controls
         for key, value in self._core.resolved.default_litellm_params.items():
             if key not in kwargs:
                 kwargs[key] = value

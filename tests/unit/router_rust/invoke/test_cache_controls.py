@@ -48,6 +48,24 @@ _OFF = {"no-cache": True, "no-store": True}
             id="a lock without a model rule still ignores controls and keeps other cache fields",
         ),
         pytest.param(
+            {"cache": {"s-max-age": 3600}},
+            {"s-maxage": 1},
+            ModelCacheControls({"s-maxage": 1}),
+            id="a request s-maxage replaces the model's s-max-age spelling",
+        ),
+        pytest.param(
+            {"cache": {"use-cache": False}, "allowed_cache_controls": []},
+            {"use-cache": True},
+            ModelCacheControls({"use-cache": False}, ("use-cache",)),
+            id="a locked model ignores a request opting in to the cache",
+        ),
+        pytest.param(
+            {"cache": {"use-cache": False}, "allowed_cache_controls": ["use-cache"]},
+            {"use-cache": True},
+            ModelCacheControls({"use-cache": True}),
+            id="a listed use-cache lets a request opt in",
+        ),
+        pytest.param(
             {"cache": {"s-maxage": 1}, "allowed_cache_controls": []},
             {"s-max-age": 3600},
             ModelCacheControls({"s-maxage": 1}, ("s-max-age",)),
@@ -56,7 +74,7 @@ _OFF = {"no-cache": True, "no-store": True}
         pytest.param(
             {"cache": {"s-maxage": 1}, "allowed_cache_controls": ["s-maxage"]},
             {"s-max-age": 3600},
-            ModelCacheControls({"s-maxage": 1, "s-max-age": 3600}),
+            ModelCacheControls({"s-maxage": 3600}),
             id="the s-max-age spelling is allowed with s-maxage",
         ),
         pytest.param(

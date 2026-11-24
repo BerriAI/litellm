@@ -10,6 +10,7 @@ from litellm.types.utils import SupportedCacheControls
 ALLOWED_CACHE_CONTROLS_PARAM: Final = "allowed_cache_controls"
 IGNORED_CACHE_CONTROLS_HEADER: Final = "x-litellm-ignored-cache-controls"
 _CONTROL_NAMES: Final = {"s-max-age": "s-maxage"}
+_LOCKABLE_CONTROLS: Final = frozenset({*SupportedCacheControls, "use-cache"})
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -25,17 +26,22 @@ def model_cache_controls(litellm_params: Mapping[str, object], request_cache: ob
     it sends. When the deployment sets ``allowed_cache_controls``, a request control outside that list is
     ignored and named in ``ignored``."""
     allowed: Final = litellm_params.get(ALLOWED_CACHE_CONTROLS_PARAM)
-    deployment_controls: Final = as_dict(litellm_params.get("cache"))
+    deployment_controls: Final = _canonical(as_dict(litellm_params.get("cache")))
     request_controls: Final = as_dict(request_cache)
     if not isinstance(allowed, Sequence) or isinstance(allowed, str):
         if not deployment_controls or not request_controls:
             return ModelCacheControls(None)
-        return ModelCacheControls({**deployment_controls, **request_controls})
+        return ModelCacheControls({**deployment_controls, **_canonical(request_controls)})
     ignored: Final = tuple(
         control
         for control in request_controls
-        if _CONTROL_NAMES.get(control, control) in SupportedCacheControls
+        if _CONTROL_NAMES.get(control, control) in _LOCKABLE_CONTROLS
         and _CONTROL_NAMES.get(control, control) not in allowed
     )
     kept: Final = {control: value for control, value in request_controls.items() if control not in ignored}
-    return ModelCacheControls({**deployment_controls, **kept}, ignored)
+    return ModelCacheControls({**deployment_controls, **_canonical(kept)}, ignored)
+
+
+def _canonical(controls: Mapping[str, object]) -> Mapping[str, object]:
+    """``s-max-age`` under its ``s-maxage`` name, so the two spellings are one control when merged."""
+    return {_CONTROL_NAMES.get(control, control): value for control, value in controls.items()}
