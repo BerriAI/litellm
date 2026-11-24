@@ -9325,6 +9325,22 @@ def test_client_anthropic_api_headers_stay_off_azure_ai_outside_native_messages(
     assert forwarded == {}
 
 
+def test_client_anthropic_api_headers_reach_copilot_only_on_native_messages() -> None:
+    client_headers: Final = {
+        "anthropic-beta": "mid-conversation-output-config-2026-07-01",
+        "anthropic-version": "2023-06-01",
+    }
+    data: Final[dict] = {}  # mutable-ok: the function under test writes into it
+    add_provider_specific_headers_to_request(data=data, headers=client_headers)
+
+    assert ProviderSpecificHeaderUtils.get_provider_specific_headers(
+        data["provider_specific_header"], "github_copilot"
+    ) == {}
+    assert ProviderSpecificHeaderUtils.get_provider_specific_headers(
+        data["provider_specific_header"], "github_copilot", native_anthropic_messages=True
+    ) == client_headers
+
+
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("local_beta_headers_config")
 async def test_client_thinking_binding_beta_reaches_azure_ai_foundry_claude():

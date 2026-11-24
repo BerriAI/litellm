@@ -4956,7 +4956,7 @@ _ANTHROPIC_API_HEADER_PROVIDERS: Final = ",".join(
     )
 )
 _NATIVE_MESSAGES_ANTHROPIC_API_HEADER_PROVIDERS: Final = ",".join(
-    (LlmProviders.AZURE_AI.value, LlmProviders.DATABRICKS.value)
+    (LlmProviders.AZURE_AI.value, LlmProviders.DATABRICKS.value, LlmProviders.GITHUB_COPILOT.value)
 )
 _ANTHROPIC_OAUTH_CREDENTIAL_PROVIDERS: Final = ",".join(sorted(ANTHROPIC_OAUTH_FORWARD_PROVIDERS))
 _CHATGPT_OAUTH_CREDENTIAL_PROVIDERS: Final = LlmProviders.CHATGPT.value
