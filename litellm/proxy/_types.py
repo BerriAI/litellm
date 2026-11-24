@@ -77,7 +77,7 @@ from litellm.types.mcp import (
     MCPUpstreamProtocol,
     validate_mcp_protocol_transport,
 )
-from litellm.types.mcp_server.mcp_server_manager import MCPInfo
+from litellm.types.mcp_server.mcp_server_manager import MCPEventCallbackBase, MCPInfo, MCPServerEventsConfig
 from litellm.types.proxy.agent_identity import ManagedAgentContext
 from litellm.types.proxy.auth.special_headers import (
     SpecialHeaders as SpecialHeaders,  # noqa: PLC0414  # public re-export
@@ -1512,6 +1512,7 @@ class NewMCPServerRequest(LiteLLMPydanticObjectBase):
     timeout: float | None = None
     max_concurrent_requests: int | None = None
     rpm: int | None = Field(default=None, ge=0)
+    events: MCPServerEventsConfig | None = None
     # BYOM submission fields — set by the endpoint, not by the caller.
     # Any caller-provided values are silently overridden before persistence.
     approval_status: str | None = Field(
@@ -1620,6 +1621,7 @@ class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
     timeout: float | None = None
     max_concurrent_requests: int | None = None
     rpm: int | None = Field(default=None, ge=0)
+    events: MCPServerEventsConfig | None = None
 
     @model_validator(mode="after")
     def validate_protocol_transport(self) -> "UpdateMCPServerRequest":
@@ -3192,6 +3194,28 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     mcp_allowed_clients: list[MCPAllowedClient] | None = Field(
         None,
         description="MCP client applications admitted by the gateway, each an {alias, value} pair where alias is the name shown in the dashboard and logs and value is the identity that must match exactly. When set, every MCP request must carry a client identity equal to one of the values: a JWT caller is identified by the claim named in litellm_jwtauth.mcp_client_id_jwt_field, any other caller by the header named in mcp_client_id_header. A request with no resolvable identity, or an unlisted one, is rejected with 403. Unset means every client is admitted.",
+    )
+    mcp_events_enabled: bool = Field(
+        default=False,
+        description="Serve the MCP Events extension (io.modelcontextprotocol/events) on /mcp for 2026-07-28 clients. "
+        "Each upstream server also needs events.enabled. Off by default.",
+    )
+    mcp_events_public_base_url: MCPEventCallbackBase | None = Field(
+        None,
+        description="Public https base URL of this proxy that upstream MCP servers can reach, used to build the "
+        "callback URL for webhook event subscriptions. Webhook delivery is unavailable while unset.",
+    )
+    mcp_event_max_subscriptions_per_key: int | None = Field(
+        None, ge=1, description="Webhook event subscriptions one caller may hold. Defaults to 50."
+    )
+    mcp_event_max_streams_per_caller: int | None = Field(
+        None, ge=1, description="Concurrent events/stream requests one caller may hold on a replica. Defaults to 50."
+    )
+    mcp_event_max_streams: int | None = Field(
+        None, ge=1, description="Concurrent events/stream requests one replica serves. Defaults to 512."
+    )
+    mcp_event_max_events_per_minute: int | None = Field(
+        None, ge=1, description="Events delivered to one caller per minute before events are dropped. Defaults to 600."
     )
     mcp_require_explicit_server_scope: bool = Field(
         default=False,

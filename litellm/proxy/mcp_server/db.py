@@ -534,6 +534,8 @@ def _prepare_mcp_server_data(
     if not exclude_unset:
         data_dict["is_byok"] = getattr(data, "is_byok", False)
 
+    if "events" in data_dict:
+        return {**data_dict, "events": safe_dumps(data_dict["events"])}
     return data_dict
 
 
