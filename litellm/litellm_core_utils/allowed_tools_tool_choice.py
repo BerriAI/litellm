@@ -467,6 +467,16 @@ def allowed_tools_tool_choice_in_auto_mode(tool_choice: object) -> object:
             return layout.model_copy(update={"mode": "auto"}).model_dump(mode="json")
 
 
+def allowed_tools_tool_choice_without(
+    tool_choice: object, is_removed: Callable[[Mapping[str, object]], bool]
+) -> object:
+    layout: Final = _callers_layout(tool_choice)
+    if layout is None:
+        return tool_choice
+    kept: Final = tuple(tool for tool in _entries_of(layout) if not is_removed(tool))
+    return _with_entries(layout, kept) if kept else "none"
+
+
 def allowed_tools_tool_choice_kept_on_follow_up(tool_choice: object) -> Mapping[str, object]:
     if not is_allowed_tools_tool_choice(tool_choice):
         return MappingProxyType({})

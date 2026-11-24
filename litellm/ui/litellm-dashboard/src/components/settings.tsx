@@ -1,6 +1,6 @@
-import { Bell, Plus } from "lucide-react";
+import { Bell } from "lucide-react";
 import { PageContent } from "@/components/shared/Page";
-import { PageHeader, PageHeaderTitle, PageHeaderDescription, PageHeaderControls } from "@/components/shared/PageHeader";
+import { PageHeader, PageHeaderTitle, PageHeaderDescription } from "@/components/shared/PageHeader";
 import type { ParseKeys } from "i18next";
 import React, { useEffect, useState } from "react";
 import { Controller, FormProvider, useForm, useFormContext } from "react-hook-form";
@@ -621,14 +621,6 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
             {t("shell.nav.items.loggingAndAlerts")}
           </PageHeaderTitle>
           <PageHeaderDescription>{t("shell.pageDescriptions.loggingAndAlerts")}</PageHeaderDescription>
-          {activeTab === "logging-callbacks" && (
-            <PageHeaderControls>
-              <Button onClick={() => setShowAddCallbacksModal(true)}>
-                <Plus />
-                {t("loggingAndAlerts.loggingCallbacks.table.add")}
-              </Button>
-            </PageHeaderControls>
-          )}
         </PageHeader>
         <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as SettingsTab)} className="gap-6">
           <TabsList variant="line" className="max-w-full justify-start overflow-x-auto">
@@ -644,6 +636,7 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
               callbacks={callbacks}
               availableCallbacks={allCallbacks}
               isLoading={isLoadingCallbacks}
+              onAdd={() => setShowAddCallbacksModal(true)}
               onEdit={(cb) => {
                 setSelectedEditCallback(cb);
                 setShowEditCallback(true);

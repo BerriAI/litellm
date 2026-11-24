@@ -14,6 +14,7 @@ import traceback
 from typing import ClassVar, Final
 
 from pydantic import TypeAdapter
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import print_verbose, verbose_logger
@@ -40,6 +41,10 @@ _BASE64_INLINE_PATTERN: Final = re.compile(
     r"data:(?:application|image|audio|video)/[a-zA-Z0-9.+-]+;base64,[A-Za-z0-9+/=\s]+",
     re.MULTILINE,
 )
+
+
+class _SQSLoggingKwargs(TypedDict, total=False, extra_items=object):
+    standard_logging_object: ReadOnly[StandardLoggingPayload | None]
 
 
 class SQSLogger(CustomBatchLogger, BaseAWSLLM):
@@ -72,7 +77,7 @@ class SQSLogger(CustomBatchLogger, BaseAWSLLM):
         sqs_aws_use_application_level_encryption: bool = False,
         sqs_app_encryption_key_b64: str | None = None,
         sqs_app_encryption_aad: str | None = None,
-        **kwargs,
+        **kwargs: object,
     ) -> None:
         try:
             verbose_logger.debug("in init sqs logger - sqs_callback_params %s", litellm.aws_sqs_callback_params)
@@ -224,7 +229,9 @@ class SQSLogger(CustomBatchLogger, BaseAWSLLM):
         except Exception as e:
             verbose_logger.exception("sqs Layer Error - %s", e)
 
-    async def async_log_failure_event(self, kwargs, response_obj: object, start_time: object, end_time: object) -> None:
+    async def async_log_failure_event(
+        self, kwargs: _SQSLoggingKwargs, response_obj: object, start_time: object, end_time: object
+    ) -> None:
         try:
             standard_logging_payload = kwargs.get("standard_logging_object")
             if standard_logging_payload is None:

@@ -169,7 +169,7 @@ class LangfuseOtelLogger(OpenTelemetry):
         super().__init__(config=config, *args, **kwargs)
 
     @staticmethod
-    def set_langfuse_otel_attributes(span: Span, kwargs: Mapping[str, object], response_obj):
+    def set_langfuse_otel_attributes(span: Span, kwargs: Mapping[str, object], response_obj: object):
         """
         Sets OpenTelemetry span attributes for Langfuse observability.
         Uses the same attribute setting logic as Arize Phoenix for consistency.
@@ -529,7 +529,7 @@ class LangfuseOtelLogger(OpenTelemetry):
         Returns:
             dict: A dictionary of dynamic Langfuse headers
         """
-        dynamic_headers: Final = {}
+        dynamic_headers: Final[dict[str, str]] = {}
 
         dynamic_langfuse_public_key: Final = standard_callback_dynamic_params.get("langfuse_public_key")
         dynamic_langfuse_secret_key: Final = standard_callback_dynamic_params.get("langfuse_secret_key")

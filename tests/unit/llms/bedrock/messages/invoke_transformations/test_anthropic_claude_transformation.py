@@ -333,6 +333,37 @@ def test_bedrock_invoke_messages_transform_adds_name_when_tool_missing_name():
     assert result["tools"][0]["name"] == "litellm_unnamed_tool_0"
 
 
+def test_bedrock_invoke_messages_transform_names_only_custom_tools() -> None:
+    from litellm.types.router import GenericLiteLLMParams
+
+    cfg: Final = AmazonAnthropicClaudeMessagesConfig()
+    result: Final = cfg.transform_anthropic_messages_request(
+        model="us.anthropic.claude-sonnet-5-5",
+        messages=[{"role": "user", "content": "Take a screenshot"}],
+        anthropic_messages_optional_request_params={
+            "max_tokens": 128,
+            "tools": [
+                {"type": "computer_toolset_20260801"},
+                {"type": "browser_toolset_20260801"},
+                {"type": "text_editor_20250728"},
+                {"type": "bash_20250124", "name": "bash"},
+                {"type": "custom", "input_schema": {"type": "object", "properties": {}}},
+                {"input_schema": {"type": "object", "properties": {}}},
+            ],
+        },
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+    assert result["tools"] == [
+        {"type": "computer_toolset_20260801"},
+        {"type": "browser_toolset_20260801"},
+        {"type": "text_editor_20250728"},
+        {"type": "bash_20250124", "name": "bash"},
+        {"type": "custom", "input_schema": {"type": "object", "properties": {}}, "name": "litellm_unnamed_tool_4"},
+        {"input_schema": {"type": "object", "properties": {}}, "name": "litellm_unnamed_tool_5"},
+    ]
+
+
 def test_bedrock_invoke_messages_skips_thinking_injection_when_already_enabled(
     local_model_cost_map,
 ):
@@ -1895,6 +1926,78 @@ def test_bedrock_invoke_transform_forwards_per_turn_control_beta_with_message_ou
 
     assert result["messages"] == messages
     assert result["anthropic_beta"].count("per-turn-control-2026-07-01") == 1
+
+
+SERVER_SIDE_FALLBACK_BETA: Final = "server-side-fallback-2026-06-01"
+BEDROCK_OPUS_4_1: Final = "us.anthropic.claude-opus-4-1-20250805-v1:0"
+BEDROCK_HAIKU_4_5: Final = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+BEDROCK_PROFILE_ARN: Final = "arn:aws:bedrock:us-east-1:000000000000:application-inference-profile/abc123"
+
+
+@pytest.mark.parametrize(
+    ("model", "litellm_params", "expected_betas"),
+    [
+        pytest.param(BEDROCK_OPUS_4_1, {"drop_params": True}, [], id="opus_4_1_under_drop_params"),
+        pytest.param(BEDROCK_OPUS_4_1, {}, [SERVER_SIDE_FALLBACK_BETA], id="opus_4_1_without_drop_params"),
+        pytest.param(
+            f"invoke/{BEDROCK_OPUS_4_1}", {"drop_params": True}, [], id="invoke_routed_opus_4_1_under_drop_params"
+        ),
+        pytest.param(BEDROCK_HAIKU_4_5, {"drop_params": True}, [SERVER_SIDE_FALLBACK_BETA], id="haiku_4_5"),
+        pytest.param(
+            "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+            {"drop_params": True},
+            [SERVER_SIDE_FALLBACK_BETA],
+            id="sonnet_4_5",
+        ),
+        pytest.param(
+            BEDROCK_HAIKU_4_5,
+            {"drop_params": True, "model_info": {"supports_server_side_fallback": False}},
+            [],
+            id="deployment_turns_it_off",
+        ),
+        pytest.param(
+            BEDROCK_OPUS_4_1,
+            {"drop_params": True, "model_info": {"supports_server_side_fallback": True}},
+            [SERVER_SIDE_FALLBACK_BETA],
+            id="deployment_turns_it_on",
+        ),
+        pytest.param(
+            BEDROCK_PROFILE_ARN,
+            {"drop_params": True, "base_model": f"bedrock/{BEDROCK_HAIKU_4_5}"},
+            [SERVER_SIDE_FALLBACK_BETA],
+            id="profile_arn_with_a_supporting_base_model",
+        ),
+        pytest.param(
+            BEDROCK_PROFILE_ARN,
+            {"drop_params": True, "base_model": BEDROCK_OPUS_4_1},
+            [],
+            id="profile_arn_with_an_opus_4_1_base_model",
+        ),
+    ],
+)
+def test_bedrock_invoke_drops_the_server_side_fallback_beta_under_drop_params_where_the_model_lacks_it(
+    local_model_cost_map: None,
+    local_beta_headers_config: None,
+    monkeypatch: pytest.MonkeyPatch,
+    model: str,
+    litellm_params: Mapping[str, object],
+    expected_betas: list[str],
+) -> None:
+    """Bedrock Invoke answers 400 invalid beta flag to server-side-fallback-2026-06-01 on Opus 4.1 and takes it on
+    Haiku 4.5, Sonnet 4.5 and newer Claude, so drop_params drops it only where the model lacks it."""
+    from litellm.types.router import GenericLiteLLMParams
+
+    monkeypatch.setattr(litellm, "drop_params", False)
+
+    result: Final = AmazonAnthropicClaudeMessagesConfig().transform_anthropic_messages_request(
+        model=model,
+        messages=[{"role": "user", "content": "hi"}],
+        anthropic_messages_optional_request_params={"max_tokens": 256, "stream": False},
+        litellm_params=GenericLiteLLMParams(**litellm_params),
+        headers={"anthropic-beta": SERVER_SIDE_FALLBACK_BETA},
+    )
+
+    assert result.get("anthropic_beta", []) == expected_betas
 
 
 def test_bedrock_invoke_transform_converts_mid_conversation_system_for_older_claude(local_model_cost_map):

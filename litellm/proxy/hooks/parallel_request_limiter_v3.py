@@ -55,6 +55,7 @@ from litellm.litellm_core_utils.add_retry_fallback_headers import (
     ensure_response_additional_headers,
     response_has_hidden_params,
 )
+from litellm.litellm_core_utils.attempt_settlement import release_in_background
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.model_latest_aliases import expand_model_latest_alias
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
@@ -121,6 +122,7 @@ if TYPE_CHECKING:
         NativeParallelRequestLimiterState,
     )
     from litellm.types.agents import AgentResponse
+    from litellm.types.responses.streaming_websocket import ResponsesWsQuotaRefund
 
     Span = _Span
     InternalUsageCache = _InternalUsageCache
@@ -503,6 +505,10 @@ class WindowGuardedIncrement:
 
 
 ReservationOperation: TypeAlias = CounterIncrement | WindowGuardedIncrement
+
+ResponsesWebSocketClose: TypeAlias = Literal[
+    "refused_at_open", "relay_failed", "turns_finished", "turn_unfinished", "settled_by_its_log"
+]
 
 
 class RateLimitDescriptorRateLimitObject(TypedDict, total=False):
@@ -1179,7 +1185,7 @@ class ParallelRequestLimiterHook(CustomLogger):
         requested_model: str | None,
         estimated_input_tokens: int,
         estimated_output_tokens: int,
-    ) -> None:
+    ) -> "ResponsesWsQuotaRefund | None":
         """Reserve one WebSocket ``response.create`` frame's tokens against
         the caller's project ITPM/OTPM quota.
 
@@ -1188,11 +1194,12 @@ class ParallelRequestLimiterHook(CustomLogger):
         frames over its lifetime. Without this, a project caller could send
         unlimited high-token generations after a single minimal reservation.
         There is no per-frame post-call hook to reconcile against, so --
-        like the batch rate limiter -- this charges the estimate immediately
-        and never refunds it.
+        like the batch rate limiter -- this charges the estimate immediately.
+        The returned refund gives the charge back for a turn refused before it
+        reached the provider, and is a no-op once the charged window has rolled.
         """
         if user_api_key_dict is None:
-            return
+            return None
         scoped: Final = await run_scoped(
             self,
             user_api_key_dict,
@@ -1207,6 +1214,20 @@ class ParallelRequestLimiterHook(CustomLogger):
         response: Final = _native_reply(scoped.reply)
         if response["overall_code"] == "OVER_LIMIT":
             handle_rate_limit_error(self, response, scoped.descriptors, requested_model)
+        refund_operations: Final = _project_io_refund_operations(
+            scoped.descriptors,
+            response.get("reservation_windows", frozenset()),
+            estimated_input_tokens,
+            estimated_output_tokens,
+            self.window_size,
+        )
+        if not refund_operations:
+            return None
+
+        async def refund() -> None:
+            await increment_reservation_aware_tokens(self, refund_operations, user_api_key_dict.parent_otel_span)
+
+        return refund
 
     @with_service_target(RATE_LIMITS_TARGET)
     async def enforce_token_limits_for_frame(
@@ -1316,6 +1337,46 @@ class ParallelRequestLimiterHook(CustomLogger):
         except Exception as e:
             verbose_proxy_logger.exception("Error in rate limit failure event: %s", e)
 
+    def leave_reservation_to_socket_close(self) -> None:
+        """Leave this WebSocket's admission reservation to its close, so the failure callbacks of the socket's own
+        call only free its slot."""
+        native_state: Final = _native_state(self, get_request_stash())
+        if native_state is not None:
+            self.native_companion.leave_reservation_to_socket_close(native_state)
+
+    @with_service_target(RATE_LIMITS_TARGET)
+    async def async_release_responses_websocket_admission(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        close: ResponsesWebSocketClose,
+        turns_logged: Callable[[], Awaitable[bool]] | None = None,
+    ) -> None:
+        """Free the slot a Responses WebSocket took at admission once it closes, and settle its token reservations by
+        how it closed. A socket whose turns all finished settles in the background once ``turns_logged`` says their
+        charges are in, and keeps its reservation when they are not."""
+        native_state: Final = _native_state(self, get_request_stash())
+        if native_state is None:
+            return
+        try:
+            if close != "turns_finished":
+                await self.native_companion.close_socket(native_state, close)
+                return
+            await self.native_companion.release_on_disconnect(native_state)
+            _ = release_in_background(self._close_finished_responses_websocket(native_state, turns_logged))
+        except Exception as e:  # noqa: BLE001  # a failed release logs instead of failing the socket's close
+            _log_responses_websocket_release_error(e)
+
+    async def _close_finished_responses_websocket(
+        self,
+        native_state: "NativeParallelRequestLimiterState",
+        turns_logged: Callable[[], Awaitable[bool]] | None,
+    ) -> None:
+        try:
+            logged: Final = turns_logged is None or await turns_logged()
+            await self.native_companion.close_socket(native_state, "turns_finished" if logged else "turn_unfinished")
+        except Exception as e:  # noqa: BLE001  # a background refund has no caller to raise to, so it logs its failure
+            _log_responses_websocket_release_error(e)
+
     @with_service_target(RATE_LIMITS_TARGET)
     async def async_release_max_parallel_requests_on_disconnect(
         self,
@@ -1371,6 +1432,10 @@ class ParallelRequestLimiterHook(CustomLogger):
             await self.native_companion.log_post_call_failure(native_state, request_data, token_rate_limit_type())
         except Exception as e:
             verbose_proxy_logger.exception("Error releasing TPM reservation on post-call failure: %s", e)
+
+
+def _log_responses_websocket_release_error(error: Exception) -> None:
+    verbose_proxy_logger.error("Error releasing a closed Responses WebSocket's admission: %s", error, exc_info=error)
 
 
 PROXY_MaxParallelRequestsHandler_v3 = ParallelRequestLimiterHook
@@ -2326,6 +2391,33 @@ async def request_capacity(
         cleanup.result()
         if cancellation is not None:
             raise cancellation
+
+
+def _project_io_refund_operations(
+    descriptors: Sequence[RateLimitDescriptor],
+    reservation_windows: frozenset[ReservationWindowIdentity],
+    input_tokens: int,
+    output_tokens: int,
+    ttl: int,
+) -> tuple[WindowGuardedIncrement, ...]:
+    reserved: Final = MappingProxyType(
+        {
+            RateLimitScope(descriptor["key"], descriptor["value"]).counter("tokens"): (
+                input_tokens if descriptor["key"] == PROJECT_ITPM_DESCRIPTOR_KEY else output_tokens
+            )
+            for descriptor in descriptors
+            if descriptor["key"] in (PROJECT_ITPM_DESCRIPTOR_KEY, PROJECT_OTPM_DESCRIPTOR_KEY)
+        }
+    )
+    return tuple(
+        WindowGuardedIncrement(
+            increment=CounterIncrement(counter=counter, amount=-reserved[counter], ttl=ttl),
+            expected_window_start=window_start,
+            reservation_backend=backend,
+        )
+        for counter, window_start, backend in sorted(reservation_windows)
+        if reserved.get(counter)
+    )
 
 
 def _native_operation(operation: ReservationOperation) -> _NativeOp:

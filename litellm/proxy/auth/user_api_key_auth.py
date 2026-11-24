@@ -14,7 +14,7 @@ import secrets
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from datetime import datetime, timezone
 from functools import partial, reduce
-from typing import TYPE_CHECKING, Final, Protocol, cast
+from typing import TYPE_CHECKING, Final, Protocol, TypeVar, cast
 
 import anyio
 import fastapi
@@ -298,6 +298,7 @@ def get_model_from_request_context(
 _CLAUDE_MODEL_ROUTES: Final = frozenset(
     f"/{prefix}{endpoint}" for prefix in ("", "v1/") for endpoint in ("messages", "chat/completions", "responses")
 )
+_FetchedT = TypeVar("_FetchedT")
 _CLAUDE_MODEL_NORMALIZED: Final = "litellm.claude_model_normalized"
 _GENERAL_SETTINGS_ADAPTER: Final = TypeAdapter(dict[str, object])
 _KEY_METADATA_ADAPTER: Final = TypeAdapter(dict[str, object])
@@ -305,7 +306,7 @@ _REQUEST_HEADERS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 
 
 async def _normalize_claude_model(
-    request_data: dict, valid_token: UserAPIKeyAuth, request: Request | None, route: str
+    request_data: dict[str, object], valid_token: UserAPIKeyAuth, request: Request | None, route: str
 ) -> None:
     from litellm.proxy.proxy_server import llm_router, prisma_client, proxy_config, proxy_logging_obj
 
@@ -1597,7 +1598,7 @@ def get_api_key(
     elif pass_through_endpoints is not None:
         for endpoint in pass_through_endpoints:
             if endpoint.get("path", "") == route:
-                headers: dict | None = endpoint.get("headers", None)
+                headers: Mapping[str, object] | None = endpoint.get("headers", None)
                 if headers is not None:
                     header_key: str = headers.get("litellm_user_api_key", "")
                     if request.headers.get(header_key) is not None:
@@ -2314,7 +2315,7 @@ async def _impersonate_or_raise(
             )
 
 
-async def _safe_fetch(label: str, awaitable):
+async def _safe_fetch(label: str, awaitable: Awaitable[_FetchedT]) -> _FetchedT | None:
     """Run an awaitable and return its result. Re-raises authentication /
     authorization failures (HTTPException, ProxyException,
     BudgetExceededError) so they propagate to the caller.
@@ -3061,7 +3062,7 @@ async def _apply_key_end_user_default_budget_to_token(
 
 async def _reserve_budget_after_common_checks(
     user_api_key_auth_obj: UserAPIKeyAuth,
-    request_data: dict,
+    request_data: Mapping[str, object],
     route: str,
     llm_router: litellm.Router | None,
     team_object: LiteLLM_TeamTableCachedObj | None,
@@ -3070,7 +3071,7 @@ async def _reserve_budget_after_common_checks(
     user_api_key_cache: UserApiKeyCache,
     proxy_logging_obj: ProxyLogging,
     skip_budget_checks: bool,
-    general_settings: dict,
+    general_settings: Mapping[str, object],
     end_user_id: str | None = None,
     end_user_object: LiteLLM_EndUserTable | None = None,
     request: Request | None = None,
@@ -3779,7 +3780,7 @@ async def enforce_key_and_fallback_model_access(
     request_data: dict,
     route: str,
     request: Request | None,
-    llm_model_list: list | None,
+    llm_model_list: Sequence[object] | None,
     llm_router: litellm.Router | None,
 ) -> None:
     """

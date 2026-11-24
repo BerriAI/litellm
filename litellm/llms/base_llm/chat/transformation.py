@@ -70,6 +70,10 @@ class BaseLLMException(Exception):
         super().__init__(self.message)  # Call the base class constructor with the parameters it needs
 
 
+class RelayOnlyBodyLLMException(BaseLLMException):
+    pass
+
+
 _NO_ATTRIBUTION_HEADERS: Final[Mapping[str, str]] = types.MappingProxyType({})
 
 
@@ -479,7 +483,7 @@ class BaseConfig(ABC):
         custom_llm_provider: str,
         logging_obj: LiteLLMLoggingObj,
         api_base: str,
-        headers: dict,
+        headers: dict[str, object],
         data: dict,
         messages: list,
         client: AsyncHTTPHandler | None = None,
@@ -497,7 +501,7 @@ class BaseConfig(ABC):
         custom_llm_provider: str,
         logging_obj: LiteLLMLoggingObj,
         api_base: str,
-        headers: dict,
+        headers: dict[str, object],
         data: dict,
         messages: list,
         client: HTTPHandler | AsyncHTTPHandler | None = None,

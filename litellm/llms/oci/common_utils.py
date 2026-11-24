@@ -86,7 +86,7 @@ class OCIRequestWrapper:
 
     method: str
     url: str
-    headers: dict
+    headers: dict[str, str]
     body: bytes
 
     @property
@@ -337,11 +337,11 @@ def get_oci_base_url(optional_params: Mapping[str, object], api_base: str | None
 
 
 def sign_with_oci_signer(
-    headers: dict,
+    headers: dict[str, str],
     optional_params: dict,
     request_data: Mapping[str, object],
     api_base: str,
-) -> tuple[dict, bytes]:
+) -> tuple[dict[str, str], bytes]:
     """Sign a request using an OCI SDK Signer object passed in optional_params."""
     oci_signer: Final = optional_params.get("oci_signer")
     body: Final = json.dumps(request_data).encode("utf-8")
@@ -377,11 +377,11 @@ def sign_with_oci_signer(
 
 
 def sign_with_manual_credentials(
-    headers: dict,
+    headers: dict[str, str],
     optional_params: Mapping[str, object],
     request_data: Mapping[str, object],
     api_base: str,
-) -> tuple[dict, bytes]:
+) -> tuple[dict[str, str], bytes]:
     """Sign a request using manually provided OCI credentials (user/fingerprint/tenancy/key)."""
     creds: Final = resolve_oci_credentials(optional_params)
     oci_user: Final = creds["oci_user"]
@@ -490,7 +490,7 @@ def sign_with_manual_credentials(
 
 
 def sign_oci_request(
-    headers: dict,
+    headers: dict[str, str],
     optional_params: dict,
     request_data: Mapping[str, object],
     api_base: str,
@@ -498,7 +498,7 @@ def sign_oci_request(
     model: str | None = None,
     stream: bool | None = None,
     fake_stream: bool | None = None,
-) -> tuple[dict, bytes]:
+) -> tuple[dict[str, str], bytes]:
     """
     Route to the appropriate OCI signing method based on what credentials are present.
 
@@ -515,10 +515,10 @@ def sign_oci_request(
 
 
 def validate_oci_environment(
-    headers: dict,
+    headers: dict[str, str],
     optional_params: Mapping[str, object],
     api_key: str | None = None,
-) -> dict:
+) -> dict[str, str]:
     """
     Populate common OCI request headers (content-type, user-agent).
 

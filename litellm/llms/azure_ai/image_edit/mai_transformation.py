@@ -35,7 +35,7 @@ class AzureFoundryMAIImageEditConfig(OpenAIImageEditConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, object],
         model: str,
         api_key: str | None = None,
         litellm_params: Mapping[str, object] | None = None,

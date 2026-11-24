@@ -261,7 +261,7 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        headers: dict,
+        headers: dict[str, object],
     ) -> dict:
         params: Final = _OPTIONAL_PARAMS.validate_python(optional_params)
         typed_litellm_params: Final = _LITELLM_PARAMS.validate_python(litellm_params)
@@ -339,7 +339,7 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        headers: dict,
+        headers: dict[str, object],
     ) -> dict:
         return self.transform_request(
             model=model,
@@ -383,9 +383,9 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         self,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
-        headers: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
+        headers: dict[str, object],
     ) -> dict:
         filtered_params = {k: v for k, v in optional_params.items() if k not in self.aws_authentication_params}
         output_config: Final = filtered_params.get("output_config")
@@ -445,7 +445,7 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         model: str,
         messages: list[AllMessageValues],
         optional_params: dict,
-        headers: dict,
+        headers: dict[str, object],
         thinking: AnthropicThinkingParam | None,
         history_holds_tool_search: bool,
     ) -> list[str]:
