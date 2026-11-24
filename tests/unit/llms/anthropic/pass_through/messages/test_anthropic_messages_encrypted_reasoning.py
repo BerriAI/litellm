@@ -107,7 +107,7 @@ def test_unsigned_thinking_is_still_replayed_to_an_open_model() -> None:
         model="deepseek-v4-pro",
         messages=messages,
         anthropic_messages_optional_request_params={"max_tokens": 1024},
-        litellm_params={},
+        litellm_params=GenericLiteLLMParams(),
         headers={},
     )["messages"]
 
