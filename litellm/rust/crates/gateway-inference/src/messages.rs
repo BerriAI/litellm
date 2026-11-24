@@ -110,6 +110,23 @@ impl<H: Host> Endpoint for MessagesAttempt<'_, H> {
         Some(counts.messages_usage())
     }
 
+    fn response_id((ran, _): &Self::Outcome) -> Option<String> {
+        match ran {
+            CallOutput::Complete(MessagesBody::Message(message)) => Some(message.id.clone()),
+            CallOutput::Complete(MessagesBody::Unchecked(fields)) => {
+                fields.get("id").and_then(Value::as_str).map(str::to_owned)
+            }
+            CallOutput::Stream { .. } => None,
+        }
+    }
+
+    fn stream_response_id(data: &str) -> Option<String> {
+        match serde_json::from_str(data) {
+            Ok(MessagesStreamEvent::MessageStart { message }) => message.id,
+            _ => None,
+        }
+    }
+
     fn render((ran, cache): Self::Outcome, reported: ReportedModel<'_>) -> Result<Response, Error> {
         let stream =
             Sse::<Messages, _, _>::new(Json, |error| Bytes::from(Error::from(error).sse_frame()));

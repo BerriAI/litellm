@@ -621,6 +621,7 @@ from litellm.proxy.common_utils.model_listing_utils import (
     alias_target,
     caller_alias_maps,
     claude_code_view_ids,
+    configured_descriptions,
     configured_display_names,
     dispatched_model,
     label_entries,
@@ -12859,9 +12860,10 @@ async def model_list(
     )
     client_headers: Final[Mapping[str, str]] = http_request.headers if http_request is not None else _EMPTY_HEADERS
     caller_aliases: Final = await request_caller_aliases(user_api_key_dict, team_id)
+    effective_team_id: Final = team_id or user_api_key_dict.team_id
     routing_names: Final = ClaudeCodeRoutingNames(
         llm_router,
-        team_id or user_api_key_dict.team_id,
+        effective_team_id,
         (*caller_aliases.rewrite, caller_aliases.router),
     )
 
@@ -12974,6 +12976,9 @@ async def model_list(
             return create_anthropic_model_list_response(
                 admin_listing,
                 display_names=configured_display_names(admin_entries, llm_router),
+                descriptions=configured_descriptions(
+                    admin_entries, llm_router, team_id=effective_team_id, include_all_teams=effective_team_id is None
+                ),
                 listed_ids=claude_code_view_ids(
                     admin_listing,
                     client_headers,
@@ -13025,6 +13030,12 @@ async def model_list(
         return create_anthropic_model_list_response(
             listing,
             display_names=configured_display_names(labels, llm_router),
+            descriptions=configured_descriptions(
+                labels,
+                llm_router,
+                team_id=effective_team_id,
+                include_all_teams=effective_team_id is None and user_api_key_has_admin_view(user_api_key_dict),
+            ),
             listed_ids=claude_code_view_ids(
                 listing,
                 client_headers,
