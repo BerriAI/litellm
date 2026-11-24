@@ -66,8 +66,7 @@ PARTITIONED_PARENT_ERROR: Final = 'cannot create index on partitioned table "Lit
 ORIGINAL_MIGRATION_SQL: Final = MappingProxyType(
     {
         "20250510142544_add_session_id_index_spend_logs": (
-            'CREATE INDEX IF NOT EXISTS "LiteLLM_SpendLogs_session_id_idx" '
-            'ON "LiteLLM_SpendLogs"("session_id");\n'
+            'CREATE INDEX IF NOT EXISTS "LiteLLM_SpendLogs_session_id_idx" ON "LiteLLM_SpendLogs"("session_id");\n'
         ),
         TOOL_INDEX_MIGRATION: (
             "-- CreateTable\n"
@@ -75,9 +74,9 @@ ORIGINAL_MIGRATION_SQL: Final = MappingProxyType(
             '    "request_id" TEXT NOT NULL,\n'
             '    "tool_name" TEXT NOT NULL,\n'
             '    "start_time" TIMESTAMP(3) NOT NULL,\n'
-            '\n'
+            "\n"
             '    CONSTRAINT "LiteLLM_SpendLogToolIndex_pkey" PRIMARY KEY ("request_id","tool_name")\n'
-            ');\n\n'
+            ");\n\n"
             "-- CreateIndex\n"
             'CREATE INDEX IF NOT EXISTS "LiteLLM_SpendLogToolIndex_tool_name_start_time_idx" '
             'ON "LiteLLM_SpendLogToolIndex"("tool_name", "start_time");\n'
@@ -483,9 +482,7 @@ def test_tool_index_recovery_accepts_only_the_shipped_checksum(
 ) -> None:
     _leave_the_tool_index_migration_unfinished(scratch_database, checksum)
 
-    recovered: Final = (
-        _migration_job(True) if use_v2_migration_job else _recover_tool_index_migration(scratch_database)
-    )
+    recovered: Final = _migration_job(True) if use_v2_migration_job else _recover_tool_index_migration(scratch_database)
 
     assert recovered is expected
     with psycopg.connect(scratch_database) as conn:
@@ -666,18 +663,20 @@ def test_the_session_a_killed_deploy_left_waiting_on_a_lock_is_ended_before_its_
     session_name: Final = f"litellm-migrate-{uuid.uuid4().hex[:16]}"
     reader: Final = _pin_a_snapshot_on(scratch_database, "LiteLLM_SpendLogs")
     left_behind: Final = psycopg.connect(scratch_database, autocommit=True, application_name=session_name)
+    attempt_started: Final = time.monotonic()
     _start_a_ledger_row(left_behind, logs=None, applied_steps=0, age="0 seconds")
 
     with ThreadPoolExecutor(max_workers=1) as pool:
         migration: Final = pool.submit(
-            left_behind.execute, 'ALTER TABLE "LiteLLM_SpendLogs" ADD COLUMN "left_behind" TEXT'
+            left_behind.execute,
+            'CREATE TABLE "left_behind" (id INT); ALTER TABLE "LiteLLM_SpendLogs" ADD COLUMN "left_behind" TEXT',
         )
         _wait_until(
             lambda: _sessions_named(scratch_database, session_name) == [(session_name, "Lock")],
             "the migration waits on the table lock",
         )
 
-        rolled_back: Final = roll_back_killed_migration(scratch_database, "public", session_name, 60.0)
+        rolled_back: Final = roll_back_killed_migration(scratch_database, "public", session_name, attempt_started)
 
         reader.close()
         with pytest.raises(psycopg.OperationalError):
@@ -686,7 +685,27 @@ def test_the_session_a_killed_deploy_left_waiting_on_a_lock_is_ended_before_its_
     assert rolled_back == (KILLED_MIGRATION,)
     assert _sessions_named(scratch_database, session_name) == []
     assert "left_behind" not in _spend_logs_columns(scratch_database)
+    with psycopg.connect(scratch_database) as conn:
+        assert conn.execute("SELECT to_regclass('left_behind')").fetchone() == (None,)
     assert _ledger_rows(scratch_database, KILLED_MIGRATION) == [(False, True)]
+
+
+@requires_db
+def test_a_killed_deploy_whose_session_was_no_longer_running_a_statement_keeps_its_row_for_the_operator(
+    scratch_database: str,
+) -> None:
+    session_name: Final = f"litellm-migrate-{uuid.uuid4().hex[:16]}"
+    finished: Final = psycopg.connect(scratch_database, autocommit=True, application_name=session_name)
+    attempt_started: Final = time.monotonic()
+    _start_a_ledger_row(finished, logs=None, applied_steps=0, age="0 seconds")
+    finished.execute('ALTER TABLE "LiteLLM_SpendLogs" ADD COLUMN "committed_before_the_check" TEXT')
+
+    rolled_back: Final = roll_back_killed_migration(scratch_database, "public", session_name, attempt_started)
+
+    assert rolled_back == ()
+    assert _sessions_named(scratch_database, session_name) == []
+    assert "committed_before_the_check" in _spend_logs_columns(scratch_database)
+    assert _ledger_rows(scratch_database, KILLED_MIGRATION) == [(False, False)]
 
 
 @requires_db
@@ -698,10 +717,27 @@ def test_the_session_a_killed_deploy_left_waiting_on_a_lock_is_ended_before_its_
 def test_an_unfinished_row_the_killed_deploy_did_not_leave_is_kept_for_the_operator(
     scratch_database: str, logs: str | None, applied_steps: int, age: str
 ) -> None:
-    with psycopg.connect(scratch_database, autocommit=True) as conn:
-        _start_a_ledger_row(conn, logs, applied_steps, age)
+    session_name: Final = f"litellm-migrate-{uuid.uuid4().hex[:16]}"
+    reader: Final = _pin_a_snapshot_on(scratch_database, "LiteLLM_SpendLogs")
+    left_behind: Final = psycopg.connect(scratch_database, autocommit=True, application_name=session_name)
+    _start_a_ledger_row(left_behind, logs, applied_steps, age)
 
-    rolled_back: Final = roll_back_killed_migration(scratch_database, "public", "litellm-migrate-none", 60.0)
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        migration: Final = pool.submit(
+            left_behind.execute, 'ALTER TABLE "LiteLLM_SpendLogs" ADD COLUMN "left_behind" TEXT'
+        )
+        _wait_until(
+            lambda: _sessions_named(scratch_database, session_name) == [(session_name, "Lock")],
+            "the migration waits on the table lock",
+        )
+
+        rolled_back: Final = roll_back_killed_migration(
+            scratch_database, "public", session_name, time.monotonic() - 60.0
+        )
+
+        reader.close()
+        with pytest.raises(psycopg.OperationalError):
+            migration.result()
 
     assert rolled_back == ()
     assert _ledger_rows(scratch_database, KILLED_MIGRATION) == [(False, False)]
@@ -849,7 +885,7 @@ def test_spend_runbooks_repoint_views_and_allow_old_table_drop(
         invoker: Final = ", security_invoker=true" if conn.info.server_version >= 150000 else ""
         conn.execute(
             sql.SQL(
-                'CREATE VIEW reports.direct WITH (security_barrier=true{}) AS '
+                "CREATE VIEW reports.direct WITH (security_barrier=true{}) AS "
                 'SELECT request_id, \'"LiteLLM_SpendLogs_legacy" "LiteLLM_SpendLogs_partitioned"\' AS label '
                 'FROM public."LiteLLM_SpendLogs" AS "LiteLLM_SpendLogs_legacy" WITH LOCAL CHECK OPTION'
             ).format(sql.SQL(invoker))
@@ -1966,9 +2002,9 @@ def sql_ascii_database(monkeypatch: pytest.MonkeyPatch) -> Iterator[str]:
     name: Final = f"sql_ascii_{uuid.uuid4().hex[:8]}"
     with psycopg.connect(admin_url, autocommit=True) as conn:
         conn.execute(
-            sql.SQL(
-                "CREATE DATABASE {} ENCODING 'SQL_ASCII' LC_COLLATE 'C' LC_CTYPE 'C' TEMPLATE template0"
-            ).format(sql.Identifier(name))
+            sql.SQL("CREATE DATABASE {} ENCODING 'SQL_ASCII' LC_COLLATE 'C' LC_CTYPE 'C' TEMPLATE template0").format(
+                sql.Identifier(name)
+            )
         )
     database_url: Final = f"{admin_url.rsplit('/', 1)[0]}/{name}"
     try:

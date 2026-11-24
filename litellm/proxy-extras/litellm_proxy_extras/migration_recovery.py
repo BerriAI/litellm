@@ -11,6 +11,7 @@ from uuid import uuid4
 
 from litellm_proxy_extras import prisma_toolchain
 from litellm_proxy_extras._logging import logger
+from litellm_proxy_extras._redaction import _redact_credentials
 from litellm_proxy_extras.migration_lock import MigrationCoordinator
 
 if TYPE_CHECKING:
@@ -229,16 +230,18 @@ KILLED_SESSION_WAIT_SECONDS: Final = 30.0
 
 
 def roll_back_killed_migration(
-    database_url: str, schema: str, application_name: str, attempt_seconds: float
+    database_url: str, schema: str, application_name: str, attempt_started: float
 ) -> tuple[str, ...]:
     """Roll back the history row of a migration that was still running when its `prisma migrate deploy`
     was killed at the deploy time limit, and return its name.
 
     Postgres keeps running a killed client's statement, so the session Prisma left behind can still
-    commit the migration once the lock it waits on is released. The row is only rolled back after
-    every session named `application_name` has been terminated and is gone, which is what aborts the
-    migration's transaction. The caller holds Prisma's migration lock, so the unfinished row is the
-    killed command's own. Nothing is changed when the sessions cannot be confirmed gone.
+    commit the migration once the lock it waits on is released. The row is only rolled back with
+    evidence that the migration did not commit: a session named `application_name` was seen still
+    running its statement, every such session was terminated and is gone, and every transaction
+    those sessions had open is recorded as aborted. The caller holds Prisma's migration lock and
+    `attempt_started` is its `time.monotonic()` from before the deploy, so the unfinished row is the
+    killed command's own. Without that evidence nothing is changed.
     """
     try:
         import psycopg
@@ -246,22 +249,42 @@ def roll_back_killed_migration(
         return ()
     from psycopg import sql
 
+    unchanged: Final = "Its migration history row was left unchanged."
     try:
         with psycopg.connect(database_url, connect_timeout=10, autocommit=True, client_encoding="utf8") as connection:
             deadline: Final = time.monotonic() + KILLED_SESSION_WAIT_SECONDS
-            while connection.execute(
-                "SELECT count(pg_terminate_backend(pid)) FROM pg_stat_activity "
-                "WHERE datname = current_database() AND application_name = %s AND pid <> pg_backend_pid()",
-                (application_name,),
-            ).fetchone() != (0,):
+            sessions: Final = _terminate_sessions(connection, application_name)
+            while _terminate_sessions(connection, application_name):
                 if time.monotonic() >= deadline:
                     logger.warning(
                         "The database session of the prisma migrate deploy that was stopped at its time limit "
-                        "is still running after %ss. Its migration history row was left unchanged.",
+                        "is still running after %ss. %s",
                         KILLED_SESSION_WAIT_SECONDS,
+                        unchanged,
                     )
                     return ()
                 time.sleep(0.2)
+            if not any(state == "active" for state, _ in sessions):
+                logger.warning(
+                    "The prisma migrate deploy that was stopped at its time limit had no database session still "
+                    "running a statement, so its migration may have committed. %s",
+                    unchanged,
+                )
+                return ()
+            if any(
+                connection.execute(
+                    "SELECT txid_status(((txid_snapshot_xmax(txid_current_snapshot()) >> 32) << 32) + %s)", (int(xid),)
+                ).fetchone()
+                != ("aborted",)
+                for _, xid in sessions
+                if xid is not None
+            ):
+                logger.warning(
+                    "The transaction of the prisma migrate deploy that was stopped at its time limit is not "
+                    "recorded as aborted, so its migration may have committed. %s",
+                    unchanged,
+                )
+                return ()
             rolled_back: Final = connection.execute(
                 sql.SQL(
                     "UPDATE {} SET rolled_back_at = current_timestamp "
@@ -269,13 +292,14 @@ def roll_back_killed_migration(
                     "AND applied_steps_count = 0 AND started_at >= current_timestamp - make_interval(secs => %s) "
                     "RETURNING migration_name"
                 ).format(sql.Identifier(schema, "_prisma_migrations")),
-                (attempt_seconds,),
+                (time.monotonic() - attempt_started,),
             ).fetchall()
     except psycopg.Error as exc:
         logger.warning(
             "Could not confirm that the database session of the prisma migrate deploy that was stopped at its "
-            "time limit is gone (%s). Its migration history row was left unchanged.",
-            str(exc).strip(),
+            "time limit is gone (%s). %s",
+            _redact_credentials(str(exc)).strip(),
+            unchanged,
         )
         return ()
     names: Final = tuple(str(row[0]) for row in rolled_back)
@@ -287,3 +311,15 @@ def roll_back_killed_migration(
             name,
         )
     return names
+
+
+def _terminate_sessions(
+    connection: "psycopg.Connection[tuple[object, ...]]", application_name: str
+) -> tuple[tuple[str | None, str | None], ...]:
+    """Signal every other session named `application_name` to end, returning each one's (state, open xid)."""
+    rows: Final = connection.execute(
+        "SELECT state, backend_xid::text, pg_terminate_backend(pid) FROM pg_stat_activity "
+        "WHERE datname = current_database() AND application_name = %s AND pid <> pg_backend_pid()",
+        (application_name,),
+    ).fetchall()
+    return tuple((None if state is None else str(state), None if xid is None else str(xid)) for state, xid, _ in rows)

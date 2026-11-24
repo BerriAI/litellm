@@ -1036,8 +1036,8 @@ class ProxyExtrasDBManager:
                     migration_environment(_get_prisma_env()),
                 )
 
-        def roll_back_killed(session_name: str, attempt_seconds: float) -> None:
-            roll_back_killed_migration(lock_url, schema, session_name, attempt_seconds)
+        def roll_back_killed(session_name: str, attempt_started: float) -> None:
+            roll_back_killed_migration(lock_url, schema, session_name, attempt_started)
 
         while not ProxyExtrasDBManager._run_database_v2(
             True, recover_completed, baseline_existing, lambda: prisma_migration_lock(lock_url), roll_back_killed
@@ -1051,7 +1051,7 @@ class ProxyExtrasDBManager:
         recover_completed: Callable[[str], bool] = lambda name: False,
         baseline_existing: "Callable[[str], None] | None" = None,
         deploy_lock: Callable[[], AbstractContextManager[None]] = nullcontext,
-        roll_back_killed: Callable[[str, float], None] = lambda session_name, attempt_seconds: None,
+        roll_back_killed: Callable[[str, float], None] = lambda session_name, attempt_started: None,
     ) -> bool:
         """
         v2 migration resolver (opt-in via --use_v2_migration_resolver).
@@ -1178,7 +1178,7 @@ class ProxyExtrasDBManager:
                     env=tagged_environment(migration_env, session_name),
                 )
             except subprocess.TimeoutExpired:
-                roll_back_killed(session_name, time.monotonic() - started)
+                roll_back_killed(session_name, started)
                 raise
 
     @staticmethod

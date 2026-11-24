@@ -1290,7 +1290,7 @@ class TestMigrateDeployAttemptAccounting:
 
         while not ProxyExtrasDBManager._run_database_v2(
             use_migrate=True,
-            roll_back_killed=lambda session_name, attempt_seconds: events.append(f"roll back {session_name}"),
+            roll_back_killed=lambda session_name, attempt_started: events.append(f"roll back {session_name}"),
         ):
             continue
 
@@ -1313,7 +1313,7 @@ class TestMigrateDeployAttemptAccounting:
         while not ProxyExtrasDBManager._run_database_v2(
             use_migrate=True,
             baseline_existing=harness._fake_baseline,
-            roll_back_killed=lambda session_name, attempt_seconds: killed.append(session_name),
+            roll_back_killed=lambda session_name, attempt_started: killed.append(session_name),
         ):
             continue
 
