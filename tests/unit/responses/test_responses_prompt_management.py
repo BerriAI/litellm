@@ -16,8 +16,9 @@ Covers:
 from importlib import import_module
 import asyncio
 import copy
+from contextlib import AbstractContextManager
 from datetime import datetime
-from typing import List, cast
+from typing import Final, List, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -672,12 +673,13 @@ def test_sync_guardrail_block_from_prompt_hook_reaches_caller_unwrapped():
     assert exc_info.value is block
 
 
-_TOOL_TURN_INPUT = [
+_TOOL_TURN_INPUT: Final = [
     {"role": "system", "content": "You are a weather assistant"},
     {"role": "user", "content": "What is the weather in Bogota?"},
     {"type": "function_call", "call_id": "call_1", "name": "get_weather", "arguments": '{"city": "Bogota"}'},
     {"type": "function_call_output", "call_id": "call_1", "output": '{"temp_c": 14}'},
 ]
+
 
 def _real_logging_obj() -> LiteLLMLoggingObj:
     return LiteLLMLoggingObj(
@@ -691,13 +693,13 @@ def _real_logging_obj() -> LiteLLMLoggingObj:
     )
 
 
-_TOOL_TURN_INPUT_WITH_INJECTED_MARKER = [
+_TOOL_TURN_INPUT_WITH_INJECTED_MARKER: Final = [
     {**_TOOL_TURN_INPUT[0], "cache_control": {"type": "ephemeral"}},
     *_TOOL_TURN_INPUT[1:],
 ]
 
 
-def _patch_native_responses_request():
+def _patch_native_responses_request() -> AbstractContextManager[MagicMock | AsyncMock]:
     return patch.object(
         import_module("litellm.responses.main").base_llm_http_handler,
         "response_api_handler",
@@ -706,8 +708,8 @@ def _patch_native_responses_request():
 
 
 @pytest.mark.asyncio
-async def test_async_cache_control_injection_logs_role_less_input_items():
-    logging_obj = _real_logging_obj()
+async def test_async_cache_control_injection_logs_role_less_input_items() -> None:
+    logging_obj: Final = _real_logging_obj()
 
     with _patch_native_responses_request() as native_request:
         await litellm.aresponses(
@@ -723,8 +725,8 @@ async def test_async_cache_control_injection_logs_role_less_input_items():
     assert logging_obj.messages == _TOOL_TURN_INPUT_WITH_INJECTED_MARKER
 
 
-def test_sync_cache_control_injection_logs_role_less_input_items():
-    logging_obj = _real_logging_obj()
+def test_sync_cache_control_injection_logs_role_less_input_items() -> None:
+    logging_obj: Final = _real_logging_obj()
 
     with _patch_native_responses_request() as native_request:
         litellm.responses(

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict
+from typing import Any, Dict, Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -1017,7 +1017,9 @@ def test_request_has_pre_call_guardrails_reads_pipelines_from_both_metadata_buck
 
 
 @pytest.mark.asyncio
-async def test_stored_prompt_on_responses_logs_role_less_input_items(proxy_logging, monkeypatch):
+async def test_stored_prompt_on_responses_logs_role_less_input_items(
+    proxy_logging: ProxyLogging, monkeypatch: pytest.MonkeyPatch
+) -> None:
     from datetime import datetime
 
     from litellm.litellm_core_utils.litellm_logging import Logging
@@ -1036,13 +1038,13 @@ async def test_stored_prompt_on_responses_logs_role_less_input_items(proxy_loggi
             ),
         )
     )
-    client_input = [
+    client_input: Final = [
         {"role": "user", "content": "What is the weather in Bogota?"},
         {"type": "function_call", "call_id": "call_1", "name": "get_weather", "arguments": '{"city": "Bogota"}'},
         {"type": "function_call_output", "call_id": "call_1", "output": '{"temp_c": 14}'},
     ]
-    data = {"model": "gpt-4o", "input": list(client_input)}
-    logging_obj = Logging(
+    data: Final = {"model": "gpt-4o", "input": list(client_input)}
+    logging_obj: Final = Logging(
         model="gpt-4o",
         messages=list(client_input),
         stream=False,
@@ -1060,6 +1062,6 @@ async def test_stored_prompt_on_responses_logs_role_less_input_items(proxy_loggi
         call_type="aresponses",
     )
 
-    expected = [{"role": "system", "content": "Answer in one short sentence"}, *client_input]
+    expected: Final = [{"role": "system", "content": "Answer in one short sentence"}, *client_input]
     assert data["input"] == expected
     assert logging_obj.model_call_details["messages"] == expected

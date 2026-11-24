@@ -502,8 +502,8 @@ async def _record_streaming_client_disconnect_if_needed(
     return True
 
 
-_LOGGED_MESSAGES: Final[TypeAdapter[str | list[object]]] = TypeAdapter(
-    str | list[object], config=ConfigDict(strict=True)
+_LOGGED_MESSAGES: Final[TypeAdapter[str | Sequence[object]]] = TypeAdapter(
+    str | Sequence[object], config=ConfigDict(strict=True)
 )
 
 

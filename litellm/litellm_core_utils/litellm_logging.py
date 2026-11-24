@@ -1730,8 +1730,9 @@ class Logging(LiteLLMLoggingBaseClass):
 
         Allows pre-call hooks to update the messages before the call is made
         """
-        self.messages = messages
-        self.model_call_details["messages"] = messages
+        logged: Final = [{"role": "user", "content": messages}] if isinstance(messages, str) else messages
+        self.messages = logged
+        self.model_call_details["messages"] = logged
 
     def should_run_prompt_management_hooks(
         self,

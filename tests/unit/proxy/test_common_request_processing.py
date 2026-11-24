@@ -17353,6 +17353,13 @@ _STRAY_MESSAGES: Final = ({"role": "user", "content": "stray messages field"},)
             id="responses-messages-only-body-still-logs-messages",
         ),
         pytest.param(
+            "aresponses",
+            "/v1/responses",
+            {"model": "gpt-4o", "input": "hello there"},
+            [{"role": "user", "content": "hello there"}],
+            id="responses-string-input-logs-a-user-message",
+        ),
+        pytest.param(
             "acompletion",
             "/v1/chat/completions",
             {"model": "gpt-4o", "messages": list(_STRAY_MESSAGES)},
@@ -17382,16 +17389,14 @@ class _MessagesOnlyMasker(CustomGuardrail):
     async def async_pre_call_hook(
         self, user_api_key_dict: object, cache: object, data: dict[str, object], call_type: str
     ) -> dict[str, object]:
-        data["messages"] = [{"role": "user", "content": "contact <EMAIL>"}]
-        return data
+        return {**data, "messages": [{"role": "user", "content": "contact <EMAIL>"}]}
 
 
 class _InputOnlyMasker(CustomGuardrail):
     async def async_pre_call_hook(
         self, user_api_key_dict: object, cache: object, data: dict[str, object], call_type: str
     ) -> dict[str, object]:
-        data["input"] = [{"role": "user", "content": "contact <EMAIL>"}]
-        return data
+        return {**data, "input": [{"role": "user", "content": "contact <EMAIL>"}]}
 
 
 @pytest.mark.asyncio
