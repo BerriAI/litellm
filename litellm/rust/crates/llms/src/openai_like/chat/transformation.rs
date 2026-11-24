@@ -309,7 +309,9 @@ fn readable_details(details: Map<String, Value>) -> Map<String, Value> {
                 Some((key, Value::Object(readable_details(nested))))
             }
             _ if key == "cache_creation_token_details" => None,
-            value if key.ends_with("_tokens") => whole_number(&value).map(|count| (key, json!(count))),
+            value if key.ends_with("_tokens") => {
+                whole_number(&value).map(|count| (key, json!(count)))
+            }
             value => Some((key, value)),
         })
         .collect()
