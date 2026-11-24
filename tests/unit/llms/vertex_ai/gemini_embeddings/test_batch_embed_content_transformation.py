@@ -8,8 +8,10 @@ Covers:
 - Response processing with correct indices
 """
 
+import asyncio
 import json
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
+from types import MappingProxyType
 from typing import Final
 
 import httpx
@@ -17,24 +19,35 @@ import pytest
 import respx
 
 import litellm
+from litellm.caching.caching import Cache
+from litellm.caching.caching_handler import _PENDING_CACHE_WRITES
 from litellm.exceptions import BadRequestError
 from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
+from litellm.llms.vertex_ai.common_utils import gemini_video_metadata_from_openai
 from litellm.llms.vertex_ai.gemini_embeddings.batch_embed_content_transformation import (
     _build_part_for_input,
-    file_reference_name,
     _is_multimodal_input,
+    file_reference_name,
     process_embed_content_response,
     process_response,
     transform_openai_input_gemini_content,
     transform_openai_input_gemini_embed_content,
 )
-from litellm.types.llms.vertex_ai import VertexAIBatchEmbeddingsResponseObject
-from litellm.types.utils import EmbeddingResponse
+from litellm.types.caching import LiteLLMCacheType
+from litellm.types.llms.vertex_ai import GeminiEmbeddingInput, VertexAIBatchEmbeddingsResponseObject
+from litellm.types.utils import EmbeddingResponse, Usage
 
 IMAGE_DATA_URI = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAgAAAAIAQMAAAD+wSzIAAAABlBMVEX///+/v7+jQ3Y5AAAADklEQVQI12P4AIX8EAgALgAD/aNpbtEAAAAASUVORK5CYII"
 GCS_URL = "gs://my-bucket/image.png"
+PDF_GCS_URL = "gs://my-bucket/invoice.pdf"
 VIDEO_DATA_URI = "data:video/mp4;base64,AAAAIGZ0eXBpc29tAAACAGlzb21pc28yYXZjMW1wNDEAAAAIZnJlZQAA"
+AUDIO_DATA_URI = "data:audio/mpeg;base64,SUQzBAAAAAAAI1RTU0UAAAAPAAADTGF2ZjU4Ljc2LjEwMAAAAAAAAAAAAAAA"
 FILES_URI = "https://generativelanguage.googleapis.com/v1beta/files/clip123"
+
+
+def _prompt_cost(model: str, usage: Usage) -> float:
+    cost, _ = generic_cost_per_token(model=model, usage=usage, custom_llm_provider="vertex_ai")
+    return cost
 
 
 def _file_block(**file: object) -> dict[str, object]:
@@ -329,13 +342,14 @@ class TestProcessEmbedContentResponseUsage:
 
     MODEL = "gemini-embedding-2"
 
-    def test_multimodal_image_preserves_usage_metadata(self):
+    @pytest.mark.parametrize("details_key", ["promptTokensDetails", "promptTokenDetails"])
+    def test_multimodal_image_preserves_usage_metadata(self, details_key: str):
         response_json = {
             "embedding": {"values": [0.1, 0.2, 0.3]},
             "usageMetadata": {
                 "promptTokenCount": 258,
                 "totalTokenCount": 258,
-                "promptTokensDetails": [{"modality": "IMAGE", "tokenCount": 258}],
+                details_key: [{"modality": "IMAGE", "tokenCount": 258}],
             },
         }
         result = process_embed_content_response(
@@ -379,6 +393,64 @@ class TestProcessEmbedContentResponseUsage:
             custom_llm_provider="vertex_ai",
         )
         assert prompt_cost > 0
+
+    def test_document_modality_is_billed_as_image_tokens(self):
+        """PDF usage arrives as DOCUMENT tokens, which Google bills at the image token rate.
+
+        https://ai.google.dev/gemini-api/docs/pricing "Document token billing", read 2026-11-13.
+        """
+
+        def usage_for(details: tuple[dict[str, object], ...], prompt_tokens: int) -> Usage:
+            return process_embed_content_response(
+                input=[{"type": "file", "file": {"file_data": "gs://bucket/invoice.pdf", "format": "application/pdf"}}],
+                model_response=EmbeddingResponse(),
+                model=self.MODEL,
+                response_json={
+                    "embedding": {"values": [0.1, 0.2]},
+                    "usageMetadata": {
+                        "promptTokenCount": prompt_tokens,
+                        "totalTokenCount": prompt_tokens,
+                        "promptTokensDetails": list(details),
+                    },
+                },
+            ).usage
+
+        document_usage: Final = usage_for(
+            ({"modality": "TEXT", "tokenCount": 12}, {"modality": "DOCUMENT", "tokenCount": 258}), 270
+        )
+        image_usage: Final = usage_for(
+            ({"modality": "TEXT", "tokenCount": 12}, {"modality": "IMAGE", "tokenCount": 258}), 270
+        )
+
+        assert document_usage.prompt_tokens == 270
+        assert document_usage.prompt_tokens_details.text_tokens == 12
+        assert document_usage.prompt_tokens_details.image_tokens == 258
+        assert _prompt_cost(self.MODEL, document_usage) == _prompt_cost(self.MODEL, image_usage) > 0
+
+    def test_unrecognized_modality_keeps_usage_and_bills_as_text(self):
+        def usage_for(modality: str) -> Usage:
+            return process_embed_content_response(
+                input=["gs://bucket/clip.mp4"],
+                model_response=EmbeddingResponse(),
+                model=self.MODEL,
+                response_json={
+                    "embedding": {"values": [0.1]},
+                    "usageMetadata": {
+                        "promptTokenCount": 112,
+                        "totalTokenCount": 112,
+                        "promptTokensDetails": [
+                            {"modality": "TEXT", "tokenCount": 12},
+                            {"modality": modality, "tokenCount": 100},
+                        ],
+                    },
+                },
+            ).usage
+
+        unknown_usage: Final = usage_for("MODALITY_UNSPECIFIED")
+
+        assert unknown_usage.prompt_tokens == 112
+        assert unknown_usage.prompt_tokens_details.text_tokens == 112
+        assert _prompt_cost(self.MODEL, unknown_usage) == _prompt_cost(self.MODEL, usage_for("TEXT")) > 0
 
     def test_video_modality_preserves_token_count(self):
         response_json = {
@@ -570,6 +642,76 @@ class TestFileContentBlocks:
             _build_part_for_input(block, drop_params=True)
 
     @pytest.mark.parametrize(
+        "video_metadata, named_in_error",
+        [
+            ({"fps": 0.2, "start_offset": "0s", "end_offset": "1s"}, r"\(1s\) at 0\.2 fps rounds to 0 frames"),
+            ({"fps": 1, "start_offset": "0s", "end_offset": "0.3s"}, r"\(0\.3s\) at 1 fps rounds to 0 frames"),
+            ({"fps": 5, "start_offset": "6.1s", "end_offset": "6.19s"}, r"\(0\.09s\) at 5 fps rounds to 0 frames"),
+            ({"end_offset": "0.4s"}, r"\(0\.4s\) at 1 fps rounds to 0 frames"),
+            ({"start_offset": "-10s", "end_offset": " 0.3s"}, r"\(0\.3s\) at 1 fps rounds to 0 frames"),
+            ({"start_offset": "5.s", "end_offset": "+5.2s"}, r"\(0\.2s\) at 1 fps rounds to 0 frames"),
+            ({"start_offset": "0s", "end_offset": "0s"}, r": end_offset \(0s\) must be later than the window start \(0s\)"),
+            ({"start_offset": "10s", "end_offset": "0s"}, r": end_offset \(0s\) must be later than the window start \(10s\)"),
+            ({"start_offset": "-0s", "end_offset": "-1s"}, r": end_offset \(-1s\) must be later than the window start \(0s\)"),
+            ({"fps": 0, "start_offset": "0s", "end_offset": "10s"}, r"\.fps: must be greater than 0, got 0"),
+            ({"fps": -1}, r"\.fps: must be greater than 0, got -1"),
+            ({"fps": float("nan")}, r"\.fps: Input should be a finite number"),
+        ],
+    )
+    def test_video_metadata_that_samples_no_frames_answers_400_naming_the_field(
+        self, video_metadata: dict[str, object], named_in_error: str
+    ) -> None:
+        with pytest.raises(BadRequestError, match=rf"file\.video_metadata.*{named_in_error}"):
+            _build_part_for_input(_file_block(file_data=VIDEO_DATA_URI, video_metadata=video_metadata))
+
+    @pytest.mark.parametrize(
+        "video_metadata",
+        [
+            {"fps": 0.2, "start_offset": "0s", "end_offset": "2.5s"},
+            {"fps": 5, "start_offset": "6.1s", "end_offset": "6.2s"},
+            {"fps": 1, "start_offset": "0s", "end_offset": "0.5s"},
+            {"end_offset": "0.5s"},
+            {"fps": 25, "start_offset": "0s", "end_offset": "1s"},
+            {"start_offset": "-1s", "end_offset": "1s"},
+            {"start_offset": "3s"},
+            {"start_offset": "5.s", "end_offset": "+6s"},
+            {"start_offset": "1000ms", "end_offset": "0.1s"},
+            {"end_offset": "1e-1s"},
+            {"end_offset": "0.3s "},
+        ],
+    )
+    def test_video_metadata_that_samples_a_frame_is_forwarded_as_given(self, video_metadata: dict[str, object]) -> None:
+        part: Final = _build_part_for_input(_file_block(file_data=VIDEO_DATA_URI, video_metadata=video_metadata))
+        assert part["video_metadata"] == gemini_video_metadata_from_openai(video_metadata)
+
+    @pytest.mark.parametrize(
+        "video_metadata",
+        [{"fps": 1, "start_offset": "0s", "end_offset": "0.4s"}, {"end_offset": "0.1s"}, {"fps": 0}, {"fps": -1}],
+    )
+    def test_frame_checks_skip_a_file_that_is_not_a_video(self, video_metadata: dict[str, object]) -> None:
+        part: Final = _build_part_for_input(_file_block(file_data=AUDIO_DATA_URI, video_metadata=video_metadata))
+        assert part["video_metadata"] == gemini_video_metadata_from_openai(video_metadata)
+
+    def test_a_window_that_ends_before_it_starts_answers_400_on_audio_too(self) -> None:
+        block: Final = _file_block(file_data=AUDIO_DATA_URI, video_metadata={"start_offset": "5s", "end_offset": "2s"})
+        with pytest.raises(
+            BadRequestError, match=r"file\.video_metadata: end_offset \(2s\) must be later than the window start \(5s\)"
+        ):
+            _build_part_for_input(block)
+
+    @pytest.mark.parametrize(
+        "transform", [transform_openai_input_gemini_content, transform_openai_input_gemini_embed_content]
+    )
+    def test_transforms_answer_400_for_a_window_that_samples_no_frames_even_with_drop_params(
+        self, transform: Callable[..., object]
+    ) -> None:
+        block: Final = _file_block(
+            file_data=VIDEO_DATA_URI, video_metadata={"fps": 0.2, "start_offset": "0s", "end_offset": "1s"}
+        )
+        with pytest.raises(BadRequestError, match="rounds to 0 frames"):
+            transform(input=[block], model=self.MODEL, optional_params={}, drop_params=True)
+
+    @pytest.mark.parametrize(
         "transform", [transform_openai_input_gemini_content, transform_openai_input_gemini_embed_content]
     )
     def test_transforms_forward_drop_params_to_every_block(self, transform: Callable[..., object]) -> None:
@@ -619,9 +761,22 @@ class TestFileContentBlocks:
         )
         assert result.usage.prompt_tokens == 0
 
-    def test_image_block_counts_as_image_only_input(self) -> None:
+    @pytest.mark.parametrize(
+        "embedding_input, image_tokens",
+        [
+            ([_file_block(file_data=IMAGE_DATA_URI)], 258),
+            ([PDF_GCS_URL], 258),
+            ([_file_block(file_data=PDF_GCS_URL)], 258),
+            ([IMAGE_DATA_URI, PDF_GCS_URL], 258),
+            ([PDF_GCS_URL, AUDIO_DATA_URI], 0),
+        ],
+        ids=["image-block", "bare-pdf-gcs-url", "pdf-block", "image-and-pdf", "pdf-and-audio"],
+    )
+    def test_image_only_input_bills_undetailed_usage_as_image_tokens(
+        self, embedding_input: list[object], image_tokens: int
+    ) -> None:
         result: Final = process_embed_content_response(
-            input=[_file_block(file_data=IMAGE_DATA_URI)],
+            input=embedding_input,
             model_response=EmbeddingResponse(),
             model=self.MODEL,
             response_json={
@@ -629,7 +784,7 @@ class TestFileContentBlocks:
                 "usageMetadata": {"promptTokenCount": 258, "totalTokenCount": 258},
             },
         )
-        assert result.usage.prompt_tokens_details.image_tokens == 258
+        assert result.usage.prompt_tokens_details.image_tokens == image_tokens
 
 
 @pytest.mark.respx(assert_all_called=True)
@@ -652,3 +807,433 @@ def test_gemini_embedding(respx_mock: respx.MockRouter) -> None:
     expected_prompt_tokens: Final = litellm.token_counter(model="gemini/gemini-embedding-001", text="Hello, world!")
     assert response.usage.prompt_tokens == expected_prompt_tokens
     assert response.usage.total_tokens == expected_prompt_tokens
+
+
+@pytest.mark.parametrize(
+    ("media_input", "modality", "media_price_key", "media_details_field"),
+    [
+        (IMAGE_DATA_URI, "IMAGE", "input_cost_per_image_token", "image_tokens"),
+        (
+            {"type": "file", "file": {"file_data": VIDEO_DATA_URI, "video_metadata": {"end_offset": "5s"}}},
+            "VIDEO",
+            "input_cost_per_video_token",
+            "video_tokens",
+        ),
+    ],
+)
+@pytest.mark.respx(assert_all_called=True)
+def test_gemini_batch_embedding_usage_comes_from_usage_metadata(
+    respx_mock: respx.MockRouter,
+    media_input: str | dict[str, object],
+    modality: str,
+    media_price_key: str,
+    media_details_field: str,
+) -> None:
+    respx_mock.post(
+        "https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-2:batchEmbedContents"
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "embeddings": [{"values": [0.1, 0.2]}, {"values": [0.3, 0.4]}],
+                "usageMetadata": {
+                    "promptTokenCount": 334,
+                    "promptTokenDetails": [
+                        {"modality": "TEXT", "tokenCount": 4},
+                        {"modality": modality, "tokenCount": 330},
+                    ],
+                },
+            },
+        )
+    )
+
+    response: Final = litellm.embedding(
+        model="gemini/gemini-embedding-2",
+        input=["a red apple", media_input],
+        api_key="gemini-test-key",
+    )
+
+    assert response.usage.prompt_tokens == 334
+    assert response.usage.total_tokens == 334
+    assert response.usage.prompt_tokens_details.text_tokens == 4
+    assert getattr(response.usage.prompt_tokens_details, media_details_field) == 330
+    prices: Final = litellm.model_cost["gemini/gemini-embedding-2"]
+    assert litellm.completion_cost(completion_response=response) == pytest.approx(
+        4 * prices["input_cost_per_token"] + 330 * prices[media_price_key]
+    )
+
+
+@pytest.mark.parametrize(
+    "usage_metadata",
+    [
+        {},
+        {"promptTokenDetails": [{"modality": "TEXT", "tokenCount": 3}, {"modality": "IMAGE", "tokenCount": 258}]},
+    ],
+)
+def test_gemini_batch_usage_metadata_without_a_prompt_count_bills_like_none_was_sent(
+    usage_metadata: Mapping[str, object],
+) -> None:
+    def usage_for(predictions: VertexAIBatchEmbeddingsResponseObject) -> Usage:
+        return process_response(
+            input=["a red apple", IMAGE_DATA_URI],
+            model_response=EmbeddingResponse(),
+            model="gemini-embedding-2",
+            _predictions=predictions,
+        ).usage
+
+    embeddings: Final = [{"values": [0.1]}, {"values": [0.2]}]
+    with_metadata: Final = usage_for({"embeddings": embeddings, "usageMetadata": usage_metadata})
+    without_metadata: Final = usage_for({"embeddings": embeddings})
+
+    assert with_metadata.prompt_tokens == without_metadata.prompt_tokens > 0
+    assert _prompt_cost("gemini-embedding-2", with_metadata) == _prompt_cost("gemini-embedding-2", without_metadata)
+
+
+@pytest.mark.parametrize("use_async", [False, True])
+@pytest.mark.respx(assert_all_called=True)
+async def test_gemini_batch_embedding_bills_a_files_image_at_the_image_rate_without_modality_details(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, use_async: bool
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    respx_mock.get("https://generativelanguage.googleapis.com/v1beta/files/abc123").mock(
+        return_value=httpx.Response(
+            200,
+            json={"mimeType": "image/png", "uri": "https://generativelanguage.googleapis.com/v1beta/files/abc123"},
+        )
+    )
+    respx_mock.post(
+        "https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-2:batchEmbedContents"
+    ).mock(
+        return_value=httpx.Response(
+            200, json={"embeddings": [{"values": [0.1, 0.2]}], "usageMetadata": {"promptTokenCount": 258}}
+        )
+    )
+
+    response: Final = (
+        await litellm.aembedding(model="gemini/gemini-embedding-2", input=["files/abc123"], api_key="gemini-test-key")
+        if use_async
+        else litellm.embedding(model="gemini/gemini-embedding-2", input=["files/abc123"], api_key="gemini-test-key")
+    )
+
+    assert response.usage.prompt_tokens_details.image_tokens == 258
+    assert litellm.completion_cost(completion_response=response) == pytest.approx(
+        258 * litellm.model_cost["gemini/gemini-embedding-2"]["input_cost_per_image_token"]
+    )
+
+
+def test_gemini_batch_embedding_adds_nothing_to_the_logged_hidden_params() -> None:
+    response: Final = process_response(
+        input=["a red apple", IMAGE_DATA_URI],
+        model_response=EmbeddingResponse(hidden_params={"custom_llm_provider": "gemini"}),
+        model="gemini-embedding-2",
+        _predictions={
+            "embeddings": [{"values": [0.1]}, {"values": [0.2]}],
+            "usageMetadata": {
+                "promptTokenCount": 261,
+                "promptTokenDetails": [{"modality": "TEXT", "tokenCount": 3}, {"modality": "IMAGE", "tokenCount": 258}],
+            },
+        },
+    )
+
+    assert response.hidden_params == {"custom_llm_provider": "gemini"}
+    assert len(response.item_usage) == 2
+
+
+def test_gemini_batch_embedding_gives_a_read_only_file_block_its_own_image_tokens() -> None:
+    response: Final = process_response(
+        input=["a red apple", MappingProxyType(_file_block(file_data=IMAGE_DATA_URI))],
+        model_response=EmbeddingResponse(),
+        model="gemini-embedding-2",
+        _predictions={
+            "embeddings": [{"values": [0.1]}, {"values": [0.2]}],
+            "usageMetadata": {
+                "promptTokenCount": 261,
+                "promptTokenDetails": [{"modality": "TEXT", "tokenCount": 3}, {"modality": "IMAGE", "tokenCount": 258}],
+            },
+        },
+    )
+
+    assert tuple(
+        (usage.prompt_tokens_details.text_tokens, usage.prompt_tokens_details.image_tokens)
+        for usage in response.item_usage
+    ) == ((3, 0), (0, 258))
+
+
+@pytest.mark.parametrize(
+    ("input", "usage_metadata", "expected"),
+    [
+        pytest.param(
+            [IMAGE_DATA_URI, _file_block(file_data=IMAGE_DATA_URI)],
+            {
+                "promptTokenCount": 520,
+                "promptTokenDetails": [{"modality": "TEXT", "tokenCount": 4}, {"modality": "IMAGE", "tokenCount": 516}],
+            },
+            ((260, 2, 258), (260, 2, 258)),
+            id="images-only",
+        ),
+        pytest.param(
+            ["hi", "a red apple"],
+            {"promptTokenCount": 3, "promptTokenDetails": [{"modality": "TEXT", "tokenCount": 13}]},
+            ((2, 2, 0), (11, 11, 0)),
+            id="details-above-prompt-count",
+        ),
+        pytest.param(
+            ["a red apple", VIDEO_DATA_URI],
+            {
+                "promptTokenCount": 11,
+                "promptTokenDetails": [{"modality": "TEXT", "tokenCount": 1}, {"modality": "VIDEO", "tokenCount": 10}],
+            },
+            ((1, 1, 0), (10, 0, 0)),
+            id="text-count-below-the-local-count",
+        ),
+        pytest.param(
+            [VIDEO_DATA_URI, VIDEO_DATA_URI],
+            {
+                "promptTokenCount": 24,
+                "promptTokenDetails": [{"modality": "TEXT", "tokenCount": 4}, {"modality": "VIDEO", "tokenCount": 20}],
+            },
+            ((12, 2, 0), (12, 2, 0)),
+            id="videos-only",
+        ),
+        pytest.param(
+            ["a red apple\ud83d", "a green pear"],
+            {"promptTokenCount": 7, "promptTokenDetails": [{"modality": "TEXT", "tokenCount": 7}]},
+            ((4, 4, 0), (3, 3, 0)),
+            id="lone-surrogate",
+        ),
+    ],
+)
+def test_gemini_batch_embedding_gives_each_input_a_non_negative_share(
+    input: GeminiEmbeddingInput,
+    usage_metadata: Mapping[str, object],
+    expected: tuple[tuple[int, int, int], ...],
+) -> None:
+    response: Final = process_response(
+        input=input,
+        model_response=EmbeddingResponse(),
+        model="gemini-embedding-2",
+        _predictions={"embeddings": [{"values": [0.1]}, {"values": [0.2]}], "usageMetadata": dict(usage_metadata)},
+    )
+
+    assert tuple(
+        (usage.prompt_tokens, usage.prompt_tokens_details.text_tokens, usage.prompt_tokens_details.image_tokens)
+        for usage in response.item_usage
+    ) == expected
+
+
+@pytest.mark.parametrize(
+    ("texts", "media", "audio", "video"),
+    [
+        pytest.param(("a red apple",), VIDEO_DATA_URI, 125, 330, id="text-and-video"),
+        pytest.param(("a red apple",), AUDIO_DATA_URI, 125, 0, id="text-and-audio"),
+        pytest.param(("a red apple", "一个红苹果从树上掉下来了"), VIDEO_DATA_URI, 125, 330, id="two-texts-and-video"),
+    ],
+)
+def test_gemini_batch_embedding_keeps_each_texts_own_tokens_and_gives_the_rest_to_the_media(
+    texts: tuple[str, ...], media: str, audio: int, video: int
+) -> None:
+    text: Final = 53
+    details: Final = (("TEXT", text), ("AUDIO", audio), ("VIDEO", video))
+    response: Final = process_response(
+        input=[*texts, media],
+        model_response=EmbeddingResponse(),
+        model="gemini-embedding-2",
+        _predictions={
+            "embeddings": [{"values": [0.1]} for _ in (*texts, media)],
+            "usageMetadata": {
+                "promptTokenCount": text + audio + video,
+                "promptTokenDetails": [
+                    {"modality": modality, "tokenCount": count} for modality, count in details if count
+                ],
+            },
+        },
+    )
+    local: Final = tuple(litellm.token_counter(model="gemini-embedding-2", text=item) for item in texts)
+
+    assert tuple(
+        (
+            usage.prompt_tokens,
+            usage.prompt_tokens_details.text_tokens,
+            usage.prompt_tokens_details.audio_tokens,
+            usage.prompt_tokens_details.video_tokens,
+        )
+        for usage in response.item_usage
+    ) == (
+        *((count, count, 0, 0) for count in local),
+        (text + audio + video - sum(local), text - sum(local), audio, video),
+    )
+
+
+def test_gemini_batch_embedding_without_usage_metadata_splits_the_local_count_by_text_length() -> None:
+    long_text: Final = " ".join(("a red apple",) * 200)
+    response: Final = process_response(
+        input=["hello", long_text],
+        model_response=EmbeddingResponse(),
+        model="gemini-embedding-001",
+        _predictions={"embeddings": [{"values": [0.1]}, {"values": [0.2]}]},
+    )
+    short, long = response.item_usage
+
+    assert short.prompt_tokens + long.prompt_tokens == response.usage.prompt_tokens
+    assert short.prompt_tokens * 100 < long.prompt_tokens
+
+
+async def _cache_hits(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    batch: tuple[str, ...],
+    usage_metadata: Mapping[str, object],
+    hit_inputs: tuple[str, ...],
+) -> tuple[int, tuple[EmbeddingResponse, ...]]:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "cache", Cache(type=LiteLLMCacheType.LOCAL))
+    route: Final = respx_mock.post(
+        "https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-2:batchEmbedContents"
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={"embeddings": [{"values": [0.1, 0.2]} for _ in batch], "usageMetadata": dict(usage_metadata)},
+        )
+    )
+
+    async def embed(input: list[str]) -> EmbeddingResponse:
+        return await litellm.aembedding(model="gemini/gemini-embedding-2", input=input, api_key="gemini-test-key")
+
+    await embed(list(batch))
+    await asyncio.gather(*_PENDING_CACHE_WRITES)
+    hits: Final = tuple([await embed([item]) for item in hit_inputs])
+    return route.call_count, hits
+
+
+@pytest.mark.asyncio
+@pytest.mark.respx(assert_all_called=True)
+@pytest.mark.parametrize(
+    ("batch", "usage_metadata", "expected_hits"),
+    [
+        pytest.param(
+            ("a red apple", IMAGE_DATA_URI, "a green pear"),
+            {
+                "promptTokenCount": 267,
+                "promptTokenDetails": [
+                    {"modality": "TEXT", "tokenCount": 9},
+                    {"modality": "IMAGE", "tokenCount": 258},
+                ],
+            },
+            (("a red apple", (4, 4, 0)), (IMAGE_DATA_URI, (258, 0, 258))),
+            id="modality-details",
+        ),
+        pytest.param(
+            ("a red apple", "a green pear"),
+            {"promptTokenCount": 7},
+            (("a red apple", (3, 0, 0)), ("a green pear", (4, 0, 0))),
+            id="prompt-count-only",
+        ),
+        pytest.param(
+            ("a red apple", IMAGE_DATA_URI),
+            {"promptTokenCount": 300},
+            (("a red apple", (150, 0, 0)), (IMAGE_DATA_URI, (150, 0, 0))),
+            id="media-without-modality-details",
+        ),
+    ],
+)
+async def test_gemini_batch_embedding_cache_hits_report_each_inputs_own_modality_tokens(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    batch: tuple[str, ...],
+    usage_metadata: Mapping[str, object],
+    expected_hits: tuple[tuple[str, tuple[int, int, int]], ...],
+) -> None:
+    calls, hits = await _cache_hits(
+        respx_mock, monkeypatch, batch, usage_metadata, tuple(item for item, _ in expected_hits)
+    )
+
+    assert calls == 1
+    assert tuple(
+        (
+            item,
+            (
+                hit.usage.prompt_tokens,
+                hit.usage.prompt_tokens_details.text_tokens,
+                hit.usage.prompt_tokens_details.image_tokens,
+            ),
+        )
+        for (item, _), hit in zip(expected_hits, hits, strict=True)
+    ) == expected_hits
+
+
+@pytest.mark.asyncio
+@pytest.mark.respx(assert_all_called=True)
+@pytest.mark.parametrize(
+    "usage_metadata",
+    [
+        pytest.param(
+            {"promptTokenCount": 601, "promptTokenDetails": [{"modality": "TEXT", "tokenCount": 601}]},
+            id="modality-details",
+        ),
+        pytest.param({"promptTokenCount": 601}, id="prompt-count-only"),
+    ],
+)
+async def test_gemini_batch_embedding_cache_hits_split_text_tokens_by_each_inputs_length(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, usage_metadata: Mapping[str, object]
+) -> None:
+    long_text: Final = " ".join(("a red apple",) * 200)
+    calls, (short_hit, long_hit) = await _cache_hits(
+        respx_mock, monkeypatch, ("hello", long_text), usage_metadata, ("hello", long_text)
+    )
+
+    assert calls == 1
+    assert short_hit.usage.prompt_tokens + long_hit.usage.prompt_tokens == 601
+    assert short_hit.usage.prompt_tokens * 100 < long_hit.usage.prompt_tokens
+
+
+@pytest.mark.asyncio
+@pytest.mark.respx(assert_all_called=True)
+async def test_gemini_batch_embedding_cache_hits_give_more_text_tokens_to_the_script_that_takes_more_tokens(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    english: Final = "a red apple"
+    chinese: Final = "一个红苹果一个红苹果一"
+    calls, (english_hit, chinese_hit) = await _cache_hits(
+        respx_mock,
+        monkeypatch,
+        (english, chinese),
+        {"promptTokenCount": 12, "promptTokenDetails": [{"modality": "TEXT", "tokenCount": 12}]},
+        (english, chinese),
+    )
+
+    assert calls == 1
+    assert english_hit.usage.prompt_tokens + chinese_hit.usage.prompt_tokens == 12
+    assert english_hit.usage.prompt_tokens < chinese_hit.usage.prompt_tokens
+
+
+@pytest.mark.parametrize("use_embed_content", [False, True])
+def test_a_usage_detail_entry_without_a_token_count_keeps_googles_other_counts(use_embed_content: bool) -> None:
+    usage_metadata: Final = {
+        "promptTokenCount": 261,
+        "promptTokenDetails": [
+            {"modality": "TEXT", "tokenCount": 3},
+            {"modality": "AUDIO"},
+            {"modality": "IMAGE", "tokenCount": 258},
+        ],
+    }
+    response: Final = (
+        process_embed_content_response(
+            input=["a red apple", IMAGE_DATA_URI],
+            model_response=EmbeddingResponse(),
+            model="gemini-embedding-2",
+            response_json={"embedding": {"values": [0.1]}, "usageMetadata": usage_metadata},
+        )
+        if use_embed_content
+        else process_response(
+            input=["a red apple", IMAGE_DATA_URI],
+            model_response=EmbeddingResponse(),
+            model="gemini-embedding-2",
+            _predictions={"embeddings": [{"values": [0.1]}, {"values": [0.2]}], "usageMetadata": usage_metadata},
+        )
+    )
+
+    assert (
+        response.usage.prompt_tokens,
+        response.usage.prompt_tokens_details.text_tokens,
+        response.usage.prompt_tokens_details.image_tokens,
+    ) == (261, 3, 258)

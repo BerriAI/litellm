@@ -358,7 +358,12 @@ class TestGoogleAIStudioFilesTransformation:
 
 @pytest.mark.parametrize(
     "file_id",
-    ["batch-la6", "files/batch-la6", "https://generativelanguage.googleapis.com/v1beta/files/batch-la6"],
+    [
+        "batch-la6",
+        "files/batch-la6",
+        "https://generativelanguage.googleapis.com/v1beta/files/batch-la6",
+        "https://generativelanguage.googleapis.com/v1/files/batch-la6",
+    ],
 )
 def test_file_content_request_downloads_the_file_as_media(file_id):
     handler = GoogleAIStudioFilesHandler()

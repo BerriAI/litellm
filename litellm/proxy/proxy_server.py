@@ -76,6 +76,7 @@ from litellm.constants import (
     DEFAULT_SHARED_HEALTH_CHECK_LOCK_TTL,
     DEFAULT_SHARED_HEALTH_CHECK_TTL,
     DEFAULT_SLACK_ALERTING_THRESHOLD,
+    GRACEFUL_SHUTDOWN_TEARDOWN_HEADROOM_SECONDS,
     INTERNAL_CALLBACK_NAMES,
     LANGFUSE_SHUTDOWN_FLUSH_TIMEOUT_MILLIS,
     LITELLM_EMBEDDING_PROVIDERS_SUPPORTING_INPUT_ARRAY_OF_TOKENS,
@@ -184,6 +185,7 @@ from litellm.router_utils.auto_router_tuning_baseline import (
     tuning_limit_violation,
 )
 from litellm.router_utils.common_utils import resolve_model_group_alias
+from litellm.router_utils.deployment_pricing import unpriced_bedrock_arn
 from litellm.router_utils.routing_groups import parse_routing_groups
 from litellm.types.caching import RedisPipelineIncrementOperation
 from litellm.types.utils import (
@@ -299,7 +301,12 @@ import litellm
 import litellm._redis
 from litellm import Router
 from litellm._internal_context import service_target, with_service_target
-from litellm._logging import redact_string, verbose_proxy_logger, verbose_router_logger
+from litellm._logging import (
+    redact_internal_details_from_client_message,
+    redact_string,
+    verbose_proxy_logger,
+    verbose_router_logger,
+)
 from litellm.caching.caching import DualCache, RedisCache
 from litellm.caching.redis_batch import (
     active_post_call_redis_batch,
@@ -505,8 +512,13 @@ from litellm.proxy.common_utils.openai_endpoint_utils import (
 )
 from litellm.proxy.common_utils.openai_error_payload import (
     LITELLM_CALL_ID_HEADER,
+    error_status_code,
     headers_with_litellm_call_id,
     litellm_call_id_headers,
+    openai_error_param,
+    openai_error_type,
+    redacted_raw_error_param,
+    relayed_provider_specific_fields,
     with_litellm_call_id,
 )
 from litellm.proxy.common_utils.periodic_reload_schedule import (
@@ -838,6 +850,9 @@ from litellm.proxy.openai_files_endpoints.files_endpoints import (
 )
 from litellm.proxy.openai_files_endpoints.files_endpoints import (
     set_files_config,
+)
+from litellm.proxy.pass_through_endpoints.llm_provider_handlers.openai_agents_turn_billing import (
+    openai_agents_turn_biller,
 )
 from litellm.proxy.pass_through_endpoints.openai_passthrough_endpoints import (
     router as openai_passthrough_router,
@@ -1224,6 +1239,19 @@ async def _flush_spend_logs_queue_on_shutdown() -> None:
         )
     except Exception as e:  # noqa: BLE001  # shutdown must continue even if the drain fails
         verbose_proxy_logger.exception("Error flushing spend logs queue on shutdown: %s", e)
+
+
+async def _flush_spend_around_agents_rows_drain_on_shutdown(
+    flush_spend: Callable[[], Awaitable[None]] = flush_spend_counters_on_shutdown,
+    *,
+    clock: Callable[[], float] = time.monotonic,
+    drain_deferred_rows: Callable[[float], Awaitable[None]] = openai_agents_turn_biller.drain,
+) -> None:
+    await flush_spend()
+    remaining: Final = GracefulShutdownManager.remaining(clock=clock)
+    await drain_deferred_rows(max(0.0, remaining - GRACEFUL_SHUTDOWN_TEARDOWN_HEADROOM_SECONDS))
+    await drain_deferred_rows(GracefulShutdownManager.remaining(5.0, clock=clock))
+    await flush_spend()
 
 
 async def _drain_audit_tasks_on_shutdown() -> None:
@@ -1759,6 +1787,7 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[ProxyLifespanState
         try:
             async with AsyncExitStack() as admin_mcp_stack:
                 try:
+                    admin_mcp_stack.enter_context(GracefulShutdownManager.capture_sigterm())
                     await admin_mcp_stack.enter_async_context(admin_mcp_lifespan(app))
                     yield state
                 finally:
@@ -1821,7 +1850,7 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[ProxyLifespanState
                 except Exception as e:
                     verbose_proxy_logger.error("Error stopping in-flight scheduled jobs: %s", e)
 
-            await flush_spend_counters_on_shutdown()
+            await _flush_spend_around_agents_rows_drain_on_shutdown()
 
             await _flush_spend_logs_queue_on_shutdown()
 
@@ -10262,11 +10291,15 @@ async def async_data_generator(
             # Including it in the SSE response leaks internal details to clients.
             error_msg = str(e)
 
+        client_message: Final = getattr(e, "message", error_msg)
         proxy_exception: Final = ProxyException(
-            message=getattr(e, "message", error_msg),
-            type=getattr(e, "type", "None"),
-            param=getattr(e, "param", "None"),
+            message=redact_internal_details_from_client_message(
+                client_message if isinstance(client_message, str) else error_msg
+            ),
+            type=openai_error_type(e, error_status_code(e, status.HTTP_500_INTERNAL_SERVER_ERROR)),
+            param=openai_error_param(e),
             code=getattr(e, "status_code", 500),
+            provider_specific_fields=relayed_provider_specific_fields(e),
         )
         error_returned: Final = json.dumps({"error": proxy_exception.to_dict()})
         stream_completed = True
@@ -10311,10 +10344,16 @@ def _pricing_override_stamps(
 
 def get_litellm_model_info(model: dict = {}):
     model_info: Final = model.get("model_info", {})
+    configured_base_model: Final = model_info.get("base_model")
+    base_model: Final = (
+        None
+        if isinstance(configured_base_model, str) and unpriced_bedrock_arn(configured_base_model)
+        else configured_base_model
+    )
     model_to_lookup = model.get("litellm_params", {}).get("model", None)
     try:
-        if "azure" in model_to_lookup or model_info.get("base_model"):
-            model_to_lookup = model_info.get("base_model", None)
+        if "azure" in model_to_lookup or base_model:
+            model_to_lookup = base_model
         litellm_model_info: Final = litellm.get_model_info(model_to_lookup)
         return litellm_model_info
     except Exception:
@@ -12591,11 +12630,12 @@ async def completion(
         error_msg: Final = f"{e}"
         raise ProxyException(
             message=getattr(e, "message", error_msg),
-            type=getattr(e, "type", "None"),
-            param=getattr(e, "param", "None"),
+            type=openai_error_type(e, error_status_code(e, status.HTTP_500_INTERNAL_SERVER_ERROR)),
+            param=openai_error_param(e),
             headers=litellm_call_id_headers(litellm_call_id),
             openai_code=getattr(e, "code", None),
             code=getattr(e, "status_code", 500),
+            provider_specific_fields=relayed_provider_specific_fields(e),
         )
 
 
@@ -12819,7 +12859,7 @@ async def moderations(
             raise ProxyException(
                 message=getattr(e, "message", str(e)),
                 type=getattr(e, "type", "None"),
-                param=getattr(e, "param", "None"),
+                param=redacted_raw_error_param(e),
                 headers=litellm_call_id_headers(litellm_call_id),
                 code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
             )
@@ -12828,7 +12868,7 @@ async def moderations(
             raise ProxyException(
                 message=getattr(e, "message", error_msg),
                 type=getattr(e, "type", "None"),
-                param=getattr(e, "param", "None"),
+                param=redacted_raw_error_param(e),
                 headers=litellm_call_id_headers(litellm_call_id),
                 code=getattr(e, "status_code", 500),
             )

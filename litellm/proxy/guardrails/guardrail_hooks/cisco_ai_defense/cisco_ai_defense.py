@@ -22,6 +22,7 @@ import os
 from collections.abc import AsyncIterator, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import datetime
+from itertools import chain
 from typing import TYPE_CHECKING, Any, Final, Literal
 
 import httpx
@@ -35,6 +36,7 @@ from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,
 )
+from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import message_field, parts_of
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
@@ -953,7 +955,7 @@ class CiscoAIDefenseGuardrail(CiscoAIDefenseMcpMixin, CustomGuardrail):
     def _finalize_inspection(
         self,
         inspect_response: dict[str, object],
-        request_data: dict,
+        request_data: dict[str, object],
         context: _ScanContext,
         start_time: datetime,
         response_obj: object = None,
@@ -1079,7 +1081,7 @@ class CiscoAIDefenseGuardrail(CiscoAIDefenseMcpMixin, CustomGuardrail):
                 self.on_flagged_action,
             )
 
-        if self.on_flagged_action == "block":
+        if self.on_flagged_action == "block" or self._redacts_json_input(action, context, request_data.get("input")):
             raise HTTPException(
                 status_code=400,
                 detail=self._build_block_payload(context, verdict),
@@ -1332,7 +1334,7 @@ class CiscoAIDefenseGuardrail(CiscoAIDefenseMcpMixin, CustomGuardrail):
 
     def _apply_redaction(
         self,
-        request_data: dict,
+        request_data: dict[str, object],
         response_obj: object,
         context: _ScanContext,
         verdict: _CiscoVerdict,
@@ -1393,7 +1395,7 @@ class CiscoAIDefenseGuardrail(CiscoAIDefenseMcpMixin, CustomGuardrail):
 
     def _redact_chat_input(
         self,
-        request_data: dict,
+        request_data: dict[str, object],
         sanitized_text: str | None,
         sanitized_messages: list[dict[str, object]] | None,
     ) -> bool:
@@ -1405,6 +1407,9 @@ class CiscoAIDefenseGuardrail(CiscoAIDefenseMcpMixin, CustomGuardrail):
             # field, so drop it before rewriting the real conversation.
             sanitized_messages = sanitized_messages[:-1] or None
         uses_input: Final = "input" in request_data and "messages" not in request_data
+        request_input: Final[object] = request_data.get("input")
+        if self._carries_json_part(request_input):
+            return False
         has_instructions: Final = request_data.get("instructions") is not None
         instructions_redacted = False
         if has_instructions:
@@ -1425,7 +1430,7 @@ class CiscoAIDefenseGuardrail(CiscoAIDefenseMcpMixin, CustomGuardrail):
             return True
         if sanitized_text:
             if uses_input:
-                rewritten_input: Final = self._rewrite_responses_input_text(request_data.get("input"), sanitized_text)
+                rewritten_input: Final = self._rewrite_responses_input_text(request_input, sanitized_text)
                 if rewritten_input is not None:
                     request_data["input"] = rewritten_input
                     return True
@@ -1699,6 +1704,16 @@ class CiscoAIDefenseGuardrail(CiscoAIDefenseMcpMixin, CustomGuardrail):
                 out.append({"role": role, "content": content})
         return out or None
 
+    @classmethod
+    def _redacts_json_input(cls, action: str, context: _ScanContext, request_input: object) -> bool:
+        return action == _ACTION_REDACT and context.direction == "input" and cls._carries_json_part(request_input)
+
+    @staticmethod
+    def _carries_json_part(request_input: object) -> bool:
+        items: Final = parts_of(request_input)
+        nested: Final = chain.from_iterable(parts_of(message_field(item, "content")) for item in items)
+        return any(message_field(part, "type") == "input_json" for part in chain(items, nested))
+
     @staticmethod
     def _rewrite_responses_input_text(original_input: object, sanitized_text: str) -> object | None:
         """Apply ``sanitized_text`` to a Responses API ``input`` value.
@@ -1967,6 +1982,9 @@ class CiscoAIDefenseGuardrail(CiscoAIDefenseMcpMixin, CustomGuardrail):
                 part_type = part.get("type")
                 if part_type in CiscoAIDefenseGuardrail._TEXT_PART_TYPES and part.get("text"):
                     parts.append(str(part["text"]))
+                    continue
+                if part_type == "input_json" and "data" in part:
+                    parts.append(json.dumps(part["data"], ensure_ascii=False))
                     continue
                 nested = part.get("content")
                 if nested is not None:

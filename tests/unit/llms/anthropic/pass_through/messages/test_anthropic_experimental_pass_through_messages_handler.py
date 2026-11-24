@@ -231,6 +231,27 @@ async def test_anthropic_messages_sanitizes_empty_text_blocks_before_dispatch():
     assert len(msgs[0]["content"]) == 2  # caller untouched
 
 
+@pytest.mark.parametrize(
+    ("model", "custom_llm_provider"),
+    [("claude-sonnet-4-5", "anthropic"), ("claude-sonnet-4-5", "vertex_ai")],
+    ids=["anthropic", "vertex_ai_claude"],
+)
+def test_a_claude_target_gets_no_user_turn_for_a_trailing_empty_text_block(model: str, custom_llm_provider: str) -> None:
+    from litellm.llms.anthropic.pass_through.messages.utils import prepare_native_messages
+
+    history: Final = [{"role": "user", "content": "Hi"}, {"role": "assistant", "content": "Hello!"}]
+
+    prepared, _system = prepare_native_messages(
+        [*history, {"role": "user", "content": [{"type": "text", "text": ""}]}],
+        None,
+        {},
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+    )
+
+    assert prepared == history
+
+
 @pytest.mark.asyncio
 async def test_anthropic_messages_sanitizes_tool_use_ids_before_dispatch():
     from litellm.llms.anthropic.pass_through.messages import handler
