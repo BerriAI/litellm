@@ -4,7 +4,7 @@
 import asyncio
 import os
 import time
-from collections.abc import AsyncIterator, Mapping, Sequence
+from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from itertools import chain
 from types import MappingProxyType
 from typing import TYPE_CHECKING, ClassVar, Final, Literal, NoReturn, Protocol
@@ -49,6 +49,7 @@ if TYPE_CHECKING:
 GUARDRAIL_NAME: Final = SupportedGuardrailIntegrations.TRENDAI.value
 OPENAI_CHAT_COMPLETION_RESPONSE_V1: Final = "OpenAIChatCompletionResponseV1"
 RESPONSE_CONTENT_CHUNK_SIZE_BYTES: Final = 49_500
+REQUEST_CONTENT_CHUNK_SIZE_BYTES: Final = 49_500
 TMV1_CLIENT_NAME: Final = "litellm"
 PLUGIN_VERSION: Final = "v0.1.3"
 PROVIDER_UNAVAILABLE_STATUS: Final = 503
@@ -82,6 +83,7 @@ class TrendAIGuardrail(CustomGuardrail):
         timeout: float = 5.0,
         stream_overlap_size: int = 256,
         response_content_chunk_size_bytes: int = RESPONSE_CONTENT_CHUNK_SIZE_BYTES,
+        request_content_chunk_size_bytes: int = REQUEST_CONTENT_CHUNK_SIZE_BYTES,
         async_handler: _AsyncHTTPClient | None = None,
         guardrail_name: str | None = None,
         event_hook: (  # mutable-ok: CustomGuardrail accepts lists of hooks
@@ -110,6 +112,8 @@ class TrendAIGuardrail(CustomGuardrail):
             raise ValueError("stream_overlap_size must be non-negative")
         if response_content_chunk_size_bytes < 1:
             raise ValueError("response_content_chunk_size_bytes must be greater than zero")
+        if request_content_chunk_size_bytes < 1:
+            raise ValueError("request_content_chunk_size_bytes must be greater than zero")
 
         self.api_key: str = resolved_api_key
         self.api_url: str = _build_apply_guardrails_url(resolved_api_base)
@@ -118,6 +122,7 @@ class TrendAIGuardrail(CustomGuardrail):
         self.timeout = timeout
         self.stream_overlap_size: int = stream_overlap_size
         self.response_content_chunk_size_bytes: int = response_content_chunk_size_bytes
+        self.request_content_chunk_size_bytes: int = request_content_chunk_size_bytes
         self.streaming_buffer_until_moderated: bool = streaming_buffer_until_moderated
         self.async_handler: _AsyncHTTPClient = async_handler or get_async_httpx_client(
             llm_provider=httpxSpecialProvider.GuardrailCallback
@@ -171,11 +176,22 @@ class TrendAIGuardrail(CustomGuardrail):
             verbose_proxy_logger.debug("Trend AI Guard: no user prompt to scan in request inputs")
             return inputs
         started_at: Final = time.time()
-        result: Final = await self._scan_payload(MappingProxyType({"prompt": prompt.prompt}))
-        self._record_scan(result, request_data, started_at, event_type=None)
-        redacted: Final = self._enforce(result)
-        if redacted is None:
+        scans: Final = await self._scan_request_windows(prompt.prompt)
+        verdict: Final = _window_verdict(scans)
+        has_redaction: Final = any(_is_redacting(scan.result) for scan in scans)
+        self._record_scan(
+            verdict,
+            request_data,
+            started_at,
+            event_type=None,
+            redacted=has_redaction,
+        )
+        self._enforce(verdict)
+        if not has_redaction:
             return inputs
+        redacted: Final = _merge_request_redactions(prompt.prompt, scans)
+        if redacted is None:
+            self._raise_redaction_failure(request_data, started_at, event_type=None)
         redacted_texts: Final = redact_request_texts(prompt.texts, redacted)
         if prompt.message_index is None:
             return {**inputs, "texts": list(redacted_texts)}
@@ -225,19 +241,58 @@ class TrendAIGuardrail(CustomGuardrail):
         }
         return redacted_inputs
 
-    async def _scan_response_windows(self, content: str, model: str) -> tuple[TrendAIWindowScan, ...]:
-        return tuple([scan async for scan in self._iter_response_window_scans(content, model)])
+    async def _scan_request_windows(self, prompt: str) -> tuple[TrendAIWindowScan, ...]:
+        return await self._scan_text_windows(
+            prompt,
+            _prompt_payload,
+            chunk_size_bytes=self.request_content_chunk_size_bytes,
+        )
 
-    async def _iter_response_window_scans(self, content: str, model: str) -> AsyncIterator[TrendAIWindowScan]:
+    async def _scan_response_windows(self, content: str, model: str) -> tuple[TrendAIWindowScan, ...]:
+        return await self._scan_text_windows(
+            content,
+            lambda window: _chat_completion_payload(window, model),
+            chunk_size_bytes=self.response_content_chunk_size_bytes,
+            request_type=OPENAI_CHAT_COMPLETION_RESPONSE_V1,
+        )
+
+    async def _scan_text_windows(
+        self,
+        content: str,
+        payload_builder: Callable[[str], Mapping[str, object]],
+        *,
+        chunk_size_bytes: int,
+        request_type: str | None = None,
+    ) -> tuple[TrendAIWindowScan, ...]:
+        return tuple(
+            [
+                scan
+                async for scan in self._iter_text_window_scans(
+                    content,
+                    payload_builder,
+                    chunk_size_bytes=chunk_size_bytes,
+                    request_type=request_type,
+                )
+            ]
+        )
+
+    async def _iter_text_window_scans(
+        self,
+        content: str,
+        payload_builder: Callable[[str], Mapping[str, object]],
+        *,
+        chunk_size_bytes: int,
+        request_type: str | None = None,
+    ) -> AsyncIterator[TrendAIWindowScan]:
         """Scan ``content`` window by window, stopping at the first block or provider failure."""
         for window in utf8_windows(
             content,
-            chunk_size_bytes=self.response_content_chunk_size_bytes,
+            chunk_size_bytes=chunk_size_bytes,
             overlap_chars=self.stream_overlap_size,
         ):
             result = await self._scan_payload(
-                _chat_completion_payload(window.text, model),
-                request_type=OPENAI_CHAT_COMPLETION_RESPONSE_V1,
+                payload_builder(window.text),
+                request_type=request_type,
             )
             yield TrendAIWindowScan(window=window, result=result)
             if not isinstance(result, TrendAIAllow):
@@ -301,9 +356,16 @@ class TrendAIGuardrail(CustomGuardrail):
         redacted: bool | None = None,
     ) -> None:
         match result:
-            case TrendAIAllow(redacted_content=redacted_content, masked_entity_count=masked_entity_count):
+            case TrendAIAllow(
+                redacted_content=redacted_content,
+                masked_entity_count=masked_entity_count,
+                detected_categories=detected_categories,
+            ):
                 self._record(
-                    _allow_record(redacted_content is not None if redacted is None else redacted),
+                    _allow_record(
+                        redacted_content is not None if redacted is None else redacted,
+                        detected_categories,
+                    ),
                     "success",
                     request_data,
                     started_at,
@@ -432,7 +494,16 @@ class TrendAIGuardrail(CustomGuardrail):
             if parsed.sensitive_information is not None and redacted_content is not None
             else ()
         )
-        return TrendAIAllow(redacted_content=redacted_content, masked_entity_count=entity_counts)
+        detected_categories: Final = _extract_detected_categories(parsed)
+        return TrendAIAllow(
+            redacted_content=redacted_content,
+            masked_entity_count=entity_counts,
+            detected_categories=detected_categories,
+        )
+
+
+def _prompt_payload(content: str) -> Mapping[str, object]:
+    return MappingProxyType({"prompt": content})
 
 
 def _chat_completion_payload(content: str, model: str) -> Mapping[str, object]:
@@ -443,22 +514,70 @@ def _optional_header(name: str, value: str | None) -> tuple[tuple[str, str], ...
     return () if value is None else ((name, value),)
 
 
-def _allow_record(redacted: bool) -> Mapping[str, object]:
-    return MappingProxyType({"action": "allow", "redacted": redacted})
+def _allow_record(
+    redacted: bool,
+    detected_categories: Sequence[tuple[str, float]] = (),
+) -> Mapping[str, object]:
+    if not detected_categories:
+        return MappingProxyType({"action": "allow", "redacted": redacted})
+    return MappingProxyType({"action": "allow", "redacted": redacted, "detected_categories": dict(detected_categories)})
 
 
 def _is_redacting(result: TrendAIScanResult) -> bool:
     return isinstance(result, TrendAIAllow) and result.redacted_content is not None
 
 
+def _extract_detected_categories(parsed: TrendAIResponse) -> tuple[tuple[str, float], ...]:
+    prompt_hits: Final = tuple(
+        ("prompt_attack", attack.confidence_score or 0.0)
+        for attack in (parsed.prompt_attacks or ())
+        if attack.has_policy_violation
+    )
+    harmful_hits: Final = tuple(
+        (
+            f"harmful_content:{(content.category or '').strip().lower() or 'unspecified'}",
+            content.confidence_score or 0.0,
+        )
+        for content in (parsed.harmful_content or ())
+        if content.has_policy_violation
+    )
+    sensitive: Final = parsed.sensitive_information
+    sensitive_rules: Final = sensitive.rules if sensitive is not None and sensitive.has_policy_violation else ()
+    sensitive_ids: Final = tuple(rule.id.strip() for rule in sensitive_rules)
+    sensitive_hits: Final = tuple((f"sensitive_data:{rule_id}", 0.0) for rule_id in sensitive_ids if rule_id)
+    return _merge_detected_categories((*prompt_hits, *harmful_hits, *sensitive_hits))
+
+
+def _merge_detected_categories(additions: Sequence[tuple[str, float]]) -> tuple[tuple[str, float], ...]:
+    """Per-category maxima across detections or overlapping windows."""
+    categories: Final = sorted(frozenset(category for category, _ in additions))
+    return tuple(
+        (category, max(score for candidate, score in additions if candidate == category)) for category in categories
+    )
+
+
 def _window_verdict(scans: Sequence[TrendAIWindowScan]) -> TrendAIScanResult:
-    """Collapse window scans into one verdict: the first non-allow result, else an allow carrying every entity count."""
+    """Collapse window scans into one verdict: the first non-allow result, else an allow carrying merged findings."""
     terminal: Final = next((scan.result for scan in scans if not isinstance(scan.result, TrendAIAllow)), None)
     if terminal is not None:
         return terminal
     allowed_counts: Final = (scan.result.masked_entity_count for scan in scans if isinstance(scan.result, TrendAIAllow))
     counts: Final = tuple(chain.from_iterable(allowed_counts))
-    return TrendAIAllow(masked_entity_count=tuple(sorted(_merge_entity_counts(_NO_ENTITIES, counts).items())))
+    allowed_categories: Final = (
+        scan.result.detected_categories for scan in scans if isinstance(scan.result, TrendAIAllow)
+    )
+    categories: Final = tuple(chain.from_iterable(allowed_categories))
+    return TrendAIAllow(
+        masked_entity_count=tuple(sorted(_merge_entity_counts(_NO_ENTITIES, counts).items())),
+        detected_categories=_merge_detected_categories(categories),
+    )
+
+
+def _merge_request_redactions(content: str, scans: Sequence[TrendAIWindowScan]) -> str | None:
+    """Return a single window's redaction directly, or fold overlapping windows positionally."""
+    if len(scans) == 1 and isinstance(scans[0].result, TrendAIAllow) and scans[0].result.redacted_content is not None:
+        return scans[0].result.redacted_content
+    return _merge_window_redactions(content, scans)
 
 
 def _merge_entity_counts(counts: Mapping[str, int], additions: Sequence[tuple[str, int]]) -> Mapping[str, int]:

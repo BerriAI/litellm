@@ -14,6 +14,7 @@ class TrendAISettings(BaseModel, frozen=True):
     timeout: float = 5.0
     stream_overlap_size: int = 256
     response_content_chunk_size_bytes: int = 49_500
+    request_content_chunk_size_bytes: int = 49_500
     streaming_buffer_until_moderated: bool = True
 
 
@@ -79,6 +80,21 @@ class TrendAISensitiveInformation(BaseModel, frozen=True):
     rules: tuple[TrendAISensitiveRule, ...] = ()
 
 
+class TrendAIPromptAttack(BaseModel, frozen=True):
+    model_config = ConfigDict(extra="ignore")
+
+    has_policy_violation: bool = Field(default=False, alias="hasPolicyViolation")
+    confidence_score: float | None = Field(default=None, alias="confidenceScore")
+
+
+class TrendAIHarmfulContent(BaseModel, frozen=True):
+    model_config = ConfigDict(extra="ignore")
+
+    category: str | None = None
+    has_policy_violation: bool = Field(default=False, alias="hasPolicyViolation")
+    confidence_score: float | None = Field(default=None, alias="confidenceScore")
+
+
 class TrendAIResponse(BaseModel, frozen=True):
     model_config = ConfigDict(extra="ignore")
 
@@ -87,6 +103,8 @@ class TrendAIResponse(BaseModel, frozen=True):
     reason: str = ""
     redacted_request: Mapping[str, object] | None = Field(default=None, alias="redactedRequest")
     sensitive_information: TrendAISensitiveInformation | None = Field(default=None, alias="sensitiveInformation")
+    prompt_attacks: tuple[TrendAIPromptAttack, ...] | None = Field(default=None, alias="promptAttacks")
+    harmful_content: tuple[TrendAIHarmfulContent, ...] | None = Field(default=None, alias="harmfulContent")
 
 
 @dataclass(frozen=True, slots=True)
@@ -94,6 +112,7 @@ class TrendAIAllow:
     kind: Literal["allow"] = "allow"
     redacted_content: str | None = None
     masked_entity_count: tuple[tuple[str, int], ...] = ()
+    detected_categories: tuple[tuple[str, float], ...] = ()
 
 
 @dataclass(frozen=True, slots=True)

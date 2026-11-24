@@ -35,6 +35,7 @@ def initialize_guardrail(
         timeout=settings.timeout,
         stream_overlap_size=settings.stream_overlap_size,
         response_content_chunk_size_bytes=settings.response_content_chunk_size_bytes,
+        request_content_chunk_size_bytes=settings.request_content_chunk_size_bytes,
         streaming_buffer_until_moderated=settings.streaming_buffer_until_moderated,
         async_handler=async_handler,
         guardrail_name=guardrail_name,
