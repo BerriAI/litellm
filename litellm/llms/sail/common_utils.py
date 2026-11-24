@@ -60,7 +60,7 @@ def completion_window_for_service_tier(
     if service_tier is None:
         return None
     tier: Final = service_tier.lower() if isinstance(service_tier, str) else None
-    if tier in _WINDOW_FOR_SERVICE_TIER:
+    if tier is not None and tier in _WINDOW_FOR_SERVICE_TIER:
         return _WINDOW_FOR_SERVICE_TIER[tier]
     if _dropping(drop_params):
         return None

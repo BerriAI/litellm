@@ -81,7 +81,7 @@ describe("Settings", () => {
     renderWithProviders(<Settings {...defaultProps} />);
 
     await waitFor(() => {
-      expect(screen.getByText("Active Logging Callbacks")).toBeInTheDocument();
+      expect(screen.getByRole("heading", { name: "Logging & Alerts", level: 1 })).toBeInTheDocument();
     });
   });
 
@@ -89,6 +89,19 @@ describe("Settings", () => {
     renderWithProviders(<Settings {...defaultProps} />, { searchParams: { tab: "alerting-types" } });
 
     expect(await screen.findByRole("tab", { name: "Alerting Types" })).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("opens callback creation from inside the Logging Callbacks tab only", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<Settings {...defaultProps} />);
+
+    const panel = screen.getByRole("tabpanel", { name: "Logging Callbacks" });
+    expect(within(panel).getByRole("heading", { name: "Active Logging Callbacks" })).toBeInTheDocument();
+    await user.click(within(panel).getByRole("button", { name: "Add Callback" }));
+    expect(screen.getByRole("dialog", { name: "Add Logging Callback" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    await user.click(screen.getByRole("tab", { name: "Alerting Types" }));
+    expect(screen.queryByRole("button", { name: "Add Callback" })).not.toBeInTheDocument();
   });
 
   it("should display additional settings tabs", async () => {
@@ -150,7 +163,7 @@ describe("Settings", () => {
     renderWithProviders(<Settings {...defaultProps} />);
 
     await waitFor(() => {
-      expect(screen.getByText("Active Logging Callbacks")).toBeInTheDocument();
+      expect(screen.getByRole("heading", { name: "Logging & Alerts", level: 1 })).toBeInTheDocument();
     });
 
     await waitFor(() => {
@@ -560,7 +573,7 @@ describe("Settings", () => {
     renderWithProviders(<Settings {...defaultProps} />);
 
     await waitFor(() => {
-      expect(screen.getByText("Active Logging Callbacks")).toBeInTheDocument();
+      expect(screen.getByRole("heading", { name: "Logging & Alerts", level: 1 })).toBeInTheDocument();
     });
 
     expect(screen.getByText("CloudZero Cost Tracking")).toBeInTheDocument();

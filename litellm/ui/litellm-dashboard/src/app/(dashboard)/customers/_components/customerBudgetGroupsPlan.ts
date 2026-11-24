@@ -1,43 +1,45 @@
 import type { components } from "@/lib/http/schema";
-import type { Organization } from "./customerHierarchyForms";
+export type BudgetGroups = components["schemas"]["BudgetGroups"];
 import {
+  customerBudgetGroupValue,
   defaultCustomerCapPolicy,
-  limit,
   validateCustomerBudgetGroups,
   type CustomerBudgetGroupFields,
 } from "./customerOrganizationForm";
+import { budgetChanges, budgetEditorFields } from "./customerBudgetForm";
 
-export const customerBudgetGroupRows = (organization: Organization): CustomerBudgetGroupFields[] =>
+export const customerBudgetGroupRows = (organization: BudgetGroups): CustomerBudgetGroupFields[] =>
   organization.default_budgets.map((group) => ({
+    ...budgetEditorFields(group),
     id: group.budget_id,
     name: group.name,
     capPolicy: group.cap_policy ?? defaultCustomerCapPolicy,
-    monthlyBudget: String(group.budget_limits?.find((entry) => entry.budget_duration === "1mo")?.max_budget ?? ""),
-    yearlyBudget: String(group.budget_limits?.find((entry) => entry.budget_duration === "12mo")?.max_budget ?? ""),
   }));
 
 export function planCustomerBudgetGroups(
-  organization: Organization,
+  organization: BudgetGroups,
   groups: CustomerBudgetGroupFields[],
   defaultGroupId: string,
+  memberGroups = true,
 ) {
   const originals = customerBudgetGroupRows(organization);
   const validation = validateCustomerBudgetGroups(
     { groups, defaultGroupId },
-    originals.map((group) => group.id),
+    organization.default_budgets,
+    memberGroups,
   );
   if (!validation.ok) return validation;
   const default_budgets = groups.map((group) => {
     const original = originals.find((row) => row.id === group.id);
-    const limits = [...limit(group.monthlyBudget, "1mo"), ...limit(group.yearlyBudget, "12mo")];
-    const previous = original
-      ? [...limit(original.monthlyBudget, "1mo"), ...limit(original.yearlyBudget, "12mo")]
-      : null;
+    const originalBudget = organization.default_budgets.find((budget) => budget.budget_id === group.id);
     return {
       ...(original ? { budget_id: original.id } : {}),
       name: group.name.trim(),
-      ...(group.capPolicy !== original?.capPolicy ? { cap_policy: group.capPolicy } : {}),
-      ...(JSON.stringify(limits) !== JSON.stringify(previous) ? { budget_limits: limits } : {}),
+      ...(memberGroups && group.capPolicy !== original?.capPolicy ? { cap_policy: group.capPolicy } : {}),
+      ...budgetChanges(
+        customerBudgetGroupValue(group, originalBudget)!,
+        original ? customerBudgetGroupValue(original, originalBudget) : null,
+      ),
     };
   });
   const body: components["schemas"]["BudgetGroupsUpdate"] = {
@@ -51,8 +53,7 @@ export function planCustomerBudgetGroups(
     default_budgets.some(
       (group) =>
         group.name !== originals.find((original) => original.id === group.budget_id)?.name ||
-        group.cap_policy !== undefined ||
-        group.budget_limits !== undefined,
+        Object.keys(group).some((key) => key !== "budget_id" && key !== "name"),
     );
   return { ok: true, body, changed } as const;
 }

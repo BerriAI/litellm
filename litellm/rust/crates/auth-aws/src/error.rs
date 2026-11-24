@@ -1,4 +1,11 @@
 use aws_credential_types::provider::error::CredentialsError;
+use aws_sdk_sts::{
+    error::ErrorMetadata,
+    operation::{
+        assume_role::AssumeRoleError, assume_role_with_web_identity::AssumeRoleWithWebIdentityError,
+    },
+};
+use aws_smithy_runtime_api::client::result::ConnectorError;
 use litellm_error::Source;
 
 #[derive(Clone, Debug, thiserror::Error, PartialEq, Eq)]
@@ -11,6 +18,10 @@ pub enum Error {
         #[source]
         source: Source,
     },
+    /// The named profile is in neither the AWS config nor the credentials file, which botocore
+    /// raises as `ProfileNotFound`.
+    #[error("the AWS profile {profile} is not in the AWS config or credentials files")]
+    ProfileNotFound { profile: String },
     #[error(
         "the AWS web identity token must name a secret or an oidc/ provider, not an environment variable"
     )]
@@ -57,7 +68,49 @@ pub enum SigningStage {
     Output,
 }
 
+/// Why an STS call made to acquire credentials failed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum StsFailure {
+    /// STS refused the web identity token the caller configured.
+    InvalidWebIdentityToken { message: String },
+    /// STS answered `operation` with an error code, such as `AccessDenied` or `ExpiredToken`.
+    Rejected {
+        operation: &'static str,
+        code: String,
+        message: String,
+    },
+    /// No answer came back from STS.
+    Unreachable,
+}
+
 impl Error {
+    pub fn sts_failure(&self) -> Option<StsFailure> {
+        let Self::Credentials { flow, source } = self else {
+            return None;
+        };
+        let cause: &(dyn std::error::Error + 'static) = &**source;
+        let rejected = |operation: &'static str, meta: &ErrorMetadata| StsFailure::Rejected {
+            operation,
+            code: meta.code().unwrap_or_default().to_owned(),
+            message: meta.message().unwrap_or_default().to_owned(),
+        };
+        if let Some(error) = litellm_error::find::<AssumeRoleWithWebIdentityError>(cause) {
+            return Some(match (flow, error) {
+                (
+                    CredentialFlow::WebIdentity,
+                    AssumeRoleWithWebIdentityError::InvalidIdentityTokenException(_),
+                ) => StsFailure::InvalidWebIdentityToken {
+                    message: error.meta().message().unwrap_or_default().to_owned(),
+                },
+                _ => rejected("AssumeRoleWithWebIdentity", error.meta()),
+            });
+        }
+        if let Some(error) = litellm_error::find::<AssumeRoleError>(cause) {
+            return Some(rejected("AssumeRole", error.meta()));
+        }
+        litellm_error::find::<ConnectorError>(cause).map(|_| StsFailure::Unreachable)
+    }
+
     pub fn is_empty_default_chain(&self) -> bool {
         let Self::Credentials {
             flow: CredentialFlow::DefaultChain,

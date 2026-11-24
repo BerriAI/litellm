@@ -96,8 +96,8 @@ class BaseFilesConfig(BaseConfig):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         data: CreateFileRequest,
     ):
         return self.get_complete_url(
@@ -113,8 +113,8 @@ class BaseFilesConfig(BaseConfig):
         self,
         model: str,
         create_file_data: CreateFileRequest,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
     ) -> Union[dict, str, bytes, "TwoStepFileUploadConfig"]:
         """
         Transform OpenAI-style file creation request into provider-specific format.
@@ -131,7 +131,7 @@ class BaseFilesConfig(BaseConfig):
         model: str | None,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
-        litellm_params: dict,
+        litellm_params: dict[str, object],
     ) -> OpenAIFileObject:
         pass
 
@@ -139,8 +139,8 @@ class BaseFilesConfig(BaseConfig):
     def transform_retrieve_file_request(
         self,
         file_id: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
     ) -> tuple[str, dict]:
         """Transform file retrieve request into provider-specific format."""
 
@@ -149,7 +149,7 @@ class BaseFilesConfig(BaseConfig):
         self,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
-        litellm_params: dict,
+        litellm_params: dict[str, object],
     ) -> OpenAIFileObject:
         """Transform file retrieve response into OpenAI format."""
 
@@ -160,8 +160,8 @@ class BaseFilesConfig(BaseConfig):
     def transform_delete_file_request(
         self,
         file_id: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
     ) -> tuple[str, dict]:
         """Transform file delete request into provider-specific format."""
 
@@ -170,7 +170,7 @@ class BaseFilesConfig(BaseConfig):
         self,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
-        litellm_params: dict,
+        litellm_params: dict[str, object],
     ) -> "FileDeleted":
         """Transform file delete response into OpenAI format."""
 
@@ -178,8 +178,8 @@ class BaseFilesConfig(BaseConfig):
     def transform_list_files_request(
         self,
         purpose: str | None,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
     ) -> tuple[str, dict]:
         """Transform file list request into provider-specific format."""
 
@@ -197,7 +197,7 @@ class BaseFilesConfig(BaseConfig):
         self,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
-        litellm_params: dict,
+        litellm_params: dict[str, object],
     ) -> list[OpenAIFileObject]:
         """Transform file list response into OpenAI format."""
 
@@ -205,8 +205,8 @@ class BaseFilesConfig(BaseConfig):
     def transform_file_content_request(
         self,
         file_content_request: "FileContentRequest",
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
     ) -> tuple[str, dict]:
         """Transform file content request into provider-specific format."""
 
@@ -215,7 +215,7 @@ class BaseFilesConfig(BaseConfig):
         self,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
-        litellm_params: dict,
+        litellm_params: dict[str, object],
     ) -> "HttpxBinaryResponseContent":
         """Transform file content response into OpenAI format."""
 
@@ -226,7 +226,7 @@ class BaseFilesConfig(BaseConfig):
         headers: Mapping[str, str],
         request_url: str,
         logging_obj: LiteLLMLoggingObj,
-        litellm_params: dict,
+        litellm_params: dict[str, object],
     ) -> FileContentStreamingResult:
         """Transform a streamed file content body. Passes the upstream bytes and headers through by default."""
         return FileContentStreamingResult(stream_iterator=stream_iterator, headers=headers)
@@ -235,10 +235,10 @@ class BaseFilesConfig(BaseConfig):
         self,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
-        headers: dict,
-    ) -> dict:
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
+        headers: Mapping[str, object],
+    ) -> dict[str, object]:
         raise NotImplementedError(
             "AudioTranscriptionConfig does not need a request transformation for audio transcription models"
         )
@@ -249,10 +249,10 @@ class BaseFilesConfig(BaseConfig):
         raw_response: httpx.Response,
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
-        request_data: dict,
+        request_data: Mapping[str, object],
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,

@@ -13,7 +13,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from prometheus_client import REGISTRY
 
-from litellm.caching.redis_batch import flush_post_call_redis_batches, request_redis_batch_scope
+from litellm.caching.redis_batch import (
+    active_request_redis_batches,
+    flush_post_call_redis_batches,
+    request_redis_batch_scope,
+)
 from litellm.integrations.prometheus import PrometheusLogger
 from litellm.proxy import proxy_server
 from litellm.proxy._types import (
@@ -37,7 +41,7 @@ from litellm.types.proxy.carried_budget_state import (
     TeamBudgetSnapshot,
     UserBudgetSnapshot,
 )
-from tests.unit.caching.redis_batch_double import FakeNatives, fake_send
+from tests.unit.caching.redis_batch_double import FakeNativeRequest, FakeNatives, fake_send
 from tests.unit.redis.stores.spend_counters_double import FakeSpendCounters
 
 TEAM_RESET_AT = datetime(2026, 10, 1, tzinfo=timezone.utc)
@@ -418,6 +422,15 @@ def _request_scope() -> request_redis_batch_scope:
     )
 
 
+def _land_the_own_charge(spend: FakeSpendCounters) -> None:
+    """The post-call batch went out: the counters take the charge and the native request reports it settled."""
+    spend.settle_post_call()
+    request: Final = active_request_redis_batches()
+    native: Final = None if request is None else request.existing_native()
+    assert isinstance(native, FakeNativeRequest)
+    native.tracked_writes_settled = True
+
+
 async def _declare_the_own_two_dollar_charge() -> None:
     await proxy_server._apply_spend_counter_increments(
         tuple(PendingSpendIncrement(counter_key, 2.0) for counter_key in (*_COUNTER_KEYS, *_TWIN_KEYS))
@@ -458,7 +471,7 @@ async def test_gauges_do_not_add_the_own_charge_twice_once_the_pipeline_went_out
 
     with _request_scope():
         await _declare_the_own_two_dollar_charge()
-        redis_spend_counters.settle_post_call()
+        _land_the_own_charge(redis_spend_counters)
         await flush_post_call_redis_batches()
         await _emit(prometheus_logger, _request_metadata(_token_committed_at_auth()))
 
@@ -487,7 +500,7 @@ async def test_an_unrelated_post_call_flush_does_not_make_the_gauge_drop_its_own
         await _declare_the_own_two_dollar_charge()
         await _emit(prometheus_logger, metadata)
         declared_unsent: Final = _remaining(prometheus_logger)
-        redis_spend_counters.settle_post_call()
+        _land_the_own_charge(redis_spend_counters)
         await _emit(prometheus_logger, metadata)
         settled: Final = _remaining(prometheus_logger)
         await flush_post_call_redis_batches()
@@ -508,7 +521,7 @@ async def test_gauges_count_the_own_charge_once_when_it_settles_while_the_gauges
     _store_committed(redis_spend_counters, key=5.0, team=32.0, user=10.0, org=62.0)
 
     async def settle_during_read(_counter: str) -> None:
-        redis_spend_counters.settle_post_call()
+        _land_the_own_charge(redis_spend_counters)
 
     redis_spend_counters.batch_reads = False
     redis_spend_counters.read_hook = settle_during_read

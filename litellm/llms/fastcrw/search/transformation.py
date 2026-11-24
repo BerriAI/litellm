@@ -8,7 +8,7 @@ or cloud). The search response uses the Firecrawl-compatible envelope
 fastCRW API Reference: https://fastcrw.com/docs/rest-api
 """
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from typing import Final, TypedDict
 
 import httpx
@@ -53,11 +53,11 @@ class FastCRWSearchConfig(BaseSearchConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-        **kwargs,
-    ) -> dict:
+        **kwargs: object,
+    ) -> dict[str, object]:
         """
         Validate environment and return headers.
         """
@@ -77,9 +77,9 @@ class FastCRWSearchConfig(BaseSearchConfig):
     def get_complete_url(
         self,
         api_base: str | None,
-        optional_params: dict,
-        data: dict | list[dict] | None = None,
-        **kwargs,
+        optional_params: Mapping[str, object],
+        data: Mapping[str, object] | Sequence[Mapping[str, object]] | None = None,
+        **kwargs: object,
     ) -> str:
         """
         Get complete URL for Search endpoint.
@@ -90,8 +90,8 @@ class FastCRWSearchConfig(BaseSearchConfig):
         self,
         query: str | list[str],
         optional_params: dict,
-        **kwargs,
-    ) -> dict:
+        **kwargs: object,
+    ) -> dict[str, object]:
         """
         Transform Search request to fastCRW API format.
 
@@ -142,7 +142,7 @@ class FastCRWSearchConfig(BaseSearchConfig):
         self,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
-        **kwargs,
+        **kwargs: object,
     ) -> SearchResponse:
         """
         Transform fastCRW API response to LiteLLM unified SearchResponse format.
@@ -159,7 +159,7 @@ class FastCRWSearchConfig(BaseSearchConfig):
         """
         response_json: Final = _JSON_OBJECT.validate_python(raw_response.json())
 
-        results: Final = []
+        results: Final[list[SearchResult]] = []
 
         data: Final = response_json.get("data", [])
 

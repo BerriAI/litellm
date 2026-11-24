@@ -9,11 +9,23 @@ import { Button } from "@/components/ui/button";
 
 const oppositeTheme = (isDark: boolean) => (isDark ? "light" : "dark");
 
-const ThemeToggle: React.FC = () => {
+const emptySubscribe = () => () => {};
+
+export function useThemeToggle() {
   const { t } = useTranslation();
   const { setTheme, resolvedTheme } = useTheme();
-  const isDark = resolvedTheme === "dark";
+  const mounted = React.useSyncExternalStore(
+    emptySubscribe,
+    () => true,
+    () => false,
+  );
+  const isDark = mounted && resolvedTheme === "dark";
   const label = isDark ? t("themeToggle.switchToLight") : t("themeToggle.switchToDark");
+  return { isDark, label, toggleTheme: () => setTheme(oppositeTheme(isDark)) };
+}
+
+const ThemeToggle: React.FC = () => {
+  const { isDark, label, toggleTheme } = useThemeToggle();
 
   return (
     <Button
@@ -22,7 +34,7 @@ const ThemeToggle: React.FC = () => {
       aria-label={label}
       title={label}
       className="text-muted-foreground"
-      onClick={() => setTheme(oppositeTheme(isDark))}
+      onClick={toggleTheme}
     >
       {isDark ? <Moon /> : <Sun />}
     </Button>

@@ -26,7 +26,7 @@ from litellm.harness.errors import (
 from litellm.harness.handlers.cli_handler import PERSIST_DIR_SCRIPT, CLIHarnessHandler
 from litellm.harness.options import HarnessOptions, OpenCodeOptions, PiOptions, PiThinkingLevel
 from litellm.harness.sandbox.base import CompletedRun
-from litellm.harness.types import Event, Harness, PermissionMode, Reasoning, Text, ToolCall, ToolResult
+from litellm.harness.types import Compaction, Event, Harness, PermissionMode, Reasoning, Text, ToolCall, ToolResult
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.llms.base_llm.harness.transformation import (
     HarnessSessionSetup,
@@ -295,6 +295,36 @@ def test_parse_continued_session():
     assert state.session_id == SESSION
     assert all(isinstance(e, Text) for e in events)
     assert state.final_text == "You asked me to create hello.txt."
+
+
+@pytest.mark.parametrize("event_type", ("compaction_end", "auto_compaction_end"))
+@pytest.mark.parametrize("tokens_after", (None, 0, 1200))
+def test_completed_compaction_reports_context_usage(event_type: str, tokens_after: int | None) -> None:
+    state: Final = PiStreamState()
+    parse(assistant_end("Task complete", "stop"), state)
+    result: Final = {
+        "tokensBefore": 24000,
+        **({"estimatedTokensAfter": tokens_after} if tokens_after is not None else {}),
+    }
+
+    events: Final = parse({"type": event_type, "result": result, "aborted": False}, state)
+
+    assert tuple(events) == (Compaction(tokens_before=24000, tokens_after=tokens_after),)
+    assert CONFIG.transform_turn_response(make_ctx(), state, 0, ()).final_text == "Task complete"
+
+
+@pytest.mark.parametrize(
+    "event",
+    (
+        {"type": "compaction_start", "reason": "threshold"},
+        {"type": "compaction_end", "aborted": True, "result": {"tokensBefore": 24000}},
+        {"type": "auto_compaction_end", "aborted": True, "result": {"tokensBefore": 24000}},
+        {"type": "compaction_end", "aborted": False, "errorMessage": "summary failed"},
+        {"type": "auto_compaction_end", "aborted": False, "result": None},
+    ),
+)
+def test_incomplete_compaction_does_not_report_success(event: Mapping[str, object]) -> None:
+    assert tuple(parse(event, PiStreamState())) == ()
 
 
 def test_parse_denied_tool_is_error_result():
@@ -607,7 +637,9 @@ def test_thinking_declares_a_reasoning_model_only_when_a_level_is_requested(
     thinking: PiThinkingLevel | None, declared_model: Mapping[str, object]
 ) -> None:
     models: Final = setup_models(setup_for(make_ctx(options=PiOptions(thinking=thinking))))
-    declared: Final = {key: value for key, value in models["providers"]["litellm"]["models"][0].items() if key != "maxTokens"}
+    declared: Final = {
+        key: value for key, value in models["providers"]["litellm"]["models"][0].items() if key != "maxTokens"
+    }
     assert declared == {key: value for key, value in declared_model.items() if key != "maxTokens"}, (
         "pi drops --thinking to off unless the model declares reasoning, and drops xhigh/max to high "
         "unless thinkingLevelMap names them; declaring reasoning with no level makes pi send its default effort"

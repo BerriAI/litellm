@@ -99,7 +99,7 @@ class AzureOpenAIFilesAPI(BaseAzureLLM):
         openai_client: AsyncAzureOpenAI | AsyncOpenAI,
     ) -> HttpxBinaryResponseContent:
         response: Final = await openai_client.files.content(**file_content_request)
-        return HttpxBinaryResponseContent(response=response.response)
+        return HttpxBinaryResponseContent(response=response.response, batch_input_format=BatchInputFormat.OPENAI)
 
     def file_content(
         self,
@@ -137,7 +137,7 @@ class AzureOpenAIFilesAPI(BaseAzureLLM):
             )
         response: Final = cast(AzureOpenAI | OpenAI, openai_client).files.content(**file_content_request)
 
-        return HttpxBinaryResponseContent(response=response.response)
+        return HttpxBinaryResponseContent(response=response.response, batch_input_format=BatchInputFormat.OPENAI)
 
     async def aretrieve_file(
         self,

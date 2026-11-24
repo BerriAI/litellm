@@ -30,12 +30,10 @@ class Target(str, Enum):
     MESSAGES = "messages"
     MESSAGES_PASSTHROUGH = "messages_passthrough"
     """A deployment's own /v1/messages, which Python's OpenAI-compatible config forwards untranslated."""
-    BEDROCK_INVOKE = "bedrock_invoke"
-    """Claude on Bedrock InvokeModel, an Anthropic Messages body behind the InvokeModel API."""
     RESPONSES = "responses"
 
 
-NATIVE_MESSAGES_TARGETS: Final = frozenset({Target.MESSAGES, Target.MESSAGES_PASSTHROUGH, Target.BEDROCK_INVOKE})
+NATIVE_MESSAGES_TARGETS: Final = frozenset({Target.MESSAGES, Target.MESSAGES_PASSTHROUGH})
 
 
 class Feature(str, Enum):
@@ -206,12 +204,13 @@ RULES: Final[Rules] = (
         targets=frozenset({Target.CHAT_COMPLETIONS, Target.RESPONSES, Target.MESSAGES_PASSTHROUGH}),
     ),
     RouteRule(Route.MESSAGES, Rollout.PYTHON_ONLY, features=MESSAGES_PYTHON_FEATURES),
-    RouteRule(Route.MESSAGES, Rollout.RUST_REQUIRED, providers=frozenset({"anthropic", "azure_ai"})),
+    # Outside anthropic, these providers serve native Messages only for Claude, so the target, not the provider,
+    # decides: their other models translate on Python, also when `_rust_only_refusal` has no target.
     RouteRule(
         Route.MESSAGES,
         Rollout.RUST_REQUIRED,
-        providers=frozenset({"bedrock"}),
-        targets=frozenset({Target.BEDROCK_INVOKE}),
+        providers=frozenset({"anthropic", "azure_ai", "bedrock", "bedrock_mantle", "vertex_ai"}),
+        targets=frozenset({Target.MESSAGES}),
     ),
     RouteRule(Route.MESSAGES, Rollout.PYTHON_ONLY),
     RouteRule(Route.RESPONSES, Rollout.PYTHON_ONLY, features=RESPONSES_PYTHON_FEATURES),

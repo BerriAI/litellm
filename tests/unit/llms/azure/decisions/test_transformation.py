@@ -247,3 +247,21 @@ def test_azure_decisions_does_not_echo_invalid_credentials() -> None:
             {"azure_ad_token": {"secret": "sensitive-value"}},
         )
     assert "sensitive-value" not in str(error.value)
+
+
+async def test_azure_decisions_forwards_input_json_in_the_openai_message_shape(respx_mock: respx.MockRouter) -> None:
+    route: Final = respx_mock.post(_URL).respond(json=_RESPONSE)
+    content: Final = [
+        {"type": "input_text", "text": "The export job hangs."},
+        {"type": "input_json", "data": {"job": {"status": "stuck", "retries": [1, 2]}}},
+    ]
+    await litellm.adecisions(
+        model="azure/luna-deployment",
+        api_base=_BASE,
+        azure_ad_token="synthetic-entra",
+        input=[{"role": "user", "content": content}],
+        questions=[{"type": "predicate", "name": "defect", "instructions": "Is this a defect?"}],
+    )
+    assert json.loads(route.calls.last.request.content)["input"] == [
+        {"role": "user", "type": "message", "content": content}
+    ]

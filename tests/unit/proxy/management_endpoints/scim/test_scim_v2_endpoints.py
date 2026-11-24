@@ -1,9 +1,9 @@
-from contextlib import asynccontextmanager
 import asyncio
 import json
 import logging
 import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
+from contextlib import asynccontextmanager
 from http import HTTPStatus
 from itertools import chain
 from types import MappingProxyType
@@ -15,9 +15,8 @@ from fastapi import FastAPI, HTTPException
 from httpx import ASGITransport, AsyncClient, ConnectError
 from pytest_mock import MockerFixture
 
+from litellm.redis.stores.auth_cache import AuthObject
 import litellm.proxy.management_endpoints.scim.scim_v2 as scim_v2_module
-from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
-from litellm.proxy.utils import handle_exception_on_proxy
 from litellm.proxy._types import (
     LiteLLM_TeamTable,
     LiteLLM_UserTable,
@@ -31,6 +30,8 @@ from litellm.proxy._types import (
     TeamMemberAddRequest,
     UserAPIKeyAuth,
 )
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.proxy.management_endpoints.scim.scim_v2 import (
     GroupMemberExtractionResult,
     SCIMRosterSyncError,
@@ -63,6 +64,7 @@ from litellm.proxy.management_endpoints.scim.scim_v2 import (
     user_api_key_auth,
 )
 from litellm.proxy.management_endpoints.team_endpoints import DeletedTeams
+from litellm.proxy.management_helpers.access_group_team_sync import TEAM_ADVISORY_LOCK_SQL
 from litellm.proxy.management_helpers.bulk_user_creation import BULK_NEW_USER_CONCURRENCY
 from litellm.proxy.management_helpers.team_roster_sync import (
     MembersMissing,
@@ -72,6 +74,7 @@ from litellm.proxy.management_helpers.team_roster_sync import (
     RosterTarget,
     TeamGone,
 )
+from litellm.proxy.utils import handle_exception_on_proxy
 from litellm.types.proxy.management_endpoints.scim_v2 import (
     SCIM_ENTERPRISE_USER_SCHEMA,
     SCIM_MANAGED_TEAM_METADATA_KEY,
@@ -87,6 +90,7 @@ from litellm.types.proxy.management_endpoints.scim_v2 import (
     SCIMUserGroup,
     SCIMUserName,
 )
+from tests.unit.proxy.rust_auth_stores import RustAuthStores
 
 _SYNC_GROUP_ROSTER: Final = "litellm.proxy.management_endpoints.scim.scim_v2._sync_group_roster"
 
@@ -831,7 +835,6 @@ async def test_handle_existing_user_by_email_existing_user_updated(mocker):
         "data": {
             "user_email": "test@example.com",
             "user_alias": "New Name",
-            "teams": ["new-team"],
             "metadata": '{"new": "data"}',
         },
     }
@@ -950,7 +953,6 @@ async def test_handle_existing_user_by_email_syncs_roster_and_dedups_teams(mocke
     update_calls = mock_prisma_client.db.litellm_usertable.update.call_args_list
     assert len(update_calls) == 1
     assert update_calls[0].kwargs["where"] == {"user_id": "same-id"}
-    assert update_calls[0].kwargs["data"]["teams"] == ["team-a", "team-b"]
 
 
 class _EmailMatchedUserRow:
@@ -984,7 +986,7 @@ async def test_handle_existing_user_by_email_keeps_record_team_order(mocker: Moc
         "litellm.proxy.management_endpoints.scim.scim_v2.ScimTransformations.transform_litellm_user_to_scim_user",
         AsyncMock(return_value=None),
     )
-    mocker.patch(  # test-quality-ok: roster helpers are module-level, not injectable into the helper
+    membership: Final = mocker.patch(  # test-quality-ok: roster helpers are module-level, not injectable
         "litellm.proxy.management_endpoints.scim.scim_v2._handle_team_membership_changes",
         AsyncMock(),
     )
@@ -1001,7 +1003,12 @@ async def test_handle_existing_user_by_email_keeps_record_team_order(mocker: Moc
         ),
     )
 
-    assert user_rows.user.teams == ["team-zeta", "team-kappa", "team-mu", "team-beta"]
+    membership.assert_awaited_once_with(
+        user_id="same-id",
+        existing_teams=["team-zeta", "team-alpha", "team-kappa"],
+        new_teams=["team-zeta", "team-kappa", "team-mu", "team-beta"],
+    )
+    assert user_rows.user.teams == ["team-zeta", "team-alpha", "team-kappa"]
 
 
 @pytest.mark.asyncio
@@ -1062,7 +1069,6 @@ async def test_handle_existing_user_by_email_without_teams_preserves_memberships
     update_calls = mock_prisma_client.db.litellm_usertable.update.call_args_list
     assert len(update_calls) == 1
     assert update_calls[0].kwargs["where"] == {"user_id": "adopted-id"}
-    assert update_calls[0].kwargs["data"]["teams"] == ["team-a", "team-b"]
 
 
 @pytest.mark.asyncio
@@ -1112,9 +1118,14 @@ async def test_handle_existing_user_by_email_roster_add_failure_blocks_teams_wri
 
 
 @pytest.mark.asyncio
-async def test_handle_existing_user_by_email_roster_add_already_member_is_noop(mocker):
-    """Being already in the team is benign even under the strict path: the upsert
-    succeeds and the deduped teams array is still persisted."""
+@pytest.mark.parametrize(
+    ("roster", "repaired"),
+    [([{"user_id": "uid", "role": "user"}], True), ([], False)],
+    ids=["still-on-roster", "removed-before-the-lock"],
+)
+async def test_handle_existing_user_by_email_roster_add_already_member_repairs_user_teams(
+    mocker, roster: list[dict[str, str]], repaired: bool
+):
     existing_user = mocker.MagicMock()
     existing_user.user_id = "uid"
     existing_user.user_email = "member@example.com"
@@ -1127,6 +1138,23 @@ async def test_handle_existing_user_by_email_roster_add_already_member_is_noop(m
     mock_prisma_client.db.litellm_usertable = mocker.MagicMock()
     mock_prisma_client.db.litellm_usertable.find_first = AsyncMock(return_value=existing_user)
     mock_prisma_client.db.litellm_usertable.update = AsyncMock(return_value={})
+    tx = mocker.MagicMock()
+    tx.query_raw = AsyncMock(side_effect=[[{"locked": None}], [{"members_with_roles": roster}]])
+    tx.litellm_usertable.update_many = AsyncMock(return_value=1)
+    tx_context = mocker.MagicMock()
+    tx_context.__aenter__ = AsyncMock(return_value=tx)
+    tx_context.__aexit__ = AsyncMock(return_value=False)
+    mock_prisma_client.tx = mocker.MagicMock(return_value=tx_context)
+    user_api_key_cache = UserApiKeyCache()
+    await user_api_key_cache.async_set_cache(key=AuthObject.user("uid"), value={"user_id": "uid", "teams": []})
+    mocker.patch(  # test-quality-ok: the repair reads the proxy's process-wide cache, not an injected one
+        "litellm.proxy.proxy_server.user_api_key_cache",
+        user_api_key_cache,
+    )
+    mocker.patch(  # test-quality-ok: the roster helpers resolve the proxy prisma client at module level
+        "litellm.proxy.management_endpoints.scim.scim_v2._get_prisma_client_or_raise_exception",
+        AsyncMock(return_value=mock_prisma_client),
+    )
 
     mock_team_member_add = mocker.patch(
         "litellm.proxy.management_endpoints.scim.scim_v2.team_member_add",
@@ -1158,9 +1186,17 @@ async def test_handle_existing_user_by_email_roster_add_already_member_is_noop(m
     )
 
     mock_team_member_add.assert_awaited_once()
+    assert tx.query_raw.await_args_list[0].args == (TEAM_ADVISORY_LOCK_SQL, "team-x")
+    if repaired:
+        tx.litellm_usertable.update_many.assert_awaited_once_with(
+            where={"user_id": "uid", "NOT": {"teams": {"has": "team-x"}}},
+            data={"teams": {"push": ["team-x"]}},
+        )
+    else:
+        tx.litellm_usertable.update_many.assert_not_awaited()
+    assert (await user_api_key_cache.async_get_cache(key=AuthObject.user("uid")) is None) is repaired
     update_calls = mock_prisma_client.db.litellm_usertable.update.call_args_list
     assert len(update_calls) == 1
-    assert update_calls[0].kwargs["data"]["teams"] == ["team-x"]
 
 
 @pytest.mark.asyncio
@@ -1256,7 +1292,6 @@ async def test_handle_existing_user_by_email_roster_remove_already_absent_is_noo
     mock_team_member_delete.assert_awaited_once()
     update_calls = mock_prisma_client.db.litellm_usertable.update.call_args_list
     assert len(update_calls) == 1
-    assert update_calls[0].kwargs["data"]["teams"] == ["replacement-team"]
 
 
 @pytest.mark.asyncio
@@ -1467,7 +1502,6 @@ async def test_update_user_success(mocker):
     call_args = mock_prisma_client.db.litellm_usertable.update.call_args
     assert call_args[1]["where"] == {"user_id": "test-user"}
     assert call_args[1]["data"]["user_email"] == "updated@example.com"
-    assert call_args[1]["data"]["teams"] == ["new-team"]
 
 
 @pytest.mark.asyncio
@@ -1596,7 +1630,7 @@ async def test_update_user_put_deactivates_and_blocks_keys_when_a_group_has_no_t
     assert response.status_code == 200, response.text
     update_data: Final = mock_prisma_client.db.litellm_usertable.update.call_args.kwargs["data"]
     assert json.loads(update_data["metadata"])["scim_active"] is False
-    assert update_data["teams"] == []
+    assert "teams" not in update_data
     mock_patch_team_membership.assert_not_called()
     set_keys_blocked_mock.assert_awaited_once_with(user_id="leaver", blocked=True)
 
@@ -1658,7 +1692,7 @@ async def test_update_user_without_groups_preserves_memberships_and_role(mocker,
     assert result == response_scim_user
     patch_membership.assert_not_awaited()
     update_data = mock_prisma_client.db.litellm_usertable.update.call_args.kwargs["data"]
-    assert update_data["teams"] == ["litellm-admins", "engineering"]
+    assert "teams" not in update_data
     assert "user_role" not in update_data
 
 
@@ -1704,15 +1738,21 @@ async def test_update_user_put_keeps_the_record_order_of_teams_the_user_already_
         "litellm.proxy.management_endpoints.scim.scim_v2.ScimTransformations.transform_litellm_user_to_scim_user",
         AsyncMock(return_value=scim_user),
     )
-    mocker.patch(  # test-quality-ok: roster writes are module-level, not injectable
+    patch_membership: Final = mocker.patch(  # test-quality-ok: roster writes are module-level, not injectable
         "litellm.proxy.management_endpoints.scim.scim_v2.patch_team_membership",
         AsyncMock(),
     )
 
     await update_user(user_id="order-user", user=scim_user)
 
+    patch_membership.assert_awaited_once_with(
+        user_id="order-user",
+        teams_ids_to_add_user_to=["team-mu", "team-beta"],
+        teams_ids_to_remove_user_from=["team-alpha"],
+        raise_on_error=True,
+    )
     update_data: Final = mock_prisma_client.db.litellm_usertable.update.call_args.kwargs["data"]
-    assert update_data["teams"] == ["team-zeta", "team-kappa", "team-mu", "team-beta"]
+    assert "teams" not in update_data
 
 
 @pytest.mark.asyncio
@@ -2911,7 +2951,7 @@ async def test_update_user_keeps_the_admin_role_from_a_group_with_no_team_named_
 
     update_data: Final = mock_prisma_client.db.litellm_usertable.update.call_args.kwargs["data"]
     assert update_data["user_role"] == LitellmUserRoles.PROXY_ADMIN
-    assert update_data["teams"] == []
+    assert "teams" not in update_data
 
 
 @pytest.mark.asyncio
@@ -3206,7 +3246,7 @@ async def test_recompute_scim_member_roles_stops_serving_a_demoted_members_cache
     monkeypatch.setattr("litellm.default_internal_user_params", None, raising=False)
     cache = UserApiKeyCache()
     await cache.async_set_cache(
-        key="member-1", value={"user_id": "member-1", "user_role": LitellmUserRoles.PROXY_ADMIN.value}
+        key=AuthObject.user("member-1"), value={"user_id": "member-1", "user_role": LitellmUserRoles.PROXY_ADMIN.value}
     )
     monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", cache)
     prisma, tx = _scim_admin_prisma(mocker, user_teams=["engineering"])
@@ -3214,7 +3254,7 @@ async def test_recompute_scim_member_roles_stops_serving_a_demoted_members_cache
     await _recompute_scim_member_roles(prisma, ["member-1"])
 
     tx.execute_raw.assert_awaited_once_with(ANY, LitellmUserRoles.INTERNAL_USER_VIEW_ONLY, ["member-1"])
-    assert await cache.async_get_cache(key="member-1") is None
+    assert await cache.async_get_cache(key=AuthObject.user("member-1")) is None
 
 
 @pytest.mark.asyncio
@@ -3909,6 +3949,37 @@ async def test_process_group_patch_operations_remove_uses_members_with_roles(moc
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("path", ["members", "Members"])
+async def test_process_group_patch_operations_remove_members_without_value_or_filter_removes_every_member(
+    mocker: MockerFixture, path: str
+):
+    """RFC 7644 section 3.5.2.2: a remove on a multi-valued attribute with no
+    filter removes all of its values"""
+    existing_team: Final = LiteLLM_TeamTable(
+        team_id="team-1",
+        team_alias="Team One",
+        members=[],
+        members_with_roles=[
+            Member(user_id="member-1", role="user"),
+            Member(user_id="member-2", role="user"),
+        ],
+    )
+    patch_ops: Final = SCIMPatchOp(
+        schemas=["urn:ietf:params:scim:api:messages:2.0:PatchOp"],
+        Operations=[SCIMPatchOperation(op="remove", path=path)],
+    )
+
+    _, final_members, replace_target = await _process_group_patch_operations(
+        patch_ops=patch_ops,
+        existing_team=existing_team,
+        prisma_client=mocker.MagicMock(),
+    )
+
+    assert final_members == set()
+    assert replace_target == set()
+
+
+@pytest.mark.asyncio
 async def test_get_groups_reports_members_from_members_with_roles(mocker):
     """GET /Groups must report members from members_with_roles (the source of
     truth), not the legacy ``members`` column that team creation leaves empty.
@@ -3958,8 +4029,8 @@ async def test_apply_group_patch_updates_writes_only_the_patched_columns_and_evi
     mock_prisma_client.db.litellm_teamtable = mocker.MagicMock()
     updated = mocker.MagicMock()
     mock_prisma_client.db.litellm_teamtable.update = AsyncMock(return_value=updated)
-    proxy_server.user_api_key_cache.set_cache(key="team_id:team-1", value={"team_id": "team-1"})
-    proxy_server.user_api_key_cache.set_cache(key="team_alias:Old", value={"team_id": "team-1"})
+    proxy_server.user_api_key_cache.set_cache(key=AuthObject.team("team-1"), value={"team_id": "team-1"})
+    proxy_server.user_api_key_cache.set_cache(key=AuthObject.team_alias("Old"), value={"team_id": "team-1"})
 
     result = await _apply_group_patch_updates(
         group_id="team-1",
@@ -3971,8 +4042,8 @@ async def test_apply_group_patch_updates_writes_only_the_patched_columns_and_evi
     assert result is updated
     mock_prisma_client.db.litellm_teamtable.update.assert_awaited_once()
     assert mock_prisma_client.db.litellm_teamtable.update.await_args.kwargs["data"] == {"team_alias": "Renamed"}
-    assert proxy_server.user_api_key_cache.get_cache("team_id:team-1") is None
-    assert proxy_server.user_api_key_cache.get_cache("team_alias:Old") is None
+    assert proxy_server.user_api_key_cache.get_cache(AuthObject.team("team-1")) is None
+    assert proxy_server.user_api_key_cache.get_cache(AuthObject.team_alias("Old")) is None
 
 
 @pytest.mark.asyncio
@@ -3985,7 +4056,7 @@ async def test_apply_group_patch_updates_with_nothing_to_write_reads_the_team_an
     existing = mocker.MagicMock()
     mock_prisma_client.db.litellm_teamtable.find_unique = AsyncMock(return_value=existing)
     mock_prisma_client.db.litellm_teamtable.update = AsyncMock()
-    proxy_server.user_api_key_cache.set_cache(key="team_id:team-2", value={"team_id": "team-2"})
+    proxy_server.user_api_key_cache.set_cache(key=AuthObject.team("team-2"), value={"team_id": "team-2"})
 
     result = await _apply_group_patch_updates(
         group_id="team-2", update_data={}, prisma_client=mock_prisma_client, team_alias="Kept"
@@ -3993,7 +4064,7 @@ async def test_apply_group_patch_updates_with_nothing_to_write_reads_the_team_an
 
     assert result is existing
     mock_prisma_client.db.litellm_teamtable.update.assert_not_awaited()
-    assert proxy_server.user_api_key_cache.get_cache("team_id:team-2") is not None
+    assert proxy_server.user_api_key_cache.get_cache(AuthObject.team("team-2")) is not None
 
 
 def _mock_prisma_for_delete_user(mocker, team):
@@ -4225,6 +4296,63 @@ async def test_patch_group_replace_stays_absolute_against_concurrent_roster(mock
     group = await patch_group(group_id=group_id, patch_ops=patch_ops)
 
     assert [member.value for member in group.members or []] == ["alice"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "operations, expected",
+    [
+        ([SCIMPatchOperation(op="remove", path="members")], []),
+        (
+            [
+                SCIMPatchOperation(op="remove", path="members"),
+                SCIMPatchOperation(op="add", path="members", value=[{"value": "alice"}]),
+            ],
+            ["alice"],
+        ),
+    ],
+)
+async def test_patch_group_remove_every_member_clears_the_live_roster(
+    mocker: MockerFixture, operations: list[SCIMPatchOperation], expected: list[str]
+):
+    """A ``remove`` on ``members`` with no value or filter empties the roster, so it is
+    planned as a target like ``replace``. A member the snapshot read missed (a lagging
+    replica, or a request that added it after the read) is still removed by the
+    roster write, where a delta built from the snapshot would keep it."""
+    group_id: Final = "team-remove-all-concurrent"
+    snapshot_team: Final = LiteLLM_TeamTable(
+        team_id=group_id,
+        team_alias="Group",
+        members_with_roles=[Member(user_id="zed", role="user")],
+        metadata={"externalId": "grp-ext"},
+    )
+    live_team: Final = snapshot_team.model_copy(
+        update={"members_with_roles": [Member(user_id="zed", role="user"), Member(user_id="carol", role="user")]}
+    )
+    patch_ops: Final = SCIMPatchOp(schemas=["urn:ietf:params:scim:api:messages:2.0:PatchOp"], Operations=operations)
+
+    mock_prisma_client: Final = mocker.MagicMock()
+    mock_prisma_client.db = mocker.MagicMock()
+    mock_prisma_client.db.litellm_teamtable = mocker.MagicMock()
+    mock_prisma_client.db.litellm_teamtable.find_unique = AsyncMock(return_value=snapshot_team)
+    mock_prisma_client.db.litellm_teamtable.update = AsyncMock(return_value=snapshot_team)
+    mock_prisma_client.db.litellm_usertable = mocker.MagicMock()
+    mock_prisma_client.db.litellm_usertable.find_many = AsyncMock(side_effect=_rows_by_exact_id(_user_row_for))
+
+    mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2._get_prisma_client_or_raise_exception",
+        AsyncMock(return_value=mock_prisma_client),
+    )
+    _stub_roster_sync(mocker, live_team)
+    mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2._recompute_scim_member_roles",
+        AsyncMock(),
+    )
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    group: Final = await patch_group(group_id=group_id, patch_ops=patch_ops)
+
+    assert [member.value for member in group.members or []] == expected
 
 
 @pytest.mark.parametrize(
@@ -7491,15 +7619,14 @@ async def test_a_server_error_a_handler_raises_on_purpose_keeps_its_reason(
 
 @pytest.mark.asyncio
 async def test_an_auth_check_during_a_database_outage_answers_503_with_its_retry_hint(
-    proxy_scim_client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+    proxy_scim_client: AsyncClient, monkeypatch: pytest.MonkeyPatch, rust_auth_stores: RustAuthStores
 ):
     from litellm.proxy import proxy_server
 
     monkeypatch.setattr(proxy_server, "master_key", "sk-master")
     outage: Final = ConnectError("All connection attempts failed")
-    prisma_client: Final = _proxy_database(monkeypatch, users=MagicMock(), teams=MagicMock())
-    prisma_client.get_data = AsyncMock(side_effect=outage)
-    prisma_client.attempt_db_reconnect = AsyncMock(return_value=False)
+    _ = _proxy_database(monkeypatch, users=MagicMock(), teams=MagicMock())
+    monkeypatch.setattr(rust_auth_stores.key, "find", AsyncMock(side_effect=outage))
 
     async with proxy_scim_client as client:
         response = await client.post(
@@ -7549,13 +7676,15 @@ async def test_a_create_with_a_body_the_schema_rejects_logs_the_user_name_it_was
 
 @pytest.mark.asyncio
 async def test_only_a_create_refused_by_the_key_check_logs_the_user_name_it_was_for(
-    proxy_scim_client: AsyncClient, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    proxy_scim_client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    rust_auth_stores: RustAuthStores,
 ):
     from litellm.proxy import proxy_server
 
     monkeypatch.setattr(proxy_server, "master_key", "sk-master")
-    prisma_client: Final = _proxy_database(monkeypatch, users=MagicMock(), teams=MagicMock())
-    prisma_client.get_data = AsyncMock(return_value=None)
+    _ = _proxy_database(monkeypatch, users=MagicMock(), teams=MagicMock())
     unknown_key: Final = {"Authorization": "Bearer sk-not-a-real-key"}
 
     with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
@@ -7571,13 +7700,12 @@ async def test_only_a_create_refused_by_the_key_check_logs_the_user_name_it_was_
 
 @pytest.mark.asyncio
 async def test_a_key_the_proxy_does_not_know_answers_401_as_a_scim_error_with_the_auth_reason(
-    proxy_scim_client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+    proxy_scim_client: AsyncClient, monkeypatch: pytest.MonkeyPatch, rust_auth_stores: RustAuthStores
 ):
     from litellm.proxy import proxy_server
 
     monkeypatch.setattr(proxy_server, "master_key", "sk-master")
-    prisma_client: Final = _proxy_database(monkeypatch, users=MagicMock(), teams=MagicMock())
-    prisma_client.get_data = AsyncMock(return_value=None)
+    _ = _proxy_database(monkeypatch, users=MagicMock(), teams=MagicMock())
 
     async with proxy_scim_client as client:
         response = await client.post(

@@ -50,8 +50,12 @@ pub struct KeyRequest<'a> {
 pub enum Credential<'a, K> {
     /// The token the request presented, if it presented one.
     Presented(Option<&'a Token>),
-    /// A key the caller already read, which a JWT mapped to that key authenticates as.
-    Resolved(Keyed<K>),
+    /// A key the caller already read, which a JWT mapped to that key authenticates as. The end user
+    /// that JWT names wins over the request's.
+    Resolved {
+        key: Keyed<K>,
+        end_user_id: Option<&'a str>,
+    },
 }
 
 /// The key fields the core decides on.
@@ -65,8 +69,6 @@ pub struct KeyRecord {
     pub team_id: Option<String>,
     pub team_object_permission_id: Option<String>,
     pub project_id: Option<String>,
-    /// The end user the key itself names, which wins over the request's.
-    pub end_user_id: Option<String>,
     pub last_refreshed_at: Option<Timestamp>,
 }
 
@@ -123,9 +125,12 @@ pub(crate) async fn verify<H: AuthHost>(
         Named::Resolved {
             hash,
             key,
+            end_user_id,
             master_key,
         } => {
-            let found = lookup::resolved(host, hash, *key, request.end_user_id, settings).await?;
+            let requested = request.end_user_id;
+            let found =
+                lookup::resolved(host, hash, *key, end_user_id, requested, settings).await?;
             (None, master_key, found)
         }
     };
@@ -157,7 +162,7 @@ pub(crate) async fn verify<H: AuthHost>(
         lookup::Gate::Held(key) => (key, shown),
         lookup::Gate::Unread => match host.db_key(&hash, &end_user).await? {
             Some(key) => (key, Shown::Stored(&hash)),
-            None => return Err(Refused::new(crate::KeyDenial::NotFound, None)),
+            None => return Err(Refused::new(crate::KeyDenial::NotFound { hash }, None)),
         },
     };
     expiry::usable(&key.record, request.now, shown, settings)

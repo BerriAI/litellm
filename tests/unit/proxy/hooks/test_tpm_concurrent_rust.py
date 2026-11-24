@@ -816,7 +816,7 @@ async def test_project_otpm_reserves_largest_conflicting_output_cap(rate_limiter
     "call_type",
     ["agenerate_content", "agenerate_content_stream"],
 )
-@pytest.mark.parametrize("config_field", ["config", "generationConfig"])
+@pytest.mark.parametrize("config_field", ["config", "generationConfig", "generation_config"])
 async def test_project_otpm_rejects_google_genai_native_output_cap(
     rate_limiter,
     call_type,
@@ -851,10 +851,12 @@ async def test_project_otpm_rejects_google_genai_native_output_cap(
     ["agenerate_content", "agenerate_content_stream"],
 )
 @pytest.mark.parametrize("candidate_count_field", ["candidateCount", "candidate_count"])
+@pytest.mark.parametrize("config_field", ["config", "generationConfig", "generation_config"])
 async def test_project_otpm_rejects_google_genai_native_candidate_count(
     rate_limiter,
     call_type,
     candidate_count_field,
+    config_field,
 ):
     handler, cache = rate_limiter
     model = "gemini/gemini-3-flash-preview"
@@ -871,7 +873,7 @@ async def test_project_otpm_rejects_google_genai_native_candidate_count(
             data={
                 "model": model,
                 "contents": [{"role": "user", "parts": [{"text": "Hello"}]}],
-                "config": {
+                config_field: {
                     "maxOutputTokens": 50,
                     candidate_count_field: 4,
                 },
@@ -887,7 +889,7 @@ async def test_project_otpm_rejects_google_genai_native_candidate_count(
     "call_type",
     ["agenerate_content", "agenerate_content_stream"],
 )
-@pytest.mark.parametrize("config_field", [None, "config", "generationConfig"])
+@pytest.mark.parametrize("config_field", [None, "config", "generationConfig", "generation_config"])
 async def test_project_otpm_injects_google_genai_native_output_cap(
     rate_limiter,
     call_type,
@@ -919,7 +921,67 @@ async def test_project_otpm_injects_google_genai_native_output_cap(
     assert stash.otpm_reserved_tokens == 10
     expected_config_field = config_field or "config"
     assert data[expected_config_field]["maxOutputTokens"] == 10
+    assert [field for field in ("config", "generationConfig", "generation_config") if field in data] == [
+        expected_config_field
+    ]
     assert "max_tokens" not in data
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "configs",
+    [
+        {"config": {}, "generationConfig": {"maxOutputTokens": 100}},
+        {"generationConfig": {"maxOutputTokens": 100}, "generation_config": {"max_output_tokens": 10}},
+        {"config": {"maxOutputTokens": 100}, "generationConfig": {"maxOutputTokens": 10}},
+    ],
+)
+async def test_project_otpm_checks_the_first_non_empty_google_genai_config(rate_limiter, configs):
+    handler, cache = rate_limiter
+    model = "gemini/gemini-3-flash-preview"
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key=hash_token("sk-google-genai-config-precedence"),
+        project_id="project-google-genai-config-precedence",
+        project_metadata={"model_otpm_limit": {model: 50}},
+    )
+
+    with pytest.raises(Exception, match="Rate limit exceeded for model_per_project_otpm") as exc_info:
+        await handler.async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict,
+            cache=cache,
+            data={"model": model, "contents": [{"role": "user", "parts": [{"text": "Hello"}]}], **configs},
+            call_type="agenerate_content",
+        )
+
+    assert getattr(exc_info.value, "status_code", None) == 429
+
+
+@pytest.mark.asyncio
+async def test_project_otpm_injects_cap_into_the_first_non_empty_google_genai_config(rate_limiter):
+    handler, cache = rate_limiter
+    model = "gemini/gemini-3-flash-preview"
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key=hash_token("sk-google-genai-config-inject-precedence"),
+        project_id="project-google-genai-config-inject-precedence",
+        project_metadata={"model_otpm_limit": {model: 40}},
+    )
+    data: Final = {
+        "model": model,
+        "contents": [{"role": "user", "parts": [{"text": "Hello"}]}],
+        "config": {},
+        "generationConfig": {"temperature": 0},
+        "generation_config": {"max_output_tokens": 5000},
+    }
+
+    await handler.async_pre_call_hook(
+        user_api_key_dict=user_api_key_dict,
+        cache=cache,
+        data=data,
+        call_type="agenerate_content",
+    )
+
+    assert data["generationConfig"] == {"temperature": 0, "maxOutputTokens": 10}
+    assert data["config"] == {}
 
 
 @pytest.mark.asyncio
@@ -2422,6 +2484,31 @@ async def test_project_token_limit_admits_image_embedding_through_an_alias_of_an
             user_api_key_dict=auth,
             cache=cache,
             data={**request, "input": "word " * 100_000},
+            call_type="aembedding",
+        )
+    assert error.value.status_code == 429
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("limit_field", ["model_tpm_limit", "model_itpm_limit"])
+@pytest.mark.parametrize(
+    "backend",
+    ["bedrock/us.twelvelabs.marengo-embed-2-7-v1:0", "bedrock/twelvelabs.marengo-embed-3-0-v1:0"],
+    ids=["marengo_2_7", "marengo_3"],
+)
+@pytest.mark.parametrize("input_type_field", ["input_type", "inputType"])
+async def test_project_token_limit_admits_an_image_marengo_is_asked_to_read_as_an_image(
+    limit_field: str, backend: str, input_type_field: str
+) -> None:
+    handler, cache, auth, request = _project_limited_embedding_call(limit_field, (backend,))
+    image_request: Final = {**request, input_type_field: "image"}
+
+    await handler.async_pre_call_hook(user_api_key_dict=auth, cache=cache, data=image_request, call_type="aembedding")
+    with pytest.raises(HTTPException) as error:
+        await handler.async_pre_call_hook(
+            user_api_key_dict=auth,
+            cache=cache,
+            data={**image_request, "input": "word " * 100_000},
             call_type="aembedding",
         )
     assert error.value.status_code == 429

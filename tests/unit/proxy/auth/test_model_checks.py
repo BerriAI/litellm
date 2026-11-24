@@ -1,5 +1,6 @@
 import datetime
 import ipaddress
+import itertools
 import json
 import ssl
 import threading
@@ -1214,6 +1215,31 @@ def test_get_complete_model_list_excludes_wildcard_routes_without_router():
     assert any(m.startswith("bedrock/") for m in result)
 
 
+def test_get_complete_model_list_lists_named_models_before_any_wildcard_route():
+    from litellm import Router
+    from litellm.proxy.auth.model_checks import get_complete_model_list
+
+    router: Final = Router(
+        model_list=[
+            {"model_name": "openai/*", "litellm_params": {"model": "openai/*"}},
+            {"model_name": "named-chat-model", "litellm_params": {"model": "openai/named-chat-model"}},
+        ]
+    )
+
+    result: Final = get_complete_model_list(
+        key_models=[],
+        team_models=[],
+        proxy_model_list=["openai/*", "named-chat-model"],
+        user_model=None,
+        infer_model_from_keys=False,
+        return_wildcard_routes=True,
+        llm_router=router,
+    )
+
+    assert list(itertools.takewhile(lambda model: "*" not in model, result)) == ["named-chat-model"]
+    assert "openai/*" in result
+
+
 def test_get_complete_model_list_includes_wildcard_routes_when_requested():
     from litellm import Router
     from litellm.proxy.auth.model_checks import get_complete_model_list
@@ -1263,6 +1289,22 @@ def test_add_known_models_refreshes_models_by_provider_for_wildcard_expansion():
         litellm.vertex_language_models.discard(fake_model)
         litellm.add_known_models(model_cost_map={})
     assert fake_model not in litellm.models_by_provider["vertex_ai"]
+
+
+@pytest.mark.parametrize("provider", ("bedrock", "bedrock_converse"))
+def test_regional_pricing_rows_do_not_narrow_bedrock_wildcard_discovery(provider: str) -> None:
+    from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
+    from litellm.types.router import LiteLLM_Params
+
+    canonical: Final = "bedrock/anthropic.regional-pricing-test-v1:0"
+    regional: Final = "bedrock/us-east-1/anthropic.regional-pricing-test-v1:0"
+    with _registered_chat_models({canonical: provider, regional: provider}):
+        bare: Final = get_known_models_from_wildcard("bedrock/*", LiteLLM_Params(model="bedrock/*"))
+        routed: Final = get_known_models_from_wildcard("bedrock/*", LiteLLM_Params(model="bedrock/us-east-1/*"))
+
+    assert canonical in bare
+    assert regional not in bare
+    assert sorted(routed) == sorted(bare)
 
 
 def test_wildcard_lists_a_model_once_when_registered_both_bare_and_provider_prefixed():
