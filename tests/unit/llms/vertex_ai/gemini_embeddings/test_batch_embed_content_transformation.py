@@ -653,8 +653,9 @@ class TestFileContentBlocks:
             ({"start_offset": "0s", "end_offset": "0s"}, r"end_offset \(0s\) must be later than the window start \(0s\)"),
             ({"start_offset": "10s", "end_offset": "0s"}, r"must be later than the window start \(10s\)"),
             ({"start_offset": "-0s", "end_offset": "-1s"}, r"end_offset \(-1s\) must be later than the window start \(0s\)"),
-            ({"fps": 0, "start_offset": "0s", "end_offset": "10s"}, r"\.fps: Input should be greater than 0"),
-            ({"fps": -1}, r"\.fps: Input should be greater than 0"),
+            ({"fps": 0, "start_offset": "0s", "end_offset": "10s"}, r"\.fps: must be greater than 0, got 0"),
+            ({"fps": -1}, r"\.fps: must be greater than 0, got -1"),
+            ({"fps": float("nan")}, r"\.fps: Input should be a finite number"),
         ],
     )
     def test_video_metadata_that_samples_no_frames_answers_400_naming_the_field(
@@ -682,6 +683,19 @@ class TestFileContentBlocks:
     def test_video_metadata_that_samples_a_frame_is_forwarded_as_given(self, video_metadata: dict[str, object]) -> None:
         part: Final = _build_part_for_input(_file_block(file_data=VIDEO_DATA_URI, video_metadata=video_metadata))
         assert part["video_metadata"] == gemini_video_metadata_from_openai(video_metadata)
+
+    @pytest.mark.parametrize(
+        "video_metadata",
+        [{"fps": 1, "start_offset": "0s", "end_offset": "0.4s"}, {"end_offset": "0.1s"}, {"fps": 0}, {"fps": -1}],
+    )
+    def test_frame_checks_skip_a_file_that_is_not_a_video(self, video_metadata: dict[str, object]) -> None:
+        part: Final = _build_part_for_input(_file_block(file_data=AUDIO_DATA_URI, video_metadata=video_metadata))
+        assert part["video_metadata"] == gemini_video_metadata_from_openai(video_metadata)
+
+    def test_a_window_that_ends_before_it_starts_answers_400_on_audio_too(self) -> None:
+        block: Final = _file_block(file_data=AUDIO_DATA_URI, video_metadata={"start_offset": "5s", "end_offset": "2s"})
+        with pytest.raises(BadRequestError, match=r"end_offset \(2s\) must be later than the window start \(5s\)"):
+            _build_part_for_input(block)
 
     @pytest.mark.parametrize(
         "transform", [transform_openai_input_gemini_content, transform_openai_input_gemini_embed_content]
