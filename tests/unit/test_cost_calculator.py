@@ -2423,11 +2423,10 @@ def test_rerank_cost_prefers_caller_set_prices_over_the_reported_cost(
 
 
 @pytest.mark.parametrize("usage", [None, {"search_units": _SEARCH_UNITS}, {"cost": "n/a"}])
-def test_unmapped_rerank_cost_without_a_reported_cost_is_unavailable_instead_of_zero(
+def test_unmapped_rerank_cost_without_a_usable_reported_cost_stays_zero(
     usage: Mapping[str, object] | None, _priced_test_reranker: None
 ) -> None:
-    with pytest.raises(Exception, match="isn't mapped yet"):
-        _rerank_cost(_provider_usage_rerank(usage), _UNMAPPED_RERANKER)
+    assert _rerank_cost(_provider_usage_rerank(usage), _UNMAPPED_RERANKER) == 0.0
 
 
 def _register_reranker(model: str, rates: dict[str, float]) -> None:
@@ -2523,7 +2522,7 @@ def test_rerank_cost_keeps_a_configured_zero_price(
     assert _rerank_cost(_provider_usage_rerank(usage), "cohere/test-free-reranker") == 0.0
 
 
-def test_rerank_cost_without_the_rate_the_provider_prices_by_is_unavailable_instead_of_zero(
+def test_rerank_cost_without_the_rate_the_provider_prices_by_stays_zero(
     _priced_test_reranker: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setitem(
@@ -2533,8 +2532,10 @@ def test_rerank_cost_without_the_rate_the_provider_prices_by_is_unavailable_inst
     )
     publish(litellm.model_cost)
 
-    with pytest.raises(ValueError, match="No rerank price in the cost map"):
+    assert (
         _rerank_cost(_provider_usage_rerank({"search_units": _SEARCH_UNITS}), "cohere/test-token-priced-reranker")
+        == 0.0
+    )
 
 
 @pytest.mark.parametrize("usage", [{"search_units": _SEARCH_UNITS}, {"search_units": _SEARCH_UNITS, "cost": 0.5}])

@@ -199,13 +199,13 @@ async def test_scaleway_rerank_bills_and_returns_the_provider_reported_usage(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("sync_mode", [True, False])
-async def test_scaleway_rerank_without_a_reported_or_mapped_cost_reports_no_cost(
+async def test_scaleway_rerank_without_a_reported_or_mapped_cost_bills_zero(
     sync_mode: bool, respx_mock: respx.MockRouter
 ) -> None:
     assert UNMAPPED_RERANK_MODEL not in litellm.model_cost
     response: Final = await _rerank_via_router(sync_mode, UNREPORTED_COST_BODY, respx_mock)
 
-    assert response._hidden_params["response_cost"] is None
+    assert response._hidden_params["response_cost"] == 0.0
     assert response.model_dump(by_alias=True)["usage"] == {"search_units": 1}
 
 

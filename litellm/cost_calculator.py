@@ -81,7 +81,6 @@ from litellm.llms.azure_ai.cost_calculator import (
 from litellm.llms.azure_ai.cost_calculator import (
     is_azure_model_router as azure_ai_is_model_router_name,
 )
-from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig
 from litellm.llms.base_llm.search.transformation import SearchResponse
 from litellm.llms.bedrock.cost_calculation import (
     cost_per_token as bedrock_cost_per_token,
@@ -2453,43 +2452,38 @@ def completion_cost(
                 if litellm_logging_obj is not None:
                     request_model_for_cost = litellm_logging_obj.model
 
-                try:
-                    (
-                        prompt_tokens_cost_usd_dollar,
-                        completion_tokens_cost_usd_dollar,
-                    ) = cost_per_token(
-                        model=model,
-                        prompt_tokens=prompt_tokens or 0,
-                        completion_tokens=completion_tokens or 0,
-                        custom_llm_provider=_pricing_provider_for_cost_candidate(
-                            candidate_provider=candidate_pricing_provider,
-                            request_provider=candidate_request_provider,
-                            current_provider=custom_llm_provider,
-                        ),
-                        response_time_ms=response_time_ms,
-                        region_name=None if explicit_pricing else region_name,
-                        custom_cost_per_second=custom_cost_per_second,
-                        custom_cost_per_token=custom_cost_per_token,
-                        requested_model_info_override=requested_model_info_override,
-                        prompt_characters=prompt_characters,
-                        completion_characters=completion_characters,
-                        cache_creation_input_tokens=cache_creation_input_tokens,
-                        cache_read_input_tokens=cache_read_input_tokens,
-                        usage_object=cost_per_token_usage_object,
-                        call_type=call_type,
-                        audio_transcription_file_duration=audio_transcription_file_duration,
-                        rerank_billed_units=rerank_billed_units,
-                        service_tier=service_tier,
-                        data_residency=data_residency,
-                        vertex_location=vertex_location,
-                        response=completion_response,
-                        custom_model_info=_ocr_model_info(litellm_logging_obj, custom_pricing, router_model_id),
-                        bedrock_model_info=bedrock_model_info,
-                    )
-                except RerankPriceUnavailableError:
-                    if not (caller_set_prices or _has_registered_rerank_price(call_type, model, custom_llm_provider)):
-                        raise
-                    prompt_tokens_cost_usd_dollar, completion_tokens_cost_usd_dollar = 0.0, 0.0
+                (
+                    prompt_tokens_cost_usd_dollar,
+                    completion_tokens_cost_usd_dollar,
+                ) = cost_per_token(
+                    model=model,
+                    prompt_tokens=prompt_tokens or 0,
+                    completion_tokens=completion_tokens or 0,
+                    custom_llm_provider=_pricing_provider_for_cost_candidate(
+                        candidate_provider=candidate_pricing_provider,
+                        request_provider=candidate_request_provider,
+                        current_provider=custom_llm_provider,
+                    ),
+                    response_time_ms=response_time_ms,
+                    region_name=None if explicit_pricing else region_name,
+                    custom_cost_per_second=custom_cost_per_second,
+                    custom_cost_per_token=custom_cost_per_token,
+                    requested_model_info_override=requested_model_info_override,
+                    prompt_characters=prompt_characters,
+                    completion_characters=completion_characters,
+                    cache_creation_input_tokens=cache_creation_input_tokens,
+                    cache_read_input_tokens=cache_read_input_tokens,
+                    usage_object=cost_per_token_usage_object,
+                    call_type=call_type,
+                    audio_transcription_file_duration=audio_transcription_file_duration,
+                    rerank_billed_units=rerank_billed_units,
+                    service_tier=service_tier,
+                    data_residency=data_residency,
+                    vertex_location=vertex_location,
+                    response=completion_response,
+                    custom_model_info=_ocr_model_info(litellm_logging_obj, custom_pricing, router_model_id),
+                    bedrock_model_info=bedrock_model_info,
+                )
 
                 # Get additional costs from provider (e.g., routing fees, infrastructure costs)
                 if custom_llm_provider in ("azure_ai", "azure") and not azure_ai_is_model_router_name(model):
@@ -3197,10 +3191,6 @@ def vector_store_search_cost(
     )
 
 
-class RerankPriceUnavailableError(ValueError):
-    """Neither a cost map entry nor a rate the rerank provider prices by exists for the model."""
-
-
 def _has_registered_rerank_price(call_type: str | None, model: str | None, custom_llm_provider: str | None) -> bool:
     if call_type not in _RERANK_CALL_TYPES or model is None or custom_llm_provider is None:
         return False
@@ -3221,55 +3211,27 @@ def rerank_cost(
     """
     _, custom_llm_provider, _, _ = litellm.get_llm_provider(model=model, custom_llm_provider=custom_llm_provider)
 
-    config: Final = ProviderConfigManager.get_provider_rerank_config(
-        model=model,
-        api_base=None,
-        present_version_params=[],
-        provider=LlmProviders(custom_llm_provider),
-    )
-
     try:
-        model_info: Final = litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider)
-    except Exception as lookup_error:
-        raise RerankPriceUnavailableError(str(lookup_error)) from lookup_error
-
-    priced: Final = config.calculate_rerank_cost(
-        model=model,
-        custom_llm_provider=custom_llm_provider,
-        billed_units=billed_units,
-        model_info=model_info,
-    )
-    if priced == (0.0, 0.0) and _rerank_rate_is_missing(config, model, custom_llm_provider, billed_units, model_info):
-        raise RerankPriceUnavailableError(
-            f"No rerank price in the cost map for model={model}, custom_llm_provider={custom_llm_provider}"
+        config: Final = ProviderConfigManager.get_provider_rerank_config(
+            model=model,
+            api_base=None,
+            present_version_params=[],
+            provider=LlmProviders(custom_llm_provider),
         )
-    return priced
 
+        try:
+            model_info: ModelInfo | None = litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider)
+        except Exception:
+            model_info = None
 
-def _rerank_rate_is_missing(
-    config: BaseRerankConfig,
-    model: str,
-    custom_llm_provider: str,
-    billed_units: RerankBilledUnits | None,
-    model_info: ModelInfo,
-) -> bool:
-    """A zero rerank price is a missing price, not a free call, when the provider's own formula would charge these
-    billed units once the per-query or per-token rate it reads was set. An explicitly configured zero rate is free."""
-    configured: Final = cached_get_model_info_helper(
-        model=model, custom_llm_provider=custom_llm_provider, preserve_unset_costs=True
-    )
-    query_rate: Final = configured.get("input_cost_per_query")
-    token_rate: Final = configured.get("input_cost_per_token")
-    if 0 in (query_rate, token_rate) or (query_rate is not None and token_rate is not None):
-        return False
-    probe: Final[ModelInfo] = {
-        **model_info,
-        "input_cost_per_query": 1.0 if query_rate is None else query_rate,
-        "input_cost_per_token": 1.0 if token_rate is None else token_rate,
-    }
-    return config.calculate_rerank_cost(
-        model=model, custom_llm_provider=custom_llm_provider, billed_units=billed_units, model_info=probe
-    ) != (0.0, 0.0)
+        return config.calculate_rerank_cost(
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            billed_units=billed_units,
+            model_info=model_info,
+        )
+    except Exception as e:
+        raise e
 
 
 def transcription_cost(model: str, custom_llm_provider: str | None, duration: float) -> tuple[float, float]:
