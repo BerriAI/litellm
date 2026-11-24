@@ -2,12 +2,13 @@ import glob
 import os
 import random
 import re
+import secrets
 import shutil
 import subprocess
 import tempfile
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -1004,6 +1005,7 @@ class ProxyExtrasDBManager:
         from litellm_proxy_extras.migration_recovery import (
             baseline_current_schema,
             recover_completed_migration,
+            roll_back_killed_migration,
             roll_back_replayable_failed_migration,
         )
 
@@ -1034,8 +1036,11 @@ class ProxyExtrasDBManager:
                     migration_environment(_get_prisma_env()),
                 )
 
+        def roll_back_killed(session_name: str, attempt_seconds: float) -> None:
+            roll_back_killed_migration(lock_url, schema, session_name, attempt_seconds)
+
         while not ProxyExtrasDBManager._run_database_v2(
-            True, recover_completed, baseline_existing, lambda: prisma_migration_lock(lock_url)
+            True, recover_completed, baseline_existing, lambda: prisma_migration_lock(lock_url), roll_back_killed
         ):
             continue
         return True
@@ -1046,6 +1051,7 @@ class ProxyExtrasDBManager:
         recover_completed: Callable[[str], bool] = lambda name: False,
         baseline_existing: "Callable[[str], None] | None" = None,
         deploy_lock: Callable[[], AbstractContextManager[None]] = nullcontext,
+        roll_back_killed: Callable[[str, float], None] = lambda session_name, attempt_seconds: None,
     ) -> bool:
         """
         v2 migration resolver (opt-in via --use_v2_migration_resolver).
@@ -1109,12 +1115,9 @@ class ProxyExtrasDBManager:
             while not budget.exhausted:
                 attempt_started = time.monotonic()
                 try:
-                    with deploy_lock():
-                        result = prisma_toolchain.run_prisma(
-                            [_get_prisma_command(), "migrate", "deploy"],
-                            timeout=deploy_timeout,
-                            env=migration_env,
-                        )
+                    result = ProxyExtrasDBManager._migrate_deploy_under_lock(
+                        migration_env, deploy_timeout, deploy_lock, roll_back_killed
+                    )
                     logger.info(f"prisma migrate deploy stdout: {result.stdout}")
                     return True
 
@@ -1155,6 +1158,28 @@ class ProxyExtrasDBManager:
             )
         finally:
             os.chdir(original_dir)
+
+    @staticmethod
+    def _migrate_deploy_under_lock(
+        migration_env: Mapping[str, str],
+        deploy_timeout: float,
+        deploy_lock: Callable[[], AbstractContextManager[None]],
+        roll_back_killed: Callable[[str, float], None],
+    ) -> "subprocess.CompletedProcess[str]":
+        from litellm_proxy_extras.migration_lock import tagged_environment
+
+        session_name: Final = f"litellm-migrate-{secrets.token_hex(8)}"
+        started: Final = time.monotonic()
+        with deploy_lock():
+            try:
+                return prisma_toolchain.run_prisma(
+                    [_get_prisma_command(), "migrate", "deploy"],
+                    timeout=deploy_timeout,
+                    env=tagged_environment(migration_env, session_name),
+                )
+            except subprocess.TimeoutExpired:
+                roll_back_killed(session_name, time.monotonic() - started)
+                raise
 
     @staticmethod
     def _v2_failed_migration_name(stderr: str) -> "str | None":

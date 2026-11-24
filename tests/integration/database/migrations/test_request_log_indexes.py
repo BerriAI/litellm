@@ -21,7 +21,11 @@ import psycopg
 import pytest
 from litellm_proxy_extras import migration_data_checks, migration_dry_run, request_log_indexes
 from litellm_proxy_extras.migration_lock import MIGRATION_LOCK_KEY, migration_lock
-from litellm_proxy_extras.migration_recovery import recover_completed_migration, roll_back_replayable_failed_migration
+from litellm_proxy_extras.migration_recovery import (
+    recover_completed_migration,
+    roll_back_killed_migration,
+    roll_back_replayable_failed_migration,
+)
 from litellm_proxy_extras.request_log_indexes import (
     END_USER_RESTRICTED_PREDICATE,
     REQUEST_LOG_INDEXES,
@@ -54,6 +58,8 @@ END_USER_RESTRICTED_QUERY: Final = (
 API_KEY_INDEX_MIGRATION: Final = "20260823000000_add_spend_logs_api_key_starttime_index"
 CALL_ID_INDEX_MIGRATION: Final = "20260831120001_spend_logs_litellm_call_id_index"
 TOOL_INDEX_MIGRATION: Final = "20260226120000_add_spend_log_tool_index"
+AGENT_IDENTITY_MIGRATION: Final = "20260921190000_agent_identity"
+KILLED_MIGRATION: Final = "20991231000000_killed_at_the_deploy_time_limit"
 API_KEY_INDEX: Final = "LiteLLM_SpendLogs_api_key_startTime_idx"
 CALL_ID_INDEX: Final = "LiteLLM_SpendLogs_litellm_call_id_idx"
 PARTITIONED_PARENT_ERROR: Final = 'cannot create index on partitioned table "LiteLLM_SpendLogs" concurrently'
@@ -570,6 +576,135 @@ def test_a_migration_without_a_failed_row_is_not_touched(partitioned_database: s
         assert roll_back_replayable_failed_migration(coordinator, "public", inert) is False
 
     assert _ledger(partitioned_database) == before
+
+
+def _ledger_rows(database_url: str, migration: str) -> list[tuple[bool, bool]]:
+    """(finished, rolled back) for every ledger row of one migration, oldest first."""
+    with psycopg.connect(database_url) as conn, conn.cursor(row_factory=class_row(_LedgerRow)) as cursor:
+        rows: Final = cursor.execute(
+            "SELECT migration_name AS name, finished_at IS NOT NULL AS finished, "
+            "rolled_back_at IS NOT NULL AS rolled_back FROM _prisma_migrations "
+            "WHERE migration_name = %s ORDER BY started_at",
+            (migration,),
+        ).fetchall()
+    return [(row.finished, row.rolled_back) for row in rows]
+
+
+def _spend_logs_columns(database_url: str) -> frozenset[str]:
+    with psycopg.connect(database_url) as conn:
+        rows: Final = conn.execute(
+            "SELECT column_name FROM information_schema.columns WHERE table_name = 'LiteLLM_SpendLogs'"
+        ).fetchall()
+    return frozenset(str(row[0]) for row in rows)
+
+
+def _sessions_named(database_url: str, pattern: str) -> list[tuple[str, str | None]]:
+    """(application name, what it waits on) for every session of this database whose name matches."""
+    with psycopg.connect(database_url) as conn:
+        rows: Final = conn.execute(
+            "SELECT application_name, wait_event_type FROM pg_stat_activity "
+            "WHERE datname = current_database() AND application_name LIKE %s",
+            (pattern,),
+        ).fetchall()
+    return [(str(name), None if waits_on is None else str(waits_on)) for name, waits_on in rows]
+
+
+def _wait_until(condition: Callable[[], bool], what: str, seconds: float = 180.0) -> None:
+    deadline: Final = time.monotonic() + seconds
+    while not condition():
+        if time.monotonic() >= deadline:
+            pytest.fail(f"timed out after {seconds}s waiting until {what}")
+        time.sleep(0.2)
+
+
+def _start_a_ledger_row(
+    connection: "psycopg.Connection[tuple[object, ...]]", logs: str | None, applied_steps: int, age: str
+) -> None:
+    connection.execute(
+        "INSERT INTO _prisma_migrations (id, checksum, migration_name, logs, started_at, applied_steps_count) "
+        "VALUES (%s, 'checksum', %s, %s, current_timestamp - %s::interval, %s)",
+        (str(uuid.uuid4()), KILLED_MIGRATION, logs, age, applied_steps),
+    )
+
+
+@requires_db
+def test_a_migration_killed_at_the_deploy_time_limit_is_rolled_back_and_applied_once_the_table_lock_is_free(
+    scratch_database: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    assert _migration_job(True) is True
+    with psycopg.connect(scratch_database, autocommit=True) as conn:
+        conn.execute("DELETE FROM _prisma_migrations WHERE migration_name = %s", (AGENT_IDENTITY_MIGRATION,))
+        conn.execute('ALTER TABLE "LiteLLM_SpendLogs" DROP COLUMN billing_agent_id')
+    monkeypatch.setenv("LITELLM_PRISMA_MIGRATE_DEPLOY_TIMEOUT", "20")
+    reader: Final = _pin_a_snapshot_on(scratch_database, "LiteLLM_SpendLogs")
+
+    def release_the_table_once_the_killed_run_is_rolled_back() -> None:
+        try:
+            _wait_until(
+                lambda: _ledger_rows(scratch_database, AGENT_IDENTITY_MIGRATION) == [(False, True)],
+                "the migration killed at the time limit is marked rolled back",
+            )
+        finally:
+            reader.close()
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        released: Final = pool.submit(release_the_table_once_the_killed_run_is_rolled_back)
+        finished: Final = _migration_job(True)
+        released.result()
+
+    assert finished is True
+    assert _ledger_rows(scratch_database, AGENT_IDENTITY_MIGRATION) == [(False, True), (True, False)]
+    assert "billing_agent_id" in _spend_logs_columns(scratch_database)
+    assert _sessions_named(scratch_database, "litellm-migrate-%") == []
+    _assert_no_pending_migrations(scratch_database)
+
+
+@requires_db
+def test_the_session_a_killed_deploy_left_waiting_on_a_lock_is_ended_before_its_row_is_rolled_back(
+    scratch_database: str,
+) -> None:
+    session_name: Final = f"litellm-migrate-{uuid.uuid4().hex[:16]}"
+    reader: Final = _pin_a_snapshot_on(scratch_database, "LiteLLM_SpendLogs")
+    left_behind: Final = psycopg.connect(scratch_database, autocommit=True, application_name=session_name)
+    _start_a_ledger_row(left_behind, logs=None, applied_steps=0, age="0 seconds")
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        migration: Final = pool.submit(
+            left_behind.execute, 'ALTER TABLE "LiteLLM_SpendLogs" ADD COLUMN "left_behind" TEXT'
+        )
+        _wait_until(
+            lambda: _sessions_named(scratch_database, session_name) == [(session_name, "Lock")],
+            "the migration waits on the table lock",
+        )
+
+        rolled_back: Final = roll_back_killed_migration(scratch_database, "public", session_name, 60.0)
+
+        reader.close()
+        with pytest.raises(psycopg.OperationalError):
+            migration.result()
+
+    assert rolled_back == (KILLED_MIGRATION,)
+    assert _sessions_named(scratch_database, session_name) == []
+    assert "left_behind" not in _spend_logs_columns(scratch_database)
+    assert _ledger_rows(scratch_database, KILLED_MIGRATION) == [(False, True)]
+
+
+@requires_db
+@pytest.mark.parametrize(
+    ("logs", "applied_steps", "age"),
+    (("ERROR: boom", 0, "0 seconds"), (None, 1, "0 seconds"), (None, 0, "1 hour")),
+    ids=("failed-with-logs", "applied-a-step", "started-before-this-attempt"),
+)
+def test_an_unfinished_row_the_killed_deploy_did_not_leave_is_kept_for_the_operator(
+    scratch_database: str, logs: str | None, applied_steps: int, age: str
+) -> None:
+    with psycopg.connect(scratch_database, autocommit=True) as conn:
+        _start_a_ledger_row(conn, logs, applied_steps, age)
+
+    rolled_back: Final = roll_back_killed_migration(scratch_database, "public", "litellm-migrate-none", 60.0)
+
+    assert rolled_back == ()
+    assert _ledger_rows(scratch_database, KILLED_MIGRATION) == [(False, False)]
 
 
 def _backend_pid(connection: "psycopg.Connection[tuple[object, ...]]") -> int:
