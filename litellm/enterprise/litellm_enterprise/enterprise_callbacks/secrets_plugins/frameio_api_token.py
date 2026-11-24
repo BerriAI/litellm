@@ -15,7 +15,7 @@ class FrameIoApiTokenDetector(RegexBasedDetector):
         return "Frame.io API Token"
 
     @property
-    def denylist(self) -> list[re.Pattern]:
+    def denylist(self) -> list[re.Pattern[str]]:
         return [
             # Frame.io API token
             re.compile(r"""(?i)fio-u-[a-z0-9\-_=]{64}"""),

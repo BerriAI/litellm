@@ -5,6 +5,10 @@ from enum import Enum
 from types import MappingProxyType
 from typing import Any, ClassVar, Final, Literal, cast
 
+from pydantic import TypeAdapter
+
+_METRIC_LABELS: Final = TypeAdapter(Sequence[object])
+
 
 def sanitize_prometheus_label_name(label: str) -> str:
     """
@@ -1012,7 +1016,7 @@ class PrometheusMetricLabels:
 
         default_labels: Final = _resolve_deployment_and_latency_caller_identity_labels(
             metric_name=label_name,
-            labels=getattr(PrometheusMetricLabels, label_name),
+            labels=_METRIC_LABELS.validate_python(getattr(PrometheusMetricLabels, label_name)),
         )
         custom_labels: Final = []
 
@@ -1152,7 +1156,7 @@ class UserAPIKeyLabelValues:
             else:
                 merged[f.name] = f.default
 
-        for k, v in kwargs.items():
+        for k, v in dict[str, object](kwargs).items():
             if k in field_names:
                 merged[k] = v
                 continue

@@ -231,8 +231,8 @@ class SlackAlerting(CustomBatchLogger):
     def _response_taking_too_long_callback_helper(
         self,
         kwargs,  # kwargs to completion
-        start_time,
-        end_time,  # start/end time
+        start_time: datetime.datetime,
+        end_time: datetime.datetime,  # start/end time
     ):
         try:
             time_difference: Final = end_time - start_time
@@ -289,8 +289,8 @@ class SlackAlerting(CustomBatchLogger):
         self,
         kwargs,  # kwargs to completion
         completion_response: object,  # response from completion
-        start_time,
-        end_time,  # start/end time
+        start_time: datetime.datetime,
+        end_time: datetime.datetime,  # start/end time
     ):
         if self.alerting is None or self.alert_types is None:
             return
@@ -1731,7 +1731,9 @@ Model Info:
                 verbose_proxy_logger.debug("Error flushing digest buckets: %s", e)
             await self.flush_queue()
 
-    async def async_log_success_event(self, kwargs, response_obj: object, start_time, end_time):
+    async def async_log_success_event(
+        self, kwargs, response_obj: object, start_time: datetime.datetime, end_time: datetime.datetime
+    ):
         """Log deployment latency"""
         try:
             if "daily_reports" in self.alert_types:

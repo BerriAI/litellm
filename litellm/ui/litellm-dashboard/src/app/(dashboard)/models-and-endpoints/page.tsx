@@ -1,7 +1,7 @@
 "use client";
 
 import { PageContent } from "@/components/shared/Page";
-import { PageHeader, PageHeaderTitle, PageHeaderDescription, PageHeaderControls } from "@/components/shared/PageHeader";
+import { PageHeader, PageHeaderTitle, PageHeaderDescription } from "@/components/shared/PageHeader";
 
 import { useMemo, useState } from "react";
 import { Network, RefreshCw } from "lucide-react";
@@ -200,23 +200,6 @@ export default function ModelsAndEndpointsPage() {
         <PageHeaderDescription>
           {t(isAdmin ? "modelsAndEndpoints.page.adminDescription" : "modelsAndEndpoints.page.userDescription")}
         </PageHeaderDescription>
-        {!modelId && (
-          <PageHeaderControls className="flex-wrap">
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              onClick={handleRefreshClick}
-              aria-label={t("modelsAndEndpoints.page.refreshModels")}
-            >
-              <RefreshCw />
-            </Button>
-            {lastRefreshed && (
-              <span className="text-xs text-muted-foreground">
-                {t("modelsAndEndpoints.page.lastRefreshed", { time: lastRefreshed })}
-              </span>
-            )}
-          </PageHeaderControls>
-        )}
       </PageHeader>
 
       {modelId ? (
@@ -244,6 +227,21 @@ export default function ModelsAndEndpointsPage() {
                   );
                 })}
               </TabsList>
+            </div>
+            <div className="flex shrink-0 items-center gap-2 pb-1">
+              {lastRefreshed && (
+                <span className="text-xs text-muted-foreground">
+                  {t("modelsAndEndpoints.page.lastRefreshed", { time: lastRefreshed })}
+                </span>
+              )}
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                onClick={handleRefreshClick}
+                aria-label={t("modelsAndEndpoints.page.refreshModels")}
+              >
+                <RefreshCw />
+              </Button>
             </div>
           </div>
           {visibleSlugs.map((slug) => {

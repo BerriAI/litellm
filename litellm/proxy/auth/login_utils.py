@@ -510,7 +510,7 @@ def encode_ui_session_jwt(returned_ui_token_object: ReturnedUITokenObject, maste
     master key rotates, and the session-cookie readers that require a bounded lifetime
     (the MCP interactive sign-in) reject it.
     """
-    claims: Final = {**cast(dict, returned_ui_token_object), "exp": _ui_session_exp_timestamp()}
+    claims: Final[dict[str, object]] = {**cast(dict, returned_ui_token_object), "exp": _ui_session_exp_timestamp()}
     return jwt.encode(claims, master_key, algorithm="HS256")
 
 

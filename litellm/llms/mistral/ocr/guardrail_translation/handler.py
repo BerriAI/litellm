@@ -91,7 +91,7 @@ class OCRHandler(BaseTranslation):
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: "LiteLLMLoggingObj | None" = None,
         user_api_key_dict: object | None = None,
-        request_data: dict | None = None,
+        request_data: dict[str, object] | None = None,
     ) -> "OCRResponse":
         """
         Process OCR output by applying guardrails to extracted page text.
