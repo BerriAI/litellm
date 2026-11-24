@@ -59,7 +59,7 @@ class PerplexityChatConfig(OpenAIGPTConfig):
     ) -> tuple[str | None, str | None]:
         return self._get_openai_compatible_provider_info(api_base, api_key)
 
-    def get_supported_openai_params(self, model: str) -> list:
+    def get_supported_openai_params(self, model: str) -> list[str]:
         """Ref: https://docs.perplexity.ai/api-reference/chat-completions"""
         provider: Final = self.custom_llm_provider
         return [
