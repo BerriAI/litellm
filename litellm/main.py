@@ -1599,8 +1599,8 @@ def _provider_config_items(config: Mapping[str, object]) -> Iterable[tuple[str, 
     return config.items()
 
 
-def _locals_snapshot(values: Mapping[str, object]) -> Mapping[str, object]:
-    return values
+def _completion_arguments(values: Mapping[str, object]) -> Mapping[str, object]:
+    return {name: value for name, value in values.items() if name in _COMPLETION_PARAMETERS}
 
 
 def _record_agentic_loop_params(
@@ -5942,7 +5942,7 @@ def completion(
     thinking = validate_and_fix_thinking_param(thinking=thinking)
 
     ######### unpacking kwargs #####################
-    args: Final = _locals_snapshot(locals())
+    args: Final = _completion_arguments(locals())
     supplemental_params: Final = _supplemental_provider_params(
         _REQUEST_KWARGS_ADAPTER.validate_python({**kwargs, "extra_headers": extra_headers}), model
     )
@@ -7039,6 +7039,9 @@ def completion(
             completion_kwargs=args,
             extra_kwargs=kwargs,
         )
+
+
+_COMPLETION_PARAMETERS: Final = frozenset(inspect.signature(completion).parameters)
 
 
 def _is_not_resent_failure(error: BaseException) -> bool:

@@ -181,11 +181,9 @@ def batch_completion_models(*args: object, **kwargs):
         futures = {}
         with ThreadPoolExecutor(max_workers=len(deployments)) as executor:
             for deployment in deployments:
-                for key in kwargs:
-                    if key not in deployment:  # don't override deployment values e.g. model name, api base, etc.
-                        deployment[key] = kwargs[key]
-                kwargs = {**deployment, **nested_kwargs}
-                futures[deployment["model"]] = executor.submit(litellm.completion, **kwargs)
+                futures[deployment["model"]] = executor.submit(
+                    litellm.completion, **{**kwargs, **deployment, **nested_kwargs}
+                )
 
             while futures:
                 # wait for the first returned future

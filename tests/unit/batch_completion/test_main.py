@@ -164,3 +164,34 @@ def test_completion_with_model_list_returns_the_first_deployment_that_succeeds(
     assert (failing.call_count, healthy.call_count, other_group.call_count) == (1, 1, 0)
     assert json.loads(healthy.calls[0].request.content)["model"] == "healthy-model"
     assert healthy.calls[0].request.headers["authorization"] == "Bearer healthy-key"
+
+
+def test_a_reused_model_list_sends_each_call_its_own_request(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    deployment: Final = respx_mock.post("https://healthy.deployment.test/v1/chat/completions").mock(
+        return_value=_chat_reply("ok")
+    )
+    model_list: Final = [
+        {
+            "model_name": "mistral-7b-instruct",
+            "litellm_params": {
+                "model": "openai/healthy-model",
+                "api_base": "https://healthy.deployment.test/v1",
+                "api_key": "healthy-key",
+            },
+        },
+    ]
+    first_request: Final = {"messages": [{"role": "user", "content": "apple"}], "temperature": 0.2}
+    second_request: Final = {"messages": [{"role": "user", "content": "banana"}], "temperature": 0.7}
+
+    for request in (first_request, second_request):
+        litellm.completion(model="mistral-7b-instruct", model_list=model_list, max_retries=0, **request)
+
+    sent: Final = [json.loads(call.request.content) for call in deployment.calls]
+    assert [(body["messages"], body["temperature"]) for body in sent] == [
+        (first_request["messages"], 0.2),
+        (second_request["messages"], 0.7),
+    ]
