@@ -10741,6 +10741,7 @@ def create_model_info_response(
     fallback_type: str | None = None,
     llm_router: Optional["Router"] = None,
     get_model_info: Callable[[str], ModelInfo] = litellm.get_model_info,
+    team_id: str | None = None,
 ) -> ModelInfoResponse:
     """
     Create a standardized OpenAI-compatible model object.
@@ -10764,7 +10765,9 @@ def create_model_info_response(
     lookup_model: Final = alias_target if alias_target is not None else model_id
 
     listing_info: Final = (
-        llm_router.registry().group(lookup_model, field="listing_info") if llm_router is not None else None
+        llm_router.registry().group(lookup_model, field="listing_info", team_id=team_id)
+        if llm_router is not None
+        else None
     )
 
     # One entry per distinct model behind the listed name; (None,) when the router knows

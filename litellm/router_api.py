@@ -554,7 +554,9 @@ class _RegistryHost(Protocol):
 
     def _core_get_configured_token_limits(self, model_name: str) -> tuple[int | None, int | None]: ...
 
-    def _core_get_model_listing_info(self, model_name: str) -> "DeploymentModelListingInfo | None": ...
+    def _core_get_model_listing_info(
+        self, model_name: str, team_id: str | None = None
+    ) -> "DeploymentModelListingInfo | None": ...
 
     def get_routing_group(self, model_name: str) -> "RoutingGroup | None": ...
 
@@ -1276,7 +1278,7 @@ class RouterRegistry:
         if field == "token_limits":
             return r._core_get_configured_token_limits(name)
         if field == "listing_info":
-            return r._core_get_model_listing_info(name)
+            return r._core_get_model_listing_info(name, team_id=team_id)
         raise ValueError(f"unknown group field {field!r}")
 
     def routing_groups(self) -> "dict[str, RoutingGroup]":  # mutable-ok: the routing_groups attribute, the live dict

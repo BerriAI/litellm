@@ -12589,7 +12589,7 @@ class _KeyModelListing:
 
 
 def _listed_model_info(
-    response_id: str, lookup_id: str, include_metadata: bool, fallback_type: str | None
+    response_id: str, lookup_id: str, include_metadata: bool, fallback_type: str | None, team_id: str | None
 ) -> "ModelInfoResponse":
     from litellm.proxy.utils import create_model_info_response
 
@@ -12599,6 +12599,7 @@ def _listed_model_info(
         include_metadata=include_metadata,
         fallback_type=fallback_type,
         llm_router=llm_router,
+        team_id=team_id,
     )
     model_info["id"] = response_id
     return model_info
@@ -12659,7 +12660,9 @@ async def _key_model_listing(
     )
     return _KeyModelListing(
         rows=tuple(
-            _listed_model_info(response_id, lookup_id, include_metadata, fallback_type)
+            _listed_model_info(
+                response_id, lookup_id, include_metadata, fallback_type, team_id or user_api_key_dict.team_id
+            )
             for response_id, lookup_id in entries
         ),
         entries=entries,
@@ -12864,6 +12867,7 @@ async def model_list(
                 include_metadata=include_metadata or False,
                 fallback_type=fallback_type,
                 llm_router=llm_router,
+                team_id=team_id or user_api_key_dict.team_id,
             )
             model_info["id"] = response_id
             model_data.append(model_info)
@@ -13082,6 +13086,7 @@ async def model_info(
         include_metadata=False,
         fallback_type=None,
         llm_router=llm_router,
+        team_id=team_id or user_api_key_dict.team_id,
     )
     response_id: Final = model_id if aliased_model_id else internal_to_public.get(resolved_model_id, model_id)
     return {**response, "id": response_id}

@@ -26,7 +26,6 @@ import dataclasses
 import math
 from collections.abc import Callable, Mapping, Sequence
 from functools import partial
-from itertools import chain
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Union, cast  # noqa: TID251  # the core's own signatures, ported unchanged
 
@@ -577,6 +576,15 @@ class HostModelInfo:
             )
             return wire.to_wire(user_model_info)
 
+        configured_model_info: Final = deployment.get("model_info") or {}
+        routed_model: Final = (
+            self._routed_wildcard_model(
+                configured_model_info.get("id"), configured_model_info.get("team_id"), received_model_name
+            )
+            if "*" in litellm_params.model
+            else litellm_params.model
+        )
+
         def answer(step: Mapping[str, object]) -> object:
             if step["lookup"] == "provider":
                 _model, custom_llm_provider, _, _ = self._host.invoke("get_llm_provider")(
@@ -586,7 +594,7 @@ class HostModelInfo:
                 return [_model, custom_llm_provider]
             if step["lookup"] == "user_model_info":
                 return read_user_model_info()
-            return self._answer_model_info_lookup(step, wire)
+            return self._answer_model_info_lookup(step, wire, routed_model)
 
         query: Final = {
             "deployment_id": wire.to_wire((deployment.get("model_info") or {}).get("id")),
@@ -619,6 +627,18 @@ class HostModelInfo:
         call: Final = self._core_handle().deployment_model_info(model_id, wire.to_wire(model_name))
         done: Final = _drive_model_info(call, partial(self._answer_model_info_lookup, wire=wire, model=model_name))
         return wire.from_wire(done["info"])  # pyright: ignore[reportReturnType]  # the merged map, as the core builds it
+
+    def _routed_wildcard_model(self, deployment_id: object, team_id: object, received_model_name: str) -> str | None:
+        team_router: Final = self._core_team_pattern_routers.get(team_id) if isinstance(team_id, str) else None
+        pattern_router: Final = team_router if team_router is not None else self._core_pattern_router
+        return next(
+            (
+                routed_model
+                for candidate, routed_model in pattern_router.get_routed_deployments(received_model_name)
+                if _configured_deployment_id(candidate) == deployment_id
+            ),
+            None,
+        )
 
     def _answer_model_info_lookup(self, step: Mapping[str, object], wire: "_Wire", model: str | None = None) -> object:
         """One cost-map lookup of a model-info merge, answered from this process."""
@@ -697,7 +717,9 @@ class HostModelInfo:
             return MappingProxyType({key: value for key, value in limits.items() if configured.get(key) is None})
         return MappingProxyType({})
 
-    def _core_get_model_listing_info(self, model_name: str) -> DeploymentModelListingInfo | None:
+    def _core_get_model_listing_info(
+        self, model_name: str, team_id: str | None = None
+    ) -> DeploymentModelListingInfo | None:
         """
         Return what the concrete deployments behind model_name contribute to its
         /v1/models entry: the cost-map keys for their underlying models, plus the widest
@@ -721,7 +743,7 @@ class HostModelInfo:
         """
         deployments: Final = self._core_deployments_named(model_name)
         if not deployments:
-            return self._core_get_wildcard_listing_info(model_name)
+            return self._core_get_wildcard_listing_info(model_name, team_id)
         wire: Final = _Wire()
         call: Final = self._core_handle().model_listing_info([wire.to_wire(deployment) for deployment in deployments])
         done: Final = _drive_model_info(call, partial(self._answer_model_info_lookup, wire=wire))
@@ -732,8 +754,10 @@ class HostModelInfo:
             max_output_tokens=cast("int | None", listing["max_output_tokens"]),  # cast-ok: router-core's limit
         )
 
-    def _core_get_wildcard_listing_info(self, model_name: str) -> DeploymentModelListingInfo | None:
-        model_infos: Final = self._wildcard_catalog_model_infos(model_name)
+    def _core_get_wildcard_listing_info(
+        self, model_name: str, team_id: str | None
+    ) -> DeploymentModelListingInfo | None:
+        model_infos: Final = self._wildcard_catalog_model_infos(model_name, team_id)
         if not model_infos:
             return None
         return DeploymentModelListingInfo(
@@ -742,18 +766,24 @@ class HostModelInfo:
             max_output_tokens=_widest_limit(model_infos, "max_output_tokens"),
         )
 
-    def _wildcard_catalog_model_infos(self, model_name: str) -> tuple[Mapping[str, object], ...]:
+    def _wildcard_catalog_model_infos(self, model_name: str, team_id: str | None) -> tuple[Mapping[str, object], ...]:
         if not self._has_wildcard_catalog:
             return ()
+        team_router: Final = self._core_team_pattern_routers.get(team_id) if team_id is not None else None
+        team_routed: Final = (
+            team_router.get_routed_deployments(model_name, LlmProviders.OPENROUTER.value)
+            if team_router is not None
+            else ()
+        )
+        routed: Final = team_routed or self._core_pattern_router.get_routed_deployments(
+            model_name, LlmProviders.OPENROUTER.value
+        )
         rows: Final = (
             (
                 _configured_model_info(deployment),
                 self._core_get_discovered_model_info(_configured_deployment_id(deployment), routed_model),
             )
-            for deployment, routed_model in chain.from_iterable(
-                router.get_routed_deployments(model_name, LlmProviders.OPENROUTER.value)
-                for router in (self._core_pattern_router, *self._core_team_pattern_routers.values())
-            )
+            for deployment, routed_model in routed
         )
         return tuple(MappingProxyType({**configured, **discovered}) for configured, discovered in rows if discovered)
 

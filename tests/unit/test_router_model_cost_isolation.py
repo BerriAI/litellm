@@ -558,6 +558,37 @@ async def test_openrouter_catalog_beats_a_cost_map_row_for_a_listed_model(
     assert _group_limits(router, model_group) == (4096, 1024)
 
 
+async def test_a_wildcard_models_request_time_info_reads_its_catalog_row_over_the_cost_map(
+    openrouter_settings_cleared: None,
+) -> None:
+    litellm.model_cost["openrouter/vendor/capped"] = {
+        "litellm_provider": "openrouter",
+        "mode": "chat",
+        "max_input_tokens": 1,
+        "max_output_tokens": 2,
+        "input_cost_per_token": 0.001,
+        "output_cost_per_token": 0.002,
+    }
+    changed_in_place()
+    router: Final = Router(model_list=[_openrouter_deployment("openrouter/*", "openrouter/*", "wild-id")])
+
+    await _refresh_against(router, _openrouter_catalog_response)
+
+    registry: Final = router.registry()
+    routed_copies: Final = registry.deployments("openrouter/vendor/capped", source="wildcard")
+    request_time_infos: Final = (
+        *(
+            registry.router_model_info(deployment=dict(routed), received_model_name="openrouter/vendor/capped")
+            for routed in routed_copies
+        ),
+        registry.router_model_info(deployment=None, received_model_name="openrouter/vendor/capped", id="wild-id"),
+    )
+    assert [(info["max_input_tokens"], info["max_output_tokens"]) for info in request_time_infos] == [
+        (4096, 1024),
+        (4096, 1024),
+    ]
+
+
 @pytest.mark.parametrize(
     ("deployment", "model_group"),
     (
@@ -825,8 +856,67 @@ async def test_a_team_openrouter_wildcard_listing_info_shows_each_concrete_model
 
     await _refresh_against(router, _openrouter_catalog_response)
 
-    listing_info: Final = router.registry().group("openrouter/vendor/capped", field="listing_info")
+    listing_info: Final = router.registry().group(
+        "openrouter/vendor/capped", field="listing_info", team_id="team-1"
+    )
     assert listing_info == DeploymentModelListingInfo(cost_map_keys=(), max_input_tokens=4096, max_output_tokens=1024)
+
+
+def _team_openrouter_wildcard(team_id: str, api_key: str) -> DeploymentTypedDict:
+    return {
+        "model_name": f"{team_id}-wild-name",
+        "litellm_params": {"model": "openrouter/*", "api_key": api_key},
+        "model_info": {"id": f"{team_id}-wild-id", "team_id": team_id, "team_public_model_name": "openrouter/*"},
+    }
+
+
+def _catalog_per_key(request: httpx.Request) -> httpx.Response:
+    context_length, max_completion_tokens = {
+        "Bearer key-one": (4096, 1024),
+        "Bearer key-two": (2048, 512),
+        "Bearer key-global": (1024, 256),
+    }[request.headers["authorization"]]
+    return httpx.Response(
+        200,
+        json={
+            "data": [
+                {
+                    "id": "vendor/capped",
+                    "context_length": context_length,
+                    "top_provider": {"max_completion_tokens": max_completion_tokens},
+                }
+            ]
+        },
+    )
+
+
+async def test_each_team_lists_the_limits_of_its_own_openrouter_wildcard(openrouter_settings_cleared: None) -> None:
+    router: Final = Router(
+        model_list=[
+            _team_openrouter_wildcard("team-1", "key-one"),
+            _team_openrouter_wildcard("team-2", "key-two"),
+            {
+                "model_name": "openrouter/*",
+                "litellm_params": {"model": "openrouter/*", "api_key": "key-global"},
+                "model_info": {"id": "global-wild-id"},
+            },
+        ]
+    )
+
+    await _refresh_against(router, _catalog_per_key)
+
+    listed: Final = {
+        team_id: router.registry().group("openrouter/vendor/capped", field="listing_info", team_id=team_id)
+        for team_id in ("team-1", "team-2", "team-without-a-wildcard", None)
+    }
+    assert listed == {
+        "team-1": DeploymentModelListingInfo(cost_map_keys=(), max_input_tokens=4096, max_output_tokens=1024),
+        "team-2": DeploymentModelListingInfo(cost_map_keys=(), max_input_tokens=2048, max_output_tokens=512),
+        "team-without-a-wildcard": DeploymentModelListingInfo(
+            cost_map_keys=(), max_input_tokens=1024, max_output_tokens=256
+        ),
+        None: DeploymentModelListingInfo(cost_map_keys=(), max_input_tokens=1024, max_output_tokens=256),
+    }
 
 
 async def test_openrouter_wildcard_listing_info_keeps_the_operator_limit(openrouter_settings_cleared: None) -> None:

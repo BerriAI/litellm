@@ -134,7 +134,7 @@ def route_entry_points_to_stubs(router: _RouterDouble) -> _RouterDouble:
         if field == "deployment_model_info":
             return router.get_routable_deployment_model_info(name, **_given(team_id=team_id))
         if field == "listing_info":
-            return router.get_model_listing_info(name)
+            return router.get_model_listing_info(name, **_given(team_id=team_id))
         if field == "mode":
             return router.get_configured_mode(name)
         if field == "token_limits":
