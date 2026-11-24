@@ -46,6 +46,7 @@ from litellm.litellm_core_utils.token_counter import (
     estimate_image_tokens,
     has_only_text_content,
     high_detail_image_token_upper_bound,
+    inline_pdf_token_delta,
     is_openai_model,
     messages_reach_token_count,
     offload_token_count,
@@ -3384,30 +3385,86 @@ def test_a_line_wrapped_base64_pdf_keeps_its_page_price():
     assert _pdf_cost("", wrapped, _as_pdf_file) == _text_cost("", _REVENUE_LINE) + 2 * 1534
 
 
+_THREE_PAGE_PDF: Final = _pdf_base64((_REVENUE_LINE,) * 3)
+_OTHER_PDF: Final = _pdf_base64((_HEADCOUNT_LINE, ""))
+
+
+def _document(pdf_base64: str) -> dict[str, object]:
+    return {"type": "document", "source": _pdf_source(pdf_base64)}
+
+
+def _image(pdf_base64: str) -> dict[str, object]:
+    return {"type": "image", "source": _pdf_source(pdf_base64)}
+
+
+def _file(pdf_base64: str) -> dict[str, object]:
+    return {"type": "file", "file": {"file_data": f"data:application/pdf;base64,{pdf_base64}"}}
+
+
+def _image_url(pdf_base64: str) -> dict[str, object]:
+    return {"type": "image_url", "image_url": {"url": f"data:application/pdf;base64,{pdf_base64}"}}
+
+
+def _tool_result(*content: object) -> dict[str, object]:
+    return {"type": "tool_result", "tool_use_id": "t1", "content": list(content)}
+
+
+def _single_image_shapes() -> list[tuple[list[object], list[object]]]:
+    shared_document: Final = _document(_THREE_PAGE_PDF)
+    shared_image: Final = _image(_THREE_PAGE_PDF)
+    return [
+        ([_document(_THREE_PAGE_PDF)], [_image(_THREE_PAGE_PDF)]),
+        ([_file(_THREE_PAGE_PDF)], [_image_url(_THREE_PAGE_PDF)]),
+        ([shared_document, shared_document, _document(_OTHER_PDF)], [shared_image, shared_image, _image(_OTHER_PDF)]),
+        (
+            [_tool_result(_document(_THREE_PAGE_PDF), _document(_OTHER_PDF))],
+            [_tool_result(_image(_THREE_PAGE_PDF), _image(_OTHER_PDF))],
+        ),
+        (
+            [{"type": "document", "source": {"type": "content", "content": [_document(_THREE_PAGE_PDF)]}}],
+            [{"type": "document", "source": {"type": "content", "content": [_image(_THREE_PAGE_PDF)]}}],
+        ),
+    ]
+
+
 @pytest.mark.parametrize(
-    "wrap", [_as_pdf_file, _as_pdf_document, _as_pdf_tool_result], ids=["file", "document", "tool_result"]
+    ("pdf_content", "image_content"),
+    _single_image_shapes(),
+    ids=["document", "file", "repeated_document_and_another", "tool_result", "nested_document"],
 )
-def test_single_image_pdf_pricing_prices_a_pdf_the_same_whatever_its_pages(wrap: Callable[[str], Mapping[str, object]]):
-    encoded: Final = _pdf_base64((_REVENUE_LINE,) * 3)
+def test_repricing_inline_pdfs_as_single_images_matches_sending_the_same_bytes_as_images(
+    pdf_content: list[object], image_content: list[object]
+):
+    pdf_messages: Final = [{"role": "user", "content": pdf_content}]
 
-    def count(pdf_base64: str, pdf_pricing: PdfDocumentPricing | None) -> int:
-        return token_counter_new(
-            model="", messages=[{"role": "user", "content": [wrap(pdf_base64)]}], pdf_pricing=pdf_pricing
-        )
-
-    assert count(encoded, "single_image") == count(_pdf_base64(()), "single_image")
-    assert count(encoded, "single_image") < count(encoded, None)
+    assert token_counter_new(model="", messages=pdf_messages) + inline_pdf_token_delta(
+        "", pdf_messages, "single_image"
+    ) == token_counter_new(model="", messages=[{"role": "user", "content": image_content}])
 
 
-def test_single_image_pdf_pricing_prices_a_pdf_document_like_the_same_bytes_sent_as_an_image():
-    source: Final = _pdf_source(_pdf_base64((_REVENUE_LINE,) * 3))
+def test_repricing_inline_pdfs_for_openai_moves_each_occurrence_by_its_page_price_difference():
+    encoded: Final = _pdf_base64((_REVENUE_LINE, ""))
+    document: Final = _document(encoded)
+    once: Final = [{"role": "user", "content": [document]}]
+    twice: Final = [
+        {"role": "user", "content": [document]},
+        {"role": "user", "content": [{"type": "text", "text": "and"}, document]},
+    ]
 
-    as_document: Final = [{"role": "user", "content": [{"type": "document", "source": source}]}]
-    as_image: Final = [{"role": "user", "content": [{"type": "image", "source": source}]}]
+    assert inline_pdf_token_delta("", once, "openai") == 13 - 2 * 1534
+    assert inline_pdf_token_delta("", twice, "openai") == 2 * (13 - 2 * 1534)
 
-    assert token_counter_new(model="", messages=as_document, pdf_pricing="single_image") == token_counter_new(
-        model="", messages=as_image
+
+def test_repricing_reads_a_pdf_inside_its_own_tool_result_once():
+    content: Final[list[object]] = [_document(_THREE_PAGE_PDF)]  # mutable-ok: closed into a cycle below
+    looped: Final = {"type": "tool_result", "tool_use_id": "t1", "content": content}
+    content.append(looped)
+    once: Final = [{"role": "user", "content": [_tool_result(_document(_THREE_PAGE_PDF))]}]
+
+    assert inline_pdf_token_delta("", [{"role": "user", "content": [looped]}], "single_image") == (
+        inline_pdf_token_delta("", once, "single_image")
     )
+    assert inline_pdf_token_delta("", once, "single_image") < 0
 
 
 @pytest.mark.parametrize(
@@ -3416,15 +3473,16 @@ def test_single_image_pdf_pricing_prices_a_pdf_document_like_the_same_bytes_sent
         [{"type": "text", "text": _REVENUE_LINE}],
         [{"type": "image_url", "image_url": {"url": _png_data_url(1024, 1024)}}],
         [_as_pdf_file(base64.b64encode(b"not a pdf at all").decode())],
+        [_as_pdf_file("[base64_data truncated: 1.00MB]")],
+        [{"type": "text", "text": "see the report", "content": [_document(_THREE_PAGE_PDF)]}],
     ],
-    ids=["text", "image", "unreadable_pdf"],
+    ids=["text", "image", "unreadable_pdf", "redacted_pdf", "pdf_the_counter_does_not_read"],
 )
-def test_single_image_pdf_pricing_leaves_every_prompt_without_a_readable_pdf_alone(content: list[object]):
-    messages: Final = [{"role": "user", "content": content}]
-
-    assert token_counter_new(model="", messages=messages, pdf_pricing="single_image") == token_counter_new(
-        model="", messages=messages
-    )
+@pytest.mark.parametrize("pdf_pricing", ["single_image", "openai"])
+def test_repricing_leaves_every_prompt_without_a_counted_readable_pdf_alone(
+    content: list[object], pdf_pricing: PdfDocumentPricing
+):
+    assert inline_pdf_token_delta("", [{"role": "user", "content": content}], pdf_pricing) == 0
 
 
 @pytest.mark.parametrize(

@@ -42,6 +42,7 @@ from litellm.exceptions import (
     RequestOverDeploymentTpmError,
 )
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+from litellm.litellm_core_utils.token_counter import PdfDocumentPricing, inline_pdf_token_delta
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.otel.plumbing.context import set_request_root_span
@@ -4381,16 +4382,16 @@ def _page_priced_pdf_tokens() -> int:
     return litellm.token_counter(model="", messages=_PDF_FILE_PROMPT)
 
 
-def _single_image_pdf_tokens() -> int:
-    from litellm.litellm_core_utils.token_counter import token_counter
+def _repriced_pdf_tokens(messages: list[dict[str, object]], pdf_pricing: PdfDocumentPricing) -> int:
+    return litellm.token_counter(model="", messages=messages) + inline_pdf_token_delta("", messages, pdf_pricing)
 
-    return token_counter(model="", messages=_PDF_FILE_PROMPT, pdf_pricing="single_image")
+
+def _single_image_pdf_tokens() -> int:
+    return _repriced_pdf_tokens(_PDF_FILE_PROMPT, "single_image")
 
 
 def _openai_priced_pdf_tokens(messages: list[dict[str, object]]) -> int:
-    from litellm.litellm_core_utils.token_counter import token_counter
-
-    return token_counter(model="", messages=messages, pdf_pricing="openai")
+    return _repriced_pdf_tokens(messages, "openai")
 
 
 def _between_pdf_prices() -> int:
@@ -4564,6 +4565,96 @@ async def test_an_over_window_prompt_without_a_pdf_fetches_its_remote_image_once
             await router.acompletion(model="docs", messages=prompt)
 
     assert (sync_fetches, image.call_count) == (1, 2)
+
+
+def _pdf_and_image_prompt(image_url: str) -> list[dict[str, object]]:
+    return [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "compare the chart with the report"},
+                {"type": "image_url", "image_url": {"url": image_url, "detail": "high"}},
+                {"type": "file", "file": {"file_data": _PDF_URL}},
+            ],
+        }
+    ]
+
+
+def _counted_with_image(png: bytes) -> tuple[str, ...]:
+    """The `Got=` each deployment reports when the remote image answers `png`, counted from the same bytes inline."""
+    inline: Final = _pdf_and_image_prompt("data:image/png;base64," + base64.b64encode(png).decode())
+    return (
+        f"Got={_repriced_pdf_tokens(inline, 'single_image')}",
+        f"Got={_repriced_pdf_tokens(inline, 'openai')}",
+        f"Got={litellm.token_counter(model='', messages=inline)}",
+    )
+
+
+async def test_an_over_window_pdf_prompt_fetches_its_remote_image_once_per_request(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(litellm, "user_url_validation", False)
+    large: Final = _png_bytes(2048, 2048)
+    small: Final = _png_bytes(512, 512)
+    prompt: Final = _pdf_and_image_prompt(_REMOTE_IMAGE_URL)
+    router: Final = _window_router(1, _GEMINI_MODELS[0], "openai/gpt-6.1-sol", _CLAUDE_MODELS[0])
+
+    with respx.mock(assert_all_called=True) as mock:
+        image: Final = mock.get(_REMOTE_IMAGE_URL).mock(
+            side_effect=[httpx.Response(200, content=large), httpx.Response(200, content=small)]
+        )
+        with pytest.raises(litellm.ContextWindowExceededError) as sync_error:
+            _kept_models(router, messages=prompt)
+        sync_fetches: Final = image.call_count
+        with pytest.raises(litellm.ContextWindowExceededError) as async_error:
+            await router.acompletion(model="docs", messages=prompt)
+
+    assert (sync_fetches, image.call_count) == (1, 2)
+    assert all(got in str(sync_error.value) for got in _counted_with_image(large))
+    assert all(got in str(async_error.value) for got in _counted_with_image(small))
+
+
+async def test_text_and_a_pdf_over_the_window_with_the_pdf_repriced_are_still_rejected():
+    prompt: Final = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "read the attached report and summarize the findings. " * 200},
+                {"type": "file", "file": {"file_data": _PDF_URL}},
+            ],
+        }
+    ]
+    own: Final = _repriced_pdf_tokens(prompt, "single_image")
+    router: Final = _window_router(own - 1, _GEMINI_MODELS[0])
+
+    assert own < litellm.token_counter(model="", messages=prompt)
+    with pytest.raises(litellm.ContextWindowExceededError, match=f"Got={own}"):
+        _kept_models(router, messages=prompt)
+    with pytest.raises(litellm.ContextWindowExceededError, match=f"Got={own}"):
+        await router.acompletion(model="docs", messages=prompt)
+
+
+_REPEATED_DOCUMENT: Final = {
+    "type": "document",
+    "source": {"type": "base64", "media_type": "application/pdf", "data": _PDF_BASE64},
+}
+
+
+@pytest.mark.parametrize(
+    ("pdf_pricing", "fitting"), [("single_image", _GEMINI_MODELS[0]), ("openai", "openai/gpt-6.1-sol")]
+)
+def test_every_occurrence_of_a_pdf_is_repriced_for_the_deployment_it_fits(
+    pdf_pricing: PdfDocumentPricing, fitting: str
+):
+    alone: Final = [{"role": "user", "content": [_REPEATED_DOCUMENT]}]
+    prompt: Final = [
+        {"role": "user", "content": [_REPEATED_DOCUMENT, _REPEATED_DOCUMENT]},
+        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t1", "content": [_REPEATED_DOCUMENT]}]},
+    ]
+    own: Final = _repriced_pdf_tokens(prompt, pdf_pricing)
+
+    assert inline_pdf_token_delta("", prompt, pdf_pricing) == 3 * inline_pdf_token_delta("", alone, pdf_pricing) < 0
+    assert _kept_models(_window_router(own, fitting, _CLAUDE_MODELS[0]), messages=prompt) == [fitting]
+    with pytest.raises(litellm.ContextWindowExceededError, match=f"Got={own}"):
+        _kept_models(_window_router(own - 1, fitting), messages=prompt)
 
 
 @pytest.mark.parametrize(

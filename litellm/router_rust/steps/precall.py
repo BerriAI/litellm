@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from functools import partial
 from itertools import accumulate, chain, groupby
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, Protocol  # noqa: TID251  # the request is read as a string tree
+from typing import TYPE_CHECKING, Final, Protocol
 
 from litellm._logging import verbose_router_logger
 from litellm.constants import PDF_DATA_URL_PREFIX
@@ -28,6 +28,7 @@ from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import 
 from litellm.litellm_core_utils.prompt_templates.tpm_media_utils import is_plain_embedding_text
 from litellm.litellm_core_utils.token_counter import (
     PdfDocumentPricing,
+    inline_pdf_token_delta,
     offload_token_count,
     pdf_page_pricing,
     served_openai_models,
@@ -55,6 +56,7 @@ _FILTERED_PARAMS: Final = frozenset({"response_format"})
 _CHARS_PER_OFFLOADED_COUNT: Final = 1 << 16
 _NO_PDF_COUNTS: Final[Mapping[str, int]] = MappingProxyType({})
 _NO_PDF_PRICINGS: Final[Mapping[str, PdfDocumentPricing]] = MappingProxyType({})
+_NO_PDF_DELTAS: Final[Mapping[PdfDocumentPricing, int | None]] = MappingProxyType({})
 
 
 @dataclass(frozen=True, slots=True)
@@ -87,30 +89,21 @@ def count_tokens(
     tokenizer_model: str,
     deployments: Sequence[Mapping[str, object]] = (),
     fits_within: int = 0,
-    *,
-    counter: Callable[..., int] | None = None,
 ) -> int:
     """``_count_pre_call_check_tokens``: messages, or Responses input normalized to messages, plus
     the tools and Anthropic ``system`` block the message list never carries. Embedding media an
-    item of ``deployments`` reads as media is left out of the input: it never counts as text.
-    ``counter`` replaces the host's ``token_counter``."""
+    item of ``deployments`` reads as media is left out of the input: it never counts as text."""
     from litellm.llms.anthropic.messages.native.utils import anthropic_system_to_openai_message
 
     if messages is None and input is not None:
-        return _input_tokens(
-            host, _text_input(input, deployments), request_kwargs, tokenizer_model, fits_within, counter=counter
-        )
+        return _input_tokens(host, _text_input(input, deployments), request_kwargs, tokenizer_model, fits_within)
     if messages is None:
         raise ValueError("Either messages or input must be provided to count tokens")
     extras: Final = _extras(request_kwargs)
     system_message: Final = anthropic_system_to_openai_message(extras.get("system"))
-    count: Final = _counter(host, counter)
+    counter: Final = host.invoke("token_counter")  # pyright: ignore[reportUnknownMemberType]  # the host's overloads name litellm's untyped returns
     counted_messages: Final = (system_message, *_items(messages)) if system_message is not None else messages
-    return count(model=tokenizer_model, messages=counted_messages, tools=_tools(extras))
-
-
-def _counter(host: "PythonHost", counter: Callable[..., int] | None) -> Callable[..., int]:
-    return counter if counter is not None else host.invoke("token_counter")  # pyright: ignore[reportUnknownMemberType]  # the host's overloads name litellm's untyped returns
+    return counter(model=tokenizer_model, messages=counted_messages, tools=_tools(extras))
 
 
 def _input_tokens(
@@ -119,30 +112,35 @@ def _input_tokens(
     request_kwargs: Mapping[str, object] | None,
     tokenizer_model: str,
     fits_within: int,
-    *,
-    counter: Callable[..., int] | None = None,
 ) -> int:
-    from litellm.responses.litellm_completion_transformation.transformation import (
-        LiteLLMCompletionResponsesConfig,
-    )
-
-    count: Final = _counter(host, counter)
+    counter: Final = host.invoke("token_counter")  # pyright: ignore[reportUnknownMemberType]  # see count_tokens
     match _embedding_batch(text_input):
         case _TextBatch(texts):
-            return _longest_text_tokens(count, tokenizer_model, texts, fits_within)
+            return _longest_text_tokens(counter, tokenizer_model, texts, fits_within)
         case _TokenIdBatch(longest):
             return _token_id_count(host, longest)
         case None:
             pass
+    return counter(
+        model=tokenizer_model,
+        messages=_responses_messages(text_input, request_kwargs),
+        tools=_tools(_extras(request_kwargs)),
+    )
+
+
+def _responses_messages(text_input: object, request_kwargs: Mapping[str, object] | None) -> object:
+    from litellm.responses.litellm_completion_transformation.transformation import (
+        LiteLLMCompletionResponsesConfig,
+    )
+
     extras: Final = _extras(request_kwargs)
     raw_instructions: Final = extras.get("instructions")
     instructions: Final = raw_instructions if isinstance(raw_instructions, str) else None
-    input_messages: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(  # pyright: ignore[reportUnknownMemberType]  # its input type is untyped
+    return LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(  # pyright: ignore[reportUnknownMemberType]  # its input type is untyped
         input=text_input,  # pyright: ignore[reportArgumentType]  # str | list, as the request carries it
         responses_api_request={"instructions": instructions, "tools": extras.get("tools")},
         only_since_compaction=True,
     )
-    return count(model=tokenizer_model, messages=input_messages, tools=_tools(extras))
 
 
 def _extras(request_kwargs: Mapping[str, object] | None) -> Mapping[str, object]:
@@ -365,7 +363,7 @@ class PreCallFacts:
     def _input_is_a_list(self) -> bool:
         return self._messages is None and _is_list(self._input)
 
-    def _count(self, counter: Callable[..., int] | None = None) -> int | None:
+    def _count(self) -> int | None:
         try:
             tokenizer_model: Final = self._tokenizer_model()
             if not self._input_is_a_list():
@@ -377,23 +375,20 @@ class PreCallFacts:
                     tokenizer_model,
                     self._candidate_records(),
                     self._fits_within(),
-                    counter=counter,
                 )
             text_input: Final = _text_input(self._input, self._candidate_records())
             match _embedding_batch(text_input):
                 case _TextBatch() if not tokenizer_model:
                     return 0
                 case _:
-                    return _input_tokens(
-                        self._host, text_input, self._request, tokenizer_model, self._fits_within(), counter=counter
-                    )
+                    return _input_tokens(self._host, text_input, self._request, tokenizer_model, self._fits_within())
         except Exception as e:  # noqa: BLE001  # best-effort: an uncountable prompt must not fail the request
             verbose_router_logger.error(
                 "litellm.router.py::_acount_pre_call_check_tokens: failed to count tokens. Got - %s", e
             )
             return None
 
-    async def _count_async(self, counter: Callable[..., int] | None = None) -> int | None:
+    async def _count_async(self) -> int | None:
         try:
             tokenizer_model: Final = self._tokenizer_model()
             if not self._input_is_a_list():
@@ -405,7 +400,6 @@ class PreCallFacts:
                     tokenizer_model,
                     self._candidate_records(),
                     self._fits_within(),
-                    counter=counter,
                 )
             text_input: Final = (
                 self._input
@@ -416,18 +410,18 @@ class PreCallFacts:
                 case _TextBatch() if not tokenizer_model:
                     return 0
                 case _TextBatch(texts):
-                    count: Final = _counter(self._host, counter)
+                    counter: Final = self._host.invoke("token_counter")  # pyright: ignore[reportUnknownMemberType]  # see count_tokens
                     fits_within: Final = self._fits_within()
                     count_slice: Final = offload_token_count(_longest_text_tokens)
                     return max(
                         [
-                            await count_slice(count, tokenizer_model, texts_in_slice, fits_within)
+                            await count_slice(counter, tokenizer_model, texts_in_slice, fits_within)
                             for texts_in_slice in _offload_slices(texts)
                         ]
                     )
                 case _:
                     return await offload_token_count(_input_tokens)(
-                        self._host, text_input, self._request, tokenizer_model, self._fits_within(), counter=counter
+                        self._host, text_input, self._request, tokenizer_model, self._fits_within()
                     )
         except Exception as e:  # noqa: BLE001  # best-effort: an uncountable prompt must not fail the request
             verbose_router_logger.error(
@@ -437,13 +431,10 @@ class PreCallFacts:
 
     def _own_pdf_pricings(self, input_tokens: int | None) -> Mapping[str, PdfDocumentPricing]:
         """The candidates the shared count overflows that bill an inline PDF below its price there. Only litellm's
-        own counter prices a PDF the way these recounts assume, so a custom one keeps the shared count."""
-        if (
-            input_tokens is None
-            or compaction_pending(self._request)
-            or not _counts_with_litellm(self._host)
-            or not _may_carry_an_inline_pdf(self._messages, self._input)
-        ):
+        own counter prices a PDF the way the repricing assumes, so a custom one keeps the shared count."""
+        if input_tokens is None or compaction_pending(self._request) or not _counts_with_litellm(self._host):
+            return _NO_PDF_PRICINGS
+        if not _may_carry_an_inline_pdf(self._messages, self._input):
             return _NO_PDF_PRICINGS
         shared: Final = pdf_page_pricing(self._tokenizer_model())
         overflowing: Final = (id for id in self._candidates if _overflows(self._windows.get(id), input_tokens))
@@ -451,21 +442,41 @@ class PreCallFacts:
             (id, _own_pdf_pricing(for_requested_model(self._record(id), self._name), self._model, shared))
             for id in overflowing
         )
-        return MappingProxyType({id: pricing for id, pricing in priced if pricing is not None})
+        return MappingProxyType[str, PdfDocumentPricing]({id: pricing for id, pricing in priced if pricing is not None})
+
+    def _counted_messages(self) -> object:
+        """The messages ``_count`` priced: the request's own, or its Responses input normalized the same way."""
+        if self._messages is not None:
+            return self._messages
+        if self._input is None:
+            return ()
+        text_input: Final = _text_input(self._input, self._candidate_records())
+        return () if _embedding_batch(text_input) is not None else _responses_messages(text_input, self._request)
+
+    def _pdf_deltas(self, pricings: Mapping[str, PdfDocumentPricing]) -> Mapping[PdfDocumentPricing, int | None]:
+        if not pricings:
+            return _NO_PDF_DELTAS
+        try:
+            messages: Final = self._counted_messages()
+            tokenizer_model: Final = self._tokenizer_model()
+            return MappingProxyType[PdfDocumentPricing, int | None](
+                {
+                    pricing: inline_pdf_token_delta(tokenizer_model, messages, pricing)
+                    for pricing in frozenset(pricings.values())
+                }
+            )
+        except Exception as e:  # noqa: BLE001  # best-effort: an unpriceable PDF keeps the shared count
+            verbose_router_logger.debug("litellm.router.py::_pre_call_checks: PDF repricing failed. Got - %s", e)
+            return _NO_PDF_DELTAS
 
     def _pdf_counts(self, input_tokens: int | None) -> Mapping[str, int]:
         pricings: Final = self._own_pdf_pricings(input_tokens)
-        recounts: Final = MappingProxyType(
-            {pricing: self._count(_pdf_counter(pricing)) for pricing in frozenset(pricings.values())}
-        )
-        return _own_pdf_counts(pricings, input_tokens, recounts)
+        return _own_pdf_counts(pricings, input_tokens, self._pdf_deltas(pricings))
 
     async def _pdf_counts_async(self, input_tokens: int | None) -> Mapping[str, int]:
         pricings: Final = self._own_pdf_pricings(input_tokens)
-        recounts: Final = MappingProxyType(
-            {pricing: await self._count_async(_pdf_counter(pricing)) for pricing in frozenset(pricings.values())}
-        )
-        return _own_pdf_counts(pricings, input_tokens, recounts)
+        deltas: Final = await offload_token_count(self._pdf_deltas)(pricings) if pricings else _NO_PDF_DELTAS
+        return _own_pdf_counts(pricings, input_tokens, deltas)
 
     def _answer(self, input_tokens: int | None, pdf_counts: Mapping[str, int] = _NO_PDF_COUNTS) -> Mapping[str, object]:
         if not self._has_input:
@@ -592,19 +603,17 @@ def _overflows(limit: int | None, input_tokens: int) -> bool:
 
 
 def _counts_with_litellm(host: "PythonHost") -> bool:
-    """The host counts with litellm's own counter, the public one and the core function it calls, so a recount
-    that prices PDFs differently changes only the PDFs. A core function replaced before this module was imported
-    is indistinguishable from the original and is called with ``pdf_pricing``."""
+    """The host counts with litellm's own counter, the public one and the core function it calls, so repricing the
+    inline PDFs it read changes the count exactly by the PDFs. A core function replaced before this module was
+    imported cannot be told apart and is assumed to price PDFs as litellm's does."""
     import litellm
+    from litellm import utils as litellm_utils
     from litellm._lazy_imports import get_token_counter_new
     from litellm.router_python_host import PythonHost
-    from litellm.utils import token_counter as litellm_token_counter
 
-    return (
-        type(host).invoke is PythonHost.invoke
-        and litellm.token_counter is litellm_token_counter
-        and get_token_counter_new() is token_counter
-    )
+    public: Final = (as_str_mapping(vars(litellm)) or {}).get("token_counter")
+    original: Final = (as_str_mapping(vars(litellm_utils)) or {}).get("token_counter")
+    return type(host).invoke is PythonHost.invoke and public is original and get_token_counter_new() is token_counter
 
 
 def _is_inline_pdf_part(value: object) -> bool:
@@ -621,32 +630,32 @@ def _is_inline_pdf_part(value: object) -> bool:
             return False
 
 
+def _pdf_content_children(value: object) -> tuple[object, ...]:
+    fields: Final = as_str_mapping(value)
+    if fields is None:
+        return _items(value)
+    output: Final = (
+        fields.get("output") if fields.get("type") in ("function_call_output", "custom_tool_call_output") else None
+    )
+    source: Final = as_str_mapping(fields.get("source")) or {}
+    nested: Final = (
+        source.get("content") if fields.get("type") == "document" and source.get("type") == "content" else None
+    )
+    return (*_items(fields.get("content")), *_items(output), *_items(nested))
+
+
 def _may_carry_an_inline_pdf(*values: object) -> bool:
     pending: Final[list[object]] = list(values)  # mutable-ok: content traversal without recursion
     visited: Final[set[int]] = set()  # mutable-ok: prevent cycles in caller-owned content containers
     while pending:
-        value: Final = pending.pop()
+        (value,) = (pending.pop(),)
         if id(value) in visited:
             continue
         visited.add(id(value))
         if _is_inline_pdf_part(value):
             return True
-        fields: Final = as_str_mapping(value)
-        if fields is None:
-            pending.extend(_items(value))
-            continue
-        pending.extend(_items(fields.get("content")))
-        if fields.get("type") in ("function_call_output", "custom_tool_call_output", "tool_result"):
-            pending.extend(_items(fields.get("output")))
-        if fields.get("type") == "document":
-            source: Final = as_str_mapping(fields.get("source")) or {}
-            if source.get("type") == "content":
-                pending.extend(_items(source.get("content")))
+        pending.extend(_pdf_content_children(value))
     return False
-
-
-def _pdf_counter(pricing: PdfDocumentPricing) -> Callable[..., int]:
-    return partial(token_counter, pdf_pricing=pricing)
 
 
 def _own_pdf_pricing(
@@ -664,12 +673,12 @@ def _own_pdf_pricing(
 def _own_pdf_counts(
     pricings: Mapping[str, PdfDocumentPricing],
     input_tokens: int | None,
-    recounts: Mapping[PdfDocumentPricing, int | None],
+    deltas: Mapping[PdfDocumentPricing, int | None],
 ) -> Mapping[str, int]:
     if input_tokens is None:
         return _NO_PDF_COUNTS
-    counts: Final = ((id, recounts.get(pricing)) for id, pricing in pricings.items())
-    return MappingProxyType({id: count for id, count in counts if count is not None and count < input_tokens})
+    lowered: Final = ((id, deltas.get(pricing)) for id, pricing in pricings.items())
+    return MappingProxyType({id: input_tokens + delta for id, delta in lowered if delta is not None and delta < 0})
 
 
 def _bills_pdfs_like_gemini(deployment: Mapping[str, object], group: str) -> bool:

@@ -8,7 +8,7 @@ import struct
 import threading
 from bisect import bisect_right
 from collections import OrderedDict
-from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from functools import cached_property
 from itertools import accumulate, chain, islice
@@ -852,7 +852,6 @@ class _MessageCountParams:
         self,
         model: str,
         custom_tokenizer: Mapping[str, object] | SelectTokenizerResponse | None,
-        pdf_pricing: PdfDocumentPricing | None = None,
     ):
         from litellm.utils import huggingface_tokenizer_kind, print_verbose
 
@@ -876,11 +875,10 @@ class _MessageCountParams:
             or "gemini" in (model or "").lower(),
         )
         self._model = model
-        self._pdf_pricing: Final = pdf_pricing
 
     @cached_property
-    def pdf_pricing(self) -> PdfDocumentPricing:
-        return self._pdf_pricing if self._pdf_pricing is not None else pdf_page_pricing(self._model)
+    def pdf_pricing(self) -> PdfPagePricing:
+        return pdf_page_pricing(self._model)
 
 
 def _tool_choice_tokens(
@@ -955,8 +953,6 @@ def token_counter(
     tool_choice: str | Mapping[str, object] | None = None,
     use_default_image_token_count: bool | None = False,
     default_token_count: int | None = None,
-    *,
-    pdf_pricing: PdfDocumentPricing | None = None,
 ) -> int:
     """
     Count the number of tokens in a given text using a specified model.
@@ -971,7 +967,6 @@ def token_counter(
     tool_choice (Optional[ChatCompletionNamedToolChoiceParam]): The tool choice. Default is None.
     use_default_image_token_count (Optional[bool]): When True, will NOT make a GET request to the image URL and instead return the default image dimensions. Default is False.
     default_token_count (Optional[int]): The default number of tokens to return for a message block, if an error occurs. Default is None.
-    pdf_pricing (Optional[PdfDocumentPricing]): How inline PDF documents are priced. None derives it from `model`.
 
     Returns:
     int: The number of tokens in the text.
@@ -1004,7 +999,7 @@ def token_counter(
 
     elif messages is not None:
         new_messages: Final = cast(list[AllMessageValues], convert_list_message_to_dict(messages))
-        params: Final = _MessageCountParams(model, custom_tokenizer, pdf_pricing)
+        params: Final = _MessageCountParams(model, custom_tokenizer)
         num_tokens = _count_messages(params, new_messages, use_default_image_token_count, default_token_count)
         if count_response_tokens is False:
             includes_system_message: Final = any(message.get("role", None) == "system" for message in new_messages)
@@ -1829,12 +1824,83 @@ def _count_opaque_document_tokens(
     )
 
 
+def inline_pdf_token_delta(model: str, messages: object, pdf_pricing: PdfDocumentPricing) -> int:
+    """How much `token_counter(model=model, messages=messages)` changes when every inline PDF it reads is priced with
+    `pdf_pricing`. Only the PDF documents are priced, so no other content is counted or fetched again."""
+    count_function: Final = _get_count_function(model, None)
+    counted_pricing: Final = pdf_page_pricing(model)
+    return sum(
+        _count_opaque_document_tokens(data_url, count_function, False, pdf_pricing)
+        - _count_opaque_document_tokens(data_url, count_function, False, counted_pricing)
+        for data_url in _inline_pdf_data_urls(messages)
+    )
+
+
+def _inline_pdf_data_urls(messages: object) -> Iterator[str]:
+    """Each inline PDF the message counter prices, once per occurrence, read through the content the counter reads.
+    A container inside itself is skipped, and the same document repeated elsewhere counts every time."""
+    pending: Final[list[tuple[object, frozenset[int]]]] = list(  # mutable-ok: traversal stack, recursion is banned
+        chain.from_iterable(map(_message_parts, as_object_list(messages) or ()))
+    )
+    while pending:
+        node, ancestors = pending.pop()
+        data_url, children = _inline_pdf_visit(node, ancestors)
+        if data_url is not None:
+            yield data_url
+        pending.extend(children)
+
+
+def _inline_pdf_visit(
+    node: object, ancestors: frozenset[int]
+) -> tuple[str | None, tuple[tuple[object, frozenset[int]], ...]]:
+    fields: Final = as_str_mapping(node)
+    if fields is None or id(node) in ancestors:
+        return None, ()
+    data_url: Final = _inline_pdf_data_url(fields)
+    if data_url is not None:
+        return data_url, ()
+    lineage: Final = ancestors | {id(node)}
+    return None, tuple((child, lineage) for child in _counted_children(fields))
+
+
+def _message_parts(message: object) -> Iterator[tuple[object, frozenset[int]]]:
+    content: Final = (as_str_mapping(message) or {}).get("content")
+    return ((part, frozenset({id(message)})) for part in as_object_list(content) or ())
+
+
+def _inline_pdf_data_url(block: Mapping[str, object]) -> str | None:
+    match block:
+        case {"type": "file", "file": {"file_data": str() as data}} | {
+            "type": "document",
+            "source": {"type": "url", "url": str() as data},
+        } if data.startswith(PDF_DATA_URL_PREFIX):
+            return data
+        case {"type": "document", "source": {"type": "base64", "media_type": "application/pdf", "data": str() as data}}:
+            return f"{PDF_DATA_URL_PREFIX}{data}"
+        case _:
+            return None
+
+
+def _counted_children(block: Mapping[str, object]) -> Sequence[object]:
+    block_type: Final = block.get("type")
+    content: Final = block.get("content")
+    if block_type == "tool_result":
+        return as_object_list(content) or ()
+    if block_type == "document":
+        source: Final = as_str_mapping(block.get("source")) or {}
+        nested: Final = source.get("content") if source.get("type") == "content" else None
+        return as_object_list(nested) or ()
+    if isinstance(block_type, str) and "content" in _ANTHROPIC_SERVER_TOOL_FIELDS.get(block_type, ()):
+        return (content,) if isinstance(content, Mapping) else as_object_list(content) or ()
+    return ()
+
+
 def _count_document_tokens(
     document: ChatCompletionDocumentObject | AnthropicMessagesDocumentParam,
     count_function: TokenCounterFunction,
     use_default_image_token_count: bool,
     default_token_count: int | None,
-    pdf_pricing: PdfDocumentPricing = "claude",
+    pdf_pricing: PdfPagePricing = "claude",
 ) -> int:
     source: Final = document["source"]
     metadata_tokens: Final = sum(
@@ -1858,7 +1924,7 @@ def _count_file_tokens(
     file_value: object,
     count_function: TokenCounterFunction,
     use_default_image_token_count: bool,
-    pdf_pricing: PdfDocumentPricing = "claude",
+    pdf_pricing: PdfPagePricing = "claude",
 ) -> int:
     """An OpenAI `file` block is the chat-completions spelling of a document, so it prices like one."""
     if not isinstance(file_value, Mapping):
@@ -1908,7 +1974,7 @@ def _count_anthropic_content(
     count_function: TokenCounterFunction,
     use_default_image_token_count: bool,
     default_token_count: int | None,
-    pdf_pricing: PdfDocumentPricing = "claude",
+    pdf_pricing: PdfPagePricing = "claude",
     *,
     _content_depth: int = 0,
 ) -> int:
@@ -2036,7 +2102,7 @@ def _count_content_list(
     ],
     use_default_image_token_count: bool,
     default_token_count: int | None,
-    pdf_pricing: PdfDocumentPricing = "claude",
+    pdf_pricing: PdfPagePricing = "claude",
 ) -> int:
     """Recursively count tokens from a list of content blocks."""
     try:
