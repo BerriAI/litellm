@@ -12173,7 +12173,7 @@ async def test_resolve_team_callback_wiring_fails_open_on_operational_error():
     (e.g. team config lookup hitting a dead secret manager) must not raise; the
     request proceeds without dynamic callbacks and the error is logged."""
     from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
-        _resolve_team_callback_wiring,
+        resolve_team_callback_wiring,
     )
     from litellm.proxy.proxy_server import ProxyConfig
 
@@ -12181,7 +12181,7 @@ async def test_resolve_team_callback_wiring_fails_open_on_operational_error():
         def load_team_config(self, team_id: str) -> dict:
             raise RuntimeError("secret manager unavailable")
 
-    wiring = _resolve_team_callback_wiring(
+    wiring = resolve_team_callback_wiring(
         user_api_key_dict=UserAPIKeyAuth(api_key="test-key", team_id="test-team"),
         proxy_config=RaisingTeamConfig(),
         route_description="pass_through_endpoint",

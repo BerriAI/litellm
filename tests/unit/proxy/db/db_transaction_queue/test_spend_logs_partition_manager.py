@@ -198,7 +198,7 @@ async def test_drop_partitions_older_than_drops_expired_only():
 
 
 @pytest.mark.asyncio
-async def test_ensure_partitions_issues_create_for_each_period():
+async def test_ensure_partitions_attaches_a_standalone_table_for_each_period() -> None:
     mgr = SpendLogsPartitionManager(interval="day", precreate_ahead=2)
     client = MagicMock()
     client.db.execute_raw = AsyncMock(return_value=0)
@@ -209,8 +209,8 @@ async def test_ensure_partitions_issues_create_for_each_period():
     assert len(created) == 3  # current + 2 ahead
     assert client.db.execute_raw.await_count == 3
     first_sql = client.db.execute_raw.call_args_list[0].args[0]
-    assert 'PARTITION OF "LiteLLM_SpendLogs"' in first_sql
-    assert "CREATE TABLE IF NOT EXISTS" in first_sql
+    assert f'CREATE TABLE "{created[0]}" (LIKE "LiteLLM_SpendLogs" INCLUDING ALL);' in first_sql
+    assert f'ALTER TABLE "LiteLLM_SpendLogs" ATTACH PARTITION "{created[0]}"' in first_sql
 
 
 @pytest.mark.asyncio
@@ -353,7 +353,9 @@ def test_parse_partition_upper_bound_unparseable_to_value_is_none():
 
 
 @pytest.mark.asyncio
-async def test_ensure_partitions_continues_when_one_create_fails():
+async def test_ensure_partitions_reports_remediation_and_continues_after_an_attach_failure(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     mgr = SpendLogsPartitionManager(interval="day", precreate_ahead=2)
     client = MagicMock()
     client.db.execute_raw = AsyncMock(side_effect=[0, Exception("overlap"), 0])
@@ -364,6 +366,10 @@ async def test_ensure_partitions_continues_when_one_create_fails():
     # the failed partition is skipped, the others still created
     assert len(created) == 2
     assert client.db.execute_raw.await_count == 3
+    assert any(
+        record.levelname == "ERROR" and "add a validated CHECK constraint" in record.getMessage()
+        for record in caplog.records
+    )
 
 
 def test_invalid_interval_falls_back_to_day():

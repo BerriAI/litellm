@@ -136,11 +136,13 @@ from litellm.proxy.management_endpoints.common_utils import (  # noqa: F401  # l
     check_denied_passthrough_routes_caller_permission,
     check_disable_global_guardrails_caller_permission,
     check_passthrough_routes_caller_permission,
+    semantic_cache_metadata_changed,
     set_object_metadata_field,
     team_member_has_permission,
     user_api_key_has_admin_view,
     validate_budget_duration,
     validate_finite_spend,
+    validate_semantic_cache_metadata,
 )
 from litellm.proxy.management_endpoints.key_budget_change import (
     KeyBudgetAdminOnly,
@@ -582,7 +584,7 @@ def _effective_key_for_generate(data: GenerateKeyRequest, now: datetime) -> Lite
         MappingProxyType(
             {
                 **columns,
-                "metadata": encrypt_callback_vars(folded_metadata),
+                "metadata": encrypt_callback_vars(folded_metadata, logging_references_approved=True),
                 "expires": expires,
                 "budget_reset_at": budget_reset_at,
                 "key_rotation_at": key_rotation_at,
@@ -1623,6 +1625,10 @@ async def _common_key_generation_helper(
     validate_budget_duration(data.budget_duration)
     if prisma_client is not None:
         await validate_scalar_budget_attachment(prisma_client, data.budget_id)
+    requested_metadata: Final = attribute_or_none(data, "metadata")
+    if semantic_cache_metadata_changed(requested_metadata, None):
+        _enforce_key_semantic_cache_admin(user_api_key_dict, team_table)
+        validate_semantic_cache_metadata(requested_metadata)
     raise_on_invalid_key_metadata(data.metadata)
     raise_on_logging_credential_change(data.metadata, None, user_api_key_dict)
 
@@ -2903,7 +2909,9 @@ async def generate_service_account_key_fn(
     )
 
 
-def prepare_metadata_fields(data: BaseModel, non_default_values: dict, existing_metadata: dict) -> dict:
+def prepare_metadata_fields(
+    data: BaseModel, non_default_values: dict, existing_metadata: dict, *, logging_references_approved: bool = False
+) -> dict:
     """
     Check LiteLLM_ManagementEndpoint_MetadataFields (proxy/_types.py) for fields that are allowed to be updated
     """
@@ -2950,7 +2958,9 @@ def prepare_metadata_fields(data: BaseModel, non_default_values: dict, existing_
             "litellm.proxy.proxy_server.prepare_metadata_fields(): Exception occured - %s", e
         )
 
-    non_default_values["metadata"] = encrypt_callback_vars(casted_metadata)
+    non_default_values["metadata"] = encrypt_callback_vars(
+        casted_metadata, logging_references_approved=logging_references_approved
+    )
     return non_default_values
 
 
@@ -3252,6 +3262,51 @@ async def _check_customer_header_team_change(
         )
 
 
+def _enforce_key_semantic_cache_admin(caller: UserAPIKeyAuth, team: LiteLLM_TeamTable | None) -> None:
+    if caller.user_role == LitellmUserRoles.PROXY_ADMIN or (team is not None and is_team_admin(caller, team)):
+        return
+    raise HTTPException(
+        status_code=403,
+        detail={"error": "Only proxy admins or the key's team admins can change metadata.cache_params."},
+    )
+
+
+async def _check_key_semantic_cache_update(
+    data: UpdateKeyRequest | RegenerateKeyRequest,
+    existing_key_row: LiteLLM_VerificationToken,
+    caller: UserAPIKeyAuth,
+    prisma_client: PrismaClient | None,
+) -> None:
+    from litellm.proxy.proxy_server import user_api_key_cache
+
+    requested_metadata: Final = attribute_or_none(data, "metadata")
+    stored_metadata: Final = attribute_or_none(existing_key_row, "metadata")
+    if "metadata" not in data.model_fields_set or not semantic_cache_metadata_changed(
+        requested_metadata, stored_metadata
+    ):
+        return
+    if caller.user_role == LitellmUserRoles.PROXY_ADMIN:
+        validate_semantic_cache_metadata(requested_metadata, stored_metadata)
+        return
+    existing_team: Final = existing_key_row.team_id
+    target_team: Final = data.team_id if "team_id" in data.model_fields_set else existing_team
+    for team_id in dict.fromkeys((existing_team, target_team)):
+        _enforce_key_semantic_cache_admin(
+            caller,
+            (
+                await get_team_object(
+                    team_id=team_id,
+                    prisma_client=prisma_client,
+                    user_api_key_cache=user_api_key_cache,
+                    check_db_only=True,
+                )
+                if team_id is not None
+                else None
+            ),
+        )
+    validate_semantic_cache_metadata(requested_metadata, stored_metadata)
+
+
 async def prepare_key_update_data(
     data: UpdateKeyRequest | RegenerateKeyRequest,
     existing_key_row: LiteLLM_VerificationToken,
@@ -3261,6 +3316,8 @@ async def prepare_key_update_data(
     user_api_key_dict: UserAPIKeyAuth | None = None,
 ):
     if user_api_key_dict is not None:
+        await _check_key_semantic_cache_update(data, existing_key_row, user_api_key_dict, prisma_client)
+        raise_on_logging_credential_change(data.metadata, existing_key_row, user_api_key_dict)
         await _check_customer_header_team_change(data, existing_key_row, user_api_key_dict, prisma_client)
     if data.router_settings is not None or (
         "router_settings" not in data.model_fields_set
@@ -3369,7 +3426,12 @@ async def prepare_key_update_data(
         non_default_values["router_settings"] = safe_dumps(non_default_values["router_settings"])
 
     non_default_values = prepare_metadata_fields(
-        data=data, non_default_values=non_default_values, existing_metadata=_metadata
+        data=data,
+        non_default_values=non_default_values,
+        existing_metadata=_metadata,
+        logging_references_approved=(
+            user_api_key_dict is not None and data.metadata is not None and "logging" in data.metadata
+        ),
     )
 
     return non_default_values
@@ -3691,7 +3753,6 @@ async def _process_single_key_update(
     )
 
     # Prepare update data
-    raise_on_logging_credential_change(key_request.metadata, existing_key_row, user_api_key_dict)
     non_default_values = await prepare_key_update_data(
         data=key_request,
         existing_key_row=existing_key_row,
@@ -4454,7 +4515,6 @@ async def update_key_fn(
 
         # Enforce upperbound key params on update (don't fill defaults)
         _enforce_upperbound_key_params(data, fill_defaults=False)
-        raise_on_logging_credential_change(data.metadata, existing_key_row, user_api_key_dict)
         non_default_values: Final = await prepare_key_update_data(
             data=data,
             existing_key_row=existing_key_row,
@@ -5486,6 +5546,7 @@ def metadata_json_with_limits(
     guardrails: Sequence[str] | None,
     policies: Sequence[str] | None,
     prompts: Sequence[str] | None,
+    logging_references_approved: bool = False,
 ) -> str:
     """Serialize the stored metadata blob with the per-model, MCP, tag, guardrail, policy and prompt settings folded in."""
     limits: Final = tuple(
@@ -5504,7 +5565,7 @@ def metadata_json_with_limits(
     if metadata is None and not limits:
         return json.dumps(None)
     merged: Final = {**(metadata or _NO_METADATA), **dict(limits)}
-    return json.dumps(encrypt_callback_vars(merged))
+    return json.dumps(encrypt_callback_vars(merged, logging_references_approved=logging_references_approved))
 
 
 async def generate_key_helper_fn(
@@ -5630,6 +5691,7 @@ async def generate_key_helper_fn(
         guardrails=guardrails,
         policies=policies,
         prompts=prompts,
+        logging_references_approved=actor is not None and actor.user_role == LitellmUserRoles.PROXY_ADMIN,
     )
     validate_model_max_budget(model_max_budget)
     model_max_budget_json: Final = json.dumps(model_max_budget)
@@ -6619,7 +6681,6 @@ async def _execute_virtual_key_regeneration(
             await _enforce_custom_key_update_policy(hook=_custom_key_update_hook(proxy_server), data=update_request)
         # Enforce upperbound key params on regenerate (don't fill defaults)
         _enforce_upperbound_key_params(data, fill_defaults=False)
-        raise_on_logging_credential_change(data.metadata, key_in_db, user_api_key_dict)
         non_default_values = await prepare_key_update_data(
             data=data,
             existing_key_row=key_in_db,

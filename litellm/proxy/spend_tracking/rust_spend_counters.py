@@ -184,8 +184,10 @@ class _CounterHost:
                 return _budget_windows(
                     await _stored_budget_limits(Litellm_EntityType(source.entity_type), source.entity_id)
                 )
-            cached: Final = _ANY_VALUE.validate_python(
-                await user_api_key_cache.async_get_cache(key=source.auth_object())
+            cached: Final[object] = (
+                await user_api_key_cache.get_team_fields(source.auth_object(), ("budget_limits",))
+                if source.entity_type == "team"
+                else _ANY_VALUE.validate_python(await user_api_key_cache.async_get_cache(key=source.auth_object()))
             )
             return None if cached is None else _budget_windows(_cached_budget_limits(cached))
 
