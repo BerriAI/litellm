@@ -10,6 +10,7 @@ Verifies that:
 - ANTHROPIC_API_KEY / ANTHROPIC_API_BASE take precedence over their aliases.
 """
 
+import copy
 import itertools
 import json
 import logging
@@ -5107,7 +5108,18 @@ def test_strip_advisor_blocks_replaces_a_string_id_exchange_and_drops_a_list_id_
     ]
 
 
-def test_a_stale_tool_search_is_left_out_beside_advisor_blocks_with_list_ids() -> None:
+def test_strip_advisor_blocks_under_drop_params_leaves_the_callers_messages_as_sent() -> None:
+    messages: Final = [
+        {"role": "assistant", "content": [_advisor_use(["srvtoolu_1"]), _advisor_result(["srvtoolu_1"]), _OK_TEXT]}
+    ]
+    sent: Final = copy.deepcopy(messages)
+
+    stripped: Final = strip_advisor_blocks_from_messages(messages, drop_params=True)
+
+    assert (messages, stripped) == (sent, [{"role": "assistant", "content": [_OK_TEXT]}])
+
+
+def test_a_stale_tool_search_is_left_out_beside_blocks_with_list_ids() -> None:
     search_use: Final = {
         "type": "server_tool_use",
         "id": "srvtoolu_01Search",
@@ -5122,13 +5134,17 @@ def test_a_stale_tool_search_is_left_out_beside_advisor_blocks_with_list_ids() -
             "tool_references": [{"type": "tool_reference", "tool_name": "gone_tool"}],
         },
     }
-    advisor_blocks: Final = [_advisor_use(["srvtoolu_01A"]), _advisor_result(["srvtoolu_01A"])]
+    list_id_blocks: Final = [
+        _advisor_use(["srvtoolu_01A"]),
+        _advisor_result(["srvtoolu_01A"]),
+        {**search_result, "tool_use_id": ["srvtoolu_01Search"]},
+    ]
     messages: Final = [
         {"role": "user", "content": "hi"},
-        {"role": "assistant", "content": [search_use, search_result, *advisor_blocks, _OK_TEXT]},
+        {"role": "assistant", "content": [search_use, search_result, *list_id_blocks, _OK_TEXT]},
         {"role": "user", "content": "and now?"},
     ]
 
     kept: Final = without_stale_tool_search_results(messages, [{"name": "get_weather"}])
 
-    assert kept == (messages[0], {"role": "assistant", "content": [*advisor_blocks, _OK_TEXT]}, messages[2])
+    assert kept == (messages[0], {"role": "assistant", "content": [*list_id_blocks, _OK_TEXT]}, messages[2])
