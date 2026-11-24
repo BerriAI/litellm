@@ -35,7 +35,11 @@ from uvicorn.importer import import_from_string
 
 import litellm
 from litellm._logging import turn_on_json
-from litellm.constants import DEFAULT_MAX_REQUEST_HEADER_SIZE, GRACEFUL_SHUTDOWN_TEARDOWN_HEADROOM_SECONDS
+from litellm.constants import (
+    DEFAULT_MAX_REQUEST_HEADER_SIZE,
+    GRACEFUL_SHUTDOWN_TEARDOWN_HEADROOM_SECONDS,
+    HEALTH_CHECK_TIMEOUT_SECONDS,
+)
 from litellm.proxy import proxy_cli
 from litellm.proxy.control_plane.main import serve as serve_control_plane
 from litellm.proxy.control_plane.settings import ControlPlaneSettings
@@ -246,6 +250,7 @@ class TestProxyInitializationHelpers:
             pytest.param("0.0.0.0", True, id="unspecified"),
             pytest.param("10.20.30.40", False, id="private-network"),
             pytest.param("proxy.example.com", False, id="remote-name"),
+            pytest.param("app.localhost", False, id="localhost-subdomain"),
         ],
     )
     @respx.mock
@@ -282,14 +287,12 @@ class TestProxyInitializationHelpers:
         assert "proxy said no" not in capsys.readouterr().out
 
     @respx.mock
-    def test_health_flag_waits_for_model_checks_slower_than_five_seconds(
+    def test_health_flag_waits_out_a_model_check_that_takes_the_proxy_default_timeout(
         self, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        slowest_model_check_seconds: Final = 30
-
         def slow_proxy(request: httpx.Request) -> httpx.Response:
             read_timeout: Final = request.extensions["timeout"]["read"]
-            if read_timeout is not None and read_timeout < slowest_model_check_seconds:
+            if read_timeout is not None and read_timeout <= HEALTH_CHECK_TIMEOUT_SECONDS:
                 raise httpx.ReadTimeout("timed out", request=request)
             return httpx.Response(200, json={"healthy_count": 2})
 
@@ -298,6 +301,18 @@ class TestProxyInitializationHelpers:
         run_server.main(["--health", *_CLI_TEST_PROXY_ARGS], standalone_mode=False)
 
         assert '"healthy_count": 2' in capsys.readouterr().out
+
+    @respx.mock
+    def test_health_flag_gives_up_on_a_proxy_that_never_answers(self) -> None:
+        def silent_proxy(request: httpx.Request) -> httpx.Response:
+            if request.extensions["timeout"]["read"] is None:
+                pytest.fail("--health would wait forever on a proxy that never answers")
+            raise httpx.ReadTimeout("timed out", request=request)
+
+        respx.get(f"{_CLI_TEST_PROXY}/health").mock(side_effect=silent_proxy)
+
+        with pytest.raises(httpx.ReadTimeout):
+            run_server.main(["--health", *_CLI_TEST_PROXY_ARGS], standalone_mode=False)
 
     @pytest.mark.parametrize(
         ("listed_models", "expected_model"),

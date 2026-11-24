@@ -18,6 +18,7 @@ from litellm.litellm_core_utils.url_utils import (
     ensure_api_route,
     is_https_url_with_host,
     is_local_host,
+    is_loopback_host,
     join_api_base,
     validate_url,
 )
@@ -37,26 +38,26 @@ def test_is_https_url_with_host(url: str, expected: bool) -> None:
 
 
 @pytest.mark.parametrize(
-    ("host", "expected"),
+    ("host", "local", "loopback"),
     (
-        ("localhost", True),
-        ("LOCALHOST.", True),
-        ("app.localhost", True),
-        ("127.0.0.1", True),
-        ("127.8.9.10", True),
-        ("[::1]", True),
-        ("::ffff:127.0.0.1", True),
-        ("0.0.0.0", True),
-        ("::", True),
-        ("10.20.30.40", False),
-        ("::ffff:10.20.30.40", False),
-        ("localhost.example.com", False),
-        ("proxy.example.com", False),
-        ("", False),
+        ("localhost", True, True),
+        ("LOCALHOST.", True, True),
+        ("app.localhost", True, False),
+        ("127.0.0.1", True, True),
+        ("127.8.9.10", True, True),
+        ("[::1]", True, True),
+        ("::ffff:127.0.0.1", True, True),
+        ("0.0.0.0", True, True),
+        ("::", True, True),
+        ("10.20.30.40", False, False),
+        ("::ffff:10.20.30.40", False, False),
+        ("localhost.example.com", False, False),
+        ("proxy.example.com", False, False),
+        ("", False, False),
     ),
 )
-def test_is_local_host(host: str, expected: bool) -> None:
-    assert is_local_host(host) is expected
+def test_is_local_host_and_is_loopback_host(host: str, local: bool, loopback: bool) -> None:
+    assert (is_local_host(host), is_loopback_host(host)) == (local, loopback)
 
 
 @pytest.fixture

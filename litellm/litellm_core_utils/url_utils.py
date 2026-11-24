@@ -112,9 +112,17 @@ def is_https_url_with_host(url: str) -> bool:
         return False
 
 
+def _normalized_host(host: str) -> str:
+    return host.removeprefix("[").removesuffix("]").rstrip(".").lower()
+
+
 def is_local_host(host: str) -> bool:
-    normalized: Final = host.removeprefix("[").removesuffix("]").rstrip(".").lower()
-    if normalized == "localhost" or normalized.endswith(".localhost"):
+    return is_loopback_host(host) or _normalized_host(host).endswith(".localhost")
+
+
+def is_loopback_host(host: str) -> bool:
+    normalized: Final = _normalized_host(host)
+    if normalized == "localhost":
         return True
     try:
         address: Final = ip_address(normalized)

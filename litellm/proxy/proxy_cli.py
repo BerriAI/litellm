@@ -31,7 +31,7 @@ from litellm.constants import (
     DEFAULT_UVICORN_KEEPALIVE_TIMEOUT_SECONDS,
 )
 from litellm.litellm_core_utils.llm_request_utils import is_cost_map_model_past_deprecation_date, is_in_cost_map
-from litellm.litellm_core_utils.url_utils import is_local_host
+from litellm.litellm_core_utils.url_utils import is_loopback_host
 from litellm.proxy.db.pgbouncer import (
     PgBouncerError,
     PgBouncerSettings,
@@ -295,7 +295,6 @@ _MODEL_LIST: Final = TypeAdapter(_ModelList)
 
 
 _PROXY_KEY_HINT: Final = "--test and --health send LITELLM_MASTER_KEY as the key, and only to a local --host"
-_HEALTH_CHECK_TIMEOUT: Final = httpx.Timeout(5.0, read=None)
 
 
 @dataclass(frozen=True, slots=True)
@@ -306,7 +305,7 @@ class _ProxyTarget:
 
 
 def _proxy_target(host: str, port: int) -> _ProxyTarget:
-    is_local: Final = is_local_host(host)
+    is_local: Final = is_loopback_host(host)
     master_key: Final = os.getenv("LITELLM_MASTER_KEY")
     return _ProxyTarget(
         base_url=str(httpx.URL(scheme="http", host=host, port=port)),
@@ -407,12 +406,14 @@ class ProxyInitializationHelpers:
 
     @staticmethod
     def run_health_check(host: str, port: int):
+        from openai import DEFAULT_TIMEOUT
+
         print("\nLiteLLM: Health Testing models in config")
         target: Final = _proxy_target(host, port)
         response: Final = httpx.get(
             url=f"{target.base_url}/health",
             headers={"Authorization": f"Bearer {target.api_key}"},
-            timeout=_HEALTH_CHECK_TIMEOUT,
+            timeout=DEFAULT_TIMEOUT,
             trust_env=target.trust_env,
         )
         _raise_for_proxy_error(response)
@@ -834,7 +835,7 @@ class ProxyInitializationHelpers:
                 )
                 print_startup_message("")
                 print_startup_message(
-                    '\033[1;34mLiteLLM: Test your local proxy with: "litellm --test" This runs an openai.ChatCompletion request to your proxy [In a new terminal tab]\033[0m\n'
+                    '\033[1;34mLiteLLM: Test your local proxy with: "litellm --test" This runs an openai.ChatCompletion request to your proxy [In a new terminal tab, with LITELLM_MASTER_KEY exported there if the proxy has a master key]\033[0m\n'
                 )
                 print_startup_message(
                     f"\033[1;34mLiteLLM: Curl Command Test for your local proxy\n {curl_command} \033[0m\n"
