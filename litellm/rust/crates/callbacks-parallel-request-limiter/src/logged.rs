@@ -14,8 +14,8 @@ use serde_json::{Map, Value};
 
 use crate::{
     limiter::{
-        Candidate, EMBEDDING_CALL_TYPES, FailureFacts, IoUsage, ModelFacts, PolicyFacts, PostCallFailureFacts, PtuFacts,
-        SuccessFacts, TargetFacts,
+        Candidate, EMBEDDING_CALL_TYPES, FailureFacts, IoUsage, ModelFacts, PolicyFacts,
+        PostCallFailureFacts, PtuFacts, SuccessFacts, TargetFacts,
     },
     ptu::{Ceiling, Usage, settlement_tokens},
     settings::TokenRateLimitType,
