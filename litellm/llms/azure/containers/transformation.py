@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from typing import Final
 from urllib.parse import parse_qs, urlparse, urlunparse
 
@@ -26,10 +27,10 @@ class AzureContainerConfig(OpenAIContainerConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, str],
         api_key: str | None = None,
         litellm_params: GenericLiteLLMParams | None = None,
-    ) -> dict:
+    ) -> dict[str, str]:
         return BaseAzureLLM.base_validate_azure_environment(
             headers=headers,
             litellm_params=GenericLiteLLMParams(api_key=api_key),
@@ -57,7 +58,7 @@ class AzureContainerConfig(OpenAIContainerConfig):
     def get_complete_url(
         self,
         api_base: str | None,
-        litellm_params: dict,
+        litellm_params: Mapping[str, object],
     ) -> str:
         """
         Build the Azure container endpoint URL.

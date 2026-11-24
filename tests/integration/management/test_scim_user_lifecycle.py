@@ -13,6 +13,7 @@ SCIM_HEADERS: Final = {"Content-Type": "application/scim+json"}
 SCIM_CORE_USER_SCHEMA: Final = "urn:ietf:params:scim:schemas:core:2.0:User"
 SCIM_ENTERPRISE_USER_SCHEMA: Final = "urn:ietf:params:scim:schemas:extension:enterprise:2.0:User"
 SCIM_LIST_RESPONSE_SCHEMA: Final = "urn:ietf:params:scim:api:messages:2.0:ListResponse"
+SCIM_ERROR_SCHEMA: Final = "urn:ietf:params:scim:api:messages:2.0:Error"
 SCIM_PATCH_OP_SCHEMA: Final = "urn:ietf:params:scim:api:messages:2.0:PatchOp"
 
 
@@ -269,7 +270,10 @@ def test_okta_create_provisions_the_user_into_its_group_and_rejects_a_duplicate(
         duplicate: Final = _scim_request(gateway, "POST", "/scim/v2/Users", requested)
         assert duplicate.status_code == 409, duplicate.text
         assert object_value(duplicate.json()) == {
-            "detail": {"error": f"User already exists with username: {user_name}"}
+            "schemas": [SCIM_ERROR_SCHEMA],
+            "status": "409",
+            "detail": f"User already exists with username: {user_name}",
+            "scimType": "uniqueness",
         }, duplicate.text
         assert read_rows(
             'SELECT user_id FROM "LiteLLM_UserTable" WHERE user_id = %s',

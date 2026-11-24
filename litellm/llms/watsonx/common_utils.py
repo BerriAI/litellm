@@ -38,11 +38,11 @@ def get_watsonx_iam_url():
     return get_secret_str("WATSONX_IAM_URL") or "https://iam.cloud.ibm.com/identity/token"
 
 
-def generate_iam_token(api_key=None, **params) -> str:
+def generate_iam_token(api_key: str | None = None, **params: object) -> str:
     result: object = iam_token_cache.get_cache(api_key)
 
     if result is None:
-        headers: Final = {}
+        headers: Final[dict[str, str]] = {}
         headers["Content-Type"] = "application/x-www-form-urlencoded"
         if api_key is None:
             api_key = (
@@ -348,8 +348,8 @@ class IBMWatsonXMixin:
             )
         return WatsonXCredentials(api_key=api_key, api_base=api_base, token=cast(str | None, token))
 
-    def _prepare_payload(self, model: str, api_params: WatsonXAPIParams) -> dict:
-        payload: Final[dict] = {}
+    def _prepare_payload(self, model: str, api_params: WatsonXAPIParams) -> dict[str, object]:
+        payload: Final[dict[str, object]] = {}
         if model.startswith("deployment/"):
             return {}  # Deployment models do not support 'space_id' or 'project_id' in their payload
         payload["model_id"] = model

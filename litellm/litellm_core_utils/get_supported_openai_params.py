@@ -280,6 +280,10 @@ def get_supported_openai_params(
             )
 
             return ElevenLabsAudioTranscriptionConfig().get_supported_openai_params(model=model)
+    elif custom_llm_provider == "gnani" and request_type == "transcription":
+        from litellm.llms.gnani.audio_transcription.transformation import GnaniAudioTranscriptionConfig
+
+        return GnaniAudioTranscriptionConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "soniox":
         if request_type == "transcription":
             from litellm.llms.soniox.audio_transcription.transformation import (

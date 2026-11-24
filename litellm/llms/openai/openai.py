@@ -12,17 +12,18 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 
 import openai
-from openai import AsyncOpenAI, AsyncStream, OpenAI, Stream
+from openai import AsyncOpenAI, AsyncStream, Omit, OpenAI, Stream
 from openai._base_client import make_request_options
 from openai._constants import RAW_RESPONSE_HEADER
 from openai._legacy_response import LegacyAPIResponse
+from openai._models import construct_type
 from openai._types import RequestOptions
 from openai.pagination import SyncCursorPage
 from openai.types import CreateEmbeddingResponse
 from openai.types.beta.assistant_deleted import AssistantDeleted
 from openai.types.chat import ChatCompletion, ChatCompletionChunk
 from openai.types.file_deleted import FileDeleted
-from pydantic import BaseModel, TypeAdapter
+from pydantic import BaseModel, InstanceOf, TypeAdapter, ValidationError
 from typing_extensions import overload
 
 import litellm
@@ -37,7 +38,11 @@ from litellm.litellm_core_utils.chat_completion_agentic_loop import (
 )
 from litellm.litellm_core_utils.core_helpers import set_provider_response_headers_in_hidden_params
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.litellm_core_utils.logging_utils import speech_request_body, track_llm_api_timing
+from litellm.litellm_core_utils.logging_utils import (
+    speech_create_params,
+    speech_request_body,
+    track_llm_api_timing,
+)
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator, MockResponseIterator
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.types.utils import (
@@ -74,6 +79,7 @@ from .common_utils import (
     model_dump_provider_response,
     upstream_error_response,
 )
+from .speech_usage_stream import speech_response_with_usage, with_usage_stream
 from .workload_identity import (
     build_async_openai_client,
     build_openai_client,
@@ -379,9 +385,11 @@ class OpenAIChatCompletionResponseIterator(BaseModelResponseIterator):
             raise e
 
 
-_EXTRA_HEADERS_ADAPTER: Final = TypeAdapter(dict[str, str] | None)
-_EXTRA_QUERY_ADAPTER: Final = TypeAdapter(dict[str, object] | None)
-_NO_EXTRA_HEADERS: Final[Mapping[str, str]] = types.MappingProxyType({})
+_EXTRA_HEADERS_ADAPTER: Final = TypeAdapter[dict[str, str | InstanceOf[Omit]] | None](
+    dict[str, str | InstanceOf[Omit]] | None
+)
+_EXTRA_QUERY_ADAPTER: Final = TypeAdapter[dict[str, object] | None](dict[str, object] | None)
+_NO_EXTRA_HEADERS: Final[Mapping[str, str | Omit]] = types.MappingProxyType({})
 _SDK_OPTION_KEYS: Final = frozenset(("extra_headers", "extra_query", "extra_body"))
 _CLIENT_API_KEY_ONLY_AUTH: Final[Mapping[str, Mapping[str, bool]]] = (
     types.MappingProxyType({"security": types.MappingProxyType({"bearer_auth": True})})
@@ -390,11 +398,46 @@ _CLIENT_API_KEY_ONLY_AUTH: Final[Mapping[str, Mapping[str, bool]]] = (
 )
 
 
+class _ChatCompletionChunkDecoder:
+    """
+    Decodes stream chunks for the SDK's `ModelBuilderProtocol` hook in one compiled pydantic pass. Strict
+    validation only accepts payloads whose values already have the declared types, where it builds the same
+    chunk as the SDK's `construct_type`, and everything else keeps the SDK's lenient `construct_type` result.
+    """
+
+    @classmethod
+    def build(cls, *, response: httpx.Response, data: object) -> object:
+        try:
+            return ChatCompletionChunk.model_validate(data, strict=True)
+        except ValidationError:
+            return construct_type(type_=ChatCompletionChunk, value=data)
+
+
 def _raw_chat_response(
-    result: ChatCompletion | Stream[ChatCompletionChunk] | AsyncStream[ChatCompletionChunk],
+    result: ChatCompletion
+    | Stream[ChatCompletionChunk]
+    | AsyncStream[ChatCompletionChunk]
+    | Stream[_ChatCompletionChunkDecoder]
+    | AsyncStream[_ChatCompletionChunkDecoder],
 ) -> LegacyAPIResponse[ChatCompletion]:
     assert isinstance(result, LegacyAPIResponse)
     return result
+
+
+def _sync_chat_stream_cls(
+    client: OpenAI,
+) -> type[Stream[ChatCompletionChunk]] | type[Stream[_ChatCompletionChunkDecoder]]:
+    if client._strict_response_validation:  # pyright: ignore[reportPrivateUsage]  # SDK has no public getter
+        return Stream[ChatCompletionChunk]
+    return Stream[_ChatCompletionChunkDecoder]
+
+
+def _async_chat_stream_cls(
+    client: AsyncOpenAI,
+) -> type[AsyncStream[ChatCompletionChunk]] | type[AsyncStream[_ChatCompletionChunkDecoder]]:
+    if client._strict_response_validation:  # pyright: ignore[reportPrivateUsage]  # SDK has no public getter
+        return AsyncStream[ChatCompletionChunk]
+    return AsyncStream[_ChatCompletionChunkDecoder]
 
 
 def _request_without_sdk_transform(
@@ -550,7 +593,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
     async def make_openai_chat_completion_request(
         self,
         openai_aclient: AsyncOpenAI,
-        data: dict,
+        data: Mapping[str, object],
         timeout: float | httpx.Timeout,
         logging_obj: LiteLLMLoggingObj,
     ) -> tuple[dict, BaseModel]:
@@ -569,7 +612,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                     cast_to=ChatCompletion,
                     options=options,
                     stream=bool(data.get("stream")),
-                    stream_cls=AsyncStream[ChatCompletionChunk],
+                    stream_cls=_async_chat_stream_cls(openai_aclient),
                 )
             )
             end_time = time.time()
@@ -606,7 +649,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
     def make_sync_openai_chat_completion_request(
         self,
         openai_client: OpenAI,
-        data: dict,
+        data: Mapping[str, object],
         timeout: float | httpx.Timeout,
         logging_obj: LiteLLMLoggingObj,
     ) -> tuple[dict, BaseModel]:
@@ -625,7 +668,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                     cast_to=ChatCompletion,
                     options=options,
                     stream=bool(data.get("stream")),
-                    stream_cls=Stream[ChatCompletionChunk],
+                    stream_cls=_sync_chat_stream_cls(openai_client),
                 )
             )
 
@@ -664,7 +707,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         response: object,
         model: str,
         messages: list[dict],
-        optional_params: dict,
+        optional_params: dict[str, object],
         logging_obj: LiteLLMLoggingObj,
         stream: bool,
         litellm_params: dict,
@@ -700,7 +743,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
         model: str,
-        stream_options: dict | None = None,
+        stream_options: Mapping[str, object] | None = None,
     ) -> CustomStreamWrapper:
         completion_stream: Final = MockResponseIterator(model_response=response)
         streaming_response: Final = CustomStreamWrapper(
@@ -721,15 +764,15 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         litellm_params: dict,
         logging_obj: LiteLLMLoggingObj,
         model: str | None = None,
-        messages: list | None = None,
-        print_verbose: Callable | None = None,
+        messages: list[AllMessageValues] | None = None,
+        print_verbose: Callable[[str], object] | None = None,
         api_key: str | None = None,
         api_base: str | None = None,
         api_version: str | None = None,
         dynamic_params: bool | None = None,
         azure_ad_token: str | None = None,
         acompletion: bool = False,
-        logger_fn=None,
+        logger_fn: object = None,
         headers: dict | None = None,
         custom_prompt_dict: dict = {},
         client=None,
@@ -978,11 +1021,11 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         api_base: str | None = None,
         api_version: str | None = None,
         organization: str | None = None,
-        client=None,
+        client: OpenAI | AsyncOpenAI | None = None,
         max_retries=None,
-        headers=None,
+        headers: dict[str, object] | None = None,
         drop_params: bool | None = None,
-        stream_options: dict | None = None,
+        stream_options: Mapping[str, object] | None = None,
         fake_stream: bool = False,
         shared_session: Optional["ClientSession"] = None,
     ):
@@ -1091,7 +1134,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
 
     def streaming(
         self,
-        logging_obj,
+        logging_obj: LiteLLMLoggingObj,
         timeout: float | httpx.Timeout,
         data: dict,
         model: str,
@@ -1099,10 +1142,10 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         api_base: str | None = None,
         api_version: str | None = None,
         organization: str | None = None,
-        client=None,
+        client: OpenAI | AsyncOpenAI | None = None,
         max_retries=None,
-        headers=None,
-        stream_options: dict | None = None,
+        headers: dict[str, object] | None = None,
+        stream_options: Mapping[str, object] | None = None,
         litellm_params: Mapping[str, object] | None = None,
     ):
         data["stream"] = True
@@ -1151,7 +1194,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
     async def async_streaming(
         self,
         timeout: float | httpx.Timeout,
-        messages: list,
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         provider_config: BaseConfig,
@@ -1161,11 +1204,11 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         api_base: str | None = None,
         api_version: str | None = None,
         organization: str | None = None,
-        client=None,
+        client: OpenAI | AsyncOpenAI | None = None,
         max_retries=None,
-        headers=None,
+        headers: dict[str, object] | None = None,
         drop_params: bool | None = None,
-        stream_options: dict | None = None,
+        stream_options: Mapping[str, object] | None = None,
         shared_session: Optional["ClientSession"] = None,
     ):
         response = None
@@ -1269,7 +1312,9 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                             body=exception_body,
                         )
 
-    def get_stream_options(self, stream_options: dict | None, api_base: str | None) -> dict:
+    def get_stream_options(
+        self, stream_options: Mapping[str, object] | None, api_base: str | None
+    ) -> dict[str, object]:
         """
         Pass `stream_options` to the data dict for OpenAI requests
         """
@@ -1316,7 +1361,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
 
     async def aembedding(
         self,
-        input: list,
+        input: Sequence[object],
         data: dict,
         model_response: EmbeddingResponse,
         timeout: float,
@@ -1324,7 +1369,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         api_key: str | None = None,
         api_base: str | None = None,
         client: AsyncOpenAI | None = None,
-        max_retries=None,
+        max_retries: int | None = None,
         shared_session: Optional["ClientSession"] = None,
         litellm_params: Mapping[str, object] | None = None,
     ):
@@ -1397,13 +1442,13 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         model: str,
         input: list,
         timeout: float,
-        logging_obj,
+        logging_obj: LiteLLMLoggingObj,
         model_response: EmbeddingResponse,
         optional_params: dict,
         api_key: str | None = None,
         api_base: str | None = None,
         client=None,
-        aembedding=None,
+        aembedding: bool | None = None,
         max_retries: int | None = None,
         shared_session: Optional["ClientSession"] = None,
         litellm_params: Mapping[str, object] | None = None,
@@ -1496,8 +1541,8 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         logging_obj: LiteLLMLoggingObj,
         api_key: str | None = None,
         api_base: str | None = None,
-        client=None,
-        max_retries=None,
+        client: OpenAI | AsyncOpenAI | None = None,
+        max_retries: int | None = None,
         organization: str | None = None,
         headers: dict | None = None,
         litellm_params: Mapping[str, object] | None = None,
@@ -1563,8 +1608,8 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         api_key: str | None = None,
         api_base: str | None = None,
         model_response: ImageResponse | None = None,
-        client=None,
-        aimg_generation=None,
+        client: OpenAI | AsyncOpenAI | None = None,
+        aimg_generation: bool | None = None,
         organization: str | None = None,
         headers: dict | None = None,
         litellm_params: Mapping[str, object] | None = None,
@@ -1665,7 +1710,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         model: str,
         input: str,
         voice: str,
-        optional_params: dict,
+        optional_params: dict[str, object],
         api_key: str | None,
         api_base: str | None,
         organization: str | None,
@@ -1674,8 +1719,9 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         timeout: float | httpx.Timeout,
         logging_obj: LiteLLMLoggingObj,
         aspeech: bool | None = None,
-        client=None,
+        client: OpenAI | AsyncOpenAI | None = None,
         shared_session: Optional["ClientSession"] = None,
+        stream: bool = False,
         litellm_params: Mapping[str, object] | None = None,
     ) -> HttpxBinaryResponseContent:
         if aspeech is not None and aspeech is True:
@@ -1693,6 +1739,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                 logging_obj=logging_obj,
                 client=client,
                 shared_session=shared_session,
+                stream=stream,
                 litellm_params=litellm_params,
             )
 
@@ -1717,14 +1764,14 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
             },
         )
 
-        response: Final = sync_client.audio.speech.create(
-            model=model,
-            voice=voice,
-            input=input,
-            **optional_params,
+        params: Final = speech_create_params(model, voice, input, with_usage_stream(model, optional_params))
+        raw_response: Final = (
+            sync_client.audio.speech.with_streaming_response.create(**params).__enter__().http_response
+            if stream
+            else sync_client.audio.speech.create(**params).response
         )
-        speech_response: Final = HttpxBinaryResponseContent(response=response.response)
-        set_provider_response_headers_in_hidden_params(speech_response, response.response.headers)
+        speech_response: Final = speech_response_with_usage(raw_response, model, optional_params)
+        set_provider_response_headers_in_hidden_params(speech_response, raw_response.headers)
         return speech_response
 
     async def async_audio_speech(
@@ -1732,7 +1779,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         model: str,
         input: str,
         voice: str,
-        optional_params: dict,
+        optional_params: dict[str, object],
         api_key: str | None,
         api_base: str | None,
         organization: str | None,
@@ -1740,8 +1787,9 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         max_retries: int,
         timeout: float | httpx.Timeout,
         logging_obj: LiteLLMLoggingObj,
-        client=None,
+        client: OpenAI | AsyncOpenAI | None = None,
         shared_session: Optional["ClientSession"] = None,
+        stream: bool = False,
         litellm_params: Mapping[str, object] | None = None,
     ) -> HttpxBinaryResponseContent:
         openai_client: Final = cast(
@@ -1767,14 +1815,14 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
             },
         )
 
-        response: Final = await openai_client.audio.speech.create(
-            model=model,
-            voice=voice,
-            input=input,
-            **optional_params,
+        params: Final = speech_create_params(model, voice, input, with_usage_stream(model, optional_params))
+        raw_response: Final = (
+            (await openai_client.audio.speech.with_streaming_response.create(**params).__aenter__()).http_response
+            if stream
+            else (await openai_client.audio.speech.create(**params)).response
         )
-        speech_response: Final = HttpxBinaryResponseContent(response=response.response)
-        set_provider_response_headers_in_hidden_params(speech_response, response.response.headers)
+        speech_response: Final = speech_response_with_usage(raw_response, model, optional_params)
+        set_provider_response_headers_in_hidden_params(speech_response, raw_response.headers)
         return speech_response
 
 
@@ -1873,7 +1921,7 @@ class OpenAIFilesAPI(BaseLLM):
         openai_client: AsyncOpenAI,
     ) -> HttpxBinaryResponseContent:
         response: Final = await openai_client.files.content(**file_content_request)
-        return HttpxBinaryResponseContent(response=response.response)
+        return HttpxBinaryResponseContent(response=response.response, batch_input_format=BatchInputFormat.OPENAI)
 
     def file_content(
         self,
@@ -1913,7 +1961,7 @@ class OpenAIFilesAPI(BaseLLM):
             )
         response: Final = cast(OpenAI, openai_client).files.content(**file_content_request)
 
-        return HttpxBinaryResponseContent(response=response.response)
+        return HttpxBinaryResponseContent(response=response.response, batch_input_format=BatchInputFormat.OPENAI)
 
     async def afile_content_streaming(
         self,
@@ -2524,7 +2572,7 @@ class OpenAIAssistantsAPI(BaseLLM):
         max_retries: int | None,
         organization: str | None,
         client=None,
-        aget_assistants=None,
+        aget_assistants: bool | None = None,
         order: str | None = "desc",
         limit: int | None = 20,
         before: str | None = None,
@@ -2602,7 +2650,7 @@ class OpenAIAssistantsAPI(BaseLLM):
         organization: str | None,
         create_assistant_data: dict,
         client=None,
-        async_create_assistants=None,
+        async_create_assistants: bool | None = None,
         *,
         litellm_params: Mapping[str, object] | None = None,
     ):
@@ -2666,7 +2714,7 @@ class OpenAIAssistantsAPI(BaseLLM):
         organization: str | None,
         assistant_id: str,
         client=None,
-        async_delete_assistants=None,
+        async_delete_assistants: bool | None = None,
         *,
         litellm_params: Mapping[str, object] | None = None,
     ):
@@ -2890,7 +2938,7 @@ class OpenAIAssistantsAPI(BaseLLM):
         max_retries: int | None,
         organization: str | None,
         client=None,
-        aget_messages=None,
+        aget_messages: bool | None = None,
         *,
         litellm_params: Mapping[str, object] | None = None,
     ):
@@ -2923,7 +2971,7 @@ class OpenAIAssistantsAPI(BaseLLM):
 
     async def async_create_thread(
         self,
-        metadata: dict | None,
+        metadata: Mapping[str, object] | None,
         api_key: str | None,
         api_base: str | None,
         timeout: float | httpx.Timeout,
@@ -2964,7 +3012,7 @@ class OpenAIAssistantsAPI(BaseLLM):
     @overload
     def create_thread(
         self, 
-        metadata: dict | None,
+        metadata: Mapping[str, object] | None,
         api_key: str | None,
         api_base: str | None,
         timeout: float | httpx.Timeout,
@@ -2981,7 +3029,7 @@ class OpenAIAssistantsAPI(BaseLLM):
     @overload
     def create_thread(
         self, 
-        metadata: dict | None,
+        metadata: Mapping[str, object] | None,
         api_key: str | None,
         api_base: str | None,
         timeout: float | httpx.Timeout,
@@ -2999,7 +3047,7 @@ class OpenAIAssistantsAPI(BaseLLM):
 
     def create_thread(
         self,
-        metadata: dict | None,
+        metadata: Mapping[str, object] | None,
         api_key: str | None,
         api_base: str | None,
         timeout: float | httpx.Timeout,
@@ -3007,7 +3055,7 @@ class OpenAIAssistantsAPI(BaseLLM):
         organization: str | None,
         messages: Iterable[OpenAICreateThreadParamsMessage] | None,
         client=None,
-        acreate_thread=None,
+        acreate_thread: bool | None = None,
         *,
         litellm_params: Mapping[str, object] | None = None,
     ):
@@ -3134,7 +3182,7 @@ class OpenAIAssistantsAPI(BaseLLM):
         max_retries: int | None,
         organization: str | None,
         client=None,
-        aget_thread=None,
+        aget_thread: bool | None = None,
         *,
         litellm_params: Mapping[str, object] | None = None,
     ):
@@ -3221,7 +3269,7 @@ class OpenAIAssistantsAPI(BaseLLM):
         assistant_id: str,
         additional_instructions: str | None,
         instructions: str | None,
-        metadata: dict | None,
+        metadata: dict[str, str] | None,
         model: str | None,
         tools: Iterable[AssistantToolParam] | None,
         event_handler: AssistantEventHandler | None,
@@ -3291,7 +3339,7 @@ class OpenAIAssistantsAPI(BaseLLM):
         assistant_id: str,
         additional_instructions: str | None,
         instructions: str | None,
-        metadata: dict | None,
+        metadata: dict[str, str] | None,
         model: str | None,
         stream: bool | None,
         tools: Iterable[AssistantToolParam] | None,
@@ -3315,7 +3363,7 @@ class OpenAIAssistantsAPI(BaseLLM):
         assistant_id: str,
         additional_instructions: str | None,
         instructions: str | None,
-        metadata: dict | None,
+        metadata: dict[str, str] | None,
         model: str | None,
         stream: bool | None,
         tools: Iterable[AssistantToolParam] | None,
@@ -3350,7 +3398,7 @@ class OpenAIAssistantsAPI(BaseLLM):
         max_retries: int | None,
         organization: str | None,
         client=None,
-        arun_thread=None,
+        arun_thread: bool | None = None,
         event_handler: AssistantEventHandler | None = None,
         *,
         litellm_params: Mapping[str, object] | None = None,

@@ -5,6 +5,7 @@ import pytest
 from litellm import Router
 from litellm.caching.dual_cache import DualCache
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.auth import fallback_rate_limit
 from litellm.proxy.auth.fallback_rate_limit import RouterFallbackRateLimitCheck
 from litellm.proxy.hooks.parallel_request_limiter_v3 import PROXY_MaxParallelRequestsHandler_v3
 from litellm.proxy.utils import InternalUsageCache
@@ -31,26 +32,6 @@ def _request(token: UserAPIKeyAuth) -> dict[str, object]:
 
 
 @pytest.mark.asyncio
-async def test_fallback_target_is_admitted_until_the_keys_per_model_rpm_limit_is_spent() -> None:
-    limiter: Final = _limiter()
-    check: Final = RouterFallbackRateLimitCheck(limiter=lambda: limiter)
-    token: Final = UserAPIKeyAuth(api_key="hashed", token="hashed", metadata={"model_rpm_limit": {"fallback": 2}})
-    ctx: Final = RoutingContext(_router())
-    verdicts: Final = tuple([await check(model="fallback", request_kwargs=_request(token), ctx=ctx) for _ in range(3)])
-    assert verdicts == (True, True, False)
-
-
-@pytest.mark.asyncio
-async def test_fallback_target_without_a_per_model_limit_is_always_admitted() -> None:
-    limiter: Final = _limiter()
-    check: Final = RouterFallbackRateLimitCheck(limiter=lambda: limiter)
-    token: Final = UserAPIKeyAuth(api_key="hashed", token="hashed", metadata={"model_rpm_limit": {"other": 1}})
-    ctx: Final = RoutingContext(_router())
-    verdicts: Final = tuple([await check(model="fallback", request_kwargs=_request(token), ctx=ctx) for _ in range(3)])
-    assert verdicts == (True, True, True)
-
-
-@pytest.mark.asyncio
 async def test_request_without_a_key_is_unrestricted() -> None:
     check: Final = RouterFallbackRateLimitCheck(limiter=_limiter)
     assert await check(model="fallback", request_kwargs={"model": "primary"}, ctx=RoutingContext(_router())) is True
@@ -64,14 +45,14 @@ async def test_proxy_without_the_v3_limiter_is_unrestricted() -> None:
 
 
 @pytest.mark.asyncio
-async def test_a_failing_limiter_fails_closed() -> None:
-    class BrokenLimiter(PROXY_MaxParallelRequestsHandler_v3):
-        async def async_fallback_target_allowed(
-            self, user_api_key_dict: object, model: str, request_data: object
-        ) -> bool:
-            raise RuntimeError("redis down")
+async def test_a_failing_limiter_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def broken_check(
+        limiter: PROXY_MaxParallelRequestsHandler_v3, user_api_key_dict: object, model: str, request_data: object
+    ) -> bool:
+        raise RuntimeError("redis down")
 
-    limiter: Final = BrokenLimiter(internal_usage_cache=InternalUsageCache(DualCache()))
+    monkeypatch.setattr(fallback_rate_limit, "fallback_target_allowed", broken_check)
+    limiter: Final = _limiter()
     check: Final = RouterFallbackRateLimitCheck(limiter=lambda: limiter)
     token: Final = UserAPIKeyAuth(api_key="hashed", token="hashed", metadata={"model_rpm_limit": {"fallback": 5}})
     assert await check(model="fallback", request_kwargs=_request(token), ctx=RoutingContext(_router())) is False

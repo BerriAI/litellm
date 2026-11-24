@@ -9,8 +9,10 @@ import type { Organization } from "@/components/networking";
 import i18n from "@/i18n/i18n";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 
+export type BudgetScope = "Key" | "Team" | "Team member" | "Organization" | "User";
+
 export interface InheritedBudgetGate {
-  scope: "Team" | "Team member" | "Organization" | "User";
+  scope: Exclude<BudgetScope, "Key">;
   alias: string;
   maxBudget: number;
   budgetDuration: string | null;
@@ -40,10 +42,18 @@ export interface TeamMemberBudgetSource {
         litellm_budget_table?: MemberBudgetRow;
       }[]
     | null;
+  pending_user_ids?: readonly string[];
 }
 
-type TeamBudgetSource = Pick<Team, "team_id" | "team_alias" | "max_budget" | "budget_duration">;
-type OrganizationBudgetSource = Pick<Organization, "organization_id" | "organization_alias" | "litellm_budget_table">;
+type TeamBudgetSource = Pick<Team, "team_id" | "team_alias" | "max_budget" | "budget_duration"> & {
+  spend?: number | null;
+};
+type OrganizationBudgetSource = Pick<
+  Organization,
+  "organization_id" | "organization_alias" | "litellm_budget_table"
+> & {
+  spend?: number | null;
+};
 
 export interface UserBudgetSource {
   user_id: string;
@@ -51,6 +61,7 @@ export interface UserBudgetSource {
   user_email?: string | null;
   max_budget?: number | null;
   budget_duration?: string | null;
+  spend?: number | null;
 }
 
 const teamGate = (team: TeamBudgetSource | null | undefined): InheritedBudgetGate | null =>
@@ -60,6 +71,7 @@ const teamGate = (team: TeamBudgetSource | null | undefined): InheritedBudgetGat
         alias: team.team_alias || team.team_id,
         maxBudget: team.max_budget,
         budgetDuration: team.budget_duration ?? null,
+        spend: team.spend,
       }
     : null;
 
@@ -72,6 +84,7 @@ const organizationGate = (organization: OrganizationBudgetSource | null | undefi
         alias: organization.organization_alias || organization.organization_id,
         maxBudget: budgetTable.max_budget,
         budgetDuration: budgetTable.budget_duration ?? null,
+        spend: organization.spend,
       }
     : null;
 };
@@ -83,6 +96,7 @@ const userGate = (user: UserBudgetSource | null | undefined): InheritedBudgetGat
         alias: user.user_alias || user.user_email || user.user_id,
         maxBudget: user.max_budget,
         budgetDuration: user.budget_duration ?? null,
+        spend: user.spend,
       }
     : null;
 
@@ -107,6 +121,7 @@ export const teamMemberBudgetGate = (
   now: Date = new Date(),
 ): InheritedBudgetGate | null => {
   if (!teamInfo || !userId) return null;
+  if (teamInfo.pending_user_ids?.includes(userId)) return null;
 
   const membership = teamInfo.team_memberships?.find((row) => row.user_id === userId);
   const membershipBudget = membership?.litellm_budget_table;
@@ -142,7 +157,8 @@ export const keyOwnerBudgetSource = (
   applyUserBudgetToTeamKeys: boolean,
 ): UserBudgetSource | null => (!key.team_id || applyUserBudgetToTeamKeys ? key.user ?? null : null);
 
-const SCOPE_LABELS: Record<InheritedBudgetGate["scope"], ParseKeys> = {
+export const SCOPE_LABELS: Record<BudgetScope, ParseKeys> = {
+  Key: "shared.inheritedBudgetHint.scopes.key",
   Team: "shared.inheritedBudgetHint.scopes.team",
   "Team member": "shared.inheritedBudgetHint.scopes.teamMember",
   Organization: "shared.inheritedBudgetHint.scopes.organization",

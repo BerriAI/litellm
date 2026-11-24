@@ -4,7 +4,7 @@ use litellm_host::interceptors::RetriedRequest;
 use litellm_secret_value::SecretValue;
 use serde_json::Value;
 
-use litellm_core_utils::settings::resolve_non_empty;
+use litellm_env::resolve_non_empty;
 use litellm_llms_types::{
     formats::messages::{MessagesOptionalParams, MessagesRequest},
     providers::anthropic::{DEFAULT_HEADERS, MESSAGES_PATH},
@@ -24,7 +24,7 @@ use crate::{
         auth::{AuthScheme, Headers, ValidatedEnvironment},
         messages::{
             context::{MessagesShapeOptions, MessagesTransformContext},
-            transformation::BaseMessagesConfig,
+            transformation::{MessagesAuth, MessagesDialect, MessagesEndpoint, MessagesReply},
         },
     },
 };
@@ -36,29 +36,28 @@ const DEFAULT_BASE: &str = "https://api.minimax.io/anthropic";
 pub struct MinimaxMessagesConfig;
 pub const MINIMAX_MESSAGES_CONFIG: MinimaxMessagesConfig = MinimaxMessagesConfig;
 
-impl BaseMessagesConfig for MinimaxMessagesConfig {
-    fn tool_custom_field(&self, _model: &str) -> crate::base_llm::messages::tools::ToolCustomField {
-        crate::base_llm::messages::tools::ToolCustomField::Rewrite {
-            hoist_defer_loading: false,
+impl MessagesEndpoint for MinimaxMessagesConfig {
+    fn get_complete_url(
+        &self,
+        api_base: Option<&str>,
+        _model: &str,
+        _params: &LitellmParams,
+        _stream: bool,
+        env: &dyn Fn(&str) -> Option<String>,
+    ) -> Result<String, Error> {
+        let base = resolve_non_empty(api_base, env, &[API_BASE_ENV])
+            .unwrap_or_else(|| DEFAULT_BASE.into());
+        let base = base.trim_end_matches('/');
+        if base.ends_with(MESSAGES_PATH) {
+            return Ok(base.into());
         }
+        Ok(format!("{base}{MESSAGES_PATH}"))
     }
+}
 
-    fn retry_after_http_error(
-        &self,
-        status: u16,
-        error_text: &str,
-        request_body: &Value,
-        context: &MessagesTransformContext,
-    ) -> Option<RetriedRequest> {
-        retry_anthropic_messages_after_http_error(status, error_text, request_body, context)
-    }
-
-    fn shape_request(
-        &self,
-        request: MessagesRequest,
-        options: MessagesShapeOptions,
-    ) -> Result<MessagesRequest, Error> {
-        shape_anthropic_messages_request(request, options)
+impl MessagesAuth for MinimaxMessagesConfig {
+    fn secret_names(&self) -> &'static [&'static str] {
+        &[API_KEY_ENV, API_BASE_ENV]
     }
 
     fn validate_environment(
@@ -90,22 +89,21 @@ impl BaseMessagesConfig for MinimaxMessagesConfig {
             },
         })
     }
+}
 
-    fn get_complete_url(
+impl MessagesDialect for MinimaxMessagesConfig {
+    fn shape_request(
         &self,
-        api_base: Option<&str>,
-        _model: &str,
-        _params: &LitellmParams,
-        _stream: bool,
-        env: &dyn Fn(&str) -> Option<String>,
-    ) -> Result<String, Error> {
-        let base = resolve_non_empty(api_base, env, &[API_BASE_ENV])
-            .unwrap_or_else(|| DEFAULT_BASE.into());
-        let base = base.trim_end_matches('/');
-        if base.ends_with(MESSAGES_PATH) {
-            return Ok(base.into());
+        request: MessagesRequest,
+        options: MessagesShapeOptions,
+    ) -> Result<MessagesRequest, Error> {
+        shape_anthropic_messages_request(request, options)
+    }
+
+    fn tool_custom_field(&self, _model: &str) -> crate::base_llm::messages::tools::ToolCustomField {
+        crate::base_llm::messages::tools::ToolCustomField::Rewrite {
+            hoist_defer_loading: false,
         }
-        Ok(format!("{base}{MESSAGES_PATH}"))
     }
 
     fn transform_anthropic_messages_request(
@@ -126,16 +124,24 @@ impl BaseMessagesConfig for MinimaxMessagesConfig {
         })
     }
 
-    fn secret_names(&self) -> &'static [&'static str] {
-        &[API_KEY_ENV, API_BASE_ENV]
-    }
-
     fn default_headers(&self) -> &'static [(&'static str, &'static str)] {
         DEFAULT_HEADERS
     }
 
     fn request_headers(&self, headers: Headers, request: &MessagesRequest) -> Headers {
         update_headers_with_anthropic_beta(headers, request)
+    }
+}
+
+impl MessagesReply for MinimaxMessagesConfig {
+    fn retry_after_http_error(
+        &self,
+        status: u16,
+        error_text: &str,
+        request_body: &Value,
+        context: &MessagesTransformContext,
+    ) -> Option<RetriedRequest> {
+        retry_anthropic_messages_after_http_error(status, error_text, request_body, context)
     }
 }
 

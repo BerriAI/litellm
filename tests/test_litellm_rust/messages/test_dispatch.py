@@ -12,9 +12,9 @@ from litellm.exceptions import UnsupportedParamsError
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.websearch_interception.handler import WebSearchInterceptionLogger
 from litellm.llms.anthropic.messages.native import handler as python_messages
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.anthropic.messages.native import interceptors as messages_interceptors
 from litellm.llms.anthropic.messages.native.interceptors import MessagesInterceptor
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.messages import dispatch
 from litellm.messages.dispatch import (
     _ADISPATCH,  # pyright: ignore[reportPrivateUsage]  # tests configured dispatch
@@ -254,6 +254,50 @@ def test_only_requests_a_provider_messages_config_serves_reach_a_messages_target
         rules=(RouteRule(Route.MESSAGES, Rollout.RUST_REQUIRED, targets=frozenset({Target.MESSAGES})),),
     )
     assert result is (native_result if passes_through else python_result)
+
+
+BEDROCK_INVOKE_MODEL: Final = "bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0"
+
+
+@pytest.mark.parametrize(
+    ("model", "target"),
+    (
+        pytest.param(BEDROCK_INVOKE_MODEL, Target.MESSAGES, id="invoke"),
+        pytest.param(
+            "bedrock/invoke/us.anthropic.claude-sonnet-4-5-20250929-v1:0", Target.MESSAGES, id="explicit-invoke"
+        ),
+        pytest.param("bedrock/us-west-2/us.anthropic.claude-sonnet-4-5-20250929-v1:0", Target.MESSAGES, id="regional"),
+        pytest.param("bedrock/claude_platform/claude-sonnet-4-5", Target.MESSAGES, id="claude-platform"),
+        pytest.param("bedrock/mantle/anthropic.claude-sonnet-5", Target.MESSAGES, id="mantle"),
+        pytest.param("bedrock_mantle/anthropic.claude-sonnet-5", Target.MESSAGES, id="bedrock-mantle"),
+        pytest.param(
+            "bedrock_mantle/us-east-1/anthropic.claude-sonnet-5", Target.MESSAGES, id="bedrock-mantle-regional"
+        ),
+        pytest.param("bedrock_mantle/openai.gpt-oss-120b", Target.CHAT_COMPLETIONS, id="bedrock-mantle-non-claude"),
+        pytest.param(
+            "bedrock/converse/us.anthropic.claude-sonnet-4-5-20250929-v1:0", Target.CHAT_COMPLETIONS, id="converse"
+        ),
+        pytest.param("bedrock/us.meta.llama3-2-11b-instruct-v1:0", Target.CHAT_COMPLETIONS, id="non-claude"),
+    ),
+)
+def test_only_claude_bedrock_messages_routes_reach_the_messages_target(model: str, target: Target) -> None:
+    python_result: Final = response(model)
+    native_result: Final = response(model)
+
+    def python(*call_args: object, **call_kwargs: object) -> AnthropicMessagesResponse:  # kwargs-ok: fallback
+        return python_result
+
+    result: Final = _DISPATCH.run(
+        (16, MESSAGES, model),
+        {},
+        python=python,
+        binding=messages_binding(lambda request: native_result),
+        native=lambda hook, request, call_args, call_kwargs: hook(request),
+        rules=(RouteRule(Route.MESSAGES, Rollout.RUST_REQUIRED, targets=frozenset({Target.MESSAGES})),),
+    )
+
+    assert dispatch.messages_target(model, None, None, None) is target
+    assert result is (native_result if target is Target.MESSAGES else python_result)
 
 
 DANGEROUS_TOOL_USE: Final = [{"type": "dangerous_tool_use", "classifier_context": {"permission_mode": "auto"}}]
@@ -759,6 +803,57 @@ async def test_anthropic_runs_on_rust_without_the_opt_in(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("asynchronous", (False, True), ids=("sync", "async"))
 @pytest.mark.parametrize(
+    "model",
+    (
+        pytest.param(BEDROCK_INVOKE_MODEL, id="invoke"),
+        pytest.param("bedrock/mantle/anthropic.claude-sonnet-5", id="mantle-route"),
+        pytest.param("bedrock_mantle/anthropic.claude-sonnet-5", id="bedrock-mantle"),
+        pytest.param("bedrock/claude_platform/claude-sonnet-4-5", id="claude-platform"),
+    ),
+)
+async def test_bedrock_messages_run_on_rust_without_the_opt_in(
+    monkeypatch: pytest.MonkeyPatch, shipped_native: list[str], asynchronous: bool, model: str
+) -> None:
+    monkeypatch.setenv("LITELLM_RUST", "0")
+    monkeypatch.setattr(litellm, "callbacks", [])
+
+    def python(*call_args: object, **call_kwargs: object) -> AnthropicMessagesResponse:  # kwargs-ok: rejected fallback
+        pytest.fail(f"{model} has no Python Messages path")
+
+    with rebound(dispatch, "_PYTHON_MESSAGES", python), rebound(dispatch, "_PYTHON_AMESSAGES", python):
+        result: Final = await _public(asynchronous, model, {})
+
+    assert isinstance(result, dict)
+    assert shipped_native == ["async" if asynchronous else "sync"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "model",
+    (
+        pytest.param("bedrock/converse/us.anthropic.claude-sonnet-4-5-20250929-v1:0", id="converse"),
+        pytest.param("bedrock/us.meta.llama3-2-11b-instruct-v1:0", id="non-claude"),
+    ),
+)
+async def test_other_bedrock_messages_keep_python(
+    monkeypatch: pytest.MonkeyPatch, shipped_native: list[str], model: str
+) -> None:
+    monkeypatch.setattr(litellm, "callbacks", [])
+    python_result: Final = response(model)
+
+    async def apython(*call_args: object, **call_kwargs: object) -> AnthropicMessagesResponse:  # kwargs-ok: stub
+        return python_result
+
+    with rebound(dispatch, "_PYTHON_AMESSAGES", apython):
+        result: Final = await _public(True, model, {})
+
+    assert result is python_result
+    assert shipped_native == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", (False, True), ids=("sync", "async"))
+@pytest.mark.parametrize(
     "model", ("anthropic/parity-tool-model", "anthropic/claude-sonnet-4-5"), ids=("non-claude", "claude")
 )
 async def test_proxy_classified_safeguards_run_on_rust(
@@ -982,6 +1077,12 @@ async def test_azure_ai_runs_on_rust_only_where_its_claude_config_serves_the_cal
             False,
             id="azure-ai-non-claude-passthrough",
         ),
+        pytest.param(BEDROCK_INVOKE_MODEL, {}, True, id="bedrock-invoke"),
+        pytest.param("bedrock/mantle/anthropic.claude-sonnet-5", {}, True, id="bedrock-mantle-route"),
+        pytest.param("bedrock_mantle/anthropic.claude-sonnet-5", {}, True, id="bedrock-mantle"),
+        pytest.param("bedrock/claude_platform/claude-sonnet-4-5", {}, True, id="claude-platform"),
+        pytest.param("bedrock_mantle/openai.gpt-oss-120b", {}, False, id="bedrock-mantle-non-claude"),
+        pytest.param("bedrock/converse/us.anthropic.claude-sonnet-4-5-20250929-v1:0", {}, False, id="converse"),
         pytest.param("deepseek/deepseek-v4-flash", {}, False, id="deepseek"),
     ),
 )

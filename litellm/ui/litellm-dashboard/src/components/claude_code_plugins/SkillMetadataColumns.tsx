@@ -4,13 +4,16 @@ import { DateCell, StatusBadge } from "@/components/shared/table_cells";
 import { Badge } from "@/components/ui/badge";
 import i18n from "@/i18n/i18n";
 import type { SkillCatalogMetadata } from "./skillCatalog";
+import { userIdentityLabel, type UserIdentityLookup } from "@/app/(dashboard)/hooks/users/useUsers";
 
 const IDENTITY_LABELS = {
   created_by: "skills.table.columns.createdBy",
   approved_by: "skills.table.columns.approvedBy",
 } as const;
 
-export function getSkillMetadataColumns<T extends SkillCatalogMetadata>(): ColumnDef<T>[] {
+export function getSkillMetadataColumns<T extends SkillCatalogMetadata>(
+  users: UserIdentityLookup = {},
+): ColumnDef<T>[] {
   return [
     {
       id: "download_count",
@@ -46,10 +49,15 @@ export function getSkillMetadataColumns<T extends SkillCatalogMetadata>(): Colum
         accessorKey: field,
         size: 190,
         enableSorting: true,
-        header: ({ column }) => <DataTableSortHeader column={column} title={i18n.t(IDENTITY_LABELS[field])} />,
+        header: ({ column }) => (
+          <DataTableSortHeader
+            column={column}
+            title={<span title={i18n.t("skills.table.identitySortHelp")}>{i18n.t(IDENTITY_LABELS[field])}</span>}
+          />
+        ),
         cell: ({ row }) => (
           <span className="block max-w-48 truncate text-xs" title={row.original[field] ?? undefined}>
-            {row.original[field] || i18n.t("skills.table.notRecorded")}
+            {userIdentityLabel(row.original[field], users) || i18n.t("skills.table.notRecorded")}
           </span>
         ),
       }),

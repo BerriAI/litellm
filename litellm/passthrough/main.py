@@ -320,7 +320,7 @@ async def allm_passthrough_route(
     params: QueryParamTypes | None = None,
     cookies: CookieTypes | None = None,
     client: HTTPHandler | AsyncHTTPHandler | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> httpx.Response | AsyncGenerator[bytes, bytes]:
     """
     Async: Reranks a list of documents based on their relevance to the query
@@ -587,8 +587,14 @@ def llm_passthrough_route(
         request_data=_streaming_request_data,
     )
 
-    # Update logging object with streaming status
     litellm_logging_obj.stream = is_streaming_request
+    litellm_logging_obj.model_call_details["stream"] = is_streaming_request
+    litellm_logging_obj.passthrough_stream = is_streaming_request
+    logged_request: Final = provider_config.logged_request(endpoint=endpoint, request_data=_streaming_request_data)
+    if logged_request is not None:
+        litellm_logging_obj.passthrough_model_parameters = logged_request.model_parameters
+    if logged_request is not None and logged_request.messages:
+        litellm_logging_obj.update_messages(list(logged_request.messages))
 
     ## LOGGING PRE-CALL
     request_data: Final = data if data else json

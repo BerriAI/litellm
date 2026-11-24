@@ -1,3 +1,5 @@
+//! Scopes a route machine's execution to the call's sink, so events from its steps reach Python.
+
 use std::sync::OnceLock;
 
 use litellm_host::{

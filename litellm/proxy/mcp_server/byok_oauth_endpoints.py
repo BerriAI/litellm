@@ -92,7 +92,7 @@ def user_id_from_session_cookie(request: Request) -> str | None:
 _user_id_from_session_cookie: Final = user_id_from_session_cookie
 
 
-def _session_identity_from_cookie(request: Request) -> tuple[str | None, str | None]:
+def session_identity_from_cookie(request: Request) -> tuple[str | None, str | None]:
     """Return ``(user_id, session_key)`` from the UI ``token`` cookie
     (HS256-signed with ``master_key``), or ``(None, None)`` if missing/invalid.
 
@@ -135,6 +135,9 @@ def _session_identity_from_cookie(request: Request) -> tuple[str | None, str | N
     return user_id, session_key if isinstance(session_key, str) and session_key else None
 
 
+_session_identity_from_cookie: Final = session_identity_from_cookie
+
+
 async def _session_key_is_live(session_key: str | None) -> bool:
     """Whether the session key embedded in the UI cookie still resolves.
 
@@ -175,7 +178,8 @@ async def _session_key_is_live(session_key: str | None) -> bool:
     return True
 
 
-async def get_authenticated_browser_user_id(request: Request) -> str | None:
+async def live_browser_session(request: Request) -> tuple[str, str | None] | None:
+    """``(cookie user_id, session key user_id)`` when the dashboard cookie's session key is still live, else None."""
     from datetime import datetime, timezone
 
     from pydantic import TypeAdapter, ValidationError
@@ -201,14 +205,19 @@ async def get_authenticated_browser_user_id(request: Request) -> str | None:
         )
     except Exception:
         return None
-    if auth is None or auth.user_id != user_id or auth.blocked or auth.expires is None:
+    if auth is None or auth.blocked or auth.expires is None:
         return None
     try:
         expiration: Final = TypeAdapter(datetime).validate_python(auth.expires)
     except ValidationError:
         return None
     expires: Final = expiration.replace(tzinfo=timezone.utc) if expiration.tzinfo is None else expiration
-    return user_id if expires > datetime.now(timezone.utc) else None
+    return (user_id, auth.user_id) if expires > datetime.now(timezone.utc) else None
+
+
+async def get_authenticated_browser_user_id(request: Request) -> str | None:
+    session: Final = await live_browser_session(request)
+    return session[0] if session is not None and session[0] == session[1] else None
 
 
 async def _byok_session_auth(request: Request) -> UserAPIKeyAuth:

@@ -22,6 +22,7 @@ from typing_extensions import ReadOnly, Required
 import litellm
 from litellm._uuid import uuid
 from litellm.constants import DEFAULT_CHAT_COMPLETION_PARAM_VALUES, RESPONSE_FORMAT_TOOL_NAME
+from litellm.exceptions import UnsupportedParamsError
 from litellm.files.types import FileContentStreamingResult
 from litellm.files.utils import FilesAPIUtils
 from litellm.litellm_core_utils.cloud_storage_security import (
@@ -33,17 +34,27 @@ from litellm.litellm_core_utils.cloud_storage_security import (
     split_configured_cloud_bucket_name,
     validate_managed_cloud_file_id,
 )
-from litellm.litellm_core_utils.core_helpers import as_str_mapping, drops_unsupported_params, iter_items
+from litellm.litellm_core_utils.core_helpers import (
+    allowed_openai_param_names,
+    as_object_list,
+    as_str_mapping,
+    iter_items,
+)
 from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.litellm_core_utils.prompt_templates.common_utils import JSON_SCHEMA_KEPT_REF_SIBLINGS, defs_unpacked
 from litellm.litellm_core_utils.prompt_templates.file_id_utils import (
     extract_file_data,
     extract_file_metadata,
 )
+from litellm.litellm_core_utils.tool_fields import hosted_mcp_batch_row_remedy, tool_params_without_hosted_mcp
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.anthropic.chat.transformation import ANTHROPIC_TOOL_NAME_REVERSE_MAP_KEY
 from litellm.llms.base_llm.base_utils import map_developer_role_to_system_role
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
-from litellm.llms.base_llm.files.batch_records import responses_batch_body_to_chat_body
+from litellm.llms.base_llm.files.batch_records import (
+    responses_batch_body_to_chat_body,
+    row_or_deployment_drop_params,
+)
 from litellm.llms.base_llm.files.transformation import (
     BaseFilesConfig,
     BaseFileUploadStream,
@@ -63,6 +74,7 @@ from litellm.llms.vertex_ai.common_utils import (
 )
 from litellm.llms.vertex_ai.gemini.transformation import transform_request_body
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+    VERTEX_SHARED_REQUEST_TIERS,
     VertexGeminiConfig,
 )
 from litellm.llms.vertex_ai.gemini_embeddings.batch_embed_content_transformation import (
@@ -73,8 +85,10 @@ from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.transformation im
 from litellm.types.files import StreamingMediaUploadConfig
 from litellm.types.llms.openai import (
     AllMessageValues,
+    BatchInputFormat,
     CreateFileRequest,
     FileContent,
+    FileContentRequest,
     FileTypes,
     HttpxBinaryResponseContent,
     OpenAICreateFileRequestOptionalParams,
@@ -116,6 +130,14 @@ _BATCH_OUTPUT_FIRST_ROW_PEEK_LIMIT_BYTES: Final = 32 * 1024 * 1024
 _PASSTHROUGH_MANAGED_GCS_PREFIX: Final = f"{VERTEX_AI_MANAGED_GCS_PREFIX}passthrough/"
 _RAW_UPLOAD_CHUNK_BYTES: Final = 1024 * 1024
 _DECODED_JSON: Final = TypeAdapter(object)
+_JSON_OBJECT: Final = TypeAdapter(dict[str, object])
+_JSON_SCHEMA_ANNOTATIONS: Final = frozenset({"$schema", "$id", "$comment", "$anchor"})
+_JSON_SCHEMA_LITERAL_KEYWORDS: Final = frozenset({"const", "default", "enum", "example", "examples"})
+_JSON_SCHEMA_NAMED_SCHEMA_KEYWORDS: Final = frozenset(
+    {"properties", "patternProperties", "dependentSchemas", "definitions", "$defs"}
+)
+_INLINABLE_JSON_SCHEMA_REF: Final = re.compile(r"#/(\$defs|definitions)/[^/]+")
+_INLINED_REF_SIBLINGS: Final = JSON_SCHEMA_KEPT_REF_SIBLINGS | frozenset({"$ref", "$defs", "definitions"})
 
 
 class _GcsObjectMetadataJson(TypedDict, total=False):
@@ -134,8 +156,13 @@ class _VertexBatchRowRequest(TypedDict, total=False):
     labels: ReadOnly[Mapping[str, object]]
 
 
+class _VertexBatchRowResponse(TypedDict, total=False):
+    modelVersion: ReadOnly[str]
+
+
 class _VertexBatchRow(TypedDict, total=False):
     request: ReadOnly[_VertexBatchRowRequest]
+    response: ReadOnly[_VertexBatchRowResponse]
     status: ReadOnly[str]
     processed_time: ReadOnly[str]
 
@@ -210,7 +237,7 @@ def _encode_gcp_label_value_chunks(value: str) -> list[str]:
 
 def _decode_gcp_label_value_chunks(values: list[str]) -> str | None:
     """Decode values produced by _encode_gcp_label_value_chunks."""
-    encoded_parts: Final = []
+    encoded_parts: Final[list[str]] = []
     for value in values:
         if not value.startswith(_CUSTOM_ID_RAW_LABEL_PREFIX):
             return None
@@ -267,7 +294,7 @@ def _get_litellm_batch_custom_id_from_labels(labels: Mapping[str, object] | None
     if raw:
         raw_chunks: Final = [str(raw)]
         chunk_prefix: Final = "litellm_custom_id_raw_"
-        indexed_chunks: Final = []
+        indexed_chunks: Final[list[tuple[int, str]]] = []
         for key, value in labels.items():
             if key.startswith(chunk_prefix) and key[len(chunk_prefix) :].isdigit():
                 indexed_chunks.append((int(key[len(chunk_prefix) :]), str(value)))
@@ -794,11 +821,18 @@ def _openai_batch_jsonl_entry_to_vertex_anthropic_row(
     config: Final = VertexAIAnthropicConfig()
     bare_model: Final = model.rsplit("/", 1)[-1]
     params: Final = {**deployment_params, **request_params}
-    drop_params: Final = drops_unsupported_params(params.get("drop_params"))
-    chat_params: Final = {
-        **get_non_default_completion_params(params),
-        **{key: value for key, value in params.items() if key in _CLAUDE_BATCH_OPENAI_PARAMS},
-    }
+    drop_params: Final = row_or_deployment_drop_params(request_params, deployment_params.get("drop_params"))
+    chat_params: Final = tool_params_without_hosted_mcp(
+        {
+            **get_non_default_completion_params(params),
+            **{key: value for key, value in params.items() if key in _CLAUDE_BATCH_OPENAI_PARAMS},
+        },
+        model=bare_model,
+        route="vertex_ai",
+        drop_params=drop_params,
+        remedy=hosted_mcp_batch_row_remedy(request_params.get("drop_params")),
+        handling="drops",
+    )
     if any(map(_names_the_response_format_tool, iter_items(chat_params.get("tools") or ()))):
         raise ValueError(
             f"tool name {RESPONSE_FORMAT_TOOL_NAME!r} is reserved for response_format on Claude, "
@@ -837,11 +871,167 @@ def _openai_batch_jsonl_entry_to_vertex_anthropic_row(
         else {
             **anthropic_request,
             **config.transform_extra_body(
-                extra_body=extra_body, request=anthropic_request, model=bare_model, litellm_params={}
+                extra_body=extra_body, request=anthropic_request, model=bare_model, litellm_params=request_state
             ),
         }
     )
     return {"custom_id": str(custom_id), "request": request}
+
+
+@dataclass(frozen=True, slots=True)
+class _SchemaObject:
+    pairs: tuple[tuple[str, object], ...]
+
+
+@dataclass(frozen=True, slots=True)
+class _SchemaLiteral:
+    value: object
+
+
+@dataclass(frozen=True, slots=True)
+class _NamedSchemas:
+    value: object
+
+
+def _schema_object(pairs: Sequence[tuple[str, object]]) -> _SchemaObject:
+    return _SchemaObject(tuple(pairs))
+
+
+def _decoded_schema_object(node: _SchemaObject) -> Mapping[str, object]:
+    return dict(node.pairs)
+
+
+def _bigquery_loadable_literal(value: object) -> object:
+    items: Final = as_object_list(value)
+    if items is not None:
+        return tuple(_SchemaLiteral(item) for item in items)
+    if not isinstance(value, _SchemaObject):
+        return value
+    refused: Final = sorted(key for key, _ in value.pairs if "$" in key)
+    if refused:
+        raise ValueError(
+            f"json_schema keys {refused} inside a const, default, enum, or example value cannot go in a Vertex AI "
+            "batch, because BigQuery column names cannot hold '$'"
+        )
+    return {key: _SchemaLiteral(child) for key, child in value.pairs}
+
+
+def _bigquery_loadable_named_schemas(value: object) -> object:
+    if not isinstance(value, _SchemaObject):
+        return value
+    refused: Final = sorted(name for name, _ in value.pairs if "$" in name)
+    if refused:
+        raise ValueError(
+            f"json_schema property names {refused} cannot go in a Vertex AI batch, because BigQuery column names "
+            "cannot hold '$'"
+        )
+    return dict(value.pairs)
+
+
+def _schema_child(key: str, value: object) -> object:
+    if key in _JSON_SCHEMA_LITERAL_KEYWORDS:
+        return _SchemaLiteral(value)
+    if key in _JSON_SCHEMA_NAMED_SCHEMA_KEYWORDS:
+        return _NamedSchemas(value)
+    return value
+
+
+def _inlinable_schema_object(pairs: tuple[tuple[str, object], ...], drop_params: bool) -> Mapping[str, object]:
+    node: Final = dict(pairs)
+    if "$ref" not in node:
+        return {key: _schema_child(key, value) for key, value in pairs}
+    ref: Final = node["$ref"]
+    if not (isinstance(ref, str) and _INLINABLE_JSON_SCHEMA_REF.fullmatch(ref)):
+        shown: Final = ref if isinstance(ref, str) else json.dumps(ref, default=_decoded_schema_object)
+        raise ValueError(
+            f"json_schema refs {[shown]} cannot go in a Vertex AI batch, because only refs of the form "
+            "#/$defs/<name> are inlined and BigQuery column names cannot hold '$'"
+        )
+    dropped: Final = sorted(key for key in node if key not in _INLINED_REF_SIBLINGS)
+    if dropped and not drop_params:
+        raise ValueError(
+            f"json_schema keys {dropped} next to a $ref cannot go in a Vertex AI batch, because the ref is inlined "
+            "and only annotations and required carry over to its target. Remove them, or set drop_params to drop them"
+        )
+    return {key: _schema_child(key, value) for key, value in pairs}
+
+
+def _bigquery_loadable_schema_object(pairs: tuple[tuple[str, object], ...], drop_params: bool) -> Mapping[str, object]:
+    annotations: Final = frozenset(
+        key for key, value in pairs if key in _JSON_SCHEMA_ANNOTATIONS and isinstance(value, str)
+    )
+    refused: Final = sorted(key for key, _ in pairs if "$" in key and key not in annotations)
+    if refused:
+        raise ValueError(
+            f"json_schema keys {refused} cannot go in a Vertex AI batch, because BigQuery column names cannot hold "
+            "'$'. Refs into $defs are inlined, so these are recursive refs, refs to a name no $defs block defines, "
+            "a nested $defs block, or other '$' keywords"
+        )
+    if annotations and not drop_params:
+        raise ValueError(
+            f"json_schema keys {sorted(annotations)} cannot go in a Vertex AI batch, because BigQuery column names "
+            "cannot hold '$'. Remove them, or set drop_params to drop them"
+        )
+    return {key: _schema_child(key, value) for key, value in pairs if key not in annotations}
+
+
+def _walked_schema_node(
+    node: _SchemaObject | _SchemaLiteral | _NamedSchemas,
+    schema_object: Callable[[tuple[tuple[str, object], ...]], Mapping[str, object]],
+) -> object:
+    if isinstance(node, _SchemaLiteral):
+        return _bigquery_loadable_literal(node.value)
+    if isinstance(node, _NamedSchemas):
+        return _bigquery_loadable_named_schemas(node.value)
+    return schema_object(node.pairs)
+
+
+def _walked_schema(
+    json_schema: Mapping[str, object], schema_object: Callable[[tuple[tuple[str, object], ...]], Mapping[str, object]]
+) -> Mapping[str, object]:
+    schema_tree: Final = _DECODED_JSON.validate_python(
+        json.loads(json.dumps(json_schema), object_pairs_hook=_schema_object)
+    )
+    return _JSON_OBJECT.validate_python(
+        json.loads(json.dumps(schema_tree, default=partial(_walked_schema_node, schema_object=schema_object)))
+    )
+
+
+def _bigquery_loadable_schema(json_schema: Mapping[str, object], drop_params: bool) -> Mapping[str, object]:
+    inlinable: Final = _walked_schema(json_schema, partial(_inlinable_schema_object, drop_params=drop_params))
+    return _walked_schema(
+        defs_unpacked(inlinable, keep_ref_siblings=True),
+        partial(_bigquery_loadable_schema_object, drop_params=drop_params),
+    )
+
+
+def _with_json_schema_config_in_its_own_column(
+    vertex_request_body: Mapping[str, object], drop_params: bool
+) -> Mapping[str, object]:
+    """
+    Vertex loads a batch file into one BigQuery table, so each row's `generationConfig` gains a null for every key
+    another row sets. `response_json_schema` is a `google.protobuf.Value`, so its null counts as set and fails the
+    row. Proto JSON takes both spellings of the field, so a row with a schema uses the one no other row shares.
+    BigQuery column names cannot hold `$` either, so the schema's `$defs` are inlined and any other `$` key is
+    dropped under drop_params when it is an annotation, else refused, and always refused inside a literal value.
+    Keys next to a `$ref` that do not carry over to its inlined target follow the same drop_params rule.
+    """
+    generation_config: Final = vertex_request_body.get("generationConfig")
+    if not isinstance(generation_config, Mapping) or "response_json_schema" not in generation_config:
+        return vertex_request_body
+    schema_config: Final = _JSON_OBJECT.validate_python(generation_config)
+    json_schema: Final = schema_config["response_json_schema"]
+    return {
+        **{key: value for key, value in vertex_request_body.items() if key != "generationConfig"},
+        "generation_config": {
+            **schema_config,
+            "response_json_schema": (
+                _bigquery_loadable_schema(_JSON_OBJECT.validate_python(json_schema), drop_params)
+                if isinstance(json_schema, Mapping)
+                else json_schema
+            ),
+        },
+    }
 
 
 def _openai_batch_jsonl_entry_to_vertex_rows(
@@ -874,7 +1064,14 @@ def _openai_batch_jsonl_entry_to_vertex_rows(
     if not isinstance(entry_body, dict):
         raise TypeError("`body` on batch requests must be a JSON object, but was missing or not an object")
     chat_request_body: Final = (
-        responses_batch_body_to_chat_body(entry_body, custom_llm_provider="vertex_ai")
+        {
+            **responses_batch_body_to_chat_body(
+                entry_body,
+                custom_llm_provider="vertex_ai",
+                drop_params=row_or_deployment_drop_params(entry_body, deployment_params.get("drop_params")),
+            ),
+            **{key: value for key, value in entry_body.items() if key == "drop_params" and value is not None},
+        }
         if _is_responses_batch_entry(openai_entry)
         else entry_body
     )
@@ -891,12 +1088,13 @@ def _openai_batch_jsonl_entry_to_vertex_rows(
                 deployment_params=deployment_params,
             ),
         )
+    drop_params: Final = row_or_deployment_drop_params(entry_body, deployment_params.get("drop_params"))
     vertex_request_body: Final = transform_request_body(
         messages=chat_messages,
         model=chat_request_body.get("model", ""),
         optional_params=map_openai_to_vertex_params(chat_request_body),
         custom_llm_provider="vertex_ai",
-        litellm_params={},
+        litellm_params={"drop_params": drop_params},
         cached_content=None,
     )
 
@@ -906,7 +1104,7 @@ def _openai_batch_jsonl_entry_to_vertex_rows(
             vertex_request_body["labels"] = {}
         _set_litellm_batch_custom_id_labels(vertex_request_body["labels"], custom_id)
 
-    return ({"request": vertex_request_body},)
+    return ({"request": _with_json_schema_config_in_its_own_column(vertex_request_body, drop_params=drop_params)},)
 
 
 def _decode_batch_input_line(lineno: int, raw: str | bytes | bytearray) -> str:
@@ -1161,7 +1359,7 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
         headers: dict,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
+        optional_params: Mapping[str, object],
         litellm_params: dict,
         api_key: str | None = None,
         api_base: str | None = None,
@@ -1261,7 +1459,7 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,
+        optional_params: Mapping[str, object],
         litellm_params: Mapping[str, object],
         data: CreateFileRequest,
     ) -> str:
@@ -1307,7 +1505,7 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
 
     def map_openai_params(
         self,
-        non_default_params: dict,
+        non_default_params: Mapping[str, object],
         optional_params: dict,
         model: str,
         drop_params: bool,
@@ -1325,30 +1523,53 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
         config: Final = VertexGeminiConfig()
         raw_model: Final = openai_request_body.get("model", "")
         model: Final = raw_model if isinstance(raw_model, str) else ""
+        drop_params: Final = row_or_deployment_drop_params(openai_request_body, deployment_drop_params)
         sampling_params: Final = tuple(
             p for p in ("temperature", "top_p", "top_k") if openai_request_body.get(p) is not None
         )
         if sampling_params and not VertexGeminiConfig.supports_sampling_params(model):
             VertexGeminiConfig.reject_unsupported_sampling_param(
-                model=model, param=", ".join(sampling_params), drop_params=False
+                model=model, param=", ".join(sampling_params), drop_params=drop_params
             )
         vertex_params: Final = config.map_openai_params(
             model=model,
-            non_default_params=openai_request_body,
+            non_default_params=tool_params_without_hosted_mcp(
+                openai_request_body,
+                model=model,
+                route="vertex_ai",
+                drop_params=drop_params,
+                remedy=hosted_mcp_batch_row_remedy(openai_request_body.get("drop_params")),
+                handling="drops",
+            ),
             optional_params={},
-            drop_params=drops_unsupported_params(openai_request_body.get("drop_params", deployment_drop_params)),
+            drop_params=drop_params,
             allow_integer_enums=False,
             allow_parameters_json_schema=False,
+            allowed_openai_params=allowed_openai_param_names(openai_request_body.get("allowed_openai_params")),
+            allow_unsupported_n=True,
         )
+        if (
+            "service_tier" in vertex_params
+            and vertex_params["service_tier"] in VERTEX_SHARED_REQUEST_TIERS
+            and not drop_params
+        ):
+            raise UnsupportedParamsError(
+                message=(
+                    "Vertex AI batch requests do not support `service_tier`, since batch jobs run on the batch tier. "
+                    "To drop this param, set `litellm.drop_params = True` or pass in `(.., drop_params=True)` "
+                    "in the request - https://docs.litellm.ai/docs/completion/drop_params"
+                ),
+                status_code=400,
+            )
         return vertex_params
 
     def transform_create_file_request(
         self,
         model: str,
         create_file_data: CreateFileRequest,
-        optional_params: dict,
+        optional_params: Mapping[str, object],
         litellm_params: Mapping[str, object],
-    ) -> bytes | str | dict:
+    ) -> bytes | str | dict[str, object]:
         """
         2 Cases:
         1. Handle basic file upload
@@ -1396,7 +1617,7 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
         model: str | None,
         raw_response: Response,
         logging_obj: LiteLLMLoggingObj,
-        litellm_params: dict,
+        litellm_params: Mapping[str, object],
     ) -> OpenAIFileObject:
         """
         Transform VertexAI File upload response into OpenAI-style FileObject
@@ -1448,9 +1669,9 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
     def transform_retrieve_file_request(
         self,
         file_id: str,
-        optional_params: dict,
+        optional_params: Mapping[str, object],
         litellm_params: Mapping[str, object],
-    ) -> tuple[str, dict]:
+    ) -> tuple[str, dict[str, object]]:
         bucket, encoded_object = self._parse_gcs_uri(file_id, litellm_params)
         url: Final = f"https://storage.googleapis.com/storage/v1/b/{bucket}/o/{encoded_object}"
         return url, {}
@@ -1459,7 +1680,7 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
         self,
         raw_response: Response,
         logging_obj: LiteLLMLoggingObj,
-        litellm_params: dict,
+        litellm_params: Mapping[str, object],
     ) -> OpenAIFileObject:
         response_json: Final[_GcsObjectJson] = raw_response.json()
         gcs_id = response_json.get("id", "")
@@ -1478,9 +1699,9 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
     def transform_delete_file_request(
         self,
         file_id: str,
-        optional_params: dict,
+        optional_params: Mapping[str, object],
         litellm_params: Mapping[str, object],
-    ) -> tuple[str, dict]:
+    ) -> tuple[str, dict[str, object]]:
         bucket, encoded_object = self._parse_gcs_uri(file_id, litellm_params)
         url: Final = f"https://storage.googleapis.com/storage/v1/b/{bucket}/o/{encoded_object}"
         return url, {}
@@ -1489,7 +1710,7 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
         self,
         raw_response: Response,
         logging_obj: LiteLLMLoggingObj,
-        litellm_params: dict,
+        litellm_params: Mapping[str, object],
     ) -> FileDeleted:
         file_id = "deleted"
         if hasattr(raw_response, "request") and raw_response.request:
@@ -1505,8 +1726,8 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
     def transform_list_files_request(
         self,
         purpose: str | None,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
     ) -> tuple[str, dict]:
         raise NotImplementedError("VertexAIFilesConfig does not support file listing")
 
@@ -1514,16 +1735,16 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
         self,
         raw_response: Response,
         logging_obj: LiteLLMLoggingObj,
-        litellm_params: dict,
+        litellm_params: Mapping[str, object],
     ) -> list[OpenAIFileObject]:
         raise NotImplementedError("VertexAIFilesConfig does not support file listing")
 
     def transform_file_content_request(
         self,
-        file_content_request,
-        optional_params: dict,
+        file_content_request: FileContentRequest,
+        optional_params: Mapping[str, object],
         litellm_params: Mapping[str, object],
-    ) -> tuple[str, dict]:
+    ) -> tuple[str, dict[str, object]]:
         file_id: Final = file_content_request.get("file_id", "")
         bucket, encoded_object = self._parse_gcs_uri(file_id, litellm_params)
         url: Final = f"https://storage.googleapis.com/storage/v1/b/{bucket}/o/{encoded_object}?alt=media"
@@ -1533,7 +1754,7 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
         self,
         raw_response: Response,
         logging_obj: LiteLLMLoggingObj,
-        litellm_params: dict,
+        litellm_params: Mapping[str, object],
     ) -> HttpxBinaryResponseContent:
         """
         Transform file content response, converting Vertex AI batch output to OpenAI format if applicable.
@@ -1548,9 +1769,9 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
             # Allow users to opt out of automatic Vertex batch output -> OpenAI
             # transformation, e.g. if they consume raw `predictions.jsonl` directly.
             if getattr(litellm, "disable_vertex_batch_output_transformation", False):
-                return HttpxBinaryResponseContent(response=raw_response)
+                return HttpxBinaryResponseContent(response=raw_response, batch_input_format=BatchInputFormat.VERTEX)
             if is_passthrough_managed_gcs_url(str(raw_response.request.url)):
-                return HttpxBinaryResponseContent(response=raw_response)
+                return HttpxBinaryResponseContent(response=raw_response, batch_input_format=BatchInputFormat.VERTEX)
 
             # Try to transform batch output if it's a JSONL file
             content: Final = raw_response.content
@@ -1577,7 +1798,7 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
             # If transformation fails, return as-is
             pass
 
-        return HttpxBinaryResponseContent(response=raw_response)
+        return HttpxBinaryResponseContent(response=raw_response, batch_input_format=BatchInputFormat.VERTEX)
 
     async def transform_file_content_stream(
         self,
@@ -1586,7 +1807,7 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
         headers: Mapping[str, str],
         request_url: str,
         logging_obj: LiteLLMLoggingObj,
-        litellm_params: dict,
+        litellm_params: Mapping[str, object],
     ) -> FileContentStreamingResult:
         """
         Streams file content, converting a Vertex AI batch output to OpenAI format row by
@@ -1788,7 +2009,7 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
             model_response: Final = ModelResponse()
 
             transformed_response = vertex_gemini_config.transform_google_generate_content_to_openai_model_response(
-                completion_response=vertex_response,
+                completion_response=dict(vertex_response),
                 model_response=model_response,
                 model=model,
                 logging_obj=logging_obj,

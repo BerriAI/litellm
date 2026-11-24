@@ -31,6 +31,7 @@ from litellm.types.llms.openai import (
     ResponseAPIUsage,
     ResponseCompletedEvent,
     ResponseInputParam,
+    ResponsesAPIOptionalRequestParams,
     ResponsesAPIResponse,
     ResponsesAPIStreamEvents,
 )
@@ -1682,16 +1683,14 @@ class TestTransformListInputItemsRequest:
         expected_params = {
             "after": "cursor_after_123",
             "before": "cursor_before_456",
-            "include": "metadata,content",  # Should be comma-separated string
+            "include[]": ["metadata", "content"],
             "limit": 50,
             "order": "asc",
         }
         assert url == expected_url
         assert params == expected_params
 
-    def test_openai_transform_list_input_items_request_include_list_formatting(self):
-        """Test that include list is properly formatted as comma-separated string"""
-        # Execute
+    def test_openai_transform_list_input_items_request_sends_include_as_a_repeated_array_param(self):
         url, params = self.openai_config.transform_list_input_items_request(
             response_id=self.response_id,
             api_base=self.api_base,
@@ -1700,8 +1699,8 @@ class TestTransformListInputItemsRequest:
             include=["metadata", "content", "annotations"],
         )
 
-        # Assert
-        assert params["include"] == "metadata,content,annotations"
+        assert params["include[]"] == ["metadata", "content", "annotations"]
+        assert "include" not in params
 
     def test_openai_transform_list_input_items_request_none_values(self):
         """Test OpenAI implementation with None values for optional parameters"""
@@ -1736,8 +1735,8 @@ class TestTransformListInputItemsRequest:
             include=[],
         )
 
-        # Assert
-        assert "include" not in params  # Empty list should not be included
+        assert "include" not in params
+        assert "include[]" not in params
 
     def test_openai_transform_compact_response_api_request_query_params_preserved(self):
         """Test compact URL construction preserves query params and appends path."""
@@ -1838,7 +1837,7 @@ class TestTransformListInputItemsRequest:
         expected_params = {
             "after": "cursor_after_123",
             "before": "cursor_before_456",
-            "include": "metadata,content",
+            "include[]": ["metadata", "content"],
             "limit": 100,
             "order": "asc",
         }
@@ -1961,7 +1960,7 @@ class TestTransformListInputItemsRequest:
             headers=self.headers,
             include=["metadata"],
         )
-        assert params["include"] == "metadata"
+        assert params["include[]"] == ["metadata"]
 
     def test_url_construction_with_different_api_bases(self):
         """Test URL construction with different API base formats"""
@@ -2674,6 +2673,85 @@ class TestResponsesSurfaceSharesTheEffortRule:
             drop_params=False,
         )
         assert mapped["top_p"] == 0.9
+
+
+class TestOSeriesTemperatureMatchesChat:
+    @pytest.mark.parametrize("model", ["o1", "o3", "o3-mini", "o4-mini", "openai/o3-mini"])
+    def test_drop_params_argument_drops_only_a_non_default_temperature(
+        self, local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch, model: str
+    ) -> None:
+        monkeypatch.setattr(litellm, "drop_params", False)
+        mapped: Final = OpenAIResponsesAPIConfig().map_openai_params(
+            response_api_optional_params={"temperature": 0.5, "top_p": 0.9, "max_output_tokens": 100},
+            model=model,
+            drop_params=True,
+        )
+        assert mapped == {"top_p": 0.9, "max_output_tokens": 100}
+
+    def test_global_drop_params_drops_a_non_default_temperature(
+        self, local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(litellm, "drop_params", True)
+        mapped: Final = OpenAIResponsesAPIConfig().map_openai_params(
+            response_api_optional_params={"temperature": 0.5, "max_output_tokens": 100},
+            model="o3-mini",
+            drop_params=False,
+        )
+        assert mapped == {"max_output_tokens": 100}
+
+    @pytest.mark.parametrize(
+        "params",
+        [
+            {"temperature": 1, "max_output_tokens": 100},
+            {"temperature": None, "max_output_tokens": 100},
+            {"max_output_tokens": 100},
+        ],
+    )
+    def test_default_or_omitted_temperature_is_forwarded_as_sent(
+        self, local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch, params: ResponsesAPIOptionalRequestParams
+    ) -> None:
+        monkeypatch.setattr(litellm, "drop_params", True)
+        mapped: Final = OpenAIResponsesAPIConfig().map_openai_params(
+            response_api_optional_params=params,
+            model="o3-mini",
+            drop_params=True,
+        )
+        assert mapped == params
+
+    def test_without_drop_params_a_non_default_temperature_is_still_forwarded(
+        self, local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(litellm, "drop_params", False)
+        mapped: Final = OpenAIResponsesAPIConfig().map_openai_params(
+            response_api_optional_params={"temperature": 0.5},
+            model="o3-mini",
+            drop_params=False,
+        )
+        assert mapped == {"temperature": 0.5}
+
+    @pytest.mark.parametrize(
+        "config, model",
+        [
+            (OpenAIResponsesAPIConfig(), "gpt-4o"),
+            (OpenAIResponsesAPIConfig(), "gpt-4.1"),
+            (AzureOpenAIResponsesAPIConfig(), "o3-mini"),
+            (HostedVLLMResponsesAPIConfig(), "o3-mini"),
+        ],
+    )
+    def test_temperature_is_kept_for_non_o_series_models_and_other_providers(
+        self,
+        local_model_cost_map: None,
+        monkeypatch: pytest.MonkeyPatch,
+        config: OpenAIResponsesAPIConfig,
+        model: str,
+    ) -> None:
+        monkeypatch.setattr(litellm, "drop_params", False)
+        mapped: Final = config.map_openai_params(
+            response_api_optional_params={"temperature": 0.5},
+            model=model,
+            drop_params=True,
+        )
+        assert mapped == {"temperature": 0.5}
 
 
 class TestFlattenToolSchemaCombinatorsWiring:

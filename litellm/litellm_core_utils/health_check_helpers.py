@@ -5,7 +5,7 @@ Helper functions for health check calls.
 import base64
 import itertools
 import re
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal
 
@@ -160,7 +160,7 @@ class HealthCheckHelpers:
         custom_llm_provider: str,
         model_params: dict,
         litellm_logging_obj: "Logging",
-    ) -> dict:
+    ) -> dict[str, object]:
         from litellm import acompletion
 
         probe_models: Final = wildcard_health_check_models(wildcard=model, custom_llm_provider=custom_llm_provider)
@@ -224,7 +224,7 @@ class HealthCheckHelpers:
         custom_llm_provider: str,
         model_params: dict,
         filtered_model_params: dict,
-    ) -> dict:
+    ) -> object:
         """
         Health check for batch mode.
 
@@ -266,7 +266,7 @@ class HealthCheckHelpers:
         custom_llm_provider: str,
         model_params: dict,
         prompt: str | None = None,
-        input: list | None = None,
+        input: Sequence[object] | None = None,
     ) -> dict[
         Literal[
             "chat",
@@ -286,7 +286,7 @@ class HealthCheckHelpers:
             "decisions",
             "extraction",
         ],
-        Callable,
+        Callable[[], Awaitable[object]],
     ]:
         """
         Returns a dictionary of mode handlers for health check calls.
@@ -328,8 +328,9 @@ class HealthCheckHelpers:
             ),
             "audio_speech": lambda: litellm.aspeech(
                 **{
+                    "voice": "alloy",
                     **_filter_model_params(model_params=model_params),
-                    **({"voice": "alloy"} if "voice" not in _filter_model_params(model_params=model_params) else {}),
+                    "stream": False,
                 },
                 input=prompt or "test",
             ),

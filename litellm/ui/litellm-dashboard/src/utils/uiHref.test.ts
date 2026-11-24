@@ -52,4 +52,17 @@ describe("routeSegmentForPathname", () => {
     expect(routeSegmentForPathname("/logs")).toBe("logs");
     expect(routeSegmentForPathname("/")).toBe("");
   });
+
+  it.each([
+    ["/ui/apps/", "apps"],
+    ["/ui/apps/usage", "apps"],
+    ["/ui/customers", "customers"],
+    ["/ui/customers/settings", "customers"],
+    ["/ui/", ""],
+    ["/ui", ""],
+    ["/ui-theme", "ui-theme"],
+  ])("recognizes the rewritten development route %s as %s", (pathname, segment) => {
+    vi.stubEnv("NODE_ENV", "development");
+    expect(routeSegmentForPathname(pathname)).toBe(segment);
+  });
 });

@@ -4,9 +4,9 @@ Expired UI session key cleanup manager.
 Deletes expired virtual keys created for LiteLLM dashboard sessions.
 """
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
-from typing import Any, Final, Protocol
+from typing import Final, Protocol
 
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import (
@@ -15,6 +15,7 @@ from litellm.constants import (
     LITELLM_INTERNAL_JOBS_SERVICE_ACCOUNT_NAME,
     UI_SESSION_TOKEN_TEAM_ID,
 )
+from litellm.litellm_core_utils.core_helpers import as_object_list, as_str_mapping, iter_items
 from litellm.proxy._types import KeyRequest, UserAPIKeyAuth
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.hooks.key_management_event_hooks import KeyManagementEventHooks
@@ -118,7 +119,7 @@ class ExpiredUISessionKeyCleanupManager:
     @staticmethod
     def _get_deleted_token_count(
         tokens: list[str],
-        response: dict[str, Any] | None,
+        response: Mapping[str, object] | None,
     ) -> int:
         """
         Return the number of tokens actually deleted from the delete helper response.
@@ -127,20 +128,23 @@ class ExpiredUISessionKeyCleanupManager:
             return len(tokens)
 
         deleted_keys: Final = response.get("deleted_keys")
-        if isinstance(deleted_keys, list):
-            return len(deleted_keys)
+        deleted_key_list: Final = as_object_list(deleted_keys)
+        if deleted_key_list is not None:
+            return len(deleted_key_list)
         if isinstance(deleted_keys, int):
             return deleted_keys
-        if isinstance(deleted_keys, dict):
-            nested_deleted_keys: Final = deleted_keys.get("deleted_keys")
-            if isinstance(nested_deleted_keys, list):
-                return len(nested_deleted_keys)
+        nested_response: Final = as_str_mapping(deleted_keys)
+        if isinstance(nested_response, dict):
+            nested_deleted_keys: Final = nested_response.get("deleted_keys")
+            nested_deleted_key_list: Final = as_object_list(nested_deleted_keys)
+            if nested_deleted_key_list is not None:
+                return len(nested_deleted_key_list)
             if isinstance(nested_deleted_keys, int):
                 return nested_deleted_keys
 
-        failed_tokens: Final = response.get("failed_tokens") or []
+        failed_tokens: Final = response.get("failed_tokens")
         if failed_tokens:
-            return max(len(tokens) - len(set(failed_tokens)), 0)
+            return max(len(tokens) - len(set(iter_items(failed_tokens))), 0)
 
         return len(tokens)
 

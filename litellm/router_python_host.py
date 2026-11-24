@@ -35,6 +35,8 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
     from litellm.redis.stores.connection import RedisStores
     from litellm.redis.stores.router_usage import RouterUsage
+    from litellm.router_utils.dynamic_queue_redis import ScriptHost
+    from litellm.router_utils.dynamic_queue_router import DynamicQueueRouter, DynamicQueueSettings
     from litellm.text_completions.streaming_iterator import TextCompletionStreamWrapper
     from litellm.types.llms.openai import HttpxBinaryResponseContent, OpenAIFileObject
     from litellm.types.rerank import RerankResponse
@@ -158,6 +160,14 @@ class PythonHost:
         from litellm.redis.stores.router_usage import RouterUsageStore
 
         return RouterUsageStore(redis.router_usage())
+
+    def dynamic_queue(
+        self, settings: "DynamicQueueSettings", redis: "Callable[[], ScriptHost | None]"
+    ) -> "DynamicQueueRouter":
+        """The congestion queue a router's attempts wait in, coordinated on the router's Redis."""
+        from litellm.router_utils.dynamic_queue_router import DynamicQueueRouter, on_redis
+
+        return DynamicQueueRouter(settings, on_redis(redis))
 
 
 def redis_cache_for(config: RouterConfig) -> "RedisCache | None":

@@ -131,7 +131,7 @@ pub fn opens_with_tool_results(message: &Recognized<Message>) -> bool {
                 && matches!(
                     &message.content,
                     MessageContent::Blocks(blocks)
-                        if blocks.first().and_then(|block| block.block_type.as_ref()) == Some(&ContentBlockType::ToolResult)
+                        if blocks.first().and_then(ContentBlock::known_type) == Some(&ContentBlockType::ToolResult)
                 )
         }
         Recognized::Unrecognized(message) => {

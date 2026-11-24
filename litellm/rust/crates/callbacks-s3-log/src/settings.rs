@@ -5,26 +5,26 @@ use litellm_secret_value::SecretValue;
 use serde::Deserialize;
 use serde_json::{Map, Value};
 
-use crate::pyjson::{py_str, truthy};
+use litellm_python_compat::{BigInt, json::from_json, pydantic, repr};
+
+fn python(value: &Value) -> litellm_python_compat::Value {
+    from_json(value.clone())
+}
 
 fn py_repr(value: &Value) -> String {
-    litellm_python_compat::repr::repr(&litellm_python_compat::json::from_json(value.clone()))
+    repr::repr(&python(value))
+}
+
+pub fn py_str(value: &Value) -> String {
+    repr::to_str(&python(value))
+}
+
+pub fn truthy(value: &Value) -> bool {
+    litellm_python_compat::truthy::truthy(&python(value))
 }
 
 fn py_optional(value: Option<u64>) -> String {
     value.map_or_else(|| "None".to_owned(), |value| value.to_string())
-}
-
-fn py_type_name(value: &Value) -> &'static str {
-    match value {
-        Value::Null => "NoneType",
-        Value::Bool(_) => "bool",
-        Value::Number(number) if number.is_f64() => "float",
-        Value::Number(_) => "int",
-        Value::String(_) => "str",
-        Value::Array(_) => "list",
-        Value::Object(_) => "dict",
-    }
 }
 
 pub const PARTITION_GRANULARITY_ENV_VAR: &str = "S3_PARTITION_GRANULARITY";
@@ -122,71 +122,17 @@ fn is_blank(value: &Value) -> bool {
 }
 
 pub fn lax_bool(value: &Value) -> Option<bool> {
-    match value {
-        Value::Bool(flag) => Some(*flag),
-        Value::Number(number) => number
-            .as_f64()
-            .and_then(|float| {
-                [(0.0, false), (1.0, true)]
-                    .into_iter()
-                    .find(|(bound, _)| *bound == float)
-            })
-            .map(|(_, flag)| flag),
-        Value::String(text) => match text.trim().to_ascii_lowercase().as_str() {
-            "0" | "off" | "f" | "false" | "n" | "no" => Some(false),
-            "1" | "on" | "t" | "true" | "y" | "yes" => Some(true),
-            _ => None,
-        },
-        _ => None,
-    }
+    pydantic::lax_bool(&python(value))
 }
 
 pub fn lax_int(value: &Value) -> Option<i128> {
-    match value {
-        Value::Bool(flag) => Some(i128::from(*flag)),
-        Value::Number(number) => {
-            if let Some(integer) = number.as_i64() {
-                return Some(i128::from(integer));
-            }
-            if let Some(integer) = number.as_u64() {
-                return Some(i128::from(integer));
-            }
-            let float = number.as_f64()?;
-            (float.is_finite() && float.fract() == 0.0 && float.abs() <= i64::MAX as f64)
-                .then_some(float as i128)
-        }
-        Value::String(text) => int_text(text.trim()),
-        _ => None,
-    }
-}
-
-fn int_text(text: &str) -> Option<i128> {
-    let (whole, fraction) = text.split_once('.').unwrap_or((text, ""));
-    if !fraction.chars().all(|character| character == '0') {
-        return None;
-    }
-    if text.contains('.') && fraction.is_empty() {
-        return None;
-    }
-    let (sign, digits) = match whole.strip_prefix('-') {
-        Some(rest) => (-1, rest),
-        None => (1, whole.strip_prefix('+').unwrap_or(whole)),
-    };
-    let well_formed = !digits.is_empty()
-        && !digits.starts_with('_')
-        && !digits.ends_with('_')
-        && !digits.contains("__")
-        && digits
-            .chars()
-            .all(|character| character.is_ascii_digit() || character == '_');
-    if !well_formed {
-        return None;
-    }
-    digits
-        .replace('_', "")
-        .parse::<i128>()
-        .ok()
-        .map(|number| sign * number)
+    pydantic::lax_int(&python(value)).map(|number| {
+        i128::try_from(&number).unwrap_or(if number < BigInt::from(0) {
+            i128::MIN
+        } else {
+            i128::MAX
+        })
+    })
 }
 
 fn strip_text(value: &Value) -> Value {
@@ -291,7 +237,7 @@ fn sse_value(name: &str, value: Option<&Value>) -> Option<String> {
         Some(other) => {
             tracing::warn!(
                 "s3 logging: ignoring {name} because it has invalid type {}; expected a string",
-                py_type_name(other)
+                python(other).type_name()
             );
             None
         }
@@ -390,6 +336,9 @@ impl Settings {
                 web_identity_token: secret(params, "s3_aws_web_identity_token"),
                 sts_endpoint: text(params, "s3_aws_sts_endpoint"),
                 external_id: None,
+                session_tags: None,
+                session_policy: None,
+                require_session_attribution: false,
             },
             use_team_prefix: truthy_param("s3_use_team_prefix"),
             use_key_prefix: truthy_param("s3_use_key_prefix"),
@@ -554,6 +503,16 @@ mod tests {
         #[case] expected: Option<bool>,
     ) {
         assert_eq!(lax_bool(&strip_text(&value)), expected);
+    }
+
+    #[rstest]
+    #[case(json!(["us-east-1"]), "['us-east-1']")]
+    #[case(json!({"a": true}), "{'a': True}")]
+    #[case(json!(null), "None")]
+    #[case(json!(1.5), "1.5")]
+    #[case(json!("us-east-1"), "us-east-1")]
+    fn values_print_as_python_str_prints_them(#[case] value: Value, #[case] expected: &str) {
+        assert_eq!(py_str(&value), expected);
     }
 
     #[rstest]
