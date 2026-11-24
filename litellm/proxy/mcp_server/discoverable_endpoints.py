@@ -1776,7 +1776,7 @@ async def hydrate_config_dcr_clients(servers: Sequence[MCPServer]) -> None:
         if server.client_id:
             continue
         try:
-            credentials: Final = _get_persisted_dcr_credentials(stored.get(server.server_id))
+            credentials = _get_persisted_dcr_credentials(stored.get(server.server_id))
             if (
                 credentials is not None
                 and credentials.client_id
