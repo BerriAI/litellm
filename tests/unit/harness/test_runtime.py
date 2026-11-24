@@ -522,6 +522,53 @@ async def test_session_multi_turn_cost(monkeypatch, sandbox):
         await session.arun("three")
 
 
+async def test_unknown_endpoint_cost_reaches_turn_and_session_results(monkeypatch, sandbox):
+    async def unpriced_turn(adapter, ctx: SessionContext, prompt: str) -> AsyncIterator[Event]:
+        assert ctx.endpoint is not None
+        ctx.endpoint.usage.add(10, 5, None)
+        yield Text("answer")
+
+    install_adapter(monkeypatch, script=unpriced_turn)
+    async with runtime.aagent_session(Harness.CODEX, sandbox=sandbox) as session:
+        await session._ensure_ready()
+        assert session.ctx.endpoint is not None
+        assert session.cost == 0.0
+
+        result = await session.arun("one")
+
+        assert result.text == "answer"
+        assert result.usage.input_tokens == 10
+        assert result.usage.output_tokens == 5
+        assert result.cost is None
+        assert Done(result).cost is None
+        assert session.cost is None
+
+
+@pytest.mark.parametrize("uses_endpoint", (True, False))
+async def test_later_turns_keep_known_costs_after_an_unpriced_turn(monkeypatch, sandbox, uses_endpoint: bool):
+    costs = iter((None, 0.0, 0.25))
+
+    async def reported_turn(adapter, ctx: SessionContext, prompt: str) -> AsyncIterator[Event]:
+        cost = next(costs)
+        if ctx.endpoint is not None:
+            ctx.endpoint.usage.add(10, 5, cost)
+        else:
+            ctx.input_tokens += 10
+            ctx.output_tokens += 5
+            ctx.calls += 1
+            ctx.costs.add(cost)
+        yield Text("answer")
+
+    install_adapter(monkeypatch, script=reported_turn, uses_endpoint=uses_endpoint)
+    async with runtime.aagent_session(Harness.CLAUDE_CODE, sandbox=sandbox) as session:
+        results = tuple([await session.arun(prompt) for prompt in ("one", "two", "three")])
+
+        assert tuple(result.cost for result in results) == (None, 0.0, 0.25)
+        assert tuple(result.usage.calls for result in results) == (1, 1, 1)
+        assert session.cost is None
+        assert session.usage.calls == 3
+
+
 async def test_await_asession(monkeypatch, sandbox):
     install_adapter(monkeypatch)
     session = await runtime.aagent_session(Harness.CLAUDE_CODE, sandbox=sandbox)

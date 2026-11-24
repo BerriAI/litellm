@@ -1,10 +1,16 @@
+from collections.abc import Mapping
 from datetime import datetime, time, timedelta, timezone
+from types import MappingProxyType
 from typing import Final
 
 from pydantic import ConfigDict
 
 import litellm
-from litellm.litellm_core_utils.duration_parser import get_next_standardized_reset_time
+from litellm.litellm_core_utils.duration_parser import (
+    get_budget_window_start,
+    get_next_standardized_reset_time,
+    normalize_budget_window_start,
+)
 from litellm.types.llms.base import LiteLLMBaseModel
 
 
@@ -87,6 +93,26 @@ def get_budget_reset_time(budget_duration: str) -> datetime:
     `BudgetResetSettings` by injection (creation/update endpoints, startup backfill).
     """
     return compute_budget_reset_at(budget_duration, get_budget_reset_settings())
+
+
+def get_budget_window_reset_fields(
+    budget_duration: str,
+    *,
+    reset_at: datetime | None = None,
+    settings: BudgetResetSettings | None = None,
+    now: datetime | None = None,
+) -> Mapping[str, str]:
+    configured: Final = settings or get_budget_reset_settings()
+    current: Final = now if now is not None else datetime.now(timezone.utc)
+    end: Final = reset_at if reset_at is not None else compute_budget_reset_at(budget_duration, configured, current)
+    scheduled: Final = get_budget_window_start(budget_duration, end, configured.timezone, configured.reset_time_of_day)
+    start: Final = normalize_budget_window_start(scheduled if reset_at is not None else min(scheduled, current))
+    return MappingProxyType(
+        {
+            "reset_at": end.astimezone(timezone.utc).isoformat(),
+            "window_start": start.astimezone(timezone.utc).isoformat(),
+        }
+    )
 
 
 def keeps_budget_reset(requested_duration: str, stored_duration: str | None, stored_reset_at: datetime | None) -> bool:

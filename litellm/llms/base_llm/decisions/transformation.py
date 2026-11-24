@@ -64,6 +64,7 @@ from litellm.types.decisions import (
     systemone_choice_key,
 )
 from litellm.types.utils import is_decisions_model_mode
+from litellm.utils import get_model_info_helper
 
 _PAYLOAD_ADAPTER: Final[TypeAdapter[object]] = TypeAdapter(object)
 _SYSTEMONE_RESPONSE_ADAPTER: Final[TypeAdapter[DecisionsResponse]] = TypeAdapter(DecisionsResponse)
@@ -703,8 +704,10 @@ def ir_to_systemone_response(response: DecisionsIRResponse, request: DecisionsIR
 
 def catalog_mode(model: str, custom_llm_provider: str) -> str | None:
     try:
-        key: Final = litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider)["key"]
-    except Exception:  # noqa: BLE001  # get_model_info raises bare Exception for an unmapped model, which the catalog does not list
+        key: Final = get_model_info_helper(model=model, custom_llm_provider=custom_llm_provider, catalog_only=True)[
+            "key"
+        ]
+    except Exception:  # noqa: BLE001  # the lookup raises bare Exception for an unmapped model, which the catalog does not list
         return None
     entry: Final = GetModelCostMap.loaded_model_cost_map().get(key)
     mode: Final = entry.get("mode") if entry is not None else None
@@ -713,8 +716,10 @@ def catalog_mode(model: str, custom_llm_provider: str) -> str | None:
 
 def _is_decisions_model(model: str, custom_llm_provider: str) -> bool:
     try:
-        model_mode: Final = litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider).get("mode")
-    except Exception:  # noqa: BLE001  # get_model_info raises bare Exception for an unmapped model, which has no mode
+        model_mode: Final = get_model_info_helper(
+            model=model, custom_llm_provider=custom_llm_provider, catalog_only=True
+        ).get("mode")
+    except Exception:  # noqa: BLE001  # the lookup raises bare Exception for an unmapped model, which has no mode
         return False
     return is_decisions_model_mode(model_mode)
 
@@ -760,6 +765,9 @@ class BaseDecisionsConfig(ABC):
     def provider_reported_cost(self, response: DecisionsIRResponse) -> float | None:
         return None
 
+    def systemone_config(self) -> "BaseDecisionsConfig":
+        return self
+
     def get_input_limits(
         self, model: str, custom_llm_provider: str, headers: Mapping[str, str]
     ) -> DecisionsInputLimits:
@@ -775,6 +783,9 @@ class BaseDecisionsConfig(ABC):
 
     def missing_api_base_message(self, custom_llm_provider: str) -> str:
         return f"api_base is required for Decisions provider '{custom_llm_provider}'"
+
+    def missing_api_key_message(self, custom_llm_provider: str) -> str:
+        return f"Missing API key for Decisions provider '{custom_llm_provider}'"
 
     def resolve_api_base(self, api_base: str | None) -> str | None:
         return api_base or self._first_secret(self.api_base_env) or self.get_default_api_base()

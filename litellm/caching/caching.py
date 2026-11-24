@@ -18,23 +18,25 @@ from contextlib import contextmanager
 from enum import Enum
 from itertools import chain
 from types import MappingProxyType
-from typing import Any, Final, Literal, Protocol, cast
+from typing import Final, Literal, Protocol, cast
 
 from pydantic import BaseModel, ConfigDict, TypeAdapter
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm._internal_context import current_service_target, service_target
 from litellm._logging import verbose_logger
-from litellm.constants import CACHED_STREAMING_CHUNK_DELAY
+from litellm.constants import CACHED_STREAMING_CHUNK_DELAY, SEMANTIC_CACHE_POLICY_KEY
 from litellm.integrations.otel.runtime import phase_span
-from litellm.litellm_core_utils.core_helpers import require_attributes
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, has_attributes, require_attributes
 from litellm.litellm_core_utils.model_param_helper import (
     ModelParamHelper,
     embeds_thought_signature_in_tool_call_id,
     peek_reasoning_summary_aliases,
 )
 from litellm.types.caching import *
-from litellm.types.utils import EmbeddingResponse, is_litellm_owned_kwarg
+from litellm.types.semantic_cache import semantic_cache_policy
+from litellm.types.utils import EmbeddingResponse, Usage, is_litellm_owned_kwarg
 
 from .azure_blob_cache import AzureBlobCache
 from .base_cache import BaseCache
@@ -48,7 +50,9 @@ from .redis_semantic_cache import RedisSemanticCache
 from .s3_cache import S3Cache
 
 RESPONSE_CACHE_TARGET: Final = "llm_response"
-_ALWAYS_KEYED_PROVIDER_PARAMS: Final = frozenset({"continuation_token", "return_token_ids"})
+_ALWAYS_KEYED_PROVIDER_PARAMS: Final = frozenset(
+    {"continuation_token", "return_token_ids", "responseFormat", "generationConfig", "generation_config"}
+)
 _DECODED_LITERAL: Final = TypeAdapter(object)
 _REDIS_STARTUP_NODES_ADAPTER: Final = TypeAdapter(
     list[dict[str, object]], config=ConfigDict(strict=True, hide_input_in_errors=True)
@@ -65,13 +69,86 @@ class _SupportsAsyncDeleteCacheKeys(Protocol):
     def delete_cache_keys(self) -> Callable[[object], Awaitable[object]] | None: ...
 
 
+class _SupportsModelDump(Protocol):
+    def model_dump(self) -> object: ...
+
+
+class _SupportsFieldLookup(Protocol):
+    def get(self, key: str, /) -> object: ...
+
+
+class _SupportsEmbeddingData(Protocol):
+    @property
+    def data(self) -> Sequence[object]: ...
+
+
+class _UnvalidatedCachedEmbedding(TypedDict):
+    embedding: ReadOnly[object]
+    index: ReadOnly[object]
+    model: ReadOnly[str | None]
+    prompt_tokens: ReadOnly[int | None]
+    prompt_tokens_details: ReadOnly[Mapping[str, object] | None]
+    format_version: ReadOnly[int]
+    object: ReadOnly[object]
+
+
+def _embedding_item(response: _SupportsEmbeddingData, index: int) -> object:
+    return response.data[index]
+
+
+def _embedding_fields(embedding_response: object) -> _SupportsFieldLookup:
+    mapping: Final = as_str_mapping(embedding_response)
+    if mapping is not None and isinstance(embedding_response, dict):
+        return mapping
+    if has_attributes(embedding_response, _SupportsModelDump, "model_dump"):
+        return require_attributes(embedding_response.model_dump(), _SupportsFieldLookup, "get")
+    return vars(embedding_response)
+
+
+def _extra_body_mapping(raw_extra_body: object) -> Mapping[str, object] | None:
+    mapping: Final = as_str_mapping(raw_extra_body)
+    return mapping if isinstance(raw_extra_body, dict) else None
+
+
+def _concrete_sequence(value: object) -> Sequence[object] | None:
+    if not isinstance(value, (list, tuple)):
+        return None
+    return cast(Sequence[object], value)  # cast-ok: isinstance leaves the item type unknown
+
+
+def _extra_body_pair(item: object) -> tuple[str, object] | None:
+    pair: Final = item if isinstance(item, str) else _concrete_sequence(item)
+    if pair is None or len(pair) != 2:
+        return None
+    key: Final = pair[0]
+    return (key, pair[1]) if isinstance(key, str) else None
+
+
+def _extra_body_from_pairs(raw_extra_body: object) -> Mapping[str, object] | None:
+    items: Final = _concrete_sequence(raw_extra_body)
+    if items is None:
+        return None
+    pairs: Final = tuple(pair for pair in map(_extra_body_pair, items) if pair is not None)
+    return dict(pairs) if len(pairs) == len(items) else None
+
+
+def _extra_body_beyond_always_keyed_params(raw_extra_body: object) -> Mapping[str, object]:
+    mapping: Final = as_str_mapping(raw_extra_body)
+    extra_body: Final = mapping if mapping is not None else _extra_body_from_pairs(raw_extra_body)
+    if extra_body is None:
+        return {}
+    token_ids_keyed_separately: Final = isinstance(raw_extra_body, dict)
+    return {
+        key: value
+        for key, value in extra_body.items()
+        if key not in _ALWAYS_KEYED_PROVIDER_PARAMS or (not token_ids_keyed_separately and value)
+    }
+
+
 def _keyed_provider_params_in_extra_body(kwargs: Mapping[str, object]) -> str:
-    raw_extra_body: Final = kwargs.get("extra_body")
-    if not isinstance(raw_extra_body, dict):
+    extra_body: Final = _extra_body_mapping(kwargs.get("extra_body"))
+    if extra_body is None:
         return ""
-    extra_body: Final = cast(  # cast-ok: isinstance leaves the key and value types unknown
-        Mapping[str, object], raw_extra_body
-    )
     return "".join(
         f"extra_body.{param}: {extra_body[param]}"
         for param in sorted(_ALWAYS_KEYED_PROVIDER_PARAMS)
@@ -220,7 +297,7 @@ def response_cache_phase(operation: Literal["get", "set"]) -> Generator[None]:
         yield
 
 
-def print_verbose(print_statement):
+def print_verbose(print_statement: object):
     try:
         verbose_logger.debug(print_statement)
         if litellm.set_verbose:
@@ -293,7 +370,7 @@ class Cache:
         valkey_semantic_cache_embedding_model: str = "text-embedding-ada-002",
         valkey_semantic_cache_index_name: str | None = None,
         redis_flush_size: int | None = None,
-        redis_startup_nodes: list | None = None,
+        redis_startup_nodes: Sequence[object] | None = None,
         disk_cache_dir: str | None = None,
         qdrant_api_base: str | None = None,
         qdrant_api_key: str | None = None,
@@ -507,7 +584,7 @@ class Cache:
     # Params whose values carry prompt content. Excluded from semantic-cache
     # scope keys so differently worded prompts share a bucket and match via
     # vector similarity rather than being split into per-wording buckets.
-    _SEMANTIC_CACHE_SCOPE_EXCLUDED_PARAMS: frozenset = frozenset({"messages", "prompt", "input"})
+    _SEMANTIC_CACHE_SCOPE_EXCLUDED_PARAMS: frozenset[str] = frozenset({"messages", "prompt", "input"})
 
     # Server-set identity (from proxy auth) used to isolate semantic-cache
     # buckets per tenant. Required once the prompt is out of the scope key, so a
@@ -525,6 +602,8 @@ class Cache:
             LiteLLMCacheType.QDRANT_SEMANTIC,
             LiteLLMCacheType.VALKEY_SEMANTIC,
         )
+
+    is_semantic_cache: Final = _is_semantic_cache
 
     def _semantic_cache_scope_fields(self) -> tuple[str, ...]:
         if self.semantic_cache_scope == SemanticCacheScope.END_USER:
@@ -588,6 +667,8 @@ class Cache:
                 and kwargs[param] is not None
             ):
                 yield param, kwargs[param]
+            elif param == "extra_body" and (forwarded := _extra_body_beyond_always_keyed_params(kwargs[param])):
+                yield param, forwarded
 
     def _cache_key_fragments(self, kwargs: dict[str, object]) -> Iterator[str]:
         is_semantic_cache: Final = self._is_semantic_cache()
@@ -606,8 +687,8 @@ class Cache:
     def _get_param_value(
         self,
         param: str,
-        kwargs: dict,
-    ) -> str | None:
+        kwargs: dict[str, object],
+    ) -> object:
         """
         Get the value for the given param from kwargs
         """
@@ -747,7 +828,7 @@ class Cache:
         verbose_logger.debug("Final hashed key: %s", hash_hex)
         return hash_hex
 
-    def generate_streaming_content(self, content):
+    def generate_streaming_content(self, content: str):
         chunk_size: Final = 5  # Adjust the chunk size as needed
         for i in range(0, len(content), chunk_size):
             yield {
@@ -809,6 +890,10 @@ class Cache:
         metadata: Final = kwargs.get("metadata")
         if isinstance(metadata, dict):
             cache_lookup_kwargs["metadata"] = dict(metadata)
+
+        policy: Final = semantic_cache_policy(kwargs)
+        if policy is not None:
+            cache_lookup_kwargs["cache"] = {SEMANTIC_CACHE_POLICY_KEY: policy}
 
         return cache_lookup_kwargs
 
@@ -890,7 +975,7 @@ class Cache:
             print_verbose(f"An exception occurred: {traceback.format_exc()}")
             return None
 
-    def _add_cache_logic(self, result, **kwargs):
+    def _add_cache_logic(self, result: object, **kwargs: object):
         """
         Common implementation across sync + async add_cache functions
         """
@@ -907,20 +992,23 @@ class Cache:
                 if self.ttl is not None:
                     kwargs["ttl"] = self.ttl
                 ## Get Cache-Controls ##
-                _cache_kwargs: Final = kwargs.get("cache", None)
-                if isinstance(_cache_kwargs, dict):
+                _cache_kwargs: Final = as_str_mapping(kwargs.get("cache"))
+                if _cache_kwargs is not None:
                     for k, v in _cache_kwargs.items():
                         if k == "ttl":
                             kwargs["ttl"] = v
 
                 cached_data: Final = {"timestamp": time.time(), "response": result}
+                policy: Final = semantic_cache_policy(kwargs) if self._is_semantic_cache() else None
+                if policy is not None and policy.params is not None and policy.params.ttl is not None:
+                    return cache_key, cached_data, {**kwargs, "ttl": policy.params.ttl}
                 return cache_key, cached_data, kwargs
             else:
                 raise Exception("cache key is None")
         except Exception as e:
             raise e
 
-    def add_cache(self, result, **kwargs):
+    def add_cache(self, result: object, **kwargs: object):
         """
         Adds a result to the cache.
 
@@ -947,7 +1035,7 @@ class Cache:
             return
         verbose_logger.error("%s: %s", message, exc)
 
-    async def async_add_cache(self, result, dynamic_cache_object: BaseCache | None = None, **kwargs):
+    async def async_add_cache(self, result: object, dynamic_cache_object: BaseCache | None = None, **kwargs: object):
         """
         Async implementation of add_cache
         """
@@ -969,23 +1057,17 @@ class Cache:
 
     def _convert_to_cached_embedding(
         self,
-        embedding_response: Any,
+        embedding_response: object,
         model: str | None,
         prompt_tokens: int | None = None,
-        prompt_tokens_details: dict | None = None,
-    ) -> CachedEmbedding:
+        prompt_tokens_details: Mapping[str, object] | None = None,
+    ) -> _UnvalidatedCachedEmbedding:
         """
         Convert any embedding response into the standardized CachedEmbedding TypedDict format.
         """
         try:
-            data: Final = (
-                embedding_response
-                if isinstance(embedding_response, dict)
-                else embedding_response.model_dump()
-                if hasattr(embedding_response, "model_dump")
-                else vars(embedding_response)
-            )
-            cached: Final[CachedEmbedding] = {
+            data: Final = _embedding_fields(embedding_response)
+            cached: Final[_UnvalidatedCachedEmbedding] = {
                 "embedding": data.get("embedding"),
                 "index": data.get("index"),
                 "object": data.get("object"),
@@ -998,19 +1080,29 @@ class Cache:
         except KeyError as e:
             raise ValueError(f"Missing expected key in embedding response: {e}")
 
+    @staticmethod
+    def _provider_item_usage(result: EmbeddingResponse, idx_in_result_data: int, num_items: int) -> Usage | None:
+        item_usages: Final = result.item_usage
+        return item_usages[idx_in_result_data] if len(item_usages) == num_items else None
+
     def _get_per_item_prompt_tokens_details(
         self,
         result: EmbeddingResponse,
         idx_in_result_data: int,
-    ) -> dict | None:
+    ) -> dict[str, object] | None:
         """
         Extract per-item prompt_tokens_details from a response for caching.
 
         For single-item responses (common for multimodal providers like Bedrock Titan,
         Nova, Vertex AI), returns the full prompt_tokens_details.
-        For multi-item responses, distributes integer fields evenly across items
-        so that summing all per-item details reconstructs the original totals.
+        For multi-item responses, uses the per-item usage the provider attributed when it
+        set one, else distributes integer fields evenly across items so that summing all
+        per-item details reconstructs the original totals.
         """
+        num_items: Final = len(result.data)
+        item_usage: Final = self._provider_item_usage(result, idx_in_result_data, num_items)
+        if item_usage is not None and item_usage.prompt_tokens_details is not None:
+            return item_usage.prompt_tokens_details.model_dump(exclude_none=True)
         if result.usage is None or result.usage.prompt_tokens_details is None:
             return None
 
@@ -1025,12 +1117,11 @@ class Cache:
         if not details_dict:
             return None
 
-        num_items: Final = len(result.data)
         if num_items <= 1:
             return details_dict
 
         # Distribute integer/float fields evenly across items
-        per_item: Final[dict] = {}
+        per_item: Final[dict[str, object]] = {}
         for key, value in details_dict.items():
             if isinstance(value, int):
                 quotient, remainder = divmod(value, num_items)
@@ -1050,14 +1141,18 @@ class Cache:
         Extract the per-item prompt_tokens from a response for caching.
 
         Single-item responses store the full usage.prompt_tokens. Multi-item
-        responses distribute it evenly (with remainder) so that summing all
+        responses use the provider's per-item usage when it set one, else
+        distribute it evenly (with remainder) so that summing all
         per-item values on retrieval reconstructs the original total.
         """
+        num_items: Final = len(result.data)
+        item_usage: Final = self._provider_item_usage(result, idx_in_result_data, num_items)
+        if item_usage is not None:
+            return item_usage.prompt_tokens
         if result.usage is None or result.usage.prompt_tokens is None:
             return None
 
         total: Final = result.usage.prompt_tokens
-        num_items: Final = len(result.data)
         if num_items <= 1:
             return total
 
@@ -1068,12 +1163,12 @@ class Cache:
         self,
         result: EmbeddingResponse,
         input: str,
-        kwargs: dict,
+        kwargs: dict[str, object],
         idx_in_result_data: int = 0,
-    ) -> tuple[str, dict, dict]:
+    ) -> tuple[str, dict[str, object], dict[str, object]]:
         preset_cache_key: Final = self.get_cache_key(**{**kwargs, "input": input})
         kwargs["cache_key"] = preset_cache_key
-        embedding_response: Final = result.data[idx_in_result_data]
+        embedding_response: Final = _embedding_item(result, idx_in_result_data)
 
         # Extract per-item prompt_tokens + details from response usage
         prompt_tokens: Final = self._get_per_item_prompt_tokens(
@@ -1087,20 +1182,22 @@ class Cache:
 
         # Always convert to properly typed CachedEmbedding
         model_name: Final = result.model
-        embedding_dict: Final[CachedEmbedding] = self._convert_to_cached_embedding(
+        embedding_dict: Final = self._convert_to_cached_embedding(
             embedding_response,
             model_name,
             prompt_tokens=prompt_tokens,
             prompt_tokens_details=prompt_tokens_details,
         )
 
-        cache_key, cached_data, kwargs = self._add_cache_logic(
+        _, cached_data, kwargs = self._add_cache_logic(
             result=embedding_dict,
             **kwargs,
         )
-        return cache_key, cached_data, kwargs
+        return preset_cache_key, cached_data, kwargs
 
-    async def async_add_cache_pipeline(self, result, dynamic_cache_object: BaseCache | None = None, **kwargs):
+    async def async_add_cache_pipeline(
+        self, result: EmbeddingResponse, dynamic_cache_object: BaseCache | None = None, **kwargs: object
+    ):
         """
         Async implementation of add_cache for Embedding calls
 
@@ -1146,7 +1243,7 @@ class Cache:
         except Exception as e:
             self._log_add_cache_failure(e)
 
-    def should_use_cache(self, **kwargs):
+    def should_use_cache(self, **kwargs: object) -> bool:
         """
         Returns true if we should use the cache for LLM API calls
 
@@ -1155,6 +1252,9 @@ class Cache:
         Always False once the request carries more than `max_messages` messages
         """
         if self.max_messages is not None and _request_message_count(kwargs) > self.max_messages:
+            return False
+        policy: Final = semantic_cache_policy(kwargs) if self._is_semantic_cache() else None
+        if policy is not None and policy.params is not None and policy.params.enabled is False:
             return False
         if self.mode == CacheMode.default_on:
             return True
@@ -1165,9 +1265,9 @@ class Cache:
         if _cache and isinstance(_cache, dict):
             if _cache.get("use-cache", False) is True:
                 return True
-        return False
+        return policy is not None and policy.params is not None and policy.params.enabled is True
 
-    async def batch_cache_write(self, result, **kwargs):
+    async def batch_cache_write(self, result: object, **kwargs: object):
         cache_key, cached_data, kwargs = self._add_cache_logic(result=result, **kwargs)
         await self.cache.batch_cache_write(cache_key, cached_data, **kwargs)
 

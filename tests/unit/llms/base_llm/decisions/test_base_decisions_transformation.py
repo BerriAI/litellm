@@ -6,6 +6,7 @@ from typing import Final
 
 import httpx
 import pytest
+import respx
 from pydantic import TypeAdapter, ValidationError
 
 import litellm
@@ -15,6 +16,7 @@ from litellm.llms.base_llm.decisions.transformation import (
     BaseDecisionsConfig,
     DecisionsInputLimits,
     DecisionsResponseValidationError,
+    catalog_mode,
     input_has_no_text,
     ir_to_systemone_request,
     ir_to_systemone_response,
@@ -76,6 +78,22 @@ def test_decision_input_limits_use_only_positive_catalog_limits(
 
 def test_unmapped_decision_model_limits_remain_unknown(local_model_cost_map: None) -> None:
     assert BaseDecisionsConfig().get_input_limits("unmapped-input-limit", "databricks", {}) == DecisionsInputLimits()
+
+
+@pytest.mark.respx(assert_all_called=False)
+@pytest.mark.parametrize("provider", ("ollama", "ollama_chat"))
+def test_catalog_mode_of_an_unmapped_ollama_model_reads_only_the_catalog(
+    local_model_cost_map: None, provider: str, monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    monkeypatch.setenv("OLLAMA_API_BASE", "http://ollama.test:11434")
+    ollama: Final = respx_mock.route().respond(json={"template": "", "model_info": {}})
+    litellm.get_model_info.cache_clear()
+    try:
+        assert catalog_mode("catalog-mode-probe", provider) is None
+    finally:
+        litellm.get_model_info.cache_clear()
+
+    assert [str(call.request.url) for call in ollama.calls] == []
 
 
 @pytest.mark.parametrize(

@@ -51,7 +51,7 @@ class LiteLLMSkillsTransformationHandler:
         _is_async: bool = False,
         logging_obj: Optional["LiteLLMLoggingObj"] = None,
         litellm_call_id: str | None = None,
-        **kwargs,
+        **kwargs: object,
     ) -> Skill | Coroutine[object, object, Skill]:
         """
         Create a skill in LiteLLM database.
@@ -163,7 +163,7 @@ class LiteLLMSkillsTransformationHandler:
         logging_obj: Optional["LiteLLMLoggingObj"] = None,
         litellm_call_id: str | None = None,
         user_api_key_dict: Optional["UserAPIKeyAuth"] = None,
-        **kwargs,
+        **kwargs: object,
     ) -> ListSkillsResponse | Coroutine[object, object, ListSkillsResponse]:
         """
         List skills from LiteLLM database.
@@ -235,7 +235,7 @@ class LiteLLMSkillsTransformationHandler:
         logging_obj: Optional["LiteLLMLoggingObj"] = None,
         litellm_call_id: str | None = None,
         user_api_key_dict: Optional["UserAPIKeyAuth"] = None,
-        **kwargs,
+        **kwargs: object,
     ) -> Skill | Coroutine[object, object, Skill]:
         """
         Get a skill from LiteLLM database.
@@ -296,7 +296,7 @@ class LiteLLMSkillsTransformationHandler:
         logging_obj: Optional["LiteLLMLoggingObj"] = None,
         litellm_call_id: str | None = None,
         user_api_key_dict: Optional["UserAPIKeyAuth"] = None,
-        **kwargs,
+        **kwargs: object,
     ) -> DeleteSkillResponse | Coroutine[object, object, DeleteSkillResponse]:
         """
         Delete a skill from LiteLLM database.

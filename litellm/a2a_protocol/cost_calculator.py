@@ -84,7 +84,7 @@ class A2ACostCalculator:
 
     @staticmethod
     def _calculate_token_based_cost(
-        model_call_details: dict,
+        model_call_details: Mapping[str, object],
         input_cost_per_token: float | None,
         output_cost_per_token: float | None,
     ) -> float:

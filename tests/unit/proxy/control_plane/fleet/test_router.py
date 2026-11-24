@@ -5,6 +5,7 @@ import pytest
 
 from litellm.litellm_core_utils.oauth_token_exchange import OAuthTokenExchangeConfig
 from litellm.proxy.control_plane.auth.rbac import (
+    EDITOR_ROLE,
     USAGE_VIEWER_ROLE,
     VIEWER_ROLE,
     build_principal,
@@ -15,13 +16,69 @@ from litellm.proxy.control_plane.dataplanes.credentials import Caller, OidcToken
 from litellm.proxy.control_plane.dataplanes.identity import USER_INFO_PATH
 from litellm.proxy.control_plane.dataplanes.registry import Dataplane
 from litellm.proxy.control_plane.fleet.service import fetch_teams
-from tests.unit.proxy.control_plane.support import RoutedTransport, response, rig
+from tests.unit.proxy.control_plane.support import MASTER_KEY, RoutedTransport, response, rig
 
 EU_MODELS: Final = "https://eu.test/model/info"
 US_MODELS: Final = "https://us.test/model/info"
 EU_TEAMS: Final = "https://eu.test/team/list"
 US_TEAMS: Final = "https://us.test/team/list"
 EU_USER_INFO: Final = f"https://eu.test{USER_INFO_PATH}"
+
+
+def test_managed_team_routes_have_typed_openapi_contracts() -> None:
+    client, _, _ = rig({})
+    schema: Final = client.get("/api/v1/openapi.json").json()
+    adopt: Final = schema["paths"]["/api/v1/fleet/teams/adopt"]["post"]
+    put: Final = schema["paths"]["/api/v1/fleet/teams/{fleet_team_id}"]["put"]
+    status: Final = schema["paths"]["/api/v1/fleet/teams/{fleet_team_id}/status"]["get"]
+    assert adopt["requestBody"]["content"]["application/json"]["schema"] == {
+        "$ref": "#/components/schemas/FleetTeamAdoption"
+    }
+    assert put["requestBody"]["content"]["application/json"]["schema"] == {
+        "$ref": "#/components/schemas/FleetTeamBudget"
+    }
+    assert status["responses"]["200"]["content"]["application/json"]["schema"] == {
+        "$ref": "#/components/schemas/FleetTeamStatus"
+    }
+
+
+def test_managed_team_writes_require_fleet_scope_and_runtime_storage() -> None:
+    client, transport, minter = rig({})
+    request: Final = {"team_alias": "finance", "dataplanes": ["eu"]}
+    path: Final = "/api/v1/fleet/teams/adopt"
+    denied: Final = client.post(path, headers=minter.headers(role="viewer"), json=request)
+    unavailable: Final = client.post(path, headers={"Authorization": f"Bearer {MASTER_KEY}"}, json=request)
+    assert denied.status_code == 403, denied.text
+    assert unavailable.status_code == 503, unavailable.text
+    assert transport.calls == []
+
+
+@pytest.mark.parametrize(
+    ("method", "path", "payload"),
+    [
+        ("POST", "adopt", {"team_alias": "finance", "dataplanes": ["eu"]}),
+        ("PUT", "example", {"max_budget": 10}),
+    ],
+)
+def test_editor_cannot_adopt_or_update_managed_team(method: str, path: str, payload: dict[str, object]) -> None:
+    client, transport, minter = rig({})
+    reply: Final = client.request(
+        method, f"/api/v1/fleet/teams/{path}", headers=minter.headers("eu", role=EDITOR_ROLE), json=payload
+    )
+    assert reply.status_code == 403, reply.text
+    assert reply.json()["detail"] == "Missing fleet write scope."
+    assert transport.calls == []
+
+
+def test_managed_team_budget_rejects_json_boolean() -> None:
+    client, transport, _ = rig({})
+    response: Final = client.put(
+        "/api/v1/fleet/teams/example",
+        headers={"Authorization": f"Bearer {MASTER_KEY}"},
+        json={"max_budget": True},
+    )
+    assert response.status_code == 422, response.text
+    assert transport.calls == []
 
 
 def _model(name: str, provider: str, model_id: str, upstream: str | None = None) -> dict[str, object]:

@@ -1,3 +1,5 @@
+import { PageContent } from "@/components/shared/Page";
+import { PageHeader, PageHeaderTitle, PageHeaderDescription } from "@/components/shared/PageHeader";
 import type { DateRangePickerValue } from "@/components/shared/date_picker_types";
 import type { TFunction } from "i18next";
 import React, { useEffect, useState } from "react";
@@ -21,7 +23,7 @@ import {
 } from "@/components/ui/combobox";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
-import { RefreshCw } from "lucide-react";
+import { Database, RefreshCw } from "lucide-react";
 import { cachingHealthCheckCall } from "@/components/networking";
 import { deriveErrorMessage } from "@/lib/http/client";
 import { ErrorState } from "@/components/shared/ErrorState";
@@ -168,229 +170,248 @@ const CacheDashboard: React.FC<CachePageProps> = ({ accessToken, token, userRole
   ];
 
   return (
-    <Tabs defaultValue="analytics" className="mt-2 mb-8 w-full gap-2 p-8">
-      <div className="mt-2 flex w-full items-center justify-between border-b">
-        <TabsList variant="line" className="h-auto rounded-none p-0">
-          <TabsTrigger value="analytics" className="flex-none rounded-none px-4 py-2">
-            {t("caching.dashboard.tabs.analytics")}
-          </TabsTrigger>
-          <TabsTrigger value="health" className="flex-none rounded-none px-4 py-2">
-            {t("caching.dashboard.tabs.health")}
-          </TabsTrigger>
-          <TabsTrigger value="settings" className="flex-none rounded-none px-4 py-2">
-            {t("caching.dashboard.tabs.settings")}
-          </TabsTrigger>
-          <TabsTrigger value="coordination" className="flex-none rounded-none px-4 py-2">
-            {t("caching.dashboard.tabs.coordination")}
-          </TabsTrigger>
-        </TabsList>
+    <PageContent>
+      <PageHeader>
+        <PageHeaderTitle>
+          <Database />
+          {t("shell.nav.items.responseCache")}
+        </PageHeaderTitle>
+        <PageHeaderDescription>{t("shell.pageDescriptions.caching")}</PageHeaderDescription>
+      </PageHeader>
+      <Tabs defaultValue="analytics" className="w-full gap-2">
+        <div className="@container w-full border-b">
+          <div className="flex flex-col-reverse gap-2 @3xl:flex-row @3xl:items-center @3xl:justify-between">
+            <div className="-mb-1.5 min-w-0 overflow-x-auto pb-1.5">
+              <TabsList variant="line" className="h-auto rounded-none p-0">
+                <TabsTrigger value="analytics" className="flex-none rounded-none px-4 py-2">
+                  {t("caching.dashboard.tabs.analytics")}
+                </TabsTrigger>
+                <TabsTrigger value="health" className="flex-none rounded-none px-4 py-2">
+                  {t("caching.dashboard.tabs.health")}
+                </TabsTrigger>
+                <TabsTrigger value="settings" className="flex-none rounded-none px-4 py-2">
+                  {t("caching.dashboard.tabs.settings")}
+                </TabsTrigger>
+                <TabsTrigger value="coordination" className="flex-none rounded-none px-4 py-2">
+                  {t("caching.dashboard.tabs.coordination")}
+                </TabsTrigger>
+              </TabsList>
+            </div>
 
-        <div className="flex items-center space-x-2">
-          {lastRefreshed && (
-            <p className="text-sm text-muted-foreground">
-              {t("caching.dashboard.lastRefreshed")}
-              {lastRefreshed}
-            </p>
-          )}
-          <Button
-            variant="outline"
-            size="icon-sm"
-            onClick={handleRefreshClick}
-            aria-label={t("caching.dashboard.refresh")}
-          >
-            <RefreshCw />
-          </Button>
+            <div className="flex shrink-0 items-center justify-end space-x-2">
+              {lastRefreshed && (
+                <p className="text-sm text-muted-foreground">
+                  {t("caching.dashboard.lastRefreshed")}
+                  {lastRefreshed}
+                </p>
+              )}
+              <Button
+                variant="outline"
+                size="icon-sm"
+                onClick={handleRefreshClick}
+                aria-label={t("caching.dashboard.refresh")}
+              >
+                <RefreshCw />
+              </Button>
+            </div>
+          </div>
         </div>
-      </div>
 
-      <TabsContent value="analytics" keepMounted>
-        <Card>
-          <CardContent>
-            <p className="text-sm text-muted-foreground">
-              <Trans
-                i18nKey="caching.dashboard.description"
-                components={{
-                  cacheDocs: (
-                    <a
-                      href="https://docs.litellm.ai/docs/proxy/caching"
-                      target="_blank"
-                      rel="noreferrer"
-                      className="underline"
-                    />
-                  ),
-                  promptDocs: (
-                    <a
-                      href="https://docs.litellm.ai/docs/completion/prompt_caching"
-                      target="_blank"
-                      rel="noreferrer"
-                      className="underline"
-                    />
-                  ),
-                }}
-              />
-            </p>
+        <TabsContent value="analytics" keepMounted>
+          <Card>
+            <CardContent>
+              <p className="text-sm text-muted-foreground">
+                <Trans
+                  i18nKey="caching.dashboard.description"
+                  components={{
+                    cacheDocs: (
+                      <a
+                        href="https://docs.litellm.ai/docs/proxy/caching"
+                        target="_blank"
+                        rel="noreferrer"
+                        className="underline"
+                      />
+                    ),
+                    promptDocs: (
+                      <a
+                        href="https://docs.litellm.ai/docs/completion/prompt_caching"
+                        target="_blank"
+                        rel="noreferrer"
+                        className="underline"
+                      />
+                    ),
+                  }}
+                />
+              </p>
 
-            <div className="mt-4 grid grid-cols-1 items-center gap-4 md:grid-cols-[1fr_1fr_auto]">
-              <Combobox
-                multiple
-                items={uniqueApiKeys}
-                value={selectedApiKeys}
-                onValueChange={(keys: string[]) => setSelectedApiKeys(keys)}
-              >
-                <ComboboxChips render={<div ref={anchor1} />}>
-                  <ComboboxValue>
-                    {(keys: string[]) =>
-                      keys.map((key) => (
-                        <ComboboxChip key={key} aria-label={key}>
+              <div className="mt-4 grid grid-cols-1 items-center gap-4 md:grid-cols-[1fr_1fr_auto]">
+                <Combobox
+                  multiple
+                  items={uniqueApiKeys}
+                  value={selectedApiKeys}
+                  onValueChange={(keys: string[]) => setSelectedApiKeys(keys)}
+                >
+                  <ComboboxChips render={<div ref={anchor1} />}>
+                    <ComboboxValue>
+                      {(keys: string[]) =>
+                        keys.map((key) => (
+                          <ComboboxChip key={key} aria-label={key}>
+                            {key}
+                          </ComboboxChip>
+                        ))
+                      }
+                    </ComboboxValue>
+                    <ComboboxChipsInput placeholder={t("caching.dashboard.filters.virtualKeysPlaceholder")} />
+                  </ComboboxChips>
+                  <ComboboxContent anchor={anchor1}>
+                    <ComboboxEmpty>{t("caching.dashboard.filters.noVirtualKeys")}</ComboboxEmpty>
+                    <ComboboxList>
+                      {(key: string) => (
+                        <ComboboxItem key={key} value={key}>
                           {key}
-                        </ComboboxChip>
-                      ))
-                    }
-                  </ComboboxValue>
-                  <ComboboxChipsInput placeholder={t("caching.dashboard.filters.virtualKeysPlaceholder")} />
-                </ComboboxChips>
-                <ComboboxContent anchor={anchor1}>
-                  <ComboboxEmpty>{t("caching.dashboard.filters.noVirtualKeys")}</ComboboxEmpty>
-                  <ComboboxList>
-                    {(key: string) => (
-                      <ComboboxItem key={key} value={key}>
-                        {key}
-                      </ComboboxItem>
-                    )}
-                  </ComboboxList>
-                </ComboboxContent>
-              </Combobox>
+                        </ComboboxItem>
+                      )}
+                    </ComboboxList>
+                  </ComboboxContent>
+                </Combobox>
 
-              <Combobox
-                multiple
-                items={uniqueModels}
-                value={selectedModels}
-                onValueChange={(models: string[]) => setSelectedModels(models)}
-              >
-                <ComboboxChips render={<div ref={anchor2} />}>
-                  <ComboboxValue>
-                    {(models: string[]) =>
-                      models.map((model) => (
-                        <ComboboxChip key={model} aria-label={model}>
+                <Combobox
+                  multiple
+                  items={uniqueModels}
+                  value={selectedModels}
+                  onValueChange={(models: string[]) => setSelectedModels(models)}
+                >
+                  <ComboboxChips render={<div ref={anchor2} />}>
+                    <ComboboxValue>
+                      {(models: string[]) =>
+                        models.map((model) => (
+                          <ComboboxChip key={model} aria-label={model}>
+                            {model}
+                          </ComboboxChip>
+                        ))
+                      }
+                    </ComboboxValue>
+                    <ComboboxChipsInput placeholder={t("caching.dashboard.filters.modelsPlaceholder")} />
+                  </ComboboxChips>
+                  <ComboboxContent anchor={anchor2}>
+                    <ComboboxEmpty>{t("caching.dashboard.filters.noModels")}</ComboboxEmpty>
+                    <ComboboxList>
+                      {(model: string) => (
+                        <ComboboxItem key={model} value={model}>
                           {model}
-                        </ComboboxChip>
-                      ))
-                    }
-                  </ComboboxValue>
-                  <ComboboxChipsInput placeholder={t("caching.dashboard.filters.modelsPlaceholder")} />
-                </ComboboxChips>
-                <ComboboxContent anchor={anchor2}>
-                  <ComboboxEmpty>{t("caching.dashboard.filters.noModels")}</ComboboxEmpty>
-                  <ComboboxList>
-                    {(model: string) => (
-                      <ComboboxItem key={model} value={model}>
-                        {model}
-                      </ComboboxItem>
-                    )}
-                  </ComboboxList>
-                </ComboboxContent>
-              </Combobox>
+                        </ComboboxItem>
+                      )}
+                    </ComboboxList>
+                  </ComboboxContent>
+                </Combobox>
 
-              <AdvancedDatePicker
-                value={dateValue}
-                onValueChange={(value) => {
-                  setDateValue(value);
-                }}
-              />
-            </div>
+                <AdvancedDatePicker
+                  value={dateValue}
+                  onValueChange={(value) => {
+                    setDateValue(value);
+                  }}
+                />
+              </div>
 
-            <div className="mt-4 grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3">
-              {statCards.map((stat) => (
-                <Card key={stat.label}>
-                  <CardContent>
-                    <p className="text-sm font-medium text-muted-foreground">{stat.label}</p>
-                    <div className="mt-2 flex items-baseline space-x-2.5">
-                      <p className="text-3xl font-semibold">{stat.value}</p>
-                    </div>
-                  </CardContent>
-                </Card>
-              ))}
-            </div>
+              <div className="mt-4 grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3">
+                {statCards.map((stat) => (
+                  <Card key={stat.label}>
+                    <CardContent>
+                      <p className="text-sm font-medium text-muted-foreground">{stat.label}</p>
+                      <div className="mt-2 flex items-baseline space-x-2.5">
+                        <p className="text-3xl font-semibold">{stat.value}</p>
+                      </div>
+                    </CardContent>
+                  </Card>
+                ))}
+              </div>
 
-            <Card className="mt-4">
-              <CardHeader>
-                <CardTitle className="text-base font-semibold">{t("caching.dashboard.requestsChart.title")}</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <p className="text-sm text-muted-foreground">{t("caching.dashboard.requestsChart.hint")}</p>
-                {hasUnknownGroup && <p className="mt-1 text-sm text-muted-foreground">{t(UNKNOWN_CALL_TYPE_NOTE)}</p>}
-                {activityFailed ? (
-                  <ErrorState
-                    title={t("caching.dashboard.requestsChart.loadFailed")}
-                    message={deriveErrorMessage(activityError)}
-                    onRetry={() => void refetch()}
-                  />
-                ) : (
+              <Card className="mt-4">
+                <CardHeader>
+                  <CardTitle className="text-base font-semibold">
+                    {t("caching.dashboard.requestsChart.title")}
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <p className="text-sm text-muted-foreground">{t("caching.dashboard.requestsChart.hint")}</p>
+                  {hasUnknownGroup && <p className="mt-1 text-sm text-muted-foreground">{t(UNKNOWN_CALL_TYPE_NOTE)}</p>}
+                  {activityFailed ? (
+                    <ErrorState
+                      title={t("caching.dashboard.requestsChart.loadFailed")}
+                      message={deriveErrorMessage(activityError)}
+                      onRetry={() => void refetch()}
+                    />
+                  ) : (
+                    <BarChart
+                      data={chartData}
+                      stack={true}
+                      index="name"
+                      valueFormatter={valueFormatterNumbers}
+                      categories={[
+                        t(REQUEST_SERIES.apiRequests),
+                        t(REQUEST_SERIES.cacheHits),
+                        t(REQUEST_SERIES.failed),
+                      ]}
+                      colors={["sky", "teal", "red"]}
+                      yAxisWidth={48}
+                      className="mt-2"
+                      onValueChange={(item) => {
+                        if (item.categoryClicked === t(REQUEST_SERIES.failed)) setErrorDrilldownCallType(item.name);
+                      }}
+                    />
+                  )}
+                </CardContent>
+              </Card>
+
+              {activeDrilldownCallType !== null && (
+                <ErrorDrilldownCard
+                  callType={activeDrilldownCallType}
+                  buckets={activity?.error_breakdown ?? []}
+                  valueFormatter={valueFormatterNumbers}
+                  onClose={() => setErrorDrilldownCallType(null)}
+                />
+              )}
+
+              <Card className="mt-6">
+                <CardHeader>
+                  <CardTitle className="text-base font-semibold">{t("caching.dashboard.tokensChart.title")}</CardTitle>
+                </CardHeader>
+                <CardContent>
                   <BarChart
                     data={chartData}
                     stack={true}
                     index="name"
                     valueFormatter={valueFormatterNumbers}
-                    categories={[t(REQUEST_SERIES.apiRequests), t(REQUEST_SERIES.cacheHits), t(REQUEST_SERIES.failed)]}
-                    colors={["sky", "teal", "red"]}
+                    categories={[
+                      t("caching.dashboard.series.generatedCompletionTokens"),
+                      t("caching.dashboard.series.cachedCompletionTokens"),
+                    ]}
+                    colors={["sky", "teal"]}
                     yAxisWidth={48}
-                    className="mt-2"
-                    onValueChange={(item) => {
-                      if (item.categoryClicked === t(REQUEST_SERIES.failed)) setErrorDrilldownCallType(item.name);
-                    }}
                   />
-                )}
-              </CardContent>
-            </Card>
+                </CardContent>
+              </Card>
+            </CardContent>
+          </Card>
+        </TabsContent>
 
-            {activeDrilldownCallType !== null && (
-              <ErrorDrilldownCard
-                callType={activeDrilldownCallType}
-                buckets={activity?.error_breakdown ?? []}
-                valueFormatter={valueFormatterNumbers}
-                onClose={() => setErrorDrilldownCallType(null)}
-              />
-            )}
+        <TabsContent value="health" keepMounted>
+          <CacheHealthTab
+            accessToken={accessToken}
+            healthCheckResponse={healthCheckResponse}
+            runCachingHealthCheck={runCachingHealthCheck}
+          />
+        </TabsContent>
 
-            <Card className="mt-6">
-              <CardHeader>
-                <CardTitle className="text-base font-semibold">{t("caching.dashboard.tokensChart.title")}</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <BarChart
-                  data={chartData}
-                  stack={true}
-                  index="name"
-                  valueFormatter={valueFormatterNumbers}
-                  categories={[
-                    t("caching.dashboard.series.generatedCompletionTokens"),
-                    t("caching.dashboard.series.cachedCompletionTokens"),
-                  ]}
-                  colors={["sky", "teal"]}
-                  yAxisWidth={48}
-                />
-              </CardContent>
-            </Card>
-          </CardContent>
-        </Card>
-      </TabsContent>
+        <TabsContent value="settings" keepMounted>
+          <CacheSettings accessToken={accessToken} userRole={userRole} userID={userID} />
+        </TabsContent>
 
-      <TabsContent value="health" keepMounted>
-        <CacheHealthTab
-          accessToken={accessToken}
-          healthCheckResponse={healthCheckResponse}
-          runCachingHealthCheck={runCachingHealthCheck}
-        />
-      </TabsContent>
-
-      <TabsContent value="settings" keepMounted>
-        <CacheSettings accessToken={accessToken} userRole={userRole} userID={userID} />
-      </TabsContent>
-
-      <TabsContent value="coordination" keepMounted>
-        <CoordinationRedisSettings />
-      </TabsContent>
-    </Tabs>
+        <TabsContent value="coordination" keepMounted>
+          <CoordinationRedisSettings />
+        </TabsContent>
+      </Tabs>
+    </PageContent>
   );
 };
 

@@ -10,19 +10,19 @@ use crate::RawJson;
 #[macro_rules_attribute::apply(crate::db_row)]
 #[derive(serde::Serialize)]
 pub struct ObjectPermission {
-    object_permission_id: String,
-    mcp_servers: Vec<String>,
-    mcp_access_groups: Vec<String>,
-    mcp_tool_permissions: Option<RawJson>,
-    vector_stores: Vec<String>,
-    agents: Vec<String>,
-    agent_access_groups: Vec<String>,
-    models: Vec<String>,
-    blocked_tools: Vec<String>,
-    mcp_toolsets: Vec<String>,
-    search_tools: Vec<String>,
-    mcp_tool_search_enabled: Option<bool>,
-    skills: Vec<String>,
+    pub object_permission_id: String,
+    pub mcp_servers: Vec<String>,
+    pub mcp_access_groups: Vec<String>,
+    pub mcp_tool_permissions: Option<RawJson>,
+    pub vector_stores: Vec<String>,
+    pub agents: Vec<String>,
+    pub agent_access_groups: Vec<String>,
+    pub models: Vec<String>,
+    pub blocked_tools: Vec<String>,
+    pub mcp_toolsets: Vec<String>,
+    pub search_tools: Vec<String>,
+    pub mcp_tool_search_enabled: Option<bool>,
+    pub skills: Vec<String>,
 }
 
 pub(super) async fn find_object_permission(

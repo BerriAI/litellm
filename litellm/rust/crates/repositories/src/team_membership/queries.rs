@@ -19,6 +19,8 @@ pub struct TeamMembership {
     team_id: String,
     budget_id: Option<String>,
     spend: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    rollover_credit: Option<f64>,
     total_spend: f64,
     litellm_budget_table: Option<Json<Budget>>,
 }

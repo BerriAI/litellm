@@ -142,7 +142,7 @@ class FakeAnthropicMessagesStreamIterator:
 
     def _create_streaming_chunks(self) -> list[bytes]:
         """Convert the non-streaming response to streaming chunks"""
-        chunks: Final = []
+        chunks: Final[list[bytes]] = []
 
         response_dict: Final[Mapping[str, object]] = self.response
 
@@ -155,7 +155,7 @@ class FakeAnthropicMessagesStreamIterator:
                 "type": "message",
                 "role": self.response.get("role", "assistant"),
                 "model": self.response.get("model"),
-                "content": [],
+                "content": list[object](),
                 "stop_reason": None,
                 "stop_sequence": None,
                 "usage": {
@@ -195,7 +195,7 @@ class FakeAnthropicMessagesStreamIterator:
         chunks.append(f"event: message_delta\ndata: {json.dumps(message_delta)}\n\n".encode())
 
         # 6. message_stop event
-        message_stop: Final = {"type": "message_stop", "usage": usage if usage else {}}
+        message_stop: Final = {"type": "message_stop", "usage": usage if usage else dict[str, object]()}
         chunks.append(f"event: message_stop\ndata: {json.dumps(message_stop)}\n\n".encode())
 
         return chunks

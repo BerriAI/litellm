@@ -28,6 +28,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
+import respx
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
 from cryptography.hazmat.primitives.asymmetric.rsa import RSAPrivateKey, RSAPublicKey
@@ -43,6 +44,7 @@ from litellm.proxy._types import CommonProxyErrors, ConfigGeneralSettings
 from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
 from litellm.proxy.common_utils.fips import enforce_fips_mode
 from litellm.proxy.config_resolvers.settings_store import SettingsStore
+from litellm.proxy.litellm_pre_call_utils import should_auto_drop_params_for_agentic_cli
 from litellm.proxy.proxy_server import (
     ProxyConfig,
     _is_remote_module_url,
@@ -108,6 +110,48 @@ async def test_proxy_config_adds_and_deletes_stale_deployment(tmp_path: Path, mo
     assert router.get_deployment(model_id="db-deployment").litellm_params.model == "openai/gpt-3.5-turbo"
     await ProxyConfig()._delete_deployment(db_models=[])
     assert router.get_model_ids() == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("db_general_settings", "discovered_max_input_tokens"),
+    [({}, 8192), ({"disable_model_info_refresh": True}, None)],
+    ids=["refresh-on", "refresh-disabled"],
+)
+async def test_a_deployment_the_db_sync_adds_gets_its_backend_limits_without_waiting_for_the_next_refresh(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+    db_general_settings: Mapping[str, object],
+    discovered_max_input_tokens: int | None,
+) -> None:
+    from litellm.proxy import proxy_server
+
+    router: Final = litellm.Router(model_list=[])
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(proxy_server, "general_settings", dict(db_general_settings))
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-proxy-config-test-salt")
+    backend: Final = respx_mock.get("https://backend.invalid/v1/models").respond(
+        200, json={"data": [{"id": "local-model", "max_model_len": 8192}]}
+    )
+    model: Final = SimpleNamespace(
+        model_id="db-vllm",
+        model_name="local",
+        model_info={"id": "db-vllm"},
+        litellm_params={
+            "model": encrypt_value_helper("hosted_vllm/local-model"),
+            "api_base": encrypt_value_helper("https://backend.invalid/v1"),
+        },
+        blocked=False,
+    )
+
+    assert ProxyConfig().add_deployments_and_refresh_model_info(db_models=[model]) == 1
+    pending: Final = asyncio.all_tasks() - {asyncio.current_task()}
+    if pending:
+        await asyncio.wait(pending, timeout=5)
+
+    assert router.registry().discovered_model_info("db-vllm").get("max_input_tokens") == discovered_max_input_tokens
+    assert backend.call_count == (0 if discovered_max_input_tokens is None else 1)
 
 
 def test_proxy_config_upserts_existing_deployment_without_duplicating_it(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -4029,20 +4073,22 @@ def test_ProxyConfig__add_deployment_keeps_loading_rows_after_a_non_flag_drop_pa
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("configured, expected", [("true", True), ("false", False)])
-async def test_ProxyConfig_load_config_turns_litellm_settings_drop_params_string_into_bool(
-    tmp_path, monkeypatch, configured, expected
+@pytest.mark.parametrize("configured, expected", [('"true"', True), ('"false"', False), ("null", False)])
+async def test_ProxyConfig_load_config_reads_a_flag_string_or_null_litellm_settings_drop_params_without_a_warning(
+    tmp_path, monkeypatch, caplog, configured, expected
 ):
     f = tmp_path / "c.yaml"
-    f.write_text(f'model_list: []\nlitellm_settings:\n  drop_params: "{configured}"\n')
+    f.write_text(f"model_list: []\nlitellm_settings:\n  drop_params: {configured}\n")
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
     monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", False)
     monkeypatch.delenv("LITELLM_CONFIG_BUCKET_NAME", raising=False)
     monkeypatch.setattr(litellm, "drop_params", not expected)
 
-    await ProxyConfig().load_config(router=None, config_file_path=str(f))
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        await ProxyConfig().load_config(router=None, config_file_path=str(f))
 
     assert litellm.drop_params is expected
+    assert "drop_params" not in caplog.text
 
 
 @pytest.mark.asyncio
@@ -4061,21 +4107,31 @@ async def test_ProxyConfig_load_config_resolves_a_litellm_settings_drop_params_e
 
 
 @pytest.mark.asyncio
-async def test_ProxyConfig_load_config_warns_and_turns_off_a_non_flag_litellm_settings_drop_params(
-    tmp_path, monkeypatch, caplog
+@pytest.mark.parametrize("configured, logged", [("ture", "'ture'"), ('"maybe"', "'maybe'"), ("2", "2")])
+async def test_ProxyConfig_load_config_warns_that_a_non_flag_litellm_settings_drop_params_is_off_except_for_agentic_clis(
+    tmp_path, monkeypatch, caplog, configured, logged
 ):
     f = tmp_path / "c.yaml"
-    f.write_text("model_list: []\nlitellm_settings:\n  drop_params: ture\n")
+    f.write_text(f"model_list: []\nlitellm_settings:\n  drop_params: {configured}\n")
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
     monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", False)
     monkeypatch.delenv("LITELLM_CONFIG_BUCKET_NAME", raising=False)
     monkeypatch.setattr(litellm, "drop_params", True)
+    proxy_config = ProxyConfig()
 
     with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
-        await ProxyConfig().load_config(router=None, config_file_path=str(f))
+        await proxy_config.load_config(router=None, config_file_path=str(f))
 
     assert litellm.drop_params is False
-    assert "litellm_settings.drop_params='ture' is not a flag value, treating it as off" in caplog.text
+    assert caplog.text.count("is not a flag value") == 1
+    assert (
+        f"litellm_settings.drop_params={logged} is not a flag value, treating it as off, except for Claude Code, "
+        "Codex, and VS Code Copilot Chat requests, which keep their drop_params default on" in caplog.text
+    )
+    assert should_auto_drop_params_for_agentic_cli("claude-cli/2.1.299 (external, cli)", False, proxy_config)
+    assert should_auto_drop_params_for_agentic_cli("codex_cli_rs/0.165.0", False, proxy_config)
+    assert should_auto_drop_params_for_agentic_cli("GitHubCopilotChat/0.74.0", False, proxy_config)
+    assert not should_auto_drop_params_for_agentic_cli("curl/8.5.0", False, proxy_config)
 
 
 # ---------------------------------------------------------------------------
@@ -5368,7 +5424,7 @@ async def test_ProxyConfig__update_general_settings_dispatches_every_side_effect
 
 
 @pytest.mark.asyncio
-async def test_ProxyConfig__update_general_settings_unrelated_value_fires_no_runtime_effect(monkeypatch):
+async def test_ProxyConfig__update_general_settings_unrelated_value_fires_no_runtime_effect(monkeypatch, caplog):
     from litellm.proxy import proxy_server
 
     pc = ProxyConfig()
@@ -5382,7 +5438,9 @@ async def test_ProxyConfig__update_general_settings_unrelated_value_fires_no_run
     monkeypatch.setattr(proxy_server, "proxy_logging_obj", proxy_logging)
     monkeypatch.setattr(pc, "_reschedule_spend_log_cleanup_job", reschedule)
 
-    await pc._update_general_settings({"unrelated": "value"})
+    await pc._update_general_settings({"unrelated": "value", "required_customer_headers": ["X-Tenant-ID"]})
+    assert "required_customer_headers" not in pc.settings
+    assert "proxy does not apply" in caplog.text
 
     initialize_endpoints.assert_not_awaited()
     reschedule.assert_not_awaited()
@@ -5392,7 +5450,7 @@ async def test_ProxyConfig__update_general_settings_unrelated_value_fires_no_run
 
 
 @pytest.mark.asyncio
-async def test_ProxyConfig__update_config_from_db_resolves_through_settings_stores(monkeypatch):
+async def test_ProxyConfig__update_config_from_db_resolves_through_settings_stores(monkeypatch, caplog):
     pc = ProxyConfig()
     config = {
         "general_settings": {
@@ -5407,6 +5465,7 @@ async def test_ProxyConfig__update_config_from_db_resolves_through_settings_stor
     db_values = {
         "general_settings": {
             "max_file_size_mb": 9,
+            "required_customer_headers": ["X-Tenant-ID"],
             "max_parallel_requests": 11,
             "alerting": ["db"],
             "pass_through_endpoints": [{"path": "/db"}],
@@ -5424,6 +5483,7 @@ async def test_ProxyConfig__update_config_from_db_resolves_through_settings_stor
 
     resolved = await pc._update_config_from_db(MagicMock(), config, store_model_in_db=True)
 
+    assert "proxy does not apply" in caplog.text
     assert resolved["general_settings"] == {
         "max_file_size_mb": 7,
         "max_parallel_requests": 3,
