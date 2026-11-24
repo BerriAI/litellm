@@ -731,6 +731,7 @@ class ChunkProcessor:
                 tool_calls_list.append(
                     ChatCompletionMessageCustomToolCall(
                         id=tool_call_data.id,
+                        type="custom",
                         custom=ChatCompletionCustomToolCallPayload(
                             name=tool_call_data.custom_name,
                             input=joined_fragments.get((index, "custom_input"), ""),

@@ -36,7 +36,6 @@ from litellm.types.llms.openai import (
 )
 from litellm.types.rerank import provider_usage_or_none
 from litellm.types.utils import (
-    ChatCompletionDeltaToolCall,
     ChatCompletionMessageCustomToolCall,
     ChatCompletionMessageToolCall,
     ChatCompletionRedactedThinkingBlock,
@@ -387,18 +386,6 @@ async def convert_to_streaming_response_async(
         )
 
     for idx, choice in enumerate(response_object["choices"]):
-        if (
-            choice["message"].get("tool_calls", None) is not None
-            and isinstance(choice["message"]["tool_calls"], list)
-            and len(choice["message"]["tool_calls"]) > 0
-            and isinstance(choice["message"]["tool_calls"][0], dict)
-        ):
-            pydantic_tool_calls = []
-            for index, t in enumerate(choice["message"]["tool_calls"]):
-                if "index" not in t:
-                    t["index"] = index
-                pydantic_tool_calls.append(ChatCompletionDeltaToolCall(**t))
-            choice["message"]["tool_calls"] = pydantic_tool_calls
         delta = _first_replay_delta(choice["message"])
         finish_reason = choice.get("finish_reason", None)
 

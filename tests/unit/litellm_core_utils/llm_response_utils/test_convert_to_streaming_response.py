@@ -9,6 +9,7 @@ replay yields multiple word-shaped chunks instead of a single one-shot
 content frame, restoring per-token cadence on cache hits.
 """
 
+from copy import deepcopy
 from datetime import datetime
 from typing import Final, Literal
 
@@ -563,6 +564,38 @@ async def test_a_cached_answer_streams_its_tool_call_after_the_reasoning_and_the
     assert reasoning and max(reasoning) < min(text)
     assert called == [max(text) + 1]
     assert deltas[called[0]]["tool_calls"] == [tool_call]
+    assert [delta["finish"] for delta in deltas if delta["finish"]] == ["tool_calls"]
+
+
+_CACHED_CUSTOM_CALL: Final[dict[str, JsonValue]] = {
+    "id": "call_custom",
+    "type": "custom",
+    "custom": {"name": "edit_note", "input": "buy milk"},
+}
+_CACHED_FUNCTION_CALL: Final[dict[str, JsonValue]] = {
+    "id": "call_function",
+    "type": "function",
+    "function": {"name": "lookup", "arguments": "{}"},
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("replay", ["async", "sync"])
+@pytest.mark.parametrize(
+    "tool_calls",
+    [
+        [_CACHED_CUSTOM_CALL],
+        [_CACHED_FUNCTION_CALL, _CACHED_CUSTOM_CALL],
+        [_CACHED_CUSTOM_CALL, _CACHED_FUNCTION_CALL],
+    ],
+    ids=["custom", "function_then_custom", "custom_then_function"],
+)
+async def test_a_cached_custom_tool_call_streams_to_the_client_as_it_was_stored(
+    replay: Literal["async", "sync"], tool_calls: list[dict[str, JsonValue]]
+) -> None:
+    deltas: Final = await _client_stream({"content": None, "tool_calls": deepcopy(tool_calls)}, replay)
+    called: Final = [delta["tool_calls"] for delta in deltas if delta.get("tool_calls")]
+    assert called == [[{**tool_call, "index": index} for index, tool_call in enumerate(tool_calls)]]
     assert [delta["finish"] for delta in deltas if delta["finish"]] == ["tool_calls"]
 
 

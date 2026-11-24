@@ -3690,6 +3690,58 @@ async def test_async_streamed_answer_with_content_is_cached():
     assert _cached_content(litellm.cache.get_cache(**kwargs)) == "hi"
 
 
+def _custom_tool_call_chunk(tool_call: Mapping[str, object]) -> ModelResponseStream:
+    return _stream_chunk(
+        [StreamingChoices(index=0, delta=Delta(role="assistant", tool_calls=[{"index": 0, **tool_call}]))]
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("original_function", "call_type"),
+    [(completion, CallTypes.completion.value), (litellm.acompletion, CallTypes.acompletion.value)],
+)
+async def test_a_streamed_custom_tool_call_is_replayed_from_the_cache_as_a_custom_tool_call(
+    original_function: Callable[..., object], call_type: str
+) -> None:
+    setup_cache()
+    kwargs: Final = {"model": "gpt-4o", "messages": _unique_messages()}
+    handler: Final = LLMCachingHandler(
+        original_function=original_function, request_kwargs=kwargs, start_time=_FIXED_START
+    )
+    streamed: Final = (
+        _custom_tool_call_chunk({"id": "call_1", "type": "custom", "custom": {"name": "edit_note", "input": ""}}),
+        _custom_tool_call_chunk({"custom": {"input": "buy "}}),
+        _custom_tool_call_chunk({"custom": {"input": "milk"}}),
+        _stream_chunk([StreamingChoices(finish_reason="tool_calls", index=0, delta=Delta())]),
+    )
+    for chunk in streamed:
+        if call_type == CallTypes.acompletion.value:
+            await handler.add_streaming_response_to_cache(chunk)
+        else:
+            handler.sync_add_streaming_response_to_cache(chunk)
+    await asyncio.gather(*_PENDING_CACHE_WRITES)
+    stored: Final = litellm.cache.get_cache(**kwargs)
+    assert stored is not None
+
+    replay: Final = handler._convert_cached_result_to_model_response(
+        cached_result=stored if isinstance(stored, dict) else json.loads(stored),
+        call_type=call_type,
+        kwargs={**kwargs, "stream": True},
+        logging_obj=_completion_logging_obj(call_type),
+        model="gpt-4o",
+        args=(),
+    )
+
+    assert isinstance(replay, CustomStreamWrapper)
+    chunks: Final = [chunk async for chunk in replay] if call_type.startswith("a") else list(replay)
+    deltas: Final = [chunk.choices[0].delta.model_dump(exclude_none=True) for chunk in chunks]
+    assert [delta["tool_calls"] for delta in deltas if delta.get("tool_calls")] == [
+        [{"id": "call_1", "type": "custom", "custom": {"name": "edit_note", "input": "buy milk"}, "index": 0}]
+    ]
+    assert [chunk.choices[0].finish_reason for chunk in chunks if chunk.choices[0].finish_reason] == ["tool_calls"]
+
+
 def _streamed_text_completion_closing_chunk(text: str) -> TextCompletionResponse:
     return litellm.TextCompletionResponse(choices=[litellm.utils.TextChoices(text=text, finish_reason="stop")])
 
