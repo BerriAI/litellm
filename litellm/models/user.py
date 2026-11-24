@@ -11,7 +11,7 @@ from typing import Final
 from pydantic import ConfigDict, Field, model_validator
 
 from litellm.models.budget import active_rollover_credit as calculate_rollover_credit
-from litellm.models.budget import active_temp_budget_increase
+from litellm.models.budget import calculate_active_temp_budget_increase
 from litellm.models.object_permission import LiteLLM_ObjectPermissionTable
 from litellm.models.organization_membership import (
     LiteLLM_OrganizationMembershipTable,
@@ -83,7 +83,7 @@ class LiteLLM_UserTable(LiteLLMPydanticObjectBase):
         budget: Final = self.max_budget_with_rollover()
         if budget is None:
             return None
-        increase: Final = active_temp_budget_increase(
+        increase: Final = calculate_active_temp_budget_increase(
             self.temp_budget_increase, self.temp_budget_expiry, now or datetime.now(timezone.utc)
         )
         return budget + increase

@@ -35,7 +35,7 @@ def active_rollover_credit(
     return min(max(0.0, credit or 0.0), ceiling - base)
 
 
-def active_temp_budget_increase(amount: float | None, expiry: datetime | None, now: datetime) -> float:
+def calculate_active_temp_budget_increase(amount: float | None, expiry: datetime | None, now: datetime) -> float:
     if amount is None or expiry is None:
         return 0.0
     expiry_utc: Final = expiry.replace(tzinfo=timezone.utc) if expiry.tzinfo is None else expiry
@@ -142,7 +142,7 @@ class LiteLLM_BudgetTable(LiteLLMPydanticObjectBase):
         return value
 
     def active_temp_budget_increase(self, now: datetime) -> float:
-        return active_temp_budget_increase(self.temp_budget_increase, self.temp_budget_expiry, now)
+        return calculate_active_temp_budget_increase(self.temp_budget_increase, self.temp_budget_expiry, now)
 
     def effective_max_budget(self, now: datetime) -> float | None:
         if self.max_budget is None:

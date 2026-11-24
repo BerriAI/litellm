@@ -34,6 +34,24 @@ def rollover_proxy(session_gateway: Gateway, tmp_path_factory: pytest.TempPathFa
         yield proxy
 
 
+@pytest.fixture(scope="module")
+def overage_rollover_proxy(session_gateway: Gateway, tmp_path_factory: pytest.TempPathFactory) -> Iterator[Gateway]:
+    directory: Final = tmp_path_factory.mktemp("temporary-budget-rollover")
+    config: Final = directory / "proxy.yaml"
+    config.write_text(
+        "model_list: []\n"
+        "general_settings:\n"
+        "  master_key: os.environ/LITELLM_MASTER_KEY\n"
+        "  database_url: os.environ/DATABASE_URL\n"
+        "litellm_settings:\n"
+        "  budget_rollover: true\n"
+    )
+    with owned_proxy(
+        session_gateway, directory, _FAST_RESET_TICK, config=config, workers=2, state=OwnedState.PRIVATE
+    ) as proxy:
+        yield proxy
+
+
 def _personal_close_period(proxy: Gateway, user_id: str, spend: str) -> None:
     write_rows(
         "UPDATE \"LiteLLM_UserTable\" SET spend = %s, budget_reset_at = now() - interval '1 minute' WHERE user_id = %s",
@@ -69,6 +87,26 @@ def _member_close_period(proxy: Gateway, budget_id: str) -> None:
 def _member_budget(gateway: Gateway, team_id: str, user_id: str) -> dict[str, JsonValue]:
     rows: Final = _MEMBERS.validate_python(gateway.get("/team/info", {"team_id": team_id})["team_memberships"])
     return next(row for row in rows if row["user_id"] == user_id)
+
+
+@pytest.mark.parametrize(("expiry_offset", "carried_spend"), ((1, 0.0), (-1, 30.0)), ids=("active", "expired"))
+def test_user_budget_reset_only_counts_active_temporary_increase(
+    overage_rollover_proxy: Gateway, expiry_offset: int, carried_spend: float
+) -> None:
+    proxy: Final = overage_rollover_proxy
+    with proxy.scenario() as scenario:
+        user_id: Final = scenario.user(max_budget=100, budget_duration="30d")
+        expiry: Final = datetime.now(timezone.utc) + timedelta(hours=expiry_offset)
+        proxy.post(
+            "/user/update",
+            {"user_id": user_id, "temp_budget_increase": 50, "temp_budget_expiry": expiry.isoformat()},
+        )
+
+        _personal_close_period(proxy, user_id, "130")
+
+        assert proxy.rows('SELECT spend, max_budget FROM "LiteLLM_UserTable" WHERE user_id = %s', (user_id,)) == [
+            {"spend": carried_spend, "max_budget": 100.0}
+        ]
 
 
 def test_user_edits_only_return_rollover_fields_when_enabled(rollover_proxy: Gateway) -> None:

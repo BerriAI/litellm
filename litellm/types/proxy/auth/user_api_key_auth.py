@@ -10,7 +10,7 @@ from typing import (
 from pydantic import ConfigDict, Field, PrivateAttr, TypeAdapter, model_validator
 from typing_extensions import TypeIs  # noqa: TID251  # narrows the before-validator input without copying it
 
-from litellm.models.budget import active_temp_budget_increase
+from litellm.models.budget import calculate_active_temp_budget_increase
 from litellm.models.object_permission import LiteLLM_ObjectPermissionTable
 from litellm.models.team import Member
 from litellm.models.verification_token import LiteLLM_VerificationToken
@@ -224,7 +224,7 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
         if self._temporary_user_budget is None:
             return self.user_max_budget
         budget, increase, expiry = self._temporary_user_budget
-        return budget + active_temp_budget_increase(increase, expiry, datetime.now(timezone.utc))
+        return budget + calculate_active_temp_budget_increase(increase, expiry, datetime.now(timezone.utc))
 
     # Values stay `object` rather than BudgetConfig: this is the raw JSON column,
     # and validating it here would make one malformed row fail auth outright.

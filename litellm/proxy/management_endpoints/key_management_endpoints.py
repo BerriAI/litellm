@@ -2944,11 +2944,11 @@ def prepare_metadata_fields(
             )
         casted_metadata[reserved_field] = existing_value
 
-    data_json: Final = _as_object_dict(data.model_dump(exclude=exclude_fields, exclude_unset=True, exclude_none=True))
+    data_json: Final = _as_object_dict(data.model_dump(exclude_unset=True, exclude_none=True))
 
     try:
         for k, v in data_json.items():
-            if k in LiteLLM_ManagementEndpoint_MetadataFields:
+            if k in LiteLLM_ManagementEndpoint_MetadataFields and k not in exclude_fields:
                 if isinstance(v, datetime):
                     casted_metadata[k] = v.isoformat()
                 else:
