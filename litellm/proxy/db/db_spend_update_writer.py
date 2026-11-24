@@ -894,7 +894,7 @@ class DBSpendUpdateWriter:
         team_id: str | None,
         org_id: str | None,
         # Completion object fields
-        kwargs: dict | None,
+        kwargs: dict[str, object] | None,
         completion_response: object,
         start_time: datetime,
         end_time: datetime,
@@ -3653,7 +3653,7 @@ class DBSpendUpdateWriter:
 
     async def add_spend_log_transaction_to_daily_user_transaction(
         self,
-        payload: dict | SpendLogsPayload,
+        payload: SpendLogsPayload,
         prisma_client: PrismaClient | None = None,
     ):
         """
