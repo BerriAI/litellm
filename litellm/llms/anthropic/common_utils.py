@@ -1654,7 +1654,7 @@ def strip_advisor_blocks_from_messages(
     control or on a follow-up turn.
 
     Args:
-        messages: Conversation history to process (mutated in-place).
+        messages: Conversation history to process. A message that changes is returned as a copy.
         replace_with_text: When True, replace the advisor exchange with an
             <advisor_feedback> text block so the executor retains the semantic
             context of what the advisor said.  When False (default), strip silently.
@@ -1663,16 +1663,21 @@ def strip_advisor_blocks_from_messages(
             the provider as sent.
     """
     drops_unpaired: Final = drops_unsupported_params(drop_params)
-    for message in messages:
-        if not isinstance(message, dict) or message.get("role") != "assistant":
-            continue
-        content = message.get("content")
-        if not isinstance(content, list):
-            continue
-        new_content = _without_advisor_blocks(content, replace_with_text, drops_unpaired)
-        if new_content is not None:
-            message["content"] = new_content
-    return messages
+    return [_message_without_advisor_blocks(message, replace_with_text, drops_unpaired) for message in messages]
+
+
+def _message_without_advisor_blocks(message: _MessageT, replace_with_text: bool, drops_unpaired: bool) -> _MessageT:
+    if not isinstance(message, dict) or message.get("role") != "assistant":
+        return message
+    content: Final = message.get("content")
+    if not isinstance(content, list):
+        return message
+    new_content: Final = _without_advisor_blocks(content, replace_with_text, drops_unpaired)
+    if new_content is None:
+        return message
+    stripped: Final = copy.copy(message)
+    stripped["content"] = new_content
+    return stripped
 
 
 def _without_advisor_blocks(
