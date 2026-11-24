@@ -250,8 +250,6 @@ def _text_blocks(container: object, text_type: str) -> tuple[tuple[object, str],
 
 
 def _native_output_text_blocks(response: object) -> tuple[tuple[object, str], ...] | None:
-    """Assistant text blocks of a Responses API or Anthropic Messages response, which carry no ``choices``.
-    None when ``response`` is neither, so a native reply with no text is still told apart from a chat one."""
     if isinstance(response, ResponsesAPIResponse):
         output: Final = stream_item_items(response, "output")
         return tuple(chain.from_iterable(_text_blocks(item, "output_text") for item in output))
@@ -293,9 +291,6 @@ class LakeraAIGuardrail(CustomGuardrail):
     ):
         """
         Initialize the LakeraAIGuardrail class.
-
-        This guardrail only supports the chat completions endpoint (/v1/chat/completions).
-        It is not supported for the Responses API, /v1/messages, MCP, A2A, or other endpoints.
 
         This calls: https://api.lakera.ai/v2/guard
 
