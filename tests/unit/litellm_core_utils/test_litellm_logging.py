@@ -1085,6 +1085,54 @@ def test_post_call_leaves_values_that_are_not_json_objects_untouched(response: o
 
 
 @pytest.mark.usefixtures("no_response_readers")
+@pytest.mark.parametrize("async_close", [False, True])
+@pytest.mark.asyncio
+async def test_post_call_releases_closed_stream_and_logging_without_cyclic_gc(async_close: bool) -> None:
+    async def closed_stream_refs() -> tuple[
+        weakref.ReferenceType[litellm.CustomStreamWrapper], weakref.ReferenceType[LitellmLogging]
+    ]:
+        request_logging: Final = _request_logging()
+        stream: Final = litellm.CustomStreamWrapper(
+            completion_stream=iter(()), model=_RETENTION_MODEL, logging_obj=request_logging
+        )
+        request_logging.post_call(original_response=stream)
+        if async_close:
+            await stream.aclose()
+        else:
+            stream.close()
+        return weakref.ref(stream), weakref.ref(request_logging)
+
+    gc_was_enabled: Final = gc.isenabled()
+    gc.disable()
+    try:
+        stream_ref, logging_ref = await closed_stream_refs()
+        assert stream_ref() is None
+        assert logging_ref() is None
+    finally:
+        if gc_was_enabled:
+            gc.enable()
+
+
+@pytest.mark.usefixtures("no_response_readers")
+@pytest.mark.parametrize("reader", ["logger_fn", "input_callback"])
+def test_post_call_gives_readers_a_stream_marker(reader: str) -> None:
+    recorder: Final = _RawResponseRecorder()
+    request_logging: Final = (
+        _request_logging(logger_fn=recorder.record)
+        if reader == "logger_fn"
+        else _request_logging("dynamic_input_callbacks", recorder)
+    )
+    stream: Final = litellm.CustomStreamWrapper(
+        completion_stream=iter(()), model=_RETENTION_MODEL, logging_obj=request_logging
+    )
+    try:
+        request_logging.post_call(original_response=stream)
+        assert recorder.received == ("first stream response received",)
+    finally:
+        stream.close()
+
+
+@pytest.mark.usefixtures("no_response_readers")
 def test_post_call_gives_logger_fn_the_serialized_response() -> None:
     recorder: Final = _RawResponseRecorder()
     response: Final = {"id": "resp-1", "submitted": datetime.datetime(2026, 5, 11, 23, 49, 13)}
