@@ -10,7 +10,7 @@ import re
 import subprocess
 import sys
 import urllib.parse as urlparse
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, MutableMapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
@@ -574,7 +574,7 @@ class ProxyInitializationHelpers:
 
     @staticmethod
     def apply_uvicorn_max_requests_jitter(
-        uvicorn_args: dict,
+        uvicorn_args: MutableMapping[str, object],
         max_requests_before_restart: int | None,
         jitter: int,
     ) -> None:
@@ -685,7 +685,7 @@ class ProxyInitializationHelpers:
         return True
 
     @staticmethod
-    def configure_dev_reload(uvicorn_args: dict, config_path: str | None) -> None:
+    def configure_dev_reload(uvicorn_args: MutableMapping[str, object], config_path: str | None) -> None:
         """Wire up --reload (dev only): watch *.py, the --config YAML, and .env,
         and signal reloaded workers to re-read .env with override so edits to
         existing keys actually take effect rather than staying masked by the
@@ -820,7 +820,7 @@ class ProxyInitializationHelpers:
 
         # Gunicorn Application Class
         class StandaloneApplication(gunicorn.app.base.BaseApplication):
-            def __init__(self, app, options=None):
+            def __init__(self, app, options: Mapping[str, object] | None = None):
                 self.options = options or {}  # gunicorn options
                 self.application = app  # FastAPI app
                 super().__init__()
@@ -905,7 +905,7 @@ class ProxyInitializationHelpers:
         if os.environ.get("PROMETHEUS_MULTIPROC_DIR"):
             from litellm.proxy.prometheus_cleanup import mark_worker_exit
 
-            def child_exit(server, worker):
+            def child_exit(server: object, worker):
                 mark_worker_exit(worker.pid)
 
             gunicorn_options["child_exit"] = child_exit

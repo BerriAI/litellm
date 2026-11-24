@@ -122,7 +122,7 @@ class AmazonAnthropicClaudeMessagesConfig(
     ) -> BedrockError:
         return BedrockError(status_code=status_code, message=error_message, headers=headers)
 
-    def __init__(self, **kwargs):
+    def __init__(self, **kwargs: object):
         BaseAnthropicMessagesConfig.__init__(self, **kwargs)
         AmazonInvokeConfig.__init__(self, **kwargs)
 
@@ -262,7 +262,7 @@ class AmazonAnthropicClaudeMessagesConfig(
 
     def _ensure_thinking_for_clear_thinking_context_management(
         self,
-        anthropic_messages_request: dict,
+        anthropic_messages_request: dict[str, object],
         model: str,
         drop_params: bool,
     ) -> bool:
@@ -355,7 +355,7 @@ class AmazonAnthropicClaudeMessagesConfig(
         return "low"
 
     def _inject_adaptive_thinking_for_clear_thinking(
-        self, anthropic_messages_request: dict, budget_tokens: int, model: str, drop_params: bool
+        self, anthropic_messages_request: dict[str, object], budget_tokens: int, model: str, drop_params: bool
     ) -> None:
         """Adaptive-thinking models (Opus 4.7/4.8, Fable 5) reject
         ``thinking.type=enabled`` on Bedrock. Use ``thinking.type=adaptive`` plus
