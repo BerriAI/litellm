@@ -1333,11 +1333,11 @@ class ParallelRequestLimiterHook(CustomLogger):
         self,
         user_api_key_dict: UserAPIKeyAuth,
         close: ResponsesWebSocketClose,
-        turns_logged: Callable[[], Awaitable[None]] | None = None,
+        turns_logged: Callable[[], Awaitable[bool]] | None = None,
     ) -> None:
         """Free the slot a Responses WebSocket took at admission once it closes, and settle its token reservations by
         how it closed. A socket whose turns all finished settles in the background once ``turns_logged`` says their
-        charges are in."""
+        charges are in, and keeps its reservation when they are not."""
         native_state: Final = _native_state(self, get_request_stash())
         if native_state is None:
             return
@@ -1353,12 +1353,11 @@ class ParallelRequestLimiterHook(CustomLogger):
     async def _close_finished_responses_websocket(
         self,
         native_state: "NativeParallelRequestLimiterState",
-        turns_logged: Callable[[], Awaitable[None]] | None,
+        turns_logged: Callable[[], Awaitable[bool]] | None,
     ) -> None:
         try:
-            if turns_logged is not None:
-                await turns_logged()
-            await self.native_companion.close_socket(native_state, "turns_finished")
+            logged: Final = turns_logged is None or await turns_logged()
+            await self.native_companion.close_socket(native_state, "turns_finished" if logged else "turn_unfinished")
         except Exception as e:  # noqa: BLE001  # a background refund has no caller to raise to, so it logs its failure
             _log_responses_websocket_release_error(e)
 

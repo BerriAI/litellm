@@ -18,7 +18,7 @@ async def test_a_socket_waits_for_the_logging_its_turns_started() -> None:
         turn_may_finish.set()
         await asyncio.wait_for(settled, timeout=1)
 
-    assert (waited_for_the_turn, turn_logging.done()) == (True, True)
+    assert (waited_for_the_turn, turn_logging.done(), settled.result()) == (True, True, True)
 
 
 @pytest.mark.asyncio
@@ -29,9 +29,9 @@ async def test_a_socket_stops_waiting_on_logging_that_outlasts_its_wait_and_leav
     turn_logging: Final = asyncio.create_task(socket_logging.tracked(asyncio.Event().wait()))
 
     with caplog.at_level(logging.WARNING, logger="LiteLLM"):
-        await asyncio.wait_for(socket_logging.finished(), timeout=1)
+        logged: Final = await asyncio.wait_for(socket_logging.finished(), timeout=1)
 
-    assert not turn_logging.done()
+    assert (logged, turn_logging.done()) == (False, False)
     assert "1 WebSocket turn logging tasks were still running" in caplog.text
     turn_logging.cancel()
 
@@ -40,7 +40,7 @@ async def test_a_socket_stops_waiting_on_logging_that_outlasts_its_wait_and_leav
 async def test_logging_started_outside_the_socket_is_not_waited_for() -> None:
     elsewhere: Final = asyncio.create_task(track_socket_logging(asyncio.Event().wait()))
     with collect_socket_logging() as socket_logging:
-        await asyncio.wait_for(socket_logging.finished(), timeout=1)
+        logged: Final = await asyncio.wait_for(socket_logging.finished(), timeout=1)
 
-    assert not elsewhere.done()
+    assert (logged, elsewhere.done()) == (True, False)
     elsewhere.cancel()

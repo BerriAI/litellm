@@ -23,15 +23,19 @@ class SocketLogging:
         self._pending = (*(pending for pending in self._pending if not pending.done()), logged)
         return _resolve_when_done(coroutine, logged)
 
-    async def finished(self) -> None:
+    async def finished(self) -> bool:
         pending: Final = tuple(logged for logged in self._pending if not logged.done())
         if not pending:
-            return
+            return True
         _, unfinished = await asyncio.wait(pending, timeout=self._wait_seconds)
         if unfinished:
             verbose_logger.warning(
-                "%d WebSocket turn logging tasks were still running after %ss", len(unfinished), self._wait_seconds
+                "%d WebSocket turn logging tasks were still running after %ss, so the socket keeps its token "
+                "reservation until its window ends",
+                len(unfinished),
+                self._wait_seconds,
             )
+        return not unfinished
 
 
 async def _resolve_when_done(coroutine: Coroutine[object, object, _T], logged: asyncio.Future[None]) -> _T:

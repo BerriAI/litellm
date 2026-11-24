@@ -7616,13 +7616,14 @@ async def test_a_responses_websocket_close_refunds_its_tpm_only_once_its_turns_l
     reserved: Final = int(_local(handler, tokens_key) or 0)
     while_turns_logged: Final[list[tuple[int, int]]] = []
 
-    async def turns_logged() -> None:
+    async def turns_logged() -> bool:
         while_turns_logged.append(
             (
                 int(_local(handler, tokens_key) or 0),
                 _gauge_in_flight(handler, _local(handler, parallel_key)),
             )
         )
+        return True
 
     async with _background_work_awaited():
         await proxy_logging_obj.arelease_responses_websocket_slot(auth, "turns_finished", turns_logged)
@@ -7630,6 +7631,30 @@ async def test_a_responses_websocket_close_refunds_its_tpm_only_once_its_turns_l
     assert reserved > 0
     assert while_turns_logged == [(reserved, 0)]
     assert int(_local(handler, tokens_key) or 0) == 0
+
+
+@pytest.mark.asyncio
+async def test_a_responses_websocket_whose_turns_are_still_logging_after_the_wait_keeps_its_tpm() -> None:
+    cache: Final = DualCache()
+    handler, proxy_logging_obj = _responses_websocket_limiter(cache)
+    api_key: Final = hash_token("sk-responses-websocket-logging-backlog")
+    auth: Final = UserAPIKeyAuth(
+        api_key=api_key, tpm_limit=1_000, max_parallel_requests=1, metadata={"default_estimated_output_tokens": 60}
+    )
+    tokens_key: Final = _counter("api_key", api_key)
+    parallel_key: Final = RateLimitScope("api_key", api_key).gauge
+    await _admit_responses_websocket(handler, cache, auth, "socket")
+    reserved: Final = int(_local(handler, tokens_key) or 0)
+
+    async def turns_logged() -> bool:
+        return False
+
+    async with _background_work_awaited():
+        await proxy_logging_obj.arelease_responses_websocket_slot(auth, "turns_finished", turns_logged)
+
+    assert reserved > 0
+    assert int(_local(handler, tokens_key) or 0) == reserved
+    assert _gauge_in_flight(handler, _local(handler, parallel_key)) == 0
 
 
 @pytest.mark.asyncio
@@ -7755,8 +7780,9 @@ async def test_a_responses_websocket_close_frees_its_slot_at_once_and_refunds_it
     reserved: Final = int(_local(handler, tokens_key) or 0)
     logged: Final = asyncio.Event()
 
-    async def turns_logged() -> None:
+    async def turns_logged() -> bool:
         await logged.wait()
+        return True
 
     async with _background_work_awaited():
         await asyncio.wait_for(

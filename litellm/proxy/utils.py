@@ -5785,7 +5785,7 @@ class ProxyLogging:
         self,
         user_api_key_dict: UserAPIKeyAuth,
         close: ResponsesWebSocketClose = "settled_by_its_log",
-        turns_logged: Callable[[], Awaitable[None]] | None = None,
+        turns_logged: Callable[[], Awaitable[bool]] | None = None,
     ) -> None:
         """Release what a Responses WebSocket took at admission. Only call this once that admission succeeded:
         the legacy limiter keeps no record of its acquisitions and decrements unconditionally."""
