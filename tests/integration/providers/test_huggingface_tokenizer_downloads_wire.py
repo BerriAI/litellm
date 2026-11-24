@@ -183,7 +183,7 @@ def test_count_endpoints_answer_503_until_the_llama_3_tokenizer_can_load(
     assert retry_in is not None and 1 <= int(retry_in[1]) <= HUGGINGFACE_TOKENIZER_LOAD_RETRY_SECONDS, response.text
     assert _JSON_OBJECT.validate_json(response.content) == envelope(
         "Could not load the Hugging Face tokenizer Xenova/llama-3-tokenizer to count tokens for this model. "
-        f"LiteLLM retries the load in {retry_in[1]}s. To count with tiktoken without downloading, "
+        f"LiteLLM retries the load in {retry_in[1]}s. To count every model with tiktoken without downloading, "
         "set litellm_settings.disable_hf_tokenizer_download to true"
     ), response.text
 

@@ -34,12 +34,12 @@ def _joined(message: str, hint: str) -> str:
     return f"{message.rstrip().rstrip('.')}. {hint}"
 
 
-def _with_hint(message: str, hint: str) -> str:
+def _rewritten(message: str, rewrite: Callable[[str], str]) -> str:
     try:
         envelope: Final = _UpstreamErrorEnvelope.model_validate_json(message)
     except ValidationError:
-        return _joined(AnthropicExceptionMapping.extract_error_message(message), hint)
-    detail: Final = envelope.error.model_copy(update={"message": _joined(envelope.error.message, hint)})
+        return rewrite(AnthropicExceptionMapping.extract_error_message(message))
+    detail: Final = envelope.error.model_copy(update={"message": rewrite(envelope.error.message)})
     return envelope.model_copy(update={"error": detail}).model_dump_json()
 
 
@@ -91,7 +91,16 @@ class ProviderCountFailure:
     def with_hint(self, hint: str) -> "ProviderCountFailure":
         if self.rejected_before_provider_call:
             return self
-        return replace(self, message=_with_hint(self.message, hint))
+        return replace(self, message=_rewritten(self.message, lambda message: _joined(message, hint)))
+
+    def led_by(self, cause: str) -> "ProviderCountFailure":
+        return replace(
+            self,
+            message=_rewritten(
+                self.message,
+                lambda message: _joined(cause, f"Counting with the provider failed with {self.status_code}: {message}"),
+            ),
+        )
 
     def to_proxy_exception(self) -> ProxyException:
         return ProxyException(

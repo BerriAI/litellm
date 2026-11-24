@@ -87,6 +87,7 @@ from litellm.constants import (
     DEFAULT_SHARED_HEALTH_CHECK_TTL,
     DEFAULT_SLACK_ALERTING_THRESHOLD,
     GRACEFUL_SHUTDOWN_TEARDOWN_HEADROOM_SECONDS,
+    HUGGINGFACE_TOKENIZER_LOAD_RETRY_SECONDS,
     INTERNAL_CALLBACK_NAMES,
     LANGFUSE_SHUTDOWN_FLUSH_TIMEOUT_MILLIS,
     LITELLM_EMBEDDING_PROVIDERS_SUPPORTING_INPUT_ARRAY_OF_TOKENS,
@@ -15822,9 +15823,12 @@ async def _tokenizer_or_provider_error(
         _tokenizer_loads_for_this_loop(_TOKENIZER_LOADS),
         partial(_model_tokenizer_load_slot, model, custom_tokenizer),
     )
+    kind: Final = None if custom_tokenizer is not None else litellm.utils.huggingface_tokenizer_kind(model)
     match tokenizer:
         case HuggingFaceTokenizerUnavailable():
             raise _tokenizer_unavailable_error(tokenizer, provider_failure)
+        case asyncio.TimeoutError() | _TokenizerLoadsBusy() if kind is not None:
+            raise _tokenizer_still_loading_error(HUGGINGFACE_TOKENIZER_NAMES[kind], provider_failure)
         case BaseException() if not _answers_provider_error(tokenizer):
             raise tokenizer.with_traceback(None)
         case BaseException():
@@ -15850,14 +15854,15 @@ async def _tokenizer_model(
     )
     match loaded:
         case asyncio.TimeoutError() | _TokenizerLoadsBusy() if call_endpoint:
-            raise _tokenizer_unavailable_error(
-                HuggingFaceTokenizerUnavailable(
-                    tokenizer=HUGGINGFACE_TOKENIZER_NAMES[base_kind], retry_in_seconds=None
-                ),
-                provider_failure,
-            )
-        case BaseException():
+            raise _tokenizer_still_loading_error(HUGGINGFACE_TOKENIZER_NAMES[base_kind], provider_failure)
+        case BaseException() if not _answers_provider_error(loaded):
+            raise loaded.with_traceback(None)
+        case BaseException() if not call_endpoint:
             return model
+        case BaseException() if provider_failure is not None:
+            raise _provider_error_after_failed_estimate(provider_failure, type(loaded).__name__) from loaded
+        case BaseException():
+            raise loaded.with_traceback(None)
         case _:
             return base_model
 
@@ -15871,7 +15876,7 @@ def _tokenizer_unavailable_message(unavailable: HuggingFaceTokenizerUnavailable)
         f"LiteLLM retries the load in {unavailable.retry_in_seconds}s"
     )
     return (
-        f"{status}. To count with tiktoken without downloading, "
+        f"{status}. To count every model with tiktoken without downloading, "
         "set litellm_settings.disable_hf_tokenizer_download to true"
     )
 
@@ -15888,7 +15893,13 @@ def _tokenizer_unavailable_error(
         provider_failure.status_code,
         unavailable.tokenizer,
     )
-    return replace(provider_failure.with_hint(message), status_code=503).to_proxy_exception()
+    return replace(provider_failure.led_by(message), status_code=503).to_proxy_exception()
+
+
+def _tokenizer_still_loading_error(tokenizer: str, provider_failure: ProviderCountFailure | None) -> ProxyException:
+    return _tokenizer_unavailable_error(
+        HuggingFaceTokenizerUnavailable(tokenizer=tokenizer, retry_in_seconds=None), provider_failure
+    )
 
 
 async def _estimate_tokenizer(
@@ -15936,7 +15947,7 @@ async def _local_token_estimate(
 
 
 _KIMI_K3_ENCODINGS: Final = KimiK3Encodings(
-    source=HUGGING_FACE_SOURCE, retry_after_seconds=TOKENIZER_LOAD_REUSE_SECONDS
+    source=HUGGING_FACE_SOURCE, retry_after_seconds=HUGGINGFACE_TOKENIZER_LOAD_RETRY_SECONDS
 )
 
 

@@ -3344,11 +3344,12 @@ _HUGGINGFACE_TOKENIZER_LOAD_OUTCOMES: Final = _HuggingFaceTokenizerLoadOutcomes(
 
 def _warn_huggingface_tokenizer_fallback(model: str, reason: str) -> None:
     verbose_logger.warning(
-        "Could not load the Hugging Face tokenizer for %s. Until it loads, its token counts fall back to tiktoken, "
-        "or answer 503 on proxy count endpoints. LiteLLM retries the load after "
+        "Could not load the Hugging Face tokenizer for %s. Until it loads, its token counts fall back to tiktoken "
+        "(the proxy's count endpoints answer 503 instead). LiteLLM retries the load after "
         "HUGGINGFACE_TOKENIZER_LOAD_RETRY_SECONDS (%ss). "
         "For Python Hugging Face tokenization, install tokenizers and huggingface-hub. "
-        "To count with tiktoken without downloading, set litellm_settings.disable_hf_tokenizer_download to true. "
+        "To count every model with tiktoken without downloading, set litellm.disable_hf_tokenizer_download = True "
+        "(litellm_settings.disable_hf_tokenizer_download: true on the proxy). "
         "Error: %s",
         json.dumps(redact_secrets(model)),
         HUGGINGFACE_TOKENIZER_LOAD_RETRY_SECONDS,

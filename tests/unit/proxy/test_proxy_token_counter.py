@@ -104,6 +104,7 @@ from litellm.types.llms.anthropic import ANTHROPIC_BETA_HEADER_VALUES, Anthropic
 from litellm.types.secret_managers.main import KeyManagementSettings, KeyManagementSystem
 from litellm.types.utils import (
     ADDRESSED_RESPONSE_ID_FIELD,
+    CustomHuggingfaceTokenizer,
     SelectTokenizerResponse,
     SpecialEnums,
     TokenCountMessagesFormat,
@@ -212,17 +213,29 @@ def _team_scoped_router() -> Router:
             {
                 "model_name": "model_name_team-a_1",
                 "litellm_params": {"model": "groq/team-a-backend", "api_key": "sk-test"},
-                "model_info": {"id": "team-a-deployment", "team_id": "team-a", "team_public_model_name": "shared-model"},
+                "model_info": {
+                    "id": "team-a-deployment",
+                    "team_id": "team-a",
+                    "team_public_model_name": "shared-model",
+                },
             },
             {
                 "model_name": "model_name_team-b_2",
                 "litellm_params": {"model": "groq/team-b-backend", "api_key": "sk-test"},
-                "model_info": {"id": "team-b-deployment", "team_id": "team-b", "team_public_model_name": "team-only-model"},
+                "model_info": {
+                    "id": "team-b-deployment",
+                    "team_id": "team-b",
+                    "team_public_model_name": "team-only-model",
+                },
             },
             {
                 "model_name": "model_name_team-c_3",
                 "litellm_params": {"model": "groq/team-c-backend", "api_key": "sk-test"},
-                "model_info": {"id": "team-c-deployment", "team_id": "team-c", "team_public_model_name": "shared-model"},
+                "model_info": {
+                    "id": "team-c-deployment",
+                    "team_id": "team-c",
+                    "team_public_model_name": "shared-model",
+                },
             },
         ]
     )
@@ -388,7 +401,6 @@ async def test_count_routes_with_the_callers_router_settings(
     assert response.model_used == expected_model_used
 
 
-
 def _rpm_capped_router() -> Router:
     return Router(
         model_list=[
@@ -419,9 +431,7 @@ async def test_a_count_under_the_callers_usage_based_strategy_leaves_the_deploym
     assert picked["model_info"]["id"] == "capped-deployment"
 
 
-async def _count_on_utils_route(
-    caller: UserAPIKeyAuth, headers: Mapping[str, str] = MappingProxyType({})
-) -> object:
+async def _count_on_utils_route(caller: UserAPIKeyAuth, headers: Mapping[str, str] = MappingProxyType({})) -> object:
     return await token_counter(
         request=TokenCountRequest(model="shared-model", messages=[{"role": "user", "content": "hello"}]),
         http_request=_json_request({}, "python-httpx/0.28.1", headers),
@@ -430,9 +440,7 @@ async def _count_on_utils_route(
     )
 
 
-async def _count_on_messages_route(
-    caller: UserAPIKeyAuth, headers: Mapping[str, str] = MappingProxyType({})
-) -> object:
+async def _count_on_messages_route(caller: UserAPIKeyAuth, headers: Mapping[str, str] = MappingProxyType({})) -> object:
     body: Final = {"model": "shared-model", "messages": [{"role": "user", "content": "hello"}]}
     return await anthropic_count_tokens(_json_request(body, "python-httpx/0.28.1", headers), Response(), caller)
 
@@ -454,9 +462,7 @@ async def _count_on_responses_route(
     )
 
 
-async def _count_on_google_route(
-    caller: UserAPIKeyAuth, headers: Mapping[str, str] = MappingProxyType({})
-) -> object:
+async def _count_on_google_route(caller: UserAPIKeyAuth, headers: Mapping[str, str] = MappingProxyType({})) -> object:
     from litellm.proxy.google_endpoints.endpoints import google_count_tokens
 
     body: Final = {"contents": [{"role": "user", "parts": [{"text": "hello"}]}]}
@@ -544,7 +550,12 @@ _PINNED_SESSION: Final = "2f1c9d4e-7b3a-4c61-9e0f-5d8a2b6c4e17"
         ("session_affinity", _PINNED_SESSION, {"x-claude-code-session-id": _PINNED_SESSION}, {}),
         ("session_affinity", _PINNED_SESSION, {"baggage": f"user.id=42,session.id={_PINNED_SESSION}"}, {}),
         ("session_affinity", _PINNED_SESSION, {}, {"litellm_session_id": _PINNED_SESSION}),
-        ("session_affinity", _PINNED_SESSION, {}, {"metadata": {"user_id": f"user_abc_account__session_{_PINNED_SESSION}"}}),
+        (
+            "session_affinity",
+            _PINNED_SESSION,
+            {},
+            {"metadata": {"user_id": f"user_abc_account__session_{_PINNED_SESSION}"}},
+        ),
     ],
 )
 async def test_messages_count_tokens_counts_on_the_deployment_inference_pinned_for_the_caller(
@@ -1099,7 +1110,9 @@ async def test_factory_anthropic_endpoint_calls_anthropic_counter():
                     "model_info": {},
                 }
             )
-            mock_router.get_routable_deployments = MagicMock(return_value=[mock_router.async_get_available_deployment.return_value])
+            mock_router.get_routable_deployments = MagicMock(
+                return_value=[mock_router.async_get_available_deployment.return_value]
+            )
 
             # Set ANTHROPIC_API_KEY for the test
             with patch.dict("os.environ", {"ANTHROPIC_API_KEY": "test-key"}):
@@ -1162,7 +1175,9 @@ async def test_factory_gpt4_endpoint_does_not_call_anthropic_counter():
                         "model_info": {},
                     }
                 )
-                mock_router.get_routable_deployments = MagicMock(return_value=[mock_router.async_get_available_deployment.return_value])
+                mock_router.get_routable_deployments = MagicMock(
+                    return_value=[mock_router.async_get_available_deployment.return_value]
+                )
 
                 client = TestClient(app)
 
@@ -1223,7 +1238,9 @@ async def test_factory_normal_token_counter_endpoint_does_not_call_anthropic():
                         "model_info": {},
                     }
                 )
-                mock_router.get_routable_deployments = MagicMock(return_value=[mock_router.async_get_available_deployment.return_value])
+                mock_router.get_routable_deployments = MagicMock(
+                    return_value=[mock_router.async_get_available_deployment.return_value]
+                )
 
                 client = TestClient(app)
 
@@ -1557,7 +1574,9 @@ async def test_token_counter_httpx_status_error_raises_proxy_exception():
                 "model_info": {},
             }
         )
-        mock_router.get_routable_deployments = MagicMock(return_value=[mock_router.async_get_available_deployment.return_value])
+        mock_router.get_routable_deployments = MagicMock(
+            return_value=[mock_router.async_get_available_deployment.return_value]
+        )
         litellm.proxy.proxy_server.llm_router = mock_router
 
         with pytest.raises(ProxyException) as exc_info:
@@ -1605,7 +1624,9 @@ async def test_proxy_token_counter_error_raises_exception_when_disabled():
 
     mock_router = route_entry_points_to_stubs(MagicMock())
     mock_router.async_get_available_deployment = AsyncMock(return_value=mock_deployment)
-    mock_router.get_routable_deployments = MagicMock(return_value=[mock_router.async_get_available_deployment.return_value])
+    mock_router.get_routable_deployments = MagicMock(
+        return_value=[mock_router.async_get_available_deployment.return_value]
+    )
 
     setattr(litellm.proxy.proxy_server, "llm_router", mock_router)
 
@@ -1670,7 +1691,9 @@ async def test_proxy_token_counter_error_raises_when_enabled():
 
     mock_router = route_entry_points_to_stubs(MagicMock())
     mock_router.async_get_available_deployment = AsyncMock(return_value=mock_deployment)
-    mock_router.get_routable_deployments = MagicMock(return_value=[mock_router.async_get_available_deployment.return_value])
+    mock_router.get_routable_deployments = MagicMock(
+        return_value=[mock_router.async_get_available_deployment.return_value]
+    )
 
     setattr(litellm.proxy.proxy_server, "llm_router", mock_router)
 
@@ -3523,9 +3546,7 @@ _MAX_TOKENS_OVER_A_FLAT_HOST_BILL: Final = 4
 
 @pytest.fixture
 def checked_in_cost_map() -> None:
-    assert isinstance(
-        install_model_cost_map(GetModelCostMap.read_local_model_cost_map_bytes()), ModelCostMapReloaded
-    )
+    assert isinstance(install_model_cost_map(GetModelCostMap.read_local_model_cost_map_bytes()), ModelCostMapReloaded)
 
 
 # usage.input_tokens plus cache_read_input_tokens that POST /v1/messages billed for these requests with the user turn
@@ -3805,9 +3826,9 @@ async def test_a_host_whose_tool_prompt_grows_with_the_schema_counts_at_or_a_bou
 
     counted: Final = await _count_with_router(monkeypatch, router, sent_tools, responses)
 
-    assert (
-        billed_prompt_tokens <= counted <= billed_prompt_tokens + most_over
-    ), f"{model} counted {counted} for a request billed {billed_prompt_tokens}"
+    assert billed_prompt_tokens <= counted <= billed_prompt_tokens + most_over, (
+        f"{model} counted {counted} for a request billed {billed_prompt_tokens}"
+    )
 
 
 @pytest.mark.usefixtures("checked_in_cost_map")
@@ -4353,9 +4374,10 @@ async def test_bedrock_kimi_k3_count_names_its_tokenizer_and_retry_time_while_th
     without_call_endpoint: Final = await count_request_tokens(request=request, call_endpoint=False)
 
     retry_in: Final = re.fullmatch(
-        f"scripted 400 for kimi\\. Could not load the Hugging Face tokenizer {re.escape(KIMI_K3_REPO)} to count "
-        r"tokens for this model\. LiteLLM retries the load in (\d+)s\. To count with tiktoken without "
-        r"downloading, set litellm_settings\.disable_hf_tokenizer_download to true",
+        f"Could not load the Hugging Face tokenizer {re.escape(KIMI_K3_REPO)} to count tokens for this model\\. "
+        r"LiteLLM retries the load in (\d+)s\. To count every model with tiktoken without downloading, set "
+        r"litellm_settings\.disable_hf_tokenizer_download to true\. Counting with the provider failed with 400: "
+        r"scripted 400 for kimi",
         raised.value.message,
     )
     assert raised.value.code == "503"
@@ -4396,9 +4418,10 @@ async def test_bedrock_kimi_k3_count_says_still_loading_while_its_tokenizer_down
 
     assert raised.value.code == "503"
     assert raised.value.message == (
-        f"scripted 400 for kimi. The Hugging Face tokenizer {KIMI_K3_REPO} to count tokens for this model is still "
-        "loading. Try again in a few seconds. To count with tiktoken without downloading, set "
-        "litellm_settings.disable_hf_tokenizer_download to true"
+        f"The Hugging Face tokenizer {KIMI_K3_REPO} to count tokens for this model is still loading. Try again in a "
+        "few seconds. To count every model with tiktoken without downloading, set "
+        "litellm_settings.disable_hf_tokenizer_download to true. Counting with the provider failed with 400: "
+        "scripted 400 for kimi"
     )
 
 
@@ -6219,7 +6242,9 @@ async def test_framed_stand_in_counts_a_prompt_like_the_same_text_sent_as_a_user
 ) -> None:
     _framed_kimi(monkeypatch)
 
-    from_prompt: Final = await count_request_tokens(request=TokenCountRequest(model="kimi", prompt=_FOX), call_endpoint=True)
+    from_prompt: Final = await count_request_tokens(
+        request=TokenCountRequest(model="kimi", prompt=_FOX), call_endpoint=True
+    )
     from_message: Final = await count_request_tokens(
         request=TokenCountRequest(model="kimi", messages=[{"role": "user", "content": _FOX}]), call_endpoint=True
     )
@@ -7372,7 +7397,7 @@ async def test_count_answers_503_naming_the_next_load_without_a_retry_after_head
 
     retry_in: Final = re.fullmatch(
         f"Could not load the Hugging Face tokenizer {re.escape(_LLAMA_3_HUB_TOKENIZER)} to count tokens for this "
-        r"model\. LiteLLM retries the load in (\d+)s\. To count with tiktoken without downloading, set "
+        r"model\. LiteLLM retries the load in (\d+)s\. To count every model with tiktoken without downloading, set "
         r"litellm_settings\.disable_hf_tokenizer_download to true",
         raised.value.message,
     )
@@ -7402,9 +7427,10 @@ async def test_framed_count_answers_503_with_the_provider_message_naming_the_tok
         await count_request_tokens(request=_LLAMA_COUNT_REQUEST, call_endpoint=True)
 
     retry_in: Final = re.fullmatch(
-        f"scripted 400 for llama\\. Could not load the Hugging Face tokenizer {re.escape(_LLAMA_3_HUB_TOKENIZER)} "
-        r"to count tokens for this model\. LiteLLM retries the load in (\d+)s\. To count with tiktoken without "
-        r"downloading, set litellm_settings\.disable_hf_tokenizer_download to true",
+        f"Could not load the Hugging Face tokenizer {re.escape(_LLAMA_3_HUB_TOKENIZER)} to count tokens for this "
+        r"model\. LiteLLM retries the load in (\d+)s\. To count every model with tiktoken without downloading, set "
+        r"litellm_settings\.disable_hf_tokenizer_download to true\. Counting with the provider failed with 400: "
+        r"scripted 400 for llama",
         raised.value.message,
     )
     assert raised.value.code == "503"
@@ -7503,6 +7529,113 @@ async def test_framed_count_loads_the_hub_tokenizer_again_right_after_answering_
     assert still_loading.value.code == "503"
     assert "is still loading. Try again in a few seconds" in still_loading.value.message
     assert (once_loaded.count_source, once_loaded.tokenizer_type) == ("local_estimate", "openai_tokenizer")
+
+
+@pytest.mark.usefixtures("no_huggingface_tokenizer_loaded")
+def test_framed_count_says_still_loading_before_the_provider_error_while_its_tokenizer_download_runs_past_the_wait(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    counter: Final = _ScriptedCounter(
+        {"databricks-meta-llama-3-3-70b-instruct": _provider_reply("llama", status_code=400)}
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", _hub_llama_router({"token_count_framing": 100}))
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server._get_provider_token_counter",
+        lambda deployment, model: (counter, model, "databricks"),
+    )
+    download_started: Final = threading.Event()
+    hub_released: Final = threading.Event()
+    _hanging_llama_download(monkeypatch, download_started, hub_released)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "TOKENIZER_LOAD_WAIT_SECONDS", 30)
+
+    async def count_past_the_wait(loop: _SkippableClockLoop) -> tuple[str, ...]:
+        async def count_error() -> tuple[str, str]:
+            with pytest.raises(ProxyException) as raised:
+                await count_request_tokens(request=_LLAMA_COUNT_REQUEST, call_endpoint=True)
+            return raised.value.code, raised.value.message
+
+        try:
+            count: Final = asyncio.ensure_future(count_error())
+            await asyncio.to_thread(download_started.wait, 10)
+            loop.skip(31)
+            return await asyncio.wait_for(count, 8)
+        finally:
+            hub_released.set()
+
+    assert _run_on_skippable_clock(count_past_the_wait) == (
+        "503",
+        f"The Hugging Face tokenizer {_LLAMA_3_HUB_TOKENIZER} to count tokens for this model is still loading. Try "
+        "again in a few seconds. To count every model with tiktoken without downloading, set "
+        "litellm_settings.disable_hf_tokenizer_download to true. Counting with the provider failed with 400: "
+        "scripted 400 for llama",
+    )
+
+
+_CUSTOM_NAMED_LLAMA_BASE_MODEL: Final = "databricks/databricks-meta-llama-3-3-70b-instruct"
+
+
+def _base_model_tokenizer_load_breaks(monkeypatch: pytest.MonkeyPatch) -> None:
+    select_tokenizer_or_unavailable: Final = litellm.utils.select_tokenizer_or_unavailable
+
+    def load(
+        model: str, custom_tokenizer: CustomHuggingfaceTokenizer | None
+    ) -> SelectTokenizerResponse | HuggingFaceTokenizerUnavailable:
+        if litellm.utils.huggingface_tokenizer_kind(model) is not None:
+            raise RuntimeError("the tokenizer file is corrupt")
+        return select_tokenizer_or_unavailable(model=model, custom_tokenizer=custom_tokenizer)
+
+    monkeypatch.setattr(litellm.utils, "select_tokenizer_or_unavailable", load)
+
+
+def _custom_named_databricks_router(model_info: Mapping[str, object]) -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": "llama",
+                "litellm_params": {"model": "databricks/my-endpoint"},
+                "model_info": {"base_model": _CUSTOM_NAMED_LLAMA_BASE_MODEL, **model_info},
+            }
+        ]
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("no_huggingface_tokenizer_loaded")
+async def test_count_answers_the_error_instead_of_a_tiktoken_count_when_its_base_model_tokenizer_load_breaks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", _custom_named_databricks_router({}))
+    _base_model_tokenizer_load_breaks(monkeypatch)
+
+    with pytest.raises(RuntimeError, match="the tokenizer file is corrupt"):
+        await count_request_tokens(request=_LLAMA_COUNT_REQUEST, call_endpoint=True)
+    without_call_endpoint: Final = await count_request_tokens(request=_LLAMA_COUNT_REQUEST, call_endpoint=False)
+
+    assert (without_call_endpoint.count_source, without_call_endpoint.tokenizer_type) == (
+        "local_estimate",
+        "openai_tokenizer",
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("no_huggingface_tokenizer_loaded")
+async def test_framed_count_answers_the_provider_error_when_its_base_model_tokenizer_load_breaks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    counter: Final = _ScriptedCounter({"my-endpoint": _provider_reply("llama", status_code=400)})
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.llm_router", _custom_named_databricks_router({"token_count_framing": 100})
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server._get_provider_token_counter",
+        lambda deployment, model: (counter, model, "databricks"),
+    )
+    _base_model_tokenizer_load_breaks(monkeypatch)
+
+    with pytest.raises(ProxyException) as raised:
+        await count_request_tokens(request=_LLAMA_COUNT_REQUEST, call_endpoint=True)
+
+    assert (raised.value.code, raised.value.message) == ("400", "scripted 400 for llama")
 
 
 _COUNTED_HELLO: Final[Mapping[str, JsonValue]] = MappingProxyType(
@@ -7779,7 +7912,9 @@ async def test_responses_count_on_mistral_counts_the_turns_previous_response_id_
         bodies.append(json.loads(request.content))
         return httpx.Response(200, json={"object": "response.input_tokens", "input_tokens": 41}, request=request)
 
-    monkeypatch.setattr(litellm.proxy.proxy_server, "prisma_client", SimpleNamespace(db=_SpendLogsTable((stored_turn,))))
+    monkeypatch.setattr(
+        litellm.proxy.proxy_server, "prisma_client", SimpleNamespace(db=_SpendLogsTable((stored_turn,)))
+    )
     with patch.object(
         mistral_count_tokens_http,
         "get_async_httpx_client",
@@ -7990,7 +8125,10 @@ async def test_messages_count_tokens_counts_deepseek_on_its_anthropic_count_rout
     sent_request: Final = route.calls.last.request
     sent: Final = json.loads(sent_request.content)
     inference: Final = _messages_inference_fields(
-        DeepSeekAnthropicMessagesConfig(), "deepseek-v4-pro", body, ("tool_choice", "output_config", "tools", "thinking")
+        DeepSeekAnthropicMessagesConfig(),
+        "deepseek-v4-pro",
+        body,
+        ("tool_choice", "output_config", "tools", "thinking"),
     )
     assert response == {"input_tokens": 91, "litellm_count_source": "provider"}
     assert sent_request.headers["x-api-key"] == "sk-deepseek-test"
@@ -8049,7 +8187,9 @@ async def _count_deepseek_responses(
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
 
     with respx.mock:
-        route: Final = respx.post(_DEEPSEEK_COUNT_ROUTE).mock(return_value=httpx.Response(200, json={"input_tokens": 91}))
+        route: Final = respx.post(_DEEPSEEK_COUNT_ROUTE).mock(
+            return_value=httpx.Response(200, json={"input_tokens": 91})
+        )
         result: Final = await count_request_tokens(
             request=TokenCountRequest.model_validate(
                 {"model": "deepseek-counted", "messages": [{"role": "user", "content": "Say hi."}], **request_options}
@@ -8399,7 +8539,13 @@ def _nested_json(depth: int) -> JsonValue:
         (_messages_route_count, "thinking"),
         (_responses_route_count, "tool_choice"),
     ],
-    ids=["utils-tool-choice", "utils-drop-params", "messages-tool-choice", "messages-thinking", "responses-tool-choice"],
+    ids=[
+        "utils-tool-choice",
+        "utils-drop-params",
+        "messages-tool-choice",
+        "messages-thinking",
+        "responses-tool-choice",
+    ],
 )
 async def test_count_routes_skip_a_value_nested_too_deep_to_validate(
     monkeypatch: pytest.MonkeyPatch,
