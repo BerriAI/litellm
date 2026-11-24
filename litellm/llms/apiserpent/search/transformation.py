@@ -74,7 +74,7 @@ class APISerpentSearchConfig(BaseSearchConfig):
     def get_complete_url(
         self,
         api_base: str | None,
-        optional_params: dict,
+        optional_params: dict[str, object],
         data: dict | list[dict] | None = None,
         **kwargs: object,
     ) -> str:
