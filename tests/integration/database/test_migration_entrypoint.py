@@ -3,7 +3,7 @@ import shutil
 import subprocess
 import sys
 import uuid
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Final
@@ -13,8 +13,9 @@ import psycopg
 import pytest
 import yaml
 from integration._support.client import Gateway
+from integration._support.database import read_rows
 from integration._support.mcp import paginated_mcp_peer
-from integration._support.process import owned_proxy, owned_proxy_process
+from integration._support.process import owned_proxy
 from psycopg import sql
 from psycopg.rows import dict_row
 
@@ -105,27 +106,36 @@ def test_migration_entrypoint_upgrades_an_older_schema_so_the_proxy_serves_mcp_t
             assert tools.json()["tools"] == [], tools.text
 
 
-def yaml_catalog_reloads(gateway: Gateway, directory: Path, config: Path, database_url: str) -> int:
-    reload_log: Final = "Found 0 MCP servers in database"
-    with owned_proxy_process(
-        gateway,
-        directory,
-        {"DATABASE_URL": database_url, "DISABLE_SCHEMA_UPDATE": "true", "LITELLM_LOG": "INFO"},
-        config=config,
-        database_setup=(),
-    ) as proxy:
-        initial_reloads: Final = proxy.log.read_text(encoding="utf-8").count(reload_log)
-        for _ in range(3):
-            tools: Final = proxy.gateway.request("GET", "/mcp-rest/tools/list", params={"mcp_server_name": "pages"})
-            assert tools.status_code == 200, tools.text
-            assert len(tools.json()["tools"]) == 3, tools.text
-        return proxy.log.read_text(encoding="utf-8").count(reload_log) - initial_reloads
+def catalog_query_count(database_url: str) -> int:
+    rows: Final = read_rows(
+        "SELECT coalesce(sum(calls), 0)::bigint AS calls FROM pg_stat_statements "
+        "WHERE dbid = (SELECT oid FROM pg_database WHERE datname = current_database()) "
+        "AND query LIKE %s",
+        ('SELECT%FROM%"LiteLLM_MCPServerTable"%',),
+        database_url=database_url,
+    )
+    calls: Final = rows[0]["calls"]
+    assert isinstance(calls, int)
+    return calls
 
 
-def test_upgrade_seeds_the_catalog_for_yaml_only_mcp_servers(gateway: Gateway, tmp_path: Path) -> None:
+def yaml_catalog_reloads(gateway: Gateway, database_url: str) -> int:
+    initial_reloads: Final = catalog_query_count(database_url)
+    for _ in range(3):
+        tools: Final = gateway.request("GET", "/mcp-rest/tools/list", params={"mcp_server_name": "pages"})
+        assert tools.status_code == 200, tools.text
+        assert len(tools.json()["tools"]) == 3, tools.text
+    return catalog_query_count(database_url) - initial_reloads
+
+
+def test_upgrade_seeds_the_catalog_for_yaml_only_mcp_servers(
+    gateway: Gateway, tmp_path: Path, record_property: Callable[[str, int], None]
+) -> None:
     revision_sql: Final = 'SELECT "reload_revision" FROM "LiteLLM_Config" WHERE "param_name" = %s'
     catalog: Final = ("mcp_catalog",)
     with fresh_database() as database_url, paginated_mcp_peer(page_size=3) as peer:
+        environment: Final = {"DATABASE_URL": database_url, "DISABLE_SCHEMA_UPDATE": "true"}
+        server_id: Final = str(uuid.uuid4())
         older_migrations: Final = tuple(name for name in SHIPPED_MIGRATIONS if name != MCP_CATALOG_SEED)
         deploy_older_schema(database_url, tmp_path, older_migrations)
         config: Final = tmp_path / "yaml-mcp.yaml"
@@ -133,7 +143,7 @@ def test_upgrade_seeds_the_catalog_for_yaml_only_mcp_servers(gateway: Gateway, t
             yaml.safe_dump(
                 {
                     "model_list": [],
-                    "mcp_servers": {"pages": {"url": peer.url, "transport": "http"}},
+                    "mcp_servers": {"pages": {"url": peer.url, "transport": "http", "server_id": server_id}},
                     "general_settings": {
                         "master_key": gateway.key,
                         "store_model_in_db": True,
@@ -144,20 +154,42 @@ def test_upgrade_seeds_the_catalog_for_yaml_only_mcp_servers(gateway: Gateway, t
             encoding="utf-8",
         )
         with psycopg.connect(database_url, autocommit=True) as connection:
+            connection.execute("CREATE EXTENSION IF NOT EXISTS pg_stat_statements")
             assert connection.execute(revision_sql, catalog).fetchone() is None
-            assert yaml_catalog_reloads(gateway, tmp_path / "before", config, database_url) >= 3
+            with owned_proxy(
+                gateway, tmp_path / "before", environment, config=config, database_setup=()
+            ) as before_proxy:
+                before: Final = yaml_catalog_reloads(before_proxy, database_url)
+            record_property("catalog_queries_before_seed", before)
+            assert before >= 3
             assert connection.execute(revision_sql, catalog).fetchone() is None
             deploy_pending_migrations(database_url)
             initial_revision: Final = connection.execute(revision_sql, catalog).fetchone()
             assert initial_revision is not None
 
-            assert yaml_catalog_reloads(gateway, tmp_path / "after", config, database_url) <= 1
+            with owned_proxy(gateway, tmp_path / "after", environment, config=config, database_setup=()) as after_proxy:
+                after: Final = yaml_catalog_reloads(after_proxy, database_url)
+                record_property("catalog_queries_after_seed", after)
+                assert after <= 1
+                assert connection.execute(revision_sql, catalog).fetchone() == initial_revision
+                connection.execute('INSERT INTO "LiteLLM_MCPServerOAuthClient" ("server_id") VALUES (%s)', (server_id,))
+                assert connection.execute(revision_sql, catalog).fetchone() == (initial_revision[0] + 1,)
+                after_oauth_write: Final = yaml_catalog_reloads(after_proxy, database_url)
+                record_property("catalog_queries_after_oauth_write", after_oauth_write)
+                assert after_oauth_write == 1
+                assert yaml_catalog_reloads(after_proxy, database_url) == 0
+                connection.execute(
+                    'UPDATE "LiteLLM_MCPServerOAuthClient" SET "credentials" = \'{}\' WHERE "server_id" = %s',
+                    (server_id,),
+                )
+                assert connection.execute(revision_sql, catalog).fetchone() == (initial_revision[0] + 2,)
+                connection.execute('DELETE FROM "LiteLLM_MCPServerOAuthClient" WHERE "server_id" = %s', (server_id,))
+                assert connection.execute(revision_sql, catalog).fetchone() == (initial_revision[0] + 3,)
             assert connection.execute('SELECT count(*) FROM "LiteLLM_MCPServerTable"').fetchone() == (0,)
-            assert connection.execute(revision_sql, catalog).fetchone() == initial_revision
 
             connection.execute('DELETE FROM "LiteLLM_MCPServerTable" WHERE FALSE')
             bumped_revision: Final = connection.execute(revision_sql, catalog).fetchone()
-            assert bumped_revision == (initial_revision[0] + 1,)
+            assert bumped_revision == (initial_revision[0] + 4,)
             seed_sql: Final = (PRISMA_DIR / "migrations" / MCP_CATALOG_SEED / "migration.sql").read_text(
                 encoding="utf-8"
             )
