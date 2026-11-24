@@ -242,14 +242,13 @@ def drop_params_from_unprocessable_entity_error(
                 message = {"detail": message}
         detail: Final = decoded_json_object(message).get("detail")
 
-        if isinstance(detail, list) and len(detail) > 0 and isinstance(detail[0], dict):
+        if isinstance(detail, list):
             for error_dict in detail:
-                if (
-                    error_dict.get("loc")
-                    and isinstance(error_dict.get("loc"), list)
-                    and len(error_dict.get("loc")) == 2
-                ):
-                    invalid_params.append(error_dict["loc"][1])
+                if not isinstance(error_dict, dict):
+                    continue
+                loc: Final = error_dict.get("loc")
+                if isinstance(loc, list) and len(loc) == 2 and isinstance(loc[1], str):
+                    invalid_params.append(loc[1])
 
     new_data: Final = {k: v for k, v in data.items() if k not in invalid_params}
     warn_dropped_reasoning_params(

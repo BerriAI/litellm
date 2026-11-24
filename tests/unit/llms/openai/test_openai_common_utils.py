@@ -715,6 +715,73 @@ def test_reasoning_drop_warning_caps_a_large_caller_value(caplog: pytest.LogCapt
     assert all(fragment in drop_warnings[0] for fragment in ("reasoning_effort='xxx", "'gpt-6.1-sol'", "422"))
 
 
+def test_drop_params_from_unprocessable_entity_error_handles_mixed_detail_list() -> None:
+    # Issue #52669: Detail list mixing dict and non-dict entries should not raise AttributeError
+    mixed_422: Final = {
+        "error": {
+            "message": json.dumps(
+                {
+                    "detail": [
+                        {"loc": ["body", "temperature"], "msg": "Extra inputs are not permitted"},
+                        "unexpected plain string error",
+                        {"loc": ["body", "top_p"], "msg": "Extra inputs are not permitted"},
+                        12345,
+                        {"loc": "not a list"},
+                    ]
+                }
+            )
+        }
+    }
+    error: Final = httpx.HTTPStatusError(
+        message="422",
+        request=httpx.Request("POST", "https://example.invalid/v1/chat/completions"),
+        response=httpx.Response(422, json=mixed_422),
+    )
+    data: Final[dict[str, object]] = {
+        "model": "gpt-6.1-sol",
+        "messages": [],
+        "temperature": 0.7,
+        "top_p": 0.9,
+    }
+
+    retried: Final = drop_params_from_unprocessable_entity_error(
+        error, data, model="gpt-6.1-sol", drop_params_gated=True
+    )
+
+    assert "temperature" not in retried
+    assert "top_p" not in retried
+    assert retried == {"model": "gpt-6.1-sol", "messages": []}
+
+
+def test_drop_params_from_unprocessable_entity_error_non_dict_first_entry() -> None:
+    # Detail list where the first element is a non-dict should still parse subsequent dict entries
+    mixed_first_non_dict: Final = {
+        "error": {
+            "message": json.dumps(
+                {
+                    "detail": [
+                        "plain string warning first",
+                        {"loc": ["body", "temperature"], "msg": "Extra inputs are not permitted"},
+                    ]
+                }
+            )
+        }
+    }
+    error: Final = httpx.HTTPStatusError(
+        message="422",
+        request=httpx.Request("POST", "https://example.invalid/v1/chat/completions"),
+        response=httpx.Response(422, json=mixed_first_non_dict),
+    )
+    data: Final[dict[str, object]] = {"model": "gpt-6.1-sol", "temperature": 0.7, "messages": []}
+
+    retried: Final = drop_params_from_unprocessable_entity_error(
+        error, data, model="gpt-6.1-sol", drop_params_gated=True
+    )
+
+    assert "temperature" not in retried
+    assert retried == {"model": "gpt-6.1-sol", "messages": []}
+
+
 @pytest.mark.parametrize("upstream_body", ["upstream is down", "<html>bad gateway</html>", "[1, 2]", "12345"])
 @respx.mock
 def test_an_error_body_that_is_not_a_json_object_keeps_the_upstream_status(upstream_body: str) -> None:
