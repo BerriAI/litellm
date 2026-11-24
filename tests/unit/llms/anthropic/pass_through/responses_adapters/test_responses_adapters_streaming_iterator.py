@@ -4,11 +4,12 @@ Tests for AnthropicResponsesStreamWrapper
 """
 
 import asyncio
+import itertools
 import json
 import os
 import sys
 import threading
-from collections.abc import AsyncIterator, Callable, Iterator, Mapping
+from collections.abc import AsyncIterator, Callable, Iterable, Iterator, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime
@@ -701,6 +702,78 @@ class TestUpstreamFailureEndsStreamWithErrorEvent:
         assert chunks[1]["error"] == {"type": "api_error", "message": INCOMPLETE_STREAM_ERROR_MESSAGE}
 
 
+def _text_then_completed() -> Iterator[Mapping[str, object]]:
+    yield {"type": "response.created"}
+    yield {"type": "response.output_item.added", "item": {"type": "message", "id": "msg_1"}}
+    yield {"type": "response.output_text.delta", "item_id": "msg_1", "delta": "Hi"}
+    yield {"type": "response.output_item.done", "item": {"type": "message", "id": "msg_1"}}
+    yield {"type": "response.completed"}
+
+
+def _text_then_transport_error() -> Iterator[Mapping[str, object]]:
+    yield {"type": "response.created"}
+    yield {"type": "response.output_item.added", "item": {"type": "message", "id": "msg_1"}}
+    yield {"type": "response.output_text.delta", "item_id": "msg_1", "delta": "Hi"}
+    raise ConnectionResetError("Response payload is not completed")
+
+
+def _text_without_a_terminal_event() -> Iterator[Mapping[str, object]]:
+    yield {"type": "response.created"}
+    yield {"type": "response.output_item.added", "item": {"type": "message", "id": "msg_1"}}
+    yield {"type": "response.output_text.delta", "item_id": "msg_1", "delta": "Hi"}
+
+
+def _failed_then_pulled_again() -> Iterator[Mapping[str, object]]:
+    yield {"type": "response.created"}
+    yield {
+        "type": "response.failed",
+        "response": {"status": "failed", "output": [], "error": {"code": "server_error", "message": "boom"}},
+    }
+    raise AssertionError("upstream was pulled again after the failure")
+
+
+def _message_start_without_id(chunk: Mapping[str, object]) -> Mapping[str, object]:
+    message: Final = chunk.get("message")
+    if chunk["type"] != "message_start" or not isinstance(message, Mapping):
+        return chunk
+    return {**chunk, "message": {**message, "id": None}}
+
+
+def _without_message_id(chunks: Iterable[Mapping[str, object]]) -> tuple[Mapping[str, object], ...]:
+    return tuple(_message_start_without_id(chunk) for chunk in chunks)
+
+
+@pytest.mark.parametrize(
+    ("upstream", "last_event"),
+    [
+        (_text_then_completed, "message_stop"),
+        (_text_then_transport_error, "error"),
+        (_text_without_a_terminal_event, "error"),
+        (_failed_then_pulled_again, "error"),
+        (lambda: iter(()), "error"),
+    ],
+    ids=["completed", "transport-error", "no-terminal-event", "response-failed", "no-events"],
+)
+def test_a_for_loop_gets_the_events_an_async_caller_gets(
+    upstream: Callable[[], Iterator[Mapping[str, object]]], last_event: str
+) -> None:
+    sync_chunks: Final = tuple(AnthropicResponsesStreamWrapper(responses_stream=upstream(), model="m"))
+
+    assert _without_message_id(sync_chunks) == _without_message_id(_collect(upstream()))
+    assert sync_chunks[0]["type"] == "message_start"
+    assert sync_chunks[-1]["type"] == last_event
+
+
+def test_a_for_loop_reads_the_upstream_only_as_far_as_the_caller_has_read() -> None:
+    upstream: Final = _text_then_completed()
+    stream: Final = AnthropicResponsesStreamWrapper(responses_stream=upstream, model="m")
+
+    first_three: Final = tuple(chunk["type"] for chunk in itertools.islice(stream, 3))
+
+    assert first_three == ("message_start", "content_block_start", "content_block_delta")
+    assert next(upstream)["type"] == "response.output_item.done"
+
+
 _RESPONSE_CREATED: Final = (
     b'data: {"type": "response.created", "response": {"id": "resp_1", "status": "in_progress", "output": []}}\n\n'
 )
@@ -860,7 +933,9 @@ class _SyncProviderStreamThatGoesQuietAfterTheFirstTextDelta(httpx.SyncByteStrea
 
 
 async def _close_after_cancelling_a_quiet_read(
-    provider_stream: _SyncProviderStreamThatGoesQuietAfterTheFirstTextDelta, logging_obj: LitellmLogging
+    provider_stream: _SyncProviderStreamThatGoesQuietAfterTheFirstTextDelta,
+    logging_obj: LitellmLogging,
+    sync_result: bool,
 ) -> None:
     upstream: Final = SyncResponsesAPIStreamingIterator(
         response=httpx.Response(200, stream=provider_stream),
@@ -868,7 +943,8 @@ async def _close_after_cancelling_a_quiet_read(
         responses_api_provider_config=OpenAIResponsesAPIConfig(),
         logging_obj=logging_obj,
     )
-    sse: Final = AnthropicResponsesStreamWrapper(responses_stream=upstream, model="m").async_anthropic_sse_wrapper()
+    wrapper: Final = AnthropicResponsesStreamWrapper(responses_stream=upstream, model="m")
+    sse: Final = wrapper.anthropic_sse_wrapper() if sync_result else wrapper.async_anthropic_sse_wrapper()
     while b'"text_delta"' not in await sse.__anext__():
         pass
     quiet_read: Final = asyncio.ensure_future(sse.__anext__())
@@ -879,13 +955,16 @@ async def _close_after_cancelling_a_quiet_read(
     await sse.aclose()
 
 
-def test_closing_a_sync_stream_after_a_cancelled_read_closes_the_provider_response_once_that_read_returns():
+@pytest.mark.parametrize("sync_result", [False, True])
+def test_closing_a_sync_stream_after_a_cancelled_read_closes_the_provider_response_once_that_read_returns(
+    sync_result: bool,
+):
     provider_stream: Final = _SyncProviderStreamThatGoesQuietAfterTheFirstTextDelta()
     failure_recorder: Final = _FailureRecorder()
 
     async def _give_up_while_the_provider_is_quiet() -> None:
         await _close_after_cancelling_a_quiet_read(
-            provider_stream, _logging_obj_that_records_failures(failure_recorder)
+            provider_stream, _logging_obj_that_records_failures(failure_recorder), sync_result
         )
         provider_stream.next_bytes.set()
 
@@ -895,14 +974,15 @@ def test_closing_a_sync_stream_after_a_cancelled_read_closes_the_provider_respon
     assert failure_recorder.failures == ()
 
 
-def test_closing_a_sync_stream_during_a_quiet_read_leaves_the_other_worker_threads_free():
+@pytest.mark.parametrize("sync_result", [False, True])
+def test_closing_a_sync_stream_during_a_quiet_read_leaves_the_other_worker_threads_free(sync_result: bool):
     provider_stream: Final = _SyncProviderStreamThatGoesQuietAfterTheFirstTextDelta()
 
     async def _run_other_work_while_the_provider_is_quiet() -> int:
         asyncio.get_running_loop().set_default_executor(ThreadPoolExecutor(max_workers=2))
         try:
             await _close_after_cancelling_a_quiet_read(
-                provider_stream, _logging_obj_that_records_failures(_FailureRecorder())
+                provider_stream, _logging_obj_that_records_failures(_FailureRecorder()), sync_result
             )
             return await asyncio.wait_for(asyncio.to_thread(threading.get_ident), timeout=2)
         finally:
