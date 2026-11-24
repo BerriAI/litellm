@@ -2019,7 +2019,7 @@ def completion_cost(
     completion_response: object | None = None,
     model: str | None = None,
     prompt: str = "",
-    messages: list = [],
+    messages: Sequence[object] = [],
     completion: str | list[str] | None = "",
     total_time: float | None = 0.0,  # used for replicate, sagemaker
     call_type: CallTypesLiteral | None = None,

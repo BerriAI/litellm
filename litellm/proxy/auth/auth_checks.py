@@ -1011,7 +1011,7 @@ def require_guardrail_modification_permission(team_object: LiteLLM_TeamTable | N
 
 
 async def check_tools_allowlist(
-    request_body: dict,
+    request_body: dict[str, object],
     valid_token: UserAPIKeyAuth | None,
     team_object: LiteLLM_TeamTable | None,
     route: str,

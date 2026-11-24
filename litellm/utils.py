@@ -2307,7 +2307,7 @@ def post_call_processing(
     original_response: object,
     model,
     optional_params: dict | None,
-    original_function,
+    original_function: Callable[..., object],
     rules_obj: Rules,
 ):
     try:
@@ -5765,7 +5765,7 @@ class PreProcessNonDefaultParams:
         model: str,
         remove_sensitive_keys: bool = False,
         add_provider_specific_params: bool = False,
-    ) -> dict:
+    ) -> dict[str, object]:
         non_default_params: Final = PreProcessNonDefaultParams.base_pre_process_non_default_params(
             passed_params=passed_params,
             special_params=special_params,
@@ -8330,7 +8330,7 @@ def _annotation_name(param: object) -> str:
     return require_attributes(attribute_or_none(param, "annotation"), _NamedAnnotation, "__name__").__name__
 
 
-def function_to_dict(input_function) -> dict:
+def function_to_dict(input_function: Callable[..., object]) -> dict:
     """Using type hints and numpy-styled docstring,
     produce a dictionary usable for OpenAI function calling
 
@@ -8937,11 +8937,11 @@ def validate_environment(
     return {"keys_in_environment": keys_in_environment, "missing_keys": missing_keys}
 
 
-def acreate(*args, **kwargs):  ## Thin client to handle the acreate langchain call
+def acreate(*args: object, **kwargs: object):  ## Thin client to handle the acreate langchain call
     return litellm.acompletion(*args, **kwargs)
 
 
-def valid_model(model):
+def valid_model(model: str):
     try:
         # for a given model name, check if the user has the right permissions to access the model
         if model in litellm.open_ai_chat_completion_models or model in litellm.open_ai_text_completion_models:
@@ -9073,7 +9073,7 @@ _calculate_retry_after = calculate_retry_after
 # custom prompt helper function
 def register_prompt_template(
     model: str,
-    roles: dict = {},
+    roles: Mapping[str, object] = {},
     initial_prompt_value: str = "",
     final_prompt_value: str = "",
     tokenizer_config: dict = {},
@@ -9229,7 +9229,7 @@ def read_config_args(config_path) -> object:
 ########## experimental completion variants ############################
 
 
-def process_system_message(system_message: object, max_tokens, model):
+def process_system_message(system_message: object, max_tokens: float, model: str | None):
     system_message_event: Final = {"role": "system", "content": system_message}
     system_message_tokens = get_token_count([system_message_event], model)
 
@@ -9242,7 +9242,7 @@ def process_system_message(system_message: object, max_tokens, model):
     return system_message_event, max_tokens - system_message_tokens
 
 
-def process_messages(messages, max_tokens, model):
+def process_messages(messages, max_tokens: float, model: str | None):
     # Process messages from older to more recent
     messages = messages[::-1]
     final_messages = []
@@ -9269,7 +9269,7 @@ def process_messages(messages, max_tokens, model):
     return final_messages
 
 
-def attempt_message_addition(final_messages, message, available_tokens, max_tokens, model):
+def attempt_message_addition(final_messages, message, available_tokens: float, max_tokens: float, model: str | None):
     temp_messages: Final = [message] + final_messages
     temp_message_tokens: Final = get_token_count(messages=temp_messages, model=model)
     verbose_logger.debug("temp_message_tokens: %s, max_tokens: %s", temp_message_tokens, max_tokens)
@@ -9289,7 +9289,7 @@ def attempt_message_addition(final_messages, message, available_tokens, max_toke
     return final_messages
 
 
-def can_add_message(message, messages, max_tokens, model):
+def can_add_message(message, messages, max_tokens: float, model: str | None):
     if get_token_count(messages + [message], model) <= max_tokens:
         return True
     return False
@@ -9299,7 +9299,9 @@ def get_token_count(messages, model) -> int:
     return token_counter(model=model, messages=messages)
 
 
-def shorten_message_to_fit_limit(message, tokens_needed, model: str | None, raise_error_on_max_limit: bool = False):
+def shorten_message_to_fit_limit(
+    message, tokens_needed: float, model: str | None, raise_error_on_max_limit: bool = False
+):
     """
     Shorten a message to fit within a token limit by removing characters from the middle.
 
@@ -9360,7 +9362,7 @@ def trim_messages(
     model: str | None = None,
     trim_ratio: float = DEFAULT_TRIM_RATIO,
     return_response_tokens: bool = False,
-    max_tokens=None,
+    max_tokens: float | None = None,
 ):
     """
     Trim a list of messages to fit within a model's token limit.
@@ -9724,7 +9726,9 @@ def _debug_params_repr(params: Mapping[str, object]) -> str:
     return "{" + ", ".join(f"{key!r}: {_debug_arg_repr(value)}" for key, value in params.items()) + "}"
 
 
-def print_args_passed_to_litellm(original_function, args: Sequence[object], kwargs: Mapping[str, object]):
+def print_args_passed_to_litellm(
+    original_function: Callable[..., object], args: Sequence[object], kwargs: Mapping[str, object]
+):
     if not is_debugging_on():
         return
     try:
@@ -10322,10 +10326,10 @@ class ProviderConfigManager:
     # Dictionary mapping for O(1) provider lookup
     # Stores tuples of (factory_function, needs_model_parameter)
     # This is initialized lazily on first access to avoid circular imports
-    _PROVIDER_CONFIG_MAP: dict[LlmProviders, tuple[Callable, bool]] | None = None
+    _PROVIDER_CONFIG_MAP: dict[LlmProviders, tuple[Callable[..., BaseConfig], bool]] | None = None
 
     @staticmethod
-    def _build_provider_config_map() -> dict[LlmProviders, tuple[Callable, bool]]:
+    def _build_provider_config_map() -> dict[LlmProviders, tuple[Callable[..., BaseConfig], bool]]:
         """Build the provider-to-config mapping dictionary.
 
         Returns a dict mapping provider to (factory_function, needs_model_parameter).
@@ -12514,7 +12518,7 @@ def get_requester_metadata(metadata: Mapping[str, object]):
     return None
 
 
-def return_raw_request(endpoint: CallTypes, kwargs: dict) -> RawRequestTypedDict:
+def return_raw_request(endpoint: CallTypes, kwargs: Mapping[str, object]) -> RawRequestTypedDict:
     """
     Return the json str of the request
 

@@ -64,6 +64,7 @@ from litellm.constants import (
     MAXIMUM_TRACEBACK_LINES_TO_LOG,
     PASSTHROUGH_UPSTREAM_ERROR_BODY_MAX_LOG_CHARS,
     REDACTED_BY_LITELLM,
+    SESSION_ID_INHERITED_METADATA_KEY,
     SESSION_ID_OMITTED_METADATA_KEY,
     WEBSOCKET_CLOSE_REASON_MAX_BYTES,
 )
@@ -239,7 +240,7 @@ def _is_mergeable_client_metadata(key: str, value: object) -> bool:
     return (
         not key.startswith("user_api_key_")
         and key not in ROUTER_RESERVED_METADATA_FIELDS
-        and key not in ("used_client_oauth_token", "claude_subscription_usage")
+        and key not in ("used_client_oauth_token", "claude_subscription_usage", SESSION_ID_INHERITED_METADATA_KEY)
         and (key != "model_info" or isinstance(value, Mapping))
     )
 

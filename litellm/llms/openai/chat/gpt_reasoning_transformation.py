@@ -363,7 +363,7 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
 
     def map_openai_params(
         self,
-        non_default_params: dict,
+        non_default_params: dict[str, object],
         optional_params: dict[str, object],
         model: str,
         drop_params: bool,
@@ -456,7 +456,7 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
                     )
 
         if "temperature" in non_default_params:
-            temperature_value: Final[float | None] = non_default_params.pop("temperature")
+            temperature_value: Final = non_default_params.pop("temperature")
             if temperature_value is not None:
                 # a non-default temperature rides on the effort resolving to "none", not on
                 # the model merely supporting it
