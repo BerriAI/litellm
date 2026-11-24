@@ -723,11 +723,8 @@ def _interactions_safety_setting(setting: object, custom_llm_provider: str) -> M
     lowered: Final = raw_threshold.lower()
     threshold: Final = "off" if lowered == "block_none" and custom_llm_provider == "gemini" else lowered
     method: Final = raw_method.lower() if isinstance(raw_method, str) else None
-    if (
-        harm_type not in _INTERACTIONS_HARM_TYPES
-        or threshold not in _INTERACTIONS_HARM_THRESHOLDS
-        or (method is not None and method not in _INTERACTIONS_HARM_METHODS)
-    ):
+    known_method: Final = method is None or method in _INTERACTIONS_HARM_METHODS
+    if harm_type not in _INTERACTIONS_HARM_TYPES or threshold not in _INTERACTIONS_HARM_THRESHOLDS or not known_method:
         return None
     return {"type": harm_type, "threshold": threshold, **({"method": method} if method is not None else {})}
 
@@ -803,10 +800,7 @@ def should_route_to_interactions_api(
         return True
     return (
         _is_gemini_4_or_newer(model)
-        and interactions_safety_settings(
-            requested_safety_settings(str_keyed_mapping(optional_params), llm_map), custom_llm_provider
-        )
-        is not None
+        and requested_safety_settings(str_keyed_mapping(optional_params), llm_map) is None
         and not asks_for_penalty
         and service_tier is None
         and not _names_a_file_search_store(tools)

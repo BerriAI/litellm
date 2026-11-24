@@ -578,7 +578,7 @@ def test_bridged_gemini_translates_openai_allowed_tools_tool_choice_while_unbrid
                     "safety_settings": [{"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_ONLY_HIGH"}]
                 }
             },
-            True,
+            False,
         ),
         ("gemini-4-neon", "gemini", {"optional_params": {"top_k": 40}}, True),
         ("gemini-4-neon", "gemini", {"asks_for_penalty": True}, False),
@@ -776,10 +776,11 @@ def test_gemini_4_completion_with_a_field_interactions_cannot_carry_is_sent_to_g
         (
             "gemini/gemini-4-neon",
             {
+                "use_interactions": True,
                 "safety_settings": [
                     {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_ONLY_HIGH"},
                     {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE", "method": "SEVERITY"},
-                ]
+                ],
             },
             {
                 "safety_settings": [
@@ -789,9 +790,9 @@ def test_gemini_4_completion_with_a_field_interactions_cannot_carry_is_sent_to_g
             },
         ),
     ),
-    ids=("n", "top_k", "logprobs", "safety_settings"),
+    ids=("n", "top_k", "logprobs", "forced_bridge_safety_settings"),
 )
-def test_gemini_4_completion_reaches_interactions_without_the_fields_it_has_no_place_for_and_with_translated_safety(
+def test_gemini_4_completion_reaches_interactions_without_the_fields_it_has_no_place_for(
     monkeypatch: pytest.MonkeyPatch,
     provider_model: str,
     request_fields: Mapping[str, object],
