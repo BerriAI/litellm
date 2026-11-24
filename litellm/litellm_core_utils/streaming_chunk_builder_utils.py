@@ -37,7 +37,6 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 from litellm.litellm_core_utils.redact_messages import drop_token_ids
 from litellm.litellm_core_utils.token_counter import usage_tokenizer_model
 from litellm.types.llms.openai import (
-    AllMessageValues,
     ChatCompletionAssistantContentValue,
     ChatCompletionAudioDelta,
 )
@@ -58,7 +57,6 @@ from litellm.types.utils import (
     FunctionCall,
     LlmProviders,
     Logprobs,
-    Message,
     ModelResponse,
     ModelResponseStream,
     PromptTokensDetailsWrapper,
@@ -1418,7 +1416,7 @@ def _reported_usage(chunk: TextCompletionResponse) -> Usage | None:
 
 def stream_chunk_builder_text_completion(
     chunks: Sequence[TextCompletionResponse | ModelResponseStream | Mapping[str, object]],
-    messages: Sequence[AllMessageValues | Message] | None = None,
+    messages: Sequence[object] | None = None,
 ) -> TextCompletionResponse:
     text_chunks: Final = tuple(_as_text_completion_chunk(chunk) for chunk in chunks)
     id: Final = text_chunks[0].id
@@ -1846,7 +1844,7 @@ def _assembled_message_fields(processor: ChunkProcessor, chunks: Sequence) -> It
 
 def stream_chunk_builder(
     chunks: list,
-    messages: Sequence | None = None,
+    messages: Sequence[object] | None = None,
     start_time: object = None,
     end_time: object = None,
     logging_obj: Optional["Logging"] = None,
@@ -1861,7 +1859,7 @@ def stream_chunk_builder(
 
 def _assembled_stream_response(
     chunks: Sequence[object],
-    messages: Sequence[AllMessageValues | Message] | None,
+    messages: Sequence[object] | None,
     logging_obj: Optional["Logging"],
     count_prompt_tokens: Callable[[], int] | None,
 ) -> ModelResponse | TextCompletionResponse | None:
