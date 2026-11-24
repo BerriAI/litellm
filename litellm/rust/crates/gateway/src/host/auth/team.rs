@@ -1,25 +1,15 @@
-//! A key's team as the auth cache holds it, as far as the native host reads it. Each field is
-//! taken apart by name, so a field added to the cached team does not compile here until it is
+//! A key's team as the auth cache holds it, read into the auth core's [`TeamRecord`]. Each field
+//! is taken apart by name, so a field added to the cached team does not compile here until it is
 //! honored or named as one the native app does not serve.
 
-use std::sync::Arc;
-
-use litellm_redis_store::auth_cache::CachedTeam;
+use litellm_gateway_auth_core::record::{Member, MemberRole, TeamRecord};
+use litellm_python_compat::{Value, json};
+use litellm_redis_store::auth_cache::{self, Bag, CachedMember, CachedTeam};
+use serde::de::DeserializeOwned;
 
 use super::key::Carried;
 
-/// A team the native host read for a key, with what the host reads of it.
-#[derive(Clone, Debug, PartialEq)]
-pub struct Team {
-    /// The team's `models` list, which the auth core decides model access on.
-    models: Arc<[String]>,
-}
-
-impl Team {
-    pub(crate) fn models(&self) -> &[String] {
-        &self.models
-    }
-}
+type Object = serde_json::Map<String, serde_json::Value>;
 
 /// The native app honors a team's `models` list and nothing else of it. `Err` names the first
 /// field that holds something Python enforces and the native app does not: the block, a budget, a
@@ -27,7 +17,7 @@ impl Team {
 /// its metadata. The roster and the member defaults only reach a key with an owner, which the
 /// owner's own step declines, and whether a request may change guardrails is asked of a body
 /// `admit` never admits. The rest only describes the team or what it spent.
-pub(super) fn read(team: &CachedTeam) -> Result<Team, &'static str> {
+fn unserved(team: &CachedTeam) -> Option<&'static str> {
     let CachedTeam {
         team_alias: _,
         team_id: _,
@@ -67,7 +57,7 @@ pub(super) fn read(team: &CachedTeam) -> Result<Team, &'static str> {
     } = team;
     let unread_models = super::key::unread_models(models);
     let unread = &unread.iter().any(|(_, value)| value.is_carried());
-    let unserved = unread_models.then_some("models").or_else(|| {
+    unread_models.then_some("models").or_else(|| {
         carried![
             blocked,
             organization_id,
@@ -91,17 +81,70 @@ pub(super) fn read(team: &CachedTeam) -> Result<Team, &'static str> {
             object_permission_id,
             unread,
         ]
-    });
-    match unserved {
+    })
+}
+
+/// `value` as the JSON it is written as, or the name of the `column` that holds something JSON
+/// cannot say.
+fn plain<T: DeserializeOwned>(column: &'static str, value: &Value) -> Result<T, &'static str> {
+    let text = json::dumps(value).map_err(|_| column)?;
+    serde_json::from_str(&text).map_err(|_| column)
+}
+
+fn object(column: &'static str, bag: Option<&Bag>) -> Result<Option<Object>, &'static str> {
+    bag.map(|bag| plain(column, &Value::Dict(bag.entries().to_vec())))
+        .transpose()
+}
+
+fn member(member: &CachedMember) -> Member {
+    Member {
+        user_id: member.user_id.clone(),
+        user_email: member.user_email.clone(),
+        role: match member.role {
+            auth_cache::MemberRole::Admin => MemberRole::Admin,
+            auth_cache::MemberRole::User => MemberRole::User,
+        },
+    }
+}
+
+/// The team's row as the auth core reads it, whatever it holds. `Err` names a column whose value
+/// is no JSON.
+fn record(team: &CachedTeam) -> Result<TeamRecord, &'static str> {
+    let aliases = team
+        .litellm_model_table
+        .as_ref()
+        .and_then(|table| table.model_aliases.as_ref());
+    Ok(TeamRecord {
+        team_alias: team.team_alias.clone(),
+        models: team.models.clone(),
+        blocked: team.blocked,
+        tpm_limit: team.tpm_limit,
+        rpm_limit: team.rpm_limit,
+        tpd_limit: team.tpd_limit,
+        max_budget: team.max_budget,
+        soft_budget: team.soft_budget,
+        model_max_budget: object("model_max_budget", team.model_max_budget.as_ref())?,
+        spend: team.spend,
+        metadata: object("metadata", team.metadata.as_ref())?,
+        model_aliases: aliases
+            .map(|aliases| plain("litellm_model_table", aliases))
+            .transpose()?,
+        object_permission_id: team.object_permission_id.clone(),
+        members_with_roles: team.members_with_roles.iter().map(member).collect(),
+    })
+}
+
+/// `team` as the core takes it, or the first field of it the native app does not serve.
+pub(super) fn read(team: &CachedTeam) -> Result<TeamRecord, &'static str> {
+    match unserved(team) {
         Some(field) => Err(field),
-        None => Ok(Team {
-            models: Arc::from(models.as_slice()),
-        }),
+        None => record(team),
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use litellm_gateway_auth_core::projection::{self, TeamRowGrants};
     use litellm_python_compat::json;
     use litellm_redis_store::FromValue;
     use rstest::rstest;
@@ -135,11 +178,68 @@ mod tests {
         CachedTeam::from_value(&json::loads(&entry.to_string()).unwrap()).unwrap()
     }
 
+    /// `LiteLLM_TeamTableCachedObj.model_dump(mode="json")` of a team that holds something in
+    /// every column the auth core's record reads, with its alias table as the text a writer
+    /// stored.
+    const FULL: &str = r#"{
+        "team_alias": "Full", "organization_id": "org",
+        "members_with_roles": [
+            {"user_id": "admin", "user_email": null, "role": "admin"},
+            {"user_id": "member", "user_email": "first@example.com", "role": "user"},
+            {"user_id": null, "user_email": "m@example.com", "role": "user"},
+            {"user_id": "member", "user_email": "last@example.com", "role": "admin"}
+        ],
+        "metadata": {"guardrails": ["pii"]}, "tpm_limit": 1000, "rpm_limit": 10,
+        "tpd_limit": 100000, "max_budget": 10.5, "soft_budget": 5.25,
+        "models": ["claude", "all-proxy-models"], "blocked": true, "spend": 1.5,
+        "model_max_budget": {"claude": {"budget_limit": 2.0}}, "model_id": 7,
+        "litellm_model_table": {
+            "id": 7, "model_aliases": "{\"gpt\": \"claude\"}", "created_by": "t",
+            "updated_by": "t", "team": null
+        },
+        "object_permission_id": "permission"
+    }"#;
+
+    /// `_team_row_grants(LiteLLM_TeamTableCachedObj(**row), "member")` on BerriAI/litellm#53731,
+    /// for the row [`FULL`] sets.
+    #[rstest]
+    fn a_cached_teams_record_sets_what_the_proxy_stamps_from_that_team() {
+        let team = record(&cached(serde_json::from_str(FULL).unwrap())).unwrap();
+        let model_max_budget = json!({"claude": {"budget_limit": 2.0}});
+        let metadata = json!({"guardrails": ["pii"]});
+        let models = ["claude".to_owned(), "all-proxy-models".to_owned()];
+        let member = Member {
+            user_id: Some("member".to_owned()),
+            user_email: Some("last@example.com".to_owned()),
+            role: MemberRole::Admin,
+        };
+
+        assert_eq!(
+            projection::team_row(&team, Some("member")),
+            TeamRowGrants {
+                team_alias: Some("Full"),
+                team_tpm_limit: Some(1000),
+                team_rpm_limit: Some(10),
+                team_tpd_limit: Some(100_000),
+                team_max_budget: Some(10.5),
+                team_soft_budget: Some(5.25),
+                team_model_max_budget: model_max_budget.as_object(),
+                team_spend: Some(1.5),
+                team_models: &models,
+                team_blocked: true,
+                team_metadata: metadata.as_object(),
+                team_model_aliases: Some([("gpt".to_owned(), "claude".to_owned())].into()),
+                team_object_permission_id: Some("permission"),
+                team_member: Some(&member),
+            }
+        );
+    }
+
     #[rstest]
     fn a_team_python_cached_with_a_model_list_is_read_with_that_list() {
         let team = read(&cached(json!({}))).unwrap();
 
-        assert_eq!(team.models(), ["claude".to_owned()]);
+        assert_eq!(team.models, ["claude".to_owned()]);
     }
 
     #[rstest]

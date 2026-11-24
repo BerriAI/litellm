@@ -31,6 +31,7 @@ use litellm_gateway_auth_core::{
         },
         key::Owner,
     },
+    record::TeamRecord,
 };
 use litellm_redis_store::auth_cache::CachedKey;
 use serde_json::Value;
@@ -38,19 +39,18 @@ use serde_json::Value;
 pub use key::Key;
 pub use store::AuthStore;
 pub(crate) use store::KEY_TTL;
-pub use team::Team;
 
-/// The rows the native host hands the core: a key's and its team's, and none of the objects it
-/// does not read yet. `Infallible` is a row this host does not read, so no identity that needs
-/// one exists. The end user's is `()`, since the key path asks for it on every request and a
-/// request that names no end user reads none.
+/// The rows the native host hands the core: a key's and its team's, which is the core's own
+/// record of a team, and none of the objects it does not read yet. `Infallible` is a row this
+/// host does not read, so no identity that needs one exists. The end user's is `()`, since the
+/// key path asks for it on every request and a request that names no end user reads none.
 #[derive(Clone, Debug, PartialEq)]
 pub struct NativeRows;
 
 impl Rows for NativeRows {
     type Key = Key;
     type User = Infallible;
-    type Team = Team;
+    type Team = TeamRecord;
     type EndUser = ();
     type ObjectPermission = Infallible;
     type Project = Infallible;
@@ -263,13 +263,13 @@ impl AuthHost for NativeAuthHost {
     /// The core asks for the cached team to bring the key's own copy of the team's values up to
     /// date. This host reads none of that copy, since [`Self::key_team`] reads the team itself, so
     /// it has nothing to refresh.
-    async fn cached_team(&self, _: &str) -> Result<Option<CachedTeam<Team>>, Error> {
+    async fn cached_team(&self, _: &str) -> Result<Option<CachedTeam<TeamRecord>>, Error> {
         Ok(None)
     }
 
     /// A team with no row is declined: the proxy then judges the key by its own copy of the
     /// team's values, which this host does not read.
-    async fn key_team(&self, team_id: &str) -> Result<Option<Team>, Error> {
+    async fn key_team(&self, team_id: &str) -> Result<Option<TeamRecord>, Error> {
         let Some(store) = &self.keys else {
             return declined("key_team");
         };
@@ -287,15 +287,15 @@ impl AuthHost for NativeAuthHost {
         }
     }
 
-    async fn team(&self, _: &str, _: bool) -> Result<TeamRead<Team>, Error> {
+    async fn team(&self, _: &str, _: bool) -> Result<TeamRead<TeamRecord>, Error> {
         declined("team")
     }
 
-    async fn granting_team(&self, _: &str) -> Result<TeamRead<Team>, Error> {
+    async fn granting_team(&self, _: &str) -> Result<TeamRead<TeamRecord>, Error> {
         declined("granting_team")
     }
 
-    async fn team_by_alias(&self, _: &str) -> Result<AliasRead<Team>, Error> {
+    async fn team_by_alias(&self, _: &str) -> Result<AliasRead<TeamRecord>, Error> {
         declined("team_by_alias")
     }
 
@@ -375,7 +375,7 @@ impl AuthHost for NativeAuthHost {
         Ok(false)
     }
 
-    async fn team_model_access(&self, _: &Team, _: &str) -> Result<ModelAccess, Error> {
+    async fn team_model_access(&self, _: &TeamRecord, _: &str) -> Result<ModelAccess, Error> {
         declined("team_model_access")
     }
 
@@ -415,7 +415,7 @@ impl AuthHost for NativeAuthHost {
     }
 
     /// Never asked, since [`Self::cached_team`] hands the core no team to refresh a key from.
-    async fn with_team(&self, key: &Key, _: &Team) -> Result<Key, Error> {
+    async fn with_team(&self, key: &Key, _: &TeamRecord) -> Result<Key, Error> {
         Ok(key.clone())
     }
 }

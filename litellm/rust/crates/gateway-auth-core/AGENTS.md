@@ -35,6 +35,13 @@ These are target invariants. Where the code still lags them, the Notion page lis
   - A list is read once into `ModelList`, sentinels included. An entry the rule does not read, a provider pattern such as `anthropic/*`, is the host's to decline at authentication. Reading one means porting it here, never matching it in a host
   - A route never names a row type and never compares a list itself
 
+## Records and projections
+
+- `record.rs` holds one core-owned record for each row a caller belongs to, with what the stored row says and nothing a request or another row adds. `TeamRecord` is the first, and `KeyRecord` in `authn/key` is the key's. A record grows a field with the first rule that reads it. A host builds a record from the row it read and decides nothing while it does
+- `projection.rs` is the one place a record becomes the values the proxy stamps on `UserAPIKeyAuth`, the counterpart of `team_grants.py` and `grants.py`: one pure function per record, returning the stamped fields under their own names. A host that needs one of those values reads it there, never off its row
+- New code reads a record or its projection and never names the `Rows` parameter. No accessor trait is added for it
+- `projection::team_row` is `_team_row_grants`. Not read yet: `team_object_permission`, which waits for the object permission's record, and the three `team_member_*` values `team_grants` adds from the membership row, which wait for the membership's
+
 ## No Python semantics
 
 - No `litellm-python-compat`, no `repr`, `str()`, truthiness or `int()` copies. Untyped claim values follow the JSON rules in `value.rs`: set means not null, false, zero or empty; an id is a string or an integer; a NumericDate is a JSON number

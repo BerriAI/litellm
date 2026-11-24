@@ -17,9 +17,10 @@ use std::sync::Arc;
 
 use litellm_gateway_auth::Authenticated;
 use litellm_gateway_auth_core::{
-    Caller,
+    Caller, StoredKey,
     authz::{Layer, ModelList},
     identity::key::TeamGrant,
+    projection,
 };
 use litellm_gateway_inference::routing::{Host, RouteAttempt};
 
@@ -35,7 +36,7 @@ pub(crate) fn layers(identity: &Authenticated<NativeRows>) -> impl Iterator<Item
     };
     let team = match &context.team {
         TeamGrant::NoTeam => None,
-        TeamGrant::Loaded(team) => Some(Layer::Team(ModelList::read(team.models()))),
+        TeamGrant::Loaded(team) => Some(Layer::Team(ModelList::read(&team.models))),
         TeamGrant::KeyCopy(_) => Some(Layer::Team(ModelList::Nothing)),
     };
     let key = Layer::Key(ModelList::read(context.key.models()));
@@ -43,15 +44,17 @@ pub(crate) fn layers(identity: &Authenticated<NativeRows>) -> impl Iterator<Item
 }
 
 /// Every entry of the model lists the native host read for `identity`, as their rows hold them:
-/// the key's and then its team's. The router narrows a caller that reaches a model only through
-/// an access group by these, as Python's does by a key's `models` plus its `team_models`,
-/// sentinels included.
+/// the key's and then the `team_models` its team's row sets on it. The router narrows a caller
+/// that reaches a model only through an access group by these, as Python's does by a key's
+/// `models` plus its `team_models`, sentinels included.
 pub(crate) fn allowed_models(identity: &Authenticated<NativeRows>) -> Vec<String> {
     let Caller::Key(context) = &**identity else {
         return Vec::new();
     };
     let team = match &context.team {
-        TeamGrant::Loaded(team) => team.models(),
+        TeamGrant::Loaded(team) => {
+            projection::team_row(team, context.key.record().user_id.as_deref()).team_models
+        }
         TeamGrant::NoTeam | TeamGrant::KeyCopy(_) => &[],
     };
     [context.key.models(), team].concat()
