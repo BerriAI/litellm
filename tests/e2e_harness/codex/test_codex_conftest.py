@@ -14,6 +14,8 @@ E2E_PYTEST_INI: Final = E2E_DIR / "pytest.ini"
 FAILS_ONCE: Final = """
 from pathlib import Path
 
+from codex.setups import MissingFeature
+
 
 def test_cell():
     attempted = Path(__file__).with_suffix(".attempted")
@@ -23,6 +25,7 @@ def test_cell():
 """
 SUITE_FILES: Final = (
     ("suite/test_assertion_e2e.py", 'AssertionError("the answer lacked the marker")'),
+    ("suite/test_missing_feature_e2e.py", 'MissingFeature("no web_search item")'),
     ("suite/test_gateway_error_e2e.py", 'RuntimeError("status_code=502 from the gateway")'),
     ("suite/test_crash_e2e.py", 'RuntimeError("codex crashed")'),
     ("outside/test_outside_e2e.py", 'AssertionError("the answer lacked the marker")'),
@@ -45,11 +48,12 @@ def test_a_codex_test_is_rerun_once_after_a_failed_assertion_or_a_configured_err
         "-p", "no:cacheprovider", "-p", "no:asyncio", "-p", "no:pytest-retry", "-rA"
     )
 
-    run.assert_outcomes(passed=2, failed=2)
-    assert run.parseoutcomes()["rerun"] == 2
+    run.assert_outcomes(passed=3, failed=2)
+    assert run.parseoutcomes()["rerun"] == 3
     run.stdout.fnmatch_lines_random(
         [
             "PASSED suite/test_assertion_e2e.py::test_cell",
+            "PASSED suite/test_missing_feature_e2e.py::test_cell",
             "PASSED suite/test_gateway_error_e2e.py::test_cell",
             "FAILED suite/test_crash_e2e.py::test_cell - RuntimeError*",
             "FAILED outside/test_outside_e2e.py::test_cell - AssertionError*",

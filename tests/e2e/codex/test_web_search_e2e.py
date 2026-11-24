@@ -4,7 +4,7 @@ from typing import Final
 
 import pytest
 from codex.harness import CodexHarness
-from codex.setups import ModelSetup, with_expected_failures
+from codex.setups import ModelSetup, require_feature, with_expected_failures
 
 pytestmark = pytest.mark.e2e
 
@@ -43,5 +43,5 @@ class TestCodexWebSearch:
         if any(IDENTITY_MAY_NOT_SEARCH in error.message for error in run.errors):
             pytest.skip("The gateway's AWS identity lacks the bedrock-websearch:InvokeSearch permission.")
         assert run.exit_code == 0, run
-        assert run.web_searches > 0, run
+        require_feature(run.web_searches > 0, run)
         assert run.answer.strip(), run

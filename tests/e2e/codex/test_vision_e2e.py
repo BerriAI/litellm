@@ -22,7 +22,7 @@ PALETTE: Final = (
 )
 STRIPES: Final = 3
 STRIPE_SIDE: Final = 96
-COLOR_NAME: Final = re.compile("|".join(name for name, _ in PALETTE))
+COLOR_NAME: Final = re.compile(rf"\b(?:{'|'.join(name for name, _ in PALETTE)})\b")
 
 
 def stripes_png(colors: tuple[tuple[int, int, int], ...]) -> bytes:

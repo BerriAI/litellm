@@ -4,7 +4,7 @@ from typing import Final
 
 import pytest
 from codex.harness import CodexHarness
-from codex.setups import ModelSetup, with_expected_failures
+from codex.setups import ModelSetup, require_feature, with_expected_failures
 from e2e_config import unique_marker
 
 pytestmark = pytest.mark.e2e
@@ -32,4 +32,4 @@ class TestCodexPromptCaching:
         )
         assert run.exit_code == 0, run
         assert marker in run.answer, run
-        assert run.usage is not None and run.usage.cached_input_tokens > 0, run
+        require_feature(run.usage is not None and run.usage.cached_input_tokens > 0, run)

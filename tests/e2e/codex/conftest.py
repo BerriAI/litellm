@@ -17,7 +17,7 @@ from proxy_client import ProxyClient
 from pydantic import TypeAdapter
 
 CODEX_DIR: Final = Path(__file__).resolve().parent
-ASSERTION_FAILURE: Final = "^AssertionError: "
+ASSERTION_FAILURE: Final = "^(AssertionError|MissingFeature): "
 RERUN_PATTERNS: Final = TypeAdapter[list[str] | None](list[str] | None)
 
 
