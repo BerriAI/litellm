@@ -7307,7 +7307,7 @@ def embedding(
     api_type: str | None = None,
     caching: bool = False,
     user: str | None = None,
-    custom_llm_provider=None,
+    custom_llm_provider: str | None = None,
     litellm_call_id=None,
     logger_fn=None,
     **kwargs,
@@ -7351,7 +7351,12 @@ def embedding(
     aembedding: Final[bool | None] = kwargs.get("aembedding", None)
     extra_headers: Final = kwargs.get("extra_headers", None)
     headers = {
-        **_embedding_headers("headers", kwargs.get("headers"), model, drop_unsupported_params),
+        **_embedding_headers(
+            "headers",
+            cast(object, kwargs.get("headers")),  # cast-ok: untyped request kwargs
+            model,
+            drop_unsupported_params,
+        ),
         **_embedding_headers("extra_headers", extra_headers, model, drop_unsupported_params),
     }
     # Inject proxy auth headers if configured
@@ -7381,7 +7386,7 @@ def embedding(
         kwargs, excluding=(*default_params, *DynamicPromptManagementParamLiteral.list_all_params())
     )
 
-    litellm_params_dict: Final[dict[str, object]] = get_litellm_params(**kwargs)
+    litellm_params_dict: Final[Mapping[str, object]] = get_litellm_params(**kwargs)
 
     model, custom_llm_provider, dynamic_api_key, api_base = get_llm_provider(
         model=model,
