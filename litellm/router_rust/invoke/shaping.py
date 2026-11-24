@@ -10,6 +10,7 @@ the same precedence and the same oddities. Nothing here reads a Python router.
 import dataclasses
 from collections.abc import Callable, Iterable, Mapping, MutableMapping, Sequence
 from functools import partial
+from itertools import product
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 
@@ -486,17 +487,28 @@ def leaves_caller_key_behind(
     """Whether an attempt onto ``deployment_params`` must not send the caller's ``api_key``: the key was meant for
     Anthropic and the deployment authenticates with AWS IAM credentials. A deployment with a bearer of its own (its
     ``api_key`` or the provider's env bearer), a blank caller key (which already turns off the env bearer), a fallback
-    target that sets its own key, and a call the caller or the target points at a base URL keep today's behavior."""
+    target that sets its own key, an explicit ``Authorization`` header, and a call the caller or the target points at a
+    base URL keep today's behavior."""
     caller_key: Final = request.get("api_key")
     redirected: Final = any(key in request or key in target_params for key in ("api_base", "base_url"))
     return (
         caller_key not in (None, "")
         and "api_key" not in target_params
         and not redirected
+        and not _sets_authorization_header(request, target_params, deployment_params)
         and deployment_provider(deployment_params) in _AWS_SIGNED_FALLBACK_PROVIDERS
         and owner_provider() in _CALLER_KEY_ORIGIN_PROVIDERS
         and _signs_with_aws_credentials(deployment_params)
     )
+
+
+def _sets_authorization_header(*sources: Mapping[str, object]) -> bool:
+    """Whether ``headers`` or ``extra_headers`` set an ``Authorization`` explicitly; the caller's key outranks it on
+    an AWS deployment, so dropping the key would hand the call to that header instead."""
+    carriers: Final = (
+        as_str_mapping(source.get(carrier)) or {} for source, carrier in product(sources, ("headers", "extra_headers"))
+    )
+    return any("authorization" in {name.lower() for name in headers} for headers in carriers)
 
 
 def _signs_with_aws_credentials(deployment_params: Mapping[str, object]) -> bool:

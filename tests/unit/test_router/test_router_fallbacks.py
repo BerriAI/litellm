@@ -1647,19 +1647,47 @@ async def test_dict_fallback_target_base_url_without_a_key_keeps_the_caller_key(
 
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("_aws_without_env_bearer")
-async def test_explicit_authorization_header_still_reaches_an_aws_fallback(respx_mock: respx.MockRouter) -> None:
-    router: Final = _anthropic_to_aws_router("bedrock", [{"claude": ["claude-aws"]}])
+@pytest.mark.parametrize("carrier", ("request", "deployment"))
+@pytest.mark.parametrize(
+    ("caller_key", "expected_authorization"),
+    (
+        pytest.param(_CALLER_ANTHROPIC_KEY, f"Bearer {_CALLER_ANTHROPIC_KEY}", id="caller-key-outranks-the-header"),
+        pytest.param(None, "Bearer gateway-token", id="header-without-a-caller-key"),
+    ),
+)
+async def test_explicit_authorization_header_keeps_its_precedence_on_an_aws_fallback(
+    respx_mock: respx.MockRouter, carrier: str, caller_key: str | None, expected_authorization: str
+) -> None:
+    explicit: Final = {"extra_headers": {"Authorization": "Bearer gateway-token"}}
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "claude",
+                "litellm_params": {"model": "anthropic/claude-haiku-4-5", "api_key": "sk-ant-deployment"},
+            },
+            {
+                "model_name": "claude-aws",
+                "litellm_params": {
+                    "model": _AWS_FALLBACK_TARGETS["bedrock"][0],
+                    **_AWS_DEPLOYMENT_CREDENTIALS,
+                    **(explicit if carrier == "deployment" else {}),
+                },
+            },
+        ],
+        fallbacks=[{"claude": ["claude-aws"]}],
+        num_retries=0,
+    )
     respx_mock.post("https://api.anthropic.com/v1/messages").mock(return_value=_anthropic_overloaded())
     aws: Final = respx_mock.post(host=_AWS_FALLBACK_TARGETS["bedrock"][1]).mock(return_value=_aws_answer("bedrock"))
 
     await router.acompletion(
         model="claude",
         messages=[{"role": "user", "content": "hi"}],
-        api_key=_CALLER_ANTHROPIC_KEY,
-        extra_headers={"Authorization": "Bearer gateway-token"},
+        **({"api_key": caller_key} if caller_key is not None else {}),
+        **(explicit if carrier == "request" else {}),
     )
 
-    assert aws.calls[0].request.headers["authorization"] == "Bearer gateway-token"
+    assert aws.calls[0].request.headers["authorization"] == expected_authorization
 
 
 class _MantleStreamCutAfterContent(httpx.AsyncByteStream):
