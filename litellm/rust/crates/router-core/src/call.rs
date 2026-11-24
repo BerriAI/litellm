@@ -24,7 +24,7 @@ use crate::{
     lookup::Lookup,
     mock::MockFailure,
     outcome::{OutcomeCallbacks, OutcomeWrite},
-    precall::named_model,
+    precall::{PreCallFacts, named_model},
     prerouting::{PreRoute, PreRouted},
     registry::{Deployment, ResolveKind, ResolveScope},
     retry::{RetryContext, RetryState, RetryStep, resolve_retry_policy, retry_step},
@@ -299,24 +299,44 @@ fn retried_failure(error: &Error) -> Option<Cow<'_, AttemptError>> {
     }
 }
 
-fn serving_the_refused_model<'a>(
+fn served_model<H: RouterHost>(host: &H, deployment: &Deployment) -> String {
+    let named = named_model(deployment);
+    let model_id = named.rsplit_once('/').map_or(named.as_str(), |(_, id)| id);
+    host.provider_model_id(model_id, deployment.provider())
+        .to_owned()
+}
+
+fn serving_the_refused_model<'a, H: RouterHost>(
+    host: &'a H,
     snapshot: &RouterStateSnapshot,
     refused: &'a str,
-    healthy: &'a [Arc<Deployment>],
+    candidates: &'a Candidates,
 ) -> impl Iterator<Item = String> + 'a {
-    let model = healthy
+    let model = candidates
+        .healthy
         .iter()
         .find(|d| d.id == refused)
-        .map(|d| named_model(d))
+        .map(|d| served_model(host, d))
         .or_else(|| {
             snapshot
                 .registry
                 .deployment(refused)
-                .map(|deployment| named_model(&deployment))
+                .map(|deployment| served_model(host, &deployment))
         });
-    healthy
+    let refused_window = candidates.pre_call.max_input_tokens(refused);
+    let has_a_larger_window = move |d: &Deployment| {
+        matches!(
+            (candidates.pre_call.max_input_tokens(&d.id), refused_window),
+            (Some(window), Some(limit)) if window > limit
+        )
+    };
+    candidates
+        .healthy
         .iter()
-        .filter(move |d| d.id == refused || model.as_ref() == Some(&named_model(d)))
+        .filter(move |d| {
+            d.id == refused
+                || (model.as_ref() == Some(&served_model(host, d)) && !has_a_larger_window(d))
+        })
         .map(|d| d.id.clone())
 }
 
@@ -1173,12 +1193,17 @@ impl<H: RouterHost> Call<'_, H> {
             request,
             ..
         } = level;
-        let healthy = match self.candidates(snapshot, op, request, group, inputs).await {
-            Ok(c) if snapshot.settings.enable_pre_call_checks && !c.kind.is_single() => c.healthy,
+        let candidates = match self.candidates(snapshot, op, request, group, inputs).await {
+            Ok(c) if snapshot.settings.enable_pre_call_checks && !c.kind.is_single() => c,
             _ => return 0,
         };
-        let serving: Vec<String> = serving_the_refused_model(snapshot, refused, &healthy).collect();
-        let untried = healthy.iter().filter(|d| !serving.contains(&d.id)).count();
+        let serving: Vec<String> =
+            serving_the_refused_model(self.host, snapshot, refused, &candidates).collect();
+        let untried = candidates
+            .healthy
+            .iter()
+            .filter(|d| !serving.contains(&d.id))
+            .count();
         inputs.refused_ids.extend(serving);
         untried
     }
@@ -1516,6 +1541,7 @@ impl<H: RouterHost> Call<'_, H> {
                     skips_batch_only: skips_batch_only(request, std::slice::from_ref(&deployment)),
                     wildcard_request: None,
                     served_as: None,
+                    pre_call: PreCallFacts::default(),
                 };
                 Ok((deployment, candidates))
             }

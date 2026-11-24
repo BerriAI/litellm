@@ -16,6 +16,7 @@ use crate::{
     error::Error,
     health_routing::WhenAllUnhealthy,
     host::{RouterHost, RouterRequest, RoutingContext, SelectStage},
+    precall::PreCallFacts,
     registry::{Deployment, Registry, ResolveKind},
     resolve::{Caller, resolve_request},
     strategy::{StrategyScope, request_override, routing_context},
@@ -85,6 +86,7 @@ pub struct Candidates {
     /// The group the host stamped the pick as served for when a pre-routing hook rewrote the name
     /// (a Claude Code subagent's bound router): a fallback lookup key.
     pub served_as: Option<String>,
+    pub pre_call: PreCallFacts,
 }
 
 impl Candidates {
@@ -564,12 +566,13 @@ impl<H: RouterHost> Call<'_, H> {
                 skips_batch_only: skip_batch_only,
                 wildcard_request,
                 served_as: None,
+                pre_call: PreCallFacts::default(),
             });
         }
 
         if listed {
-            if settings.enable_pre_call_checks && !resolution.kind.is_single() {
-                healthy = self
+            let pre_call = if settings.enable_pre_call_checks && !resolution.kind.is_single() {
+                let (checked, facts) = self
                     .pre_call_checks(
                         snapshot,
                         op,
@@ -580,7 +583,11 @@ impl<H: RouterHost> Call<'_, H> {
                         healthy,
                     )
                     .await?;
-            }
+                healthy = checked;
+                facts
+            } else {
+                PreCallFacts::default()
+            };
             // Only a priority group narrows a listed pass-through pick by order.
             let priority = resolution.kind == ResolveKind::RoutingGroup
                 && registry.routing_groups().iter().any(|g| {
@@ -603,6 +610,7 @@ impl<H: RouterHost> Call<'_, H> {
                 skips_batch_only: skip_batch_only,
                 wildcard_request,
                 served_as: None,
+                pre_call,
             });
         }
 
@@ -621,8 +629,8 @@ impl<H: RouterHost> Call<'_, H> {
                 .await?;
         }
 
-        if settings.enable_pre_call_checks && !resolution.kind.is_single() {
-            healthy = self
+        let pre_call = if settings.enable_pre_call_checks && !resolution.kind.is_single() {
+            let (checked, facts) = self
                 .pre_call_checks(
                     snapshot,
                     op,
@@ -633,7 +641,11 @@ impl<H: RouterHost> Call<'_, H> {
                     healthy,
                 )
                 .await?;
-        }
+            healthy = checked;
+            facts
+        } else {
+            PreCallFacts::default()
+        };
 
         if request.filter_tags && !healthy.is_empty() {
             let mut ctx = self.context(
@@ -785,6 +797,7 @@ impl<H: RouterHost> Call<'_, H> {
             skips_batch_only: skip_batch_only,
             wildcard_request,
             served_as: None,
+            pre_call,
         })
     }
 
@@ -799,7 +812,7 @@ impl<H: RouterHost> Call<'_, H> {
         name: &str,
         pool: &[Arc<Deployment>],
         healthy: Vec<Arc<Deployment>>,
-    ) -> Result<Vec<Arc<Deployment>>, Error> {
+    ) -> Result<(Vec<Arc<Deployment>>, PreCallFacts), Error> {
         let mut ctx = self.context(
             snapshot,
             op,
@@ -810,7 +823,8 @@ impl<H: RouterHost> Call<'_, H> {
         );
         ctx.pool = pool;
         let facts = self.host.pre_call_facts(&ctx, &healthy).await?;
-        crate::precall::filter(model_group, healthy, pool, &facts)
+        let checked = crate::precall::filter(model_group, healthy, pool, &facts)?;
+        Ok((checked, facts))
     }
 
     /// Pick one of `candidates.healthy` with the group's strategy.

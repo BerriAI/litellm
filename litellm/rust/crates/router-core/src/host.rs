@@ -763,6 +763,11 @@ pub trait RouterHost: Send + Sync {
         async { Ok(PreCallFacts::default()) }
     }
 
+    fn provider_model_id<'a>(&self, model_id: &'a str, provider: &str) -> &'a str {
+        let _ = provider;
+        model_id
+    }
+
     /// `f"{provider}/{model}"` for `ctx.name`, which `PatternMatchRouter.get_pattern` tries when
     /// no pattern matches the name itself: only the host can infer a provider. `None` from a
     /// host that infers none.

@@ -19,7 +19,7 @@ use litellm_router_core::{
     health::current_minute,
     host::UncountedRetries,
     mock::MockFailure,
-    precall::PreCallFacts,
+    precall::{DeploymentFacts, PreCallFacts},
     select,
     select::PassThrough,
 };
@@ -54,6 +54,7 @@ struct ScriptedHost {
     pre_routes: Option<(&'static str, PreRouted)>,
     /// The params each attempt carried, in the order the attempts ran.
     params_sent: Mutex<Vec<Option<Value>>>,
+    windows: Vec<(&'static str, i64)>,
 }
 
 impl ScriptedHost {
@@ -268,6 +269,27 @@ impl RouterHost for ScriptedHost {
                 ..Served::new(attempt.deployment.id.clone(), 10)
             }),
         }
+    }
+
+    async fn pre_call_facts(
+        &self,
+        _ctx: &RoutingContext<'_>,
+        _candidates: &[Arc<Deployment>],
+    ) -> Result<PreCallFacts, Error> {
+        Ok(PreCallFacts {
+            deployments: self
+                .windows
+                .iter()
+                .map(|(id, window)| {
+                    let facts = DeploymentFacts {
+                        max_input_tokens: Some(*window),
+                        ..DeploymentFacts::default()
+                    };
+                    ((*id).to_owned(), facts)
+                })
+                .collect(),
+            ..PreCallFacts::default()
+        })
     }
 
     async fn pre_route(&self, ask: &PreRoute<'_>) -> Result<Option<PreRouted>, Error> {
@@ -2026,6 +2048,9 @@ fn same_model_group(second: Value) -> RouterConfig {
 #[case::same_base_model(json!(
     {"model_name": "primary", "litellm_params": {"model": "openai/alias"}, "model_info": {"id": "a2", "base_model": "openai/a"}}
 ))]
+#[case::same_model_from_another_provider(json!(
+    {"model_name": "primary", "litellm_params": {"model": "azure_ai/a"}, "model_info": {"id": "a2"}}
+))]
 #[tokio::test]
 async fn a_context_window_error_skips_every_deployment_serving_the_refused_model(
     #[case] second: Value,
@@ -2048,6 +2073,39 @@ async fn a_context_window_error_skips_every_deployment_serving_the_refused_model
     assert_eq!(selected.len(), 2);
     assert_ne!(serves_a(&selected[0]), serves_a(&selected[1]));
     assert_eq!(response.deployment_id, selected[1]);
+}
+
+#[rstest]
+#[case::a_larger_window(vec![("p1", 200_000), ("p2", 1_000_000)], &["p1", "p2"])]
+#[case::the_same_window(vec![("p1", 200_000), ("p2", 200_000)], &["p1"])]
+#[case::a_smaller_window(vec![("p1", 200_000), ("p2", 100_000)], &["p1"])]
+#[case::no_known_window(vec![("p1", 200_000)], &["p1"])]
+#[case::no_known_window_on_the_refused_one(vec![("p2", 1_000_000)], &["p1"])]
+#[tokio::test]
+async fn a_context_window_error_retries_a_copy_of_the_model_only_with_a_larger_window(
+    #[case] windows: Vec<(&'static str, i64)>,
+    #[case] tried: &[&str],
+) {
+    let config: RouterConfig = serde_json::from_value(json!({
+        "model_list": [
+            {"model_name": "primary", "litellm_params": {"model": "openai/a", "weight": 1}, "model_info": {"id": "p1"}},
+            {"model_name": "primary", "litellm_params": {"model": "openai/a", "weight": 0}, "model_info": {"id": "p2"}},
+        ]
+    }))
+    .unwrap();
+    let host = Arc::new(ScriptedHost {
+        first_failure: Mutex::new(Some(context_window())),
+        windows,
+        ..ScriptedHost::default()
+    });
+    let router = router(
+        pre_call_checked(config),
+        json!({"num_retries": 2}),
+        host.clone(),
+    );
+    let outcome = router.call(Op::from("acompletion"), request()).await;
+    assert_eq!(host.selected(), tried);
+    assert_eq!(outcome.is_ok(), tried.len() == 2);
 }
 
 #[rstest]

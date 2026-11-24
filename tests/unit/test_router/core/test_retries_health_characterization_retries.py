@@ -13,6 +13,7 @@ from litellm.exceptions import GuardrailRaisedException
 from litellm.litellm_core_utils.agentic_followup_failure import is_agentic_followup_failure
 from litellm.types.router import RetryPolicy
 from litellm.types.utils import Usage
+from tests.unit.test_router.core.construction_precall_helpers import windowed
 from tests.unit.test_router.core.retries_health_helpers import (
     ErrorBuilder,
     MakeCore,
@@ -161,6 +162,44 @@ async def test_a_context_window_error_is_raised_over_a_rate_limit_on_the_retry(
     assert isinstance(error, litellm.ContextWindowExceededError)
     assert len(called) == 2
     assert called[0] != called[1]
+
+
+@pytest.mark.asyncio
+async def test_a_context_window_error_skips_the_other_region_profiles_of_the_refused_bedrock_model(
+    make_core: MakeCore, host: ScriptedHost
+) -> None:
+    profiles: Final = [
+        deployment("g", region, model=f"bedrock/{region}.anthropic.claude-sonnet-4-5-20250929-v1:0")
+        for region in ("us", "global", "eu")
+    ]
+    core: Final = make_core(model_list=profiles, num_retries=2, enable_pre_call_checks=True)
+    host.answer("*", fresh(context_window))
+
+    error: Final = await attempt(core)
+
+    assert isinstance(error, litellm.ContextWindowExceededError)
+    assert len(host.deployments_called("acompletion")) == 1
+
+
+@pytest.mark.asyncio
+async def test_a_context_window_error_retries_a_copy_of_the_model_that_declares_a_larger_window(
+    make_core: MakeCore, host: ScriptedHost
+) -> None:
+    base_model: Final = {"base_model": "openai/cw-shared-window-base"}
+    core: Final = make_core(
+        model_list=[
+            windowed("g", "small", 1_000, weight=1, model_info=base_model),
+            windowed("g", "large", 1_000_000, weight=0, model_info=base_model),
+        ],
+        num_retries=1,
+        enable_pre_call_checks=True,
+    )
+    host.answer("*", fresh(context_window), None)
+
+    response: Final = await attempt(core)
+
+    assert not isinstance(response, Exception)
+    assert host.deployments_called("acompletion") == ["small", "large"]
 
 
 @pytest.mark.asyncio

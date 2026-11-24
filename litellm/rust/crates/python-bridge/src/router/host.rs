@@ -20,6 +20,7 @@ use std::{
     time::Duration,
 };
 
+use litellm_model_catalog::bedrock_base_model;
 use litellm_router_core::{
     Attempt, AttemptError, AttemptFailure, Blocked, BuildAsk, BuildPath, Built, CallbackFiltered,
     Deployment, Error, HealthState, LimitCounter, Outcomes, PreRoute, PreRouted, Provided,
@@ -861,6 +862,14 @@ impl RouterHost for PythonRouterHost {
     type Response = ();
     type Failure = ();
     type Cache = PythonRouterCache;
+
+    fn provider_model_id<'a>(&self, model_id: &'a str, provider: &str) -> &'a str {
+        if provider.starts_with("bedrock") {
+            bedrock_base_model(model_id)
+        } else {
+            model_id
+        }
+    }
 
     async fn attempt(&self, attempt: &Attempt) -> Result<Served<()>, AttemptFailure<()>> {
         let call = HostCall::Attempt {
