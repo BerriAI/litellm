@@ -85,8 +85,8 @@ class AmazonStabilityConfig:
     def map_openai_params(
         cls,
         non_default_params: dict,
-        optional_params: dict[str, object],
-    ) -> dict[str, object]:
+        optional_params: dict,
+    ):
         _size: Final = non_default_params.get("size")
         if _size is not None:
             width, height = _size.split("x")
@@ -99,7 +99,7 @@ class AmazonStabilityConfig:
     def transform_request_body(
         cls,
         text: str,
-        optional_params: dict[str, object],
+        optional_params: dict,
     ) -> dict[str, object]:
         inference_params: Final = copy.deepcopy(optional_params)
         inference_params.pop("user", None)  # make sure user is not passed in for bedrock call

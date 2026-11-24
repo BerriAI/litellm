@@ -434,8 +434,8 @@ class AmazonBedrockRuntimeChatCompletionsConfig(OpenAILikeChatConfig):
 
     def map_openai_params(
         self,
-        non_default_params: dict[str, object],  # mutable-ok: BaseConfig signature
-        optional_params: dict[str, object],  # mutable-ok: BaseConfig signature
+        non_default_params: dict,  # mutable-ok: BaseConfig signature
+        optional_params: dict,  # mutable-ok: BaseConfig signature
         model: str,
         drop_params: bool,
         replace_max_completion_tokens_with_max_tokens: bool = False,
