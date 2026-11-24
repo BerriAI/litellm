@@ -440,18 +440,20 @@ def _reasoning_items_from_output_items(output_items: Sequence[object]) -> tuple[
     )
 
 
-_HOSTED_LOOKUP_ITEM_TYPES: Final = frozenset({"web_search_call", "file_search_call", "mcp_list_tools"})
+_HOSTED_TOOL_ITEM_TYPES: Final = frozenset(
+    {"web_search_call", "file_search_call", "mcp_list_tools", "mcp_call", "code_interpreter_call"}
+)
 
 
-def _is_hosted_lookup_item(item: object) -> bool:
+def _is_hosted_tool_item(item: object) -> bool:
     raw: Final[object] = item.model_dump() if isinstance(item, BaseModel) else item
-    return _json_field(raw, "type") in _HOSTED_LOOKUP_ITEM_TYPES
+    return _json_field(raw, "type") in _HOSTED_TOOL_ITEM_TYPES
 
 
-def _holds_only_reasoning_and_hosted_lookups(output_items: Sequence[object]) -> bool:
+def _holds_only_reasoning_and_hosted_tool_calls(output_items: Sequence[object]) -> bool:
     reasoning_count: Final = len(_reasoning_items_from_output_items(output_items))
-    lookup_count: Final = sum(map(_is_hosted_lookup_item, output_items))
-    return 0 < reasoning_count and reasoning_count + lookup_count == len(output_items)
+    hosted_count: Final = sum(map(_is_hosted_tool_item, output_items))
+    return 0 < reasoning_count and reasoning_count + hosted_count == len(output_items)
 
 
 _TOOL_SEARCH_ITEM_TYPES: Final = frozenset({"tool_search_call", "tool_search_output"})
@@ -1776,7 +1778,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                     output_items, "stop", tool_search_items=tool_search_items
                 ),
             )
-        if not (completed and _holds_only_reasoning_and_hosted_lookups(output_items)):
+        if not (completed and _holds_only_reasoning_and_hosted_tool_calls(output_items)):
             return ()
         empty: Final = LiteLLMResponsesTransformationHandler._build_empty_choice(output_items, "stop")
         if not replay_openai_history:
