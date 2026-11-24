@@ -617,6 +617,47 @@ class TestContentFilterGuardrail:
         assert content_by_choice[1] == "Email [EMAIL_REDACTED] for support"
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("ends_with_finish_reason", [True, False])
+    async def test_streaming_hook_masks_a_refusal_beside_content_in_its_own_field(self, ends_with_finish_reason: bool):
+        guardrail: Final = ContentFilterGuardrail(
+            guardrail_name="test-streaming-mask-refusal",
+            patterns=[
+                ContentFilterPattern(pattern_type="prebuilt", pattern_name="email", action=ContentFilterAction.MASK)
+            ],
+            event_hook=GuardrailEventHooks.during_call,
+        )
+        deltas: Final = (
+            Delta(content="Mail first@ex"),
+            Delta(refusal="I cannot write to second@ex"),
+            Delta(content="ample.com now", refusal="ample.com"),
+            *((Delta(),) if ends_with_finish_reason else ()),
+        )
+
+        async def refusal_stream() -> AsyncIterator[ModelResponseStream]:
+            for position, delta in enumerate(deltas, start=1):
+                finish_reason: Final = "stop" if ends_with_finish_reason and position == len(deltas) else None
+                yield ModelResponseStream(
+                    id=f"chunk{position}",
+                    choices=[StreamingChoices(delta=delta, index=0, finish_reason=finish_reason)],
+                    model="gpt-4",
+                )
+
+        delivered: Final = [
+            chunk
+            async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+                user_api_key_dict=MagicMock(), response=refusal_stream(), request_data={}
+            )
+        ]
+
+        def streamed(field: str) -> str:
+            return "".join(stream_item_field(chunk.choices[0].delta, field) or "" for chunk in delivered)
+
+        assert (streamed("content"), streamed("refusal")) == (
+            "Mail [EMAIL_REDACTED] now",
+            "I cannot write to [EMAIL_REDACTED]",
+        )
+
+    @pytest.mark.asyncio
     async def test_streaming_hook_block(self):
         """
         Test streaming hook with BLOCK action

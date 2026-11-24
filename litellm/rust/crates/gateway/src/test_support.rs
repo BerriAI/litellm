@@ -18,11 +18,23 @@ pub(crate) fn master() -> Authenticated<NativeRows> {
 pub(crate) type Variables = &'static [(&'static str, &'static str)];
 
 /// What each read of the stored config returns, `None` for a read that fails.
-#[derive(Default)]
 pub(crate) struct Rows {
     pub(crate) settings: Option<Vec<ConfigParam>>,
     pub(crate) models: Option<Vec<ProxyModel>>,
     pub(crate) credentials: Option<Vec<Credential>>,
+    /// The UI settings column, `Err(())` for a read that fails.
+    pub(crate) ui_settings: Result<Option<&'static str>, ()>,
+}
+
+impl Default for Rows {
+    fn default() -> Self {
+        Self {
+            settings: None,
+            models: None,
+            credentials: None,
+            ui_settings: Ok(None),
+        }
+    }
 }
 
 fn read<T: Clone>(rows: &Option<Vec<T>>) -> Result<Vec<T>, litellm_db::Error> {
@@ -40,6 +52,12 @@ impl StoredRows for Rows {
 
     async fn credentials(&self) -> Result<Vec<Credential>, litellm_db::Error> {
         read(&self.credentials)
+    }
+
+    async fn ui_settings(&self) -> Result<Option<RawJson>, litellm_db::Error> {
+        self.ui_settings
+            .map(|column| column.map(json))
+            .map_err(|()| litellm_db::Error::TransactionTimedOut)
     }
 }
 

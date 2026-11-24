@@ -277,7 +277,9 @@ async def test_upstream_held_past_the_deployment_timeout_answers_408_on_every_ro
         received: Final = wire.drain()
     assert len(answers) == len(ROUTES)
     for answer in answers:
-        assert "litellm.Timeout" in assert_openai_error(answer.response, MAPPED_BY_STATUS[408]), answer.response.text
+        assert "litellm.Timeout" in assert_openai_error(answer.response, Mapped(408, "invalid_request_error", None)), (
+            answer.response.text
+        )
     assert sorted(upstream_trail(received)) == sorted((route.method, proxy_path(route, marker)) for route in ROUTES)
 
 

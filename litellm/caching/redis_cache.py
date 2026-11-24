@@ -18,13 +18,14 @@ import json
 import logging
 import threading
 import time
-from collections import Counter
+from collections import Counter, deque
 from collections.abc import Awaitable, Callable, Iterable, Iterator, Mapping, Sequence
 from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import timedelta
 from types import FrameType, MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Protocol, TypeVar, cast
+from weakref import WeakValueDictionary
 
 from pydantic import TypeAdapter
 
@@ -573,7 +574,7 @@ def _redis_circuit_breaker_guard(method):
     """
 
     @functools.wraps(method)
-    async def wrapper(self: "RedisCache", *args, **kwargs):
+    async def wrapper(self: "RedisCache", *args: object, **kwargs: object):
         async def guarded() -> object:
             return await method(self, *args, **kwargs)
 
@@ -643,7 +644,9 @@ class RedisCache(BaseCache):
         # redis namespaces
         self.namespace = namespace
         # for high traffic, we store the redis results in memory and then batch write to redis
-        self.redis_batch_writing_buffer: list[tuple[str, object]] = []
+        self.redis_batch_writing_buffer: Final = deque[tuple[str, object, int | None]]()
+        self._batch_buffer_lock: Final = threading.Lock()
+        self._batch_flush_locks: Final = WeakValueDictionary[int | None, asyncio.Lock]()
         if redis_flush_size is None:
             self.redis_flush_size: int = 100
         else:
@@ -1196,7 +1199,7 @@ class RedisCache(BaseCache):
         pipe: pipeline | cluster_pipeline,
         cache_list: Sequence[tuple[str, object]],
         ttl: float | None,
-    ) -> list:
+    ) -> Sequence[object]:
         """
         Helper function for executing a pipeline of set operations on Redis
         """
@@ -1334,7 +1337,7 @@ class RedisCache(BaseCache):
         self,
         redis_client: async_redis_client,
         key: str,
-        value: list,
+        value: Sequence[bytes | float | str],
         ttl: float | None,
     ) -> None:
         """Helper function for async_set_cache_sadd. Separated for testing."""
@@ -1348,7 +1351,9 @@ class RedisCache(BaseCache):
             raise
 
     @_redis_circuit_breaker_guard
-    async def async_set_cache_sadd(self, key: str, value: list, ttl: float | None, **kwargs: object):
+    async def async_set_cache_sadd(
+        self, key: str, value: Sequence[bytes | float | str], ttl: float | None, **kwargs: object
+    ):
         from redis.asyncio import Redis
 
         start_time: Final = time.time()
@@ -1418,14 +1423,25 @@ class RedisCache(BaseCache):
             _record_swallowed_redis_failure(self._health, e)
 
     @_redis_circuit_breaker_guard
-    async def batch_cache_write(self, key: str, value: object, **kwargs: object):
-        print_verbose(
-            f"in batch cache writing for redis buffer size={len(self.redis_batch_writing_buffer)}",
-        )
-        key = self.check_and_fix_namespace(key=key)
-        self.redis_batch_writing_buffer.append((key, value))
-        if len(self.redis_batch_writing_buffer) >= self.redis_flush_size:
-            await self.flush_cache_buffer()  # logging done in here
+    async def batch_cache_write(self, key: str, value: object, scoped_ttl: int | None = None, **kwargs: object):
+        async with self._batch_flush_lock():
+            with self._batch_buffer_lock:
+                self.redis_batch_writing_buffer.append((key, value, scoped_ttl))
+                should_flush: Final = (
+                    scoped_ttl is not None or len(self.redis_batch_writing_buffer) >= self.redis_flush_size
+                )
+            if should_flush:
+                await self._flush_cache_buffer()
+
+    def _batch_flush_lock(self) -> asyncio.Lock:
+        loop_token: Final = running_loop_token()
+        with self._batch_buffer_lock:
+            lock: Final = self._batch_flush_locks.get(loop_token)
+            if lock is not None:
+                return lock
+            new_lock: Final = asyncio.Lock()
+            self._batch_flush_locks[loop_token] = new_lock
+            return new_lock
 
     @staticmethod
     async def _incrbyfloat_with_ttl(
@@ -1448,7 +1464,7 @@ class RedisCache(BaseCache):
     @_redis_circuit_breaker_guard
     async def async_increment(
         self,
-        key,
+        key: str,
         value: float,
         ttl: int | None = None,
         parent_otel_span: Span | None = None,
@@ -1591,9 +1607,23 @@ class RedisCache(BaseCache):
         return total
 
     async def flush_cache_buffer(self):
-        print_verbose(f"flushing to redis....reached size of buffer {len(self.redis_batch_writing_buffer)}")
-        await self.async_set_cache_pipeline(self.redis_batch_writing_buffer)
-        self.redis_batch_writing_buffer = []
+        async with self._batch_flush_lock():
+            await self._flush_cache_buffer()
+
+    async def _flush_cache_buffer(self) -> None:
+        with self._batch_buffer_lock:
+            entries: Final = tuple(self.redis_batch_writing_buffer)
+            self.redis_batch_writing_buffer.clear()
+        print_verbose(f"flushing to redis....reached size of buffer {len(entries)}")
+        try:
+            if any(ttl is not None for _, _, ttl in entries):
+                await self.async_set_cache_pipeline_with_ttls(entries)
+            else:
+                await self.async_set_cache_pipeline(tuple((key, value) for key, value, _ in entries))
+        except BaseException:
+            with self._batch_buffer_lock:
+                self.redis_batch_writing_buffer.extendleft(reversed(entries))
+            raise
 
     def _get_cache_logic(self, cached_response: bytes | str | None):
         """
@@ -1690,7 +1720,7 @@ class RedisCache(BaseCache):
             # 'results' is a list of values corresponding to the order of keys in '_key_list'.
             key_value_dict = dict(zip(_key_list, results))
 
-            decoded_results: Final = {}
+            decoded_results: Final[dict[str, object]] = {}
             for k, v in key_value_dict.items():
                 if isinstance(k, bytes):
                     k = k.decode("utf-8")
@@ -1801,7 +1831,7 @@ class RedisCache(BaseCache):
         start_time: Final = time.time()
         _key_list: Final = [key for key in key_list if key is not None]
         try:
-            _keys: Final = []
+            _keys: Final[list[str]] = []
             for cache_key in _key_list:
                 cache_key = self.check_and_fix_namespace(key=cache_key)
                 _keys.append(cache_key)
@@ -1825,7 +1855,7 @@ class RedisCache(BaseCache):
             # 'results' is a list of values corresponding to the order of keys in 'key_list'.
             key_value_dict = dict(zip(_key_list, results))
 
-            decoded_results: Final = {}
+            decoded_results: Final[dict[str, object]] = {}
             for k, v in key_value_dict.items():
                 if isinstance(k, bytes):
                     k = k.decode("utf-8")
@@ -1966,7 +1996,7 @@ class RedisCache(BaseCache):
         except Exception as e:
             verbose_logger.debug("Error closing sync Redis client: %s", e)
 
-    async def test_connection(self) -> dict:
+    async def test_connection(self) -> dict[str, str]:
         """
         Test the Redis connection by creating a new client and pinging it.
 

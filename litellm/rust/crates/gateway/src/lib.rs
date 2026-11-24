@@ -4,11 +4,13 @@ mod callbacks;
 mod config_sync;
 mod db;
 mod error;
+mod gateway_requests;
 mod health;
 pub mod host;
 mod license;
 mod live;
 pub mod middleware;
+mod periodic;
 mod redis;
 mod reload;
 mod resources;
@@ -23,7 +25,9 @@ pub use callbacks::{
     parallel_request_limiter::{self, KeyLimiter},
 };
 pub use error::Error;
+pub use gateway_requests::{Category, GatewayRequests};
 pub use live::{Live, Served};
+pub use periodic::PeriodicJob;
 pub use redis::RedisClients;
 pub use reload::{Poller, Source, reload_every};
 pub use resources::Resources;
@@ -46,6 +50,7 @@ use litellm_http::{
 };
 use litellm_model_catalog::{BUNDLED_REGISTRY, Catalog};
 use litellm_redis_store::{Remote, active_teams::ActiveTeams, rate_limits::RateLimits};
+use litellm_router_core::registry::DeploymentFilter;
 use litellm_secrets::{OidcResolver, SecretManagerState, SecretResolver};
 
 /// The config at `path`, its `os.environ/` references read from the process environment, with
@@ -111,6 +116,8 @@ pub(crate) async fn inference_over(
 ) -> Result<Inference, Error> {
     let catalog = Catalog::parse(BUNDLED_REGISTRY)?.value;
     let (router, shaping) = boot::router(config, &catalog).await?;
+    let deployments = router.registry().deployments(&DeploymentFilter::default());
+    let windows = host::ContextWindows::read(&catalog, &deployments).await;
     let limits = parallel_request_limiter::Settings::read(config, environment);
     let key_limiter = KeyLimiter::new(limits, counters.clone(), router.clone());
     let licensed = resources.environment.get(LICENSE).is_some();
@@ -135,7 +142,7 @@ pub(crate) async fn inference_over(
         router,
         shaping,
         routing,
-        host::NativeHost::new(Arc::new(callbacks)),
+        host::NativeHost::new(Arc::new(callbacks), Arc::new(windows)),
     )?;
     Ok(Inference {
         gateway: Arc::new(gateway),

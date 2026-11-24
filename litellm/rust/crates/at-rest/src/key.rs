@@ -7,6 +7,7 @@ use base64::engine::general_purpose::{STANDARD, URL_SAFE};
 use litellm_secret_value::SecretValue;
 use sha2::{Digest, Sha256};
 use veil::Redact;
+use zeroize::Zeroizing;
 
 use crate::{DecryptError, EncryptError, gcm, secretbox};
 
@@ -25,7 +26,7 @@ pub enum Algorithm {
 /// The 32-byte key both formats use, SHA-256 of the salt key as Python's `_derive_key` computes it. The caller
 /// picks the salt key, `LITELLM_SALT_KEY` when it is set and the master key otherwise
 #[derive(Clone, Redact)]
-pub struct AtRestKey(#[redact(with = "[REDACTED]")] [u8; 32]);
+pub struct AtRestKey(#[redact(with = "[REDACTED]")] Zeroizing<[u8; 32]>);
 
 /// A stored value read the way Python's `decrypt_value_helper(..., return_original_value=True)` reads it, where
 /// DB params mix ciphertexts with plain strings. `Original` keeps why decryption failed so the caller can report it
@@ -50,7 +51,9 @@ impl<'a> Plaintext<'a> {
 
 impl AtRestKey {
     pub fn from_salt_key(salt_key: &SecretValue) -> Self {
-        Self(Sha256::digest(salt_key.expose().as_bytes()).into())
+        let mut key = Zeroizing::new([0u8; 32]);
+        Sha256::new_with_prefix(salt_key.expose().as_bytes()).finalize_into(key.as_mut().into());
+        Self(key)
     }
 
     pub fn encrypt(&self, plaintext: &str, algorithm: Algorithm) -> Result<String, EncryptError> {

@@ -3,7 +3,6 @@ import time
 from collections.abc import Mapping
 from dataclasses import dataclass
 from functools import partial
-from ipaddress import IPv6Address, ip_address
 from typing import Annotated, Final
 from urllib.parse import urlencode, urlsplit
 
@@ -19,6 +18,7 @@ from litellm.integrations.lens.proxy.buffering import (
     LensRoute,
 )
 from litellm.integrations.lens.remote import LensConnection, bounded_response
+from litellm.litellm_core_utils.url_utils import is_local_host
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.authorization import OwnedRows, resolve_trace_read_scope
 from litellm.proxy.auth.authorization_dependencies import LogTeamLookupDependency
@@ -121,18 +121,6 @@ class ServiceConnection(BaseModel):
     browser_url: str = ""
 
 
-def _local_host(host: str) -> bool:
-    normalized: Final = host.removeprefix("[").removesuffix("]").rstrip(".").lower()
-    if normalized == "localhost" or normalized.endswith(".localhost"):
-        return True
-    try:
-        address: Final = ip_address(normalized)
-    except ValueError:
-        return False
-    effective: Final = address.ipv4_mapped if isinstance(address, IPv6Address) and address.ipv4_mapped else address
-    return effective.is_loopback or effective.is_unspecified
-
-
 def lens_browser_url(lens_url: str, gateway_url: str) -> str:
     try:
         target: Final = AnyHttpUrl(lens_url)
@@ -141,7 +129,7 @@ def lens_browser_url(lens_url: str, gateway_url: str) -> str:
             return ""
         if target.query or target.fragment:
             return ""
-        if _local_host(target.host or "") and not _local_host((gateway.host or "") if gateway else ""):
+        if is_local_host(target.host or "") and not is_local_host((gateway.host or "") if gateway else ""):
             return ""
         return lens_url.rstrip("/")
     except ValueError:

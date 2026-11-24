@@ -36,6 +36,7 @@ from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.litellm_core_utils.exception_mapping_utils import (
     add_key_name_and_team_to_alert,
 )
+from litellm.litellm_core_utils.secret_redaction import redact_string
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     get_async_httpx_client,
@@ -509,7 +510,7 @@ class SlackAlerting(CustomBatchLogger):
 
     async def response_taking_too_long(
         self,
-        request_data: dict | None = None,
+        request_data: dict[str, object] | None = None,
     ):
         if self.alerting is None or self.alert_types is None:
             return
@@ -1801,7 +1802,7 @@ Model Info:
 
     async def _run_scheduler_helper(
         self,
-        llm_router,
+        llm_router: Router,
         pod_lock_manager: "PodLockManager | None" = None,
     ) -> bool:
         """
@@ -1854,7 +1855,7 @@ Model Info:
 
     async def _run_scheduled_daily_report(
         self,
-        llm_router: object | None = None,
+        llm_router: Router | None = None,
         pod_lock_manager: "PodLockManager | None" = None,
     ):
         """
@@ -2136,7 +2137,7 @@ Model Info:
                 message += f"{key}: `{value}`\n"
 
             await self.send_alert(
-                message=message,
+                message=redact_string(message),
                 level="High",
                 alert_type=alert_type,
                 alerting_metadata={},

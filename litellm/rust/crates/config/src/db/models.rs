@@ -1,6 +1,12 @@
-//! The model list a `store_model_in_db` proxy serves, built on the config document before its
-//! `os.environ/` references are resolved, so a reference a decrypted row holds is resolved by the
-//! same walk as the file's.
+//! The model list a `store_model_in_db` proxy serves, built on the config document after its
+//! `os.environ/` references are resolved.
+//!
+//! A stored row does not go through that walk. Python reads a reference in a row only where
+//! `_resolve_db_litellm_param` does: a top-level string of `litellm_params`, unless the key holds a
+//! secret pointer. `model_name`, `model_info` and anything nested stay as stored, since a team
+//! admin can write `os.environ/` text there and the proxy must never read its own environment for
+//! it. So a row is merged only as a [`ResolvedModel`], which [`DbModel::resolve`] makes with exactly
+//! that scope, and stored credential values stay literal, as `decrypt_credentials` leaves them.
 //!
 //! It is what `ProxyConfig.add_deployment` leaves in Python's router after a reconcile. The file's
 //! models are set first, then each `LiteLLM_ProxyModelTable` row is upserted by its `model_id`
@@ -13,8 +19,9 @@
 //! the params already hold wins, and a credential row in the DB wins over the file's
 //! `credential_list` entry of the same name (`CredentialAccessor.upsert_credentials`).
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
+use litellm_router_types::holds_secret_pointer;
 use serde::Deserialize;
 use serde_yaml_ng::Mapping;
 use veil::Redact;
@@ -24,6 +31,7 @@ use crate::{Error, Object, Value};
 const MODEL_LIST: &str = "model_list";
 const CREDENTIAL_LIST: &str = "credential_list";
 const CREDENTIAL_NAME: &str = "litellm_credential_name";
+const ENVIRON_PREFIX: &str = "os.environ/";
 /// `CredentialAccessor.get_credential_values` never hands this value to a call.
 const WITHHELD_CREDENTIAL_VALUE: &str = "github_copilot_app_private_key";
 
@@ -36,6 +44,39 @@ pub struct DbModel {
     pub litellm_params: Object,
     pub model_info: Object,
     pub blocked: bool,
+}
+
+/// A stored row whose `litellm_params` references are read the way Python reads them, the only
+/// form [`merge`] takes a row in.
+#[derive(Clone, Debug)]
+pub struct ResolvedModel(DbModel);
+
+impl DbModel {
+    /// The row with each top-level `litellm_params` string that starts with `os.environ/` replaced
+    /// by what `read` returns for it, except under a key that holds a secret pointer. Nothing else
+    /// in the row is read. `read` gets the whole reference, `os.environ/` included.
+    pub async fn resolve<E, F, Fut>(self, mut read: F) -> Result<ResolvedModel, E>
+    where
+        F: FnMut(String) -> Fut,
+        Fut: Future<Output = Result<Value, E>>,
+    {
+        let mut litellm_params = BTreeMap::new();
+        for (key, value) in self.litellm_params.iter() {
+            let value = match value {
+                Value::String(text)
+                    if text.starts_with(ENVIRON_PREFIX) && !holds_secret_pointer(key) =>
+                {
+                    read(text.clone()).await?
+                }
+                value => value.clone(),
+            };
+            litellm_params.insert(key.clone(), value);
+        }
+        Ok(ResolvedModel(DbModel {
+            litellm_params: Object::from_fields(litellm_params),
+            ..self
+        }))
+    }
 }
 
 /// One `LiteLLM_CredentialsTable` row, its `credential_values` already decrypted.
@@ -67,12 +108,12 @@ struct FileCredential {
     credential_values: Object,
 }
 
-/// `document` (the config file with its includes merged, `os.environ/` not yet resolved) with
-/// `models` added to its `model_list` and every model's `litellm_credential_name` filled from
-/// `credentials` and the document's `credential_list`.
+/// `document` (the config file with its includes merged and its `os.environ/` references already
+/// resolved) with `models` added to its `model_list` and every model's `litellm_credential_name`
+/// filled from `credentials` and the document's `credential_list`.
 pub fn merge(
     document: Value,
-    models: impl IntoIterator<Item = DbModel>,
+    models: impl IntoIterator<Item = ResolvedModel>,
     credentials: impl IntoIterator<Item = DbCredential>,
 ) -> Result<Merged, Error> {
     let mut document: Mapping = match document {
@@ -84,7 +125,10 @@ pub fn merge(
         None | Some(Value::Null) => Vec::new(),
         Some(list) => serde_yaml_ng::from_value(list)?,
     };
-    let models: Vec<DbModel> = models.into_iter().collect();
+    let models: Vec<DbModel> = models
+        .into_iter()
+        .map(|ResolvedModel(model)| model)
+        .collect();
     let db_ids: HashSet<String> = models.iter().map(|model| model.model_id.clone()).collect();
     let mut missing_credentials = Vec::new();
     let model_list = written
@@ -226,8 +270,40 @@ mod tests {
         }
     }
 
+    /// What `read` hands back for each reference, as the config-load walk reads it from a test
+    /// environment holding `LITELLM_MASTER_KEY` and `B_KEY`.
+    async fn from_environment(reference: String) -> Result<Value, std::convert::Infallible> {
+        Ok(match reference.strip_prefix(ENVIRON_PREFIX) {
+            Some("LITELLM_MASTER_KEY") => Value::from("sk-master"),
+            Some("B_KEY") => Value::from("b-from-env"),
+            _ => Value::Null,
+        })
+    }
+
+    /// Polls a future that never waits, which every `read` in these tests is.
+    fn now<T>(future: impl Future<Output = T>) -> T {
+        let mut future = std::pin::pin!(future);
+        let mut context = std::task::Context::from_waker(std::task::Waker::noop());
+        match future.as_mut().poll(&mut context) {
+            std::task::Poll::Ready(value) => value,
+            std::task::Poll::Pending => panic!("a test read never waits"),
+        }
+    }
+
+    fn resolved(model: DbModel) -> ResolvedModel {
+        let Ok(model) = now(model.resolve(from_environment));
+        model
+    }
+
     fn model_list(document: &str, models: Vec<DbModel>, credentials: Vec<DbCredential>) -> Value {
-        merge(yaml(document), models, credentials).unwrap().document[MODEL_LIST].clone()
+        merge(
+            yaml(document),
+            models.into_iter().map(resolved),
+            credentials,
+        )
+        .unwrap()
+        .document[MODEL_LIST]
+            .clone()
     }
 
     #[rstest]
@@ -239,7 +315,7 @@ mod tests {
     #[case::db_only(
         "general_settings: {store_model_in_db: true}\n",
         vec![db_model("db-1", "b", "{model: openai/b, api_key: os.environ/B_KEY}", "{}")],
-        "- model_name: b\n  litellm_params: {model: openai/b, api_key: os.environ/B_KEY}\n  model_info: {id: db-1, db_model: true, blocked: false}\n"
+        "- model_name: b\n  litellm_params: {model: openai/b, api_key: b-from-env}\n  model_info: {id: db-1, db_model: true, blocked: false}\n"
     )]
     #[case::db_models_follow_file_models(
         "model_list:\n- model_name: a\n  litellm_params: {model: openai/a}\n",
@@ -293,7 +369,7 @@ mod tests {
     fn the_merged_document_reads_as_a_config() {
         let merged = merge(
             yaml(NAMED),
-            vec![db_model("db-1", "b", "{model: openai/b}", "{}")],
+            vec![resolved(db_model("db-1", "b", "{model: openai/b}", "{}"))],
             vec![db_credential("shared", "{api_key: db-key}")],
         )
         .unwrap();
@@ -474,7 +550,7 @@ mod tests {
                 credential_name: row.credential_name,
                 credential_values: row.credential_values,
             });
-        let merged = merge(fixture.input.file, models, credentials).unwrap();
+        let merged = merge(fixture.input.file, models.map(resolved), credentials).unwrap();
         let recorded: Vec<serde_json::Value> = merged.document[MODEL_LIST]
             .as_sequence()
             .unwrap()
@@ -482,6 +558,125 @@ mod tests {
             .map(as_recorded)
             .collect();
         assert_eq!(serde_json::Value::from(recorded), fixture.expected);
+    }
+
+    #[rstest]
+    #[case::top_level_param(
+        "os.environ/LITELLM_MASTER_KEY",
+        "{model: openai/a, api_key: os.environ/B_KEY}",
+        "{}",
+        "- model_name: os.environ/LITELLM_MASTER_KEY\n  litellm_params: {model: openai/a, api_key: b-from-env}\n  model_info: {id: db-1, db_model: true, blocked: false}\n"
+    )]
+    #[case::unset_top_level_param_is_null(
+        "a",
+        "{model: openai/a, api_base: os.environ/UNSET}",
+        "{}",
+        "- model_name: a\n  litellm_params: {model: openai/a, api_base: null}\n  model_info: {id: db-1, db_model: true, blocked: false}\n"
+    )]
+    #[case::model_info_and_nested_params_stay_literal(
+        "a",
+        "{model: openai/a, litellm_metadata: {nested: os.environ/LITELLM_MASTER_KEY}, tags: [os.environ/LITELLM_MASTER_KEY]}",
+        "{team_public_model_name: os.environ/LITELLM_MASTER_KEY, nested: {value: os.environ/LITELLM_MASTER_KEY}}",
+        "- model_name: a\n  litellm_params: {model: openai/a, litellm_metadata: {nested: os.environ/LITELLM_MASTER_KEY}, tags: [os.environ/LITELLM_MASTER_KEY]}\n  model_info: {team_public_model_name: os.environ/LITELLM_MASTER_KEY, nested: {value: os.environ/LITELLM_MASTER_KEY}, id: db-1, db_model: true, blocked: false}\n"
+    )]
+    #[case::secret_pointer_stays_literal(
+        "a",
+        "{model: openai/a, anthropic_issuer_signing_key_ref: os.environ/LITELLM_MASTER_KEY}",
+        "{}",
+        "- model_name: a\n  litellm_params: {model: openai/a, anthropic_issuer_signing_key_ref: os.environ/LITELLM_MASTER_KEY}\n  model_info: {id: db-1, db_model: true, blocked: false}\n"
+    )]
+    fn a_stored_row_reads_only_its_top_level_params_from_the_environment(
+        #[case] model_name: &str,
+        #[case] params: &str,
+        #[case] model_info: &str,
+        #[case] expected: &str,
+    ) {
+        let models = vec![db_model("db-1", model_name, params, model_info)];
+        assert_eq!(model_list("{}", models, vec![]), yaml(expected));
+    }
+
+    #[rstest]
+    fn a_stored_credential_value_stays_literal() {
+        let models = vec![db_model(
+            "db-1",
+            "a",
+            "{model: openai/a, litellm_credential_name: shared}",
+            "{}",
+        )];
+        let credentials = vec![db_credential(
+            "shared",
+            "{api_key: os.environ/LITELLM_MASTER_KEY}",
+        )];
+        assert_eq!(
+            model_list("{}", models, credentials)[0]["litellm_params"],
+            yaml(
+                "{model: openai/a, litellm_credential_name: shared, api_key: os.environ/LITELLM_MASTER_KEY}"
+            )
+        );
+    }
+
+    #[derive(Deserialize)]
+    struct PythonEnvironRead {
+        environment: HashMap<String, String>,
+        row: PythonModelRow,
+        router_holds: PythonDeployment,
+    }
+
+    #[derive(Deserialize)]
+    struct PythonDeployment {
+        model_name: String,
+        litellm_params: Object,
+        model_info: Object,
+    }
+
+    #[rstest]
+    fn a_stored_row_reads_the_environment_where_python_does() {
+        let fixture: PythonEnvironRead =
+            serde_json::from_str(include_str!("../../fixtures/db_model_environ_python.json"))
+                .unwrap();
+        let environment = fixture.environment;
+        let read = |reference: String| {
+            let value = reference
+                .strip_prefix(ENVIRON_PREFIX)
+                .and_then(|name| environment.get(name))
+                .map_or(Value::Null, |value| Value::from(value.as_str()));
+            std::future::ready(Ok::<_, std::convert::Infallible>(value))
+        };
+        let row = fixture.row;
+        let model = DbModel {
+            model_id: row.model_id,
+            model_name: row.model_name,
+            litellm_params: row.litellm_params,
+            model_info: row.model_info,
+            blocked: row.blocked,
+        };
+        let Ok(model) = now(model.resolve(read));
+
+        let merged = merge(yaml("{}"), [model], vec![]).unwrap();
+
+        let entry = &merged.document[MODEL_LIST][0];
+        assert_eq!(
+            entry["model_name"],
+            Value::from(fixture.router_holds.model_name.as_str())
+        );
+        let held = |section: &str, expected: &Object| -> Vec<(String, Value, Value)> {
+            expected
+                .iter()
+                .map(|(key, value)| {
+                    (
+                        key.clone(),
+                        entry[section][key.as_str()].clone(),
+                        value.clone(),
+                    )
+                })
+                .filter(|(_, ours, python)| ours != python)
+                .collect()
+        };
+        assert_eq!(
+            held("litellm_params", &fixture.router_holds.litellm_params),
+            vec![]
+        );
+        assert_eq!(held("model_info", &fixture.router_holds.model_info), vec![]);
     }
 
     #[rstest]

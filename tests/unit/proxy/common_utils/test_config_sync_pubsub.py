@@ -1186,8 +1186,9 @@ async def test_proxy_config_subscriber_applies_published_model_ids_from_the_db(
     router.registry.return_value.deployments.return_value = ["deployment"]
     installed: List[object] = []
 
-    def install(db_models: object) -> None:
+    def install(db_models: object) -> int:
         installed.append(db_models)
+        return 0
 
     monkeypatch.setattr(proxy_server, "prisma_client", prisma_client)
     monkeypatch.setattr(proxy_server, "store_model_in_db", True)

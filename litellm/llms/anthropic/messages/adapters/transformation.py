@@ -79,14 +79,14 @@ def _server_tool_blocks(message: object) -> tuple[Mapping[str, object], ...]:
 
 def _compaction_blocks(provider_specific_fields: object) -> tuple[Mapping[str, object], ...]:
     fields: Final = _as_string_mapping(provider_specific_fields)
-    raw_blocks: Final = fields.get("compaction_blocks") if fields is not None else None
+    raw_blocks: Final = _object_sequence(fields.get("compaction_blocks") if fields is not None else None)
     return (
         tuple(
             block
             for raw_block in raw_blocks
             if (block := _as_string_mapping(raw_block)) is not None and block.get("type") == "compaction"
         )
-        if isinstance(raw_blocks, (list, tuple))
+        if raw_blocks is not None
         else ()
     )
 
@@ -561,8 +561,11 @@ class LiteLLMAnthropicMessagesAdapter:
             model: Model name to check if cache_control should be preserved
         """
         # TypedDict objects are dicts at runtime, so .get() works
+        source_mapping: Final = as_str_mapping(source)
         cache_control: Final = (
-            source.get("cache_control") if isinstance(source, dict) else getattr(source, "cache_control", None)
+            source_mapping.get("cache_control")
+            if isinstance(source_mapping, dict)
+            else getattr(source, "cache_control", None)
         )
         if cache_control and (self.keep_cache_control or (model and self.target_consumes_cache_control(model))):
             # TypedDict objects support dict operations at runtime
@@ -575,8 +578,9 @@ class LiteLLMAnthropicMessagesAdapter:
 
     @staticmethod
     def _add_prompt_cache_breakpoint_if_present(source: object, target: _BlockT) -> _BlockT:
-        if isinstance(source, dict) and "prompt_cache_breakpoint" in source:
-            return with_prompt_cache_breakpoint(target, source["prompt_cache_breakpoint"])
+        source_mapping: Final = as_str_mapping(source)
+        if isinstance(source_mapping, dict) and "prompt_cache_breakpoint" in source_mapping:
+            return with_prompt_cache_breakpoint(target, source_mapping["prompt_cache_breakpoint"])
         return target
 
     def translatable_anthropic_params(self) -> list[str]:
@@ -1684,9 +1688,10 @@ class LiteLLMAnthropicMessagesAdapter:
         if prompt_tokens_details is None:
             return 0
 
+        details_mapping: Final = as_str_mapping(prompt_tokens_details)
         for field_name in field_names:
-            if isinstance(prompt_tokens_details, dict):
-                value = cls._positive_int(prompt_tokens_details.get(field_name))
+            if isinstance(details_mapping, dict):
+                value = cls._positive_int(details_mapping.get(field_name))
             else:
                 value = cls._positive_int(_optional_attr(prompt_tokens_details, field_name))
             if value > 0:

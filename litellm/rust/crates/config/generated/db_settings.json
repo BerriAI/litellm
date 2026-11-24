@@ -261,6 +261,101 @@
     {
       "file": {
         "general_settings": {
+          "forward_llm_provider_auth_headers": false,
+          "master_key": "sk-file"
+        }
+      },
+      "merged": {
+        "general_settings": {
+          "forward_client_headers_to_llm_api": true,
+          "forward_llm_provider_auth_headers": false,
+          "master_key": "sk-file",
+          "max_parallel_requests": 5,
+          "team_admin_editable_team_fields": [
+            "team_alias"
+          ]
+        }
+      },
+      "name": "ui_settings_object",
+      "rows": {
+        "general_settings": {
+          "disable_custom_api_keys": true,
+          "forward_client_headers_to_llm_api": false,
+          "max_parallel_requests": 5
+        },
+        "ui_settings": {
+          "disable_model_add_for_internal_users": null,
+          "enable_chat_ui": true,
+          "forward_client_headers_to_llm_api": true,
+          "forward_llm_provider_auth_headers": true,
+          "team_admin_editable_team_fields": [
+            "team_alias"
+          ],
+          "usage_default_time_range": "7d"
+        }
+      },
+      "shadowed": [
+        [
+          "general_settings",
+          "forward_llm_provider_auth_headers"
+        ]
+      ]
+    },
+    {
+      "file": {
+        "model_list": []
+      },
+      "merged": {
+        "general_settings": {
+          "forward_client_headers_to_llm_api": true
+        },
+        "model_list": []
+      },
+      "name": "ui_settings_json_text",
+      "rows": {
+        "ui_settings": "{\"forward_client_headers_to_llm_api\": true, \"disable_aria\": true}"
+      },
+      "shadowed": []
+    },
+    {
+      "file": {
+        "general_settings": {
+          "master_key": "sk-file"
+        }
+      },
+      "merged": {
+        "general_settings": {
+          "master_key": "sk-file"
+        }
+      },
+      "name": "ui_settings_unreadable",
+      "rows": {
+        "ui_settings": "not json"
+      },
+      "shadowed": []
+    },
+    {
+      "file": {
+        "general_settings": {
+          "master_key": "sk-file"
+        }
+      },
+      "merged": {
+        "general_settings": {
+          "master_key": "sk-file"
+        }
+      },
+      "name": "ui_settings_not_an_object",
+      "rows": {
+        "ui_settings": [
+          "forward_client_headers_to_llm_api"
+        ]
+      },
+      "shadowed": []
+    },
+    {
+      "file": {
+        "general_settings": {
           "master_key": "sk-file"
         },
         "litellm_settings": null
@@ -336,11 +431,13 @@
       "global_max_parallel_requests",
       "health_check_concurrency",
       "health_check_interval",
+      "health_check_skip_blocked_background_models",
       "health_check_skip_disabled_background_models",
       "include_call_id_in_error_body",
       "infer_model_from_keys",
       "key_expiry_alert_days",
       "key_management_system",
+      "ldap_sync",
       "master_key",
       "max_batch_file_records",
       "max_batch_file_size_mb",
@@ -371,6 +468,12 @@
       "mcp_allowed_clients",
       "mcp_client_id_header",
       "mcp_disabled_capabilities",
+      "mcp_event_max_events_per_minute",
+      "mcp_event_max_streams",
+      "mcp_event_max_streams_per_caller",
+      "mcp_event_max_subscriptions_per_key",
+      "mcp_events_enabled",
+      "mcp_events_public_base_url",
       "mcp_internal_ip_ranges",
       "mcp_prefer_client_id_metadata_document",
       "mcp_require_explicit_server_scope",

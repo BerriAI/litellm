@@ -9,11 +9,9 @@
 
 import os
 import sys
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 import sys
 from typing import Literal, Optional
 
@@ -47,11 +45,9 @@ class _ENTERPRISE_LlamaGuard(CustomLogger):
 
         self.unsafe_content_categories = data
 
-        verbose_proxy_logger.debug(
-            f"self.unsafe_content_categories: {self.unsafe_content_categories}"
-        )
+        verbose_proxy_logger.debug(f"self.unsafe_content_categories: {self.unsafe_content_categories}")
 
-    def print_verbose(self, print_statement):
+    def print_verbose(self, print_statement: object):
         try:
             verbose_proxy_logger.debug(print_statement)
             if litellm.set_verbose:
@@ -59,7 +55,7 @@ class _ENTERPRISE_LlamaGuard(CustomLogger):
         except Exception:
             pass
 
-    def set_custom_prompt_template(self, messages: list):
+    def set_custom_prompt_template(self, messages: Sequence[object]):
         if self.unsafe_content_categories is not None and self.model is not None:
             role = "Agent" if len(messages) % 2 == 0 else "User"
             litellm.register_prompt_template(
@@ -107,9 +103,7 @@ class _ENTERPRISE_LlamaGuard(CustomLogger):
         The llama guard prompt template is applied automatically in factory.py
         """
         if "messages" in data:
-            safety_check_messages = data["messages"][
-                -1
-            ]  # get the last response - llama guard has a 4k token limit
+            safety_check_messages = data["messages"][-1]  # get the last response - llama guard has a 4k token limit
             response = await litellm.acompletion(
                 model=self.model,
                 messages=[safety_check_messages],
@@ -123,8 +117,6 @@ class _ENTERPRISE_LlamaGuard(CustomLogger):
                 and isinstance(response.choices[0].message.content, Iterable)
                 and "unsafe" in response.choices[0].message.content
             ):
-                raise HTTPException(
-                    status_code=400, detail={"error": "Violated content safety policy"}
-                )
+                raise HTTPException(status_code=400, detail={"error": "Violated content safety policy"})
 
         return data
