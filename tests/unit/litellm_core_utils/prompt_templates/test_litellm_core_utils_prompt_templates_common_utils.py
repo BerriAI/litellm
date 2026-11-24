@@ -6,7 +6,7 @@ import logging
 import os
 import sys
 import tracemalloc
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import Final, cast
 
 import pytest
@@ -41,11 +41,13 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     schema_property_count,
     split_concatenated_json_objects,
     strip_encrypted_reasoning_from_messages,
+    strip_litellm_internal_message_fields,
     strip_litellm_response_only_fields,
     system_messages_first,
     update_messages_with_model_file_ids,
     with_prompt_cache_breakpoint,
 )
+from litellm.types.llms.openai import AllMessageValues
 
 _ARTIFACT_FIELD_PATTERN: Final = r'^(?!__.*__$)[^\p{Cc}\p{Cf}\p{Zl}\p{Zp}"\\./[\]]{1,200}$'
 _ARTIFACT_DATA_ID_PATTERN: Final = r"^(?!\.\.?(?:\/|$))[A-Za-z0-9_\-.~:@+]{1,200}$"
@@ -2372,6 +2374,25 @@ def test_strip_litellm_response_only_fields_drops_nested_tool_call_provider_fiel
     assert "provider_specific_fields" not in function
     assert function["name"] == "get_weather"
     assert function["arguments"] == '{"city": "Paris"}'
+
+
+@pytest.mark.parametrize("strip", [strip_litellm_response_only_fields, strip_litellm_internal_message_fields])
+def test_strip_litellm_fields_drops_generated_image_provider_fields(
+    strip: Callable[[AllMessageValues], AllMessageValues],
+) -> None:
+    image: Final = {"image_url": {"url": "data:image/png;base64,Y2F0"}, "index": 0, "type": "image_url"}
+    unsigned_image: Final = {"image_url": {"url": "data:image/png;base64,ZG9n"}, "index": 1, "type": "image_url"}
+    message: Final = cast(
+        AllMessageValues,
+        {
+            "role": "assistant",
+            "content": "Here is your cat.",
+            "images": [{**image, "provider_specific_fields": {"thought_signature": "sig-cat"}}, unsigned_image],
+            "provider_specific_fields": {"thought_signatures": ["sig-cat"]},
+        },
+    )
+
+    assert strip(message) == {"role": "assistant", "content": "Here is your cat.", "images": [image, unsigned_image]}
 
 
 @pytest.mark.parametrize(

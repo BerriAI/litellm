@@ -26,8 +26,12 @@ from litellm.llms.azure_ai.common_utils import (
     OPENAI_V1_PATH,
     AzureFoundryModelInfo,
     api_key_header_for_base,
+    foundry_project_root,
+    foundry_v1_root,
     is_foundry_model_inference_base,
     is_openai_v1_resource_base,
+    with_foundry_project_scope,
+    without_api_version,
 )
 from litellm.llms.base_llm.chat.transformation import LiteLLMLoggingObj
 from litellm.llms.fireworks_ai.common_utils import AZURE_FOUNDRY_FIREWORKS_MODEL_ID_PREFIX
@@ -301,7 +305,9 @@ class AzureAIStudioConfig(OpenAIConfig):
                 headers["Authorization"] = f"Bearer {api_key}"
         else:
             # No api_key provided — fall back to Azure AD token-based auth
-            litellm_params_obj = GenericLiteLLMParams(**(litellm_params if isinstance(litellm_params, dict) else {}))
+            litellm_params_obj: Final = with_foundry_project_scope(
+                GenericLiteLLMParams(**(litellm_params if isinstance(litellm_params, dict) else {})), api_base
+            )
             headers = BaseAzureLLM.base_validate_azure_environment(headers=headers, litellm_params=litellm_params_obj)
 
         headers["Content-Type"] = "application/json"
@@ -312,7 +318,7 @@ class AzureAIStudioConfig(OpenAIConfig):
         """
         Returns True if the request should use `api-key` header for authentication.
         """
-        return api_key_header_for_base(api_base) == "api-key"
+        return api_key_header_for_base(api_base) == "api-key" and not foundry_project_root(httpx.URL(api_base))
 
     def get_complete_url(
         self,
@@ -356,24 +362,28 @@ class AzureAIStudioConfig(OpenAIConfig):
             query_params["api-version"] = api_version
 
         requested_api_version: Final = query_params.get("api-version")
-        if is_openai_v1_resource_base(original_url):
+        resource_base: Final = is_openai_v1_resource_base(original_url)
+        if (
+            resource_base
+            and requested_api_version is not None
+            and not BaseAzureLLM.is_azure_v1_api_version(requested_api_version)
+        ):
             deployment: Final = AzureFoundryModelInfo.get_base_model(model)
-            dated_version: Final = requested_api_version is not None and not BaseAzureLLM.is_azure_v1_api_version(
-                requested_api_version
-            )
-            if dated_version and not _is_plain_path_segment(deployment):
+            if not _is_plain_path_segment(deployment):
                 raise BadRequestError(
                     message=f"azure_ai deployment name {deployment!r} must be one URL path segment made of letters, "
                     "digits, '-', '_', '.', or '~'",
                     model=model,
                     llm_provider="azure_ai",
                 )
-            resource_path: Final = (
-                ("openai", "deployments", deployment, *CHAT_COMPLETIONS_PATH)
-                if dated_version
-                else (*OPENAI_V1_PATH, *CHAT_COMPLETIONS_PATH)
-            )
-            return str(original_url.copy_with(path="/" + "/".join(resource_path), params=query_params))
+            deployment_chat_path: Final = "/" + "/".join(("openai", "deployments", deployment, *CHAT_COMPLETIONS_PATH))
+            return str(original_url.copy_with(path=deployment_chat_path, params=query_params))
+        v1_root: Final = foundry_v1_root(original_url) or (OPENAI_V1_PATH if resource_base else None)
+        if v1_root is not None:
+            v1_chat_path: Final = "/" + "/".join((*v1_root, *CHAT_COMPLETIONS_PATH))
+            if foundry_project_root(original_url):
+                return str(original_url.copy_with(path=v1_chat_path, params=without_api_version(original_url)))
+            return str(original_url.copy_with(path=v1_chat_path, params=query_params))
 
         # Add the path to the base URL
         if "services.ai.azure.com" in api_base:

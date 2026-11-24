@@ -391,6 +391,51 @@ def detect_first_expected_role(
     return None
 
 
+_TEXT_BLOCK_TYPES: Final = frozenset({"text", "input_text"})
+
+
+def _is_blank_text_block(block: object) -> bool:
+    fields: Final = as_str_mapping(block)
+    return fields is not None and fields.get("type") in _TEXT_BLOCK_TYPES and not fields.get("text")
+
+
+def is_blank_content(content: object) -> bool:
+    if content is None or content == "":
+        return True
+    blocks: Final = as_object_list(content)
+    return blocks is not None and all(map(_is_blank_text_block, blocks))
+
+
+def is_empty_user_message(message: object) -> bool:
+    mapping: Final = as_str_mapping(message)
+    if mapping is not None:
+        return mapping.get("role") == "user" and is_blank_content(mapping.get("content"))
+    return getattr(message, "role", None) == "user" and is_blank_content(getattr(message, "content", None))
+
+
+def _is_whitespace_text(text: object) -> bool:
+    return not text or (isinstance(text, str) and not text.strip())
+
+
+def _is_whitespace_text_block(block: object) -> bool:
+    fields: Final = as_str_mapping(block)
+    return fields is not None and fields.get("type") in _TEXT_BLOCK_TYPES and _is_whitespace_text(fields.get("text"))
+
+
+def _is_whitespace_content(content: object) -> bool:
+    if content is None or isinstance(content, str):
+        return _is_whitespace_text(content)
+    blocks: Final = as_object_list(content)
+    return blocks is not None and all(map(_is_whitespace_text_block, blocks))
+
+
+def is_whitespace_user_message(message: object) -> bool:
+    mapping: Final = as_str_mapping(message)
+    if mapping is not None:
+        return mapping.get("role") == "user" and _is_whitespace_content(mapping.get("content"))
+    return getattr(message, "role", None) == "user" and _is_whitespace_content(getattr(message, "content", None))
+
+
 def _counts_for_alternation(message: AllMessageValues) -> bool:
     role: Final = message.get("role")
     if role == "user":
@@ -424,7 +469,7 @@ def _insert_user_continue_message(
     # Handle first message if it's an assistant message — always prepend
     # user_continue regardless of tool_calls, to preserve backward compatibility.
     if result_messages[0]["role"] == "assistant":
-        result_messages.insert(0, continue_message)
+        result_messages.insert(0, continue_message.copy())
 
     # Handle consecutive assistant messages in the counted sequence
     i = 1
@@ -435,7 +480,7 @@ def _insert_user_continue_message(
             # Preserve old behavior for malformed adjacent assistant sequences like
             # assistant(tool_calls) -> assistant(no-tool-calls) with no tool message.
             if i > 0 and result_messages[i - 1].get("role") == "assistant":
-                result_messages.insert(i, continue_message)
+                result_messages.insert(i, continue_message.copy())
                 i += 2
                 inserted_continue_message = True
             else:
@@ -444,7 +489,7 @@ def _insert_user_continue_message(
                     previous_message = result_messages[j]
                     if _counts_for_alternation(previous_message):
                         if previous_message["role"] == "assistant":
-                            result_messages.insert(i, continue_message)
+                            result_messages.insert(i, continue_message.copy())
                             i += 2
                             inserted_continue_message = True
                         break
@@ -455,7 +500,7 @@ def _insert_user_continue_message(
     # Handle final message — append user_continue after any trailing assistant,
     # including ones with tool_calls, to preserve backward compatibility.
     if result_messages[-1]["role"] == "assistant" and ensure_alternating_roles:
-        result_messages.append(continue_message)
+        result_messages.append(continue_message.copy())
 
     return result_messages
 
@@ -495,7 +540,7 @@ def _insert_assistant_continue_message(
     modified_messages: Final[list[AllMessageValues]] = []
     for i, message in enumerate(messages):
         if i in insert_before_indexes:
-            modified_messages.append(continue_message)
+            modified_messages.append(continue_message.copy())
         modified_messages.append(message)
 
     return modified_messages
@@ -1811,6 +1856,20 @@ def get_image_mime_type_from_url(url: str) -> str | None:
 _get_image_mime_type_from_url = get_image_mime_type_from_url
 
 
+_MP4_VIDEO_BRANDS: Final = frozenset(
+    (b"isom", b"iso2", b"iso4", b"iso5", b"iso6", b"mp41", b"mp42", b"avc1", b"M4V ", b"dash", b"XAVC", b"MSNV")
+)
+
+
+def _sniffed_video_mime(content: bytes) -> str | None:
+    if content[4:8] != b"ftyp":
+        return None
+    brand: Final = content[8:12]
+    if brand == b"qt  ":
+        return "video/mov"
+    return "video/mp4" if brand in _MP4_VIDEO_BRANDS else None
+
+
 def infer_content_type_from_url_and_content(
     url: str,
     content: bytes,
@@ -1869,6 +1928,15 @@ def infer_content_type_from_url_and_content(
         "png": "image/png",
         "gif": "image/gif",
         "webp": "image/webp",
+        # Video formats
+        "mp4": "video/mp4",
+        "mov": "video/mov",
+        "webm": "video/webm",
+        "mpeg": "video/mpeg",
+        "mpg": "video/mpeg",
+        "avi": "video/avi",
+        "wmv": "video/wmv",
+        "flv": "video/flv",
         # Document formats
         "pdf": "application/pdf",
         "csv": "text/csv",
@@ -1889,6 +1957,9 @@ def infer_content_type_from_url_and_content(
             return inferred_type
 
     # Try to detect from binary content signature (magic bytes)
+    video_type: Final = _sniffed_video_mime(content)
+    if video_type:
+        return video_type
     if content:
         detected_type: Final = get_image_type(content[:100])
         if detected_type:
@@ -2073,19 +2144,31 @@ def _tool_call_without_provider_specific_fields(tool_call: object) -> object:
     }
 
 
+def _image_without_provider_specific_fields(image: object) -> object:
+    fields: Final = as_str_mapping(image)
+    if fields is None or "provider_specific_fields" not in fields:
+        return image
+    return {key: value for key, value in fields.items() if key != "provider_specific_fields"}
+
+
 def _message_without_fields(message: AllMessageValues, dropped: frozenset[str]) -> AllMessageValues:
-    kept: Final = {key: value for key, value in message.items() if key not in dropped}
-    tool_calls: Final = message.get("tool_calls")
-    if not isinstance(tool_calls, list):
-        return cast(AllMessageValues, kept)  # cast-ok: same TypedDict minus dropped keys
-    return cast(  # cast-ok: same TypedDict minus dropped keys, tool calls minus their provider_specific_fields
+    kept: Final[Mapping[str, object]] = {key: value for key, value in message.items() if key not in dropped}
+    tool_calls: Final = as_object_list(kept.get("tool_calls"))
+    images: Final = as_object_list(kept.get("images"))
+    return cast(  # cast-ok: same TypedDict minus dropped keys and nested provider_specific_fields
         AllMessageValues,
         {
             **kept,
-            "tool_calls": [
-                _tool_call_without_provider_specific_fields(tool_call)
-                for tool_call in cast(list[object], tool_calls)  # cast-ok: untyped JSON tool calls
-            ],
+            **(
+                {"tool_calls": [_tool_call_without_provider_specific_fields(tool_call) for tool_call in tool_calls]}
+                if tool_calls is not None
+                else {}
+            ),
+            **(
+                {"images": [_image_without_provider_specific_fields(image) for image in images]}
+                if images is not None
+                else {}
+            ),
         },
     )
 

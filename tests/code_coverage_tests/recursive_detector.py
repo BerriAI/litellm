@@ -34,6 +34,7 @@ IGNORE_FUNCTIONS = [
     "_contains_vision_content",  # max depth set.
     "_read_all_bytes",  # max depth set.
     "_fix_enum_types",  # max depth set.
+    "_pin_scalar_consts",  # max depth set (DEFAULT_MAX_RECURSE_DEPTH); leaves the subtree past the cap untouched.
     "_collect_argument_paths",  # max depth set.
     "_split_text",  # max depth set.
     "_mask_sequence",  # max depth set.

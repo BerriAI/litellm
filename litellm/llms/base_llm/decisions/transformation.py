@@ -8,6 +8,7 @@ from typing import Final
 
 import httpx
 from pydantic import TypeAdapter, ValidationError
+from pydantic_core import ErrorDetails
 from typing_extensions import assert_never
 
 import litellm
@@ -398,12 +399,14 @@ def _ir_answer(question: DecisionsIRQuestion, answer: DecisionAnswer | None) -> 
 
 
 def systemone_response_to_ir(response: DecisionsResponse, request: DecisionsIRRequest) -> DecisionsIRResponse:
-    usage: Final = response.usage or DecisionsUsage()
+    usage: Final = response.usage
     keyed_questions: Final = zip(systemone_keys(request.questions), request.questions, strict=True)
     return DecisionsIRResponse(
         model=response.model,
         answers=tuple(_ir_answer(question, response.answers.get(key)) for key, question in keyed_questions),
-        usage=DecisionsIRUsage(
+        usage=None
+        if usage is None
+        else DecisionsIRUsage(
             input_tokens=usage.input_tokens,
             output_tokens=usage.output_tokens,
             cached_tokens=usage.cached_tokens,
@@ -412,6 +415,19 @@ def systemone_response_to_ir(response: DecisionsResponse, request: DecisionsIRRe
         ),
         extra=MappingProxyType(response.model_extra or {}),
     )
+
+
+def _validation_detail(detail: ErrorDetails) -> str:
+    location: Final = ".".join(str(part) for part in detail["loc"])
+    return f"{location}: {detail['msg']}" if location else detail["msg"]
+
+
+def _validation_summary(error: ValidationError) -> str:
+    return "; ".join(_validation_detail(detail) for detail in error.errors(include_url=False, include_input=False))
+
+
+class DecisionsResponseValidationError(BaseLLMException):
+    pass
 
 
 def _lacks_confidence(answer: DecisionsIRAnswer) -> bool:
@@ -468,7 +484,9 @@ def ir_to_systemone_response(response: DecisionsIRResponse, request: DecisionsIR
             **response.extra,
             "model": response.model,
             "answers": {key: answer for key, answer in keyed_answers if answer is not None},
-            "usage": DecisionsUsage.model_validate(
+            "usage": None
+            if response.usage is None
+            else DecisionsUsage.model_validate(
                 {
                     **response.usage.extra,
                     "input_tokens": response.usage.input_tokens,
@@ -490,7 +508,7 @@ def _is_decisions_model(model: str, custom_llm_provider: str) -> bool:
 
 
 def usage_reported_cost(response: DecisionsIRResponse) -> float | None:
-    cost: Final = response.usage.extra.get("cost")
+    cost: Final = response.usage.extra.get("cost") if response.usage is not None else None
     if not isinstance(cost, (int, float)):
         return None
     return float(cost)
@@ -535,7 +553,11 @@ class BaseDecisionsConfig(ABC):
     def resolve_api_key(self, api_key: str | None) -> str | None:
         return api_key or self._first_secret(self.api_key_env)
 
+    def validate_client_connection(self, api_base: str | None, api_key: str | None) -> None:
+        return
+
     def resolve_connection(self, api_base: str | None, api_key: str | None) -> tuple[str | None, str | None]:
+        self.validate_client_connection(api_base, api_key)
         return self.resolve_api_base(api_base), self.resolve_api_key(api_key)
 
     def resolve_credential(
@@ -654,12 +676,13 @@ class BaseDecisionsConfig(ABC):
         try:
             response: Final = self.parse_response(payload, request)
         except ValidationError as error:
-            raise BaseLLMException(
+            raise DecisionsResponseValidationError(
                 status_code=500,
-                message=f"Decisions provider '{custom_llm_provider}' returned an unexpected response: {error}",
+                message=f"Decisions provider '{custom_llm_provider}' returned an unexpected response: "
+                f"{error.title} {_validation_summary(error)}",
             ) from error
         if not self.confidence_optional and any(_lacks_confidence(answer) for answer in response.answers):
-            raise BaseLLMException(
+            raise DecisionsResponseValidationError(
                 status_code=500,
                 message=f"Decisions provider '{custom_llm_provider}' returned an unexpected response: "
                 "a choice or score answer has no confidence",

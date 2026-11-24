@@ -69,6 +69,7 @@ from litellm.constants import (
     DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
     DEFAULT_TRIM_RATIO,
     FUNCTION_DEFINITION_TOKEN_COUNT,
+    GNANI_REJECTED_OPENAI_TRANSCRIPTION_PARAMS,
     HF_CONFIG_FETCH_TIMEOUT_SECONDS,
     INITIAL_RETRY_DELAY,
     JITTER,
@@ -272,6 +273,7 @@ from litellm.types.utils import (
     TranscriptionResponse,
     Usage,
     is_litellm_owned_kwarg,
+    is_server_derived_pricing_key,
 )
 
 _CALL_TYPE_ENUM_MAP: Final[dict] = {ct.value: ct for ct in CallTypes}
@@ -776,6 +778,11 @@ def _is_gemini_model(model: str | None, custom_llm_provider: str | None) -> bool
 
     # Check if model name contains gemini
     return model is not None and "gemini" in model.lower()
+
+
+def is_gemini_tts_model(model: str) -> bool:
+    model_name: Final = model.lower()
+    return "gemini" in model_name and "tts" in model_name
 
 
 def _remove_thought_signature_from_id(tool_call_id: str, separator: str) -> str:
@@ -1392,6 +1399,18 @@ def _dispatch_success_logging(
     )
 
 
+def _schedule_sync_success_logging(
+    logging_obj: LiteLLMLoggingObject,
+    result: object,
+    start_time: datetime.datetime,
+    end_time: datetime.datetime,
+    executor: BoundedLoggingThreadPoolExecutor,
+) -> None:
+    if not logging_obj.claim_sync_success_log():
+        return
+    executor.submit(contextvars.copy_context().run, logging_obj.success_handler, result, start_time, end_time)
+
+
 def _schedule_async_success_logging(
     logging_obj: LiteLLMLoggingObject,
     result: object,
@@ -1958,17 +1977,8 @@ def client(original_function):
             # LOG SUCCESS - handle streaming success logging in the _next_ object, remove `handle_success` once it's deprecated
             verbose_logger.info("Wrapper: Completed Call, calling success_handler")
             if not is_internal_call.get():
-                # Copy the current context to propagate it to the background thread
-                # This is essential for OpenTelemetry span context propagation
-                ctx: Final = contextvars.copy_context()
                 executor: Final[BoundedLoggingThreadPoolExecutor] = litellm_utils.executor
-                executor.submit(
-                    ctx.run,
-                    logging_obj.success_handler,
-                    result,
-                    start_time,
-                    end_time,
-                )
+                _schedule_sync_success_logging(logging_obj, result, start_time, end_time, executor)
             # RETURN RESULT
             return result
         except Exception as e:
@@ -3403,23 +3413,25 @@ def _without_overridden_price_variants(
     )
 
 
-@with_config(ConfigDict(extra="allow"))
-class _PricingModelInfo(ModelInfo):
-    pass
-
-
-_PRICING_MODEL_INFO: Final = TypeAdapter(_PricingModelInfo)
-
-
-def model_info_with_pricing_overrides(model_info: ModelInfo, registration: Mapping[str, object]) -> ModelInfo:
+def pricing_with_overrides(
+    model_info: Mapping[str, object], registration: Mapping[str, object]
+) -> Mapping[str, object]:
     from litellm.types.utils import is_server_derived_pricing_key
 
     overrides: Final = {
         name: value for name, value in registration.items() if value is not None and is_server_derived_pricing_key(name)
     }
-    return _PRICING_MODEL_INFO.validate_python(
-        update_dictionary(dict(_without_overridden_price_variants(model_info, overrides)), overrides)
+    return update_dictionary(dict(_without_overridden_price_variants(model_info, overrides)), overrides)
+
+
+def declared_pricing_fields(entry: Mapping[str, object]) -> Mapping[str, object]:
+    return MappingProxyType(
+        {name: value for name, value in entry.items() if value is not None and is_server_derived_pricing_key(name)}
     )
+
+
+def cost_map_key_declared_prices(key: str) -> Mapping[str, object]:
+    return declared_pricing_fields(_builtin_cost_map().get(key) or {})
 
 
 @dataclass(frozen=True, slots=True)
@@ -3858,6 +3870,16 @@ def _get_non_default_params(passed_params: dict, default_params: dict, additiona
     return non_default_params
 
 
+_TRANSCRIPTION_STREAM_FLAG: Final = TypeAdapter(bool)
+
+
+def _transcription_stream_flag(value: object) -> bool | None:
+    try:
+        return _TRANSCRIPTION_STREAM_FLAG.validate_python(value)
+    except ValidationError:
+        return None
+
+
 def get_optional_params_transcription(
     model: str,
     custom_llm_provider: str,
@@ -3882,15 +3904,26 @@ def get_optional_params_transcription(
     for k, v in special_params.items():
         passed_params[k] = v
 
+    gnani_rejected_params: Final = (
+        ("stream", *GNANI_REJECTED_OPENAI_TRANSCRIPTION_PARAMS) if custom_llm_provider == "gnani" else ()
+    )
     default_params: Final = {
         "language": None,
         "prompt": None,
         "response_format": None,
         "temperature": None,  # openai defaults this to 0
         "timestamp_granularities": None,
+        **{param: None for param in gnani_rejected_params},
     }
 
-    non_default_params = {k: v for k, v in passed_params.items() if (k in default_params and v != default_params[k])}
+    gnani_stream_off: Final = (
+        custom_llm_provider == "gnani" and _transcription_stream_flag(passed_params.get("stream")) is False
+    )
+    non_default_params = {
+        k: v
+        for k, v in passed_params.items()
+        if k in default_params and v != default_params[k] and not (k == "stream" and (v == "" or gnani_stream_off))
+    }
     optional_params = {}
 
     ## raise exception if non-default value passed for non-openai/azure embedding calls
@@ -3905,7 +3938,7 @@ def get_optional_params_transcription(
                 elif k not in supported_params:
                     raise UnsupportedParamsError(
                         status_code=500,
-                        message=f"Setting user/encoding format is not supported by {custom_llm_provider}. To drop it from the call, set `litellm.drop_params = True`.",
+                        message=f"Setting `{k}` is not supported by {custom_llm_provider}. To drop it from the call, set `litellm.drop_params = True`.",
                     )
             return non_default_params
 
@@ -3934,7 +3967,7 @@ def get_optional_params_transcription(
             non_default_params=non_default_params,
             optional_params=optional_params,
             model=model,
-            drop_params=drop_params if drop_params is not None else False,
+            drop_params=drop_params is True or litellm.drop_params is True,
         )
 
     optional_params = add_provider_specific_params_to_optional_params(
@@ -4279,6 +4312,15 @@ def get_optional_params_embeddings(
             object = litellm.TwelveLabsMarengoEmbeddingConfig(model=model)
         elif "nova" in model.lower():
             object = litellm.AmazonNovaEmbeddingConfig()
+            if (
+                "encoding_format" in non_default_params
+                and non_default_params["encoding_format"] not in object.servable_encoding_formats
+            ):
+                _check_valid_arg(
+                    supported_params=[
+                        param for param in object.get_supported_openai_params() if param != "encoding_format"
+                    ]
+                )
         else:  # unmapped model
             supported_params = []
             _check_valid_arg(supported_params=supported_params)
@@ -4823,6 +4865,16 @@ def _map_params_with_provider_config(
             model=model,
             drop_params=drop_params,
             base_model=base_model,
+            allowed_openai_params=allowed_openai_param_names(allowed_openai_params),
+        )
+    from litellm.llms.openai_like.dynamic_config import MapsAllowedOpenAIParams
+
+    if isinstance(provider_config, MapsAllowedOpenAIParams):
+        return provider_config.map_openai_params_allowing(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model=model,
+            drop_params=drop_params,
             allowed_openai_params=allowed_openai_param_names(allowed_openai_params),
         )
     return provider_config.map_openai_params(
@@ -5462,6 +5514,25 @@ EXTRA_BODY_ROUTING_KEYS: Final = frozenset({"model"})
 LITELLM_ONLY_PARAMS: Final = frozenset(("cache_control_injection_points",))
 
 
+VECTOR_STORE_ROUTING_PARAMS: Final = frozenset(("vector_store_id", "vector_store_ids"))
+
+
+def vector_store_params_withheld_from(custom_llm_provider: str) -> frozenset[str]:
+    if custom_llm_provider == "litellm_proxy":
+        return frozenset()
+    if ProviderConfigManager.get_custom_llm_handler(custom_llm_provider) is not None:
+        return frozenset()
+    return VECTOR_STORE_ROUTING_PARAMS
+
+
+def header_auth_params(custom_llm_provider: str) -> frozenset[str]:
+    if custom_llm_provider != "azure_ai":
+        return frozenset()
+    from litellm.llms.azure_ai.common_utils import AZURE_ENTRA_CREDENTIAL_PARAM_KEYS
+
+    return AZURE_ENTRA_CREDENTIAL_PARAM_KEYS
+
+
 def add_provider_specific_params_to_optional_params(
     optional_params: dict,
     passed_params: dict,
@@ -5480,11 +5551,16 @@ def add_provider_specific_params_to_optional_params(
         "text-completion-openai",
         *litellm.openai_compatible_providers,
     ] or JSONProviderRegistry.exists(custom_llm_provider)
+    vector_store_params_withheld: Final = vector_store_params_withheld_from(custom_llm_provider)
     if calls_through_openai_sdk:
         # for openai, azure we should pass the extra/passed params within `extra_body` https://github.com/openai/openai-python/blob/ac33853ba10d13ac149b1fa3ca6dba7d613065c9/src/openai/resources/models.py#L46
         if _should_drop_param(k="extra_body", additional_drop_params=additional_drop_params) is False:
             extra_body: Final = dict(passed_params.pop("extra_body", None) or {})
-            withheld_params: Final = frozenset[str]() if custom_llm_provider == "litellm_proxy" else LITELLM_ONLY_PARAMS
+            withheld_params: Final = (
+                frozenset[str]()
+                if custom_llm_provider == "litellm_proxy"
+                else LITELLM_ONLY_PARAMS | vector_store_params_withheld
+            )
             for k in passed_params:
                 if k not in openai_params and k not in withheld_params and passed_params[k] is not None:
                     extra_body[k] = passed_params[k]
@@ -5495,8 +5571,10 @@ def add_provider_specific_params_to_optional_params(
                 **extra_body,
             }
 
-            dropped_keys: Final = EXTRA_BODY_ROUTING_KEYS | frozenset(
-                param for param in (additional_drop_params or ()) if isinstance(param, str)
+            dropped_keys: Final = (
+                EXTRA_BODY_ROUTING_KEYS
+                | header_auth_params(custom_llm_provider)
+                | frozenset(param for param in (additional_drop_params or ()) if isinstance(param, str))
             )
             ensure_extra_body_is_safe: Final = litellm_utils.ensure_extra_body_is_safe
             optional_params["extra_body"] = ensure_extra_body_is_safe(
@@ -5504,7 +5582,7 @@ def add_provider_specific_params_to_optional_params(
             )
     else:
         for k in passed_params:
-            if k not in openai_params and passed_params[k] is not None:
+            if k not in openai_params and k not in vector_store_params_withheld and passed_params[k] is not None:
                 if _should_drop_param(k=k, additional_drop_params=additional_drop_params):
                     continue
                 optional_params[k] = passed_params[k]
@@ -6391,11 +6469,13 @@ def get_provider_info(model: str, custom_llm_provider: str | None) -> ProviderSp
             model=model, provider=LlmProviders(custom_llm_provider)
         )
 
-    model_info: ProviderSpecificModelInfo | None = None
     if provider_config:
-        model_info = provider_config.get_provider_info(model=model)
+        return provider_config.get_provider_info(model=model)
 
-    return model_info
+    from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+
+    json_provider: Final = JSONProviderRegistry.get(custom_llm_provider) if custom_llm_provider else None
+    return json_provider.provider_info if json_provider is not None and json_provider.provider_info else None
 
 
 def _is_potential_model_name_in_model_cost(
@@ -7351,6 +7431,8 @@ def validate_environment(
             else:
                 missing_keys.append("GOOGLE_API_KEY")
                 missing_keys.append("GEMINI_API_KEY")
+        elif custom_llm_provider == "gnani" and not os.environ.get("GNANI_API_KEY"):
+            missing_keys.append("GNANI_API_KEY")
         elif custom_llm_provider == "groq":
             if "GROQ_API_KEY" in os.environ:
                 keys_in_environment = True
@@ -8288,6 +8370,14 @@ class AvailableModelsCache(InMemoryCache):
 _model_cache: Final = AvailableModelsCache()
 
 
+def _provider_api_key_env_vars(provider: str) -> tuple[str, ...]:
+    from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+
+    json_provider: Final = JSONProviderRegistry.get(provider)
+    derived: Final = (f"{provider.replace('_', '').upper()}_API_KEY", f"{provider.upper()}_API_KEY")
+    return derived if json_provider is None else (*derived, *json_provider.api_key_envs)
+
+
 def _infer_valid_provider_from_env_vars(
     custom_llm_provider: str | None = None,
 ) -> list[str]:
@@ -8297,16 +8387,7 @@ def _infer_valid_provider_from_env_vars(
         if custom_llm_provider and provider != custom_llm_provider:
             continue
 
-        # edge case litellm has together_ai as a provider, it should be togetherai
-        env_provider_1 = provider.replace("_", "")
-        env_provider_2 = provider
-
-        # litellm standardizes expected provider keys to
-        # PROVIDER_API_KEY. Example: OPENAI_API_KEY, COHERE_API_KEY
-        expected_provider_key_1 = f"{env_provider_1.upper()}_API_KEY"
-        expected_provider_key_2 = f"{env_provider_2.upper()}_API_KEY"
-        if expected_provider_key_1 in environ_keys or expected_provider_key_2 in environ_keys:
-            # key is set
+        if any(key in environ_keys for key in _provider_api_key_env_vars(provider)):
             valid_providers.append(provider)
 
     return valid_providers
@@ -8896,6 +8977,8 @@ def validate_chat_completion_tool_choice(
         if is_allowed_tools_tool_choice(requested_choice):
             allowed_tools: Final = parse_allowed_tools_tool_choice_or_refuse(requested_choice, model, drop_params)
             return None if allowed_tools is None else dict(chat_allowed_tools_tool_choice(allowed_tools))
+        if tool_choice_type == "mcp":
+            return tool_choice
 
         # Standard OpenAI format: {"type": "function", "function": {...}}
         if tool_choice_type is None or tool_choice.get("function") is None:
@@ -9189,7 +9272,7 @@ class ProviderConfigManager:
             )
 
             return VertexAIGPTOSSTransformation()
-        elif model in litellm.vertex_mistral_models:
+        elif model in litellm.vertex_mistral_models or "mistral" in model:
             if "codestral" in model:
                 return litellm.CodestralTextCompletionConfig()
             return litellm.VertexAIMistralConfig()
@@ -9461,8 +9544,11 @@ class ProviderConfigManager:
 
     @staticmethod
     def get_provider_decisions_config(model: str, provider: LlmProviders) -> BaseDecisionsConfig | None:
-        if provider == LlmProviders.PERPLEXITY:
-            return litellm.PerplexityDecisionsConfig()
+        if provider in (LlmProviders.GEMINI, LlmProviders.PERPLEXITY):
+            return {
+                LlmProviders.GEMINI: litellm.GeminiDecisionsConfig,
+                LlmProviders.PERPLEXITY: litellm.PerplexityDecisionsConfig,
+            }[provider]()
         if provider == LlmProviders.TYPESAFE:
             return litellm.TypeSafeDecisionsConfig()
         if provider == LlmProviders.OPENROUTER:
@@ -9597,6 +9683,10 @@ class ProviderConfigManager:
             return AzureSpeechAudioTranscriptionConfig()
         elif litellm.LlmProviders.DEEPGRAM == provider:
             return litellm.DeepgramAudioTranscriptionConfig()
+        elif litellm.LlmProviders.GNANI == provider:
+            from litellm.llms.gnani.audio_transcription.transformation import GnaniAudioTranscriptionConfig
+
+            return GnaniAudioTranscriptionConfig()
         elif litellm.LlmProviders.ELEVENLABS == provider:
             from litellm.llms.elevenlabs.audio_transcription.transformation import (
                 ElevenLabsAudioTranscriptionConfig,
@@ -10617,6 +10707,12 @@ class ProviderConfigManager:
             )
 
             return ElevenLabsTextToSpeechConfig()
+        elif litellm.LlmProviders.GRADIUM == provider:
+            from litellm.llms.gradium.text_to_speech.transformation import (
+                GradiumTextToSpeechConfig,
+            )
+
+            return GradiumTextToSpeechConfig()
         elif litellm.LlmProviders.RUNWAYML == provider:
             from litellm.llms.runwayml.text_to_speech.transformation import (
                 RunwayMLTextToSpeechConfig,

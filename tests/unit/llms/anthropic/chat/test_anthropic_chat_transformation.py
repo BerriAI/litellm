@@ -10095,3 +10095,21 @@ def test_a_renamed_tool_leaves_tool_results_without_tool_references_as_claude_se
     sent: Final = request["messages"][1]["content"]
     assert [block for block in sent if block["type"].endswith("_tool_result")] == results
     assert [block["name"] for block in sent if block["type"] == "tool_use"] == ["weather_get"]
+
+
+def test_transform_request_leaves_the_callers_extra_body_for_a_repeat_call() -> None:
+    optional_params: Final = {"max_tokens": 16, "extra_body": {"top_k": 5}}
+
+    requests: Final = tuple(
+        AnthropicConfig().transform_request(
+            model="claude-sonnet-5-5",
+            messages=[{"role": "user", "content": "Hello"}],
+            optional_params=optional_params,
+            litellm_params={},
+            headers={},
+        )
+        for _ in range(2)
+    )
+
+    assert [request.get("top_k") for request in requests] == [5, 5]
+    assert all("extra_body" not in request for request in requests)
