@@ -7,6 +7,8 @@ import httpx
 from pydantic import TypeAdapter
 
 from litellm.exceptions import AuthenticationError
+from litellm.litellm_core_utils.core_helpers import as_object_list, as_str_mapping
+from litellm.litellm_core_utils.prompt_templates.common_utils import handle_messages_with_text_only_content_lists_as_str
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.llms.openai.common_utils import decoded_json_object
 from litellm.llms.openai.openai import OpenAIConfig
@@ -27,6 +29,31 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.tokenizer import Encoding
 
 _DECODED_JSON: Final = TypeAdapter(object)
+
+
+def _block_cache_control(message: Mapping[str, object]) -> object:
+    if "cache_control" in message:
+        return None
+    parts: Final = as_object_list(message.get("content"))
+    return next(
+        (
+            block["cache_control"]
+            for part in reversed(parts or ())
+            if (block := as_str_mapping(part)) is not None and "cache_control" in block
+        ),
+        None,
+    )
+
+
+def _system_message_for_copilot(message: AllMessageValues, role: str) -> AllMessageValues:
+    (normalized,) = handle_messages_with_text_only_content_lists_as_str((message,))
+    if normalized is message and role == "system":
+        return message
+    cache_control: Final = _block_cache_control(message) if normalized is not message else None
+    return cast(  # cast-ok: keeps the message fields with a valid Copilot role and optional cache marker
+        AllMessageValues,
+        {**normalized, "role": role, **({"cache_control": cache_control} if cache_control is not None else {})},
+    )
 
 
 class GithubCopilotConfig(OpenAIConfig):
@@ -81,24 +108,11 @@ class GithubCopilotConfig(OpenAIConfig):
     ) -> list[AllMessageValues]:
         import litellm
 
-        # Check if system-to-assistant conversion is disabled
-        if litellm.disable_copilot_system_to_assistant:
-            # GitHub Copilot API now supports system prompts for all models (Claude, GPT, etc.)
-            # No conversion needed - just return messages as-is
-            return messages
-
-        # Default behavior: convert system messages to assistant for compatibility
-        transformed_messages: Final[list[AllMessageValues]] = []
-        for message in messages:
-            if message.get("role") == "system":
-                # Convert system message to assistant message
-                transformed_messages.append(
-                    cast(AllMessageValues, {**message, "role": "assistant"})  # cast-ok: dict matches the union
-                )
-            else:
-                transformed_messages.append(message)
-
-        return transformed_messages
+        role: Final = "system" if litellm.disable_copilot_system_to_assistant else "assistant"
+        return [
+            _system_message_for_copilot(message, role) if message.get("role") == "system" else message
+            for message in messages
+        ]
 
     def _copilot_headers(self, session_token: str | None) -> Mapping[str, str]:
         if session_token is not None:

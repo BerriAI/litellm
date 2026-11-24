@@ -165,6 +165,45 @@ def test_transform_messages_disable_copilot_system_to_assistant(monkeypatch):
         litellm.disable_copilot_system_to_assistant = original_flag
 
 
+@pytest.mark.parametrize(("keep_system", "role"), [(True, "system"), (False, "assistant")])
+def test_system_text_blocks_flatten_without_losing_cache_control(monkeypatch, keep_system, role):
+    monkeypatch.setattr(litellm, "disable_copilot_system_to_assistant", keep_system)
+    block_marker = {"type": "ephemeral"}
+    message_marker = {"type": "ephemeral", "ttl": "1h"}
+    text = [
+        {"type": "text", "text": "Keep the instruction.", "cache_control": block_marker},
+        {"type": "text", "text": "Keep the order."},
+    ]
+    mixed = [*text, {"type": "image_url", "image_url": {"url": "https://example.com/image.png"}}]
+    user = {"role": "user", "content": text}
+    messages = [
+        {"role": "system", "content": text, "name": "policy"},
+        {"role": "system", "content": text, "cache_control": message_marker},
+        {"role": "system", "content": mixed},
+        {"role": "system", "content": []},
+        {"role": "system", "content": [{"type": "text", "text": ""}]},
+        user,
+    ]
+    original = json.loads(json.dumps(messages))
+
+    transformed = GithubCopilotConfig().transform_messages(messages, model="github_copilot/claude-sonnet-5.5")
+
+    assert transformed == [
+        {
+            "role": role,
+            "content": "Keep the instruction.\nKeep the order.",
+            "cache_control": block_marker,
+            "name": "policy",
+        },
+        {"role": role, "content": "Keep the instruction.\nKeep the order.", "cache_control": message_marker},
+        {"role": role, "content": mixed},
+        {"role": role, "content": []},
+        {"role": role, "content": ""},
+        user,
+    ]
+    assert messages == original
+
+
 def test_x_initiator_header_user_request():
     """Test that user-only messages result in X-Initiator: user header"""
     config = GithubCopilotConfig()
