@@ -9365,6 +9365,7 @@ export interface paths {
          *     - router_settings: Optional[UpdateRouterConfig] - key-specific router settings. Example - {"model_group_retry_policy": {"gpt-4": {"RateLimitErrorRetries": 5}}}. IF null or {} then no router settings.
          *     - access_group_ids: Optional[List[str]] - List of access group IDs to associate with the key. Access groups define which models a key can access. Example - ["access_group_1", "access_group_2"].
          *     - budget_limits: Optional[list] - List of concurrent budget windows for the key. Each window specifies a budget_limit, time_period, and optional budget_duration. Example - [{"budget_limit": 10.0, "time_period": "1d"}, {"budget_limit": 50.0, "time_period": "7d"}].
+         *     - lens_enabled: Optional[bool] - Whether this key's requests are sent to Lens. `null` inherits the team default, which is on when unset.
          *
          *     Example:
          *     ```bash
@@ -9566,6 +9567,28 @@ export interface paths {
         head?: never;
         /** Lens Request */
         patch: operations["lens_request_lens_patch"];
+        trace?: never;
+    };
+    "/lens/admin/gateway/connect": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Connect Model Gateway
+         * @description Connect this gateway's models to Lens using a dedicated virtual key.
+         *
+         *     Requires a proxy administrator. Existing Lens model settings are preserved.
+         */
+        post: operations["connect_model_gateway_lens_admin_gateway_connect_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/lens/login": {
@@ -36297,6 +36320,41 @@ export interface components {
             /** Status Code */
             status_code: number;
         };
+        /** GatewaySetupRequest */
+        GatewaySetupRequest: Record<string, never>;
+        /** GatewayStatus */
+        GatewayStatus: {
+            /**
+             * Analysis Models
+             * @default 0
+             */
+            analysis_models: number;
+            /** Api Base */
+            api_base?: string | null;
+            /** Configured */
+            configured: boolean;
+            /** Connected */
+            connected: boolean;
+            /** Error */
+            error?: string | null;
+            /**
+             * Evaluation Models
+             * @default 0
+             */
+            evaluation_models: number;
+            /** Last Refreshed */
+            last_refreshed?: string | null;
+            /**
+             * Login Connected
+             * @default false
+             */
+            login_connected: boolean;
+            /**
+             * Supports Gateway Connect
+             * @default false
+             */
+            supports_gateway_connect: boolean;
+        };
         /** GenerateKeyRequest */
         GenerateKeyRequest: {
             /** Access Group Ids */
@@ -48620,6 +48678,16 @@ export interface components {
              */
             type: "tool_search_output";
         };
+        /** ResponsesAPIBackgroundOptions */
+        ResponsesAPIBackgroundOptions: {
+            /**
+             * Completion Window
+             * @enum {string}
+             */
+            completion_window?: "soonest" | "2h" | "8h";
+            /** Continuation Id */
+            continuation_id?: string;
+        };
         /** ResponsesAPIModeration */
         ResponsesAPIModeration: {
             /** Model */
@@ -48632,6 +48700,7 @@ export interface components {
         ResponsesAPIRequestParams: {
             /** Background */
             background?: boolean | null;
+            background_options?: components["schemas"]["ResponsesAPIBackgroundOptions"] | null;
             /** Context Management */
             context_management?: components["schemas"]["ContextManagementEntry"][] | null;
             /** Include */
@@ -54074,6 +54143,12 @@ export interface components {
              * @default false
              */
             per_server_oauth_discovery: boolean;
+            /**
+             * Preserve Explicit Oauth Settings
+             * @description Keep explicitly supplied OAuth settings on upstream or auth changes, even when their values match the saved settings.
+             * @default false
+             */
+            preserve_explicit_oauth_settings: boolean;
             /** Registration Url */
             registration_url?: string | null;
             /** Rpm */
@@ -58890,6 +58965,7 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["TranscriptionResponse"];
                     "text/event-stream": string;
+                    "text/plain": string;
                 };
             };
             /** @description Validation Error */
@@ -70590,6 +70666,39 @@ export interface operations {
             };
         };
     };
+    connect_model_gateway_lens_admin_gateway_connect_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GatewaySetupRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GatewayStatus"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     lens_login_lens_login_get: {
         parameters: {
             query?: never;
@@ -75681,6 +75790,7 @@ export interface operations {
                 "application/json": {
                     /** Background */
                     background?: boolean | null;
+                    background_options?: components["schemas"]["ResponsesAPIBackgroundOptions"] | null;
                     /** Context Management */
                     context_management?: components["schemas"]["ContextManagementEntry"][] | null;
                     /** Include */
@@ -79578,6 +79688,7 @@ export interface operations {
                 "application/json": {
                     /** Background */
                     background?: boolean | null;
+                    background_options?: components["schemas"]["ResponsesAPIBackgroundOptions"] | null;
                     /** Context Management */
                     context_management?: components["schemas"]["ContextManagementEntry"][] | null;
                     /** Include */
@@ -87842,6 +87953,7 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["TranscriptionResponse"];
                     "text/event-stream": string;
+                    "text/plain": string;
                 };
             };
             /** @description Validation Error */
@@ -91779,6 +91891,7 @@ export interface operations {
                 "application/json": {
                     /** Background */
                     background?: boolean | null;
+                    background_options?: components["schemas"]["ResponsesAPIBackgroundOptions"] | null;
                     /** Context Management */
                     context_management?: components["schemas"]["ContextManagementEntry"][] | null;
                     /** Include */

@@ -2,6 +2,7 @@ import asyncio
 import base64
 import copy
 import json
+import logging
 import os
 import time
 from datetime import datetime, timezone
@@ -2972,11 +2973,72 @@ def test_get_dynamic_logging_metadata_with_arize_team_logging():
         pytest.param([None], id="list-with-null"),
     ],
 )
-def test_non_object_team_logging_metadata_fails_as_a_server_error_not_a_bad_request(logging_value: object) -> None:
+def test_non_object_team_logging_metadata_is_skipped(logging_value: object) -> None:
     user_api_key_dict: Final = UserAPIKeyAuth(api_key="test-key", metadata={}, team_metadata={"logging": logging_value})
 
-    with pytest.raises(TypeError):
-        get_dynamic_logging_metadata(user_api_key_dict=user_api_key_dict, proxy_config=MagicMock())
+    assert get_dynamic_logging_metadata(user_api_key_dict=user_api_key_dict, proxy_config=MagicMock()) is None
+
+
+@pytest.mark.parametrize("source", ["metadata", "team_metadata"])
+@pytest.mark.parametrize("serialized", [True, False])
+def test_stored_json_string_logging_activates_the_same_callback(source: str, serialized: bool) -> None:
+    entries: Final = [
+        {
+            "callback_name": "langfuse",
+            "callback_type": "success",
+            "callback_vars": {"langfuse_secret_key": "legacy-secret"},
+        }
+    ]
+    metadata: Final = {"logging": json.dumps(entries) if serialized else entries}
+    auth: Final = UserAPIKeyAuth.model_validate({"api_key": "test-key", source: metadata})
+    result: Final = get_dynamic_logging_metadata(auth, MagicMock())
+    assert result is not None
+    assert result.success_callback == ["langfuse"]
+    assert result.callback_vars == {"langfuse_secret_key": "legacy-secret"}
+
+
+@pytest.mark.parametrize("source", ["metadata", "team_metadata"])
+@pytest.mark.parametrize("reference", ["legacy-credential", None])
+def test_legacy_string_credential_references_are_dropped_without_dropping_inline_siblings(
+    source: str, reference: object, caplog: pytest.LogCaptureFixture
+) -> None:
+    inline: Final = {
+        "callback_name": "langfuse",
+        "callback_type": "success",
+        "callback_vars": {"langfuse_secret_key": "legacy-secret"},
+    }
+    referenced: Final = {
+        "callback_name": "langsmith",
+        "callback_type": "failure",
+        "litellm_credential_name": reference,
+        "callback_vars": {"langsmith_api_key": "unapproved-secret"},
+    }
+    auth: Final = UserAPIKeyAuth.model_validate(
+        {"api_key": "test-key", source: {"logging": json.dumps([referenced, inline])}}
+    )
+    with caplog.at_level(logging.WARNING):
+        result: Final = get_dynamic_logging_metadata(auth, MagicMock())
+    assert result is not None
+    assert result.success_callback == ["langfuse"]
+    assert result.failure_callback == []
+    assert result.callback_vars == {"langfuse_secret_key": "legacy-secret"}
+    assert "Ignoring credential references in legacy string metadata.logging" in caplog.text
+    assert "unapproved-secret" not in caplog.text
+
+
+@pytest.mark.parametrize("source", ["metadata", "team_metadata"])
+@pytest.mark.parametrize("malformed", [None, {"callback_name": "langfuse", "callback_vars": None}])
+def test_malformed_stored_logging_items_do_not_drop_valid_siblings(source: str, malformed: object) -> None:
+    entry: Final = {
+        "callback_name": "langfuse",
+        "callback_type": "success",
+        "callback_vars": {"langfuse_secret_key": "legacy-secret"},
+    }
+    auth: Final = UserAPIKeyAuth.model_validate({"api_key": "test-key", source: {"logging": [malformed, entry, "bad"]}})
+    result: Final = get_dynamic_logging_metadata(auth, MagicMock())
+    assert result is not None
+    assert result.success_callback == ["langfuse"]
+    assert result.callback_vars == {"langfuse_secret_key": "legacy-secret"}
 
 
 def test_add_team_callback_rejects_env_reference():
@@ -7553,6 +7615,11 @@ def test_forwarded_traceparent_shows_in_the_logged_request_body(
         ("codex_exec/0.144.5 (Mac OS 26.4.0; arm64)", None, {"drop_params": True}, True),
         ("codex_exec/0.144.5 (Mac OS 26.4.0; arm64)", None, {"drop_params": " False "}, None),
         ("codex_exec/0.144.5 (Mac OS 26.4.0; arm64)", None, {"drop_params": "true"}, True),
+        ("GitHubCopilotChat/0.74.0", None, {}, True),
+        ("GitHubCopilotChat/0.74.0", False, {}, False),
+        ("GitHubCopilotChat/0.74.0", None, {"drop_params": False}, None),
+        ("GitHubCopilotChat/0.74.0", None, {"drop_params": True}, True),
+        ("relay/1.0 (forwarding GitHubCopilotChat/0.74.0)", None, {}, None),
         ("PostmanRuntime/7.53.0", None, {}, None),
         (None, None, {}, None),
     ],
@@ -7560,9 +7627,10 @@ def test_forwarded_traceparent_shows_in_the_logged_request_body(
 async def test_add_litellm_data_to_request_agentic_cli_drop_params(
     user_agent, request_drop_params, operator_settings, expected_drop_params
 ):
-    """Claude Code sends Anthropic-specific params and Codex sends
-    service_tier, both of which fail on providers that reject them, so those
-    user agents must turn on drop_params automatically, without overriding an
+    """Claude Code sends Anthropic-specific params, Codex sends service_tier and
+    VS Code Copilot Chat sends cot_id on old assistant turns, all of which fail on
+    providers that reject them, so those user agents must turn on drop_params
+    automatically, without overriding an
     explicit caller value, an explicit operator-level litellm_settings value,
     or affecting other clients.
     """
@@ -8565,6 +8633,56 @@ async def test_key_cache_controls_merge_into_request_cache_controls(
     assert updated["cache"] == expected_cache
     opt_in_cache: Final = Cache(type=LiteLLMCacheType.LOCAL, mode=CacheMode.default_off)
     assert opt_in_cache.should_use_cache(**updated) is uses_cache_when_default_off
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("key_params", "user_params", "team_params", "scope", "uses_cache"),
+    [
+        ({"enabled": False}, {"enabled": True}, {"enabled": True}, "key", False),
+        ({"enabled": False, "similarity_threshold": 0}, None, {"enabled": True}, "key", False),
+        ({"enabled": False, "similarity_threshold": 1}, None, {"enabled": True}, "key", False),
+        ({"enabled": False, "ttl": 0}, None, {"enabled": True}, "key", False),
+        ({"enabled": False, "similarity_threshold": "0"}, None, {"enabled": True}, "key", False),
+        ({"ttl": 0}, {"enabled": False}, {"enabled": True}, "user", False),
+        ({}, None, {"enabled": False}, "team", False),
+        (None, None, None, "global", True),
+    ],
+)
+async def test_semantic_cache_uses_authenticated_policy_and_reports_scope(
+    monkeypatch,
+    key_params: dict[str, object] | None,
+    user_params: dict[str, object] | None,
+    team_params: dict[str, object] | None,
+    scope: str,
+    uses_cache: bool,
+):
+    from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+    from litellm.types.semantic_cache import SemanticCacheParams
+
+    cache = Cache(
+        type=LiteLLMCacheType.REDIS_SEMANTIC,
+        redis_url="redis://localhost:6379",
+        similarity_threshold=0.8,
+    )
+    monkeypatch.setattr(litellm, "cache", cache)
+    key = UserAPIKeyAuth(
+        api_key="hashed-key",
+        metadata={"cache_params": key_params},
+        user_semantic_cache_params=SemanticCacheParams.model_validate(user_params) if user_params else None,
+        team_metadata={"cache_params": team_params},
+    )
+    updated = await add_litellm_data_to_request(
+        data={"model": "gpt-4.1-mini", "cache": {"_semantic_cache_policy": {"scope": "key"}}},
+        request=_callback_credential_request_mock(),
+        user_api_key_dict=key,
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+    headers = ProxyBaseLLMRequestProcessing.get_custom_headers(user_api_key_dict=key, request_data=updated)
+    assert headers["x-litellm-cache-scope"] == scope
+    assert cache.should_use_cache(**updated) is uses_cache
 
 
 @pytest.mark.asyncio

@@ -66,7 +66,7 @@ class SessionContext:
     output: type[BaseModel] | None = None
     max_turns: int | None = None
     timeout: float | None = None
-    metadata: Mapping[str, object] = field(default_factory=dict)
+    metadata: Mapping[str, object] = field(default_factory=dict[str, object])
     options: HarnessOptions | None = None
     # Set by the handler after each turn.
     final_text: str = ""

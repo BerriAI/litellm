@@ -9,9 +9,20 @@ Requires google-auth >= 2.29.0.
 """
 
 from collections.abc import Callable
-from typing import Final
+from typing import Final, Protocol
 
 from google.auth import aws
+
+
+class _AwsCredentials(Protocol):
+    @property
+    def access_key(self) -> str: ...
+
+    @property
+    def secret_key(self) -> str: ...
+
+    @property
+    def token(self) -> str | None: ...
 
 
 class AwsCredentialsSupplier(aws.AwsSecurityCredentialsSupplier):
@@ -28,7 +39,7 @@ class AwsCredentialsSupplier(aws.AwsSecurityCredentialsSupplier):
     STS tokens).
     """
 
-    def __init__(self, credentials_provider: Callable, aws_region: str):
+    def __init__(self, credentials_provider: Callable[[], _AwsCredentials], aws_region: str):
         """
         Args:
             credentials_provider: A zero-arg callable that returns a
@@ -39,7 +50,7 @@ class AwsCredentialsSupplier(aws.AwsSecurityCredentialsSupplier):
         self._credentials_provider = credentials_provider
         self._region = aws_region
 
-    def get_aws_security_credentials(self, context, request):
+    def get_aws_security_credentials(self, context: object, request: object):
         """Return current AWS credentials for the GCP token exchange."""
         current: Final = self._credentials_provider()
         return aws.AwsSecurityCredentials(
@@ -48,6 +59,6 @@ class AwsCredentialsSupplier(aws.AwsSecurityCredentialsSupplier):
             session_token=current.token,
         )
 
-    def get_aws_region(self, context, request):
+    def get_aws_region(self, context: object, request: object):
         """Return the AWS region for credential verification."""
         return self._region

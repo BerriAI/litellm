@@ -365,7 +365,7 @@ class ModelInfo(MirroredPricingParams):
     # minted on one can be replayed to another (e.g. regional endpoints of one OpenAI organization)
     encrypted_content_boundary: Annotated[str, Field(min_length=1)] | None = None
 
-    def __init__(self, id: str | int | None = None, **params) -> None:
+    def __init__(self, id: str | int | None = None, **params: object) -> None:
         if id is None:
             id = str(uuid.uuid4())  # Generate a UUID if id is None or not provided
         elif isinstance(id, int):
@@ -391,19 +391,19 @@ class ModelInfo(MirroredPricingParams):
 
     model_config = ConfigDict(extra="allow")
 
-    def __contains__(self, key) -> bool:
+    def __contains__(self, key: str) -> bool:
         # Define custom behavior for the 'in' operator
         return hasattr(self, key)
 
-    def get(self, key, default=None):
+    def get(self, key: str, default=None):
         # Custom .get() method to access attributes with a default value if the attribute doesn't exist
         return getattr(self, key, default)
 
-    def __getitem__(self, key) -> object:
+    def __getitem__(self, key: str) -> object:
         # Allow dictionary-style access to attributes
         return _OPAQUE_VALUE.validate_python(getattr(self, key))
 
-    def __setitem__(self, key, value) -> None:
+    def __setitem__(self, key: str, value: object) -> None:
         # Allow dictionary-style assignment of attributes
         setattr(self, key, value)
 
@@ -758,19 +758,19 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
             verbose_logger.warning("drop_params=%r is not a flag value, treating it as unset", value)
         return None
 
-    def __contains__(self, key) -> bool:
+    def __contains__(self, key: str) -> bool:
         # Define custom behavior for the 'in' operator
         return hasattr(self, key)
 
-    def get(self, key, default=None):
+    def get(self, key: str, default=None):
         # Custom .get() method to access attributes with a default value if the attribute doesn't exist
         return getattr(self, key, default)
 
-    def __getitem__(self, key) -> object:
+    def __getitem__(self, key: str) -> object:
         # Allow dictionary-style access to attributes
         return _OPAQUE_VALUE.validate_python(getattr(self, key))
 
-    def __setitem__(self, key, value) -> None:
+    def __setitem__(self, key: str, value: object) -> None:
         # Allow dictionary-style assignment of attributes
         setattr(self, key, value)
 
@@ -787,19 +787,19 @@ class LiteLLM_Params(GenericLiteLLMParams):
     model: str
     model_config = ConfigDict(extra="allow", arbitrary_types_allowed=True)
 
-    def __contains__(self, key) -> bool:
+    def __contains__(self, key: str) -> bool:
         # Define custom behavior for the 'in' operator
         return hasattr(self, key)
 
-    def get(self, key, default=None):
+    def get(self, key: str, default=None):
         # Custom .get() method to access attributes with a default value if the attribute doesn't exist
         return getattr(self, key, default)
 
-    def __getitem__(self, key) -> object:
+    def __getitem__(self, key: str) -> object:
         # Allow dictionary-style access to attributes
         return _OPAQUE_VALUE.validate_python(getattr(self, key))
 
-    def __setitem__(self, key, value) -> None:
+    def __setitem__(self, key: str, value: object) -> None:
         # Allow dictionary-style assignment of attributes
         setattr(self, key, value)
 
@@ -933,7 +933,7 @@ class Deployment(LiteLLMBaseModel):
         model_name: str,
         litellm_params: LiteLLM_Params,
         model_info: ModelInfo | dict | None = None,
-        **params,
+        **params: object,
     ) -> None:
         if model_info is None:
             model_info = ModelInfo()
@@ -959,19 +959,19 @@ class Deployment(LiteLLMBaseModel):
             # if using pydantic v1
             return self.dict(**kwargs)
 
-    def __contains__(self, key) -> bool:
+    def __contains__(self, key: str) -> bool:
         # Define custom behavior for the 'in' operator
         return hasattr(self, key)
 
-    def get(self, key, default=None):
+    def get(self, key: str, default=None):
         # Custom .get() method to access attributes with a default value if the attribute doesn't exist
         return getattr(self, key, default)
 
-    def __getitem__(self, key) -> object:
+    def __getitem__(self, key: str) -> object:
         # Allow dictionary-style access to attributes
         return _OPAQUE_VALUE.validate_python(getattr(self, key))
 
-    def __setitem__(self, key, value) -> None:
+    def __setitem__(self, key: str, value: object) -> None:
         # Allow dictionary-style assignment of attributes
         setattr(self, key, value)
 
@@ -1107,7 +1107,7 @@ class ModelGroupInfo(LiteLLMBaseModel):
     supported_endpoints: tuple[str, ...] | None = None
     deployment_pricing: tuple[DeploymentPricing, ...] = ()
 
-    def __init__(self, **data) -> None:
+    def __init__(self, **data: object) -> None:
         for field_name, field_type in _resolved_annotations(self.__class__).items():
             if field_type is bool and data.get(field_name) is None:
                 data[field_name] = False
@@ -1270,7 +1270,7 @@ class RouterRateLimitError(ValueError):
         model: str,
         cooldown_time: float,
         enable_pre_call_checks: bool,
-        cooldown_list: list,
+        cooldown_list: Sequence[object],
         model_ids: Sequence[str] = (),
         cooldown_deployments: Sequence[CooldownDeploymentInfo] | None = None,
     ) -> None:
@@ -1554,7 +1554,7 @@ class AdaptiveRouterWeights(LiteLLMBaseModel):
 
     @field_validator("cost")
     @classmethod
-    def _weights_sum_to_one(cls, v, info):
+    def _weights_sum_to_one(cls, v: float, info):
         q: Final = info.data.get("quality", 0.7)
         if abs(q + v - 1.0) > 0.001:
             raise ValueError(f"weights must sum to 1.0, got quality={q} + cost={v} = {q + v}")

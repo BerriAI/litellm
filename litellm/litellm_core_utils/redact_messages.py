@@ -51,6 +51,30 @@ class _HasArguments(Protocol):
     arguments: str
 
 
+class _HasChoices(Protocol):
+    choices: Iterable[object]
+
+
+class _HasOutput(Protocol):
+    output: Iterable[object]
+
+
+class _HasReasoning(Protocol):
+    reasoning: object
+
+
+class _HasEncryptedContent(Protocol):
+    encrypted_content: str
+
+
+class _HasInput(Protocol):
+    input: str
+
+
+class _HasAction(Protocol):
+    action: object
+
+
 MESSAGE_REDACTION_ENABLE_HEADERS: Final = ("litellm-enable-message-redaction", "x-litellm-enable-message-redaction")
 
 
@@ -59,7 +83,7 @@ def _opted_out_of_message_logging(custom_logger: CustomLogger) -> bool:
 
 
 def redact_message_input_output_from_custom_logger(
-    litellm_logging_obj: LiteLLMLoggingObject, result, custom_logger: CustomLogger
+    litellm_logging_obj: LiteLLMLoggingObject, result: object, custom_logger: CustomLogger
 ) -> object:
     if _opted_out_of_message_logging(custom_logger):
         return perform_redaction(litellm_logging_obj.model_call_details, result, redact_streaming_responses=False)
@@ -177,8 +201,8 @@ def _redact_bedrock_guardrail_trace(response: object) -> None:
             setattr(response, field, _redacted_bedrock_trace(value))
 
 
-def _redact_streaming_response(streaming_response):
-    if hasattr(streaming_response, "choices"):
+def _redact_streaming_response(streaming_response: object) -> object:
+    if has_attributes(streaming_response, _HasChoices, "choices"):
         for choice in streaming_response.choices:
             _redact_choice_content(choice)
         redact_vertex_ai_metadata_from_logged_object(streaming_response)
@@ -188,14 +212,14 @@ def _redact_streaming_response(streaming_response):
         return perform_redaction({}, streaming_response)
     elif isinstance(streaming_response, litellm.TranscriptionResponse):
         streaming_response.text = REDACTED_BY_LITELLM
-    elif hasattr(streaming_response, "output"):
+    elif has_attributes(streaming_response, _HasOutput, "output"):
         _redact_responses_api_output(streaming_response.output)
-        if hasattr(streaming_response, "reasoning") and streaming_response.reasoning is not None:
+        if has_attributes(streaming_response, _HasReasoning, "reasoning") and streaming_response.reasoning is not None:
             streaming_response.reasoning = None
     return streaming_response
 
 
-def _redact_tool_calls(tool_calls) -> None:
+def _redact_tool_calls(tool_calls: Iterable[object] | None) -> None:
     """Redact tool call arguments (assistant tool calls carry prompt-derived data)."""
     if not tool_calls:
         return
@@ -205,13 +229,13 @@ def _redact_tool_calls(tool_calls) -> None:
             function.arguments = REDACTED_BY_LITELLM
 
 
-def _redact_function_call(function_call) -> None:
+def _redact_function_call(function_call: object) -> None:
     """Redact legacy assistant function_call arguments."""
-    if function_call is not None and hasattr(function_call, "arguments"):
+    if function_call is not None and has_attributes(function_call, _HasArguments, "arguments"):
         function_call.arguments = REDACTED_BY_LITELLM
 
 
-def _redact_choice_content(choice):
+def _redact_choice_content(choice: object) -> None:
     """Helper to redact content in a choice (message or delta)."""
     if isinstance(choice, (litellm.Choices, litellm.utils.StreamingChoices, litellm.utils.TextChoices)):
         drop_token_ids(choice)
@@ -417,7 +441,7 @@ def _drop_field_when_present(item: object, field: str) -> None:
         setattr(item, field, None)
 
 
-def _redact_responses_api_output(output_items):
+def _redact_responses_api_output(output_items: Iterable[object]) -> None:
     """Helper to redact ResponsesAPIResponse output items."""
     for output_item in output_items:
         output_type = stream_item_field(output_item, "type")
@@ -432,13 +456,17 @@ def _redact_responses_api_output(output_items):
             for summary_item in stream_item_items(output_item, "summary"):
                 _redact_field_when_present(summary_item, "text")
 
-        if output_type == "compaction" and hasattr(output_item, "encrypted_content"):
+        if output_type == "compaction" and has_attributes(output_item, _HasEncryptedContent, "encrypted_content"):
             output_item.encrypted_content = REDACTED_BY_LITELLM
-        if output_type == "function_call" and hasattr(output_item, "arguments"):
+        if output_type == "function_call" and has_attributes(output_item, _HasArguments, "arguments"):
             output_item.arguments = REDACTED_BY_LITELLM
-        if output_type == "custom_tool_call" and hasattr(output_item, "input"):
+        if output_type == "custom_tool_call" and has_attributes(output_item, _HasInput, "input"):
             output_item.input = REDACTED_BY_LITELLM
-        if output_type == "web_search_call" and getattr(output_item, "action", None) is not None:
+        if (
+            output_type == "web_search_call"
+            and has_attributes(output_item, _HasAction, "action")
+            and output_item.action is not None
+        ):
             output_item.action = _redacted_web_search_action(output_item.action)
 
 
@@ -678,7 +706,7 @@ def redacted_litellm_params(params: Mapping[str, object], *, redact_request_body
     }
 
 
-def perform_redaction(model_call_details: dict[str, object], result, redact_streaming_responses: bool = True):
+def perform_redaction(model_call_details: dict[str, object], result: object, redact_streaming_responses: bool = True):
     """
     Performs the actual redaction on the logging object and result.
 
@@ -821,7 +849,9 @@ def should_redact_message_logging(model_call_details: dict) -> bool:
     return litellm.turn_off_message_logging is True
 
 
-def redact_message_input_output_from_logging(model_call_details: dict, result, input: object | None = None) -> object:
+def redact_message_input_output_from_logging(
+    model_call_details: dict, result: object, input: object | None = None
+) -> object:
     """
     Removes messages, prompts, input, response from logging. This modifies the data in-place
     only redacts when litellm.turn_off_message_logging == True

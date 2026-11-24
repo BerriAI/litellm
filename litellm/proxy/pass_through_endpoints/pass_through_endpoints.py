@@ -38,6 +38,7 @@ from fastapi import (
     UploadFile,
     WebSocket,
     WebSocketDisconnect,
+    params,
     status,
 )
 from fastapi.responses import StreamingResponse
@@ -268,7 +269,7 @@ def get_response_body(response: httpx.Response) -> dict | None:
         return None
 
 
-async def set_env_variables_in_header(custom_headers: dict | None) -> dict | None:
+async def set_env_variables_in_header(custom_headers: Mapping[str, object] | None) -> dict[str, object] | None:
     """
     checks if any headers on config.yaml are defined as os.environ/COHERE_API_KEY etc
 
@@ -280,7 +281,7 @@ async def set_env_variables_in_header(custom_headers: dict | None) -> dict | Non
     """
     if custom_headers is None:
         return None
-    headers: Final = {}
+    headers: Final[dict[str, object]] = {}
     for key, value in custom_headers.items():
         # langfuse Api requires base64 encoded headers - it's simpleer to just ask litellm users to set their langfuse public and secret keys
         # we can then get the b64 encoded keys here
@@ -505,7 +506,7 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
         headers: httpx.Headers,
         litellm_call_id: str | None = None,
         custom_headers: Mapping[str, str] | None = None,
-    ) -> dict:
+    ) -> dict[str, str]:
         # Exclude headers that uvicorn writes itself (server, date) and
         # encoding/length headers that don't survive re-serialization.
         # If we forward the upstream's Server header, uvicorn adds its
@@ -568,7 +569,7 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
         url: str,
         headers: dict,
         requested_query_params: dict | None = None,
-        custom_body: dict | None = None,
+        custom_body: dict[str, object] | None = None,
     ) -> httpx.Response:
         """
         Make a non-streaming HTTP request
@@ -996,7 +997,7 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
     _update_stream_param_based_on_request_body = update_stream_param_based_on_request_body
 
 
-def _carry_guardrail_logging_info(request_data: dict, guardrail_data: dict | None) -> None:
+def _carry_guardrail_logging_info(request_data: dict[str, object], guardrail_data: dict | None) -> None:
     """Copy guardrail logging entries from ``guardrail_data`` onto ``request_data``.
 
     Post-call guardrails run against a throwaway ``hook_data`` dict (its
@@ -1050,15 +1051,15 @@ def _passthrough_google_model(url_route: str, google_provider: str | None) -> st
 
 
 def _build_passthrough_failure_request_payload(
-    parsed_body: dict | None,
-    kwargs: dict | None,
+    parsed_body: dict[str, object] | None,
+    kwargs: Mapping[str, object] | None,
     logging_obj: LiteLLMLoggingObj | None,
     custom_llm_provider: str | None,
     upstream_usage: UpstreamReportedUsage | None = None,
     url: httpx.URL | None = None,
     upstream_model: str | None = None,
     builtin_provider_route: bool = False,
-) -> dict:
+) -> dict[str, object]:
     """Build the ``request_data`` dict passed to ``post_call_failure_hook``.
 
     Shared by the outer exception handler (LiteLLM-internal failures) and
@@ -1103,17 +1104,17 @@ def _build_passthrough_failure_request_payload(
 
 
 @dataclass(frozen=True, slots=True)
-class _TeamCallbackWiring:
+class TeamCallbackWiring:
     success_callbacks: "list[str | Callable[..., object] | CustomLogger] | None" = None  # mutable-ok: Logging init arg
     failure_callbacks: "list[str | Callable[..., object] | CustomLogger] | None" = None  # mutable-ok: Logging init arg
     logging_kwargs: dict[str, str | dict[str, str]] | None = None  # mutable-ok: Logging.__init__ arg
 
 
-def _resolve_team_callback_wiring(
+def resolve_team_callback_wiring(
     user_api_key_dict: UserAPIKeyAuth,
     proxy_config: "ProxyConfig",
     route_description: str,
-) -> _TeamCallbackWiring:
+) -> TeamCallbackWiring:
     """Resolve key/team dynamic logging callbacks for a passthrough request.
 
     Mirrors add_litellm_data_to_request: callback_vars are unpacked top-level
@@ -1140,9 +1141,9 @@ def _resolve_team_callback_wiring(
             "%s: failed to resolve team logging callbacks, continuing without them",
             route_description,
         )
-        return _TeamCallbackWiring()
+        return TeamCallbackWiring()
     if callback_settings_obj is None:
-        return _TeamCallbackWiring()
+        return TeamCallbackWiring()
     callback_vars: Final = callback_settings_obj.callback_vars
     success_callbacks: Final = callback_settings_obj.success_callback
     failure_callbacks: Final = callback_settings_obj.failure_callback
@@ -1156,7 +1157,7 @@ def _resolve_team_callback_wiring(
             "model_info": {},
         }
     )
-    return _TeamCallbackWiring(
+    return TeamCallbackWiring(
         success_callbacks=None if success_callbacks is None else [*success_callbacks],
         failure_callbacks=None if failure_callbacks is None else [*failure_callbacks],
         logging_kwargs=logging_kwargs,
@@ -1243,7 +1244,7 @@ async def _error_body_preview_and_relay(response: httpx.Response) -> tuple[str, 
 async def _log_passthrough_upstream_failure(
     response: httpx.Response,
     user_api_key_dict: UserAPIKeyAuth,
-    request_payload: dict,
+    request_payload: dict[str, object],
     logging_obj: LiteLLMLoggingObj,
     inspect_body: bool = True,
 ) -> httpx.Response:
@@ -1301,7 +1302,7 @@ async def _relay_reporting_failures(
     stream: AsyncGenerator[bytes, None],
     upstream_status: int,
     user_api_key_dict: UserAPIKeyAuth,
-    request_payload: dict,  # mutable-ok: post_call_failure_hook lifts fields onto request_data in place
+    request_payload: dict[str, object],  # mutable-ok: post_call_failure_hook lifts fields onto request_data in place
     logging_obj: LiteLLMLoggingObj | None = None,
 ) -> AsyncGenerator[bytes, None]:
     from litellm.proxy.proxy_server import proxy_logging_obj
@@ -1621,7 +1622,7 @@ async def pass_through_request(
     target: str,
     custom_headers: dict,
     user_api_key_dict: UserAPIKeyAuth,
-    custom_body: dict | None = None,
+    custom_body: Mapping[str, object] | None = None,
     forward_headers: bool | None = False,
     merge_query_params: bool | None = False,
     query_params: dict | None = None,
@@ -1687,7 +1688,7 @@ async def pass_through_request(
     logging_obj: Logging | None = None
     # the dict post-call guardrails wrote their logging info into; the failure
     # handler reuses it so a guardrail block still surfaces its span/logs
-    post_call_guardrail_data: dict | None = None
+    post_call_guardrail_data: dict[str, object] | None = None
 
     #########################################################
     try:
@@ -1761,7 +1762,7 @@ async def pass_through_request(
         # read e.g. ``chat gpt-4o`` instead of ``chat unknown``.
         passthrough_model: Final = (_parsed_body.get("model") if isinstance(_parsed_body, dict) else None) or "unknown"
         start_time: Final = datetime.now()
-        team_callbacks: Final = _resolve_team_callback_wiring(
+        team_callbacks: Final = resolve_team_callback_wiring(
             user_api_key_dict=user_api_key_dict,
             proxy_config=proxy_config,
             route_description="pass_through_endpoint",
@@ -2033,6 +2034,9 @@ async def pass_through_request(
             stream=stream,
         )
         forwarded_json_body: Final = _forwarded_json_body(upstream_body, request.method, request_sent_body(request))
+        await pass_through_endpoint_logging.settle_background_response_before_delete(
+            request.method, str(url), outbound_headers
+        )
 
         if stream:
             logging_obj.stream = True
@@ -2605,14 +2609,14 @@ def _apply_key_team_project_controls(
 _METADATA_ADAPTER: Final = TypeAdapter(dict[str, object])
 
 
-def _update_metadata_with_tags_in_header(request: Request, metadata: dict) -> dict:
+def _update_metadata_with_tags_in_header(request: Request, metadata: dict) -> dict[str, object]:
     """
     If tags are in the request headers, add them to the metadata
 
     Used for google and vertex JS SDKs, and Azure passthrough
     Checks both 'tags' and 'x-litellm-tags' headers
     """
-    tags_to_add: Final = []
+    tags_to_add: Final[list[str]] = []
 
     # Check for 'tags' header first
     _tags = request.headers.get("tags")
@@ -2708,12 +2712,12 @@ async def _parse_request_data_by_content_type(
 
 
 def create_pass_through_route(
-    endpoint,
+    endpoint: object,
     target: str,
     custom_headers: Mapping[str, object] | None = None,
     _forward_headers: bool | None = False,
     _merge_query_params: bool | None = False,
-    dependencies: list | None = None,
+    dependencies: Sequence[params.Depends] | None = None,
     include_subpath: bool | None = False,
     cost_per_request: float | None = None,
     custom_llm_provider: str | None = None,
@@ -2902,7 +2906,7 @@ def create_websocket_passthrough_route(
     target: str,
     custom_headers: dict | None = None,
     _forward_headers: bool | None = False,
-    dependencies: list | None = None,
+    dependencies: Sequence[params.Depends] | None = None,
     cost_per_request: float | None = None,
 ):
     """
@@ -3521,7 +3525,7 @@ async def websocket_passthrough_request(
     upstream_headers: Final = _with_trace_context(forwarded_headers, parent_span=user_api_key_dict.parent_otel_span)
 
     # Initialize logging object similar to HTTP passthrough
-    team_callbacks: Final = _resolve_team_callback_wiring(
+    team_callbacks: Final = resolve_team_callback_wiring(
         user_api_key_dict=user_api_key_dict,
         proxy_config=proxy_config,
         route_description="websocket_passthrough",
@@ -3555,7 +3559,7 @@ async def websocket_passthrough_request(
     # Create a dummy request object for WebSocket connections to maintain compatibility
     # with the existing _init_kwargs_for_pass_through_endpoint function
     class DummyRequest:
-        def __init__(self, url: str, method: str = "WEBSOCKET", headers: dict | None = None):
+        def __init__(self, url: str, method: str = "WEBSOCKET", headers: dict[str, str] | None = None):
             self.url = httpx.URL(url)
             self.scope = websocket.scope
             self.query_params = websocket.query_params
@@ -4085,7 +4089,7 @@ def _should_buffer_passthrough_response(response: httpx.Response) -> bool:
 
 async def _relay_passthrough_response_bytes(
     response: httpx.Response,
-    request_body: dict,
+    request_body: dict[str, object],
     url_route: str,
     start_time: datetime,
     logging_obj: LiteLLMLoggingObj,
@@ -4239,7 +4243,7 @@ class SafeRouteAdder:
         path: str,
         endpoint: Callable[..., object],
         methods: list[str],
-        dependencies: list | None = None,
+        dependencies: Sequence[params.Depends] | None = None,
     ) -> bool:
         """
         Add an API route to the app only if it doesn't already exist.
@@ -4296,10 +4300,10 @@ class InitPassThroughEndpointHelpers:
         app: FastAPI,
         path: str,
         target: str,
-        custom_headers: dict | None,
+        custom_headers: Mapping[str, object] | None,
         forward_headers: bool | None,
         merge_query_params: bool | None,
-        dependencies: list | None,
+        dependencies: Sequence[params.Depends] | None,
         cost_per_request: float | None,
         endpoint_id: str,
         guardrails: dict | None = None,
@@ -4380,10 +4384,10 @@ class InitPassThroughEndpointHelpers:
         app: FastAPI,
         path: str,
         target: str,
-        custom_headers: dict | None,
+        custom_headers: Mapping[str, object] | None,
         forward_headers: bool | None,
         merge_query_params: bool | None,
-        dependencies: list | None,
+        dependencies: Sequence[params.Depends] | None,
         cost_per_request: float | None,
         endpoint_id: str,
         guardrails: dict | None = None,
@@ -4655,8 +4659,8 @@ class YieldsToConfiguredPassThroughRoute(APIRoute):
 
 
 def _get_combined_pass_through_endpoints(
-    pass_through_endpoints: list[dict] | list[PassThroughGenericEndpoint],
-    config_pass_through_endpoints: list[dict],
+    pass_through_endpoints: list[dict[str, object]] | list[PassThroughGenericEndpoint],
+    config_pass_through_endpoints: list[dict[str, object]],
 ):
     """Get combined pass-through endpoints from db + config"""
     return pass_through_endpoints + config_pass_through_endpoints
@@ -4790,7 +4794,7 @@ async def initialize_pass_through_endpoints(
     )
 
     ## get combined pass-through endpoints from db + config
-    combined_pass_through_endpoints: list[dict | PassThroughGenericEndpoint]
+    combined_pass_through_endpoints: list[dict[str, object] | PassThroughGenericEndpoint]
 
     if config_passthrough_endpoints is not None:
         combined_pass_through_endpoints = _get_combined_pass_through_endpoints(
@@ -4933,7 +4937,7 @@ async def _get_pass_through_endpoints_from_db(
 async def _filter_endpoints_by_team_allowed_routes(
     team_id: str,
     pass_through_endpoints: list[PassThroughGenericEndpoint],
-    prisma_client,
+    prisma_client: object,
 ) -> list[PassThroughGenericEndpoint]:
     """
     Filter pass-through endpoints based on team's allowed_passthrough_routes and
@@ -5133,7 +5137,7 @@ async def update_pass_through_endpoints(
     await update_config_general_settings(data=updated_data, user_api_key_dict=user_api_key_dict)
 
     # Re-register the route with updated headers
-    _custom_headers: dict | None = updated_endpoint.headers or {}
+    _custom_headers: dict[str, object] | None = updated_endpoint.headers or {}
     _custom_headers = await set_env_variables_in_header(custom_headers=_custom_headers)
 
     route_app: Final = _request_app(request)
@@ -5230,7 +5234,7 @@ async def create_pass_through_endpoints(
     created_endpoint: Final = PassThroughGenericEndpoint.model_validate(data_dict)
 
     # Register the new route
-    _custom_headers: dict | None = created_endpoint.headers or {}
+    _custom_headers: dict[str, object] | None = created_endpoint.headers or {}
     _custom_headers = await set_env_variables_in_header(custom_headers=_custom_headers)
 
     route_app: Final = _request_app(request)

@@ -85,7 +85,7 @@ class BaseAnthropicMessagesConfig(ABC):
         return api_base or ""
 
     @abstractmethod
-    def get_supported_anthropic_messages_params(self, model: str) -> list:
+    def get_supported_anthropic_messages_params(self, model: str) -> list[str]:
         pass
 
     @abstractmethod
@@ -179,7 +179,7 @@ class BaseAnthropicMessagesConfig(ABC):
         httpx_response: httpx.Response,
         request_body: dict,
         litellm_logging_obj: LiteLLMLoggingObj,
-    ) -> AsyncIterator:
+    ) -> AsyncIterator[bytes]:
         raise NotImplementedError("Subclasses must implement this method")
 
     def get_error_class(

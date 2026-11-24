@@ -18,7 +18,7 @@ from pydantic import ConfigDict, JsonValue, TypeAdapter
 
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
-from litellm.litellm_core_utils.core_helpers import decoded_json_object, subscript
+from litellm.litellm_core_utils.core_helpers import decoded_json_object, iter_items, require_get, subscript
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig, RealtimeSessionUpdateRejection
 from litellm.llms.bedrock.common_utils import BedrockError
@@ -278,7 +278,7 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
     ) -> BedrockError:
         return BedrockError(status_code=status_code, message=error_message, headers=headers)
 
-    def validate_environment(self, headers: dict, model: str, api_key: str | None = None) -> dict:
+    def validate_environment(self, headers: dict[str, str], model: str, api_key: str | None = None) -> dict[str, str]:
         """Validate environment - no special validation needed for Bedrock."""
         return headers
 
@@ -563,7 +563,7 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
             )
         return None
 
-    def transform_input_audio_buffer_append_event(self, json_message: dict) -> list[str]:
+    def transform_input_audio_buffer_append_event(self, json_message: Mapping[str, object]) -> list[str]:
         """
         Transform input_audio_buffer.append event to Bedrock audio input.
 
@@ -630,7 +630,7 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
 
         return messages
 
-    def transform_input_audio_buffer_commit_event(self, json_message: dict) -> list[str]:
+    def transform_input_audio_buffer_commit_event(self, json_message: Mapping[str, object]) -> list[str]:
         """
         Transform input_audio_buffer.commit event to Bedrock audio content end.
 
@@ -657,7 +657,7 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
 
         return messages
 
-    def transform_conversation_item_create_event(self, json_message: dict) -> list[str]:
+    def transform_conversation_item_create_event(self, json_message: Mapping[str, object]) -> list[str]:
         """
         Transform conversation.item.create event to Bedrock text input or tool result.
 
@@ -669,7 +669,7 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
         """
         verbose_logger.debug("Handling conversation.item.create")
 
-        item: Final = json_message.get("item", {})
+        item: Final = require_get(json_message.get("item", {}))
         item_type: Final = item.get("type")
 
         # Handle tool result
@@ -681,7 +681,8 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
         # Handle regular message
         if item_type == "message":
             content: Final = item.get("content", [])
-            for content_part in content:
+            for raw_content_part in iter_items(content):
+                content_part = require_get(raw_content_part)
                 if content_part.get("type") == "input_text":
                     text_content_name = str(uuid_lib.uuid4())
 
@@ -725,7 +726,7 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
 
         return messages
 
-    def transform_response_create_event(self, json_message: dict) -> list[str]:
+    def transform_response_create_event(self, json_message: Mapping[str, object]) -> list[str]:
         """
         Transform response.create event to Bedrock format.
 
@@ -790,7 +791,7 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
             for offset in range(0, len(pcm), TRIGGER_AUDIO_CHUNK_SIZE)
         ]
 
-    def transform_response_cancel_event(self, json_message: dict) -> list[str]:
+    def transform_response_cancel_event(self, json_message: Mapping[str, object]) -> list[str]:
         """
         Transform response.cancel event to Bedrock format.
 
@@ -1544,7 +1545,7 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
     def _should_close_response(self, stop_reason: str | None) -> bool:
         return stop_reason == "END_TURN" or self._response_done_pending
 
-    def transform_conversation_item_create_tool_result_event(self, json_message: dict) -> list[str]:
+    def transform_conversation_item_create_tool_result_event(self, json_message: Mapping[str, object]) -> list[str]:
         """
         Transform conversation.item.create with tool result to Bedrock format.
 
@@ -1557,7 +1558,7 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
         verbose_logger.debug("Handling conversation.item.create for tool result")
         messages: Final[list[str]] = []
 
-        item: Final = json_message.get("item", {})
+        item: Final = require_get(json_message.get("item", {}))
         if item.get("type") == "function_call_output":
             tool_content_name: Final = str(uuid_lib.uuid4())
             call_id: Final = item.get("call_id", "")

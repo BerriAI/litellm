@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING, Final, Optional, TypeAlias
 from pydantic import TypeAdapter
 
 from litellm._logging import verbose_proxy_logger
-from litellm.litellm_core_utils.core_helpers import as_str_mapping
+from litellm.litellm_core_utils.core_helpers import as_object_list, as_str_mapping
 from litellm.llms.base_llm.guardrail_translation.base_translation import (
     BaseTranslation,
     StreamTransformSink,
@@ -38,9 +38,18 @@ _DECODED_JSON: Final = TypeAdapter(object)
 _OBJECT_SEQUENCE: Final = TypeAdapter(tuple[object, ...])
 
 
+def _as_dict(value: object) -> Mapping[object, object] | None:
+    return value if isinstance(value, dict) else None
+
+
+def _as_list_or_tuple(value: object) -> Sequence[object] | None:
+    return value if isinstance(value, (list, tuple)) else None
+
+
 def _field(container: object, name: str) -> object | None:
-    if isinstance(container, dict):
-        return container.get(name)
+    mapping: Final = _as_dict(container)
+    if mapping is not None:
+        return mapping.get(name)
     return getattr(container, name, None)
 
 
@@ -59,8 +68,8 @@ def _write_part_text(part: object, text: str) -> None:
 
 
 def _content_text_parts(content: object) -> tuple[object, ...]:
-    parts: Final = _field(content, "parts")
-    if not isinstance(parts, (list, tuple)):
+    parts: Final = _as_list_or_tuple(_field(content, "parts"))
+    if parts is None:
         return ()
     return tuple(part for part in parts if _part_text(part) is not None)
 
@@ -81,9 +90,8 @@ def _system_instruction(data: Mapping[str, object]) -> object | None:
 
 def _request_text_parts(data: Mapping[str, object]) -> tuple[object, ...]:
     contents: Final = data.get("contents")
-    content_list: Final = (
-        (contents,) if isinstance(contents, dict) else tuple(contents) if isinstance(contents, list) else ()
-    )
+    listed: Final = as_object_list(contents)
+    content_list: Final = (contents,) if _as_dict(contents) is not None else tuple(listed) if listed is not None else ()
     return (
         *_content_text_parts(_system_instruction(data)),
         *(part for content in content_list for part in _content_text_parts(content)),
@@ -91,8 +99,8 @@ def _request_text_parts(data: Mapping[str, object]) -> tuple[object, ...]:
 
 
 def _response_text_parts(response: object) -> tuple[object, ...]:
-    candidates: Final = _field(response, "candidates")
-    if not isinstance(candidates, (list, tuple)):
+    candidates: Final = _as_list_or_tuple(_field(response, "candidates"))
+    if candidates is None:
         return ()
     return tuple(part for candidate in candidates for part in _content_text_parts(_field(candidate, "content")))
 
@@ -545,7 +553,7 @@ class GoogleGenAIGenerateContentHandler(BaseTranslation):
         user_api_key_dict: Optional["UserAPIKeyAuth"],
         context_key: str,
         context_value: object,
-    ) -> dict:  # mutable-ok: CustomGuardrail.apply_guardrail requires a plain dict request payload
+    ) -> dict[str, object]:  # mutable-ok: CustomGuardrail.apply_guardrail requires a plain dict request payload
         base: Final = request_data if request_data is not None else _EMPTY_REQUEST_DATA
         user_metadata: Final = self.transform_user_api_key_dict_to_metadata(user_api_key_dict)
         context_pairs: Final = ((context_key, context_value),) if context_key not in base else ()

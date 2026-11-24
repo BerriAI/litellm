@@ -1,4 +1,5 @@
 import base64
+import copy
 import os
 import re
 from collections.abc import Callable, Collection, Iterable, Iterator, Mapping, Sequence
@@ -20,9 +21,10 @@ from litellm.litellm_core_utils.core_helpers import (
     attribute_or_none,
     decoded_json_object,
     iter_items,
+    json_contains,
     require_attributes,
 )
-from litellm.litellm_core_utils.dot_notation_indexing import delete_nested_value, is_nested_path
+from litellm.litellm_core_utils.dot_notation_indexing import delete_nested_value
 from litellm.litellm_core_utils.get_provider_specific_headers import ProviderSpecificHeaderUtils
 from litellm.llms.base_llm.responses.transformation import (
     ANY_REASONING_FIELD_VALUES,
@@ -85,9 +87,28 @@ class _LooksUpById(Protocol):
 _NO_MODEL_INFO: Final[Mapping[str, object]] = MappingProxyType({})
 
 
-def _apply_nested_drop_params(params: dict[str, object], additional_drop_params: list[str] | None) -> dict[str, object]:
-    nested_paths: Final = tuple(path for path in additional_drop_params or () if is_nested_path(path))
-    return reduce(lambda acc, path: delete_nested_value(acc, path), nested_paths, params)
+class _ParamItems(Protocol):
+    def items(self) -> Iterable[tuple[str, object]]: ...
+
+
+def _special_params(value: object) -> Mapping[str, object]:
+    mapping: Final = as_str_mapping(value)
+    if mapping is not None:
+        return mapping
+    return dict(require_attributes(value, _ParamItems, "items").items())
+
+
+def _names_nested_path(path: object) -> bool:
+    return json_contains(path, ".") or json_contains(path, "[")
+
+
+def _without_nested_path(params: dict[str, object], path: object) -> dict[str, object]:
+    return delete_nested_value(params, path) if isinstance(path, str) else copy.deepcopy(params)
+
+
+def _apply_nested_drop_params(params: dict[str, object], additional_drop_params: object) -> dict[str, object]:
+    nested_paths: Final = tuple(path for path in iter_items(additional_drop_params or ()) if _names_nested_path(path))
+    return reduce(_without_nested_path, nested_paths, params)
 
 
 def _output_token_detail(details: object, field: str) -> int | None:
@@ -394,7 +415,7 @@ class ResponsesAPIRequestUtils:
 
     @staticmethod
     def get_requested_response_api_optional_param(
-        params: dict[str, Any],
+        params: dict[str, object],
     ) -> ResponsesAPIOptionalRequestParams:
         """
         Filter parameters to only include those defined in ResponsesAPIOptionalRequestParams.
@@ -409,13 +430,13 @@ class ResponsesAPIRequestUtils:
 
         valid_keys: Final = get_type_hints(ResponsesAPIOptionalRequestParams).keys()
         custom_llm_provider: Final = params.pop("custom_llm_provider", None)
-        special_params: Final[dict[str, object]] = params.pop("kwargs", {})
+        special_params: Final = params.pop("kwargs", {})
 
-        additional_drop_params: Final[list[str] | None] = params.pop("additional_drop_params", None)
+        additional_drop_params: Final = params.pop("additional_drop_params", None)
         non_default_params: Final = _apply_nested_drop_params(
             PreProcessNonDefaultParams.base_pre_process_non_default_params(
                 passed_params=params,
-                special_params=special_params,
+                special_params=_special_params(special_params),
                 custom_llm_provider=custom_llm_provider,
                 additional_drop_params=additional_drop_params,
                 default_param_values={k: None for k in valid_keys},
@@ -1711,6 +1732,7 @@ def bridge_reasoning(
     deployment_model_info: Mapping[str, object] | None,
     drop_params: bool,
     additional_drop_params: object,
+    collapses_to_effort: bool = False,
 ) -> Mapping[str, object] | RefusedReasoningFields | None:
     from litellm.utils import ProviderConfigManager
 
@@ -1737,11 +1759,39 @@ def bridge_reasoning(
         for key, value in sent.items()
         if key in _REFUSABLE_REASONING_FIELDS and key not in accepted and value is not None
     )
-    if (
-        refused
-        and not drop_params
-        and responses_config is not None
-        and responses_config.ignores_unsupported_reasoning_fields()
-    ):
+    backend_stays_silent: Final = collapses_to_effort or (
+        responses_config is not None and responses_config.ignores_unsupported_reasoning_fields()
+    )
+    if refused and not drop_params and backend_stays_silent:
         return RefusedReasoningFields(refused)
     return (accepted if drop_params else sent) or None
+
+
+def chat_reasoning_effort(
+    *,
+    requested: Mapping[str, object],
+    model: str,
+    base_model: str | None,
+    custom_llm_provider: str,
+    api_base: str | None,
+    deployment_model_info: Mapping[str, object] | None,
+    drop_params: bool,
+    additional_drop_params: object,
+) -> str | RefusedReasoningFields | None:
+    checked: Final = bridge_reasoning(
+        requested=requested,
+        effort_kept=True,
+        summary_alias=None,
+        model=model,
+        base_model=base_model,
+        custom_llm_provider=custom_llm_provider,
+        api_base=api_base,
+        deployment_model_info=deployment_model_info,
+        drop_params=drop_params,
+        additional_drop_params=additional_drop_params,
+        collapses_to_effort=True,
+    )
+    if isinstance(checked, RefusedReasoningFields):
+        return checked
+    effort: Final = None if checked is None else checked.get("effort")
+    return effort if isinstance(effort, str) else None
