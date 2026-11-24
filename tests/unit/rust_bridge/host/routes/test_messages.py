@@ -4176,3 +4176,22 @@ def test_settings_leave_pricing_to_python_for_an_invoked_bedrock_model_id() -> N
     )
 
     assert settings["pricing"] is None
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_forwards_billing_policy_to_anthropic(
+    recording_upstream: tuple[str, list[dict[str, object]]],
+) -> None:
+    api_base, bodies = recording_upstream
+    billing_policy: Final = {"type": "billing_policy"}
+
+    await litellm.anthropic_messages(
+        model="anthropic/claude-opus-5-5",
+        api_base=api_base,
+        api_key="sk-ant-test",
+        max_tokens=16,
+        messages=[{"role": "user", "content": "hi"}],
+        billing_policy=billing_policy,
+    )
+
+    assert bodies[0]["billing_policy"] == billing_policy

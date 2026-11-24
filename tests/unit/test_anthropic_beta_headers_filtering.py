@@ -519,6 +519,18 @@ class TestAnthropicBetaHeadersFiltering:
 
         assert filtered == ["dangerous-tool-use-2026-09-03"]
 
+    @pytest.mark.parametrize("provider", ["anthropic", "azure_ai"])
+    def test_linked_billing_beta_forwarded(self, provider: str) -> None:
+        """user-profiles-billing-2026-10-01 gates the `billing_policy` request field. Anthropic documents it for the
+        Claude API (https://platform.claude.com/docs/en/release-notes/overview, 2026-11-17 entry, fetched
+        2026-11-22); the azure_ai row follows the other user-profiles betas."""
+        filtered: Final = filter_and_transform_beta_headers(
+            beta_headers=["user-profiles-billing-2026-10-01"],
+            provider=provider,
+        )
+
+        assert filtered == ["user-profiles-billing-2026-10-01"]
+
     @pytest.mark.parametrize("provider", ["anthropic", "vertex_ai"])
     def test_inline_tools_forwarded(self, provider: str) -> None:
         """inline-tools-2026-09-15 lets a `tool_addition` system message carry a new tool mid-conversation.

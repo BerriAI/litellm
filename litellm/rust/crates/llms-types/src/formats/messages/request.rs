@@ -457,6 +457,8 @@ pub struct MessagesOptionalParams {
     pub thread: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub diagnostics: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub billing_policy: Option<Value>,
     #[serde(flatten)]
     #[field_names_as_slice(skip)]
     pub extra: Map<String, Value>,

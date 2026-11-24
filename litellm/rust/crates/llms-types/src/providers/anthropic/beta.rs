@@ -196,6 +196,8 @@ pub enum AnthropicBeta {
     UserProfiles20260818,
     #[strum(serialize = "user-profiles-2026-09-04")]
     UserProfiles20260904,
+    #[strum(serialize = "user-profiles-billing-2026-10-01")]
+    UserProfilesBilling20261001,
     #[strum(serialize = "webhooks-2026-10-07")]
     Webhooks20261007,
     #[strum(default, transparent)]
@@ -203,7 +205,7 @@ pub enum AnthropicBeta {
 }
 
 impl AnthropicBeta {
-    pub const KNOWN: [Self; 77] = [
+    pub const KNOWN: [Self; 78] = [
         Self::Oauth20250420,
         Self::WebFetch20250910,
         Self::WebSearch20250305,
@@ -280,6 +282,7 @@ impl AnthropicBeta {
         Self::UserProfiles20260324,
         Self::UserProfiles20260818,
         Self::UserProfiles20260904,
+        Self::UserProfilesBilling20261001,
         Self::Webhooks20261007,
     ];
 
@@ -344,7 +347,8 @@ impl AnthropicBeta {
             | Self::TokenCounting20241101
             | Self::UserProfiles20260324
             | Self::UserProfiles20260818
-            | Self::UserProfiles20260904 => &[
+            | Self::UserProfiles20260904
+            | Self::UserProfilesBilling20261001 => &[
                 BetaProvider::BedrockConverse,
                 BetaProvider::Bedrock,
                 BetaProvider::BedrockMantle,
@@ -599,6 +603,7 @@ mod tests {
             AnthropicBeta::UserProfiles20260324,
             AnthropicBeta::UserProfiles20260818,
             AnthropicBeta::UserProfiles20260904,
+            AnthropicBeta::UserProfilesBilling20261001,
             AnthropicBeta::Webhooks20261007
         )]
         beta: AnthropicBeta,
