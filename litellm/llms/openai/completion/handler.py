@@ -2,6 +2,8 @@ import json
 from collections.abc import Callable, Mapping
 from typing import Final
 
+from openai import AsyncOpenAI, OpenAI
+
 import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
@@ -184,7 +186,7 @@ class OpenAITextCompletion(BaseLLM):
         timeout: float,
         max_retries: int,
         organization: str | None = None,
-        client=None,
+        client: AsyncOpenAI | None = None,
         litellm_params: Mapping[str, object] | None = None,
     ):
         try:
@@ -245,7 +247,7 @@ class OpenAITextCompletion(BaseLLM):
         timeout: float,
         api_base: str | None = None,
         max_retries: int | None = None,
-        client=None,
+        client: OpenAI | None = None,
         organization: str | None = None,
         litellm_params: Mapping[str, object] | None = None,
     ):
@@ -313,7 +315,7 @@ class OpenAITextCompletion(BaseLLM):
         timeout: float,
         max_retries: int,
         api_base: str | None = None,
-        client=None,
+        client: AsyncOpenAI | None = None,
         organization: str | None = None,
         litellm_params: Mapping[str, object] | None = None,
     ):

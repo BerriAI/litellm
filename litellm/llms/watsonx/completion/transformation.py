@@ -241,7 +241,7 @@ class IBMWatsonXAIConfig(IBMWatsonXMixin, BaseConfig):
             "us-south",
         ]
 
-    def _build_request_payload(self, model: str, prompt: str, optional_params: dict) -> dict:
+    def _build_request_payload(self, model: str, prompt: str, optional_params: dict) -> dict[str, object]:
         """Shared logic to build request payload"""
         extra_body_params: Final = optional_params.pop("extra_body", {})
         optional_params.update(extra_body_params)
@@ -266,7 +266,7 @@ class IBMWatsonXAIConfig(IBMWatsonXMixin, BaseConfig):
         optional_params: dict,
         litellm_params: Mapping[str, object],
         headers: Mapping[str, object],
-    ) -> dict:
+    ) -> dict[str, object]:
         provider: Final = model.split("/")[0]
         prompt: Final = await aconvert_watsonx_messages_to_prompt(
             model=model, messages=messages, provider=provider, custom_prompt_dict={}
@@ -280,7 +280,7 @@ class IBMWatsonXAIConfig(IBMWatsonXMixin, BaseConfig):
         optional_params: dict,
         litellm_params: Mapping[str, object],
         headers: Mapping[str, object],
-    ) -> dict:
+    ) -> dict[str, object]:
         """Sync version of transform_request"""
         provider: Final = model.split("/")[0]
         prompt: Final = convert_watsonx_messages_to_prompt(

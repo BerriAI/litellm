@@ -223,6 +223,10 @@ pub(super) async fn provider_call(
     )
     .await?;
     let env_lookup = secret_lookup(secrets, deferred.as_ref());
+    let transform_context = MessagesTransformContext {
+        keeps_unsigned_thinking: !config.checks_claude_signatures(api_base.as_deref(), &env_lookup),
+        ..transform_context
+    };
 
     let connection_params = config.select_endpoint(
         connection_params,

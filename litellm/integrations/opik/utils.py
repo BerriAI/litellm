@@ -36,7 +36,7 @@ def create_uuid7() -> str:
     return str(uuid.UUID(bytes=bytes(uuid_bytes)))
 
 
-def _read_opik_config_file() -> dict[str, str]:
+def _read_opik_config_file() -> Mapping[str, str]:
     config_path: Final = os.path.expanduser(CONFIG_FILE_PATH_DEFAULT)
 
     config: Final = configparser.ConfigParser()

@@ -2,6 +2,7 @@ import os
 import threading
 from collections import OrderedDict
 from collections.abc import Iterator, Mapping
+from datetime import datetime
 from typing import TYPE_CHECKING, Any, Final
 
 from litellm._logging import verbose_logger
@@ -329,18 +330,30 @@ class ArizePhoenixLogger(OpenTelemetry):
 
         return traceparent_ctx, None
 
-    def _handle_success(self, kwargs: object, response_obj: object, start_time: object, end_time: object):
+    def _handle_success(
+        self,
+        kwargs: object,
+        response_obj: object,
+        start_time: datetime | float | None,
+        end_time: datetime | float | None,
+    ):
         self._handle_phoenix_trace(kwargs, response_obj, start_time, end_time, success=True)
 
-    def _handle_failure(self, kwargs: object, response_obj: object, start_time: object, end_time: object):
+    def _handle_failure(
+        self,
+        kwargs: object,
+        response_obj: object,
+        start_time: datetime | float | None,
+        end_time: datetime | float | None,
+    ):
         self._handle_phoenix_trace(kwargs, response_obj, start_time, end_time, success=False)
 
     def _handle_phoenix_trace(
         self,
         kwargs,
         response_obj: object,
-        start_time,
-        end_time,
+        start_time: datetime | float | None,
+        end_time: datetime | float | None,
         *,
         success: bool,
     ):

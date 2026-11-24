@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Any, Final, Literal, Optional, TypeAlias, Type
 
 from openai.types.chat import ChatCompletionToolParam
 from openai.types.responses.function_tool_param import FunctionToolParam
-from pydantic import TypeAdapter, ValidationError
+from pydantic import BaseModel, TypeAdapter, ValidationError
 from typing_extensions import TypedDict as ExtraItemsTypedDict
 from typing_extensions import Unpack
 
@@ -1203,7 +1203,7 @@ class LiteLLM_Proxy_MCP_Handler:
 
     @staticmethod
     def create_follow_up_messages_for_chat(
-        original_messages: list[object],
+        original_messages: Sequence[BaseModel | Mapping[str, object]],
         response: ModelResponse,
         tool_results: Sequence[Mapping[str, object]],
     ) -> Sequence[Mapping[str, object]]:
