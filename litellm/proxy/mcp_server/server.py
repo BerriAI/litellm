@@ -299,7 +299,7 @@ def _jsonrpc_text_method(text: str) -> str | None:
     if value is None:
         return None
     try:
-        method: Final = json.loads(value.group(1))
+        method: Final = _DECODED_JSON.validate_python(json.loads(value.group(1)))
     except ValueError:
         return None
     return method if isinstance(method, str) else None
@@ -927,7 +927,7 @@ if MCP_AVAILABLE:
             _SESSION_MANAGERS_INITIALIZED = False
 
     @contextlib.asynccontextmanager
-    async def lifespan(app) -> AsyncIterator[None]:
+    async def lifespan(app: object) -> AsyncIterator[None]:
         """Application lifespan context manager."""
         await initialize_session_managers()
         try:
@@ -1372,7 +1372,7 @@ if MCP_AVAILABLE:
             mcp_servers=mcp_servers, user_api_key_auth=user_api_key_auth, toolset_id=mcp_active_toolset_id.get()
         )
 
-    async def extract_mcp_auth_context(scope, path):
+    async def extract_mcp_auth_context(scope: Scope, path: str):
         """
         Extracts mcp_servers from the path and processes the MCP request for auth context.
         Returns: (user_api_key_auth, mcp_auth_header, mcp_servers, mcp_server_auth_headers)

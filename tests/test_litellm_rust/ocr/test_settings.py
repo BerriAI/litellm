@@ -77,6 +77,50 @@ async def test_native_ocr_inherits_named_credentials_without_overwriting_argumen
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+async def test_native_ocr_resolves_a_named_credential_oidc_key_beside_values_that_cannot_be_copied(
+    server: RecordingServer, monkeypatch: pytest.MonkeyPatch, asynchronous: bool
+) -> None:
+    import threading
+
+    from litellm.models.credentials import CredentialItem
+
+    class TokenSource:
+        def __init__(self) -> None:
+            self.lock: Final = threading.Lock()
+
+        def token(self) -> str:
+            return "unused"
+
+    monkeypatch.setenv("MISTRAL_SA_TOKEN", "env-token")
+    monkeypatch.setattr(
+        litellm,
+        "credential_list",
+        [
+            CredentialItem(
+                credential_name="ocr-oidc",
+                credential_info={},
+                credential_values={
+                    "api_key": "oidc/env/MISTRAL_SA_TOKEN",
+                    "api_base": server.base_url,
+                    "token_source": TokenSource().token,
+                },
+            )
+        ],
+    )
+    arguments: Final = {
+        "model": "mistral/mistral-ocr-latest",
+        "document": OCR_DOCUMENT,
+        "litellm_credential_name": "ocr-oidc",
+    }
+
+    response: Final = await litellm.aocr(**arguments) if asynchronous else litellm.ocr(**arguments)
+
+    assert response.pages[0].markdown == "native OCR response"
+    assert server.requests[0].headers["authorization"] == "Bearer env-token"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
 @pytest.mark.parametrize(
     "name,value",
     [

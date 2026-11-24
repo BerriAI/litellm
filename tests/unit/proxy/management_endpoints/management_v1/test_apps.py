@@ -1,23 +1,27 @@
 import asyncio
+from collections.abc import AsyncIterator
 from types import SimpleNamespace
 from typing import Final, cast
 
 import pytest
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
+from starlette.types import Message, Receive, Scope, Send
 
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.list_api.common import ManagementProblem, problem_response
 from litellm.proxy.management_endpoints.management_v1.apps import get_app_store, router
 from litellm.proxy.management_helpers.apps import AppStore
 from litellm.proxy.management_helpers.customer_hierarchy import BudgetGroupScope
+from litellm.redis.stores.auth_cache import AuthObject
+from litellm.types.proxy.management_endpoints.customer_hierarchy import Budget
 from tests.unit.proxy.management_helpers.test_apps import (
     AppDatabase,
     profile,
     seed_resources,
 )
-from litellm.types.proxy.management_endpoints.customer_hierarchy import Budget
 from tests.unit.proxy.management_helpers.test_customer_hierarchy import NOW
 
 
@@ -57,6 +61,69 @@ def test_app_presets_reject_unrelated_or_conflicting_assignments(invalid: str) -
     assert rejected.status_code == 422, rejected.text
     assert http.post("/management/v1/apps", json={"resource_id": "search", **body}).status_code == 422
     assert http.get(f"/management/v1/apps/{app['app_id']}").json()["budget_id"] is None
+
+
+@pytest.mark.parametrize(
+    ("method", "suffix", "field"),
+    (
+        ("PATCH", "", "default_customer_member_budget"),
+        ("PUT", "/customer_organizations/org", "customer_member_budget"),
+        ("PUT", "/customer_members/member", "budget"),
+    ),
+)
+def test_member_presets_link_fork_and_inherit_without_changing_shared_policy(
+    method: str, suffix: str, field: str
+) -> None:
+    http, store = client()
+    asyncio.run(store.customers.organizations.create({"customer_org_id": "org"}))
+    asyncio.run(store.customers.members.create({"customer_member_id": "member", "parent_org_id": "org"}))
+    assert http.put("/management/v1/apps/definition", json={"resource_type": "team"}).status_code == 200
+    group: Final = asyncio.run(profile(store, "Member Standard", 100, BudgetGroupScope.APP_MEMBER))
+    policy: Final = Budget(
+        max_budget=100, budget_duration="1mo", tpm_limit=1000, rpm_limit=10, soft_budget=80, allowed_models=("model-a",)
+    )
+    asyncio.run(store.customers.update_budget(group, policy, "admin"))
+    app: Final = http.post(
+        "/management/v1/apps", json={"resource_id": "chat", "default_customer_member_budget_id": group}
+    ).json()
+    path: Final = f"/management/v1/apps/{app['app_id']}{suffix}"
+    member_path: Final = f"/management/v1/apps/{app['app_id']}/customer_members/member"
+    private: Final = asyncio.run(store.customers.create_budget(Budget(max_budget=10), "admin"))
+    unrelated: Final = asyncio.run(profile(store, "Org group", 10))
+    for invalid in (private, unrelated, "missing"):
+        rejected: Final = http.request(method, path, json={f"{field}_id": invalid})
+        assert rejected.status_code == 422, rejected.text
+    assert http.request(method, path, json={f"{field}_id": group, field: {"max_budget": 5}}).status_code == 422
+    assigned: Final = http.request(method, path, json={f"{field}_id": group})
+    assert assigned.status_code == 200, assigned.text
+    assert assigned.json()[f"{field}_id"] == group
+    assert http.request(method, path, json={}).json()[f"{field}_id"] == group
+    asyncio.run(store.customers.update_budget(group, Budget(max_budget=120), "admin"))
+    assert http.get(member_path).json()["effective_budget"]["max_budget"] == 120
+    customized: Final = http.request(method, path, json={field: {"max_budget": 200}}).json()
+    private_id: Final = customized[f"{field}_id"]
+    assert private_id is not None and private_id != group
+    expected: Final = policy.model_copy(update={"max_budget": 200})
+    assert asyncio.run(store.budget(private_id)) == expected
+    assert asyncio.run(store.budget(group)) == expected.model_copy(update={"max_budget": 120})
+    increased: Final = http.put(
+        member_path,
+        json={"budget_override": {"max_budget": 300}, "budget_override_expires_at": NOW.replace(year=2028).isoformat()},
+    ).json()
+    assert increased["effective_budget"]["max_budget"] == 300
+    http.request(method, path, json={field: {"max_budget": 250}})
+    assert http.get(member_path).json()["effective_budget"]["max_budget"] == 300
+    assert http.get(member_path).json()["budget_override_id"] == increased["budget_override_id"]
+    expired: Final = http.put(member_path, json={"budget_override_expires_at": NOW.replace(year=2020).isoformat()})
+    assert expired.json()["effective_budget"]["max_budget"] == 250
+    restored: Final = http.request(method, path, json={f"{field}_id": group})
+    assert restored.json()[f"{field}_id"] == group and asyncio.run(store.budget(private_id)) is None
+    cleared: Final = http.request(method, path, json={f"{field}_id": None})
+    assert cleared.json()[f"{field}_id"] is None
+    assert http.get(member_path).json()["effective_budget"] == (
+        None if not suffix else expected.model_copy(update={"max_budget": 120}).model_dump(mode="json")
+    )
+    assert asyncio.run(store.budget(group)) == expected.model_copy(update={"max_budget": 120})
 
 
 GRANT_ROUTES: Final = ("user", "team", "organization")
@@ -209,7 +276,103 @@ def test_only_proxy_admins_can_discover_or_manage_app_budgets(
     assert http.get("/management/v1/apps").status_code == 403
     assert http.get("/management/v1/apps/definition").status_code == 403
     assert http.get("/management/v1/apps/resources", params={"resource_type": "virtual_key"}).status_code == 403
+    assert http.get("/management/v1/apps/resources/team/chat/models").status_code == 403
     assert http.put("/management/v1/apps/definition", json={"resource_type": "team"}).status_code == 403
+
+
+def model_client(
+    monkeypatch: pytest.MonkeyPatch,
+    team_models: list[str],
+    key_models: list[str],
+    project_models: list[str],
+) -> tuple[TestClient, UserApiKeyCache]:
+    from litellm import Router
+    from litellm.proxy import proxy_server
+    from litellm.proxy._types import LiteLLM_ProjectTableCachedObj, LiteLLM_TeamTableCachedObj
+    from litellm.proxy.utils import PrismaClient
+
+    http, store = client()
+    cache: Final = UserApiKeyCache()
+    team: Final = LiteLLM_TeamTableCachedObj(team_id="chat", models=team_models)
+    project: Final = LiteLLM_ProjectTableCachedObj(project_id="project", team_id="chat", models=project_models)
+    key: Final = UserAPIKeyAuth(
+        token="token-a", team_id="chat", team_models=team_models, models=key_models, project_id="project"
+    )
+    cache.set_cache(AuthObject.team("chat"), team, model_type=LiteLLM_TeamTableCachedObj)
+    cache.set_cache(AuthObject.project("project"), project, model_type=LiteLLM_ProjectTableCachedObj)
+    cache.set_cache(AuthObject.virtual_key("token-a"), key, model_type=UserAPIKeyAuth)
+    asyncio.run(store.keys.update(where={"token": "token-a"}, data={"key_id": "key-id"}))
+    asyncio.run(store.projects.update(where={"project_id": "project"}, data={"team_id": "chat"}))
+    router_models: Final = [
+        {"model_name": name, "litellm_params": {"model": "openai/test-model", "api_key": "test"}}
+        for name in ("alpha", "beta", "other")
+    ]
+    monkeypatch.setattr(proxy_server, "llm_router", Router(model_list=router_models))
+    monkeypatch.setattr(proxy_server, "llm_model_list", router_models)
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", cache)
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+    monkeypatch.setattr(proxy_server, "user_model", None)
+    monkeypatch.setattr(
+        proxy_server,
+        "prisma_client",
+        PrismaClient(
+            database_url="postgresql://unused:unused@localhost/unused", proxy_logging_obj=proxy_server.proxy_logging_obj
+        ),
+    )
+    return http, cache
+
+
+@pytest.mark.parametrize(
+    ("resource", "team_models", "key_models", "project_models", "expected"),
+    (
+        ("team/chat", ["alpha"], [], [], ["alpha"]),
+        ("team/chat", [], [], [], ["alpha", "beta", "other"]),
+        ("team/chat", ["no-default-models"], [], [], []),
+        ("virtual_key/key-id", ["alpha", "beta"], ["alpha"], [], ["alpha"]),
+        ("virtual_key/key-id", ["alpha"], ["beta"], [], []),
+        ("virtual_key/key-id", ["alpha", "beta"], ["all-team-models"], ["beta"], ["beta"]),
+        ("virtual_key/key-id", ["a*"], ["*"], [], ["alpha"]),
+        ("project/project", ["alpha", "beta"], [], ["beta", "other"], ["beta"]),
+    ),
+)
+def test_app_model_options_follow_resource_permissions(
+    monkeypatch: pytest.MonkeyPatch,
+    resource: str,
+    team_models: list[str],
+    key_models: list[str],
+    project_models: list[str],
+    expected: list[str],
+) -> None:
+    http, _ = model_client(monkeypatch, team_models, key_models, project_models)
+    response: Final = http.get(f"/management/v1/apps/resources/{resource}/models")
+    assert response.status_code == 200, response.text
+    assert sorted(response.json()) == expected
+    assert http.get("/management/v1/apps/resources/team/missing/models").status_code == 404
+
+
+@pytest.mark.parametrize("resource", ("team/chat", "project/project", "virtual_key/key-id"))
+@pytest.mark.parametrize("unavailable", (False, True))
+def test_app_model_lookup_errors_describe_the_resource_not_the_admin_session(
+    monkeypatch: pytest.MonkeyPatch, resource: str, unavailable: bool
+) -> None:
+    from litellm.proxy.db.db_lookup_gate import DBLookupDeadlineExceeded
+    from tests.unit.proxy.rust_auth_stores import FakeKeyStore, FakeTeamStore, RustAuthStores, install_rust_auth_stores
+
+    http, cache = model_client(monkeypatch, [], [], [])
+    cache.flush_cache()
+    error: Final = DBLookupDeadlineExceeded("app resource", 1)
+    install_rust_auth_stores(
+        monkeypatch,
+        RustAuthStores(
+            key=FakeKeyStore(rows={"token-a": error} if unavailable else {}),
+            team=FakeTeamStore(rows={"chat": error} if unavailable else {}),
+        ),
+    )
+    response: Final = http.get(f"/management/v1/apps/resources/{resource}/models")
+    assert response.status_code == (503 if unavailable else 404), response.text
+    assert response.json() == {
+        "detail": "Unable to load app models. Try again." if unavailable else "App resource or its parent not found."
+    }
 
 
 @pytest.mark.parametrize("resource_type", ("key", "application", "unknown"))
@@ -372,3 +535,31 @@ def test_unauthenticated_app_read_does_not_open_the_store(path: str) -> None:
     response: Final = TestClient(app).get(path)
 
     assert (response.status_code, opened) == (401, []), response.text
+
+
+def test_app_changes_finish_the_transaction_before_reporting_success() -> None:
+    events: Final[list[str]] = []  # mutable-ok: records transaction and response ordering
+    store: Final = AppStore(AppDatabase(), NOW)
+
+    async def transactional_store() -> AsyncIterator[AppStore]:
+        yield store
+        events.append("committed and cache invalidated")
+
+    app: Final = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin"
+    )
+    app.dependency_overrides[get_app_store] = transactional_store
+
+    async def observe(scope: Scope, receive: Receive, send: Send) -> None:
+        async def send_response(message: Message) -> None:
+            if message["type"] == "http.response.start":
+                events.append("response")
+            await send(message)
+
+        await app(scope, receive, send_response)
+
+    response: Final = TestClient(observe).put("/management/v1/apps/definition", json={"resource_type": "team"})
+    assert response.status_code == 200, response.text
+    assert events == ["committed and cache invalidated", "response"]

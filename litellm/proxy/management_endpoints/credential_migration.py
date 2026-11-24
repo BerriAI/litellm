@@ -22,10 +22,9 @@ Design properties (see case 2026-06-24 fix plan):
   every value as ``migrated`` / ``legacy`` / ``plaintext`` / ``undecryptable``.
   A residual ``legacy == 0`` is the compliance attestation.
 
-Coverage. The covered tables (model table, credentials table, MCP credential/env
-tables, config ``environment_variables``) already have a re-encryption path in
-``_rotate_master_key``; this module delegates to it in *same-key* mode and adds
-walkers for the locations that had no rotation path: team / verification-token
+Coverage. This module uses the same-key AES migration helper for the model and
+credential tables, MCP credential/env tables, and config ``environment_variables``.
+It adds walkers for team / verification-token
 ``callback_vars`` metadata, the ``vantage_settings`` / ``cloudzero_settings``
 config rows, and the SSO config table.
 """
@@ -459,7 +458,7 @@ def _classify_callback_value(value: object) -> ValueClass:
 # ---------------------------------------------------------------------------
 # Read-only scanner for the rotation-covered tables.
 #
-# ``_rotate_master_key`` re-encrypts these tables but returns no counts, so on
+# The AES migration helper re-encrypts these tables but returns no counts, so on
 # its own it can neither attest residual legacy nor report how many rows it
 # migrated. This scanner reads (never writes) the same encrypted columns the
 # rotation path touches and classifies every value, giving both the attestation
@@ -520,8 +519,8 @@ async def _scan_one_table(
     prisma_client: object,
     location: str,
     db_attr: str,
-    json_columns: tuple,
-    scalar_columns: tuple,
+    json_columns: tuple[str, ...],
+    scalar_columns: tuple[str, ...],
 ) -> LocationReport:
     report: Final = LocationReport(location=location)
     table: Final[TableActions[object] | None] = getattr(prisma_client.db, db_attr, None)
@@ -594,18 +593,18 @@ _CLOUDZERO_SENSITIVE: Final = ["api_key"]
 
 
 async def _migrate_covered_tables(prisma_client: object, user_api_key_dict: object) -> list[LocationReport]:
-    """Re-encrypt the tables already covered by ``_rotate_master_key`` (model
+    """Re-encrypt the tables covered by the AES migration helper (model
     table, credentials, MCP credential/env tables, config environment_variables)
     by running that orchestrator in *same-key* mode. With the AES gate on, the
     re-encrypt writes land in ``v2:`` format.
 
-    ``_rotate_master_key`` returns no counts, so we bracket it with read-only
+    The helper returns no counts, so we bracket it with read-only
     scans: the pre-scan's legacy total minus the post-scan's gives the number
     actually migrated per location, and the post-scan supplies the residual /
     already-v2 / scanned figures. Returns one report per covered location.
     """
     from litellm.proxy.management_endpoints.key_management_endpoints import (
-        rotate_master_key,
+        reencrypt_credentials_for_aes_migration,
     )
 
     pre: Final = {r.location: r for r in await _scan_covered_tables(prisma_client)}
@@ -615,7 +614,7 @@ async def _migrate_covered_tables(prisma_client: object, user_api_key_dict: obje
         raise RuntimeError(
             "Cannot migrate covered tables: no salt key / master key is set. Set LITELLM_SALT_KEY before migrating."
         )
-    await rotate_master_key(
+    await reencrypt_credentials_for_aes_migration(
         prisma_client=cast("PrismaClient", prisma_client),
         user_api_key_dict=cast("UserAPIKeyAuth", user_api_key_dict),
         current_master_key=current_key,

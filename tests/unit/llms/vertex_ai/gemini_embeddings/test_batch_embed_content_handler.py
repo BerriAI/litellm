@@ -327,3 +327,95 @@ async def test_async_handler_custom_httpx_client_error_redacts_credentials_echoe
     assert exc_info.value.status_code == 400
     assert "bad request for" in exc_info.value.message
     assert "not-a-real-secret-123" not in exc_info.value.message
+
+
+MEDIA_LOOKING_TEXTS: Final = (
+    'data:image/png;base64,iVBORw0KGgo="}',
+    "gs://bucket/docs is mirrored; the logo is gs://bucket/assets/logo.png",
+    "files/README.md explains the build",
+)
+
+
+async def _embed(model: str, sync_mode: bool, embedding_input: list[object]) -> EmbeddingResponse:
+    if sync_mode:
+        return litellm.embedding(
+            model=model, input=embedding_input, api_key="gemini-test-key", **_vertex_params(model)
+        )
+    return await litellm.aembedding(
+        model=model, input=embedding_input, api_key="gemini-test-key", **_vertex_params(model)
+    )
+
+
+@pytest.mark.usefixtures("error_test_vertex_credentials")
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.parametrize(("model", "url"), SHARED_HANDLER_ROUTES)
+@pytest.mark.asyncio
+async def test_text_blocks_are_sent_as_text_without_a_files_api_lookup(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, sync_mode: bool, model: str, url: str
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "in_memory_llm_clients_cache", LLMClientCache())
+    is_vertex: Final = model.startswith("vertex_ai/")
+    route: Final = respx_mock.post(url).mock(
+        return_value=httpx.Response(
+            200,
+            json={"embedding": {"values": [0.1, 0.2]}}
+            if is_vertex
+            else {"embeddings": [{"values": [0.1, 0.2]} for _ in MEDIA_LOOKING_TEXTS]},
+        )
+    )
+
+    response: Final = await _embed(model, sync_mode, [{"type": "text", "text": text} for text in MEDIA_LOOKING_TEXTS])
+
+    assert len(respx_mock.calls) == route.call_count == 1
+    body: Final = json.loads(route.calls[0].request.content)
+    text_parts: Final = [{"text": text} for text in MEDIA_LOOKING_TEXTS]
+    if is_vertex:
+        assert body["content"]["parts"] == text_parts
+    else:
+        assert [request["content"]["parts"] for request in body["requests"]] == [[part] for part in text_parts]
+    expected_tokens: Final = litellm.token_counter(model=model.split("/", 1)[1], text="".join(MEDIA_LOOKING_TEXTS))
+    assert response.usage.prompt_tokens == expected_tokens > 0
+
+
+@pytest.mark.usefixtures("error_test_vertex_credentials")
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.parametrize(
+    ("invalid_media", "named_in_error"),
+    [
+        ("data:application/octet-stream;base64,AACAvw==", "Unsupported MIME type"),
+        ("gs://bucket/build/output.txt", "Unable to infer MIME type"),
+    ],
+)
+@pytest.mark.parametrize("model", ["vertex_ai/gemini-embedding-2", "gemini/gemini-embedding-2"])
+@pytest.mark.asyncio
+async def test_unparseable_bare_media_answers_400_before_any_request(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    sync_mode: bool,
+    invalid_media: str,
+    named_in_error: str,
+    model: str,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "in_memory_llm_clients_cache", LLMClientCache())
+
+    with pytest.raises(litellm.BadRequestError, match=named_in_error) as exc_info:
+        await _embed(model, sync_mode, [invalid_media])
+
+    assert exc_info.value.status_code == 400
+    assert len(respx_mock.calls) == 0
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_malformed_text_block_answers_400_before_resolving_a_files_reference(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, sync_mode: bool
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "in_memory_llm_clients_cache", LLMClientCache())
+
+    with pytest.raises(litellm.BadRequestError, match="text: Input should be a valid string"):
+        await _embed("gemini/gemini-embedding-2", sync_mode, [{"type": "text", "text": 5}, "files/clip123"])
+
+    assert len(respx_mock.calls) == 0

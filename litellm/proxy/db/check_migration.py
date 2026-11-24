@@ -2,9 +2,21 @@
 
 import os
 import subprocess
-from typing import Final
+from pathlib import Path
+from typing import Final, Protocol
 
 from litellm._logging import print_startup_message, print_startup_warning, verbose_logger
+
+_PROXY_SCHEMA_PATH: Final = Path(__file__).resolve().parent.parent / "schema.prisma"
+
+
+class _FailedCommand(Protocol):
+    @property
+    def stderr(self) -> object: ...
+
+
+def _failure_output(failed_command: _FailedCommand) -> object:
+    return failed_command.stderr
 
 
 def extract_sql_commands(diff_output: str) -> list[str]:
@@ -18,7 +30,7 @@ def extract_sql_commands(diff_output: str) -> list[str]:
     # Split the output into lines and remove empty lines
     lines: Final = [line.strip() for line in diff_output.split("\n") if line.strip()]
 
-    sql_commands: Final = []
+    sql_commands: Final[list[str]] = []
     current_command = ""
     in_sql_block = False
 
@@ -79,7 +91,7 @@ def check_prisma_schema_diff_helper(db_url: str) -> tuple[bool, list[str]]:
                 "--from-url",
                 db_url,
                 "--to-schema-datamodel",
-                "./schema.prisma",
+                str(_PROXY_SCHEMA_PATH),
                 "--script",
             ],
             timeout=timeout,
@@ -102,7 +114,7 @@ def check_prisma_schema_diff_helper(db_url: str) -> tuple[bool, list[str]]:
         )
         return False, []
     except subprocess.CalledProcessError as e:
-        error_message: Final = f"Failed to generate migration diff. Error: {e.stderr}"
+        error_message: Final = f"Failed to generate migration diff. Error: {_failure_output(e)}"
         print_startup_warning(error_message)
         return False, []
 

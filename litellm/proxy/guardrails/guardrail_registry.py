@@ -227,7 +227,9 @@ async def _rotate_guardrail_row(
     return await _rotate_guardrail_row(prisma_client, latest_row, encryption_key, attempts_left - 1)
 
 
-guardrail_initializer_registry: Final = {
+guardrail_initializer_registry: Final[
+    dict[str, Callable[..., CustomGuardrail | Sequence[CustomGuardrail] | None] | None]
+] = {
     SupportedGuardrailIntegrations.BEDROCK.value: initialize_bedrock,
     SupportedGuardrailIntegrations.LAKERA.value: initialize_lakera,
     SupportedGuardrailIntegrations.LAKERA_V2.value: initialize_lakera_v2,
@@ -252,7 +254,7 @@ guardrail_class_registry: Final[dict[str, type[CustomGuardrail]]] = {
 }
 
 
-def get_guardrail_initializer_from_hooks():
+def get_guardrail_initializer_from_hooks() -> dict[str, Callable[..., CustomGuardrail] | None]:
     """
     Get guardrail initializers by discovering them from the guardrail_hooks directory structure.
 
@@ -262,7 +264,7 @@ def get_guardrail_initializer_from_hooks():
     Returns:
         Dict[str, Callable]: A dictionary mapping guardrail types to their initializer functions
     """
-    discovered_initializers: Final = {}
+    discovered_initializers: Final[dict[str, Callable[..., CustomGuardrail] | None]] = {}
 
     try:
         # Get the path to the guardrail_hooks directory
@@ -330,7 +332,7 @@ def get_guardrail_initializer_from_hooks():
     return discovered_initializers
 
 
-def get_guardrail_class_from_hooks():
+def get_guardrail_class_from_hooks() -> dict[str, type[CustomGuardrail]]:
     """
     Get guardrail classes by discovering them from the guardrail_hooks directory structure.
     """
@@ -343,7 +345,7 @@ def get_guardrail_class_from_hooks():
     Returns:
         Dict[str, Callable]: A dictionary mapping guardrail types to their initializer functions
     """
-    discovered_classes: Final = {}
+    discovered_classes: Final[dict[str, type[CustomGuardrail]]] = {}
 
     try:
         # Get the path to the guardrail_hooks directory
@@ -666,6 +668,7 @@ def _configure_callback_scoping(
         "skip_tool_message_in_guardrail",
         "scan_only_tool_results",
         "scan_tool_descriptions_as_text",
+        "scan_tool_calls_as_text",
     ):
         setattr(custom_guardrail_callback, scoping_param, getattr(litellm_params, scoping_param, None))
     if (
@@ -674,7 +677,17 @@ def _configure_callback_scoping(
     ):
         raise ValueError(
             f"Guardrail {guardrail_name}: scan_tool_descriptions_as_text is only supported by the "
-            "panw_prisma_airs and presidio guardrails. Remove it from this guardrail."
+            "panw_prisma_airs, presidio and bedrock guardrails, and on bedrock not with mode during_call or "
+            "experimental_use_latest_role_message_only. Remove it from this guardrail."
+        )
+    if (
+        litellm_params.scan_tool_calls_as_text is True
+        and not custom_guardrail_callback.supports_scan_tool_calls_as_text()
+    ):
+        raise ValueError(
+            f"Guardrail {guardrail_name}: scan_tool_calls_as_text is only supported by the bedrock "
+            "guardrail, and not with mode during_call or experimental_use_latest_role_message_only. "
+            "Remove it from this guardrail."
         )
     scan_only_tool_results_enabled: Final = effective_scan_only_tool_results_for_guardrail(custom_guardrail_callback)
     if scan_only_tool_results_enabled and not custom_guardrail_callback.supports_scan_only_tool_results():
@@ -869,7 +882,9 @@ class InMemoryGuardrailHandler:
         config_file_path: str | None,
         llm_router: Optional["Router"],
     ) -> GuardrailCallbacks:
-        initializer: Final = guardrail_initializer_registry.get(guardrail_type)
+        initializer: Final[Callable[..., CustomGuardrail | Sequence[CustomGuardrail] | None] | None] = (
+            guardrail_initializer_registry.get(guardrail_type)
+        )
         if initializer:
             import inspect
 

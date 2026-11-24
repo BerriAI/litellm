@@ -307,6 +307,33 @@ async def test_url_change_clears_stale_oauth_fields_even_when_resubmitted_unchan
 
 
 @pytest.mark.asyncio
+async def test_repointing_mcp_server_preserves_only_explicit_oauth_settings_when_requested():
+    mock_prisma = _mock_prisma()
+    existing = _existing_row("oauth2", credentials={"client_id": "old-client", "client_secret": "old-secret"})
+    existing.url = "https://old.example.com/mcp"
+    existing.issuer = "https://old-idp.example.com"
+    existing.authorization_url = "https://old-idp.example.com/authorize"
+    existing.oauth2_flow = "client_credentials"
+    mock_prisma.db.litellm_mcpservertable.find_unique = AsyncMock(return_value=existing)
+
+    update = UpdateMCPServerRequest(
+        server_id="my-test-server",
+        url="https://new.example.com/mcp",
+        issuer="https://new-idp.example.com",
+        oauth2_flow="client_credentials",
+        preserve_explicit_oauth_settings=True,
+    )
+    await update_mcp_server(mock_prisma, update, "test-user")
+    data_dict = mock_prisma.db.litellm_mcpservertable.update.call_args[1]["data"]
+
+    assert data_dict["issuer"] == "https://new-idp.example.com"
+    assert data_dict["oauth2_flow"] == "client_credentials"
+    assert data_dict["authorization_url"] is None
+    assert json.loads(data_dict["credentials"]) == {}
+    assert "preserve_explicit_oauth_settings" not in data_dict
+
+
+@pytest.mark.asyncio
 async def test_clearing_pinned_issuer_clears_stale_oauth_endpoints():
     """Clearing a previously pinned issuer must not revive the endpoints resolved under it. Under an
     issuer anchor the endpoints come solely from the issuer document and are not persisted, but a row

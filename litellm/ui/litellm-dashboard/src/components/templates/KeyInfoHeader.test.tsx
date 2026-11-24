@@ -15,12 +15,9 @@ const MOCK_DATA: KeyInfoData = {
   teamAlias: "Platform Team",
   orgId: "org-abc-001",
   orgAlias: "Acme Org",
-  createdBy: "admin@example.com",
-  createdById: "admin-user-456",
-  createdAt: "Oct 29, 2025 at 1:26 AM",
-  lastUpdated: "Oct 29, 2025 at 1:47 AM",
-  lastActive: "Oct 29, 2025 at 2:00 AM",
-  expires: "Never",
+  secretKey: "sk-...a91f",
+  projectId: "proj-1",
+  projectAlias: "Help center",
 };
 
 describe("KeyInfoHeader", () => {
@@ -29,23 +26,29 @@ describe("KeyInfoHeader", () => {
     expect(screen.getByText("My Test Key")).toBeInTheDocument();
   });
 
-  it("should render the key ID with prefix", () => {
+  it("shows the key ID truncated in the middle with the full ID one hover away", () => {
     render(<KeyInfoHeader data={MOCK_DATA} />);
-    expect(screen.getByText(/Key ID:/)).toBeInTheDocument();
-    expect(screen.getByText(/sk-9876543210fedcba/)).toBeInTheDocument();
+    const chip = screen.getByText("sk-9\u2026dcba");
+    expect(chip).toHaveAttribute("title", "sk-9876543210fedcba");
+    expect(screen.getByRole("button", { name: "Copy Key ID" })).toBeInTheDocument();
   });
 
-  it("should render all metadata fields", () => {
+  it("shows the owner, team, organization, project and masked secret on the meta line", () => {
     render(<KeyInfoHeader data={MOCK_DATA} />);
-    expect(screen.getByText("User")).toBeInTheDocument();
     expect(screen.getByText("test@example.com")).toBeInTheDocument();
-    expect(screen.getByText("Created At")).toBeInTheDocument();
-    expect(screen.getByText("Created By")).toBeInTheDocument();
-    expect(screen.getByText("Expires")).toBeInTheDocument();
-    expect(screen.getByText("Last Updated")).toBeInTheDocument();
-    expect(screen.getByText("Last Active")).toBeInTheDocument();
-    expect(screen.getByText("Team")).toBeInTheDocument();
-    expect(screen.getByText("Organization")).toBeInTheDocument();
+    expect(screen.getByText("Platform Team")).toBeInTheDocument();
+    expect(screen.getByText("Acme Org")).toBeInTheDocument();
+    expect(screen.getByText("Help center")).toBeInTheDocument();
+    expect(screen.getByText("sk-...a91f")).toBeInTheDocument();
+  });
+
+  it("shows the status it is given", () => {
+    const { rerender } = render(<KeyInfoHeader data={MOCK_DATA} />);
+    expect(screen.getByText("Active")).toBeInTheDocument();
+    rerender(<KeyInfoHeader data={MOCK_DATA} status="overBudget" />);
+    expect(screen.getByText("Over budget")).toBeInTheDocument();
+    rerender(<KeyInfoHeader data={MOCK_DATA} status="expired" />);
+    expect(screen.getByText("Expired")).toBeInTheDocument();
   });
 
   describe("entity links", () => {
@@ -54,14 +57,6 @@ describe("KeyInfoHeader", () => {
       expect(screen.getByRole("link", { name: "test@example.com" })).toHaveAttribute(
         "href",
         expect.stringContaining("/users?user=user-abc-123"),
-      );
-    });
-
-    it("links the creator to the users page by user id, not by the displayed alias", () => {
-      render(<KeyInfoHeader data={MOCK_DATA} />);
-      expect(screen.getByRole("link", { name: "admin@example.com" })).toHaveAttribute(
-        "href",
-        expect.stringContaining("/users?user=admin-user-456"),
       );
     });
 
@@ -89,28 +84,22 @@ describe("KeyInfoHeader", () => {
       );
     });
 
-    it("renders '-' without a link when the key has no organization", () => {
+    it("leaves the organization out of the meta line when the key has none", () => {
       render(<KeyInfoHeader data={{ ...MOCK_DATA, orgId: "", orgAlias: null }} />);
       expect(screen.queryByRole("link", { name: /org/i })).not.toBeInTheDocument();
-      expect(screen.getByText("Organization").parentElement?.parentElement).toHaveTextContent("-");
+      expect(screen.queryByTitle("Organization")).not.toBeInTheDocument();
     });
 
-    it("renders '-' without a link when the key has no team", () => {
+    it("leaves the team out of the meta line when the key has none", () => {
       render(<KeyInfoHeader data={{ ...MOCK_DATA, teamId: "", teamAlias: null }} />);
       expect(screen.queryByRole("link", { name: /team/i })).not.toBeInTheDocument();
-      expect(screen.getByText("Team").parentElement?.parentElement).toHaveTextContent("-");
+      expect(screen.queryByTitle("Team")).not.toBeInTheDocument();
     });
 
     it("does not link the user when the key has no user id", () => {
       render(<KeyInfoHeader data={{ ...MOCK_DATA, userId: "", userEmail: "orphan@example.com" }} />);
       expect(screen.getByText("orphan@example.com")).toBeInTheDocument();
       expect(screen.queryByRole("link", { name: "orphan@example.com" })).not.toBeInTheDocument();
-    });
-
-    it("keeps the Default Proxy Admin creator unlinked", () => {
-      render(<KeyInfoHeader data={{ ...MOCK_DATA, createdBy: "default_user_id", createdById: "default_user_id" }} />);
-      expect(screen.getByText("Default Proxy Admin")).toBeInTheDocument();
-      expect(screen.queryByRole("link", { name: /default/i })).not.toBeInTheDocument();
     });
   });
 
@@ -227,8 +216,8 @@ describe("KeyInfoHeader", () => {
   });
 
   describe("blocked tag", () => {
-    it("should show a Blocked tag when isBlocked is true", () => {
-      render(<KeyInfoHeader data={MOCK_DATA} isBlocked />);
+    it("should show a Blocked tag when the status is blocked", () => {
+      render(<KeyInfoHeader data={MOCK_DATA} status="blocked" isBlocked />);
       expect(screen.getByText("Blocked")).toBeInTheDocument();
     });
 
@@ -263,12 +252,6 @@ describe("KeyInfoHeader", () => {
       render(<KeyInfoHeader data={data} />);
       expect(screen.getAllByText("Default Proxy Admin").length).toBeGreaterThanOrEqual(1);
     });
-
-    it("should show Default Proxy Admin tag for Created By when value is default_user_id", () => {
-      const data = { ...MOCK_DATA, createdBy: "default_user_id" };
-      render(<KeyInfoHeader data={data} />);
-      expect(screen.getAllByText("Default Proxy Admin").length).toBeGreaterThanOrEqual(1);
-    });
   });
 
   describe("User field fallbacks", () => {
@@ -290,10 +273,10 @@ describe("KeyInfoHeader", () => {
       expect(screen.getByText("user-abc-123")).toBeInTheDocument();
     });
 
-    it("should show '-' when alias, email, and userId are all empty", () => {
+    it("calls a key with no owner a service account", () => {
       const data = { ...MOCK_DATA, userId: "", userEmail: "", userAlias: null };
       render(<KeyInfoHeader data={data} />);
-      expect(screen.getByText("-")).toBeInTheDocument();
+      expect(screen.getByText("Service account, no owner")).toBeInTheDocument();
     });
   });
 });

@@ -2,6 +2,7 @@
 A2A Streaming Response Iterator
 """
 
+from collections.abc import Mapping
 from typing import Final
 
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
@@ -19,7 +20,7 @@ class A2AModelResponseIterator(BaseModelResponseIterator):
 
     def __init__(
         self,
-        streaming_response,
+        streaming_response: object,
         sync_stream: bool,
         json_mode: bool | None = False,
         model: str = "a2a/agent",
@@ -31,7 +32,7 @@ class A2AModelResponseIterator(BaseModelResponseIterator):
         )
         self.model = model
 
-    def chunk_parser(self, chunk: dict) -> GenericStreamingChunk | ModelResponseStream:
+    def chunk_parser(self, chunk: Mapping[str, object]) -> GenericStreamingChunk | ModelResponseStream:
         """
         Parse A2A streaming chunk to OpenAI format.
 
@@ -87,7 +88,7 @@ class A2AModelResponseIterator(BaseModelResponseIterator):
                 tool_use=None,
             )
 
-    def _get_finish_reason(self, chunk: dict) -> str | None:
+    def _get_finish_reason(self, chunk: Mapping[str, object]) -> str | None:
         """Extract finish reason from A2A chunk"""
         result: Final = chunk.get("result", {})
 

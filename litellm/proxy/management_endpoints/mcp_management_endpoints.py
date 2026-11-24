@@ -388,7 +388,7 @@ if MCP_AVAILABLE:
         )
         payload.oauth2_flow = "client_credentials" if has_m2m_shape else "authorization_code"
 
-    _VALID_MCP_REQUIRED_FIELDS: Final[frozenset] = frozenset(NewMCPServerRequest.model_fields)
+    _VALID_MCP_REQUIRED_FIELDS: Final[frozenset[str]] = frozenset(NewMCPServerRequest.model_fields)
 
     def _validate_mcp_required_fields(payload: NewMCPServerRequest) -> None:
         """Validate submission payload against admin-configured mcp_required_fields."""
@@ -1130,7 +1130,7 @@ if MCP_AVAILABLE:
         )
         from litellm.proxy.proxy_server import prisma_client
 
-        access_groups: Final = set()
+        access_groups: Final = set[str]()
 
         # Get from config-loaded servers
         for server in global_mcp_server_manager.config_mcp_servers.values():
@@ -2295,6 +2295,8 @@ if MCP_AVAILABLE:
 
         return _redact_mcp_credentials(temp_record)
 
+    _PATH_PARAM_VALUE: Final = TypeAdapter(object)
+
     @public_catalog_operation
     async def _mcp_oauth_user_api_key_auth(request: Request) -> UserAPIKeyAuth:
         """
@@ -2352,7 +2354,8 @@ if MCP_AVAILABLE:
                 global_mcp_server_manager,
             )
 
-            server_id: Final[str] = request.path_params.get("server_id", "")
+            raw_server_id: Final = _PATH_PARAM_VALUE.validate_python(request.path_params.get("server_id", ""))
+            server_id: Final = raw_server_id if isinstance(raw_server_id, str) else ""
             if server_id:
                 _s = await global_mcp_server_manager.catalog.resolve(server_id)
                 if (
@@ -2962,7 +2965,7 @@ if MCP_AVAILABLE:
 
     @catalog_operation(lambda: global_mcp_server_manager)
     async def _authorize_and_fetch_mcp_server(
-        prisma_client,
+        prisma_client: "PrismaClient",
         user_api_key_dict: UserAPIKeyAuth,
         server_id: str,
     ) -> LiteLLM_MCPServerTable:
@@ -3037,10 +3040,12 @@ if MCP_AVAILABLE:
             if not is_set:
                 missing_count += 1
             required.append(
-                MCPUserEnvVarSpec(
-                    name=name,
-                    description=spec.get("description"),
-                    is_set=is_set,
+                MCPUserEnvVarSpec.model_validate(
+                    {
+                        "name": name,
+                        "description": spec.get("description"),
+                        "is_set": is_set,
+                    }
                 )
             )
 

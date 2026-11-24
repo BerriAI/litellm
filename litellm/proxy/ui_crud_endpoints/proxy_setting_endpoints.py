@@ -223,6 +223,11 @@ class _SettingsWithSchema(LiteLLMBaseModel):
     field_schema: dict[str, object]
 
 
+class _SettingsWithSchemaPayload(TypedDict):
+    values: ReadOnly[dict[str, object]]
+    field_schema: ReadOnly[dict[str, object]]
+
+
 class BackgroundChatSettings(LiteLLMBaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -282,7 +287,7 @@ class UISettings(LiteLLMBaseModel):
     model_config = ConfigDict(extra="allow")
 
     usage_default_time_range: Literal["today", "last_7_days", "last_30_days", "month_to_date", "year_to_date"] = Field(
-        default="last_7_days",
+        default="month_to_date",
         description="Default date range when opening Usage without an explicit URL range. Calendar ranges use the browser timezone.",
     )
 
@@ -856,9 +861,10 @@ def _root_schema(settings_class: type[BaseModel]) -> _RootSchema:
 
 def _model_field_default(settings_class: type[BaseModel], field_name: str) -> object:
     field_info: Final = settings_class.model_fields.get(field_name)
-    if field_info is None or field_info.default is PydanticUndefined:
+    if field_info is None:
         return None
-    return cast(object, field_info.default)  # cast-ok: Pydantic field defaults are untyped
+    default: Final = cast(object, field_info.default)  # cast-ok: Pydantic field defaults are untyped
+    return None if default is PydanticUndefined else default
 
 
 def _ui_setting_source(
@@ -879,7 +885,7 @@ async def _get_settings_with_schema(
     settings_key: str,
     settings_class: type[BaseModel],
     config: dict,
-) -> dict:
+) -> _SettingsWithSchemaPayload:
     """
     Common utility function to get settings with schema information.
 
@@ -1842,10 +1848,10 @@ async def get_ui_settings_cached() -> dict[str, JsonValue]:
     Cache hit  → return cached dict immediately.
     Cache miss → read from DB, populate cache, return dict.
     """
-    from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
+    from litellm.proxy.proxy_server import prisma_client, ui_settings_cache
 
     # 1. Try cache
-    cached: Final = _DECODED_JSON.validate_python(await user_api_key_cache.async_get_cache(key=UI_SETTINGS_CACHE_KEY))
+    cached: Final = _DECODED_JSON.validate_python(await ui_settings_cache.async_get_cache(key=UI_SETTINGS_CACHE_KEY))
     if cached is not None and isinstance(cached, dict):
         return cached
 
@@ -1865,7 +1871,7 @@ async def get_ui_settings_cached() -> dict[str, JsonValue]:
     ui_settings = {k: v for k, v in ui_settings.items() if k in ALLOWED_UI_SETTINGS_FIELDS}
 
     # 3. Populate cache with TTL
-    await user_api_key_cache.async_set_cache(key=UI_SETTINGS_CACHE_KEY, value=ui_settings, ttl=UI_SETTINGS_CACHE_TTL)
+    await ui_settings_cache.async_set_cache(key=UI_SETTINGS_CACHE_KEY, value=ui_settings, ttl=UI_SETTINGS_CACHE_TTL)
 
     return ui_settings
 
@@ -2036,9 +2042,9 @@ async def get_ui_settings():
     apply_runtime_general_settings_flags(ui_settings)
 
     # Refresh DualCache so other code paths (e.g. /user/filter/ui) see fresh values
-    from litellm.proxy.proxy_server import user_api_key_cache
+    from litellm.proxy.proxy_server import ui_settings_cache
 
-    await user_api_key_cache.async_set_cache(key=UI_SETTINGS_CACHE_KEY, value=ui_settings, ttl=UI_SETTINGS_CACHE_TTL)
+    await ui_settings_cache.async_set_cache(key=UI_SETTINGS_CACHE_KEY, value=ui_settings, ttl=UI_SETTINGS_CACHE_TTL)
 
     effective_ui_settings: Final[Mapping[str, object]] = MappingProxyType(
         {
@@ -2197,10 +2203,10 @@ async def update_ui_settings(
     apply_runtime_general_settings_flags(ui_settings)
 
     # Invalidate + set DualCache so subsequent reads see the new values immediately
-    from litellm.proxy.proxy_server import user_api_key_cache
+    from litellm.proxy.proxy_server import ui_settings_cache
 
     sanitized: Final = {k: v for k, v in ui_settings.items() if k in ALLOWED_UI_SETTINGS_FIELDS}
-    await user_api_key_cache.async_set_cache(key=UI_SETTINGS_CACHE_KEY, value=sanitized, ttl=UI_SETTINGS_CACHE_TTL)
+    await ui_settings_cache.async_set_cache(key=UI_SETTINGS_CACHE_KEY, value=sanitized, ttl=UI_SETTINGS_CACHE_TTL)
 
     asyncio.create_task(
         create_config_audit_log(

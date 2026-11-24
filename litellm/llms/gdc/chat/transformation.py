@@ -60,7 +60,7 @@ class GDCGeminiConfig(OpenAILikeChatConfig):
         self._creds_lock = threading.Lock()
         self._gdch_creds_cache: dict[tuple[str, str], _GDCHAudienceCredentials] = {}
 
-    def get_supported_openai_params(self, model: str) -> list:
+    def get_supported_openai_params(self, model: str) -> list[str]:
         return [
             "vertex_project",
             "vertex_location",

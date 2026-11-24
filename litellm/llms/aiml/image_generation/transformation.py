@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING, Any, Final
 import httpx
 from pydantic import ConfigDict, TypeAdapter
 
+from litellm.litellm_core_utils.core_helpers import json_contains, subscript
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.image_generation.transformation import (
     BaseImageGenerationConfig,
@@ -24,6 +25,7 @@ if TYPE_CHECKING:
 else:
     LiteLLMLoggingObj = Any
 
+_DECODED_JSON: Final = TypeAdapter(object)
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
 _JSON_CONTAINER: Final[TypeAdapter[Mapping[str, object] | str | Sequence[object]]] = TypeAdapter(
     Mapping[str, object] | str | Sequence[object], config=ConfigDict(hide_input_in_errors=True)
@@ -64,7 +66,7 @@ class AimlImageGenerationConfig(BaseImageGenerationConfig):
 
     def map_openai_params(
         self,
-        non_default_params: dict,
+        non_default_params: Mapping[str, object],
         optional_params: dict,
         model: str,
         drop_params: bool,
@@ -110,8 +112,8 @@ class AimlImageGenerationConfig(BaseImageGenerationConfig):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         stream: bool | None = None,
     ) -> str:
         """
@@ -130,8 +132,8 @@ class AimlImageGenerationConfig(BaseImageGenerationConfig):
         headers: dict,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
     ) -> dict:
@@ -150,9 +152,9 @@ class AimlImageGenerationConfig(BaseImageGenerationConfig):
         model: str,
         prompt: str,
         optional_params: dict,
-        litellm_params: dict,
-        headers: dict,
-    ) -> dict:
+        litellm_params: Mapping[str, object],
+        headers: Mapping[str, object],
+    ) -> dict[str, object]:
         """
         Transform the image generation request to the AI/ML image generation request body
 
@@ -174,9 +176,9 @@ class AimlImageGenerationConfig(BaseImageGenerationConfig):
         raw_response: httpx.Response,
         model_response: ImageResponse,
         logging_obj: LiteLLMLoggingObj,
-        request_data: dict,
-        optional_params: dict,
-        litellm_params: dict,
+        request_data: Mapping[str, object],
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
@@ -187,7 +189,7 @@ class AimlImageGenerationConfig(BaseImageGenerationConfig):
         https://api.aimlapi.com/v1/images/generations
         """
         try:
-            response_data: Final = raw_response.json()
+            response_data: Final = _DECODED_JSON.validate_python(raw_response.json())
         except Exception as e:
             raise self.get_error_class(
                 error_message=f"Error transforming image generation response: {e}",
@@ -203,9 +205,9 @@ class AimlImageGenerationConfig(BaseImageGenerationConfig):
         # 2. output.choices array with image_base64
         # 3. images array with url (and optional width, height, content_type)
 
-        if "data" in response_data and isinstance(response_data["data"], list):
+        if json_contains(response_data, "data") and isinstance(subscript(response_data, "data"), list):
             # Handle OpenAI-like format: {"data": [{"url": "...", "width": 1024, "height": 768, "content_type": "image/jpeg"}]}
-            for raw_image in _JSON_CONTAINER.validate_python(response_data["data"]):
+            for raw_image in _JSON_CONTAINER.validate_python(subscript(response_data, "data")):
                 image = raw_image if isinstance(raw_image, str) else _JSON_CONTAINER.validate_python(raw_image)
                 if "url" in image:
                     url_image = _JSON_OBJECT.validate_python(image)
@@ -225,8 +227,8 @@ class AimlImageGenerationConfig(BaseImageGenerationConfig):
                             revised_prompt=b64_image.get("revised_prompt"),
                         )
                     )
-        elif "output" in response_data and "choices" in response_data["output"]:
-            for raw_choice in _JSON_CONTAINER.validate_python(response_data["output"]["choices"]):
+        elif json_contains(response_data, "output") and json_contains(subscript(response_data, "output"), "choices"):
+            for raw_choice in _JSON_CONTAINER.validate_python(subscript(subscript(response_data, "output"), "choices")):
                 choice = raw_choice if isinstance(raw_choice, str) else _JSON_CONTAINER.validate_python(raw_choice)
                 if "image_base64" in choice:
                     model_response.data.append(
@@ -242,9 +244,9 @@ class AimlImageGenerationConfig(BaseImageGenerationConfig):
                             url=_JSON_OBJECT.validate_python(choice)["url"],
                         )
                     )
-        elif "images" in response_data:
+        elif json_contains(response_data, "images"):
             # Handle alternative format: {"images": [{"url": "...", "width": 1024, "height": 768, "content_type": "image/jpeg"}]}
-            for raw_image in _JSON_CONTAINER.validate_python(response_data["images"]):
+            for raw_image in _JSON_CONTAINER.validate_python(subscript(response_data, "images")):
                 image = raw_image if isinstance(raw_image, str) else _JSON_CONTAINER.validate_python(raw_image)
                 if "url" in image:
                     model_response.data.append(

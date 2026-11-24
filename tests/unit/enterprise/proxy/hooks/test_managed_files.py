@@ -157,7 +157,13 @@ class _InMemoryManagedFileTable:
         where: Mapping[str, object],
         **_query: object,
     ) -> list[LiteLLM_ManagedFileTable]:
-        return list(self.rows.values())
+        if "OR" not in where or len(where) != 1:
+            return list(self.rows.values())
+        return [
+            row
+            for row in self.rows.values()
+            if await _InMemoryManagedFileTable(row).find_first(where) is not None
+        ]
 
 
 class _InMemoryManagedObjectTable:
@@ -6585,6 +6591,13 @@ _GEMINI_OUTPUT_SPELLINGS: Final = (
     "https://example.invalid/batch-out1",
     "http://example.invalid/batch-out1?alt=media#download",
     "https%3A%2F%2Fexample.invalid%2Fbatch-out1",
+    "https://example.invalid/%23/files/batch-out1",
+    "https://example.invalid/%3F/files/batch-out1",
+    "https://generativelanguage.googleapis.com/%23/files/batch-out1",
+    "https://generativelanguage.googleapis.com/%3F/files/batch-out1",
+    "https://x%23/batch-out1",
+    "https://x%3F/batch-out1",
+    "https://x%2Ffiles%2F/batch-out1",
 )
 
 
@@ -6605,6 +6618,110 @@ def _gemini_batch_output_row() -> LiteLLM_ManagedFileTable:
         created_by="owner",
         team_id="team-owner",
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("version", ["v1", "v1beta"])
+@pytest.mark.parametrize(
+    ("role", "media"),
+    [
+        ("user", "file"),
+        ("user", "image"),
+        ("user", "video"),
+        ("system", "file"),
+        ("system", "image"),
+        ("assistant", "video"),
+        ("assistant-image-string", "image"),
+        ("assistant", "file"),
+        ("assistant", "image"),
+        ("assistant-images", "image"),
+        ("tool", "file"),
+        ("tool", "image"),
+        ("responses-tool", "file"),
+        ("responses-tool", "image"),
+    ],
+)
+@pytest.mark.parametrize("has_access", [True, False], ids=["owner", "different-key"])
+async def test_chat_file_references_use_managed_file_access(
+    version: str, role: str, media: str, has_access: bool
+) -> None:
+    managed_files, _ = _managed_files_with_fake_prisma(_gemini_batch_output_row())
+    caller: Final = (
+        UserAPIKeyAuth(user_id="owner", team_id="team-owner")
+        if has_access
+        else UserAPIKeyAuth(user_id="other", team_id="team-other")
+    )
+    uri: Final = f"https://generativelanguage.googleapis.com/{version}/files/batch-out1"
+    file: Final = {"file_id": uri, "format": "application/pdf"}
+    image_url: Final = {"url": uri, "format": "image/png"}
+    model: Final = "gemini/gemini-4-argon"
+    call_type: Final = "aresponses" if role == "responses-tool" else "acompletion"
+    if role == "responses-tool":
+        output_part: Final = (
+            {"type": "input_file", **file} if media == "file" else {"type": "input_image", "image_url": image_url}
+        )
+        request: Final[dict[str, object]] = {
+            "model": model,
+            "input": [{"type": "function_call_output", "call_id": "call_1", "output": [output_part]}],
+        }
+    elif role == "assistant-image-string":
+        request = {"model": model, "messages": [{"role": "assistant", "images": [{"image_url": uri}]}]}
+    elif role == "assistant-images":
+        request = {"model": model, "messages": [{"role": "assistant", "images": [{"image_url": image_url}]}]}
+    else:
+        part: Final = (
+            {"type": "file", "file": file}
+            if media == "file"
+            else {"type": "video_url", "video_url": {"url": uri, "format": "video/mp4"}}
+            if media == "video"
+            else {"type": "image_url", "image_url": image_url}
+        )
+        request = {"model": model, "messages": [{"role": role, "content": [part]}]}
+    if has_access:
+        result: Final = await managed_files.async_pre_call_hook(caller, DualCache(), request, call_type)
+        assert result == request
+    else:
+        with pytest.raises(HTTPException) as denied:
+            await managed_files.async_pre_call_hook(caller, DualCache(), request, call_type)
+        assert denied.value.status_code == 403
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("nested", [False, True], ids=["direct", "message-content"])
+async def test_responses_input_checks_managed_file_access(nested: bool) -> None:
+    managed_files, _ = _managed_files_with_fake_prisma(_gemini_batch_output_row())
+    caller: Final = UserAPIKeyAuth(user_id="other", team_id="team-other")
+    file: Final = {"type": "input_file", "file_id": "https://generativelanguage.googleapis.com/v1/files/batch-out1"}
+    item: Final = {"role": "user", "content": [file]} if nested else file
+    request: Final = {"model": "gemini/gemini-4-argon", "input": [item]}
+
+    with pytest.raises(HTTPException) as denied:
+        await managed_files.async_pre_call_hook(caller, DualCache(), request, "aresponses")
+
+    assert denied.value.status_code == 403
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("version", ["v1", "v1beta"])
+@pytest.mark.parametrize(("media_type", "field"), [("input_image", "image_url"), ("input_file", "file_url")])
+@pytest.mark.parametrize("nested", [False, True], ids=["direct", "message-content"])
+async def test_responses_media_urls_check_file_ownership(
+    version: str, media_type: str, field: str, nested: bool
+) -> None:
+    managed_files, _ = _managed_files_with_fake_prisma(_gemini_batch_output_row())
+    owner: Final = UserAPIKeyAuth(user_id="owner", team_id="team-owner")
+    other: Final = UserAPIKeyAuth(user_id="other", team_id="team-other")
+    uri: Final = f"https://generativelanguage.googleapis.com/{version}/files/batch-out1"
+    media: Final = {"type": media_type, field: uri}
+    item: Final = {"role": "user", "content": [media]} if nested else media
+    request: Final = {"model": "gemini/gemini-4-argon", "input": [item]}
+
+    result: Final = await managed_files.async_pre_call_hook(owner, DualCache(), request, "aresponses")
+
+    assert isinstance(result, dict) and result["input"] == request["input"]
+    with pytest.raises(HTTPException) as denied:
+        await managed_files.async_pre_call_hook(other, DualCache(), request, "aresponses")
+    assert denied.value.status_code == 403
 
 
 @pytest.mark.asyncio
@@ -6629,6 +6746,55 @@ async def test_enforce_provider_file_access_lets_the_owner_read_any_spelling(spe
 
     assert await managed_files.enforce_provider_file_access(spelling, owner) is None
     assert await managed_files.enforce_provider_file_access(spelling, teammate) is None
+
+
+@pytest.mark.asyncio
+async def test_enforce_provider_file_access_checks_every_matching_provider_file_row():
+    row_for_a: Final = _gemini_batch_output_row().model_copy(
+        update={
+            "unified_file_id": "file-encoded-gemini-a",
+            "model_mappings": {"model-gemini": "A"},
+            "flat_model_file_ids": ["A"],
+            "created_by": "owner-a",
+            "team_id": "team-a",
+        }
+    )
+    row_for_v: Final = _gemini_batch_output_row().model_copy(
+        update={
+            "unified_file_id": "file-encoded-gemini-v",
+            "model_mappings": {"model-gemini": "V"},
+            "flat_model_file_ids": ["V"],
+            "created_by": "owner-v",
+            "team_id": "team-v",
+        }
+    )
+    managed_files, _ = _managed_files_with_fake_prisma(row_for_a, row_for_v)
+    owner_of_a: Final = UserAPIKeyAuth(user_id="owner-a", team_id="team-a")
+
+    with pytest.raises(HTTPException) as denied:
+        await managed_files.enforce_provider_file_access(
+            "https://x%2Ffiles%2FA%23/V", owner_of_a
+        )
+
+    assert denied.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_enforce_provider_file_access_allows_multiple_rows_the_caller_owns():
+    row_for_v: Final = _gemini_batch_output_row()
+    row_for_a: Final = row_for_v.model_copy(
+        update={
+            "unified_file_id": "file-encoded-gemini-a",
+            "model_mappings": {"model-gemini": "A"},
+            "flat_model_file_ids": ["A"],
+        }
+    )
+    managed_files, _ = _managed_files_with_fake_prisma(row_for_a, row_for_v)
+    owner: Final = UserAPIKeyAuth(user_id="owner", team_id="team-owner")
+
+    assert await managed_files.enforce_provider_file_access(
+        "https://x%2Ffiles%2FA%23/batch-out1", owner
+    ) is None
 
 
 @pytest.mark.asyncio

@@ -320,7 +320,7 @@ async def allm_passthrough_route(
     params: QueryParamTypes | None = None,
     cookies: CookieTypes | None = None,
     client: HTTPHandler | AsyncHTTPHandler | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> httpx.Response | AsyncGenerator[bytes, bytes]:
     """
     Async: Reranks a list of documents based on their relevance to the query

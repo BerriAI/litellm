@@ -1,5 +1,8 @@
 use litellm_env::Lookup;
-use litellm_python_compat::{lenient::UintOrUnset, unicode::isspace};
+use litellm_python_compat::{
+    lenient::{FloatOrUnset, UintOrUnset},
+    unicode::isspace,
+};
 use serde::{Deserialize, Deserializer};
 use serde_with::serde_as;
 use struct_field_names_as_array::FieldNamesAsSlice;
@@ -35,6 +38,14 @@ pub struct Environment {
     pub default_max_retries: Option<String>,
     pub default_allowed_fails: Option<String>,
     pub default_cooldown_time_seconds: Option<String>,
+    #[serde_as(as = "FloatOrUnset")]
+    pub default_cooldown_redis_read_interval_seconds: Option<f64>,
+    #[serde_as(as = "UintOrUnset")]
+    pub default_max_redis_batch_cache_size: Option<u64>,
+    pub litellm_rate_limit_window_size: Option<i64>,
+    pub litellm_tpm_token_reservation_enabled: Option<Flag>,
+    #[serde_as(as = "UintOrUnset")]
+    pub proxy_batch_write_at: Option<u64>,
 }
 
 impl Environment {
@@ -92,6 +103,8 @@ mod tests {
             ("MAX_REQUEST_BODY_DECOMPRESSION_RATIO", "10"),
             ("MAX_DECOMPRESSED_REQUEST_BODIES_IN_FLIGHT_MB", "20"),
             ("NON_LLM_CONNECTION_TIMEOUT", "40"),
+            ("LITELLM_RATE_LIMIT_WINDOW_SIZE", "30"),
+            ("LITELLM_TPM_TOKEN_RESERVATION_ENABLED", "false"),
         ])
         .unwrap();
 
@@ -106,6 +119,8 @@ mod tests {
                 max_request_body_decompression_ratio: Some(10),
                 max_decompressed_request_bodies_in_flight_mb: Some(20.0),
                 non_llm_connection_timeout: Some(40),
+                litellm_rate_limit_window_size: Some(30),
+                litellm_tpm_token_reservation_enabled: Some(Flag(false)),
                 ..Environment::default()
             }
         );
@@ -158,6 +173,31 @@ mod tests {
         let environment = from_variables(&[("NON_LLM_CONNECTION_TIMEOUT", raw)]).unwrap();
 
         assert_eq!(environment.non_llm_connection_timeout, expected);
+    }
+
+    #[rstest]
+    #[case::blank("", "", None, None)]
+    #[case::words("soon", "many", None, None)]
+    #[case::numbers(" 2.5 ", "42", Some(2.5), Some(42))]
+    fn the_router_read_tuning_is_unset_where_python_falls_back_to_its_default(
+        #[case] interval: &str,
+        #[case] size: &str,
+        #[case] expected_interval: Option<f64>,
+        #[case] expected_size: Option<u64>,
+    ) {
+        let environment = from_variables(&[
+            ("DEFAULT_COOLDOWN_REDIS_READ_INTERVAL_SECONDS", interval),
+            ("DEFAULT_MAX_REDIS_BATCH_CACHE_SIZE", size),
+        ])
+        .unwrap();
+
+        assert_eq!(
+            (
+                environment.default_cooldown_redis_read_interval_seconds,
+                environment.default_max_redis_batch_cache_size,
+            ),
+            (expected_interval, expected_size)
+        );
     }
 
     #[rstest]

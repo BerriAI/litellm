@@ -1,15 +1,16 @@
 import base64
 import json
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Final, cast
 from unittest.mock import MagicMock
 
 import pytest
 
-
 import litellm
 from litellm.llms.gemini.realtime.transformation import GEMINI_LIVE_DOCUMENTED_VOICES, GeminiRealtimeConfig
 from litellm.types.llms.gemini import BidiGenerateContentServerMessage
+from litellm.types.llms.openai import OpenAIRealtimeEvents
+from litellm.types.realtime import RealtimeResponseTransformInput
 
 
 def test_gemini_realtime_transformation_session_created():
@@ -1945,6 +1946,292 @@ def test_gemini_post_tool_bare_turn_complete_followed_by_answer():
     assert response_done["response"]["status"] == "completed"
 
 
+_AUDIO_MODEL_TURN: Final = {
+    "serverContent": {"modelTurn": {"parts": [{"inlineData": {"mimeType": "audio/pcm", "data": "QUJD"}}]}}
+}
+_INTERRUPTION_USAGE: Final = {"promptTokenCount": 30, "responseTokenCount": 12, "totalTokenCount": 42}
+
+
+def _initial_audio_state() -> RealtimeResponseTransformInput:
+    return {
+        "session_configuration_request": json.dumps(
+            {"setup": {"model": "gemini-2.5-flash-native-audio", "generationConfig": {"responseModalities": ["AUDIO"]}}}
+        ),
+        "current_output_item_id": None,
+        "current_response_id": None,
+        "current_conversation_id": None,
+        "current_delta_chunks": [],
+        "current_item_chunks": [],
+        "current_delta_type": None,
+    }
+
+
+def _events_per_frame(
+    config: GeminiRealtimeConfig,
+    frames: Sequence[Mapping[str, object]],
+    state: RealtimeResponseTransformInput | None = None,
+) -> tuple[list[OpenAIRealtimeEvents], ...]:
+    if not frames:
+        return ()
+    current_state: Final = state if state is not None else _initial_audio_state()
+    result: Final = config.transform_realtime_response(
+        json.dumps(frames[0]),
+        "gemini-2.5-flash-native-audio",
+        MagicMock(litellm_trace_id="trace_interruption"),
+        realtime_response_transform_input=current_state,
+    )
+    next_state: Final[RealtimeResponseTransformInput] = {
+        "session_configuration_request": result["session_configuration_request"],
+        "current_output_item_id": result["current_output_item_id"],
+        "current_response_id": result["current_response_id"],
+        "current_conversation_id": result["current_conversation_id"],
+        "current_delta_chunks": result["current_delta_chunks"],
+        "current_item_chunks": result["current_item_chunks"],
+        "current_delta_type": result["current_delta_type"],
+    }
+    response: Final = result["response"]
+    frame_events: Final = response if isinstance(response, list) else [response]
+    return (frame_events, *_events_per_frame(config, frames[1:], next_state))
+
+
+def test_gemini_interruption_closes_item_incomplete_and_reports_one_cancelled_response_done() -> None:
+    opened, interrupted, turn_complete, next_turn, next_turn_complete = _events_per_frame(
+        GeminiRealtimeConfig(),
+        [
+            _AUDIO_MODEL_TURN,
+            {"serverContent": {"interrupted": True}},
+            {"serverContent": {"turnComplete": True}, "usageMetadata": _INTERRUPTION_USAGE},
+            _AUDIO_MODEL_TURN,
+            {"serverContent": {"turnComplete": True}},
+        ],
+    )
+    response_id: Final = opened[0]["response"]["id"]
+    item_id: Final = opened[1]["item"]["id"]
+
+    audio_done, part_done, item_done = interrupted
+    assert [
+        (audio_done["type"], audio_done["response_id"], audio_done["item_id"]),
+        (part_done["type"], part_done["response_id"], part_done["item_id"]),
+        (item_done["type"], item_done["response_id"], item_done["item"]["id"], item_done["item"]["status"]),
+    ] == [
+        ("response.output_audio.done", response_id, item_id),
+        ("response.content_part.done", response_id, item_id),
+        ("response.output_item.done", response_id, item_id, "incomplete"),
+    ], interrupted
+
+    assert [event["type"] for event in turn_complete] == ["response.done"], turn_complete
+    done: Final = turn_complete[0]["response"]
+    assert (done["id"], done["status"], done["status_details"]) == (
+        response_id,
+        "cancelled",
+        {"type": "cancelled", "reason": "turn_detected"},
+    ), done
+    usage: Final = done["usage"]
+    assert (usage["input_tokens"], usage["output_tokens"], usage["total_tokens"]) == (30, 12, 42), usage
+
+    next_done: Final = next_turn_complete[-1]["response"]
+    assert next_turn[0]["response"]["id"] != response_id
+    assert (next_done["status"], next_done["status_details"]) == ("completed", None), next_done
+
+
+def test_gemini_interruption_and_turn_complete_in_one_frame_reports_cancelled() -> None:
+    opened, closing = _events_per_frame(
+        GeminiRealtimeConfig(),
+        [
+            _AUDIO_MODEL_TURN,
+            {"serverContent": {"interrupted": True, "turnComplete": True}, "usageMetadata": _INTERRUPTION_USAGE},
+        ],
+    )
+
+    assert [event["type"] for event in closing] == [
+        "response.output_audio.done",
+        "response.content_part.done",
+        "response.output_item.done",
+        "response.done",
+    ], closing
+    assert closing[2]["item"]["status"] == "incomplete"
+    done: Final = closing[3]["response"]
+    assert (done["id"], done["status"], done["status_details"], done["usage"]["total_tokens"]) == (
+        opened[0]["response"]["id"],
+        "cancelled",
+        {"type": "cancelled", "reason": "turn_detected"},
+        42,
+    ), done
+
+
+def test_gemini_interruption_after_generation_complete_does_not_close_the_item_twice() -> None:
+    _, generation_complete, interrupted, turn_complete = _events_per_frame(
+        GeminiRealtimeConfig(),
+        [
+            _AUDIO_MODEL_TURN,
+            {"serverContent": {"generationComplete": True}},
+            {"serverContent": {"interrupted": True}},
+            {"serverContent": {"turnComplete": True}},
+        ],
+    )
+
+    assert generation_complete[-1]["item"]["status"] == "completed", generation_complete
+    assert interrupted == []
+    statuses: Final = [(event["type"], event["response"]["status"]) for event in turn_complete]
+    assert statuses == [("response.done", "cancelled")], turn_complete
+
+
+def test_gemini_usage_on_the_interrupted_frame_is_billed_on_the_cancelled_response_done() -> None:
+    _, _, turn_complete = _events_per_frame(
+        GeminiRealtimeConfig(),
+        [
+            _AUDIO_MODEL_TURN,
+            {"serverContent": {"interrupted": True}, "usageMetadata": _INTERRUPTION_USAGE},
+            {"serverContent": {"turnComplete": True}},
+        ],
+    )
+
+    done: Final = turn_complete[-1]["response"]
+    assert (done["status"], done["usage"]["total_tokens"]) == ("cancelled", 42), done
+
+
+def test_gemini_repeated_interruption_closes_the_item_once() -> None:
+    _, first, second, turn_complete = _events_per_frame(
+        GeminiRealtimeConfig(),
+        [
+            _AUDIO_MODEL_TURN,
+            {"serverContent": {"interrupted": True}},
+            {"serverContent": {"interrupted": True}},
+            {"serverContent": {"turnComplete": True}},
+        ],
+    )
+
+    assert [event["type"] for event in first] == [
+        "response.output_audio.done",
+        "response.content_part.done",
+        "response.output_item.done",
+    ], first
+    assert second == []
+    statuses: Final = [(event["type"], event["response"]["status"]) for event in turn_complete]
+    assert statuses == [("response.done", "cancelled")], turn_complete
+
+
+_TRANSCRIPT_TURN: Final = {"serverContent": {"outputTranscription": {"text": "Once upon"}}}
+
+
+def test_gemini_interruption_before_audio_closes_a_transcript_first_item() -> None:
+    opened, interrupted, turn_complete = _events_per_frame(
+        GeminiRealtimeConfig(),
+        [
+            _TRANSCRIPT_TURN,
+            {"serverContent": {"interrupted": True}},
+            {"serverContent": {"turnComplete": True}, "usageMetadata": _INTERRUPTION_USAGE},
+        ],
+    )
+    item_id: Final = opened[1]["item"]["id"]
+
+    closes: Final = [(event["type"], event.get("item_id") or event["item"]["id"]) for event in interrupted]
+    assert closes == [
+        ("response.output_audio.done", item_id),
+        ("response.content_part.done", item_id),
+        ("response.output_item.done", item_id),
+    ], interrupted
+    assert interrupted[2]["item"]["status"] == "incomplete", interrupted[2]
+    statuses: Final = [(event["type"], event["response"]["status"]) for event in turn_complete]
+    assert statuses == [("response.done", "cancelled")], turn_complete
+
+
+def test_gemini_transcript_first_turn_closes_its_item_on_generation_complete() -> None:
+    opened, generation_complete, turn_complete = _events_per_frame(
+        GeminiRealtimeConfig(),
+        [_TRANSCRIPT_TURN, {"serverContent": {"generationComplete": True}}, {"serverContent": {"turnComplete": True}}],
+    )
+
+    item_done: Final = generation_complete[-1]
+    assert (item_done["type"], item_done["item"]["id"], item_done["item"]["status"]) == (
+        "response.output_item.done",
+        opened[1]["item"]["id"],
+        "completed",
+    ), generation_complete
+    statuses: Final = [(event["type"], event["response"]["status"]) for event in turn_complete]
+    assert statuses == [("response.done", "completed")], turn_complete
+
+
+@pytest.mark.parametrize(
+    "opening_frame",
+    [_AUDIO_MODEL_TURN, _TRANSCRIPT_TURN],
+    ids=["audio-first", "transcript-first"],
+)
+def test_gemini_generation_and_turn_complete_in_one_frame_close_the_item_and_the_response(
+    opening_frame: Mapping[str, object],
+) -> None:
+    opened, closing = _events_per_frame(
+        GeminiRealtimeConfig(),
+        [
+            opening_frame,
+            {"serverContent": {"generationComplete": True, "turnComplete": True}, "usageMetadata": _INTERRUPTION_USAGE},
+        ],
+    )
+    response_id: Final = opened[0]["response"]["id"]
+    item_id: Final = opened[1]["item"]["id"]
+
+    audio_done, part_done, item_done, response_done = closing
+    assert [
+        (audio_done["type"], audio_done["item_id"]),
+        (part_done["type"], part_done["item_id"]),
+        (item_done["type"], item_done["item"]["id"], item_done["item"]["status"]),
+        (response_done["type"], response_done["response"]["id"], response_done["response"]["status"]),
+    ] == [
+        ("response.output_audio.done", item_id),
+        ("response.content_part.done", item_id),
+        ("response.output_item.done", item_id, "completed"),
+        ("response.done", response_id, "completed"),
+    ], closing
+    assert response_done["response"]["usage"]["total_tokens"] == 42, response_done
+
+
+def test_gemini_session_close_returns_the_interrupted_response_with_its_buffered_usage_once() -> None:
+    config: Final = GeminiRealtimeConfig()
+    opened, _ = _events_per_frame(
+        config,
+        [_AUDIO_MODEL_TURN, {"serverContent": {"interrupted": True}, "usageMetadata": _INTERRUPTION_USAGE}],
+    )
+
+    flushed: Final = config.unbilled_response_on_session_close("gemini-2.5-flash-native-audio")
+
+    assert flushed is not None
+    response: Final = flushed["response"]
+    assert (response["id"], response["status"], response["status_details"], response["usage"]["total_tokens"]) == (
+        opened[0]["response"]["id"],
+        "cancelled",
+        {"type": "cancelled", "reason": "turn_detected"},
+        42,
+    ), flushed
+    assert config.unbilled_response_on_session_close("gemini-2.5-flash-native-audio") is None
+
+
+def test_gemini_session_close_returns_nothing_once_the_turn_already_billed() -> None:
+    config: Final = GeminiRealtimeConfig()
+    _events_per_frame(
+        config,
+        [
+            _AUDIO_MODEL_TURN,
+            {"serverContent": {"interrupted": True}},
+            {"serverContent": {"turnComplete": True}, "usageMetadata": _INTERRUPTION_USAGE},
+        ],
+    )
+
+    assert config.unbilled_response_on_session_close("gemini-2.5-flash-native-audio") is None
+
+
+def test_gemini_session_close_leaves_usage_buffered_outside_an_interruption_unflushed() -> None:
+    config: Final = GeminiRealtimeConfig()
+    _events_per_frame(config, [{"usageMetadata": _INTERRUPTION_USAGE}])
+
+    assert config.unbilled_response_on_session_close("gemini-2.5-flash-native-audio") is None
+
+
+def test_gemini_interruption_with_no_open_response_emits_nothing() -> None:
+    (interrupted,) = _events_per_frame(GeminiRealtimeConfig(), [{"serverContent": {"interrupted": True}}])
+
+    assert interrupted == []
+
+
 @pytest.fixture(autouse=False)
 def patch_gemini_audio_cost_map_entries(monkeypatch):
     """Inject gemini_native_audio / gemini_audio_only_live into the cost map.
@@ -2511,3 +2798,176 @@ def test_gemini_realtime_response_done_reports_no_grounding_when_none_ran():
 
     assert input_details.get("web_search_requests") is None
     assert input_details.get("google_maps_grounding_requests") is None
+
+
+def _transform_input(**overrides: object) -> RealtimeResponseTransformInput:
+    base: Final[dict[str, object]] = {
+        "session_configuration_request": json.dumps(
+            {"setup": {"model": "gemini-3.8-live", "generationConfig": {"responseModalities": ["VIDEO"]}}}
+        ),
+        "current_output_item_id": None,
+        "current_response_id": None,
+        "current_conversation_id": None,
+        "current_delta_chunks": [],
+        "current_item_chunks": [],
+        "current_delta_type": None,
+    }
+    return cast(RealtimeResponseTransformInput, {**base, **overrides})
+
+
+_AVATAR_SESSION: Final = {"output_modalities": ["video"], "avatar": "Ben", "avatar_video_bitrate_bps": 1_500_000}
+
+
+def test_ai_studio_rejects_avatar_because_only_vertex_serves_it() -> None:
+    rejection: Final = GeminiRealtimeConfig().setup_session_update_rejection(
+        "gemini-3.8-live", _AVATAR_SESSION, setup_sent=False
+    )
+    assert rejection is not None
+    assert (rejection.code, rejection.param) == ("invalid_value", "session.avatar")
+    assert "vertex_ai/" in rejection.message
+
+
+def test_ai_studio_drops_avatar_and_video_under_drop_params() -> None:
+    config: Final = GeminiRealtimeConfig(drop_params=True)
+    assert config.setup_session_update_rejection("gemini-3.8-live", _AVATAR_SESSION, setup_sent=False) is None
+    messages: Final = config.transform_realtime_request(
+        json.dumps({"type": "session.update", "session": _AVATAR_SESSION}),
+        "gemini-3.8-live",
+        session_configuration_request=None,
+    )
+    setup: Final = json.loads(messages[0])["setup"]
+    assert "avatarConfig" not in setup
+    assert setup["generationConfig"]["responseModalities"] == ["AUDIO"]
+
+
+def test_gemini_session_update_without_avatar_has_no_avatar_config() -> None:
+    config: Final = GeminiRealtimeConfig()
+    messages: Final = config.transform_realtime_request(
+        json.dumps({"type": "session.update", "session": {"modalities": ["audio"]}}),
+        "gemini-3.8-live",
+        session_configuration_request=None,
+    )
+    assert "avatarConfig" not in json.loads(messages[0])["setup"]
+
+
+def test_gemini_video_inline_data_becomes_output_video_delta() -> None:
+    """A model turn carrying [video/mp4, audio/pcm] parts -> one output_video.delta
+    with the mp4 bytes and one output_audio.delta with ONLY the pcm bytes."""
+    config: Final = GeminiRealtimeConfig()
+    frame: Final = {
+        "serverContent": {
+            "modelTurn": {
+                "parts": [
+                    {"inlineData": {"mimeType": "video/mp4", "data": "bXA0"}},
+                    {"inlineData": {"mimeType": "audio/pcm;rate=24000", "data": "cGNt"}},
+                ]
+            }
+        }
+    }
+    result: Final = config.transform_realtime_response(
+        json.dumps(frame), "gemini-3.8-live", MagicMock(), realtime_response_transform_input=_transform_input()
+    )
+    events: Final = result["response"]
+    video: Final = [e for e in events if e["type"] == "response.output_video.delta"]
+    audio: Final = [e for e in events if e["type"] == "response.output_audio.delta"]
+    assert len(video) == 1 and len(audio) == 1
+    assert video[0]["delta"] == "bXA0"
+    assert video[0]["mime_type"] == "video/mp4"
+    assert video[0]["item_id"] == audio[0]["item_id"] == result["current_output_item_id"]
+    assert video[0]["response_id"] == result["current_response_id"]
+    assert audio[0]["delta"] == "cGNt"
+    # One response.created preamble, as for any first delta.
+    assert sum(1 for e in events if e["type"] == "response.created") == 1
+
+
+def test_gemini_video_only_frame_emits_no_audio_delta() -> None:
+    config: Final = GeminiRealtimeConfig()
+    frame: Final = {"serverContent": {"modelTurn": {"parts": [{"inlineData": {"mimeType": "video/mp4", "data": "bXA0"}}]}}}
+    result: Final = config.transform_realtime_response(
+        json.dumps(frame),
+        "gemini-3.8-live",
+        MagicMock(),
+        realtime_response_transform_input=_transform_input(
+            current_output_item_id="item_1", current_response_id="resp_1", current_delta_type="audio"
+        ),
+    )
+    types: Final = [e["type"] for e in result["response"]]
+    assert types == ["response.output_video.delta"], types
+    # The response stays open and bound to the same item: the audio/item done
+    # events close it later, exactly as for an audio-only turn.
+    assert result["current_output_item_id"] == "item_1"
+    assert result["current_response_id"] == "resp_1"
+
+
+def test_gemini_video_output_tokens_survive_response_done() -> None:
+    config: Final = GeminiRealtimeConfig()
+    frame: Final = {
+        "serverContent": {"turnComplete": True},
+        "usageMetadata": {
+            "candidatesTokenCount": 50,
+            "candidatesTokensDetails": [
+                {"modality": "VIDEO", "tokenCount": 42},
+                {"modality": "AUDIO", "tokenCount": 8},
+            ],
+        },
+    }
+    result: Final = config.transform_realtime_response(
+        json.dumps(frame),
+        "gemini-3.8-live",
+        MagicMock(),
+        realtime_response_transform_input=_transform_input(
+            current_output_item_id="item_1", current_response_id="resp_1", current_delta_type="audio"
+        ),
+    )
+    done: Final = [e for e in result["response"] if e["type"] == "response.done"]
+    assert len(done) == 1
+    otd: Final = done[0]["response"]["usage"]["output_token_details"]
+    assert otd["audio_tokens"] == 8
+    assert otd["video_tokens"] == 42
+
+
+def test_gemini_video_only_frame_never_opens_a_response() -> None:
+    """Avatar video flows continuously, outside any turn: a video-only frame opens no
+    response and leaves the delta state untouched; the transcript opens the spoken turn."""
+    config: Final = GeminiRealtimeConfig()
+    frame: Final = {"serverContent": {"modelTurn": {"parts": [{"inlineData": {"mimeType": "video/mp4", "data": "bXA0"}}]}}}
+    result: Final = config.transform_realtime_response(
+        json.dumps(frame), "gemini-3.8-live", MagicMock(), realtime_response_transform_input=_transform_input()
+    )
+    types: Final = [e["type"] for e in result["response"]]
+    assert types == ["response.output_video.delta"], types
+    assert result["response"][0]["response_id"] is None
+    assert result["current_response_id"] is None
+    assert result["current_output_item_id"] is None
+    assert result["current_delta_type"] is None
+
+
+def test_gemini_transcript_opened_response_is_closed_by_generation_complete() -> None:
+    """With avatar video no audio part ever arrives: the spoken turn is opened by its
+    transcript and generationComplete must still close the item (audio.done + item.done)."""
+    config: Final = GeminiRealtimeConfig()
+    state: Final = _transform_input()
+    first: Final = config.transform_realtime_response(
+        json.dumps({"serverContent": {"outputTranscription": {"text": "Bonjour, je "}}}),
+        "gemini-3.8-live",
+        MagicMock(),
+        realtime_response_transform_input=state,
+    )
+    assert [e["type"] for e in first["response"]][0] == "response.created"
+    assert first["current_delta_type"] == "audio"
+    state: Final = _transform_input(
+        current_output_item_id=first["current_output_item_id"],
+        current_response_id=first["current_response_id"],
+        current_conversation_id=first["current_conversation_id"],
+        current_delta_type=first["current_delta_type"],
+    )
+    done: Final = config.transform_realtime_response(
+        json.dumps({"serverContent": {"generationComplete": True}}),
+        "gemini-3.8-live",
+        MagicMock(),
+        realtime_response_transform_input=state,
+    )
+    types: Final = [e["type"] for e in done["response"]]
+    assert "response.output_audio.done" in types and "response.output_item.done" in types, types
+    item_done: Final = next(e for e in done["response"] if e["type"] == "response.output_item.done")
+    assert item_done["item"]["id"] == first["current_output_item_id"]
