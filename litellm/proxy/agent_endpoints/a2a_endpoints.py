@@ -407,6 +407,10 @@ def _refusal_error(error: ProxyException) -> _RefusalError:
     }
 
 
+def _refusal_frame(request_id: str | int | None, error: ProxyException) -> str:
+    return _sse_event({"jsonrpc": "2.0", "id": request_id, "error": _refusal_error(error)})
+
+
 async def _jsonrpc_refusal(request: Request, refusal: ProxyException | HTTPException) -> JSONResponse:
     from litellm.proxy.proxy_server import (
         _close_dangling_otel_server_span,  # pyright: ignore[reportPrivateUsage]  # proxy_server keeps the span-close helper private; a route that answers an error itself must stamp the OTel server span like the global ProxyException handler does
@@ -506,6 +510,7 @@ async def _a2a_sse_event_source(
     request_id: str | int | None = None,
     extra_headers: Mapping[str, str] | None = None,
     served_version: A2AVersion = "0.3",
+    raise_rejections: bool = False,
 ) -> AsyncGenerator[object, None]:
     """Stream an upstream A2A SSE response as parsed JSON-RPC event dicts.
 
@@ -530,6 +535,8 @@ async def _a2a_sse_event_source(
     resp: Final = await async_client.send(req, stream=True)
     try:
         if not resp.is_success:
+            if raise_rejections and str(resp.status_code) in _REJECTED_STATUS_CODES:
+                resp.raise_for_status()
             error_body: Final = await resp.aread()
             error_event: Mapping[str, object] | None = None
             try:
@@ -589,19 +596,26 @@ async def _forward_jsonrpc_sse(
     user_api_key_dict: UserAPIKeyAuth | None = None,
     request_data: dict[str, object] | None = None,
     served_version: A2AVersion = "0.3",
+    exchanged_token: ExchangedAgentToken | None = None,
 ) -> StreamingResponse:
-    event_source: Final = _a2a_sse_event_source(
+    upstream_events: Final = _a2a_sse_event_source(
         agent_url,
         body,
         request_id=request_id,
         extra_headers=extra_headers,
         served_version=served_version,
+        raise_rejections=exchanged_token is not None,
+    )
+    event_source: Final = (
+        upstream_events if exchanged_token is None else _stream_relaying_rejection(upstream_events, exchanged_token)
     )
 
     def _serialize_chunk(chunk: object) -> str:
         return f"data: {json.dumps(chunk)}\n\n"
 
-    def _serialize_error(proxy_exc: object) -> str:
+    def _serialize_error(proxy_exc: ProxyException) -> str:
+        if exchanged_token is not None and proxy_exc.code in _REJECTED_STATUS_CODES:
+            return _refusal_frame(request_id, proxy_exc)
         return (
             "data: "
             + json.dumps(
@@ -747,7 +761,7 @@ async def _handle_stream_message(
 
                 def _sse_error(proxy_exc: ProxyException) -> str:
                     if exchanged_token is not None and proxy_exc.code in _REJECTED_STATUS_CODES:
-                        return _sse_event({"jsonrpc": "2.0", "id": request_id, "error": _refusal_error(proxy_exc)})
+                        return _refusal_frame(request_id, proxy_exc)
                     return _sse_event(
                         {
                             "jsonrpc": "2.0",
@@ -1331,6 +1345,7 @@ async def invoke_agent_a2a(
                 user_api_key_dict=user_api_key_auth_for_call,
                 request_data=data,
                 served_version=served_version,
+                exchanged_token=exchanged_token,
             )
 
         else:

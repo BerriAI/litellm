@@ -417,3 +417,32 @@ def test_an_agent_rejecting_the_exchanged_token_answers_the_caller_with_its_stat
         _assert_rejected(forbidden, 403, "permission_error", "forbidden: ", caller, exchanged)
         assert len(rig.exchanges()) == 1
         assert _agent_authorizations(agent) == (f"Bearer {exchanged}",) * 5
+
+
+def _assert_rejected_frame(response: httpx.Response, status: int, error_type: str, *secrets: str) -> None:
+    assert response.status_code == 200, response.text
+    frames: Final = sse_frames(response.text)
+    assert len(frames) == 1, response.text
+    error: Final = object_value(frames[0]["error"])
+    assert error["code"] == -32000, response.text
+    assert object_value(error["data"]) == {"type": error_type, "param": None, "code": str(status)}, response.text
+    assert not [secret for secret in (_CLIENT_SECRET, *secrets) if secret in response.text], response.text
+
+
+def test_an_agent_rejecting_the_exchanged_token_on_resubscribe_streams_the_refusal_and_re_exchanges(
+    rig: _Rig,
+) -> None:
+    with peer("oboresubscribe", "langgraph") as agent, rig.proxy.scenario() as scenario:
+        identity: Final = _agent(rig, scenario, agent, {"token_exchange": _block(rig)})
+        caller: Final = rig.caller()
+        headers: Final = {"Authorization": f"Bearer {caller}"}
+        exchanged: Final = _exchanged(caller, "")
+        rig.exchanges()
+        agent.post_status = 401
+        unauthorized: Final = _task_call(rig, identity, "tasks/resubscribe", headers)
+        _assert_rejected_frame(unauthorized, 401, "authentication_error", caller, exchanged)
+        agent.post_status = 403
+        forbidden: Final = _task_call(rig, identity, "tasks/resubscribe", headers)
+        _assert_rejected_frame(forbidden, 403, "permission_error", caller, exchanged)
+        assert [form["subject_token"] for form in rig.exchanges()] == [caller, caller]
+        assert _agent_authorizations(agent) == (f"Bearer {exchanged}",) * 2
