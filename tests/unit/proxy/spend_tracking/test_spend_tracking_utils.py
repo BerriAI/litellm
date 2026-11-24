@@ -2,11 +2,11 @@ import asyncio
 import datetime
 import json
 import threading
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from copy import deepcopy
 from datetime import timezone
 from types import MappingProxyType
-from typing import Any, Final, cast
+from typing import Any, ClassVar, Final, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -3713,9 +3713,16 @@ class _FieldlessVerdict(BaseModel, frozen=True):
     pass
 
 
-class _BlankText:
+class _UndumpableVerdict(BaseModel, frozen=True):
+    verdict: str = "flagged"
+
+    def model_dump(self, **_: object) -> dict[str, object]:
+        raise RuntimeError("dump boom")
+
+
+class _UnprintableVerdict:
     def __str__(self) -> str:
-        return ""
+        raise RuntimeError("str boom")
 
 
 @pytest.mark.parametrize(
@@ -3726,11 +3733,13 @@ class _BlankText:
         ("\x00\x00", ""),
         ({1: "x"}, {}),
         (_FieldlessVerdict(), {}),
-        (_BlankText(), ""),
         ({"a"}, None),
         ("\x00a", None),
         ({1: "x", "k": "v"}, None),
         (frozenset(), None),
+        ([set()], None),
+        ((0,), None),
+        (b"", None),
     ],
 )
 @patch("litellm.proxy.proxy_server.general_settings", _PROMPTS_NOT_STORED)
@@ -3744,6 +3753,34 @@ def test_sanitize_guardrail_information_stores_what_the_native_row_builder_store
 
     assert result == [{"guardrail_name": "vendor", "guardrail_response": stored}]
     assert stored == (native_input if native_input in ("", [], {}) else None)
+
+
+@pytest.mark.parametrize("value", [_UndumpableVerdict(), _UnprintableVerdict(), {1, "a"}])
+@patch("litellm.proxy.proxy_server.general_settings", _PROMPTS_NOT_STORED)
+def test_sanitize_guardrail_information_stores_none_for_a_value_with_no_json_form(value: object) -> None:
+    entry: Final[dict[str, object]] = {"guardrail_name": "vendor", "match_details": value}
+
+    assert _sanitize_guardrail_information_for_spend_logs([entry]) == [
+        {"guardrail_name": "vendor", "match_details": None}
+    ]
+
+
+@patch("litellm.proxy.proxy_server.general_settings", _PROMPTS_NOT_STORED)
+def test_sanitize_guardrail_information_does_not_walk_a_large_value() -> None:
+    class _CountingDict(dict[str, object]):
+        reads: ClassVar[list[str]] = []
+
+        def __iter__(self) -> Iterator[str]:
+            for key in super().__iter__():
+                self.reads.append(key)
+                yield key
+
+    large: Final = _CountingDict({f"k{index}": "v" for index in range(1000)})
+
+    result: Final = _sanitize_guardrail_information_for_spend_logs([{"guardrail_response": large}])
+
+    assert result == [{"guardrail_response": None}]
+    assert len(_CountingDict.reads) == 1
 
 
 @patch("litellm.proxy.proxy_server.general_settings", _PROMPTS_NOT_STORED)

@@ -3,14 +3,14 @@ import ipaddress
 import os
 import re
 import secrets
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from datetime import datetime
 from datetime import datetime as dt
 from functools import partial
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Protocol, cast, runtime_checkable
 
-from pydantic import JsonValue, TypeAdapter, ValidationError
+from pydantic import BaseModel, JsonValue, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict
 
 import litellm
@@ -59,7 +59,7 @@ from litellm.litellm_core_utils.litellm_logging import (
 )
 from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import message_field
 from litellm.litellm_core_utils.redact_messages import numeric_compression_stats
-from litellm.litellm_core_utils.safe_json_dumps import safe_dumps, safe_json_structure, strip_null_bytes
+from litellm.litellm_core_utils.safe_json_dumps import safe_dumps, strip_null_bytes
 from litellm.litellm_core_utils.secret_redaction import redact_tokens
 from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
 from litellm.proxy._types import (
@@ -1200,18 +1200,31 @@ def _holds_nothing(value: object) -> bool:
     return False
 
 
+def _has_text_key(keys: Iterable[object]) -> bool:
+    return any(isinstance(key, str) for key in keys)
+
+
 def _stored_prompt_field(value: object) -> object:
     """What a prompt-carrying field is stored as when prompts are not stored: the value itself when its
     JSON form holds nothing, otherwise ``None``.
 
-    The native row builder makes the same choice on the JSON form of the value, where an empty set is
-    ``[]``, a string of NUL bytes is ``""`` and a dict with no string key is ``{}``, so the choice is
-    made on that form here too. Two levels are enough to tell whether the form is empty.
+    The native row builder makes the same choice on the JSON form of the value, where a string of NUL
+    bytes is ``""``, an empty set is ``[]``, and a dict with no string key or a pydantic model with no
+    field is ``{}``. Only those shapes can have an empty form, so only they are checked: a large value
+    is never walked, and a dict stops at its first string key.
     """
     if _holds_nothing(value):
         return value
-    json_form: Final = safe_json_structure(value, max_depth=1)
-    return json_form if _holds_nothing(json_form) else None
+    if isinstance(value, str):
+        return None if strip_null_bytes(value) else ""
+    if isinstance(value, set):
+        return None if value else []
+    text_keyed: Final = as_str_mapping(value)
+    if isinstance(value, dict) and text_keyed is not None:
+        return None if _has_text_key(text_keyed) else {}
+    if isinstance(value, BaseModel) and not type(value).model_fields and not value.model_extra:
+        return {}
+    return None
 
 
 def _redact_prompt_fields_in_guardrail_entry(
