@@ -259,3 +259,11 @@ def test_apistore_chat_completion_uses_authenticated_client(monkeypatch: pytest.
             )
     assert route.calls.last.request.headers["authorization"] == "Bearer apistore-client-key"
     assert response.choices[0].message.content == "Hello from API Store"
+
+
+@pytest.mark.parametrize("model", [m for m in _CATALOG_MODELS if m.startswith("apistore/claude-")])
+def test_claude_cache_writes_cost_more_than_plain_input(model: str):
+    row: Final = _PRIMARY_PRICES[model]
+
+    assert row["cache_creation_input_token_cost"] == pytest.approx(1.25 * row["input_cost_per_token"])
+    assert row["cache_creation_input_token_cost_above_1hr"] == pytest.approx(2 * row["input_cost_per_token"])

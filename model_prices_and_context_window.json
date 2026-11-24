@@ -126270,6 +126270,8 @@
         "supports_vision": true
     },
     "apistore/claude-fable-5": {
+        "cache_creation_input_token_cost": 8.75e-06,
+        "cache_creation_input_token_cost_above_1hr": 1.4e-05,
         "cache_read_input_token_cost": 7e-07,
         "input_cost_per_token": 7e-06,
         "litellm_provider": "apistore",
@@ -126287,6 +126289,8 @@
         "supports_vision": true
     },
     "apistore/claude-fable-5-1": {
+        "cache_creation_input_token_cost": 8.75e-06,
+        "cache_creation_input_token_cost_above_1hr": 1.4e-05,
         "cache_read_input_token_cost": 1.75e-07,
         "input_cost_per_token": 7e-06,
         "litellm_provider": "apistore",
@@ -126304,6 +126308,8 @@
         "supports_vision": true
     },
     "apistore/claude-fable-5-2": {
+        "cache_creation_input_token_cost": 7e-06,
+        "cache_creation_input_token_cost_above_1hr": 1.12e-05,
         "cache_read_input_token_cost": 1.4e-07,
         "input_cost_per_token": 5.6e-06,
         "litellm_provider": "apistore",
@@ -126321,6 +126327,8 @@
         "supports_vision": true
     },
     "apistore/claude-haiku-4-5": {
+        "cache_creation_input_token_cost": 8.75e-07,
+        "cache_creation_input_token_cost_above_1hr": 1.4e-06,
         "cache_read_input_token_cost": 7e-08,
         "input_cost_per_token": 7e-07,
         "litellm_provider": "apistore",
@@ -126338,6 +126346,8 @@
         "supports_vision": true
     },
     "apistore/claude-haiku-5-5": {
+        "cache_creation_input_token_cost": 8.75e-08,
+        "cache_creation_input_token_cost_above_1hr": 1.4e-07,
         "cache_read_input_token_cost": 7e-09,
         "cache_read_input_token_cost_above_100k_tokens": 3.5e-08,
         "input_cost_per_token": 7e-08,
@@ -126358,6 +126368,8 @@
         "supports_vision": true
     },
     "apistore/claude-opus-4-5": {
+        "cache_creation_input_token_cost": 4.375e-06,
+        "cache_creation_input_token_cost_above_1hr": 7e-06,
         "cache_read_input_token_cost": 3.5e-07,
         "input_cost_per_token": 3.5e-06,
         "litellm_provider": "apistore",
@@ -126375,6 +126387,8 @@
         "supports_vision": true
     },
     "apistore/claude-opus-4-6": {
+        "cache_creation_input_token_cost": 4.375e-06,
+        "cache_creation_input_token_cost_above_1hr": 7e-06,
         "cache_read_input_token_cost": 3.5e-07,
         "input_cost_per_token": 3.5e-06,
         "litellm_provider": "apistore",
@@ -126392,6 +126406,8 @@
         "supports_vision": true
     },
     "apistore/claude-opus-4-7": {
+        "cache_creation_input_token_cost": 4.375e-06,
+        "cache_creation_input_token_cost_above_1hr": 7e-06,
         "cache_read_input_token_cost": 3.5e-07,
         "input_cost_per_token": 3.5e-06,
         "litellm_provider": "apistore",
@@ -126409,6 +126425,8 @@
         "supports_vision": true
     },
     "apistore/claude-opus-4-8": {
+        "cache_creation_input_token_cost": 4.375e-06,
+        "cache_creation_input_token_cost_above_1hr": 7e-06,
         "cache_read_input_token_cost": 3.5e-07,
         "input_cost_per_token": 3.5e-06,
         "litellm_provider": "apistore",
@@ -126426,6 +126444,8 @@
         "supports_vision": true
     },
     "apistore/claude-opus-5": {
+        "cache_creation_input_token_cost": 4.375e-06,
+        "cache_creation_input_token_cost_above_1hr": 7e-06,
         "cache_read_input_token_cost": 3.5e-07,
         "input_cost_per_token": 3.5e-06,
         "litellm_provider": "apistore",
@@ -126443,6 +126463,8 @@
         "supports_vision": true
     },
     "apistore/claude-opus-5-5": {
+        "cache_creation_input_token_cost": 3.5e-06,
+        "cache_creation_input_token_cost_above_1hr": 5.6e-06,
         "cache_read_input_token_cost": 1.4e-07,
         "input_cost_per_token": 2.8e-06,
         "litellm_provider": "apistore",
@@ -126460,6 +126482,8 @@
         "supports_vision": true
     },
     "apistore/claude-sonnet-4-6": {
+        "cache_creation_input_token_cost": 2.625e-06,
+        "cache_creation_input_token_cost_above_1hr": 4.2e-06,
         "cache_read_input_token_cost": 2.1e-07,
         "input_cost_per_token": 2.1e-06,
         "litellm_provider": "apistore",
@@ -126477,6 +126501,8 @@
         "supports_vision": true
     },
     "apistore/claude-sonnet-5": {
+        "cache_creation_input_token_cost": 1.75e-06,
+        "cache_creation_input_token_cost_above_1hr": 2.8e-06,
         "cache_read_input_token_cost": 1.4e-07,
         "input_cost_per_token": 1.4e-06,
         "litellm_provider": "apistore",
@@ -126494,6 +126520,8 @@
         "supports_vision": true
     },
     "apistore/claude-sonnet-5-5": {
+        "cache_creation_input_token_cost": 1.75e-06,
+        "cache_creation_input_token_cost_above_1hr": 2.8e-06,
         "cache_read_input_token_cost": 7e-08,
         "input_cost_per_token": 1.4e-06,
         "litellm_provider": "apistore",
