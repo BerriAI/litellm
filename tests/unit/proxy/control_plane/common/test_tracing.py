@@ -355,32 +355,53 @@ def test_health_is_not_traced() -> None:
     assert exporter.get_finished_spans() == ()
 
 
-def test_server_exclusions_match_only_the_exact_url_path() -> None:
+@pytest.mark.parametrize("asset", ("/scalar/reference.js", "/swagger/swagger-ui.css"))
+@pytest.mark.parametrize("root_path", ("", "/gateway"))
+def test_documentation_assets_are_not_traced(asset: str, root_path: str) -> None:
     exporter: Final = InMemorySpanExporter()
-    docs_url: Final = "https://docs-prod.test/user/info"
+    client, _, _ = rig({}, build_provider(_settings(), exporter))
+    prefixed_client: Final = TestClient(client.app, root_path=root_path)
+
+    assert prefixed_client.get(f"{root_path}{asset}").status_code == 200
+    assert _by_kind(exporter.get_finished_spans(), SpanKind.SERVER) == []
+
+
+@pytest.mark.parametrize("dataplane_id", ("docs-prod", "swagger", "scalar"))
+@pytest.mark.parametrize(
+    ("root_path", "api_prefix"),
+    (("", "/api/v1"), ("/gateway", "/api/v1"), ("/gateway", "/swagger"), ("/gateway", "/scalar")),
+)
+def test_server_exclusions_match_only_documentation_routes(dataplane_id: str, root_path: str, api_prefix: str) -> None:
+    exporter: Final = InMemorySpanExporter()
+    dataplane_url: Final = f"https://{dataplane_id}.test"
     dataplanes: Final = {
         **DATAPLANES,
-        "docs-prod": {"url": "https://docs-prod.test", "service_token": {"token": "sk-docs"}},
+        dataplane_id: {"url": dataplane_url, "service_token": {"token": "sk-docs"}},
     }
     client, _, minter = rig(
-        {docs_url: [response(200, {"ok": True})]},
+        {f"{dataplane_url}/user/info": [response(200, {"ok": True})]},
         build_provider(_settings(), exporter),
         dataplanes=dataplanes,
+        api_prefix=api_prefix,
     )
 
-    assert client.get("/api/v1/docs").status_code == 200
+    assert client.get(f"{api_prefix}/docs").status_code == 200
     assert _by_kind(exporter.get_finished_spans(), SpanKind.SERVER) == []
-    assert client.get("/api/v1/openapi.json").status_code == 200
+    assert client.get(f"{api_prefix}/swagger").status_code == 200
     assert _by_kind(exporter.get_finished_spans(), SpanKind.SERVER) == []
-    reply: Final = client.get(
-        "/api/v1/dataplanes/docs-prod/proxy/user/info?probe=1",
-        headers=minter.headers("docs-prod"),
+    assert client.get(f"{api_prefix}/openapi.json").status_code == 200
+    assert _by_kind(exporter.get_finished_spans(), SpanKind.SERVER) == []
+    prefixed_client: Final = TestClient(client.app, root_path=root_path)
+    path: Final = f"{root_path}{api_prefix}/dataplanes/{dataplane_id}/proxy/user/info"
+    reply: Final = prefixed_client.get(
+        f"{path}?probe=1",
+        headers=minter.headers(dataplane_id),
     )
 
     assert reply.status_code == 200, reply.text
     (server,) = _by_kind(exporter.get_finished_spans(), SpanKind.SERVER)
-    assert server.name == PROXY_ROUTE
-    assert _attr(server, "http.url") == "http://testserver/api/v1/dataplanes/docs-prod/proxy/user/info"
+    assert server.name == PROXY_ROUTE.replace("/api/v1", api_prefix, 1)
+    assert _attr(server, "http.url") == f"http://testserver{path}"
 
 
 def test_without_a_provider_nothing_is_recorded_and_no_trace_header_is_sent() -> None:

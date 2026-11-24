@@ -3,13 +3,14 @@ import subprocess
 import sys
 import threading
 from concurrent.futures import ThreadPoolExecutor
+from enum import Enum
 from itertools import chain
 from typing import Final
 
 import pytest
-from pydantic import ConfigDict, create_model
+from pydantic import ConfigDict, TypeAdapter, create_model
 
-from litellm.types.llms.base import LiteLLMBaseModel
+from litellm.types.llms.base import LiteLLMBaseModel, StrAsGiven
 
 _PROBE: Final = """
 from litellm.types.llms.base import LiteLLMBaseModel
@@ -142,3 +143,18 @@ def test_concurrent_first_use_of_a_deferred_subclass_always_builds_that_subclass
             assert _concurrent_first_use_outcomes(child) == {child.__name__}, f"round {round_id}"
     finally:
         sys.setswitchinterval(previous_switch_interval)
+
+
+class _MarkedKey(str):
+    pass
+
+
+class _KeyName(str, Enum):
+    PROD = "sk-prod"
+
+
+def test_str_as_given_keeps_a_marked_str_and_reads_a_str_enum_as_its_value():
+    marked: Final = _MarkedKey("sk-marked")
+
+    assert TypeAdapter(StrAsGiven).validate_python(marked) is marked
+    assert f"Bearer {TypeAdapter(StrAsGiven).validate_python(_KeyName.PROD)}" == "Bearer sk-prod"

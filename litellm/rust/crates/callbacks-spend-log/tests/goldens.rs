@@ -9,7 +9,7 @@ use litellm_callbacks_spend_log::{
     SpendLogRow, SpendLogRowBuilder,
 };
 use litellm_python_compat::json;
-use litellm_tracing::TokenRedactor;
+use litellm_redaction::TokenRedactor;
 use rstest::rstest;
 use serde::Deserialize;
 use serde_json::Value;

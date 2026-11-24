@@ -1,7 +1,7 @@
 import os
 import threading
 from collections import OrderedDict
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from typing import TYPE_CHECKING, Any, Final
 
 from litellm._logging import verbose_logger
@@ -177,12 +177,12 @@ class ArizePhoenixLogger(OpenTelemetry):
             self._project_providers[project_name] = new_provider
             return new_provider.get_tracer(LITELLM_TRACER_NAME)
 
-    def _resolve_tracer_for_kwargs(self, kwargs: dict) -> tuple[str, Tracer]:
+    def _resolve_tracer_for_kwargs(self, kwargs: Mapping[str, object]) -> tuple[str, Tracer]:
         """Resolve project name once and return the matching tracer."""
         project_name: Final = self._resolve_project_name(kwargs)
         return project_name, self._get_tracer_for(project_name)
 
-    def get_tracer_to_use_for_request(self, kwargs: dict) -> Tracer:
+    def get_tracer_to_use_for_request(self, kwargs: Mapping[str, object]) -> Tracer:
         """Route guardrail/raw-request spans to the same per-project tracer as the request."""
         if getattr(self, "_use_injected_tracer_provider", False):
             return self.tracer
@@ -195,22 +195,22 @@ class ArizePhoenixLogger(OpenTelemetry):
         primary ``otel`` callback which handles proxy-level parent spans.
         """
 
-    def set_attributes(self, span: Span, kwargs, response_obj: object):
+    def set_attributes(self, span: Span, kwargs: object, response_obj: object):
         ArizePhoenixLogger.set_arize_phoenix_attributes(span, kwargs, response_obj)
 
     @staticmethod
-    def set_arize_phoenix_attributes(span: Span, kwargs, response_obj):
+    def set_arize_phoenix_attributes(span: Span, kwargs: object, response_obj: object):
         _utils.set_attributes(span, kwargs, response_obj, ArizeOTELAttributes)
 
     @staticmethod
-    def _normalize_project_name(name: str | None) -> str | None:
+    def _normalize_project_name(name: object) -> str | None:
         if name is None:
             return None
         normalized: Final = str(name).strip()
         return normalized if normalized else None
 
     @staticmethod
-    def _iter_metadata_dicts_from_kwargs(kwargs: dict):
+    def _iter_metadata_dicts_from_kwargs(kwargs: Mapping[str, object]) -> Iterator[Mapping[object, object]]:
         """Yield request metadata dicts; standard_logging_object before litellm_params."""
         for key in ("standard_logging_object", "litellm_params"):
             found_key = kwargs.get(key)
@@ -221,7 +221,7 @@ class ArizePhoenixLogger(OpenTelemetry):
                 yield metadata
 
     @staticmethod
-    def _is_proxy_request(kwargs: dict) -> bool:
+    def _is_proxy_request(kwargs: Mapping[str, object]) -> bool:
         """True when the call is routed through the LiteLLM proxy.
 
         Proxy mode is determined solely by the server-set ``proxy_server_request``
@@ -234,7 +234,9 @@ class ArizePhoenixLogger(OpenTelemetry):
         return isinstance(litellm_params, dict) and bool(litellm_params.get("proxy_server_request"))
 
     @staticmethod
-    def _project_from_metadata_dict(metadata: dict, metadata_key: str, *, proxy_mode: bool) -> str | None:
+    def _project_from_metadata_dict(
+        metadata: Mapping[object, object], metadata_key: str, *, proxy_mode: bool
+    ) -> str | None:
         """
         Read a Phoenix project field from proxy/SDK metadata.
 
@@ -253,7 +255,7 @@ class ArizePhoenixLogger(OpenTelemetry):
         return None
 
     @staticmethod
-    def _metadata_project_from_kwargs(kwargs: dict, metadata_key: str) -> str | None:
+    def _metadata_project_from_kwargs(kwargs: Mapping[str, object], metadata_key: str) -> str | None:
         proxy_mode: Final = ArizePhoenixLogger._is_proxy_request(kwargs)
         for metadata in ArizePhoenixLogger._iter_metadata_dicts_from_kwargs(kwargs):
             project = ArizePhoenixLogger._project_from_metadata_dict(metadata, metadata_key, proxy_mode=proxy_mode)
@@ -262,7 +264,7 @@ class ArizePhoenixLogger(OpenTelemetry):
         return None
 
     @staticmethod
-    def _resolve_project_name(kwargs: dict) -> str:
+    def _resolve_project_name(kwargs: Mapping[str, object]) -> str:
         """
         Resolve the target Phoenix/Arize project for this request.
 
@@ -327,16 +329,16 @@ class ArizePhoenixLogger(OpenTelemetry):
 
         return traceparent_ctx, None
 
-    def _handle_success(self, kwargs, response_obj, start_time, end_time):
+    def _handle_success(self, kwargs: object, response_obj: object, start_time: object, end_time: object):
         self._handle_phoenix_trace(kwargs, response_obj, start_time, end_time, success=True)
 
-    def _handle_failure(self, kwargs, response_obj, start_time, end_time):
+    def _handle_failure(self, kwargs: object, response_obj: object, start_time: object, end_time: object):
         self._handle_phoenix_trace(kwargs, response_obj, start_time, end_time, success=False)
 
     def _handle_phoenix_trace(
         self,
         kwargs,
-        response_obj,
+        response_obj: object,
         start_time,
         end_time,
         *,

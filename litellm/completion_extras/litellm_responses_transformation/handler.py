@@ -59,7 +59,7 @@ class ResponsesToCompletionBridgeHandler:
         self.transformation_handler = LiteLLMResponsesTransformationHandler()
 
     @staticmethod
-    def _resolve_stream_flag(optional_params: dict, litellm_params: dict) -> bool:
+    def _resolve_stream_flag(optional_params: dict[str, object], litellm_params: dict[str, object]) -> bool:
         stream = optional_params.get("stream")
         if stream is None:
             stream = litellm_params.get("stream", False)
@@ -177,7 +177,7 @@ class ResponsesToCompletionBridgeHandler:
         )
 
     def completion(
-        self, *args, **kwargs
+        self, *args: object, **kwargs
     ) -> Union[
         Coroutine[None, None, Union["ModelResponse", "CustomStreamWrapper"]],
         "ModelResponse",
@@ -305,7 +305,7 @@ class ResponsesToCompletionBridgeHandler:
             )
             return self._apply_post_stream_processing(streamwrapper, model, custom_llm_provider)
 
-    async def acompletion(self, *args, **kwargs) -> Union["ModelResponse", "CustomStreamWrapper"]:
+    async def acompletion(self, *args: object, **kwargs) -> Union["ModelResponse", "CustomStreamWrapper"]:
         from litellm import aresponses
         from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 

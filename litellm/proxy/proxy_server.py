@@ -97,6 +97,7 @@ from litellm.constants import (
     SPEND_LOG_QUEUE_MAX_BACKOFF_SECONDS,
     VLLM_CHOICE_FIELDS,
 )
+from litellm.cost_calculator import base_model_for_pricing
 from litellm.litellm_core_utils.access_windows import access_windows_config_error
 from litellm.litellm_core_utils.add_retry_fallback_headers import (
     get_fallback_errors_from_headers,
@@ -119,7 +120,10 @@ from litellm.litellm_core_utils.prompt_templates.chat_template_tools import (
     chat_template_tool_choice_tokens,
     chat_template_tool_section,
 )
-from litellm.litellm_core_utils.routing_common_utils import resolve_model_group_alias
+from litellm.litellm_core_utils.routing_common_utils import (
+    deployments_the_caller_may_use,
+    resolve_model_group_alias,
+)
 from litellm.litellm_core_utils.routing_groups import parse_routing_groups
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
@@ -389,6 +393,7 @@ from litellm.integrations.custom_guardrail import CustomGuardrail, ModifyRespons
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.generic_api.generic_api_callback import GenericAPILogger
 from litellm.integrations.lens.proxy.adapter import router as lens_router
+from litellm.integrations.lens.proxy.pages import router as lens_pages_router
 from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
 from litellm.litellm_core_utils.agentic_loop_settings import (
     validated_max_agentic_loops,
@@ -444,6 +449,7 @@ from litellm.llms.custom_httpx.aiohttp_pool_diagnostics import build_pool_wait_t
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler, exclude_rsa_key_exchange_and_chacha20
 from litellm.llms.custom_httpx.httpx_handler import HTTPHandler as JwksHTTPHandler
 from litellm.llms.openai.live import parse_live_session_start
+from litellm.llms.openai.live.handler import LiveAttach, LiveProviderFrameGate
 from litellm.llms.openai_like.model_info import MODEL_INFO_REFRESH_SECONDS
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.messages.dispatch import messages_target
@@ -539,6 +545,8 @@ from litellm.proxy.common_request_processing import (  # noqa: F401, RUF100  # l
     proxy_exception_from_route_error,
     refuse_s3_media_the_key_may_not_read,
     resolve_litellm_call_id,
+    resolve_per_request_model_group_alias,
+    saved_router_weights,
     should_return_raw_model_name,
     sse_error_payload,
     ttft_keepalive_interval,
@@ -768,6 +776,8 @@ from litellm.proxy.litellm_pre_call_utils import (
     SCHEDULER_PRIORITY_HEADER,
     LiteLLMProxyRequestSetup,
     add_litellm_data_to_request,
+    request_routing_metadata,
+    request_served_model,
     sanitize_for_log,
 )
 from litellm.proxy.logging_endpoints.callback_logs_endpoints import (
@@ -920,6 +930,8 @@ from litellm.proxy.plugin_routes import (
 from litellm.proxy.plugin_routes import (
     router as plugin_router,
 )
+from litellm.proxy.realtime_endpoints.live_delegation import authorize_live_delegation, live_client_frame
+from litellm.proxy.realtime_endpoints.sideband import SESSION_NOT_ADMITTED_CODE
 from litellm.proxy.spend_tracking.spend_event_producer import (
     CollectorSettings,
     SpendEventProducer,
@@ -959,7 +971,7 @@ from starlette.background import BackgroundTask
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.websockets import WebSocketState
 
-from litellm.integrations.lens.config import is_lens_tracing_enabled
+from litellm.integrations.lens.config import LensController
 from litellm.integrations.lens.proxy import tracing_endpoints
 from litellm.integrations.lens.proxy.tracing_runtime import manage_tracing
 from litellm.litellm_core_utils.on_end_byte_stream import OnEndAsyncByteStream
@@ -1007,7 +1019,7 @@ from litellm.proxy.public_endpoints.public_v1 import router as public_v1_router
 from litellm.proxy.rag_endpoints.endpoints import router as rag_router
 from litellm.proxy.rerank_endpoints.endpoints import router as rerank_router
 from litellm.proxy.response_api_endpoints.endpoints import router as response_router
-from litellm.proxy.route_llm_request import route_request
+from litellm.proxy.route_llm_request import per_request_router_settings, route_request
 from litellm.proxy.route_priority import hot_routes_first
 from litellm.proxy.search_endpoints.endpoints import router as search_router
 from litellm.proxy.shutdown.graceful_shutdown_manager import GracefulShutdownManager
@@ -1068,7 +1080,6 @@ from litellm.proxy.utils import (  # noqa: F401, RUF100  # legacy module exports
     _get_docs_url,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     _get_openapi_url,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     _get_projected_spend_over_limit,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
-    _get_redoc_url,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     _is_projected_spend_over_limit,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     _is_valid_team_configs,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     cache_user_row,
@@ -1079,8 +1090,8 @@ from litellm.proxy.utils import (  # noqa: F401, RUF100  # legacy module exports
     get_error_message_str,
     get_openapi_url,
     get_projected_spend_over_limit,
-    get_redoc_url,
     get_server_root_path,
+    get_swagger_url,
     handle_exception_on_proxy,
     hash_password,
     hash_token,
@@ -1107,7 +1118,11 @@ from litellm.router import (
     LiteLLM_Params,
     ModelGroupInfo,
 )
-from litellm.router_api import ChangeSet, deployment_id, router_init_args
+from litellm.router_api import ChangeSet, RoutingContext, deployment_id, router_init_args
+from litellm.router_strategy.tag_based_routing import (
+    get_deployments_for_tag,
+    get_tag_metadata_variable_name_from_kwargs,
+)
 from litellm.scheduler import FlowItem, Scheduler
 from litellm.secret_managers.aws_secret_manager import load_aws_kms
 from litellm.secret_managers.google_kms import load_google_kms
@@ -1202,19 +1217,18 @@ from fastapi import (
     UploadFile,
     WebSocket,
     WebSocketDisconnect,
-    applications,
     status,
 )
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.openapi.docs import get_swagger_ui_html
 from fastapi.openapi.utils import get_openapi
 from fastapi.responses import (
     FileResponse,
     HTMLResponse,
     JSONResponse,
     ORJSONResponse,
+    PlainTextResponse,
     RedirectResponse,
     StreamingResponse,
 )
@@ -1222,6 +1236,8 @@ from fastapi.routing import APIRouter
 from fastapi.security import OAuth2PasswordBearer
 from fastapi.security.api_key import APIKeyHeader
 from fastapi.staticfiles import StaticFiles
+
+from litellm.proxy.scalar_reference import mount_api_references
 
 # import enterprise folder
 enterprise_router = APIRouter()
@@ -1333,10 +1349,6 @@ ui_message += "\n\n💸 [```LiteLLM Model Cost Map```](https://models.litellm.ai
 
 ui_message += f"\n\n🔎 [```LiteLLM Model Hub```]({model_hub_link}). See available models on the proxy. [**Docs**](https://docs.litellm.ai/docs/proxy/ai_hub)"
 
-custom_swagger_message: Final = (
-    "[**Customize Swagger Docs**](https://docs.litellm.ai/docs/enterprise#operations--branding)"
-)
-
 ### CUSTOM BRANDING [ENTERPRISE FEATURE] ###
 title: Final = os.getenv("DOCS_TITLE", "LiteLLM API") if premium_user else "LiteLLM API"
 
@@ -1344,10 +1356,10 @@ _title: Final = title
 _description: Final = (
     os.getenv(
         "DOCS_DESCRIPTION",
-        f"Enterprise Edition \n\nProxy Server to call 100+ LLMs in the OpenAI format. {custom_swagger_message}\n\n{ui_message}",
+        f"Enterprise Edition \n\nProxy Server to call 100+ LLMs in the OpenAI format.\n\n{ui_message}",
     )
     if premium_user
-    else f"Proxy Server to call 100+ LLMs in the OpenAI format. {custom_swagger_message}\n\n{ui_message}"
+    else f"Proxy Server to call 100+ LLMs in the OpenAI format.\n\n{ui_message}"
 )
 
 
@@ -2057,6 +2069,19 @@ async def _proxy_lifespan(app: FastAPI, resources: AsyncExitStack) -> AsyncGener
         await install_background_interaction_settlement(
             prisma_client, router=lambda: llm_router, spend_logs_kept=lambda: disable_spend_logs is False
         )
+        from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+            openai_passthrough_base_url,
+            openai_passthrough_poll_headers,
+        )
+        from litellm.proxy.pass_through_endpoints.pass_through_endpoints import pass_through_endpoint_logging
+
+        await resources.enter_async_context(
+            database_runtime.background_task(
+                pass_through_endpoint_logging.sweep_background_response_polls_periodically(
+                    api_base=openai_passthrough_base_url(), poll_headers=openai_passthrough_poll_headers
+                )
+            )
+        )
 
     # Start background health checks AFTER models are loaded and index is built
     if use_background_health_checks:
@@ -2108,7 +2133,7 @@ async def _proxy_lifespan(app: FastAPI, resources: AsyncExitStack) -> AsyncGener
         dict[str, object] | None,
         TypeAdapter(dict[str, object] | None).validate_python(general_settings.get("tracing")),
     )
-    tracing_enabled: Final = is_lens_tracing_enabled(tracing_settings)
+    tracing_enabled: Final = LensController.is_lens_setup(tracing_settings)
     async with manage_tracing(
         enabled=tracing_enabled,
         settings=tracing_settings,
@@ -2289,9 +2314,11 @@ def ensure_unique_openapi_operation_ids(
     return openapi_schema
 
 
+docs_url: Final = get_docs_url()
 app = FastAPI(
-    docs_url=get_docs_url(),
-    redoc_url=get_redoc_url(),
+    # FastAPI registers its Swagger handler during construction, before Scalar can claim the docs URL.
+    docs_url=None,
+    redoc_url=None,
     openapi_url=get_openapi_url(),
     title=title,
     description=_description,
@@ -2301,6 +2328,8 @@ app = FastAPI(
     generate_unique_id_function=_generate_stable_operation_id,
     strict_content_type=False,
 )
+
+mount_api_references(app, docs_url, get_swagger_url(), lazy_features=True)
 
 ## V2 OTEL: instrument the FastAPI app for server spans (gated by
 ## LITELLM_OTEL_V2). This MUST run at app-creation time — once the lifespan runs,
@@ -3197,93 +3226,6 @@ app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(GZipBufferedResponseMiddleware)
 
 
-def mount_swagger_ui():
-    swagger_directory: Final = os.path.join(current_dir, "swagger")
-    swagger_path = "/" if server_root_path is None else server_root_path
-    if not swagger_path.endswith("/"):
-        swagger_path = swagger_path + "/"
-    custom_root_path_swagger_path: Final = swagger_path + "swagger"
-
-    app.mount("/swagger", StaticFiles(directory=swagger_directory), name="swagger")
-
-    # On dropdown expand: one-time fetch to the prefix (triggers lazy load),
-    # then spec re-download so real routes replace the stub. Raw JS (no
-    # <script> tag) since it's injected inside the existing inline script.
-    from fastapi.responses import HTMLResponse
-
-    from litellm.proxy._lazy_features import lazy_tag_to_prefix
-
-    _lazy_plugin_js: Final = (
-        "const TAG_TO_PREFIX = " + json.dumps(lazy_tag_to_prefix()) + ";"
-        "const warmedTags = new Set();"
-        "const LAZY_TAGS = new Set(Object.keys(TAG_TO_PREFIX));"
-        "const hideStubRows = () => {"
-        "document.querySelectorAll('.opblock').forEach(op => {"
-        "const d = op.querySelector('.opblock-summary-description');"
-        "if (d && LAZY_TAGS.has(d.textContent.trim())) op.style.display = 'none';"
-        "});};"
-        "const annotateLazyHeaders = () => {"
-        "document.querySelectorAll('.opblock-tag').forEach(tagEl => {"
-        "const m = (tagEl.id || '').match(/^operations-tag-(.+)$/);"
-        "if (!m || !LAZY_TAGS.has(m[1])) return;"
-        "const existing = tagEl.querySelector('.lazy-load-hint');"
-        "if (warmedTags.has(m[1])) { if (existing) existing.remove(); return; }"
-        "if (existing) return;"
-        "const hint = document.createElement('small');"
-        "hint.className = 'lazy-load-hint';"
-        "hint.textContent = ' (expand to load routes)';"
-        "hint.style.opacity = '0.6';"
-        "hint.style.marginLeft = '6px';"
-        "const target = tagEl.querySelector('a span') || tagEl.querySelector('span') || tagEl;"
-        "target.appendChild(hint);"
-        "});};"
-        "setInterval(() => { hideStubRows(); annotateLazyHeaders(); }, 200);"
-        "const LazyLoadPlugin = () => ({"
-        "afterLoad:function(system){setTimeout(()=>{"
-        "for(const tag of LAZY_TAGS)system.layoutActions.show(['operations-tag',tag],false);"
-        "},200);},"
-        "statePlugins:{layout:{wrapActions:{show:(ori,sys)=>(...args)=>{"
-        "const thing=args[0];const shown=args[1];let tag=null;"
-        "if(Array.isArray(thing)){for(const t of thing)if(TAG_TO_PREFIX[t])tag=t;}"
-        "if(shown!==false&&tag&&!warmedTags.has(tag)){warmedTags.add(tag);"
-        "fetch('/lazy/warm/'+tag,{method:'POST',credentials:'include'}).then(r=>r.json()).then(d=>{"
-        "if(!d.paths||Object.keys(d.paths).length===0)return;"
-        "const cur=sys.specSelectors.specJson().toJS();"
-        "const merged={};let inserted=false;"
-        "for(const k in (cur.paths||{})){"
-        "if(k===d.stub_path){for(const nk in d.paths)merged[nk]=d.paths[nk];inserted=true;}"
-        "else{merged[k]=cur.paths[k];}}"
-        "if(!inserted)Object.assign(merged,d.paths);"
-        "cur.paths=merged;"
-        "cur.components=cur.components||{};"
-        "cur.components.schemas=Object.assign(cur.components.schemas||{},(d.components||{}).schemas||{});"
-        "sys.specActions.updateSpec(JSON.stringify(cur));"
-        "}).catch(()=>{});}"
-        "return ori(...args);}}}}});"
-    )
-
-    def swagger_monkey_patch(*args, **kwargs):
-        response: Final = get_swagger_ui_html(
-            *args,
-            **kwargs,
-            swagger_js_url=f"{custom_root_path_swagger_path}/swagger-ui-bundle.js",
-            swagger_css_url=f"{custom_root_path_swagger_path}/swagger-ui.css",
-            swagger_favicon_url=f"{custom_root_path_swagger_path}/favicon.png",
-        )
-        body = response.body.decode("utf-8")
-        body = body.replace(
-            "const ui = SwaggerUIBundle({",
-            _lazy_plugin_js + 'const ui = SwaggerUIBundle({plugins:[LazyLoadPlugin],tagsSorter:"alpha",',
-            1,
-        )
-        return HTMLResponse(content=body)
-
-    applications.get_swagger_ui_html = swagger_monkey_patch
-
-
-mount_swagger_ui()
-
-docs_url: Final = get_docs_url()
 root_redirect_url: Final[str | None] = os.getenv("ROOT_REDIRECT_URL")
 if docs_url != "/" and root_redirect_url is not None:
 
@@ -4078,7 +4020,11 @@ async def _accounting_scope_windows(
 ) -> tuple[Mapping[str, object], ...]:
     from litellm.proxy.spend_tracking.budget_reservation import fixed_budget_window
 
-    cached: Final[object] = _UNTYPED_VALUE.validate_python(await user_api_key_cache.async_get_cache(key=cache_key))
+    cached: Final[object] = (
+        await user_api_key_cache.get_team_fields(cache_key, ("budget_limits",))
+        if entity_type == Litellm_EntityType.TEAM
+        else _UNTYPED_VALUE.validate_python(await user_api_key_cache.async_get_cache(key=cache_key))
+    )
     limits: Final = (
         await _stored_budget_limits(entity_type, entity_id) if cached is None else _cached_budget_limits(cached)
     )
@@ -4359,6 +4305,9 @@ _CachedSpendObjectT = TypeVar(
 def _add_spend_to_locally_cached_object(
     cache: UserApiKeyCache, key: AuthObject, model_type: type[_CachedSpendObjectT], response_cost: float
 ) -> None:
+    if model_type is LiteLLM_TeamTableCachedObj:
+        cache.add_local_team_spend(key, response_cost)
+        return
     current: Final = cache.get_cache(key=key, local_only=True, model_type=model_type)
     if current is None:
         return
@@ -8270,6 +8219,7 @@ class ProxyConfig:
                     prisma_client=prisma_client,
                     user_api_key_cache=user_api_key_cache,
                     proxy_logging_obj=proxy_logging_obj,
+                    for_auth=True,
                 )
                 team_settings: Final = self._parse_router_settings_value(getattr(team_obj, "router_settings", None))
                 if team_settings is not None:
@@ -10992,10 +10942,11 @@ def _pricing_override_stamps(model_info: Mapping[str, object], litellm_params: _
 
 def get_litellm_model_info(model: dict = {}) -> Mapping[str, object]:
     model_info: Final = model.get("model_info", {})
+    priced_base_model: Final = base_model_for_pricing(model_info.get("base_model"))
     model_to_lookup = model.get("litellm_params", {}).get("model", None)
     try:
-        if "azure" in model_to_lookup or model_info.get("base_model"):
-            model_to_lookup = model_info.get("base_model", None)
+        if "azure" in model_to_lookup or priced_base_model:
+            model_to_lookup = priced_base_model
         litellm_model_info: Final = litellm.get_model_info(model_to_lookup)
         return litellm_model_info
     except Exception:
@@ -13968,6 +13919,9 @@ def _form_fields_without_file(form_data: Mapping[str, object]) -> Mapping[str, o
     return {key: value for key, value in form_data.items() if key != "file"}
 
 
+PLAIN_TEXT_TRANSCRIPTION_FORMATS: Final = frozenset({"text", "srt", "vtt"})
+
+
 @router.post(
     "/v1/audio/transcriptions",
     dependencies=[Depends(user_api_key_auth)],
@@ -13975,7 +13929,10 @@ def _form_fields_without_file(form_data: Mapping[str, object]) -> Mapping[str, o
     responses={
         200: {
             "model": TranscriptionResponse,
-            "content": {"text/event-stream": {"schema": {"type": "string"}}},
+            "content": {
+                "text/event-stream": {"schema": {"type": "string"}},
+                "text/plain": {"schema": {"type": "string"}},
+            },
         }
     },
 )
@@ -13986,7 +13943,10 @@ def _form_fields_without_file(form_data: Mapping[str, object]) -> Mapping[str, o
     responses={
         200: {
             "model": TranscriptionResponse,
-            "content": {"text/event-stream": {"schema": {"type": "string"}}},
+            "content": {
+                "text/event-stream": {"schema": {"type": "string"}},
+                "text/plain": {"schema": {"type": "string"}},
+            },
         }
     },
 )
@@ -14007,6 +13967,7 @@ async def audio_transcriptions(
     try:
         # Use orjson to parse JSON data, orjson speeds up requests significantly
         form_data: Final = await get_form_data(request)
+        requested_response_format: Final = form_data.get("response_format")
         data = {**_form_fields_without_file(form_data), **data}
 
         # Include original request and headers in the data
@@ -14140,6 +14101,11 @@ async def audio_transcriptions(
                 media_type="text/event-stream",
                 headers=response_headers,
             )
+
+        if requested_response_format in PLAIN_TEXT_TRANSCRIPTION_FORMATS and isinstance(
+            response, TranscriptionResponse
+        ):
+            return PlainTextResponse(content=response.text or "", headers=response_headers)
 
         fastapi_response.headers.update(response_headers)
 
@@ -14350,12 +14316,20 @@ async def _route_realtime_websocket_session(
     request_path: str | None = None,
     live_session_start: Mapping[str, object] | None = None,
     is_translation: bool = False,
+    sideband_call_id: str | None = None,
+    live_attach: LiveAttach | None = None,
+    pinned_deployment_id: str | None = None,
+    live_client_frame_gate: LiveProviderFrameGate | None = None,
 ) -> None:
     # Only use explicit parameters, not all query params
     query_model: Final = route_model if is_translation else model
-    query_params: Final = cast(  # cast-ok: cached tuples contain only the declared realtime query keys
-        RealtimeQueryParams,
-        dict(_realtime_query_params_template(query_model, intent)),
+    query_params: Final[RealtimeQueryParams] = (
+        {"call_id": sideband_call_id}
+        if sideband_call_id is not None
+        else cast(  # cast-ok: cached tuples contain only the declared realtime query keys
+            RealtimeQueryParams,
+            dict(_realtime_query_params_template(query_model, intent)),
+        )
     )
 
     data: dict[str, object] = {
@@ -14367,8 +14341,21 @@ async def _route_realtime_websocket_session(
     # Pass guardrails into data so pre-call guardrail processing picks them up
     if guardrails:
         data["guardrails"] = [g.strip() for g in guardrails.split(",") if g.strip()]
-    if live_session_start is not None:
-        data["live_session_start"] = live_session_start
+    data.update(
+        {
+            name: value
+            for name, value in (
+                ("live_session_start", live_session_start),
+                ("live_attach", live_attach),
+                ("live_client_frame_gate", live_client_frame_gate),
+            )
+            if value is not None
+        }
+    )
+    if pinned_deployment_id:
+        from litellm.router_rust.invoke.endpoints import PINNED_DEPLOYMENT_KEY
+
+        data[PINNED_DEPLOYMENT_KEY] = pinned_deployment_id
 
     # Use raw ASGI headers (already lowercase bytes) to avoid extra work
     headers_list: Final = list(websocket.scope.get("headers") or [])
@@ -14411,9 +14398,17 @@ async def _route_realtime_websocket_session(
             route_type="_arealtime",
         )
     except Exception as e:
-        verbose_proxy_logger.exception("Realtime pre-call error")
+        if sideband_call_id is None and live_attach is None:
+            verbose_proxy_logger.exception("Realtime pre-call error")
+        else:
+            verbose_proxy_logger.warning("The proxy's sideband was not admitted to its call: %s", e)
         await _reject_realtime_session(
-            websocket, user_api_key_dict, code=1011, reason="Pre-call error", error_message=str(e)
+            websocket,
+            user_api_key_dict,
+            code=1011,
+            reason="Pre-call error",
+            error_message=str(e),
+            error_code=None if sideband_call_id is None and live_attach is None else SESSION_NOT_ADMITTED_CODE,
         )
         return
     except BaseException:
@@ -14481,6 +14476,7 @@ async def _authorize_live_session_model(
     authorize_session_model: LiveSessionModelAuthorizer,
     websocket: WebSocket,
     model: str,
+    session: object,
 ) -> UserAPIKeyAuth:
     session_auth: Final = await authorize_session_model(websocket, model)
     try:
@@ -14498,6 +14494,7 @@ async def _authorize_live_session_model(
             user_api_key_cache=user_api_key_cache,
             proxy_logging_obj=proxy_logging_obj,
         )
+        await authorize_live_delegation(session, session_auth)
     except BaseException:
         await _release_realtime_budget_reservation(session_auth)
         raise
@@ -14558,7 +14555,7 @@ async def live_sessions_websocket_endpoint(
     await _release_realtime_budget_reservation(upgrade_auth)
     try:
         session_auth: Final = await _authorize_live_session_model(
-            authorize_session_model, websocket, session_start.model
+            authorize_session_model, websocket, session_start.model, session_start.frame.get("session")
         )
     except (ProxyException, HTTPException) as error:
         denial_message: Final = error.message if isinstance(error, ProxyException) else str(error.detail)
@@ -14587,6 +14584,7 @@ async def live_sessions_websocket_endpoint(
         guardrails=None,
         request_path=websocket.url.path,
         live_session_start=session_start.frame,
+        live_client_frame_gate=lambda client_frame, provider: live_client_frame(client_frame, provider, session_auth),
     )
 
 
@@ -15842,11 +15840,6 @@ _COUNT_TOOLS: Final[TypeAdapter[tuple[Mapping[str, object], ...] | None]] = Type
 _ROUTED_DEPLOYMENT: Final[TypeAdapter[Mapping[str, object] | None]] = TypeAdapter(Mapping[str, object] | None)
 
 
-def _model_group_deployment(router: Router | None, model_group: str) -> Mapping[str, object] | None:
-    group: Final = () if router is None else router.registry().deployments(model_group, source="all")
-    return group[0] if group else None
-
-
 def _non_empty_str(value: object) -> str | None:
     return value if isinstance(value, str) and value else None
 
@@ -15917,21 +15910,36 @@ def _router_default_litellm_params(router: Router | None) -> Mapping[str, object
     return {key: value for key, value in defaults.items() if value is not None}
 
 
+@dataclass(frozen=True, slots=True)
+class CountRoute:
+    served: str
+    select_request: Mapping[str, object]
+    routable: tuple[Mapping[str, object], ...]
+    deployment: Mapping[str, object] | None
+    miss: Exception | None = None
+    fallback: Mapping[str, object] | None = None
+
+    def usable_deployment(self) -> Mapping[str, object] | None:
+        return self.deployment if self.deployment is not None else self.fallback
+
+
 def _count_context_management(
-    context_management: JsonValue, model: str, request_litellm_params: Mapping[str, JsonValue]
+    context_management: JsonValue, route: CountRoute, request_litellm_params: Mapping[str, JsonValue]
 ) -> CountContextManagement | None:
     from litellm.llms.anthropic.messages.adapters.handler import context_management_explicitly_dropped
 
     if context_management is None or llm_router is None:
         return None
     inference_model: Final = resolve_inference_model(
-        model, general_settings_view(), user_model if isinstance(user_model, str) else None
+        route.served, general_settings_view(), user_model if isinstance(user_model, str) else None
     )
     router_defaults: Final = _router_default_litellm_params(llm_router)
     deployment_params: Final = tuple(
         deployment["litellm_params"]
         for deployment in llm_router.registry().deployments(
-            inference_model if isinstance(inference_model, str) else model, source="routable"
+            inference_model if isinstance(inference_model, str) else route.served,
+            source="routable",
+            request=route.select_request,
         )
     )
     sent_params: Final = tuple(
@@ -16043,6 +16051,50 @@ async def _gateway_request_view(
 def _responses_routing_kwargs(responses_request: Mapping[str, object] | None) -> Mapping[str, object]:
     previous_response_id: Final = None if responses_request is None else responses_request.get("previous_response_id")
     return {"previous_response_id": previous_response_id} if isinstance(previous_response_id, str) else {}
+
+
+def _caller_tag_scope(caller: UserAPIKeyAuth) -> Mapping[str, object]:
+    inherited: Final = LiteLLMProxyRequestSetup.get_inherited_tags(caller)
+    return {"tags": list(inherited), "inherited_tags": inherited} if inherited else {}
+
+
+def _caller_affinity_keys(caller: UserAPIKeyAuth) -> Mapping[str, object]:
+    key_hash: Final = LiteLLMProxyRequestSetup.get_logged_api_key(caller)
+    return {
+        **({"user_api_key_hash": key_hash} if key_hash else {}),
+        **({"user_api_key_user_id": caller.user_id} if caller.user_id else {}),
+    }
+
+
+def _caller_routing_kwargs(
+    caller: UserAPIKeyAuth | None, request_routing: Mapping[str, object]
+) -> Mapping[str, object]:
+    if caller is None:
+        return {}
+    team_scope: Final = {"user_api_key_team_id": caller.team_id} if caller.team_id else {}
+    return {
+        "metadata": {
+            "user_api_key_auth": LiteLLMProxyRequestSetup.auth_for_request_metadata(caller),
+            **team_scope,
+            **_caller_affinity_keys(caller),
+            **_caller_tag_scope(caller),
+            **request_routing,
+        }
+    }
+
+
+def _router_settings_kwargs(settings: Mapping[str, object]) -> Mapping[str, object]:
+    weights: Final = saved_router_weights(settings)
+    return {**per_request_router_settings(settings), **({"_router_weights": weights} if weights is not None else {})}
+
+
+async def _caller_router_settings(caller: UserAPIKeyAuth | None) -> Mapping[str, object]:
+    if caller is None:
+        return {}
+    settings: Final = await proxy_config.get_hierarchical_router_settings(
+        user_api_key_dict=caller, prisma_client=prisma_client, proxy_logging_obj=proxy_logging_obj
+    )
+    return settings or {}
 
 
 def _inference_params(
@@ -16193,6 +16245,7 @@ async def token_counter(
     request: TokenCountRequest,
     http_request: Request,
     fastapi_response: Response,
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
     call_endpoint: bool = False,
     litellm_call_id: Annotated[str | None, Header(alias=LITELLM_CALL_ID_HEADER)] = None,
 ):
@@ -16207,6 +16260,7 @@ async def token_counter(
         \f
         http_request: carries the call id to the error handler when the count fails
         fastapi_response: answers the x-litellm-call-id header the count's log line names
+        user_api_key_dict: the caller, whose team picks the deployment the count runs on
     """
     call_id: Final = resolve_litellm_call_id(litellm_call_id)
     return await answered_with_litellm_call_id(
@@ -16219,6 +16273,8 @@ async def token_counter(
                 else {"additional_drop_params": request.additional_drop_params}
             ),
             litellm_call_id=call_id,
+            caller=user_api_key_dict,
+            request_routing=request_routing_metadata(http_request, {}, user_api_key_dict),
         ),
         call_id,
         http_request,
@@ -16237,6 +16293,8 @@ async def count_request_tokens(
     litellm_call_id: str | None = None,
     client_oauth_token: str | None = None,
     count_options: Mapping[str, JsonValue] = MappingProxyType({}),
+    caller: UserAPIKeyAuth | None = None,
+    request_routing: Mapping[str, object] = MappingProxyType({}),
 ) -> TokenCountResponse:
     call_id: Final = resolve_litellm_call_id(litellm_call_id)
     if request.prompt is None and request.messages is None and request.contents is None:
@@ -16245,10 +16303,10 @@ async def count_request_tokens(
             call_id,
             request.model,
         )
-    routed: Final = await _routed_count_deployment(request.model, responses_request)
+    count_route: Final = await route_count(request.model, responses_request, caller, request_routing)
     count: Final = _count_request_tokens(
         request=request,
-        routed=routed,
+        count_route=count_route,
         call_endpoint=call_endpoint,
         messages_format=messages_format,
         output_format=output_format,
@@ -16262,7 +16320,7 @@ async def count_request_tokens(
         _with_anthropic_content_errors(count) if messages_format == "anthropic" else count,
         litellm_call_id=call_id,
         request_model=request.model,
-        model_id=deployment_model_id(routed),
+        model_id=deployment_model_id(count_route.deployment),
     )
 
 
@@ -16273,19 +16331,83 @@ async def _with_anthropic_content_errors(count: Awaitable[TokenCountResponse]) -
         raise ProxyException(message=str(e), type="invalid_request_error", param="messages", code=400) from e
 
 
-async def _routed_count_deployment(
-    model: str, responses_request: Mapping[str, object] | None
-) -> Mapping[str, object] | None:
+def _routable_count_deployments(served: str, select_request: Mapping[str, object]) -> tuple[Mapping[str, object], ...]:
     if llm_router is None:
+        return ()
+    return tuple(llm_router.registry().deployments(served, source="routable", request=select_request))
+
+
+async def _routed_count_deployment(
+    served: str, select_request: Mapping[str, object], routable: tuple[Mapping[str, object], ...]
+) -> Mapping[str, object] | Exception | None:
+    if llm_router is None or not routable:
         return None
     try:
-        routed: Final = await llm_router.select(model, dict(_responses_routing_kwargs(responses_request)))
-    except Exception:
+        routed: Final = await llm_router.select(served, dict(select_request), override_pre_call_check=False)
+    except Exception as e:
         verbose_proxy_logger.exception(
             "litellm.proxy.proxy_server.token_counter(): Exception occured while getting deployment"
         )
-        return None
+        return e
     return routed if isinstance(routed, Mapping) else None
+
+
+async def _first_caller_allowed_deployment(
+    served: str, select_request: Mapping[str, object], routable: tuple[Mapping[str, object], ...]
+) -> Mapping[str, object] | None:
+    team_usable: Final = deployments_the_caller_may_use(routable, select_request)
+    if llm_router is None or not team_usable:
+        return next(iter(team_usable), None)
+    try:
+        tag_allowed: Final = await get_deployments_for_tag(
+            ctx=RoutingContext(llm_router),
+            model=served,
+            healthy_deployments=team_usable,  # pyright: ignore[reportArgumentType]  # deployment dicts
+            request_kwargs=dict(select_request),  # pyright: ignore[reportArgumentType]  # the request kwargs
+            metadata_variable_name=get_tag_metadata_variable_name_from_kwargs(select_request),
+            request_deployments=routable,  # pyright: ignore[reportArgumentType]  # deployment dicts
+        )
+    except ValueError:
+        return None
+    return next((d for d in team_usable if d in tag_allowed), None)
+
+
+async def _caller_served_count_model(model: str, caller: UserAPIKeyAuth | None, settings: Mapping[str, object]) -> str:
+    if caller is None:
+        return model
+    prepared: Final = request_served_model(model, caller, None, llm_router)
+    if llm_router is None:
+        return prepared
+    return await resolve_per_request_model_group_alias(prepared, settings, caller, llm_router) or prepared
+
+
+async def route_count(
+    model: str,
+    responses_request: Mapping[str, object] | None,
+    caller: UserAPIKeyAuth | None,
+    request_routing: Mapping[str, object] = MappingProxyType({}),
+) -> CountRoute:
+    settings: Final = await _caller_router_settings(caller)
+    served: Final = await _caller_served_count_model(model, caller, settings)
+    select_request: Final = {
+        "model": served,
+        **_responses_routing_kwargs(responses_request),
+        **_router_settings_kwargs(settings),
+        **_caller_routing_kwargs(caller, request_routing),
+    }
+    routable: Final = _routable_count_deployments(served, select_request)
+    routed: Final = await _routed_count_deployment(served, select_request, routable)
+    deployment: Final = routed if isinstance(routed, Mapping) else None
+    return CountRoute(
+        served=served,
+        select_request=select_request,
+        routable=routable,
+        deployment=deployment,
+        miss=routed if isinstance(routed, Exception) else None,
+        fallback=(
+            None if deployment is not None else await _first_caller_allowed_deployment(served, select_request, routable)
+        ),
+    )
 
 
 def _with_chat_timeout(litellm_params: Mapping[str, object]) -> Mapping[str, object]:
@@ -16296,7 +16418,7 @@ def _with_chat_timeout(litellm_params: Mapping[str, object]) -> Mapping[str, obj
 
 async def _count_request_tokens(
     request: TokenCountRequest,
-    routed: Mapping[str, object] | None,
+    count_route: CountRoute,
     call_endpoint: bool,
     messages_format: TokenCountMessagesFormat,
     output_format: JsonValue,
@@ -16311,6 +16433,7 @@ async def _count_request_tokens(
     contents: Final = request.contents
     tools: Final = request.tools
     system: Final = request.system
+    routed: Final = count_route.deployment
 
     deployment: dict[str, object] | None = None if routed is None else dict(routed)
     litellm_model_name = None
@@ -16331,7 +16454,7 @@ async def _count_request_tokens(
         litellm_model_name if isinstance(litellm_model_name, str) and litellm_model_name else request.model
     )
     deployment_view: Final = _TOKEN_COUNT_DEPLOYMENT.validate_python(
-        deployment or _model_group_deployment(llm_router, request.model) or {}
+        deployment or count_route.usable_deployment() or {}
     )
     cost_map_row: Final = await asyncify(cost_map_entry)(*_token_count_settings_model(deployment_view, request.model))
     settings: Final = await asyncify(resolve_token_count_settings)(
@@ -16381,7 +16504,7 @@ async def _count_request_tokens(
         if local_count_error is None
         else ProxyException(message=local_count_error, type="token_counting_error", param="messages", code=400)
     )
-    context_edits: Final = _count_context_management(context_management, request.model, request_litellm_params)
+    context_edits: Final = _count_context_management(context_management, count_route, request_litellm_params)
     route: Final = (
         _messages_route(deployment_view, request.model)
         if request_messages is not None and messages_format == "anthropic"
@@ -23093,6 +23216,7 @@ app.include_router(tag_management_router)
 app.include_router(workflow_management_router)
 app.include_router(memory_router)
 app.include_router(lens_router)
+app.include_router(lens_pages_router)
 app.include_router(plugin_router)
 app.include_router(cost_tracking_settings_router)
 app.include_router(subscription_accounts_router)

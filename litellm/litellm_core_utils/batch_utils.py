@@ -34,7 +34,7 @@ BATCH_COST_REQUEST_ID_SUFFIX: Final = "_batch_cost"
 _AZURE_PROVIDERS: Final = frozenset({LlmProviders.AZURE.value, LlmProviders.AZURE_AI.value})
 
 _batch_create_routing: Final[ContextVar[bool]] = ContextVar("batch_create_routing", default=False)
-_DeploymentT: Final = TypeVar("_DeploymentT", bound=Mapping[str, object])
+_DeploymentT = TypeVar("_DeploymentT", bound=Mapping[str, object])
 
 
 class InMemoryFile(io.BytesIO):
@@ -44,7 +44,7 @@ class InMemoryFile(io.BytesIO):
         self.content_type = content_type
 
 
-def parse_jsonl_with_embedded_newlines(content: str) -> list[dict]:
+def parse_jsonl_with_embedded_newlines(content: str) -> list[object]:
     """
     Parse JSONL content that may contain JSON objects with embedded newlines in string values.
 
@@ -62,7 +62,7 @@ def parse_jsonl_with_embedded_newlines(content: str) -> list[dict]:
         >>> parse_jsonl_with_embedded_newlines(content)
         [{"id":1,"msg":"Line 1\\nLine 2"}, {"id":2,"msg":"test"}]
     """
-    json_objects: Final = []
+    json_objects: Final[list[object]] = []
     buffer = ""
 
     for char in content:
@@ -349,6 +349,58 @@ BATCH_RETRIEVE_CALL_TYPES: Final = frozenset(
         CallTypes.retrieve_batch.value,
     }
 )
+
+
+_SYNC_VECTOR_STORE_AND_CONTAINER_CALLS: Final = frozenset(
+    {
+        *(f"vector_store_{name}" for name in ("create", "search", "retrieve", "list", "update", "delete")),
+        *(f"vector_store_file_{name}" for name in ("create", "list", "retrieve", "content", "update", "delete")),
+        "create_container",
+        "list_containers",
+        "retrieve_container",
+        "delete_container",
+        "upload_container_file",
+        "list_container_files",
+        "retrieve_container_file",
+        "delete_container_file",
+        "retrieve_container_file_content",
+    }
+)
+VECTOR_STORE_AND_CONTAINER_CALLS: Final = frozenset(
+    {*_SYNC_VECTOR_STORE_AND_CONTAINER_CALLS, *(f"a{name}" for name in _SYNC_VECTOR_STORE_AND_CONTAINER_CALLS)}
+)
+BATCH_API_CALL_TYPES: Final = frozenset(
+    {
+        *BATCH_RETRIEVE_CALL_TYPES,
+        *VECTOR_STORE_AND_CONTAINER_CALLS,
+        CallTypes.acreate_batch.value,
+        CallTypes.create_batch.value,
+        CallTypes.acancel_batch.value,
+        CallTypes.cancel_batch.value,
+        CallTypes.acreate_file.value,
+        CallTypes.create_file.value,
+        CallTypes.afile_content.value,
+        CallTypes.file_content.value,
+        CallTypes.afile_delete.value,
+        CallTypes.file_delete.value,
+        CallTypes.afile_list.value,
+        CallTypes.file_list.value,
+        CallTypes.acreate_fine_tuning_job.value,
+        CallTypes.create_fine_tuning_job.value,
+        CallTypes.acancel_fine_tuning_job.value,
+        CallTypes.cancel_fine_tuning_job.value,
+        CallTypes.alist_fine_tuning_jobs.value,
+        CallTypes.list_fine_tuning_jobs.value,
+        CallTypes.aretrieve_fine_tuning_job.value,
+        CallTypes.retrieve_fine_tuning_job.value,
+    }
+)
+
+
+def is_batch_api_call_type(call_type: object) -> bool:
+    """A batch, file, fine-tuning, vector store, or container call, which Azure scopes to the resource,
+    so an Azure deployment serving only batches also takes it."""
+    return isinstance(call_type, str) and call_type in BATCH_API_CALL_TYPES
 
 
 def is_batch_retrieve_call_type(call_type: object) -> bool:

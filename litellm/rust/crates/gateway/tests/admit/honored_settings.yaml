@@ -15,6 +15,11 @@ config:
     routing_strategy: simple-shuffle
     num_retries: 1
     enable_cross_model_group_collision_check: true
+    redis_host: localhost
+    redis_port: 6379
+    redis_password: redis-key
+    redis_db: 1
+    cache_kwargs: {socket_timeout: 1}
     fallbacks:
       - claude-down: [claude]
   litellm_settings:
@@ -24,6 +29,7 @@ config:
     max_request_size_mb: 1
     enable_jwt_auth: true
     store_model_in_db: false
+    token_rate_limit_type: output
   environment_variables:
     SOME_KEY: value
 

@@ -3,7 +3,7 @@ use std::{collections::BTreeMap, fmt};
 use serde::Deserialize;
 use serde_json::{Map, Value};
 
-use crate::{RoutingGroupSpec, RoutingStrategy};
+use crate::{RouterRedis, RoutingGroupSpec, RoutingStrategy};
 
 /// A proxy config's `router_settings`, as written. What each setting means, and its default when
 /// unset, is the router core's.
@@ -41,6 +41,8 @@ pub struct RouterSettings {
     pub weights: Option<Map<String, Value>>,
     pub tag_routing_prefix: Option<String>,
     pub optional_pre_call_checks: Option<Vec<String>>,
+    #[serde(flatten)]
+    pub redis: RouterRedis,
     #[serde(flatten)]
     pub additional_fields: BTreeMap<String, Value>,
 }

@@ -51,6 +51,7 @@ from litellm.proxy.management_endpoints.team_admin_field_permissions import (
     SUPPORTED_TEAM_ADMIN_PERMISSIONS,
 )
 from litellm.proxy.management_endpoints.team_endpoints import (
+    raise_on_invalid_team_logging_shape,
     _LOCK_DELETED_TEAM_MEMBERS_SQL,
     _STRIP_DELETED_TEAMS_FROM_USERS_SQL,
     DeletedTeams,
@@ -2902,6 +2903,7 @@ async def test_update_team_team_member_budget_not_passed_to_db(
             team_member_rpm_limit=None,
             team_member_tpm_limit=None,
             team_member_budget_duration=None,
+            team_member_rollover_max_budget=None,
             team_member_model_max_budget=None,
             user_api_key_cache=None,
             explicitly_set_fields=frozenset(),
@@ -3300,6 +3302,9 @@ async def test_upsert_team_member_budget_table_clears_duration_kept_budget(mock_
     mock_db_client.db.litellm_customerteamtable.find_many = AsyncMock(return_value=[])
     mock_db_client.db.litellm_customerorganizationtable.find_many = AsyncMock(return_value=[])
 
+    mock_db_client.db.litellm_budgettable.find_unique = AsyncMock(
+        return_value=SimpleNamespace(max_budget=100.0, budget_duration="30d", rollover_max_budget=None)
+    )
     mock_db_client.db.litellm_budgettable.update = AsyncMock(
         side_effect=lambda where, data: SimpleNamespace(**data)
     )
@@ -3480,6 +3485,7 @@ async def test_update_team_with_team_member_budget_duration(
             team_member_rpm_limit=None,
             team_member_tpm_limit=None,
             team_member_budget_duration=None,
+            team_member_rollover_max_budget=None,
             team_member_model_max_budget=None,
             user_api_key_cache=None,
             explicitly_set_fields=frozenset(),
@@ -17443,7 +17449,7 @@ async def test_reset_team_member_budget_fn_relinks_custom_member_to_team_default
     assert response.budget_source == "team_default"
     mock_prisma_client.db.litellm_teammembership.update.assert_awaited_once_with(
         where={"user_id_team_id": {"user_id": "member-1", "team_id": "team-1"}},
-        data={"litellm_budget_table": {"connect": {"budget_id": "team-default-b"}}},
+        data={"litellm_budget_table": {"connect": {"budget_id": "team-default-b"}}, "rollover_credit": None},
     )
     mock_prisma_client.db.litellm_budgettable.update.assert_not_awaited()
     assert (
@@ -17491,7 +17497,7 @@ async def test_reset_team_member_budget_fn_detaches_member_when_team_has_no_usab
     assert response.budget_source == "none"
     mock_prisma_client.db.litellm_teammembership.update.assert_awaited_once_with(
         where={"user_id_team_id": {"user_id": "member-1", "team_id": "team-1"}},
-        data={"litellm_budget_table": {"disconnect": True}},
+        data={"litellm_budget_table": {"disconnect": True}, "rollover_credit": None},
     )
 
 
@@ -18985,6 +18991,20 @@ async def test_update_team_team_admin_cannot_change_a_proxy_controlled_metadata_
 
 
 @pytest.mark.asyncio
+async def test_team_admin_cannot_update_a_team_with_invalid_semantic_cache_metadata() -> None:
+    with ExitStack() as stack:
+        _wire_update_team(stack, {})
+        stack.enter_context(_team_admin_may_edit("metadata"))
+        with pytest.raises(ProxyException, match=r"metadata\.cache_params") as exc:
+            await update_team(
+                data=UpdateTeamRequest(team_id="test_team_id", metadata={"cache_params": {"ttl": -1}}),
+                http_request=_update_request_stub(),
+                user_api_key_dict=_TEAM_ADMIN_CALLER,
+            )
+    assert str(exc.value.code) == "400"
+
+
+@pytest.mark.asyncio
 async def test_update_team_team_admin_metadata_still_goes_through_the_configured_validator():
     import contextlib
 
@@ -20301,3 +20321,16 @@ def test_stored_team_windows_load_without_request_validation():
         team_id="team-1", budget_limits=[{"budget_duration": "1d", "max_budget": -1.0}, {"budget_duration": "1d", "max_budget": 2.0}]
     )
     assert [window.max_budget for window in team.budget_limits or ()] == [-1.0, 2.0]
+
+
+@pytest.mark.parametrize("value", ["not json", '{"a":1}', "null", "[null]", [1], {"bad": 1}])
+def test_team_logging_shape_rejects_non_object_lists(value: object) -> None:
+    with pytest.raises(HTTPException) as error:
+        raise_on_invalid_team_logging_shape({"logging": value})
+    assert error.value.status_code == 400
+    assert "metadata.logging must be a list of objects" in str(error.value.detail)
+
+
+@pytest.mark.parametrize("value", [None, "", {}, [], "[]", [{"callback_name": "newrelic", "callback_vars": {}}]])
+def test_team_logging_shape_preserves_empty_and_previously_accepted_object_configs(value: object) -> None:
+    assert raise_on_invalid_team_logging_shape({"logging": value}) is None

@@ -197,7 +197,7 @@ class OpenAIRealtime(OpenAIChatCompletion):
         timeout: float | None = None,
         query_params: RealtimeQueryParams | None = None,
         user_api_key_dict: object | None = None,
-        litellm_metadata: dict | None = None,
+        litellm_metadata: Mapping[str, object] | None = None,
         realtime_mode: str = "realtime",
         drop_params: bool = False,
         **kwargs: object,
@@ -260,6 +260,7 @@ class OpenAIRealtime(OpenAIChatCompletion):
                     usage_meter=self._make_usage_meter(),
                     translation_session=realtime_mode == "translation",
                     drop_params=drop_params,
+                    listens_only=bool((query_params or {}).get("call_id")),
                 )
                 await realtime_streaming.bidirectional_forward()
 

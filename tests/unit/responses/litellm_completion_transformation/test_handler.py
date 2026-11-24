@@ -25,10 +25,12 @@ import httpx
 import pytest
 
 import litellm
+from litellm.constants import PREVIOUS_RESPONSE_IDS_METADATA_KEY
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.tool_fields import BRIDGED_TOOL_NAMES_KWARG, BridgedToolNames, qualified_member_name
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.responses.litellm_completion_transformation.compaction_trigger import SUMMARY_PROMPT
 from litellm.responses.litellm_completion_transformation.handler import (
     LiteLLMCompletionTransformationHandler,
 )
@@ -60,6 +62,30 @@ def test_sync_fallback_tags_skip_responses_api_bridge():
             )
 
     assert captured.get("_skip_responses_api_bridge") is True
+
+
+@pytest.mark.asyncio
+async def test_a_first_turn_stores_an_empty_path_to_the_root_so_a_fork_off_it_replays_only_it():
+    litellm_metadata: Final[dict[str, object]] = {"user_api_key": "hashed"}
+    handler = LiteLLMCompletionTransformationHandler()
+    captured: dict = {}
+
+    async def fake_acompletion(**kwargs):
+        captured.update(kwargs)
+        raise _StopForwarding()
+
+    with patch("litellm.acompletion", fake_acompletion), pytest.raises(_StopForwarding):
+        await handler.response_api_handler(
+            model="gpt-4o",
+            input="hello",
+            responses_api_request={},
+            custom_llm_provider="openai",
+            _is_async=True,
+            litellm_metadata=litellm_metadata,
+        )
+
+    assert captured["litellm_metadata"] == {"user_api_key": "hashed", PREVIOUS_RESPONSE_IDS_METADATA_KEY: []}
+    assert captured["litellm_metadata"] is litellm_metadata
 
 
 @pytest.mark.asyncio
@@ -329,9 +355,7 @@ async def test_bridged_next_turn_replays_a_turn_stored_under_the_id_the_client_h
         )
 
     assert provider.request_body is not None, "the bridged turn never reached the provider"
-    assert [
-        (message["role"], json.dumps(message["content"])) for message in provider.request_body["messages"]
-    ] == [
+    assert [(message["role"], json.dumps(message["content"])) for message in provider.request_body["messages"]] == [
         ("user", json.dumps([{"type": "text", "text": "My favorite number is 7."}])),
         ("assistant", json.dumps([{"type": "text", "text": "Noted."}])),
         ("user", json.dumps([{"type": "text", "text": "Double it"}])),
@@ -674,3 +698,39 @@ async def test_converse_turn_after_a_blank_user_turn_resends_the_messages_that_f
     assert isinstance(follow_up_messages, list) and isinstance(next_turn_messages, list)
     assert [message["role"] for message in next_turn_messages] == ["user", "assistant", "user", "assistant", "user"]
     assert next_turn_messages[: len(follow_up_messages)] == follow_up_messages
+
+
+@pytest.mark.asyncio
+async def test_a_compaction_trigger_after_a_stored_turn_asks_for_the_summary_after_that_turn():
+    previous_response_id: Final = ResponsesAPIRequestUtils._build_responses_api_response_id(
+        custom_llm_provider="azure_ai", model_id="deployment-a", response_id="chatcmpl-turn-one"
+    )
+    stored_turns: Final = _StoredTurns((_stored_mcp_turn(previous_response_id),))
+    provider: Final = _RecordingAnthropicHandler(
+        {**_ANTHROPIC_MESSAGE_PAYLOAD, "content": [{"type": "text", "text": "<summary>The number is 7.</summary>"}]}
+    )
+    client: Final = AsyncHTTPHandler()
+    client.client = httpx.AsyncClient(transport=httpx.MockTransport(provider))
+
+    with patch("litellm.proxy.proxy_server.prisma_client", SimpleNamespace(db=stored_turns)):
+        response = await litellm.aresponses(
+            model="azure_ai/claude-sonnet-4-6",
+            api_base="https://fake-foundry-resource.services.ai.azure.com",
+            api_key="fake-api-key",
+            input=[{"type": "compaction_trigger"}],
+            previous_response_id=previous_response_id,
+            client=client,
+        )
+
+    assert provider.request_body is not None, "the bridged turn never reached the provider"
+    assert [
+        (message["role"], json.dumps(message["content"])) for message in provider.request_body["messages"]
+    ] == [
+        ("user", json.dumps([{"type": "text", "text": "My favorite number is 7."}])),
+        ("assistant", json.dumps([{"type": "text", "text": "Noted."}])),
+        ("user", json.dumps([{"type": "text", "text": SUMMARY_PROMPT}])),
+    ]
+    assert isinstance(response, ResponsesAPIResponse)
+    assert [(item.type, item.encrypted_content) for item in response.output] == [
+        ("compaction", '{"type":"compaction","content":"The number is 7."}')
+    ]

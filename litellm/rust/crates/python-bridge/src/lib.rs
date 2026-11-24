@@ -5,6 +5,7 @@ mod cache;
 mod callable;
 mod callbacks_model_capacity;
 mod coercion;
+mod cost;
 mod credentials;
 mod db;
 mod db_repository;
@@ -19,6 +20,7 @@ mod model_registry;
 mod parallel_request_limiter;
 mod preflight;
 mod python_settings;
+mod redaction;
 mod redis;
 mod router;
 mod routes;
@@ -54,6 +56,11 @@ mod _native {
     #[pymodule_export]
     use crate::callbacks_model_capacity::{NativeModelCapacity, NativeModelCapacityState};
     #[pymodule_export]
+    use crate::cost::{
+        NativeBilledRates, NativeCallContext, NativePriced, NativePrices, NativeQuote,
+        NativeRateCard, NativeReceipt, NativeTokenUsage,
+    };
+    #[pymodule_export]
     use crate::db::{DatabaseEndpoint, NativeDatabase, NativeDatabaseFailure};
     #[pymodule_export]
     use crate::db_repository::{
@@ -73,8 +80,6 @@ mod _native {
     #[pymodule_export]
     use crate::http::unsupported_tls_settings;
     #[pymodule_export]
-    use crate::logger::{NativeDiagnosticProcessor, NativeTokenRedactor};
-    #[pymodule_export]
     use crate::model_cost::{
         NativeCostMapSource, NativeFetchFailed, NativeFetchPolicy, NativeFetched, NativeInstalled,
         NativeModelCostMap, NativeModelCostMapState, NativeProvenance, NativeRegistered,
@@ -87,13 +92,17 @@ mod _native {
         NativeParallelRequestLimiter, NativeParallelRequestLimiterState,
     };
     #[pymodule_export]
+    use crate::redaction::{NativeDiagnosticProcessor, NativeTokenRedactor};
+    #[pymodule_export]
     use crate::redis::breaker::{NativeAdmission, NativeRedisBreaker, native_redis_breaker_states};
     #[pymodule_export]
     use crate::redis::client::NativeRedisClient;
     #[pymodule_export]
     use crate::redis::store::active_teams::{NativeActiveTeams, PyActiveMember};
     #[pymodule_export]
-    use crate::redis::store::auth_cache::{NativeAuthCache, PyAuthObject, PyLocalSizes};
+    use crate::redis::store::auth_cache::{
+        NativeAuthCache, NativeTeamRoster, PyAuthObject, PyLocalSizes,
+    };
     #[pymodule_export]
     use crate::redis::store::cache_invalidation::NativeCacheInvalidation;
     #[pymodule_export]
@@ -158,9 +167,14 @@ mod _native {
     #[pymodule_init]
     fn init(module: &Bound<'_, PyModule>) -> PyResult<()> {
         let _ = rustls::crypto::ring::default_provider().install_default();
+        let _ = crate::logger::process().install_global();
         module.add(
             "JWT_ID_JAG_TYP",
             litellm_gateway_auth_core::authn::jwt::ID_JAG_TYP,
+        )?;
+        module.add(
+            "BOUND_DEFAULT_MAX_OUTPUT_TOKENS",
+            litellm_cost::bound::DEFAULT_MAX_OUTPUT_TOKENS,
         )?;
         let py = module.py();
         let dict = module.dict();
@@ -217,6 +231,7 @@ mod tests {
                 "NativeSend",
                 "drain_post_call_redis_batches",
                 "NativeAuthCache",
+                "NativeTeamRoster",
                 "NativeDeploymentHealth",
                 "NativeRouterSessionPins",
                 "AuthObject",
@@ -266,6 +281,14 @@ mod tests {
                 "trace_encode_error",
                 "bundled_model_cost_map",
                 "NativeModelCostMap",
+                "NativePrices",
+                "NativeTokenUsage",
+                "NativeCallContext",
+                "NativePriced",
+                "NativeQuote",
+                "NativeReceipt",
+                "NativeBilledRates",
+                "NativeRateCard",
                 "NativeModelCostMapState",
                 "NativeInstalled",
                 "NativeRejected",
@@ -301,6 +324,7 @@ mod tests {
                 "auth_route_matches_prefix",
                 "auth_route_matches_wildcard",
                 "JWT_ID_JAG_TYP",
+                "BOUND_DEFAULT_MAX_OUTPUT_TOKENS",
                 "RustAuth",
                 "RustAuthOutcome",
                 "RustAuthSettings",

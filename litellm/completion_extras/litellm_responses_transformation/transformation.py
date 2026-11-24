@@ -1476,7 +1476,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             {**existing, **update},
         )
 
-    def _build_sanitized_litellm_params(self, litellm_params: dict) -> dict[str, object]:
+    def _build_sanitized_litellm_params(self, litellm_params: Mapping[str, object]) -> dict[str, object]:
         """Build sanitized litellm_params with merged metadata."""
         responses_optional_param_keys: Final = set(ResponsesAPIOptionalRequestParams.__annotations__.keys())
         sanitized: Final[dict[str, object]] = {

@@ -770,7 +770,7 @@ def _normalize_custom_field_on_tool(tool: object) -> None:
         tool["defer_loading"] = deferred  # rebind-ok: a fallback reuses the caller's tool, as on main
 
 
-def normalize_custom_field_on_tools(request_body: dict) -> None:
+def normalize_custom_field_on_tools(request_body: Mapping[str, object]) -> None:
     """
     Drop the ``custom`` field from each tool, first hoisting a boolean
     ``custom.defer_loading`` onto the top-level ``defer_loading`` flag that
@@ -842,7 +842,7 @@ def normalize_json_schema_custom_types_to_object(schema: dict) -> None:
                         stack.append(sub)
 
 
-def normalize_tool_input_schema_types_for_bedrock_invoke(request_body: dict) -> None:
+def normalize_tool_input_schema_types_for_bedrock_invoke(request_body: Mapping[str, object]) -> None:
     """
     Bedrock Invoke (Anthropic Messages) validates ``input_schema`` as JSON Schema.
     Anthropic's API allows ``type: \"custom\"`` for Claude Code custom tools; Bedrock
@@ -865,7 +865,7 @@ def normalize_tool_input_schema_types_for_bedrock_invoke(request_body: dict) -> 
             normalize_json_schema_custom_types_to_object(input_schema)
 
 
-def ensure_bedrock_anthropic_messages_tool_names(request_body: dict) -> None:
+def ensure_bedrock_anthropic_messages_tool_names(request_body: Mapping[str, object]) -> None:
     """
     Bedrock Invoke (Anthropic Messages) requires each tool to include ``name``.
     Some clients send only ``input_schema``; Bedrock then errors with
@@ -888,13 +888,13 @@ class AmazonBedrockGlobalConfig:
     def __init__(self):
         pass
 
-    def get_mapped_special_auth_params(self) -> dict:
+    def get_mapped_special_auth_params(self) -> dict[str, str]:
         """
         Mapping of common auth params across bedrock/vertex/azure/watsonx
         """
         return {"region_name": "aws_region_name"}
 
-    def map_special_auth_params(self, non_default_params: dict, optional_params: dict):
+    def map_special_auth_params(self, non_default_params: Mapping[str, object], optional_params: dict):
         mapped_params: Final = self.get_mapped_special_auth_params()
         for param, value in non_default_params.items():
             if param in mapped_params:
@@ -959,10 +959,10 @@ class AmazonBedrockGlobalConfig:
         ]
 
 
-def add_custom_header(headers):
+def add_custom_header(headers: Mapping[str, object]):
     """Closure to capture the headers and add them."""
 
-    def callback(request, **kwargs):
+    def callback(request, **kwargs: object):
         """Actual callback function that Boto3 will call."""
         for header_name, header_value in headers.items():
             request.headers.add_header(header_name, header_value)
@@ -985,7 +985,7 @@ def _get_bedrock_client_ssl_verify() -> bool | str:
 
 
 def init_bedrock_client(
-    region_name=None,
+    region_name: object = None,
     aws_access_key_id: str | None = None,
     aws_secret_access_key: str | None = None,
     aws_region_name: str | None = None,
@@ -994,7 +994,7 @@ def init_bedrock_client(
     aws_profile_name: str | None = None,
     aws_role_name: str | None = None,
     aws_web_identity_token: str | None = None,
-    extra_headers: dict | None = None,
+    extra_headers: Mapping[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
 ):
     # check for custom AWS_REGION_NAME and use it if not passed to init_bedrock_client
@@ -1157,7 +1157,7 @@ def init_bedrock_client(
 
 
 class ModelResponseIterator:
-    def __init__(self, model_response):
+    def __init__(self, model_response: object):
         self.model_response = model_response
         self.is_done = False
 
@@ -2390,7 +2390,7 @@ class BedrockModelInfo(BaseLLMModelInfo):
         return model.replace("claude_platform/", "", 1)
 
     @staticmethod
-    def map_claude_platform_auth_params(passed_params: dict, optional_params: dict) -> dict:
+    def map_claude_platform_auth_params(passed_params: Mapping[str, object], optional_params: dict) -> dict:
         """
         Map Claude Platform route auth params that are not OpenAI request params.
         """
@@ -2594,9 +2594,9 @@ def get_bedrock_chat_config(model: str):
 _BOTOCORE_SERVICE_DESCRIPTION: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
 
 
-def _load_bedrock_response_stream_shape():
+def _load_bedrock_response_stream_shape(service_name: str = "bedrock-runtime"):
     """
-    Load the ResponseStream shape from botocore's bundled bedrock-runtime schema.
+    Load the ResponseStream shape from botocore's bundled schema for ``service_name``.
 
     Returns ``None`` if botocore is unavailable or the service model cannot be
     loaded.
@@ -2607,13 +2607,14 @@ def _load_bedrock_response_stream_shape():
 
         loader: Final = Loader()
         service_dict: Final = _BOTOCORE_SERVICE_DESCRIPTION.validate_python(
-            loader.load_service_model("bedrock-runtime", "service-2")
+            loader.load_service_model(service_name, "service-2")
         )
         return ServiceModel(service_dict).shape_for("ResponseStream")
     except Exception as e:
         verbose_logger.warning(
-            "litellm: could not load bedrock-runtime response stream shape "
-            "— Bedrock event-stream decoding will be unavailable. Error: %s",
+            "litellm: could not load %s response stream shape, "
+            "so its event-stream decoding will be unavailable. Error: %s",
+            service_name,
             e,
         )
         return None
@@ -2628,6 +2629,11 @@ def get_bedrock_response_stream_shape():
     decoding is actually needed.
     """
     return _load_bedrock_response_stream_shape()
+
+
+@functools.lru_cache(maxsize=1)
+def get_bedrock_agent_response_stream_shape() -> Shape | None:
+    return _load_bedrock_response_stream_shape("bedrock-agent-runtime")
 
 
 _BEDROCK_STREAM_OUTPUT_SHAPES: Final = ("ConverseStreamOutput", "ResponseStream")
@@ -2793,7 +2799,7 @@ def bedrock_event_chunk_text(chunk: object) -> str:
     return require_attributes(decoded_json_object(chunk).get("bytes"), _DecodablePayload, "decode").decode()
 
 
-def get_anthropic_beta_from_headers(headers: dict) -> list[str]:
+def get_anthropic_beta_from_headers(headers: Mapping[str, object]) -> list[str]:
     """
     Extract anthropic-beta header values and convert them to a list.
     Supports both JSON array format and comma-separated values from user headers.
@@ -2894,7 +2900,7 @@ class CommonBatchFilesUtils:
             return model[8:]  # Remove "bedrock/" prefix
         return model
 
-    def parse_s3_uri(self, s3_uri: str) -> tuple:
+    def parse_s3_uri(self, s3_uri: str) -> tuple[str, str]:
         """
         Parse S3 URI into bucket and key components.
 
@@ -3031,8 +3037,8 @@ class CommonBatchFilesUtils:
 
     def get_s3_bucket_and_key_from_config(
         self,
-        litellm_params: dict,
-        optional_params: dict,
+        litellm_params: Mapping[str, object],
+        optional_params: Mapping[str, object],
         bucket_env_var: str = "AWS_S3_BUCKET_NAME",
         key_prefix: str = "litellm",
     ) -> tuple:

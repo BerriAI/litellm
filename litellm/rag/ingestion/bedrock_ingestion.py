@@ -26,6 +26,8 @@ from litellm.llms.bedrock.web_identity_session_policy import (
 from litellm.rag.ingestion.base_ingestion import BaseRAGIngestion, RAGIngestBadRequestError
 
 if TYPE_CHECKING:
+    from boto3 import Session as Boto3Session
+
     from litellm import Router
     from litellm.types.rag import RAGIngestOptions
 
@@ -202,7 +204,7 @@ class BedrockRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
         kb_name: Final = self.ingest_name or f"litellm-kb-{unique_id}"
 
         # Get AWS account ID and caller ARN (for data access policy)
-        sts: Final = self._get_boto3_client("sts")
+        sts: Final = self._get_boto3_session().client("sts")
         caller_identity: Final = sts.get_caller_identity()
         account_id: Final = caller_identity["Account"]
         caller_arn: Final = caller_identity["Arn"]
@@ -521,7 +523,7 @@ class BedrockRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
 
     async def _create_knowledge_base(self, kb_name: str, role_arn: str, collection_arn: str) -> str:
         """Create Bedrock Knowledge Base."""
-        bedrock_agent: Final = self._get_boto3_client("bedrock-agent")
+        bedrock_agent: Final = self._get_boto3_session().client("bedrock-agent")
 
         verbose_logger.debug("Creating Knowledge Base: %s", kb_name)
 
@@ -590,8 +592,8 @@ class BedrockRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
         verbose_logger.info("Created Data Source: %s", ds_id)
         return ds_id
 
-    def _get_boto3_client(self, service_name: str):
-        """Get a boto3 client for the specified service using BaseAWSLLM auth."""
+    def _get_boto3_session(self) -> Boto3Session:
+        """Get a boto3 session using BaseAWSLLM auth."""
         try:
             import boto3
         except ImportError:
@@ -619,7 +621,11 @@ class BedrockRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
             region_name=self.aws_region_name,
         )
 
-        return session.client(service_name)
+        return session
+
+    def _get_boto3_client(self, service_name: str):
+        """Get a boto3 client for the specified service using BaseAWSLLM auth."""
+        return self._get_boto3_session().client(service_name)
 
     async def embed(
         self,

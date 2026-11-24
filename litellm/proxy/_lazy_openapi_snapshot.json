@@ -23987,6 +23987,38 @@
       }
     }
   },
+  "live_sessions": {
+    "components": {
+      "schemas": {}
+    },
+    "paths": {
+      "/v1/live/sessions": {
+        "post": {
+          "description": "Create a GPT-Live session over WebRTC. The body carries the session and the browser's SDP offer,\nand the response carries the SDP answer. The returned `session.id` attaches a sideband on\n`/v1/live/sessions/{session_id}/attach`.",
+          "operationId": "create_live_session_v1_live_sessions_post",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Create Live Session",
+          "tags": [
+            "live_sessions"
+          ]
+        }
+      }
+    }
+  },
   "llm_passthrough": {
     "components": {
       "schemas": {
@@ -46522,6 +46554,12 @@
             "per_server_oauth_discovery": {
               "default": false,
               "title": "Per Server Oauth Discovery",
+              "type": "boolean"
+            },
+            "preserve_explicit_oauth_settings": {
+              "default": false,
+              "description": "Keep explicitly supplied OAuth settings on upstream or auth changes, even when their values match the saved settings.",
+              "title": "Preserve Explicit Oauth Settings",
               "type": "boolean"
             },
             "registration_url": {

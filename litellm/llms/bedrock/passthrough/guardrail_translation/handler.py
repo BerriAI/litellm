@@ -871,7 +871,7 @@ class InvokeStreamFrame:
 
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object])
 _DECODED_JSON: Final = TypeAdapter(object)
-_Frame: Final = TypeVar("_Frame", ConverseStreamFrame, InvokeStreamFrame)
+_Frame = TypeVar("_Frame", ConverseStreamFrame, InvokeStreamFrame)
 
 
 def _event_message(raw: bytes) -> tuple[str, bytes] | None:
@@ -1191,7 +1191,7 @@ async def _post_call_rewritten_texts(
     """Run the post_call guardrails on a buffered stream's texts as one Converse response with a content block per
     group, and return each group's text as the guardrails left it, or None when the response came back in another
     shape."""
-    synthetic_response: Final[dict] = {
+    synthetic_response: Final[dict[str, object]] = {
         "output": {
             "message": {
                 "role": "assistant",
