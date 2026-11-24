@@ -36,21 +36,23 @@ async fn drain_detached<P>(
     stream: &StreamSender<P>,
     mut chunks: BoxStream<'static, Result<P::Chunk, P::Error>>,
     drain: DetachedDrain,
-) where
+) -> Result<(), P::Error>
+where
     P: Protocol,
     P::Error: From<MachineFault>,
 {
     let Some(_slot) = DrainSlot::claim(drain.limit) else {
-        return;
+        return Ok(());
     };
     let delivered = async {
-        while let Ok(Some(chunk)) = chunks.try_next().await {
-            if stream.send_chunk(chunk).await.is_err() {
-                return;
-            }
+        while let Some(chunk) = chunks.try_next().await? {
+            let _ = stream.send_chunk(chunk).await?;
         }
+        Ok(())
     };
-    let _ = tokio::time::timeout(drain.timeout, delivered).await;
+    tokio::time::timeout(drain.timeout, delivered)
+        .await
+        .unwrap_or(Ok(()))
 }
 
 pub enum CallOutput<Response, Head, Chunk, Error> {
@@ -113,7 +115,7 @@ where
                     while let Some(chunk) = chunks.try_next().await? {
                         if host.stream.send_chunk(chunk).await?.is_break() {
                             if let Some(drain) = drain {
-                                drain_detached(&host.stream, chunks, drain).await;
+                                drain_detached(&host.stream, chunks, drain).await?;
                             }
                             return Ok(HostedCompletion::Detached);
                         }

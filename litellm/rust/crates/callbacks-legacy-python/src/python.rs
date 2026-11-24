@@ -48,6 +48,8 @@ pub(crate) enum Logging {
     PostCall,
     #[strum(serialize = "record_response")]
     RecordResponse,
+    #[strum(serialize = "record_route_cost")]
+    RecordRouteCost,
     #[strum(serialize = "record_api_window")]
     RecordApiWindow,
     #[strum(serialize = "times_provider_exchange")]

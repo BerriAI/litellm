@@ -11,7 +11,7 @@ from collections.abc import AsyncIterator, Iterator, Mapping
 from typing import TYPE_CHECKING, Any, Final
 
 from litellm.litellm_core_utils.prompt_templates.image_handling import async_inline_remote_media
-from litellm.llms.anthropic.chat.transformation import JsonModeRequest
+from litellm.llms.anthropic.chat.transformation import AnthropicConfig, JsonModeRequest
 from litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude_transformation import (
     AmazonAnthropicClaudeConfig,
 )
@@ -66,7 +66,7 @@ class AmazonMantleConfig(AmazonAnthropicClaudeConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, str],
         model: str,
         messages: list[AllMessageValues],
         optional_params: dict,
@@ -94,7 +94,7 @@ class AmazonMantleConfig(AmazonAnthropicClaudeConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        headers: dict,
+        headers: dict[str, object],
     ) -> dict:
         # Strip the "mantle/" routing prefix to get the real model ID
         model_id: Final = model.replace("mantle/", "", 1)
@@ -121,7 +121,7 @@ class AmazonMantleConfig(AmazonAnthropicClaudeConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        headers: dict,
+        headers: dict[str, object],
     ) -> dict:
         return self.transform_request(
             model=model,
@@ -131,9 +131,22 @@ class AmazonMantleConfig(AmazonAnthropicClaudeConfig):
             headers=headers,
         )
 
+    def transform_extra_body(
+        self,
+        extra_body: Mapping[str, object],
+        request: Mapping[str, object],
+        model: str,
+        litellm_params: Mapping[str, object],
+    ) -> Mapping[str, object]:
+        return AnthropicConfig.transform_extra_body(
+            self, extra_body=extra_body, request=request, model=model, litellm_params=litellm_params
+        )
+
     @staticmethod
-    def _restore_mantle_body_fields(request: dict, model_id: str, optional_params: dict) -> dict:
-        stream_fields: Final[dict] = {"stream": True} if optional_params.get("stream") is True else {}
+    def _restore_mantle_body_fields(
+        request: Mapping[str, object], model_id: str, optional_params: Mapping[str, object]
+    ) -> dict[str, object]:
+        stream_fields: Final[dict[str, bool]] = {"stream": True} if optional_params.get("stream") is True else {}
         return {**request, "model": model_id, **stream_fields}
 
     @property

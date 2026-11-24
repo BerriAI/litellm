@@ -4,6 +4,7 @@ import re
 from collections.abc import AsyncIterator, Collection, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final, cast
+from urllib.parse import quote
 
 import httpx
 from httpx import Response
@@ -12,7 +13,7 @@ from typing_extensions import assert_never
 
 import litellm
 from litellm._logging import WarningLogger, verbose_logger
-from litellm.exceptions import UnsupportedParamsError
+from litellm.exceptions import BadRequestError, UnsupportedParamsError
 from litellm.integrations.anthropic_cache_control_hook import (
     AnthropicCacheControlHook,
     declared_prompt_cache_breakpoint,
@@ -38,8 +39,16 @@ from litellm.litellm_core_utils.reasoning_effort_capability import (
 from litellm.litellm_core_utils.reasoning_effort_utils import warn_dropped_reasoning, warn_dropped_reasoning_params
 from litellm.llms.azure.common_utils import BaseAzureLLM
 from litellm.llms.azure_ai.common_utils import (
+    CHAT_COMPLETIONS_PATH,
+    OPENAI_V1_PATH,
+    AzureFoundryModelInfo,
     api_key_header_for_base,
+    foundry_project_root,
+    foundry_v1_root,
     is_foundry_model_inference_base,
+    is_openai_v1_resource_base,
+    with_foundry_project_scope,
+    without_api_version,
 )
 from litellm.llms.base_llm.chat.transformation import LiteLLMLoggingObj
 from litellm.llms.fireworks_ai.common_utils import AZURE_FOUNDRY_FIREWORKS_MODEL_ID_PREFIX
@@ -51,13 +60,22 @@ from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues, PromptCacheBreakpoint
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import ModelResponse, ModelResponseStream, ProviderField
-from litellm.utils import add_path_to_api_base, catalog_with_runtime_registrations, supports_tool_choice
+from litellm.utils import (
+    add_path_to_api_base,
+    catalog_with_runtime_registrations,
+    has_catalog_entry,
+    supports_tool_choice,
+)
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 
 
 _REQUEST_BODY: Final = TypeAdapter(dict[str, object])
+
+
+def _is_plain_path_segment(segment: str) -> bool:
+    return quote(segment, safe="") == segment and segment.strip(".") != ""
 
 
 def _request_model(request: Mapping[str, object]) -> str | None:
@@ -320,7 +338,48 @@ def _reasoning_effort_params(
             assert_never(outcome)
 
 
+def _chat_param_the_responses_api_lacks(optional_params: Mapping[str, object]) -> str | None:
+    n: Final = optional_params.get("n")
+    if isinstance(n, int) and n > 1:
+        return "n"
+    return "seed" if optional_params.get("seed") is not None else None
+
+
+def _without_tool_choice_when_no_tools(optional_params: Mapping[str, object]) -> Mapping[str, object]:
+    if optional_params.get("tools") or optional_params.get("functions"):
+        return optional_params
+    return {key: value for key, value in optional_params.items() if key != "tool_choice"}
+
+
 class AzureAIStudioConfig(OpenAIConfig):
+    @staticmethod
+    def gpt_5_base_model(model: str, base_model: str | None) -> str | None:
+        """The deployment name a gpt-5-family base_model stands for, so a custom-named deployment takes the
+        params and request shape of the deployment named after its base_model. A deployment named after a
+        model LiteLLM knows keeps its own name, since its base_model then only sets pricing."""
+        if base_model is None or azureAIGPT5Config.is_model_gpt_5_model(model) or has_catalog_entry(model, "azure_ai"):
+            return None
+        name: Final = base_model.rsplit("/", 1)[-1]
+        return name if azureAIGPT5Config.is_model_gpt_5_model(name) else None
+
+    @staticmethod
+    def raise_if_base_model_bridge_would_drop_a_param(
+        optional_params: Mapping[str, object], *, model: str, base_model: str | None, drop_params: bool
+    ) -> None:
+        if drop_params or AzureAIStudioConfig.gpt_5_base_model(model, base_model) is None:
+            return
+        param: Final = _chat_param_the_responses_api_lacks(optional_params)
+        if param is None:
+            return
+        raise UnsupportedParamsError(
+            message=f"azure_ai/{model} goes to the Responses API because its base_model {base_model} is a "
+            f"gpt-5 model, and the Responses API has no `{param}` field. "
+            "To drop it, set `litellm.drop_params=True`, pass `drop_params=True`, or for proxy: "
+            "`litellm_settings: drop_params: true`.",
+            model=model,
+            llm_provider="azure_ai",
+        )
+
     def get_supported_openai_params(self, model: str) -> list[str]:
         model_supports_tool_choice = True  # azure ai supports this by default
         if not supports_tool_choice(model=f"azure_ai/{model}"):
@@ -328,10 +387,15 @@ class AzureAIStudioConfig(OpenAIConfig):
         supported_params = (
             azureAIGPT5Config.get_supported_openai_params(model)
             if azureAIGPT5Config.is_model_gpt_5_model(model)
-            else _with_reasoning_effort(super().get_supported_openai_params(model), model)
+            else _with_reasoning_effort(
+                cast(  # cast-ok: OpenAIConfig returns parameter names but leaves the list elements untyped
+                    Sequence[str], super().get_supported_openai_params(model)
+                ),
+                model,
+            )
         )
         if not model_supports_tool_choice:
-            filtered_supported_params: Final = []
+            filtered_supported_params: Final[list[str]] = []
             for param in supported_params:
                 if param != "tool_choice":
                     filtered_supported_params.append(param)
@@ -355,11 +419,12 @@ class AzureAIStudioConfig(OpenAIConfig):
         base_model: str | None = None,
         allowed_openai_params: Collection[str] = (),
     ) -> dict[str, object]:  # mutable-ok: OpenAIConfig.map_openai_params signature
-        if azureAIGPT5Config.is_model_gpt_5_model(model):
+        detection_model: Final = self.gpt_5_base_model(model, base_model) or model
+        if azureAIGPT5Config.is_model_gpt_5_model(detection_model):
             return azureAIGPT5Config.map_openai_params(
                 non_default_params=non_default_params,
                 optional_params=optional_params,
-                model=model,
+                model=detection_model,
                 drop_params=drop_params,
                 declared_reasoning_efforts=declared_reasoning_efforts,
                 reasoning_drop_logger=reasoning_drop_logger,
@@ -371,7 +436,7 @@ class AzureAIStudioConfig(OpenAIConfig):
             level_check_waived=bool(declared_reasoning_efforts) or _REASONING_EFFORT in allowed_openai_params,
             drop_params=drop_params or litellm.drop_params is True,
         )
-        return {
+        mapped_params: Final[dict[str, object]] = {  # mutable-ok: returned as required by OpenAIConfig
             **super().map_openai_params(
                 non_default_params=non_default_params,
                 optional_params=optional_params,
@@ -380,9 +445,17 @@ class AzureAIStudioConfig(OpenAIConfig):
             ),
             **foundry_effort,
         }
+        if "gpt-5-chat" not in model.rsplit("/", 1)[-1] or "max_tokens" not in mapped_params:
+            return mapped_params
+        return {
+            **{param: value for param, value in mapped_params.items() if param != "max_tokens"},
+            "max_completion_tokens": mapped_params.get("max_completion_tokens", mapped_params["max_tokens"]),
+        }
 
     def refuses_reasoning_effort(self, model: str, reasoning_effort: object, *, base_model: str | None) -> bool:
-        return not azureAIGPT5Config.is_model_gpt_5_model(model) and isinstance(
+        return not azureAIGPT5Config.is_model_gpt_5_model(
+            self.gpt_5_base_model(model, base_model) or model
+        ) and isinstance(
             _catalog_reasoning_effort_outcome(reasoning_effort, model, base_model=base_model, level_check_waived=False),
             _UnsendableReasoningEffort,
         )
@@ -399,14 +472,14 @@ class AzureAIStudioConfig(OpenAIConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, str],
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, str]:
         if api_key:
             if api_base and self._should_use_api_key_header(api_base):
                 headers["api-key"] = api_key
@@ -414,7 +487,9 @@ class AzureAIStudioConfig(OpenAIConfig):
                 headers["Authorization"] = f"Bearer {api_key}"
         else:
             # No api_key provided — fall back to Azure AD token-based auth
-            litellm_params_obj = GenericLiteLLMParams(**(litellm_params if isinstance(litellm_params, dict) else {}))
+            litellm_params_obj: Final = with_foundry_project_scope(
+                GenericLiteLLMParams(**(litellm_params if isinstance(litellm_params, dict) else {})), api_base
+            )
             headers = BaseAzureLLM.base_validate_azure_environment(headers=headers, litellm_params=litellm_params_obj)
 
         headers["Content-Type"] = "application/json"
@@ -425,15 +500,15 @@ class AzureAIStudioConfig(OpenAIConfig):
         """
         Returns True if the request should use `api-key` header for authentication.
         """
-        return api_key_header_for_base(api_base) == "api-key"
+        return api_key_header_for_base(api_base) == "api-key" and not foundry_project_root(httpx.URL(api_base))
 
     def get_complete_url(
         self,
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         stream: bool | None = None,
     ) -> str:
         """
@@ -467,6 +542,30 @@ class AzureAIStudioConfig(OpenAIConfig):
         # Add api_version if needed
         if "api-version" not in query_params and api_version:
             query_params["api-version"] = api_version
+
+        requested_api_version: Final = query_params.get("api-version")
+        resource_base: Final = is_openai_v1_resource_base(original_url)
+        if (
+            resource_base
+            and requested_api_version is not None
+            and not BaseAzureLLM.is_azure_v1_api_version(requested_api_version)
+        ):
+            deployment: Final = AzureFoundryModelInfo.get_base_model(model)
+            if not _is_plain_path_segment(deployment):
+                raise BadRequestError(
+                    message=f"azure_ai deployment name {deployment!r} must be one URL path segment made of letters, "
+                    "digits, '-', '_', '.', or '~'",
+                    model=model,
+                    llm_provider="azure_ai",
+                )
+            deployment_chat_path: Final = "/" + "/".join(("openai", "deployments", deployment, *CHAT_COMPLETIONS_PATH))
+            return str(original_url.copy_with(path=deployment_chat_path, params=query_params))
+        v1_root: Final = foundry_v1_root(original_url) or (OPENAI_V1_PATH if resource_base else None)
+        if v1_root is not None:
+            v1_chat_path: Final = "/" + "/".join((*v1_root, *CHAT_COMPLETIONS_PATH))
+            if foundry_project_root(original_url):
+                return str(original_url.copy_with(path=v1_chat_path, params=without_api_version(original_url)))
+            return str(original_url.copy_with(path=v1_chat_path, params=query_params))
 
         # Add the path to the base URL
         if "services.ai.azure.com" in api_base:
@@ -503,7 +602,7 @@ class AzureAIStudioConfig(OpenAIConfig):
         reads_breakpoints: bool | None = None,
         drop_params: bool = False,
         base_model: str | None = None,
-    ) -> list:
+    ) -> list[AllMessageValues]:
         """
         - Azure AI Studio doesn't support content as a list. This handles:
             1. Strips message fields that are not part of the OpenAI chat-completions
@@ -560,7 +659,11 @@ class AzureAIStudioConfig(OpenAIConfig):
         return is_foundry_model_inference_base(api_base)
 
     def _is_azure_openai_model(self, model: str, api_base: str | None) -> bool:
-        if api_base is None or self._is_foundry_model_inference_base(api_base):
+        if (
+            api_base is None
+            or self._is_foundry_model_inference_base(api_base)
+            or bool(foundry_project_root(httpx.URL(api_base)))
+        ):
             return False
         stripped_model: Final = model.split("/", 1)[1] if "/" in model else model
         return (
@@ -597,10 +700,10 @@ class AzureAIStudioConfig(OpenAIConfig):
         self,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
-        headers: dict,
-    ) -> dict:
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
+        headers: dict[str, object],
+    ) -> dict[str, object]:
         extra_body: Final = optional_params.pop("extra_body", {})
         if extra_body and isinstance(extra_body, dict):
             optional_params.update(extra_body)
@@ -616,7 +719,7 @@ class AzureAIStudioConfig(OpenAIConfig):
                 bool(litellm_params.get("drop_params") or litellm.drop_params),
                 base_model if isinstance(base_model, str) else None,
             ),
-            **optional_params,
+            **_without_tool_choice_when_no_tools(optional_params),
         }
 
     def transform_response(
@@ -625,10 +728,10 @@ class AzureAIStudioConfig(OpenAIConfig):
         raw_response: Response,
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
-        request_data: dict,
+        request_data: dict[str, object],
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
@@ -663,7 +766,7 @@ class AzureAIStudioConfig(OpenAIConfig):
         )
 
     def should_retry_llm_api_inside_llm_translation_on_http_error(
-        self, e: httpx.HTTPStatusError, litellm_params: dict
+        self, e: httpx.HTTPStatusError, litellm_params: dict[str, object]
     ) -> bool:
         should_drop_params: Final = litellm_params.get("drop_params") or litellm.drop_params
         error_text: Final = e.response.text
@@ -684,7 +787,9 @@ class AzureAIStudioConfig(OpenAIConfig):
     def max_retry_on_unprocessable_entity_error(self) -> int:
         return 2
 
-    def transform_request_on_unprocessable_entity_error(self, e: httpx.HTTPStatusError, request_data: dict) -> dict:
+    def transform_request_on_unprocessable_entity_error(
+        self, e: httpx.HTTPStatusError, request_data: dict[str, object]
+    ) -> dict[str, object]:
         error_text: Final = e.response.text
         _messages: Final = cast(list[AllMessageValues] | None, request_data.get("messages"))
         if "unknown field: parameter index is not a valid field" in error_text and _messages is not None:
@@ -704,7 +809,7 @@ class AzureAIStudioConfig(OpenAIConfig):
         )
         return data
 
-    def _drop_tool_level_extra_fields(self, request_data: dict, error_text: str) -> dict:
+    def _drop_tool_level_extra_fields(self, request_data: dict[str, object], error_text: str) -> dict[str, object]:
         fields_to_drop: Final[Collection[str]] = set(re.findall(r"tools\[\d+\]\.([\w-]+)", error_text))
         tools: Final = request_data.get("tools")
         if fields_to_drop and isinstance(tools, list):
@@ -714,7 +819,9 @@ class AzureAIStudioConfig(OpenAIConfig):
                         tool.pop(field, None)
         return request_data
 
-    def _drop_extra_params_from_request_data(self, request_data: dict, error_text: str) -> dict:
+    def _drop_extra_params_from_request_data(
+        self, request_data: dict[str, object], error_text: str
+    ) -> dict[str, object]:
         params_to_drop: Final = self._extract_params_to_drop_from_error_text(error_text)
         if params_to_drop:
             request: Final = _REQUEST_BODY.validate_python(request_data)
@@ -741,7 +848,7 @@ class AzureAIStudioConfig(OpenAIConfig):
 
         # Parse the extracted string into a list of parameter names
         params_str: Final = match.group(1)
-        params: Final = []
+        params: Final[list[str]] = []
         for param in params_str.split(","):
             # Clean up the parameter name (remove quotes, spaces)
             clean_param = param.strip().strip("'").strip('"')

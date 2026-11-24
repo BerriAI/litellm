@@ -30,7 +30,7 @@ class VertexEmbedding(VertexBase):
         self,
         model: str,
         input: list | str,
-        print_verbose,
+        print_verbose: object,
         model_response: EmbeddingResponse,
         optional_params: dict,
         logging_obj: LiteLLMLoggingObject,
@@ -39,7 +39,7 @@ class VertexEmbedding(VertexBase):
         ],  # if it's vertex_ai or gemini (google ai studio)
         timeout: float | httpx.Timeout | None,
         api_key: str | None = None,
-        encoding=None,
+        encoding: object = None,
         aembedding: bool | None = False,
         api_base: str | None = None,
         client: AsyncHTTPHandler | HTTPHandler | None = None,
@@ -47,7 +47,7 @@ class VertexEmbedding(VertexBase):
         vertex_location: str | None = None,
         vertex_credentials: VERTEX_CREDENTIALS_TYPES | None = None,
         gemini_api_key: str | None = None,
-        extra_headers: dict | None = None,
+        extra_headers: Mapping[str, str] | None = None,
         litellm_params: dict | None = None,
     ) -> EmbeddingResponse:
         if aembedding is True:
@@ -154,8 +154,8 @@ class VertexEmbedding(VertexBase):
         vertex_location: str | None = None,
         vertex_credentials: VERTEX_CREDENTIALS_TYPES | None = None,
         gemini_api_key: str | None = None,
-        extra_headers: dict | None = None,
-        encoding=None,
+        extra_headers: Mapping[str, str] | None = None,
+        encoding: object = None,
         litellm_params: dict | None = None,
     ) -> EmbeddingResponse:
         """

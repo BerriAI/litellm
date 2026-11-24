@@ -485,6 +485,16 @@ without storing a tier pin. `session_affinity: true` retains precedence and the 
 
 `session_affinity_ttl_seconds` is the idle window for both the model pin selected by session affinity and the deployment pin. Every request that reuses a pin refreshes its TTL, so a session actively sending requests stays pinned. After the window passes with no pin reuse, the next request classifies again and creates a fresh pin. Omit the setting to track the default of 3600 seconds.
 
+When the session ID changes per message, set `conversation_header` to the header your application uses to name the conversation
+
+```yaml
+complexity_router_config:
+  session_affinity: true
+  conversation_header: x-conversation-id
+```
+
+The tier pin, the per-tier model pin, the deployment pin and `user_turn` continuations then follow that header's value instead of the session ID. The header name matches case-insensitively and the value is used exactly as sent. Pins stay scoped to the calling key or JWT user, and a `user_turn` child keeps its own pin inside the conversation. A request without the header, with an empty value, or naming a credential header that the proxy redacts gets no conversation-based reuse from this router and never falls back to the session ID. The same applies to SDK calls that carry no proxy request headers. Spend logs and traces keep the request's own session ID. A separately enabled Router-level `session_affinity` pre-call check keeps its own session ID behavior for those requests
+
 ### Mid-task stall escalation
 
 A weak model working an agentic task can get stuck: it keeps calling the same tool with the
@@ -564,6 +574,12 @@ model_list:
 `classifier_llm_config.reasoning_effort` applies only to the internal classifier call. Omit it to
 keep the classifier deployment or provider default, or set a supported value such as `none` or
 `low` to override that call.
+
+`classifier_llm_config.max_output_tokens` optionally limits the LLM classifier's output.
+Omit it or set it to `null` to keep the classifier deployment or provider default unchanged.
+Set it to a positive integer, such as `64`, to override that limit for the classifier call only.
+This can reduce quota reservation on providers such as Amazon Bedrock. Leave room for reasoning
+tokens when `reasoning_effort` is set.
 
 When the current ask is a Responses API `agent_message` containing `encrypted_content`, LLM
 classification preserves the encrypted task and uses native Responses. This also bypasses the

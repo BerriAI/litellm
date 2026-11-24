@@ -1,29 +1,45 @@
 import asyncio
+import copy
 import hashlib
 import json
 import logging
 import re
 import traceback
+import tracemalloc
 import uuid
+from collections import OrderedDict, UserDict
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterable, Mapping, Sequence
+from contextlib import asynccontextmanager
 from datetime import timedelta
+from enum import Enum
+from functools import reduce
+from types import MappingProxyType
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import httpx
 import pytest
 import respx
+from opentelemetry.trace import NonRecordingSpan, SpanContext
+from pydantic import BaseModel, ConfigDict
 
 import litellm
-from litellm import acompletion, aembedding, completion, embedding
+from litellm import CustomLLM, acompletion, aembedding, completion, embedding
 import litellm.caching.redis_cache as redis_cache_module
 from litellm._internal_context import current_service_target
-from litellm.caching.caching import Cache, CacheMode, response_cache_phase
+from litellm.caching.caching import Cache, CacheMode, enable_cache, response_cache_phase, update_cache
 from litellm.caching.caching_handler import _PENDING_CACHE_WRITES
+from litellm.constants import CACHE_WRITE_SHUTDOWN_FLUSH_TIMEOUT_SECONDS
 from litellm.caching.dual_cache import DualCache
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.caching.redis_cache import RedisCache, RedisTimeoutLogThrottle
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
-from litellm.types.caching import EMBEDDING_CACHE_FORMAT_VERSION, LiteLLMCacheType, SemanticCacheScope
+from litellm.types.caching import (
+    DEFAULT_CACHING_SUPPORTED_CALL_TYPES,
+    EMBEDDING_CACHE_FORMAT_VERSION,
+    LiteLLMCacheType,
+    SemanticCacheScope,
+)
 from litellm.types.utils import Embedding, EmbeddingResponse, Usage
 
 _CACHING_TEST_MESSAGES: Final = [{"role": "user", "content": "who is ishaan 5222"}]
@@ -129,6 +145,40 @@ def test_get_per_item_prompt_tokens_distributes_with_remainder():
     per_item = [cache._get_per_item_prompt_tokens(result, i) for i in range(3)]
     assert sum(per_item) == 10  # 4 + 3 + 3
     assert per_item == [4, 3, 3]
+
+
+@pytest.mark.asyncio
+@pytest.mark.respx(assert_all_called=True)
+@pytest.mark.parametrize("item_usage", [[{"prompt_tokens": 1}, {"prompt_tokens": 2}], None])
+async def test_an_upstream_item_usage_key_still_caches_each_embedding_input(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, item_usage: object
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "cache", Cache(type=LiteLLMCacheType.LOCAL))
+    route: Final = respx_mock.post("http://upstream.test/v1/embeddings").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "object": "list",
+                "data": [{"object": "embedding", "index": index, "embedding": [0.1, 0.2]} for index in range(2)],
+                "model": "m",
+                "usage": {"prompt_tokens": 3, "total_tokens": 3},
+                "item_usage": item_usage,
+            },
+        )
+    )
+
+    async def embed(input: Sequence[str]) -> EmbeddingResponse:
+        return await aembedding(
+            model="openai_like/m", input=input, api_base="http://upstream.test/v1", api_key="upstream-test-key"
+        )
+
+    await embed(["alpha", "beta"])
+    await asyncio.gather(*_PENDING_CACHE_WRITES)
+    hit: Final = await embed(["alpha"])
+
+    assert route.call_count == 1
+    assert hit.usage.prompt_tokens == 2
 
 
 def _semantic_cache(**cache_kwargs):
@@ -474,7 +524,33 @@ def test_provider_specific_cache_key_ignores_litellm_owned_kwargs(monkeypatch: p
 
     assert cache.get_cache_key(**request, _litellm_control={"stream_chunk_size": 64}) == base_key
     assert cache.get_cache_key(**request, litellm_trace_id="trace-1") == base_key
+    assert cache.get_cache_key(**request, _skip_mcp_handler=True) == base_key
+    assert cache.get_cache_key(**request, fake_stream=True) == base_key
     assert cache.get_cache_key(**{**request, "top_k": 6}) != base_key
+
+
+def _request_span(trace_id: int) -> NonRecordingSpan:
+    return NonRecordingSpan(SpanContext(trace_id=trace_id, span_id=trace_id, is_remote=False))
+
+
+@pytest.mark.parametrize("provider_specific_params_keyed", [True, False])
+def test_cache_key_ignores_the_per_request_otel_span(
+    monkeypatch: pytest.MonkeyPatch, provider_specific_params_keyed: bool
+) -> None:
+    monkeypatch.setattr(litellm, "enable_caching_on_provider_specific_optional_params", provider_specific_params_keyed)
+    cache: Final = Cache(type=LiteLLMCacheType.LOCAL)
+    request: Final = {"model": "openai/mock-model", "messages": [{"role": "user", "content": "hi"}]}
+    first_span: Final = _request_span(1)
+    second_span: Final = _request_span(2)
+    assert repr(first_span) != repr(second_span)
+
+    first_key: Final = cache.get_cache_key(**request, my_provider_param="a", parent_otel_span=first_span)
+
+    assert cache.get_cache_key(**request, my_provider_param="a", parent_otel_span=second_span) == first_key
+    assert cache.get_cache_key(**request, my_provider_param="a", parent_otel_span=None) == first_key
+    assert (cache.get_cache_key(**request, my_provider_param="b", parent_otel_span=first_span) != first_key) is (
+        provider_specific_params_keyed
+    )
 
 
 def test_cache_key_tells_apart_requests_that_differ_only_in_continuation_token() -> None:
@@ -540,6 +616,286 @@ def test_cache_key_tells_apart_requests_that_name_a_gemini_audio_format(audio_fo
     }
 
     assert cache.get_cache_key(**request, **audio_format_ask) != cache.get_cache_key(**request)
+
+
+_EXTRA_BODY_REQUEST: Final = MappingProxyType(
+    {"model": "hosted_vllm/qwen3", "messages": [{"role": "user", "content": "extra-body"}]}
+)
+_LARGE_EXTRA_BODY_TEXT: Final = "x" * 70_000
+
+
+def _as_pair_list(body: Mapping[str, object]) -> Sequence[tuple[str, object]]:
+    return list(body.items())
+
+
+def _as_pair_tuple(body: Mapping[str, object]) -> Sequence[tuple[str, object]]:
+    return tuple(body.items())
+
+
+@pytest.mark.parametrize(
+    ("first", "second"),
+    [
+        ({"chat_template_kwargs": {"enable_thinking": True}}, {"chat_template_kwargs": {"enable_thinking": False}}),
+        ({"top_k": 0}, None),
+        ({"top_k": None}, {}),
+        ({"top_k": False}, {"top_k": 0}),
+        ({"chat_template_kwargs": {}}, {}),
+        ({"stop_token_ids": [1, 2]}, {"stop_token_ids": [2, 1]}),
+        ({"stop_token_ids": (1,)}, {"stop_token_ids": [1]}),
+        ({"guided_regex": b"a"}, {"guided_regex": b"b"}),
+        ({"prompt": _LARGE_EXTRA_BODY_TEXT + "a"}, {"prompt": _LARGE_EXTRA_BODY_TEXT + "b"}),
+        ({"top_k": 5, "return_token_ids": True}, {"return_token_ids": True}),
+        ({"top_k": 5, "return_token_ids": False}, None),
+    ],
+    ids=[
+        "nested_bool",
+        "zero",
+        "null",
+        "false_vs_zero",
+        "empty_nested_dict",
+        "list_order",
+        "tuple_vs_list",
+        "bytes",
+        "large_string_tail",
+        "beside_token_ids",
+        "beside_falsy_token_ids",
+    ],
+)
+def test_default_cache_key_tells_apart_requests_whose_extra_body_differs(
+    monkeypatch: pytest.MonkeyPatch, first: object, second: object
+) -> None:
+    monkeypatch.setattr(litellm, "enable_caching_on_provider_specific_optional_params", False)
+    cache: Final = Cache(type=LiteLLMCacheType.LOCAL)
+
+    first_key: Final = cache.get_cache_key(**_EXTRA_BODY_REQUEST, extra_body=first)
+
+    assert first_key != cache.get_cache_key(**_EXTRA_BODY_REQUEST, extra_body=second)
+    assert first_key == cache.get_cache_key(**_EXTRA_BODY_REQUEST, extra_body=copy.deepcopy(first))
+
+
+@pytest.mark.parametrize(
+    "extra_body",
+    [
+        None,
+        {},
+        "top_k=5",
+        [],
+        (),
+        [("return_token_ids", False), ("continuation_token", "")],
+        [("top_k",)],
+        [("top_k", 5, 6)],
+        [(5, "top_k")],
+        ["a"],
+        ["abc"],
+        [("top_k", 5), ("min_p",)],
+        {"return_token_ids": False},
+        {"continuation_token": ""},
+        {"return_token_ids": None, "continuation_token": ""},
+    ],
+    ids=[
+        "none",
+        "empty",
+        "string",
+        "empty_pair_list",
+        "empty_pair_tuple",
+        "falsy_token_id_pairs",
+        "short_pair",
+        "long_pair",
+        "non_string_pair_key",
+        "short_string_item",
+        "long_string_item",
+        "one_malformed_pair",
+        "falsy_token_ids",
+        "empty_continuation",
+        "falsy_legacy_fields",
+    ],
+)
+def test_default_cache_key_ignores_extra_body_that_adds_nothing_to_the_request(
+    monkeypatch: pytest.MonkeyPatch, extra_body: object
+) -> None:
+    monkeypatch.setattr(litellm, "enable_caching_on_provider_specific_optional_params", False)
+    cache: Final = Cache(type=LiteLLMCacheType.LOCAL)
+
+    assert cache.get_cache_key(**_EXTRA_BODY_REQUEST, extra_body=extra_body) == cache.get_cache_key(
+        **_EXTRA_BODY_REQUEST
+    )
+
+
+@pytest.mark.parametrize(
+    ("provider_specific_params_keyed", "extra_body", "extra_body_preimage"),
+    [
+        (False, {"return_token_ids": True}, "extra_body.return_token_ids: True"),
+        (False, {"continuation_token": "dG9r", "return_token_ids": False}, "extra_body.continuation_token: dG9r"),
+        (False, {"return_token_ids": True, "top_k": 5}, "extra_body: {'top_k': 5}extra_body.return_token_ids: True"),
+        (True, {}, "extra_body: {}"),
+        (True, {"return_token_ids": False}, "extra_body: {'return_token_ids': False}"),
+        (
+            True,
+            {"return_token_ids": True, "top_k": 5},
+            "extra_body: {'return_token_ids': True, 'top_k': 5}extra_body.return_token_ids: True",
+        ),
+        (True, "top_k=5", "extra_body: top_k=5"),
+        (
+            True,
+            MappingProxyType({"return_token_ids": True, "top_k": 5}),
+            "extra_body: {'return_token_ids': True, 'top_k': 5}",
+        ),
+        (True, UserDict({"return_token_ids": True, "top_k": 5}), "extra_body: {'return_token_ids': True, 'top_k': 5}"),
+        (
+            False,
+            MappingProxyType({"return_token_ids": True, "top_k": 5}),
+            "extra_body: {'return_token_ids': True, 'top_k': 5}",
+        ),
+        (False, [("return_token_ids", True), ("top_k", 5)], "extra_body: {'return_token_ids': True, 'top_k': 5}"),
+        (True, [("return_token_ids", True), ("top_k", 5)], "extra_body: [('return_token_ids', True), ('top_k', 5)]"),
+    ],
+    ids=[
+        "default_token_ids",
+        "default_continuation",
+        "default_beside_token_ids",
+        "flag_empty",
+        "flag_falsy_token_ids",
+        "flag_beside_token_ids",
+        "flag_string",
+        "flag_mapping_proxy",
+        "flag_user_dict",
+        "default_mapping_proxy_beside_token_ids",
+        "default_pairs_beside_token_ids",
+        "flag_pairs",
+    ],
+)
+def test_extra_body_cache_key_keeps_its_preimage(
+    monkeypatch: pytest.MonkeyPatch, provider_specific_params_keyed: bool, extra_body: object, extra_body_preimage: str
+) -> None:
+    monkeypatch.setattr(litellm, "enable_caching_on_provider_specific_optional_params", provider_specific_params_keyed)
+    expected: Final = hashlib.sha256(f"model: mmessages: hi{extra_body_preimage}".encode()).hexdigest()
+
+    assert Cache(type=LiteLLMCacheType.LOCAL).get_cache_key(model="m", messages="hi", extra_body=extra_body) == expected
+
+
+@pytest.mark.parametrize("mapping_type", [MappingProxyType, UserDict])
+def test_default_cache_key_reads_extra_body_from_any_mapping(
+    monkeypatch: pytest.MonkeyPatch, mapping_type: Callable[[Mapping[str, object]], Mapping[str, object]]
+) -> None:
+    monkeypatch.setattr(litellm, "enable_caching_on_provider_specific_optional_params", False)
+    cache: Final = Cache(type=LiteLLMCacheType.LOCAL)
+    thinking: Final = {"chat_template_kwargs": {"enable_thinking": True}}
+    no_thinking: Final = {"chat_template_kwargs": {"enable_thinking": False}}
+
+    def key_of(extra_body: Mapping[str, object] | None) -> str:
+        return cache.get_cache_key(**_EXTRA_BODY_REQUEST, extra_body=extra_body)
+
+    assert key_of(mapping_type(thinking)) == key_of(thinking)
+    assert key_of(mapping_type(no_thinking)) == key_of(no_thinking)
+    assert key_of(mapping_type(thinking)) != key_of(mapping_type(no_thinking))
+    assert key_of(mapping_type({})) == key_of(None)
+    assert key_of(mapping_type({"return_token_ids": False, "continuation_token": ""})) == key_of(None)
+    assert key_of(mapping_type({"return_token_ids": True})) != key_of(None)
+    assert key_of(mapping_type({"continuation_token": "a"})) != key_of(mapping_type({"continuation_token": "b"}))
+
+
+@pytest.mark.parametrize("pair_sequence", [list, tuple])
+def test_default_cache_key_reads_extra_body_given_as_key_value_pairs(
+    monkeypatch: pytest.MonkeyPatch, pair_sequence: Callable[[Iterable[Sequence[object]]], Sequence[Sequence[object]]]
+) -> None:
+    monkeypatch.setattr(litellm, "enable_caching_on_provider_specific_optional_params", False)
+    cache: Final = Cache(type=LiteLLMCacheType.LOCAL)
+    thinking_pairs: Final = pair_sequence([("chat_template_kwargs", {"enable_thinking": True})])
+    sent_pairs: Final = copy.deepcopy(thinking_pairs)
+
+    def key_of(extra_body: object) -> str:
+        return cache.get_cache_key(**_EXTRA_BODY_REQUEST, extra_body=extra_body)
+
+    assert key_of(thinking_pairs) == key_of({"chat_template_kwargs": {"enable_thinking": True}})
+    assert key_of(thinking_pairs) != key_of(pair_sequence([("chat_template_kwargs", {"enable_thinking": False})]))
+    assert thinking_pairs == sent_pairs
+    assert key_of(pair_sequence([("top_k", 1), ("top_k", 5)])) == key_of({"top_k": 5})
+    assert key_of(pair_sequence([("top_k", 1), ("top_k", 5)])) != key_of({"top_k": 1})
+    assert key_of(pair_sequence([("return_token_ids", True)])) != key_of(None)
+    assert key_of(pair_sequence([["top_k", 5]])) == key_of({"top_k": 5})
+    assert key_of(pair_sequence(["ab"])) == key_of({"a": "b"})
+    assert key_of(pair_sequence(["ab"])) != key_of(pair_sequence(["ac"]))
+
+
+def test_default_cache_key_leaves_one_shot_extra_body_iterators_unread(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "enable_caching_on_provider_specific_optional_params", False)
+    cache: Final = Cache(type=LiteLLMCacheType.LOCAL)
+    pairs: Final = iter([("top_k", 5)])
+
+    assert cache.get_cache_key(**_EXTRA_BODY_REQUEST, extra_body=pairs) == cache.get_cache_key(**_EXTRA_BODY_REQUEST)
+    assert next(pairs) == ("top_k", 5)
+
+
+def test_extra_body_keeps_preset_keys_and_namespaces_in_charge(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "enable_caching_on_provider_specific_optional_params", False)
+    cache: Final = Cache(type=LiteLLMCacheType.LOCAL)
+    extra_body: Final = {"chat_template_kwargs": {"enable_thinking": False}}
+
+    unscoped_key: Final = cache.get_cache_key(**_EXTRA_BODY_REQUEST, extra_body=extra_body)
+
+    assert (
+        cache.get_cache_key(**_EXTRA_BODY_REQUEST, extra_body=extra_body, litellm_params={"preset_cache_key": "preset"})
+        == "preset"
+    )
+    assert (
+        cache.get_cache_key(**_EXTRA_BODY_REQUEST, extra_body=extra_body, cache={"namespace": "team-a"})
+        == f"team-a:{unscoped_key}"
+    )
+
+
+def test_semantic_cache_scope_separates_extra_body_but_still_ignores_the_prompt() -> None:
+    cache: Final = _semantic_cache()
+    sky, colour = _SEMANTICALLY_IDENTICAL_PROMPTS
+
+    def scope_key(messages: object, api_key: str, enable_thinking: bool) -> str:
+        return cache.get_cache_key(
+            model="gpt-4o-mini",
+            messages=messages,
+            metadata={"user_api_key": api_key},
+            extra_body={"chat_template_kwargs": {"enable_thinking": enable_thinking}},
+        )
+
+    assert scope_key(sky, "hash-A", True) == scope_key(colour, "hash-A", True)
+    assert scope_key(sky, "hash-A", True) != scope_key(colour, "hash-A", False)
+    assert scope_key(sky, "hash-A", True) != scope_key(colour, "hash-B", True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("provider_specific_params_keyed", [False, True])
+@pytest.mark.parametrize("extra_body_type", [dict, MappingProxyType, UserDict, _as_pair_list, _as_pair_tuple])
+async def test_response_cache_answers_each_extra_body_with_its_own_reply(
+    monkeypatch: pytest.MonkeyPatch,
+    provider_specific_params_keyed: bool,
+    extra_body_type: Callable[[Mapping[str, object]], object],
+) -> None:
+    monkeypatch.setattr(litellm, "enable_caching_on_provider_specific_optional_params", provider_specific_params_keyed)
+    monkeypatch.setattr(litellm, "cache", Cache(type=LiteLLMCacheType.LOCAL))
+
+    async def ask(enable_thinking: bool, mock_response: str) -> tuple[str, object]:
+        response: Final = await acompletion(
+            model="hosted_vllm/qwen",
+            api_base="http://localhost:8000",
+            messages=[{"role": "user", "content": "extra-body"}],
+            extra_body=extra_body_type({"chat_template_kwargs": {"enable_thinking": enable_thinking}}),
+            mock_response=mock_response,
+        )
+        await asyncio.gather(*_PENDING_CACHE_WRITES)
+        assert isinstance(response, litellm.ModelResponse), response
+        return _completion_text(response), response._hidden_params.get("cache_hit")
+
+    replies: Final = (
+        await ask(True, "WITH-THINKING"),
+        await ask(False, "NO-THINKING"),
+        await ask(True, "not served, cached reply expected"),
+        await ask(False, "not served, cached reply expected"),
+    )
+
+    assert replies == (
+        ("WITH-THINKING", None),
+        ("NO-THINKING", None),
+        ("WITH-THINKING", True),
+        ("NO-THINKING", True),
+    )
 
 
 def test_cache_key_tells_apart_requests_that_differ_only_in_tool_call_id_shape() -> None:
@@ -1087,6 +1443,17 @@ _FILE_BLOCK_ITEM: Final = {"type": "file", "file": {"file_data": "data:video/mp4
         pytest.param({"input": "one prompt"}, True, id="string-input-is-one-message"),
         pytest.param({"input": ["a", "b", "c", "d", "e"]}, True, id="embedding-strings-are-not-messages"),
         pytest.param({"input": [_FILE_BLOCK_ITEM] * 5}, True, id="embedding-file-blocks-are-not-messages"),
+        pytest.param(
+            {"input": [{"type": "text", "text": "chunk"}] * 5}, True, id="embedding-text-blocks-are-not-messages"
+        ),
+        pytest.param(
+            {"input": [{"type": ["message"], "content": "hi"}] * 5}, False, id="unhashable-item-types-still-count"
+        ),
+        pytest.param(
+            {"input": [{"type": "message", "role": "user", "content": "hi"}] * 5},
+            False,
+            id="five-typed-responses-messages-skip-the-cache",
+        ),
     ],
 )
 def test_should_use_cache_stops_past_the_default_max_messages(kwargs: dict[str, object], expected: bool) -> None:
@@ -1678,3 +2045,322 @@ def test_cache_key_separates_model_ids_unless_a_model_group_owns_the_key() -> No
     assert key_a != bare
     assert key_a == key_a_again
     assert grouped_a == grouped_b
+
+
+class _LoudDict(dict[str, str]):
+    def __repr__(self) -> str:
+        return "<loud dict>"
+
+
+class _Role(str, Enum):
+    USER = "user"
+
+
+class _ContentPart(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    type: str
+    text: str
+
+
+_LARGE_DATA_URL: Final = "data:image/png;base64," + "QUJD" * 524_288
+
+
+def _self_referencing_list() -> list[object]:  # mutable-ok: a cycle can only be closed by appending to the list
+    looped: Final[list[object]] = [{"role": "user", "content": _LARGE_DATA_URL}]  # mutable-ok: closed below
+    looped.append({"role": "user", "content": looped})
+    return looped
+
+
+def _self_referencing_dict() -> dict[str, object]:  # mutable-ok: a cycle can only be closed by assigning a key
+    looped: Final[dict[str, object]] = {"role": "user", "content": _LARGE_DATA_URL}  # mutable-ok: closed below
+    looped["self"] = (looped, [looped])
+    return looped
+
+
+_KEY_PREIMAGE_CASES: Final = MappingProxyType(
+    {
+        "one_tuple": ({"role": "user", "content": "hi"},),
+        "empty_containers": [{"role": "user", "content": [], "a": {}, "b": (), "c": set(), "d": "", "e": frozenset()}],
+        "mixed_quotes": [{"role": "user", "content": "it's \"quoted\" and 'single'"}],
+        "emoji_newlines_backslashes": [{"role": "user", "content": "\U0001f600 line\nnext\ttab \\ back\r\x00"}],
+        "dict_subclass_custom_repr": [_LoudDict(role="user", content="hi")],
+        "ordered_dict": [OrderedDict([("content", "hi"), ("role", "user")])],
+        "str_enum_top_level": _Role.USER,
+        "str_enum_nested": [{"role": _Role.USER, "content": "hi"}],
+        "special_floats": [{"role": "user", "content": [float("nan"), -0.0, 1e300, float("inf")]}],
+        "bytes": [{"role": "user", "content": b"\x00\xffraw'\"bytes"}],
+        "nested_lone_surrogate": [{"role": "user", "content": "a\ud800b"}],
+        "deep_nesting": reduce(lambda inner, _: [inner], range(300), {"role": "user", "content": "leaf"}),
+        "pydantic_model": [{"role": "user", "content": [_ContentPart(type="text", text="hi")]}],
+        "large_data_url_in_one_tuple": [({"content": _LARGE_DATA_URL},)],
+        "large_data_url": [
+            {
+                "role": "user",
+                "content": [{"type": "image_url", "image_url": {"url": _LARGE_DATA_URL}}],
+            }
+        ],
+        "self_referencing_list": _self_referencing_list(),
+        "self_referencing_dict": [_self_referencing_dict()],
+        "large_data_url_nested_past_any_walk_depth": reduce(
+            lambda inner, _: [inner, ("x",)], range(600), {"role": "user", "content": _LARGE_DATA_URL}
+        ),
+    }
+)
+
+
+@pytest.mark.parametrize("case", _KEY_PREIMAGE_CASES.values(), ids=_KEY_PREIMAGE_CASES.keys())
+def test_cache_key_stays_the_sha256_of_the_formatted_request(case: object) -> None:
+    expected: Final = hashlib.sha256(f"model: mmessages: {case}stream: True".encode()).hexdigest()
+
+    assert Cache(type=LiteLLMCacheType.LOCAL).get_cache_key(model="m", messages=case, stream=True) == expected
+
+
+@pytest.mark.parametrize("provider_specific_params_keyed", [False, True])
+@pytest.mark.parametrize("case", _KEY_PREIMAGE_CASES.values(), ids=_KEY_PREIMAGE_CASES.keys())
+def test_extra_body_cache_key_formats_any_accepted_value_like_the_request(
+    monkeypatch: pytest.MonkeyPatch, provider_specific_params_keyed: bool, case: object
+) -> None:
+    monkeypatch.setattr(litellm, "enable_caching_on_provider_specific_optional_params", provider_specific_params_keyed)
+    extra_body: Final = {"payload": case}
+    expected: Final = hashlib.sha256(f"model: mmessages: hiextra_body: {extra_body}".encode()).hexdigest()
+
+    assert Cache(type=LiteLLMCacheType.LOCAL).get_cache_key(model="m", messages="hi", extra_body=extra_body) == expected
+
+
+def test_cache_key_for_a_top_level_lone_surrogate_still_raises() -> None:
+    with pytest.raises(UnicodeEncodeError):
+        Cache(type=LiteLLMCacheType.LOCAL).get_cache_key(model="m", messages="\ud800", stream=True)
+
+
+def test_cache_key_for_large_image_payloads_does_not_copy_the_whole_request() -> None:
+    image_bytes: Final = 1 << 20
+    image_messages: Final = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": f"screenshot {index}"},
+                {"type": "image_url", "image_url": {"url": "data:image/png;base64," + chr(65 + index) * image_bytes}},
+            ],
+        }
+        for index in range(16)
+    ]
+    payload_bytes: Final = 16 * image_bytes
+    cache: Final = Cache(type=LiteLLMCacheType.LOCAL)
+
+    already_tracing: Final = tracemalloc.is_tracing()
+    if not already_tracing:
+        tracemalloc.start()
+    tracemalloc.reset_peak()
+    try:
+        traced_before, _ = tracemalloc.get_traced_memory()
+        cache.get_cache_key(model="m", messages=image_messages, stream=True)
+        _, traced_peak = tracemalloc.get_traced_memory()
+    finally:
+        if not already_tracing:
+            tracemalloc.stop()
+
+    added_peak: Final = traced_peak - traced_before
+    assert added_peak < payload_bytes / 4, (
+        f"peak {added_peak / 2**20:.1f} MiB for a {payload_bytes / 2**20:.0f} MiB payload"
+    )
+
+
+class _CountingEmbedder(CustomLLM):
+    def __init__(self) -> None:
+        super().__init__()
+        self.calls: int = 0
+
+    def _respond(self, model: str, input: list[str]) -> EmbeddingResponse:
+        self.calls += 1
+        return EmbeddingResponse(
+            model=model,
+            data=[
+                Embedding(embedding=[float(self.calls)], index=idx, object="embedding") for idx, _ in enumerate(input)
+            ],
+        )
+
+    def embedding(self, model: str, input: list[str], *args: object, **kwargs: object) -> EmbeddingResponse:
+        return self._respond(model, input)
+
+    async def aembedding(self, model: str, input: list[str], *args: object, **kwargs: object) -> EmbeddingResponse:
+        return self._respond(model, input)
+
+
+@pytest.fixture
+def counting_embedder(monkeypatch: pytest.MonkeyPatch) -> _CountingEmbedder:
+    embedder: Final = _CountingEmbedder()
+    monkeypatch.setattr(litellm, "custom_provider_map", [{"provider": "count-embed", "custom_handler": embedder}])
+    monkeypatch.setattr(litellm, "provider_list", [*litellm.provider_list, "count-embed"])
+    monkeypatch.setattr(litellm, "_custom_providers", [*litellm._custom_providers, "count-embed"])
+    return embedder
+
+
+_EMBED_REQUEST: Final = MappingProxyType({"model": "count-embed/m", "input": ["alpha", "beta"]})
+_COMPLETION_REQUEST: Final = MappingProxyType(
+    {"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "excluded call types"}]}
+)
+_EMBEDDING_CALL_TYPES: Final = ("embedding", "aembedding")
+_CALL_TYPE_EXCLUSION_CASES: Final = (
+    pytest.param({}, True, True, id="default"),
+    pytest.param({"excluded_call_types": []}, True, True, id="empty_exclusion"),
+    pytest.param({"excluded_call_types": list(_EMBEDDING_CALL_TYPES)}, False, True, id="embeddings_excluded"),
+    pytest.param({"excluded_call_types": ["completion", "acompletion"]}, True, False, id="completions_excluded"),
+    pytest.param(
+        {
+            "supported_call_types": [*_EMBEDDING_CALL_TYPES, "completion", "acompletion"],
+            "excluded_call_types": list(_EMBEDDING_CALL_TYPES),
+        },
+        False,
+        True,
+        id="custom_supported_list",
+    ),
+    pytest.param(
+        {"supported_call_types": None, "excluded_call_types": list(_EMBEDDING_CALL_TYPES)},
+        False,
+        False,
+        id="none_supported",
+    ),
+    pytest.param(
+        {"supported_call_types": [], "excluded_call_types": list(_EMBEDDING_CALL_TYPES)},
+        False,
+        False,
+        id="empty_supported",
+    ),
+)
+
+
+@asynccontextmanager
+async def _owned_cache_writes() -> AsyncIterator[Callable[[], Awaitable[None]]]:
+    before: Final = frozenset(_PENDING_CACHE_WRITES)
+
+    async def drain() -> None:
+        owned: Final = frozenset(_PENDING_CACHE_WRITES) - before
+        if not owned:
+            return
+        _, unfinished = await asyncio.wait(owned, timeout=CACHE_WRITE_SHUTDOWN_FLUSH_TIMEOUT_SECONDS)
+        for task in unfinished:
+            task.cancel()
+        await asyncio.gather(*unfinished, return_exceptions=True)
+
+    try:
+        yield drain
+    finally:
+        await drain()
+
+
+def _completion_text(response: object) -> str:
+    assert isinstance(response, litellm.ModelResponse), response
+    choice: Final = response.choices[0]
+    assert isinstance(choice, litellm.Choices), choice
+    return str(choice.message.content)
+
+
+@pytest.mark.parametrize(("cache_kwargs", "embeddings_cached", "completions_cached"), _CALL_TYPE_EXCLUSION_CASES)
+def test_excluded_call_types_decide_sync_cache_reads_and_writes(
+    monkeypatch: pytest.MonkeyPatch,
+    counting_embedder: _CountingEmbedder,
+    cache_kwargs: dict[str, object],
+    embeddings_cached: bool,
+    completions_cached: bool,
+) -> None:
+    backend: Final = InMemoryCache()
+    monkeypatch.setattr(litellm, "cache", Cache(type=LiteLLMCacheType.LOCAL, _backend=backend, **cache_kwargs))
+
+    embedding(**_EMBED_REQUEST)
+    embedding(**_EMBED_REQUEST)
+    embedding_entries: Final = len(backend.cache_dict)
+    completion(**_COMPLETION_REQUEST, mock_response="first")
+    second: Final = completion(**_COMPLETION_REQUEST, mock_response="second")
+
+    assert counting_embedder.calls == (1 if embeddings_cached else 2)
+    assert (embedding_entries > 0) is embeddings_cached
+    assert _completion_text(second) == ("first" if completions_cached else "second")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("cache_kwargs", "embeddings_cached", "completions_cached"), _CALL_TYPE_EXCLUSION_CASES)
+async def test_excluded_call_types_decide_async_cache_reads_and_writes(
+    monkeypatch: pytest.MonkeyPatch,
+    counting_embedder: _CountingEmbedder,
+    cache_kwargs: dict[str, object],
+    embeddings_cached: bool,
+    completions_cached: bool,
+) -> None:
+    backend: Final = InMemoryCache()
+    monkeypatch.setattr(litellm, "cache", Cache(type=LiteLLMCacheType.LOCAL, _backend=backend, **cache_kwargs))
+
+    async with _owned_cache_writes() as drain_owned_writes:
+        await aembedding(**_EMBED_REQUEST)
+        await drain_owned_writes()
+        await aembedding(**_EMBED_REQUEST)
+        await drain_owned_writes()
+        embedding_entries: Final = len(backend.cache_dict)
+        await acompletion(**_COMPLETION_REQUEST, mock_response="first")
+        await drain_owned_writes()
+        second: Final = await acompletion(**_COMPLETION_REQUEST, mock_response="second")
+
+    assert counting_embedder.calls == (1 if embeddings_cached else 2)
+    assert (embedding_entries > 0) is embeddings_cached
+    assert _completion_text(second) == ("first" if completions_cached else "second")
+
+
+@pytest.mark.asyncio
+async def test_excluded_call_types_bypass_embeddings_cached_before_the_exclusion(
+    monkeypatch: pytest.MonkeyPatch, counting_embedder: _CountingEmbedder
+) -> None:
+    backend: Final = InMemoryCache()
+    monkeypatch.setattr(litellm, "cache", Cache(type=LiteLLMCacheType.LOCAL, _backend=backend))
+
+    async with _owned_cache_writes() as drain_owned_writes:
+        await aembedding(**_EMBED_REQUEST)
+        await drain_owned_writes()
+        primed: Final = dict(backend.cache_dict)
+        monkeypatch.setattr(
+            litellm,
+            "cache",
+            Cache(type=LiteLLMCacheType.LOCAL, _backend=backend, excluded_call_types=list(_EMBEDDING_CALL_TYPES)),
+        )
+        response: Final = await aembedding(**_EMBED_REQUEST)
+        await drain_owned_writes()
+
+    assert len(primed) == len(_EMBED_REQUEST["input"])
+    assert counting_embedder.calls == 2
+    assert [item["embedding"] for item in response.data] == [[2.0], [2.0]]
+    assert backend.cache_dict == primed
+
+
+@pytest.mark.parametrize("configure_cache", [enable_cache, update_cache], ids=["enable_cache", "update_cache"])
+def test_cache_setup_helpers_pass_excluded_call_types_to_the_cache(
+    monkeypatch: pytest.MonkeyPatch,
+    counting_embedder: _CountingEmbedder,
+    configure_cache: Callable[..., None],
+) -> None:
+    monkeypatch.setattr(litellm, "cache", None)
+    monkeypatch.setattr(litellm, "input_callback", list(litellm.input_callback))
+    monkeypatch.setattr(litellm, "success_callback", list(litellm.success_callback))
+    monkeypatch.setattr(litellm, "_async_success_callback", list(litellm._async_success_callback))
+    backend: Final = InMemoryCache()
+
+    configure_cache(type=LiteLLMCacheType.LOCAL, excluded_call_types=list(_EMBEDDING_CALL_TYPES), _backend=backend)
+    embedding(**_EMBED_REQUEST)
+    embedding(**_EMBED_REQUEST)
+    embedding_entries: Final = len(backend.cache_dict)
+    completion(**_COMPLETION_REQUEST, mock_response="first")
+    second: Final = completion(**_COMPLETION_REQUEST, mock_response="second")
+
+    assert counting_embedder.calls == 2
+    assert embedding_entries == 0
+    assert _completion_text(second) == "first"
+
+
+def test_excluded_call_types_leave_the_callers_lists_and_later_defaults_intact() -> None:
+    supported: Final = [*_EMBEDDING_CALL_TYPES, "completion"]
+    excluded: Final = list(_EMBEDDING_CALL_TYPES)
+
+    Cache(type=LiteLLMCacheType.LOCAL, supported_call_types=supported, excluded_call_types=excluded)
+    Cache(type=LiteLLMCacheType.LOCAL, excluded_call_types=excluded)
+
+    assert supported == ["embedding", "aembedding", "completion"]
+    assert excluded == ["embedding", "aembedding"]
+    assert Cache(type=LiteLLMCacheType.LOCAL).supported_call_types == list(DEFAULT_CACHING_SUPPORTED_CALL_TYPES)

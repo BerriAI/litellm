@@ -1,5 +1,5 @@
 import json
-from collections.abc import Mapping
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from typing import TYPE_CHECKING, Final, Protocol
 
 from pydantic import ConfigDict, TypeAdapter
@@ -10,7 +10,14 @@ from litellm.integrations.opentelemetry_utils.base_otel_llm_obs_attributes impor
     BaseLLMObsOTELAttributes,
     safe_set_attribute,
 )
-from litellm.litellm_core_utils.core_helpers import iter_items, require_attributes, subscript
+from litellm.litellm_core_utils.core_helpers import (
+    as_object_list,
+    has_attributes,
+    iter_items,
+    length_of,
+    require_attributes,
+    subscript,
+)
 from litellm.litellm_core_utils.redact_messages import (
     should_redact_message_logging,
 )
@@ -37,6 +44,38 @@ _JSON_OBJECT: Final = TypeAdapter(dict[str, object], config=ConfigDict(hide_inpu
 
 class _SupportsGetWithDefault(Protocol):
     def get(self, key: str, default: object = None, /) -> object: ...
+
+
+class _SupportsPop(Protocol):
+    def pop(self, key: str, default: object, /) -> object: ...
+
+
+class _HasType(Protocol):
+    @property
+    def type(self) -> object: ...
+
+
+class _HasSummary(Protocol):
+    @property
+    def summary(self) -> object: ...
+
+
+class _HasText(Protocol):
+    @property
+    def text(self) -> object: ...
+
+
+class _HasContent(Protocol):
+    @property
+    def content(self) -> object: ...
+
+
+def _getter_of(value: object) -> _SupportsGetWithDefault:
+    return require_attributes(value, _SupportsGetWithDefault, "get")
+
+
+def _as_dict(value: object) -> Mapping[object, object] | None:
+    return value if isinstance(value, dict) else None
 
 
 class ArizeOTELAttributes(BaseLLMObsOTELAttributes):
@@ -91,10 +130,10 @@ class ArizeOTELAttributes(BaseLLMObsOTELAttributes):
     # outputs in a single place.
 
 
-def _set_response_attributes(span: "Span", response_obj):
+def _set_response_attributes(span: "Span", response_obj: object):
     """Helper to set response output and token usage attributes on span."""
 
-    if not hasattr(response_obj, "get"):
+    if not has_attributes(response_obj, _SupportsGetWithDefault, "get"):
         return
 
     _set_choice_outputs(span, response_obj, MessageAttributes, SpanAttributes)
@@ -105,10 +144,15 @@ def _set_response_attributes(span: "Span", response_obj):
     _set_usage_outputs(span, response_obj, SpanAttributes)
 
 
-def _set_choice_outputs(span: "Span", response_obj, msg_attrs, span_attrs):
-    for idx, choice in enumerate(response_obj.get("choices", [])):
-        response_message = choice.get("message", {})
-        content = response_message.get("content", "")
+def _set_choice_outputs(
+    span: "Span",
+    response_obj: _SupportsGetWithDefault,
+    msg_attrs: type[MessageAttributes],
+    span_attrs: type[SpanAttributes],
+):
+    for idx, choice in enumerate(iter_items(response_obj.get("choices", []))):
+        response_message = _getter_of(choice).get("message", {})
+        content = _getter_of(response_message).get("content", "")
 
         # Tool-only assistant responses have empty content; serialize the
         # tool_calls into OUTPUT_VALUE so Arize's "Output" pane isn't blank.
@@ -123,7 +167,7 @@ def _set_choice_outputs(span: "Span", response_obj, msg_attrs, span_attrs):
         safe_set_attribute(
             span,
             f"{prefix}.{msg_attrs.MESSAGE_ROLE}",
-            response_message.get("role"),
+            _getter_of(response_message).get("role"),
         )
         safe_set_attribute(
             span,
@@ -143,9 +187,15 @@ def _set_choice_outputs(span: "Span", response_obj, msg_attrs, span_attrs):
         )
 
 
-def _set_image_outputs(span: "Span", response_obj, image_attrs, span_attrs):
+def _set_image_outputs(
+    span: "Span",
+    response_obj: _SupportsGetWithDefault,
+    image_attrs: type[ImageAttributes],
+    span_attrs: type[SpanAttributes],
+):
     images: Final = response_obj.get("data", [])
-    for i, image in enumerate(images):
+    for i, raw_image in enumerate(iter_items(images)):
+        image = _getter_of(raw_image)
         img_url = image.get("url")
         if img_url is None and image.get("b64_json"):
             img_url = f"data:image/png;base64,{image.get('b64_json')}"
@@ -159,9 +209,15 @@ def _set_image_outputs(span: "Span", response_obj, image_attrs, span_attrs):
         safe_set_attribute(span, f"{image_attrs.IMAGE_URL}.{i}", img_url)
 
 
-def _set_audio_outputs(span: "Span", response_obj, audio_attrs, span_attrs):
+def _set_audio_outputs(
+    span: "Span",
+    response_obj: _SupportsGetWithDefault,
+    audio_attrs: type[AudioAttributes],
+    span_attrs: type[SpanAttributes],
+):
     audio: Final = response_obj.get("audio", [])
-    for i, audio_item in enumerate(audio):
+    for i, raw_audio_item in enumerate(iter_items(audio)):
+        audio_item = _getter_of(raw_audio_item)
         audio_url = audio_item.get("url")
         if audio_url is None and audio_item.get("b64_json"):
             audio_url = f"data:audio/wav;base64,{audio_item.get('b64_json')}"
@@ -180,9 +236,15 @@ def _set_audio_outputs(span: "Span", response_obj, audio_attrs, span_attrs):
             safe_set_attribute(span, f"{audio_attrs.AUDIO_TRANSCRIPT}.{i}", audio_transcript)
 
 
-def _set_embedding_outputs(span: "Span", response_obj, embedding_attrs, span_attrs):
+def _set_embedding_outputs(
+    span: "Span",
+    response_obj: _SupportsGetWithDefault,
+    embedding_attrs: type[EmbeddingAttributes],
+    span_attrs: type[SpanAttributes],
+):
     embeddings: Final = response_obj.get("data", [])
-    for i, embedding_item in enumerate(embeddings):
+    for i, raw_embedding_item in enumerate(iter_items(embeddings)):
+        embedding_item = _getter_of(raw_embedding_item)
         embedding_vector = embedding_item.get("embedding")
         if embedding_vector:
             if i == 0:
@@ -207,35 +269,40 @@ def _set_embedding_outputs(span: "Span", response_obj, embedding_attrs, span_att
             )
 
 
-def _set_structured_outputs(span: "Span", response_obj, msg_attrs, span_attrs):
+def _set_structured_outputs(
+    span: "Span",
+    response_obj: _SupportsGetWithDefault,
+    msg_attrs: type[MessageAttributes],
+    span_attrs: type[SpanAttributes],
+):
     output_items: Final = response_obj.get("output", [])
-    for i, item in enumerate(output_items):
+    for i, item in enumerate(iter_items(output_items)):
         prefix = f"{span_attrs.LLM_OUTPUT_MESSAGES}.{i}"
-        if not hasattr(item, "type"):
+        if not has_attributes(item, _HasType, "type"):
             continue
 
         item_type = item.type
-        if item_type == "reasoning" and hasattr(item, "summary"):
-            for summary in item.summary:
-                if hasattr(summary, "text"):
+        if item_type == "reasoning" and has_attributes(item, _HasSummary, "summary"):
+            for summary in iter_items(item.summary):
+                if has_attributes(summary, _HasText, "text"):
                     safe_set_attribute(
                         span,
                         f"{prefix}.{msg_attrs.MESSAGE_REASONING_SUMMARY}",
                         summary.text,
                     )
-        elif item_type == "message" and hasattr(item, "content"):
-            message_content = ""
+        elif item_type == "message" and has_attributes(item, _HasContent, "content"):
+            message_content: object = ""
             content_list = item.content
-            if content_list and len(content_list) > 0:
-                first_content = content_list[0]
+            if content_list and length_of(content_list) > 0:
+                first_content = subscript(content_list, 0)
                 message_content = getattr(first_content, "text", "")
-            message_role = getattr(item, "role", "assistant")
+            message_role: object = getattr(item, "role", "assistant")
             safe_set_attribute(span, span_attrs.OUTPUT_VALUE, message_content)
             safe_set_attribute(span, f"{prefix}.{msg_attrs.MESSAGE_CONTENT}", message_content)
             safe_set_attribute(span, f"{prefix}.{msg_attrs.MESSAGE_ROLE}", message_role)
 
 
-def _safe_get(obj, key, default=None):
+def _safe_get(obj: object, key: str, default: object = None) -> object:
     """Read ``key`` from a dict-like or Pydantic-model-like object.
 
     The arize/langfuse_otel logger receives ``usage`` objects from many sources:
@@ -247,7 +314,7 @@ def _safe_get(obj, key, default=None):
     """
     if obj is None:
         return default
-    getter: Final = getattr(obj, "get", None)
+    getter: Final[object] = getattr(obj, "get", None)
     if callable(getter):
         try:
             return getter(key, default)
@@ -257,7 +324,7 @@ def _safe_get(obj, key, default=None):
     return getattr(obj, key, default)
 
 
-def _set_usage_outputs(span: "Span", response_obj, span_attrs):
+def _set_usage_outputs(span: "Span", response_obj: _SupportsGetWithDefault | None, span_attrs: type[SpanAttributes]):
     usage: Final = response_obj and response_obj.get("usage")
     if not usage:
         return
@@ -317,7 +384,7 @@ def _set_usage_outputs(span: "Span", response_obj, span_attrs):
         )
 
 
-def _infer_open_inference_span_kind(call_type: str | None) -> str:
+def _infer_open_inference_span_kind(call_type: object) -> str:
     """
     Map LiteLLM call types to OpenInference span kinds.
     """
@@ -375,13 +442,14 @@ def _infer_open_inference_span_kind(call_type: str | None) -> str:
     return OpenInferenceSpanKindValues.UNKNOWN.value
 
 
-def _set_tool_attributes(span: "Span", optional_tools: list | None, metadata_tools: list | None):
+def _set_tool_attributes(span: "Span", optional_tools: object, metadata_tools: object):
     """set tool attributes on span from optional_params or tool call metadata"""
     if optional_tools:
-        for idx, tool in enumerate(optional_tools):
-            if not isinstance(tool, dict):
+        for idx, raw_tool in enumerate(iter_items(optional_tools)):
+            tool = _as_dict(raw_tool)
+            if tool is None:
                 continue
-            function = tool.get("function") if isinstance(tool.get("function"), dict) else None
+            function = _as_dict(tool.get("function"))
             if not function:
                 continue
             tool_name = function.get("name")
@@ -402,9 +470,11 @@ def _set_tool_attributes(span: "Span", optional_tools: list | None, metadata_too
                     json.dumps(params),
                 )
 
-    if metadata_tools and isinstance(metadata_tools, list):
-        for idx, tool in enumerate(metadata_tools):
-            if not isinstance(tool, dict):
+    metadata_tool_list: Final = as_object_list(metadata_tools)
+    if metadata_tool_list:
+        for idx, raw_tool in enumerate(metadata_tool_list):
+            tool = _as_dict(raw_tool)
+            if tool is None:
                 continue
             tool_name = tool.get("name")
             if tool_name:
@@ -423,7 +493,9 @@ def _set_tool_attributes(span: "Span", optional_tools: list | None, metadata_too
                 )
 
 
-def set_attributes(span: "Span", kwargs, response_obj, attributes: type[BaseLLMObsOTELAttributes]):
+def set_attributes(
+    span: "Span", kwargs: Mapping[str, object], response_obj: object, attributes: type[BaseLLMObsOTELAttributes]
+):
     """
     Populates span with OpenInference-compliant LLM attributes for Arize and Phoenix tracing.
     """
@@ -441,12 +513,12 @@ def set_attributes(span: "Span", kwargs, response_obj, attributes: type[BaseLLMO
 
     try:
         optional_params: Final = _sanitize_optional_params(kwargs.get("optional_params"))
-        litellm_params: Final = kwargs.get("litellm_params", {}) or {}
-        standard_logging_payload: Final[StandardLoggingPayload | None] = kwargs.get("standard_logging_object")
+        litellm_params: Final[object] = kwargs.get("litellm_params", {}) or {}
+        standard_logging_payload: Final = kwargs.get("standard_logging_object")
         if standard_logging_payload is None:
             raise ValueError("standard_logging_object not found in kwargs")
 
-        metadata: Final = standard_logging_payload.get("metadata") if standard_logging_payload else None
+        metadata: Final = _getter_of(standard_logging_payload).get("metadata") if standard_logging_payload else None
         _set_metadata_attributes(span, metadata, SpanAttributes)
 
         metadata_tools: Final = _extract_metadata_tools(metadata)
@@ -470,7 +542,9 @@ def set_attributes(span: "Span", kwargs, response_obj, attributes: type[BaseLLMO
         _set_tool_attributes(span, optional_tools, metadata_tools)
         attributes.set_messages(span, kwargs)
 
-        model_params: Final = standard_logging_payload.get("model_parameters") if standard_logging_payload else None
+        model_params: Final = (
+            _getter_of(standard_logging_payload).get("model_parameters") if standard_logging_payload else None
+        )
         _set_model_params(span, model_params, SpanAttributes)
 
         _set_response_attributes(span=span, response_obj=response_obj_for_attrs)
@@ -498,48 +572,50 @@ def set_attributes(span: "Span", kwargs, response_obj, attributes: type[BaseLLMO
     _safe_emit("mcp tool attrs", _maybe_set_mcp_tool_attrs, span, kwargs, slp, response_obj_for_attrs)
 
 
-def _sanitize_optional_params(optional_params: dict | None) -> dict:
-    if not isinstance(optional_params, dict):
+def _sanitize_optional_params(optional_params: object) -> Mapping[object, object]:
+    params: Final = _as_dict(optional_params)
+    if params is None:
         return {}
-    optional_params.pop("secret_fields", None)
-    return optional_params
+    require_attributes(optional_params, _SupportsPop, "pop").pop("secret_fields", None)
+    return params
 
 
-def _set_metadata_attributes(span: "Span", metadata: object | None, span_attrs) -> None:
+def _set_metadata_attributes(span: "Span", metadata: object | None, span_attrs: type[SpanAttributes]) -> None:
     if metadata is not None:
         safe_set_attribute(span, span_attrs.METADATA, safe_dumps(metadata))
 
 
-def _extract_metadata_tools(metadata: object | None) -> list | None:
-    if not isinstance(metadata, dict):
+def _extract_metadata_tools(metadata: object | None) -> object:
+    metadata_map: Final = _as_dict(metadata)
+    if metadata_map is None:
         return None
-    llm_obj: Final = metadata.get("llm")
-    if isinstance(llm_obj, dict):
+    llm_obj: Final = _as_dict(metadata_map.get("llm"))
+    if llm_obj is not None:
         return llm_obj.get("tools")
     return None
 
 
-def _extract_optional_tools(optional_params: dict) -> list | None:
+def _extract_optional_tools(optional_params: Mapping[object, object]) -> object:
     return optional_params.get("tools") if isinstance(optional_params, dict) else None
 
 
 def _set_request_attributes(
     span: "Span",
-    kwargs,
-    standard_logging_payload: StandardLoggingPayload,
-    optional_params: dict,
-    litellm_params: dict,
-    response_obj,
-    span_attrs,
+    kwargs: Mapping[str, object],
+    standard_logging_payload: object,
+    optional_params: Mapping[object, object],
+    litellm_params: object,
+    response_obj: object,
+    span_attrs: type[SpanAttributes],
 ):
     if kwargs.get("model"):
         safe_set_attribute(span, span_attrs.LLM_MODEL_NAME, kwargs.get("model"))
 
-    safe_set_attribute(span, "llm.request.type", standard_logging_payload.get("call_type"))
+    safe_set_attribute(span, "llm.request.type", _getter_of(standard_logging_payload).get("call_type"))
     safe_set_attribute(
         span,
         span_attrs.LLM_PROVIDER,
-        litellm_params.get("custom_llm_provider", "Unknown"),
+        _getter_of(litellm_params).get("custom_llm_provider", "Unknown"),
     )
 
     if optional_params.get("max_tokens"):
@@ -554,7 +630,7 @@ def _set_request_attributes(
     if optional_params.get("user"):
         safe_set_attribute(span, "llm.user", optional_params.get("user"))
 
-    if not hasattr(response_obj, "get"):
+    if not has_attributes(response_obj, _SupportsGetWithDefault, "get"):
         return
 
     if response_obj.get("id"):
@@ -563,13 +639,13 @@ def _set_request_attributes(
         safe_set_attribute(span, "llm.response.model", response_obj.get("model"))
 
 
-def _set_model_params(span: "Span", model_params: dict | None, span_attrs) -> None:
+def _set_model_params(span: "Span", model_params: object, span_attrs: type[SpanAttributes]) -> None:
     if not model_params:
         return
 
     safe_set_attribute(span, span_attrs.LLM_INVOCATION_PARAMETERS, safe_dumps(model_params))
-    if model_params.get("user"):
-        user_id: Final = model_params.get("user")
+    if _getter_of(model_params).get("user"):
+        user_id: Final = _getter_of(model_params).get("user")
         if user_id is not None:
             safe_set_attribute(span, span_attrs.USER_ID, user_id)
 
@@ -580,7 +656,7 @@ def _set_model_params(span: "Span", model_params: dict | None, span_attrs) -> No
 # ---------------------------------------------------------------------------
 
 
-def _safe_emit(label: str, fn, *args, **kwargs) -> None:
+def _safe_emit(label: str, fn: Callable[..., object], *args: object, **kwargs: object) -> None:
     """Run an additive attribute emitter, swallowing any error so it cannot
     blank attributes set elsewhere on the span. Failures are logged at debug.
     """
@@ -590,10 +666,10 @@ def _safe_emit(label: str, fn, *args, **kwargs) -> None:
         verbose_logger.debug("[Arize] %s skipped: %s", label, e)
 
 
-def _set_early_span_kind(span: "Span", kwargs: dict) -> None:
+def _set_early_span_kind(span: "Span", kwargs: Mapping[str, object]) -> None:
     """Defensively set OPENINFERENCE_SPAN_KIND before any other logic runs."""
-    slp: Final = kwargs.get("standard_logging_object")
-    call_type: Final = slp.get("call_type") if isinstance(slp, dict) else None
+    slp: Final = _as_dict(kwargs.get("standard_logging_object"))
+    call_type: Final = slp.get("call_type") if slp is not None else None
     safe_set_attribute(
         span,
         SpanAttributes.OPENINFERENCE_SPAN_KIND,
@@ -601,7 +677,7 @@ def _set_early_span_kind(span: "Span", kwargs: dict) -> None:
     )
 
 
-def _coerce_response_obj_for_attrs(response_obj):
+def _coerce_response_obj_for_attrs(response_obj: object) -> object:
     """Return a `.get`-compatible view of `response_obj` when possible.
 
     - dicts and Pydantic models that already expose `.get` are returned
@@ -617,9 +693,9 @@ def _coerce_response_obj_for_attrs(response_obj):
     if response_obj is None or hasattr(response_obj, "get"):
         return response_obj
     dumped: Final = _to_plain_dict(response_obj)
-    if isinstance(dumped, dict):
+    if _as_dict(dumped) is not None:
         return dumped
-    text: Final = getattr(response_obj, "text", None)
+    text: Final[object] = getattr(response_obj, "text", None)
     if isinstance(text, str) and text:
         try:
             return _JSON_OBJECT.validate_python(json.loads(text))
@@ -628,7 +704,7 @@ def _coerce_response_obj_for_attrs(response_obj):
     return response_obj
 
 
-def _coerce_text(value) -> str | None:
+def _coerce_text(value: object) -> str | None:
     """Best-effort text extraction from a message-content value.
 
     Returns None when no textual portion can be derived. Handles:
@@ -641,13 +717,15 @@ def _coerce_text(value) -> str | None:
         return None
     if isinstance(value, str):
         return value
-    if isinstance(value, list):
-        parts: Final = []
-        for part in value:
+    listed: Final = as_object_list(value)
+    if listed is not None:
+        parts: Final[list[str]] = []
+        for part in listed:
+            part_map = _as_dict(part)
             if isinstance(part, str):
                 parts.append(part)
-            elif isinstance(part, dict):
-                text = part.get("text") or part.get("input_text")
+            elif part_map is not None:
+                text = part_map.get("text") or part_map.get("input_text")
                 if isinstance(text, str):
                     parts.append(text)
         if parts:
@@ -655,15 +733,15 @@ def _coerce_text(value) -> str | None:
     return None
 
 
-def _to_plain_dict(value):
+def _to_plain_dict(value: object) -> object:
     """Best-effort: coerce a value (Pydantic model / dict / None) to a dict.
 
     Returns the original value when no safe conversion exists. Used to bridge
     OpenAI Pydantic message/tool_call objects into the dict-based helpers.
     """
-    if value is None or isinstance(value, dict):
+    if value is None or _as_dict(value) is not None:
         return value
-    model_dump: Final = getattr(value, "model_dump", None)
+    model_dump: Final[object] = getattr(value, "model_dump", None)
     if callable(model_dump):
         try:
             return model_dump()
@@ -672,7 +750,7 @@ def _to_plain_dict(value):
     return value
 
 
-def _get_tool_calls(message) -> list | None:
+def _get_tool_calls(message: object) -> Sequence[object] | None:
     """Return the message's tool calls, Claude's server tool calls first, or
     ``None`` when there are none. Works for dicts and Pydantic message objects.
     """
@@ -695,7 +773,7 @@ class _NormalizedToolCall(TypedDict):
     function: ReadOnly[_NormalizedToolCallFunction]
 
 
-def _normalize_tool_call(raw_tc) -> _NormalizedToolCall | None:
+def _normalize_tool_call(raw_tc: object) -> _NormalizedToolCall | None:
     """Normalize a single tool_call (dict or Pydantic) into a stable shape:
 
         {"id": str|None, "type": str, "function": {"name": str|None, "arguments": str|None}}
@@ -703,12 +781,12 @@ def _normalize_tool_call(raw_tc) -> _NormalizedToolCall | None:
     Arguments are coerced to a JSON string per OpenInference convention.
     Returns ``None`` when ``raw_tc`` cannot be coerced to a dict.
     """
-    tc: Final = _to_plain_dict(raw_tc)
-    if not isinstance(tc, dict):
+    tc: Final = _as_dict(_to_plain_dict(raw_tc))
+    if tc is None:
         return None
-    function: Final = _to_plain_dict(tc.get("function"))
-    name: Final = function.get("name") if isinstance(function, dict) else None
-    args = function.get("arguments") if isinstance(function, dict) else None
+    function: Final = _as_dict(_to_plain_dict(tc.get("function")))
+    name: Final = function.get("name") if function is not None else None
+    args = function.get("arguments") if function is not None else None
     if args is not None and not isinstance(args, str):
         try:
             args = json.dumps(args)
@@ -721,7 +799,7 @@ def _normalize_tool_call(raw_tc) -> _NormalizedToolCall | None:
     }
 
 
-def _summarize_tool_calls_for_output(tool_calls) -> str:
+def _summarize_tool_calls_for_output(tool_calls: Iterable[object]) -> str:
     """Render a tool_calls list as a compact JSON string for OUTPUT_VALUE.
 
     Best-effort: returns ``str(tool_calls)`` if anything unexpected happens
@@ -734,7 +812,7 @@ def _summarize_tool_calls_for_output(tool_calls) -> str:
         return str(tool_calls)
 
 
-def _emit_message_tool_calls(span: "Span", prefix: str, message) -> None:
+def _emit_message_tool_calls(span: "Span", prefix: str, message: object) -> None:
     """Emit ``MESSAGE_TOOL_CALLS.*`` for an assistant message that requested
     tool calls. Pure addition: only writes when ``tool_calls`` is non-empty.
 
@@ -766,7 +844,7 @@ def _emit_message_tool_calls(span: "Span", prefix: str, message) -> None:
             )
 
 
-def _emit_input_message_extras(span: "Span", prefix: str, message: dict) -> None:
+def _emit_input_message_extras(span: "Span", prefix: str, message: object) -> None:
     """Emit additive attributes for an input message:
 
     - `MESSAGE_NAME` and `MESSAGE_TOOL_CALL_ID` (commonly set on tool-result
@@ -777,14 +855,15 @@ def _emit_input_message_extras(span: "Span", prefix: str, message: dict) -> None
       still performed by the caller, so renderers that only read the legacy
       key continue to work.
     """
-    if not isinstance(message, dict):
+    message_map: Final = _as_dict(message)
+    if message_map is None:
         return
 
-    name: Final = message.get("name")
+    name: Final = message_map.get("name")
     if name:
         safe_set_attribute(span, f"{prefix}.{MessageAttributes.MESSAGE_NAME}", name)
 
-    tool_call_id: Final = message.get("tool_call_id")
+    tool_call_id: Final = message_map.get("tool_call_id")
     if tool_call_id:
         safe_set_attribute(
             span,
@@ -794,11 +873,12 @@ def _emit_input_message_extras(span: "Span", prefix: str, message: dict) -> None
 
     _emit_message_tool_calls(span, prefix, message)
 
-    content: Final = message.get("content")
-    if isinstance(content, list):
+    content: Final = as_object_list(message_map.get("content"))
+    if content is not None:
         contents_prefix: Final = f"{prefix}.{MessageAttributes.MESSAGE_CONTENTS}"
-        for part_idx, part in enumerate(content):
-            if not isinstance(part, dict):
+        for part_idx, raw_part in enumerate(content):
+            part = _as_dict(raw_part)
+            if part is None:
                 continue
             part_prefix = f"{contents_prefix}.{part_idx}"
             part_type = part.get("type")
@@ -816,16 +896,17 @@ def _emit_input_message_extras(span: "Span", prefix: str, message: dict) -> None
                         text,
                     )
             elif part_type in ("image_url", "image", "input_image"):
-                url = None
+                url: object = None
                 image = part.get("image_url")
-                if isinstance(image, dict):
-                    url = image.get("url")
+                image_map = _as_dict(image)
+                if image_map is not None:
+                    url = image_map.get("url")
                 elif isinstance(image, str):
                     url = image
                 if not url:
                     # Anthropic-style source.{type=base64,media_type,data}
-                    source = part.get("source")
-                    if isinstance(source, dict) and source.get("data"):
+                    source = _as_dict(part.get("source"))
+                    if source is not None and source.get("data"):
                         media_type = source.get("media_type", "image/jpeg")
                         url = f"data:{media_type};base64,{source['data']}"
                     elif isinstance(part.get("url"), str):
@@ -843,7 +924,7 @@ def _emit_input_message_extras(span: "Span", prefix: str, message: dict) -> None
                     )
 
 
-def _set_session_and_user_attrs(span: "Span", kwargs: dict, standard_logging_payload) -> None:
+def _set_session_and_user_attrs(span: "Span", kwargs: Mapping[str, object], standard_logging_payload: object) -> None:
     """Emit `SESSION_ID` / `USER_ID` / team metadata when source data exists.
 
     `SESSION_ID` is emitted only when an explicit end-user identifier exists
@@ -857,25 +938,26 @@ def _set_session_and_user_attrs(span: "Span", kwargs: dict, standard_logging_pay
     optional_params.user) has already set it, to avoid overwriting an
     existing value with a possibly-different one from API-key metadata.
     """
-    if not isinstance(standard_logging_payload, dict):
+    payload: Final = _as_dict(standard_logging_payload)
+    if payload is None:
         return
-    metadata: Final = standard_logging_payload.get("metadata") or {}
-    if not isinstance(metadata, dict):
+    metadata: Final = _as_dict(payload.get("metadata") or {})
+    if metadata is None:
         return
 
     session_id: Final = metadata.get("user_api_key_end_user_id")
     if session_id:
         safe_set_attribute(span, SpanAttributes.SESSION_ID, str(session_id))
 
-    trace_id: Final = standard_logging_payload.get("trace_id")
+    trace_id: Final = payload.get("trace_id")
     if trace_id:
         safe_set_attribute(span, "litellm.trace_id", str(trace_id))
 
-    optional_params: Final = kwargs.get("optional_params") or {}
-    model_params: Final = standard_logging_payload.get("model_parameters") or {}
+    optional_params: Final = _as_dict(kwargs.get("optional_params") or {})
+    model_params: Final = _as_dict(payload.get("model_parameters") or {})
     has_user_already: Final = bool(
-        (isinstance(optional_params, dict) and optional_params.get("user"))
-        or (isinstance(model_params, dict) and model_params.get("user"))
+        (optional_params is not None and optional_params.get("user"))
+        or (model_params is not None and model_params.get("user"))
     )
     if not has_user_already:
         user_id: Final = metadata.get("user_api_key_user_id")
@@ -922,7 +1004,7 @@ def _set_response_cost_attr(span: "Span", standard_logging_payload: Mapping[str,
     safe_set_attribute(span, "llm.response.cost", cost_value)
 
 
-def _is_passthrough_call_type(call_type: str | None) -> bool:
+def _is_passthrough_call_type(call_type: object) -> bool:
     if not call_type:
         return False
     lowered: Final = str(call_type).lower()
@@ -931,10 +1013,10 @@ def _is_passthrough_call_type(call_type: str | None) -> bool:
 
 def _maybe_normalize_passthrough(
     span: "Span",
-    kwargs: dict,
-    raw_response_obj,
-    coerced_response_obj,
-    standard_logging_payload,
+    kwargs: dict[str, object],
+    raw_response_obj: object,
+    coerced_response_obj: object,
+    standard_logging_payload: object,
 ) -> None:
     """Surface input/output text for passthrough routes (e.g. Bedrock
     InvokeModel) so the parent span renders as more than `usage` numbers.
@@ -956,7 +1038,8 @@ def _maybe_normalize_passthrough(
     passthrough I/O (with central redaction) for free and this helper's
     `complete_input_dict` fallback can be deleted. See follow-up issue.
     """
-    call_type: Final = standard_logging_payload.get("call_type") if isinstance(standard_logging_payload, dict) else None
+    payload: Final = _as_dict(standard_logging_payload)
+    call_type: Final = payload.get("call_type") if payload is not None else None
     if not _is_passthrough_call_type(call_type):
         return
 
@@ -970,35 +1053,40 @@ def _maybe_normalize_passthrough(
         return
 
     # --- INPUT --------------------------------------------------------------
-    additional_args: Final = kwargs.get("additional_args") or {}
-    complete_input_dict = additional_args.get("complete_input_dict") if isinstance(additional_args, dict) else None
-    if isinstance(complete_input_dict, dict):
+    additional_args: Final = _as_dict(kwargs.get("additional_args") or {})
+    complete_input_dict: Final = (
+        _as_dict(additional_args.get("complete_input_dict")) if additional_args is not None else None
+    )
+    if complete_input_dict is not None:
         _set_passthrough_input_attributes(span, complete_input_dict.get("messages"))
 
     # --- OUTPUT -------------------------------------------------------------
-    parsed_response: Final = _parse_passthrough_response(raw_response_obj, coerced_response_obj, kwargs)
-    if not isinstance(parsed_response, dict):
+    parsed_response: Final = _as_dict(_parse_passthrough_response(raw_response_obj, coerced_response_obj, kwargs))
+    if parsed_response is None:
         return
 
     _set_passthrough_output_attributes(span, parsed_response)
 
 
-def _set_passthrough_input_attributes(span: "Span", messages) -> None:
+def _set_passthrough_input_attributes(span: "Span", messages: object) -> None:
     """Render passthrough request messages into INPUT_VALUE + LLM_INPUT_MESSAGES."""
-    if not (isinstance(messages, list) and messages):
+    message_list: Final = as_object_list(messages)
+    if not message_list:
         return
     # Set INPUT_VALUE from the last user message text if discoverable.
     last_text = None
-    for msg in reversed(messages):
-        if isinstance(msg, dict):
+    for raw_msg in reversed(message_list):
+        msg = _as_dict(raw_msg)
+        if msg is not None:
             last_text = _coerce_text(msg.get("content"))
             if last_text:
                 break
     if last_text:
         safe_set_attribute(span, SpanAttributes.INPUT_VALUE, last_text)
     # Mirror messages into LLM_INPUT_MESSAGES so the input pane renders.
-    for idx, msg in enumerate(messages):
-        if not isinstance(msg, dict):
+    for idx, raw_msg in enumerate(message_list):
+        msg = _as_dict(raw_msg)
+        if msg is None:
             continue
         prefix = f"{SpanAttributes.LLM_INPUT_MESSAGES}.{idx}"
         role = msg.get("role")
@@ -1017,15 +1105,17 @@ def _set_passthrough_input_attributes(span: "Span", messages) -> None:
             )
 
 
-def _set_passthrough_output_attributes(span: "Span", parsed_response: dict) -> None:
+def _set_passthrough_output_attributes(span: "Span", parsed_response: Mapping[object, object]) -> None:
     """Render passthrough response into OUTPUT_VALUE + LLM_OUTPUT_MESSAGES."""
     # Anthropic / Bedrock-Anthropic: `content` is a list of typed parts.
-    content_list: Final = parsed_response.get("content")
-    if isinstance(content_list, list) and content_list:
-        texts: Final = []
+    content_list: Final = as_object_list(parsed_response.get("content"))
+    if content_list:
+        texts: Final[list[str]] = []
         for part in content_list:
-            if isinstance(part, dict) and isinstance(part.get("text"), str):
-                texts.append(part["text"])
+            part_map = _as_dict(part)
+            part_text = part_map.get("text") if part_map is not None else None
+            if isinstance(part_text, str):
+                texts.append(part_text)
         joined: Final = "\n\n".join(t for t in texts if t)
         if joined:
             safe_set_attribute(span, SpanAttributes.OUTPUT_VALUE, joined)
@@ -1042,12 +1132,12 @@ def _set_passthrough_output_attributes(span: "Span", parsed_response: dict) -> N
             )
 
     # OpenAI-style passthrough: `choices[0].message.content`
-    choices: Final = parsed_response.get("choices")
-    if isinstance(choices, list) and choices:
-        first: Final = choices[0]
-        if isinstance(first, dict):
-            msg: Final = first.get("message")
-            if isinstance(msg, dict):
+    choices: Final = as_object_list(parsed_response.get("choices"))
+    if choices:
+        first: Final = _as_dict(choices[0])
+        if first is not None:
+            msg: Final = _as_dict(first.get("message"))
+            if msg is not None:
                 text: Final = _coerce_text(msg.get("content"))
                 if text:
                     safe_set_attribute(span, SpanAttributes.OUTPUT_VALUE, text)
@@ -1064,14 +1154,17 @@ def _set_passthrough_output_attributes(span: "Span", parsed_response: dict) -> N
                     )
 
 
-def _parse_passthrough_response(raw_response_obj, coerced_response_obj, kwargs):
+def _parse_passthrough_response(raw_response_obj: object, coerced_response_obj: object, kwargs: object) -> object:
     """Return a dict view of the provider response for passthrough routes."""
     # Prefer the coerced view (already JSON-parsed for httpx.Response).
-    candidates: Final = []
-    if isinstance(coerced_response_obj, dict):
-        candidates.append(coerced_response_obj)
-    if isinstance(raw_response_obj, dict) and raw_response_obj is not coerced_response_obj:
-        candidates.append(raw_response_obj)
+    candidates: Final = tuple(
+        candidate
+        for candidate in (
+            _as_dict(coerced_response_obj),
+            _as_dict(raw_response_obj) if raw_response_obj is not coerced_response_obj else None,
+        )
+        if candidate is not None
+    )
 
     for candidate in candidates:
         # StandardPassThroughResponseObject wrapper: {"response": "..."}.
@@ -1082,15 +1175,18 @@ def _parse_passthrough_response(raw_response_obj, coerced_response_obj, kwargs):
                     return _JSON_OBJECT.validate_python(json.loads(inner))
                 except Exception:
                     continue
-            if isinstance(inner, dict):
-                return inner
+            inner_map = _as_dict(inner)
+            if inner_map is not None:
+                return inner_map
         else:
             return candidate
 
     # Fallback: kwargs["original_response"] from the OTel base path.
-    original: Final = kwargs.get("original_response") if isinstance(kwargs, dict) else None
-    if isinstance(original, dict):
-        return original
+    kwargs_map: Final = _as_dict(kwargs)
+    original: Final = kwargs_map.get("original_response") if kwargs_map is not None else None
+    original_map: Final = _as_dict(original)
+    if original_map is not None:
+        return original_map
     if isinstance(original, str):
         try:
             return _JSON_OBJECT.validate_python(json.loads(original))
@@ -1138,7 +1234,8 @@ def _maybe_set_mcp_tool_attrs(
 
 
 def _has_only_text_parts(content: object) -> bool:
-    return not isinstance(content, list) or all(_coerce_text([part]) is not None for part in content)
+    listed: Final = as_object_list(content)
+    return listed is None or all(_coerce_text([part]) is not None for part in listed)
 
 
 def _set_mcp_tool_output(span: "Span", coerced_response_obj: object) -> None:

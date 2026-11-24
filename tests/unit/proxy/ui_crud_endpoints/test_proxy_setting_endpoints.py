@@ -4664,11 +4664,11 @@ class TestMoyaiUrlSetting:
 
 
 @pytest.mark.parametrize("setting,initial_value,submitted,default", (
-    ("usage_default_time_range", None, "today", "last_7_days"),
-    ("usage_default_time_range", None, "last_7_days", "last_7_days"),
-    ("usage_default_time_range", None, "last_30_days", "last_7_days"),
-    ("usage_default_time_range", None, "month_to_date", "last_7_days"),
-    ("usage_default_time_range", None, "year_to_date", "last_7_days"),
+    ("usage_default_time_range", None, "today", "month_to_date"),
+    ("usage_default_time_range", None, "last_7_days", "month_to_date"),
+    ("usage_default_time_range", None, "last_30_days", "month_to_date"),
+    ("usage_default_time_range", "last_7_days", "month_to_date", "month_to_date"),
+    ("usage_default_time_range", None, "year_to_date", "month_to_date"),
     ("disable_aria", None, False, False),
     ("disable_aria", None, True, False),
     ("disable_aria", False, True, False),

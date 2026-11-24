@@ -149,6 +149,7 @@ def _cost_the_logger_records_for(
     model_info: dict[str, object] | None = None,
     route_provider: str | None = None,
     base_model: object = None,
+    raw_stream: list[bytes] | None = None,
 ) -> float:
     logging_obj: Final = Logging(
         model="unknown",
@@ -175,7 +176,11 @@ def _cost_the_logger_records_for(
                 request_body={},
                 endpoint_type=EndpointType.VERTEX_AI,
                 start_time=datetime(2026, 1, 1),
-                raw_bytes=[f"data: {json.dumps(event)}\n\n".encode() for event in stream_events],
+                raw_bytes=(
+                    raw_stream
+                    if raw_stream is not None
+                    else [f"data: {json.dumps(event)}\n\n".encode() for event in stream_events]
+                ),
                 end_time=datetime(2026, 1, 1),
             )
         )
@@ -459,6 +464,28 @@ def test_a_claude_stream_through_a_configured_vertex_gateway_with_a_short_path_b
     assert recorded == pytest.approx(7 * _CLAUDE_INPUT_RATE + 1 * _CLAUDE_OUTPUT_RATE)
 
 
+@pytest.mark.parametrize(
+    "undecodable_line",
+    [b"data: 5\n\n", b"data: " + b'{"a": ' * 100_000 + b"1" + b"}" * 100_000 + b"\n\n"],
+    ids=["number", "deep-object"],
+)
+def test_claude_stream_spend_is_recorded_when_a_data_line_is_not_an_object(
+    claude_regional_uplift_rate_card: None, undecodable_line: bytes
+) -> None:
+    first_event, *other_events = (f"data: {json.dumps(event)}\n\n".encode() for event in _claude_stream_events())
+
+    recorded: Final = _cost_the_logger_records_for(
+        "https://aiplatform.googleapis.com/v1/projects/p/locations/global"
+        f"/publishers/anthropic/models/{_CLAUDE_UPLIFT_MODEL}:streamRawPredict",
+        stream=True,
+        reply=_claude_message(),
+        stream_events=_claude_stream_events(),
+        raw_stream=[first_event, undecodable_line, *other_events],
+    )
+
+    assert recorded == pytest.approx(7 * _CLAUDE_INPUT_RATE + 1 * _CLAUDE_OUTPUT_RATE)
+
+
 def test_build_complete_streaming_response_assembles_stream_generate_content_sse_chunks():
     logging_obj: Final = Logging(
         model="gemini-2.5-flash",
@@ -554,3 +581,50 @@ def test_vertex_passthrough_logs_the_tts_audio_the_caller_received(stream: bool)
 
     assert isinstance(logged, ModelResponse)
     assert logged.choices[0].message.audio.data == wav_base64
+
+
+def test_gemini_batch_embed_contents_passthrough_bills_image_tokens_from_usage_metadata():
+    logging_obj: Final = Logging(
+        model="unknown",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=False,
+        call_type="pass_through_endpoint",
+        start_time=datetime(2026, 1, 1),
+        litellm_call_id="call-1",
+        function_id="fn-1",
+    )
+    logging_obj.optional_params = {}
+    response: Final = httpx.Response(
+        200,
+        json={
+            "embeddings": [{"values": [0.1, 0.2]}],
+            "usageMetadata": {
+                "promptTokenCount": 258,
+                "promptTokenDetails": [{"modality": "IMAGE", "tokenCount": 258}],
+            },
+        },
+    )
+
+    result: Final = VertexPassthroughLoggingHandler.vertex_passthrough_handler(
+        httpx_response=response,
+        logging_obj=logging_obj,
+        url_route="https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-2:batchEmbedContents",
+        result=response.text,
+        start_time=datetime(2026, 1, 1),
+        end_time=datetime(2026, 1, 1),
+        cache_hit=False,
+        request_body={
+            "requests": [
+                {
+                    "model": "models/gemini-embedding-2",
+                    "content": {"parts": [{"inlineData": {"mimeType": "image/png", "data": "iVBORw0KGgo="}}]},
+                }
+            ]
+        },
+    )
+
+    assert result["result"].usage.prompt_tokens == 258
+    assert result["result"].usage.prompt_tokens_details.image_tokens == 258
+    assert result["kwargs"]["response_cost"] == pytest.approx(
+        258 * litellm.model_cost["gemini/gemini-embedding-2"]["input_cost_per_image_token"]
+    )

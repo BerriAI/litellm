@@ -3,7 +3,7 @@ import base64
 import io
 import json
 import wave
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from datetime import datetime
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -507,7 +507,9 @@ def probe_rate_card(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     litellm.get_model_info.cache_clear()
 
 
-def _cost_the_logger_records_for_gemini(*, stream: bool, model_info: dict[str, object] | None) -> float:
+def _cost_the_logger_records_for_gemini(
+    *, stream: bool, model_info: dict[str, object] | None, reply: Mapping[str, object] = _PROBE_REPLY
+) -> float:
     method: Final = "streamGenerateContent?alt=sse" if stream else "generateContent"
     url_route: Final = f"https://generativelanguage.googleapis.com/v1beta/models/{_PROBE_MODEL}:{method}"
     logging_obj: Final = LiteLLMLoggingObj(
@@ -531,15 +533,15 @@ def _cost_the_logger_records_for_gemini(*, stream: bool, model_info: dict[str, o
                 request_body={},
                 endpoint_type=HttpPassThroughEndpointHelpers.get_endpoint_type(url_route),
                 start_time=datetime(2026, 1, 1),
-                raw_bytes=[f"data: {json.dumps(_PROBE_REPLY)}\n\n".encode()],
+                raw_bytes=[f"data: {json.dumps(reply)}\n\n".encode()],
                 end_time=datetime(2026, 1, 1),
             )
         )
         return logging_obj.model_call_details["response_cost"]
-    response: Final = httpx.Response(200, json=_PROBE_REPLY)
+    response: Final = httpx.Response(200, json=reply)
     result: Final = GeminiPassthroughLoggingHandler.gemini_passthrough_handler(
         httpx_response=response,
-        response_body=_PROBE_REPLY,
+        response_body=dict(reply),
         logging_obj=logging_obj,
         url_route=url_route,
         result=response.text,
@@ -577,6 +579,18 @@ def test_gemini_passthrough_spend_matches_whether_or_not_the_call_streams(
     recorded: Final = _cost_the_logger_records_for_gemini(stream=stream, model_info=model_info)
 
     assert recorded == pytest.approx(7 * input_rate + 1 * output_rate), stream
+
+
+@pytest.mark.parametrize("stream", [True, False], ids=["streamed", "non-streamed"])
+def test_gemini_passthrough_bills_a_malformed_reply_with_no_output(probe_rate_card: None, stream: bool) -> None:
+    malformed: Final = {
+        **_PROBE_REPLY,
+        "candidates": [{"content": {"role": "model", "parts": []}, "finishReason": "MALFORMED_FUNCTION_CALL"}],
+    }
+
+    recorded: Final = _cost_the_logger_records_for_gemini(stream=stream, model_info=None, reply=malformed)
+
+    assert recorded == pytest.approx(7 * _LIST_INPUT_RATE + 1 * _LIST_OUTPUT_RATE)
 
 
 @pytest.mark.parametrize("stream", [True, False], ids=["streamed", "non-streamed"])

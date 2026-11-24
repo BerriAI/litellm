@@ -14,7 +14,7 @@ from litellm.constants import (
     BASE64_TRUNCATION_OFFLOAD_THRESHOLD_STRINGS,
     MAX_BASE64_LENGTH_FOR_LOGGING,
 )
-from litellm.litellm_core_utils.core_helpers import get_litellm_metadata_from_kwargs
+from litellm.litellm_core_utils.core_helpers import as_object_list, get_litellm_metadata_from_kwargs
 from litellm.types.utils import (
     ModelResponse,
     ModelResponseStream,
@@ -22,6 +22,7 @@ from litellm.types.utils import (
 )
 
 if TYPE_CHECKING:
+    from openai.types.audio.speech_create_params import SpeechCreateParams
     from opentelemetry.trace import Span as _Span
 
     from litellm import ModelResponse as _ModelResponse
@@ -107,8 +108,8 @@ def _truncate_base64_in_value(
                     copy: dict[str, object] | list[object] = {ck: cv for ck, cv in v.items()}
                     container[k] = copy
                     stack.append((copy, depth + 1))
-                elif isinstance(v, list):
-                    copy = list(v)
+                elif (items := as_object_list(v)) is not None:
+                    copy = list(items)
                     container[k] = copy
                     stack.append((copy, depth + 1))
         else:
@@ -119,8 +120,8 @@ def _truncate_base64_in_value(
                     copy = {ck: cv for ck, cv in v.items()}
                     container[i] = copy
                     stack.append((copy, depth + 1))
-                elif isinstance(v, list):
-                    copy = list(v)
+                elif (items := as_object_list(v)) is not None:
+                    copy = list(items)
                     container[i] = copy
                     stack.append((copy, depth + 1))
 
@@ -129,7 +130,7 @@ def _truncate_base64_in_value(
 
 def truncate_base64_in_messages(
     messages: str | list | dict | None,
-) -> str | list | dict | None:
+) -> str | list[object] | dict[str, object] | None:
     """
     Return a copy of *messages* with long base64 data-URI payloads replaced
     by human-readable size placeholders.
@@ -175,7 +176,7 @@ def _is_few_plain_strings(leaves: tuple[str, ...]) -> bool:
 
 async def truncate_base64_in_messages_async(
     messages: str | list | dict | None,  # mutable-ok: same contract as truncate_base64_in_messages
-) -> str | list | dict | None:  # mutable-ok: same contract as truncate_base64_in_messages
+) -> str | list[object] | dict[str, object] | None:  # mutable-ok: same contract as truncate_base64_in_messages
     """
     Same result as truncate_base64_in_messages, but payloads whose string content
     reaches BASE64_TRUNCATION_OFFLOAD_THRESHOLD_CHARS are copied in a worker thread,
@@ -312,7 +313,7 @@ _assemble_complete_response_from_streaming_chunks = assemble_complete_response_f
 
 
 def _set_duration_in_model_call_details(
-    logging_obj: Any,  # we're not guaranteed this will be `LiteLLMLoggingObject`
+    logging_obj: LiteLLMLoggingObject | None,
     start_time: datetime,
     end_time: datetime,
 ):
@@ -341,6 +342,17 @@ def _set_duration_in_model_call_details(
         verbose_logger.warning("Error setting `llm_api_duration_ms`: %s", e)
 
 
+def speech_create_params(
+    model: str, voice: str, input: str, optional_params: Mapping[str, object]
+) -> "SpeechCreateParams":
+    """The provider-mapped speech body, in the shape the OpenAI and Azure SDKs take."""
+    from openai.types.audio.speech_create_params import SpeechCreateParams
+
+    return cast(  # cast-ok: map_openai_params already mapped these to this SDK call's params
+        SpeechCreateParams, {"model": model, "voice": voice, "input": input, **optional_params}
+    )
+
+
 def speech_request_body(model: str, voice: str, optional_params: Mapping[str, object]) -> Mapping[str, object]:
     """Speech request body for telemetry, without the caller headers the provider SDKs
     take as request kwargs rather than body fields."""
@@ -360,7 +372,7 @@ def track_llm_api_timing():
 
     def decorator(func):
         @functools.wraps(func)
-        async def async_wrapper(*args, **kwargs):
+        async def async_wrapper(*args: object, **kwargs):
             start_time: Final = datetime.now()
             start_time_float: Final = time.time()
             logging_obj: Final = kwargs.get("logging_obj", None)
@@ -407,7 +419,7 @@ def track_llm_api_timing():
                     verbose_logger.debug("Error in service logging: %s", e)
 
         @functools.wraps(func)
-        def sync_wrapper(*args, **kwargs):
+        def sync_wrapper(*args: object, **kwargs):
             start_time: Final = datetime.now()
             start_time_float: Final = time.time()
             logging_obj: Final = kwargs.get("logging_obj", None)

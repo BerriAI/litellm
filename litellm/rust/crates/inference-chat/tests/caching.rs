@@ -51,7 +51,7 @@ async fn the_same_route_entrypoint_reports_facts_with_or_without_caching(
     traces: support::TraceCapture,
 ) {
     use litellm_cache_response::ScopedCache;
-    use litellm_inference_chat::types::ChatCompletionsRequest;
+    use litellm_inference_chat::types::{ChatCompletionsRequest, OptionalParams};
     use wiremock::{Mock, MockServer, ResponseTemplate, matchers::method};
 
     let upstream = MockServer::start().await;
@@ -78,7 +78,9 @@ async fn the_same_route_entrypoint_reports_facts_with_or_without_caching(
                 ChatCompletionsRequest {
                     model: "anthropic/cache-test-model",
                     messages: json!([{"role":"user","content":"hello"}]),
-                    optional_params: [("max_tokens".into(), json!(16))].into_iter().collect(),
+                    optional_params: OptionalParams::ProviderMapped(
+                        [("max_tokens".into(), json!(16))].into_iter().collect(),
+                    ),
                     api_key: Some("test-key"),
                     api_base: Some(&base),
                     custom_llm_provider: None,
@@ -200,7 +202,10 @@ async fn chat_cache_identity_follows_resolved_configuration_and_request_callback
     #[case] change: &str,
 ) {
     use litellm_cache_response::ScopedCache;
-    use litellm_inference_chat::{ChatCompletionsRoute, types::ChatCompletionsRequest};
+    use litellm_inference_chat::{
+        ChatCompletionsRoute,
+        types::{ChatCompletionsRequest, OptionalParams},
+    };
     use wiremock::{Mock, MockServer, ResponseTemplate, matchers::method};
 
     let first = MockServer::start().await;
@@ -249,7 +254,9 @@ async fn chat_cache_identity_follows_resolved_configuration_and_request_callback
             ChatCompletionsRequest {
                 model: "anthropic/cache-test-model",
                 messages: json!([{"role":"user","content":"hello"}]),
-                optional_params: [("max_tokens".into(), json!(32))].into_iter().collect(),
+                optional_params: OptionalParams::ProviderMapped(
+                    [("max_tokens".into(), json!(32))].into_iter().collect(),
+                ),
                 api_key: None,
                 api_base: None,
                 custom_llm_provider: None,
@@ -299,7 +306,7 @@ async fn chat_cache_identity_follows_resolved_configuration_and_request_callback
 #[tokio::test]
 async fn signed_requests_bypass_response_caching(cache: Arc<dyn ResponseCacheService>) {
     use litellm_cache_response::ScopedCache;
-    use litellm_inference_chat::types::ChatCompletionsRequest;
+    use litellm_inference_chat::types::{ChatCompletionsRequest, OptionalParams};
     use wiremock::{Mock, MockServer, ResponseTemplate, matchers::method};
 
     let upstream = MockServer::start().await;
@@ -318,7 +325,7 @@ async fn signed_requests_bypass_response_caching(cache: Arc<dyn ResponseCacheSer
         let response = route.execute(ChatCompletionsRequest {
             model:"bedrock/anthropic.cache-test-model",
             messages:json!([{"role":"user","content":"hello"}]),
-            optional_params:json!({"aws_access_key_id":"test-access","aws_secret_access_key":"test-secret","aws_region_name":"eu-west-1"}).as_object().unwrap().clone(),
+            optional_params:OptionalParams::ProviderMapped(json!({"aws_access_key_id":"test-access","aws_secret_access_key":"test-secret","aws_region_name":"eu-west-1"}).as_object().unwrap().clone()),
             api_key:None,api_base:Some(&upstream.uri()),custom_llm_provider:None,extra_headers:None,timeout:None,
         }, &hooks, None).await.unwrap();
         assert_eq!(

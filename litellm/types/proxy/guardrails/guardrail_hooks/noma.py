@@ -1,9 +1,10 @@
-from typing import Final
+from typing import Final, Protocol
 
 from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    TypeAdapter,
     ValidationError,
     ValidationInfo,
     ValidatorFunctionWrapHandler,
@@ -11,6 +12,7 @@ from pydantic import (
 )
 
 from litellm._logging import verbose_proxy_logger
+from litellm.litellm_core_utils.core_helpers import require_attributes
 
 from .base import GuardrailConfigModel
 
@@ -69,6 +71,13 @@ class NomaV2GuardrailConfigModel(GuardrailConfigModel):
         return "Noma Security v2"
 
 
+_VALIDATED_FIELD: Final = TypeAdapter(object)
+
+
+class _ValidationContext(Protocol):
+    def get(self, key: str, /) -> object: ...
+
+
 class NomaV2StreamingParams(BaseModel):
     """Streaming settings a Noma v2 guardrail reads from the top level of its litellm_params.
 
@@ -89,11 +98,12 @@ class NomaV2StreamingParams(BaseModel):
         cls, value: object, handler: ValidatorFunctionWrapHandler, info: ValidationInfo
     ) -> object:
         try:
-            validated: Final[object] = handler(value)
+            validated: Final = _VALIDATED_FIELD.validate_python(handler(value))
         except ValidationError:
+            context: Final = _VALIDATED_FIELD.validate_python(info.context)
             verbose_proxy_logger.warning(
                 "Noma v2 guardrail %s: ignoring %s=%.100r, which is not a valid value; the default applies",
-                info.context.get("guardrail_name") if info.context else None,
+                require_attributes(context, _ValidationContext, "get").get("guardrail_name") if context else None,
                 info.field_name,
                 value,
             )

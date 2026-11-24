@@ -24,6 +24,7 @@ from litellm.constants import (
 )
 from litellm.litellm_core_utils.batch_utils import get_router_metadata_variable_name
 from litellm.litellm_core_utils.clientside_credential_handler import (
+    clientside_credential_keys,
     get_dynamic_litellm_params,  # pyright: ignore[reportUnknownVariableType]  # litellm's untyped helpers and request values
     is_clientside_credential,  # pyright: ignore[reportUnknownVariableType]  # litellm's untyped helpers and request values
 )
@@ -264,24 +265,37 @@ def _resolved_upstream(params: Mapping[str, object], group: str, host: "PythonHo
 
 
 def _deployment_base_model(deployment: Mapping[str, object], params: Mapping[str, object]) -> str | None:
-    base_model: Final = as_dict(deployment.get("model_info")).get("base_model") or params.get("base_model")
+    base_model: Final = params.get("base_model") or as_dict(deployment.get("model_info")).get("base_model")
     return base_model if isinstance(base_model, str) else None
 
 
-def _deployment_supports_param(deployment: Mapping[str, object], group: str, param: str, host: "PythonHost") -> bool:
+def _deployment_supports_param(
+    deployment: Mapping[str, object], group: str, param: str, value: object, host: "PythonHost"
+) -> bool:
     params: Final = as_dict(deployment.get("litellm_params"))
     if not params:
         return True
     try:
         model, custom_llm_provider = _resolved_upstream(params, group, host)
+        base_model: Final = _deployment_base_model(deployment, params)
         supported: Final = host.invoke("get_supported_openai_params")(
             model=model,
             custom_llm_provider=custom_llm_provider,
-            base_model=_deployment_base_model(deployment, params),
+            base_model=base_model,
+        )
+        if supported is not None and param not in supported:
+            return False
+        return param != "reasoning_effort" or not host.invoke(
+            "litellm_core_utils.reasoning_effort_capability.gpt_5_row_refuses_reasoning_effort"
+        )(
+            value,
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            base_model=base_model,
+            deployment_model_info=deployment.get("model_info"),
         )
     except Exception:  # noqa: BLE001  # best-effort filter: an unresolvable provider must not narrow the request
         return True
-    return supported is None or param in supported
 
 
 def _deployment_refuses_reasoning_effort(
@@ -306,7 +320,9 @@ def _deployment_refuses_reasoning_effort(
     )
 
 
-def deployment_accepts_param(deployment: Mapping[str, object], group: str, param: str, host: "PythonHost") -> bool:
+def deployment_accepts_param(
+    deployment: Mapping[str, object], group: str, param: str, value: object, host: "PythonHost"
+) -> bool:
     params: Final = as_dict(deployment.get("litellm_params"))
     if not params:
         return True
@@ -317,7 +333,7 @@ def deployment_accepts_param(deployment: Mapping[str, object], group: str, param
         str(params.get("model") or ""), provider_param if isinstance(provider_param, str) else None
     ):
         return True
-    return _deployment_supports_param(deployment, group, param, host)
+    return _deployment_supports_param(deployment, group, param, value, host)
 
 
 def drop_unsupported_classifier_reasoning_effort(
@@ -330,7 +346,7 @@ def drop_unsupported_classifier_reasoning_effort(
     reasoning_effort: Final = kwargs.get("reasoning_effort")
     if reasoning_effort is None or not _is_classifier_internal_call(kwargs):
         return
-    if deployment_accepts_param(deployment, model, "reasoning_effort", host) and not (
+    if deployment_accepts_param(deployment, model, "reasoning_effort", reasoning_effort, host) and not (
         _deployment_refuses_reasoning_effort(deployment, model, reasoning_effort, host)
     ):
         return
@@ -385,10 +401,13 @@ def update_kwargs_with_default_litellm_params(
     shaping: Shaping,
     kwargs: MutableMapping[str, object],  # mutable-ok: the request kwargs the Python router mutates in place
     metadata_variable_name: str,
+    caller_only_keys: frozenset[str] = frozenset(),
 ) -> None:
     """``_update_kwargs_with_default_litellm_params``: unset non-None defaults fill the request;
     the default metadata fills the keys the request leaves unset, the router's caching groups excepted."""
-    defaults: Final = dict(without_retrieve_stream_defaults(shaping.default_litellm_params, kwargs))
+    defaults: Final = without(
+        without_retrieve_stream_defaults(shaping.default_litellm_params, kwargs), *caller_only_keys
+    )
     metadata_defaults: Final = defaults.pop("metadata", {}) or {}  # pyright: ignore[reportUnknownVariableType]  # litellm's untyped helpers and request values
     for key, value in defaults.items():
         if value is None:
@@ -427,6 +446,32 @@ def _clientside_deployment(
 # --- the deployment --------------------------------------------------------------------------
 
 
+def forwarded_caller_authorization(kwargs: Mapping[str, object], deployment_params: Mapping[str, object]) -> str | None:
+    """The caller's ``Authorization`` a credential-isolating provider sends instead of the deployment's key."""
+    from litellm.litellm_core_utils.get_provider_specific_headers import ProviderSpecificHeaderUtils
+
+    declared_provider: Final = deployment_params.get("custom_llm_provider")
+    declared_model: Final = deployment_params.get("model")
+    deployment_provider: Final = (
+        declared_provider
+        if isinstance(declared_provider, str)
+        else inferred_provider(declared_model if isinstance(declared_model, str) else None)
+    )
+    if deployment_provider not in _FORWARDED_CREDENTIAL_ISOLATION_PROVIDERS:
+        return None
+    header: Final = kwargs.get("provider_specific_header")
+    return ProviderSpecificHeaderUtils.forwarded_authorization(header, deployment_provider)
+
+
+def serves_caller_credentials(kwargs: Mapping[str, object], deployment: Mapping[str, object]) -> bool:
+    """Whether the attempt authenticates with what its caller sent: a client-side credential field that carries a
+    value (``api_key: null`` leaves the deployment's own auth in use), or a forwarded ``Authorization``."""
+    return (
+        any(kwargs.get(key) is not None for key in clientside_credential_keys)
+        or forwarded_caller_authorization(kwargs, as_dict(deployment.get("litellm_params"))) is not None
+    )
+
+
 def update_kwargs_with_deployment(
     shaping: Shaping,
     deployment: Mapping[str, object],
@@ -436,6 +481,7 @@ def update_kwargs_with_deployment(
     function_name: str | None = None,
     splits_stream_timeout: bool = False,
     opens_responses_socket: bool = False,
+    caller_only_keys: frozenset[str] = frozenset(),
 ) -> None:
     """``_update_kwargs_with_deployment``, in place on the attempt's kwargs."""
     deployment_params: Final = as_dict(deployment.get("litellm_params"))
@@ -453,22 +499,9 @@ def update_kwargs_with_deployment(
     deployment_model: object = deployment_params.get("model")  # rebind-ok: same
     deployment_api_base: object = deployment_params.get("api_base")  # rebind-ok: same
     deployment_model_name: Final = deployment.get("model_name")
-    from litellm.litellm_core_utils.get_provider_specific_headers import ProviderSpecificHeaderUtils
-
     for key in _malformed_request_params_the_deployment_sets(deployment_params, defaults, kwargs):
         kwargs.pop(key)
-    declared_provider: Final = deployment_params.get("custom_llm_provider")
-    declared_model: Final = deployment_params.get("model")
-    deployment_provider: Final = (
-        declared_provider
-        if isinstance(declared_provider, str)
-        else inferred_provider(declared_model if isinstance(declared_model, str) else None)
-    )
-    forwarded_authorization: Final = (
-        ProviderSpecificHeaderUtils.forwarded_authorization(kwargs.get("provider_specific_header"), deployment_provider)
-        if deployment_provider in _FORWARDED_CREDENTIAL_ISOLATION_PROVIDERS
-        else None
-    )
+    forwarded_authorization: Final = forwarded_caller_authorization(kwargs, deployment_params)
     if is_clientside_credential(request_kwargs=dict(kwargs)) or forwarded_authorization is not None:
         model_info, deployment_model, deployment_api_base = (  # rebind-ok: rebound as the Python router rebinds it
             _clientside_deployment(
@@ -559,7 +592,7 @@ def update_kwargs_with_deployment(
         kwargs[  # rebind-ok: the request kwargs are shaped in place, as the Python router shapes them
             STREAM_USAGE_INJECTED_FIELD
         ] = True
-    update_kwargs_with_default_litellm_params(shaping, kwargs, metadata_variable_name)
+    update_kwargs_with_default_litellm_params(shaping, kwargs, metadata_variable_name, caller_only_keys)
     pinned_model_id: Final = deployment_model_id_pin(deployment_params)
     if pinned_model_id is not None:
         kwargs["model_id"] = (  # rebind-ok: the request kwargs are shaped in place, as the Python router shapes them

@@ -269,6 +269,7 @@ pub struct OcrResponseContext<'a> {
     pub request_format: OcrResponseFormat,
     pub url: &'a str,
     pub headers: &'a [(String, String)],
+    pub optional_params: &'a CallArguments,
 }
 
 pub trait BaseOcrConfig: Send + Sync + Sized + 'static {
@@ -376,6 +377,24 @@ pub trait BaseOcrConfig: Send + Sync + Sized + 'static {
             body: error_message,
             headers: Box::new(headers),
         }
+    }
+
+    /// What `release_request` needs to undo provider state that `prepare_request` created for
+    /// this call alone, such as an uploaded file, read from the request before it is sent.
+    /// `None`, the default, means there is nothing to undo.
+    fn request_cleanup(&self, _request: &reqwest::Request) -> Option<Value> {
+        None
+    }
+
+    /// Runs once the call has ended, whatever its outcome (a refused or failed send, an error
+    /// response or a normalized result), with what `request_cleanup` returned.
+    fn release_request(
+        &self,
+        _cleanup: Value,
+        _context: OcrRequestContext<'_>,
+        _headers: &[(String, String)],
+    ) -> impl Future<Output = ()> + Send {
+        async {}
     }
 
     /// Provider-specific check applied to the composed body, both before and

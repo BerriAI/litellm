@@ -7,11 +7,13 @@ import os
 import re
 import sys
 import time
+import traceback
 import types
 import uuid
 from collections.abc import Callable, Mapping, Sequence
 from copy import deepcopy
 from datetime import datetime
+from itertools import chain
 from typing import Final, List, TypeAlias, cast
 from unittest.mock import MagicMock, patch
 
@@ -25,7 +27,8 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_completion_messages,
 )
 from litellm.litellm_core_utils.prompt_templates.factory import (
-    _EMPTY_TEXT_PLACEHOLDER,
+    DEFAULT_USER_CONTINUE_MESSAGE,
+    EMPTY_TEXT_PLACEHOLDER,
     BEDROCK_DOCUMENT_PLACEHOLDER_TEXT,
     THOUGHT_SIGNATURE_SEPARATOR,
     BedrockConverseMessagesProcessor,
@@ -53,6 +56,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     has_tool_with_name,
     llama_2_chat_pt,
     make_valid_bedrock_tool_name,
+    map_system_message_pt,
     ollama_pt,
     parse_mime_type,
     prompt_factory,
@@ -60,6 +64,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     sanitize_anthropic_tool_use_id,
     sanitize_messages_for_tool_calling,
 )
+from litellm.litellm_core_utils.prompt_templates.tool_call_json_repair import MAX_SALVAGED_TOOL_ARGUMENT_OBJECTS
 from litellm.litellm_core_utils.prompt_templates.reasoning_utils import (
     encrypted_reasoning_signature,
 )
@@ -85,6 +90,7 @@ from litellm.types.utils import ChatCompletionMessageToolCall, Function, ModelRe
 from litellm.utils import (
     Rules,
     function_setup,
+    messages_without_foreign_thought_signatures,
     validate_and_fix_openai_messages,
 )
 from litellm.litellm_core_utils.model_cost_table import publish
@@ -210,8 +216,8 @@ def test_encode_tool_call_id_with_signature(thought_signature, expected):
             "function-signature",
         ),
         (
-            {"id": encode_tool_call_id_with_signature("call_123", "embedded-signature")},
-            "embedded-signature",
+            {"id": encode_tool_call_id_with_signature("call_123", "ZW1iZWRkZWQtc2lnbmF0dXJl")},
+            "ZW1iZWRkZWQtc2lnbmF0dXJl",
         ),
         ({}, None),
     ],
@@ -321,7 +327,11 @@ def test_ollama_pt_consecutive_user_messages():
 
 
 def _ollama_tool_turn(*results: object) -> list[dict]:
-    call: Final = {"id": "call_1", "type": "function", "function": {"name": "get_weather", "arguments": '{"city": "Paris"}'}}
+    call: Final = {
+        "id": "call_1",
+        "type": "function",
+        "function": {"name": "get_weather", "arguments": '{"city": "Paris"}'},
+    }
     return [
         {"role": "user", "content": "Weather in Paris?"},
         {"role": "assistant", "content": None, "tool_calls": [call]},
@@ -1078,6 +1088,34 @@ async def test_bedrock_converse_keeps_dropping_redacted_thinking_for_non_claude_
     assert assistant_content == [{"text": "hello"}]
 
 
+CONVERSE_EMPTY_USER_MESSAGES: Final = pytest.mark.parametrize(
+    "empty_user_message",
+    [
+        {"role": "user", "content": []},
+        {"role": "user", "content": None},
+        {"role": "user"},
+        {"role": "user", "content": ""},
+        {"role": "user", "content": [{"type": "text", "text": ""}]},
+    ],
+    ids=["empty-list", "null", "content-key-dropped", "empty-string", "empty-text-block"],
+)
+
+_CONVERSE_TOOL_CALL_TURN: Final = {
+    "role": "assistant",
+    "content": None,
+    "tool_calls": [{"id": "tooluse_1", "type": "function", "function": {"name": "f", "arguments": "{}"}}],
+}
+
+
+async def _converse(messages: Sequence[Mapping[str, object]], use_async: bool) -> Sequence[Mapping[str, object]]:
+    model: Final = "us.anthropic.claude-opus-5-5"
+    if use_async:
+        return await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+            messages=list(messages), model=model, llm_provider="bedrock"
+        )
+    return _bedrock_converse_messages_pt(messages=list(messages), model=model, llm_provider="bedrock")
+
+
 _HIDDEN_MODEL_ARN: Final = "arn:aws:bedrock:us-west-2:123456789012:application-inference-profile/abc123"
 
 
@@ -1087,6 +1125,7 @@ async def _converse_messages(
     base_model: str | None,
     use_async: bool,
     assistant_continue_message: str | None = None,
+    user_continue_message: ChatCompletionUserMessage | None = None,
 ) -> list[dict[str, object]]:
     return (
         await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
@@ -1095,6 +1134,7 @@ async def _converse_messages(
             llm_provider="bedrock",
             base_model=base_model,
             assistant_continue_message=assistant_continue_message,
+            user_continue_message=user_continue_message,
         )
         if use_async
         else _bedrock_converse_messages_pt(
@@ -1103,6 +1143,7 @@ async def _converse_messages(
             llm_provider="bedrock",
             base_model=base_model,
             assistant_continue_message=assistant_continue_message,
+            user_continue_message=user_continue_message,
         )
     )
 
@@ -1113,6 +1154,271 @@ def _assistant_with_thinking(placement: str, block: dict[str, object]) -> dict[s
         if placement == "thinking_blocks"
         else {"role": "assistant", "content": [block, {"type": "text", "text": "hello"}]}
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True])
+@CONVERSE_EMPTY_USER_MESSAGES
+async def test_bedrock_converse_keeps_an_empty_trailing_user_turn(
+    use_async: bool, empty_user_message: Mapping[str, object]
+) -> None:
+    result: Final = await _converse(
+        [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "hello"}, empty_user_message], use_async
+    )
+
+    assert [message["role"] for message in result] == ["user", "assistant", "user"]
+    assert result[-1]["content"] == [{"text": EMPTY_TEXT_PLACEHOLDER}]
+
+
+_ANSWERED_HISTORY: Final[tuple[dict[str, object], ...]] = (
+    {"role": "user", "content": "hi"},
+    {"role": "assistant", "content": "hello"},
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True])
+@pytest.mark.parametrize(
+    "blank_user_message",
+    [
+        {"role": "user", "content": "   "},
+        {"role": "user", "content": [{"type": "text", "text": " \n"}]},
+        {"role": "user", "content": [{"type": "guarded_text", "text": ""}]},
+    ],
+    ids=["whitespace-string", "whitespace-block", "empty-guarded-text"],
+)
+async def test_bedrock_converse_treats_a_blank_trailing_user_turn_as_empty(
+    use_async: bool, blank_user_message: Mapping[str, object]
+) -> None:
+    result: Final = await _converse([*_ANSWERED_HISTORY, blank_user_message], use_async)
+
+    assert result[-1] == {"role": "user", "content": [{"text": EMPTY_TEXT_PLACEHOLDER}]}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True])
+@pytest.mark.parametrize(
+    "model",
+    ["us.amazon.nova-2-lite-v1:0", "us.anthropic.claude-sonnet-4-5-20250929-v1:0", _HIDDEN_MODEL_ARN],
+    ids=["nova", "claude-with-prefill", "hidden-arn"],
+)
+@CONVERSE_EMPTY_USER_MESSAGES
+async def test_bedrock_converse_adds_no_placeholder_for_a_model_that_is_not_known_to_refuse_a_prefill(
+    use_async: bool, model: str, empty_user_message: dict[str, object]
+) -> None:
+    result: Final = await _converse_messages([*_ANSWERED_HISTORY, empty_user_message], model, None, use_async)
+
+    assert [message["role"] for message in result] == ["user", "assistant"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True])
+async def test_bedrock_converse_reads_a_hidden_arn_model_from_base_model_for_the_placeholder(use_async: bool) -> None:
+    result: Final = await _converse_messages(
+        [*_ANSWERED_HISTORY, {"role": "user", "content": None}],
+        _HIDDEN_MODEL_ARN,
+        "anthropic.claude-opus-5-5",
+        use_async,
+    )
+
+    assert result[-1] == {"role": "user", "content": [{"text": EMPTY_TEXT_PLACEHOLDER}]}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True])
+@pytest.mark.parametrize(
+    ("model", "turns"),
+    [
+        ("us.anthropic.claude-sonnet-4-5-20250929-v1:0", (*_ANSWERED_HISTORY, {"role": "user", "content": "   "})),
+        (
+            "us.anthropic.claude-opus-5-5",
+            (
+                *_ANSWERED_HISTORY,
+                {"role": "user", "content": "   "},
+                {"role": "assistant", "content": "again"},
+                {"role": "user", "content": "more"},
+            ),
+        ),
+    ],
+    ids=["model-with-prefill", "before-later-turns"],
+)
+async def test_bedrock_converse_leaves_a_whitespace_string_alone_unless_it_ends_a_request_that_needs_the_placeholder(
+    use_async: bool, model: str, turns: Sequence[dict[str, object]]
+) -> None:
+    result: Final = await _converse_messages(list(turns), model, None, use_async)
+
+    assert {"text": "   "} in result[2]["content"]
+    assert not _carries_the_placeholder(result)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True])
+@pytest.mark.parametrize(
+    "marked_user_message",
+    [
+        {"role": "user", "content": "", "cache_control": {"type": "ephemeral"}},
+        {"role": "user", "content": None, "cache_control": {"type": "ephemeral"}},
+        {"role": "user", "content": [{"type": "text", "text": "", "cache_control": {"type": "ephemeral"}}]},
+    ],
+    ids=["empty-string", "null", "empty-text-block"],
+)
+async def test_bedrock_converse_keeps_the_cache_mark_of_an_empty_trailing_user_turn(
+    use_async: bool, marked_user_message: Mapping[str, object]
+) -> None:
+    result: Final = await _converse([*_ANSWERED_HISTORY, marked_user_message], use_async)
+
+    assert result[-1]["content"] == [{"text": EMPTY_TEXT_PLACEHOLDER}, {"cachePoint": {"type": "default"}}]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True])
+async def test_bedrock_converse_prefers_a_user_continue_message_over_the_placeholder(use_async: bool) -> None:
+    result: Final = await _converse_messages(
+        [*_ANSWERED_HISTORY, {"role": "user", "content": "   "}],
+        "us.anthropic.claude-opus-5-5",
+        None,
+        use_async,
+        user_continue_message={"role": "user", "content": "go on"},
+    )
+
+    assert result[-1] == {"role": "user", "content": [{"text": "go on"}]}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True])
+async def test_bedrock_converse_lets_modify_params_continue_an_empty_trailing_user_turn(
+    use_async: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "modify_params", True)
+
+    result: Final = await _converse_messages(
+        [*_ANSWERED_HISTORY, {"role": "user", "content": "   "}], "us.anthropic.claude-opus-5-5", None, use_async
+    )
+
+    assert result[-1] == {"role": "user", "content": [{"text": DEFAULT_USER_CONTINUE_MESSAGE["content"]}]}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True])
+@pytest.mark.parametrize(
+    "content", ["", "   ", [{"type": "text", "text": ""}]], ids=["empty-string", "whitespace-string", "empty-text-block"]
+)
+async def test_bedrock_converse_fills_a_blank_trailing_user_turn_under_a_guardrail(
+    use_async: bool, content: object
+) -> None:
+    guarded: Final = litellm.AmazonConverseConfig._convert_consecutive_user_messages_to_guarded_text(
+        [*_ANSWERED_HISTORY, {"role": "user", "content": content}],
+        {"guardrailConfig": {"guardrailIdentifier": "guardrail", "guardrailVersion": "1"}},
+    )
+
+    result: Final = await _converse(guarded, use_async)
+
+    assert result[-1] == {"role": "user", "content": [{"text": EMPTY_TEXT_PLACEHOLDER}]}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True])
+@pytest.mark.parametrize("empty_user_first", [True, False], ids=["empty-user-then-tool", "tool-then-empty-user"])
+@CONVERSE_EMPTY_USER_MESSAGES
+async def test_bedrock_converse_empty_user_message_beside_a_tool_result_keeps_the_tool_result_only(
+    use_async: bool, empty_user_first: bool, empty_user_message: Mapping[str, object]
+) -> None:
+    tool_result: Final = {"role": "tool", "tool_call_id": "tooluse_1", "content": "ok"}
+    result: Final = await _converse(
+        [
+            {"role": "user", "content": "hi"},
+            _CONVERSE_TOOL_CALL_TURN,
+            *((empty_user_message, tool_result) if empty_user_first else (tool_result, empty_user_message)),
+        ],
+        use_async,
+    )
+
+    assert [message["role"] for message in result] == ["user", "assistant", "user"]
+    assert [list(block) for block in result[-1]["content"]] == [["toolResult"]]
+
+
+def _carries_the_placeholder(turns: Sequence[Mapping[str, object]]) -> bool:
+    blocks: Final = chain.from_iterable(turn["content"] for turn in turns)
+    return any(block.get("text") == EMPTY_TEXT_PLACEHOLDER for block in blocks)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True])
+@CONVERSE_EMPTY_USER_MESSAGES
+async def test_bedrock_converse_adds_no_placeholder_for_an_empty_user_message_before_later_turns(
+    use_async: bool, empty_user_message: Mapping[str, object]
+) -> None:
+    result: Final = await _converse(
+        [
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "content": "hello"},
+            empty_user_message,
+            {"role": "assistant", "content": "anything else?"},
+            {"role": "user", "content": "no"},
+        ],
+        use_async,
+    )
+
+    assert not _carries_the_placeholder(result)
+    assert result[-1] == {"role": "user", "content": [{"text": "no"}]}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True])
+@pytest.mark.parametrize("tool_output", ["ok", ""], ids=["tool-output", "empty-tool-output"])
+@CONVERSE_EMPTY_USER_MESSAGES
+async def test_bedrock_converse_keeps_a_tool_result_right_after_its_tool_call_across_empty_turns(
+    use_async: bool, tool_output: str, empty_user_message: Mapping[str, object]
+) -> None:
+    result: Final = await _converse(
+        [
+            {"role": "user", "content": "hi"},
+            _CONVERSE_TOOL_CALL_TURN,
+            empty_user_message,
+            {"role": "assistant", "content": ""},
+            {"role": "tool", "tool_call_id": "tooluse_1", "content": tool_output},
+        ],
+        use_async,
+    )
+
+    assert [message["role"] for message in result] == ["user", "assistant", "user"]
+    assert [list(block) for block in result[-1]["content"]] == [["toolResult"]]
+
+
+_CONVERSE_UNSENDABLE_MEDIA_TURN: Final = {
+    "role": "user",
+    "content": [{"type": "input_audio", "input_audio": {"data": "AAAA", "format": "wav"}}],
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True])
+@pytest.mark.parametrize(
+    "trailing_turns",
+    [
+        (_CONVERSE_UNSENDABLE_MEDIA_TURN,),
+        ({"role": "user", "content": ""}, _CONVERSE_UNSENDABLE_MEDIA_TURN),
+    ],
+    ids=["media-only", "empty-then-media"],
+)
+async def test_bedrock_converse_does_not_call_a_media_only_user_turn_empty(
+    use_async: bool, trailing_turns: tuple[Mapping[str, object], ...]
+) -> None:
+    result: Final = await _converse(
+        [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "hello"}, *trailing_turns], use_async
+    )
+
+    assert not _carries_the_placeholder(result)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True])
+async def test_bedrock_converse_adds_no_placeholder_before_a_leading_assistant_turn(use_async: bool) -> None:
+    result: Final = await _converse(
+        [{"role": "assistant", "content": "hello"}, {"role": "user", "content": "hi"}], use_async
+    )
+
+    assert [message["role"] for message in result] == ["assistant", "user"]
 
 
 @pytest.mark.asyncio
@@ -1377,7 +1683,6 @@ def test_anthropic_messages_pt_sends_a_signed_block_once_when_thinking_blocks_ho
     assert result[1] == {"role": "assistant", "content": [signed, redacted, {"type": "text", "text": "hello"}]}
 
 
-
 def test_anthropic_messages_pt_sends_a_block_once_when_two_assistant_messages_carry_it():
     signed: Final = {"type": "thinking", "thinking": "Let me look this up.", "signature": "sig-abc"}
     redacted: Final = {"type": "redacted_thinking", "data": _NATIVE_REDACTED_DATA}
@@ -1396,6 +1701,7 @@ def test_anthropic_messages_pt_sends_a_block_once_when_two_assistant_messages_ca
             {"type": "tool_use", "id": "tooluse_weather_1", "name": "get_weather", "input": {"city": "Paris"}},
         ],
     }
+
 
 @REASONING_PLACEMENTS
 @pytest.mark.parametrize("drop_params", [False, True])
@@ -1641,7 +1947,7 @@ def test_anthropic_messages_pt_preserves_trailing_user_message_with_empty_conten
     )
 
     assert [message["role"] for message in result] == ["user", "assistant", "user"]
-    assert result[-1]["content"] == [{"type": "text", "text": _EMPTY_TEXT_PLACEHOLDER}]
+    assert result[-1]["content"] == [{"type": "text", "text": EMPTY_TEXT_PLACEHOLDER}]
 
 
 @EMPTY_USER_MESSAGES
@@ -1745,7 +2051,7 @@ def test_anthropic_messages_pt_keeps_every_breakpoint_of_a_long_run_of_empty_use
 
     assert (
         result[-1]["content"]
-        == [{"type": "text", "text": _EMPTY_TEXT_PLACEHOLDER, "cache_control": {"type": "ephemeral"}}] * 10_000
+        == [{"type": "text", "text": EMPTY_TEXT_PLACEHOLDER, "cache_control": {"type": "ephemeral"}}] * 10_000
     )
 
 
@@ -2185,7 +2491,11 @@ def test_convert_to_gemini_tool_call_invoke_drops_unusable_arguments_under_drop_
 
     function: Final = {"name": "get_weather", "arguments": arguments}
     message: Final = (
-        {"role": "assistant", "content": None, "tool_calls": [{"id": "call_1", "type": "function", "function": function}]}
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [{"id": "call_1", "type": "function", "function": function}],
+        }
         if shape == "tool_calls"
         else {"role": "assistant", "content": None, "function_call": function}
     )
@@ -2429,10 +2739,11 @@ def test_gemini_tool_media_keeps_vertex_reference_when_inline_data_is_absent(
     ]
 
 
-
 def test_gemini_tool_media_fetch_failure_preserves_tool_text() -> None:
     message: Final = ChatCompletionToolMessage(
-        role="tool", name="lookup", content=[
+        role="tool",
+        name="lookup",
+        content=[
             {"type": "text", "text": '{"ok":true}'},
             {"type": "image_url", "image_url": {"url": "https://8.8.8.8/unavailable.png"}},
         ],
@@ -2441,6 +2752,315 @@ def test_gemini_tool_media_fetch_failure_preserves_tool_text() -> None:
         router.get("https://8.8.8.8/unavailable.png").respond(404)
         result: Final = convert_to_gemini_tool_call_result(message, None, custom_llm_provider="gemini")
     assert result == {"function_response": {"name": "lookup", "response": {"ok": True}}}
+
+
+def _tool_result_with(part: Mapping[str, object]) -> ChatCompletionToolMessage:
+    return cast(
+        ChatCompletionToolMessage,
+        {"role": "tool", "name": "find_clip", "content": [{"type": "text", "text": '{"ok":true}'}, part]},
+    )
+
+
+_MISSING_VIDEO_URL: Final = f"https://8.8.8.8/{uuid.uuid4()}.mp4"
+
+
+@pytest.mark.parametrize("custom_llm_provider", ["gemini", "vertex_ai"])
+@pytest.mark.parametrize(
+    "video_url",
+    [
+        pytest.param(_MISSING_VIDEO_URL, id="link-answering-404"),
+        pytest.param("data:video/mp4;base64", id="data-url-without-data"),
+    ],
+)
+def test_gemini_tool_result_video_that_fails_to_download_is_a_bad_request_unless_drop_params(
+    custom_llm_provider: str, video_url: str
+) -> None:
+    message: Final = _tool_result_with({"type": "video_url", "video_url": {"url": video_url}})
+
+    with respx.mock(assert_all_called=False) as router:
+        router.get(_MISSING_VIDEO_URL).respond(404)
+        with pytest.raises(litellm.BadRequestError, match="Could not download the video in a tool result") as excinfo:
+            convert_to_gemini_tool_call_result(message, None, custom_llm_provider=custom_llm_provider)
+        dropped: Final = convert_to_gemini_tool_call_result(
+            message, None, custom_llm_provider=custom_llm_provider, drop_params=True
+        )
+
+    assert excinfo.value.llm_provider == custom_llm_provider
+    assert dropped == {"function_response": {"name": "find_clip", "response": {"ok": True}}}
+
+
+@pytest.mark.parametrize("custom_llm_provider", ["gemini", "vertex_ai"])
+def test_failed_tool_result_video_download_keeps_its_signed_link_out_of_the_error(custom_llm_provider: str) -> None:
+    signature: Final = uuid.uuid4().hex
+    signed_url: Final = f"https://8.8.8.8/{uuid.uuid4()}.mp4?X-Goog-Signature={signature}"
+    message: Final = _tool_result_with({"type": "video_url", "video_url": {"url": signed_url}})
+
+    with respx.mock as router:
+        router.get(signed_url).respond(404)
+        with pytest.raises(litellm.BadRequestError) as excinfo:
+            convert_to_gemini_tool_call_result(message, None, custom_llm_provider=custom_llm_provider)
+
+    assert signature not in str(excinfo.value)
+    assert signature not in "".join(traceback.format_exception(excinfo.value))
+
+
+@pytest.mark.parametrize(
+    ("part_type", "drop_params"),
+    [pytest.param("video_url", True, id="video-under-drop-params"), pytest.param("image_url", False, id="image")],
+)
+def test_dropped_tool_result_media_keeps_its_signed_link_out_of_the_logs(
+    part_type: str, drop_params: bool, caplog: pytest.LogCaptureFixture
+) -> None:
+    signature: Final = uuid.uuid4().hex
+    signed_url: Final = f"https://8.8.8.8/{uuid.uuid4()}.mp4?X-Goog-Signature={signature}"
+    message: Final = _tool_result_with({"type": part_type, part_type: {"url": signed_url}})
+
+    with respx.mock as router, caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        router.get(signed_url).respond(404)
+        dropped: Final = convert_to_gemini_tool_call_result(
+            message, None, custom_llm_provider="gemini", drop_params=drop_params
+        )
+
+    assert dropped == {"function_response": {"name": "find_clip", "response": {"ok": True}}}
+    assert caplog.records
+    assert signature not in caplog.text
+
+
+_MP4_BYTES: Final = b"\x00\x00\x00\x18ftypmp42\x00\x00\x00\x00mp42isom"
+_HEIC_BYTES: Final = b"\x00\x00\x00\x18ftypheic\x00\x00\x00\x00mif1heic"
+_XAVC_BYTES: Final = b"\x00\x00\x00\x18ftypXAVC\x00\x00\x00\x00XAVCmp42"
+_QUICKTIME_BYTES: Final = b"\x00\x00\x00\x14ftypqt  \x00\x00\x00\x00qt  "
+
+
+@pytest.mark.parametrize(
+    ("part_type", "suffix", "body", "mime_type"),
+    [
+        pytest.param("video_url", ".mp4", _MP4_BYTES, "video/mp4", id="mp4-link"),
+        pytest.param("video_url", "", _MP4_BYTES, "video/mp4", id="mp4-bytes"),
+        pytest.param("video_url", "", _XAVC_BYTES, "video/mp4", id="xavc-bytes"),
+        pytest.param("video_url", "", _QUICKTIME_BYTES, "video/mov", id="quicktime-bytes"),
+        pytest.param("image_url", "", _HEIC_BYTES, "image/heic", id="heic-bytes"),
+    ],
+)
+def test_gemini_tool_result_media_served_as_octet_stream_keeps_its_real_type(
+    part_type: str, suffix: str, body: bytes, mime_type: str
+) -> None:
+    media_url: Final = f"https://8.8.8.8/{uuid.uuid4()}{suffix}"
+    message: Final = _tool_result_with({"type": part_type, part_type: {"url": media_url}})
+
+    with respx.mock as router:
+        router.get(media_url).respond(200, content=body, headers={"content-type": "application/octet-stream"})
+        delivered: Final = convert_to_gemini_tool_call_result(message, None, custom_llm_provider="gemini")
+
+    assert delivered == [
+        {
+            "function_response": {
+                "name": "find_clip",
+                "response": {"ok": True},
+                "parts": [{"inline_data": {"data": base64.b64encode(body).decode(), "mime_type": mime_type}}],
+            }
+        }
+    ]
+
+
+_YOUTUBE_LINK: Final = "https://www.youtube.com/watch?v=aqz-KE-bpKQ"
+_YOUTUBE_TOOL_RESULT: Final = {
+    "role": "tool",
+    "name": "find_clip",
+    "content": [
+        {"type": "text", "text": '{"ok":true}'},
+        {"type": "video_url", "video_url": {"url": _YOUTUBE_LINK}},
+    ],
+}
+
+
+def test_gemini_tool_result_youtube_video_reaches_vertex_by_reference() -> None:
+    with respx.mock:
+        delivered: Final = convert_to_gemini_tool_call_result(
+            _YOUTUBE_TOOL_RESULT, None, custom_llm_provider="vertex_ai"
+        )
+
+    assert delivered == [
+        {
+            "function_response": {
+                "name": "find_clip",
+                "response": {"ok": True},
+                "parts": [{"file_data": {"mime_type": "video/mp4", "file_uri": _YOUTUBE_LINK}}],
+            }
+        }
+    ]
+
+
+def test_gemini_tool_result_youtube_video_on_ai_studio_is_a_bad_request_instead_of_a_page_download() -> None:
+    with respx.mock, pytest.raises(litellm.BadRequestError, match="require inline media data"):
+        convert_to_gemini_tool_call_result(_YOUTUBE_TOOL_RESULT, None, custom_llm_provider="gemini")
+
+
+@pytest.mark.parametrize(
+    "part",
+    [
+        pytest.param({"type": "video_url", "video_url": {"url": _YOUTUBE_LINK}}, id="video_url"),
+        pytest.param({"type": "file", "file": {"file_id": _YOUTUBE_LINK}}, id="file"),
+    ],
+)
+def test_drop_params_drops_a_youtube_link_from_an_ai_studio_tool_result(part: dict[str, object]) -> None:
+    with respx.mock:
+        delivered: Final = convert_to_gemini_tool_call_result(
+            _tool_result_with(part), None, custom_llm_provider="gemini", drop_params=True
+        )
+
+    assert delivered == {"function_response": {"name": "find_clip", "response": {"ok": True}}}
+
+
+_CLIP_WITH_SETTINGS_RESULT: Final = {
+    "role": "tool",
+    "name": "find_clip",
+    "content": [
+        {"type": "text", "text": '{"ok":true}'},
+        {
+            "type": "video_url",
+            "video_url": {"url": "data:video/mp4;base64,AAAAGGZ0eXA=", "detail": "high", "video_metadata": {"fps": 2}},
+        },
+    ],
+}
+
+
+def test_gemini_tool_result_video_carries_its_detail_and_metadata_into_the_function_response() -> None:
+    delivered: Final = convert_to_gemini_tool_call_result(
+        _CLIP_WITH_SETTINGS_RESULT, None, custom_llm_provider="gemini", model="gemini-3.8-flash"
+    )
+
+    assert delivered == [
+        {
+            "function_response": {
+                "name": "find_clip",
+                "response": {"ok": True},
+                "parts": [
+                    {
+                        "inline_data": {"data": "AAAAGGZ0eXA=", "mime_type": "video/mp4"},
+                        "media_resolution": {"level": "MEDIA_RESOLUTION_HIGH"},
+                        "video_metadata": {"fps": 2},
+                    }
+                ],
+            }
+        }
+    ]
+
+
+def test_vertex_tool_result_video_settings_are_a_bad_request_since_vertex_ignores_them() -> None:
+    with pytest.raises(litellm.BadRequestError, match="Vertex ignores detail and video_metadata") as excinfo:
+        convert_to_gemini_tool_call_result(
+            _CLIP_WITH_SETTINGS_RESULT, None, custom_llm_provider="vertex_ai", model="gemini-3.8-flash"
+        )
+
+    assert (excinfo.value.llm_provider, excinfo.value.model) == ("vertex_ai", "gemini-3.8-flash")
+
+
+@pytest.mark.parametrize(
+    "settings",
+    [pytest.param({"detail": "auto"}, id="detail-auto"), pytest.param({"video_metadata": {"label": "x"}}, id="no-op-metadata")],
+)
+def test_vertex_tool_result_video_settings_that_change_nothing_are_sent_without_error(
+    settings: dict[str, object],
+) -> None:
+    delivered: Final = convert_to_gemini_tool_call_result(
+        _tool_result_with({"type": "video_url", "video_url": {"url": "data:video/mp4;base64,AAAAGGZ0eXA=", **settings}}),
+        None,
+        custom_llm_provider="vertex_ai",
+        model="gemini-3.8-flash",
+    )
+
+    assert delivered == [
+        {
+            "function_response": {
+                "name": "find_clip",
+                "response": {"ok": True},
+                "parts": [{"inline_data": {"data": "AAAAGGZ0eXA=", "mime_type": "video/mp4"}}],
+            }
+        }
+    ]
+
+
+def test_drop_params_sends_a_vertex_tool_result_video_without_its_settings() -> None:
+    delivered: Final = convert_to_gemini_tool_call_result(
+        _CLIP_WITH_SETTINGS_RESULT, None, custom_llm_provider="vertex_ai", model="gemini-3.8-flash", drop_params=True
+    )
+
+    assert delivered == [
+        {
+            "function_response": {
+                "name": "find_clip",
+                "response": {"ok": True},
+                "parts": [{"inline_data": {"data": "AAAAGGZ0eXA=", "mime_type": "video/mp4"}}],
+            }
+        }
+    ]
+
+
+def test_gemini_tool_result_image_carries_its_detail_into_the_function_response() -> None:
+    delivered: Final = convert_to_gemini_tool_call_result(
+        {
+            "role": "tool",
+            "name": "find_clip",
+            "content": [{"type": "image_url", "image_url": {"url": "data:image/png;base64,iVBORw0KGgo=", "detail": "low"}}],
+        },
+        None,
+        custom_llm_provider="gemini",
+        model="gemini-3.8-flash",
+    )
+
+    assert delivered[0]["function_response"]["parts"] == [
+        {
+            "inline_data": {"data": "iVBORw0KGgo=", "mime_type": "image/png"},
+            "media_resolution": {"level": "MEDIA_RESOLUTION_LOW"},
+        }
+    ]
+
+
+@pytest.mark.parametrize("custom_llm_provider", ["gemini", "vertex_ai"])
+def test_gemini_tool_result_video_url_linking_a_web_page_is_a_bad_request_instead_of_sending_html(
+    monkeypatch: pytest.MonkeyPatch, custom_llm_provider: str
+) -> None:
+    monkeypatch.setattr(litellm, "user_url_validation", False)
+    page_url: Final = f"https://videos.example/watch/{uuid.uuid4()}"
+    page_result: Final = {
+        "role": "tool",
+        "name": "find_clip",
+        "content": [{"type": "text", "text": '{"ok":true}'}, {"type": "video_url", "video_url": {"url": page_url}}],
+    }
+
+    with respx.mock:
+        respx.get(page_url).mock(
+            return_value=httpx.Response(200, text="<html>clip</html>", headers={"content-type": "text/html"})
+        )
+        with pytest.raises(litellm.BadRequestError, match="but it holds text/html") as excinfo:
+            convert_to_gemini_tool_call_result(page_result, None, custom_llm_provider=custom_llm_provider)
+        dropped: Final = convert_to_gemini_tool_call_result(
+            page_result, None, custom_llm_provider=custom_llm_provider, drop_params=True
+        )
+
+    assert excinfo.value.llm_provider == custom_llm_provider
+    assert dropped == {"function_response": {"name": "find_clip", "response": {"ok": True}}}
+
+
+def test_gemini_tool_result_video_keeps_its_settings_beside_the_function_response() -> None:
+    delivered: Final = convert_to_gemini_tool_call_result(
+        _CLIP_WITH_SETTINGS_RESULT,
+        None,
+        supports_multimodal_function_responses=False,
+        custom_llm_provider="gemini",
+        model="gemini-3.8-flash",
+    )
+
+    assert delivered == [
+        {"function_response": {"name": "find_clip", "response": {"ok": True}}},
+        {
+            "inline_data": {"data": "AAAAGGZ0eXA=", "mime_type": "video/mp4"},
+            "media_resolution": {"level": "MEDIA_RESOLUTION_HIGH"},
+            "video_metadata": {"fps": 2},
+        },
+    ]
+
 
 def test_convert_gemini_tool_call_result_with_anthropic_image_block():
     """
@@ -2865,6 +3485,482 @@ def test_bedrock_tools_pt_sends_malformed_parameters_as_an_object_schema(paramet
     assert "$defs" not in input_schema
 
 
+_ADDRESS_SCHEMA: Final = {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]}
+
+
+@pytest.mark.parametrize(
+    ("legacy_defs", "ref"),
+    [
+        ({"definitions": {"Address": _ADDRESS_SCHEMA}}, "#/definitions/Address"),
+        ({"components": {"schemas": {"Address": _ADDRESS_SCHEMA}}}, "#/components/schemas/Address"),
+    ],
+    ids=["definitions", "components_schemas"],
+)
+def test_bedrock_tools_pt_inlines_legacy_definitions_for_claude(legacy_defs: dict[str, object], ref: str) -> None:
+    parameters: Final = {"type": "object", "properties": {"home": {"$ref": ref}}, "required": ["home"], **legacy_defs}
+    tools: Final = [{"type": "function", "function": {"name": "save_address", "parameters": parameters}}]
+
+    sent: Final = _bedrock_tools_pt(tools, model="us.anthropic.claude-sonnet-5-5")[0]["toolSpec"]["inputSchema"]["json"]
+
+    assert sent == {"type": "object", "properties": {"home": _ADDRESS_SCHEMA}, "required": ["home"]}
+
+
+@pytest.mark.parametrize(
+    "legacy_defs",
+    [{"definitions": 5}, {"components": "openapi", "definitions": {"Address": _ADDRESS_SCHEMA}}],
+    ids=["definitions_not_a_map", "components_not_a_map"],
+)
+def test_bedrock_tools_pt_drops_a_malformed_legacy_defs_block_for_claude(legacy_defs: dict[str, object]) -> None:
+    parameters: Final = {"type": "object", "properties": {"name": {"type": "string"}}, **legacy_defs}
+    tools: Final = [{"type": "function", "function": {"name": "save_name", "parameters": parameters}}]
+
+    sent: Final = _bedrock_tools_pt(tools, model="us.anthropic.claude-sonnet-5-5")[0]["toolSpec"]["inputSchema"]["json"]
+
+    assert sent == {"type": "object", "properties": {"name": {"type": "string"}}, "required": []}
+
+
+def test_bedrock_tools_pt_sends_strict_claude_tools_with_their_defs() -> None:
+    parameters: Final = {
+        "type": "object",
+        "properties": {"home": {"$ref": "#/$defs/Address"}},
+        "required": ["home"],
+        "additionalProperties": False,
+        "$defs": {"Address": {**_ADDRESS_SCHEMA, "additionalProperties": False}},
+    }
+    tools: Final = [
+        {"type": "function", "function": {"name": "save_address", "strict": True, "parameters": parameters}}
+    ]
+
+    tool_spec: Final = _bedrock_tools_pt(tools, model="us.anthropic.claude-haiku-4-5-20251001-v1:0")[0]["toolSpec"]
+
+    assert tool_spec["strict"] is True
+    assert tool_spec["inputSchema"]["json"] == parameters
+
+
+def test_bedrock_tools_pt_resolves_a_root_ref_for_claude_and_keeps_its_defs() -> None:
+    node: Final = {
+        "type": "object",
+        "properties": {"name": {"type": "string"}, "children": {"type": "array", "items": {"$ref": "#/$defs/Node"}}},
+        "required": ["name", "children"],
+    }
+    tools: Final = [
+        {
+            "type": "function",
+            "function": {"name": "save_tree", "parameters": {"$defs": {"Node": node}, "$ref": "#/$defs/Node"}},
+        }
+    ]
+
+    sent: Final = _bedrock_tools_pt(tools, model="us.anthropic.claude-sonnet-5-5")[0]["toolSpec"]["inputSchema"]["json"]
+
+    assert sent == {**node, "$defs": {"Node": node}}
+
+
+def test_bedrock_tools_pt_follows_a_chain_of_root_refs_for_claude() -> None:
+    defs: Final = {"Alias": {"$ref": "#/$defs/Address"}, "Address": _ADDRESS_SCHEMA}
+    tools: Final = [
+        {"type": "function", "function": {"name": "save_address", "parameters": {"$ref": "#/$defs/Alias", "$defs": defs}}}
+    ]
+
+    sent: Final = _bedrock_tools_pt(tools, model="us.anthropic.claude-sonnet-5-5")[0]["toolSpec"]["inputSchema"]["json"]
+
+    assert sent == _ADDRESS_SCHEMA
+
+
+@pytest.mark.parametrize("hops", [32, 40])
+def test_bedrock_tools_pt_keeps_the_arguments_of_a_root_ref_chain_past_the_hop_limit_for_claude(hops: int) -> None:
+    aliases: Final = {f"Alias{i}": {"$ref": f"#/$defs/Alias{i + 1}"} for i in range(hops)}
+    defs: Final = {**aliases, f"Alias{hops}": _ADDRESS_SCHEMA}
+    tools: Final = [
+        {"type": "function", "function": {"name": "save_address", "parameters": {"$ref": "#/$defs/Alias0", "$defs": defs}}}
+    ]
+
+    sent: Final = _bedrock_tools_pt(tools, model="us.anthropic.claude-sonnet-5-5")[0]["toolSpec"]["inputSchema"]["json"]
+
+    assert sent["properties"] == _ADDRESS_SCHEMA["properties"]
+    assert sent["required"] == _ADDRESS_SCHEMA["required"]
+
+
+_ORDER_SCHEMA: Final = {
+    "type": "object",
+    "properties": {"street": {"type": "string"}, "city": {"type": "string"}},
+    "required": ["street", "city"],
+}
+
+
+@pytest.mark.parametrize(
+    ("siblings", "expected"),
+    [
+        (
+            {"type": "object", "properties": {}, "additionalProperties": False},
+            {**_ORDER_SCHEMA, "additionalProperties": False},
+        ),
+        (
+            {
+                "properties": {"city": {"type": "string", "enum": ["Paris"]}, "note": {"type": "string"}},
+                "required": ["note"],
+            },
+            {
+                "type": "object",
+                "properties": {
+                    "street": {"type": "string"},
+                    "city": {"type": "string", "enum": ["Paris"]},
+                    "note": {"type": "string"},
+                },
+                "required": ["street", "city", "note"],
+            },
+        ),
+    ],
+    ids=["mcp_normalized_empty_properties", "root_properties_win"],
+)
+def test_bedrock_tools_pt_merges_root_ref_siblings_into_its_target_for_claude(
+    siblings: dict[str, object], expected: dict[str, object]
+) -> None:
+    parameters: Final = {"$ref": "#/$defs/Order", "$defs": {"Order": _ORDER_SCHEMA}, **siblings}
+    tools: Final = [{"type": "function", "function": {"name": "ship_order", "strict": True, "parameters": parameters}}]
+
+    tool_spec: Final = _bedrock_tools_pt(tools, model="us.anthropic.claude-haiku-4-5-20251001-v1:0")[0]["toolSpec"]
+
+    assert tool_spec["inputSchema"]["json"] == expected
+
+
+def test_bedrock_tools_pt_sends_claude_only_the_defs_its_refs_reach() -> None:
+    defs: Final = {
+        "Home": {"type": "object", "properties": {"address": {"$ref": "#/$defs/Address"}}},
+        "Address": _ADDRESS_SCHEMA,
+        "Place": _ORDER_SCHEMA,
+        "Unused": {"type": "string"},
+    }
+    properties: Final = {
+        "home": {"$ref": "#/$defs/Home"},
+        "city": {"$ref": "#/$defs/Place/properties/city"},
+        "same_home": {"$ref": "#/properties/home"},
+        "parent": {"$ref": "#"},
+    }
+    parameters: Final = {"type": "object", "properties": properties, "$defs": defs}
+    tools: Final = [{"type": "function", "function": {"name": "save_home", "parameters": parameters}}]
+
+    sent: Final = _bedrock_tools_pt(tools, model="us.anthropic.claude-sonnet-5-5")[0]["toolSpec"]["inputSchema"]["json"]
+
+    assert sent["$defs"] == {"Home": defs["Home"], "Address": _ADDRESS_SCHEMA, "Place": _ORDER_SCHEMA}
+
+
+def test_bedrock_tools_pt_keeps_a_claude_def_whose_name_its_ref_escapes() -> None:
+    defs: Final = {"a/b c~1": _ADDRESS_SCHEMA, "Unused": {"type": "string"}}
+    parameters: Final = {"type": "object", "properties": {"home": {"$ref": "#/$defs/a~1b%20c~01"}}, "$defs": defs}
+    tools: Final = [{"type": "function", "function": {"name": "save_home", "parameters": parameters}}]
+
+    sent: Final = _bedrock_tools_pt(tools, model="us.anthropic.claude-sonnet-5-5")[0]["toolSpec"]["inputSchema"]["json"]
+
+    assert sent["$defs"] == {"a/b c~1": _ADDRESS_SCHEMA}
+
+
+@pytest.mark.parametrize(
+    "home",
+    [{"$ref": "#home"}, {"$dynamicRef": "#home"}, {"$ref": "#/$defs"}],
+    ids=["anchor_ref", "dynamic_ref", "whole_defs_ref"],
+)
+def test_bedrock_tools_pt_keeps_every_claude_def_when_a_ref_may_reach_one_by_other_means(
+    home: dict[str, object],
+) -> None:
+    defs: Final = {"Home": {"$anchor": "home", **_ADDRESS_SCHEMA}, "Spare": {"type": "string"}}
+    parameters: Final = {"type": "object", "properties": {"home": home}, "$defs": defs}
+    tools: Final = [{"type": "function", "function": {"name": "save_home", "parameters": parameters}}]
+
+    sent: Final = _bedrock_tools_pt(tools, model="us.anthropic.claude-sonnet-5-5")[0]["toolSpec"]["inputSchema"]["json"]
+
+    assert sent["$defs"] == defs
+
+
+def _with_root_defs_inlined(schema: object, defs: Mapping[str, object]) -> object:
+    if isinstance(schema, list):
+        return [_with_root_defs_inlined(item, defs) for item in schema]
+    if not isinstance(schema, dict):
+        return schema
+    ref: Final = schema.get("$ref")
+    if isinstance(ref, str) and ref.startswith("#/$defs/"):
+        return _with_root_defs_inlined(defs[ref.removeprefix("#/$defs/")], defs)
+    return {key: _with_root_defs_inlined(value, defs) for key, value in schema.items()}
+
+
+_SHIP_TO: Final = {"type": "object", "properties": {"to": {"$ref": "#/$defs/Address"}}, "required": ["to"]}
+_ZIP_ONLY: Final = {"type": "object", "properties": {"zip": {"type": "string"}}, "required": ["zip"]}
+
+
+@pytest.mark.parametrize(
+    "parameters",
+    [
+        {"$ref": "#/definitions/Ship", "definitions": {"Ship": _SHIP_TO}, "$defs": {"Address": _ADDRESS_SCHEMA}},
+        {"$ref": "#/$defs/Ship", "$defs": {"Ship": {**_SHIP_TO, "$defs": {"Address": _ADDRESS_SCHEMA}}}},
+        {
+            "type": "object",
+            "properties": {"to": {"$ref": "#/%24defs/Address"}},
+            "required": ["to"],
+            "$defs": {"Address": _ADDRESS_SCHEMA},
+        },
+        {
+            "type": "object",
+            "properties": {"to": {"$ref": "#/definitions/Address"}},
+            "required": ["to"],
+            "$defs": {"Address": _ADDRESS_SCHEMA},
+        },
+        {
+            "type": "object",
+            "properties": {"ship": {"$ref": "#/definitions/Ship"}},
+            "required": ["ship"],
+            "definitions": {"Ship": _SHIP_TO},
+            "$defs": {"Address": _ADDRESS_SCHEMA},
+        },
+        {
+            "type": "object",
+            "properties": {"ship": {**_SHIP_TO, "$defs": {"Address": _ADDRESS_SCHEMA}}},
+            "required": ["ship"],
+            "$defs": {"Unused": {"type": "string"}},
+        },
+        {
+            "type": "object",
+            "properties": {
+                "ship": {
+                    "type": "object",
+                    "properties": {"gift": {"type": "boolean"}},
+                    "dependencies": {"gift": {"properties": {"to": {"$ref": "#/$defs/Address"}}}},
+                }
+            },
+            "$defs": {"Address": _ADDRESS_SCHEMA},
+        },
+        {
+            "type": "object",
+            "properties": {"ship": {**_SHIP_TO, "$defs": {"Address": _ZIP_ONLY}}},
+            "required": ["ship"],
+            "$defs": {"Address": _ADDRESS_SCHEMA},
+        },
+        {
+            "type": "object",
+            "properties": {"ship": {"$ref": "#/$defs/Ship"}},
+            "required": ["ship"],
+            "$defs": {"Ship": {**_SHIP_TO, "$defs": {"Address": _ZIP_ONLY}}, "Address": _ADDRESS_SCHEMA},
+        },
+        {"$ref": "/$defs/Ship", "$defs": {"Ship": _SHIP_TO, "Address": _ADDRESS_SCHEMA}},
+        {
+            "type": "object",
+            "properties": {"to": {"$ref": "/$defs/Address"}},
+            "required": ["to"],
+            "$defs": {"Address": _ADDRESS_SCHEMA},
+        },
+    ],
+    ids=[
+        "root_ref_into_definitions_beside_defs",
+        "root_ref_target_with_its_own_defs",
+        "percent_encoded_defs_pointer",
+        "definitions_pointer_into_root_defs",
+        "property_ref_into_definitions_that_refs_defs",
+        "property_with_its_own_defs",
+        "ref_under_dependencies",
+        "property_defs_shadowing_a_root_name",
+        "defs_entry_shadowing_a_root_name",
+        "root_ref_without_a_leading_hash",
+        "property_ref_without_a_leading_hash",
+    ],
+)
+def test_bedrock_tools_pt_sends_claude_a_schema_that_means_what_full_inlining_does(
+    parameters: dict[str, object],
+) -> None:
+    tools: Final = [{"type": "function", "function": {"name": "ship", "parameters": parameters}}]
+
+    claude: Final = _bedrock_tools_pt(deepcopy(tools), model="us.anthropic.claude-sonnet-5-5")[0]["toolSpec"]
+    inlined: Final = _bedrock_tools_pt(deepcopy(tools), model="us.amazon.nova-2-lite-v1:0")[0]["toolSpec"]
+
+    claude_schema: Final = claude["inputSchema"]["json"]
+    claude_body: Final = {key: value for key, value in claude_schema.items() if key != "$defs"}
+    assert _with_root_defs_inlined(claude_body, claude_schema.get("$defs", {})) == inlined["inputSchema"]["json"]
+
+
+def test_bedrock_tools_pt_spends_no_inlining_budget_on_unused_claude_defs() -> None:
+    big: Final = {"type": "string", "description": "x" * 1_000_000}
+    unused: Final = {f"Unused{i}": {"$ref": "#/definitions/Big"} for i in range(11)}
+    parameters: Final = {
+        "type": "object",
+        "properties": {"a": {"type": "string"}},
+        "required": ["a"],
+        "$defs": unused,
+        "definitions": {"Big": big},
+    }
+    tools: Final = [{"type": "function", "function": {"name": "t", "parameters": parameters}}]
+
+    sent: Final = _bedrock_tools_pt(tools, model="us.anthropic.claude-sonnet-5-5")[0]["toolSpec"]["inputSchema"]["json"]
+
+    assert sent == {"type": "object", "properties": {"a": {"type": "string"}}, "required": ["a"]}
+
+
+def test_bedrock_tools_pt_spends_no_inlining_budget_on_claude_defs_only_unused_definitions_reach() -> None:
+    big: Final = {"type": "string", "description": "x" * 1_000_000}
+    heavy: Final = {"type": "object", "properties": {f"p{i}": {"$ref": "#/definitions/Big"} for i in range(11)}}
+    parameters: Final = {
+        "type": "object",
+        "properties": {"a": {"type": "string"}},
+        "required": ["a"],
+        "$defs": {"Heavy": heavy},
+        "definitions": {"Big": big, "Unused": {"$ref": "#/$defs/Heavy"}},
+    }
+    tools: Final = [{"type": "function", "function": {"name": "t", "parameters": parameters}}]
+
+    sent: Final = _bedrock_tools_pt(tools, model="us.anthropic.claude-sonnet-5-5")[0]["toolSpec"]["inputSchema"]["json"]
+
+    assert sent == {"type": "object", "properties": {"a": {"type": "string"}}, "required": ["a"]}
+
+
+@pytest.mark.parametrize("model", ["us.anthropic.claude-sonnet-5-5", "us.amazon.nova-2-lite-v1:0"])
+def test_bedrock_tools_pt_spends_no_inlining_budget_on_unused_legacy_definitions(model: str) -> None:
+    big: Final = {"type": "string", "description": "x" * 1_000_000}
+    unused: Final = {f"Unused{i}": {"$ref": "#/definitions/Big"} for i in range(11)}
+    parameters: Final = {
+        "type": "object",
+        "properties": {"a": {"type": "string"}},
+        "required": ["a"],
+        "definitions": {"Big": big, **unused},
+    }
+    tools: Final = [{"type": "function", "function": {"name": "t", "parameters": parameters}}]
+
+    sent: Final = _bedrock_tools_pt(tools, model=model)[0]["toolSpec"]["inputSchema"]["json"]
+
+    assert sent == {"type": "object", "properties": {"a": {"type": "string"}}, "required": ["a"]}
+
+
+def test_bedrock_tools_pt_resolves_a_root_ref_targets_refs_to_its_own_defs_for_claude() -> None:
+    zip_only: Final = {"type": "object", "properties": {"zip": {"type": "string"}}, "required": ["zip"]}
+    request: Final = {
+        "type": "object",
+        "properties": {"to": {"$ref": "#/$defs/Address"}},
+        "required": ["to"],
+        "$defs": {"Address": zip_only},
+    }
+    parameters: Final = {"$ref": "#/$defs/Request", "$defs": {"Request": request, "Address": _ADDRESS_SCHEMA}}
+    tools: Final = [{"type": "function", "function": {"name": "send", "parameters": parameters}}]
+
+    sent_to_claude: Final = _bedrock_tools_pt(deepcopy(tools), model="us.anthropic.claude-sonnet-5-5")
+    sent_to_nova: Final = _bedrock_tools_pt(deepcopy(tools), model="us.amazon.nova-2-lite-v1:0")
+
+    assert sent_to_claude[0]["toolSpec"]["inputSchema"]["json"]["properties"] == {"to": zip_only}
+    assert sent_to_claude == sent_to_nova
+
+
+def test_bedrock_tools_pt_keeps_defs_a_root_ref_target_repeats_unchanged_for_claude() -> None:
+    request: Final = {
+        "type": "object",
+        "properties": {"to": {"$ref": "#/$defs/Address"}},
+        "required": ["to"],
+        "$defs": {"Address": _ADDRESS_SCHEMA},
+    }
+    parameters: Final = {"$ref": "#/$defs/Request", "$defs": {"Request": request, "Address": _ADDRESS_SCHEMA}}
+    tools: Final = [{"type": "function", "function": {"name": "send", "parameters": parameters}}]
+
+    sent: Final = _bedrock_tools_pt(tools, model="us.anthropic.claude-sonnet-5-5")[0]["toolSpec"]["inputSchema"]["json"]
+
+    assert sent == {
+        "type": "object",
+        "properties": {"to": {"$ref": "#/$defs/Address"}},
+        "required": ["to"],
+        "$defs": {"Address": _ADDRESS_SCHEMA},
+    }
+
+
+def test_bedrock_tools_pt_sends_claude_tools_whose_properties_have_non_string_keys() -> None:
+    parameters: Final = {
+        "type": "object",
+        "properties": {1: {"type": "string"}, "home": {"$ref": "#/$defs/Address"}},
+        "$defs": {"Address": _ADDRESS_SCHEMA},
+    }
+    tools: Final = [{"type": "function", "function": {"name": "t", "parameters": parameters}}]
+
+    sent: Final = _bedrock_tools_pt(tools, model="us.anthropic.claude-sonnet-5-5")[0]["toolSpec"]["inputSchema"]["json"]
+
+    assert sent["properties"] == {1: {"type": "string"}, "home": {"$ref": "#/$defs/Address"}}
+    assert sent["$defs"] == {"Address": _ADDRESS_SCHEMA}
+
+
+def test_bedrock_tools_pt_inlines_boolean_definitions_as_the_schemas_they_mean() -> None:
+    parameters: Final = {
+        "type": "object",
+        "properties": {"anything": {"$ref": "#/$defs/Anything"}, "nothing": {"$ref": "#/$defs/Nothing"}},
+        "$defs": {"Anything": True, "Nothing": False},
+    }
+    tools: Final = [{"type": "function", "function": {"name": "t", "parameters": parameters}}]
+
+    sent: Final = _bedrock_tools_pt(tools, model="us.amazon.nova-2-lite-v1:0")[0]["toolSpec"]["inputSchema"]["json"]
+
+    assert sent["properties"] == {"anything": {}, "nothing": {"not": {}}}
+
+
+def test_bedrock_tools_pt_keeps_defs_for_claude_behind_any_region_prefix() -> None:
+    parameters: Final = {
+        "type": "object",
+        "properties": {"to": {"$ref": "#/$defs/Address"}},
+        "required": ["to"],
+        "$defs": {"Address": _ADDRESS_SCHEMA},
+    }
+    tools: Final = [{"type": "function", "function": {"name": "ship", "parameters": deepcopy(parameters)}}]
+
+    sent: Final = _bedrock_tools_pt(tools, model="ca.anthropic.claude-sonnet-5-5")[0]["toolSpec"]["inputSchema"]["json"]
+
+    assert sent == parameters
+
+
+def test_bedrock_tools_pt_sends_no_defs_to_models_that_need_inlining() -> None:
+    parameters: Final = {"$ref": "#/$defs/Ship", "$defs": {"Ship": {**_SHIP_TO, "$defs": {"Address": _ADDRESS_SCHEMA}}}}
+    tools: Final = [{"type": "function", "function": {"name": "ship", "parameters": parameters}}]
+
+    sent: Final = _bedrock_tools_pt(tools, model="us.amazon.nova-2-lite-v1:0")[0]["toolSpec"]["inputSchema"]["json"]
+
+    assert sent == {"type": "object", "properties": {"to": _ADDRESS_SCHEMA}, "required": ["to"]}
+
+
+def test_bedrock_tools_pt_inlines_legacy_refs_under_a_root_defs_ref_for_claude() -> None:
+    defs: Final = {
+        "Home": {"type": "object", "properties": {"address": {"$ref": "#/definitions/Address"}}, "required": ["address"]}
+    }
+    parameters: Final = {"$ref": "#/$defs/Home", "$defs": defs, "definitions": {"Address": _ADDRESS_SCHEMA}}
+    tools: Final = [{"type": "function", "function": {"name": "save_home", "parameters": parameters}}]
+
+    sent: Final = _bedrock_tools_pt(tools, model="us.anthropic.claude-sonnet-5-5")[0]["toolSpec"]["inputSchema"]["json"]
+
+    assert sent == {"type": "object", "properties": {"address": _ADDRESS_SCHEMA}, "required": ["address"]}
+
+
+def test_bedrock_tools_pt_inlines_only_legacy_refs_for_claude() -> None:
+    parameters: Final = {
+        "type": "object",
+        "properties": {"home": {"$ref": "#/definitions/Address"}, "work": {"$ref": "#/$defs/Address"}},
+        "required": ["home", "work"],
+        "definitions": {"Address": _ADDRESS_SCHEMA},
+        "$defs": {"Address": {"type": "string"}},
+    }
+    tools: Final = [{"type": "function", "function": {"name": "save_addresses", "parameters": parameters}}]
+
+    sent: Final = _bedrock_tools_pt(tools, model="us.anthropic.claude-sonnet-5-5")[0]["toolSpec"]["inputSchema"]["json"]
+
+    assert sent == {
+        "type": "object",
+        "properties": {"home": _ADDRESS_SCHEMA, "work": {"$ref": "#/$defs/Address"}},
+        "required": ["home", "work"],
+        "$defs": {"Address": {"type": "string"}},
+    }
+
+
+def test_bedrock_tools_pt_keeps_claude_defs_refs_beside_an_empty_definitions_block() -> None:
+    depth: Final = 17
+    branches: Final = {
+        f"L{i}": {"type": "object", "properties": {"left": {"$ref": f"#/$defs/L{i + 1}"}, "right": {"$ref": f"#/$defs/L{i + 1}"}}}
+        for i in range(depth)
+    }
+    defs: Final = {**branches, f"L{depth}": {"type": "string"}}
+    parameters: Final = {"type": "object", "properties": {"root": {"$ref": "#/$defs/L0"}}, "$defs": defs, "definitions": {}}
+    tools: Final = [{"type": "function", "function": {"name": "tree", "parameters": parameters}}]
+
+    sent: Final = _bedrock_tools_pt(tools, model="us.anthropic.claude-sonnet-5-5")[0]["toolSpec"]["inputSchema"]["json"]
+
+    assert sent["properties"] == {"root": {"$ref": "#/$defs/L0"}}
+    assert sent["$defs"] == defs
+
+
 def test_bedrock_tools_pt_strict_parameter():
     """Regression for strict tools on the Bedrock Converse path.
 
@@ -2985,6 +4081,16 @@ def test_bedrock_image_processor_content_type_fallback_application_octet_stream(
 
     assert content_type == "image/gif"
     assert base64_bytes == base64.b64encode(gif_content).decode("utf-8")
+
+
+def test_bedrock_sends_an_mp4_link_served_as_octet_stream_as_a_video_block() -> None:
+    video_url: Final = f"https://8.8.8.8/{uuid.uuid4()}"
+
+    with respx.mock as router:
+        router.get(video_url).respond(200, content=_MP4_BYTES, headers={"content-type": "application/octet-stream"})
+        block: Final = BedrockImageProcessor.process_image_sync(video_url)
+
+    assert block == {"video": {"source": {"bytes": base64.b64encode(_MP4_BYTES).decode()}, "format": "mp4"}}
 
 
 def test_bedrock_image_processor_content_type_with_query_params():
@@ -3687,40 +4793,70 @@ def test_bedrock_converse_tool_result_s3_media_keeps_its_bucket_owner(part: Mapp
     ]
 
 
-@pytest.mark.parametrize(
-    "file, expected_media",
-    [
-        pytest.param(
-            {"file_id": "s3://media-bucket/clips/demo.mp4"},
-            [{"video": {"format": "mp4", "source": _s3_source("s3://media-bucket/clips/demo.mp4")}}],
-            id="s3-video-is-forwarded",
-        ),
-        pytest.param(
-            {"file_data": "data:video/mp4;base64,AAAAGGZ0eXBtcDQy"},
-            [],
-            id="inline-video-is-dropped",
-        ),
-    ],
+_OCTET_STREAM_MP4_URL: Final = "https://8.8.8.8/clip"
+_NON_S3_TOOL_RESULT_VIDEOS: Final = (
+    pytest.param({"type": "file", "file": {"file_data": "data:video/mp4;base64,AAAAGGZ0eXBtcDQy"}}, id="inline-file"),
+    pytest.param({"type": "image_url", "image_url": {"url": _OCTET_STREAM_MP4_URL}}, id="octet-stream-mp4-link"),
 )
-def test_bedrock_converse_tool_result_video_is_forwarded_only_from_s3(
-    file: Mapping[str, object], expected_media: list[Mapping[str, object]]
-):
+
+
+async def _converse_tool_result_content(
+    part: Mapping[str, object], run_async: bool, drop_params: bool
+) -> Sequence[Mapping[str, object]]:
     messages: Final = [
         {"role": "user", "content": "Describe the clip."},
         {
             "tool_call_id": "tooluse_video_1",
             "role": "tool",
             "name": "fetch_clip",
-            "content": [{"type": "text", "text": "clip:"}, {"type": "file", "file": file}],
+            "content": [{"type": "text", "text": "clip:"}, part],
         },
     ]
-
-    with respx.mock:
-        converted: Final = _bedrock_converse_messages_pt(
-            messages=messages, model=_S3_MEDIA_MODEL, llm_provider="bedrock"
+    with respx.mock(assert_all_called=False) as router:
+        router.get(_OCTET_STREAM_MP4_URL).respond(
+            200, content=_MP4_BYTES, headers={"content-type": "application/octet-stream"}
         )
+        converted: Final = (
+            await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+                messages=messages, model=_S3_MEDIA_MODEL, llm_provider="bedrock", drop_params=drop_params
+            )
+            if run_async
+            else _bedrock_converse_messages_pt(
+                messages=messages, model=_S3_MEDIA_MODEL, llm_provider="bedrock", drop_params=drop_params
+            )
+        )
+    return converted[-1]["content"][-1]["toolResult"]["content"]
 
-    assert converted[-1]["content"][-1]["toolResult"]["content"] == [{"text": "clip:"}, *expected_media]
+
+@pytest.mark.parametrize("run_async", [False, True], ids=["sync", "async"])
+async def test_bedrock_converse_tool_result_s3_video_is_forwarded(run_async: bool):
+    content: Final = await _converse_tool_result_content(
+        {"type": "file", "file": {"file_id": "s3://media-bucket/clips/demo.mp4"}}, run_async, drop_params=False
+    )
+
+    assert content == [
+        {"text": "clip:"},
+        {"video": {"format": "mp4", "source": _s3_source("s3://media-bucket/clips/demo.mp4")}},
+    ]
+
+
+@pytest.mark.parametrize("run_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize("part", _NON_S3_TOOL_RESULT_VIDEOS)
+async def test_bedrock_converse_tool_result_video_not_on_s3_is_a_bad_request(
+    part: Mapping[str, object], run_async: bool
+):
+    with pytest.raises(litellm.BadRequestError) as excinfo:
+        await _converse_tool_result_content(part, run_async, drop_params=False)
+
+    assert "drop_params=True" in excinfo.value.message
+
+
+@pytest.mark.parametrize("run_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize("part", _NON_S3_TOOL_RESULT_VIDEOS)
+async def test_drop_params_drops_a_bedrock_tool_result_video_not_on_s3(part: Mapping[str, object], run_async: bool):
+    content: Final = await _converse_tool_result_content(part, run_async, drop_params=True)
+
+    assert content == [{"text": "clip:"}]
 
 
 @pytest.mark.parametrize("bucket_owner", [111122223333, ""], ids=["int", "empty-string"])
@@ -6749,181 +7885,74 @@ def test_empty_content():
     )
 
 
-@pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
-def test_thought_signature_removal_for_non_gemini():
-    """
-    Test that thought signatures are removed from tool call IDs when sending to non-Gemini models
-    """
-    rules_obj = Rules()
-
-    # Create messages with thought signatures (as would come from Gemini)
-    messages = [
+def _signed_tool_turn(*call_ids: str) -> Sequence[Mapping[str, object]]:
+    return [
         {"role": "user", "content": "What's the weather?"},
         {
             "role": "assistant",
             "tool_calls": [
                 {
-                    "id": f"call_123{THOUGHT_SIGNATURE_SEPARATOR}sig1",
-                    "type": "function",
-                    "function": {
-                        "name": "get_weather",
-                        "arguments": '{"location": "SF"}',
-                    },
-                }
-            ],
-        },
-        {
-            "role": "tool",
-            "tool_call_id": f"call_123{THOUGHT_SIGNATURE_SEPARATOR}sig1",
-            "content": "Sunny, 72°F",
-        },
-    ]
-
-    # Call function_setup with OpenAI model (non-Gemini)
-    logging_obj, kwargs = function_setup(
-        original_function="acompletion",
-        rules_obj=rules_obj,
-        start_time=datetime.now(),
-        model="gpt-4",
-        messages=messages,
-        litellm_call_id=str(uuid.uuid4()),
-        custom_llm_provider="openai",
-    )
-
-    # Verify thought signatures were removed
-    processed_messages = kwargs["messages"]
-    assert processed_messages[1]["tool_calls"][0]["id"] == "call_123"
-    assert processed_messages[2]["tool_call_id"] == "call_123"
-    assert THOUGHT_SIGNATURE_SEPARATOR not in processed_messages[1]["tool_calls"][0]["id"]
-    assert THOUGHT_SIGNATURE_SEPARATOR not in processed_messages[2]["tool_call_id"]
-
-
-@pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
-def test_thought_signature_preserved_for_gemini():
-    """
-    Test that thought signatures are preserved when sending to Gemini models
-    """
-    rules_obj = Rules()
-
-    # Create messages with thought signatures
-    messages = [
-        {"role": "user", "content": "What's the weather?"},
-        {
-            "role": "assistant",
-            "tool_calls": [
-                {
-                    "id": f"call_456{THOUGHT_SIGNATURE_SEPARATOR}sig2",
-                    "type": "function",
-                    "function": {
-                        "name": "get_weather",
-                        "arguments": '{"location": "NYC"}',
-                    },
-                }
-            ],
-        },
-        {
-            "role": "tool",
-            "tool_call_id": f"call_456{THOUGHT_SIGNATURE_SEPARATOR}sig2",
-            "content": "Rainy, 65°F",
-        },
-    ]
-
-    # Call function_setup with Gemini model
-    logging_obj, kwargs = function_setup(
-        original_function="acompletion",
-        rules_obj=rules_obj,
-        start_time=datetime.now(),
-        model="gemini-1.5-pro",
-        messages=messages,
-        litellm_call_id=str(uuid.uuid4()),
-        custom_llm_provider="vertex_ai",
-    )
-
-    # Verify thought signatures were preserved (messages should be unchanged)
-    processed_messages = kwargs["messages"]
-    assert THOUGHT_SIGNATURE_SEPARATOR in processed_messages[1]["tool_calls"][0]["id"]
-    assert THOUGHT_SIGNATURE_SEPARATOR in processed_messages[2]["tool_call_id"]
-
-
-@pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
-def test_thought_signature_removal_with_multiple_tool_calls():
-    """
-    Test that thought signatures are removed from multiple tool calls
-    """
-    rules_obj = Rules()
-
-    messages = [
-        {"role": "user", "content": "Get weather and time"},
-        {
-            "role": "assistant",
-            "tool_calls": [
-                {
-                    "id": f"call_1{THOUGHT_SIGNATURE_SEPARATOR}sig1",
+                    "id": f"{call_id}{THOUGHT_SIGNATURE_SEPARATOR}sig{index}",
                     "type": "function",
                     "function": {"name": "get_weather", "arguments": "{}"},
-                },
-                {
-                    "id": f"call_2{THOUGHT_SIGNATURE_SEPARATOR}sig2",
-                    "type": "function",
-                    "function": {"name": "get_time", "arguments": "{}"},
-                },
+                }
+                for index, call_id in enumerate(call_ids)
             ],
         },
-        {
-            "role": "tool",
-            "tool_call_id": f"call_1{THOUGHT_SIGNATURE_SEPARATOR}sig1",
-            "content": "Sunny",
-        },
-        {
-            "role": "tool",
-            "tool_call_id": f"call_2{THOUGHT_SIGNATURE_SEPARATOR}sig2",
-            "content": "3:00 PM",
-        },
+        *(
+            {"role": "tool", "tool_call_id": f"{call_id}{THOUGHT_SIGNATURE_SEPARATOR}sig{index}", "content": "Sunny"}
+            for index, call_id in enumerate(call_ids)
+        ),
     ]
 
-    logging_obj, kwargs = function_setup(
-        original_function="acompletion",
-        rules_obj=rules_obj,
-        start_time=datetime.now(),
-        model="claude-3-opus",
-        messages=messages,
-        litellm_call_id=str(uuid.uuid4()),
-        custom_llm_provider="anthropic",
+
+@pytest.mark.parametrize(
+    ("model", "custom_llm_provider"),
+    [("gpt-4", "openai"), ("claude-3-opus", "anthropic"), ("openai/gpt-4", None)],
+)
+def test_thought_signatures_are_cut_from_every_tool_call_id_for_a_non_gemini_target(model, custom_llm_provider):
+    stripped = messages_without_foreign_thought_signatures(
+        "acompletion", model, _signed_tool_turn("call_1", "call_2"), custom_llm_provider
     )
 
-    processed_messages = kwargs["messages"]
+    assert stripped is not None
+    assert [call["id"] for call in stripped[1]["tool_calls"]] == ["call_1", "call_2"]
+    assert [message["tool_call_id"] for message in stripped[2:]] == ["call_1", "call_2"]
 
-    # Check all tool call IDs are cleaned
-    assert processed_messages[1]["tool_calls"][0]["id"] == "call_1"
-    assert processed_messages[1]["tool_calls"][1]["id"] == "call_2"
-    assert processed_messages[2]["tool_call_id"] == "call_1"
-    assert processed_messages[3]["tool_call_id"] == "call_2"
+
+@pytest.mark.parametrize(
+    ("model", "custom_llm_provider"),
+    [("gemini-1.5-pro", "vertex_ai"), ("vertex_ai/gemini-3.8-flash", None), ("gemini/gemini-3.8-flash", None)],
+)
+def test_thought_signatures_are_kept_for_a_gemini_target(model, custom_llm_provider):
+    assert (
+        messages_without_foreign_thought_signatures(
+            "acompletion", model, _signed_tool_turn("call_1"), custom_llm_provider
+        )
+        is None
+    )
+
+
+def test_messages_without_signed_tool_call_ids_are_left_alone_for_a_non_gemini_target():
+    messages = [{"role": "user", "content": "Hello"}, {"role": "assistant", "content": "Hi there!"}]
+
+    assert messages_without_foreign_thought_signatures("acompletion", "gpt-4", messages, "openai") is None
 
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
-def test_messages_without_tool_calls_unchanged():
-    """
-    Test that messages without tool calls pass through unchanged
-    """
-    rules_obj = Rules()
+def test_proxy_request_setup_keeps_signatures_for_a_model_name_without_gemini_in_it():
+    messages = _signed_tool_turn("call_1")
 
-    messages = [
-        {"role": "user", "content": "Hello"},
-        {"role": "assistant", "content": "Hi there!"},
-    ]
-
-    logging_obj, kwargs = function_setup(
+    _, kwargs = function_setup(
         original_function="acompletion",
-        rules_obj=rules_obj,
+        rules_obj=Rules(),
         start_time=datetime.now(),
-        model="gpt-4",
+        model="g38flash",
         messages=messages,
         litellm_call_id=str(uuid.uuid4()),
-        custom_llm_provider="openai",
     )
 
-    # Messages should be unchanged
-    assert kwargs["messages"] == messages
+    assert kwargs["messages"] is messages, "the proxy alias must not decide signature stripping before routing"
 
 
 def test_llama_3_prompt():
@@ -7644,6 +8673,101 @@ def test_ensure_alternating_roles(messages, expected_messages, user_continue_mes
     print(messages)
 
     assert messages == expected_messages
+
+
+@pytest.mark.parametrize(
+    "messages",
+    [
+        pytest.param([{"role": "assistant", "content": "Hello!"}], id="before_a_first_assistant_message"),
+        pytest.param(
+            [
+                {"role": "user", "content": "Hi"},
+                {"role": "assistant", "content": "Hello!"},
+                {"role": "assistant", "content": "Still there?"},
+            ],
+            id="between_adjacent_assistant_messages",
+        ),
+        pytest.param(
+            [
+                {"role": "user", "content": "Hi"},
+                {"role": "assistant", "content": "Hello!"},
+                {"role": "tool", "tool_call_id": "call_1", "content": "42"},
+                {"role": "assistant", "content": "Still there?"},
+            ],
+            id="between_assistant_messages_split_by_a_tool_result",
+        ),
+        pytest.param(
+            [{"role": "user", "content": "Hi"}, {"role": "assistant", "content": "Hello!"}],
+            id="after_a_last_assistant_message",
+        ),
+        pytest.param(
+            [{"role": "user", "content": "Hi"}, {"role": "user", "content": "Anyone there?"}],
+            id="between_adjacent_user_messages",
+        ),
+    ],
+)
+def test_folding_a_system_prompt_into_an_inserted_continue_message_never_changes_a_later_request(
+    messages: list[dict[str, str]],
+) -> None:
+    def completion_messages() -> list[dict[str, str]]:
+        return get_completion_messages(
+            messages=messages,
+            assistant_continue_message=None,
+            user_continue_message=None,
+            ensure_alternating_roles=True,
+        )
+
+    first: Final = completion_messages()
+    untouched: Final = json.loads(json.dumps(first))
+    for inserted in (message for message in first if message not in messages):
+        map_system_message_pt([{"role": "system", "content": "First tenant secret"}, inserted])
+
+    assert completion_messages() == untouched
+
+
+_STRICT_TEMPLATE_API_BASE: Final = "https://strict-template.example.com/v1"
+_STRICT_TEMPLATE_REPLY: Final = {
+    "id": "chatcmpl-strict",
+    "object": "chat.completion",
+    "created": 0,
+    "model": "strict-template-model",
+    "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+}
+
+
+@pytest.mark.parametrize(
+    "user_continue_message", [None, {"role": "user", "content": "Keep going"}], ids=["default", "configured"]
+)
+def test_a_system_prompt_folded_into_the_continue_message_never_reaches_a_later_request(
+    respx_mock: respx.MockRouter, user_continue_message: dict[str, str] | None
+) -> None:
+    route: Final = respx_mock.post(f"{_STRICT_TEMPLATE_API_BASE}/chat/completions").mock(
+        return_value=httpx.Response(200, json=_STRICT_TEMPLATE_REPLY)
+    )
+
+    def send(messages: list[dict[str, str]]) -> None:
+        litellm.completion(
+            model="openai/strict-template-model",
+            api_base=_STRICT_TEMPLATE_API_BASE,
+            api_key="test-key",
+            messages=messages,
+            ensure_alternating_roles=True,
+            supports_system_message=False,
+            user_continue_message=user_continue_message,
+        )
+
+    send(
+        [
+            {"role": "user", "content": "Hi"},
+            {"role": "assistant", "content": "Hello!"},
+            {"role": "system", "content": "First tenant secret"},
+            {"role": "assistant", "content": "Anything else?"},
+        ]
+    )
+    send([{"role": "user", "content": "Hi"}, {"role": "assistant", "content": "Hello!"}])
+
+    assert "First tenant secret" not in json.dumps(json.loads(route.calls.last.request.read())["messages"])
 
 
 def test_ensure_alternating_roles_with_tool_calls():
@@ -8990,7 +10114,6 @@ def test_anthropic_messages_pt_interleave_more_thinking_than_tool_groups():
     ], f"Expected order but got: {types}"
 
 
-
 def _paused_web_search_turn(
     thinking_blocks: list[dict[str, str]] | None, content: str | list[dict[str, str]] = "Step 1 is Tokyo."
 ) -> dict[str, object]:
@@ -9453,7 +10576,11 @@ TEMPLATE_INITIAL = "<start>"
 TEMPLATE_FINAL = "<end>"
 
 PARTIAL_TEMPLATE = {"roles": TEMPLATE_ROLES}
-FULL_TEMPLATE = {"roles": TEMPLATE_ROLES, "initial_prompt_value": TEMPLATE_INITIAL, "final_prompt_value": TEMPLATE_FINAL}
+FULL_TEMPLATE = {
+    "roles": TEMPLATE_ROLES,
+    "initial_prompt_value": TEMPLATE_INITIAL,
+    "final_prompt_value": TEMPLATE_FINAL,
+}
 ROLELESS_TEMPLATE = {"initial_prompt_value": TEMPLATE_INITIAL, "final_prompt_value": TEMPLATE_FINAL}
 
 
@@ -9675,7 +10802,9 @@ def test_template_wraps_only_the_roles_it_defines_across_a_conversation(monkeypa
         pytest.param({"roles": {"user": {**TEMPLATE_ROLES["user"], "priority": 1}}}, id="extra-role-key"),
         pytest.param({"roles": {**TEMPLATE_ROLES, "tool": {"pre_message": 5}}}, id="unused-role-wrong-type"),
         pytest.param({"roles": {**TEMPLATE_ROLES, 1: {"pre_message": "x"}}}, id="unused-non-string-role"),
-        pytest.param({"roles": TEMPLATE_ROLES, "initial_prompt_value": None, "bos_token": 7}, id="null-and-unread-keys"),
+        pytest.param(
+            {"roles": TEMPLATE_ROLES, "initial_prompt_value": None, "bos_token": 7}, id="null-and-unread-keys"
+        ),
     ],
 )
 def test_template_shapes_main_rendered_keep_rendering(template, monkeypatch):
@@ -9768,3 +10897,174 @@ def test_wrong_type_template_field_in_requests_leaves_the_deployments_in_rotatio
     response = router.completion(model="template-group", messages=TEMPLATE_MESSAGES, mock_response="Blue")
 
     assert response.choices[0].message.content == "Blue"
+
+
+def _history_with_concatenated_tool_arguments(
+    *payloads: dict[str, object], sibling_id: str = "call_1__concat_1", truncated_tail: str = ""
+) -> list[dict[str, object]]:
+    return [
+        {"role": "user", "content": "List files in /a and /b"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {"name": "ls", "arguments": _concatenated_json(*payloads) + truncated_tail},
+                },
+                {
+                    "id": sibling_id,
+                    "type": "function",
+                    "function": {"name": "ls", "arguments": '{"path": "/c"}'},
+                },
+            ],
+        },
+        {"role": "tool", "tool_call_id": "call_1", "content": "a.txt"},
+        {"role": "tool", "tool_call_id": sibling_id, "content": "c.txt"},
+    ]
+
+
+_UNSPLIT_TURN_REUSING_CALL_1 = (
+    {"role": "user", "content": "List files in /z"},
+    {
+        "role": "assistant",
+        "content": None,
+        "tool_calls": [{"id": "call_1", "type": "function", "function": {"name": "ls", "arguments": '{"path": "/z"}'}}],
+    },
+    {"role": "tool", "tool_call_id": "call_1", "content": "z.txt"},
+)
+
+
+async def _bedrock_converse_messages(messages: list[dict[str, object]], use_async: bool) -> list[dict[str, object]]:
+    model = "anthropic.claude-sonnet-4-5-20250929-v1:0"
+    if use_async:
+        return await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(messages, model, "bedrock")
+    return _bedrock_converse_messages_pt(messages, model, "bedrock")
+
+
+def _bedrock_tool_use_ids(message: dict[str, object]) -> list[str]:
+    return [block["toolUse"]["toolUseId"] for block in message["content"] if "toolUse" in block]
+
+
+def _bedrock_results_by_id(message: dict[str, object]) -> dict[str, object]:
+    return {
+        block["toolResult"]["toolUseId"]: block["toolResult"]["content"]
+        for block in message["content"]
+        if "toolResult" in block
+    }
+
+
+def test_anthropic_messages_pt_splits_concatenated_tool_arguments_and_answers_every_tool_use():
+    messages = _history_with_concatenated_tool_arguments({"path": "/a"}, {"path": "/b"})
+
+    _, assistant, tool_results = anthropic_messages_pt(messages, model="claude-sonnet-4-5", llm_provider="anthropic")
+
+    tool_uses = [block for block in assistant["content"] if block["type"] == "tool_use"]
+    assert [block["input"] for block in tool_uses] == [{"path": "/a"}, {"path": "/b"}, {"path": "/c"}]
+    tool_use_ids = [block["id"] for block in tool_uses]
+    assert len(set(tool_use_ids)) == 3
+    results_by_id = {block["tool_use_id"]: block["content"] for block in tool_results["content"]}
+    assert results_by_id == {tool_use_ids[0]: "a.txt", tool_use_ids[1]: "a.txt", tool_use_ids[2]: "c.txt"}
+
+
+def test_anthropic_messages_pt_rejects_truncated_concatenated_tool_arguments():
+    messages = _history_with_concatenated_tool_arguments({"path": "/a"}, {"path": "/b"}, truncated_tail='{"path": ')
+
+    with pytest.raises(ValueError, match="Failed to parse tool call arguments for tool 'ls'"):
+        anthropic_messages_pt(messages, model="claude-sonnet-4-5", llm_provider="anthropic")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True])
+async def test_bedrock_converse_messages_pt_answers_every_tool_use_split_from_concatenated_arguments(use_async: bool):
+    messages = _history_with_concatenated_tool_arguments({"path": "/a"}, {"path": "/b"}, sibling_id="call_1_1")
+
+    _, assistant, tool_results = await _bedrock_converse_messages(messages, use_async)
+
+    tool_uses = [block["toolUse"] for block in assistant["content"] if "toolUse" in block]
+    assert [block["input"] for block in tool_uses] == [{"path": "/a"}, {"path": "/b"}, {"path": "/c"}]
+    tool_use_ids = _bedrock_tool_use_ids(assistant)
+    assert len(set(tool_use_ids)) == 3
+    assert _bedrock_results_by_id(tool_results) == {
+        tool_use_ids[0]: [{"text": "a.txt"}],
+        tool_use_ids[1]: [{"text": "a.txt"}],
+        tool_use_ids[2]: [{"text": "c.txt"}],
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True])
+async def test_bedrock_converse_messages_pt_copies_results_only_into_the_turn_that_split(use_async: bool):
+    messages = [
+        *_UNSPLIT_TURN_REUSING_CALL_1,
+        *_history_with_concatenated_tool_arguments({"path": "/a"}, {"path": "/b"}),
+    ]
+
+    _, unsplit_assistant, unsplit_results, split_assistant, split_results = await _bedrock_converse_messages(
+        messages, use_async
+    )
+
+    assert _bedrock_results_by_id(unsplit_results) == {_bedrock_tool_use_ids(unsplit_assistant)[0]: [{"text": "z.txt"}]}
+    assert set(_bedrock_results_by_id(split_results)) == set(_bedrock_tool_use_ids(split_assistant))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True])
+async def test_bedrock_converse_messages_pt_rejects_more_split_tool_uses_than_the_cap(use_async: bool):
+    payloads = [{"path": f"/{index}"} for index in range(MAX_SALVAGED_TOOL_ARGUMENT_OBJECTS + 1)]
+    messages = _history_with_concatenated_tool_arguments(*payloads)
+
+    with pytest.raises(litellm.BadRequestError, match="concatenated JSON argument objects"):
+        await _bedrock_converse_messages(messages, use_async)
+
+
+_CALL_1_SPLIT_IN_TWO = {
+    "role": "assistant",
+    "content": None,
+    "tool_calls": [
+        {"id": "call.1", "type": "function", "function": {"name": "ls", "arguments": '{"path": "/a"}{"path": "/b"}'}}
+    ],
+}
+_CALL_1_REPEATED_IN_ONE_TURN = (
+    {"role": "user", "content": "List files in /a and /b"},
+    _CALL_1_SPLIT_IN_TWO,
+    _CALL_1_SPLIT_IN_TWO,
+    {"role": "tool", "tool_call_id": "call.1", "content": "a.txt"},
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True])
+async def test_bedrock_converse_messages_pt_answers_a_split_call_repeated_in_one_turn(use_async: bool):
+    _, assistant, tool_results = await _bedrock_converse_messages(list(_CALL_1_REPEATED_IN_ONE_TURN), use_async)
+
+    assert set(_bedrock_results_by_id(tool_results)) == set(_bedrock_tool_use_ids(assistant))
+
+
+def test_anthropic_messages_pt_answers_a_split_call_with_an_unsanitized_id_repeated_in_one_turn():
+    _, assistant, tool_results = anthropic_messages_pt(
+        list(_CALL_1_REPEATED_IN_ONE_TURN), model="claude-sonnet-4-5", llm_provider="anthropic"
+    )
+
+    tool_use_ids = {block["id"] for block in assistant["content"] if block["type"] == "tool_use"}
+    assert len(tool_use_ids) == 2
+    assert {block["tool_use_id"] for block in tool_results["content"]} == tool_use_ids
+
+
+def test_anthropic_messages_pt_copies_results_only_into_the_turn_that_split():
+    messages = [
+        *_UNSPLIT_TURN_REUSING_CALL_1,
+        *_history_with_concatenated_tool_arguments({"path": "/a"}, {"path": "/b"}),
+    ]
+
+    _, unsplit_assistant, unsplit_results, split_assistant, split_results = anthropic_messages_pt(
+        messages, model="claude-sonnet-4-5", llm_provider="anthropic"
+    )
+
+    assert [block["tool_use_id"] for block in unsplit_results["content"] if block["type"] == "tool_result"] == [
+        block["id"] for block in unsplit_assistant["content"] if block["type"] == "tool_use"
+    ]
+    assert {block["tool_use_id"] for block in split_results["content"]} == {
+        block["id"] for block in split_assistant["content"] if block["type"] == "tool_use"
+    }
