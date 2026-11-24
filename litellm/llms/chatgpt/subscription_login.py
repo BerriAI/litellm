@@ -1,3 +1,5 @@
+import math
+import time
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
@@ -7,11 +9,11 @@ from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
 from litellm.exceptions import BadRequestError, CallerCredentialAuthenticationError
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
+from litellm.llms.chatgpt.authenticator import TOKEN_EXPIRY_SKEW_SECONDS
 from litellm.llms.chatgpt.common_utils import CHATGPT_ACCOUNT_ID_HEADER, CHATGPT_API_BASE, chatgpt_client_api_base
 from litellm.types.proxy.litellm_pre_call_utils import RedactedDict
 from litellm.types.utils import CredentialItem, chatgpt_subscription_login_litellm_params
 
-CHATGPT_SUBSCRIPTION_LOGINS_SECRET_FIELD: Final = "chatgpt_subscription_logins"
 CHATGPT_SUBSCRIPTION_OWNER_SECRET_FIELD: Final = "chatgpt_subscription_owner"
 CHATGPT_OWNER_TEAM_ID_KEY: Final = "chatgpt_owner_team_id"
 CHATGPT_OWNER_KEY_HASH_KEY: Final = "chatgpt_owner_key_hash"
@@ -36,6 +38,25 @@ def is_chatgpt_subscription_login(credential: CredentialItem) -> bool:
 
 def _non_empty_str(value: object) -> str | None:
     return value if isinstance(value, str) and value else None
+
+
+def chatgpt_login_expires_at(values: Mapping[str, object]) -> float | None:
+    raw: Final = values.get("chatgpt_expires_at")
+    if not isinstance(raw, (str, int, float)) or isinstance(raw, bool):
+        return None
+    try:
+        parsed: Final = float(raw)
+    except ValueError:
+        return None
+    return parsed if math.isfinite(parsed) else None
+
+
+def fresh_chatgpt_access_token(values: Mapping[str, object], now: float) -> str | None:
+    access_token: Final = _non_empty_str(values.get("chatgpt_access_token"))
+    expires_at: Final = chatgpt_login_expires_at(values)
+    if access_token is None or expires_at is None or now >= expires_at - TOKEN_EXPIRY_SKEW_SECONDS:
+        return None
+    return access_token
 
 
 def chatgpt_credential_info(credential: CredentialItem | None) -> Mapping[str, object]:
@@ -177,17 +198,18 @@ class _NamedLogin:
     credential: CredentialItem | None
 
 
-def _owned_access_token(kwargs: Mapping[str, object], login: _NamedLogin) -> str | None:
-    if login.credential is None:
-        return None
-    return _non_empty_str(_secret_field(kwargs, CHATGPT_SUBSCRIPTION_LOGINS_SECRET_FIELD).get(login.credential_name))
-
-
 def _caller_owner(kwargs: Mapping[str, object]) -> tuple[str | None, str | None] | None:
     owner: Final = _secret_field(kwargs, CHATGPT_SUBSCRIPTION_OWNER_SECRET_FIELD)
     team_id: Final = _non_empty_str(owner.get(CHATGPT_OWNER_TEAM_ID_KEY))
     key_hash: Final = _non_empty_str(owner.get(CHATGPT_OWNER_KEY_HASH_KEY))
     return None if team_id is None and key_hash is None else (team_id, key_hash)
+
+
+def _owned_access_token(kwargs: Mapping[str, object], login: _NamedLogin, now: float) -> str | None:
+    owner: Final = _caller_owner(kwargs)
+    if login.credential is None or owner is None or not owns_chatgpt_login(login.credential, *owner):
+        return None
+    return fresh_chatgpt_access_token(login.credential.credential_values, now)
 
 
 def _without_login_headers(headers: Mapping[str, object]) -> Mapping[str, object]:
@@ -278,11 +300,12 @@ def _bind_login(
 def attach_chatgpt_subscription_login(
     kwargs: dict[str, object],  # mutable-ok: kwargs is the request mutation channel
     model: object,
+    clock: Callable[[], float] = time.time,
 ) -> None:
     login: Final = _named_login(kwargs, model)
     if login is None:
         return
-    _bind_login(kwargs, model, login.credential_name, _owned_access_token(kwargs, login))
+    _bind_login(kwargs, model, login.credential_name, _owned_access_token(kwargs, login, clock()))
 
 
 async def _refresh_through_proxy(credential_name: str, team_id: str | None, key_hash: str | None) -> str | None:
@@ -306,11 +329,12 @@ async def aattach_chatgpt_subscription_login(
     kwargs: dict[str, object],  # mutable-ok: kwargs is the request mutation channel
     model: object,
     refresh: ChatGPTLoginRefresh = _refresh_through_proxy,
+    clock: Callable[[], float] = time.time,
 ) -> None:
     login: Final = _named_login(kwargs, model)
     if login is None:
         return
-    access_token: Final = _owned_access_token(kwargs, login) or await _refreshed_access_token(
+    access_token: Final = _owned_access_token(kwargs, login, clock()) or await _refreshed_access_token(
         kwargs, model, login.credential_name, refresh
     )
     _bind_login(kwargs, model, login.credential_name, access_token)

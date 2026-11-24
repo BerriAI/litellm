@@ -15,6 +15,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.llms.chatgpt.authenticator import TOKEN_EXPIRY_SKEW_SECONDS
 from litellm.llms.chatgpt.common_utils import CHATGPT_OAUTH_TOKEN_URL, OPENAI_AUTH_CLAIM_KEY
+from litellm.llms.chatgpt.subscription_login import fresh_chatgpt_access_token
 from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper, encrypt_value_helper
 from litellm.proxy.credential_endpoints.chatgpt_subscription_logins import (
     ChatGPTLoginRefresher,
@@ -22,7 +23,6 @@ from litellm.proxy.credential_endpoints.chatgpt_subscription_logins import (
     LockedRefresh,
     RefusedRefreshTokens,
     blocks_chatgpt_login,
-    fresh_chatgpt_subscription_logins,
     owned_chatgpt_subscription_access_token,
     owned_chatgpt_subscription_logins,
     save_chatgpt_login,
@@ -861,7 +861,11 @@ async def test_a_caller_gets_only_the_logins_its_team_or_key_owns(monkeypatch, t
     oauth: Final = _TokenEndpoint(status=500)
 
     resolved: Final = await _resolve(team_id, key_hash, _refresher(rows, oauth))
-    bound: Final = fresh_chatgpt_subscription_logins(owned_chatgpt_subscription_logins(team_id, key_hash), _now)
+    bound: Final = {
+        credential.credential_name: token
+        for credential in owned_chatgpt_subscription_logins(team_id, key_hash)
+        if (token := fresh_chatgpt_access_token(credential.credential_values, NOW)) is not None
+    }
 
     assert resolved == bound == {name: tokens[name] for name in expected}
     assert (rows.updates, oauth.posts) == ([], [])

@@ -671,7 +671,7 @@ async def test_chat_on_a_subscription_deployment_sends_the_owned_login_instead_o
         "messages": [{"role": "user", "content": "Hello"}],
         "secret_fields": {
             "raw_headers": {},
-            "chatgpt_subscription_logins": RedactedDict({login.credential_name: subscription_token}),
+            "chatgpt_subscription_owner": RedactedDict({"chatgpt_owner_team_id": "team-a"}),
         },
     }
     complete: Final = (router.completion if sync else router.acompletion) if router else (

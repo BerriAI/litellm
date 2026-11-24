@@ -637,7 +637,7 @@ def test_a_request_body_cannot_pick_a_chatgpt_subscription_login_by_credential_n
         ],
     )
 
-    with pytest.raises(ValueError, match="names a credential configured for") as error:
+    with pytest.raises(ValueError, match="names a ChatGPT subscription login") as error:
         is_request_body_safe(
             request_body=body,
             general_settings={"allow_client_side_credentials": allow_client_side_credentials},
@@ -646,6 +646,7 @@ def test_a_request_body_cannot_pick_a_chatgpt_subscription_login_by_credential_n
         )
 
     assert "access-team-a-example" not in str(error.value)
+    assert "workload identity" not in str(error.value)
 
 
 def test_a_request_body_may_still_name_a_credential_that_does_not_federate(monkeypatch):

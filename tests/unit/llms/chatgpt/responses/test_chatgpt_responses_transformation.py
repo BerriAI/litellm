@@ -846,7 +846,7 @@ async def test_a_subscription_login_replaces_the_host_auth_file_login_on_the_wir
         "litellm_credential_name": login.credential_name,
         "secret_fields": {
             "raw_headers": {},
-            "chatgpt_subscription_logins": RedactedDict({login.credential_name: subscription_token}),
+            "chatgpt_subscription_owner": RedactedDict({"chatgpt_owner_team_id": "team-a"}),
         },
     }
 
@@ -868,10 +868,10 @@ async def test_a_subscription_login_replaces_the_host_auth_file_login_on_the_wir
 
 
 @pytest.mark.parametrize("sync", [False, True])
-@pytest.mark.parametrize("owned_logins", [None, {"team-b-chatgpt": "team-b-example-token"}])
+@pytest.mark.parametrize("caller_owner", [None, {"chatgpt_owner_team_id": "team-b"}], ids=["no_owner", "team_b"])
 @pytest.mark.asyncio
 async def test_a_subscription_login_the_caller_does_not_own_never_falls_back_to_the_host_auth_file(
-    sync: bool, owned_logins: dict[str, str] | None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    sync: bool, caller_owner: dict[str, str] | None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     monkeypatch.setenv("CHATGPT_TOKEN_DIR", str(tmp_path))
@@ -893,8 +893,8 @@ async def test_a_subscription_login_the_caller_does_not_own_never_falls_back_to_
         "litellm_credential_name": login.credential_name,
         **(
             {}
-            if owned_logins is None
-            else {"secret_fields": {"raw_headers": {}, "chatgpt_subscription_logins": RedactedDict(owned_logins)}}
+            if caller_owner is None
+            else {"secret_fields": {"raw_headers": {}, "chatgpt_subscription_owner": RedactedDict(caller_owner)}}
         ),
     }
 

@@ -2455,11 +2455,14 @@ def chatgpt_logins(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         [
             *(
                 CredentialItem(
-                    credential_name=name,
-                    credential_values={"chatgpt_access_token": _fake_chatgpt_jwt(f"acct-{name}")},
-                    credential_info={"custom_llm_provider": "chatgpt"},
+                    credential_name=f"{team_id}-chatgpt",
+                    credential_values={
+                        "chatgpt_access_token": _fake_chatgpt_jwt(f"acct-{team_id}-chatgpt"),
+                        "chatgpt_expires_at": "4102444800",
+                    },
+                    credential_info={"custom_llm_provider": "chatgpt", "chatgpt_owner_team_id": team_id},
                 )
-                for name in ("team-a-chatgpt", "team-b-chatgpt")
+                for team_id in ("team-a", "team-b")
             ),
             CredentialItem(credential_name="plain-key", credential_values={"api_key": "sk-plain"}, credential_info={}),
         ],
@@ -2481,10 +2484,10 @@ _CHATGPT_DEPLOYMENT_NAMING_A_MISSING_CREDENTIAL: Final = {
 _CREDENTIAL_NAME_OVERRIDES: Final = ("", None, "team-b-chatgpt", "plain-key", "unknown-credential")
 
 
-def _owned_logins() -> dict[str, object]:
+def _team_a_caller() -> dict[str, object]:
     from litellm.types.proxy.litellm_pre_call_utils import RedactedDict
 
-    return {"chatgpt_subscription_logins": RedactedDict({"team-a-chatgpt": _fake_chatgpt_jwt("acct-team-a-chatgpt")})}
+    return {"chatgpt_subscription_owner": RedactedDict({"chatgpt_owner_team_id": "team-a"})}
 
 
 @pytest.mark.asyncio
@@ -2513,7 +2516,7 @@ async def test_a_request_cannot_swap_the_credential_a_chatgpt_deployment_names(
             model="team-a-gpt",
             messages=[{"role": "user", "content": "hi"}],
             mock_response="ran",
-            secret_fields=_owned_logins(),
+            secret_fields=_team_a_caller(),
             litellm_credential_name=override,
             num_retries=0,
         )
@@ -2533,7 +2536,7 @@ async def test_a_chatgpt_deployment_runs_when_the_request_leaves_its_credential_
         model="team-a-gpt",
         messages=[{"role": "user", "content": "hi"}],
         mock_response="ran",
-        secret_fields=_owned_logins(),
+        secret_fields=_team_a_caller(),
         num_retries=0,
         **own_name,
     )
@@ -2556,7 +2559,7 @@ async def test_a_chatgpt_deployment_naming_a_plain_credential_still_takes_an_own
         "model": "plain-chatgpt",
         "messages": [{"role": "user", "content": "hi"}],
         "mock_response": "ran",
-        "secret_fields": _owned_logins(),
+        "secret_fields": _team_a_caller(),
         "num_retries": 0,
     }
 

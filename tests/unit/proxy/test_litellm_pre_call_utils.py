@@ -55,7 +55,7 @@ from litellm.proxy.litellm_pre_call_utils import (
     _get_enforced_params,
     _match_and_track_policies,
     _promoted_trace_control_fields,
-    _bind_chatgpt_subscription_logins_for_request,
+    _record_chatgpt_subscription_owner_for_request,
     _resolve_credential_from_model_config,
     _resolve_provider_from_deployment,
     _update_model_if_key_alias_exists,
@@ -11679,10 +11679,10 @@ class _RecordingCredentialsTable:
         self.reads.append(where)
 
 
-class TestBindChatGPTSubscriptionLogins:
-    """``_bind_chatgpt_subscription_logins_for_request`` hands a request the fresh ChatGPT subscription logins
-    its team or its key owns, and who the caller is, inside secret_fields where no log or body snapshot shows them.
-    It never refreshes a stale login, so a request for another model never waits on the ChatGPT token endpoint."""
+class TestRecordChatGPTSubscriptionOwner:
+    """``_record_chatgpt_subscription_owner_for_request`` records who the caller is inside secret_fields, where no
+    log or body snapshot shows it. It hands no ChatGPT login token to the request, so callbacks and guardrails never
+    see one, and it never reads the database or the token endpoint before the call."""
 
     _LOGIN_NAMES: Final = ("login-team-a", "login-team-b", "login-key-k")
     _FRESH_EXPIRES_AT: Final = "4102444800"
@@ -11733,44 +11733,24 @@ class TestBindChatGPTSubscriptionLogins:
             assert f"rt-{name}-refresh" not in text
 
     @pytest.mark.parametrize(
-        ("team_id", "key_hash", "owned", "owner"),
+        ("team_id", "key_hash", "added"),
         [
             (
                 "team-a",
                 "hash-unbound",
-                ("login-team-a",),
-                {"chatgpt_owner_team_id": "team-a", "chatgpt_owner_key_hash": "hash-unbound"},
+                {
+                    "chatgpt_subscription_owner": {
+                        "chatgpt_owner_team_id": "team-a",
+                        "chatgpt_owner_key_hash": "hash-unbound",
+                    }
+                },
             ),
-            (None, "hash-k", ("login-key-k",), {"chatgpt_owner_key_hash": "hash-k"}),
+            (None, "hash-k", {"chatgpt_subscription_owner": {"chatgpt_owner_key_hash": "hash-k"}}),
             (
                 "team-b",
                 "hash-k",
-                ("login-team-b", "login-key-k"),
-                {"chatgpt_owner_team_id": "team-b", "chatgpt_owner_key_hash": "hash-k"},
+                {"chatgpt_subscription_owner": {"chatgpt_owner_team_id": "team-b", "chatgpt_owner_key_hash": "hash-k"}},
             ),
-        ],
-        ids=["by-team", "by-key", "by-team-and-key"],
-    )
-    def test_secret_fields_carry_only_the_callers_logins_and_who_the_caller_is(
-        self, monkeypatch, team_id, key_hash, owned, owner
-    ):
-        self._serve_logins(monkeypatch)
-        data = {"model": "chatgpt-seat", "secret_fields": {"raw_headers": {}}}
-
-        _bind_chatgpt_subscription_logins_for_request(data=data, team_id=team_id, key_hash=key_hash)
-
-        logins = data["secret_fields"]["chatgpt_subscription_logins"]
-        assert logins == {name: self._access_token(name) for name in owned}
-        assert data["secret_fields"]["chatgpt_subscription_owner"] == owner
-        assert isinstance(logins, RedactedDict)
-        assert isinstance(data["secret_fields"]["chatgpt_subscription_owner"], RedactedDict)
-        for shown in (str(logins), repr(logins), str(data), repr(data)):
-            self._assert_no_token_in(shown)
-            assert all(value not in shown for value in owner.values())
-
-    @pytest.mark.parametrize(
-        ("team_id", "key_hash", "added"),
-        [
             (
                 "team-unbound",
                 "hash-unbound",
@@ -11783,22 +11763,27 @@ class TestBindChatGPTSubscriptionLogins:
             ),
             (None, None, {}),
         ],
-        ids=["unbound", "no-owner"],
+        ids=["by-team", "by-key", "by-team-and-key", "unbound", "no-owner"],
     )
-    def test_a_caller_who_owns_no_login_gets_no_logins_entry(self, monkeypatch, team_id, key_hash, added):
+    def test_secret_fields_carry_only_who_the_caller_is(self, monkeypatch, team_id, key_hash, added):
         self._serve_logins(monkeypatch)
         data = {"model": "chatgpt-seat", "secret_fields": {"raw_headers": {}}}
 
-        _bind_chatgpt_subscription_logins_for_request(data=data, team_id=team_id, key_hash=key_hash)
+        _record_chatgpt_subscription_owner_for_request(data=data, team_id=team_id, key_hash=key_hash)
 
         assert data["secret_fields"] == {"raw_headers": {}, **added}
+        owner = data["secret_fields"].get("chatgpt_subscription_owner", RedactedDict())
+        assert isinstance(owner, RedactedDict)
+        for shown in (str(data), repr(data)):
+            assert all(value not in shown for value in owner.values())
 
     @pytest.mark.asyncio
-    async def test_a_request_gets_its_keys_and_teams_logins_and_nothing_else_shows_them(self, monkeypatch):
+    @pytest.mark.parametrize("model", ["chatgpt-seat", "gpt-4o"], ids=["chatgpt-model", "other-model"])
+    async def test_a_request_from_a_login_owner_carries_its_owner_ids_and_no_login_token(self, monkeypatch, model):
         self._serve_logins(monkeypatch)
 
         updated = await add_litellm_data_to_request(
-            data={"model": "chatgpt-seat", "input": "hello"},
+            data={"model": model, "input": "hello"},
             request=self._request(),
             user_api_key_dict=UserAPIKeyAuth(token="hash-k", team_id="team-b", user_id="user-1", metadata={}),
             proxy_config=MagicMock(),
@@ -11806,15 +11791,12 @@ class TestBindChatGPTSubscriptionLogins:
             version="test-version",
         )
 
-        assert updated["secret_fields"]["chatgpt_subscription_logins"] == {
-            "login-team-b": self._access_token("login-team-b"),
-            "login-key-k": self._access_token("login-key-k"),
-        }
         assert updated["secret_fields"]["chatgpt_subscription_owner"] == {
             "chatgpt_owner_team_id": "team-b",
             "chatgpt_owner_key_hash": "hash-k",
         }
-        self._assert_no_token_in(json.dumps({k: v for k, v in updated.items() if k != "secret_fields"}, default=str))
+        self._assert_no_token_in(json.dumps(updated["secret_fields"], default=str))
+        self._assert_no_token_in(json.dumps(updated, default=str))
 
     @pytest.mark.asyncio
     async def test_a_caller_owning_a_stale_login_reaches_no_database_or_token_endpoint_before_its_call(
@@ -11844,7 +11826,6 @@ class TestBindChatGPTSubscriptionLogins:
         )
 
         assert credentials_table.reads == []
-        assert updated["secret_fields"]["chatgpt_subscription_logins"] == {}
         assert updated["secret_fields"]["chatgpt_subscription_owner"] == {
             "chatgpt_owner_team_id": "team-a",
             "chatgpt_owner_key_hash": "hash-unbound",

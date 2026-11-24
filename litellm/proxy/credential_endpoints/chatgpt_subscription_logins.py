@@ -1,8 +1,7 @@
 import asyncio
 import json
-import math
 import time
-from collections.abc import Awaitable, Callable, Iterable, Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import timedelta
 from enum import Enum
@@ -14,7 +13,6 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.llms.chatgpt.authenticator import (
-    TOKEN_EXPIRY_SKEW_SECONDS,
     TOKEN_REFRESH_TIMEOUT_SECONDS,
     ChatGPTOAuthClient,
     arefresh_chatgpt_tokens,
@@ -27,7 +25,9 @@ from litellm.llms.chatgpt.subscription_login import (
     CHATGPT_OWNER_TEAM_ID_KEY,
     CHATGPT_PROVIDER,
     chatgpt_credential_info,
+    chatgpt_login_expires_at,
     chatgpt_login_owner,
+    fresh_chatgpt_access_token,
     is_chatgpt_subscription_login,
     owns_chatgpt_login,
 )
@@ -183,38 +183,6 @@ def owned_chatgpt_subscription_logins(team_id: str | None, key_hash: str | None)
     )
 
 
-def _expires_at(values: Mapping[str, object]) -> float | None:
-    raw: Final = values.get("chatgpt_expires_at")
-    if not isinstance(raw, (str, int, float)) or isinstance(raw, bool):
-        return None
-    try:
-        parsed: Final = float(raw)
-    except ValueError:
-        return None
-    return parsed if math.isfinite(parsed) else None
-
-
-def _fresh_access_token(values: Mapping[str, object], now: float) -> str | None:
-    access_token: Final = _non_empty_str(values.get("chatgpt_access_token"))
-    expires_at: Final = _expires_at(values)
-    if access_token is None or expires_at is None or now >= expires_at - TOKEN_EXPIRY_SKEW_SECONDS:
-        return None
-    return access_token
-
-
-def fresh_chatgpt_subscription_logins(
-    owned: Iterable[CredentialItem], clock: Callable[[], float] = time.time
-) -> Mapping[str, str]:
-    now: Final = clock()
-    return MappingProxyType(
-        {
-            credential.credential_name: token
-            for credential in owned
-            if (token := _fresh_access_token(credential.credential_values, now)) is not None
-        }
-    )
-
-
 def _in_memory_login(credential_name: str) -> _InMemoryLogin | None:
     current: Final = CredentialAccessor.find_credential(credential_name)
     if current is None:
@@ -302,11 +270,11 @@ class ChatGPTLoginRefresher:
         self, stored: CredentialItem, seen: _InMemoryLogin | None
     ) -> tuple[OAuthToken | None, Mapping[str, object]]:
         values: Final = decrypted_credential(stored).credential_values
-        access_token: Final = _fresh_access_token(values, self.clock())
+        access_token: Final = fresh_chatgpt_access_token(values, self.clock())
         if access_token is None:
             return None, values
         self._remember(stored, values, seen)
-        return OAuthToken(access_token=access_token, expires_at=_expires_at(values)), values
+        return OAuthToken(access_token=access_token, expires_at=chatgpt_login_expires_at(values)), values
 
     async def _reread(
         self, credential_name: str, owner: tuple[str | None, str | None], rows: CredentialRows
@@ -357,7 +325,7 @@ class ChatGPTLoginRefresher:
                 self._remember(stored, refreshed_values, seen)
             case _Save.MISSED:
                 return await self._hand_over_to_new_owner(rows, credential_name, owner, redeemed, saved_values)
-        return OAuthToken(access_token=tokens.access_token, expires_at=_expires_at(refreshed_values))
+        return OAuthToken(access_token=tokens.access_token, expires_at=chatgpt_login_expires_at(refreshed_values))
 
     async def _hand_over_to_new_owner(
         self,
@@ -450,7 +418,7 @@ async def owned_chatgpt_subscription_access_token(
 ) -> str | None:
     credential: Final = CredentialAccessor.find_credential(credential_name)
     held: Final = credential if credential is not None and owns_chatgpt_login(credential, team_id, key_hash) else None
-    fresh: Final = _fresh_access_token(held.credential_values, clock()) if held is not None else None
+    fresh: Final = fresh_chatgpt_access_token(held.credential_values, clock()) if held is not None else None
     if fresh is not None:
         return fresh
     try:

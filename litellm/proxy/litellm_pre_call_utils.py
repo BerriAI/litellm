@@ -3480,7 +3480,7 @@ async def add_litellm_data_to_request(
         ),
     )
 
-    _bind_chatgpt_subscription_logins_for_request(
+    _record_chatgpt_subscription_owner_for_request(
         data=cast("dict[str, object]", data),  # cast-ok: data is the untyped request body dict
         team_id=user_api_key_dict.team_id,
         key_hash=user_api_key_dict.token,
@@ -3917,33 +3917,22 @@ async def _resolve_user_provider_credentials_for_request(
     secret_fields["user_provider_credentials"] = RedactedDict(dict(connections))
 
 
-def _bind_chatgpt_subscription_logins_for_request(
-    data: dict[str, object],  # mutable-ok: writes the caller's logins into the nested secret_fields dict
+def _record_chatgpt_subscription_owner_for_request(
+    data: dict[str, object],  # mutable-ok: writes the caller's owner ids into the nested secret_fields dict
     team_id: str | None,
     key_hash: str | None,
 ) -> None:
     from litellm.llms.chatgpt.subscription_login import (
-        CHATGPT_SUBSCRIPTION_LOGINS_SECRET_FIELD,
         CHATGPT_SUBSCRIPTION_OWNER_SECRET_FIELD,
         chatgpt_subscription_owner,
     )
     from litellm.types.proxy.litellm_pre_call_utils import RedactedDict
-
-    from .credential_endpoints.chatgpt_subscription_logins import (
-        fresh_chatgpt_subscription_logins,
-        owned_chatgpt_subscription_logins,
-    )
 
     secret_fields: Final = data.get("secret_fields")
     owner: Final = chatgpt_subscription_owner(team_id, key_hash)
     if not isinstance(secret_fields, dict) or not owner:
         return
     secret_fields[CHATGPT_SUBSCRIPTION_OWNER_SECRET_FIELD] = RedactedDict(dict(owner))
-    owned: Final = owned_chatgpt_subscription_logins(team_id, key_hash)
-    if owned:
-        secret_fields[CHATGPT_SUBSCRIPTION_LOGINS_SECRET_FIELD] = RedactedDict(
-            dict(fresh_chatgpt_subscription_logins(owned))
-        )
 
 
 def _warn_stale_team_alias_once(warning_key: str, message: str, *args: str) -> None:

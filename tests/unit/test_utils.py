@@ -7836,6 +7836,14 @@ def _chatgpt_subscription_credential(**extra_values: str) -> CredentialItem:
     )
 
 
+def _team_b_chatgpt_subscription_credential() -> CredentialItem:
+    return CredentialItem(
+        credential_name="team-b-chatgpt",
+        credential_values={**_CHATGPT_SUBSCRIPTION_LOGIN_VALUES, "chatgpt_access_token": "access-team-b-example"},
+        credential_info={"custom_llm_provider": "chatgpt", "chatgpt_owner_team_id": "team-b"},
+    )
+
+
 def test_load_credentials_from_list_never_merges_chatgpt_subscription_login_values_into_kwargs(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -7864,19 +7872,18 @@ def test_load_credentials_from_list_never_merges_chatgpt_subscription_login_valu
     "secret_fields",
     [
         pytest.param(None, id="no_secret_fields"),
-        pytest.param({"chatgpt_subscription_logins": {}}, id="no_owned_logins"),
-        pytest.param({"chatgpt_subscription_logins": {"team-b-chatgpt": "access-team-b-example"}}, id="another_login"),
-        pytest.param(
-            {"chatgpt_subscription_logins": {}, "chatgpt_subscription_owner": {"chatgpt_owner_team_id": "team-b"}},
-            id="another_owner",
-        ),
+        pytest.param({"raw_headers": {}}, id="no_owner"),
+        pytest.param({"chatgpt_subscription_owner": {"chatgpt_owner_team_id": "team-b"}}, id="owner_of_another_login"),
+        pytest.param({"chatgpt_subscription_owner": {"chatgpt_owner_key_hash": "hash-b"}}, id="another_owner"),
     ],
 )
 async def test_acompletion_on_a_chatgpt_subscription_the_caller_does_not_own_is_a_401(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, secret_fields: dict[str, object] | None
 ) -> None:
     monkeypatch.setenv("CHATGPT_TOKEN_DIR", str(tmp_path))
-    monkeypatch.setattr(litellm, "credential_list", [_chatgpt_subscription_credential()])
+    monkeypatch.setattr(
+        litellm, "credential_list", [_chatgpt_subscription_credential(), _team_b_chatgpt_subscription_credential()]
+    )
     with pytest.raises(litellm.CallerCredentialAuthenticationError) as raised:
         await litellm.acompletion(
             model="chatgpt/gpt-5.5",
@@ -7889,6 +7896,7 @@ async def test_acompletion_on_a_chatgpt_subscription_the_caller_does_not_own_is_
     assert raised.value.status_code == 401
     assert "team-a-chatgpt" in str(raised.value)
     assert not any(token in str(raised.value) for token in _CHATGPT_SUBSCRIPTION_LOGIN_VALUES.values())
+    assert "access-team-b-example" not in str(raised.value)
 
 
 @pytest.mark.asyncio
@@ -7903,7 +7911,7 @@ async def test_acompletion_on_a_chatgpt_subscription_the_caller_owns_returns_the
     request: Final = {
         "messages": [{"role": "user", "content": "hi"}],
         "mock_response": "owned",
-        "secret_fields": {"chatgpt_subscription_logins": RedactedDict({"team-a-chatgpt": "access-team-a-example"})},
+        "secret_fields": {"chatgpt_subscription_owner": RedactedDict({"chatgpt_owner_team_id": "team-a"})},
     }
     deployment: Final = {"model": "chatgpt/gpt-5.5", "litellm_credential_name": "team-a-chatgpt"}
     router: Final = litellm.Router(model_list=[{"model_name": "team-a-gpt", "litellm_params": deployment}])
@@ -7911,28 +7919,6 @@ async def test_acompletion_on_a_chatgpt_subscription_the_caller_owns_returns_the
         router.acompletion(model="team-a-gpt", **request)
         if through_router
         else litellm.acompletion(**deployment, **request)
-    )
-
-    assert response.choices[0].message.content == "owned"
-
-
-@pytest.mark.asyncio
-async def test_acompletion_on_the_callers_chatgpt_subscription_refreshed_since_its_pre_call_returns_the_response(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    from litellm.types.proxy.litellm_pre_call_utils import RedactedDict
-
-    monkeypatch.setenv("CHATGPT_TOKEN_DIR", str(tmp_path))
-    monkeypatch.setattr(litellm, "credential_list", [_chatgpt_subscription_credential()])
-    response: Final = await litellm.acompletion(
-        model="chatgpt/gpt-5.5",
-        messages=[{"role": "user", "content": "hi"}],
-        litellm_credential_name="team-a-chatgpt",
-        mock_response="owned",
-        secret_fields={
-            "chatgpt_subscription_logins": RedactedDict({}),
-            "chatgpt_subscription_owner": RedactedDict({"chatgpt_owner_team_id": "team-a"}),
-        },
     )
 
     assert response.choices[0].message.content == "owned"
@@ -7950,7 +7936,7 @@ async def test_aresponses_on_a_chatgpt_subscription_the_caller_owns_returns_the_
     request: Final = {
         "input": "hi",
         "mock_response": "owned",
-        "secret_fields": {"chatgpt_subscription_logins": RedactedDict({"team-a-chatgpt": "access-team-a-example"})},
+        "secret_fields": {"chatgpt_subscription_owner": RedactedDict({"chatgpt_owner_team_id": "team-a"})},
     }
     deployment: Final = {"model": "chatgpt/gpt-5.5", "litellm_credential_name": "team-a-chatgpt"}
     router: Final = litellm.Router(model_list=[{"model_name": "team-a-gpt", "litellm_params": deployment}])

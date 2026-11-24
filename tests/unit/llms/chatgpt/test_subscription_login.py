@@ -1,13 +1,14 @@
 import base64
 import copy
 import json
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import Final
 
 import pytest
 
 import litellm
 from litellm.exceptions import CallerCredentialAuthenticationError
+from litellm.llms.chatgpt.authenticator import TOKEN_EXPIRY_SKEW_SECONDS
 from litellm.llms.chatgpt.common_utils import CHATGPT_API_BASE, ChatGPTAuthError
 from litellm.llms.chatgpt.subscription_login import (
     aattach_chatgpt_subscription_login,
@@ -28,27 +29,30 @@ def _jwt(claims: Mapping[str, object]) -> str:
     return f"{segment({'alg': 'RS256'})}.{segment(claims)}.fake-signature"
 
 
+EXPIRES_AT: Final = 4102444800
 TEAM_A_LOGIN: Final = "team-a-chatgpt"
 TEAM_B_LOGIN: Final = "team-b-chatgpt"
-TEAM_A_TOKEN: Final = _jwt({"https://api.openai.com/auth": {"chatgpt_account_id": "acct-team-a"}, "exp": 4102444800})
-TEAM_B_TOKEN: Final = _jwt({"https://api.openai.com/auth": {"chatgpt_account_id": "acct-team-b"}, "exp": 4102444800})
+KEY_K_LOGIN: Final = "key-k-chatgpt"
+TEAM_A_TOKEN: Final = _jwt({"https://api.openai.com/auth": {"chatgpt_account_id": "acct-team-a"}, "exp": EXPIRES_AT})
+TEAM_B_TOKEN: Final = _jwt({"https://api.openai.com/auth": {"chatgpt_account_id": "acct-team-b"}, "exp": EXPIRES_AT})
+KEY_K_TOKEN: Final = _jwt({"https://api.openai.com/auth": {"chatgpt_account_id": "acct-key-k"}, "exp": EXPIRES_AT})
 CLIENT_TOKEN: Final = _jwt({"https://api.openai.com/auth": {"chatgpt_account_id": "acct-client"}})
 REFRESHED_TEAM_A_TOKEN: Final = _jwt(
     {"https://api.openai.com/auth": {"chatgpt_account_id": "acct-team-a"}, "exp": 4102444800, "jti": "refreshed"}
 )
 
 
-def _subscription(name: str, access_token: str, owner_team_id: str) -> CredentialItem:
+def _subscription(name: str, access_token: str, **owner: str) -> CredentialItem:
     return CredentialItem(
         credential_name=name,
         credential_values={
             "chatgpt_access_token": access_token,
             "chatgpt_refresh_token": f"refresh-{name}",
             "chatgpt_id_token": access_token,
-            "chatgpt_account_id": f"acct-{owner_team_id}",
-            "chatgpt_expires_at": "4102444800",
+            "chatgpt_account_id": f"acct-{name}",
+            "chatgpt_expires_at": str(EXPIRES_AT),
         },
-        credential_info={"custom_llm_provider": "chatgpt", "chatgpt_owner_team_id": owner_team_id},
+        credential_info={"custom_llm_provider": "chatgpt", **owner},
     )
 
 
@@ -63,15 +67,23 @@ def credentials(monkeypatch: pytest.MonkeyPatch) -> None:
         litellm,
         "credential_list",
         [
-            _subscription(TEAM_A_LOGIN, TEAM_A_TOKEN, "team-a"),
-            _subscription(TEAM_B_LOGIN, TEAM_B_TOKEN, "team-b"),
+            _subscription(TEAM_A_LOGIN, TEAM_A_TOKEN, chatgpt_owner_team_id="team-a"),
+            _subscription(TEAM_B_LOGIN, TEAM_B_TOKEN, chatgpt_owner_team_id="team-b"),
+            _subscription(KEY_K_LOGIN, KEY_K_TOKEN, chatgpt_owner_key_hash="hash-k"),
             ORDINARY,
         ],
     )
 
 
-def _owned(*logins: tuple[str, str]) -> dict[str, object]:
-    return {"chatgpt_subscription_logins": RedactedDict(dict(logins)), "raw_headers": {}}
+def _caller(team_id: str | None, key_hash: str | None) -> dict[str, object]:
+    return {
+        "raw_headers": {},
+        "chatgpt_subscription_owner": RedactedDict(dict(chatgpt_subscription_owner(team_id, key_hash))),
+    }
+
+
+def _at(now: float) -> Callable[[], float]:
+    return lambda: now
 
 
 def _request(**overrides: object) -> dict[str, object]:
@@ -79,7 +91,7 @@ def _request(**overrides: object) -> dict[str, object]:
         "model": "chatgpt/gpt-5.5",
         "litellm_credential_name": TEAM_A_LOGIN,
         "chatgpt_auth_file": "/host/chatgpt/auth.json",
-        "secret_fields": _owned((TEAM_A_LOGIN, TEAM_A_TOKEN)),
+        "secret_fields": _caller("team-a", None),
         **overrides,
     }
 
@@ -108,13 +120,13 @@ def test_attach_sends_the_owned_login_to_chatgpt_instead_of_the_host_auth_file(
 @pytest.mark.parametrize(
     "secret_fields",
     [
-        _owned((TEAM_B_LOGIN, TEAM_B_TOKEN)),
-        _owned(),
-        _owned((TEAM_A_LOGIN, "")),
+        _caller("team-b", None),
+        _caller(None, "hash-k"),
+        _caller(None, None),
         {"raw_headers": {}},
         None,
     ],
-    ids=["another_teams_login", "no_logins", "empty_token", "no_login_field", "no_secret_fields"],
+    ids=["another_teams_owner", "another_keys_owner", "empty_owner", "no_owner_field", "no_secret_fields"],
 )
 def test_a_login_the_caller_does_not_own_fails_closed_with_a_401(secret_fields: dict[str, object] | None) -> None:
     kwargs: Final = _request(secret_fields=secret_fields) if secret_fields is not None else _request()
@@ -152,7 +164,7 @@ def test_a_chatgpt_deployment_naming_a_missing_credential_fails_closed(monkeypat
             {
                 "model": "openai/gpt-5.4-mini",
                 "litellm_credential_name": "deleted-credential",
-                "secret_fields": _owned(),
+                "secret_fields": _caller("team-a", None),
             },
             "openai/gpt-5.4-mini",
         ),
@@ -164,17 +176,17 @@ def test_a_chatgpt_deployment_naming_a_missing_credential_fails_closed(monkeypat
             {
                 "model": "chatgpt/gpt-5.5",
                 "litellm_credential_name": "plain-openai",
-                "secret_fields": _owned(("plain-openai", TEAM_A_TOKEN)),
+                "secret_fields": _caller("team-a", None),
             },
             "chatgpt/gpt-5.5",
         ),
-        ({"model": "chatgpt/gpt-5.5", "secret_fields": _owned((TEAM_A_LOGIN, TEAM_A_TOKEN))}, "chatgpt/gpt-5.5"),
+        ({"model": "chatgpt/gpt-5.5", "secret_fields": _caller("team-a", None)}, "chatgpt/gpt-5.5"),
         ({"model": "chatgpt/gpt-5.5", "litellm_credential_name": ""}, "chatgpt/gpt-5.5"),
     ],
     ids=[
         "missing_credential_on_another_provider",
         "ordinary_credential",
-        "ordinary_credential_with_a_same_named_login",
+        "ordinary_credential_named_by_a_login_owner",
         "no_credential_name",
         "empty_credential_name",
     ],
@@ -287,7 +299,7 @@ def test_a_caller_api_base_override_on_a_subscription_deployment_never_sends_the
         litellm_params={"model": "chatgpt/gpt-5.5", "litellm_credential_name": TEAM_A_LOGIN},
         request_kwargs={"api_base": "https://attacker.example/backend-api/codex"},
     )
-    kwargs: Final = {**redirected, "secret_fields": _owned((TEAM_A_LOGIN, TEAM_A_TOKEN))}
+    kwargs: Final = {**redirected, "secret_fields": _caller("team-a", None)}
 
     with pytest.raises(ChatGPTAuthError):
         attach_chatgpt_subscription_login(kwargs, "chatgpt/gpt-5.5")
@@ -324,18 +336,11 @@ class _Refresh:
         return self.access_token
 
 
-def _caller(team_id: str | None, key_hash: str | None, *logins: tuple[str, str]) -> dict[str, object]:
-    return {
-        **_owned(*logins),
-        "chatgpt_subscription_owner": RedactedDict(dict(chatgpt_subscription_owner(team_id, key_hash))),
-    }
-
-
 async def test_async_attach_refreshes_the_callers_stale_login_once_and_sends_it() -> None:
     refresh: Final = _Refresh(REFRESHED_TEAM_A_TOKEN)
     kwargs: Final = _request(secret_fields=_caller("team-a", "hash-unbound"))
 
-    await aattach_chatgpt_subscription_login(kwargs, "chatgpt/gpt-5.5", refresh=refresh)
+    await aattach_chatgpt_subscription_login(kwargs, "chatgpt/gpt-5.5", refresh=refresh, clock=_at(EXPIRES_AT))
 
     assert refresh.calls == [(TEAM_A_LOGIN, "team-a", "hash-unbound")]
     assert kwargs["api_key"] == REFRESHED_TEAM_A_TOKEN
@@ -345,7 +350,7 @@ async def test_async_attach_refreshes_the_callers_stale_login_once_and_sends_it(
 
 async def test_async_attach_sends_a_fresh_login_without_refreshing_it() -> None:
     refresh: Final = _Refresh(REFRESHED_TEAM_A_TOKEN)
-    kwargs: Final = _request(secret_fields=_caller("team-a", None, (TEAM_A_LOGIN, TEAM_A_TOKEN)))
+    kwargs: Final = _request(secret_fields=_caller("team-a", None))
 
     await aattach_chatgpt_subscription_login(kwargs, "chatgpt/gpt-5.5", refresh=refresh)
 
@@ -359,10 +364,86 @@ async def test_async_attach_fails_a_login_that_could_not_be_refreshed_closed_wit
     before: Final = copy.deepcopy(kwargs)
 
     with pytest.raises(CallerCredentialAuthenticationError) as raised:
-        await aattach_chatgpt_subscription_login(kwargs, "chatgpt/gpt-5.5", refresh=refresh)
+        await aattach_chatgpt_subscription_login(kwargs, "chatgpt/gpt-5.5", refresh=refresh, clock=_at(EXPIRES_AT))
 
     assert raised.value.status_code == 401
     assert refresh.calls == [(TEAM_A_LOGIN, "team-a", None)]
+    assert kwargs == before
+
+
+@pytest.mark.parametrize("sync", [True, False], ids=["sync", "async"])
+@pytest.mark.parametrize(
+    ("credential_name", "owner", "token"),
+    [
+        (TEAM_A_LOGIN, ("team-a", "hash-unbound"), TEAM_A_TOKEN),
+        (KEY_K_LOGIN, ("team-unbound", "hash-k"), KEY_K_TOKEN),
+    ],
+    ids=["team_owner", "key_owner"],
+)
+async def test_attach_binds_the_owners_fresh_token_from_the_named_credential_itself(
+    sync: bool, credential_name: str, owner: tuple[str | None, str | None], token: str
+) -> None:
+    refresh: Final = _Refresh(REFRESHED_TEAM_A_TOKEN)
+    kwargs: Final = _request(litellm_credential_name=credential_name, secret_fields=_caller(*owner))
+    clock: Final = _at(EXPIRES_AT - TOKEN_EXPIRY_SKEW_SECONDS - 1)
+
+    if sync:
+        attach_chatgpt_subscription_login(kwargs, "chatgpt/gpt-5.5", clock=clock)
+    else:
+        await aattach_chatgpt_subscription_login(kwargs, "chatgpt/gpt-5.5", refresh=refresh, clock=clock)
+
+    assert kwargs["api_key"] == token
+    assert refresh.calls == []
+
+
+@pytest.mark.parametrize("owner", [("team-b", None), (None, "hash-k")], ids=["another_team", "another_key"])
+async def test_async_attach_refuses_a_caller_that_does_not_own_the_named_login_with_a_401(
+    owner: tuple[str | None, str | None],
+) -> None:
+    refresh: Final = _Refresh(None)
+    kwargs: Final = _request(secret_fields=_caller(*owner))
+    before: Final = copy.deepcopy(kwargs)
+
+    with pytest.raises(CallerCredentialAuthenticationError) as raised:
+        await aattach_chatgpt_subscription_login(kwargs, "chatgpt/gpt-5.5", refresh=refresh)
+
+    assert raised.value.status_code == 401
+    assert refresh.calls == [(TEAM_A_LOGIN, *owner)]
+    assert TEAM_A_TOKEN not in str(raised.value)
+    assert kwargs == before
+
+
+@pytest.mark.parametrize(
+    ("now", "sent", "refreshed"),
+    [
+        (EXPIRES_AT - TOKEN_EXPIRY_SKEW_SECONDS - 1, TEAM_A_TOKEN, False),
+        (EXPIRES_AT - TOKEN_EXPIRY_SKEW_SECONDS, REFRESHED_TEAM_A_TOKEN, True),
+        (EXPIRES_AT + 1, REFRESHED_TEAM_A_TOKEN, True),
+    ],
+    ids=["fresh", "inside_the_expiry_skew", "expired"],
+)
+async def test_async_attach_sends_the_stored_token_only_while_it_is_fresh_and_refreshes_it_after(
+    now: float, sent: str, refreshed: bool
+) -> None:
+    refresh: Final = _Refresh(REFRESHED_TEAM_A_TOKEN)
+    kwargs: Final = _request()
+
+    await aattach_chatgpt_subscription_login(kwargs, "chatgpt/gpt-5.5", refresh=refresh, clock=_at(now))
+
+    assert kwargs["api_key"] == sent
+    assert refresh.calls == ([(TEAM_A_LOGIN, "team-a", None)] if refreshed else [])
+
+
+@pytest.mark.parametrize("now", [EXPIRES_AT - TOKEN_EXPIRY_SKEW_SECONDS, EXPIRES_AT + 1], ids=["skew", "expired"])
+def test_sync_attach_fails_an_owned_login_whose_stored_token_is_stale_closed_with_a_401(now: float) -> None:
+    kwargs: Final = _request()
+    before: Final = copy.deepcopy(kwargs)
+
+    with pytest.raises(CallerCredentialAuthenticationError) as raised:
+        attach_chatgpt_subscription_login(kwargs, "chatgpt/gpt-5.5", clock=_at(now))
+
+    assert raised.value.status_code == 401
+    assert TEAM_A_TOKEN not in str(raised.value)
     assert kwargs == before
 
 
@@ -395,7 +476,7 @@ async def test_async_attach_never_refreshes_for_a_call_that_names_no_subscriptio
 @pytest.mark.parametrize(
     ("secret_fields", "model"),
     [
-        (_owned(), "chatgpt/gpt-5.5"),
+        ({"raw_headers": {}}, "chatgpt/gpt-5.5"),
         (_caller("team-a", None), "openai/gpt-5.4-mini"),
     ],
     ids=["no_owner_identity", "another_provider"],
@@ -445,7 +526,7 @@ async def test_a_probe_of_a_team_owned_login_runs_as_that_team(
     params: Final = {"model": "chatgpt/gpt-5.5", "litellm_credential_name": TEAM_A_LOGIN}
     probe: Final = dict(chatgpt_login_probe_params(params, probing_owners))
 
-    await aattach_chatgpt_subscription_login(probe, "chatgpt/gpt-5.5", refresh=refresh)
+    await aattach_chatgpt_subscription_login(probe, "chatgpt/gpt-5.5", refresh=refresh, clock=_at(EXPIRES_AT))
 
     assert refresh.calls == [(TEAM_A_LOGIN, "team-a", None)]
     assert probe["api_key"] == REFRESHED_TEAM_A_TOKEN
@@ -483,7 +564,7 @@ def test_a_probe_that_names_no_subscription_login_gets_no_owner(params: dict[str
 def test_a_probe_of_a_login_without_exactly_one_owner_gets_no_owner(
     monkeypatch: pytest.MonkeyPatch, owner_info: dict[str, str]
 ) -> None:
-    login: Final = _subscription(TEAM_A_LOGIN, TEAM_A_TOKEN, "team-a").model_copy(
+    login: Final = _subscription(TEAM_A_LOGIN, TEAM_A_TOKEN, chatgpt_owner_team_id="team-a").model_copy(
         update={"credential_info": {"custom_llm_provider": "chatgpt", **owner_info}}
     )
     monkeypatch.setattr(litellm, "credential_list", [login])
