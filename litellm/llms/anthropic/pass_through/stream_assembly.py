@@ -1,6 +1,7 @@
 import codecs
 import json
 from collections.abc import Mapping, Sequence
+from itertools import chain
 from typing import Final
 
 import litellm
@@ -496,6 +497,17 @@ def assemble_anthropic_sse_stream(
     if isinstance(model, str) and model:
         assembled.model = model
     return assembled
+
+
+def _is_upstream_error_event(event: str) -> bool:
+    return "error" in event and any(event_data.get("type") == "error" for event_data in _parsed_sse_events(event))
+
+
+def anthropic_sse_events_before_upstream_error(all_chunks: Sequence[str | bytes]) -> Sequence[str | bytes]:
+    """The stream without its upstream ``error`` events, so what arrived before the failure still assembles."""
+    events: Final = tuple(chain.from_iterable(map(split_sse_chunk_into_events, all_chunks)))
+    kept: Final = tuple(event for event in events if not _is_upstream_error_event(event))
+    return all_chunks if len(kept) == len(events) else kept
 
 
 def is_sse_error_stream(all_chunks: Sequence[object]) -> bool:
