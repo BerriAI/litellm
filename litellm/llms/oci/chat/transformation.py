@@ -663,7 +663,7 @@ class OCIChatConfig(BaseConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        headers: dict,
+        headers: dict[str, object],
     ) -> dict:
         creds: Final = resolve_oci_credentials(optional_params)
         oci_compartment_id: Final = creds["oci_compartment_id"]
@@ -783,7 +783,7 @@ class OCIChatConfig(BaseConfig):
         custom_llm_provider: str,
         logging_obj: LiteLLMLoggingObj,
         api_base: str,
-        headers: dict,
+        headers: dict[str, object],
         data: dict,
         messages: list,
         client: HTTPHandler | AsyncHTTPHandler | None = None,
@@ -825,7 +825,7 @@ class OCIChatConfig(BaseConfig):
         custom_llm_provider: str,
         logging_obj: LiteLLMLoggingObj,
         api_base: str,
-        headers: dict,
+        headers: dict[str, object],
         data: dict,
         messages: list,
         client: HTTPHandler | AsyncHTTPHandler | None = None,
@@ -860,7 +860,9 @@ class OCIChatConfig(BaseConfig):
             logging_obj=logging_obj,
         )
 
-    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: dict[str, object] | httpx.Headers
+    ) -> BaseLLMException:
         return OCIError(status_code=status_code, message=error_message)
 
 

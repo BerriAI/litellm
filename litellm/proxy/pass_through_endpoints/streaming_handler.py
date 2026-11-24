@@ -60,7 +60,7 @@ class RouteStreamingLogging(Protocol):
         litellm_logging_obj: LiteLLMLoggingObj,
         passthrough_success_handler_obj: PassThroughEndpointLogging,
         url_route: str,
-        request_body: dict,
+        request_body: dict[str, object],
         endpoint_type: EndpointType,
         start_time: datetime,
         raw_bytes: list[bytes],
@@ -179,7 +179,7 @@ class PassThroughStreamingHandler:
     @staticmethod
     async def chunk_processor(
         response: httpx.Response,
-        request_body: dict | None,
+        request_body: dict[str, object] | None,
         litellm_logging_obj: LiteLLMLoggingObj,
         endpoint_type: EndpointType,
         start_time: datetime,
@@ -428,7 +428,7 @@ class PassThroughStreamingHandler:
         litellm_logging_obj: LiteLLMLoggingObj,
         passthrough_success_handler_obj: PassThroughEndpointLogging,
         url_route: str,
-        request_body: dict,
+        request_body: dict[str, object],
         endpoint_type: EndpointType,
         start_time: datetime,
         raw_bytes: Sequence[bytes],
@@ -568,14 +568,14 @@ class PassThroughStreamingHandler:
         litellm_logging_obj: LiteLLMLoggingObj,
         passthrough_success_handler_obj: PassThroughEndpointLogging,
         url_route: str,
-        request_body: dict,
+        request_body: dict[str, object],
         endpoint_type: EndpointType,
         start_time: datetime,
         raw_bytes: Sequence[bytes],
         end_time: datetime,
         model: str | None,
         background_response_settled_before: bool = False,
-    ) -> tuple[PassThroughEndpointLoggingResultValues, dict]:
+    ) -> tuple[PassThroughEndpointLoggingResultValues, dict[str, object]]:
         """
         Synchronous, CPU-bound reconstruction of the standard logging payload
         from collected raw SSE bytes. Extracted from
@@ -585,7 +585,7 @@ class PassThroughStreamingHandler:
         """
         all_chunks: Final = PassThroughStreamingHandler._convert_raw_bytes_to_str_lines(raw_bytes)
         standard_logging_response_object: PassThroughEndpointLoggingResultValues | None = None
-        kwargs: dict = {}
+        kwargs: dict[str, object] = {}
         if endpoint_type == EndpointType.ANTHROPIC:
             anthropic_passthrough_logging_handler_result: Final = (
                 AnthropicPassthroughLoggingHandler.handle_logging_anthropic_collected_chunks(

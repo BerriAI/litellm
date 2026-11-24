@@ -60,6 +60,13 @@ def _branch_listing(response: _BranchListingResponse) -> BitBucketBranchListing:
     return response.json()
 
 
+_NO_STATUS_CODE: Final = object()
+
+
+def _error_status_code(error: Exception) -> object:
+    return getattr(getattr(error, "response", _NO_STATUS_CODE), "status_code", _NO_STATUS_CODE)
+
+
 def _sanitize_file_path(file_path: str) -> str:
     """Reject path traversal and URL-encode each path segment."""
     if "#" in file_path or "?" in file_path:
@@ -158,14 +165,15 @@ class BitBucketClient:
 
         except Exception as e:
             # Check if it's an HTTP error
-            if hasattr(e, "response") and hasattr(e.response, "status_code"):
-                if e.response.status_code == 404:
+            status_code: Final = _error_status_code(e)
+            if status_code is not _NO_STATUS_CODE:
+                if status_code == 404:
                     return None
-                elif e.response.status_code == 403:
+                elif status_code == 403:
                     raise Exception(
                         f"Access denied to file '{file_path}'. Check your BitBucket permissions for workspace '{self.workspace}' and repository '{self.repository}'."
                     )
-                elif e.response.status_code == 401:
+                elif status_code == 401:
                     raise Exception("Authentication failed. Check your BitBucket access token and permissions.")
                 else:
                     raise Exception(f"Failed to fetch file '{file_path}': {e}")
@@ -199,14 +207,15 @@ class BitBucketClient:
 
         except Exception as e:
             # Check if it's an HTTP error
-            if hasattr(e, "response") and hasattr(e.response, "status_code"):
-                if e.response.status_code == 404:
+            status_code: Final = _error_status_code(e)
+            if status_code is not _NO_STATUS_CODE:
+                if status_code == 404:
                     return []
-                elif e.response.status_code == 403:
+                elif status_code == 403:
                     raise Exception(
                         f"Access denied to directory '{directory_path}'. Check your BitBucket permissions for workspace '{self.workspace}' and repository '{self.repository}'."
                     )
-                elif e.response.status_code == 401:
+                elif status_code == 401:
                     raise Exception("Authentication failed. Check your BitBucket access token and permissions.")
                 else:
                     raise Exception(f"Failed to list files in '{directory_path}': {e}")
@@ -288,8 +297,9 @@ class BitBucketClient:
             }
         except Exception as e:
             # Check if it's an HTTP error
-            if hasattr(e, "response") and hasattr(e.response, "status_code"):
-                if e.response.status_code == 404:
+            status_code: Final = _error_status_code(e)
+            if status_code is not _NO_STATUS_CODE:
+                if status_code == 404:
                     return None
                 raise Exception(f"Failed to get file metadata for '{file_path}': {e}")
             else:

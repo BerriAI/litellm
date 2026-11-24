@@ -41,13 +41,13 @@ class LiteLLMPydanticObjectBase(LiteLLMBaseModel):
 class BaseLiteLLMOpenAIResponseObject(LiteLLMBaseModel):
     model_config = ConfigDict(extra="allow", protected_namespaces=())
 
-    def __getitem__(self, key) -> object:
+    def __getitem__(self, key: str) -> object:
         return _ATTRIBUTE_VALUE.validate_python(self.__dict__[key])
 
-    def get(self, key, default=None):
+    def get(self, key: str, default=None):
         return self.__dict__.get(key, default)
 
-    def __contains__(self, key) -> bool:
+    def __contains__(self, key: object) -> bool:
         return key in self.__dict__
 
     def items(self):
@@ -63,19 +63,19 @@ class HiddenParams(OpenAIObject):
 
     model_config = ConfigDict(extra="allow", protected_namespaces=())
 
-    def get(self, key, default=None):
+    def get(self, key: str, default: object = None):
         # Custom .get() method to access attributes with a default value if the attribute doesn't exist
         return getattr(self, key, default)
 
-    def __getitem__(self, key) -> object:
+    def __getitem__(self, key: str) -> object:
         # Allow dictionary-style access to attributes
         return _ATTRIBUTE_VALUE.validate_python(getattr(self, key))
 
-    def __setitem__(self, key, value) -> None:
+    def __setitem__(self, key: str, value: object) -> None:
         # Allow dictionary-style assignment of attributes
         setattr(self, key, value)
 
-    def json(self, **kwargs):
+    def json(self, **kwargs: object):
         try:
             return self.model_dump()
         except Exception:

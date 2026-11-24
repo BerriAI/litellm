@@ -1708,7 +1708,9 @@ impl Engine {
                 };
                 self.set_local(
                     Entry::Counter(counter.clone()),
-                    Local::Number(Number::Float(current + operation.increment.amount.as_f64())),
+                    Local::Number(Number::Float(
+                        (current + operation.increment.amount.as_f64()).max(0.0),
+                    )),
                     operation.increment.ttl,
                 );
             }

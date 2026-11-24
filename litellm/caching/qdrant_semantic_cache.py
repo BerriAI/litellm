@@ -74,12 +74,12 @@ class QdrantSemanticCache(BaseCache):
         self,
         qdrant_api_base=None,
         qdrant_api_key=None,
-        collection_name=None,
+        collection_name: str | None = None,
         similarity_threshold: float | None = None,
-        quantization_config=None,
-        embedding_model="text-embedding-ada-002",
-        host_type=None,
-        vector_size=None,
+        quantization_config: str | None = None,
+        embedding_model: str = "text-embedding-ada-002",
+        host_type: object = None,
+        vector_size: int | None = None,
         embedding_max_input_tokens: int | None = None,
         embedding_timeout: float | None = None,
     ):
@@ -520,7 +520,7 @@ class QdrantSemanticCache(BaseCache):
     async def _collection_info(self):
         return self.collection_info
 
-    async def async_set_cache_pipeline(self, cache_list: Iterable[Sequence[object]], **kwargs):
+    async def async_set_cache_pipeline(self, cache_list: Iterable[Sequence[object]], **kwargs: object):
         tasks: Final = []
         for val in cache_list:
             tasks.append(self.async_set_cache(val[0], val[1], **kwargs))

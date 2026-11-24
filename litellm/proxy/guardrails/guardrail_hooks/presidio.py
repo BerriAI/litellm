@@ -727,7 +727,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         self,
         text: str,
         presidio_config: PresidioPerRequestConfig | None,
-        request_data: dict,
+        request_data: dict[str, object],
     ) -> PresidioAnalyzeRequest:
         """
         Construct the payload for the Presidio analyze request
@@ -763,7 +763,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         self,
         text: str,
         presidio_config: PresidioPerRequestConfig | None,
-        request_data: dict,
+        request_data: dict[str, object],
     ) -> list[PresidioAnalyzeResponseItem] | _PresidioAnonymizeResponse:
         """
         Send text to the Presidio analyzer endpoint and get analysis results
@@ -914,7 +914,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         self,
         text: str,
         presidio_config: PresidioPerRequestConfig | None,
-        request_data: dict,  # mutable-ok: shared per-request state dict, matching analyze_text's parameter
+        request_data: dict[str, object],  # mutable-ok: shared per-request state dict, matching analyze_text's parameter
     ) -> list[PresidioAnalyzeResponseItem]:  # mutable-ok: analyze_text's declared return type requires list
         """
         Analyze an oversized text by splitting it into overlapping chunks.
@@ -1209,7 +1209,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         analyze_results: list[PresidioAnalyzeResponseItem] | _PresidioAnonymizeResponse,
         output_parse_pii: bool,
         masked_entity_count: dict[str, int],
-        request_data: dict | None = None,
+        request_data: dict[str, object] | None = None,
     ) -> str:
         """
         Send analysis results to the Presidio anonymizer endpoint to get redacted text
@@ -1367,7 +1367,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             ####################################################
             # Create Guardrail Trace for logging on Langfuse, Datadog, etc.
             ####################################################
-            guardrail_json_response: Exception | str | dict | list[dict] = {}
+            guardrail_json_response: Exception | str | dict[str, object] | list[dict[str, object]] = {}
             if status == "success":
                 if isinstance(analyze_results, list):
                     guardrail_json_response = [dict(item) for item in analyze_results]
@@ -1474,7 +1474,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         except Exception as e:
             raise e
 
-    def logging_hook(self, kwargs: dict, result: object, call_type: str) -> tuple[dict, object]:
+    def logging_hook(self, kwargs: dict[str, object], result: object, call_type: str) -> tuple[dict, object]:
         from concurrent.futures import ThreadPoolExecutor
 
         def run_in_new_loop():
@@ -1787,7 +1787,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
     async def _mask_output_response(
         self,
         response: ModelResponse | EmbeddingResponse | ImageResponse,
-        request_data: dict,
+        request_data: dict[str, object],
     ):
         """
         Apply Presidio masking on model responses (non-streaming).
@@ -1824,7 +1824,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
     async def _stream_apply_output_masking(
         self,
         response: AsyncIterable[object],
-        request_data: dict,
+        request_data: dict[str, object],
     ) -> AsyncGenerator[object, None]:
         """Apply Presidio masking to streaming output (apply_to_output=True path)."""
         all_chunks: list[ModelResponseStream] = []
@@ -1900,7 +1900,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         )
 
     async def _mask_anthropic_sse_stream(
-        self, first_chunk: bytes, rest: AsyncIterator[object], request_data: dict
+        self, first_chunk: bytes, rest: AsyncIterator[object], request_data: dict[str, object]
     ) -> tuple[object, ...]:
         """The frames the client gets: only what Presidio read and masked, or a refusal.
 

@@ -3389,3 +3389,30 @@ def test_a_stream_naming_a_dated_snapshot_is_billed_at_the_resolved_deployment_p
 
     assert result["result"].usage.prompt_tokens > 0
     assert result["kwargs"]["response_cost"] == pytest.approx(_deployment_price_of(result["result"].usage))
+
+
+def test_a_stream_the_rust_route_priced_is_billed_at_that_price_without_pricing_it_again(
+    monkeypatch: pytest.MonkeyPatch, all_chunks: list[str]
+) -> None:
+    logging_obj: Final = _deployment_priced_logging_obj(monkeypatch, stream=True)
+    logging_obj.optional_params = {}
+    logging_obj.record_route_cost(0.0421)
+
+    def repriced(*_args: object, **_kwargs: object) -> float:
+        raise AssertionError("a route-priced stream was priced again")
+
+    monkeypatch.setattr(litellm, "completion_cost", repriced)
+    monkeypatch.setattr(litellm, "response_cost_calculator", repriced)
+    result: Final = AnthropicPassthroughLoggingHandler.handle_logging_anthropic_collected_chunks(  # pyright: ignore[reportUnknownMemberType]  # the handler leaves its passthrough logging object untyped
+        litellm_logging_obj=logging_obj,
+        passthrough_success_handler_obj=MagicMock(),
+        url_route="/v1/messages",
+        request_body={"model": "claude-sonnet-4-5", "stream": True, "messages": []},
+        endpoint_type=MagicMock(),
+        start_time=datetime(2025, 1, 1),
+        all_chunks=all_chunks,
+        end_time=datetime(2025, 1, 1),
+    )
+
+    assert result["kwargs"]["response_cost"] == 0.0421, result["kwargs"]
+    assert logging_obj.model_call_details["response_cost"] == 0.0421

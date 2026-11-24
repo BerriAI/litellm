@@ -446,6 +446,50 @@ async def test_generic_api_callback_sumologic_uses_ndjson():
 
 
 @pytest.mark.asyncio
+async def test_generic_api_callback_luca_sends_successful_calls_with_its_token(monkeypatch: pytest.MonkeyPatch):
+    """
+    callbacks: ["luca"] loads its endpoint and token from the environment and sends
+    successful calls only, as a JSON array, to that endpoint
+    """
+    luca_url: Final = "https://luca.example/v1/hooks/litellm/rc_0123abcd"
+    monkeypatch.setenv("LUCA_LITELLM_URL", luca_url)
+    monkeypatch.setenv("LUCA_LITELLM_TOKEN", "test-ingest-token")
+
+    mock_post = AsyncMock()
+    mock_post.return_value.status_code = 200
+    mock_post.return_value.text = "OK"
+
+    generic_logger = GenericAPILogger(callback_name="luca", flush_interval=3600)
+    generic_logger.async_httpx_client.post = mock_post
+    monkeypatch.setattr(litellm, "callbacks", [generic_logger])
+
+    assert generic_logger.endpoint == luca_url
+    assert generic_logger.headers["Authorization"] == "Bearer test-ingest-token"
+    assert generic_logger.event_types == ["llm_api_success"]
+    assert generic_logger.log_format == "json_array"
+
+    await _await_with_spawned_tasks(
+        litellm.acompletion(
+            model="gpt-5.5",
+            messages=[{"role": "user", "content": "Luca test"}],
+            mock_response="response",
+            user="customer_42",
+        )
+    )
+
+    await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=LOGGING_WORKER_DRAIN_TIMEOUT_SECONDS)
+    await generic_logger.flush_queue()
+
+    mock_post.assert_called_once()
+    assert mock_post.call_args[1]["url"] == luca_url
+    records: Final = json.loads(mock_post.call_args[1]["data"])
+    mine: Final = [r for r in records if r.get("messages") == [{"role": "user", "content": "Luca test"}]]
+    assert len(mine) == 1, f"Expected this test's single call in the batch, got {len(mine)} of {len(records)}"
+    assert mine[0]["response_cost"] > 0
+    assert mine[0]["status"] == "success"
+
+
+@pytest.mark.asyncio
 async def test_generic_api_callback_sends_queued_events_on_its_own(monkeypatch: pytest.MonkeyPatch):
     mock_post = AsyncMock()
     mock_post.return_value.status_code = 200

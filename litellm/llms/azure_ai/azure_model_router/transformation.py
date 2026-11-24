@@ -34,7 +34,7 @@ class AzureModelRouterConfig(AzureAIStudioConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        headers: dict,
+        headers: dict[str, object],
     ) -> dict:
         """
         Transform request for Model Router.
@@ -111,7 +111,9 @@ class AzureModelRouterConfig(AzureAIStudioConfig):
             )
         return transformed_response
 
-    def calculate_additional_costs(self, model: str, prompt_tokens: int, completion_tokens: int) -> dict | None:
+    def calculate_additional_costs(
+        self, model: str, prompt_tokens: int, completion_tokens: int
+    ) -> dict[str, float] | None:
         """
         Calculate additional costs for Azure Model Router.
 
