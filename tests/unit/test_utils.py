@@ -1250,6 +1250,8 @@ _COST_MAP_ROW_SCHEMA: Final = {
             "supports_parallel_function_calling": {"type": "boolean"},
             "supports_parallel_tool_use_config": {"type": "boolean"},
             "supports_pdf_input": {"type": "boolean"},
+            "supports_part_media_resolution": {"type": "boolean"},
+            "supports_media_in_tool_response": {"type": "boolean"},
             "prompt_cache_min_tokens": {"type": "number"},
             "supports_prompt_cache_breakpoint": {"type": "boolean"},
             "supports_bedrock_converse_cache_point": {"type": "boolean"},

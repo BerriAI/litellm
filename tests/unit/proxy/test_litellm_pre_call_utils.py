@@ -8163,6 +8163,11 @@ def test_forwarded_traceparent_shows_in_the_logged_request_body(
         ("codex_exec/0.144.5 (Mac OS 26.4.0; arm64)", None, {"drop_params": True}, True),
         ("codex_exec/0.144.5 (Mac OS 26.4.0; arm64)", None, {"drop_params": " False "}, None),
         ("codex_exec/0.144.5 (Mac OS 26.4.0; arm64)", None, {"drop_params": "true"}, True),
+        ("GitHubCopilotChat/0.74.0", None, {}, True),
+        ("GitHubCopilotChat/0.74.0", False, {}, False),
+        ("GitHubCopilotChat/0.74.0", None, {"drop_params": False}, None),
+        ("GitHubCopilotChat/0.74.0", None, {"drop_params": True}, True),
+        ("relay/1.0 (forwarding GitHubCopilotChat/0.74.0)", None, {}, None),
         ("PostmanRuntime/7.53.0", None, {}, None),
         (None, None, {}, None),
     ],
@@ -8170,9 +8175,10 @@ def test_forwarded_traceparent_shows_in_the_logged_request_body(
 async def test_add_litellm_data_to_request_agentic_cli_drop_params(
     user_agent, request_drop_params, operator_settings, expected_drop_params
 ):
-    """Claude Code sends Anthropic-specific params and Codex sends
-    service_tier, both of which fail on providers that reject them, so those
-    user agents must turn on drop_params automatically, without overriding an
+    """Claude Code sends Anthropic-specific params, Codex sends service_tier and
+    VS Code Copilot Chat sends cot_id on old assistant turns, all of which fail on
+    providers that reject them, so those user agents must turn on drop_params
+    automatically, without overriding an
     explicit caller value, an explicit operator-level litellm_settings value,
     or affecting other clients.
     """

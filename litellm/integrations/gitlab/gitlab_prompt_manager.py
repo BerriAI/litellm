@@ -473,7 +473,7 @@ class GitLabPromptManager(CustomPromptManagement):
         litellm_params: Mapping[str, object] | None = None,
         prompt_id: str | None = None,
         prompt_variables: Mapping[str, object] | None = None,
-        **kwargs,
+        **kwargs: object,
     ) -> _ResponseT:
         return response
 
@@ -507,7 +507,7 @@ class GitLabPromptManager(CustomPromptManagement):
         self,
         prompt_id: str | None,
         prompt_spec: PromptSpec | None,
-        prompt_variables: dict | None,
+        prompt_variables: Mapping[str, object] | None,
         dynamic_callback_params: StandardCallbackDynamicParams,
         prompt_label: str | None = None,
         prompt_version: int | None = None,
@@ -554,7 +554,7 @@ class GitLabPromptManager(CustomPromptManagement):
     async def async_compile_prompt_helper(
         self,
         prompt_id: str | None,
-        prompt_variables: dict | None,
+        prompt_variables: Mapping[str, object] | None,
         dynamic_callback_params: StandardCallbackDynamicParams,
         prompt_spec: PromptSpec | None = None,
         prompt_label: str | None = None,

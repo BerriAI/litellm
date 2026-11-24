@@ -74,10 +74,10 @@ class AmazonMantleMessagesConfig(AmazonAnthropicClaudeMessagesConfig):
         self,
         model: str,
         messages: list[dict],
-        anthropic_messages_optional_request_params: dict,
+        anthropic_messages_optional_request_params: dict[str, object],
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
-    ) -> dict:
+        headers: dict[str, str],
+    ) -> dict[str, object]:
         model_id: Final = model.replace("mantle/", "", 1)
         request: Final = _MANTLE_REQUEST.validate_python(
             super().transform_anthropic_messages_request(

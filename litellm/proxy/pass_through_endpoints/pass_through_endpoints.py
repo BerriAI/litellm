@@ -1698,7 +1698,7 @@ async def _opaque_passthrough_response(
 async def pass_through_request(
     request: Request,
     target: str,
-    custom_headers: Mapping[str, object],
+    custom_headers: Mapping[str, str],
     user_api_key_dict: UserAPIKeyAuth,
     custom_body: Mapping[str, object] | None = None,
     forward_headers: bool | None = False,
@@ -2925,7 +2925,7 @@ def create_pass_through_route(
 
             # Ensure custom_headers is a dict. Botocore returns a HeadersDict
             # for SigV4-prepared requests, which is a Mapping but not a dict.
-            headers_dict: Final[dict[str, object]] = (
+            headers_dict: Final[dict[str, str]] = (
                 {**param_custom_headers} if isinstance(param_custom_headers, Mapping) else {}
             )
 

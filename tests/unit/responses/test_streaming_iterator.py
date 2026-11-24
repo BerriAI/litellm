@@ -28,6 +28,8 @@ from litellm.litellm_core_utils.core_helpers import UPSTREAM_USAGE_COST, billed_
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
+from litellm.llms.bigmodel.responses.transformation import BigModelResponsesAPIConfig
+from litellm.llms.volcengine.responses.transformation import VolcEngineResponsesAPIConfig
 from litellm.responses.streaming_iterator import (
     CachedResponsesAPIStreamingIterator,
     MockResponsesAPIStreamingIterator,
@@ -3521,3 +3523,88 @@ def test_synthetic_stream_serializes_every_event_position_from_zero(output: list
 
     payloads: Final = tuple(json.loads(event.model_dump_json()) for event in events)
     assert [payload.get("sequence_number") for payload in payloads] == list(range(len(payloads)))
+
+
+_TOOL_INPUT_EVENTS: Final = (
+    ("response.function_call_arguments.delta", "delta"),
+    ("response.function_call_arguments.done", "arguments"),
+    ("response.mcp_call_arguments.delta", "delta"),
+    ("response.mcp_call_arguments.done", "arguments"),
+    ("response.mcp_call.arguments.delta", "delta"),
+    ("response.mcp_call.arguments.done", "arguments"),
+    ("response.custom_tool_call_input.delta", "delta"),
+    ("response.custom_tool_call_input.done", "input"),
+)
+_PROVIDER_STREAM_READERS: Final = (
+    pytest.param(OpenAIResponsesAPIConfig, id="openai_and_its_subclasses"),
+    pytest.param(BigModelResponsesAPIConfig, id="bigmodel"),
+    pytest.param(VolcEngineResponsesAPIConfig, id="volcengine"),
+)
+
+
+def _streamed_event_fields(
+    provider_config: type[OpenAIResponsesAPIConfig], event: Mapping[str, object]
+) -> Mapping[str, object]:
+    iterator: Final = ResponsesAPIStreamingIterator(
+        response=httpx.Response(200),
+        model="test-model",
+        responses_api_provider_config=provider_config(),
+        logging_obj=_FakeLoggingObj(),
+        litellm_metadata={},
+        request_data={},
+        call_type=CallTypes.responses.value,
+    )
+    streamed: Final = iterator._process_chunk(
+        json.dumps({"item_id": "call_1", "output_index": 0, "sequence_number": 1, **event})
+    )
+    assert streamed is not None
+    return json.loads(streamed.model_dump_json(exclude_none=True))
+
+
+@pytest.mark.parametrize("provider_config", _PROVIDER_STREAM_READERS)
+@pytest.mark.parametrize(("event_type", "field"), _TOOL_INPUT_EVENTS)
+@pytest.mark.parametrize("value", [42, {"q": "雪"}, [1, "a"], True])
+def test_streamed_tool_input_that_is_not_a_string_reaches_the_client_as_its_json_text(
+    provider_config: type[OpenAIResponsesAPIConfig], event_type: str, field: str, value: object
+):
+    fields: Final = _streamed_event_fields(provider_config, {"type": event_type, field: value})
+
+    assert fields["type"] == event_type
+    assert isinstance(fields[field], str)
+    assert json.loads(fields[field]) == value
+    assert "\\u" not in fields[field]
+
+
+@pytest.mark.parametrize("provider_config", _PROVIDER_STREAM_READERS)
+@pytest.mark.parametrize(("event_type", "field"), _TOOL_INPUT_EVENTS)
+def test_streamed_tool_input_sent_as_null_reaches_the_client_as_an_empty_string(
+    provider_config: type[OpenAIResponsesAPIConfig], event_type: str, field: str
+):
+    assert _streamed_event_fields(provider_config, {"type": event_type, field: None})[field] == ""
+
+
+@pytest.mark.parametrize(("event_type", "field"), _TOOL_INPUT_EVENTS)
+def test_streamed_tool_input_on_an_event_the_provider_reader_cannot_validate_still_reaches_the_client_as_a_string(
+    event_type: str, field: str
+):
+    fields: Final = _streamed_event_fields(
+        OpenAIResponsesAPIConfig, {"type": event_type, field: {"q": 1}, "output_index": "not-an-int"}
+    )
+
+    assert json.loads(fields[field]) == {"q": 1}
+
+
+@pytest.mark.parametrize("provider_config", _PROVIDER_STREAM_READERS)
+@pytest.mark.parametrize(("event_type", "field"), _TOOL_INPUT_EVENTS)
+def test_streamed_tool_input_that_is_already_a_string_reaches_the_client_unchanged(
+    provider_config: type[OpenAIResponsesAPIConfig], event_type: str, field: str
+):
+    assert _streamed_event_fields(provider_config, {"type": event_type, field: '{"ci'})[field] == '{"ci'
+
+
+def test_streamed_delta_on_an_event_that_is_not_tool_input_is_left_as_sent():
+    fields: Final = _streamed_event_fields(
+        OpenAIResponsesAPIConfig, {"type": "response.some_provider_event", "delta": {"q": 1}}
+    )
+
+    assert fields["delta"] == {"q": 1}

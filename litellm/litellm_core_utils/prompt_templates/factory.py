@@ -1569,6 +1569,8 @@ class GeminiMediaSource:
     detail: str | None = None
     video_metadata: Mapping[str, object] | None = None
     inline_in_tool_result: bool = False
+    document_metadata: Mapping[str, object] | None = None
+    spreadsheet_metadata: Mapping[str, object] | None = None
     max_download_bytes: int | None = None
 
 
@@ -1686,13 +1688,15 @@ def gemini_media_source(content: Mapping[str, object], *, prefer_file_id: bool =
     if source is None:
         return None
     file_format: Final = _gemini_media_format(file)
-    file_detail: Final = file.get("detail")
+    file_detail: Final = file.get("resolution") or file.get("detail")
     return GeminiMediaSource(
         url=_gemini_inline_url(source, file_format) if source == file_data else source,
         format=file_format,
         detail=file_detail if isinstance(file_detail, str) else None,
         video_metadata=as_str_mapping(file.get("video_metadata")),
         inline_in_tool_result=source == file_data,
+        document_metadata=as_str_mapping(file.get("document_metadata")),
+        spreadsheet_metadata=as_str_mapping(file.get("spreadsheet_metadata")),
     )
 
 
@@ -1706,7 +1710,7 @@ def _gemini_tool_media_part(
     vertex_credentials: VERTEX_CREDENTIALS_TYPES | None,
     drop_params: bool = False,
 ) -> VertexPartType | None:
-    from litellm.llms.vertex_ai.common_utils import gemini_fetches_url_itself
+    from litellm.llms.vertex_ai.common_utils import GEMINI_FILES_API_URI_PREFIXES, gemini_fetches_url_itself
     from litellm.llms.vertex_ai.gemini.transformation import changes_gemini_media_settings, encode_gemini_media_source
 
     source: Final = gemini_media_source(content)
@@ -1733,7 +1737,7 @@ def _gemini_tool_media_part(
             model=model or "",
             llm_provider=custom_llm_provider or "vertex_ai",
         )
-    inline_only: Final = nested and not vertex_nested
+    inline_only: Final = nested and not vertex_nested and not source.url.startswith(GEMINI_FILES_API_URI_PREFIXES)
     if inline_only and (source.url.startswith("gs://") or gemini_fetches_url_itself(source.url)):
         if drop_params:
             verbose_logger.warning("Dropped a media link from a Gemini tool result, which takes inline data only")
@@ -1761,8 +1765,10 @@ def _gemini_tool_media_part(
             or (inline_only and kept_source.url.startswith(("http://", "https://")))
             else kept_source
         )
-        part: Final = encode_gemini_media_source(encoded_source, model, vertex_project, vertex_credentials)
-        if nested and "file_data" in part and not part["file_data"].get("mime_type"):
+        part: Final = encode_gemini_media_source(
+            encoded_source, model, vertex_project, vertex_credentials, custom_llm_provider=custom_llm_provider
+        )
+        if vertex_nested and "file_data" in part and not part["file_data"].get("mime_type"):
             raise litellm.BadRequestError(
                 message="Vertex tool result file references require an explicit MIME type in format.",
                 model=model or "",
@@ -1809,7 +1815,9 @@ def skip_unfetched_media(
     verbose_logger.warning("Dropped media from %s because it could not be downloaded", location)
 
 
-def _function_response_part(part: VertexPartType) -> FunctionResponsePartType:
+def _function_response_part(part: VertexPartType, *, include_file_inspection: bool) -> FunctionResponsePartType:
+    from litellm.llms.vertex_ai.gemini.transformation import gemini_file_inspection_metadata
+
     inline: Final = (
         FunctionResponsePartType(inline_data=part["inline_data"])
         if "inline_data" in part
@@ -1828,7 +1836,14 @@ def _function_response_part(part: VertexPartType) -> FunctionResponsePartType:
         if "video_metadata" in part
         else FunctionResponsePartType()
     )
-    return inline | file | resolution | clip
+    selection: Final = (
+        FunctionResponsePartType(
+            **gemini_file_inspection_metadata(part.get("document_metadata"), part.get("spreadsheet_metadata"))
+        )
+        if include_file_inspection
+        else FunctionResponsePartType()
+    )
+    return inline | file | resolution | clip | selection
 
 
 def convert_to_gemini_tool_call_result(
@@ -1963,7 +1978,9 @@ def convert_to_gemini_tool_call_result(
         if not supports_multimodal_function_responses:
             return [_part, *media_parts]
         _function_response["parts"] = [
-            _function_response_part(part) for part in media_parts if "inline_data" in part or "file_data" in part
+            _function_response_part(part, include_file_inspection=custom_llm_provider == "gemini")
+            for part in media_parts
+            if "inline_data" in part or "file_data" in part
         ]
         return [_part]
 
