@@ -62,7 +62,12 @@ RUN --mount=type=secret,id=cgr-token \
     openssl-dev \
     nodejs \
     npm \
-    libsndfile
+    libsndfile \
+    build-base \
+    clang \
+    cmake \
+    go \
+    perl
 
 ENV UV_PROJECT_ENVIRONMENT=/app/.venv \
     CARGO_NET_RETRY=5 \
@@ -97,7 +102,10 @@ COPY --from=ui-builder /ui/out/. litellm/proxy/_experimental/out/
 
 RUN sed -i 's/\r$//' litellm/deploy/docker/build_admin_ui.sh && chmod +x litellm/deploy/docker/build_admin_ui.sh && ./litellm/deploy/docker/build_admin_ui.sh
 
-ARG MATURIN_PEP517_ARGS=""
+# The bridge's fips feature builds the AWS-LC FIPS module, whose delocate step fails under gcc
+ENV AWS_LC_FIPS_SYS_CC=clang \
+    AWS_LC_FIPS_SYS_CXX=clang++
+ARG MATURIN_PEP517_ARGS="--features fips"
 RUN uv sync --frozen --no-install-package litellm-proxy --no-default-groups --no-editable \
     --no-install-package cryptography --no-install-package grpcio --no-install-package psycopg-binary \
     --extra proxy \
@@ -188,6 +196,8 @@ RUN --mount=type=secret,id=cgr-token \
     HTTP_AUTH="basic:virtualapk.cgr.dev:user:$(cat /run/secrets/cgr-token)" \
     apk add --no-cache binutils
 RUN openssl-fips-test
+RUN grep -aq 'AWS-LC FIPS ' "$(python -c 'from litellm.rust_bridge import _native; print(_native.__file__)')" \
+    || { echo "the Rust bridge was built without its fips feature"; exit 1; }
 RUN python -c "from cryptography.hazmat.bindings._rust import openssl; assert openssl.is_fips_enabled(), openssl.openssl_version_text()"
 RUN for lib in "$(python -c 'import grpc._cython.cygrpc as m; print(m.__file__)')" \
         "$(python -c 'import psycopg; psycopg.pq.version(); print(next(l.split()[-1] for l in open("/proc/self/maps") if "/libpq." in l))')"; do \
