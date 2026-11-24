@@ -1025,6 +1025,23 @@ def _traced_peak_of_post_call(request_logging: LitellmLogging, response: object)
         tracemalloc.stop()
 
 
+@pytest.mark.parametrize(
+    ("callback_list", "async_callback_list"),
+    (
+        ("dynamic_success_callbacks", "dynamic_async_success_callbacks"),
+        ("dynamic_failure_callbacks", "dynamic_async_failure_callbacks"),
+    ),
+)
+def test_a_known_logger_named_by_the_request_gets_sync_and_async_events(
+    callback_list: str, async_callback_list: str
+) -> None:
+    request_logging: Final = _request_logging(callback_list, "langsmith")
+
+    sync_loggers: Final = getattr(request_logging, callback_list)
+    assert [type(logger).__name__ for logger in sync_loggers] == ["LangsmithLogger"]
+    assert getattr(request_logging, async_callback_list) == sync_loggers
+
+
 @pytest.fixture
 def no_response_readers(monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
     for name in _GLOBAL_CALLBACK_LISTS:

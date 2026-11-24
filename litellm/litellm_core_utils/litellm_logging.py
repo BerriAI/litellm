@@ -281,6 +281,7 @@ from litellm.types.videos.utils import POLLED_VIDEO_STATUS_KWARG
 from litellm.utils import (
     get_base_model_from_metadata,
     print_verbose,
+    split_dynamic_success_callbacks,
 )
 
 from ..integrations.argilla import ArgillaLogger
@@ -704,6 +705,7 @@ def _resolve_mantle_region_for_cost(
 
 _PER_CALL_LITELLM_PARAM_DICTS: Final = frozenset({"metadata", "litellm_metadata"})
 _LITELLM_PARAMS: Final = TypeAdapter(dict[str, object])
+_CALLBACK_ENTRIES: Final = TypeAdapter(list[object])
 _SERVED_ANTHROPIC_BODY: Final = TypeAdapter(dict[str, object])
 _GOOGLE_USAGE_FIELDS: Final = frozenset(UsageMetadata.__annotations__)
 _REDACTED_RESULT: Final = TypeAdapter(object)
@@ -766,6 +768,30 @@ def _timestamp_seconds(moment: object) -> float | None:
 
 def same_attempt_marker(first: object, second: object) -> bool:
     return first is second or first == second
+
+
+def configured_callbacks(configured: object) -> tuple[str | Callable[..., object] | CustomLogger, ...] | None:
+    if not isinstance(configured, list):
+        return None
+    entries: Final = _CALLBACK_ENTRIES.validate_python(configured)
+    return tuple(entry for entry in entries if isinstance(entry, str | CustomLogger) or callable(entry))
+
+
+@dataclass(frozen=True, slots=True)
+class _AttemptCallbacks:
+    success: tuple[str | Callable[..., object] | CustomLogger, ...] = ()
+    async_success: tuple[str | Callable[..., object] | CustomLogger, ...] = ()
+    failure: tuple[str | Callable[..., object] | CustomLogger, ...] = ()
+    async_failure: tuple[str | Callable[..., object] | CustomLogger, ...] = ()
+
+
+def _swapped_callbacks(
+    callbacks: Sequence[str | Callable[..., object] | CustomLogger] | None,
+    previous_attempt: Sequence[str | Callable[..., object] | CustomLogger],
+    attempt: Sequence[str | Callable[..., object] | CustomLogger],
+) -> list[str | Callable[..., object] | CustomLogger]:
+    kept: Final = tuple(callback for callback in callbacks or () if callback not in previous_attempt)
+    return [*kept, *(callback for callback in attempt if callback not in kept)]
 
 
 class UsageObservation(Enum):
@@ -1223,6 +1249,13 @@ class Logging(LiteLLMLoggingBaseClass):
         # Process dynamic callbacks (after standard_callback_dynamic_params is initialized,
         # so team-scoped credentials are available for callback initialization)
         self.process_dynamic_callbacks()
+        self._request_set_success_callbacks: Final = (
+            dynamic_success_callbacks is not None or dynamic_async_success_callbacks is not None
+        )
+        self._request_set_failure_callbacks: Final = (
+            dynamic_failure_callbacks is not None or dynamic_async_failure_callbacks is not None
+        )
+        self._attempt_callbacks: _AttemptCallbacks = _AttemptCallbacks()
         self.standard_built_in_tools_params: StandardBuiltInToolsParams = (
             self.initialize_standard_built_in_tools_params(kwargs)
         )
@@ -1422,6 +1455,57 @@ class Logging(LiteLLMLoggingBaseClass):
             self.dynamic_async_success_callbacks, dynamic_callbacks_type="async_success"
         )
 
+    def follow_attempt_callback_settings(self, attempt_fields: Mapping[str, object]) -> None:
+        self.standard_callback_dynamic_params = _initialize_standard_callback_dynamic_params(dict(attempt_fields))
+        self.model_call_details["standard_callback_dynamic_params"] = self.standard_callback_dynamic_params
+        previous: Final = self._attempt_callbacks
+        attempt: Final = self._attempt_callbacks_from(attempt_fields)
+        self.dynamic_success_callbacks = _swapped_callbacks(
+            self.dynamic_success_callbacks, previous.success, attempt.success
+        )
+        self.dynamic_async_success_callbacks = _swapped_callbacks(
+            self.dynamic_async_success_callbacks, previous.async_success, attempt.async_success
+        )
+        self.dynamic_failure_callbacks = _swapped_callbacks(
+            self.dynamic_failure_callbacks, previous.failure, attempt.failure
+        )
+        self.dynamic_async_failure_callbacks = _swapped_callbacks(
+            self.dynamic_async_failure_callbacks, previous.async_failure, attempt.async_failure
+        )
+        self._attempt_callbacks = attempt
+
+    def _attempt_callbacks_from(self, attempt_fields: Mapping[str, object]) -> _AttemptCallbacks:
+        success_callbacks: Final = (
+            None
+            if self._request_set_success_callbacks
+            else configured_callbacks(attempt_fields.get("success_callback"))
+        )
+        failure_callbacks: Final = (
+            None
+            if self._request_set_failure_callbacks
+            else configured_callbacks(attempt_fields.get("failure_callback"))
+        )
+        sync_success, async_success = split_dynamic_success_callbacks(success_callbacks or ())
+        success, success_loggers = self._resolved_dynamic_callbacks(sync_success)
+        failure, failure_loggers = self._resolved_dynamic_callbacks(failure_callbacks or ())
+        return _AttemptCallbacks(success, (*async_success, *success_loggers), failure, failure_loggers)
+
+    def _resolved_dynamic_callbacks(
+        self, callbacks: Sequence[str | Callable[..., object] | CustomLogger]
+    ) -> tuple[tuple[str | Callable[..., object] | CustomLogger, ...], tuple[CustomLogger, ...]]:
+        loggers: Final = tuple(self._known_callback_loggers(callback) for callback in callbacks)
+        resolved: Final = itertools.chain.from_iterable(
+            (callback,) if found is None else found for callback, found in zip(callbacks, loggers, strict=True)
+        )
+        return tuple(resolved), tuple(itertools.chain.from_iterable(found for found in loggers if found is not None))
+
+    def _known_callback_loggers(
+        self, callback: str | Callable[..., object] | CustomLogger
+    ) -> tuple[CustomLogger, ...] | None:
+        if isinstance(callback, str) and callback in litellm._known_custom_logger_compatible_callbacks:
+            return self._resolve_dynamic_callback_string(callback)
+        return None
+
     def _process_dynamic_callback_list(
         self,
         callback_list: list[str | Callable[..., object] | CustomLogger] | None,
@@ -1438,24 +1522,12 @@ class Logging(LiteLLMLoggingBaseClass):
         if callback_list is None:
             return None
 
-        processed_list: Final[list[str | Callable[..., object] | CustomLogger]] = []
-        for callback in callback_list:
-            if isinstance(callback, str) and callback in litellm._known_custom_logger_compatible_callbacks:
-                for callback_instance in self._resolve_dynamic_callback_string(callback):
-                    processed_list.append(callback_instance)
-
-                    # If processing dynamic_success_callbacks, add to dynamic_async_success_callbacks
-                    if dynamic_callbacks_type == "success":
-                        if self.dynamic_async_success_callbacks is None:
-                            self.dynamic_async_success_callbacks = []
-                        self.dynamic_async_success_callbacks.append(callback_instance)
-                    elif dynamic_callbacks_type == "failure":
-                        if self.dynamic_async_failure_callbacks is None:
-                            self.dynamic_async_failure_callbacks = []
-                        self.dynamic_async_failure_callbacks.append(callback_instance)
-            else:
-                processed_list.append(callback)
-        return processed_list
+        resolved, loggers = self._resolved_dynamic_callbacks(callback_list)
+        if loggers and dynamic_callbacks_type == "success":
+            self.dynamic_async_success_callbacks = [*(self.dynamic_async_success_callbacks or ()), *loggers]
+        if loggers and dynamic_callbacks_type == "failure":
+            self.dynamic_async_failure_callbacks = [*(self.dynamic_async_failure_callbacks or ()), *loggers]
+        return list(resolved)
 
     def _resolve_dynamic_callback_string(self, callback: str) -> "tuple[CustomLogger, ...]":
         """

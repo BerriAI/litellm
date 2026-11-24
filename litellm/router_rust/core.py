@@ -543,6 +543,23 @@ def _shares_logging(request: Mapping[str, object]) -> bool:
     return isinstance(request.get("litellm_logging_obj"), Logging)
 
 
+_CALLBACK_SETUP_FIELDS: Final = frozenset({"callbacks", "success_callback", "failure_callback"})
+
+
+def _follow_deployment_log_settings(attempt_kwargs: Mapping[str, object]) -> Mapping[str, object]:
+    from litellm.litellm_core_utils.litellm_logging import Logging, configured_callbacks
+    from litellm.utils import register_dynamic_callbacks
+
+    logging_obj: Final = attempt_kwargs.get("litellm_logging_obj")
+    if not isinstance(logging_obj, Logging):
+        return attempt_kwargs
+    deployment_callbacks: Final = configured_callbacks(attempt_kwargs.get("callbacks"))
+    if deployment_callbacks:
+        register_dynamic_callbacks(deployment_callbacks)
+    logging_obj.follow_attempt_callback_settings(attempt_kwargs)
+    return {key: value for key, value in attempt_kwargs.items() if key not in _CALLBACK_SETUP_FIELDS}
+
+
 class RustCoreUnsupported(AttributeError):
     """A member or request the Rust core does not serve. It is never forwarded to a Python core."""
 
@@ -5139,7 +5156,8 @@ class _Driver:
             fallback_model_group=shape.fallback_model_group,
         )
         self._strip_undecryptable_reasoning(step, shape, deployment, call.kwargs)
-        shaped: Final = shape_attempt_kwargs(call.kwargs, deployment)
+        logged: Final = _follow_deployment_log_settings(call.kwargs) if self._plan.kind == "image" else call.kwargs
+        shaped: Final = shape_attempt_kwargs(logged, deployment)
         # The walk's metadata for the attempt's level (retries, fallback hops) and its hop kwargs.
         call.kwargs = self._walk.stamp(step, shaped, shape) if self._plan.stamps_walk else shaped
         field: Final = self._plan.metadata_field

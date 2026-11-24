@@ -1,10 +1,12 @@
 import asyncio
 import copy
 import logging
-from collections.abc import Iterator, Mapping
+import threading
+from collections.abc import Callable, Iterator, Mapping
+from dataclasses import dataclass
 from datetime import datetime
 from queue import Queue
-from types import SimpleNamespace
+from types import MappingProxyType, SimpleNamespace
 from typing import Any, Dict, Final, cast
 
 import orjson
@@ -443,6 +445,7 @@ async def test_failure_before_the_provider_call_bills_the_callers_litellm_call_i
 class _ImageRouterHandler(litellm.CustomLLM):
     def __init__(self) -> None:
         self.calls: list[str] = []
+        self.received_params: list[Mapping[str, object]] = []
         self.billed_before_failure: tuple[litellm.Usage, float] | None = None
 
     async def aimage_generation(
@@ -458,6 +461,7 @@ class _ImageRouterHandler(litellm.CustomLLM):
         client: object | None = None,
     ) -> ImageResponse:
         self.calls.append(model)
+        self.received_params.append(dict(optional_params))
         if isinstance(logging_obj, LiteLLMLoggingObj):
             logging_obj.pre_call(input=prompt, api_key=api_key)
         if model.endswith("failing"):
@@ -472,6 +476,7 @@ def _image_generation_client(
     user_api_key_dict: UserAPIKeyAuth,
     team_settings: Mapping[str, object] | None = None,
     working_params: Mapping[str, object] | None = None,
+    failing_params: Mapping[str, object] | None = None,
 ) -> tuple[TestClient, _ImageRouterHandler]:
     from litellm.proxy import proxy_server
 
@@ -496,7 +501,7 @@ def _image_generation_client(
         model_list=[
             {
                 "model_name": "A",
-                "litellm_params": {"model": "image-regression/failing"},
+                "litellm_params": {"model": "image-regression/failing", **(failing_params or {})},
                 "model_info": {"id": "image-regression-failing"},
             },
             {
@@ -523,11 +528,39 @@ def _image_generation_client(
     return TestClient(app, raise_server_exceptions=False), handler
 
 
+def _shows_prompt(value: object) -> bool:
+    return "draw a tree" in orjson.dumps(value, default=str).decode()
+
+
+@dataclass(frozen=True, slots=True)
+class _LoggedRow:
+    outcome: str
+    prompt_shown: tuple[bool, bool, bool]
+    callback_params: Mapping[str, object]
+
+    @classmethod
+    def of(cls, outcome: str, kwargs: Mapping[str, object]) -> "_LoggedRow":
+        payload: Final = kwargs.get("standard_logging_object")
+        assert isinstance(payload, Mapping)
+        callback_params: Final = kwargs.get("standard_callback_dynamic_params")
+        assert isinstance(callback_params, Mapping)
+        return cls(
+            outcome,
+            (
+                _shows_prompt(payload.get("messages")),
+                _shows_prompt(kwargs.get("messages")),
+                _shows_prompt(kwargs.get("input")),
+            ),
+            MappingProxyType(dict(callback_params)),
+        )
+
+
 class _ImageOutcomeLogger(CustomLogger):
     def __init__(self) -> None:
         self.events: Queue[tuple[object, object, object]] = Queue()
         self.messages: Queue[object] = Queue()
         self.correlation: Queue[tuple[str, str]] = Queue()
+        self.rows: Queue[_LoggedRow] = Queue()
 
     async def async_log_failure_event(
         self,
@@ -536,6 +569,7 @@ class _ImageOutcomeLogger(CustomLogger):
         start_time: datetime,
         end_time: datetime,
     ) -> None:
+        self.rows.put(_LoggedRow.of("failure", kwargs))
         self.messages.put(kwargs.get("messages"))
         self.correlation.put((trace_id_var.get(), session_id_var.get()))
         self.events.put((kwargs.get("call_type"), kwargs.get("litellm_call_id"), kwargs.get("exception")))
@@ -547,6 +581,7 @@ class _ImageOutcomeLogger(CustomLogger):
         start_time: datetime,
         end_time: datetime,
     ) -> None:
+        self.rows.put(_LoggedRow.of("success", kwargs))
         self.messages.put(kwargs.get("messages"))
         self.events.put((kwargs.get("call_type"), kwargs.get("litellm_call_id"), response_obj))
 
@@ -795,3 +830,241 @@ def test_failed_image_generation_spend_row_bills_what_the_provider_served(monkey
         2240,
         2256,
     )
+
+
+_PRIVATE: Final = MappingProxyType({"turn_off_message_logging": True})
+_OPEN: Final = MappingProxyType({})
+
+
+@pytest.mark.parametrize(
+    ("model", "settings", "outcome", "prompt_shown"),
+    (
+        pytest.param("B", _PRIVATE, "success", False, id="served_private"),
+        pytest.param("B", _OPEN, "success", True, id="served_open"),
+        pytest.param("A", _PRIVATE, "failure", False, id="failed_private"),
+        pytest.param("A", _OPEN, "failure", True, id="failed_open"),
+    ),
+)
+def test_image_log_follows_the_deployments_message_logging_setting(
+    monkeypatch: pytest.MonkeyPatch, model: str, settings: Mapping[str, object], outcome: str, prompt_shown: bool
+) -> None:
+    logger: Final = _ImageOutcomeLogger()
+    monkeypatch.setattr(litellm, "callbacks", [logger])
+    client, handler = _image_generation_client(
+        monkeypatch, UserAPIKeyAuth(), working_params=settings, failing_params=settings
+    )
+
+    with client:
+        response: Final = client.post("/v1/images/generations", json={"model": model, "prompt": "draw a tree"})
+        row: Final = logger.rows.get(timeout=5)
+
+    assert response.status_code == (200 if outcome == "success" else 429), response.text
+    assert (row.outcome, row.prompt_shown) == (outcome, (prompt_shown,) * 3)
+    assert logger.rows.empty()
+
+
+@pytest.mark.parametrize(
+    ("failing_settings", "working_settings", "failure_shown", "served_shown"),
+    (
+        pytest.param(_OPEN, _PRIVATE, True, False, id="open_to_private"),
+        pytest.param(_PRIVATE, _OPEN, False, True, id="private_to_open"),
+    ),
+)
+def test_image_fallback_logs_each_attempt_by_its_own_deployments_message_logging(
+    monkeypatch: pytest.MonkeyPatch,
+    failing_settings: Mapping[str, object],
+    working_settings: Mapping[str, object],
+    failure_shown: bool,
+    served_shown: bool,
+) -> None:
+    logger: Final = _ImageOutcomeLogger()
+    monkeypatch.setattr(litellm, "callbacks", [logger])
+    client, handler = _image_generation_client(
+        monkeypatch,
+        UserAPIKeyAuth(router_settings={"fallbacks": [{"A": ["B"]}]}),
+        working_params=working_settings,
+        failing_params=failing_settings,
+    )
+
+    with client:
+        response: Final = client.post("/v1/images/generations", json={"model": "A", "prompt": "draw a tree"})
+        rows: Final = (logger.rows.get(timeout=5), logger.rows.get(timeout=5))
+
+    assert response.status_code == 200, response.text
+    assert handler.calls == ["failing", "working"]
+    assert [(row.outcome, row.prompt_shown) for row in rows] == [
+        ("failure", (failure_shown,) * 3),
+        ("success", (served_shown,) * 3),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("key_metadata", "logged_public_key"),
+    (
+        pytest.param({}, "pk-deployment", id="deployment_key"),
+        pytest.param(
+            {
+                "logging": [
+                    {
+                        "callback_name": "image-regression-key-logger",
+                        "callback_type": "success",
+                        "callback_vars": {"langfuse_public_key": "pk-key"},
+                    }
+                ]
+            },
+            "pk-key",
+            id="key_wins",
+        ),
+    ),
+)
+@pytest.mark.parametrize(("model", "outcome"), (("B", "success"), ("A", "failure")))
+def test_image_log_carries_the_deployments_callback_params_unless_the_key_sets_them(
+    monkeypatch: pytest.MonkeyPatch,
+    key_metadata: Mapping[str, object],
+    logged_public_key: str,
+    model: str,
+    outcome: str,
+) -> None:
+    logger: Final = _ImageOutcomeLogger()
+    monkeypatch.setattr(litellm, "callbacks", [logger])
+    settings: Final = {"langfuse_public_key": "pk-deployment"}
+    client, _ = _image_generation_client(
+        monkeypatch, UserAPIKeyAuth(metadata=dict(key_metadata)), working_params=settings, failing_params=settings
+    )
+
+    with client:
+        client.post("/v1/images/generations", json={"model": model, "prompt": "draw a tree"})
+        row: Final = logger.rows.get(timeout=5)
+
+    assert (row.outcome, row.callback_params.get("langfuse_public_key")) == (outcome, logged_public_key)
+
+
+class _DeploymentLogger(CustomLogger):
+    def __init__(self, report: Callable[[str], None]) -> None:
+        self.report: Final = report
+
+    async def async_log_success_event(
+        self, kwargs: dict[str, object], response_obj: object, start_time: datetime, end_time: datetime
+    ) -> None:
+        self.report("success")
+
+    async def async_log_failure_event(
+        self, kwargs: dict[str, object], response_obj: object, start_time: datetime, end_time: datetime
+    ) -> None:
+        self.report("failure")
+
+
+@pytest.mark.parametrize(
+    ("key_metadata", "deployment_outcomes"),
+    (
+        pytest.param({}, {"success": ("success", "async_success"), "failure": ("failure",)}, id="deployment_callbacks"),
+        pytest.param(
+            {
+                "logging": [
+                    {
+                        "callback_name": "image-regression-key-logger",
+                        "callback_type": "success_and_failure",
+                        "callback_vars": {},
+                    }
+                ]
+            },
+            {"success": (), "failure": ()},
+            id="key_callbacks_win",
+        ),
+    ),
+)
+@pytest.mark.parametrize(("model", "outcome"), (("B", "success"), ("A", "failure")))
+def test_image_deployment_callbacks_run_without_reaching_the_provider(
+    monkeypatch: pytest.MonkeyPatch,
+    key_metadata: Mapping[str, object],
+    deployment_outcomes: Mapping[str, tuple[str, ...]],
+    model: str,
+    outcome: str,
+) -> None:
+    fired: Final = {name: threading.Event() for name in ("success", "async_success", "failure", "logged")}
+    registered_outcomes: Final[Queue[str]] = Queue()
+
+    def report(registered_outcome: str) -> None:
+        registered_outcomes.put(registered_outcome)
+
+    def on_success(kwargs: object, response: object, start_time: object, end_time: object) -> None:
+        fired["success"].set()
+
+    async def on_async_success(kwargs: object, response: object, start_time: object, end_time: object) -> None:
+        fired["async_success"].set()
+
+    def on_failure(kwargs: object, response: object, start_time: object, end_time: object) -> None:
+        fired["failure"].set()
+
+    def on_logged(kwargs: object, response: object, start_time: object, end_time: object) -> None:
+        fired["logged"].set()
+
+    for name in ("input_callback", "_async_success_callback", "_async_failure_callback", "callbacks"):
+        monkeypatch.setattr(litellm, name, [])
+    monkeypatch.setattr(litellm, "success_callback", [on_logged])
+    monkeypatch.setattr(litellm, "failure_callback", [on_logged])
+    settings: Final = {
+        "success_callback": [on_success, on_async_success],
+        "failure_callback": [on_failure],
+        "callbacks": [_DeploymentLogger(report)],
+    }
+    client, handler = _image_generation_client(
+        monkeypatch, UserAPIKeyAuth(metadata=dict(key_metadata)), working_params=settings, failing_params=settings
+    )
+
+    with client:
+        response: Final = client.post("/v1/images/generations", json={"model": model, "prompt": "draw a tree"})
+        assert fired["logged"].wait(timeout=5), response.text
+        assert registered_outcomes.get(timeout=5) == outcome
+
+    deployment_fired: Final = tuple(name for name in ("success", "async_success", "failure") if fired[name].is_set())
+    assert deployment_fired == deployment_outcomes[outcome]
+    assert handler.received_params == [{}]
+
+
+def test_image_fallback_runs_only_each_attempts_own_deployment_callbacks(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "success_callback", [])
+    monkeypatch.setattr(litellm, "failure_callback", [])
+    monkeypatch.setattr(litellm, "callbacks", [])
+    fired: Final = {name: threading.Event() for name in ("failing_success", "failing_failure", "working_success")}
+
+    def on_failing_success(kwargs: object, response: object, start_time: object, end_time: object) -> None:
+        fired["failing_success"].set()
+
+    def on_failing_failure(kwargs: object, response: object, start_time: object, end_time: object) -> None:
+        fired["failing_failure"].set()
+
+    def on_working_success(kwargs: object, response: object, start_time: object, end_time: object) -> None:
+        fired["working_success"].set()
+
+    client, handler = _image_generation_client(
+        monkeypatch,
+        UserAPIKeyAuth(router_settings={"fallbacks": [{"A": ["B"]}]}),
+        working_params={"success_callback": [on_working_success]},
+        failing_params={"success_callback": [on_failing_success], "failure_callback": [on_failing_failure]},
+    )
+
+    with client:
+        response: Final = client.post("/v1/images/generations", json={"model": "A", "prompt": "draw a tree"})
+        assert fired["failing_failure"].wait(timeout=5), response.text
+        assert fired["working_success"].wait(timeout=5), response.text
+
+    assert handler.calls == ["failing", "working"]
+    assert not fired["failing_success"].is_set()
+
+
+def test_repeated_image_requests_register_a_deployments_named_logger_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    for name in ("input_callback", "success_callback", "failure_callback", "_async_success_callback", "callbacks"):
+        monkeypatch.setattr(litellm, name, [])
+    client, _ = _image_generation_client(
+        monkeypatch, UserAPIKeyAuth(), working_params={"callbacks": ["anthropic_cache_control_hook"]}
+    )
+
+    with client:
+        responses: Final = tuple(
+            client.post("/v1/images/generations", json={"model": "B", "prompt": "draw a tree"}) for _ in range(2)
+        )
+
+    assert [response.status_code for response in responses] == [200, 200]
+    registered: Final = tuple(type(callback).__name__ for callback in litellm._async_success_callback)
+    assert registered == ("AnthropicCacheControlHook",)
