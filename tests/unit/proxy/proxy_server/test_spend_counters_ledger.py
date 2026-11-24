@@ -383,3 +383,59 @@ async def test_a_budgeted_team_whose_id_names_a_window_keeps_its_charge_and_gets
     )
 
     assert store.snapshot() == {team_counter_key: 1.5}
+
+
+@pytest.mark.asyncio
+async def test_scheduled_team_window_charges_the_period_the_request_started_in(monkeypatch: pytest.MonkeyPatch) -> None:
+    from datetime import datetime, timezone
+
+    from litellm.models.team import LiteLLM_TeamTable
+    from litellm.redis.stores.spend_counters import team_window_counter
+
+    morning: Final = "sched:Europe/Berlin:mon,tue,wed,thu,fri:08:00-13:00"
+    afternoon: Final = "sched:Europe/Berlin:mon,tue,wed,thu,fri:13:00-18:00"
+    morning_counter: Final = team_window_counter("t", f"{morning}@2026-11-25T07:00:00+00:00")
+    afternoon_counter: Final = team_window_counter("t", f"{afternoon}@2026-11-25T12:00:00+00:00")
+    redis: Final = RespRedis(values={"spend:team:t": 0.0, morning_counter: 0.0, afternoon_counter: 0.0})
+    cache: Final = UserApiKeyCache()
+    await cache.async_set_cache(
+        key=AuthObject.team("t"),
+        value=LiteLLM_TeamTable.model_validate(
+            {
+                "team_id": "t",
+                "budget_limits": [
+                    {
+                        "max_budget": 10.0,
+                        "schedule": {
+                            "timezone": "Europe/Berlin",
+                            "days": ["mon", "tue", "wed", "thu", "fri"],
+                            "start": "08:00",
+                            "end": "13:00",
+                        },
+                    },
+                    {
+                        "max_budget": 10.0,
+                        "schedule": {
+                            "timezone": "Europe/Berlin",
+                            "days": ["mon", "tue", "wed", "thu", "fri"],
+                            "start": "13:00",
+                            "end": "18:00",
+                        },
+                    },
+                ],
+            }
+        ),
+    )
+    monkeypatch.setattr(ps, "user_api_key_cache", cache)
+    monkeypatch.setattr(ps, "prisma_client", None)
+
+    with rust_redis_store(monkeypatch, redis):
+        await ps.increment_spend_counters(
+            token=None,
+            team_id="t",
+            user_id=None,
+            response_cost=2.0,
+            request_started_at=datetime(2026, 11, 25, 11, 59, tzinfo=timezone.utc),
+        )
+
+    assert redis.values == {"spend:team:t": 2.0, morning_counter: 2.0, afternoon_counter: 0.0}

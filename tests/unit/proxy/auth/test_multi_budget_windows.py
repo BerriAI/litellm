@@ -3,6 +3,7 @@ Unit tests for multi-budget-window enforcement on API keys.
 """
 
 import re
+from datetime import datetime
 from collections.abc import Mapping
 from unittest.mock import AsyncMock, patch
 from typing import Final
@@ -14,8 +15,10 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.auth_checks import _virtual_key_multi_budget_check
 from litellm.proxy.auth import auth_checks
 from litellm.proxy import proxy_server
+from litellm.models.budget_schedule import resolve_schedules_at
+from litellm.models.team import LiteLLM_TeamTable
 from litellm.models.user import LiteLLM_UserTable
-from litellm.redis.stores.spend_counters import user_counter, user_window_counter
+from litellm.redis.stores.spend_counters import team_window_counter, user_counter, user_window_counter
 from tests.unit.redis.stores.spend_counters_double import FakeSpendCounters
 
 
@@ -181,3 +184,76 @@ async def test_budget_limit_entry_objects_coerced():
     ):
         # Should not raise TypeError / KeyError — model_dump() coerces the object
         await _virtual_key_multi_budget_check(valid_token=token)
+
+_MORNING: Final = "sched:Europe/Berlin:mon,tue,wed,thu,fri:08:00-13:00"
+_AFTERNOON: Final = "sched:Europe/Berlin:mon,tue,wed,thu,fri:13:00-18:00"
+
+
+def _scheduled_team() -> LiteLLM_TeamTable:
+    return LiteLLM_TeamTable(
+        team_id="t",
+        budget_limits=[
+            {
+                "max_budget": 10.0,
+                "schedule": {
+                    "timezone": "Europe/Berlin",
+                    "days": ["mon", "tue", "wed", "thu", "fri"],
+                    "start": "08:00",
+                    "end": "13:00",
+                },
+            },
+            {
+                "max_budget": 10.0,
+                "schedule": {
+                    "timezone": "Europe/Berlin",
+                    "days": ["mon", "tue", "wed", "thu", "fri"],
+                    "start": "13:00",
+                    "end": "18:00",
+                },
+            },
+        ],
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "now, spend, blocked_by",
+    [
+        (
+            "2026-11-25T11:00:00+00:00",
+            {_MORNING + "@2026-11-25T07:00:00+00:00": 10.0},
+            "over sched:Europe/Berlin:mon,tue,wed,thu,fri:08:00-13:00 budget",
+        ),
+        ("2026-11-25T12:00:00+00:00", {_MORNING + "@2026-11-25T07:00:00+00:00": 10.0}, None),
+        (
+            "2026-11-25T12:30:00+00:00",
+            {_AFTERNOON + "@2026-11-25T12:00:00+00:00": 10.0},
+            "over sched:Europe/Berlin:mon,tue,wed,thu,fri:13:00-18:00 budget",
+        ),
+        ("2026-11-26T08:00:00+00:00", {_MORNING + "@2026-11-25T07:00:00+00:00": 10.0}, None),
+        (
+            "2026-11-25T20:00:00+00:00",
+            {_MORNING + "@2026-11-25T07:00:00+00:00": 10.0, _AFTERNOON + "@2026-11-25T12:00:00+00:00": 10.0},
+            None,
+        ),
+    ],
+    ids=[
+        "morning_full",
+        "afternoon_starts_fresh",
+        "afternoon_full",
+        "next_morning_starts_fresh",
+        "outside_every_period",
+    ],
+)
+async def test_team_scheduled_windows_give_each_period_a_fresh_allowance(
+    monkeypatch: pytest.MonkeyPatch, now: str, spend: Mapping[str, float], blocked_by: str | None
+) -> None:
+    counters: Final = FakeSpendCounters(redis={team_window_counter("t", name): value for name, value in spend.items()})
+    monkeypatch.setattr(proxy_server, "spend_counter_store", counters.store())
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    with resolve_schedules_at(datetime.fromisoformat(now)):
+        if blocked_by is not None:
+            with pytest.raises(litellm.BudgetExceededError, match=re.escape(blocked_by)):
+                await auth_checks._team_multi_budget_check(_scheduled_team())
+            return
+        await auth_checks._team_multi_budget_check(_scheduled_team())

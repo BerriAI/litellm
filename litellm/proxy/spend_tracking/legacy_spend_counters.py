@@ -18,6 +18,7 @@ from typing import Final, TypeAlias
 from pydantic import TypeAdapter
 
 from litellm._internal_context import service_target
+from litellm.models.budget_schedule import is_scheduled_duration, window_counter_name
 from litellm.proxy._types import Litellm_EntityType
 from litellm.proxy.db.db_transaction_queue.window_spend_update_queue import build_window_spend_transaction
 from litellm.proxy.spend_tracking.budget_reservation import (
@@ -137,7 +138,10 @@ async def increment_spend_counters_batched(
         duration: Final = (
             window["budget_duration"] if isinstance(window, dict) else getattr(window, "budget_duration", None)
         )
-        duration_text: Final = TypeAdapter(str).validate_python(duration)
+        window_start: Final = get_budget_window_start(window)
+        if window_start is None and is_scheduled_duration(duration):
+            return None
+        duration_text: Final = window_counter_name(TypeAdapter(str).validate_python(duration), window_start)
         window_reset_at: Final = (
             window.get("reset_at") if isinstance(window, dict) else getattr(window, "reset_at", None)
         )
@@ -149,7 +153,7 @@ async def increment_spend_counters_batched(
             else team_window_counter(entity_id, duration_text)
         )
         return await _resolved_window_increment(
-            entity_type, entity_id, window_counter, duration, get_budget_window_start(window), window_reset_at
+            entity_type, entity_id, window_counter, duration_text, window_start, window_reset_at
         )
 
     async def _customer_windows() -> tuple[PendingSpendIncrement | BaseException, ...]:

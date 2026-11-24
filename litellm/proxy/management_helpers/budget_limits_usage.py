@@ -4,6 +4,7 @@ from collections.abc import Callable, Mapping
 from typing import Final, Literal, TypeAlias
 
 from litellm.litellm_core_utils.core_helpers import iter_items
+from litellm.models.budget_schedule import BudgetSchedule, schedule_clock, window_counter_name
 from litellm.proxy.spend_tracking.budget_reservation import get_budget_window_start
 
 BudgetWindowEntityType: TypeAlias = Literal["Key", "Team", "User"]
@@ -47,16 +48,27 @@ async def _budget_window_usage(
     duration: Final = window.get("budget_duration")
     if not isinstance(duration, str) or not duration:
         return None
+    window_start: Final = get_budget_window_start(window)
+    schedule: Final = BudgetSchedule.from_label(duration)
+    if schedule is not None and window_start is None:
+        return duration, {"current_spend": 0.0, "active": False, "next_start": _next_start(schedule)}
+    window_name: Final = window_counter_name(duration, window_start)
     spend: Final = await get_current_spend(
-        counter_key=counter_key(duration),
+        counter_key=counter_key(window_name),
         fallback_spend=0.0,
         max_budget=_window_max_budget(window),
         window_entity_type=entity_type,
         window_entity_id=entity_id,
-        window_duration=duration,
-        window_start=get_budget_window_start(window),
+        window_duration=window_name,
+        window_start=window_start,
     )
-    return duration, {"current_spend": spend}
+    if schedule is None:
+        return duration, {"current_spend": spend}
+    return duration, {"current_spend": spend, "active": True, "next_start": _next_start(schedule)}
+
+
+def _next_start(schedule: BudgetSchedule) -> str:
+    return schedule.next_start(schedule_clock()).isoformat()
 
 
 async def build_budget_limits_usage(

@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Annotated, Final, TypeAlias
 from pydantic import AfterValidator, ConfigDict, Field, model_validator
 
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
+from litellm.models.budget_schedule import BudgetSchedule, validate_schedules
 from litellm.types.llms.base import LiteLLMPydanticObjectBase
 
 if TYPE_CHECKING:
@@ -50,6 +51,22 @@ class BudgetLimit(LiteLLMPydanticObjectBase):
         description="Server-managed start of the current spend window.",
         exclude_if=_is_none,
     )
+    schedule: BudgetSchedule | None = Field(
+        default=None,
+        description="Recurring local wall-clock period this window applies to. Its budget_duration is derived.",
+        exclude_if=_is_none,
+    )
+
+    @model_validator(mode="before")
+    @classmethod
+    def derive_scheduled_duration(cls, value: object) -> object:
+        values: Final = as_str_mapping(value)
+        if values is None or values.get("schedule") is None:
+            return value
+        label: Final = BudgetSchedule.model_validate(values["schedule"]).label()
+        if values.get("budget_duration") not in (None, label):
+            raise ValueError("budget_duration is derived from schedule; omit it")
+        return {**values, "budget_duration": label}
 
 
 def validate_budget_limits(limits: Sequence[BudgetLimit]) -> Sequence[BudgetLimit]:
@@ -57,6 +74,7 @@ def validate_budget_limits(limits: Sequence[BudgetLimit]) -> Sequence[BudgetLimi
 
     if len({limit.budget_duration for limit in limits}) != len(limits):
         raise ValueError("Each budget duration may appear only once")
+    validate_schedules(tuple(limit.schedule for limit in limits if limit.schedule is not None))
     for limit in limits:
         if (error := budget_duration_error(limit.budget_duration)) is not None:
             raise ValueError(error)
@@ -65,8 +83,19 @@ def validate_budget_limits(limits: Sequence[BudgetLimit]) -> Sequence[BudgetLimi
     return limits
 
 
-BudgetLimits: TypeAlias = Annotated[tuple[BudgetLimit, ...], AfterValidator(validate_budget_limits)]
-BudgetLimitList: TypeAlias = Annotated[list[BudgetLimit], AfterValidator(validate_budget_limits)]
+def reject_budget_schedules(limits: Sequence[BudgetLimit]) -> Sequence[BudgetLimit]:
+    if any(limit.schedule is not None for limit in limits):
+        raise ValueError("Scheduled budget windows are supported only on teams")
+    return limits
+
+
+BudgetLimits: TypeAlias = Annotated[
+    tuple[BudgetLimit, ...], AfterValidator(validate_budget_limits), AfterValidator(reject_budget_schedules)
+]
+BudgetLimitList: TypeAlias = Annotated[
+    list[BudgetLimit], AfterValidator(validate_budget_limits), AfterValidator(reject_budget_schedules)
+]
+TeamBudgetLimitList: TypeAlias = Annotated[list[BudgetLimit], AfterValidator(validate_budget_limits)]
 
 
 def carry_budget_limit_resets(

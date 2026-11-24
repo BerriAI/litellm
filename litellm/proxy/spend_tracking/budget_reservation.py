@@ -37,6 +37,7 @@ from litellm.litellm_core_utils.tool_fields import drop_policy
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.openai.responses.transformation import OPENAI_RESPONSES_API_MIN_MAX_OUTPUT_TOKENS
 from litellm.models.budget import BudgetLimit
+from litellm.models.budget_schedule import is_scheduled_duration, schedule_clock, scheduled_period, window_counter_name
 from litellm.proxy._types import (
     LiteLLM_TeamMembership,
     LiteLLM_TeamTable,
@@ -1085,6 +1086,8 @@ def _get_budget_limit_counters(
         if not budget_duration or max_budget is None or max_budget <= 0:
             continue
         window_start = get_budget_window_start(window_dict)
+        if window_start is None and is_scheduled_duration(budget_duration):
+            continue
         if window_start is None:
             verbose_proxy_logger.warning(
                 "Skipping budget window with invalid duration for %s=%s: %s",
@@ -1093,15 +1096,16 @@ def _get_budget_limit_counters(
                 budget_duration,
             )
             continue
+        window_name = window_counter_name(str(budget_duration), window_start)
         counters.append(
             _BudgetCounter(
-                counter_key=window_counter(str(budget_duration)),
+                counter_key=window_counter(window_name),
                 max_budget=float(max_budget),
                 fallback_spend=0.0,
                 entity_type=entity_type,
-                entity_id=f"{entity_id}:{budget_duration}",
+                entity_id=f"{entity_id}:{window_name}",
                 spend_log_entity_id=entity_id,
-                window_duration=str(budget_duration),
+                window_duration=window_name,
                 window_start=window_start,
             )
         )
@@ -1230,7 +1234,7 @@ def fixed_budget_window(window: object) -> tuple[str, datetime] | None:
     duration: Final = fields.get("budget_duration")
     if not fields.get("reset_at") or not isinstance(duration, str) or start is None:
         return None
-    return duration, start
+    return window_counter_name(duration, start), start
 
 
 def get_budget_window_start(window: object, reset_settings: BudgetResetSettings | None = None) -> datetime | None:
@@ -1238,6 +1242,9 @@ def get_budget_window_start(window: object, reset_settings: BudgetResetSettings 
     budget_duration: Final = window_dict.get("budget_duration")
     if budget_duration is None:
         return None
+    if is_scheduled_duration(budget_duration):
+        period: Final = scheduled_period(str(budget_duration), schedule_clock())
+        return None if period is None else period[0]
     saved_start: Final = _coerce_datetime(window_dict.get("window_start"))
     if saved_start is not None:
         start: Final = saved_start if saved_start.tzinfo is not None else saved_start.replace(tzinfo=timezone.utc)

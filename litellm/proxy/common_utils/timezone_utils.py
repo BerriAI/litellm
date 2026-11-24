@@ -11,6 +11,7 @@ from litellm.litellm_core_utils.duration_parser import (
     get_next_standardized_reset_time,
     normalize_budget_window_start,
 )
+from litellm.models.budget_schedule import BudgetSchedule, is_scheduled_duration
 from litellm.types.llms.base import LiteLLMBaseModel
 
 
@@ -102,8 +103,11 @@ def get_budget_window_reset_fields(
     settings: BudgetResetSettings | None = None,
     now: datetime | None = None,
 ) -> Mapping[str, str]:
-    configured: Final = settings or get_budget_reset_settings()
     current: Final = now if now is not None else datetime.now(timezone.utc)
+    schedule: Final = BudgetSchedule.from_label(budget_duration)
+    if schedule is not None:
+        return _scheduled_window_reset_fields(schedule, current)
+    configured: Final = settings or get_budget_reset_settings()
     end: Final = reset_at if reset_at is not None else compute_budget_reset_at(budget_duration, configured, current)
     scheduled: Final = get_budget_window_start(budget_duration, end, configured.timezone, configured.reset_time_of_day)
     start: Final = normalize_budget_window_start(scheduled if reset_at is not None else min(scheduled, current))
@@ -113,6 +117,12 @@ def get_budget_window_reset_fields(
             "window_start": start.astimezone(timezone.utc).isoformat(),
         }
     )
+
+
+def _scheduled_window_reset_fields(schedule: BudgetSchedule, now: datetime) -> Mapping[str, str]:
+    period: Final = schedule.period_at(now)
+    start, end = period if period is not None else (schedule.next_start(now),) * 2
+    return MappingProxyType({"reset_at": end.isoformat(), "window_start": start.isoformat()})
 
 
 def keeps_budget_reset(requested_duration: str, stored_duration: str | None, stored_reset_at: datetime | None) -> bool:
@@ -141,4 +151,10 @@ def budget_duration_error(budget_duration: str | None) -> str | None:
     """
     if budget_duration is None or _is_persistable_budget_duration(budget_duration):
         return None
+    if is_scheduled_duration(budget_duration):
+        return (
+            None
+            if BudgetSchedule.from_label(budget_duration) is not None
+            else f"Invalid budget schedule '{budget_duration}'."
+        )
     return f"Invalid budget_duration '{budget_duration}'. Use a format like '1h', '24h', '7d', or '30d'."

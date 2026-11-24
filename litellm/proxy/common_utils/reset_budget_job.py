@@ -40,6 +40,7 @@ from litellm.litellm_core_utils.duration_parser import (
     rolled_budget_window_start,
 )
 from litellm.models.budget import active_rollover_credit
+from litellm.models.budget_schedule import is_scheduled_duration
 from litellm.proxy._types import (
     DB_RETRY_SAFE_ERROR_TYPES,
     LiteLLM_BudgetTableFull,
@@ -2006,6 +2007,8 @@ class ResetBudgetJob:
         reset_at_str: Final = window.get("reset_at")
         budget_duration: Final = window.get("budget_duration")
         if not isinstance(reset_at_str, str) or not reset_at_str or not isinstance(budget_duration, str):
+            return None
+        if is_scheduled_duration(budget_duration):
             return None
         saved_reset_at: Final = datetime.fromisoformat(reset_at_str.replace("Z", "+00:00"))
         if _as_utc(saved_reset_at) > _as_utc(now):

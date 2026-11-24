@@ -55,6 +55,7 @@ from litellm.llms.base_llm.managed_resources.utils import (
     extract_provider_resource_id_from_unified_id,
     is_base64_encoded_unified_id,
 )
+from litellm.models.budget_schedule import is_scheduled_duration, window_counter_name
 from litellm.models.project import LiteLLM_ProjectTable
 from litellm.models.team import LiteLLM_TeamRebuiltFromToken
 from litellm.proxy._types import (
@@ -7771,15 +7772,18 @@ async def _team_multi_budget_check(
 
     for window in team_object.budget_limits:
         w: dict = window if isinstance(window, dict) else window.model_dump()
-        counter_key = team_window_counter(team_object.team_id, str(w["budget_duration"]))
+        window_start = get_budget_window_start(w)
+        if window_start is None and is_scheduled_duration(w["budget_duration"]):
+            continue
+        window_name = window_counter_name(str(w["budget_duration"]), window_start)
         window_spend = await get_current_spend(
-            counter_key=counter_key,
+            counter_key=team_window_counter(team_object.team_id, window_name),
             fallback_spend=0.0,
             max_budget=w["max_budget"],
             window_entity_type="Team",
             window_entity_id=team_object.team_id,
-            window_duration=str(w["budget_duration"]),
-            window_start=get_budget_window_start(w),
+            window_duration=window_name,
+            window_start=window_start,
         )
         native = _native_budget_decision(
             {

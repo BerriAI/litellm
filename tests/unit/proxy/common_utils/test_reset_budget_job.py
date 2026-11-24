@@ -118,6 +118,25 @@ async def test_annual_window_reset_waits_for_the_saved_instant(reset_at: str, no
 
 
 @pytest.mark.asyncio
+async def test_sweep_never_resets_a_scheduled_window_counter() -> None:
+    """A late sweep would wipe spend the new period already accrued, so scheduled windows roll by counter name."""
+    label: Final = "sched:Europe/Berlin:mon,tue,wed,thu,fri:13:00-18:00"
+    counter: Final = f"spend:team:t:window:{label}@2026-11-25T12:00:00+00:00"
+    counters: Final = FakeSpendCounters(redis={counter: 4.0}, memory={counter: 4.0})
+    window: Final = {"budget_duration": label, "reset_at": "2026-11-25T12:00:00+00:00", "max_budget": 10.0}
+    plan: Final = await ResetBudgetJob._prepare_window_reset(
+        window,
+        counter,
+        counters.store(),
+        datetime(2026, 11, 25, 12, 7),
+        BudgetResetSettings(timezone="Europe/Berlin"),
+    )
+
+    assert plan is None
+    assert counters.redis == counters.memory == {counter: 4.0}
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("budget_duration", ("1h", "1d", "2d", "7d", "1mo"))
 @pytest.mark.parametrize(
     "now,resets",
