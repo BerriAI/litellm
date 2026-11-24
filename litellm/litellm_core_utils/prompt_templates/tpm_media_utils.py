@@ -229,17 +229,6 @@ def split_embedding_media_for_tpm(value: object) -> tuple[object, tuple[Mapping[
     return projection.content, projection.media
 
 
-_EMBEDDING_STORAGE_LINK_PREFIXES: Final = ("gs://", "s3://")
-
-
-def embedding_input_links_media(value: object) -> bool:
-    if isinstance(value, str):
-        return value.startswith(_EMBEDDING_STORAGE_LINK_PREFIXES)
-    return _is_json_array(value) and any(
-        map(embedding_input_links_media, cast(Sequence[object], value))  # cast-ok: JSON input array
-    )
-
-
 def embedding_input_is_all_media(value: object) -> bool:
     items: Final = cast(Sequence[object], value) if _is_json_array(value) else (value,)  # cast-ok: JSON input array
     return all(_tpm_embedding_leaf(item).media for item in items)

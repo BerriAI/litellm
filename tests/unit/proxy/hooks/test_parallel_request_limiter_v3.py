@@ -1567,11 +1567,26 @@ async def test_embedding_served_after_a_failed_attempt_still_charges_its_tpm_est
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("embedding_input", [[_MP4_DATA_URI], ["gs://bucket/clip.mp4"], "s3://bucket/photo.png"])
 async def test_embedding_media_no_deployment_prices_refunds_its_tpm_reservation_when_reported_as_zero_tokens(
-    monkeypatch: pytest.MonkeyPatch, embedding_input: list[str] | str
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _, counted = await _settle_tpm_for_call(
+        monkeypatch,
+        call_type="aembedding",
+        data={"model": "titan-embed-image", "input": [_MP4_DATA_URI]},
+        usage=Usage(prompt_tokens=0, completion_tokens=0, total_tokens=0),
+        media_models=("bedrock/async_invoke/us.twelvelabs.marengo-embed-3-0-v1:0",),
+    )
+
+    assert counted == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("embedding_input", [["s3://notes " + "word " * 40], "gs://bucket/clip.mp4"])
+async def test_embedding_text_starting_with_a_storage_link_keeps_its_tpm_charge_when_reported_as_zero_tokens(
+    monkeypatch: pytest.MonkeyPatch, embedding_input: list[str] | str
+) -> None:
+    reserved, counted = await _settle_tpm_for_call(
         monkeypatch,
         call_type="aembedding",
         data={"model": "titan-embed-image", "input": embedding_input},
@@ -1579,7 +1594,7 @@ async def test_embedding_media_no_deployment_prices_refunds_its_tpm_reservation_
         media_models=("bedrock/async_invoke/us.twelvelabs.marengo-embed-3-0-v1:0",),
     )
 
-    assert counted == 0
+    assert counted == reserved
 
 
 @pytest.mark.asyncio

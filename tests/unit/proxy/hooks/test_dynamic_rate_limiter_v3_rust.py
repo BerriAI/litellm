@@ -2023,16 +2023,12 @@ async def test_an_embedding_counts_its_prompt_tokens_or_else_its_pre_call_estima
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "embedding_input",
-    [["data:video/mp4;base64,AAAAIGZ0eXBpc29t" + "A" * 4096], ["gs://bucket/clip.mp4"], "s3://bucket/photo.png"],
-)
 async def test_an_embedding_whose_media_no_deployment_prices_counts_nothing_toward_saturation_at_zero_tokens(
-    monkeypatch: pytest.MonkeyPatch, embedding_input: object
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     counted: Final = await _embedding_tokens_toward_saturation(
         monkeypatch,
-        embedding_input,
+        ["data:video/mp4;base64,AAAAIGZ0eXBpc29t" + "A" * 4096],
         0,
         ("bedrock/async_invoke/us.twelvelabs.marengo-embed-3-0-v1:0",),
     )

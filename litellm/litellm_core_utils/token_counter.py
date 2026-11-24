@@ -719,20 +719,16 @@ def count_embedding_input_tokens(
 ) -> tuple[_EmbeddingInputT, int, bool]:
     """The input left to count as text, the tokens of the media priced out of it, and whether it holds media
     no deployment prices, which stays in the text."""
-    from litellm.litellm_core_utils.prompt_templates.tpm_media_utils import (
-        embedding_input_links_media,
-        split_embedding_media_for_tpm,
-    )
+    from litellm.litellm_core_utils.prompt_templates.tpm_media_utils import split_embedding_media_for_tpm
 
     text, media = split_embedding_media_for_tpm(value)
-    links_media: Final = embedding_input_links_media(value)
     if not media:
-        return value, 0, links_media
+        return value, 0, False
     models: Final = tuple(media_models())
     if not _prices_embedding_media(value, media, models, input_type):
         return value, 0, True
     media_tokens: Final = sum(estimate_media_block_tokens(block, models, fallback_model) for block in media)
-    return cast(_EmbeddingInputT, text), media_tokens, links_media  # cast-ok: the projection keeps the input's shape
+    return cast(_EmbeddingInputT, text), media_tokens, False  # cast-ok: the projection keeps the input's shape
 
 
 def split_embedding_input_tokens(
