@@ -45,17 +45,17 @@ class IBMWatsonXEmbeddingConfig(IBMWatsonXMixin, BaseEmbeddingConfig):
     def map_openai_params(
         self,
         non_default_params: object,
-        optional_params: dict[str, object],
+        optional_params: dict,
         model: str,
         drop_params: bool,
-    ) -> dict[str, object]:
+    ) -> dict:
         return optional_params
 
     def transform_embedding_request(
         self,
         model: str,
         input: AllEmbeddingInputValues,
-        optional_params: dict[str, object],
+        optional_params: dict,
         headers: object,
     ) -> dict[str, object]:
         watsonx_api_params: Final = get_api_params(params=optional_params, model=model)

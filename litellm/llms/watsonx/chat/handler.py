@@ -5,7 +5,6 @@ import httpx
 
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
-from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import CustomStreamingDecoder, ModelResponse
 
 from ...openai_like.chat.handler import OpenAILikeChatHandler
@@ -23,7 +22,7 @@ class WatsonXChatHandler(OpenAILikeChatHandler):
         self,
         *,
         model: str,
-        messages: list[AllMessageValues],
+        messages: list,
         api_base: str | None,
         custom_llm_provider: str,
         custom_prompt_dict: dict,
