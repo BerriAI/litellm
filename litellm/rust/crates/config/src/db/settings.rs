@@ -12,7 +12,8 @@
 //! - The file wins per key. A stored value only fills a key the file does not declare, and a key
 //!   the file declares, even as `null`, keeps the file's value. A stored `null` counts as absent
 //! - `general_settings` takes only the keys the proxy manages from that row, and never the keys it
-//!   reads from the `LiteLLM_UISettings` table instead
+//!   reads from the `LiteLLM_UISettings` table instead. Those keys come from the `ui_settings` column
+//!   of that table, which the file still wins over
 //! - `litellm_settings` takes only the keys a stored row changes in the proxy
 //! - `general_settings.pass_through_endpoints` is the stored endpoints followed by each file
 //!   endpoint whose `path` no stored endpoint has
@@ -49,9 +50,10 @@ pub enum Section {
     RouterSettings,
 }
 
-/// The `param_value` of each settings row of `LiteLLM_Config`, decrypted by the caller. A missing
-/// row, a `null` one or one that is not a JSON object is an empty section. A stored variable the
-/// caller could not decrypt, or that is `null`, is left out of `environment_variables`.
+/// The `param_value` of each settings row of `LiteLLM_Config`, decrypted by the caller, and the
+/// `LiteLLM_UISettings` row. A missing row, a `null` one or one that is not a JSON object is an
+/// empty section. A stored variable the caller could not decrypt, or that is `null`, is left out of
+/// `environment_variables`.
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(default)]
 pub struct SettingsRows {
@@ -59,6 +61,39 @@ pub struct SettingsRows {
     pub router_settings: Object,
     pub litellm_settings: Object,
     pub environment_variables: BTreeMap<String, SecretValue>,
+    pub ui_settings: UiSettings,
+}
+
+/// The `ui_settings` column of the `LiteLLM_UISettings` row, read as
+/// `sync_ui_settings_to_general_settings` in
+/// `litellm/proxy/ui_crud_endpoints/proxy_setting_endpoints.py` reads it. The column holds either
+/// the settings object or, as some writers save it, that object's JSON text as a JSON string. A
+/// missing row, or a value that is neither, is no settings.
+#[derive(Clone, Debug, Default)]
+pub struct UiSettings(Object);
+
+impl UiSettings {
+    /// The settings in `column`, the column's JSON text as the database returns it.
+    pub fn from_json(column: &str) -> Self {
+        serde_json::from_str(column).unwrap_or_default()
+    }
+}
+
+impl<'de> Deserialize<'de> for UiSettings {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Stored {
+            Object(Object),
+            Text(String),
+            Other(serde::de::IgnoredAny),
+        }
+        Ok(match Stored::deserialize(deserializer)? {
+            Stored::Object(settings) => Self(settings),
+            Stored::Text(text) => serde_json::from_str(&text).map(Self).unwrap_or_default(),
+            Stored::Other(_) => Self::default(),
+        })
+    }
 }
 
 /// A key the file sets to something other than the stored value, so the stored value is never
@@ -106,10 +141,14 @@ impl SettingsRows {
     /// The non-null stored values the proxy applies to `section`.
     fn stored(&self, section: Section) -> Mapping {
         match section {
-            Section::GeneralSettings => applied(&self.general_settings, |key| {
-                keys::MANAGED_GENERAL_SETTINGS.binary_search(&key).is_ok()
-                    && keys::UI_SETTINGS.binary_search(&key).is_err()
-            }),
+            Section::GeneralSettings => {
+                let ui = |key: &str| keys::UI_SETTINGS.binary_search(&key).is_ok();
+                let mut stored = applied(&self.general_settings, |key| {
+                    keys::MANAGED_GENERAL_SETTINGS.binary_search(&key).is_ok() && !ui(key)
+                });
+                stored.extend(applied(&self.ui_settings.0, ui));
+                stored
+            }
             Section::RouterSettings => applied(&self.router_settings, |_| true),
             Section::LitellmSettings => applied(&self.litellm_settings, |key| {
                 keys::STORED_LITELLM_SETTINGS.binary_search(&key).is_ok()
@@ -214,7 +253,7 @@ mod tests {
     use rstest::rstest;
     use serde::Deserialize;
 
-    use super::{Section, SettingsRows, Shadowed, keys, overlay};
+    use super::{Section, SettingsRows, Shadowed, UiSettings, keys, overlay};
     use crate::Value;
 
     fn yaml(text: &str) -> Value {
@@ -281,6 +320,60 @@ mod tests {
         "general_settings: {}",
         r#"{"general_settings": {"forward_client_headers_to_llm_api": true}}"#,
         "general_settings: {}",
+        &[]
+    )]
+    #[case::ui_settings_value_fills_general_settings(
+        "general_settings: {master_key: sk-file}",
+        r#"{"ui_settings": {"forward_client_headers_to_llm_api": true}}"#,
+        "general_settings: {master_key: sk-file, forward_client_headers_to_llm_api: true}",
+        &[]
+    )]
+    #[case::ui_settings_saved_as_json_text_is_read(
+        "general_settings: {}",
+        r#"{"ui_settings": "{\"forward_client_headers_to_llm_api\": true}"}"#,
+        "general_settings: {forward_client_headers_to_llm_api: true}",
+        &[]
+    )]
+    #[case::ui_settings_value_wins_over_the_general_settings_row(
+        "general_settings: {}",
+        r#"{"general_settings": {"forward_client_headers_to_llm_api": false}, "ui_settings": {"forward_client_headers_to_llm_api": true}}"#,
+        "general_settings: {forward_client_headers_to_llm_api: true}",
+        &[]
+    )]
+    #[case::file_wins_over_ui_settings_and_shadows_it(
+        "general_settings: {forward_client_headers_to_llm_api: false}",
+        r#"{"ui_settings": {"forward_client_headers_to_llm_api": true}}"#,
+        "general_settings: {forward_client_headers_to_llm_api: false}",
+        &[(Section::GeneralSettings, "forward_client_headers_to_llm_api")]
+    )]
+    #[case::ui_settings_key_that_is_no_runtime_flag_is_dropped(
+        "general_settings: {}",
+        r#"{"ui_settings": {"enable_chat_ui": true, "master_key": "sk-ui"}}"#,
+        "general_settings: {}",
+        &[]
+    )]
+    #[case::ui_settings_null_counts_as_absent(
+        "general_settings: {}",
+        r#"{"ui_settings": {"forward_client_headers_to_llm_api": null}}"#,
+        "general_settings: {}",
+        &[]
+    )]
+    #[case::unreadable_ui_settings_text_is_no_settings(
+        "general_settings: {}",
+        r#"{"ui_settings": "{not json"}"#,
+        "general_settings: {}",
+        &[]
+    )]
+    #[case::ui_settings_that_are_not_an_object_are_no_settings(
+        "model_list: []",
+        r#"{"ui_settings": ["forward_client_headers_to_llm_api"]}"#,
+        "model_list: []",
+        &[]
+    )]
+    #[case::ui_settings_create_the_general_settings_section(
+        "model_list: []",
+        r#"{"ui_settings": {"disable_custom_api_keys": true}}"#,
+        "{model_list: [], general_settings: {disable_custom_api_keys: true}}",
         &[]
     )]
     #[case::litellm_settings_key_a_row_cannot_change_is_dropped(
@@ -373,6 +466,23 @@ mod tests {
         assert_eq!(overlaid.shadowed, shadowed(expected_shadowed));
     }
 
+    #[rstest]
+    #[case::object(r#"{"forward_client_headers_to_llm_api": true}"#)]
+    #[case::json_text(r#""{\"forward_client_headers_to_llm_api\": true}""#)]
+    fn ui_settings_column_reads_as_the_settings_object(#[case] column: &str) {
+        let rows = SettingsRows {
+            ui_settings: UiSettings::from_json(column),
+            ..SettingsRows::default()
+        };
+
+        let overlaid = overlay(yaml("general_settings: {}"), &rows);
+
+        assert_eq!(
+            overlaid.document,
+            yaml("general_settings: {forward_client_headers_to_llm_api: true}")
+        );
+    }
+
     #[derive(Deserialize)]
     struct Fixture {
         tables: Tables,
@@ -418,6 +528,10 @@ mod tests {
     #[case::pass_through_endpoints_union("pass_through_endpoints_union")]
     #[case::db_only_sections("db_only_sections")]
     #[case::environment_variables("environment_variables")]
+    #[case::ui_settings_object("ui_settings_object")]
+    #[case::ui_settings_json_text("ui_settings_json_text")]
+    #[case::ui_settings_unreadable("ui_settings_unreadable")]
+    #[case::ui_settings_not_an_object("ui_settings_not_an_object")]
     #[case::no_rows("no_rows")]
     fn overlay_matches_python(#[case] name: &str) {
         let case = fixture()
