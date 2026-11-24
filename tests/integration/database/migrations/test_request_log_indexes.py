@@ -54,6 +54,7 @@ END_USER_RESTRICTED_QUERY: Final = (
 API_KEY_INDEX_MIGRATION: Final = "20260823000000_add_spend_logs_api_key_starttime_index"
 CALL_ID_INDEX_MIGRATION: Final = "20260831120001_spend_logs_litellm_call_id_index"
 TOOL_INDEX_MIGRATION: Final = "20260226120000_add_spend_log_tool_index"
+AGENT_IDENTITY_MIGRATION: Final = "20260921190000_agent_identity"
 API_KEY_INDEX: Final = "LiteLLM_SpendLogs_api_key_startTime_idx"
 CALL_ID_INDEX: Final = "LiteLLM_SpendLogs_litellm_call_id_idx"
 PARTITIONED_PARENT_ERROR: Final = 'cannot create index on partitioned table "LiteLLM_SpendLogs" concurrently'
@@ -501,6 +502,40 @@ def _fail_the_tool_index_migration(database_url: str, checksum: str) -> None:
             "VALUES (%s, %s, %s, 'canceling statement due to user request', current_timestamp, 0)",
             (str(uuid.uuid4()), checksum, TOOL_INDEX_MIGRATION),
         )
+
+
+@requires_db
+@pytest.mark.parametrize("release", (AGENT_IDENTITY_MIGRATION,))
+@pytest.mark.parametrize(
+    ("matching_checksum", "logs", "recover"),
+    ((True, None, True), (False, None, False), (True, "migration failed", False)),
+    ids=("interrupted-shipped-ddl", "unrecognized-ddl", "unrecognized-error"),
+)
+def test_v2_only_replays_the_shipped_interrupted_agent_identity_migration(
+    scratch_database: str, matching_checksum: bool, logs: str | None, recover: bool
+) -> None:
+    script: Final = PACKAGE / "migrations" / AGENT_IDENTITY_MIGRATION / "migration.sql"
+    checksum: Final = hashlib.sha256(script.read_bytes() if matching_checksum else b"different SQL").hexdigest()
+    with psycopg.connect(scratch_database, autocommit=True) as conn:
+        conn.execute(
+            "INSERT INTO _prisma_migrations (id, checksum, migration_name, logs, applied_steps_count) "
+            "VALUES (%s, %s, %s, %s, 0)",
+            (str(uuid.uuid4()), checksum, AGENT_IDENTITY_MIGRATION, logs),
+        )
+
+    if recover:
+        assert _migration_job(True) is True
+    else:
+        with pytest.raises(RuntimeError, match="Migration completion could not be verified"):
+            _migration_job(True)
+
+    with psycopg.connect(scratch_database) as conn:
+        rows: Final = conn.execute(
+            "SELECT finished_at IS NOT NULL, rolled_back_at IS NOT NULL FROM _prisma_migrations "
+            "WHERE migration_name = %s ORDER BY started_at",
+            (AGENT_IDENTITY_MIGRATION,),
+        ).fetchall()
+    assert rows == ([(False, True), (True, False)] if recover else [(False, False)])
 
 
 @requires_db

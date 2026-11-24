@@ -1002,8 +1002,10 @@ class ProxyExtrasDBManager:
             prisma_migration_lock,
         )
         from litellm_proxy_extras.migration_recovery import (
+            AGENT_IDENTITY_MIGRATION,
             baseline_current_schema,
             recover_completed_migration,
+            roll_back_interrupted_agent_identity,
             roll_back_replayable_failed_migration,
         )
 
@@ -1034,8 +1036,13 @@ class ProxyExtrasDBManager:
                     migration_environment(_get_prisma_env()),
                 )
 
+        def recover_interrupted() -> bool:
+            migration: Final = Path.cwd() / "migrations" / AGENT_IDENTITY_MIGRATION / "migration.sql"
+            with migration_lock(lock_url) as coordinator:
+                return roll_back_interrupted_agent_identity(coordinator, schema, migration)
+
         while not ProxyExtrasDBManager._run_database_v2(
-            True, recover_completed, baseline_existing, lambda: prisma_migration_lock(lock_url)
+            True, recover_completed, baseline_existing, lambda: prisma_migration_lock(lock_url), recover_interrupted
         ):
             continue
         return True
@@ -1046,6 +1053,7 @@ class ProxyExtrasDBManager:
         recover_completed: Callable[[str], bool] = lambda name: False,
         baseline_existing: "Callable[[str], None] | None" = None,
         deploy_lock: Callable[[], AbstractContextManager[None]] = nullcontext,
+        recover_interrupted: Callable[[], bool] = lambda: False,
     ) -> bool:
         """
         v2 migration resolver (opt-in via --use_v2_migration_resolver).
@@ -1098,6 +1106,7 @@ class ProxyExtrasDBManager:
         os.chdir(migrations_dir)
         deploy_timeout = prisma_migrate_deploy_timeout()
         from litellm_proxy_extras.migration_lock import migration_environment, migration_lock_timeout
+        from litellm_proxy_extras.migration_recovery import AGENT_IDENTITY_MIGRATION
 
         migration_env: Final = migration_environment(_get_prisma_env())
 
@@ -1118,7 +1127,14 @@ class ProxyExtrasDBManager:
                     logger.info(f"prisma migrate deploy stdout: {result.stdout}")
                     return True
 
-                except subprocess.TimeoutExpired:
+                except subprocess.TimeoutExpired as error:
+                    output: Final = error.stdout if isinstance(error.stdout, bytes) else (error.stdout or "").encode()
+                    applying: Final = next(
+                        (line for line in reversed(output.splitlines()) if line.startswith(b"Applying migration `")),
+                        None,
+                    )
+                    if applying == f"Applying migration `{AGENT_IDENTITY_MIGRATION}`".encode():
+                        recover_interrupted()
                     logger.warning(
                         "prisma migrate deploy attempt %s timed out after %ss, retrying. "
                         "Raise %s if this database needs longer to apply its pending migrations.",
@@ -1135,11 +1151,17 @@ class ProxyExtrasDBManager:
                     failed_migration = ProxyExtrasDBManager._v2_failed_migration_name(e.stderr or "")
                     if failed_migration and recover_completed(failed_migration):
                         return False
-                    next_budget = ProxyExtrasDBManager._budget_after_deploy_failure(
-                        e,
-                        budget,
-                        time.monotonic() - attempt_started,
-                        deploy_lock=deploy_lock,
+                    next_budget = (
+                        budget.spend()
+                        if failed_migration == AGENT_IDENTITY_MIGRATION
+                        and "P3009" in (e.stderr or "")
+                        and recover_interrupted()
+                        else ProxyExtrasDBManager._budget_after_deploy_failure(
+                            e,
+                            budget,
+                            time.monotonic() - attempt_started,
+                            deploy_lock=deploy_lock,
+                        )
                     )
 
                 if next_budget.attempts_left < budget.attempts_left:

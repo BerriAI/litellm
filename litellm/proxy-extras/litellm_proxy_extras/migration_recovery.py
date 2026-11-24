@@ -16,6 +16,10 @@ if TYPE_CHECKING:
     import psycopg
 
 
+AGENT_IDENTITY_MIGRATION: Final = "20260921190000_agent_identity"
+_AGENT_IDENTITY_CHECKSUM: Final = "4a9d6f79f0cfe0eef9b76d1dd4c676b93be64d5621fd9f4c11f5870385991bba"
+
+
 # SHA-256 of earlier shipped files whose successful run applied everything the current file does,
 # and whose failed run the current file can replay.
 SUPERSEDED_CHECKSUMS: Final = MappingProxyType(
@@ -221,4 +225,28 @@ def roll_back_replayable_failed_migration(coordinator: MigrationCoordinator, sch
         "its index is built by the migration job",
         migration.parent.name,
     )
+    return True
+
+
+def roll_back_interrupted_agent_identity(coordinator: MigrationCoordinator, schema: str, migration: Path) -> bool:
+    from psycopg import sql
+
+    if not migration.is_file() or hashlib.sha256(migration.read_bytes()).hexdigest() != _AGENT_IDENTITY_CHECKSUM:
+        return False
+    coordinator.acquire_prisma_lock()
+    records: Final = _migration_records(coordinator.connection, schema, migration)
+    unfinished: Final = tuple(record for record in records if not record.finished)
+    if len(unfinished) != 1:
+        return False
+    result: Final = coordinator.connection.execute(
+        sql.SQL(
+            "UPDATE {} SET rolled_back_at = current_timestamp "
+            "WHERE id = %s AND checksum = %s AND applied_steps_count = 0 "
+            "AND finished_at IS NULL AND rolled_back_at IS NULL AND logs IS NULL"
+        ).format(sql.Identifier(schema, "_prisma_migrations")),
+        (unfinished[0].id, _AGENT_IDENTITY_CHECKSUM),
+    )
+    if result.rowcount != 1:
+        return False
+    logger.info("Rolled back the interrupted %s migration, whose shipped DDL is safe to replay", migration.parent.name)
     return True

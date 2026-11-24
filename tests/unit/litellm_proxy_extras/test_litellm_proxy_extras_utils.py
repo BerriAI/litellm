@@ -9,6 +9,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Final, NoReturn, Optional
+from unittest.mock import Mock
 
 import pytest
 from psycopg.conninfo import conninfo_to_dict
@@ -1130,6 +1131,8 @@ class _MigrateDeployHarness:
                 return _FakeCompleted()
             if outcome == "timeout":
                 raise self._subprocess_module.TimeoutExpired(cmd, 1)
+            if isinstance(outcome, subprocess.TimeoutExpired):
+                raise outcome
             raise self._subprocess_module.CalledProcessError(1, cmd, stderr=outcome)
         if cmd[1:4] == ["migrate", "resolve", "--rolled-back"] and len(cmd) == 5:
             self.rolled_back.append(cmd[4])
@@ -1284,6 +1287,30 @@ class TestMigrateDeployAttemptAccounting:
         with pytest.raises(RuntimeError):
             harness.run()
         assert len(harness.deploy_calls) == _ATTEMPT_BUDGET
+
+    @pytest.mark.parametrize(
+        ("stdout", "recoveries"),
+        (
+            (b"Applying migration `20260921190000_agent_identity`\n", _ATTEMPT_BUDGET),
+            (
+                b"Applying migration `20260921190000_agent_identity`\nApplying migration `20261122000000_other`\n",
+                0,
+            ),
+        ),
+        ids=("agent-identity-was-interrupted", "a-later-migration-was-interrupted"),
+    )
+    def test_a_timeout_only_recovers_the_last_migration_under_the_retry_budget(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, stdout: bytes, recoveries: int
+    ) -> None:
+        timeout: Final = subprocess.TimeoutExpired("prisma", 20, output=stdout)
+        harness: Final = _MigrateDeployHarness(monkeypatch, tmp_path, [timeout], repeat_last=True)
+        recover: Final = Mock(return_value=True)
+
+        with pytest.raises(RuntimeError, match=f"failed after {_ATTEMPT_BUDGET} attempts"):
+            ProxyExtrasDBManager._run_database_v2(True, recover_interrupted=recover)
+
+        assert len(harness.deploy_calls) == _ATTEMPT_BUDGET
+        assert recover.call_count == recoveries
 
     def test_an_unverified_baseline_stops_without_replaying_migrations(self, monkeypatch, tmp_path):
         harness = _MigrateDeployHarness(monkeypatch, tmp_path, [_P3005_STDERR], repeat_last=True)
