@@ -8241,8 +8241,20 @@ async def test_caller_credentials_keep_body_profiles_without_changing_shared_cre
         {"additionalModelRequestFields": {"user_profile_id": "uprof_client"}},
         {"extra_body": {"user_profile_id": "uprof_client"}},
         {"extra_body": {"additionalModelRequestFields": {"user_profile_id": "uprof_client"}}},
+        {
+            "provider_specific_header": {
+                "custom_llm_provider": "bedrock_mantle,openai",
+                "extra_headers": {USER_PROFILE_ID_HEADER: "uprof_client"},
+            }
+        },
     ],
-    ids=["top-level", "additional-model-request-fields", "extra-body", "extra-body-additional-model-request-fields"],
+    ids=[
+        "top-level",
+        "additional-model-request-fields",
+        "extra-body",
+        "extra-body-additional-model-request-fields",
+        "provider-specific-header",
+    ],
 )
 @pytest.mark.parametrize("credential", [{"api_key": "caller-bedrock-key"}, _CALLER_AWS_KEYS, {}])
 async def test_a_caller_credential_keeps_the_profile_id_it_sent_in_a_body_field(
