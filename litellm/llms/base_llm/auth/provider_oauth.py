@@ -13,7 +13,12 @@ from typing_extensions import assert_never
 
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.exceptions import AuthenticationError
-from litellm.llms.base_llm.auth.token_exchange import MAX_RESPONSE_BYTES, InsecureTokenUrl, validate_token_endpoint_url
+from litellm.llms.base_llm.auth.token_exchange import (
+    FALLBACK_TOKEN_TTL_SECONDS,
+    MAX_RESPONSE_BYTES,
+    InsecureTokenUrl,
+    validate_token_endpoint_url,
+)
 from litellm.llms.base_llm.auth.types import MalformedTokenResponse, TokenEndpointError, TokenTransportError
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.proxy.auth.special_headers import SpecialHeaders
@@ -166,9 +171,9 @@ def provider_oauth_token(
             return cached
         started: Final = monotonic()
         token: Final = _require_token(_fetch_token(token_url, client_id, client_secret, scope), provider, model)
-        if token.expires_in is not None:
-            remaining: Final = token.expires_in - (monotonic() - started)
-            ttl: Final = remaining - min(30.0, token.expires_in * 0.1)
-            if ttl > 0:
-                _TOKENS.set_cache(cache_key, json.dumps(token.access_token), ttl=ttl)
+        lifetime: Final = token.expires_in if token.expires_in is not None else FALLBACK_TOKEN_TTL_SECONDS
+        remaining: Final = lifetime - (monotonic() - started)
+        ttl: Final = remaining - min(30.0, lifetime * 0.1)
+        if ttl > 0:
+            _TOKENS.set_cache(cache_key, json.dumps(token.access_token), ttl=ttl)
         return token.access_token

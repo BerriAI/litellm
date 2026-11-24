@@ -106,15 +106,20 @@ def test_oauth_stops_reading_an_oversized_token_response() -> None:
 
 
 @pytest.mark.parametrize("provider", ("openai", "custom_openai"))
-def test_openai_compatible_completion_sends_refreshed_bearer(provider: str, monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("expires_in", (30, None), ids=("issuer-expiry", "fallback-expiry"))
+def test_openai_compatible_completion_sends_refreshed_bearer(
+    provider: str, expires_in: int | None, monkeypatch: pytest.MonkeyPatch
+) -> None:
     clock: Final = FakeClock(start=0.0)
+    expiry_field: Final = {} if expires_in is None else {"expires_in": expires_in}
+    after_expiry: Final = 61.0 if expires_in is None else 31.0
     monkeypatch.setattr(provider_oauth, "monotonic", clock)
     monkeypatch.setattr(provider_oauth, "_TOKENS", InMemoryCache(clock=clock))
     with respx.mock as upstream:
         token_route: Final = upstream.post(_TOKEN_URL).mock(
             side_effect=(
-                httpx.Response(200, json={"access_token": "first-token", "expires_in": 30}),
-                httpx.Response(200, json={"access_token": "fresh-token", "expires_in": 30}),
+                httpx.Response(200, json={"access_token": "first-token", **expiry_field}),
+                httpx.Response(200, json={"access_token": "fresh-token", **expiry_field}),
             ),
         )
         inference: Final = upstream.post(f"{_PROVIDER_URL}/chat/completions").mock(
@@ -131,7 +136,7 @@ def test_openai_compatible_completion_sends_refreshed_bearer(provider: str, monk
                 },
             )
         )
-        for elapsed in (0.0, 5.0, 26.0):
+        for elapsed in (0.0, 5.0, after_expiry - 5.0):
             clock.advance(elapsed)
             litellm.completion(
                 model=f"{provider}/gpt-6-luna",
