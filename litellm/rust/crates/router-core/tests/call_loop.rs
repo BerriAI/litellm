@@ -364,7 +364,7 @@ impl Hosted {
         self.router.healthy(&*self.host, op, request).await
     }
 
-    fn health(&self) -> Health<&RecordingCache> {
+    fn health(&self) -> Health<'_, RecordingCache> {
         self.router.health(self.host.cache())
     }
 

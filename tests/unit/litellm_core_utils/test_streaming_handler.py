@@ -10845,6 +10845,36 @@ def test_chunk_creator_usage_only_chunk_with_dict_usage_keeps_details(
     assert usage.completion_tokens_details.reasoning_tokens == 5
 
 
+@pytest.mark.asyncio
+async def test_a_socket_waits_for_the_success_logging_of_a_stream_it_consumed(monkeypatch):
+    from litellm.integrations.custom_logger import CustomLogger
+    from litellm.litellm_core_utils.socket_logging import collect_socket_logging
+
+    logging_may_finish: Final = asyncio.Event()
+
+    class _SlowLogger(CustomLogger):
+        async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+            await logging_may_finish.wait()
+
+    monkeypatch.setattr(litellm, "callbacks", [_SlowLogger()])
+    with collect_socket_logging() as socket_logging:
+        stream: Final = await litellm.acompletion(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": "hi"}],
+            mock_response="Hello there!",
+            stream=True,
+        )
+        async for _ in stream:
+            pass
+        settled: Final = asyncio.create_task(socket_logging.finished())
+        await asyncio.sleep(0.05)
+        waited_for_the_success_logging: Final = not settled.done()
+        logging_may_finish.set()
+        await asyncio.wait_for(settled, timeout=5)
+
+    assert waited_for_the_success_logging
+
+
 def _stream_of(chunks: Sequence[object], sync_mode: bool) -> Iterator[object] | AsyncIterator[object]:
     return iter(chunks) if sync_mode else _as_async(iter(chunks))
 

@@ -135,7 +135,7 @@ class BaseInteractionsAPIConfig(ABC):
         input: InteractionInput | None,
         optional_params: InteractionsAPIOptionalRequestParams,
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
+        headers: dict[str, str],
     ) -> dict:
         """
         Transform the input request into the provider's expected format.

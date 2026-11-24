@@ -2183,6 +2183,7 @@ def _agentic_params(
     params: Final = {
         **{name: value for name, value in sent.items() if name not in _AGENTIC_UNSENT_PARAMS},
         **({"system": requested_system} if "system" in sent and requested_system is not None else {}),
+        **({"max_tokens": requested["max_tokens"]} if "max_tokens" in requested else {}),
     }
     if "tools" not in params:
         return params

@@ -971,7 +971,7 @@ def process_sso_jwt_access_token(
     sso_jwt_handler: ClaimReading | None,
     result: OpenID | dict | None,
     role_mappings: Optional["RoleMappings"] = None,
-) -> dict | None:
+) -> dict[str, object] | None:
     """
     Process SSO JWT access token and extract team IDs and user role if available.
 
@@ -1650,14 +1650,14 @@ async def get_generic_sso_response(
     generic_client_id: str,
     redirect_url: str,
 ) -> tuple[
-    OpenID | dict, dict | None, dict | None, SSOIdentityAssertion | None
+    OpenID | dict, dict[str, object] | None, dict[str, object] | None, SSOIdentityAssertion | None
 ]:  # (result, received_response, access_token_payload, sso_assertion)
     # make generic sso provider
     from fastapi_sso.sso.base import DiscoveryDocument
 
     from litellm.proxy import proxy_server
 
-    received_response: dict | None = None
+    received_response: dict[str, object] | None = None
     sso_assertion: SSOIdentityAssertion | None = None
 
     # Setup environment variables
@@ -1727,7 +1727,7 @@ async def get_generic_sso_response(
     additional_generic_sso_headers_dict: Final = _parse_generic_sso_headers()
 
     code_verifier: str | None = None  # assigned inside try; initialized for type tracking
-    access_token_payload: dict | None = None  # decoded JWT access token claims
+    access_token_payload: dict[str, object] | None = None  # decoded JWT access token claims
 
     try:
         token_exchange_params: Final = await SSOAuthenticationHandler.prepare_token_exchange_parameters(
@@ -3987,10 +3987,10 @@ class SSOAuthenticationHandler:
     async def get_redirect_response_from_openid(
         result: OpenID | Mapping[str, object] | CustomOpenID,
         request: Request,
-        received_response: dict | None = None,
+        received_response: dict[str, object] | None = None,
         generic_client_id: str | None = None,
         ui_access_mode: Mapping[str, object] | None = None,
-        access_token_payload: dict | None = None,
+        access_token_payload: dict[str, object] | None = None,
         jwt_handler: ClaimReading | None = None,
         return_to: str | None = None,
         sso_assertion: SSOIdentityAssertion | None = None,
@@ -4021,7 +4021,7 @@ class SSOAuthenticationHandler:
         verbose_proxy_logger.info("SSO callback result: %s", result)
 
         user_info = None
-        user_id_models: Final[list] = []
+        user_id_models: Final[list[str]] = []
         max_internal_user_budget: Final = litellm.max_internal_user_budget
         internal_user_budget_duration: Final = litellm.internal_user_budget_duration
 
@@ -4998,7 +4998,7 @@ class MicrosoftSSOHandler:
 
     @staticmethod
     async def fetch_and_parse_groups(
-        url: str, headers: dict, async_client: AsyncHTTPHandler
+        url: str, headers: dict[str, str], async_client: AsyncHTTPHandler
     ) -> tuple[list[str], str | None]:
         """Helper function to fetch and parse group data from a URL"""
         response: Final = await async_client.get(url, headers=headers)

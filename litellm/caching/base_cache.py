@@ -47,7 +47,7 @@ class BaseCache(ABC):
     async def disconnect(self) -> None:
         raise NotImplementedError
 
-    async def test_connection(self) -> dict:
+    async def test_connection(self) -> dict[str, str]:
         """
         Test the cache connection.
 

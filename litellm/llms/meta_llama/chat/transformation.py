@@ -30,11 +30,11 @@ class LlamaAPIConfig(OpenAIGPTConfig):
 
     def map_openai_params(
         self,
-        non_default_params: dict,
-        optional_params: dict,
+        non_default_params: dict[str, object],
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:
         mapped_openai_params: Final = super().map_openai_params(non_default_params, optional_params, model, drop_params)
 
         # Only json_schema is working for response_format

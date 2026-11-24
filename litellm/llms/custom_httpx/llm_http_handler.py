@@ -1111,7 +1111,7 @@ class BaseLLMHTTPHandler:
         custom_llm_provider: str,
         provider_config: BaseConfig,
         api_base: str,
-        headers: dict,
+        headers: dict[str, object],
         data: dict,
         timeout: float | httpx.Timeout,
         model: str,
@@ -1446,7 +1446,7 @@ class BaseLLMHTTPHandler:
         self,
         provider_config: BaseConfig,
         api_base: str,
-        headers: dict,
+        headers: dict[str, object],
         data: dict,
         signed_json_body: bytes | None,
         original_data: dict,
@@ -1527,7 +1527,7 @@ class BaseLLMHTTPHandler:
         messages: list,
         api_base: str,
         custom_llm_provider: str,
-        headers: dict,
+        headers: dict[str, object],
         provider_config: BaseConfig,
         timeout: float | httpx.Timeout,
         logging_obj: LiteLLMLoggingObj,
@@ -1587,7 +1587,7 @@ class BaseLLMHTTPHandler:
         custom_llm_provider: str,
         provider_config: BaseConfig,
         api_base: str,
-        headers: dict,
+        headers: dict[str, object],
         data: dict,
         messages: list,
         logging_obj: LiteLLMLoggingObj,
@@ -1813,7 +1813,7 @@ class BaseLLMHTTPHandler:
         self,
         request_data: dict,
         api_base: str,
-        headers: dict,
+        headers: dict[str, object],
         model: str,
         custom_llm_provider: str,
         provider_config: BaseEmbeddingConfig,
@@ -1963,7 +1963,7 @@ class BaseLLMHTTPHandler:
         logging_obj: LiteLLMLoggingObj,
         model_response: RerankResponse,
         api_base: str,
-        headers: dict,
+        headers: dict[str, object],
         api_key: str | None = None,
         timeout: float | httpx.Timeout | None = None,
         client: HTTPHandler | AsyncHTTPHandler | None = None,
@@ -2995,7 +2995,7 @@ class BaseLLMHTTPHandler:
         request_body: Final = anthropic_messages_provider_config.transform_anthropic_messages_request(
             model=model,
             messages=messages,
-            anthropic_messages_optional_request_params=request_params,
+            anthropic_messages_optional_request_params=dict(request_params),
             litellm_params=litellm_params,
             headers=headers,
         )
@@ -6214,6 +6214,7 @@ class BaseLLMHTTPHandler:
         depth: int,
         max_loops: int,
         model: str,
+        answered_at_cap: bool = False,
     ) -> str:
         """
         Evaluate agentic-loop safety guards (fingerprint cycle / max depth).
@@ -6228,7 +6229,7 @@ class BaseLLMHTTPHandler:
         fingerprint: Final = BaseLLMHTTPHandler._fingerprint_agentic_tools(tool_calls)
         if fingerprint in fingerprints:
             raise AgenticLoopSafetyError("Agentic loop detected repeated tool-call fingerprint; aborting rerun")
-        if depth >= max_loops:
+        if depth > max_loops or (depth == max_loops and not answered_at_cap):
             raise AgenticLoopLimitError(f"Exceeded max_agentic_loops={max_loops} for model={model}")
         return fingerprint
 
@@ -6615,6 +6616,7 @@ class BaseLLMHTTPHandler:
                     depth=depth,
                     max_loops=max_loops,
                     model=model,
+                    answered_at_cap=callback.answers_tool_calls_at_agentic_loop_cap(custom_llm_provider),
                 )
             except AgenticLoopSafetyError as e:
                 if not self._can_replace_turn_with_terminal_response(stream, api_surface):
@@ -7418,6 +7420,7 @@ class BaseLLMHTTPHandler:
         turn_admission: "ResponsesWsTurnAdmission | None" = None,
         turn_usage_recorder: "ResponsesWsTurnUsageRecorder | None" = None,
         frame_guard: "ResponsesWsFrameGuard | None" = None,
+        on_unfinished_turn: Callable[[], None] | None = None,
         **kwargs: object,
     ) -> Exception | None:
         """
@@ -7488,6 +7491,7 @@ class BaseLLMHTTPHandler:
                 turn_admission=_ws_turn_admission,
                 guardrail_callbacks=_ws_guardrail_callbacks,  # pyright: ignore[reportUnknownArgumentType]  # duck-typed callbacks from litellm.callbacks
                 frame_guard=frame_guard,
+                on_unfinished_turn=on_unfinished_turn,
                 **kwargs,
             )
             return await handler.run()
@@ -7582,6 +7586,7 @@ class BaseLLMHTTPHandler:
                     turn_admission=_ws_turn_admission,
                     turn_usage_recorder=turn_usage_recorder,
                     frame_guard=frame_guard,
+                    on_unfinished_turn=on_unfinished_turn,
                 )
                 return await streaming.bidirectional_forward()
 

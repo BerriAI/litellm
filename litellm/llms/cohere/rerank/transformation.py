@@ -110,7 +110,7 @@ class CohereRerankConfig(BaseRerankConfig):
         self,
         model: str,
         optional_rerank_params: dict,
-        headers: dict,
+        headers: dict[str, object],
         litellm_params: dict | None = None,
     ) -> dict[str, object]:
         if "query" not in optional_rerank_params:

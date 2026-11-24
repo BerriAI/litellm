@@ -48,6 +48,7 @@ from litellm.constants import (
     SESSION_DEPLOYMENT_AFFINITY_CONVERSATION_METADATA_KEY,
     SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY,
     SESSION_ID_GENERATED_METADATA_KEY,
+    SESSION_ID_INHERITED_METADATA_KEY,
     SESSION_ID_OMITTED_METADATA_KEY,
     TYPESAFE_DANGER_ZONE_HEADER_PREFIX,
     USAGE_BASED_ROUTING_COUNTED_TOKENS_METADATA_KEY,
@@ -638,6 +639,7 @@ _UNTRUSTED_METADATA_CONTROL_FIELDS: Final = (
     CONSUMED_REQUEST_TAGS_METADATA_KEY,
     ROUTING_REQUEST_TAGS_METADATA_KEY,
     INTERNAL_CALL_ORIGIN_METADATA_KEY,
+    SESSION_ID_INHERITED_METADATA_KEY,
     BILLED_RETRY_ATTEMPT_METADATA_KEY,
     MANAGED_BACKGROUND_RESPONSE_METADATA_KEY,
     "standard_logging_object",
@@ -650,6 +652,8 @@ _UNTRUSTED_METADATA_CONTROL_FIELDS: Final = (
     "error_information",
     "_failover_excluded_ids",
     PRE_CALL_EXECUTED_GUARDRAILS_KEY,
+    "_agentic_loop_depth",
+    "max_agentic_loops",
 )
 
 
@@ -1364,6 +1368,18 @@ def should_auto_drop_params_for_agentic_cli(
         return False
     litellm_settings: Final = _request_fields(proxy_config.config.get("litellm_settings"))
     return normalize_drop_params(litellm_settings.get("drop_params")) is not False
+
+
+def parse_litellm_settings_drop_params(value: object) -> bool:
+    normalized: Final = normalize_drop_params(value)
+    if normalized is None and value is not None:
+        verbose_proxy_logger.warning(
+            "litellm_settings.drop_params=%r is not a flag value, treating it as off, except for Claude Code, "
+            "Codex, and VS Code Copilot Chat requests, which keep their drop_params default on. "
+            "Set it to true or false",
+            value,
+        )
+    return normalized is True
 
 
 def safe_add_api_version_from_query_params(data: dict, request: Request):

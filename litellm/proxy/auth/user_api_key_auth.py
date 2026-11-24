@@ -1598,7 +1598,7 @@ def get_api_key(
     elif pass_through_endpoints is not None:
         for endpoint in pass_through_endpoints:
             if endpoint.get("path", "") == route:
-                headers: dict | None = endpoint.get("headers", None)
+                headers: Mapping[str, object] | None = endpoint.get("headers", None)
                 if headers is not None:
                     header_key: str = headers.get("litellm_user_api_key", "")
                     if request.headers.get(header_key) is not None:
@@ -3062,7 +3062,7 @@ async def _apply_key_end_user_default_budget_to_token(
 
 async def _reserve_budget_after_common_checks(
     user_api_key_auth_obj: UserAPIKeyAuth,
-    request_data: dict,
+    request_data: Mapping[str, object],
     route: str,
     llm_router: litellm.Router | None,
     team_object: LiteLLM_TeamTableCachedObj | None,
@@ -3071,7 +3071,7 @@ async def _reserve_budget_after_common_checks(
     user_api_key_cache: UserApiKeyCache,
     proxy_logging_obj: ProxyLogging,
     skip_budget_checks: bool,
-    general_settings: dict,
+    general_settings: Mapping[str, object],
     end_user_id: str | None = None,
     end_user_object: LiteLLM_EndUserTable | None = None,
     request: Request | None = None,
@@ -3780,7 +3780,7 @@ async def enforce_key_and_fallback_model_access(
     request_data: dict,
     route: str,
     request: Request | None,
-    llm_model_list: list | None,
+    llm_model_list: Sequence[object] | None,
     llm_router: litellm.Router | None,
 ) -> None:
     """

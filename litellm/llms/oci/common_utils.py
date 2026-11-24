@@ -86,7 +86,7 @@ class OCIRequestWrapper:
 
     method: str
     url: str
-    headers: dict
+    headers: dict[str, str]
     body: bytes
 
     @property
