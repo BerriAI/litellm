@@ -3,6 +3,7 @@ import json
 import os
 from collections.abc import Iterable, Mapping, Sequence
 from datetime import datetime
+from hashlib import sha256
 from itertools import chain
 from typing import TYPE_CHECKING, Any, Final, Optional, Protocol, runtime_checkable
 
@@ -126,12 +127,57 @@ def _starts_its_own_trace(span: object, kwargs: Mapping[str, object]) -> bool:
     parent: Final = _parent_of(span)
     if parent is None:
         return True
+    anchor: Final = _caller_trace_anchor(kwargs)
+    if anchor is not None and (anchor[0].trace_id, anchor[0].span_id) == (parent.trace_id, parent.span_id):
+        return not anchor[1]
     proxy_span: Final = _litellm_proxy_span(kwargs)
     return (
         proxy_span is not None
         and _parent_of(proxy_span) is None
         and proxy_span.get_span_context().span_id == parent.span_id
     )
+
+
+def _caller_trace_anchor(kwargs: Mapping[str, object]) -> tuple[trace.SpanContext, bool] | None:
+    """The parent a call hangs under so that it lands in the trace the caller named in ``metadata`` or
+    ``litellm_metadata`` (or a ``langfuse_*`` header), and whether the caller named it with ``existing_trace_id``.
+    A UUID or 32 hex characters are used as they are and anything else is hashed, as the ``langfuse`` callback does.
+    The parent is never exported and its span id follows from the trace id, so every call of the trace is a sibling.
+    A trace id the proxy copied from a session header is not one the caller named, so each of that session's calls
+    keeps its own trace."""
+    from litellm.integrations.langfuse.langfuse import _is_session_header_trace, langfuse_trace_metadata
+    from litellm.integrations.langfuse.langfuse_sdk import resolve_trace_id
+
+    litellm_params: Final = _as_gettable(kwargs.get("litellm_params")) or {}
+    proxy_server_request: Final = litellm_params.get("proxy_server_request")
+    named: Final = (
+        (value, field == "existing_trace_id")
+        for metadata in (
+            langfuse_trace_metadata(litellm_params.get(key), proxy_server_request)
+            for key in ("metadata", "litellm_metadata")
+        )
+        for field in ("existing_trace_id", "trace_id")
+        for value in (metadata.get(field),)
+        if isinstance(value, str)
+        and value
+        and (
+            field == "existing_trace_id"
+            or not _is_session_header_trace(value, metadata.get("session_id"), proxy_server_request)
+        )
+    )
+    caller_trace: Final = next(named, None)
+    if caller_trace is None:
+        return None
+    trace_id: Final = int(resolve_trace_id(caller_trace[0]), 16)
+    if trace_id == 0:
+        return None
+    anchor: Final = trace.SpanContext(
+        trace_id=trace_id,
+        span_id=int.from_bytes(sha256(trace_id.to_bytes(16, "big")).digest()[:8], "big") or 1,
+        is_remote=False,
+        trace_flags=trace.TraceFlags(trace.TraceFlags.SAMPLED),
+    )
+    return anchor, caller_trace[1]
 
 
 def _a_destination_records_the_call(kwargs: Mapping[str, object]) -> bool:
@@ -568,6 +614,15 @@ class LangfuseOtelLogger(OpenTelemetry):
             secret_key=secret_key,
             langfuse_host=langfuse_host,
         )
+
+    def _get_span_context(self, kwargs, default_span: Span | None = None):
+        ctx, parent_span = super()._get_span_context(kwargs, default_span=default_span)
+        if parent_span is not None or trace.get_current_span(ctx).get_span_context().is_valid:
+            return ctx, parent_span
+        anchor: Final = _caller_trace_anchor(kwargs)
+        if anchor is None:
+            return ctx, parent_span
+        return trace.set_span_in_context(trace.NonRecordingSpan(anchor[0]), ctx), None
 
     def create_litellm_proxy_request_started_span(
         self,
