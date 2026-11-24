@@ -166,8 +166,8 @@ def test_zai_forwards_reasoning_effort_as_sent_to_models_declaring_no_levels(
     assert json.loads(respx_mock.calls[0].request.content)["reasoning_effort"] == requested
 
 
-@pytest.mark.parametrize(("drop_params", "sent"), [(True, None), (False, "none")])
-def test_zai_drops_a_reasoning_effort_the_model_cannot_take_only_under_drop_params(
+@pytest.mark.parametrize(("drop_params", "sent"), [(True, "low"), (False, "none")])
+def test_zai_sends_reasoning_off_as_the_weakest_level_only_under_drop_params(
     local_model_cost_map: None,
     respx_mock: respx.MockRouter,
     zai_response: Mapping[str, object],
