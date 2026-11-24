@@ -193,6 +193,7 @@ from litellm.utils import (
     cached_get_model_info_helper,
     mapped_model_fill_missing,
     pricing_with_overrides,
+    provider_matched_runtime_model_cost_registrations,
     runtime_model_cost_registrations,
     token_counter,
     unmapped_model_generalization,
@@ -954,7 +955,7 @@ def cost_per_token(
         return 0.0, 0.0
 
 
-def get_replicate_completion_pricing(completion_response: dict, total_time=0.0):
+def get_replicate_completion_pricing(completion_response: dict, total_time: float = 0.0):
     # see https://replicate.com/pricing
     # for all litellm currently supported LLMs, almost all requests go to a100_80gb
     a100_80gb_price_per_second_public: Final = (
@@ -1199,7 +1200,11 @@ def select_model_name_for_cost_calc(
             return_model = model
 
     elif priced_base_model is not None or bedrock_pricing_model is not None:
-        return_model = priced_base_model if priced_base_model is not None else bedrock_pricing_model
+        return_model = (
+            _base_model_without_nested_provider(priced_base_model, custom_llm_provider)
+            if priced_base_model is not None
+            else bedrock_pricing_model
+        )
 
     elif provider_response_model is not None:
         return _served_or_priced_requested_model(
@@ -1246,6 +1251,16 @@ def _resolves_to_rates(model: str, custom_llm_provider: str | None) -> bool:
     return key is not None and _cost_map_entry_prices_anything(
         declared_cost_map_pricing(key, model, custom_llm_provider)
     )
+
+
+def _base_model_without_nested_provider(base_model: str, custom_llm_provider: str | None) -> str:
+    provider, _, rest = base_model.partition("/")
+    nested_provider, _, name = rest.partition("/")
+    nests_a_provider: Final = provider in LlmProvidersSet and nested_provider in LlmProvidersSet and bool(name)
+    if not nests_a_provider or _resolves_to_rates(base_model, custom_llm_provider):
+        return base_model
+    unnested: Final = f"{provider}/{name}"
+    return unnested if _resolves_to_rates(unnested, custom_llm_provider) else base_model
 
 
 def _served_or_priced_requested_model(
@@ -1594,7 +1609,7 @@ def _store_cost_breakdown_in_logging_obj(
     completion_tokens_cost_usd_dollar: float | None,
     cost_for_built_in_tools_cost_usd_dollar: float | None,
     total_cost_usd_dollar: float,
-    additional_costs: dict | None = None,
+    additional_costs: dict[str, float] | None = None,
     original_cost: float | None = None,
     discount_percent: float | None = None,
     discount_amount: float | None = None,
@@ -2018,7 +2033,7 @@ def completion_cost(
     completion_response: object | None = None,
     model: str | None = None,
     prompt: str = "",
-    messages: list = [],
+    messages: Sequence[object] = [],
     completion: str | list[str] | None = "",
     total_time: float | None = 0.0,  # used for replicate, sagemaker
     call_type: CallTypesLiteral | None = None,
@@ -2518,6 +2533,7 @@ def completion_cost(
                 if (
                     not caller_set_prices
                     and (reported_cost := billed_usage_cost(priced_response, custom_llm_provider)) is not None
+                    and not _has_registered_rerank_price(call_type, model, custom_llm_provider)
                 ):
                     return _adjusted_provider_billed_cost(
                         reported_cost=reported_cost,
@@ -3246,6 +3262,15 @@ def vector_store_search_cost(
 
     return config.calculate_vector_store_cost(
         response=response,
+    )
+
+
+def _has_registered_rerank_price(call_type: str | None, model: str | None, custom_llm_provider: str | None) -> bool:
+    if call_type not in _RERANK_CALL_TYPES or model is None or custom_llm_provider is None:
+        return False
+    return any(
+        _cost_map_entry_prices_anything(entry)
+        for _, entry in provider_matched_runtime_model_cost_registrations(model, custom_llm_provider)
     )
 
 

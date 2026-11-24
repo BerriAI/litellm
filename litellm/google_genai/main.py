@@ -411,7 +411,7 @@ async def agenerate_content(
     timeout: float | httpx.Timeout | None = None,
     # LiteLLM specific params,
     custom_llm_provider: str | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> object:
     """
     Async: Generate content using Google GenAI

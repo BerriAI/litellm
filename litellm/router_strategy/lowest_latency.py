@@ -216,7 +216,7 @@ class LowestLatencyLoggingHandler(CustomLogger):
             )
 
     @with_service_target(ROUTER_USAGE_TARGET)
-    async def async_log_failure_event(self, kwargs, response_obj: object, start_time, end_time):
+    async def async_log_failure_event(self, kwargs, response_obj: object, start_time: object, end_time: object):
         """
         Check if Timeout Error, if timeout set deployment latency -> 100
         """

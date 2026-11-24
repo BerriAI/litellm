@@ -17,12 +17,14 @@ import hashlib
 import html as _html_module
 import time
 import uuid
+from collections.abc import Sequence
 from typing import Final, cast
 from urllib.parse import urlencode, urlparse
 
 import jwt
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import UserAPIKeyAuth
@@ -37,11 +39,22 @@ from litellm.proxy.mcp_server.oauth_utils import (
 )
 from litellm.proxy.middleware.per_request_root_path_middleware import get_server_root_paths
 
+
+class _AuthCodeRecord(TypedDict):
+    api_key: ReadOnly[str]
+    server_id: ReadOnly[str]
+    code_challenge: ReadOnly[str]
+    redirect_uri: ReadOnly[str]
+    client_id: ReadOnly[str]
+    user_id: ReadOnly[str]
+    expires_at: ReadOnly[float]
+
+
 # ---------------------------------------------------------------------------
 # In-memory store for pending authorization codes.
 # Each entry: {code: {api_key, server_id, code_challenge, redirect_uri, user_id, expires_at}}
 # ---------------------------------------------------------------------------
-_byok_auth_codes: Final[dict[str, dict]] = {}
+_byok_auth_codes: Final[dict[str, _AuthCodeRecord]] = {}
 
 # Authorization codes expire after 5 minutes.
 _AUTH_CODE_TTL_SECONDS: Final = 300
@@ -242,7 +255,7 @@ def _build_authorize_html(
     code_challenge_method: str,
     state: str,
     server_id: str,
-    access_items: list,
+    access_items: Sequence[str],
     help_url: str,
 ) -> str:
     """Build the 2-step BYOK OAuth authorization page HTML."""
@@ -784,7 +797,7 @@ async def byok_authorize_get(
 
     # Resolve server metadata (name, description items, help URL).
     server_name = "MCP Server"
-    access_items: list = []
+    access_items: list[str] = []
     help_url = ""
     if server_id:
         try:
