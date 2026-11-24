@@ -6098,6 +6098,33 @@ async def test_request_capacity_enforces_shared_rpm_scopes(limits, request_data,
 
 
 @pytest.mark.asyncio
+async def test_failed_admitted_request_still_consumes_api_key_rpm() -> None:
+    cache: Final = DualCache()
+    handler: Final = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(cache))
+    auth: Final = UserAPIKeyAuth(api_key=hash_token("sk-failed-rpm"), rpm_limit=1)
+    requests: Final = _counter("api_key", auth.api_key, "requests")
+    data: Final = {"model": "test-model"}
+
+    await handler.async_pre_call_hook(auth, cache, data, "acompletion")
+    assert _local(handler, requests) == 1
+
+    await handler.async_log_failure_event(
+        kwargs={
+            "litellm_call_id": data["litellm_call_id"],
+            "standard_logging_object": {"metadata": {"user_api_key_hash": auth.api_key}},
+        },
+        response_obj=None,
+        start_time=None,
+        end_time=None,
+    )
+
+    assert _local(handler, requests) == 1
+    with pytest.raises(HTTPException) as exc:
+        await handler.async_pre_call_hook(auth, cache, {"model": "test-model"}, "acompletion")
+    assert exc.value.status_code == 429
+
+
+@pytest.mark.asyncio
 async def test_request_capacity_keeps_dynamic_rpm_policy(monkeypatch):
     from litellm.proxy import proxy_server
 
