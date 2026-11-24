@@ -385,6 +385,11 @@ def image_generation(
                 "model_info": model_info,
                 "preset_cache_key": None,
                 "stream_response": {},
+                **{
+                    field: kwargs[field]
+                    for field in CustomPricingLiteLLMParams.model_fields
+                    if field in kwargs and kwargs[field] is not None
+                },
             },
             custom_llm_provider=custom_llm_provider,
         )
