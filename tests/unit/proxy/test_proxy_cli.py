@@ -464,6 +464,34 @@ class TestProxyInitializationHelpers:
         assert "LITELLM_MASTER_KEY" in raised.value.message
         assert request_lines.get_nowait() == (first_path, "Bearer sk-cli-master")
 
+    @pytest.mark.parametrize(
+        "master_key",
+        [
+            pytest.param("sk-cli-master\n", id="trailing-newline"),
+            pytest.param("sk-cli-master ", id="trailing-space"),
+            pytest.param("sk-cli-mäster", id="non-ascii"),
+        ],
+    )
+    @pytest.mark.parametrize(
+        "command",
+        [
+            pytest.param(("--health",), id="health"),
+            pytest.param(("--test",), id="test"),
+            pytest.param(("--test", "--model", "picked-by-user"), id="test-with-model"),
+        ],
+    )
+    @respx.mock
+    def test_a_master_key_no_header_can_carry_is_named_before_any_request(
+        self, monkeypatch: pytest.MonkeyPatch, master_key: str, command: tuple[str, ...]
+    ) -> None:
+        monkeypatch.setenv("LITELLM_MASTER_KEY", master_key)
+
+        with pytest.raises(click.ClickException) as raised:
+            run_server.main([*command, *_CLI_TEST_PROXY_ARGS], standalone_mode=False)
+
+        assert "LITELLM_MASTER_KEY" in raised.value.message
+        assert respx.calls.call_count == 0
+
     @respx.mock
     def test_test_flag_with_a_model_names_the_master_key_when_the_proxy_rejects_it(
         self, monkeypatch: pytest.MonkeyPatch

@@ -304,12 +304,22 @@ class _ProxyTarget:
     trust_env: bool
 
 
+def _fits_in_header(value: str) -> bool:
+    return value.isascii() and value.isprintable() and value == value.rstrip()
+
+
 def _proxy_target(host: str, port: int) -> _ProxyTarget:
     is_local: Final = is_loopback_host(host)
     master_key: Final = os.getenv("LITELLM_MASTER_KEY")
+    api_key: Final = master_key if master_key and is_local else "My API Key"
+    if not _fits_in_header(api_key):
+        raise click.ClickException(
+            "LITELLM_MASTER_KEY has a newline, a trailing space, or another character an HTTP header can't carry. "
+            "Fix the value and run again"
+        )
     return _ProxyTarget(
         base_url=str(httpx.URL(scheme="http", host=host, port=port)),
-        api_key=master_key if master_key and is_local else "My API Key",
+        api_key=api_key,
         trust_env=not is_local,
     )
 
