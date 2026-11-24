@@ -1,8 +1,9 @@
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    field::{DERIVED_ONLY, FieldSet},
+    field::{DERIVED_ONLY, Field, FieldSet},
     hook::Hook,
+    verdict::Verdict,
 };
 
 #[derive(
@@ -97,6 +98,23 @@ impl Subscription {
         !self.writes.is_empty() || self.may_abort
     }
 
+    /// Holds a handler to what it declared, as the proxy's `Enforced` policy does: a patch stays
+    /// inside `writes`, and only `may_abort` aborts.
+    pub fn check(&self, verdict: &Verdict) -> Result<(), Violation> {
+        match verdict {
+            Verdict::Patch(patch) => {
+                let undeclared = patch.fields().difference(self.writes);
+                if undeclared.is_empty() {
+                    Ok(())
+                } else {
+                    Err(Violation::Writes(undeclared))
+                }
+            }
+            Verdict::Abort(_) if self.may_abort => Ok(()),
+            Verdict::Abort(_) => Err(Violation::Abort),
+        }
+    }
+
     fn problem(&self) -> Option<SubscriptionProblem> {
         if !self.hook.subscribable() {
             return Some(SubscriptionProblem::NotSubscribable);
@@ -127,6 +145,15 @@ pub struct Manifest {
     pub selection: Selection,
     pub subscriptions: Vec<Subscription>,
     pub has_request_state: bool,
+}
+
+/// What a handler returned that its subscription never declared.
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum Violation {
+    #[error("patched {:?} outside its declared writes", Vec::<Field>::from(*.0))]
+    Writes(FieldSet),
+    #[error("aborted without may_abort")]
+    Abort,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
@@ -211,9 +238,10 @@ impl Manifest {
 #[cfg(test)]
 mod tests {
     use rstest::rstest;
+    use serde_json::{Map, json};
 
     use super::*;
-    use crate::field::Field;
+    use crate::verdict::{Abort, Patch};
 
     fn manifest(subscription: Subscription, selection: Selection) -> Manifest {
         Manifest {
@@ -287,6 +315,43 @@ mod tests {
                 problem
             })
         );
+    }
+
+    fn limiter() -> Subscription {
+        Subscription {
+            writes: FieldSet::of(&[Field::OptionalParams]),
+            may_abort: true,
+            ..Subscription::on(Hook::PreCall)
+        }
+    }
+
+    #[rstest]
+    #[case::a_declared_write(
+        limiter(),
+        Verdict::Patch(Patch::default().merge(Field::OptionalParams, Map::new())),
+        Ok(())
+    )]
+    #[case::a_declared_abort(limiter(), Verdict::Abort(Abort::new(429, "slow down")), Ok(()))]
+    #[case::a_write_among_declared_ones(
+        limiter(),
+        Verdict::Patch(
+            Patch::default()
+                .merge(Field::OptionalParams, Map::new())
+                .set(Field::Model, json!("other"))
+        ),
+        Err(Violation::Writes(FieldSet::of(&[Field::Model])))
+    )]
+    #[case::an_abort_never_declared(
+        Subscription::on(Hook::PreCall),
+        Verdict::Abort(Abort::new(429, "slow down")),
+        Err(Violation::Abort)
+    )]
+    fn a_handler_is_held_to_what_its_subscription_declared(
+        #[case] subscription: Subscription,
+        #[case] verdict: Verdict,
+        #[case] checked: Result<(), Violation>,
+    ) {
+        assert_eq!(subscription.check(&verdict), checked);
     }
 
     #[rstest]

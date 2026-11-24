@@ -3,6 +3,7 @@ from typing import ClassVar, Final
 
 import httpx
 from pydantic import TypeAdapter
+from typing_extensions import TypedDict
 
 import litellm
 from litellm._logging import verbose_logger
@@ -18,11 +19,16 @@ from litellm.anthropic_beta_headers_manager import (
     is_beta_header_supported_by_bundled_config,
 )
 from litellm.constants import ANTHROPIC_BILLING_METADATA_PREFIX
-from litellm.exceptions import AuthenticationError
-from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
+from litellm.exceptions import AuthenticationError, UnsupportedParamsError
+from litellm.litellm_core_utils.core_helpers import drops_unsupported_params, keyword_arguments
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.reasoning_effort_utils import OPAQUE_VALUE, warn_non_string_reasoning_effort
 from litellm.litellm_core_utils.url_utils import ensure_api_route
+from litellm.llms.anthropic.messages.api_versions import (
+    requested_api_version,
+    sampling_params_to_drop,
+    serves_anthropic_api_versions,
+)
 from litellm.llms.anthropic.messages.convertible_blocks import drop_non_string_tool_result_texts
 from litellm.llms.anthropic.messages.safeguards import proxy_serves_safeguards
 from litellm.llms.base_llm.anthropic_messages.transformation import (
@@ -67,6 +73,12 @@ DEFAULT_ANTHROPIC_API_VERSION: Final = "2023-06-01"
 _CALLER_CREDENTIAL_HEADERS: Final = frozenset({"x-api-key", "authorization"})
 
 _MESSAGE_MAPPINGS: Final = TypeAdapter(tuple[Mapping[str, object], ...])
+
+_DECODED_JSON: Final = TypeAdapter(object)
+
+
+class _AnthropicMessagesResponseFields(TypedDict, total=False, extra_items=object):
+    pass
 
 
 def _carries_caller_credential(headers: Mapping[str, str]) -> bool:
@@ -116,7 +128,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
     def _resolved_provider(self) -> str:
         return self.custom_llm_provider or "anthropic"
 
-    def get_supported_anthropic_messages_params(self, model: str) -> list:
+    def get_supported_anthropic_messages_params(self, model: str) -> list[str]:
         return [
             "messages",
             "model",
@@ -185,7 +197,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             if isinstance(cache_control, dict):
                 cache_control.pop("scope", None)
 
-        def _process_content_list(content: list) -> None:
+        def _process_content_list(content: list[object]) -> None:
             for item in content:
                 if isinstance(item, dict) and "cache_control" in item:
                     _sanitize(item["cache_control"])
@@ -265,7 +277,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         return _MESSAGE_MAPPINGS.validate_python(gated.messages) if gated.stripped else messages
 
     def _normalize_system_role_messages(
-        self, anthropic_messages_request: dict, model: str, drop_params: object
+        self, anthropic_messages_request: dict[str, object], model: str, drop_params: object
     ) -> None:
         """Normalize ``role: "system"`` entries in ``messages`` per the Anthropic
         ``/v1/messages`` contract, which the first-party API, Bedrock Invoke,
@@ -359,7 +371,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         self,
         headers: dict,
         model: str,
-        messages: list[object],
+        messages: Sequence[object],
         optional_params: dict,
         litellm_params: dict,
         api_key: str | None = None,
@@ -382,7 +394,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         self,
         headers: dict,  # mutable-ok: mirrors the sync validate_anthropic_messages_environment contract
         model: str,
-        messages: list[object],  # mutable-ok: mirrors the sync validate_anthropic_messages_environment contract
+        messages: Sequence[object],
         optional_params: dict,  # mutable-ok: mirrors the sync validate_anthropic_messages_environment contract
         litellm_params: dict,  # mutable-ok: mirrors the sync validate_anthropic_messages_environment contract
         api_key: str | None = None,
@@ -441,7 +453,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         self,
         headers: dict,  # mutable-ok: out-param
         optional_params: dict,  # mutable-ok: out-param
-        messages: list[object],  # mutable-ok: mirrors the validate_anthropic_messages_environment contract
+        messages: Sequence[object],
     ) -> dict:  # mutable-ok: out-param
         if "anthropic-version" not in headers:
             headers["anthropic-version"] = DEFAULT_ANTHROPIC_API_VERSION
@@ -455,7 +467,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
 
     @staticmethod
     def _translate_reasoning_effort_to_anthropic(
-        model: str, optional_params: dict, max_tokens: int | None, custom_llm_provider: str
+        model: str, optional_params: dict[str, object], max_tokens: int | None, custom_llm_provider: str
     ) -> None:
         """Map OpenAI-style ``reasoning_effort`` to native Anthropic params.
 
@@ -520,7 +532,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
 
     @staticmethod
     def _translate_adaptive_effort_for_non_adaptive_model(
-        model: str, optional_params: dict, max_tokens: int | None, custom_llm_provider: str
+        model: str, optional_params: dict[str, object], max_tokens: int | None, custom_llm_provider: str
     ) -> None:
         """Translate the 4.6+ adaptive-thinking interface (``thinking.type=adaptive``
         and/or ``output_config.effort``) down to what an older Anthropic model
@@ -622,7 +634,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
 
     @staticmethod
     def _drop_incompatible_temperature_for_thinking(
-        model: str, optional_params: dict, custom_llm_provider: str
+        model: str, optional_params: dict[str, object], custom_llm_provider: str
     ) -> None:
         """Anthropic rejects any ``temperature`` other than 1 while extended thinking
         is enabled ("temperature may only be set to 1 when thinking is enabled").
@@ -649,6 +661,12 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         effort_enabled: Final = isinstance(output_config, dict) and output_config.get("effort") is not None
         if thinking_enabled or effort_enabled:
             optional_params.pop("temperature", None)
+
+    def anthropic_api_version(self, headers: Mapping[str, object], api_base: str | None) -> str | None:
+        serves_versions: Final = self._resolved_provider == "anthropic" and serves_anthropic_api_versions(
+            AnthropicModelInfo.resolve_anthropic_api_base(api_base)
+        )
+        return requested_api_version(headers) if serves_versions else None
 
     def strips_beta_gated_fields_from_final_headers(self) -> bool:
         """False on legs whose final ``anthropic_beta`` list is only known after this transform (Bedrock Invoke),
@@ -731,6 +749,16 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             custom_llm_provider=self._resolved_provider,
         )
 
+        dropped_sampling_params: Final = sampling_params_to_drop(
+            anthropic_messages_optional_request_params,  # pyright: ignore[reportUnknownArgumentType]  # the base signature types this as a bare dict
+            self.anthropic_api_version(headers, getattr(litellm_params, "api_base", None)),  # pyright: ignore[reportUnknownArgumentType]  # the base signature types this as a bare dict
+            model=model,
+            provider=self._resolved_provider,
+            drop_params=drops_unsupported_params(getattr(litellm_params, "drop_params", None)),
+        )
+        if isinstance(dropped_sampling_params, UnsupportedParamsError):
+            raise dropped_sampling_params
+
         system_param: Final = anthropic_messages_optional_request_params.get("system")
         if self.should_strip_billing_metadata() and system_param is not None:
             filtered_system: Final = self._filter_billing_headers_from_system(system_param)
@@ -794,7 +822,11 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             ),
             max_tokens=max_tokens,
             model=model,
-            **anthropic_messages_optional_request_params,  # pyright: ignore[reportUnknownArgumentType]  # the request params arrive as a bare dict
+            **{  # pyright: ignore[reportUnknownArgumentType]  # the request params arrive as a bare dict
+                name: value
+                for name, value in anthropic_messages_optional_request_params.items()  # pyright: ignore[reportUnknownVariableType]  # the base signature types this as a bare dict
+                if name not in dropped_sampling_params
+            },
         )
         request: Final = (
             {**dict(anthropic_messages_request), "thinking": gated.thinking}
@@ -817,10 +849,12 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         logging_obj: LiteLLMLoggingObj,
     ) -> AnthropicMessagesResponse:
         try:
-            raw_response_json: Final[AnthropicMessagesResponse] = raw_response.json()
+            raw_response_json: Final = _DECODED_JSON.validate_python(raw_response.json())
         except Exception:
             raise AnthropicError(message=raw_response.text, status_code=raw_response.status_code)
-        response: Final = AnthropicMessagesResponse(**raw_response_json)
+        response: Final = AnthropicMessagesResponse(
+            **_AnthropicMessagesResponseFields(**keyword_arguments(raw_response_json, AnthropicMessagesResponse))
+        )
         return _ensure_stop_sequence(response)
 
     def get_async_streaming_response_iterator(

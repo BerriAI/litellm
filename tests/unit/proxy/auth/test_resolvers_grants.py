@@ -87,7 +87,7 @@ class _Loaders:
     def resolver(self) -> GrantResolver:
         return GrantResolver(
             object(),
-            object(),
+            UserApiKeyCache(),
             load_user=self.load_user,
             load_team=self.load_team,
             load_membership=self.load_membership,

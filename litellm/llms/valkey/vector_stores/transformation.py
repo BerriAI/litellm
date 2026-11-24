@@ -10,13 +10,13 @@ Documents are HASHes indexed by an FT index named after the vector_store_id.
 from collections.abc import Awaitable, Callable, Generator, Mapping, Sequence
 from contextlib import contextmanager
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, NoReturn
+from typing import TYPE_CHECKING, Final, NoReturn, Protocol
 
 import httpx
 from pydantic import ConfigDict
 
 import litellm
-from litellm.litellm_core_utils.core_helpers import attribute_items
+from litellm.litellm_core_utils.core_helpers import attribute_items, require_attributes
 from litellm.llms.base_llm.vector_store.transformation import (
     BaseDirectVectorStoreConfig,
     VectorStoreEmbeddingExecutor,
@@ -50,7 +50,7 @@ DEFAULT_EMBEDDING_FIELD_NAME: Final = "embedding"
 DEFAULT_TEXT_FIELD_NAME: Final = "text"
 DISTANCE_FIELD_NAME: Final = "vector_distance"
 
-_EMPTY_EMBEDDING_CONFIG: Final = MappingProxyType({})
+_EMPTY_EMBEDDING_CONFIG: Final[Mapping[str, object]] = MappingProxyType({})
 _REDIS_INSTALL_HINT: Final = (
     "The Valkey vector store requires the 'redis' package. Run 'pip install redis' to install it."
 )
@@ -79,6 +79,11 @@ def _import_query() -> "type[Query]":
     except ImportError as e:
         raise ValueError(_REDIS_INSTALL_HINT) from e
     return RedisQuery
+
+
+class _DistanceScoredDocument(Protocol):
+    @property
+    def vector_distance(self) -> str: ...
 
 
 @contextmanager
@@ -210,7 +215,7 @@ class ValkeyVectorStoreConfig(BaseDirectVectorStoreConfig):
     def _to_result(doc: object, text_field: str) -> VectorStoreSearchResult:
         content: Final = [VectorStoreResultContent(text=str(getattr(doc, text_field, "")), type="text")]
         return VectorStoreSearchResult(
-            score=1.0 - float(getattr(doc, DISTANCE_FIELD_NAME)),
+            score=1.0 - float(require_attributes(doc, _DistanceScoredDocument, DISTANCE_FIELD_NAME).vector_distance),
             content=content,
             file_id=getattr(doc, "id", None),
             filename=getattr(doc, "id", None),

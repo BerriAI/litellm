@@ -78,7 +78,7 @@ from e2e_config import (
 )
 from e2e_metadata import Domain, Mode, Provider, Subject, meta
 from lifecycle import ResourceManager
-from memory_readings import RssCapture, RssReading, WorkerKey, settled_rss_per_worker
+from memory_readings import RssCapture, RssReading, WorkerKey, assert_same_rss_workers, settled_rss_per_worker
 from models import ChatMessage, LiteLLMParamsBody, ReliabilityChatBody, RouterSettingsOverride
 from proxy_client import ProxyClient
 
@@ -203,14 +203,7 @@ def _settled_rss_after_batches(
 def _heaviest_worker_growth(
     warm: Mapping[WorkerKey, RssReading], after: Mapping[WorkerKey, RssReading]
 ) -> WorkerGrowth:
-    assert warm.keys() == after.keys(), (
-        f"the workers answering /debug/memory/summary changed around measured batches {FIRST_MEASURED_BATCH}-"
-        f"{LAST_BATCH}, so not every "
-        f"worker can be compared with itself: gone after it {sorted(warm.keys() - after.keys())} (a worker "
-        f"that died or was restarted under failing traffic, which is what an OOM kill looks like), first seen "
-        f"after it {sorted(after.keys() - warm.keys())} (the warm window never reached them, so they have no "
-        f"baseline; raise E2E_MEMORY_RSS_SETTLE_SAMPLES if the stack has more workers than the window covers)"
-    )
+    assert_same_rss_workers(warm, after)
     return max((WorkerGrowth(warm[worker], after[worker]) for worker in warm), key=lambda growth: growth.growth_mb)
 
 

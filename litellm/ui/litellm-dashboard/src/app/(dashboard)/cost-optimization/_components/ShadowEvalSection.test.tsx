@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import React from "react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { useInfiniteKeys } from "@/app/(dashboard)/hooks/keys/useKeys";
 import { ApiError } from "@/lib/http/client";
@@ -237,6 +237,10 @@ describe("ShadowEvalSection", () => {
   beforeEach(() => {
     authorizedRoleMock.mockReturnValue({ accessToken: "token", isViewOnly: false });
   });
+  afterEach(() => {
+    vi.mocked(usePlainModelGroups).mockReset();
+    vi.mocked(usePlainChatModelGroups).mockReset();
+  });
 
   it("shows a key picker load failure instead of posing as no matching keys", async () => {
     const user = userEvent.setup();
@@ -308,8 +312,16 @@ describe("ShadowEvalSection", () => {
             <ShadowEvalSection />
           </QueryClientProvider>,
         );
-        await chooseSelectOption(user, screen.getByPlaceholderText("Every model the targets use"), "responses-only");
-        await chooseSelectOption(user, screen.getByPlaceholderText("Every model the targets use"), "custom-chat");
+        await chooseSelectOption(
+          user,
+          screen.getByRole("combobox", { name: "Every model the targets use" }),
+          "responses-only",
+        );
+        await chooseSelectOption(
+          user,
+          screen.getByRole("combobox", { name: "Every model the targets use" }),
+          "custom-chat",
+        );
         await chooseSelectOption(
           user,
           screen.getByText("Adoption check: key's traffic vs the router"),

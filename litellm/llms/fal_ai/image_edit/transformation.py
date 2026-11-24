@@ -1,4 +1,4 @@
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 
@@ -48,7 +48,7 @@ class FalAIImageEditConfig(BaseImageEditConfig):
     uploads, so local files are sent inline as base64 data URLs.
     """
 
-    def get_supported_openai_params(self, model: str) -> list:  # mutable-ok: base class contract returns a list
+    def get_supported_openai_params(self, model: str) -> list[str]:  # mutable-ok: base class contract returns a list
         return list(SUPPORTED_OPENAI_PARAMS)
 
     def map_openai_params(
@@ -56,7 +56,7 @@ class FalAIImageEditConfig(BaseImageEditConfig):
         image_edit_optional_params: ImageEditOptionalRequestParams,
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:
         return {
             PARAM_TRANSLATION.get(key, key): self._translate_value(key, value, model)
             for key, value in image_edit_optional_params.items()
@@ -72,12 +72,12 @@ class FalAIImageEditConfig(BaseImageEditConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: Mapping[str, object],
         model: str,
         api_key: str | None = None,
-        litellm_params: dict | None = None,
+        litellm_params: Mapping[str, object] | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         final_api_key: Final = api_key or get_secret_str("FAL_AI_API_KEY")
         if not final_api_key:
             raise ValueError("FAL_AI_API_KEY is not set")
@@ -100,11 +100,11 @@ class FalAIImageEditConfig(BaseImageEditConfig):
         self,
         model: str,
         prompt: str | None,
-        image: FileTypes | None,
+        image: FileTypes | Sequence[FileTypes | None] | None,
         image_edit_optional_request_params: dict,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> tuple[dict, RequestFiles]:
+    ) -> tuple[dict[str, object], RequestFiles]:
         images: Final = tuple(img for img in (image if isinstance(image, list) else (image,)) if img is not None)
         if not images:
             raise ValueError("Fal AI image edit requires at least one input image")

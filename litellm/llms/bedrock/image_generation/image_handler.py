@@ -190,11 +190,11 @@ class BedrockImageGeneration(BaseAWSLLM):
         )
         return model_response
 
-    def _extract_headers_from_optional_params(self, optional_params: dict) -> dict:
+    def _extract_headers_from_optional_params(self, optional_params: dict[str, object]) -> dict:
         """
         Extract guardrail parameters from optional_params and convert them to headers.
         """
-        headers: Final = {}
+        headers: Final[dict[str, object]] = {}
         guardrail_identifier: Final = optional_params.pop("guardrailIdentifier", None)
         guardrail_version: Final = optional_params.pop("guardrailVersion", None)
 
@@ -208,7 +208,7 @@ class BedrockImageGeneration(BaseAWSLLM):
     def _prepare_request(
         self,
         model: str,
-        optional_params: dict,
+        optional_params: dict[str, object],
         api_base: str | None,
         extra_headers: dict | None,
         logging_obj: LitellmLogging,
@@ -301,8 +301,8 @@ class BedrockImageGeneration(BaseAWSLLM):
         self,
         model: str,
         prompt: str,
-        optional_params: dict,
-    ) -> dict:
+        optional_params: dict[str, object],
+    ) -> dict[str, object]:
         """
         Get the request body for the Bedrock Image Generation API
 

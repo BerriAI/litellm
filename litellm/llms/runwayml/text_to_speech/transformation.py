@@ -6,11 +6,11 @@ Maps OpenAI TTS spec to RunwayML Text-to-Speech API
 
 import asyncio
 import time
-from collections.abc import Coroutine, Sequence
-from typing import TYPE_CHECKING, Any, Final, TypedDict, Union
+from collections.abc import Coroutine, Mapping
+from typing import TYPE_CHECKING, Any, Final, Protocol, Union
 
 import httpx
-from typing_extensions import ReadOnly
+from pydantic import TypeAdapter
 
 import litellm
 from litellm._logging import verbose_logger
@@ -18,6 +18,7 @@ from litellm.constants import (
     RUNWAYML_DEFAULT_API_VERSION,
     RUNWAYML_POLLING_TIMEOUT,
 )
+from litellm.litellm_core_utils.core_helpers import as_object_list, require_attributes, require_get
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.text_to_speech.transformation import (
     BaseTextToSpeechConfig,
@@ -27,23 +28,22 @@ from litellm.secret_managers.main import get_secret_str
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
     from litellm.types.llms.openai import HttpxBinaryResponseContent
 else:
     LiteLLMLoggingObj = Any
     HttpxBinaryResponseContent = Any
 
 
-class _RunwayTtsTaskResponse(TypedDict, total=False):
-    id: ReadOnly[str]
-    status: ReadOnly[str]
-    output: ReadOnly[Sequence[object]]
-    failure: ReadOnly[str]
-    failureCode: ReadOnly[str]
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
-def _parse_runway_tts_task(response: httpx.Response) -> _RunwayTtsTaskResponse:
-    task: Final[_RunwayTtsTaskResponse] = response.json()
-    return task
+class _SupportsUpper(Protocol):
+    def upper(self) -> str: ...
+
+
+def _parse_runway_tts_task(response: httpx.Response) -> object:
+    return _DECODED_JSON.validate_python(response.json())
 
 
 class RunwayMLTextToSpeechConfig(BaseTextToSpeechConfig):
@@ -80,7 +80,7 @@ class RunwayMLTextToSpeechConfig(BaseTextToSpeechConfig):
         logging_obj: "LiteLLMLoggingObj",
         timeout: float | httpx.Timeout,
         extra_headers: dict[str, object] | None,
-        base_llm_http_handler: Any,
+        base_llm_http_handler: "BaseLLMHTTPHandler",
         aspeech: bool,
         api_base: str | None,
         api_key: str | None,
@@ -115,15 +115,6 @@ class RunwayMLTextToSpeechConfig(BaseTextToSpeechConfig):
             or get_secret_str("RUNWAYML_API_KEY")
         )
 
-        # Convert voice to appropriate format
-        voice_param: str | dict | None = voice
-        if isinstance(voice, str):
-            # Keep as string, will be processed in map_openai_params
-            voice_param = voice
-        elif isinstance(voice, dict):
-            # Already in dict format, pass through
-            voice_param = voice
-
         litellm_params_dict.update(
             {
                 "api_key": api_key,
@@ -135,7 +126,7 @@ class RunwayMLTextToSpeechConfig(BaseTextToSpeechConfig):
         response: Final = base_llm_http_handler.text_to_speech_handler(
             model=model,
             input=input,
-            voice=voice_param,
+            voice=voice if isinstance(voice, str) else None,
             text_to_speech_provider_config=self,
             text_to_speech_optional_params=optional_params,
             custom_llm_provider="runwayml",
@@ -149,7 +140,7 @@ class RunwayMLTextToSpeechConfig(BaseTextToSpeechConfig):
 
         return response
 
-    def get_supported_openai_params(self, model: str) -> list:
+    def get_supported_openai_params(self, model: str) -> list[str]:
         """
         RunwayML TTS supports these OpenAI parameters
         """
@@ -158,11 +149,11 @@ class RunwayMLTextToSpeechConfig(BaseTextToSpeechConfig):
     def map_openai_params(
         self,
         model: str,
-        optional_params: dict,
-        voice: str | dict | None = None,
+        optional_params: Mapping[str, object],
+        voice: str | Mapping[str, object] | None = None,
         drop_params: bool = False,
-        kwargs: dict = {},
-    ) -> tuple[str | None, dict]:
+        kwargs: Mapping[str, object] = {},
+    ) -> tuple[str | None, dict[str, object]]:
         """
         Map OpenAI parameters to RunwayML TTS parameters
 
@@ -172,10 +163,10 @@ class RunwayMLTextToSpeechConfig(BaseTextToSpeechConfig):
         Note: Since RunwayML requires voice as a dict, we store it in
         mapped_params["runwayml_voice"] and return None for the voice string.
         """
-        mapped_params: Final = {}
+        mapped_params: Final[dict[str, object]] = {}
 
         # Map voice parameter to RunwayML format dict
-        voice_dict: dict | None = None
+        voice_dict: dict[str, object] | None = None
         if isinstance(voice, str):
             # Check if it's an OpenAI voice name that needs mapping
             if voice in self.VOICE_MAPPINGS:
@@ -231,7 +222,7 @@ class RunwayMLTextToSpeechConfig(BaseTextToSpeechConfig):
         self,
         model: str,
         api_base: str | None,
-        litellm_params: dict,
+        litellm_params: Mapping[str, object],
     ) -> str:
         """
         Get the complete URL for RunwayML TTS request
@@ -255,7 +246,7 @@ class RunwayMLTextToSpeechConfig(BaseTextToSpeechConfig):
             raise TimeoutError(f"RunwayML TTS task polling timed out after {timeout_secs} seconds")
 
     @staticmethod
-    def _check_task_status(response_data: _RunwayTtsTaskResponse) -> str:
+    def _check_task_status(response_data: object) -> str:
         """
         Check RunwayML task status from response.
 
@@ -270,15 +261,16 @@ class RunwayMLTextToSpeechConfig(BaseTextToSpeechConfig):
         Raises:
             ValueError: If task failed or status is unknown
         """
-        status: Final = response_data.get("status", "").upper()
+        fields: Final = require_get(response_data)
+        status: Final = require_attributes(fields.get("status", ""), _SupportsUpper, "upper").upper()
 
         verbose_logger.debug("RunwayML TTS task status: %s", status)
 
         if status == "SUCCEEDED":
             return "succeeded"
         elif status == "FAILED":
-            failure_reason: Final = response_data.get("failure", "Unknown error")
-            failure_code: Final = response_data.get("failureCode", "unknown")
+            failure_reason: Final = fields.get("failure", "Unknown error")
+            failure_code: Final = fields.get("failureCode", "unknown")
             raise ValueError(f"RunwayML TTS failed: {failure_reason} (code: {failure_code})")
         elif status == "CANCELLED":
             raise ValueError("RunwayML TTS was cancelled")
@@ -289,7 +281,7 @@ class RunwayMLTextToSpeechConfig(BaseTextToSpeechConfig):
 
     def _poll_task_sync(
         self,
-        task_id: str,
+        task_id: object,
         api_base: str,
         headers: dict[str, str],
         timeout_secs: float = 600,
@@ -326,7 +318,7 @@ class RunwayMLTextToSpeechConfig(BaseTextToSpeechConfig):
             response = client.get(url=task_url, headers=headers)
             response.raise_for_status()
 
-            response_data: _RunwayTtsTaskResponse = _parse_runway_tts_task(response)
+            response_data: object = _parse_runway_tts_task(response)
 
             # Check task status
             status = self._check_task_status(response_data=response_data)
@@ -339,7 +331,7 @@ class RunwayMLTextToSpeechConfig(BaseTextToSpeechConfig):
 
     async def _poll_task_async(
         self,
-        task_id: str,
+        task_id: object,
         api_base: str,
         headers: dict[str, str],
         timeout_secs: float = 600,
@@ -373,7 +365,7 @@ class RunwayMLTextToSpeechConfig(BaseTextToSpeechConfig):
             response = await client.get(url=task_url, headers=headers)
             response.raise_for_status()
 
-            response_data: _RunwayTtsTaskResponse = _parse_runway_tts_task(response)
+            response_data: object = _parse_runway_tts_task(response)
 
             # Check task status
             status = self._check_task_status(response_data=response_data)
@@ -388,9 +380,9 @@ class RunwayMLTextToSpeechConfig(BaseTextToSpeechConfig):
         self,
         model: str,
         input: str,
-        voice: str | dict | None,
-        optional_params: dict,
-        litellm_params: dict,
+        voice: str | Mapping[str, object] | None,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         headers: dict,
     ) -> TextToSpeechRequestData:
         """
@@ -418,19 +410,18 @@ class RunwayMLTextToSpeechConfig(BaseTextToSpeechConfig):
             }
 
         # Build request body
-        request_body: Final = {
+        request_body: Final[Mapping[str, object]] = {
             "model": model or self.DEFAULT_MODEL,
             "promptText": input,
             "voice": runwayml_voice,
         }
 
         # Add any other optional parameters (except runwayml_voice which we already used)
-        for k, v in optional_params.items():
-            if k not in request_body and k != "runwayml_voice":
-                request_body[k] = v
-
         return {
-            "dict_body": request_body,
+            "dict_body": {
+                **request_body,
+                **{k: v for k, v in optional_params.items() if k not in request_body and k != "runwayml_voice"},
+            },
             "headers": headers,
         }
 
@@ -464,7 +455,7 @@ class RunwayMLTextToSpeechConfig(BaseTextToSpeechConfig):
         from litellm.types.llms.openai import HttpxBinaryResponseContent
 
         try:
-            response_data: Final[_RunwayTtsTaskResponse] = _parse_runway_tts_task(raw_response)
+            response_data: Final = _parse_runway_tts_task(raw_response)
         except Exception as e:
             raise self.get_error_class(
                 error_message=f"Error parsing RunwayML TTS response: {e}",
@@ -475,7 +466,7 @@ class RunwayMLTextToSpeechConfig(BaseTextToSpeechConfig):
         verbose_logger.debug("RunwayML TTS starting polling...")
 
         # Get task ID
-        task_id: Final = response_data.get("id")
+        task_id: Final = require_get(response_data).get("id")
         if not task_id:
             raise ValueError("RunwayML TTS response missing task ID")
 
@@ -494,13 +485,13 @@ class RunwayMLTextToSpeechConfig(BaseTextToSpeechConfig):
         )
 
         # Get the completed task data
-        task_data: Final[_RunwayTtsTaskResponse] = _parse_runway_tts_task(polled_response)
+        task_data: Final = _parse_runway_tts_task(polled_response)
 
         verbose_logger.debug("RunwayML TTS polling complete, downloading audio")
 
         # Get audio URL from output
-        output: Final = task_data.get("output", [])
-        if not output or not isinstance(output, list) or len(output) == 0:
+        output: Final = as_object_list(require_get(task_data).get("output", []))
+        if not output:
             raise ValueError("RunwayML TTS response missing audio URL in output")
 
         audio_url: Final = output[0]
@@ -533,7 +524,7 @@ class RunwayMLTextToSpeechConfig(BaseTextToSpeechConfig):
         from litellm.types.llms.openai import HttpxBinaryResponseContent
 
         try:
-            response_data: Final[_RunwayTtsTaskResponse] = _parse_runway_tts_task(raw_response)
+            response_data: Final = _parse_runway_tts_task(raw_response)
         except Exception as e:
             raise self.get_error_class(
                 error_message=f"Error parsing RunwayML TTS response: {e}",
@@ -544,7 +535,7 @@ class RunwayMLTextToSpeechConfig(BaseTextToSpeechConfig):
         verbose_logger.debug("RunwayML TTS starting polling (async)...")
 
         # Get task ID
-        task_id: Final = response_data.get("id")
+        task_id: Final = require_get(response_data).get("id")
         if not task_id:
             raise ValueError("RunwayML TTS response missing task ID")
 
@@ -563,13 +554,13 @@ class RunwayMLTextToSpeechConfig(BaseTextToSpeechConfig):
         )
 
         # Get the completed task data
-        task_data: Final[_RunwayTtsTaskResponse] = _parse_runway_tts_task(polled_response)
+        task_data: Final = _parse_runway_tts_task(polled_response)
 
         verbose_logger.debug("RunwayML TTS polling complete (async), downloading audio")
 
         # Get audio URL from output
-        output: Final = task_data.get("output", [])
-        if not output or not isinstance(output, list) or len(output) == 0:
+        output: Final = as_object_list(require_get(task_data).get("output", []))
+        if not output:
             raise ValueError("RunwayML TTS response missing audio URL in output")
 
         audio_url: Final = output[0]

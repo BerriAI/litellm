@@ -3,6 +3,7 @@ from typing import Final
 
 from litellm.exceptions import UnsupportedParamsError
 from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
+from litellm.llms.anthropic.messages.api_versions import requested_api_version
 from litellm.llms.anthropic.messages.native.transformation import AnthropicMessagesConfig
 from litellm.types.router import GenericLiteLLMParams
 
@@ -15,16 +16,8 @@ _VERSIONS_SERVED_AS_VERTEX_DEFAULT: Final = frozenset({"", "2023-01-01", "2023-0
 _VERSIONS_VERTEX_ACCEPTS_IN_BODY: Final = frozenset({_VERTEX_DEFAULT_VERSION, "2026-10-21"})
 
 
-def _requested_version(headers: Mapping[str, object]) -> str:
-    requested: Final = next(
-        (value for name, value in headers.items() if name.lower() == _VERSION_HEADER_VERTEX_READS_FROM_BODY),
-        "",
-    )
-    return requested.strip() if isinstance(requested, str) else ""
-
-
 def _vertex_version(headers: Mapping[str, object], model: str, drop_params: bool) -> str | UnsupportedParamsError:
-    requested: Final = _requested_version(headers)
+    requested: Final = requested_api_version(headers) or ""
     if requested in _VERSIONS_SERVED_AS_VERTEX_DEFAULT:
         return _VERTEX_DEFAULT_VERSION
     if requested in _VERSIONS_VERTEX_ACCEPTS_IN_BODY:
@@ -49,14 +42,17 @@ class VertexAIPartnerModelsAnthropicMessagesConfig(AnthropicMessagesConfig, Vert
     def should_strip_billing_metadata(self) -> bool:
         return True
 
+    def supports_diagnostics(self) -> bool:
+        return False
+
     def transform_anthropic_messages_request(
         self,
         model: str,
-        messages: list[dict],
-        anthropic_messages_optional_request_params: dict,
+        messages: list[dict[str, object]],
+        anthropic_messages_optional_request_params: dict[str, object],
         litellm_params: GenericLiteLLMParams,
         headers: dict[str, object],  # mutable-ok: mirrors the provider transform contract
-    ) -> dict:
+    ) -> dict[str, object]:
         anthropic_messages_request: Final = super().transform_anthropic_messages_request(
             model=model,
             messages=messages,

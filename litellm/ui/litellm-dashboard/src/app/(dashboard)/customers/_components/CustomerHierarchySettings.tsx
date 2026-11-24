@@ -10,12 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import DeleteResourceModal from "@/components/common_components/DeleteResourceModal";
-import {
-  customerEntityId,
-  customerHierarchyBudget,
-  type CustomerHierarchyEntity,
-  type Organization,
-} from "./customerHierarchyForms";
+import { customerEntityId, type CustomerHierarchyEntity, type Organization } from "./customerHierarchyForms";
 
 import { useCustomerHierarchyForm } from "./useCustomerHierarchyForm";
 import CustomerHierarchyBudgetFields from "./CustomerHierarchyBudgetFields";
@@ -121,7 +116,6 @@ function SettingsForm({ entity, organization, onSaved, onDeleted }: Props) {
             fields={fields}
             onChange={update}
             idPrefix="customer-hierarchy"
-            original={customerHierarchyBudget(entity)}
           />
         </fieldset>
         {error && (

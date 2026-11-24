@@ -304,6 +304,10 @@ class OpenTelemetryV2(CustomLogger):
     #  closed here. See ``log_pre_api_call``.
     # ====================================================================== #
 
+    def _defer_llm_call(self, call_id: str, start_time_ns: int | None) -> None:
+        """Record only when the call started, leaving its span to be created by the close callback."""
+        self._store_open_call(call_id, _LLMCallSpan(span=None, start_time_ns=start_time_ns))
+
     def log_pre_api_call(self, model: str, messages: object, kwargs: Mapping[str, object]) -> None:
         """Open the LLM-call span at the call boundary.
 
@@ -342,7 +346,7 @@ class OpenTelemetryV2(CustomLogger):
         # provider here would evict idle ones even though close re-routes.
         parent_context: Final = _llm_call_parent_context(call)
         if not is_recordable_span(get_current_span(parent_context)):
-            self._store_open_call(call_id, _LLMCallSpan(span=None, start_time_ns=start_time_ns))
+            self._defer_llm_call(call_id, start_time_ns)
             return
         # A detached route roots its own trace instead (linked to the request
         # trace) — see ``TenantRoute.detached``.
@@ -590,6 +594,10 @@ class OpenTelemetryV2(CustomLogger):
         if carrier is not None:
             self._tenant_tracers.release(carrier.provider)
 
+    def _span_session(self, call: LLMCallEvent) -> str | None:
+        """The session a model call's span names."""
+        return call.session_id
+
     def _finish_carrier(
         self,
         carrier: "_LLMCallSpan | None",
@@ -616,7 +624,7 @@ class OpenTelemetryV2(CustomLogger):
             request_route=request_root_http_route(),
             request_purpose=call.purpose,
             trace=call.trace,
-            session_id=call.session_id,
+            session_id=self._span_session(call),
             metadata_keys=tuple(self.config.baggage_metadata_keys),
             operation=call.operation,
         )
@@ -669,7 +677,7 @@ class OpenTelemetryV2(CustomLogger):
         parent_otel_span: Span | None = None,
         start_time: datetime | float | None = None,
         end_time: datetime | float | None = None,
-        event_metadata: dict | None = None,
+        event_metadata: Mapping[str, object] | None = None,
     ) -> None:
         self._emit_service(
             payload,
@@ -687,7 +695,7 @@ class OpenTelemetryV2(CustomLogger):
         parent_otel_span: Span | None = None,
         start_time: datetime | float | None = None,
         end_time: datetime | float | None = None,
-        event_metadata: dict | None = None,
+        event_metadata: Mapping[str, object] | None = None,
     ) -> None:
         self._emit_service(
             payload,
@@ -705,7 +713,7 @@ class OpenTelemetryV2(CustomLogger):
         parent_otel_span: Span | None,
         start_time: datetime | float | None,
         end_time: datetime | float | None,
-        event_metadata: dict | None,
+        event_metadata: Mapping[str, object] | None,
         error_override: str | None,
     ) -> Span | None:
         data = ServiceSpanData.from_payload(payload, event_metadata=event_metadata)
@@ -834,9 +842,9 @@ class OpenTelemetryV2(CustomLogger):
         self,
         user_api_key_dict: "UserAPIKeyAuth",
         cache: "DualCache",
-        data: dict,
+        data: dict[str, object],
         call_type: "CallTypesLiteral",
-    ) -> dict:
+    ) -> dict[str, object]:
         self.seed_request_identity(
             user_api_key_dict,
             model=model_from_request_data(data),
@@ -874,7 +882,7 @@ class OpenTelemetryV2(CustomLogger):
 
     async def async_post_call_failure_hook(
         self,
-        request_data: dict,
+        request_data: Mapping[str, object],
         original_exception: Exception,
         user_api_key_dict: "UserAPIKeyAuth",
         traceback_str: "str | None" = None,

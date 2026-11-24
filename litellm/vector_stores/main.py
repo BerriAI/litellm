@@ -135,8 +135,8 @@ def mock_vector_store_create_response(
 async def acreate(
     name: str | None = None,
     file_ids: builtins.list[str] | None = None,
-    expires_after: dict | None = None,
-    chunking_strategy: dict | None = None,
+    expires_after: Mapping[str, object] | None = None,
+    chunking_strategy: Mapping[str, object] | None = None,
     metadata: dict[str, str] | None = None,
     # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
     # The extra values given here take precedence over values defined on the client or passed to this method.
@@ -199,8 +199,8 @@ async def acreate(
 def create(
     name: str | None = None,
     file_ids: builtins.list[str] | None = None,
-    expires_after: dict | None = None,
-    chunking_strategy: dict | None = None,
+    expires_after: Mapping[str, object] | None = None,
+    chunking_strategy: Mapping[str, object] | None = None,
     metadata: dict[str, str] | None = None,
     # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
     # The extra values given here take precedence over values defined on the client or passed to this method.
@@ -856,7 +856,7 @@ async def alist(
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
     **kwargs,
-) -> Mapping[str, object]:
+) -> object:
     """
     Async: List vector stores.
     """
@@ -887,7 +887,7 @@ async def alist(
         init_response: Final = await loop.run_in_executor(None, func_with_context)
 
         if asyncio.iscoroutine(init_response):
-            response: Mapping[str, object] = await init_response
+            response: object = await init_response
         else:
             response = init_response
 
@@ -914,7 +914,7 @@ def list(
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
     **kwargs,
-) -> Mapping[str, object] | Coroutine[object, object, Mapping[str, object]]:
+) -> object | Coroutine[object, object, object]:
     """
     List vector stores.
 
@@ -1000,7 +1000,7 @@ def list(
 async def aupdate(
     vector_store_id: str,
     name: str | None = None,
-    expires_after: dict | None = None,
+    expires_after: Mapping[str, object] | None = None,
     metadata: dict[str, str] | None = None,
     extra_headers: dict[str, object] | None = None,
     extra_query: dict[str, object] | None = None,
@@ -1058,7 +1058,7 @@ async def aupdate(
 def update(
     vector_store_id: str,
     name: str | None = None,
-    expires_after: dict | None = None,
+    expires_after: Mapping[str, object] | None = None,
     metadata: dict[str, str] | None = None,
     extra_headers: dict[str, object] | None = None,
     extra_query: dict[str, object] | None = None,
@@ -1160,7 +1160,7 @@ async def adelete(
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
     **kwargs,
-) -> Mapping[str, object]:
+) -> object:
     """
     Async: Delete a vector store.
     """
@@ -1188,7 +1188,7 @@ async def adelete(
         init_response: Final = await loop.run_in_executor(None, func_with_context)
 
         if asyncio.iscoroutine(init_response):
-            response: Mapping[str, object] = await init_response
+            response: object = await init_response
         else:
             response = init_response
 
@@ -1212,7 +1212,7 @@ def delete(
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
     **kwargs,
-) -> Mapping[str, object] | Coroutine[object, object, Mapping[str, object]]:
+) -> object | Coroutine[object, object, object]:
     """
     Delete a vector store.
 

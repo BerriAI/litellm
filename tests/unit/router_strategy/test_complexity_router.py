@@ -18528,3 +18528,264 @@ async def test_custom_classifier_failure_preserves_plan_floor_and_direct_default
     assert result.routing_decision.get("tier") == (
         ("premium" if planned_model == "premium-model" else "careful") if plan_mode else None
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "configured_cap, db_loaded, reasoning_effort",
+    [
+        (1, False, None),
+        (64, False, None),
+        ("omitted", False, None),
+        (None, False, None),
+        (64, True, None),
+        ("omitted", False, "high"),
+        (8192, False, "high"),
+    ],
+)
+@pytest.mark.parametrize("deployment_cap", [None, 32])
+@pytest.mark.parametrize("truncated", [False, True])
+async def test_llm_classifier_call_caps_the_output_tokens_bedrock_reserves(
+    configured_cap: int | None | Literal["omitted"],
+    db_loaded: bool,
+    reasoning_effort: Literal["high"] | None,
+    deployment_cap: int | None,
+    truncated: bool,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    classifier_llm_config: Final = {
+        "model": "classifier",
+        "timeout_ms": 2000,
+        **({"reasoning_effort": reasoning_effort} if reasoning_effort is not None else {}),
+        **({"max_output_tokens": configured_cap} if configured_cap != "omitted" else {}),
+    }
+    model_list: Final = [
+        {
+            "model_name": "auto",
+            "litellm_params": {
+                "model": "auto_router/complexity_router",
+                "complexity_router_config": {
+                    "tiers": {"SIMPLE": "cheap", "REASONING": "capable"},
+                    "default_model": "capable",
+                    "classifier_type": "llm",
+                    "classifier_fallback": "default_model",
+                    "classifier_llm_config": classifier_llm_config,
+                },
+            },
+        },
+        {
+            "model_name": "classifier",
+            "litellm_params": {
+                "model": (
+                    "bedrock/anthropic.claude-3-7-sonnet-20250219-v1:0"
+                    if reasoning_effort is not None
+                    else "bedrock/global.anthropic.claude-haiku-5-5"
+                ),
+                "aws_region_name": "us-east-1",
+                "aws_access_key_id": "test-key",
+                "aws_secret_access_key": "test-secret",
+                **({"max_tokens": deployment_cap} if deployment_cap is not None else {}),
+            },
+        },
+        {"model_name": "cheap", "litellm_params": {"model": "openai/test-cheap", "api_key": "test-key"}},
+        {"model_name": "capable", "litellm_params": {"model": "openai/test-capable", "api_key": "test-key"}},
+    ]
+    router: Final = Router(model_list=model_list[1:] if db_loaded else model_list)
+    if db_loaded:
+        assert (
+            router.upsert_deployment(
+                Deployment(**{**model_list[0], "model_info": {"id": "db-auto-cap", "db_model": True}})
+            )
+            is not None
+        )
+    with respx.mock(assert_all_mocked=True) as upstream:
+        converse: Final = upstream.post(host="bedrock-runtime.us-east-1.amazonaws.com").respond(
+            200,
+            json={
+                "output": {
+                    "message": {
+                        "role": "assistant",
+                        "content": [{"text": '{"tier":' if truncated else '{"tier": "SIMPLE"}'}],
+                    }
+                },
+                "stopReason": "max_tokens" if truncated else "end_turn",
+                "usage": {"inputTokens": 900, "outputTokens": 8, "totalTokens": 908},
+            },
+        )
+        response: Final = await router.async_pre_routing_hook(
+            model="auto",
+            request_kwargs={"max_tokens": 17},
+            messages=[{"role": "user", "content": "rename this variable"}],
+        )
+
+        sent: Final = json.loads(converse.calls.last.request.content)
+        if db_loaded:
+            assert (
+                router.upsert_deployment(
+                    Deployment(
+                        model_name="auto",
+                        model_info={"id": "db-auto-cap", "db_model": True},
+                        litellm_params={
+                            "model": "auto_router/complexity_router",
+                            "complexity_router_config": {
+                                "tiers": {"SIMPLE": "cheap", "REASONING": "capable"},
+                                "default_model": "capable",
+                                "classifier_type": "llm",
+                                "classifier_fallback": "default_model",
+                                "classifier_llm_config": {**classifier_llm_config, "max_output_tokens": 128},
+                            },
+                        },
+                    )
+                )
+                is not None
+            )
+            updated: Final = await router.async_pre_routing_hook(
+                model="auto", request_kwargs={}, messages=[{"role": "user", "content": "rename another variable"}]
+            )
+            assert updated is not None and updated.model == ("capable" if truncated else "cheap")
+            assert json.loads(converse.calls.last.request.content)["inferenceConfig"]["maxTokens"] == 128
+
+    assert response is not None and response.model == ("capable" if truncated else "cheap")
+    assert response.routing_decision["cause"] == ("default_model_fallback" if truncated else "llm_classifier")
+    expected_cap: Final = (
+        configured_cap
+        if isinstance(configured_cap, int)
+        else deployment_cap
+        if deployment_cap is not None
+        else 8192
+        if reasoning_effort == "high"
+        else None
+    )
+    assert sent["inferenceConfig"].get("maxTokens") == expected_cap
+    if expected_cap is None:
+        assert "maxTokens" not in sent["inferenceConfig"]
+    if reasoning_effort is not None:
+        assert sent["additionalModelRequestFields"]["thinking"]["budget_tokens"] == 4096
+
+
+@pytest.mark.parametrize("cap", [0, -1])
+def test_classifier_output_cap_rejects_nonpositive_values(cap: int) -> None:
+    with pytest.raises(ValidationError, match="max_output_tokens"):
+        ClassifierLLMConfig(model="classifier", max_output_tokens=cap)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("configured_cap", [64, None, "omitted"])
+@pytest.mark.parametrize("deployment_cap", [None, 8192])
+async def test_encrypted_classifier_sends_its_own_output_cap(
+    configured_cap: int | None | Literal["omitted"], deployment_cap: int | None, native_classifier_http: MagicMock
+) -> None:
+    native: Final = Router(
+        model_list=[
+            {
+                "model_name": "classifier",
+                "litellm_params": {
+                    "model": "openai/gpt-6-astra",
+                    "api_key": "test-key",
+                    "api_base": "https://classifier.test/v1",
+                    **({"max_output_tokens": deployment_cap} if deployment_cap is not None else {}),
+                },
+            }
+        ],
+        num_retries=0,
+    )
+    router: Final = ComplexityRouter(
+        model_name="encrypted-router",
+        ctx=RoutingContext(native),
+        complexity_router_config={
+            "tiers": {"SIMPLE": "cheap-model", "REASONING": "deep-model"},
+            "classifier_type": "llm",
+            "classifier_llm_config": {
+                "model": "classifier",
+                "timeout_ms": 5000,
+                **({"max_output_tokens": configured_cap} if configured_cap != "omitted" else {}),
+            },
+            "default_model": "cheap-model",
+            "session_affinity": False,
+            "deployment_affinity": False,
+        },
+    )
+    result: Final = await router.async_pre_routing_hook(
+        model="encrypted-router",
+        request_kwargs={"input": [_encrypted_agent_task()], "max_output_tokens": 17},
+    )
+    assert result.model == "deep-model"
+    assert result.routing_decision["cause"] == "llm_classifier"
+    native_classifier_http.assert_called_once()
+    request: Final = native_classifier_http.call_args.args[0]
+    assert request.url.path == "/v1/responses"
+    body: Final = json.loads(request.content)
+    if isinstance(configured_cap, int):
+        assert body["max_output_tokens"] == configured_cap
+    elif deployment_cap is not None:
+        assert body["max_output_tokens"] == deployment_cap
+    else:
+        assert "max_output_tokens" not in body
+    assert "max_tokens" not in body
+    assert "max_completion_tokens" not in body
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("configured_cap", [None, 64])
+@pytest.mark.parametrize("deployment_key", [None, "max_tokens", "max_completion_tokens"])
+async def test_classifier_cap_overrides_openai_deployment_token_limits(
+    configured_cap: int | None, deployment_key: str | None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "classifier",
+                "litellm_params": {
+                    "model": "openai/gpt-6-astra",
+                    "api_key": "test-key",
+                    "api_base": "https://classifier.test/v1",
+                    **({deployment_key: 8192} if deployment_key is not None else {}),
+                },
+            },
+        ],
+        num_retries=0,
+    )
+    classifier: Final = ComplexityRouter(
+        model_name="auto",
+        ctx=RoutingContext(router),
+        complexity_router_config={
+            "tiers": {"SIMPLE": "cheap", "REASONING": "capable"},
+            "default_model": "capable",
+            "classifier_type": "llm",
+            "classifier_llm_config": {
+                "model": "classifier",
+                "timeout_ms": 5000,
+                "max_output_tokens": configured_cap,
+            },
+        },
+    )
+    with respx.mock(assert_all_mocked=True) as upstream:
+        endpoint: Final = upstream.post("https://classifier.test/v1/chat/completions").respond(
+            200,
+            json={
+                "id": "chatcmpl-classifier",
+                "object": "chat.completion",
+                "created": 1,
+                "model": "gpt-6-astra",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": '{"tier":"SIMPLE"}'},
+                        "finish_reason": "stop",
+                    }
+                ],
+            },
+        )
+        result: Final = await classifier.async_pre_routing_hook(
+            model="auto", request_kwargs={}, messages=[{"role": "user", "content": "rename this variable"}]
+        )
+
+    assert result.model == "cheap"
+    assert result.routing_decision["cause"] == "llm_classifier"
+    sent: Final = json.loads(endpoint.calls.last.request.content)
+    expected_cap: Final = configured_cap if configured_cap is not None else 8192 if deployment_key is not None else None
+    assert {key: sent[key] for key in OUTPUT_TOKEN_CEILING_PARAMS if key in sent} == (
+        {"max_completion_tokens": expected_cap} if expected_cap is not None else {}
+    )

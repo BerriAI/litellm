@@ -127,6 +127,26 @@ pub struct Authenticated {
     pub signer: Option<SigV4Signer>,
 }
 
+/// What a login before the URL resolved about where the call goes: the project a Vertex AI
+/// login names.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct LoggedIn {
+    pub project: Option<String>,
+}
+
+/// The scheme steps that must run before the URL is built: an Entra ID scheme takes the token
+/// source it names, and a Vertex AI login runs. Any other scheme passes through.
+pub async fn prepare_auth(
+    services: &AuthServices,
+    validated: ValidatedEnvironment,
+    azure_ad_token_hosts: AzureAdTokenHosts,
+    secrets: &(dyn Fn(&str) -> Option<String> + Sync),
+) -> Result<(ValidatedEnvironment, LoggedIn), crate::Error> {
+    let validated = validated.with_azure_ad_token_hosts(azure_ad_token_hosts)?;
+    let (validated, project) = log_in_to_vertex(services, validated, secrets).await?;
+    Ok((validated, LoggedIn { project }))
+}
+
 /// Logs a Claude on Vertex AI call in before its URL is built, as Python's
 /// `validate_anthropic_messages_environment` does, reading `VERTEXAI_CREDENTIALS` and
 /// `VERTEXAI_PROJECT` through the host's `secrets`. Returns the call's environment with the
