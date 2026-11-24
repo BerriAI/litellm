@@ -2013,4 +2013,3 @@ async def test_mixed_provider_group_keeps_the_caller_key_on_its_own_aws_member_a
     assert len(sent) == 2, sent
     assert sent[0] == (True, f"Bearer {_CALLER_ANTHROPIC_KEY}")
     assert (sent[1][0], sent[1][1].startswith("AWS4-HMAC-SHA256 ")) == (False, True)
-
