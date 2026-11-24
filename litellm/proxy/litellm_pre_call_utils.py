@@ -48,6 +48,7 @@ from litellm.constants import (
     SESSION_DEPLOYMENT_AFFINITY_CONVERSATION_METADATA_KEY,
     SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY,
     SESSION_ID_GENERATED_METADATA_KEY,
+    SESSION_ID_INHERITED_METADATA_KEY,
     SESSION_ID_OMITTED_METADATA_KEY,
     TYPESAFE_DANGER_ZONE_HEADER_PREFIX,
     USAGE_BASED_ROUTING_COUNTED_TOKENS_METADATA_KEY,
@@ -64,6 +65,7 @@ from litellm.litellm_core_utils.core_helpers import (
     attribute_or_none,
     decoded_json_object,
     is_codex_user_agent,
+    is_github_copilot_chat_user_agent,
     iter_items,
     keyword_arguments,
     normalize_drop_params,
@@ -637,6 +639,7 @@ _UNTRUSTED_METADATA_CONTROL_FIELDS: Final = (
     CONSUMED_REQUEST_TAGS_METADATA_KEY,
     ROUTING_REQUEST_TAGS_METADATA_KEY,
     INTERNAL_CALL_ORIGIN_METADATA_KEY,
+    SESSION_ID_INHERITED_METADATA_KEY,
     BILLED_RETRY_ATTEMPT_METADATA_KEY,
     MANAGED_BACKGROUND_RESPONSE_METADATA_KEY,
     "standard_logging_object",
@@ -649,6 +652,8 @@ _UNTRUSTED_METADATA_CONTROL_FIELDS: Final = (
     "error_information",
     "_failover_excluded_ids",
     PRE_CALL_EXECUTED_GUARDRAILS_KEY,
+    "_agentic_loop_depth",
+    "max_agentic_loops",
 )
 
 
@@ -1346,19 +1351,35 @@ def apply_missing_session_id_policy(
 def should_auto_drop_params_for_agentic_cli(
     user_agent: str, caller_set_drop_params: bool, proxy_config: ProxyConfig
 ) -> bool:
-    """drop_params defaults to on for agentic CLIs so their client-specific
-    params (e.g. Claude Code's thinking, Codex's service_tier) don't fail
-    requests routed to providers that reject them. A drop_params from the
-    caller wins over this default, and the operator's ``litellm_settings``
-    turns it off only with a value that reads as false."""
+    """drop_params defaults to on for agentic coding clients so their client-specific
+    params (e.g. Claude Code's thinking, Codex's service_tier, Copilot Chat's cot_id
+    on old assistant turns) don't fail requests routed to providers that reject them.
+    A drop_params from the caller wins over this default, and the operator's
+    ``litellm_settings`` turns it off only with a value that reads as false."""
     from litellm.llms.anthropic.common_utils import is_claude_code_user_agent
 
-    if not (is_claude_code_user_agent(user_agent) or is_codex_user_agent(user_agent)):
+    if not (
+        is_claude_code_user_agent(user_agent)
+        or is_codex_user_agent(user_agent)
+        or is_github_copilot_chat_user_agent(user_agent)
+    ):
         return False
     if caller_set_drop_params:
         return False
     litellm_settings: Final = _request_fields(proxy_config.config.get("litellm_settings"))
     return normalize_drop_params(litellm_settings.get("drop_params")) is not False
+
+
+def parse_litellm_settings_drop_params(value: object) -> bool:
+    normalized: Final = normalize_drop_params(value)
+    if normalized is None and value is not None:
+        verbose_proxy_logger.warning(
+            "litellm_settings.drop_params=%r is not a flag value, treating it as off, except for Claude Code, "
+            "Codex, and VS Code Copilot Chat requests, which keep their drop_params default on. "
+            "Set it to true or false",
+            value,
+        )
+    return normalized is True
 
 
 def safe_add_api_version_from_query_params(data: dict, request: Request):

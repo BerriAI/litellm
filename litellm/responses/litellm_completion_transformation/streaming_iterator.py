@@ -1005,7 +1005,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         )
         self._pending_response_events.extend(events)
 
-    def _merge_provider_specific_fields(self, src: dict) -> None:
+    def _merge_provider_specific_fields(self, src: Mapping[str, object]) -> None:
         """Merge provider_specific_fields using last-value-wins for lists.
 
         List-valued keys (web_search_results, tool_results,

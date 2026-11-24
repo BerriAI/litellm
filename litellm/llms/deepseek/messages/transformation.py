@@ -3,21 +3,75 @@ DeepSeek Anthropic-compatible messages transformation config.
 """
 
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from typing import Final
 
 from pydantic import TypeAdapter
 
 import litellm
+from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
 from litellm.litellm_core_utils.url_utils import join_api_base
+from litellm.llms.anthropic.common_utils import AnthropicError
 from litellm.llms.anthropic.messages.native.transformation import (
     AnthropicMessagesConfig,
 )
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.router import GenericLiteLLMParams
+from litellm.utils import is_known_non_reasoning_model
 
 _TOOL_LIST: Final = TypeAdapter(list[object])
-_REQUEST_FIELDS: Final = TypeAdapter(dict[str, object])
+_FIELDS: Final = TypeAdapter(dict[str, object])
 _TOOL_FIELDS: Final = TypeAdapter(dict[object, object])
+DEEPSEEK_EFFORT_LEVELS: Final = ("none", "minimal", "low", "medium", "high", "xhigh", "ultra", "max")
+
+
+@dataclass(frozen=True, slots=True)
+class _InvalidEffort:
+    field: str
+    effort: object
+
+
+def _without(params: Mapping[str, object], key: str) -> Mapping[str, object]:
+    return {name: value for name, value in params.items() if name != key}
+
+
+def _with_output_config_effort(
+    params: Mapping[str, object], alias_effort: str | None, drop_params: bool
+) -> Mapping[str, object] | _InvalidEffort:
+    output_config: Final = params.get("output_config")
+    if output_config is not None and not isinstance(output_config, dict):
+        return params
+    fields: Final = _FIELDS.validate_python(output_config or {})
+    caller_effort: Final = fields.get("effort")
+    if caller_effort is None and alias_effort is None:
+        return params
+    alias_decides: Final = caller_effort not in DEEPSEEK_EFFORT_LEVELS
+    if alias_decides and caller_effort is not None and not drop_params:
+        return _InvalidEffort(field="output_config.effort", effort=caller_effort)
+    effort: Final = alias_effort if alias_decides else caller_effort
+    remaining: Final = {**_without(fields, "effort"), **({} if effort is None else {"effort": effort})}
+    alias_clears_thinking: Final = alias_decides and effort == "none"
+    kept: Final = _without(params, "thinking") if alias_clears_thinking else params
+    return {**_without(kept, "output_config"), **({"output_config": remaining} if remaining else {})}
+
+
+def _deepseek_effort_params(params: Mapping[str, object], drop_params: bool) -> Mapping[str, object] | _InvalidEffort:
+    alias: Final = params.get("reasoning_effort")
+    if not isinstance(alias, str):
+        return _with_output_config_effort(params, None, drop_params)
+    if alias in DEEPSEEK_EFFORT_LEVELS:
+        return _with_output_config_effort(_without(params, "reasoning_effort"), alias, drop_params)
+    if not drop_params:
+        return _InvalidEffort(field="reasoning_effort", effort=alias)
+    return _with_output_config_effort(_without(params, "reasoning_effort"), None, drop_params)
+
+
+def _deepseek_request_params(
+    model: str, custom_llm_provider: str, params: Mapping[str, object], drop_params: bool
+) -> Mapping[str, object] | _InvalidEffort:
+    if is_known_non_reasoning_model(model, custom_llm_provider):
+        return params
+    return _deepseek_effort_params(params, drop_params)
 
 
 def _custom_tool_without_type(tool: object) -> Mapping[object, object] | None:
@@ -57,6 +111,11 @@ class DeepSeekAnthropicMessagesConfig(AnthropicMessagesConfig):
     It accepts the native Anthropic Messages conversation shape, including
     thinking blocks in assistant history, but rejects Anthropic's explicit
     custom-tool discriminator (`{"type": "custom"}`).
+
+    Its reasoning models read `output_config.effort` natively, ignore
+    `budget_tokens`, and accept any `temperature`, so the Claude-specific
+    effort and temperature reshaping only applies to models the cost map
+    lists without reasoning.
     """
 
     @property
@@ -85,7 +144,7 @@ class DeepSeekAnthropicMessagesConfig(AnthropicMessagesConfig):
         model: str,
         messages: Sequence[object],
         optional_params: dict,
-        litellm_params: dict,
+        litellm_params: object,
         api_key: str | None = None,
         api_base: str | None = None,
     ) -> tuple[dict, str | None]:
@@ -113,11 +172,41 @@ class DeepSeekAnthropicMessagesConfig(AnthropicMessagesConfig):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: object,
+        litellm_params: object,
         stream: bool | None = None,
     ) -> str:
         return join_api_base(deepseek_anthropic_base(api_base), "v1/messages")
+
+    @staticmethod
+    def _translate_adaptive_effort_for_non_adaptive_model(
+        model: str,
+        optional_params: dict[str, object],  # mutable-ok: the base hook edits the request params in place
+        max_tokens: int | None,
+        custom_llm_provider: str,
+    ) -> None:
+        if not is_known_non_reasoning_model(model, custom_llm_provider):
+            return None
+        return AnthropicMessagesConfig._translate_adaptive_effort_for_non_adaptive_model(  # pyright: ignore[reportUnknownMemberType]  # the base hook takes a bare dict
+            model=model,
+            optional_params=optional_params,
+            max_tokens=max_tokens,
+            custom_llm_provider=custom_llm_provider,
+        )
+
+    @staticmethod
+    def _drop_incompatible_temperature_for_thinking(
+        model: str,
+        optional_params: dict[str, object],  # mutable-ok: the base hook edits the request params in place
+        custom_llm_provider: str,
+    ) -> None:
+        if not is_known_non_reasoning_model(model, custom_llm_provider):
+            return None
+        return AnthropicMessagesConfig._drop_incompatible_temperature_for_thinking(  # pyright: ignore[reportUnknownMemberType]  # the base hook takes a bare dict
+            model=model,
+            optional_params=optional_params,
+            custom_llm_provider=custom_llm_provider,
+        )
 
     def transform_anthropic_messages_request(
         self,
@@ -126,12 +215,26 @@ class DeepSeekAnthropicMessagesConfig(AnthropicMessagesConfig):
         anthropic_messages_optional_request_params: dict,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> dict:
-        anthropic_messages_request: Final = _REQUEST_FIELDS.validate_python(
+    ) -> dict[str, object]:
+        effort_params: Final = _deepseek_request_params(
+            model,
+            self._resolved_provider,
+            _FIELDS.validate_python(anthropic_messages_optional_request_params),
+            drops_unsupported_params(litellm_params.drop_params),
+        )
+        if isinstance(effort_params, _InvalidEffort):
+            raise AnthropicError(
+                message=(
+                    f"Invalid {effort_params.field}: {effort_params.effort!r}. DeepSeek accepts one of: "
+                    f"{', '.join(repr(level) for level in DEEPSEEK_EFFORT_LEVELS)}"
+                ),
+                status_code=400,
+            )
+        anthropic_messages_request: Final = _FIELDS.validate_python(
             super().transform_anthropic_messages_request(
                 model=model,
                 messages=messages,
-                anthropic_messages_optional_request_params=anthropic_messages_optional_request_params,
+                anthropic_messages_optional_request_params=dict(effort_params),
                 litellm_params=litellm_params,
                 headers=headers,
             )

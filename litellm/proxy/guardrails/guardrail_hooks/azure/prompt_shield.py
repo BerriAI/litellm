@@ -330,14 +330,14 @@ class AzureContentSafetyPromptShieldGuardrail(AzureGuardrailBase, CustomGuardrai
 
     def _process_response(
         self,
-        response: dict | None,  # mutable-ok: matches CustomGuardrail._process_response signature
-        request_data: dict,  # mutable-ok: matches CustomGuardrail._process_response signature
+        response: dict[str, object] | None,  # mutable-ok: matches CustomGuardrail._process_response signature
+        request_data: dict[str, object],  # mutable-ok: matches CustomGuardrail._process_response signature
         start_time: float | None = None,
         end_time: float | None = None,
         duration: float | None = None,
         event_type: GuardrailEventHooks | None = None,
         original_inputs: dict | None = None,  # mutable-ok: matches CustomGuardrail._process_response signature
-    ) -> dict | None:  # mutable-ok: matches CustomGuardrail._process_response return
+    ) -> dict[str, object] | None:  # mutable-ok: matches CustomGuardrail._process_response return
         """Override to attach the Azure billing tracing detail (usage counters and
         estimated cost) and the ``azure`` provider label to the recorded guardrail
         information. Follows the OpenAI moderation override pattern
@@ -363,7 +363,7 @@ class AzureContentSafetyPromptShieldGuardrail(AzureGuardrailBase, CustomGuardrai
     def _process_error(
         self,
         e: Exception,
-        request_data: dict,  # mutable-ok: matches CustomGuardrail._process_error signature
+        request_data: dict[str, object],  # mutable-ok: matches CustomGuardrail._process_error signature
         start_time: float | None = None,
         end_time: float | None = None,
         duration: float | None = None,

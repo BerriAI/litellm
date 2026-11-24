@@ -1272,7 +1272,7 @@ def unpack_legacy_defs(
     return schema
 
 
-def sanitize_input_schema_for_anthropic(input_schema: dict) -> "AnthropicInputSchema":
+def sanitize_input_schema_for_anthropic(input_schema: Mapping[str, object]) -> "AnthropicInputSchema":
     """Coerce an arbitrary tool input_schema into the shape Anthropic accepts.
 
     Anthropic requires ``type == "object"``, only recognises ``$defs`` (legacy
@@ -1858,8 +1858,8 @@ def is_present_non_string(value: object) -> bool:
     return value is not None and not isinstance(value, str)
 
 
-def invalid_type_message(field_path: str, value: object) -> str:
-    return f"Invalid type for '{field_path}': expected a string, got {type(value).__name__}"
+def invalid_type_message(field_path: str, value: object, expected: str = "a string") -> str:
+    return f"Invalid type for '{field_path}': expected {expected}, got {type(value).__name__}"
 
 
 def is_unhashable_value_behind(error: TypeError, value: object) -> bool:
