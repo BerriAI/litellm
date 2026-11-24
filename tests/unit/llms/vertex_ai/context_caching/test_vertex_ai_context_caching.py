@@ -1,22 +1,22 @@
 import json
 from collections.abc import Awaitable, Callable, Mapping
 from itertools import chain
-from typing import Final
+from typing import Final, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
 
 import litellm
-
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import CONVERTED_SYSTEM_NOTE
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.vertex_ai.common_utils import VertexAIError
-from litellm.types.llms.openai import AllMessageValues
+from litellm.llms.vertex_ai.context_caching.transformation import transform_openai_messages_to_gemini_context_caching
 from litellm.llms.vertex_ai.context_caching.vertex_ai_context_caching import (
     ContextCachingEndpoints,
 )
+from litellm.types.llms.openai import AllMessageValues
 
 
 @pytest.fixture
@@ -2540,6 +2540,28 @@ async def test_a_strict_request_rejects_tool_call_arguments_even_when_a_lenient_
 
     with pytest.raises(litellm.BadRequestError, match="get_weather"):
         await complete({**request, "drop_params": False}, calls)
+
+
+@pytest.mark.parametrize("empty_content", [pytest.param("", id="empty_string"), pytest.param(None, id="null")])
+def test_a_cached_segment_ending_on_an_empty_user_message_caches_no_blank_user_turn(empty_content: str | None) -> None:
+    cached: Final = transform_openai_messages_to_gemini_context_caching(
+        model="gemini-2.5-pro",
+        messages=cast(
+            list[AllMessageValues],
+            [
+                {"role": "user", "content": "Hi"},
+                {"role": "assistant", "content": "Hello!"},
+                {"role": "user", "content": empty_content},
+            ],
+        ),
+        custom_llm_provider="gemini",
+        cache_key="test-cache-key",
+        ttl=None,
+        vertex_project=None,
+        vertex_location=None,
+    )
+
+    assert {"text": " "} not in chain.from_iterable(content["parts"] for content in cached["contents"])
 
 
 _GET_WEATHER_TOOL: Final = {
