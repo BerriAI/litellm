@@ -107,9 +107,15 @@ class CachingHandlerResponse(LiteLLMBaseModel):
     final_embedding_cached_response: EmbeddingResponse | None = None
     embedding_all_elements_cache_hit: bool = False  # this is set to True when all elements in the list have a cache hit in the embedding cache, if true return the final_embedding_cached_response no need to make an API call
     embedding_uncached_input: SkipValidation[list[EmbeddingCacheInputElement]] | None = None
+    embedding_uncached_extra_body: SkipValidation[object] = None
 
 
 in_memory_cache_obj: Final = InMemoryCache()
+_CACHE_READS: Final = TypeAdapter(tuple[object, ...])
+
+
+def _missed_input_indexes(cached_result: object) -> tuple[int, ...]:
+    return tuple(idx for idx, hit in enumerate(_CACHE_READS.validate_python(cached_result)) if hit is None)
 
 
 class _CacheCallKwargs(TypedDict, total=False, extra_items=object):
@@ -503,6 +509,9 @@ class LLMCachingHandler:
                     final_embedding_cached_response=final_embedding_cached_response,
                     embedding_all_elements_cache_hit=embedding_all_elements_cache_hit,
                     embedding_uncached_input=self.handle_kwargs_input_list_or_str(kwargs),
+                    embedding_uncached_extra_body=extra_body_for_inputs(
+                        kwargs.get("extra_body"), _missed_input_indexes(read.cached_result)
+                    ),
                 )
 
         verbose_logger.debug("CACHE RESULT: %s", cached_result)
@@ -778,11 +787,6 @@ class LLMCachingHandler:
             else:
                 non_null_list.append((idx, cr))
         kwargs["input"] = remaining_list
-        if non_null_list and "extra_body" in kwargs:
-            kept_input_indexes: Final = [idx for idx, cr in enumerate(cached_result) if cr is None]
-            kwargs["extra_body"] = extra_body_for_inputs(  # rebind-ok: the caller sends these kwargs, like input above
-                kwargs["extra_body"], kept_input_indexes
-            )
         if len(non_null_list) > 0:
             # Use the model from the first non-null cached result, fallback to kwargs if not present
             model_name = self._extract_model_from_cached_results(non_null_list)

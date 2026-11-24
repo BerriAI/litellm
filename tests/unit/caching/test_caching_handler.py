@@ -1969,34 +1969,6 @@ async def test_process_async_embedding_cached_response():
     assert len(response.data) == 1
 
 
-def test_a_partial_embedding_cache_hit_keeps_each_remaining_input_with_its_own_extra_body_item():
-    kwargs = {
-        "model": "gemini/gemini-embedding-001",
-        "input": ["cached", "first miss", "second miss"],
-        "extra_body": {
-            "requests": [{"taskType": "A"}, {"taskType": "B"}, {"taskType": "C"}],
-            "instances": [{"title": "a"}, {"title": "b"}],
-            "taskType": "shared",
-        },
-    }
-
-    LLMCachingHandler(
-        original_function=MagicMock(), request_kwargs={}, start_time=datetime.now()
-    )._process_async_embedding_cached_response(
-        final_embedding_cached_response=None,
-        cached_result=[{"embedding": [0.1], "index": 0, "object": "embedding"}, None, None],
-        kwargs=kwargs,
-        logging_obj=MagicMock(),
-        start_time=datetime.now(),
-        model="gemini/gemini-embedding-001",
-    )
-
-    assert (kwargs["input"], kwargs["extra_body"]) == (
-        ["first miss", "second miss"],
-        {"requests": [{"taskType": "B"}, {"taskType": "C"}], "instances": [{"title": "b"}], "taskType": "shared"},
-    )
-
-
 @pytest.mark.asyncio
 async def test_embedding_cache_preserves_prompt_tokens_details():
     """Test that prompt_tokens_details (including image_count) survives a full cache hit."""
@@ -2826,6 +2798,55 @@ async def test_partial_embedding_cache_hit_sends_only_misses_and_keeps_input_ord
 
     assert len(embedder.provider_inputs) == 2, embedder.provider_inputs
     assert [item["embedding"] for item in repeat.data] == [[float(len(text))] for text in mixed_input]
+
+
+@pytest.mark.asyncio
+async def test_a_partial_embedding_cache_hit_sends_each_missed_input_with_its_own_extra_body_item(monkeypatch):
+    import litellm
+    from litellm import CustomLLM
+    from litellm.caching.caching import Cache
+    from litellm.types.utils import Embedding, EmbeddingResponse
+
+    class RecordingEmbedder(CustomLLM):
+        provider_calls: tuple[tuple[tuple[str, ...], object], ...] = ()
+
+        async def aembedding(self, model, input, model_response, optional_params, **kwargs) -> EmbeddingResponse:
+            self.provider_calls = (*self.provider_calls, (tuple(input), optional_params["extra_body"]))
+            return EmbeddingResponse(
+                model=model,
+                data=[
+                    Embedding(embedding=[float(len(text))], index=idx, object="embedding")
+                    for idx, text in enumerate(input)
+                ],
+            )
+
+    embedder = RecordingEmbedder()
+    monkeypatch.setattr(
+        litellm, "custom_provider_map", [{"provider": "recording-embedder", "custom_handler": embedder}]
+    )
+    monkeypatch.setattr(litellm, "provider_list", [*litellm.provider_list, "recording-embedder"])
+    monkeypatch.setattr(litellm, "_custom_providers", [*litellm._custom_providers, "recording-embedder"])
+    monkeypatch.setattr(litellm, "cache", Cache(type="local"))
+    extra_body = {
+        "requests": [{"taskType": "A"}, {"taskType": "B"}, {"taskType": "C"}],
+        "instances": [{"title": "a"}, {"title": "b"}],
+        "taskType": "shared",
+    }
+
+    await litellm.aembedding(model="recording-embedder/m", input=["cached"], extra_body=extra_body)
+    await asyncio.gather(*_PENDING_CACHE_WRITES)
+    await litellm.aembedding(
+        model="recording-embedder/m", input=["cached", "first miss", "second miss"], extra_body=extra_body
+    )
+    await asyncio.gather(*_PENDING_CACHE_WRITES)
+
+    assert embedder.provider_calls == (
+        (("cached",), extra_body),
+        (
+            ("first miss", "second miss"),
+            {"requests": [{"taskType": "B"}, {"taskType": "C"}], "instances": [{"title": "b"}], "taskType": "shared"},
+        ),
+    ), embedder.provider_calls
 
 
 @pytest.mark.asyncio
