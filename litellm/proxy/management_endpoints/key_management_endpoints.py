@@ -106,6 +106,7 @@ from litellm.proxy.common_utils.callback_utils import (
     decrypted_callback_metadata,
     decrypted_logging_entries,
     encrypt_callback_vars,
+    env_reference_check_metadata,
 )
 from litellm.proxy.common_utils.config_sync_pubsub import (
     coordination_redis_cache,
@@ -1011,7 +1012,7 @@ def raise_on_invalid_key_logging_config(metadata: Mapping[str, object] | None) -
     accepted here and then silently ignored or misrouted at request time.
     """
     error: Final = logging_metadata_env_reference_error(
-        string_keyed(decrypted_callback_metadata(metadata))
+        string_keyed(env_reference_check_metadata(metadata))
     ) or logging_metadata_config_error(metadata)
     if error is not None:
         raise HTTPException(status_code=400, detail={"error": error})

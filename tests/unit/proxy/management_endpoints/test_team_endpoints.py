@@ -652,6 +652,37 @@ async def test_update_team_permissions_success(mock_db_client, mock_admin_auth):
 
 
 @pytest.mark.asyncio
+async def test_new_team_refuses_an_encrypted_env_reference(mock_db_client, mock_admin_auth, monkeypatch):
+    from fastapi import Request
+
+    from litellm.proxy._types import NewTeamRequest
+    from litellm.proxy.common_utils.callback_utils import encrypt_callback_vars
+    from litellm.proxy.management_endpoints.team_endpoints import new_team
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-unit-test-salt-key-for-callback-vars")
+    copied: Final = encrypt_callback_vars(
+        {"logging": [{"callback_name": "arize", "callback_vars": {"arize_api_key": "os.environ/ARIZE_KEY_TENANT_1"}}]}
+    )
+    assert "os.environ" not in json.dumps(copied)
+    mock_db_client.db = MagicMock()
+    mock_team_create = AsyncMock()
+    mock_db_client.db.litellm_teamtable = MagicMock()
+    mock_db_client.db.litellm_teamtable.create = mock_team_create
+    _wire_team_create_tx(mock_db_client)
+
+    with pytest.raises(ProxyException) as exc_info:
+        await new_team(
+            data=NewTeamRequest(team_alias="my-team", metadata=copied),
+            http_request=MagicMock(spec=Request),
+            user_api_key_dict=mock_admin_auth,
+        )
+
+    assert str(exc_info.value.code) == "400"
+    assert "arize_api_key" in str(exc_info.value.message)
+    mock_team_create.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("field", ["budget_duration", "team_member_budget_duration"])
 @pytest.mark.parametrize("bad_duration", ["0s", "-5m"])
 async def test_new_team_rejects_a_duration_that_never_advances(

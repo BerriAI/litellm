@@ -540,6 +540,26 @@ async def test_only_proxy_admin_creates_a_key_whose_logging_references_a_credent
 
 
 @pytest.mark.asyncio
+async def test_bulk_creation_refuses_only_the_row_with_an_encrypted_env_reference(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy.common_utils.callback_utils import encrypt_callback_vars
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-unit-test-salt-key-for-callback-vars")
+    copied: Final = encrypt_callback_vars(
+        {"logging": [{"callback_name": "arize", "callback_vars": {"arize_api_key": "os.environ/ARIZE_KEY_TENANT_1"}}]}
+    )
+    assert "os.environ" not in json.dumps(copied)
+    prisma: Final = _FakePrisma()
+
+    response: Final = await _run(prisma, [{"user_id": "u1", "metadata": copied}, {"user_id": "u2"}], caller=ADMIN)
+
+    assert [r.success for r in response.data] == [False, True]
+    assert "arize_api_key" in (response.data[0].error or "")
+    assert set(prisma.db.litellm_usertable.rows) == {"u2"}
+
+
+@pytest.mark.asyncio
 async def test_license_is_checked_once_against_the_whole_batch():
     prisma = _FakePrisma()
     prisma.db.litellm_usertable.rows["existing"] = _UserRow(user_id="existing")

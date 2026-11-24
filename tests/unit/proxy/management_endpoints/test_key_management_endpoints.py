@@ -25302,6 +25302,23 @@ def test_a_resent_encrypted_env_reference_is_refused_on_key_and_user_writes(monk
     assert "arize_api_key" in str(exc_info.value.detail) and "os.environ/" in str(exc_info.value.detail)
 
 
+def test_an_encrypted_env_reference_inside_json_string_logging_is_refused(monkeypatch):
+    from litellm.proxy.common_utils.callback_utils import encrypt_callback_vars
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-unit-test-salt-key-for-callback-vars")
+    encrypted: Final = encrypt_callback_vars(
+        {"logging": [{"callback_name": "arize", "callback_vars": {"arize_api_key": "os.environ/ARIZE_KEY_TENANT_1"}}]}
+    )
+    resent: Final = {"logging": json.dumps(encrypted["logging"])}
+    assert "os.environ" not in json.dumps(resent)
+
+    with pytest.raises(HTTPException) as exc_info:
+        raise_on_invalid_key_logging_config(resent)
+
+    assert exc_info.value.status_code == 400
+    assert "arize_api_key" in str(exc_info.value.detail) and "os.environ/" in str(exc_info.value.detail)
+
+
 def test_a_resent_ciphertext_never_comes_back_decrypted_in_a_validation_error(monkeypatch):
     from litellm.proxy.common_utils.callback_utils import encrypt_callback_vars
 
