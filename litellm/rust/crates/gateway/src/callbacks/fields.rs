@@ -5,7 +5,7 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use litellm_callbacks::{
-    CallFacts, CallIds, CallKind, CallTarget, CallTiming, Field, FieldSet, FieldValues, Hook,
+    CallFacts, CallIds, CallKind, CallTarget, CallTiming, Cost, Field, FieldSet, FieldValues, Hook,
     HookInput, LoggedModelGroup, Outcome, PatchOp, Scalar, Usage, UsageRecord,
 };
 use litellm_gateway_inference::{CallType, ServedCall};
@@ -168,6 +168,10 @@ impl Known {
             Field::ResponseHeaders => Some(Value::Object(self.response_headers.clone())),
             Field::Outcome => record(self.outcome?),
             Field::Usage => record(usage(self.served.as_ref()?.usage.as_ref()?)),
+            Field::Cost => record(Cost {
+                response_cost: Some(Scalar::Float(self.served.as_ref()?.cost?)),
+                ..Cost::default()
+            }),
             Field::LoggedModelGroup => record(LoggedModelGroup {
                 value: Some(Scalar::Text(self.served.as_ref()?.model_group.clone())),
                 ..LoggedModelGroup::default()
@@ -306,6 +310,27 @@ mod tests {
                 Map::from_iter([("model".to_owned(), json!("claude"))])
             )
         );
+    }
+
+    #[rstest]
+    #[case::a_cost_the_route_settled(Some(0.25), Some(Scalar::Float(0.25)))]
+    #[case::a_call_the_route_settled_no_cost_for(None, None)]
+    fn the_success_log_reads_what_the_route_settled_the_call_cost(
+        #[case] cost: Option<f64>,
+        #[case] expected: Option<Scalar>,
+    ) {
+        let mut known = known();
+        known.serve(ServedCall {
+            model_group: "claude".to_owned(),
+            usage: None,
+            cost,
+        });
+
+        let input = known.input(Hook::PostCallSuccess, FieldSet::of(&[Field::Cost]));
+
+        let read = input.fields.raw(Field::Cost).unwrap().cloned();
+        let read: Option<Cost> = read.map(|cost| serde_json::from_value(cost).unwrap());
+        assert_eq!(read.and_then(|cost| cost.response_cost), expected);
     }
 
     /// What a callback that reads the model is told of the call: the field, and the model and

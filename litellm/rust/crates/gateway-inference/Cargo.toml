@@ -33,12 +33,12 @@ litellm-router-types.workspace = true
 litellm-secrets.workspace = true
 parking_lot.workspace = true
 litellm-llms-types.workspace = true
+parking_lot.workspace = true
 serde.workspace = true
 serde_json = { workspace = true, features = ["preserve_order"] }
 strum.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["rt", "time"] }
-tower-http = { version = "0.6.11", features = ["set-header"] }
 tracing.workspace = true
 
 [dev-dependencies]

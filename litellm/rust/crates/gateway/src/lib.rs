@@ -113,11 +113,19 @@ pub async fn build_inference(
         routing,
         host::NativeHost::new(Arc::new(callbacks)),
     )?;
+    let gateway = match VERSION {
+        Some(version) => gateway.with_version(version),
+        None => gateway,
+    };
     Ok(Inference {
         gateway: Arc::new(gateway),
         key_limiter,
     })
 }
+
+/// The LiteLLM version this build was made from (`build.rs`), which every answer of an inference
+/// route names in `x-litellm-version`.
+pub const VERSION: Option<&str> = option_env!("LITELLM_VERSION");
 
 pub fn install_crypto_provider() {
     if rustls::crypto::CryptoProvider::get_default().is_none() {

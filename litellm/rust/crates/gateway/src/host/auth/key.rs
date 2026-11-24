@@ -102,6 +102,8 @@ pub struct Key {
     models: Arc<[String]>,
     /// The key's own rate limits, which the limiter enforces.
     limits: KeyLimits,
+    /// What the key had spent when its row was read (`x-litellm-key-spend`).
+    spend: f64,
     /// The priority class the key's `metadata.priority` names, which reserves it a share of a
     /// model group's capacity.
     priority: Option<Arc<str>>,
@@ -124,6 +126,10 @@ impl Key {
 
     pub(crate) fn limits(&self) -> &KeyLimits {
         &self.limits
+    }
+
+    pub(crate) fn spend(&self) -> f64 {
+        self.spend
     }
 
     pub(crate) fn priority(&self) -> Option<&Arc<str>> {
@@ -394,6 +400,7 @@ pub(super) fn read(key: &CachedKey) -> Result<Keyed<Key>, &'static str> {
                 model_rpm: ModelLimits::new(metadata.model_rpm_limit),
                 model_tpm: ModelLimits::new(metadata.model_tpm_limit),
             },
+            spend: key.spend,
             priority: metadata.priority.map(Arc::from),
             budget,
             aliased,

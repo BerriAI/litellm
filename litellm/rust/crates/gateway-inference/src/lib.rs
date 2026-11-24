@@ -5,6 +5,7 @@
 //! attempt, and tells the host's callback hooks what happened to the call (`hooks.rs`).
 
 mod asked;
+mod attempted;
 mod caching;
 mod error;
 mod group_usage;
@@ -38,7 +39,7 @@ use litellm_secrets::source::SecretSource;
 pub use asked::call_type;
 pub use error::{BodyError, Ended, Error};
 pub use group_usage::{GroupLimits, group_limits};
-pub use headers::ExposedHeader;
+pub use headers::{ExposedHeader, response_cost};
 pub use hooks::{CallHooks, CallType, HookError, Refusal, ServedCall};
 pub use litellm_redis_store::RouterTiers;
 pub use rate_limited::RateLimited;
@@ -58,12 +59,22 @@ pub struct Gateway<H> {
     pub secrets: Arc<dyn SecretSource>,
     pub resources: CoreResources,
     pub http: HttpClientConfig,
+    /// The LiteLLM version every answer names (`x-litellm-version`), when the mounting server
+    /// knows one.
+    version: Option<String>,
 }
 
 impl<H: Host> Gateway<H> {
     pub fn with_cache(self, cache: Arc<dyn litellm_cache_response::ResponseCacheService>) -> Self {
         Self {
             cache: Some(cache),
+            ..self
+        }
+    }
+
+    pub fn with_version(self, version: impl Into<String>) -> Self {
+        Self {
+            version: Some(version.into()),
             ..self
         }
     }
@@ -107,6 +118,7 @@ impl<H: Host> Gateway<H> {
             secrets,
             resources,
             http,
+            version: None,
         })
     }
 }
@@ -119,7 +131,10 @@ pub fn router<H: Host>(gateway: Arc<Gateway<H>>) -> Router {
         .layer(axum::extract::DefaultBodyLimit::max(
             request::MAX_BODY_BYTES,
         ))
-        .layer(headers::layer())
+        .layer(axum::middleware::from_fn_with_state(
+            gateway.clone(),
+            headers::told::<H>,
+        ))
         .layer(axum::middleware::from_fn_with_state(
             gateway.clone(),
             group_usage::told::<H>,

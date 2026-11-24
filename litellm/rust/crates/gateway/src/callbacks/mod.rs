@@ -447,6 +447,7 @@ mod tests {
         ServedCall {
             model_group: "claude".to_owned(),
             usage: None,
+            cost: None,
         }
     }
 

@@ -1,5 +1,7 @@
 //! `POST /v1/messages`, as the Python proxy's `anthropic_response` serves it.
 
+use std::time::Duration;
+
 use axum::{Json, body::Bytes, http::HeaderMap, response::Response};
 use futures_util::StreamExt;
 use litellm_cache_response::CachePolicy;
@@ -7,7 +9,8 @@ use litellm_framer::sse;
 use litellm_host::call::CallOutput;
 use litellm_host_http::Sse;
 use litellm_inference_messages::{
-    MessagesBody, MessagesCall, MessagesRoute, MessagesShaping, messages_body, route::Messages,
+    DEFAULT_TIMEOUT, MessagesBody, MessagesCall, MessagesRoute, MessagesShaping, messages_body,
+    route::Messages,
 };
 use litellm_llms_types::formats::chat_completions::ChatCompletionsUsage;
 use litellm_llms_types::formats::messages::{
@@ -16,11 +19,12 @@ use litellm_llms_types::formats::messages::{
 };
 use litellm_llms_types::headers::{ProviderSpecificHeader, ProviderSpecificHeaders};
 use litellm_router_core::{Attempt, Deployment, Op};
+use parking_lot::Mutex;
 use serde_json::{Map, Value};
 
 use crate::{
     Error, Gateway, JsonObject,
-    caching::CacheHeaders,
+    attempted::Attempted,
     error::ErrorFormat,
     hooks::CallType,
     model_restamp::{ReportedModel, Stamp},
@@ -75,6 +79,8 @@ struct MessagesAttempt<'a, H> {
     body: Map<String, Value>,
     headers: &'a HeaderMap,
     policy: CachePolicy,
+    /// The timeout of the attempt that last ran, which a failed call names.
+    timeout: Mutex<Option<Duration>>,
 }
 
 impl<'a, H: Host> MessagesAttempt<'a, H> {
@@ -95,6 +101,7 @@ impl<'a, H: Host> MessagesAttempt<'a, H> {
             body,
             headers: &call.headers,
             policy: cache_options.policy,
+            timeout: Mutex::default(),
         })
     }
 }
@@ -120,22 +127,35 @@ impl<H: Host> Endpoint for MessagesAttempt<'_, H> {
         Some(counts.messages_usage())
     }
 
-    fn render((ran, cache): Self::Outcome, reported: ReportedModel<'_>) -> Result<Response, Error> {
+    fn cost((_, attempted): &Self::Outcome) -> Option<f64> {
+        Some(crate::headers::charged(attempted)?.total)
+    }
+
+    fn render(
+        (ran, attempted): Self::Outcome,
+        reported: ReportedModel<'_>,
+    ) -> Result<Response, Error> {
         let stream =
             Sse::<Messages, _, _>::new(Json, |error| Bytes::from(Error::from(error).sse_frame()));
         let ran = reported.answer(ran, message_start);
         let response = litellm_host_http::render(stream, stream_outcome::bytes(ran))?;
-        Ok(cache.apply(response))
+        Ok(attempted.told(response))
+    }
+
+    fn timeout(&self) -> Option<Duration> {
+        *self.timeout.lock()
     }
 }
 
 impl<H: Host> RouteAttempt for MessagesAttempt<'_, H> {
-    type Outcome = (Streamed<Messages>, CacheHeaders);
+    type Outcome = (Streamed<Messages>, Attempted);
 
     async fn run(&self, attempt: &Attempt) -> Result<Self::Outcome, Error> {
         let deployment = &attempt.deployment;
+        let timeout = routing::timeout(attempt, routing::streamed(&self.body));
+        *self.timeout.lock() = Some(timeout.unwrap_or(DEFAULT_TIMEOUT));
         let call = MessagesCall {
-            timeout: routing::timeout(attempt, routing::streamed(&self.body)),
+            timeout,
             ..project(
                 deployment,
                 self.gateway.shaping(&deployment.id),
@@ -144,8 +164,11 @@ impl<H: Host> RouteAttempt for MessagesAttempt<'_, H> {
             )?
         };
         let machine = self.route.clone().machine(call, self.policy);
-        let cache = CacheHeaders::default();
-        let ran = litellm_host_http::run(machine, (), cache.clone(), None).await?;
+        let attempted = Attempted::new(
+            deployment.params.model.clone(),
+            deployment.params.api_base.clone(),
+        );
+        let ran = litellm_host_http::run(machine, (), attempted.clone(), None).await?;
         let ran = match ran {
             CallOutput::Complete(body) => CallOutput::Complete(body),
             CallOutput::Stream { head, chunks } => CallOutput::Stream {
@@ -153,7 +176,7 @@ impl<H: Host> RouteAttempt for MessagesAttempt<'_, H> {
                 chunks: sse::blocks(chunks).boxed(),
             },
         };
-        Ok((ran, cache))
+        Ok((ran, attempted))
     }
 
     fn total_tokens((ran, _): &Self::Outcome) -> u64 {

@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use axum::http::StatusCode;
 use axum::{
     Extension, Json,
@@ -117,6 +119,8 @@ impl IntoResponse for Error {
 pub struct Ended {
     pub error: Box<Error>,
     pub routing: Option<Routing>,
+    /// The timeout of the attempt the call last ran (`x-litellm-timeout`).
+    pub timeout: Option<Duration>,
 }
 
 impl Ended {
@@ -131,6 +135,7 @@ impl<E: Into<Error>> From<E> for Ended {
         Self {
             error: Box::new(error.into()),
             routing: None,
+            timeout: None,
         }
     }
 }

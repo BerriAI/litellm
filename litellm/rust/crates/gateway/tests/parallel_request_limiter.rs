@@ -636,3 +636,20 @@ async fn a_served_call_is_charged_the_tokens_the_configured_type_counts(
         Some(charged)
     );
 }
+
+#[tokio::test]
+async fn an_answer_names_what_its_key_had_spent_when_it_was_read() {
+    let database = keys::Held::holding(KEY, json!({"spend": 2.5})).await;
+    let served = support::served(database, "", "").await;
+
+    let response = send_as(&served.app, KEY, asking("claude", Some(8))).await;
+
+    let spend = response.headers().get("x-litellm-key-spend");
+    assert_eq!(
+        (
+            response.status(),
+            spend.map(|spend| spend.to_str().unwrap())
+        ),
+        (StatusCode::OK, Some("2.5"))
+    );
+}

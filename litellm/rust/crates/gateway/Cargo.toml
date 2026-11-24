@@ -60,6 +60,9 @@ tower = { version = "0.5", features = ["util"] }
 tower-http = { version = "0.6.11", features = ["catch-panic", "cors", "decompression-gzip", "decompression-zstd", "metrics", "propagate-header", "request-id", "set-header"] }
 uuid.workspace = true
 
+[build-dependencies]
+toml = "0.9"
+
 [dev-dependencies]
 litellm-gateway = { workspace = true, features = ["test-support"] }
 litellm-redis-testing.workspace = true
