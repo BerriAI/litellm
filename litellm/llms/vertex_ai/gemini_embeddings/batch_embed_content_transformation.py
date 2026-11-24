@@ -503,7 +503,8 @@ _SUPPORTED_EMBED_PARAMS: Final = {"outputDimensionality", "taskType", "title"}
 _GEMINI_PARAM_BY_OPENAI_PARAM: Final = (("dimensions", "outputDimensionality"), ("task_type", "taskType"))
 _EMBED_CONTENT_CONFIG_FIELD: Final = "embedContentConfig"
 _EMBED_CONTENT_CONFIG_SPELLINGS: Final = (_EMBED_CONTENT_CONFIG_FIELD, "embed_content_config")
-_AUDIO_TRACK_EXTRACTION_SPELLINGS: Final = ("audioTrackExtraction", "audio_track_extraction")
+_AUDIO_TRACK_EXTRACTION_FIELD: Final = "audioTrackExtraction"
+_AUDIO_TRACK_EXTRACTION_SPELLINGS: Final = (_AUDIO_TRACK_EXTRACTION_FIELD, "audio_track_extraction")
 _GOOGLE_TRUE_VALUES: Final = frozenset({"true", "t", "yes", "y", "1", "1.0"})
 _STRING_KEYED_FIELDS: Final = TypeAdapter(Mapping[str, object])
 _ANY_KEYED_FIELDS: Final = TypeAdapter(Mapping[object, object])
@@ -526,15 +527,28 @@ def embed_content_config_fields(request_body: Mapping[str, object]) -> Mapping[s
 
 
 def audio_track_extraction_enabled(optional_params: Mapping[str, object]) -> bool:
-    request_fields: Final = {**extra_body_fields(optional_params), **_embed_content_config(optional_params)}
+    request_fields: Final = _embed_content_request_fields(optional_params)
     return any(_turns_on_audio_track_extraction(request_fields.get(field)) for field in _EMBED_CONTENT_CONFIG_SPELLINGS)
+
+
+def vertex_batch_row_audio_track_extraction_enabled(optional_params: Mapping[str, object]) -> bool:
+    config: Final = embed_content_config_fields(_embed_content_request_fields(optional_params))
+    return _is_google_true(config.get(_AUDIO_TRACK_EXTRACTION_FIELD))
+
+
+def _embed_content_request_fields(optional_params: Mapping[str, object]) -> Mapping[str, object]:
+    return {**extra_body_fields(optional_params), **_embed_content_config(optional_params)}
 
 
 def _turns_on_audio_track_extraction(config: object) -> bool:
     fields: Final[Mapping[object, object]] = (
         _ANY_KEYED_FIELDS.validate_python(config) if isinstance(config, Mapping) else {}
     )
-    return any(str(fields.get(field)).lower() in _GOOGLE_TRUE_VALUES for field in _AUDIO_TRACK_EXTRACTION_SPELLINGS)
+    return any(_is_google_true(fields.get(field)) for field in _AUDIO_TRACK_EXTRACTION_SPELLINGS)
+
+
+def _is_google_true(value: object) -> bool:
+    return str(value).lower() in _GOOGLE_TRUE_VALUES
 
 
 def _embed_content_config(optional_params: Mapping[str, object]) -> Mapping[str, object]:
@@ -644,6 +658,7 @@ def transform_openai_input_gemini_embed_content(
     optional_params: Mapping[str, object],
     resolved_files: dict[str, dict[str, str]] | None = None,
     drop_params: bool = False,
+    audio_track_extraction: bool | None = None,
 ) -> dict[str, object]:
     """
     Transform OpenAI embedding input to Gemini embedContent format (multimodal).
@@ -653,6 +668,8 @@ def transform_openai_input_gemini_embed_content(
         model: Model name
         optional_params: Additional parameters (taskType, outputDimensionality, etc.)
         resolved_files: Dict mapping file names (files/abc) to {mime_type, uri}
+        audio_track_extraction: Whether the request Google gets turns on audio track extraction,
+            read from optional_params when None
 
     Returns:
         dict: Gemini embedContent request body with content.parts
@@ -662,7 +679,9 @@ def transform_openai_input_gemini_embed_content(
     gemini_params: Final = _filter_embed_params(optional_params)
 
     input_list: Final = _top_level_elements(input)
-    audio_track_extraction: Final = audio_track_extraction_enabled(optional_params)
+    extracts_audio_track: Final = (
+        audio_track_extraction_enabled(optional_params) if audio_track_extraction is None else audio_track_extraction
+    )
     parts: Final[list[PartType]] = []
 
     for element in input_list:
@@ -676,7 +695,7 @@ def transform_openai_input_gemini_embed_content(
                 element,
                 resolved_files=resolved_files,
                 drop_params=drop_params,
-                audio_track_extraction=audio_track_extraction,
+                audio_track_extraction=extracts_audio_track,
             )
         )
 

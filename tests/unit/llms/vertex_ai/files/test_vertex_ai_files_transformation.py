@@ -1356,16 +1356,41 @@ class TestVertexEmbeddingsBatchInputTranslation:
             _uploaded_rows(config, {"gcs_bucket_name": "my-bucket", "model": "vertex_ai/gemini-embedding-2"}, entries)
         assert exc_info.value.status_code == 400
 
-    def test_should_keep_a_window_with_no_frames_when_audio_track_extraction_is_on(self) -> None:
-        (row,) = _wrap_entries(
-            [_clip_entry("request-1", {"fps": 0.2, "start_offset": "0s", "end_offset": "2s"}, audio_track_extraction=True)]
-        )
+    @pytest.mark.parametrize(
+        "extraction",
+        [
+            {"audio_track_extraction": True},
+            {"extra_body": {"embedContentConfig": {"audioTrackExtraction": True}}},
+        ],
+    )
+    def test_should_keep_a_window_with_no_frames_when_the_row_carries_audio_track_extraction(
+        self, extraction: Mapping[str, object]
+    ) -> None:
+        (row,) = _wrap_entries([_clip_entry("request-1", {"fps": 0.2, "start_offset": "0s", "end_offset": "2s"}, **extraction)])
 
+        assert row["request"]["embed_content_config"] == {"audio_track_extraction": True}
         assert row["request"]["content"]["parts"][0]["video_metadata"] == {
             "fps": 0.2,
             "startOffset": "0s",
             "endOffset": "2s",
         }
+
+    @pytest.mark.parametrize(
+        "extra_body",
+        [
+            {"embed_content_config": {"audio_track_extraction": True}},
+            {"embedContentConfig": {"audio_track_extraction": True}},
+        ],
+    )
+    def test_should_refuse_a_window_with_no_frames_when_the_row_drops_audio_track_extraction(
+        self, config: VertexAIFilesConfig, extra_body: Mapping[str, object]
+    ) -> None:
+        from litellm.llms.vertex_ai.common_utils import VertexAIError
+
+        entry: Final = _clip_entry("request-1", {"fps": 0.2, "start_offset": "0s", "end_offset": "2s"}, extra_body=extra_body)
+        with pytest.raises(VertexAIError, match=r"line 1 .*\(2s\) at 0\.2 fps rounds to 0 frames") as exc_info:
+            _uploaded_rows(config, {"gcs_bucket_name": "my-bucket", "model": "vertex_ai/gemini-embedding-2"}, (entry,))
+        assert exc_info.value.status_code == 400
 
     def test_should_translate_multimodal_gcs_input(self):
         (row,) = _wrap_entries(
