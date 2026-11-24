@@ -7791,6 +7791,7 @@ async def test_truncation_auto_sends_a_system_prompt_too_long_for_instructions_a
     assert (sent.get("instructions"), sent["input"]) == expected
 
 
+
 def _tool_call(call_id: object, kind: Literal["function", "custom"]) -> dict[str, object]:
     if kind == "custom":
         return {"id": call_id, "type": "custom", "custom": {"name": "apply_patch", "input": "*** Begin Patch"}}
