@@ -7,8 +7,11 @@
 //!
 //! [`RouterHost::pre_call_facts`]: crate::host::RouterHost::pre_call_facts
 
+mod context_window;
+
 use std::{collections::BTreeMap, sync::Arc};
 
+use context_window::Overflow;
 use serde::Deserialize;
 use serde_json::Value;
 
@@ -54,31 +57,13 @@ impl PreCallFacts {
     }
 }
 
-/// The name a context-window error gives a deployment: its base model, else its model.
-fn deployment_model(deployment: &Deployment) -> String {
-    let truthy = |value: Option<&Value>| match value {
-        Some(Value::String(text)) if !text.is_empty() => Some(text.clone()),
-        Some(Value::Null | Value::Bool(false)) | None => None,
-        Some(Value::String(_)) => None,
-        Some(other) => Some(python_str(other)),
-    };
-    truthy(deployment.model_info.raw.get("base_model"))
-        .or_else(|| truthy(deployment.raw_params.get("base_model")))
-        .unwrap_or_else(|| deployment.params.model.clone())
-}
-
-/// `str(value)` for the scalar values a base model may hold.
-fn python_str(value: &Value) -> String {
-    match value {
-        Value::Bool(true) => "True".to_owned(),
-        Value::Number(number) => number.to_string(),
-        other => other.to_string(),
-    }
-}
-
 /// `is_region_allowed`: the deployment's `region_name` equals the allowed region.
-fn in_region(deployment: &Deployment, allowed: &Value) -> bool {
-    deployment.raw_params.get("region_name") == Some(allowed)
+fn outside_region(deployment: &Deployment, facts: &PreCallFacts) -> bool {
+    facts
+        .allowed_model_region
+        .as_ref()
+        .filter(|allowed| !allowed.is_null())
+        .is_some_and(|allowed| deployment.raw_params.get("region_name") != Some(allowed))
 }
 
 /// `_pre_call_checks` over `candidates`; `pool` is the group's deployments before health filters
@@ -92,30 +77,16 @@ pub fn filter(
     if !facts.has_input {
         return Ok(candidates);
     }
-    let mut invalid = vec![false; candidates.len()];
-    let mut context_window_error = false;
-    let mut detail = String::new();
-    for (index, deployment) in candidates.iter().enumerate() {
-        let found = facts.of(deployment);
-        if let (Some(limit), true, Some(tokens)) =
-            (found.max_input_tokens, facts.countable, facts.input_tokens)
-            && tokens > limit
-        {
-            invalid[index] = true;
-            context_window_error = true;
-            detail.push_str(&format!(
-                "Model={}, Max Input Tokens={limit}, Got={tokens}",
-                deployment_model(deployment)
-            ));
-            continue;
-        }
-        if let Some(allowed) = &facts.allowed_model_region
-            && !allowed.is_null()
-            && !in_region(deployment, allowed)
-        {
-            invalid[index] = true;
-        }
-    }
+    let overflows: Vec<Option<Overflow>> = candidates
+        .iter()
+        .map(|deployment| context_window::overflow(deployment, facts))
+        .collect();
+    let context_window_error = overflows.iter().any(Option::is_some);
+    let mut invalid: Vec<bool> = candidates
+        .iter()
+        .zip(&overflows)
+        .map(|(deployment, overflow)| overflow.is_some() || outside_region(deployment, facts))
+        .collect();
     let params_checked = !facts.requested_params.is_empty();
     let param_candidates: Vec<usize> = (0..candidates.len()).filter(|i| !invalid[*i]).collect();
     let lacking: Vec<bool> = param_candidates
@@ -150,10 +121,7 @@ pub fn filter(
             });
         }
         if context_window_error {
-            return Err(Error::ContextWindowExceeded {
-                model: model.to_owned(),
-                detail,
-            });
+            return Err(context_window::exceeded(model, overflows.iter().flatten()));
         }
     }
     Ok(candidates
@@ -240,6 +208,15 @@ mod tests {
         let mut found = facts(&[("small", window(5))]);
         found.input_tokens = Some(100);
         found.has_input = false;
+        assert_eq!(filter("g", vec![small], &[], &found).unwrap().len(), 1);
+    }
+
+    #[rstest]
+    fn a_prompt_that_may_not_be_counted_fits_every_window() {
+        let small = deployment("small", json!({"model": "openai/a"}), json!({}));
+        let mut found = facts(&[("small", window(5))]);
+        found.input_tokens = Some(100);
+        found.countable = false;
         assert_eq!(filter("g", vec![small], &[], &found).unwrap().len(), 1);
     }
 
