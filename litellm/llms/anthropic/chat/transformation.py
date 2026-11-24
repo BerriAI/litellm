@@ -2331,7 +2331,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
     def _create_json_tool_call_for_response_format(
         self,
-        json_schema: dict | None = None,
+        json_schema: dict[str, object] | None = None,
         description: str | None = None,
     ) -> AnthropicMessagesTool:
         """

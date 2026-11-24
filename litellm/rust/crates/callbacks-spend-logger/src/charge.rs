@@ -6,10 +6,7 @@
 //! against the counters it holds and reseeds any it finds cold; a call that charges nothing
 //! releases it. Each step stamps the caller's copy, which [`crate::SpendLogCallback`] writes back.
 
-use std::{
-    sync::atomic::{AtomicBool, Ordering},
-    time::Duration,
-};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use litellm_callbacks::{BudgetReservation, Host, Scalar};
 use litellm_callbacks_budgets::{CounterStep, CustomerWindow, Failure as Failed, post_call};
@@ -27,16 +24,12 @@ use crate::{
     hook_input::{Failure, Identity, RowRequest, Settings, Success},
     host::{
         AccountingContext, AccountingRow, AfterCharge, AfterWrite, BatchAccounting,
-        EnrichKeyIdentity, EnrichedKeyIdentity, FailedTrackingAlert, IncrementSearchFreeTier,
-        LoggedCost,
+        ChargeFailureCounters, EnrichKeyIdentity, EnrichedKeyIdentity, FailedTrackingAlert,
+        IncrementSearchFreeTier, LoggedCost,
     },
     policy::{self, Disposition},
     search_free_tier,
 };
-
-/// `FAILURE_SPEND_COUNTER_WAIT_SECONDS`: how long a failure waits on its counters before
-/// leaving them to finish in the background.
-const FAILURE_SPEND_COUNTER_WAIT: Duration = Duration::from_secs(1);
 
 const RESPONSES_ID_CALL_TYPES: [&str; 2] = ["aget_responses", "acancel_responses"];
 
@@ -927,48 +920,19 @@ impl<S: LedgerStore + 'static> SpendLogCallback<S> {
                 counter_step(&charge, written, &[])
             })
             .collect();
-        self.count_failure_rows(host, redis, steps).await;
+        self.count_failure_rows(host, steps).await;
     }
 
     /// `_increment_failure_spend_counters`: the failure rows' counters, sent before the client sees
-    /// the error, so in a request its post-call batch goes out as soon as they are declared. A
-    /// counter store slower than `FAILURE_SPEND_COUNTER_WAIT` finishes them in the background
-    /// instead of holding the error back. The reservation was already released, so every counter
-    /// takes the full row cost.
-    async fn count_failure_rows(
-        &self,
-        host: &Host,
-        redis: Option<&RequestRedis>,
-        steps: Vec<CounterStep>,
-    ) {
+    /// the error. The proxy runs them on the request's post-call batch, so a counter store slower
+    /// than its wait finishes them in the background with the host still answering. The
+    /// reservation was already released, so every counter takes the full row cost.
+    async fn count_failure_rows(&self, host: &Host, steps: Vec<CounterStep>) {
         if steps.is_empty() {
             return;
         }
-        let budgets = self.budgets.clone();
-        let host = host.clone();
-        let redis = redis.cloned();
-        let mut counting = tokio::spawn(async move {
-            for step in steps {
-                if let Some(error) = budgets
-                    .charge_counters(&host, redis.as_ref(), &step, None)
-                    .await
-                    .error
-                {
-                    tracing::error!(%error, "Failed to raise spend counters for a failure spend row");
-                }
-            }
-            if let Some(redis) = &redis {
-                redis.flush_post().await;
-            }
-        });
-        if tokio::time::timeout(FAILURE_SPEND_COUNTER_WAIT, &mut counting)
-            .await
-            .is_err()
-        {
-            tracing::warn!(
-                "Spend counters for failure spend rows took over {}s, finishing them in the background",
-                FAILURE_SPEND_COUNTER_WAIT.as_secs_f64()
-            );
+        if let Err(error) = host.call(ChargeFailureCounters { steps }).await {
+            tracing::error!(%error, "Failed to raise spend counters for the failure spend rows");
         }
     }
 }

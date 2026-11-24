@@ -30,6 +30,7 @@ from litellm.proxy.db.db_spend_update_writer import (
 )
 from litellm.proxy.db.rust_spend_log_writer import rust_spend_log_writer
 from litellm.proxy.hooks.proxy_track_cost_callback import (
+    FAILURE_SPEND_COUNTER_WAIT_SECONDS,
     ProxyDBLogger,
     _batch_accounting_for,  # pyright: ignore[reportPrivateUsage]  # the cost callback's batch costing outcome
 )
@@ -37,6 +38,7 @@ from litellm.proxy.hooks.search_free_tier import record_freed_cost
 from litellm.proxy.spend_tracking.customer_cost_margin import apply_callback_customer_cost_margin
 from litellm.proxy.spend_tracking.rust_spend_counters import (
     _CounterHost,  # pyright: ignore[reportPrivateUsage]  # the counter step's host, which the callback's host delegates to
+    charge_counter_steps,
 )
 from litellm.proxy.spend_tracking.rust_spend_log_inputs import SpendLogCall, spend_log_document
 from litellm.proxy.spend_tracking.spend_tracking_utils import get_request_model_access_groups
@@ -50,6 +52,7 @@ from litellm.types.proxy.auth.customer_hierarchy import (
 )
 
 _FIELDS: Final = TypeAdapter(dict[str, object])
+_STEPS: Final = TypeAdapter(list[dict[str, object]])
 _KEY_IDENTITY: Final = (
     ("key_alias", "user_api_key_alias"),
     ("user_id", "user_api_key_user_id"),
@@ -60,6 +63,7 @@ _KEY_IDENTITY: Final = (
 )
 _ROW_TIMES: Final = ("completionStartTime",)
 _SPEND_LOG_CALL: Final[ContextVar[SpendLogCall | None]] = ContextVar("rust_spend_log_call", default=None)
+_FAILURE_COUNTER_STEPS: Final[set[asyncio.Task[None]]] = set()  # mutable-ok: holds each running step until it ends
 
 
 def _mapping(value: object) -> Mapping[str, object]:
@@ -144,6 +148,12 @@ async def _committed_tracked(request: Mapping[str, object]) -> Sequence[str]:
     return list(warmed.tracked())
 
 
+def _log_failed_counter_steps(increment: "asyncio.Task[None]") -> None:
+    error: Final = None if increment.cancelled() else increment.exception()
+    if error is not None:
+        verbose_proxy_logger.error("Failed to raise spend counters for a failure spend row: %s", error, exc_info=error)
+
+
 @dataclass(frozen=True, slots=True)
 class SpendLogHost:
     """The callback's host calls, with the counter step's own calls answered by its host."""
@@ -158,6 +168,22 @@ class SpendLogHost:
 
     async def cached_spend(self, request: object) -> tuple[float, ...]:
         return await self.counters.cached_spend(request)
+
+    async def charge_failure_counters(self, request: Mapping[str, object]) -> None:
+        """``_increment_failure_spend_counters``: the failure rows' counter steps, sent before the client sees the
+        error. A counter store slower than ``FAILURE_SPEND_COUNTER_WAIT_SECONDS`` finishes them in the background, in a
+        task of this proxy's own, so their host calls are still answered after the hook returned.
+        """
+        increment: Final = asyncio.create_task(charge_counter_steps(_STEPS.validate_python(request.get("steps", []))))
+        _FAILURE_COUNTER_STEPS.add(increment)
+        increment.add_done_callback(_FAILURE_COUNTER_STEPS.discard)
+        increment.add_done_callback(_log_failed_counter_steps)
+        finished, _ = await asyncio.wait((increment,), timeout=FAILURE_SPEND_COUNTER_WAIT_SECONDS)
+        if not finished:
+            verbose_proxy_logger.warning(
+                "Spend counters for failure spend rows took over %ss, finishing them in the background",
+                FAILURE_SPEND_COUNTER_WAIT_SECONDS,
+            )
 
     async def enrich_key_identity(self, request: Mapping[str, object]) -> Mapping[str, object]:
         metadata: Final[dict[str, object]] = {  # mutable-ok: the enrichment fills it in place

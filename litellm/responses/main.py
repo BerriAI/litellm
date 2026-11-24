@@ -3037,7 +3037,7 @@ def _build_litellm_metadata_for_ws(kwargs: dict) -> dict:
     return metadata
 
 
-_JSON_OBJECT_ADAPTER: Final = TypeAdapter(dict[str, object] | None)
+_JSON_OBJECT_ADAPTER: Final[TypeAdapter[dict[str, object] | None]] = TypeAdapter(dict[str, object] | None)
 
 
 def _deployment_reasoning_default(kwargs: Mapping[str, object]) -> Reasoning | dict[str, object] | None:

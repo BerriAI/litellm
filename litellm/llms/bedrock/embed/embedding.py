@@ -58,6 +58,7 @@ _JSON_OBJECT: Final = TypeAdapter(dict[str, object], config=ConfigDict(strict=Tr
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 
 
 def _sign_get_request(
@@ -614,7 +615,7 @@ class BedrockEmbedding(BaseAWSLLM):
         api_base: str | None,
         model_response: EmbeddingResponse,
         print_verbose: Callable,
-        encoding,
+        encoding: "Tokenizer | None",
         logging_obj: "LiteLLMLoggingObj",
         client: HTTPHandler | AsyncHTTPHandler | None,
         timeout: float | httpx.Timeout | None,

@@ -209,7 +209,11 @@ from litellm.litellm_core_utils.litellm_logging import (
 )
 from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import is_str_keyed_dict
 from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
-from litellm.litellm_core_utils.redact_messages import drop_token_ids
+from litellm.litellm_core_utils.redact_messages import (
+    TokenDataCheckedFields,
+    drop_token_ids,
+    without_hidden_token_data,
+)
 from litellm.litellm_core_utils.routing_common_utils import resolve_model_group_alias
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
@@ -4824,7 +4828,16 @@ class ProxyLogging:
         3. /image/generation
         4. /files
         """
+        return await without_hidden_token_data(
+            response, self._post_call_success_response(data, response, user_api_key_dict)
+        )
 
+    async def _post_call_success_response(
+        self,
+        data: dict[str, object],  # mutable-ok: guardrail_to_apply is written into the live request
+        response: LLMResponseTypes,
+        user_api_key_dict: UserAPIKeyAuth,
+    ) -> LLMResponseTypes:
         from litellm.proxy.proxy_server import llm_router
 
         run: Final[HookRun[LLMResponseTypes]] = HookRun(response=response)
@@ -4849,7 +4862,7 @@ class ProxyLogging:
             await self._post_call_without_v2(run, guardrails, guardrail_callbacks, other_callbacks)
             return run.response
         fields: Final = with_sources(
-            hook_fields(data, run, Field.response),
+            TokenDataCheckedFields(hook_fields(data, run, Field.response)),
             DERIVED_POST_CALL_SUCCESS_FIELDS,
             HookArgs(auth=user_api_key_dict, request=data),  # pyright: ignore[reportUnknownArgumentType]  # untyped legacy request dict
         )
@@ -4927,7 +4940,9 @@ class ProxyLogging:
             return
         if callback.post_call_already_checked(guardrails.request_view, run.response) is True:
             return
-        run.adopt(await self._post_call_guardrail(guardrails, callback, run.response))
+        run.adopt(
+            await without_hidden_token_data(run.response, self._post_call_guardrail(guardrails, callback, run.response))
+        )
 
     async def _post_call_parallel_guardrail(
         self,
@@ -4945,7 +4960,9 @@ class ProxyLogging:
                 return
             if callback.post_call_already_checked(request_view, run.response) is True:
                 return
-            _ = await self._post_call_guardrail(guardrails, callback, run.response)
+            _ = await without_hidden_token_data(
+                run.response, self._post_call_guardrail(guardrails, callback, run.response)
+            )
         except BaseException as e:
             if not _exception_changes_request_flow(e):
                 raise
@@ -4989,8 +5006,11 @@ class ProxyLogging:
         if not isinstance(callback, CustomLogger):
             return
         run.adopt(
-            await callback.async_post_call_success_hook(
-                user_api_key_dict=user_api_key_dict, data=data, response=run.response
+            await without_hidden_token_data(
+                run.response,
+                callback.async_post_call_success_hook(
+                    user_api_key_dict=user_api_key_dict, data=data, response=run.response
+                ),
             )
         )
 

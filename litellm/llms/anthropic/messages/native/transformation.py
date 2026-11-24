@@ -819,6 +819,8 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
                 ),
                 model=model,
                 base_model=base_model if isinstance(base_model, str) else None,
+                custom_llm_provider=self._resolved_provider,
+                api_base=getattr(litellm_params, "api_base", None),
             ),
             max_tokens=max_tokens,
             model=model,
