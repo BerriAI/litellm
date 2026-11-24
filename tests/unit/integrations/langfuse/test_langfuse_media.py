@@ -355,6 +355,46 @@ def test_storage_that_is_never_reached_is_not_reported_as_uploaded(caplog):
     assert uploader.failed_uploads == 1
 
 
+def test_a_registration_that_does_not_reach_langfuse_is_sent_again_after_each_delay():
+    requests: list[httpx.Request] = []
+    langfuse = _langfuse(requests)
+    outage = iter((True, True))
+
+    def transport(request: httpx.Request) -> httpx.Response:
+        if next(outage, False):
+            requests.append(request)
+            raise httpx.ConnectError("langfuse unreachable")
+        return langfuse(request)
+
+    uploader = _uploader(transport, delays=(0.0, 0.0))
+
+    assert uploader.submit((_upload(),)) is True
+    assert uploader.drain(5_000) is True
+
+    assert [request.method for request in requests] == ["POST", "POST", "POST", "PUT", "PATCH"]
+    assert uploader.failed_uploads == 0
+    assert uploader.submit((_upload(),)) is True
+
+
+def test_a_registration_that_never_reaches_langfuse_fails_that_upload_only(caplog):
+    requests: list[httpx.Request] = []
+
+    def transport(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        raise httpx.ConnectError("langfuse unreachable")
+
+    uploader = _uploader(transport, delays=(0.0,))
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        uploader.submit((_upload(),))
+        assert uploader.drain(5_000) is True
+
+    assert [request.method for request in requests] == ["POST", "POST"]
+    assert uploader.failed_uploads == 1
+    assert "langfuse unreachable" in caplog.text
+    assert uploader.submit((_upload(),)) is True
+
+
 def test_a_failed_registration_is_logged_without_its_headers_and_the_next_upload_still_runs(caplog):
     requests: list[httpx.Request] = []
     langfuse = _langfuse(requests)
@@ -413,7 +453,10 @@ def test_a_langfuse_that_cannot_take_media_is_sent_no_further_references(status:
     assert len(requests) == registrations
     assert {(request.method, request.url.path) for request in requests} == {("POST", "/api/public/media")}
     assert uploader.failed_uploads == 1
-    assert f"Langfuse media cannot be stored (HTTP {status} from the media API), so media stays inline" in caplog.text
+    assert (
+        f"Langfuse media cannot be stored (HTTP {status} from the media API, a self-hosted Langfuse needs a media "
+        "bucket), so media stays inline"
+    ) in caplog.text
 
 
 def test_a_refused_upload_url_keeps_later_media_inline():

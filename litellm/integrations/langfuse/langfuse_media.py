@@ -290,13 +290,22 @@ class MediaUploader:
         with self._lock:
             if self._probe_at is None:
                 verbose_logger.warning(
-                    "Langfuse media cannot be stored (%s), so media stays inline in traces until an upload gets "
-                    "through. A self-hosted Langfuse needs a media bucket (LANGFUSE_S3_MEDIA_UPLOAD_BUCKET).",
+                    "Langfuse media cannot be stored (%s), so media stays inline in traces until an upload gets through",
                     reason,
                 )
             self._probe_at = monotonic() + self._refusal_pause
 
     def _registered(self, upload: MediaUpload) -> GetMediaUploadUrlResponse:
+        """Re-sent after each delay while Langfuse is not reached, which is how long its span export keeps trying."""
+        for delay in self._delays:
+            try:
+                return self._registered_once(upload)
+            except httpx.TransportError as error:
+                verbose_logger.warning("Langfuse media %s registration raised %s", upload.media.media_id, error)
+                sleep(delay)
+        return self._registered_once(upload)
+
+    def _registered_once(self, upload: MediaUpload) -> GetMediaUploadUrlResponse:
         try:
             return self._api.media.get_upload_url(
                 content_type=upload.media.content_type,
@@ -308,7 +317,9 @@ class MediaUploader:
             )
         except ApiError as error:
             if _media_api_unavailable(error.status_code):
-                self._keep_media_inline(f"HTTP {error.status_code} from the media API")
+                self._keep_media_inline(
+                    f"HTTP {error.status_code} from the media API, a self-hosted Langfuse needs a media bucket"
+                )
             raise
 
     def _put(self, url: str, headers: Mapping[str, str], media: Media) -> httpx.Response | None:
