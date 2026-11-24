@@ -1257,6 +1257,8 @@ class Logging(LiteLLMLoggingBaseClass):
         self.deferred_success_result: tuple[object, datetime.datetime, datetime.datetime] | None = None
         self.billed_token_rates: BilledTokenRates | None = None
         self._provider_reported_cost: float | None = None
+        self._route_priced_cost: float | None = None
+        self._route_prices: bool = False
 
         # Init Caching related details
         self.caching_details: CachingDetails | None = None
@@ -2616,6 +2618,24 @@ class Logging(LiteLLMLoggingBaseClass):
         if margin_total_amount is not None:
             self.cost_breakdown["margin_total_amount"] = margin_total_amount
 
+    def record_route_cost(self, cost: float) -> None:
+        """The cost the Rust route priced the call at, which every later pricing of this call reads instead."""
+        self._route_prices = True
+        self._route_priced_cost = cost
+        self.model_call_details["response_cost"] = cost
+
+    def record_route_metering(self) -> None:
+        """The Rust route prices this stream once its usage is final and injects the cost of each event it prices."""
+        self._route_prices = True
+
+    @property
+    def route_priced_cost(self) -> float | None:
+        return self._route_priced_cost
+
+    @property
+    def route_prices_call(self) -> bool:
+        return self._route_prices
+
     def response_cost_calculator(
         self,
         result: object,
@@ -2761,8 +2781,11 @@ class Logging(LiteLLMLoggingBaseClass):
 
         try:
             reported_cost: Final = self._provider_reported_cost
+            route_cost: Final = self._route_priced_cost
             response_cost: Final = (
-                reported_cost
+                route_cost
+                if route_cost is not None
+                else reported_cost
                 if isinstance(reported_cost, float)
                 and math.isfinite(reported_cost)
                 and reported_cost >= 0
@@ -2825,15 +2848,20 @@ class Logging(LiteLLMLoggingBaseClass):
     def _price_without_recording(
         self, result: object, *, cache_hit: bool | None, ignore_stamped_cost: bool
     ) -> UncachedPrice:
+        with self.pricing_left_unrecorded():
+            cost: Final = self.response_cost_calculator(
+                result=result, cache_hit=cache_hit, ignore_stamped_cost=ignore_stamped_cost
+            )
+            return UncachedPrice(cost=cost, cost_breakdown=self.cost_breakdown)
+
+    @contextmanager
+    def pricing_left_unrecorded(self) -> Generator[None]:
         previous_cost_breakdown: Final = self.cost_breakdown
         previous_billed_token_rates: Final = self.billed_token_rates
         debug_key: Final = "response_cost_failure_debug_information"
         previous_failure_debug_info: Final = self.model_call_details.get(debug_key)
         try:
-            cost: Final = self.response_cost_calculator(
-                result=result, cache_hit=cache_hit, ignore_stamped_cost=ignore_stamped_cost
-            )
-            return UncachedPrice(cost=cost, cost_breakdown=self.cost_breakdown)
+            yield
         finally:
             self.cost_breakdown = previous_cost_breakdown
             self.billed_token_rates = previous_billed_token_rates
@@ -3836,7 +3864,11 @@ class Logging(LiteLLMLoggingBaseClass):
             self.model_call_details["response_cost"] = hidden_response_cost
             self._record_zero_cost_diagnostic(logging_result, hidden_response_cost)
             self._add_failed_attempts_spend(get_usage_object(completion_response=logging_result))
-        elif (existing_cost := self.model_call_details.get("response_cost")) is not None and (
+        elif (
+            existing_cost := None
+            if self._route_priced_cost is not None
+            else self.model_call_details.get("response_cost")
+        ) is not None and (
             existing_cost != 0 or self.call_type == CallTypes.pass_through.value  # pyright: ignore[reportUnknownMemberType]  # Logging.call_type is untyped
         ):
             # Preserve response_cost if already calculated (e.g., by pass-through

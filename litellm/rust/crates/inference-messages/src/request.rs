@@ -40,8 +40,9 @@ use litellm_llms::base_llm::{
     },
 };
 use litellm_llms_types::{
-    formats::messages::{MessagesOptionalParams, MessagesRequest},
+    formats::messages::{MessagesOptionalParams, MessagesRequest, Speed},
     headers::ProviderSpecificHeaders,
+    recognized::Recognized,
 };
 use litellm_router_types::LitellmParams;
 use litellm_secret_value::SecretValue;
@@ -51,6 +52,7 @@ use serde_json::{Map, Value};
 use super::{
     Error, MessagesCall, MessagesShaping, WorkloadIdentity,
     common_utils::{MessagesProvider, merge_messages_header_sources, string_headers},
+    pricing::RequestedPricing,
     types::invalid_request,
 };
 
@@ -71,6 +73,7 @@ pub(super) struct ProviderCall {
     pub(super) unencodable_request_header: Option<Vec<u8>>,
     pub(super) ascii_request_headers: bool,
     pub(super) connect_retry: bool,
+    pub(super) requested_pricing: RequestedPricing,
 }
 
 impl ProviderCall {
@@ -154,6 +157,7 @@ pub(super) async fn provider_call(
     model: String,
     call: MessagesCall,
     secrets: &(dyn Lookup + Send + Sync),
+    host_transport: bool,
     context: &CallContext<'_, impl Interceptors<Error>>,
 ) -> Result<ProviderCall, Error> {
     let MessagesCall {
@@ -185,6 +189,11 @@ pub(super) async fn provider_call(
         &transform_context,
     )?;
     let logged_params = logged_params(config, &effective, &transform_context)?;
+    let requested_pricing = RequestedPricing {
+        service_tier: effective.params.service_tier.clone(),
+        fast: effective.params.speed == Some(Recognized::Known(Speed::Fast)),
+        inject_stream_cost: false,
+    };
     let trimmed =
         without_additional_drop_params(effective, &shaping.settings.additional_drop_params)?;
 
@@ -270,6 +279,7 @@ pub(super) async fn provider_call(
         optional_params: logged_params,
         secret_fields: Vec::new(),
         api_key: api_key.map(SecretValue::new),
+        host_transport,
     };
     let authenticated = resolve_auth(
         auth_services,
@@ -317,6 +327,7 @@ pub(super) async fn provider_call(
         unencodable_request_header: shaping.settings.unencodable_request_header,
         ascii_request_headers: shaping.settings.ascii_request_headers,
         connect_retry: shaping.settings.connect_retry,
+        requested_pricing,
     })
 }
 
@@ -470,7 +481,7 @@ fn requested_optional_params(
         return Ok(request);
     }
     if request.params.service_tier.is_some() {
-        litellm_tracing::warn!(
+        tracing::warn!(
             "Dropping `service_tier` for model={} on provider={}. Only the Anthropic API routes accept it.",
             request.model,
             provider.as_str()
@@ -777,6 +788,7 @@ mod tests {
             model,
             call,
             secrets,
+            false,
             &context,
         )
         .await

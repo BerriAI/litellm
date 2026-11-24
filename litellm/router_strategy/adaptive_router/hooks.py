@@ -20,7 +20,13 @@ from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_router_logger
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.litellm_core_utils.core_helpers import as_str_mapping, attribute_or_none, iter_items, require_attributes
+from litellm.litellm_core_utils.core_helpers import (
+    as_str_mapping,
+    attribute_or_none,
+    int_of,
+    iter_items,
+    require_attributes,
+)
 from litellm.litellm_core_utils.internal_call_metadata import inherits_parent_session
 from litellm.router_strategy.adaptive_router.adaptive_router import AdaptiveRouter
 from litellm.router_strategy.adaptive_router.classifier import classify_prompt
@@ -48,6 +54,8 @@ _IDENTITY_FIELDS: Final = (
 class _LoggedCallKwargs(TypedDict, total=False):
     litellm_params: ReadOnly[Mapping[str, object]]
     messages: ReadOnly[Sequence[Mapping[str, object]] | None]
+    response_status: ReadOnly[object]
+    exception: ReadOnly[object]
 
 
 def _explicit_session_id(litellm_params: Mapping[str, object]) -> str | None:
@@ -77,7 +85,7 @@ def _resolve_session_key(kwargs: _LoggedCallKwargs) -> str | None:
     explicit: Final = None if inherits_parent_session(litellm_params) else _explicit_session_id(litellm_params)
     if explicit:
         return explicit
-    metadata: Final = litellm_params.get("metadata") or {}
+    metadata: Final = _dict_fields(litellm_params.get("metadata") or {})
 
     messages: Final = kwargs.get("messages") or []
     if len(messages) < SIGNAL_GATE_MIN_MESSAGES:
@@ -86,7 +94,7 @@ def _resolve_session_key(kwargs: _LoggedCallKwargs) -> str | None:
         # crediting the bandit for conversations that are too short to signal.
         return None
 
-    identity = ":".join(str(metadata.get(f) or "") if isinstance(metadata, dict) else "" for f in _IDENTITY_FIELDS)
+    identity: Final = ":".join(str(metadata.get(f) or "") if metadata is not None else "" for f in _IDENTITY_FIELDS)
     anchor: Final = messages[:SIGNAL_GATE_MIN_MESSAGES]
     payload: Final = (
         identity
@@ -248,15 +256,19 @@ class AdaptiveRouterPostCallHook(CustomLogger):
     def __init__(self, adaptive_router: AdaptiveRouter) -> None:
         self.adaptive_router = adaptive_router
 
-    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+    async def async_log_success_event(
+        self, kwargs: _LoggedCallKwargs, response_obj: object, start_time: object, end_time: object
+    ) -> None:
         await self._record(kwargs, response_obj, response_status=200)
 
-    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+    async def async_log_failure_event(
+        self, kwargs: _LoggedCallKwargs, response_obj: object, start_time: object, end_time: object
+    ) -> None:
         status = kwargs.get("response_status")
         if status is None:
             exc: Final = kwargs.get("exception")
             status = getattr(exc, "status_code", 500) if exc is not None else 500
-        await self._record(kwargs, response_obj, response_status=int(status))
+        await self._record(kwargs, response_obj, response_status=int_of(status))
 
     async def _record(
         self,

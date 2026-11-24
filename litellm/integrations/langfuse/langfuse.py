@@ -378,7 +378,7 @@ class LangFuseLogger:
         langfuse_secret=None,
         langfuse_host=None,
         langfuse_environment: str | None = None,
-        flush_interval=1,
+        flush_interval: int = 1,
         allow_env_credentials: bool = True,
     ):
         try:
@@ -1084,7 +1084,7 @@ class LangFuseLogger:
             return []
         return standard_logging_object.get("request_tags", []) or []
 
-    def add_default_langfuse_tags(self, tags, kwargs, metadata):
+    def add_default_langfuse_tags(self, tags: list[str], kwargs, metadata) -> list[str]:
         """
         Helper function to add litellm default langfuse tags
 

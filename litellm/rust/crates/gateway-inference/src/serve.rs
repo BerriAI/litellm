@@ -11,7 +11,7 @@ use axum::{
     http::{HeaderMap, request::Parts},
     response::Response,
 };
-use litellm_gateway_auth::AuthenticatedRequest;
+use litellm_gateway_auth::Authenticated;
 use litellm_llms_types::formats::chat_completions::ChatCompletionsUsage;
 use litellm_router_core::Op;
 use serde_json::{Map, Value};
@@ -28,9 +28,9 @@ use crate::{
 };
 
 /// One request to an inference route, apart from its body.
-pub struct Call<H> {
+pub struct Call<H: Host> {
     pub(crate) gateway: Arc<Gateway<H>>,
-    pub(crate) identity: AuthenticatedRequest,
+    pub(crate) identity: Authenticated<H::Rows>,
     pub(crate) headers: HeaderMap,
     pub(crate) request_id: Option<String>,
 }
@@ -42,7 +42,7 @@ impl<H: Host> FromRequestParts<Arc<Gateway<H>>> for Call<H> {
         parts: &mut Parts,
         gateway: &Arc<Gateway<H>>,
     ) -> Result<Self, Self::Rejection> {
-        let identity = AuthenticatedRequest::from_request_parts(parts, gateway).await?;
+        let identity = Authenticated::from_request_parts(parts, gateway).await?;
         let Ok(RequestId(request_id)) = RequestId::from_request_parts(parts, gateway).await;
         Ok(Self {
             gateway: gateway.clone(),

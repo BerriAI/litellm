@@ -4,6 +4,7 @@ Test for response_api_endpoints/endpoints.py
 
 import asyncio
 import contextlib
+import contextvars
 import dataclasses
 import datetime
 import json
@@ -22,6 +23,7 @@ import respx
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from httpx import Response
+from starlette.datastructures import URL
 
 import litellm
 from litellm.caching.base_cache import BaseCache
@@ -31,8 +33,11 @@ from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
+from litellm.proxy.hooks import PROXY_HOOKS
+from litellm.proxy.hooks.parallel_request_limiter import PROXY_MaxParallelRequestsHandler
+from litellm.proxy.hooks.parallel_request_limiter_v3 import ParallelRequestLimiterHook
 from litellm.proxy.proxy_server import app
-from litellm.proxy.utils import ProxyLogging
+from litellm.proxy.utils import InternalUsageCache, ProxyLogging
 from litellm.responses.streaming_iterator import ResponsesAPIStreamingIterator
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.llms.openai import ResponseAPIUsage, ResponsesAPIResponse
@@ -7126,3 +7131,77 @@ def test_input_token_count_keeps_the_joined_name_of_a_self_named_namespace_membe
 
     assert called_names(namespace_tools) == ["search__search"]
     assert called_names([{"type": "function", "name": "search", "defer_loading": True}]) == ["search"]
+
+
+async def _admits(proxy_logging: ProxyLogging, key: UserAPIKeyAuth, call_type: CallTypesLiteral) -> bool:
+    async def admit() -> bool:
+        try:
+            await proxy_logging.pre_call_hook(user_api_key_dict=key, data={"model": "gpt-4o-mini"}, call_type=call_type)
+        except ProxyRateLimitError:
+            return False
+        return True
+
+    return await asyncio.create_task(admit(), context=contextvars.Context())
+
+
+class _RefusesWebSocketOpens(CustomLogger):
+    def __init__(self, refusal: Exception) -> None:
+        super().__init__()
+        self.refusal: Final = refusal
+
+    async def async_pre_call_hook(
+        self, user_api_key_dict: UserAPIKeyAuth, cache: DualCache, data: dict, call_type: CallTypesLiteral
+    ) -> None:
+        if call_type == "_aresponses_websocket":
+            raise self.refusal
+
+
+def _legacy_limiter(internal_usage_cache: InternalUsageCache) -> PROXY_MaxParallelRequestsHandler:
+    return PROXY_MaxParallelRequestsHandler(internal_usage_cache, clock=lambda: datetime.datetime(2026, 1, 31, 12, 0, 30))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("limiter", [ParallelRequestLimiterHook, _legacy_limiter], ids=["default", "legacy"])
+@pytest.mark.parametrize(
+    "open_failure",
+    [
+        litellm.RateLimitError(message="session is over its limit", model="gpt-4o-mini", llm_provider="openai"),
+        RuntimeError("a pre-call step after the limiter failed"),
+    ],
+    ids=["rate_limit", "error"],
+)
+async def test_a_responses_websocket_refused_after_admission_gives_its_parallel_slot_back(
+    monkeypatch: pytest.MonkeyPatch, limiter: Callable[..., CustomLogger], open_failure: Exception
+) -> None:
+    from litellm.proxy.response_api_endpoints.endpoints import responses_websocket_endpoint
+
+    monkeypatch.setattr(litellm, "callbacks", [])
+    monkeypatch.setitem(PROXY_HOOKS, "parallel_request_limiter", limiter)
+    monkeypatch.setitem(PROXY_HOOKS, "refuses_after_the_limiter", lambda: _RefusesWebSocketOpens(open_failure))
+    proxy_logging: Final = ProxyLogging(user_api_key_cache=DualCache())
+    with patch("litellm.proxy.proxy_server.prisma_client", None):
+        proxy_logging._add_proxy_hooks(llm_router=None)
+    ProxyLogging._callback_capabilities_cache.clear()
+    key: Final = UserAPIKeyAuth(api_key="hashed-single-slot-key", max_parallel_requests=1)
+
+    ws: Final = MagicMock()
+    ws.headers = {}
+    ws.query_params = {}
+    ws.scope = {"headers": []}
+    ws.url = URL("ws://testserver/v1/responses")
+    ws.accept = AsyncMock()
+    ws.receive_text = AsyncMock(
+        return_value=json.dumps({"type": "response.create", "model": "gpt-4o-mini", "input": []})
+    )
+    ws.send_text = AsyncMock()
+    ws.close = AsyncMock()
+
+    with patch("litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging):
+        await asyncio.create_task(
+            responses_websocket_endpoint(websocket=ws, model="gpt-4o-mini", user_api_key_dict=key),
+            context=contextvars.Context(),
+        )
+
+    ws.close.assert_awaited_once()
+    assert await _admits(proxy_logging, key, "acompletion"), "the refused socket still holds the key's only slot"
+    assert not await _admits(proxy_logging, key, "acompletion"), "the limiter under test must enforce the single slot"

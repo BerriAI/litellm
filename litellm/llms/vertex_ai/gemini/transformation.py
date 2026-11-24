@@ -6,7 +6,7 @@ Why separate file? Make it easy to see how transformation works
 
 import os
 import re
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass
 from functools import partial
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, cast
@@ -27,6 +27,7 @@ from litellm.litellm_core_utils.core_helpers import (
     has_attributes,
 )
 from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
+from litellm.litellm_core_utils.prompt_templates.common_utils import is_blank_content
 from litellm.litellm_core_utils.prompt_templates.factory import (
     THOUGHT_SIGNATURE_SEPARATOR,
     GeminiMediaSource,
@@ -44,6 +45,14 @@ from litellm.litellm_core_utils.prompt_templates.file_id_utils import (
     get_image_mime_type_from_url,
 )
 from litellm.litellm_core_utils.prompt_templates.image_handling import RemoteMedia, async_inline_remote_media
+from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import (
+    is_system_message,
+    message_field,
+    parts_of,
+    place_mid_conversation_system,
+    split_leading_system_run,
+    string_field,
+)
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.vertex_ai.common_utils import pop_vertex_caller_labels, pop_vertex_request_labels
 from litellm.llms.vertex_ai.request_labels import vertex_request_label_fields
@@ -650,7 +659,7 @@ def camel_to_snake(camel_str: str) -> str:
 _camel_to_snake = camel_to_snake
 
 
-def _get_equivalent_key(key: str, available_keys: set) -> str | None:
+def _get_equivalent_key(key: str, available_keys: Collection[object]) -> str | None:
     """
     Get the equivalent key from available keys, checking both camelCase and snake_case variants
     """
@@ -1025,11 +1034,27 @@ def _gemini_history_media_part(
     return checked_gemini_video_part(content, part, model=model, custom_llm_provider=provider, drop_params=drop_params)
 
 
+def _is_blank_user_message(message: AllMessageValues) -> bool:
+    fields: Final = as_str_mapping(message)
+    return fields is not None and is_blank_content(fields.get("content"))
+
+
+def _gemini_blank_last_user_turn(
+    last_user_span: Sequence[AllMessageValues], contents: Sequence[ContentType]
+) -> ContentType | None:
+    if not last_user_span or not all(map(_is_blank_user_message, last_user_span)):
+        return None
+    if contents and contents[-1].get("role") == "user":
+        return None
+    return ContentType(role="user", parts=[PartType(text=" ")])
+
+
 def gemini_convert_messages_with_history(
     messages: list[AllMessageValues],
     model: str | None = None,
     litellm_params: dict | None = None,
     custom_llm_provider: str | None = None,
+    ends_request: bool = True,
 ) -> list[ContentType]:
     """
     Converts given messages from OpenAI format to Gemini format
@@ -1094,7 +1119,13 @@ def gemini_convert_messages_with_history(
 
                 msg_i += 1
 
-            if user_content:
+            if (
+                ends_request
+                and msg_i == len(messages)
+                and (blank_user_turn := _gemini_blank_last_user_turn(messages[init_msg_i:], contents)) is not None
+            ):
+                contents.append(blank_user_turn)
+            elif user_content:
                 """
                 check that user_content has 'text' parameter.
                     - Known Vertex Error: Unable to submit request because it must have a text parameter.
@@ -1274,7 +1305,7 @@ def gemini_convert_messages_with_history(
 _gemini_convert_messages_with_history = gemini_convert_messages_with_history
 
 # Keys that LiteLLM consumes internally and must never be forwarded to the
-_LITELLM_INTERNAL_EXTRA_BODY_KEYS: Final[frozenset] = frozenset({"cache", "tags"})
+_LITELLM_INTERNAL_EXTRA_BODY_KEYS: Final[frozenset[str]] = frozenset({"cache", "tags"})
 
 
 def _pop_and_merge_extra_body(data: RequestBody, optional_params: dict) -> None:
@@ -1299,15 +1330,73 @@ class _CallerToolConfig(TypedDict, total=False):
 _CALLER_TOOL_CONFIG: Final = TypeAdapter(_CallerToolConfig)
 
 
-def _tools_fit_for_caller_tool_config(tools: Tools, extra_body: object, model: str) -> Tools:
+def _without_search_tools_next_to_functions(tools: Tools) -> Tools:
+    from .vertex_and_google_ai_studio_gemini import VertexGeminiConfig
+
+    kept: Final = VertexGeminiConfig.without_search_tools_next_to_functions(as_object_list(tools) or ())
+    return cast(Tools, list(kept))  # cast-ok: a subset of the caller's tools list
+
+
+def _caller_tool_config(extra_body: object) -> JsonValue | None:
     extra_body_fields: Final = as_str_mapping(extra_body)
     if extra_body_fields is None:
-        return tools
+        return None
     try:
         caller: Final = _CALLER_TOOL_CONFIG.validate_python(extra_body_fields)
     except ValidationError:
-        return tools
-    tool_config: Final = caller.get("toolConfig", caller.get("tool_config"))
+        return None
+    return caller.get("toolConfig", caller.get("tool_config"))
+
+
+_TOOL_FIELD_KEYS: Final = frozenset(
+    ("tools", "tool_choice", "include_server_side_tool_invocations", "includeServerSideToolInvocations")
+)
+
+
+@dataclass(frozen=True, slots=True)
+class _ToolFields:
+    tools: Tools | None
+    tool_config: ToolConfig | None
+
+
+def _settled_tool_fields(optional_params: Mapping[str, object]) -> _ToolFields:
+    from .vertex_and_google_ai_studio_gemini import VertexGeminiConfig
+
+    drops_search_next_to_functions: Final = optional_params.get(
+        "includeServerSideToolInvocations"
+    ) is False or VertexGeminiConfig.caller_tool_config_keeps_the_old_search_drop(
+        _caller_tool_config(optional_params.get("extra_body"))
+    )
+    tools: Final = cast(Tools | None, optional_params.get("tools"))  # cast-ok: map_openai_params built these tools
+    tool_choice: Final = cast(ToolConfig | None, optional_params.get("tool_choice"))  # cast-ok: mapped params
+    flags_server_side_tools: Final = (
+        optional_params.get("include_server_side_tool_invocations") is True and not drops_search_next_to_functions
+    )
+    return _ToolFields(
+        tools=(
+            _without_search_tools_next_to_functions(tools)
+            if drops_search_next_to_functions and tools is not None
+            else tools
+        ),
+        tool_config=(
+            ToolConfig({**(tool_choice or ToolConfig()), "includeServerSideToolInvocations": True})
+            if flags_server_side_tools
+            else tool_choice
+        ),
+    )
+
+
+def _with_settled_tool_fields(optional_params: Mapping[str, object]) -> Mapping[str, object]:
+    fields: Final = _settled_tool_fields(optional_params)
+    rest: Final = {k: v for k, v in optional_params.items() if k not in _TOOL_FIELD_KEYS}
+    return {
+        **rest,
+        **({} if fields.tools is None else {"tools": fields.tools}),
+        **({} if fields.tool_config is None else {"tool_choice": fields.tool_config}),
+    }
+
+
+def _tools_fit_for_caller_tool_config(tools: Tools, tool_config: JsonValue | None, model: str) -> Tools:
     if tool_config is None:
         return tools
     from .vertex_and_google_ai_studio_gemini import VertexGeminiConfig
@@ -1414,7 +1503,9 @@ def transform_request_body(
             litellm_params.update({k: v})
             remove_keys.append(k)
 
-    optional_params = {k: v for k, v in optional_params.items() if k not in remove_keys}
+    tool_settings: Final = cast(Mapping[str, object], optional_params)  # cast-ok: untyped shared signature
+    tool_fields: Final = _settled_tool_fields(tool_settings)
+    optional_params = {k: v for k, v in optional_params.items() if k not in remove_keys and k not in _TOOL_FIELD_KEYS}
 
     try:
         if custom_llm_provider == "gemini":
@@ -1425,9 +1516,6 @@ def transform_request_body(
             content = litellm.VertexGeminiConfig().transform_messages(
                 messages=messages, model=model, litellm_params=litellm_params
             )
-        tools: Final[Tools | None] = optional_params.pop("tools", None)
-        tool_choice: Final[ToolConfig | None] = optional_params.pop("tool_choice", None)
-        include_server_side_tool_invocations: bool = optional_params.pop("include_server_side_tool_invocations", False)
         safety_settings: list[SafetSettingsConfig] | None = optional_params.pop("safety_settings", None)
         # Drop output_config as it's not supported by Vertex AI
         optional_params.pop("output_config", None)
@@ -1445,6 +1533,9 @@ def transform_request_body(
                 param="top_k",
                 drop_params=drops_unsupported_params(request_params.get("drop_params")),
             )
+        caller_tool_config: Final = _caller_tool_config(
+            cast(Mapping[str, object], optional_params).get("extra_body")  # cast-ok: untyped shared signature
+        )
         config_keys: Final = set(config_fields) - {"top_k"} if drops_top_k else set(config_fields)
         filtered_params = {k: v for k, v in optional_params.items() if _get_equivalent_key(k, config_keys)}
 
@@ -1467,16 +1558,10 @@ def transform_request_body(
         if can_send_cache_incompatible_fields:
             if system_instructions is not None:
                 data["system_instruction"] = system_instructions
-            if tools is not None:
-                built_tools: Final = cast(Tools, tools)  # cast-ok: popped from the untyped optional_params
-                caller_params: Final = cast(Mapping[str, object], optional_params)  # cast-ok: untyped shared signature
-                data["tools"] = _tools_fit_for_caller_tool_config(built_tools, caller_params.get("extra_body"), model)
-            if tool_choice is not None:
-                data["toolConfig"] = tool_choice
-            if include_server_side_tool_invocations:
-                if "toolConfig" not in data:
-                    data["toolConfig"] = {}
-                data["toolConfig"]["includeServerSideToolInvocations"] = True
+            if tool_fields.tools is not None:
+                data["tools"] = _tools_fit_for_caller_tool_config(tool_fields.tools, caller_tool_config, model)
+            if tool_fields.tool_config is not None:
+                data["toolConfig"] = tool_fields.tool_config
         if safety_settings is not None:
             data["safetySettings"] = safety_settings
         if generation_config is not None and len(generation_config) > 0:
@@ -1484,14 +1569,9 @@ def transform_request_body(
         if cached_content is not None:
             data["cachedContent"] = cached_content
 
-        if service_tier := optional_params.pop("service_tier", None):
-            if isinstance(service_tier, str):
-                if service_tier.lower() == "default":
-                    data["serviceTier"] = "standard"
-                else:
-                    data["serviceTier"] = service_tier.lower()
-            else:
-                data["serviceTier"] = service_tier
+        service_tier: Final[str | None] = optional_params.pop("service_tier", None)
+        if service_tier is not None and custom_llm_provider == LlmProviders.GEMINI:
+            data["serviceTier"] = service_tier
 
         if continuation_token := optional_params.pop("continuation_token", None):
             data["continuationToken"] = continuation_token
@@ -1536,20 +1616,22 @@ def sync_transform_request_body(
     context_caching_endpoints: Final = ContextCachingEndpoints()
     request_settings: Final = cast(Mapping[str, object], litellm_params)  # cast-ok: untyped shared signature
 
+    caller_cache_name: Final = cast(str | None, optional_params.pop("cached_content", None))  # cast-ok: a cache name
+    tool_settings: Final = cast(Mapping[str, object], optional_params)  # cast-ok: untyped shared signature
     (
         messages,
         optional_params,
         cached_content,
     ) = context_caching_endpoints.check_and_create_cache(
         messages=messages,
-        optional_params=optional_params,
+        optional_params=dict(_with_settled_tool_fields(tool_settings)),
         api_key=gemini_api_key or "dummy",
         api_base=api_base,
         model=model,
         client=client,
         timeout=timeout,
         extra_headers=extra_headers,
-        cached_content=optional_params.pop("cached_content", None),
+        cached_content=caller_cache_name,
         context_caching=context_caching,
         logging_obj=logging_obj,
         custom_llm_provider=custom_llm_provider,
@@ -1674,20 +1756,22 @@ async def async_transform_request_body(
     context_caching_endpoints: Final = ContextCachingEndpoints()
     request_settings: Final = cast(Mapping[str, object], litellm_params)  # cast-ok: untyped shared signature
 
+    caller_cache_name: Final = cast(str | None, optional_params.pop("cached_content", None))  # cast-ok: a cache name
+    tool_settings: Final = cast(Mapping[str, object], optional_params)  # cast-ok: untyped shared signature
     (
         messages,
         optional_params,
         cached_content,
     ) = await context_caching_endpoints.async_check_and_create_cache(
         messages=messages,
-        optional_params=optional_params,
+        optional_params=dict(_with_settled_tool_fields(tool_settings)),
         api_key=gemini_api_key or "dummy",
         api_base=api_base,
         model=model,
         client=client,
         timeout=timeout,
         extra_headers=extra_headers,
-        cached_content=optional_params.pop("cached_content", None),
+        cached_content=caller_cache_name,
         context_caching=context_caching,
         logging_obj=logging_obj,
         custom_llm_provider=custom_llm_provider,
@@ -1732,9 +1816,29 @@ def _default_user_message_when_system_message_passed() -> ChatCompletionUserMess
     return ChatCompletionUserMessage(content=".", role="user")
 
 
+def _system_instruction_part(message: AllMessageValues) -> PartType | None:
+    content: Final = message_field(message, "content")
+    if isinstance(content, str):
+        return PartType(text=content)
+    text: Final = "".join(string_field(part, "text") or "" for part in parts_of(content))
+    return PartType(text=text) if isinstance(content, list) else None
+
+
 def _has_video_url_part(message: object) -> bool:
     parts: Final = as_object_list((as_str_mapping(message) or {}).get("content")) or ()
     return any((as_str_mapping(part) or {}).get("type") == "video_url" for part in parts)
+
+
+def reject_system_message_videos(
+    messages: Sequence[AllMessageValues], drop_params: bool, model: str | None, custom_llm_provider: str | None
+) -> None:
+    if drop_params or not any(is_system_message(message) and _has_video_url_part(message) for message in messages):
+        return
+    raise litellm.BadRequestError(
+        message="Gemini system instructions take text only. Move the video to a user message or set drop_params=True.",
+        model=model or "",
+        llm_provider=custom_llm_provider or "gemini",
+    )
 
 
 def transform_system_message(
@@ -1745,55 +1849,31 @@ def transform_system_message(
     custom_llm_provider: str | None = None,
 ) -> tuple[SystemInstructions | None, list[AllMessageValues]]:
     """
-    Extracts the system message from the openai message list.
+    Extracts the leading run of system messages from the openai message list as Gemini system instructions.
 
-    Converts the system message to Gemini format
+    Gemini contents only take the user and model roles, so every later system message becomes a user turn
+    in place. Hoisting it into system_instruction would change the head of the prompt every time a client
+    adds a reminder, which breaks implicit prompt caching.
 
     Returns
-    - system_content_blocks: Optional[SystemInstructions] - the system message list in Gemini format.
-    - messages: List[AllMessageValues] - filtered list of messages in OpenAI format (transformed separately)
+    - system_content_blocks: Optional[SystemInstructions] - the leading system messages in Gemini format.
+    - messages: List[AllMessageValues] - the remaining messages in OpenAI format (transformed separately)
     """
-    # Separate system prompt from rest of message
-    system_prompt_indices: Final = []
-    system_content_blocks: Final[list[PartType]] = []
-    if supports_system_message is True:
-        for idx, message in enumerate(messages):
-            if message["role"] == "system":
-                _system_content_block: PartType | None = None
-                if isinstance(message["content"], str):
-                    _system_content_block = PartType(text=message["content"])
-                elif isinstance(message["content"], list):
-                    if not drop_params and _has_video_url_part(message):
-                        raise litellm.BadRequestError(
-                            message=(
-                                "Gemini system instructions take text only. "
-                                "Move the video to a user message or set drop_params=True."
-                            ),
-                            model=model or "",
-                            llm_provider=custom_llm_provider or "gemini",
-                        )
-                    system_text = ""
-                    for content in message["content"]:
-                        system_text += content.get("text") or ""
-                    _system_content_block = PartType(text=system_text)
-                if _system_content_block is not None:
-                    system_content_blocks.append(_system_content_block)
-                    system_prompt_indices.append(idx)
-        if len(system_prompt_indices) > 0:
-            for idx in reversed(system_prompt_indices):
-                messages.pop(idx)
-
-    if len(system_content_blocks) > 0:
-        #########################################################
-        # If no messages are passed in, add a blank user message
-        # Relevant Issue - https://github.com/BerriAI/litellm/issues/13769
-        #########################################################
-        if len(messages) == 0:
-            messages.append(_default_user_message_when_system_message_passed())
-        #########################################################
-        return SystemInstructions(parts=system_content_blocks), messages
-
-    return None, messages
+    if supports_system_message is not True:
+        return None, messages
+    reject_system_message_videos(messages, drop_params, model, custom_llm_provider)
+    leading_system_run, rest = split_leading_system_run(messages)
+    parts_by_message: Final = tuple((message, _system_instruction_part(message)) for message in leading_system_run)
+    system_content_blocks: Final = [part for _, part in parts_by_message if part is not None]
+    remaining_messages: Final = [
+        *(message for message, part in parts_by_message if part is None),
+        *place_mid_conversation_system(rest, supports_mid_conversation_system=False),
+    ]
+    if not system_content_blocks:
+        return None, remaining_messages
+    return SystemInstructions(parts=system_content_blocks), remaining_messages or [
+        _default_user_message_when_system_message_passed()
+    ]
 
 
 _transform_system_message = transform_system_message

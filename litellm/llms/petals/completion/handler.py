@@ -1,7 +1,7 @@
 import time
 import types
 from collections.abc import Callable, Mapping
-from typing import Final
+from typing import TYPE_CHECKING, Final
 
 import litellm
 from litellm.litellm_core_utils.prompt_templates.factory import (
@@ -17,21 +17,24 @@ from litellm.utils import ModelResponse, Usage
 
 from ..common_utils import PetalsError
 
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+
 
 def completion(
     model: str,
     messages: list,
     api_base: str | None,
     model_response: ModelResponse,
-    print_verbose: Callable,
+    print_verbose: Callable[..., object],
     encoding,
-    logging_obj,
+    logging_obj: "LiteLLMLoggingObj",
     optional_params: dict,
-    stream=False,
-    litellm_params=None,
-    logger_fn=None,
+    stream: object = False,
+    litellm_params: object = None,
+    logger_fn: object = None,
     client: HTTPHandler | AsyncHTTPHandler | None = None,
-):
+) -> ModelResponse:
     ## Load Config
     config: Final[Mapping[str, object]] = types.MappingProxyType(litellm.PetalsConfig.get_config())
     for k, v in config.items():

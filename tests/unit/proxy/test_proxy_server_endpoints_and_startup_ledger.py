@@ -3,8 +3,8 @@ from typing import Final
 import pytest
 
 import litellm.proxy.proxy_server as ps
-from litellm.caching.dual_cache import DualCache
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 
 from tests.unit.proxy import test_proxy_server_endpoints_and_startup as scenarios
 from tests.unit.proxy.spend_counters_ledger_twin import force_ledger_windows, ledger_scenarios, rust_memory_store
@@ -46,7 +46,7 @@ async def test_increment_spend_counters_finalizes_after_unreserved_increments(
         0.5,
     )
     assert counter_cache.get_local("spend:key:key-finalize-after-increments") == 0.5
-    monkeypatch.setattr(ps, "user_api_key_cache", DualCache())
+    monkeypatch.setattr(ps, "user_api_key_cache", UserApiKeyCache())
 
     await ps.increment_spend_counters(
         token="key-finalize-after-increments",

@@ -50,7 +50,7 @@ impl CyberArkSecretManager {
             .map(|value| str_to_bool(&value) != Some(false))
             .unwrap_or(true);
         if !verify {
-            litellm_tracing::warn!(
+            tracing::warn!(
                 "CyberArk SSL verification is disabled. This is insecure and should only be used for testing with self-signed certificates."
             );
         }

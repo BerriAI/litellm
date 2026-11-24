@@ -36,6 +36,8 @@ from litellm.types.vector_stores import (
     OpenAIMembershipFilter,
     OpenAIRangeFilter,
     OpenAIVectorStoreFilter,
+    VectorStoreCreateOptionalRequestParams,
+    VectorStoreCreateResponse,
     VectorStoreIndexEndpoints,
     VectorStoreResultContent,
     VectorStoreSearchImageMediaType,
@@ -239,7 +241,7 @@ class BedrockVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
     ) -> BedrockError:
         return BedrockError(status_code=status_code, message=error_message, headers=headers)
 
-    def get_auth_credentials(self, litellm_params: dict) -> BaseVectorStoreAuthCredentials:
+    def get_auth_credentials(self, litellm_params: Mapping[str, object]) -> BaseVectorStoreAuthCredentials:
         return {}
 
     def get_vector_store_endpoints_by_type(self) -> VectorStoreIndexEndpoints:
@@ -254,7 +256,7 @@ class BedrockVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
     def _map_operator_to_aws(self, operator: str) -> str:
         return _AWS_COMPARISON_OPERATORS.get(operator, operator)
 
-    def _map_operator_filter(self, filter_dict: dict) -> dict:
+    def _map_operator_filter(self, filter_dict: dict) -> dict[str, object]:
         """
         Map a single OpenAI operator filter to AWS KB format.
 
@@ -269,7 +271,7 @@ class BedrockVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
             }
         }
 
-    def _map_and_or_filters(self, value: dict) -> dict:
+    def _map_and_or_filters(self, value: dict) -> dict[str, object]:
         """
         Map OpenAI and/or filters to AWS KB format.
 
@@ -279,7 +281,7 @@ class BedrockVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
         Note: AWS requires andAll/orAll to have at least 2 elements.
         For single filters, unwrap and return just the operator.
         """
-        aws_filters: Final = {}
+        aws_filters: Final[dict[str, object]] = {}
 
         if "and" in value:
             and_filters: Final = value["and"]
@@ -388,9 +390,9 @@ class BedrockVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
         vector_store_search_optional_params: VectorStoreSearchOptionalRequestParams,
         api_base: str,
         litellm_logging_obj: LiteLLMLoggingObj,
-        litellm_params: dict,
+        litellm_params: Mapping[str, object],
         extra_body: dict[str, object] | None = None,
-    ) -> tuple[str, dict]:
+    ) -> tuple[str, dict[str, object]]:
         if isinstance(query, list):
             query = " ".join(query)
 
@@ -563,10 +565,10 @@ class BedrockVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
     # Vector store creation is not yet implemented
     def transform_create_vector_store_request(
         self,
-        vector_store_create_optional_params,
+        vector_store_create_optional_params: VectorStoreCreateOptionalRequestParams,
         api_base: str,
-    ) -> tuple[str, dict]:
+    ) -> tuple[str, dict[str, object]]:
         raise NotImplementedError
 
-    def transform_create_vector_store_response(self, response: httpx.Response):
+    def transform_create_vector_store_response(self, response: httpx.Response) -> VectorStoreCreateResponse:
         raise NotImplementedError

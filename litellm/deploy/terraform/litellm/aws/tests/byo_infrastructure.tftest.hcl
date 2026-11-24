@@ -49,6 +49,11 @@ run "module_owns_everything_by_default" {
   }
 
   assert {
+    condition     = [for e in local.gateway_environment : e.value if e.name == "STORE_MODEL_IN_DB"] == ["true"]
+    error_message = "The gateway must load models from the module-created database."
+  }
+
+  assert {
     condition     = length(terraform_data.bootstrap_db) == 1 && length(aws_ecs_task_definition.migrations) == 1
     error_message = "The IAM-user bootstrap and the schema migration must both run against the module-created Aurora."
   }
@@ -141,8 +146,48 @@ run "existing_database_and_redis_replace_the_managed_ones" {
   }
 
   assert {
-    condition     = length([for e in local.backend_default_env : e if e.name == "STORE_MODEL_IN_DB"]) == 1
+    condition     = length([for e in local.model_store_env : e if e.name == "STORE_MODEL_IN_DB"]) == 1
     error_message = "STORE_MODEL_IN_DB must stay set when a database is reachable."
+  }
+
+  assert {
+    condition     = [for e in local.gateway_environment : e.value if e.name == "STORE_MODEL_IN_DB"] == ["true"]
+    error_message = "The gateway must load models from the existing database."
+  }
+}
+
+run "explicit_gateway_model_storage_setting_takes_precedence" {
+  command = plan
+
+  variables {
+    azs               = ["us-east-1a", "us-east-1b"]
+    gateway_extra_env = { STORE_MODEL_IN_DB = "false" }
+  }
+
+  assert {
+    condition     = [for e in local.gateway_environment : e.value if e.name == "STORE_MODEL_IN_DB"] == ["false"]
+    error_message = "The gateway must keep the explicit model storage setting without duplicating it."
+  }
+}
+
+run "gateway_model_storage_secret_replaces_plaintext_default" {
+  command = plan
+
+  variables {
+    azs = ["us-east-1a", "us-east-1b"]
+    gateway_extra_secrets = {
+      STORE_MODEL_IN_DB = "arn:aws:secretsmanager:us-east-1:111122223333:secret:model-storage-AbCdEf"
+    }
+  }
+
+  assert {
+    condition     = !contains([for e in local.gateway_environment : e.name], "STORE_MODEL_IN_DB")
+    error_message = "The gateway must omit the plaintext model storage default when a secret is configured."
+  }
+
+  assert {
+    condition     = [for s in local.gateway_extra_secrets_list : s.valueFrom if s.name == "STORE_MODEL_IN_DB"] == [var.gateway_extra_secrets["STORE_MODEL_IN_DB"]]
+    error_message = "The gateway must inject the configured model storage secret."
   }
 }
 
@@ -262,8 +307,13 @@ run "no_database_and_no_redis_drops_the_schema_migration" {
   }
 
   assert {
-    condition     = length(local.backend_default_env) == 0
+    condition     = length(local.model_store_env) == 0
     error_message = "STORE_MODEL_IN_DB must not be set without a database to store models in."
+  }
+
+  assert {
+    condition     = !contains([for e in local.gateway_environment : e.name], "STORE_MODEL_IN_DB")
+    error_message = "The gateway must not enable model storage without a database."
   }
 
   assert {

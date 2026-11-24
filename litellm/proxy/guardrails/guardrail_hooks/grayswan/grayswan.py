@@ -2,7 +2,7 @@
 
 import os
 import time
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from enum import Enum
 from typing import TYPE_CHECKING, Final, Literal, Optional, Protocol, cast
 
@@ -244,7 +244,7 @@ class GraySwanGuardrail(CustomGuardrail):
     # Debug override to trace post_call issues
     # ------------------------------------------------------------------
 
-    def should_run_guardrail(self, data, event_type) -> bool:
+    def should_run_guardrail(self, data: object, event_type: GuardrailEventHooks) -> bool:
         """Override to add debug logging."""
         result: Final = super().should_run_guardrail(data, event_type)
         # Check if apply_guardrail is in __dict__
@@ -723,7 +723,7 @@ class GraySwanGuardrail(CustomGuardrail):
     def _prepare_payload(
         self,
         messages: tuple[Mapping[str, object], ...],
-        dynamic_body: dict,
+        dynamic_body: Mapping[str, object],
         request_data: dict,
         logging_obj: Optional["LiteLLMLoggingObj"] = None,
         *,
@@ -810,7 +810,7 @@ class GraySwanGuardrail(CustomGuardrail):
 
         return "\n".join(message_parts)
 
-    def _format_violated_rules(self, violated_rules: list) -> str:
+    def _format_violated_rules(self, violated_rules: Iterable[object]) -> str:
         """Format violated rules list into a readable string."""
         formatted: Final[list[str]] = []
         for rule in violated_rules:

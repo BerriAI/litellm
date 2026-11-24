@@ -11,9 +11,10 @@ use litellm_redis_store::{
     router_usage::{COUNTER_TTL, Counter, Kind, RouterUsage, Scope},
 };
 use litellm_router_core::{
-    HealthState, InMemoryRouterCache, Outcomes, RouterCache, UsageCounts, UsageWindow,
-    health::CooldownValue,
+    HealthState, Outcomes, RouterCache, UsageCounts, UsageWindow, health::CooldownValue,
 };
+
+use crate::worker_outcomes::WorkerOutcomes;
 
 /// The deployments' routing state: cooldowns, usage and health checks in memory, shared through
 /// the router's Redis when there is one, and this process's own success and failure counts, which
@@ -22,7 +23,7 @@ pub struct RoutingCache {
     cooldowns: Arc<RouterCooldowns>,
     usage: RouterUsage,
     health: DeploymentHealth,
-    outcomes: InMemoryRouterCache,
+    outcomes: WorkerOutcomes,
 }
 
 impl RoutingCache {
@@ -31,8 +32,13 @@ impl RoutingCache {
             cooldowns: Arc::new(RouterCooldowns::new(remote.clone(), tiers.cooldowns())),
             usage: RouterUsage::new(remote.clone(), tiers.usage()),
             health: DeploymentHealth::new(remote, tiers.default_in_memory_ttl),
-            outcomes: InMemoryRouterCache::default(),
+            outcomes: WorkerOutcomes::default(),
         }
+    }
+
+    /// Each counter's value, `None` for one nothing counted.
+    pub(crate) async fn counted(&self, counters: &[Counter]) -> Result<Vec<Option<Number>>, Error> {
+        self.usage.get_many(counters).await
     }
 }
 
@@ -78,7 +84,7 @@ fn health(state: StoredHealth) -> HealthState {
     }
 }
 
-fn counter(window: &UsageWindow, kind: Kind) -> Counter {
+pub(crate) fn counter(window: &UsageWindow, kind: Kind) -> Counter {
     Counter {
         scope: Scope::GlobalRouter,
         deployment_id: window.deployment_id.clone(),
@@ -187,14 +193,16 @@ impl RouterCache for RoutingCache {
     }
 
     async fn outcomes(&self, id: &str) -> Result<Outcomes, litellm_cache::Error> {
-        self.outcomes.outcomes(id).await
+        Ok(self.outcomes.of(id))
     }
 
     async fn count_success(&self, id: &str) -> Result<(), litellm_cache::Error> {
-        self.outcomes.count_success(id).await
+        self.outcomes.count_success(id);
+        Ok(())
     }
 
     async fn count_failure(&self, id: &str) -> Result<(), litellm_cache::Error> {
-        self.outcomes.count_failure(id).await
+        self.outcomes.count_failure(id);
+        Ok(())
     }
 }
