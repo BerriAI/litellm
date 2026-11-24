@@ -1287,7 +1287,7 @@ async def google_login(
 
 
 def generic_response_convertor(
-    response,
+    response: Mapping[str, object],
     jwt_handler: ClaimReading,
     sso_jwt_handler: ClaimReading | None = None,
     role_mappings: Optional["RoleMappings"] = None,
@@ -1650,14 +1650,14 @@ async def get_generic_sso_response(
     generic_client_id: str,
     redirect_url: str,
 ) -> tuple[
-    OpenID | dict, dict | None, dict | None, SSOIdentityAssertion | None
+    OpenID | dict[str, object], dict[str, object] | None, dict[str, object] | None, SSOIdentityAssertion | None
 ]:  # (result, received_response, access_token_payload, sso_assertion)
     # make generic sso provider
     from fastapi_sso.sso.base import DiscoveryDocument
 
     from litellm.proxy import proxy_server
 
-    received_response: dict | None = None
+    received_response: dict[str, object] | None = None
     sso_assertion: SSOIdentityAssertion | None = None
 
     # Setup environment variables
@@ -2207,7 +2207,7 @@ def _build_sso_user_update_data(
 @with_service_target(AUTH_OBJECTS_TARGET)
 async def _sync_user_role_from_jwt_role_map(
     jwt_handler: ClaimReading | None,
-    received_response: dict | None,
+    received_response: dict[str, object] | None,
     user_info: LiteLLM_UserTable | NewUserResponse | None,
     prisma_client: PrismaClient,
     user_api_key_cache: UserApiKeyCache,
@@ -2527,7 +2527,7 @@ async def saml_callback(request: Request):
 
 
 async def _build_cli_sso_user_defined_values(
-    result: OpenID | dict,
+    result: OpenID | dict[str, object],
     parsed_openid_result: ParsedOpenIDResult,
 ) -> SSOUserDefinedValues | None:
     custom_sso_handler: Final = _configured_custom_sso()
@@ -2617,8 +2617,8 @@ async def _complete_cli_sso_callback_session(
     *,
     request: Request,
     key: str,
-    flow: dict,
-    result: OpenID | dict,
+    flow: dict[str, object],
+    result: OpenID | dict[str, object],
     parsed_openid_result: ParsedOpenIDResult,
     user_defined_values: SSOUserDefinedValues | None,
     prisma_client: PrismaClient,
@@ -2716,8 +2716,8 @@ async def _complete_cli_sso_callback_session(
 async def cli_sso_callback(
     request: Request,
     key: str | None = None,
-    result: OpenID | dict | None = None,
-    received_response: dict | None = None,
+    result: OpenID | dict[str, object] | None = None,
+    received_response: dict[str, object] | None = None,
     prefill_user_code: str | None = None,
     sso_assertion: SSOIdentityAssertion | None = None,
 ):
@@ -2920,7 +2920,7 @@ async def cli_poll_key(
 
 
 async def insert_sso_user(
-    result_openid: OpenID | dict | None,
+    result_openid: OpenID | dict[str, object] | None,
     user_defined_values: SSOUserDefinedValues | None = None,
 ) -> NewUserResponse:
     """
@@ -3704,7 +3704,7 @@ class SSOAuthenticationHandler:
 
     @staticmethod
     async def upsert_sso_user(
-        result: CustomOpenID | OpenID | dict | None,
+        result: CustomOpenID | OpenID | dict[str, object] | None,
         user_info: NewUserResponse | LiteLLM_UserTable | None,
         user_email: str | None,
         user_defined_values: SSOUserDefinedValues | None,
@@ -3753,7 +3753,7 @@ class SSOAuthenticationHandler:
 
     @staticmethod
     async def add_user_to_teams_from_sso_response(
-        result: CustomOpenID | OpenID | dict | None,
+        result: CustomOpenID | OpenID | dict[str, object] | None,
         user_info: NewUserResponse | LiteLLM_UserTable | None,
     ):
         """
@@ -3774,9 +3774,9 @@ class SSOAuthenticationHandler:
 
     @staticmethod
     def verify_user_in_restricted_sso_group(
-        general_settings: dict,
-        result: CustomOpenID | OpenID | dict | None,
-        received_response: dict | None,
+        general_settings: dict[str, object],
+        result: CustomOpenID | OpenID | dict[str, object] | None,
+        received_response: dict[str, object] | None,
     ) -> Literal[True]:
         """
         when ui_access_mode.type == "restricted_sso_group":
@@ -3789,7 +3789,7 @@ class SSOAuthenticationHandler:
         - if result.team_ids is a list, return True if the restricted_sso_group is in the list, otherwise return False
         """
 
-        ui_access_mode: Final = cast(dict | str | None, general_settings.get("ui_access_mode"))
+        ui_access_mode: Final = cast(dict[str, object] | str | None, general_settings.get("ui_access_mode"))
 
         if ui_access_mode is None:
             return True
@@ -3870,7 +3870,7 @@ class SSOAuthenticationHandler:
 
     @staticmethod
     def _cast_and_deepcopy_litellm_default_team_params(
-        default_team_params: DefaultTeamSSOParams | dict,
+        default_team_params: DefaultTeamSSOParams | dict[str, object],
         team_request: NewTeamRequest,
         litellm_team_id: str,
         litellm_team_name: str | None = None,
@@ -3925,7 +3925,7 @@ class SSOAuthenticationHandler:
 
     @staticmethod
     def get_user_email_and_id_from_result(
-        result: OpenID | dict | None,
+        result: OpenID | dict[str, object] | None,
         generic_client_id: str | None = None,
     ) -> ParsedOpenIDResult:
         """
@@ -3985,12 +3985,12 @@ class SSOAuthenticationHandler:
 
     @staticmethod
     async def get_redirect_response_from_openid(
-        result: OpenID | dict | CustomOpenID,
+        result: OpenID | dict[str, object] | CustomOpenID,
         request: Request,
-        received_response: dict | None = None,
+        received_response: dict[str, object] | None = None,
         generic_client_id: str | None = None,
-        ui_access_mode: dict | None = None,
-        access_token_payload: dict | None = None,
+        ui_access_mode: dict[str, object] | None = None,
+        access_token_payload: dict[str, object] | None = None,
         jwt_handler: ClaimReading | None = None,
         return_to: str | None = None,
         sso_assertion: SSOIdentityAssertion | None = None,
@@ -4998,7 +4998,7 @@ class MicrosoftSSOHandler:
 
     @staticmethod
     async def fetch_and_parse_groups(
-        url: str, headers: dict, async_client: AsyncHTTPHandler
+        url: str, headers: dict[str, str], async_client: AsyncHTTPHandler
     ) -> tuple[list[str], str | None]:
         """Helper function to fetch and parse group data from a URL"""
         response: Final = await async_client.get(url, headers=headers)
