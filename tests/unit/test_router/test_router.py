@@ -4608,6 +4608,62 @@ async def test_repricing_reads_each_distinct_pdf_once_for_every_deployment(monke
     assert all(got in str(async_error.value) for got in expected)
 
 
+def _pdf_url_of(pages: tuple[str, ...]) -> str:
+    return f"data:application/pdf;base64,{pdf_base64(pages)}"
+
+
+async def test_repricing_keeps_no_page_text_alive_between_pages(monkeypatch: pytest.MonkeyPatch):
+    import weakref
+
+    import pypdf
+
+    pages: Final = tuple(f"page {number} revenue grew while churn fell" for number in range(5))
+    prompt: Final = [{"role": "user", "content": [{"type": "file", "file": {"file_data": _pdf_url_of(pages)}}]}]
+    expected: Final = (
+        f"Got={_repriced_pdf_tokens(prompt, 'single_image')}",
+        f"Got={_repriced_pdf_tokens(prompt, 'openai')}",
+        f"Got={litellm.token_counter(model='', messages=prompt)}",
+    )
+    router: Final = _window_router(1, _GEMINI_MODELS[0], "openai/gpt-6.1-sol", _CLAUDE_MODELS[0])
+    alive: Final[weakref.WeakSet[str]] = weakref.WeakSet()
+    alive_at_each_extract: Final[list[int]] = []  # mutable-ok: page texts still alive as each page is extracted
+
+    class ExtractedText(str):
+        __slots__ = ("__weakref__",)
+
+    class TrackedPage(pypdf.PageObject):
+        def extract_text(self, *args: object, **kwargs: object) -> str:
+            alive_at_each_extract.append(len(alive))
+            text: Final = ExtractedText(super().extract_text(*args, **kwargs))  # pyright: ignore[reportArgumentType]  # pypdf's own arguments
+            alive.add(text)
+            return text
+
+    def tracked(page: pypdf.PageObject) -> pypdf.PageObject:
+        copy: Final = TrackedPage(pdf=page.pdf, indirect_reference=page.indirect_reference)
+        copy.update(page)
+        return copy
+
+    class TrackingPdfReader(pypdf.PdfReader):
+        @property
+        def pages(self) -> list[pypdf.PageObject]:
+            return [tracked(page) for page in super().pages]
+
+    monkeypatch.setattr(pypdf, "PdfReader", TrackingPdfReader)
+    litellm.token_counter(model="", messages=prompt)
+    shared_extracts: Final = len(alive_at_each_extract)
+    with pytest.raises(litellm.ContextWindowExceededError) as sync_error:
+        _kept_models(router, messages=prompt)
+    sync_extracts: Final = len(alive_at_each_extract) - shared_extracts
+    with pytest.raises(litellm.ContextWindowExceededError) as async_error:
+        await router.acompletion(model="docs", messages=prompt)
+
+    assert shared_extracts == len(pages)
+    assert (sync_extracts, len(alive_at_each_extract) - shared_extracts - sync_extracts) == (2 * len(pages),) * 2
+    assert max(alive_at_each_extract) == 0
+    assert all(got in str(sync_error.value) for got in expected)
+    assert all(got in str(async_error.value) for got in expected)
+
+
 @pytest.mark.parametrize("wrapped", [False, True])
 @pytest.mark.parametrize("replaced", ["litellm", "core"])
 async def test_a_custom_token_counter_stays_authoritative_for_a_pdf_request(

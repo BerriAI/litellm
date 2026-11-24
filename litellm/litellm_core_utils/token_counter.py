@@ -1822,8 +1822,13 @@ def _count_inline_pdf_tokens(
 @dataclass(frozen=True, slots=True)
 class _ReadPdfPage:
     page: _PdfPage
-    text: str
+    has_text: bool
     text_tokens: int
+
+
+def _read_pdf_page(page: _PdfPage, count_function: TokenCounterFunction) -> _ReadPdfPage:
+    text: Final = page.extract_text() or ""
+    return _ReadPdfPage(page, bool(text.strip()), count_function(text))
 
 
 def _read_pdf_pages(data_url: str, count_function: TokenCounterFunction) -> tuple[_ReadPdfPage, ...] | None:
@@ -1832,12 +1837,7 @@ def _read_pdf_pages(data_url: str, count_function: TokenCounterFunction) -> tupl
     reader: Final = _inline_pdf_reader(data_url)
     if reader is None:
         return None
-    return _pdf_or_none(
-        lambda: tuple(
-            _ReadPdfPage(page, text, count_function(text))
-            for page, text in tuple((page, page.extract_text() or "") for page in reader.pages)
-        )
-    )
+    return _pdf_or_none(lambda: tuple(_read_pdf_page(page, count_function) for page in reader.pages))
 
 
 def _read_claude_page_tokens(page: _ReadPdfPage) -> int:
@@ -1849,7 +1849,7 @@ def _read_claude_page_tokens(page: _ReadPdfPage) -> int:
 def _read_page_tokens(page: _ReadPdfPage, pdf_pricing: PdfPagePricing) -> int:
     match pdf_pricing:
         case "openai" if not _pdf_page_draws_raster_image(page.page):
-            return page.text_tokens + OPENAI_PDF_TEXT_PAGE_FRAMING_TOKENS if page.text.strip() else 0
+            return page.text_tokens + OPENAI_PDF_TEXT_PAGE_FRAMING_TOKENS if page.has_text else 0
         case "openai" | "claude":
             return _read_claude_page_tokens(page)
 
