@@ -1347,7 +1347,7 @@ class Function(OpenAIObject):
         self,
         arguments: dict | str | None = None,
         name: str | None = None,
-        **params,
+        **params: object,
     ) -> None:
         if arguments is None:
             if params.get("parameters", None) is not None and isinstance(params["parameters"], dict):
@@ -1659,7 +1659,7 @@ class Message(SafeAttributeModel, OpenAIObject):
         # Allow dictionary-style assignment of attributes
         setattr(self, key, value)
 
-    def json(self, **kwargs):
+    def json(self, **kwargs: object):
         try:
             return self.model_dump()
         except Exception:
@@ -1820,7 +1820,7 @@ class Choices(SafeAttributeModel, OpenAIObject):
         logprobs: ChoiceLogprobs | dict | Any | None = None,
         enhancements=None,
         provider_specific_fields: dict[str, Any] | None = None,
-        **params,
+        **params: object,
     ) -> None:
         if finish_reason is not None:
             mapped: Final = map_finish_reason(finish_reason)
@@ -1988,7 +1988,7 @@ class PromptTokensDetailsWrapper(
         elif name == "cache_creation_tokens":
             super().__setattr__("cache_write_tokens", value)
 
-    def __init__(self, *args, **kwargs) -> None:
+    def __init__(self, *args: object, **kwargs) -> None:
         super().__init__(*args, **kwargs)
         extra_fields: Final = self.model_extra
         nested_cache_creation_input_tokens: Final = (
@@ -2089,7 +2089,7 @@ class Usage(SafeAttributeModel, CompletionUsage):
         completion_tokens_details: CompletionTokensDetailsWrapper | dict | None = None,
         server_tool_use: ServerToolUse | dict | None = None,
         cost: float | None = None,
-        **params,
+        **params: object,
     ) -> None:
         # handle reasoning_tokens
         _completion_tokens_details: CompletionTokensDetailsWrapper | None = None
@@ -2239,7 +2239,7 @@ class StreamingChoices(OpenAIObject):
         delta: Delta | None = None,
         logprobs=None,
         enhancements=None,
-        **params,
+        **params: object,
     ) -> None:
         # Fix Perplexity return both delta and message cause OpenWebUI repect text
         # https://github.com/BerriAI/litellm/issues/8455
@@ -2280,7 +2280,7 @@ class StreamingChoices(OpenAIObject):
 
 
 class StreamingChatCompletionChunk(OpenAIChatCompletionChunk):
-    def __init__(self, **kwargs) -> None:
+    def __init__(self, **kwargs: object) -> None:
         new_choices: Final = []
         for choice in kwargs["choices"]:
             new_choice = StreamingChoices(**choice).model_dump()
@@ -2329,7 +2329,7 @@ class ModelResponseBase(OpenAIObject):
         """Surface a provider's raw response headers to the caller as `llm_provider-*` headers."""
         self._hidden_params["additional_headers"] = process_response_headers(headers)
 
-    def model_dump(self, **kwargs):
+    def model_dump(self, **kwargs: object):
         """Default to exclude_unset to avoid Pydantic serializer warnings for OpenAIObject-derived types."""
         if "exclude_unset" not in kwargs and "exclude_none" not in kwargs:
             kwargs["exclude_unset"] = True
@@ -2406,7 +2406,7 @@ class ModelResponseStream(ModelResponseBase):
         # Allow dictionary-style access to attributes
         return getattr(self, key)
 
-    def json(self, **kwargs):
+    def json(self, **kwargs: object):
         try:
             return self.model_dump()
         except Exception:
@@ -2515,7 +2515,7 @@ class ModelResponse(ModelResponseBase):
         # Allow dictionary-style access to attributes
         return getattr(self, key)
 
-    def json(self, **kwargs):
+    def json(self, **kwargs: object):
         try:
             return self.model_dump()
         except Exception:
@@ -2634,7 +2634,7 @@ class EmbeddingResponse(OpenAIObject):
         # Allow dictionary-style assignment of attributes
         setattr(self, key, value)
 
-    def json(self, **kwargs):
+    def json(self, **kwargs: object):
         try:
             return self.model_dump()
         except Exception:
@@ -2685,7 +2685,7 @@ class TextChoices(OpenAIObject):
         # Allow dictionary-style assignment of attributes
         setattr(self, key, value)
 
-    def json(self, **kwargs):
+    def json(self, **kwargs: object):
         try:
             return self.model_dump()
         except Exception:
@@ -2857,7 +2857,7 @@ class ImageObject(OpenAIImage):
         # Allow dictionary-style assignment of attributes
         setattr(self, key, value)
 
-    def json(self, **kwargs):
+    def json(self, **kwargs: object):
         try:
             return self.model_dump()
         except Exception:
@@ -2976,7 +2976,7 @@ class ImageResponse(OpenAIImageResponse, BaseLiteLLMOpenAIResponseObject):
         response_ms=None,
         usage: ImageUsage | None = None,
         hidden_params: dict | None = None,
-        **kwargs,
+        **kwargs: object,
     ) -> None:
         if response_ms:
             _response_ms = response_ms
@@ -3033,7 +3033,7 @@ class ImageResponse(OpenAIImageResponse, BaseLiteLLMOpenAIResponseObject):
         # Allow dictionary-style assignment of attributes
         setattr(self, key, value)
 
-    def json(self, **kwargs):
+    def json(self, **kwargs: object):
         try:
             return self.model_dump()
         except Exception:
@@ -3129,7 +3129,7 @@ class TranscriptionResponse(OpenAIObject):
         # Allow dictionary-style assignment of attributes
         setattr(self, key, value)
 
-    def json(self, **kwargs):
+    def json(self, **kwargs: object):
         try:
             return self.model_dump()
         except Exception:
@@ -5299,7 +5299,7 @@ class LiteLLMBatch(Batch):
         # Allow dictionary-style access to attributes
         return getattr(self, key)
 
-    def json(self, **kwargs):
+    def json(self, **kwargs: object):
         try:
             return self.model_dump()
         except Exception:
@@ -5351,7 +5351,7 @@ class LiteLLMRealtimeStreamLoggingObject(LiteLLMPydanticObjectBase):
         # Allow dictionary-style access to attributes
         return getattr(self, key)
 
-    def json(self, **kwargs):
+    def json(self, **kwargs: object):
         try:
             return self.model_dump()
         except Exception:

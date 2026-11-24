@@ -1161,7 +1161,7 @@ class Cache:
         self,
         result: EmbeddingResponse,
         input: str,
-        kwargs: dict,
+        kwargs: dict[str, object],
         idx_in_result_data: int = 0,
     ) -> tuple[str, dict[str, object], dict[str, object]]:
         preset_cache_key: Final = self.get_cache_key(**{**kwargs, "input": input})

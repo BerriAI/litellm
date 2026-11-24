@@ -4491,7 +4491,7 @@ class MemberAddRequest(LiteLLMPydanticObjectBase):
         description="Member object or list of member objects to add. Each member must include either user_id or user_email, and a role"
     )
 
-    def __init__(self, **data):
+    def __init__(self, **data: object):
         member_data: Final = data.get("member")
         if isinstance(member_data, list):
             # If member is a list of dictionaries, convert each dictionary to a Member object
@@ -4510,7 +4510,7 @@ class MemberAddRequest(LiteLLMPydanticObjectBase):
 class OrgMemberAddRequest(LiteLLMPydanticObjectBase):
     member: list[OrgMember] | OrgMember
 
-    def __init__(self, **data):
+    def __init__(self, **data: object):
         member_data: Final = data.get("member")
         if isinstance(member_data, list):
             # If member is a list of dictionaries, convert each dictionary to a Member object

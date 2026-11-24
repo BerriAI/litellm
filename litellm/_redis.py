@@ -820,7 +820,7 @@ def _credential_provider_from_connect_func(redis_connect_func: object | None) ->
     return None
 
 
-def _credential_provider_auth_kwargs(redis_kwargs: dict) -> dict:
+def _credential_provider_auth_kwargs(redis_kwargs: dict[str, object]) -> dict:
     """Use a credential provider instead of an IAM callback and conflicting static credentials."""
     explicit_provider: Final = redis_kwargs.get("credential_provider")
     credential_provider: Final = (
