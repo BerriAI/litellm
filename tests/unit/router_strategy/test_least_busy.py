@@ -167,6 +167,41 @@ def test_a_request_routed_through_litellm_metadata_counts_while_in_flight() -> N
     assert calling_worker.get_available_deployments(GROUP, HEALTHY) is DEPLOYMENT_A
 
 
+def _chat_call_left_with_an_outer_routers_metadata(deployment_id: str) -> dict[str, object]:
+    return {
+        "litellm_params": {
+            "metadata": {
+                "model_group": "smart-router",
+                "deployment_model_name": GROUP,
+                "model_info": {"id": deployment_id},
+            },
+            "litellm_metadata": {
+                "model_group": "smart-router",
+                "deployment_model_name": "smart-router",
+                "model_info": {"id": "smart-router"},
+            },
+            "model_info": {"id": deployment_id},
+        },
+        "litellm_call_id": "call-1",
+    }
+
+
+def test_a_call_counts_under_the_group_stamped_with_its_own_deployment() -> None:
+    shared: Final = SharedRedisCounters()
+    calling_worker: Final = _worker(shared)
+    picking_worker: Final = _worker(shared)
+
+    calling_worker.log_pre_api_call(
+        model="m", messages=[], kwargs=_chat_call_left_with_an_outer_routers_metadata("dep-a")
+    )
+
+    assert picking_worker.get_available_deployments(GROUP, HEALTHY) is DEPLOYMENT_B
+
+    calling_worker.log_success_event(_chat_call_left_with_an_outer_routers_metadata("dep-a"), None, None, None)
+
+    assert picking_worker.get_available_deployments(GROUP, HEALTHY) is DEPLOYMENT_A
+
+
 def test_a_closed_realtime_session_leaves_its_deployment_idle() -> None:
     shared: Final = SharedRedisCounters()
     worker: Final = _worker(shared)
@@ -584,10 +619,18 @@ async def test_a_call_in_flight_keeps_its_deployment_busy_whatever_name_routed_i
     messages: Final = [{"role": "user", "content": "hi"}]
 
     busy: Final = asyncio.create_task(router.acompletion(model=busy_model, messages=messages))
-    await busy_call_reached_provider.wait()
-    following: Final = await router.acompletion(model=next_model, messages=messages)
-    busy_call_may_finish.set()
-    held: Final = await busy
+    reached: Final = asyncio.create_task(busy_call_reached_provider.wait())
+    try:
+        await asyncio.wait((busy, reached), timeout=30, return_when=asyncio.FIRST_COMPLETED)
+        assert not busy.done(), busy.result()
+        assert reached.done(), "the first call never reached the provider"
+        following: Final = await router.acompletion(model=next_model, messages=messages)
+        busy_call_may_finish.set()
+        held: Final = await busy
+    finally:
+        busy_call_may_finish.set()
+        busy.cancel()
+        reached.cancel()
 
     assert following._hidden_params["model_id"] != held._hidden_params["model_id"]
 

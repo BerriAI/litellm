@@ -185,6 +185,7 @@ from litellm.types.llms.custom_http import httpxSpecialProvider
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY,
     LITELLM_PASS_THROUGH_DEPLOYMENT_MODEL_INFO_STATE_KEY,
+    LITELLM_PASS_THROUGH_DEPLOYMENT_MODEL_NAME_STATE_KEY,
     LITELLM_PASS_THROUGH_DEPLOYMENT_PRICING_STATE_KEY,
     LITELLM_PASS_THROUGH_ENDPOINT_MARKER,
     LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY,
@@ -481,6 +482,7 @@ _PASS_THROUGH_REQUEST_STATE_KEYS: Final = (
     LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY,
     LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY,
     LITELLM_PASS_THROUGH_DEPLOYMENT_MODEL_INFO_STATE_KEY,
+    LITELLM_PASS_THROUGH_DEPLOYMENT_MODEL_NAME_STATE_KEY,
     LITELLM_PASS_THROUGH_DEPLOYMENT_PRICING_STATE_KEY,
 )
 
@@ -873,6 +875,11 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
         )
         if isinstance(deployment_model_info, Mapping):
             _metadata["model_info"] = dict(deployment_model_info)
+        deployment_model_name: Final = getattr(
+            _request_state, LITELLM_PASS_THROUGH_DEPLOYMENT_MODEL_NAME_STATE_KEY, None
+        )
+        if isinstance(deployment_model_name, str):
+            _metadata["deployment_model_name"] = deployment_model_name
         deployment_pricing: Final = getattr(_request_state, LITELLM_PASS_THROUGH_DEPLOYMENT_PRICING_STATE_KEY, None)
         priced_model_info: Final = (
             deployment_pricing.resolve(server_marker_free_body)

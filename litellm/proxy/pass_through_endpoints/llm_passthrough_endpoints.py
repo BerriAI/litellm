@@ -193,6 +193,7 @@ from litellm.types.passthrough_endpoints.eu_jev import EuJevDecisionRequest, EuJ
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY,
     LITELLM_PASS_THROUGH_DEPLOYMENT_MODEL_INFO_STATE_KEY,
+    LITELLM_PASS_THROUGH_DEPLOYMENT_MODEL_NAME_STATE_KEY,
     LITELLM_PASS_THROUGH_DEPLOYMENT_PRICING_STATE_KEY,
     LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY,
     DeploymentPricingResolver,
@@ -2420,6 +2421,12 @@ async def transcribe_sdk_proxy_route(
     )
 
 
+@dataclass(frozen=True, slots=True)
+class _ResolvedVertexDeployment:
+    model_info: Mapping[str, object]
+    model_name: str | None
+
+
 async def _resolve_vertex_model_from_router(
     model_id: str,
     llm_router: litellm.Router | None,
@@ -2427,7 +2434,7 @@ async def _resolve_vertex_model_from_router(
     endpoint: str,
     vertex_project: str | None,
     vertex_location: str | None,
-) -> tuple[str, str, str | None, str | None, Mapping[str, object] | None]:
+) -> tuple[str, str, str | None, str | None, _ResolvedVertexDeployment | None]:
     """
     Resolve Vertex AI model configuration from router.
 
@@ -2440,21 +2447,26 @@ async def _resolve_vertex_model_from_router(
         vertex_location: Current vertex location (may be from URL)
 
     Returns:
-        tuple of (encoded_endpoint, endpoint, vertex_project, vertex_location, deployment_model_info)
-        with resolved values from router config; deployment_model_info is the resolved
-        deployment's `model_info`, or None when no deployment matched
+        tuple of (encoded_endpoint, endpoint, vertex_project, vertex_location, resolved_deployment)
+        with resolved values from router config; resolved_deployment carries the resolved
+        deployment's `model_info` and `model_name`, or None when no deployment matched
     """
     if not llm_router:
         return encoded_endpoint, endpoint, vertex_project, vertex_location, None
 
     try:
         deployment: Final = await llm_router.select(model_id, kind="pass_through")
-        if not deployment:
+        if not isinstance(deployment, Mapping) or not deployment:
             return encoded_endpoint, endpoint, vertex_project, vertex_location, None
 
         litellm_params: Final[Mapping[str, object]] = cast(Mapping[str, object], deployment.get("litellm_params", {}))
-        model_info: Final = deployment.get("model_info")
-        deployment_model_info: Final = model_info if isinstance(model_info, Mapping) else None
+        model_info: Final = as_str_mapping(deployment.get("model_info"))
+        model_name: Final = deployment.get("model_name")
+        resolved_deployment: Final = (
+            _ResolvedVertexDeployment(model_info, model_name if isinstance(model_name, str) else None)
+            if model_info
+            else None
+        )
 
         # Always override with router config values (they take precedence over URL values)
         config_vertex_project: Final = cast(str | None, litellm_params.get("vertex_project"))
@@ -2495,7 +2507,7 @@ async def _resolve_vertex_model_from_router(
                 encoded_endpoint = encoded_endpoint.replace(model_id, actual_model)
                 endpoint = endpoint.replace(model_id, actual_model)
 
-        return encoded_endpoint, endpoint, vertex_project, vertex_location, deployment_model_info
+        return encoded_endpoint, endpoint, vertex_project, vertex_location, resolved_deployment
     except Exception as e:
         verbose_proxy_logger.debug("Error resolving vertex model from router for model %s: %s", model_id, e)
 
@@ -3579,7 +3591,7 @@ async def _base_vertex_proxy_route(
                 endpoint,
                 vertex_project,
                 vertex_location,
-                deployment_model_info,
+                resolved_deployment,
             ) = await _resolve_vertex_model_from_router(
                 model_id=model_id,
                 llm_router=llm_router,
@@ -3588,8 +3600,13 @@ async def _base_vertex_proxy_route(
                 vertex_project=vertex_project,
                 vertex_location=vertex_location,
             )
-            if deployment_model_info:
-                setattr(request.state, LITELLM_PASS_THROUGH_DEPLOYMENT_MODEL_INFO_STATE_KEY, deployment_model_info)
+            if resolved_deployment is not None:
+                setattr(
+                    request.state, LITELLM_PASS_THROUGH_DEPLOYMENT_MODEL_INFO_STATE_KEY, resolved_deployment.model_info
+                )
+                setattr(
+                    request.state, LITELLM_PASS_THROUGH_DEPLOYMENT_MODEL_NAME_STATE_KEY, resolved_deployment.model_name
+                )
 
     vertex_credentials: Final = passthrough_endpoint_router.get_vertex_credentials(
         project_id=vertex_project,

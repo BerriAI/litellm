@@ -109,6 +109,11 @@ def _routed_deployment_id(metadata: _Metadata | None) -> str | int | None:
     return _deployment_id(metadata.get("model_info")) if metadata else None
 
 
+def _group_served_by(metadata: _Metadata | None, deployment_id: str) -> str | None:
+    routed_id: Final = _routed_deployment_id(metadata)
+    return _served_model_group(metadata) if routed_id is not None and str(routed_id) == deployment_id else None
+
+
 def _deployment_ref(kwargs: Mapping[str, object]) -> tuple[str, str] | None:
     call_type: Final = kwargs.get("call_type")
     if (
@@ -123,14 +128,6 @@ def _deployment_ref(kwargs: Mapping[str, object]) -> tuple[str, str] | None:
         return None
     litellm_params: Final = call.get("litellm_params") or _LitellmParams()
     routing_metadata: Final = (litellm_params.get("litellm_metadata"), litellm_params.get("metadata"))
-    model_group: Final = next(
-        (
-            group
-            for group in (*map(_served_model_group, routing_metadata), *map(_model_group, routing_metadata))
-            if group is not None
-        ),
-        None,
-    )
     deployment_id: Final = next(
         (
             deployment_id
@@ -142,7 +139,14 @@ def _deployment_ref(kwargs: Mapping[str, object]) -> tuple[str, str] | None:
         ),
         None,
     )
-    if model_group is None or deployment_id is None:
+    if deployment_id is None:
+        return None
+    served_groups: Final = (_group_served_by(metadata, str(deployment_id)) for metadata in routing_metadata)
+    model_group: Final = next(
+        (group for group in (*served_groups, *map(_model_group, routing_metadata)) if group is not None),
+        None,
+    )
+    if model_group is None:
         return None
     return model_group, str(deployment_id)
 
