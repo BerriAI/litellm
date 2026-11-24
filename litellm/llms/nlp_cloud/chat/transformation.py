@@ -5,7 +5,9 @@ from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 from pydantic import TypeAdapter
+from typing_extensions import TypedDict
 
+from litellm.litellm_core_utils.core_helpers import sum_of
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     convert_content_list_to_str,
 )
@@ -25,6 +27,10 @@ else:
 
 
 _DECODED_JSON: Final = TypeAdapter(object)
+
+
+class _KeywordFields(TypedDict, total=False, extra_items=object):
+    pass
 
 
 def _json_len(value: object) -> int:
@@ -218,15 +224,17 @@ class NLPCloudConfig(BaseConfig):
                 )
 
         ## CALCULATING USAGE - baseten charges on time, not tokens - have some mapping of cost here.
-        prompt_tokens: Final = completion_response["nb_input_tokens"]
-        completion_tokens: Final = completion_response["nb_generated_tokens"]
+        prompt_tokens: Final = _DECODED_JSON.validate_python(completion_response["nb_input_tokens"])
+        completion_tokens: Final = _DECODED_JSON.validate_python(completion_response["nb_generated_tokens"])
 
         model_response.created = int(time.time())
         model_response.model = model
         usage: Final = Usage(
-            prompt_tokens=prompt_tokens,
-            completion_tokens=completion_tokens,
-            total_tokens=prompt_tokens + completion_tokens,
+            **_KeywordFields(
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+                total_tokens=sum_of(prompt_tokens, completion_tokens),
+            )
         )
         setattr(model_response, "usage", usage)
         return model_response

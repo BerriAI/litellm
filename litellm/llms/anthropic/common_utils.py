@@ -2948,7 +2948,7 @@ def normalize_cache_control_in_anthropic_payload(
     return {key: _with_portable_cache_control_in_scoped_value(key, value) for key, value in portable.items()}
 
 
-def process_anthropic_headers(headers: httpx.Headers | dict) -> dict:
+def process_anthropic_headers(headers: httpx.Headers | Mapping[str, str]) -> dict[str, str]:
     openai_headers: Final = {}
     if "anthropic-ratelimit-requests-limit" in headers:
         openai_headers["x-ratelimit-limit-requests"] = headers["anthropic-ratelimit-requests-limit"]

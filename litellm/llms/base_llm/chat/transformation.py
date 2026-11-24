@@ -70,6 +70,10 @@ class BaseLLMException(Exception):
         super().__init__(self.message)  # Call the base class constructor with the parameters it needs
 
 
+class RelayOnlyBodyLLMException(BaseLLMException):
+    pass
+
+
 _NO_ATTRIBUTION_HEADERS: Final[Mapping[str, str]] = types.MappingProxyType({})
 
 

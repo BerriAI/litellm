@@ -718,6 +718,7 @@ async def new_user(
             **data_json,
             llm_router=None,
             actor=actor,
+            key_writer=None,
         )
         created_user_id: Final = cast(str | None, response.get("user_id", None))
         if created_user_id is not None:
@@ -933,6 +934,13 @@ class _UserInfoDataClient(Protocol):
     ) -> "Sequence[TeamListResponseObject] | None": ...
 
 
+async def _get_user_info_row(
+    prisma_client: "_UserInfoDataClient",
+    user_id: str,
+) -> "prisma_models.LiteLLM_UserTable | None":
+    return await prisma_client.get_data(user_id=user_id)
+
+
 async def _get_user_info_keys(
     prisma_client: "_UserInfoDataClient",
     user_id: str | None,
@@ -1128,7 +1136,7 @@ async def user_info(
 
         user_info = None
         if user_id is not None:
-            user_info = await prisma_client.get_data(user_id=user_id)
+            user_info = await _get_user_info_row(prisma_client, user_id)
 
         if user_info is None:
             raise HTTPException(

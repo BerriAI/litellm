@@ -195,7 +195,7 @@ class AnthropicExceptionMapping:
             return None
         try:
             embedded: Final = _PARSED_ERROR_BODY.validate_python(_JSON_DECODER.raw_decode(raw_message, start)[0])
-        except ValueError:
+        except (ValueError, RecursionError):
             return None
         try:
             envelope: Final = _ERROR_DETAILS.validate_python(embedded, strict=True)
@@ -232,8 +232,16 @@ class AnthropicErrorSseFrame(str):
         return body
 
 
-def anthropic_error_sse_frame(status_code: int, raw_message: str) -> AnthropicErrorSseFrame:
-    return AnthropicErrorSseFrame(
-        status_code,
-        AnthropicExceptionMapping.transform_to_anthropic_error(status_code=status_code, raw_message=raw_message),
+def anthropic_error_sse_frame(
+    status_code: int,
+    raw_message: str,
+    provider_specific_fields: Mapping[str, object] | None = None,
+) -> AnthropicErrorSseFrame:
+    response: Final = AnthropicExceptionMapping.transform_to_anthropic_error(
+        status_code=status_code, raw_message=raw_message
     )
+    if not provider_specific_fields:
+        return AnthropicErrorSseFrame(status_code, response)
+    detail: Final[AnthropicErrorDetail] = {**response["error"], "provider_specific_fields": provider_specific_fields}
+    with_fields: Final[AnthropicErrorResponse] = {**response, "error": detail}
+    return AnthropicErrorSseFrame(status_code, with_fields)

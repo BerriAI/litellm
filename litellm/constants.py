@@ -2288,6 +2288,62 @@ HTTP_FRAMING_HEADERS: Final[frozenset[str]] = frozenset(
     }
 )
 
+CREDENTIAL_HEADER_NAMES: Final[frozenset[str]] = frozenset(
+    {
+        "api-key",
+        "authorization",
+        "cookie",
+        "ocp-apim-subscription-key",
+        "proxy-authorization",
+        "set-cookie",
+        "x-amz-security-token",
+        "x-api-key",
+        "x-goog-api-key",
+        "x-litellm-api-key",
+        "x-mcp-auth",
+    }
+)
+
+PROVIDER_ERROR_BODY_ATTRIBUTE: Final = "provider_error_body"
+CREDENTIAL_FIELD_NAME_FRAGMENTS: Final[tuple[str, ...]] = (
+    "accesskey",
+    "accesstoken",
+    "apikey",
+    "authtoken",
+    "bearer",
+    "clientsecret",
+    "credential",
+    "idtoken",
+    "passphrase",
+    "passwd",
+    "password",
+    "privatekey",
+    "refreshtoken",
+    "secret",
+    "sessiontoken",
+    "signingkey",
+)
+CREDENTIAL_FIELD_NAME_WORDS: Final[frozenset[str]] = frozenset(
+    {"auth", "authorization", "cookie", "pass", "pwd", "session", "sig", "signature", "token"}
+)
+QUANTITY_FIELD_NAME_WORDS: Final[frozenset[str]] = frozenset(
+    {
+        "count",
+        "expires",
+        "expiry",
+        "length",
+        "limit",
+        "max",
+        "min",
+        "remaining",
+        "total",
+        "ttl",
+        "type",
+        "usage",
+        "used",
+    }
+)
+
 PROVIDER_REQUEST_ID_HEADERS: Final[tuple[str, ...]] = (
     "x-amzn-requestid",
     "x-request-id",

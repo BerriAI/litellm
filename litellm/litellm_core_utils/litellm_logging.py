@@ -4485,6 +4485,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 | ResponsesAPIResponse
                 | InteractionsAPIResponse
                 | TranscriptionResponse
+                | ImageResponse
                 | None
             ) = None
             if "complete_streaming_response" in self.model_call_details and not for_async_request:
@@ -5675,7 +5676,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 and failure.__traceback__ is not None
             ):
                 self.model_call_details = {
-                    key: value for key, value in self.model_call_details.items() if key != "exception"
+                    key: value for key, value in self._model_call_details_view.items() if key != "exception"
                 }
 
     def failure_handler(
@@ -6303,11 +6304,12 @@ class Logging(LiteLLMLoggingBaseClass):
         | ResponsesAPIResponse
         | InteractionsAPIResponse
         | TranscriptionResponse
+        | ImageResponse
         | None
     ):
         if self.stream is not True:
             return None
-        if isinstance(result, (ModelResponse, TextCompletionResponse, TranscriptionResponse)):
+        if isinstance(result, (ModelResponse, TextCompletionResponse, TranscriptionResponse, ImageResponse)):
             return result
         elif isinstance(
             result,

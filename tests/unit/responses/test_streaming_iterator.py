@@ -1915,11 +1915,6 @@ def setup_and_teardown():
     This fixture reloads litellm before every function. To speed up testing by removing callbacks being chained.
     """
     importlib.reload(litellm)
-    try:
-        if hasattr(litellm, "proxy") and hasattr(litellm.proxy, "proxy_server"):
-            importlib.reload(litellm.proxy.proxy_server)
-    except Exception:
-        pass
     loop = asyncio.get_event_loop_policy().new_event_loop()
     asyncio.set_event_loop(loop)
     yield
