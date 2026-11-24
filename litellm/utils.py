@@ -2119,6 +2119,20 @@ async def async_post_call_success_deployment_hook(
     """
     Allow modifying / reviewing the response just after it's received from the deployment.
     """
+    from litellm.litellm_core_utils.redact_messages import without_hidden_token_data
+
+    return await without_hidden_token_data(
+        response, _post_call_success_deployment_response(request_data, response, call_type, include_v2=include_v2)
+    )
+
+
+async def _post_call_success_deployment_response(
+    request_data: dict[str, object],  # mutable-ok: the attempt's request dict the hooks receive
+    response: object,
+    call_type: CallTypes | None,
+    *,
+    include_v2: bool,
+) -> object:
     try:
         typed_call_type = CallTypes(call_type)
     except ValueError:
@@ -2130,9 +2144,15 @@ async def async_post_call_success_deployment_hook(
         and Hook.post_deployment_success in CustomLoggerV2.declared_hooks
         and (subscribers := hook_subscribers(Hook.post_deployment_success, callbacks, admit=Admit.every_logger)).has_v2
     ):
+        from litellm.litellm_core_utils.redact_messages import TokenDataCheckedFields
+
         fields: Final = ResultFields(request_data, PROXY_REQUEST_KEYS, Field.response, response)  # pyright: ignore[reportUnknownArgumentType]  # the attempt's request dict
         _ = kwargs_after(
-            await run_subscribers(subscribers, fields, partial(_start_post_deployment_success, fields, typed_call_type))
+            await run_subscribers(
+                subscribers,
+                TokenDataCheckedFields(fields),
+                partial(_start_post_deployment_success, fields, typed_call_type),
+            )
         )
         return fields.value
 
@@ -2164,11 +2184,16 @@ async def _post_deployment_success_patch(
 async def _post_deployment_success(
     callback: CustomLogger, request_data: object, response: object, call_type: CallTypes | None
 ) -> object:
+    from litellm.litellm_core_utils.redact_messages import without_hidden_token_data
+
     try:
-        return await callback.async_post_call_success_deployment_hook(
-            request_data,  # pyright: ignore[reportArgumentType]  # the attempt's request dict
-            cast(LLMResponseTypes, response),
-            call_type,
+        return await without_hidden_token_data(
+            response,
+            callback.async_post_call_success_deployment_hook(
+                request_data,  # pyright: ignore[reportArgumentType]  # the attempt's request dict
+                cast(LLMResponseTypes, response),
+                call_type,
+            ),
         )
     except Exception:  # noqa: BLE001  # a broken callback must not fail a completed request
         if isinstance(callback, CustomGuardrail):
@@ -5034,6 +5059,25 @@ def _map_openai_size_to_vertex_ai_aspect_ratio(size: str | None) -> str:
     return size_to_aspect_ratio.get(size, "1:1")  # Default to square if size not recognized
 
 
+_EXTRA_BODY_FIELDS: Final = TypeAdapter(dict[str, object])
+
+
+def _without_dropped_extra_body_params(
+    optional_params: Mapping[str, object], additional_drop_params: Sequence[str] | None
+) -> Mapping[str, object]:
+    extra_body: Final = optional_params.get("extra_body")
+    if not additional_drop_params or not isinstance(extra_body, dict):
+        return optional_params
+    return {
+        **optional_params,
+        "extra_body": {
+            key: value
+            for key, value in _EXTRA_BODY_FIELDS.validate_python(extra_body).items()
+            if key not in additional_drop_params
+        },
+    }
+
+
 def _takes_openai_image_params_unmapped(custom_llm_provider: str | None) -> bool:
     if custom_llm_provider in ("openai", "azure") or custom_llm_provider in litellm.openai_compatible_providers:
         return True
@@ -5163,7 +5207,9 @@ def get_optional_params_image_gen(
     )
     # remove keys with None or empty dict/list values to avoid sending empty payloads
     optional_params = {
-        k: v for k, v in optional_params.items() if v is not None and (not isinstance(v, (dict, list)) or len(v) > 0)
+        k: v
+        for k, v in _without_dropped_extra_body_params(optional_params, additional_drop_params).items()
+        if v is not None and (not isinstance(v, (dict, list)) or len(v) > 0)
     }
     return optional_params
 
@@ -6435,13 +6481,6 @@ def get_optional_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
             model=model,
-            drop_params=bool(drop_params),
-        )
-    elif custom_llm_provider == "nvidia_nim":
-        optional_params = litellm.NvidiaNimConfig().map_openai_params(
-            model=model,
-            non_default_params=non_default_params,
-            optional_params=optional_params,
             drop_params=bool(drop_params),
         )
     elif custom_llm_provider == "cerebras":
@@ -11713,6 +11752,10 @@ class ProviderConfigManager:
             )
 
             return TencentImageGenerationConfig() if is_tokenhub_image_model(model) else None
+        elif LlmProviders.MINIMAX == provider:
+            from litellm.llms.minimax.image_generation import MinimaxImageGenerationConfig
+
+            return MinimaxImageGenerationConfig()
         return None
 
     @staticmethod
@@ -11902,6 +11945,10 @@ class ProviderConfigManager:
             )
 
             return DashScopeImageEditConfig()
+        elif LlmProviders.MINIMAX == provider:
+            from litellm.llms.minimax.image_edit import MinimaxImageEditConfig
+
+            return MinimaxImageEditConfig()
         return None
 
     @staticmethod
