@@ -19,6 +19,7 @@ from litellm.integrations.lens.proxy.adapter import Connection, Identity
 from litellm.integrations.lens.remote import bounded_response
 from litellm.proxy._types import GenerateKeyRequest, LitellmUserRoles, ProxyException, SpecialModelNames, UserAPIKeyAuth
 from litellm.proxy.auth.route_checks import RouteChecks
+from litellm.proxy.db.db_span import db_span
 from litellm.repositories.prisma_protocols import TableActions
 
 if TYPE_CHECKING:
@@ -181,19 +182,20 @@ async def setup(
 
 
 async def _model_key_state(transaction: "Prisma", hashed: str, alias: str) -> _ModelKeyState:
-    row: Final = await transaction.query_first(
-        """
-        SELECT CASE
-            WHEN EXISTS (SELECT 1 FROM "LiteLLM_DeletedVerificationToken" WHERE token = $1) THEN 'retired'
-            WHEN EXISTS (SELECT 1 FROM "LiteLLM_VerificationToken" WHERE token = $1) THEN 'active'
-            WHEN EXISTS (SELECT 1 FROM "LiteLLM_VerificationToken" WHERE key_alias = $2) THEN 'retired'
-            ELSE 'missing'
-        END AS state
-        """,
-        hashed,
-        alias,
-        model=_ModelKeyStateRow,
-    )
+    async with db_span("find_first", "LiteLLM_VerificationToken"):
+        row: Final = await transaction.query_first(
+            """
+            SELECT CASE
+                WHEN EXISTS (SELECT 1 FROM "LiteLLM_DeletedVerificationToken" WHERE token = $1) THEN 'retired'
+                WHEN EXISTS (SELECT 1 FROM "LiteLLM_VerificationToken" WHERE token = $1) THEN 'active'
+                WHEN EXISTS (SELECT 1 FROM "LiteLLM_VerificationToken" WHERE key_alias = $2) THEN 'retired'
+                ELSE 'missing'
+            END AS state
+            """,
+            hashed,
+            alias,
+            model=_ModelKeyStateRow,
+        )
     if row is None:
         raise RuntimeError("The Lens key state query returned no result")
     return row.state
