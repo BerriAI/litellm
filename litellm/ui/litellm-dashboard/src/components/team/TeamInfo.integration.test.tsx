@@ -990,6 +990,10 @@ describe("TeamInfoView - team settings", () => {
 
   it("submits a semantic cache threshold in team metadata", async () => {
     const user = userEvent.setup({ delay: null });
+    mockUseUISettings.mockReturnValue({
+      data: { values: {}, supports_similarity_threshold: true },
+      isLoading: false,
+    } as unknown as ReturnType<typeof useUISettings>);
     vi.mocked(networking.teamInfoCall).mockResolvedValue(createMockTeamData({ metadata: { region: "us" } }));
     renderWithProviders(<TeamInfoView {...props} userModels={[]} />);
 

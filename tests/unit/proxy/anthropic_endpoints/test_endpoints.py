@@ -3,6 +3,7 @@ Test for anthropic_endpoints/endpoints.py, focusing on handling dictionary objec
 """
 
 import asyncio
+import dataclasses
 import datetime
 import json
 import logging
@@ -15,6 +16,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import openai
 import pytest
+import pytest_asyncio
 import respx
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import StreamingResponse
@@ -25,13 +27,18 @@ import litellm
 import litellm.proxy.proxy_server as proxy_server
 from litellm import Router
 from litellm._logging import verbose_proxy_logger
+from litellm.caching.caching import Cache, LiteLLMCacheType
+from litellm.caching.caching_handler import _PENDING_CACHE_WRITES
 from litellm.caching.dual_cache import DualCache
+from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.litellm_core_utils.exception_mapping_utils import exception_type
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.anthropic_endpoints.endpoints import router as messages_router
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+from litellm.proxy.utils import ProxyLogging
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import ModelResponseStream, TokenCountResponse
 
@@ -111,9 +118,18 @@ class _RewriteEveryStreamedReply(CustomGuardrail):
             yield ModelResponseStream(choices=[])
 
 
-def _messages_request(body: Mapping[str, object]) -> Request:
+def _messages_request(
+    body: Mapping[str, object], call_id: str = _BLOCK_CALL_ID, disconnected: asyncio.Event | None = None
+) -> Request:
+    pending: Final = iter(({"type": "http.request", "body": json.dumps(body).encode(), "more_body": False},))
+
     async def receive() -> Message:
-        return {"type": "http.request", "body": json.dumps(body).encode(), "more_body": False}
+        if disconnected is None:
+            return {"type": "http.request", "body": json.dumps(body).encode(), "more_body": False}
+        if (message := next(pending, None)) is not None:
+            return message
+        await disconnected.wait()
+        return {"type": "http.disconnect"}
 
     return Request(
         {
@@ -121,7 +137,7 @@ def _messages_request(body: Mapping[str, object]) -> Request:
             "method": "POST",
             "path": "/v1/messages",
             "query_string": b"",
-            "headers": [(b"content-type", b"application/json"), (b"x-litellm-call-id", _BLOCK_CALL_ID.encode())],
+            "headers": [(b"content-type", b"application/json"), (b"x-litellm-call-id", call_id.encode())],
         },
         receive,
     )
@@ -1779,3 +1795,163 @@ async def test_messages_error_relays_the_provider_code(status_code: int) -> None
     error: Final = json.loads(response.body)["error"]
     assert response.status_code == status_code
     assert error["provider_specific_fields"] == {"code": "provider_code"}
+
+
+_UPSTREAM_MESSAGE: Final = MappingProxyType(
+    {
+        "id": "msg_upstream",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-sonnet-5-5",
+        "content": [{"type": "text", "text": "ALPHA"}],
+        "stop_reason": "end_turn",
+        "stop_sequence": None,
+        "usage": {"input_tokens": 10, "output_tokens": 3},
+    }
+)
+_UPSTREAM_EVENTS: Final = tuple(
+    f"event: {event['type']}\ndata: {json.dumps(event)}\n\n".encode()
+    for event in (
+        {
+            "type": "message_start",
+            "message": {**_UPSTREAM_MESSAGE, "content": [], "stop_reason": None, "usage": {"input_tokens": 10}},
+        },
+        {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+        {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "ALPHA"}},
+        {"type": "content_block_stop", "index": 0},
+        {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 3}},
+        {"type": "message_stop"},
+    )
+)
+
+
+async def _upstream_event_stream() -> AsyncIterator[bytes]:
+    for event in _UPSTREAM_EVENTS:
+        yield event
+
+
+class _CountingProviderDispatch:
+    def __init__(self) -> None:
+        self.calls: Final[list[Mapping[str, object]]] = []  # mutable-ok: records each provider dispatch a miss makes
+
+    def __call__(self, **kwargs: object) -> object:  # kwargs-ok: stands in for the handler's full keyword call
+        self.calls.append(kwargs)
+        if kwargs.get("stream") is True:
+            return _upstream_event_stream()
+        return json.loads(json.dumps(dict(_UPSTREAM_MESSAGE)))
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class _CachedProxy:
+    store: InMemoryCache
+    provider: _CountingProviderDispatch
+    disconnected: asyncio.Event
+
+
+@pytest_asyncio.fixture
+async def cached_proxy(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[_CachedProxy]:
+    from litellm.llms.anthropic.messages.native import handler as native_messages
+
+    cache: Final = Cache(type=LiteLLMCacheType.LOCAL)
+    assert isinstance(cache.cache, InMemoryCache)
+    provider: Final = _CountingProviderDispatch()
+    monkeypatch.setattr(litellm, "cache", cache)
+    monkeypatch.setattr(native_messages, "anthropic_messages_handler", provider)
+    monkeypatch.setattr(
+        proxy_server,
+        "llm_router",
+        Router(
+            model_list=[
+                {"model_name": "claude-sonnet", "litellm_params": {"model": "openai/gpt-6.2-sol", "api_key": "sk-test"}}
+            ],
+            cache_responses=True,
+        ),
+    )
+    monkeypatch.setattr(proxy_server, "proxy_logging_obj", ProxyLogging(user_api_key_cache=DualCache()))
+    disconnected: Final = asyncio.Event()
+    try:
+        yield _CachedProxy(store=cache.cache, provider=provider, disconnected=disconnected)
+    finally:
+        disconnected.set()
+        await asyncio.gather(*_PENDING_CACHE_WRITES)
+        await GLOBAL_LOGGING_WORKER.flush()
+
+
+async def _answer_messages(
+    cached_proxy: _CachedProxy, body: Mapping[str, object], call_id: str
+) -> tuple[Mapping[str, str], object]:
+    import litellm.proxy.anthropic_endpoints.endpoints as ep
+
+    fastapi_response: Final = Response()
+    response: Final = await ep.anthropic_response(
+        fastapi_response=fastapi_response,
+        request=_messages_request(body, call_id, cached_proxy.disconnected),
+        user_api_key_dict=UserAPIKeyAuth(),
+    )
+    if not isinstance(response, StreamingResponse):
+        await asyncio.gather(*_PENDING_CACHE_WRITES)
+        return fastapi_response.headers, response
+    streamed: Final = b"".join(
+        [chunk if isinstance(chunk, bytes) else str(chunk).encode() async for chunk in response.body_iterator]
+    ).decode()
+    await asyncio.gather(*_PENDING_CACHE_WRITES)
+    return response.headers, streamed
+
+
+_HIT_TEST_BODY: Final = MappingProxyType(
+    {"model": "claude-sonnet", "messages": [{"role": "user", "content": "header check"}], "max_tokens": 16}
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stream", [False, True], ids=["non_streaming", "streaming"])
+@pytest.mark.parametrize("caller_cache_key", [None, "caller-chosen-key"], ids=["derived_cache_key", "caller_cache_key"])
+async def test_repeated_messages_request_answers_the_cache_key_it_was_served_from(
+    cached_proxy: _CachedProxy, stream: bool, caller_cache_key: str | None
+) -> None:
+    body: Final = {
+        **_HIT_TEST_BODY,
+        "stream": stream,
+        **({} if caller_cache_key is None else {"cache_key": caller_cache_key}),
+    }
+
+    replies: Final = [await _answer_messages(cached_proxy, body, f"cache-hit-{turn}") for turn in range(3)]
+
+    stored_keys: Final = tuple(cached_proxy.store.cache_dict)
+    assert len(cached_proxy.provider.calls) == 1, "repeats must be served from the response cache"
+    assert len(stored_keys) == 1
+    if caller_cache_key is not None:
+        assert stored_keys == (caller_cache_key,)
+    assert [headers.get("x-litellm-cache-key") for headers, _ in replies] == [None, stored_keys[0], stored_keys[0]]
+    first_body: Final = replies[0][1]
+    if stream:
+        assert all(isinstance(reply_body, str) and "ALPHA" in reply_body for _, reply_body in replies)
+        assert replies[1][1] == replies[2][1]
+        return
+    assert isinstance(first_body, dict) and first_body["content"] == _UPSTREAM_MESSAGE["content"]
+    assert all(reply_body == first_body and "_hidden_params" not in reply_body for _, reply_body in replies)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stream", [False, True], ids=["non_streaming", "streaming"])
+@pytest.mark.parametrize(
+    ("first_extra", "repeat_extra"),
+    [({}, {"cache": {"no-cache": True}}), ({"caching": False}, {"caching": False})],
+    ids=["repeat_skips_the_cache_read", "caching_disabled"],
+)
+async def test_messages_request_not_served_from_cache_sends_no_cache_key(
+    cached_proxy: _CachedProxy,
+    stream: bool,
+    first_extra: Mapping[str, object],
+    repeat_extra: Mapping[str, object],
+) -> None:
+    first: Final = await _answer_messages(
+        cached_proxy, {**_HIT_TEST_BODY, "stream": stream, **first_extra}, "cache-miss-0"
+    )
+    repeat: Final = await _answer_messages(
+        cached_proxy, {**_HIT_TEST_BODY, "stream": stream, **repeat_extra}, "cache-miss-1"
+    )
+
+    assert len(cached_proxy.provider.calls) == 2, "a bypassed cache must reach the provider every time"
+    assert first[0].get("x-litellm-cache-key") is None
+    assert repeat[0].get("x-litellm-cache-key") is None

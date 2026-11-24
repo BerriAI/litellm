@@ -94,6 +94,7 @@ from litellm.litellm_core_utils.initialize_dynamic_callback_params import valida
 from litellm.litellm_core_utils.internal_call_metadata import MODEL_ACCESS_GROUP_METADATA_KEY
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.litellm_logging import get_masked_values
+from litellm.litellm_core_utils.logging_utils import truncate_base64_in_messages_async
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.litellm_core_utils.realtime_errors import realtime_error_event
 from litellm.litellm_core_utils.redact_messages import should_redact_message_logging
@@ -1577,6 +1578,22 @@ def _with_anthropic_user_id(body: Mapping[str, object] | None, user_id: str | No
     return {**body, "metadata": {"user_id": user_id}}
 
 
+def _pinned_request_with_user_id(
+    profile_pin: Callable[[Mapping[str, str], Mapping[str, object] | None], UpstreamRequest],
+    headers: Mapping[str, str],
+    body: Mapping[str, object] | None,
+    user_id: str | None,
+) -> UpstreamRequest:
+    pinned_headers, pinned_body = profile_pin(headers, body)
+    return pinned_headers, _with_anthropic_user_id(pinned_body, user_id)
+
+
+def _logging_url(url: httpx.URL, query: str | None) -> str:
+    if not query:
+        return str(url)
+    return str(url) + ("&" if "?" in str(url) else "?") + query
+
+
 def _eu_jev_client_body(custom_llm_provider: str | None, body: Mapping[str, object]) -> Mapping[str, object] | None:
     return MappingProxyType(dict(body)) if custom_llm_provider == "eu_jev" else None
 
@@ -1857,9 +1874,10 @@ async def pass_through_request(
             route_description="pass_through_endpoint",
         )
         litellm_trace_id: Final[str | None] = get_chain_id_from_headers(dict(request.headers))
+        received_body_for_logging: Final = safe_dumps(await truncate_base64_in_messages_async(_parsed_body))
         logging_obj = Logging(
             model=passthrough_model,
-            messages=[{"role": "user", "content": safe_dumps(_parsed_body)}],
+            messages=[{"role": "user", "content": received_body_for_logging}],
             stream=False,
             call_type="pass_through_endpoint",
             start_time=start_time,
@@ -2091,31 +2109,23 @@ async def pass_through_request(
                         media_type="application/json",
                     )
 
-        requested_query_params_str = None
-        if requested_query_params:
-            requested_query_params_str = "&".join(f"{k}={v}" for k, v in requested_query_params.items())
-
-        logging_url = str(url)
-        if requested_query_params_str:
-            if "?" in str(url):
-                logging_url = str(url) + "&" + requested_query_params_str
-            else:
-                logging_url = str(url) + "?" + requested_query_params_str
+        requested_query_params_str: Final = (
+            "&".join(f"{k}={v}" for k, v in requested_query_params.items()) if requested_query_params else None
+        )
 
         outgoing_body: Final = cast("Mapping[str, object] | None", _parsed_body)  # cast-ok: json
-        pinned_headers, pinned_body = profile_pin(upstream_headers, outgoing_body)
         outbound_headers, upstream_body = _filtered_upstream_request(
             upstream_request_filter,
-            pinned_headers,
-            _with_anthropic_user_id(pinned_body, client_user_id),
+            *_pinned_request_with_user_id(profile_pin, upstream_headers, outgoing_body, client_user_id),
             _METADATA_ADAPTER.validate_python(kwargs["litellm_params"]),
         )
+        hooked_body_for_logging: Final = safe_dumps(await truncate_base64_in_messages_async(_parsed_body))
         logging_obj.pre_call(
-            input=[{"role": "user", "content": safe_dumps(_parsed_body)}],
+            input=[{"role": "user", "content": hooked_body_for_logging}],
             api_key="",
             additional_args={
                 "complete_input_dict": upstream_body,
-                "api_base": str(logging_url),
+                "api_base": _logging_url(url, requested_query_params_str),
                 "headers": redact_credential_headers(outbound_headers),
             },
         )
@@ -3017,7 +3027,7 @@ def create_websocket_passthrough_route(
     async def websocket_endpoint_func(
         websocket: WebSocket,
         user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth_websocket),
-        **kwargs,  # For additional query parameters
+        **kwargs: object,  # For additional query parameters
     ):
         """
         WebSocket passthrough endpoint function.

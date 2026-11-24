@@ -1071,7 +1071,7 @@ mod tests {
     }
 
     #[test]
-    fn folds_converse_cache_tokens_into_prompt_tokens() {
+    fn reports_converse_cache_tokens_the_way_python_transform_usage_does() {
         let response = transform_response(json!({
             "output": {"message": {"content": [{"text": "x"}]}},
             "stopReason": "end_turn",
@@ -1079,17 +1079,20 @@ mod tests {
                 "inputTokens": 10,
                 "outputTokens": 2,
                 "cacheReadInputTokens": 5,
-                "cacheWriteInputTokens": 3
+                "cacheWriteInputTokens": 3,
+                "totalTokens": 20
             }
         }))
         .expect("response transforms");
-        assert_eq!(response.usage.prompt_tokens, 18);
-        assert_eq!(response.usage.prompt_tokens_details.cached_tokens, 5);
         assert_eq!(
-            response.usage.prompt_tokens_details.cache_creation_tokens,
-            3
+            serde_json::to_value(response.usage).unwrap(),
+            json!({
+                "completion_tokens": 2, "prompt_tokens": 18, "total_tokens": 20,
+                "completion_tokens_details": {"reasoning_tokens": 0, "text_tokens": 2},
+                "prompt_tokens_details": {"cached_tokens": 5, "text_tokens": 10, "cache_write_tokens": 3, "cache_creation_tokens": 3},
+                "cache_creation_input_tokens": 3, "cache_read_input_tokens": 5
+            })
         );
-        assert_eq!(response.usage.prompt_tokens_details.text_tokens, 10);
     }
 
     #[test]

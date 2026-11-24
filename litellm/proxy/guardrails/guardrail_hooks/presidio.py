@@ -1320,7 +1320,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         text: str,
         output_parse_pii: bool,
         presidio_config: PresidioPerRequestConfig | None,
-        request_data: dict,
+        request_data: dict[str, object],
     ) -> str:
         """
         Calls Presidio Analyze + Anonymize endpoints for PII Analysis + Masking
@@ -1666,7 +1666,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
     async def _process_anthropic_response_for_pii(
         self,
         response: dict,
-        request_data: dict,
+        request_data: dict[str, object],
         mode: Literal["mask", "unmask"],
     ) -> dict:
         """
@@ -1732,7 +1732,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
     async def _process_response_for_pii(
         self,
         response: ModelResponse,
-        request_data: dict,
+        request_data: dict[str, object],
         mode: Literal["mask", "unmask"],
     ) -> ModelResponse:
         """

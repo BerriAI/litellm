@@ -167,7 +167,7 @@ class IBMWatsonXAIConfig(IBMWatsonXMixin, BaseConfig):
     def map_openai_params(
         self,
         non_default_params: Mapping[str, object],
-        optional_params: dict,
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
     ) -> dict:
@@ -216,7 +216,7 @@ class IBMWatsonXAIConfig(IBMWatsonXMixin, BaseConfig):
             "token": "watsonx_token",
         }
 
-    def map_special_auth_params(self, non_default_params: Mapping[str, object], optional_params: dict):
+    def map_special_auth_params(self, non_default_params: Mapping[str, object], optional_params: dict[str, object]):
         mapped_params: Final = self.get_mapped_special_auth_params()
 
         for param, value in non_default_params.items():
@@ -263,7 +263,7 @@ class IBMWatsonXAIConfig(IBMWatsonXMixin, BaseConfig):
         self,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
+        optional_params: dict[str, object],
         litellm_params: Mapping[str, object],
         headers: Mapping[str, object],
     ) -> dict[str, object]:
@@ -277,7 +277,7 @@ class IBMWatsonXAIConfig(IBMWatsonXMixin, BaseConfig):
         self,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
+        optional_params: dict[str, object],
         litellm_params: Mapping[str, object],
         headers: Mapping[str, object],
     ) -> dict[str, object]:
