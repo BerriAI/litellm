@@ -4378,6 +4378,7 @@ dependencies = [
  "litellm-secret-value",
  "litellm-secrets",
  "parking_lot",
+ "regex",
  "rstest",
  "serde",
  "serde_json",
