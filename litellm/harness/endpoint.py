@@ -37,7 +37,7 @@ from litellm.constants import (
 from litellm.harness.context import CostTracker, GatewayTarget
 from litellm.harness.errors import HarnessError, HarnessInstallFailed
 from litellm.harness.types import Harness, Usage
-from litellm.litellm_core_utils.core_helpers import decoded_json_object, has_attributes
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, decoded_json_object, has_attributes
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.types.litellm_params import STREAM_USAGE_INJECTED_FIELD
 from litellm.types.llms.custom_http import httpxSpecialProvider
@@ -186,10 +186,11 @@ def _as_int(value: object) -> int:
 
 def usage_from_mapping(usage: object) -> tuple[int, int]:
     """(input, output) from a usage dict using OpenAI or Anthropic/Responses field names."""
-    if not isinstance(usage, Mapping):
+    usage_mapping: Final = as_str_mapping(usage)
+    if usage_mapping is None:
         return 0, 0
-    input_tokens = usage.get("input_tokens", usage.get("prompt_tokens"))
-    output_tokens = usage.get("output_tokens", usage.get("completion_tokens"))
+    input_tokens = usage_mapping.get("input_tokens", usage_mapping.get("prompt_tokens"))
+    output_tokens = usage_mapping.get("output_tokens", usage_mapping.get("completion_tokens"))
     return _as_int(input_tokens), _as_int(output_tokens)
 
 
@@ -447,8 +448,9 @@ class _DumpsModelJson(Protocol):
 def to_jsonable(obj: object) -> object:
     if has_attributes(obj, _DumpsModel, "model_dump"):
         return obj.model_dump(mode="json", exclude_none=True)
-    if isinstance(obj, Mapping):
-        return dict(obj)  # mutable-ok: plain-dict copy so json.dumps can serialize any Mapping
+    mapping: Final = as_str_mapping(obj)
+    if mapping is not None:
+        return dict(mapping)  # mutable-ok: plain-dict copy so json.dumps can serialize any Mapping
     return obj
 
 
@@ -458,7 +460,8 @@ def encode_anthropic_chunk(chunk: object) -> bytes:
     if isinstance(chunk, str):
         return chunk.encode()
     data = to_jsonable(chunk)
-    event_type = data.get("type", "message") if isinstance(data, Mapping) else "message"
+    data_mapping: Final = as_str_mapping(data)
+    event_type = data_mapping.get("type", "message") if data_mapping is not None else "message"
     return f"event: {event_type}\ndata: {json.dumps(data)}\n\n".encode()
 
 
@@ -470,7 +473,8 @@ def encode_chat_chunk(chunk: object) -> bytes:
 
 def encode_responses_chunk(chunk: object) -> bytes:
     data = to_jsonable(chunk)
-    event_type = data.get("type", "message") if isinstance(data, Mapping) else "message"
+    data_mapping: Final = as_str_mapping(data)
+    event_type = data_mapping.get("type", "message") if data_mapping is not None else "message"
     return f"event: {event_type}\ndata: {json.dumps(data)}\n\n".encode()
 
 

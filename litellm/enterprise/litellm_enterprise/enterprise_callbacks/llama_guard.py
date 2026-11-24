@@ -9,7 +9,7 @@
 
 import os
 import sys
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 
 sys.path.insert(
     0, os.path.abspath("../..")
@@ -51,7 +51,7 @@ class _ENTERPRISE_LlamaGuard(CustomLogger):
             f"self.unsafe_content_categories: {self.unsafe_content_categories}"
         )
 
-    def print_verbose(self, print_statement):
+    def print_verbose(self, print_statement: object):
         try:
             verbose_proxy_logger.debug(print_statement)
             if litellm.set_verbose:
@@ -59,7 +59,7 @@ class _ENTERPRISE_LlamaGuard(CustomLogger):
         except Exception:
             pass
 
-    def set_custom_prompt_template(self, messages: list):
+    def set_custom_prompt_template(self, messages: Sequence[object]):
         if self.unsafe_content_categories is not None and self.model is not None:
             role = "Agent" if len(messages) % 2 == 0 else "User"
             litellm.register_prompt_template(

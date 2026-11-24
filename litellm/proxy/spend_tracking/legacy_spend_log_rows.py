@@ -118,8 +118,8 @@ def _get_router_metadata_for_spend_log(
     selected_provider: str | None,
     router_correlation_id: str | None,
 ) -> SpendLogsRouterMetadata | None:
-    model_info: Final = metadata.get("model_info") if metadata is not None else None
-    if not isinstance(model_info, Mapping) or model_info.get("internal_router_model") is not True:
+    model_info: Final = as_str_mapping(metadata.get("model_info")) if metadata is not None else None
+    if model_info is None or model_info.get("internal_router_model") is not True:
         return None
     return SpendLogsRouterMetadata(
         requested_model=requested_model or None,
@@ -252,7 +252,7 @@ def _ensure_datetime_utc(timestamp: datetime) -> datetime:
 
 def _get_messages_for_spend_logs_payload(
     standard_logging_payload: StandardLoggingPayload | None,
-    metadata: dict | None = None,
+    metadata: Mapping[str, object] | None = None,
 ) -> str:
     if spend_tracking_utils.should_store_prompts_and_responses_in_spend_logs(
         _SPEND_LOGS_PRIVACY_METADATA_ADAPTER.validate_python(metadata)
@@ -443,8 +443,8 @@ def _convert_mapping_to_json_serializable(obj: Mapping[str, object]) -> dict[str
 def _placeholder_stored_request_body_metadata(
     request_body: Mapping[str, object], persisted_model_group: str, raw_model: str
 ) -> Mapping[str, object]:
-    body_metadata: Final = request_body.get("metadata")
-    if not isinstance(body_metadata, Mapping):
+    body_metadata: Final = as_str_mapping(request_body.get("metadata"))
+    if body_metadata is None:
         return request_body
     error_information: Final = body_metadata.get("error_information")
     placeholdered_fields: Final = MappingProxyType(
@@ -470,11 +470,11 @@ def _placeholder_stored_request_body_metadata(
 def _placeholder_stored_request_body(
     litellm_params: Mapping[str, object], persisted_model_group: str, raw_model: str
 ) -> Mapping[str, object]:
-    proxy_server_request: Final = litellm_params.get("proxy_server_request")
-    if not isinstance(proxy_server_request, Mapping):
+    proxy_server_request: Final = as_str_mapping(litellm_params.get("proxy_server_request"))
+    if proxy_server_request is None:
         return litellm_params
-    request_body: Final = proxy_server_request.get("body")
-    if not isinstance(request_body, Mapping):
+    request_body: Final = as_str_mapping(proxy_server_request.get("body"))
+    if request_body is None:
         return litellm_params
     model_placeholdered: Final = (
         MappingProxyType({**request_body, "model": UNKNOWN_MODEL_SPEND_LOG_MODEL})
@@ -699,14 +699,14 @@ def _get_response_for_spend_logs_payload(
 
 
 def _get_status_for_spend_log(
-    metadata: dict,
+    metadata: Mapping[str, object],
 ) -> Literal["success", "failure"]:
     """
     Get the status for the spend log.
 
     It's only a failure if metadata.get("status") is "failure"
     """
-    _status: Final[str | None] = metadata.get("status", None)
+    _status: Final = metadata.get("status", None)
     if _status == "failure":
         return "failure"
     return "success"

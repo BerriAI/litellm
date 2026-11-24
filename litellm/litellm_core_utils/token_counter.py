@@ -1045,9 +1045,10 @@ def _count_function_call_tokens(
             total += count_function(str(function_arguments))
         return total
     if key == "function_call":
-        if not isinstance(value, Mapping):
+        function_call: Final = as_str_mapping(value)
+        if function_call is None:
             raise ValueError(f"Unsupported type {type(value)} for key function_call in message {message}")
-        return count_function(str(value.get("arguments", "")))
+        return count_function(str(function_call.get("arguments", "")))
     raise ValueError(f"Unexpected key {key!r}; expected 'tool_calls' or 'function_call'")
 
 
@@ -1820,10 +1821,11 @@ def _count_file_tokens(
     pdf_pricing: PdfPagePricing = "claude",
 ) -> int:
     """An OpenAI `file` block is the chat-completions spelling of a document, so it prices like one."""
-    if not isinstance(file_value, Mapping):
+    file_mapping: Final = as_str_mapping(file_value)
+    if file_mapping is None:
         return 0
-    filename: Final = file_value.get("filename")
-    file_data: Final = file_value.get("file_data")
+    filename: Final = file_mapping.get("filename")
+    file_data: Final = file_mapping.get("file_data")
     name_tokens: Final = count_function(filename) if isinstance(filename, str) and filename else 0
     if not isinstance(file_data, str) or not file_data:
         return name_tokens
@@ -2118,15 +2120,16 @@ def _function_definitions_for_tool(tool: Mapping[str, object]) -> Iterable[Mappi
     if isinstance(function, Mapping):
         yield function
         return
-    declarations: Final = tool.get("function_declarations") or tool.get("functionDeclarations")
-    if isinstance(declarations, list):
+    declarations: Final = as_object_list(tool.get("function_declarations") or tool.get("functionDeclarations"))
+    if declarations is not None:
         for declaration in declarations:
             if isinstance(declaration, Mapping):
                 yield declaration
         return
     input_schema: Final = tool.get("input_schema")
-    parameters: Final = input_schema or tool.get("parameters") or {}
-    normalized_parameters: Final = parameters if isinstance(parameters, Mapping) else {}
+    parameters: Final[object] = input_schema or tool.get("parameters") or {}
+    parameters_mapping: Final = as_str_mapping(parameters)
+    normalized_parameters: Final[Mapping[str, object]] = parameters_mapping if parameters_mapping is not None else {}
     unmapped_anthropic_keys: Final = (
         {key: value for key, value in tool.items() if key not in _ANTHROPIC_TOOL_KEYS_MAPPED_BY_BRIDGE}
         if input_schema is not None
@@ -2147,8 +2150,9 @@ def _format_single_function_definition(function: Mapping[str, object]) -> tuple[
     if not function_name:
         return ()
     function_description: Final = function.get("description")
-    parameters_value: Final = function.get("parameters") or function.get("parametersJsonSchema") or {}
-    parameters: Final = parameters_value if isinstance(parameters_value, Mapping) else {}
+    parameters_value: Final[object] = function.get("parameters") or function.get("parametersJsonSchema") or {}
+    parameters_mapping: Final = as_str_mapping(parameters_value)
+    parameters: Final[Mapping[str, object]] = parameters_mapping if parameters_mapping is not None else {}
     properties: Final = parameters.get("properties")
     if isinstance(properties, Mapping) and properties:
         return (
@@ -2166,14 +2170,15 @@ def _format_single_function_definition(function: Mapping[str, object]) -> tuple[
 
 
 def _format_object_parameters(parameters: Mapping[str, object], indent: int) -> str:
-    properties: Final = parameters.get("properties")
-    if not isinstance(properties, Mapping) or not properties:
+    properties: Final = as_str_mapping(parameters.get("properties"))
+    if properties is None or not properties:
         return ""
-    required: Final = parameters.get("required")
-    required_params: Final = tuple(required) if isinstance(required, list) else ()
+    required: Final = as_object_list(parameters.get("required"))
+    required_params: Final = tuple(required) if required is not None else ()
     lines: Final[list[str]] = []
     for key, props in properties.items():
-        description = props.get("description") if isinstance(props, Mapping) else None
+        props_mapping = as_str_mapping(props)
+        description = props_mapping.get("description") if props_mapping is not None else None
         if description:
             lines.append(f"// {description}")
         question = "?"
@@ -2184,20 +2189,21 @@ def _format_object_parameters(parameters: Mapping[str, object], indent: int) -> 
 
 
 def _format_type(props: object, indent: int) -> str:
-    if not isinstance(props, Mapping):
+    schema: Final = as_str_mapping(props)
+    if schema is None:
         return "any"
-    type: Final = props.get("type")
-    enum: Final = props.get("enum")
+    type: Final = schema.get("type")
+    enum: Final = as_object_list(schema.get("enum"))
     if type == "string":
-        if isinstance(enum, list):
+        if enum is not None:
             return " | ".join([f'"{item}"' for item in enum])
         return "string"
     elif type == "array":
-        return f"{_format_type(props.get('items'), indent)}[]"
+        return f"{_format_type(schema.get('items'), indent)}[]"
     elif type == "object":
-        return f"{{\n{_format_object_parameters(props, indent + 2)}\n}}"
+        return f"{{\n{_format_object_parameters(schema, indent + 2)}\n}}"
     elif type in ["integer", "number"]:
-        if isinstance(enum, list):
+        if enum is not None:
             return " | ".join([f'"{item}"' for item in enum])
         return "number"
     elif type == "boolean":
