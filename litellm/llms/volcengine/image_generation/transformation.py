@@ -17,12 +17,7 @@ from litellm.types.llms.openai import (
     AllMessageValues,
     OpenAIImageGenerationOptionalParams,
 )
-from litellm.types.utils import (
-    ImageObject,
-    ImageResponse,
-    ImageUsage,
-    ImageUsageInputTokensDetails,
-)
+from litellm.types.utils import ImageObject, ImageResponse, ImageUsage
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -225,11 +220,15 @@ def ark_image_response(raw_response: httpx.Response) -> ImageResponse:
         size=first_image.size,
         output_format=first_image.output_format,
         background=first_image.background,
-        usage=ImageUsage(
-            input_tokens=0,
-            input_tokens_details=ImageUsageInputTokensDetails(image_tokens=0, text_tokens=0),
-            output_tokens=usage.output_tokens or 0,
-            total_tokens=usage.total_tokens or 0,
+        usage=ImageUsage.model_validate(
+            {
+                "input_tokens": 0,
+                "input_tokens_details": {"image_tokens": 0, "text_tokens": 0},
+                "output_tokens": usage.output_tokens or 0,
+                "total_tokens": usage.total_tokens or 0,
+                "input_images": usage.input_images or 0,
+                "generated_images": usage.generated_images or 0,
+            }
         ),
     )
 
