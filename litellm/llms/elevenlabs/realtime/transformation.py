@@ -167,52 +167,74 @@ def realtime_options_from_params(params: Mapping[str, object]) -> ElevenLabsReal
         raise ValueError(f"Invalid ElevenLabs realtime options: {e}") from None
 
 
-def normalize_language(language: str) -> str:
+@dataclass(frozen=True, slots=True)
+class SessionUpdateRejected:
+    """A session.update ElevenLabs can't serve. `session_config_or_raise` turns it into the client's error."""
+
+    reason: str
+
+
+def normalize_language(language: str) -> str | SessionUpdateRejected:
     primary: Final = language.strip().replace("_", "-").split("-", 1)[0].casefold()
     if not (2 <= len(primary) <= 3 and primary.isascii() and primary.isalpha()):
-        raise ElevenLabsProtocolError("language must be an ISO 639-1 or ISO 639-3 code")
+        return SessionUpdateRejected("language must be an ISO 639-1 or ISO 639-3 code")
     return primary
 
 
-def _parse_sample_rate(audio_format: TranscriptionAudioFormat | None) -> int:
+def _parse_sample_rate(audio_format: TranscriptionAudioFormat | None) -> int | SessionUpdateRejected:
     if audio_format is None:
         return _DEFAULT_SAMPLE_RATE
     if audio_format.layout == "beta":
         if audio_format.encoding != "pcm16":
-            raise ElevenLabsProtocolError(f"{_BACKEND_NAME} requires pcm16 input audio")
+            return SessionUpdateRejected(f"{_BACKEND_NAME} requires pcm16 input audio")
         return _DEFAULT_SAMPLE_RATE
     if not audio_format.is_pcm16:
-        raise ElevenLabsProtocolError(f"{_BACKEND_NAME} requires audio/pcm input audio")
+        return SessionUpdateRejected(f"{_BACKEND_NAME} requires audio/pcm input audio")
     if audio_format.channels not in (None, 1):
-        raise ElevenLabsProtocolError(f"{_BACKEND_NAME} requires mono input audio")
+        return SessionUpdateRejected(f"{_BACKEND_NAME} requires mono input audio")
     rate: Final = _DEFAULT_SAMPLE_RATE if audio_format.rate is None else audio_format.rate
     if rate not in SUPPORTED_SAMPLE_RATES:
-        raise ElevenLabsProtocolError(
-            f"{_BACKEND_NAME} supports PCM16 at 8000, 16000, 22050, 24000, 44100, or 48000 Hz"
-        )
+        return SessionUpdateRejected(f"{_BACKEND_NAME} supports PCM16 at 8000, 16000, 22050, 24000, 44100, or 48000 Hz")
     return rate
 
 
 def parse_session_update(
     payload: str, options: ElevenLabsRealtimeOptions, *, drop_params: bool = False
-) -> ElevenLabsSessionConfig:
+) -> ElevenLabsSessionConfig | SessionUpdateRejected:
     update: Final = parse_transcription_session_update(payload, ElevenLabsProtocolError)
     if update.session_type not in (None, "transcription", "realtime"):
-        raise ElevenLabsProtocolError(f"{_BACKEND_NAME} supports transcription sessions only")
+        return SessionUpdateRejected(f"{_BACKEND_NAME} supports transcription sessions only")
     if update.model is not None and normalize_model(update.model) != SCRIBE_REALTIME_MODEL:
-        raise ElevenLabsProtocolError("realtime session model cannot be changed")
+        return SessionUpdateRejected("realtime session model cannot be changed")
     if update.unsupported_transcription_keys:
         verbose_logger.warning(
             "ElevenLabs realtime: dropping unsupported transcription settings %s",
             update.unsupported_transcription_keys,
         )
     server_vad: Final = uses_server_vad(update, _BACKEND_NAME, drop_params, ElevenLabsProtocolError)
+    sample_rate: Final = _parse_sample_rate(update.audio_format)
+    if isinstance(sample_rate, SessionUpdateRejected):
+        return sample_rate
+    language: Final = None if update.language is None else normalize_language(update.language)
+    if isinstance(language, SessionUpdateRejected):
+        return language
     return ElevenLabsSessionConfig(
-        sample_rate=_parse_sample_rate(update.audio_format),
+        sample_rate=sample_rate,
         commit_strategy="vad" if server_vad else "manual",
-        language=None if update.language is None else normalize_language(update.language),
+        language=language,
         options=options,
     )
+
+
+def session_config_or_raise(outcome: ElevenLabsSessionConfig | SessionUpdateRejected) -> ElevenLabsSessionConfig:
+    """The one place a rejected session.update becomes the protocol error the client receives."""
+    match outcome:
+        case ElevenLabsSessionConfig():
+            return outcome
+        case SessionUpdateRejected(reason=reason):
+            raise ElevenLabsProtocolError(reason)
+        case _:
+            assert_never(outcome)
 
 
 def session_created_event(
@@ -506,7 +528,9 @@ class ElevenLabsRealtimeConfig(BaseRealtimeConfig):
         if self._config is not None:
             verbose_logger.debug("ElevenLabs realtime: ignoring session.update after the session was configured")
             return ()
-        config: Final = parse_session_update(message, self._options, drop_params=self._drop_params)
+        config: Final = session_config_or_raise(
+            parse_session_update(message, self._options, drop_params=self._drop_params)
+        )
         self._config = config
         return (ElevenLabsRealtimeConfigure(query=config.query()).model_dump_json(),)
 

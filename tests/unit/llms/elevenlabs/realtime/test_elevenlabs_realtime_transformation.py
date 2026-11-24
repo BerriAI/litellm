@@ -17,20 +17,22 @@ from litellm.llms.elevenlabs.realtime.backend import ElevenLabsRealtimeBackend
 from litellm.llms.elevenlabs.realtime.transformation import (
     DEFAULT_ELEVENLABS_REALTIME_URL,
     MAX_AUDIO_CHUNK_BYTES,
-    ElevenLabsRealtimeConfig,
-    build_elevenlabs_realtime_url,
-    elevenlabs_realtime_config,
     SCRIBE_REALTIME_MODEL,
     SUPPORTED_SAMPLE_RATES,
     ElevenLabsEventTransformer,
     ElevenLabsProtocolError,
+    ElevenLabsRealtimeConfig,
     ElevenLabsSessionConfig,
+    SessionUpdateRejected,
+    build_elevenlabs_realtime_url,
     default_session_config,
+    elevenlabs_realtime_config,
     elevenlabs_realtime_health_check,
     normalize_language,
     parse_server_message,
     parse_session_update,
     realtime_options_from_params,
+    session_config_or_raise,
     session_created_event,
 )
 from litellm.types.llms.elevenlabs import ElevenLabsErrorType, ElevenLabsRealtimeConfigure, ElevenLabsRealtimeOptions
@@ -72,17 +74,23 @@ def _query(config: ElevenLabsSessionConfig) -> dict[str, list[str]]:
     return parse_qs(config.query())
 
 
+def _config(
+    payload: str, options: ElevenLabsRealtimeOptions = NO_OPTIONS, *, drop_params: bool = False
+) -> ElevenLabsSessionConfig:
+    return session_config_or_raise(parse_session_update(payload, options, drop_params=drop_params))
+
+
 @pytest.mark.parametrize("rate", sorted(SUPPORTED_SAMPLE_RATES))
 def test_session_rate_selects_the_matching_pcm_audio_format(rate: int):
-    config: Final = parse_session_update(_session_update(rate=rate), NO_OPTIONS)
+    config: Final = _config(_session_update(rate=rate))
 
     assert _query(config)["audio_format"] == [f"pcm_{rate}"]
     assert config.bytes_per_second == rate * 2
 
 
 def test_server_vad_selects_vad_and_null_turn_detection_selects_manual_commit():
-    vad: Final = parse_session_update(_session_update(turn_detection="server_vad"), NO_OPTIONS)
-    manual: Final = parse_session_update(_session_update(turn_detection=None), NO_OPTIONS)
+    vad: Final = _config(_session_update(turn_detection="server_vad"))
+    manual: Final = _config(_session_update(turn_detection=None))
 
     assert _query(vad)["commit_strategy"] == ["vad"]
     assert _query(manual)["commit_strategy"] == ["manual"]
@@ -92,13 +100,13 @@ def test_semantic_vad_falls_back_to_vad_only_under_drop_params():
     with pytest.raises(ElevenLabsProtocolError, match="drop_params"):
         parse_session_update(_session_update(turn_detection="semantic_vad"), NO_OPTIONS)
 
-    fallback: Final = parse_session_update(_session_update(turn_detection="semantic_vad"), NO_OPTIONS, drop_params=True)
+    fallback: Final = _config(_session_update(turn_detection="semantic_vad"), drop_params=True)
     assert _query(fallback)["commit_strategy"] == ["vad"]
 
 
 @pytest.mark.parametrize("model", [SCRIBE_REALTIME_MODEL, f"elevenlabs/{SCRIBE_REALTIME_MODEL}"])
 def test_query_pins_the_scribe_realtime_model(model: str):
-    assert _query(parse_session_update(_session_update(model=model), NO_OPTIONS))["model_id"] == [SCRIBE_REALTIME_MODEL]
+    assert _query(_config(_session_update(model=model)))["model_id"] == [SCRIBE_REALTIME_MODEL]
 
 
 def test_beta_pcm16_session_uses_the_default_rate_and_vad():
@@ -108,7 +116,7 @@ def test_beta_pcm16_session_uses_the_default_rate_and_vad():
             "session": {"input_audio_format": "pcm16", "input_audio_transcription": {"model": SCRIBE_REALTIME_MODEL}},
         }
     )
-    query: Final = _query(parse_session_update(beta, NO_OPTIONS))
+    query: Final = _query(_config(beta))
 
     assert query["audio_format"] == ["pcm_24000"]
     assert query["commit_strategy"] == ["vad"]
@@ -117,13 +125,14 @@ def test_beta_pcm16_session_uses_the_default_rate_and_vad():
 @pytest.mark.parametrize(("source", "expected"), [("en", "en"), ("EN-us", "en"), ("pt_BR", "pt"), ("fil", "fil")])
 def test_language_becomes_an_iso_language_code(source: str, expected: str):
     assert normalize_language(source) == expected
-    assert _query(parse_session_update(_session_update(language=source), NO_OPTIONS))["language_code"] == [expected]
+    assert _query(_config(_session_update(language=source)))["language_code"] == [expected]
 
 
 @pytest.mark.parametrize("language", ["", " ", "english", "e1"])
 def test_invalid_language_is_rejected(language: str):
+    assert normalize_language(language) == SessionUpdateRejected("language must be an ISO 639-1 or ISO 639-3 code")
     with pytest.raises(ElevenLabsProtocolError, match="ISO 639"):
-        normalize_language(language)
+        _config(_session_update(language=language))
 
 
 @pytest.mark.parametrize(
@@ -137,8 +146,12 @@ def test_invalid_language_is_rejected(language: str):
     ],
 )
 def test_session_rejects_unsupported_settings(update: str, message: str):
+    rejected: Final = parse_session_update(update, NO_OPTIONS)
+
+    assert isinstance(rejected, SessionUpdateRejected)
+    assert message in rejected.reason
     with pytest.raises(ElevenLabsProtocolError, match=message):
-        parse_session_update(update, NO_OPTIONS)
+        session_config_or_raise(rejected)
 
 
 def test_options_are_appended_to_the_query():
@@ -153,7 +166,7 @@ def test_options_are_appended_to_the_query():
         min_silence_duration_ms=250,
         enable_logging=False,
     )
-    query: Final = _query(parse_session_update(_session_update(), options))
+    query: Final = _query(_config(_session_update(), options))
 
     assert query["keyterms"] == ["Scribe", "realtime"]
     assert query["secondary_languages"] == ["es"]
@@ -167,7 +180,7 @@ def test_options_are_appended_to_the_query():
 
 
 def test_unset_options_are_not_sent():
-    assert set(_query(parse_session_update(_session_update(), NO_OPTIONS))) == {
+    assert set(_query(_config(_session_update()))) == {
         "model_id",
         "audio_format",
         "commit_strategy",
@@ -199,7 +212,7 @@ def test_options_from_params_reject_invalid_values(params: dict[str, object]):
 
 
 def test_session_created_event_reports_the_effective_transcription_session():
-    config: Final = parse_session_update(_session_update(rate=16_000, turn_detection=None, language="es"), NO_OPTIONS)
+    config: Final = _config(_session_update(rate=16_000, turn_detection=None, language="es"))
     event: Final = session_created_event(config, "sess_1")
 
     assert event["type"] == "session.created"
