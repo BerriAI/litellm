@@ -130,6 +130,34 @@ pub struct GroupInfo {
     pub output_cost_per_token: Option<f64>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Charge {
+    Reported(i64),
+    Estimated(i64),
+}
+
+impl Charge {
+    pub fn against(self, reserved: i64) -> i64 {
+        match self {
+            Self::Reported(tokens) => tokens,
+            Self::Estimated(_) => reserved,
+        }
+    }
+
+    pub fn tokens(self) -> i64 {
+        match self {
+            Self::Reported(tokens) | Self::Estimated(tokens) => tokens,
+        }
+    }
+
+    pub fn map(self, f: impl FnOnce(i64) -> i64) -> Self {
+        match self {
+            Self::Reported(tokens) => Self::Reported(f(tokens)),
+            Self::Estimated(tokens) => Self::Estimated(f(tokens)),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TokenRateLimitType {
@@ -497,6 +525,29 @@ impl UsageTokens {
             .map(Self::of)
     }
 
+    pub fn settles_at_estimate(
+        usage: Option<&Self>,
+        rate_limit_type: TokenRateLimitType,
+        embedding: bool,
+    ) -> bool {
+        let reported_nothing = Self::settled(usage, TokenRateLimitType::Total) == 0
+            && Self::settled(usage, TokenRateLimitType::Input) == 0;
+        embedding && reported_nothing && rate_limit_type != TokenRateLimitType::Output
+    }
+
+    pub fn charged(
+        usage: Option<&Self>,
+        rate_limit_type: TokenRateLimitType,
+        embedding: bool,
+    ) -> i64 {
+        match Self::settled(usage, rate_limit_type) {
+            0 if embedding && rate_limit_type == TokenRateLimitType::Total => {
+                Self::settled(usage, TokenRateLimitType::Input)
+            }
+            tokens => tokens,
+        }
+    }
+
     pub fn settled(usage: Option<&Self>, rate_limit_type: TokenRateLimitType) -> i64 {
         usage.map_or(0, |usage| match rate_limit_type {
             TokenRateLimitType::Output => usage.completion_tokens,
@@ -518,6 +569,33 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    #[rstest]
+    #[case::no_usage(None, TokenRateLimitType::Total, true, true)]
+    #[case::zero_usage(Some((0, 0, 0)), TokenRateLimitType::Input, true, true)]
+    #[case::reported_tokens(Some((7, 0, 7)), TokenRateLimitType::Total, true, false)]
+    #[case::prompt_without_total(Some((7, 0, 0)), TokenRateLimitType::Total, true, false)]
+    #[case::output_limit(None, TokenRateLimitType::Output, true, false)]
+    #[case::chat(None, TokenRateLimitType::Total, false, false)]
+    fn only_an_embedding_reporting_no_tokens_settles_at_its_estimate_under_a_total_or_input_limit(
+        #[case] usage: Option<(i64, i64, i64)>,
+        #[case] rate_limit_type: TokenRateLimitType,
+        #[case] embedding: bool,
+        #[case] expected: bool,
+    ) {
+        let usage = usage.map(
+            |(prompt_tokens, completion_tokens, total_tokens)| UsageTokens {
+                prompt_tokens,
+                completion_tokens,
+                total_tokens,
+                cached_tokens: 0,
+            },
+        );
+        assert_eq!(
+            UsageTokens::settles_at_estimate(usage.as_ref(), rate_limit_type, embedding),
+            expected
+        );
+    }
 
     fn identity(members: Value) -> KeyIdentity {
         serde_json::from_value(members).unwrap()
@@ -563,6 +641,22 @@ mod tests {
         let key = KeyFacts::new(Some(&identity(members)), KeyGaps::default());
         assert_eq!(key.team_text().as_deref(), text);
         assert_eq!(key.team_str(), exact);
+    }
+
+    #[rstest]
+    #[case::prompt_without_total(tokens(7, 0, 0), TokenRateLimitType::Total, 7)]
+    #[case::reported_total(tokens(7, 0, 9), TokenRateLimitType::Total, 9)]
+    #[case::input_limit(tokens(7, 0, 0), TokenRateLimitType::Input, 7)]
+    #[case::nothing_reported(tokens(0, 0, 0), TokenRateLimitType::Total, 0)]
+    fn an_embedding_reporting_prompt_tokens_without_a_total_charges_its_prompt_tokens(
+        #[case] usage: Option<UsageTokens>,
+        #[case] rate_limit_type: TokenRateLimitType,
+        #[case] expected: i64,
+    ) {
+        assert_eq!(
+            UsageTokens::charged(usage.as_ref(), rate_limit_type, true),
+            expected
+        );
     }
 
     fn usage(members: Value) -> Usage {
