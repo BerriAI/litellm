@@ -253,7 +253,7 @@ def _raw_reset_write(query: str, args: Sequence[object]) -> dict[str, object] | 
         "LiteLLM_UserTable": ("user", "user_id"),
         "LiteLLM_TeamTable": ("team", "team_id"),
     }[query.split('"')[1]]
-    identity, reset_at, decrement, expected_reset_at, _ = args
+    identity, reset_at, decrement, expected_reset_at, _, *extra = args
     assert isinstance(identity, str) and isinstance(reset_at, str) and isinstance(decrement, str)
     assert expected_reset_at is None or isinstance(expected_reset_at, str)
     return {
@@ -264,6 +264,7 @@ def _raw_reset_write(query: str, args: Sequence[object]) -> dict[str, object] | 
             "budget_reset_at": datetime.fromisoformat(expected_reset_at).replace(tzinfo=timezone.utc)
             if expected_reset_at is not None
             else None,
+            **({"temp_budget_increase": extra[-2], "temp_budget_expiry": extra[-1]} if len(extra) >= 2 else {}),
         },
         "data": {
             "spend": {"decrement": float(decrement)},
@@ -4252,6 +4253,8 @@ def rollover_enabled(monkeypatch):
                     "budget_duration": "30d",
                     "budget_reset_at": now,
                     "user_id": "user-roll",
+                    "temp_budget_increase": None,
+                    "temp_budget_expiry": None,
                 },
             ),
         ),
@@ -4295,7 +4298,10 @@ def test_direct_reset_carries_overage_when_rollover_enabled(
 
     writes = _batch_writes(mock_prisma_client, table)
     assert len(writes) == 1
-    assert writes[0]["where"] == {id_field: id_value, "budget_reset_at": now}
+    expected_where = {id_field: id_value, "budget_reset_at": now}
+    if table == "user":
+        expected_where |= {"temp_budget_increase": None, "temp_budget_expiry": None}
+    assert writes[0]["where"] == expected_where
     assert writes[0]["data"]["spend"] == {"decrement": 100.0}
     assert writes[0]["data"]["budget_reset_at"] > now
     counter_prefix = {"key": "spend:key", "user": "spend:user", "team": "spend:team"}[table]
@@ -5159,7 +5165,14 @@ _RACE_TABLES = [
         lambda now: type(
             "User",
             (),
-            {"spend": 5.0, "budget_duration": "7d", "budget_reset_at": now, "user_id": "user-race"},
+            {
+                "spend": 5.0,
+                "budget_duration": "7d",
+                "budget_reset_at": now,
+                "user_id": "user-race",
+                "temp_budget_increase": None,
+                "temp_budget_expiry": None,
+            },
         ),
     ),
     (

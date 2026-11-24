@@ -120,16 +120,32 @@ async def test_paid_target_refused_when_over_user_budget():
 
 
 @pytest.mark.asyncio
-async def test_paid_target_loses_temporary_user_budget_at_expiry() -> None:
+@pytest.mark.parametrize(
+    ("legacy_budget", "spend", "allowed_during_increase", "allowed_after_expiry"),
+    [(None, 15, True, True), (None, 35, False, True), (10, 15, True, False)],
+)
+async def test_paid_target_restores_legacy_user_budget_at_expiry(
+    legacy_budget: float | None, spend: float, allowed_during_increase: bool, allowed_after_expiry: bool
+) -> None:
     expiry: Final = datetime(2030, 1, 1, tzinfo=timezone.utc)
-    user: Final = LiteLLM_UserTable(user_id="u1", max_budget=10, temp_budget_increase=20, temp_budget_expiry=expiry)
-    token: Final = UserAPIKeyAuth(user_id="u1", user_spend=15, user_max_budget=10)
-    token.carry_temporary_user_budget(user)
+    user: Final = LiteLLM_UserTable(
+        user_id="u1", spend=spend, max_budget=10, temp_budget_increase=20, temp_budget_expiry=expiry
+    )
+    token: Final = UserAPIKeyAuth(
+        user_id="u1", user_spend=spend if legacy_budget is not None else None, user_max_budget=legacy_budget
+    )
     router: Final = _router()
     with time_machine.travel(expiry - timedelta(seconds=1), tick=False):
-        assert await is_token_within_budget_for_model(model="paid-model", valid_token=token, llm_router=router)
+        token.carry_temporary_user_budget(user)
+        assert (
+            await is_token_within_budget_for_model(model="paid-model", valid_token=token, llm_router=router)
+            is allowed_during_increase
+        )
     with time_machine.travel(expiry, tick=False):
-        assert not await is_token_within_budget_for_model(model="paid-model", valid_token=token, llm_router=router)
+        assert (
+            await is_token_within_budget_for_model(model="paid-model", valid_token=token, llm_router=router)
+            is allowed_after_expiry
+        )
 
 
 @pytest.mark.asyncio

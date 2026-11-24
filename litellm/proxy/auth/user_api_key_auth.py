@@ -2522,6 +2522,24 @@ async def _load_team_member_default_model_budget(
 
 
 @tracer.wrap()
+def _admin_user_for_common_checks(
+    user_id: str, loaded_user: LiteLLM_UserTable | None, budget_row: LiteLLM_UserTable | None
+) -> LiteLLM_UserTable:
+    increase: Final = budget_row.temp_budget_increase if budget_row is not None else None
+    rollover_credit: Final = (budget_row.active_rollover_credit() or 0.0) if budget_row is not None else 0.0
+    return LiteLLM_UserTable(
+        user_id=user_id,
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        spend=loaded_user.spend if loaded_user is not None else 0.0,
+        max_budget=budget_row.max_budget if budget_row is not None else None,
+        temp_budget_increase=(increase + rollover_credit) if increase is not None and increase > 0 else None,
+        temp_budget_expiry=budget_row.temp_budget_expiry if budget_row is not None else None,
+        budget_limits=budget_row.budget_limits if budget_row is not None else None,
+        user_email=budget_row.user_email if budget_row is not None else None,
+        object_permission_id=loaded_user.object_permission_id if loaded_user is not None else None,
+    )
+
+
 async def run_centralized_common_checks(
     user_api_key_auth_obj: UserAPIKeyAuth,
     request: Request,
@@ -2655,7 +2673,15 @@ async def run_centralized_common_checks(
     else:
         fetch_coros.append(_safe_fetch("team", _noop_none()))
 
-    if user_api_key_auth_obj.user_id is not None:
+    key_owner: Final = attribute_or_none(request.state, "authenticated_key_owner")
+    resolved_owner: Final = (
+        key_owner
+        if isinstance(key_owner, LiteLLM_UserTable)
+        and key_owner.user_id == user_api_key_auth_obj.user_id
+        and key_owner.temp_budget_increase is None
+        else None
+    )
+    if user_api_key_auth_obj.user_id is not None and resolved_owner is None:
         fetch_coros.append(
             _safe_fetch(
                 "user",
@@ -2768,10 +2794,10 @@ async def run_centralized_common_checks(
             _team_obj_from_token(user_api_key_auth_obj) if user_api_key_auth_obj.team_id == UI_TEAM_ID else team_result
         )
 
-    user_object: LiteLLM_UserTable | None = user_result if isinstance(user_result, LiteLLM_UserTable) else None
-    if user_object is not None:
+    loaded_user: Final = user_result if isinstance(user_result, LiteLLM_UserTable) else resolved_owner
+    if loaded_user is not None:
         user_api_key_auth_obj.apply_user_semantic_cache_params(
-            semantic_cache_params(attribute_or_none(user_object, "metadata"))
+            semantic_cache_params(attribute_or_none(loaded_user, "metadata"))
         )
     project_object: Final[LiteLLM_ProjectTableCachedObj | None] = (
         None if isinstance(project_result, BaseException) else project_result
@@ -2781,7 +2807,7 @@ async def run_centralized_common_checks(
     carry_team_and_user_budget_state(
         valid_token=user_api_key_auth_obj,
         team_object=team_object,
-        user_object=user_object,
+        user_object=loaded_user,
     )
 
     await _inherit_org_identity(
@@ -2802,24 +2828,15 @@ async def run_centralized_common_checks(
     # the admin user_object whenever the token says PROXY_ADMIN, even
     # if a DB row was fetched. Every admin token except the built-in admin
     # identity (litellm_proxy_admin_name: the master key and the UI
-    # username/password login) keeps the row's personal budget (max_budget,
-    # and user_email for budget alerts) so common_checks enforces it; every
-    # other field keeps its default.
-    budget_row: Final = user_object if user_api_key_auth_obj.user_id != litellm_proxy_admin_name else None
-    if user_api_key_auth_obj.user_role == LitellmUserRoles.PROXY_ADMIN:
-        user_object = LiteLLM_UserTable(
-            user_id=user_api_key_auth_obj.user_id or litellm_proxy_admin_name,
-            user_role=LitellmUserRoles.PROXY_ADMIN,
-            spend=user_object.spend if user_object is not None else 0.0,
-            max_budget=budget_row.max_budget if budget_row is not None else None,
-            temp_budget_increase=budget_row.temp_budget_increase if budget_row is not None else None,
-            temp_budget_expiry=budget_row.temp_budget_expiry if budget_row is not None else None,
-            budget_limits=budget_row.budget_limits if budget_row is not None else None,
-            user_email=budget_row.user_email if budget_row is not None else None,
-            object_permission_id=(
-                user_object.object_permission_id if isinstance(user_object, LiteLLM_UserTable) else None
-            ),
+    # username/password login) keeps the row's personal budget for common_checks.
+    budget_row: Final = loaded_user if user_api_key_auth_obj.user_id != litellm_proxy_admin_name else None
+    user_object: Final = (
+        _admin_user_for_common_checks(
+            user_api_key_auth_obj.user_id or litellm_proxy_admin_name, loaded_user, budget_row
         )
+        if user_api_key_auth_obj.user_role == LitellmUserRoles.PROXY_ADMIN
+        else loaded_user
+    )
 
     user_api_key_auth_obj.carry_temporary_user_budget(user_object if budget_row is not None else None)
 
@@ -2827,11 +2844,10 @@ async def run_centralized_common_checks(
         user_api_key_auth_obj.project_metadata = project_object.metadata
         user_api_key_auth_obj.project_alias = project_object.project_alias
 
-    if (
-        end_user_id
-        and (key_end_user_budget_id is not None or user_api_key_auth_obj.jwt_claims is not None)
-        and prisma_client is not None
-    ):
+    has_default_end_user_budget: Final = (
+        key_end_user_budget_id is not None or user_api_key_auth_obj.jwt_claims is not None
+    )
+    if end_user_id and has_default_end_user_budget and prisma_client is not None:
         await _apply_key_end_user_default_budget_to_token(
             valid_token=user_api_key_auth_obj,
             end_user_object=end_user_object,

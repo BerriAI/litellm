@@ -46,10 +46,10 @@ from litellm.rust_bridge._native import (
 )
 
 
-def native_database_failure(kind: Literal["unreachable", "capacity", "other"]) -> NativeDatabaseFailure:
+def native_database_failure(kind: Literal["unreachable", "capacity", "lock_timeout", "other"]) -> NativeDatabaseFailure:
     failure: Final = NativeDatabaseFailure(f"database query failed: {kind}")
     failure.kind = kind
-    failure.unavailable = kind != "other"
+    failure.unavailable = kind in ("unreachable", "capacity")
     failure.requeue_safe = False
     return failure
 

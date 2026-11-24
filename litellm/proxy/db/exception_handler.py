@@ -392,6 +392,8 @@ class PrismaDBExceptionHandler:
         behind the holder."""
         import prisma
 
+        if isinstance(e, NativeDatabaseFailure):
+            return e.kind == "lock_timeout"
         if not isinstance(e, _exception_types(prisma.errors.PrismaError)):
             return False
         if PrismaDBExceptionHandler.postgres_sqlstate(e) == _LOCK_TIMEOUT_SQLSTATE:
@@ -494,6 +496,8 @@ class PrismaDBExceptionHandler:
         """
         import asyncio
 
+        if isinstance(e, NativeDatabaseFailure):
+            return e.unavailable
         if PrismaDBExceptionHandler.is_database_infrastructure_error(e):
             return True
         if PrismaDBExceptionHandler.is_database_transport_error(e):

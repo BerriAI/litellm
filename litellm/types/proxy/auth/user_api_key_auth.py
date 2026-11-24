@@ -216,10 +216,15 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
         if user is None or user.temp_budget_increase is None or user.temp_budget_expiry is None:
             self._temporary_user_budget = None
             return
-        budget: Final = self.user_max_budget if self.user_max_budget is not None else user.max_budget_with_rollover()
-        self._temporary_user_budget = (
-            (budget, user.temp_budget_increase, user.temp_budget_expiry) if budget is not None else None
+        budget: Final = user.max_budget_with_rollover()
+        active: Final = calculate_active_temp_budget_increase(
+            user.temp_budget_increase, user.temp_budget_expiry, datetime.now(timezone.utc)
         )
+        self._temporary_user_budget = (
+            (budget, active, user.temp_budget_expiry) if budget is not None and active > 0 else None
+        )
+        if self._temporary_user_budget is not None and self.user_spend is None:
+            self.user_spend = user.spend
 
     def effective_user_max_budget(self) -> float | None:
         if self._temporary_user_budget is None:
@@ -227,6 +232,12 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
         budget, increase, expiry = self._temporary_user_budget
         remaining: Final = calculate_active_temp_budget_increase(increase, expiry, datetime.now(timezone.utc))
         return budget + remaining if remaining > 0 else self.user_max_budget
+
+    def has_active_temporary_user_budget(self) -> bool:
+        if self._temporary_user_budget is None:
+            return False
+        _, increase, expiry = self._temporary_user_budget
+        return calculate_active_temp_budget_increase(increase, expiry, datetime.now(timezone.utc)) > 0
 
     # Values stay `object` rather than BudgetConfig: this is the raw JSON column,
     # and validating it here would make one malformed row fail auth outright.

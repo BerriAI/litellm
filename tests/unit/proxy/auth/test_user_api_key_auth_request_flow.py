@@ -19,6 +19,7 @@ import httpx
 import jwt
 import orjson
 import pytest
+import time_machine
 from cryptography.hazmat.primitives.asymmetric import rsa
 from starlette.routing import Route
 
@@ -3772,10 +3773,13 @@ async def test_named_admin_keeps_its_existing_base_cap_with_stored_rollover_cred
 
 
 @pytest.mark.asyncio
-async def test_centralized_common_checks_apply_temporary_personal_budget_to_named_admin() -> None:
+@pytest.mark.parametrize("legacy_fallback_cap", [15.0, None])
+async def test_centralized_common_checks_apply_temporary_personal_budget_to_named_admin(
+    legacy_fallback_cap: float | None,
+) -> None:
     db_user: Final = LiteLLM_UserTable(
         user_id="admin-with-temporary-budget",
-        spend=12.0,
+        spend=16.0,
         max_budget=10.0,
         budget_duration="30d",
         rollover_max_budget=15.0,
@@ -3784,10 +3788,38 @@ async def test_centralized_common_checks_apply_temporary_personal_budget_to_name
         temp_budget_expiry=datetime(9999, 1, 1, tzinfo=timezone.utc),
     )
     token: Final = UserAPIKeyAuth(
-        api_key="sk-test", user_id=db_user.user_id, user_role=LitellmUserRoles.PROXY_ADMIN, user_max_budget=15
+        api_key="sk-test",
+        user_id=db_user.user_id,
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        user_max_budget=legacy_fallback_cap,
     )
     await _run_checks_for_cached_user(db_user, token)
     assert token.effective_user_max_budget() == 18.0
+
+
+@pytest.mark.asyncio
+async def test_named_admin_rechecks_temporary_cap_after_loading_spend(monkeypatch: pytest.MonkeyPatch) -> None:
+    expiry: Final = datetime(2030, 1, 1, tzinfo=timezone.utc)
+    db_user: Final = LiteLLM_UserTable(
+        user_id="admin-user",
+        max_budget=10,
+        budget_duration="30d",
+        rollover_max_budget=30,
+        rollover_credit=5,
+        temp_budget_increase=3,
+        temp_budget_expiry=expiry,
+    )
+    token: Final = UserAPIKeyAuth(user_id=db_user.user_id, user_role=LitellmUserRoles.PROXY_ADMIN)
+    with time_machine.travel(expiry - timedelta(seconds=1), tick=False) as clock:
+        async def spend(**_kwargs: object) -> float:
+            clock.move_to(expiry)
+            return 12.0
+
+        monkeypatch.setattr(litellm.proxy.proxy_server, "get_current_spend", spend)
+        with pytest.raises(litellm.BudgetExceededError) as rejection:
+            await _run_checks_for_cached_user(db_user, token)
+
+    assert (rejection.value.max_budget, rejection.value.current_cost) == (10.0, 12.0)
 
 
 @pytest.mark.asyncio

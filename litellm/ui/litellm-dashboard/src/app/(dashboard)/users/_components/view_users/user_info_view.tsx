@@ -354,9 +354,15 @@ export default function UserInfoView({
         null,
       );
 
-      // Update local state with new values
       if (shouldRefreshBudget(userData, formValues)) {
-        setUserData(await userGetInfoV2(accessToken, userData.user_id, true));
+        try {
+          setUserData(await userGetInfoV2(accessToken, userData.user_id, true));
+        } catch (error) {
+          console.error("Error refreshing saved user:", error);
+          toast.warning(t("users.userInfo.toasts.updatedRefreshFailed"));
+          setIsEditing(false);
+          return;
+        }
       } else {
         const editedUser = {
           ...userData,

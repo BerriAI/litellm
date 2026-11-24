@@ -86,8 +86,11 @@ def owners(stores: RustAuthStores) -> FakeKeyOwnersStore:
     return stores.key_owners
 
 
-def _prisma() -> MagicMock:
-    return MagicMock(name="prisma_client")
+def _prisma(*, replica: bool = False) -> MagicMock:
+    prisma: Final = MagicMock(name="prisma_client")
+    if not replica:
+        prisma.read_db = prisma.writer_db
+    return prisma
 
 
 def _cache(redis: FakeAuthCache | None) -> UserApiKeyCache:
@@ -327,6 +330,16 @@ async def test_user_eviction_during_database_fill_leaves_the_user_uncached(
 
     assert owners.lookups == [(USER_ID, TEAM_ID, USER_ID, ORG_ID, None)]
     assert await cache.async_get_cache(key=key, model_type=LiteLLM_UserTable) is None
+
+
+@pytest.mark.asyncio
+async def test_replica_prefetch_warms_other_owners_without_reading_the_writer(owners: FakeKeyOwnersStore):
+    cache: Final = UserApiKeyCache()
+    await prefetch_auth_objects(refs=_refs(), user_api_key_cache=cache, prisma_client=_prisma(replica=True))
+
+    assert owners.lookups == [(None, TEAM_ID, USER_ID, ORG_ID, None)]
+    assert cache.get_local(AuthObject.team(TEAM_ID)) is not None
+    assert cache.get_local(AuthObject.user(USER_ID)) is None
 
 
 @pytest.mark.asyncio

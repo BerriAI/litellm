@@ -21121,6 +21121,7 @@
         "deleted": "User deleted successfully",
         "deleteFailed": "Failed to delete user",
         "updated": "User updated successfully",
+        "updatedRefreshFailed": "User saved. Reload the details to see the latest budget.",
         "updateFailed": "Failed to update user"
       },
       "backToUsers": "Back to Users",

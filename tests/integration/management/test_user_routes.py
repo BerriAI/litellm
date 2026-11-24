@@ -1,3 +1,5 @@
+import json
+import threading
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
@@ -9,7 +11,7 @@ import psycopg
 from tests.integration._support.client import Gateway, eventually, object_value
 from tests.integration._support.database import read_rows, scratch_database, write_rows
 from tests.integration._support.process import owned_proxy, owned_proxy_process
-from tests.integration._support.upstream import JsonResponse, delete_scenario, register_scenario
+from tests.integration._support.wire import Reply, Request, wire_server
 
 
 def test_concurrent_user_creation_persists_models_and_aliases(gateway: Gateway) -> None:
@@ -46,11 +48,17 @@ def test_user_info_v2_remains_available_when_the_writer_user_table_is_locked(gat
     with scratch_database("user_info_writer") as writer, scratch_database("user_info_replica") as reader:
         with owned_proxy(gateway, tmp_path / "seed-replica", {"DATABASE_URL": reader}) as replica_seed:
             replica_seed.post("/user/new", {"user_id": user, "user_role": "internal_user", "max_budget": 10})
+            key: Final = replica_seed.post("/key/generate", {"user_id": user})["key"]
+            assert isinstance(key, str)
         with owned_proxy_process(
             gateway,
             tmp_path / "replica-proxy",
-            {"DATABASE_URL": writer, "DATABASE_URL_READ_REPLICA": reader},
-            client_timeout=3,
+            {
+                "DATABASE_URL": writer,
+                "DATABASE_URL_READ_REPLICA": reader,
+                "PROXY_DB_LOOKUP_DEADLINE_SECONDS": "10",
+            },
+            client_timeout=16,
         ) as proxy:
             write_rows(
                 """INSERT INTO "LiteLLM_UserTable" (user_id, user_role, max_budget)
@@ -60,10 +68,36 @@ def test_user_info_v2_remains_available_when_the_writer_user_table_is_locked(gat
             )
             expected: Final = proxy.gateway.get("/v2/user/info", params)
             assert expected["user_id"] == user and expected["max_budget"] == 10
+            write_rows(
+                """UPDATE "LiteLLM_UserTable"
+                   SET spend = 12, temp_budget_increase = 3, temp_budget_expiry = now() + interval '1 hour'
+                   WHERE user_id = %s""",
+                (user,),
+                database_url=reader,
+            )
             with psycopg.connect(writer) as locked:
                 locked.execute('LOCK TABLE "LiteLLM_UserTable" IN ACCESS EXCLUSIVE MODE')
                 result: Final = proxy.gateway.get("/v2/user/info", params)
                 assert result["user_id"] == user and result["max_budget"] == 10
+                own: Final = proxy.gateway.request("GET", "/v2/user/info", params=params, key=key)
+                assert own.status_code == 200, own.text
+                assert own.json()["max_budget"] == 10
+                chat: Final = proxy.gateway.request(
+                    "POST",
+                    "/v1/chat/completions",
+                    {"model": "openai/gpt-5-mini", "messages": [{"role": "user", "content": "budget check"}]},
+                    key=key,
+                )
+                assert chat.status_code == 422 and "budget" in chat.text.lower(), chat.text
+                readiness: Final = proxy.gateway.request("GET", "/health/readiness")
+                assert readiness.status_code == 200, readiness.text
+                assert readiness.json()["db"] == "connected"
+            write_rows(
+                """UPDATE "LiteLLM_UserTable"
+                   SET spend = 0, temp_budget_increase = NULL, temp_budget_expiry = NULL WHERE user_id = %s""",
+                (user,),
+                database_url=reader,
+            )
             assert proxy.gateway.get("/v2/user/info", params) == expected
             expiry: Final = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
             proxy.gateway.post("/user/update", {**params, "temp_budget_increase": 3, "temp_budget_expiry": expiry})
@@ -181,7 +215,9 @@ def test_named_proxy_admin_temporary_budget_preserves_the_existing_base_cap(gate
         assert "budget" in blocked.text.lower(), blocked.text
 
         expiry: Final = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
-        gateway.post("/user/update", {"user_id": user, "temp_budget_increase": 3, "temp_budget_expiry": expiry})
+        gateway.post(
+            "/user/update", {"user_id": user, "spend": 16, "temp_budget_increase": 3, "temp_budget_expiry": expiry}
+        )
         info: Final = gateway.get("/v2/user/info", {"user_id": user})
         assert (info["rollover_credit"], info["temp_budget_increase"], info["effective_max_budget"]) == (5, 3, 18)
         allowed: Final = gateway.request("POST", "/v1/chat/completions", chat, key=key)
@@ -201,18 +237,27 @@ def test_named_proxy_admin_temporary_budget_preserves_the_existing_base_cap(gate
 
 
 def test_paid_fallback_obeys_the_named_admin_temporary_cap(gateway: Gateway, tmp_path: Path) -> None:
+    primary_error: Final = "integration free primary failed"
+    hold: Final = threading.Event()
+    entered: Final = threading.Event()
+    release: Final = threading.Event()
+
+    def respond(_request: Request) -> Reply:
+        if hold.is_set():
+            entered.set()
+        return Reply(
+            status=500,
+            body=json.dumps({"error": {"message": primary_error}}).encode(),
+            gate_before_first=release if hold.is_set() else None,
+        )
+
     with (
+        wire_server(respond) as upstream,
         scratch_database("named_admin_fallback") as database,
         owned_proxy(gateway, tmp_path, {"DATABASE_URL": database}) as proxy,
         proxy.scenario() as scenario,
     ):
-        primary_error: Final = "integration free primary failed"
-        upstream: Final = register_scenario(
-            f"free-primary-{uuid.uuid4().hex}",
-            JsonResponse(content_type="application/json", status=500, body={"error": {"message": primary_error}}),
-        )
-        scenario.cleanups.callback(delete_scenario, upstream)
-        free: Final = scenario.model(api_base=upstream.api_base(), input_cost_per_token=0.0, output_cost_per_token=0.0)
+        free: Final = scenario.model(api_base=f"{upstream.url}/v1", input_cost_per_token=0.0, output_cost_per_token=0.0)
         paid: Final = scenario.model(input_cost_per_token=0.001, output_cost_per_token=0.001)
         proxy.post(
             "/config/update",
@@ -242,7 +287,33 @@ def test_paid_fallback_obeys_the_named_admin_temporary_cap(gateway: Gateway, tmp
         allowed: Final = proxy.request("POST", "/v1/chat/completions", chat, key=key)
         assert allowed.status_code == 200, allowed.text
 
-        proxy.post("/user/update", {"user_id": user, "temp_budget_increase": None, "temp_budget_expiry": None})
+        hold.set()
+        proxy.post("/user/update", {"user_id": user, "spend": 2})
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            under_cap: Final = pool.submit(proxy.request, "POST", "/v1/chat/completions", chat, key=key)
+            try:
+                assert entered.wait(timeout=15), "The upstream did not receive the admitted request"
+                with psycopg.connect(database) as locked:
+                    locked.execute('LOCK TABLE "LiteLLM_UserTable" IN ACCESS EXCLUSIVE MODE')
+                    release.set()
+                    while_locked: Final = under_cap.result(timeout=8)
+                    assert while_locked.status_code == 200, while_locked.text
+            finally:
+                release.set()
+
+        entered.clear()
+        release.clear()
+        proxy.post("/user/update", {"user_id": user, "spend": 16})
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            pending: Final = pool.submit(proxy.request, "POST", "/v1/chat/completions", chat, key=key)
+            try:
+                assert entered.wait(timeout=15), "The upstream did not receive the admitted request"
+                proxy.post("/user/update", {"user_id": user, "temp_budget_increase": None, "temp_budget_expiry": None})
+            finally:
+                release.set()
+            after_clear: Final = pending.result(timeout=15)
+        assert after_clear.status_code == 500 and primary_error in after_clear.text, after_clear.text
+
         cleared: Final = proxy.request("POST", "/v1/chat/completions", chat, key=key)
         assert cleared.status_code == 500 and primary_error in cleared.text, cleared.text
 

@@ -36,6 +36,18 @@ _SPEND_RESET_SET: Final = (
     " updated_at = (NOW() AT TIME ZONE 'UTC')"
 )
 _SPEND_RESET_WHERE: Final = " AND budget_reset_at IS NOT DISTINCT FROM $4::timestamp"
+_USER_TEMP_BUDGET_WHERE: Final = (
+    " AND (temp_budget_increase IS NOT DISTINCT FROM ${amount}::text::double precision"
+    " OR ABS(temp_budget_increase::text::numeric - ${amount}::text::numeric)"
+    " <= ABS(${amount}::text::numeric) * 0.000000000000001)"
+    " AND temp_budget_expiry IS NOT DISTINCT FROM ${expiry}::timestamp"
+)
+# Evaluate expiry after the CTE acquires the lock, even when the lock holder leaves the row unchanged.
+_USER_TEMP_BUDGET_ACTIVE_WHERE: Final = (
+    ' AND EXISTS (WITH locked_user AS MATERIALIZED (SELECT temp_budget_expiry FROM "LiteLLM_UserTable"'
+    " WHERE user_id = $1 FOR UPDATE)"
+    " SELECT 1 FROM locked_user WHERE temp_budget_expiry > (clock_timestamp() AT TIME ZONE 'UTC'))"
+)
 _KEY_SPEND_RESET_SQL: Final = (
     'UPDATE "LiteLLM_VerificationToken"' + _SPEND_RESET_SET + " WHERE token = $1" + _SPEND_RESET_WHERE
 )
@@ -93,8 +105,9 @@ def _queue_guarded_spend_reset(
     spend_decrement: float,
     expected_reset_at: datetime | None,
     spend_after_reset: float,
+    *where_values: str | None,
 ) -> bool:
-    if budget_reset_at is None or spend_decrement == 0 or not isfinite(spend_decrement):
+    if budget_reset_at is None or (spend_decrement == 0 and not where_values) or not isfinite(spend_decrement):
         return False
     # Prisma rounds Float reads, so exact subtraction can still leave a few ULPs.
     tolerance: Final = 4 * ulp(spend_decrement) if spend_after_reset == 0.0 else 0.0
@@ -105,6 +118,7 @@ def _queue_guarded_spend_reset(
         repr(spend_decrement),
         _reset_timestamp(expected_reset_at),
         str(tolerance),
+        *where_values,
     )
     return True
 
@@ -151,15 +165,21 @@ class UserSpendResetWrites:
         closed_spend: float,
         spend_decrement: float,
         spend_after_reset: float,
+        expected_temp_budget: tuple[float | None, datetime | None] | None = None,
+        require_active_temp_budget: bool = False,
     ) -> None:
+        guard: Final = self._temp_budget_guard(expected_temp_budget)
         self.batch.execute_raw(
-            _USER_CREDIT_RESET_SQL,
+            _USER_CREDIT_RESET_SQL
+            + (_USER_TEMP_BUDGET_WHERE.format(amount=7, expiry=8) if guard else "")
+            + (_USER_TEMP_BUDGET_ACTIVE_WHERE if require_active_temp_budget else ""),
             user_id,
             _reset_timestamp(budget_reset_at),
             repr(spend_decrement),
             _reset_timestamp(expected_reset_at),
             str(4 * ulp(spend_decrement) if spend_after_reset == 0.0 else 0.0),
             repr(closed_spend),
+            *guard,
         )
 
     def queue_spend_reset(
@@ -169,21 +189,42 @@ class UserSpendResetWrites:
         spend_decrement: float,
         expected_reset_at: datetime | None,
         spend_after_reset: float = 0.0,
+        expected_temp_budget: tuple[float | None, datetime | None] | None = None,
+        require_active_temp_budget: bool = False,
     ) -> None:
+        guard: Final = self._temp_budget_guard(expected_temp_budget)
         if _queue_guarded_spend_reset(
             self.batch,
-            _USER_SPEND_RESET_SQL,
+            _USER_SPEND_RESET_SQL
+            + (_USER_TEMP_BUDGET_WHERE.format(amount=6, expiry=7) if guard else "")
+            + (_USER_TEMP_BUDGET_ACTIVE_WHERE if require_active_temp_budget else ""),
             user_id,
             budget_reset_at,
             spend_decrement,
             expected_reset_at,
             spend_after_reset,
+            *guard,
         ):
             return
         self.table.update_many(
-            where={"user_id": user_id, "budget_reset_at": expected_reset_at},
+            where={
+                "user_id": user_id,
+                "budget_reset_at": expected_reset_at,
+                **(
+                    {"temp_budget_increase": expected_temp_budget[0], "temp_budget_expiry": expected_temp_budget[1]}
+                    if expected_temp_budget is not None
+                    else {}
+                ),
+            },
             data=_spend_reset_data(budget_reset_at, spend_decrement),
         )
+
+    @staticmethod
+    def _temp_budget_guard(expected: tuple[float | None, datetime | None] | None) -> tuple[str | None, ...]:
+        if expected is None:
+            return ()
+        amount, expiry = expected
+        return (repr(amount) if amount is not None else None, _reset_timestamp(expiry))
 
 
 @dataclass(frozen=True, slots=True)

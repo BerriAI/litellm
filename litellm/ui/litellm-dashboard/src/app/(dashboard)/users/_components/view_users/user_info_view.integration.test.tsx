@@ -183,6 +183,25 @@ describe("UserInfoView add-to-team form", () => {
     expect(await screen.findByText("$67.5700")).toBeInTheDocument();
   });
 
+  it("closes the editor after saving even if the budget refresh fails", async () => {
+    mockUserGetInfoV2.mockImplementation(async (_token, _user, readAfterWrite) => {
+      if (readAfterWrite) throw new Error("database unavailable");
+      return {
+        ...MOCK_USER_DATA_NO_TEAMS,
+        temp_budget_increase: 25,
+        temp_budget_expiry: "9999-01-01T12:01:00Z",
+        effective_max_budget: 125,
+      };
+    });
+    render(<UserInfoView {...defaultProps} initialTab={1} startInEditMode />);
+
+    const budget = await screen.findByRole("spinbutton", { name: /max budget/i });
+    fireEvent.change(budget, { target: { value: "42.57" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
+
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Save Changes" })).not.toBeInTheDocument());
+  });
+
   it("shows the new base budget immediately after saving a base-budget edit", async () => {
     mockUserGetInfoV2.mockResolvedValue(MOCK_USER_DATA_NO_TEAMS);
     render(<UserInfoView {...defaultProps} initialTab={1} startInEditMode />);

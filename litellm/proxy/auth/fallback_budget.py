@@ -33,21 +33,25 @@ Two known limitations of that narrow scope, both shared with `fallback_model_acc
 
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Final, Protocol
 
 from pydantic import ValidationError
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.models.budget import calculate_active_temp_budget_increase
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.auth_checks import (  # noqa: F401  # legacy module exports
     _is_model_cost_zero,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     is_model_cost_zero,  # pyright: ignore[reportPrivateUsage]  # the zero-cost predicate the auth-time budget checks use; no public equivalent
 )
+from litellm.proxy.db.db_lookup_gate import bounded_db_lookup
 from litellm.redis.stores.spend_counters import (
     key_counter,
     user_counter,
 )
+from litellm.repositories.user_repository import UserRepository
 from litellm.router_api import RegistryReader, RoutingContext
 from litellm.types.llms.base import LiteLLMBaseModel
 
@@ -118,6 +122,30 @@ async def _counter_spend(counter_key: str, fallback_spend: float, max_budget: fl
     )
 
 
+async def _current_personal_budget(
+    valid_token: UserAPIKeyAuth, user_id: str, checked_budget: float, spend: float
+) -> float | None:
+    from litellm.proxy.proxy_server import prisma_client
+
+    legacy_budget: Final = valid_token.user_max_budget
+    if legacy_budget is not None and spend < legacy_budget:
+        return valid_token.effective_user_max_budget()
+    if not valid_token.has_active_temporary_user_budget() or prisma_client is None:
+        return valid_token.effective_user_max_budget()
+    user: Final = await bounded_db_lookup(
+        UserRepository(prisma_client, use_writer=True).find_by_id(user_id), name="user", tracker=None
+    )
+    now: Final = datetime.now(timezone.utc)
+    if (
+        user is not None
+        and calculate_active_temp_budget_increase(user.temp_budget_increase, user.temp_budget_expiry, now) > 0
+    ):
+        current_budget: Final = user.effective_max_budget(now)
+        if current_budget is not None:
+            return min(checked_budget, current_budget)
+    return legacy_budget
+
+
 async def is_token_within_budget_for_model(
     *,
     model: str,
@@ -157,7 +185,10 @@ async def is_token_within_budget_for_model(
             fallback_spend=valid_token.user_spend or 0.0,
             max_budget=user_budget,
         )
-        if user_spend >= user_budget:
+        admission_budget: Final = await _current_personal_budget(
+            valid_token, valid_token.user_id, user_budget, user_spend
+        )
+        if admission_budget is not None and user_spend >= admission_budget:
             return False
 
     team_member_model_max_budget: Final = valid_token.team_member_model_max_budget

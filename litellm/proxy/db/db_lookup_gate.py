@@ -67,7 +67,7 @@ async def bounded_db_lookup(
     *,
     name: str,
     deadline_seconds: float | None = None,
-    tracker: DBLookupStallTracker = db_lookup_stall_tracker,
+    tracker: DBLookupStallTracker | None = db_lookup_stall_tracker,
 ) -> LookupT:
     timeout: Final = PROXY_DB_LOOKUP_DEADLINE_SECONDS if deadline_seconds is None else deadline_seconds
     task: Final = asyncio.ensure_future(lookup)
@@ -79,12 +79,14 @@ async def bounded_db_lookup(
     if task not in done:
         task.cancel()
         task.add_done_callback(_consume_abandoned_lookup)
-        tracker.record_hit()
+        if tracker is not None:
+            tracker.record_hit()
         raise DBLookupDeadlineExceeded(name, timeout)
     try:
         return task.result()
     except DBLookupDeadlineExceeded:
         raise
     except asyncio.TimeoutError as e:
-        tracker.record_hit()
+        if tracker is not None:
+            tracker.record_hit()
         raise DBLookupDeadlineExceeded(name, timeout) from e

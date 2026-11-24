@@ -30,7 +30,7 @@ from litellm.redis.stores.cache_invalidation import CacheInvalidation
 import httpx
 from prisma import Prisma
 from litellm._service_logger import ServiceTypes
-from tests.unit.proxy.rust_auth_stores import RustAuthStores
+from tests.unit.proxy.rust_auth_stores import RustAuthStores, native_database_failure
 from litellm.caching.caching import DualCache
 from litellm.types.mcp import MCPTransport
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
@@ -2191,8 +2191,14 @@ async def test_get_user_object_cache_miss_reads_the_rust_store_which_reports_its
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("claim_subject", [None, "linked-subject"])
+@pytest.mark.parametrize(
+    "writer_failure",
+    [ConnectionRefusedError(), native_database_failure("unreachable"), native_database_failure("lock_timeout")],
+)
 async def test_user_budget_replica_fallback_preserves_base_cap_without_caching_temporary_fields(
-    rust_auth_stores: RustAuthStores, claim_subject: str | None,
+    rust_auth_stores: RustAuthStores,
+    claim_subject: str | None,
+    writer_failure: Exception,
 ) -> None:
     user_id: Final = f"replica-user-{uuid.uuid4()}"
     row: Final = LiteLLM_UserTable(
@@ -2205,7 +2211,7 @@ async def test_user_budget_replica_fallback_preserves_base_cap_without_caching_t
     )
     lookup_id: Final = claim_subject or user_id
     rust_auth_stores.user.rows = {lookup_id: row.model_dump()}
-    rust_auth_stores.user.writer = {lookup_id: ConnectionRefusedError()}
+    rust_auth_stores.user.writer = {lookup_id: writer_failure}
     cache: Final = UserApiKeyCache()
     prisma: Final = MagicMock()
 
