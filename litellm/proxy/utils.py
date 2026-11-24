@@ -5770,15 +5770,26 @@ class ProxyLogging:
         """
         Release an ended request's v3 concurrency acquisition independently of logging.
         The request stash serializes release with callbacks and clears the acquisition,
-        so repeated cleanup cannot release another request's slot.
+        so repeated cleanup cannot release another request's slot. A completed request's
+        legacy limiter slot is released by the success callback it always fires.
         """
         limiter: Final = self.get_proxy_hook("parallel_request_limiter")
         if not isinstance(limiter, ParallelRequestLimiterHook):
             return
         await limiter.async_release_max_parallel_requests_on_disconnect(user_api_key_dict)
 
-    arelease_max_parallel_requests_on_disconnect = arelease_max_parallel_requests
-    _arelease_max_parallel_requests_on_disconnect = arelease_max_parallel_requests
+    async def arelease_max_parallel_requests_on_disconnect(self, user_api_key_dict: UserAPIKeyAuth) -> None:
+        """Release the slot of a request that ended with no callback to release it, a client gone before the first
+        chunk or a Responses WebSocket refused while opening. Either limiter frees only a slot this request recorded
+        taking, so a refused request or a repeated cleanup releases nothing."""
+        limiter: Final = self.get_proxy_hook("parallel_request_limiter")
+        if isinstance(limiter, _PROXY_MaxParallelRequestsHandler):
+            await limiter.async_release_admitted_max_parallel_requests(user_api_key_dict)
+        elif isinstance(limiter, ParallelRequestLimiterHook):
+            await limiter.async_release_max_parallel_requests_on_disconnect(user_api_key_dict)
+
+    _arelease_max_parallel_requests_on_disconnect = arelease_max_parallel_requests_on_disconnect
+    arelease_refused_responses_websocket_slot = arelease_max_parallel_requests_on_disconnect
 
     async def arelease_responses_websocket_slot(self, user_api_key_dict: UserAPIKeyAuth) -> None:
         """Release the slot a Responses WebSocket took at admission. Only call this once that admission succeeded:
@@ -5787,14 +5798,6 @@ class ProxyLogging:
         if not isinstance(limiter, (ParallelRequestLimiterHook, _PROXY_MaxParallelRequestsHandler)):
             return
         await limiter.async_release_max_parallel_requests_on_disconnect(user_api_key_dict)
-
-    async def arelease_refused_responses_websocket_slot(self, user_api_key_dict: UserAPIKeyAuth) -> None:
-        """Release the slot of a Responses WebSocket refused while opening, only when its admission got that far."""
-        limiter: Final = self.get_proxy_hook("parallel_request_limiter")
-        if isinstance(limiter, _PROXY_MaxParallelRequestsHandler):
-            await limiter.async_release_admitted_max_parallel_requests(user_api_key_dict)
-        elif isinstance(limiter, ParallelRequestLimiterHook):
-            await limiter.async_release_max_parallel_requests_on_disconnect(user_api_key_dict)
 
     async def enforce_mcp_server_rate_limits(
         self,
