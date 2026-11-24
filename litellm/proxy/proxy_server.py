@@ -10610,7 +10610,7 @@ def _make_keepalive_resolver(request_data: Mapping[str, object]) -> Callable[[ob
     return _resolve
 
 
-def _transcription_sse_error_frame(client_error: Exception) -> str:
+def openai_sse_error_frame(client_error: Exception) -> str:
     status_code: Final = error_status_code(client_error, 500)
     error_returned: Final = json.dumps(
         {
@@ -14092,7 +14092,7 @@ async def audio_transcriptions(
                             else data
                         ),
                     )
-                    yield _transcription_sse_error_frame(stream_error if replacement is None else replacement)
+                    yield openai_sse_error_frame(stream_error if replacement is None else replacement)
                     yield TRANSCRIPTION_STREAM_DONE_FRAME
                 finally:
                     with anyio.CancelScope(shield=True):
