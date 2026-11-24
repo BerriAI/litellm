@@ -28,6 +28,7 @@ from litellm.litellm_core_utils.tool_fields import drop_policy, drops_mcp_server
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.responses.stored_system_prompt import awithout_stored_instructions, without_stored_instructions
 from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
+from litellm.rust_bridge.public_call import optional_str
 from litellm.types.integrations.custom_logger import CONVERTED_STREAM_KEYS
 from litellm.types.llms.anthropic import (
     AllAnthropicMessageValues,
@@ -48,7 +49,7 @@ from ..adapters.handler import (
     request_safeguards_evaluator,
     resent_without_rejected_reasoning,
 )
-from ..deferred_tools import deferred_tools_mode, native_tool_search_name
+from ..deferred_tools import native_tool_search_name, usable_deferred_tools_mode
 from ..safeguards import with_safeguard_results
 from ..utils import (
     KNOWN_REASONING_EFFORTS,
@@ -390,7 +391,9 @@ def _build_responses_kwargs(
             model, forwarded_kwargs.get("custom_llm_provider")
         ),
         preserve_system_instructions=preserves_system_instructions(forwarded_kwargs),
-        deferred_tools=deferred_tools_mode(forwarded_kwargs.get("model_info")),
+        deferred_tools=usable_deferred_tools_mode(
+            forwarded_kwargs.get("model_info"), optional_str(forwarded_kwargs.get("custom_llm_provider"))
+        ),
     )
     system_instructions: Final = responses_kwargs.get("instructions")
 
@@ -613,7 +616,9 @@ class LiteLLMMessagesToResponsesAPIHandler:
             )
 
         safeguards_evaluator: Final = request_safeguards_evaluator(kwargs, messages)
-        tool_search_name: Final = native_tool_search_name(kwargs.get("model_info"), tools)
+        tool_search_name: Final = native_tool_search_name(
+            kwargs.get("model_info"), optional_str(kwargs.get("custom_llm_provider")), tools
+        )
         responses_kwargs, result = await _aresponses_without_rejected_reasoning(
             messages, responses_kwargs_for, drop_params=drops_unsupported_params(kwargs.get("drop_params"))
         )
@@ -704,7 +709,9 @@ class LiteLLMMessagesToResponsesAPIHandler:
                 extra_kwargs=kwargs,
             )
 
-        tool_search_name: Final = native_tool_search_name(kwargs.get("model_info"), tools)
+        tool_search_name: Final = native_tool_search_name(
+            kwargs.get("model_info"), optional_str(kwargs.get("custom_llm_provider")), tools
+        )
         responses_kwargs, result = _responses_without_rejected_reasoning(
             messages, responses_kwargs_for, drop_params=drops_unsupported_params(kwargs.get("drop_params"))
         )

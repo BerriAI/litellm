@@ -47,10 +47,11 @@ from litellm.utils import ProviderConfigManager, client
 
 from ..adapters.handler import LiteLLMMessagesToCompletionTransformationHandler, request_safeguards_evaluator
 from ..deferred_tools import (
-    CLIENT_TOOL_SEARCH_PROVIDERS,
-    deferred_tools_setting,
+    native_messages_deferred_tools_refusal,
     native_tool_search_name,
     unknown_deferred_tools_refusal,
+    unusable_deferred_tools_refusal,
+    usable_deferred_tools_mode,
 )
 from ..responses_adapters.handler import LiteLLMMessagesToResponsesAPIHandler
 from ..safeguards import (
@@ -125,29 +126,9 @@ def _should_route_to_responses_api(
     return _responses_mode_is_lost_by_prefix_strip(requested_model, resolved_model, custom_llm_provider)
 
 
-def _refuse_unknown_deferred_tools(deployment_model_info: object, drop_params: bool) -> None:
-    refusal: Final = unknown_deferred_tools_refusal(deployment_model_info, drop_params)
+def _refuse_deferred_tools(refusal: str | None) -> None:
     if refusal is not None:
         raise AnthropicError(status_code=400, message=refusal)
-
-
-def _serves_native_deferred_tools(
-    deployment_model_info: object, custom_llm_provider: str | None, drop_params: bool
-) -> bool:
-    if deferred_tools_setting(deployment_model_info) != "native":
-        return False
-    if custom_llm_provider in CLIENT_TOOL_SEARCH_PROVIDERS:
-        return True
-    if drop_params:
-        return False
-    raise AnthropicError(
-        status_code=400,
-        message=(
-            f"model_info.deferred_tools native needs a Responses API with client tool search, which provider "
-            f"{custom_llm_provider} lacks. Pick emulate, passthrough or drop for this deployment, or set drop_params "
-            "to send deferred tools the drop way"
-        ),
-    )
 
 
 _ToolChoice: Final = TypeVar("_ToolChoice", bound=Mapping[str, object])
@@ -676,11 +657,15 @@ def anthropic_messages_handler(
         model, custom_llm_provider, kwargs.get("model_info")
     )
     deployment_model_info: Final = as_str_mapping(kwargs.get("model_info"))
-    _refuse_unknown_deferred_tools(deployment_model_info, drops_unsupported_params(litellm_params.drop_params))
+    drops_deferred_tools_setting: Final = drops_unsupported_params(litellm_params.drop_params)
+    _refuse_deferred_tools(unknown_deferred_tools_refusal(deployment_model_info, drops_deferred_tools_setting))
     if anthropic_messages_provider_config is None:
         # Route to Responses API for OpenAI / Azure, chat/completions for everything else.
-        native_deferred_tools: Final = _serves_native_deferred_tools(
-            deployment_model_info, custom_llm_provider, drops_unsupported_params(litellm_params.drop_params)
+        _refuse_deferred_tools(
+            unusable_deferred_tools_refusal(deployment_model_info, custom_llm_provider, drops_deferred_tools_setting)
+        )
+        native_deferred_tools: Final = (
+            usable_deferred_tools_mode(deployment_model_info, custom_llm_provider) == "native"
         )
         request_messages: Final = cast("list[dict[str, object]]", messages)  # cast-ok: the handler takes untyped dicts
         request_tools: Final = cast("list[dict[str, object]] | None", tools)  # cast-ok: the handler takes untyped dicts
@@ -717,8 +702,8 @@ def anthropic_messages_handler(
                 thinking=thinking,
                 tool_choice=_without_forced_native_tool_search(
                     bridged_tool_choice,
-                    native_tool_search_name(deployment_model_info, request_tools),
-                    drops_unsupported_params(litellm_params.drop_params),
+                    native_tool_search_name(deployment_model_info, custom_llm_provider, request_tools),
+                    drops_deferred_tools_setting,
                 ),
                 tools=cast(  # cast-ok: dict tools already fit the handler's union
                     "list[AllAnthropicToolsValues | dict[str, object]] | None", bridged_tools
@@ -771,6 +756,9 @@ def anthropic_messages_handler(
             f"custom_llm_provider is required for Anthropic messages, passed in model={model}, custom_llm_provider={custom_llm_provider}"
         )
 
+    _refuse_deferred_tools(
+        native_messages_deferred_tools_refusal(deployment_model_info, custom_llm_provider, drops_deferred_tools_setting)
+    )
     request_kwargs: Final = cast(dict[str, object], kwargs)  # cast-ok: **kwargs of the handler is untyped
     marked_tools: Final = tools_marked_for_a_tool_config_point(
         local_vars.get("tools"), request_kwargs.pop("cache_control_injection_points", None)

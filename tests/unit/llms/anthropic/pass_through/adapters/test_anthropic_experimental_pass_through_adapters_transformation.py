@@ -6428,7 +6428,7 @@ def test_chat_route_sends_deferred_tools_as_plain_functions_unless_passthrough(
         _deferred_tool_request(), deployment_model_info=deployment_model_info
     )
 
-    tools = openai_request["tools"]
+    tools: Final = openai_request["tools"]
     assert [tool["function"]["name"] for tool in tools] == ["Read", "mcp__weather__get_forecast"]
     assert not any("defer_loading" in tool for tool in tools)
     assert not any("defer_loading" in tool["function"]["parameters"] for tool in tools)
@@ -6439,7 +6439,7 @@ def test_chat_route_passthrough_keeps_defer_loading_on_the_deferred_tool():
         _deferred_tool_request(), deployment_model_info={"deferred_tools": "passthrough"}
     )
 
-    tools = openai_request["tools"]
+    tools: Final = openai_request["tools"]
     assert {tool["function"]["name"]: tool.get("defer_loading") for tool in tools} == {
         "Read": None,
         "mcp__weather__get_forecast": True,

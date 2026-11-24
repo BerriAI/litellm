@@ -98,6 +98,10 @@ def _tool_reference_names(tool_result: Mapping[str, object]) -> Iterator[str]:
             yield name
 
 
+def _tool_search_text_block(text: str) -> dict[str, str]:  # mutable-ok: API input content block
+    return {"type": "input_text", "text": f"ToolSearch tool output, not a message from the user: {json.dumps(text)}"}
+
+
 def _tool_result_texts(tool_result: Mapping[str, object]) -> Iterator[str]:
     content: Final = tool_result.get("content")
     if isinstance(content, str):
@@ -132,7 +136,7 @@ class ToolSearchReplay:
             return (self.output_item(tool_result),)
         return (
             self.output_item(tool_result),
-            {"type": "message", "role": "user", "content": [{"type": "input_text", "text": text} for text in texts]},
+            {"type": "message", "role": "user", "content": [_tool_search_text_block(text) for text in texts]},
         )
 
     def output_item(self, tool_result: Mapping[str, object]) -> dict[str, object]:  # mutable-ok: API input item
