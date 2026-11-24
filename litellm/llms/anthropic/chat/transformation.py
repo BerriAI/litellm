@@ -2924,7 +2924,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         _has_advisor = any(isinstance(t, dict) and t.get("type") == ANTHROPIC_ADVISOR_TOOL_TYPE for t in _all_tools)
         anthropic_messages = list(
             without_stale_tool_search_results(
-                anthropic_messages if _has_advisor else strip_advisor_blocks_from_messages(anthropic_messages),
+                anthropic_messages
+                if _has_advisor
+                else strip_advisor_blocks_from_messages(anthropic_messages, drop_params=drop_params),
                 _TOOLS_ADAPTER.validate_python(_all_tools),
             )
         )

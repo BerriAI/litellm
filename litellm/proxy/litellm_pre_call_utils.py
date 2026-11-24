@@ -139,25 +139,50 @@ _SPECIAL_HEADERS_CACHE: Final = frozenset(str(v.value).lower() for v in SpecialH
 _DECODED_JSON: Final = TypeAdapter(object)
 
 
-def resolve_semantic_cache_policy(auth: UserAPIKeyAuth) -> SemanticCachePolicy:
+def resolve_response_cache_policy(auth: UserAPIKeyAuth, *, semantic: bool) -> SemanticCachePolicy:
     scoped: Final[tuple[tuple[CachePolicyScope, SemanticCacheParams | None], ...]] = (
         ("key", semantic_cache_params(attribute_or_none(auth, "metadata"))),
         ("user", auth.user_semantic_cache_params),
         ("team", semantic_cache_params(auth.team_metadata)),
     )
-    return next(
-        (SemanticCachePolicy(scope=scope, params=params) for scope, params in scoped if params is not None),
+    policy: Final = next(
+        (
+            SemanticCachePolicy(scope=scope, params=params)
+            for scope, params in scoped
+            if params is not None and (semantic or params.enabled is not None or params.ttl is not None)
+        ),
         SemanticCachePolicy(scope="global"),
     )
+    if semantic or policy.params is None:
+        return policy
+    enabled: Final = next(
+        (params.enabled for _, params in scoped if params is not None and params.enabled is not None), None
+    )
+    ttl: Final = next((params.ttl for _, params in scoped if params is not None and params.ttl is not None), None)
+    return SemanticCachePolicy(scope=policy.scope, params=SemanticCacheParams(enabled=enabled, ttl=ttl))
 
 
-def _semantic_cache_fields(request: object, auth: UserAPIKeyAuth) -> Mapping[str, object]:
+def _response_cache_fields(request: object, auth: UserAPIKeyAuth) -> Mapping[str, object]:
     response_cache: Final = litellm.cache
-    if response_cache is None or response_cache.is_semantic_cache() is not True:
+    if response_cache is None:
+        return MappingProxyType({})
+    semantic: Final = response_cache.is_semantic_cache()
+    policy: Final = resolve_response_cache_policy(auth, semantic=semantic)
+    if not semantic and policy.scope == "global":
         return MappingProxyType({})
     request_fields: Final = as_str_mapping(request)
     cache_controls: Final = _request_fields(request_fields.get("cache") if request_fields is not None else None)
-    return {"cache": {**cache_controls, SEMANTIC_CACHE_POLICY_KEY: resolve_semantic_cache_policy(auth)}}
+    key_metadata: Final = as_str_mapping(attribute_or_none(auth, "metadata"))
+    key_controls: Final = as_str_mapping(key_metadata.get("cache")) if key_metadata is not None else None
+    key_opts_out: Final = (
+        not semantic
+        and key_controls is not None
+        and (key_controls.get("use-cache", True) is not True or key_controls.get("no-cache", False) is not False)
+    )
+    effective_policy: Final = (
+        SemanticCachePolicy(scope=policy.scope, params=policy.params, key_opted_out=True) if key_opts_out else policy
+    )
+    return {"cache": {**cache_controls, SEMANTIC_CACHE_POLICY_KEY: effective_policy}}
 
 
 _OBJECT_LIST_ADAPTER: Final = TypeAdapter(list[object])
@@ -3505,7 +3530,7 @@ async def add_litellm_data_to_request(
     data.update(
         {
             **key_and_team_logging_fields(user_api_key_dict=user_api_key_dict, proxy_config=proxy_config),
-            **_semantic_cache_fields(_DECODED_JSON.validate_python(data), user_api_key_dict),
+            **_response_cache_fields(_DECODED_JSON.validate_python(data), user_api_key_dict),
         }
     )
 

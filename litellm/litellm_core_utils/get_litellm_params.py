@@ -11,6 +11,7 @@ from litellm.litellm_core_utils.core_helpers import normalize_drop_params
 from litellm.llms.openai.data_residency import infer_openai_data_residency
 from litellm.types.litellm_params import MAX_CONTROL_INT_DIGITS, ControlOptions
 from litellm.types.router import CustomPricingLiteLLMParams
+from litellm.types.utils import provider_oauth_litellm_params
 from litellm.types.workload_identity import ANTHROPIC_WIF_KWARGS_KEYS, OPENAI_WIF_KWARGS_KEYS
 
 AWS_CREDENTIAL_KWARGS_KEYS: Final = frozenset(
@@ -107,6 +108,7 @@ OPTIONAL_KWARGS_KEYS: Final = (
     | ANTHROPIC_WIF_KWARGS_KEYS
     | OPENAI_WIF_KWARGS_KEYS
     | OAUTH_TOKEN_EXCHANGE_KWARGS_KEYS
+    | frozenset(provider_oauth_litellm_params)
     | AGENTIC_LOOP_CONTROL_KWARGS_KEYS
     | frozenset(CustomPricingLiteLLMParams.model_fields)
 )

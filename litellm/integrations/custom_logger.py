@@ -184,7 +184,9 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
     async def async_log_pre_api_call(self, model: str, messages: object, kwargs: Mapping[str, object]):
         pass
 
-    async def async_pre_request_hook(self, model: str, messages: list, kwargs: dict) -> dict[str, object] | None:
+    async def async_pre_request_hook(
+        self, model: str, messages: list, kwargs: dict[str, object]
+    ) -> dict[str, object] | None:
         """
         Hook called before making the API request to allow modifying request parameters.
 
@@ -288,7 +290,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
     async def async_pre_routing_hook(
         self,
         model: str,
-        request_kwargs: dict,
+        request_kwargs: dict[str, object],
         messages: list[dict[str, object]] | None = None,
         input: str | list | None = None,
         specific_deployment: bool | None = False,
@@ -305,7 +307,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         model: str,
         healthy_deployments: list,
         messages: list[AllMessageValues] | None,
-        request_kwargs: dict | None = None,
+        request_kwargs: dict[str, object] | None = None,
         parent_otel_span: Span | None = None,
     ) -> list[dict[str, object]]:
         return healthy_deployments
@@ -402,14 +404,18 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
 
     #### Fallback Events - router/proxy only ####
     async def log_model_group_rate_limit_error(
-        self, exception: Exception, original_model_group: str | None, kwargs: dict
+        self, exception: Exception, original_model_group: str | None, kwargs: dict[str, object]
     ):
         pass
 
-    async def log_success_fallback_event(self, original_model_group: str, kwargs: dict, original_exception: Exception):
+    async def log_success_fallback_event(
+        self, original_model_group: str, kwargs: dict[str, object], original_exception: Exception
+    ):
         pass
 
-    async def log_failure_fallback_event(self, original_model_group: str, kwargs: dict, original_exception: Exception):
+    async def log_failure_fallback_event(
+        self, original_model_group: str, kwargs: dict[str, object], original_exception: Exception
+    ):
         pass
 
     #### ADAPTERS #### Allow calling 100+ LLMs in custom format - https://github.com/BerriAI/litellm/pulls
@@ -542,12 +548,14 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         pass
 
     async def async_logging_hook(
-        self, kwargs: dict, result: object, call_type: str
+        self, kwargs: dict[str, object], result: object, call_type: str
     ) -> tuple[dict[str, object], object]:
         """For masking logged request/response. Return a modified version of the request/result."""
         return kwargs, result
 
-    def logging_hook(self, kwargs: dict, result: object, call_type: str) -> tuple[dict[str, object], object]:
+    def logging_hook(
+        self, kwargs: dict[str, object], result: object, call_type: str
+    ) -> tuple[dict[str, object], object]:
         """For masking logged request/response. Return a modified version of the request/result."""
         return kwargs, result
 
@@ -691,7 +699,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         tools: list[dict] | None,
         stream: bool,
         custom_llm_provider: str,
-        kwargs: dict,
+        kwargs: dict[str, object],
     ) -> tuple[bool, dict[str, object]]:
         """
         Hook to determine if agentic loop should be executed.
@@ -751,7 +759,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         anthropic_messages_optional_request_params: dict,
         logging_obj: "LiteLLMLoggingObj",
         stream: bool,
-        kwargs: dict,
+        kwargs: dict[str, object],
     ) -> Any:
         """
         Hook to execute agentic loop based on context from should_run hook.
@@ -820,7 +828,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         anthropic_messages_optional_request_params: dict,
         logging_obj: "LiteLLMLoggingObj",
         stream: bool,
-        kwargs: dict,
+        kwargs: dict[str, object],
     ) -> AgenticLoopPlan:
         """
         Build a typed rerun plan for Anthropic Messages agentic loops.
@@ -834,7 +842,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         self,
         response: object,
         plan: AgenticLoopPlan,
-        kwargs: dict,
+        kwargs: dict[str, object],
     ) -> object:
         """
         Post-process the response returned by the agentic-loop follow-up call.
@@ -854,7 +862,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
     async def async_agentic_loop_cleanup_hook(
         self,
         plan: AgenticLoopPlan,
-        kwargs: dict,
+        kwargs: dict[str, object],
     ) -> None:
         """
         Release resources held for an agentic-loop iteration.
@@ -877,7 +885,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         tools: list[dict] | None,
         stream: bool,
         custom_llm_provider: str,
-        kwargs: dict,
+        kwargs: dict[str, object],
     ) -> tuple[bool, dict[str, object]]:
         """
         Hook to determine if chat completion agentic loop should be executed.
@@ -893,7 +901,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         optional_params: dict[str, object],
         logging_obj: "LiteLLMLoggingObj",
         stream: bool,
-        kwargs: dict,
+        kwargs: dict[str, object],
     ) -> object:
         """
         Hook to execute chat completion agentic loop based on context from should_run hook.
@@ -908,7 +916,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         optional_params: dict[str, object],
         logging_obj: "LiteLLMLoggingObj",
         stream: bool,
-        kwargs: dict,
+        kwargs: dict[str, object],
     ) -> AgenticLoopPlan:
         """
         Build a typed rerun plan for chat-completions agentic loops.

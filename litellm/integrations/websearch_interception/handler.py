@@ -1163,7 +1163,7 @@ class WebSearchInterceptionLogger(CustomLogger):
         anthropic_messages_optional_request_params: dict,
         logging_obj: "LiteLLMLoggingObj | None",
         stream: bool,
-        kwargs: dict,
+        kwargs: dict[str, object],
     ) -> AgenticLoopPlan:
         if kwargs.get("_agentic_loop_api_surface") == CHAT_COMPLETION_AGENTIC_SURFACE:
             return await self.async_build_chat_completion_agentic_loop_plan(
@@ -1498,7 +1498,7 @@ class WebSearchInterceptionLogger(CustomLogger):
     @staticmethod
     def _resolve_max_tokens(
         optional_params: dict,
-        kwargs: dict,
+        kwargs: dict[str, object],
     ) -> int:
         """Extract max_tokens and validate against thinking.budget_tokens.
 
@@ -1610,7 +1610,7 @@ class WebSearchInterceptionLogger(CustomLogger):
         thinking_blocks: list[dict],
         anthropic_messages_optional_request_params: dict,
         logging_obj: "LiteLLMLoggingObj | None",
-        kwargs: dict,
+        kwargs: dict[str, object],
     ) -> tuple[AgenticLoopRequestPatch, tuple[SearchOutcome, ...]]:
         """
         Execute litellm.search() and build follow-up request patch.
