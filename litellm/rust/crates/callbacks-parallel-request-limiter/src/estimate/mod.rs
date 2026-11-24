@@ -253,7 +253,9 @@ fn may_hold_embedding_media(value: &Value) -> bool {
     match value {
         Value::Array(items) => items.iter().any(may_hold_embedding_media),
         Value::Object(_) => true,
-        Value::String(text) => text.starts_with("data:"),
+        Value::String(text) => ["data:", "gs://", "s3://"]
+            .iter()
+            .any(|prefix| text.starts_with(prefix)),
         _ => false,
     }
 }
@@ -482,6 +484,8 @@ mod tests {
         "aresponses"
     )]
     #[case::embedding_data_uri(json!({"input": "data:image/png;base64,AAAA"}), "aembedding")]
+    #[case::embedding_gcs_link(json!({"input": ["gs://bucket/clip.mp4"]}), "aembedding")]
+    #[case::embedding_s3_link(json!({"input": "s3://bucket/photo.png"}), "aembedding")]
     fn media_is_left_to_python(#[case] data: Value, #[case] call_type: &str) {
         assert_eq!(
             estimated(data, call_type, None, None, true),

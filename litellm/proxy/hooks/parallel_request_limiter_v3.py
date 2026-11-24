@@ -68,8 +68,8 @@ from litellm.litellm_core_utils.ptu_pricing import is_ptu_cost_attribution_enabl
 from litellm.litellm_core_utils.ptu_shares import PTUTeamCeiling
 from litellm.litellm_core_utils.routing_common_utils import resolve_model_group_alias
 from litellm.litellm_core_utils.token_counter import (
+    count_embedding_input_tokens,
     estimate_media_block_tokens,
-    has_unpriced_embedding_media,
     split_embedding_input_tokens,
 )
 from litellm.proxy._types import UserAPIKeyAuth
@@ -739,6 +739,28 @@ class BorrowingShareState:
             self.fallback_limits = MappingProxyType({k: h for k, h in self.fallback_limits.items() if h is not hold})
 
 
+@dataclass(frozen=True, slots=True)
+class RequestTokenEstimate:
+    input_tokens: int
+    output_tokens: int
+    unpriced_media: bool = False
+
+    def charged(self, rate_limit_type: str) -> int:
+        match rate_limit_type:
+            case "input":
+                return self.input_tokens
+            case "output":
+                return self.output_tokens
+            case _:
+                return self.input_tokens + self.output_tokens
+
+
+@dataclass(frozen=True, slots=True)
+class RememberedTokenEstimate:
+    model: str | None
+    estimate: RequestTokenEstimate
+
+
 @dataclass(slots=True)
 class RequestRateLimiterStash:
     """
@@ -765,6 +787,8 @@ class RequestRateLimiterStash:
     owner_litellm_call_id: str | None = None
     call_type: str | None = None
     request_body: Mapping[str, object] | None = None
+    request_team_id: str | None = None
+    token_estimate: RememberedTokenEstimate | None = None
     rate_limit_response: RateLimitResponse | None = None
     parallel_slot: ParallelSlotAcquisition | None = None
     parallel_slot_reused_at: datetime | None = None
@@ -2541,6 +2565,27 @@ def estimate_input_and_output_tokens(
     team_id: str | None = None,
     media_model_resolver: Callable[[str, str | None], tuple[str, ...]] | None = None,
 ) -> tuple[int, int]:
+    estimate: Final = estimate_tokens_and_unpriced_media(
+        data=data,
+        min_configured_tpm_limit=min_configured_tpm_limit,
+        call_type=call_type,
+        configured_output_tokens=configured_output_tokens,
+        include_media=include_media,
+        team_id=team_id,
+        media_model_resolver=media_model_resolver,
+    )
+    return estimate.input_tokens, estimate.output_tokens
+
+
+def estimate_tokens_and_unpriced_media(
+    data: object,
+    min_configured_tpm_limit: int | None = None,
+    call_type: str | None = None,
+    configured_output_tokens: int | None = None,
+    include_media: bool = True,
+    team_id: str | None = None,
+    media_model_resolver: Callable[[str, str | None], tuple[str, ...]] | None = None,
+) -> RequestTokenEstimate:
     """
     Estimate input tokens and output (max_tokens) budget separately, so
     callers needing independent ITPM/OTPM reservations (rather than one
@@ -2565,7 +2610,7 @@ def estimate_input_and_output_tokens(
     """
     request_data: Final = as_str_mapping(data)
     if not isinstance(data, dict) or request_data is None:
-        return 0, 0
+        return RequestTokenEstimate(0, 0)
     request_model: Final = request_data.get("model")
     translated_data: Final = _translate_google_genai_native_request(request_data, call_type)
     estimable_data: Final = translated_data if translated_data is not None else request_data
@@ -2604,15 +2649,15 @@ def estimate_input_and_output_tokens(
     resolved_models: Final = (
         _media_models(media_model_resolver, fallback_model or "", team_id) if media else (fallback_model or "",)
     )
-    embedding_text, embedding_media_tokens = (
-        split_embedding_input_tokens(
+    embedding_text, embedding_media_tokens, unpriced_media = (
+        count_embedding_input_tokens(
             original_input,
             lambda: _media_models(media_model_resolver, fallback_model or "", team_id),
             fallback_model,
             _embedding_input_type(estimable_data),
         )
         if include_media and is_embedding_call
-        else (original_input, 0)
+        else (original_input, 0, False)
     )
     input_text: Final = projected if call_type in RESPONSES_API_CALL_TYPES else embedding_text
     media_tokens: Final = embedding_media_tokens + sum(
@@ -2659,7 +2704,11 @@ def estimate_input_and_output_tokens(
         else max(estimated_input_tokens, output_floor)
     )
 
-    return estimated_input_tokens, max_tokens_estimate * get_output_candidate_count(request_data, call_type)
+    return RequestTokenEstimate(
+        estimated_input_tokens,
+        max_tokens_estimate * get_output_candidate_count(request_data, call_type),
+        unpriced_media,
+    )
 
 
 def estimate_tokens_for_request(
@@ -2720,40 +2769,21 @@ def request_token_estimate(
     rate_limit_type: str = "total",
     media_model_resolver: Callable[[str, str | None], tuple[str, ...]] = _resolve_media_models_via_proxy_router,
 ) -> int:
-    """The reservation this limiter would hold for the request, for another limiter settling the same call."""
-    if rate_limit_type == "total":
-        return estimate_tokens_for_request(
-            data=data,
-            model=model,
-            min_configured_tpm_limit=min_configured_tpm_limit,
-            call_type=call_type,
-            team_id=team_id,
-            media_model_resolver=media_model_resolver,
-        )
-    estimated_input, output_budget = estimate_input_and_output_tokens(
-        data=data,
-        min_configured_tpm_limit=min_configured_tpm_limit,
-        call_type=call_type,
-        team_id=team_id,
-        media_model_resolver=media_model_resolver,
+    return dispatched_token_estimate(data, min_configured_tpm_limit, call_type, team_id, media_model_resolver).charged(
+        rate_limit_type
     )
-    return output_budget if rate_limit_type == "output" else estimated_input
 
 
-def counts_unpriced_embedding_media(
-    data: Mapping[str, object],
+def dispatched_token_estimate(
+    data: object,
+    min_configured_tpm_limit: int,
     call_type: str | None,
     team_id: str | None,
     media_model_resolver: Callable[[str, str | None], tuple[str, ...]] = _resolve_media_models_via_proxy_router,
-) -> bool:
-    if call_type not in EMBEDDING_API_CALL_TYPES:
-        return False
-    model: Final = data.get("model")
-    requested: Final = model if isinstance(model, str) else ""
-    return has_unpriced_embedding_media(
-        data.get("input"),
-        lambda: _media_models(media_model_resolver, requested, team_id),
-        _embedding_input_type(data),
+) -> RequestTokenEstimate:
+    """The reservation this limiter would hold for the request, for another limiter settling the same call."""
+    return estimate_tokens_and_unpriced_media(
+        data, min_configured_tpm_limit, call_type, team_id=team_id, media_model_resolver=media_model_resolver
     )
 
 

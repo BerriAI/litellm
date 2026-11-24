@@ -358,14 +358,14 @@ impl ModelCapacity {
         let estimate =
             if UsageTokens::settles_at_estimate(used.as_ref(), settings.rate_limit_type, embedding)
             {
-                match group.as_ref().filter(|group| group.truthy) {
-                    Some(group) => self
-                        .engine
-                        .settled_estimate(&group.text, call_type)
-                        .await
-                        .map_err(|error| error.python_message())?,
-                    None => Some(0),
-                }
+                let model = group
+                    .as_ref()
+                    .filter(|group| group.truthy)
+                    .map(|group| group.text.as_str());
+                self.engine
+                    .settled_estimate(model, call_type)
+                    .await
+                    .map_err(|error| error.python_message())?
             } else {
                 None
             };

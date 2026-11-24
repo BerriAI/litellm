@@ -711,31 +711,38 @@ def _data_uri_media_scope(
     return "per_item" if provider in _PER_ITEM_DATA_URI_EMBEDDING_PROVIDERS else None
 
 
+def count_embedding_input_tokens(
+    value: _EmbeddingInputT,
+    media_models: Callable[[], Sequence[str]],
+    fallback_model: str | None = None,
+    input_type: str | None = None,
+) -> tuple[_EmbeddingInputT, int, bool]:
+    """The input left to count as text, the tokens of the media priced out of it, and whether it holds media
+    no deployment prices, which stays in the text."""
+    from litellm.litellm_core_utils.prompt_templates.tpm_media_utils import (
+        embedding_input_links_media,
+        split_embedding_media_for_tpm,
+    )
+
+    text, media = split_embedding_media_for_tpm(value)
+    links_media: Final = embedding_input_links_media(value)
+    if not media:
+        return value, 0, links_media
+    models: Final = tuple(media_models())
+    if not _prices_embedding_media(value, media, models, input_type):
+        return value, 0, True
+    media_tokens: Final = sum(estimate_media_block_tokens(block, models, fallback_model) for block in media)
+    return cast(_EmbeddingInputT, text), media_tokens, links_media  # cast-ok: the projection keeps the input's shape
+
+
 def split_embedding_input_tokens(
     value: _EmbeddingInputT,
     media_models: Callable[[], Sequence[str]],
     fallback_model: str | None = None,
     input_type: str | None = None,
 ) -> tuple[_EmbeddingInputT, int]:
-    from litellm.litellm_core_utils.prompt_templates.tpm_media_utils import split_embedding_media_for_tpm
-
-    text, media = split_embedding_media_for_tpm(value)
-    if not media:
-        return value, 0
-    models: Final = tuple(media_models())
-    if not _prices_embedding_media(value, media, models, input_type):
-        return value, 0
-    media_tokens: Final = sum(estimate_media_block_tokens(block, models, fallback_model) for block in media)
-    return cast(_EmbeddingInputT, text), media_tokens  # cast-ok: the projection keeps the input's container shape
-
-
-def has_unpriced_embedding_media(
-    value: object, media_models: Callable[[], Sequence[str]], input_type: str | None = None
-) -> bool:
-    from litellm.litellm_core_utils.prompt_templates.tpm_media_utils import split_embedding_media_for_tpm
-
-    _, media = split_embedding_media_for_tpm(value)
-    return bool(media) and not _prices_embedding_media(value, media, tuple(media_models()), input_type)
+    text, media_tokens, _ = count_embedding_input_tokens(value, media_models, fallback_model, input_type)
+    return text, media_tokens
 
 
 def _prices_embedding_media(

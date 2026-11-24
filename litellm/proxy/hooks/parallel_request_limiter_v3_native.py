@@ -542,12 +542,13 @@ class _PreCallHost:
         deployment prices as text. Text, chat and Responses requests the native estimator reads never come here."""
         from litellm.litellm_core_utils.token_counter import offload_token_count
         from litellm.proxy.hooks.parallel_request_limiter_v3 import (
-            counts_unpriced_embedding_media,
-            estimate_input_and_output_tokens,
+            RememberedTokenEstimate,
+            estimate_tokens_and_unpriced_media,
+            get_request_stash,
         )
 
         include_media: Final = request["include_media"] is True
-        estimated: Final = await offload_token_count(estimate_input_and_output_tokens)(
+        estimate: Final = await offload_token_count(estimate_tokens_and_unpriced_media)(
             data=self.data,
             min_configured_tpm_limit=_HOST_OPTIONAL_INT.validate_python(request["min_configured_tpm_limit"]),
             call_type=self.call_type,
@@ -556,10 +557,11 @@ class _PreCallHost:
             team_id=self.team_id,
             media_model_resolver=self.limiter.media_model_resolver,
         )
-        unpriced: Final = include_media and counts_unpriced_embedding_media(
-            self.data, self.call_type, self.team_id, self.limiter.media_model_resolver
-        )
-        return [*estimated, unpriced]
+        stash: Final = get_request_stash()
+        model: Final = self.data.get("model")
+        if stash is not None and include_media:
+            stash.token_estimate = RememberedTokenEstimate(model if isinstance(model, str) else None, estimate)
+        return [estimate.input_tokens, estimate.output_tokens, estimate.unpriced_media]
 
     def precise_input_tokens(self, request: Mapping[str, object]) -> Awaitable[int]:
         from litellm.litellm_core_utils.token_counter import offload_token_count

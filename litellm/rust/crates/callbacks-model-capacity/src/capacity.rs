@@ -652,7 +652,7 @@ impl Engine {
         Ok(
             match self
                 .host
-                .estimate_tokens(tpm_share, model, call_type)
+                .estimate_tokens(tpm_share, Some(model), call_type)
                 .await?
             {
                 Estimate::NoBody | Estimate::Unpriced => 0,
@@ -664,7 +664,7 @@ impl Engine {
 
     pub async fn settled_estimate(
         &self,
-        model: &str,
+        model: Option<&str>,
         call_type: Option<&str>,
     ) -> Result<Option<i64>, CapacityError> {
         Ok(
@@ -1689,7 +1689,7 @@ mod tests {
         fn estimate_tokens<'a>(
             &'a self,
             _tpm_share: i64,
-            _model: &'a str,
+            _model: Option<&'a str>,
             _call_type: Option<&'a str>,
         ) -> SeamFuture<'a, Estimate> {
             done(Estimate::NoBody)
