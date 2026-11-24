@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import sys
+import threading
 import uuid
 import zlib
 from collections.abc import AsyncIterator, Callable, Coroutine, Mapping, Sequence
@@ -38,6 +39,7 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.lens.policy import LENS_LOGGING_POLICY_PARAM
 from litellm.integrations.prometheus import PrometheusLogger
 from litellm.litellm_core_utils.internal_call_metadata import MODEL_ACCESS_GROUP_METADATA_KEY
+from litellm.litellm_core_utils import logging_utils
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.proxy._lazy_features import LazyFeature, attach_lazy_features
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
@@ -1971,13 +1973,48 @@ async def test_pass_through_request_logs_anthropic_base64_source_as_placeholder_
             }
         ],
     }
+    logging_obj, sent_body = await _send_pass_through_with_upstream_down(body)
+
+    logged: Final = (
+        logging_obj.model_call_details["messages"][0]["content"],
+        logging_obj.model_call_details["input"][0]["content"],
+    )
+    assert all(image not in text and "[base64_data truncated: 12.0KB]" in text for text in logged)
+    assert json.loads(sent_body)["messages"][0]["content"][0]["source"]["data"] == image
+
+
+@pytest.mark.asyncio
+async def test_pass_through_request_copies_a_long_history_for_logging_off_the_event_loop():
+    turns: Final = tuple(
+        {"role": "user" if turn % 2 == 0 else "assistant", "content": f"turn {turn} " + "x" * 1_000}
+        for turn in range(300)
+    )
+    body: Final = {"model": "claude-haiku-5-5", "max_tokens": 16, "messages": list(turns)}
+    scan_threads: Final[list[int]] = []
+    original_scan: Final = logging_utils._truncate_base64_in_string
+
+    def recording_scan(value: str) -> str:
+        scan_threads.append(threading.get_ident())
+        return original_scan(value)
+
+    with patch.object(logging_utils, "_truncate_base64_in_string", recording_scan):
+        logging_obj, _ = await _send_pass_through_with_upstream_down(body)
+
+    assert scan_threads
+    assert threading.get_ident() not in scan_threads
+    assert all(
+        "turn 299 " in logging_obj.model_call_details[field][0]["content"] for field in ("messages", "input")
+    )
+
+
+async def _send_pass_through_with_upstream_down(body: dict[str, object]) -> tuple[LiteLLMLoggingObj, bytes]:
     mock_request: Final = MagicMock(spec=Request)
     mock_request.method = "POST"
     mock_request.headers = Headers({})
     mock_request.query_params = QueryParams({})
 
     sent_bodies: Final[list[bytes]] = []
-    logging_objs: Final[list[object]] = []
+    logging_objs: Final[list[LiteLLMLoggingObj]] = []
 
     def refuse_upstream(upstream_request: httpx.Request) -> httpx.Response:
         sent_bodies.append(upstream_request.read())
@@ -2002,13 +2039,7 @@ async def test_pass_through_request_logs_anthropic_base64_source_as_placeholder_
                 user_api_key_dict=UserAPIKeyAuth(),
                 custom_body=body,
             )
-
-    logged: Final = (
-        logging_objs[0].model_call_details["messages"][0]["content"],
-        logging_objs[0].model_call_details["input"][0]["content"],
-    )
-    assert all(image not in text and "[base64_data truncated: 12.0KB]" in text for text in logged)
-    assert json.loads(sent_bodies[0])["messages"][0]["content"][0]["source"]["data"] == image
+    return logging_objs[0], sent_bodies[0]
 
 
 @pytest.mark.asyncio
