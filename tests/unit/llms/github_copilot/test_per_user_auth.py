@@ -2,6 +2,7 @@
 
 import asyncio
 import datetime
+import json
 import time
 from collections.abc import Callable
 from contextlib import contextmanager
@@ -1006,6 +1007,52 @@ def test_e2e_responses_per_user_credential(per_user_credential):
     _assert_user_lookup_then_model_call(requests, "gho_a")
     assert requests[-1].url.path == "/responses"
     assert response.usage.total_tokens == 6
+
+
+@pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize("stream", [False, True], ids=["buffered", "streaming"])
+@pytest.mark.asyncio
+async def test_chat_bridged_to_responses_uses_per_user_credential(per_user_credential, is_async, stream):
+    def respond(request: httpx.Request) -> httpx.Response:
+        if request.url.path != "/responses" or not stream:
+            return _copilot_surface_responder(_responses_payload())(request)
+        events: Final = (
+            {
+                "type": "response.output_text.delta",
+                "item_id": "m1",
+                "output_index": 0,
+                "content_index": 0,
+                "delta": "hi",
+            },
+            {"type": "response.completed", "response": _responses_payload()},
+        )
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            text="".join(f"data: {json.dumps(event)}\n\n" for event in events),
+        )
+
+    with github_http(respond) as requests:
+        params = {
+            "model": "github_copilot/gpt-5.3-codex",
+            "messages": [{"role": "user", "content": "hi"}],
+            "litellm_credential_name": "copilot-cred",
+            "secret_fields": _secret_fields("user-a", "gho_a"),
+            "stream": stream,
+        }
+        if is_async:
+            response = await litellm.acompletion(**params)
+        else:
+            response = litellm.completion(**params)
+        if stream:
+            chunks = [chunk async for chunk in response] if is_async else list(response)
+            text = "".join(chunk.choices[0].delta.content or "" for chunk in chunks if chunk.choices)
+        else:
+            text = response.choices[0].message.content
+
+    assert text == "hi"
+    _assert_user_lookup_then_model_call(requests, "gho_a")
+    assert requests[-1].url.path == "/responses"
 
 
 @pytest.mark.asyncio

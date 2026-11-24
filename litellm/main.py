@@ -6541,6 +6541,7 @@ def completion(
                     *OAUTH_TOKEN_EXCHANGE_KWARGS_KEYS,
                     *AGENTIC_LOOP_CONTROL_KWARGS_KEYS,
                     "github_copilot_auth_type",
+                    "litellm_credential_name",
                     "github_copilot_host",
                     "github_copilot_app_id",
                     "github_copilot_app_installation_id",

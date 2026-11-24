@@ -197,6 +197,10 @@ def _auth_hosts(api_url: str, grant: threading.Event) -> Callable[[Request], Rep
                 if request.headers.get("authorization") == f"token {COPILOT_REJECTED_ACCESS}":
                     return _json(401, {"message": "Bad credentials"})
                 return _json(200, {"endpoints": {"api": f"https://{COPILOT_API_HOST}"}})
+            case ("api.github.com", "GET", "/user") if request.headers.get("authorization") == (
+                f"token {COPILOT_FIRST_LOGIN_ACCESS}"
+            ):
+                return _json(200, {"login": "scripted-copilot-user"})
             case _:
                 return _switched_off()
 
