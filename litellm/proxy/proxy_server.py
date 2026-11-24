@@ -16317,7 +16317,7 @@ async def count_request_tokens(
         count_options=count_options,
     )
     return await logged_token_count(
-        _with_content_errors(count, _content_error_param(request, responses_request)),
+        _with_content_errors(count, request, responses_request),
         litellm_call_id=call_id,
         request_model=request.model,
         model_id=deployment_model_id(count_route.deployment),
@@ -16339,7 +16339,6 @@ def _content_error_param(request: TokenCountRequest, responses_request: Mapping[
                     for message in request.messages or ()
                 ),
             ),
-            ("contents", request.contents is not None),
             ("system", not isinstance(request.system, (str, type(None)))),
         )
     )
@@ -16347,11 +16346,18 @@ def _content_error_param(request: TokenCountRequest, responses_request: Mapping[
     return sent[0] if len(sent) == 1 else None
 
 
-async def _with_content_errors(count: Awaitable[TokenCountResponse], param: str | None) -> TokenCountResponse:
+async def _with_content_errors(
+    count: Awaitable[TokenCountResponse], request: TokenCountRequest, responses_request: Mapping[str, object] | None
+) -> TokenCountResponse:
     try:
         return await count
     except UnsupportedContentTypeError as e:
-        raise ProxyException(message=str(e), type="invalid_request_error", param=param, code=400) from e
+        raise ProxyException(
+            message=str(e),
+            type="invalid_request_error",
+            param=_content_error_param(request, responses_request),
+            code=400,
+        ) from e
 
 
 def _routable_count_deployments(served: str, select_request: Mapping[str, object]) -> tuple[Mapping[str, object], ...]:

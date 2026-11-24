@@ -7358,23 +7358,35 @@ def test_utils_token_counter_answers_400_naming_a_malformed_server_tool_block(mo
     ), error
 
 
+_FUTURE_BLOCK: Final = MappingProxyType({"type": "future_block", "data": "opaque"})
+
+
 @pytest.mark.parametrize(
-    ("system", "user_content", "param"),
+    ("fields", "param"),
     [
-        ([{"type": "future_block", "data": "opaque"}], "hi", "system"),
-        ("Be brief.", [{"type": "future_block", "data": "opaque"}], "messages"),
-        ([{"type": "text", "text": "Be brief."}], [{"type": "future_block", "data": "opaque"}], None),
+        ({"system": [dict(_FUTURE_BLOCK)], "messages": [{"role": "user", "content": "hi"}]}, "system"),
+        ({"system": "Be brief.", "messages": [{"role": "user", "content": [dict(_FUTURE_BLOCK)]}]}, "messages"),
+        (
+            {
+                "system": [{"type": "text", "text": "Be brief."}],
+                "messages": [{"role": "user", "content": [dict(_FUTURE_BLOCK)]}],
+            },
+            None,
+        ),
+        (
+            {
+                "messages": [{"role": "user", "content": [dict(_FUTURE_BLOCK)]}],
+                "contents": [{"role": "user", "parts": [{"text": "Be brief."}]}],
+            },
+            "messages",
+        ),
     ],
-    ids=["block-in-system", "block-in-messages", "blocks-in-both-fields"],
+    ids=["block-in-system", "block-in-messages", "blocks-in-both-fields", "contents-sent-beside-messages"],
 )
 def test_utils_token_counter_points_param_only_at_the_one_field_that_can_hold_the_block(
-    monkeypatch: pytest.MonkeyPatch, system: JsonValue, user_content: JsonValue, param: str | None
+    monkeypatch: pytest.MonkeyPatch, fields: Mapping[str, JsonValue], param: str | None
 ) -> None:
-    response: Final = _utils_token_counter(
-        monkeypatch,
-        {"model": "count-log-gpt", "system": system, "messages": [{"role": "user", "content": user_content}]},
-        {},
-    )
+    response: Final = _utils_token_counter(monkeypatch, {"model": "count-log-gpt", **fields}, {})
 
     assert response.status_code == 400, response.text
     error: Final = response.json()["error"]
@@ -7389,26 +7401,32 @@ def test_utils_token_counter_keeps_500_for_a_known_block_it_fails_to_count(monke
     assert response.status_code == 500, response.text
 
 
-def test_responses_input_tokens_points_param_at_input_for_a_content_block_the_local_counter_cannot_read(
-    monkeypatch: pytest.MonkeyPatch,
+_INPUT_AUDIO: Final = MappingProxyType({"type": "input_audio", "input_audio": {"data": "UklGRg==", "format": "wav"}})
+
+
+@pytest.mark.parametrize(
+    ("fields", "param"),
+    [
+        ({"input": [{"role": "user", "content": [dict(_INPUT_AUDIO)]}]}, "input"),
+        ({"input": "hi", "instructions": [dict(_INPUT_AUDIO)]}, "instructions"),
+    ],
+    ids=["block-in-input", "block-in-instructions"],
+)
+def test_responses_input_tokens_points_param_at_the_field_holding_a_block_the_local_counter_cannot_read(
+    monkeypatch: pytest.MonkeyPatch, fields: Mapping[str, JsonValue], param: str
 ) -> None:
     deployment: Final[Mapping[str, JsonValue]] = {
         "model_name": "count-local-vllm",
         "litellm_params": {"model": "hosted_vllm/zai-org/GLM-5.3", "api_base": "http://127.0.0.1:9/v1"},
     }
-    audio: Final[JsonValue] = {"type": "input_audio", "input_audio": {"data": "UklGRg==", "format": "wav"}}
 
     response: Final = _post_count(
-        monkeypatch,
-        "/v1/responses/input_tokens",
-        deployment,
-        {"model": "count-local-vllm", "input": [{"role": "user", "content": [audio]}]},
-        {},
+        monkeypatch, "/v1/responses/input_tokens", deployment, {"model": "count-local-vllm", **fields}, {}
     )
 
     assert response.status_code == 400, response.text
     error: Final = response.json()["error"]
-    assert (error["type"], error["param"]) == ("invalid_request_error", "input"), error
+    assert (error["type"], error["param"]) == ("invalid_request_error", param), error
     assert error["message"] == "The token counter can't count content blocks of type input_audio", error
 
 
