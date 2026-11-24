@@ -527,6 +527,25 @@ describe("teamInfoCall", () => {
     }
   });
 
+  it("asks the proxy to skip the roster only when includeMembers is false", async () => {
+    const mockFetch = vi.spyOn(global, "fetch").mockImplementation(async () => new Response("{}", { status: 200 }));
+
+    try {
+      await Networking.teamInfoCall("token", "team-1", { includeMembers: false });
+      await Networking.teamInfoCall("token", "team-1", { includeMembers: true });
+      await Networking.teamInfoCall("token", "team-1");
+
+      const includeMembers = mockFetch.mock.calls.map(([url]) =>
+        (url instanceof Request ? new URL(url.url) : new URL(url.toString(), "http://example.com")).searchParams.get(
+          "include_members",
+        ),
+      );
+      expect(includeMembers).toEqual(["false", null, null]);
+    } finally {
+      mockFetch.mockRestore();
+    }
+  });
+
   it("should not append team_id when teamID is null", async () => {
     const mockFetch = vi.fn().mockResolvedValue({
       ok: true,

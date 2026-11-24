@@ -34,6 +34,7 @@ class FalAIFluxProV11UltraConfig(FalAIBaseConfig):
     """
 
     IMAGE_GENERATION_ENDPOINT: str = "fal-ai/flux-pro/v1.1-ultra"
+    MODEL_FAMILY_ROOTS: tuple[str, ...] = ("fal-ai/flux-pro/",)
 
     def get_supported_openai_params(self, model: str) -> list[OpenAIImageGenerationOptionalParams]:
         """
@@ -160,10 +161,10 @@ class FalAIFluxProV11UltraConfig(FalAIBaseConfig):
         self,
         model: str,
         prompt: str,
-        optional_params: dict,
-        litellm_params: dict,
-        headers: dict,
-    ) -> dict:
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
+        headers: Mapping[str, object],
+    ) -> dict[str, object]:
         """
         Transform the image generation request to Flux Pro v1.1-ultra request body.
 
@@ -183,7 +184,7 @@ class FalAIFluxProV11UltraConfig(FalAIBaseConfig):
         - image_prompt_strength: Strength of image prompt 0-1 (default: 0.1)
         - enhance_prompt: Enhance prompt for better results (default: false)
         """
-        flux_pro_request_body: Final = {
+        flux_pro_request_body: Final[dict[str, object]] = {
             "prompt": prompt,
             **optional_params,
         }
@@ -196,9 +197,9 @@ class FalAIFluxProV11UltraConfig(FalAIBaseConfig):
         raw_response: httpx.Response,
         model_response: ImageResponse,
         logging_obj: LiteLLMLoggingObj,
-        request_data: dict,
-        optional_params: dict,
-        litellm_params: dict,
+        request_data: Mapping[str, object],
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,

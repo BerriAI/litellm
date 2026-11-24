@@ -6,7 +6,7 @@ from functools import partial
 from typing import TYPE_CHECKING, Any, ClassVar, Final
 
 import httpx
-from pydantic import ConfigDict, JsonValue, TypeAdapter
+from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter
 from pydantic_core import to_jsonable_python
 
 import litellm
@@ -141,6 +141,12 @@ class GenerateContentHelper:
         """
         litellm_logging_obj: Final[LiteLLMLoggingObj | None] = kwargs.get("litellm_logging_obj")
         litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id", None)
+        sent_config: Final = config or kwargs.get("generationConfig") or kwargs.get("generation_config")
+        request_config: Final = (
+            sent_config.model_dump(mode="json", exclude_none=True)
+            if isinstance(sent_config, BaseModel)
+            else sent_config
+        )
 
         # get llm provider logic
         litellm_params: Final = GenericLiteLLMParams(**kwargs)
@@ -168,6 +174,13 @@ class GenerateContentHelper:
         if litellm_params.custom_llm_provider is None:
             litellm_params.custom_llm_provider = custom_llm_provider
 
+        if request_config is not None and not isinstance(request_config, Mapping):
+            raise litellm.BadRequestError(
+                message="generationConfig must be an object",
+                model=model,
+                llm_provider=custom_llm_provider,
+            )
+
         custom_handler: Final = _custom_generate_content_handler(custom_llm_provider)
         # get provider config
         generate_content_provider_config: Final[BaseGoogleGenAIGenerateContentConfig | None] = (
@@ -190,7 +203,9 @@ class GenerateContentHelper:
                 litellm_logging_obj.update_from_kwargs(  # pyright: ignore[reportUnknownMemberType]  # legacy logging interface is untyped
                     kwargs=kwargs,
                     model=model,
-                    optional_params={"generationConfig": _CUSTOM_GENERATE_CONTENT_BODY.validate_python(config or {})},
+                    optional_params={
+                        "generationConfig": _CUSTOM_GENERATE_CONTENT_BODY.validate_python(request_config or {})
+                    },
                     litellm_params={
                         "litellm_call_id": litellm_call_id,
                         **{key: value for key, value in request_kwargs.items() if key in CUSTOM_PRICING_PARAMS},
@@ -205,7 +220,7 @@ class GenerateContentHelper:
                 custom_llm_provider=custom_llm_provider,
                 request_body={},  # Will be handled by adapter
                 generate_content_provider_config=None,
-                generate_content_config_dict=dict(config or {}),
+                generate_content_config_dict=dict(request_config or {}),
                 native_request_fields={},
                 litellm_params=litellm_params,
                 litellm_logging_obj=litellm_logging_obj,
@@ -217,7 +232,7 @@ class GenerateContentHelper:
         #########################################################################################
         # Create Google Optional Params Config
         generate_content_config_dict: Final = generate_content_provider_config.map_generate_content_optional_params(
-            generate_content_config_dict=config or {},
+            generate_content_config_dict=request_config or {},
             model=model,
         )
         # Extract systemInstruction from kwargs to pass to transform
@@ -396,7 +411,7 @@ async def agenerate_content(
     timeout: float | httpx.Timeout | None = None,
     # LiteLLM specific params,
     custom_llm_provider: str | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> object:
     """
     Async: Generate content using Google GenAI
@@ -406,9 +421,6 @@ async def agenerate_content(
         loop: Final = asyncio.get_event_loop()
         kwargs["agenerate_content"] = True
 
-        # Handle generationConfig parameter from kwargs for backward compatibility
-        if "generationConfig" in kwargs and config is None:
-            config = kwargs.pop("generationConfig")
         # get custom llm provider so we can use this for mapping exceptions
         if custom_llm_provider is None:
             _, custom_llm_provider, _, _ = litellm.get_llm_provider(
@@ -475,9 +487,6 @@ def generate_content(
 
         _mark_async_entrypoint(kwargs.get("litellm_logging_obj"), CallTypes.agenerate_content.value, _is_async)
 
-        # Handle generationConfig parameter from kwargs for backward compatibility
-        if "generationConfig" in kwargs and config is None:
-            config = kwargs.pop("generationConfig")
         # Check for mock response first
         litellm_params: Final = GenericLiteLLMParams(**kwargs)
         if litellm_params.mock_response and isinstance(litellm_params.mock_response, str):
@@ -501,6 +510,10 @@ def generate_content(
         )
         if custom_handler is not None and native_hook_overridden:
             logging_obj: Final = setup_result.litellm_logging_obj
+            request_sent_config: Final = config is not None or any(
+                kwargs.get(field) is not None for field in ("generationConfig", "generation_config")
+            )
+            native_config: Final = setup_result.generate_content_config_dict if request_sent_config else None
             native_contents: Final = _GENERATE_CONTENT_RESULT.validate_python(contents)
             native_tools: Final = _GENERATE_CONTENT_RESULT.validate_python(tools)
             native_optional_params: Final[Mapping[str, object]] = _CUSTOM_GENERATE_CONTENT_BODY.validate_python(
@@ -515,14 +528,14 @@ def generate_content(
                 input=native_contents,
                 api_key=setup_result.litellm_params.api_key,
                 additional_args={
-                    "complete_input_dict": {"contents": contents, "generationConfig": config, "tools": tools}
+                    "complete_input_dict": {"contents": contents, "generationConfig": native_config, "tools": tools}
                 },
             )
             hook: Final = custom_handler.agenerate_content if _is_async else custom_handler.generate_content
             native_response: Final = hook(
                 model=setup_result.model,
                 contents=native_contents,
-                config=setup_result.generate_content_config_dict if config is not None else None,
+                config=native_config,
                 tools=native_tools,
                 litellm_params=setup_result.litellm_params,
                 logging_obj=logging_obj,
@@ -619,9 +632,6 @@ async def agenerate_content_stream(
 
         _mark_async_entrypoint(kwargs.get("litellm_logging_obj"), CallTypes.agenerate_content_stream.value, True)
 
-        # Handle generationConfig parameter from kwargs for backward compatibility
-        if "generationConfig" in kwargs and config is None:
-            config = kwargs.pop("generationConfig")
         # get custom llm provider so we can use this for mapping exceptions
         if custom_llm_provider is None:
             _, custom_llm_provider, _, _ = litellm.get_llm_provider(
@@ -720,9 +730,6 @@ def generate_content_stream(
 
         _mark_async_entrypoint(kwargs.get("litellm_logging_obj"), CallTypes.agenerate_content_stream.value, _is_async)
 
-        # Handle generationConfig parameter from kwargs for backward compatibility
-        if "generationConfig" in kwargs and config is None:
-            config = kwargs.pop("generationConfig")
         # Setup the call
         setup_result: Final = GenerateContentHelper.setup_generate_content_call(
             model=model,

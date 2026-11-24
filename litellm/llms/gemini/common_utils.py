@@ -320,11 +320,7 @@ def get_gemini_image_generation_config(
         generation_config["imageConfig"] = image_config
 
     candidate_count: Final = next(
-        (
-            optional_params[key]
-            for key in ("candidateCount", "candidate_count", "sampleCount", "n")
-            if optional_params.get(key) is not None
-        ),
+        (optional_params[key] for key in ("candidateCount", "candidate_count") if optional_params.get(key) is not None),
         None,
     )
     if candidate_count is not None:
@@ -422,7 +418,7 @@ class GeminiModelInfo(BaseLLMModelInfo):
         return model.replace("gemini/", "")
 
     def process_model_name(self, models: Iterable[Mapping[str, str]]) -> list[str]:
-        litellm_model_names: Final = []
+        litellm_model_names: Final[list[str]] = []
         for model in models:
             stripped_model_name = model["name"].replace("models/", "")
             litellm_model_name = "gemini/" + stripped_model_name
@@ -605,12 +601,14 @@ class GoogleAIStudioTokenCounter(BaseTokenCounter):
             return provider_error_response(error, request_model, model_to_use)
 
         if result is not None:
-            return TokenCountResponse(
-                total_tokens=result.get("totalTokens", 0),
-                request_model=request_model,
-                model_used=model_to_use,
-                tokenizer_type=result.get("tokenizer_used", ""),
-                original_response=result,
+            return TokenCountResponse.model_validate(
+                {
+                    "total_tokens": result.get("totalTokens", 0),
+                    "request_model": request_model,
+                    "model_used": model_to_use,
+                    "tokenizer_type": result.get("tokenizer_used", ""),
+                    "original_response": result,
+                }
             )
 
         return None

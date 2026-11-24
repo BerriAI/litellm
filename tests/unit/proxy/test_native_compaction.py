@@ -7,8 +7,8 @@ import pytest
 from fastapi import FastAPI, Request
 from pydantic import TypeAdapter
 
+from litellm.redis.stores.auth_cache import AuthObject
 import litellm
-from litellm.caching.caching import DualCache
 from litellm.exceptions import BadRequestError
 from litellm.litellm_core_utils.initialize_dynamic_callback_params import inherit_message_logging_privacy
 from litellm.litellm_core_utils.litellm_logging import Logging
@@ -16,12 +16,14 @@ from litellm.litellm_core_utils.redact_messages import should_redact_message_log
 from litellm.proxy import common_request_processing, proxy_server
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.auth_checks import can_key_call_model
+from litellm.proxy.proxy_server import UserApiKeyCache
 from litellm.proxy._types import ProxyException
 from litellm.proxy.hooks.parallel_request_limiter_v3 import get_or_create_request_stash, get_request_stash
 from litellm.proxy.native_compaction import with_proxy_compaction_executor
 from litellm.router import Router
 from litellm.router_strategy.complexity_router.context_compaction import compaction_executor, reject_recursive_compactor
 from litellm.types.utils import ModelResponse
+from tests.unit.proxy._prisma import prisma_with_empty_config
 
 _HEADERS: Final = (
     (b"authorization", b"Bearer sk-compaction-fixture"), (b"cookie", b"session=fixture"),
@@ -86,11 +88,11 @@ async def test_child_preserves_credentials_and_isolates_context(protocol: Litera
 async def test_real_proxy_child_auth_privacy_and_body_policy(
     monkeypatch: pytest.MonkeyPatch, protocol: Literal["chat", "messages"], policy: str,
 ) -> None:
-    cache: Final = DualCache()
+    cache: Final = UserApiKeyCache()
     token: Final = proxy_server.hash_token("sk-compaction-fixture")
     models: Final = {"denied": ("answer",), "router_alias": ("auto",), "unrelated_alias": ("other-auto",)}.get(policy, ("compactor",))
     auth: Final = UserAPIKeyAuth.model_validate(MappingProxyType({"token": token, "models": models}))
-    await cache.async_set_cache(key=token, value=auth)
+    await cache.async_set_cache(key=AuthObject.virtual_key(token), value=auth)
     dispatched: Final = asyncio.Event()
     allowed: Final = policy in ("allowed", "router_alias")
 
@@ -117,7 +119,7 @@ async def test_real_proxy_child_auth_privacy_and_body_policy(
     monkeypatch.setattr(proxy_server.app, "dependency_overrides", {})
     monkeypatch.setattr(proxy_server, "master_key", "sk-master-fixture")
     monkeypatch.setattr(litellm, "max_budget", 0.0)
-    monkeypatch.setattr(proxy_server, "prisma_client", object())
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma_with_empty_config())
     monkeypatch.setattr(proxy_server, "user_api_key_cache", cache)
     monkeypatch.setattr(proxy_server, "llm_router", None)
     monkeypatch.setattr(proxy_server, "general_settings", {})

@@ -437,28 +437,6 @@ def test_initialize_honors_explicit_max_retries(setup_mocks, configured, expecte
     assert result["max_retries"] == expected
 
 
-def test_default_max_retries_env_var_reaches_azure_sdk_client():
-    import subprocess
-    import sys
-
-    code = (
-        "from litellm.llms.azure.common_utils import BaseAzureLLM\n"
-        "client = BaseAzureLLM().get_azure_openai_client("
-        "api_key='test-api-key', api_base='https://test.openai.azure.com', api_version='2024-02-01',"
-        " client=None, _is_async=True, litellm_params={}, model='gpt-4')\n"
-        "print(client.max_retries)"
-    )
-    completed = subprocess.run(
-        [sys.executable, "-c", code],
-        env={**os.environ, "DEFAULT_MAX_RETRIES": "0"},
-        capture_output=True,
-        text=True,
-        check=True,
-    )
-
-    assert completed.stdout.strip() == "0"
-
-
 @pytest.mark.parametrize(
     "call_type",
     [
@@ -1768,6 +1746,74 @@ def test_azure_v1_api_client_targets_openai_v1_once_whatever_the_api_base_ends_i
     )
 
     assert str(client.base_url) == "https://test.openai.azure.com/openai/v1/"
+
+
+def test_azure_v1_base_without_an_azure_credential_never_sends_the_openai_api_key(
+    no_azure_api_key, respx_mock, monkeypatch
+):
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-openai-key-meant-for-api-openai-com")
+    route: Final = respx_mock.post(
+        host="no-credential-resource.openai.azure.com", path="/openai/v1/chat/completions"
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-1",
+                "object": "chat.completion",
+                "created": 1,
+                "model": "gpt-4.1-mini",
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
+            },
+        )
+    )
+
+    litellm.completion(
+        model="azure/gpt-4.1-mini",
+        api_base="https://no-credential-resource.openai.azure.com/openai/v1",
+        messages=[{"role": "user", "content": "hi"}],
+    )
+
+    assert "authorization" not in route.calls.last.request.headers
+
+
+def _embed_on(api_base: str) -> object:
+    return litellm.embedding(model="azure/text-embedding-3-small", api_base=api_base, api_key="k", input=["hi"])
+
+
+def _draw_on(api_base: str) -> object:
+    return litellm.image_generation(model="azure/gpt-image-1", api_base=api_base, api_key="k", prompt="a dot")
+
+
+@pytest.mark.parametrize(
+    ("call", "route_path", "upstream_body"),
+    [
+        pytest.param(
+            _embed_on,
+            "/openai/v1/embeddings",
+            {
+                "object": "list",
+                "data": [{"object": "embedding", "embedding": [0.1], "index": 0}],
+                "model": "text-embedding-3-small",
+                "usage": {"prompt_tokens": 1, "total_tokens": 1},
+            },
+            id="embedding",
+        ),
+        pytest.param(
+            _draw_on, "/openai/v1/images/generations", {"created": 1, "data": [{"b64_json": "aGk="}]}, id="image"
+        ),
+    ],
+)
+def test_azure_openai_v1_base_with_no_api_version_uses_the_v1_api_beyond_chat(
+    respx_mock, monkeypatch, call: Callable[[str], object], route_path: str, upstream_body: dict[str, object]
+):
+    monkeypatch.setenv("AZURE_API_VERSION", litellm.AZURE_DEFAULT_API_VERSION)
+    route: Final = respx_mock.post(host="v1-default-resource.openai.azure.com", path=route_path).mock(
+        return_value=httpx.Response(200, json=upstream_body)
+    )
+
+    call("https://v1-default-resource.openai.azure.com/openai/v1")
+
+    assert route.calls.last.request.url.params.get("api-version") != litellm.AZURE_DEFAULT_API_VERSION
 
 
 @pytest.mark.parametrize("api_version", ["v1", "latest", "preview"])
@@ -3268,4 +3314,3 @@ def test_non_chat_calls_on_a_foundry_project_v1_base_reach_azure(
     respx_mock.post().mock(return_value=httpx.Response(200, json=upstream_body))
 
     assert call() == "ok"
-

@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Final, cast
 import litellm
 from litellm._logging import verbose_logger
 from litellm.caching.caching_handler import create_cache_write_task, is_response_without_output
+from litellm.litellm_core_utils.core_helpers import FinishEvidence, finish_evidence_of
 from litellm.llms.anthropic.messages.native.streaming_iterator import (
     AnthropicMessagesStreamingResponse,
     BaseAnthropicMessagesStreamingIterator,
@@ -58,6 +59,10 @@ class AnthropicMessagesStreamCacheWriter:
         return cast(  # cast-ok: chunks is a list of ModelResponseStream on the inner stream
             "list[ModelResponseStream] | None", getattr(self.stream, "chunks", None)
         )
+
+    @property
+    def finish_evidence(self) -> FinishEvidence:
+        return finish_evidence_of(self.stream)
 
     @property
     def messages(self) -> "list[AllMessageValues] | None":

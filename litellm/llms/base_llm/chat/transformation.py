@@ -8,9 +8,11 @@ from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final, Union
 
 import httpx
+import openai
 from pydantic import BaseModel, TypeAdapter
 
 from litellm.constants import DEFAULT_MAX_TOKENS, RESPONSE_FORMAT_TOOL_NAME
+from litellm.litellm_core_utils.allowed_tools_tool_choice import HostedMcpToolHandling
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -68,20 +70,37 @@ class BaseLLMException(Exception):
         super().__init__(self.message)  # Call the base class constructor with the parameters it needs
 
 
+class RelayOnlyBodyLLMException(BaseLLMException):
+    pass
+
+
 _NO_ATTRIBUTION_HEADERS: Final[Mapping[str, str]] = types.MappingProxyType({})
+
+
+def _client_header_names(client: openai.OpenAI | openai.AsyncOpenAI | None) -> frozenset[str]:
+    if client is None:
+        return frozenset()
+    sdk_user_agent: Final = f"{type(client).__name__}/Python {openai.__version__}"
+    return frozenset(
+        name.lower()
+        for name, value in client.default_headers.items()
+        if name != "User-Agent" or value != sdk_user_agent
+    )
 
 
 def with_attribution_headers(
     attribution_headers: Mapping[str, str],
     headers: dict[str, object] | None,  # mutable-ok: returned as-is when there is nothing to add
+    client: openai.OpenAI | openai.AsyncOpenAI | None = None,
 ) -> dict[str, object] | None:  # mutable-ok: becomes the request's outbound headers
     """
-    `headers` plus any attribution header the caller didn't already set (names
-    compared case-insensitively). Builds a new dict; `headers` is never mutated.
+    `headers` plus any attribution header the caller didn't already set, on the
+    request or as a default header of its own OpenAI client (names compared
+    case-insensitively). Builds a new dict; `headers` is never mutated.
     """
     if not attribution_headers:
         return headers
-    caller_names: Final = {name.lower() for name in headers or {}}
+    caller_names: Final = {name.lower() for name in headers or {}} | _client_header_names(client)
     return {
         **{name: value for name, value in attribution_headers.items() if name.lower() not in caller_names},
         **(headers or {}),
@@ -125,7 +144,7 @@ class BaseConfig(ABC):
     def get_json_schema_from_pydantic_object(self, response_format: type[BaseModel] | dict | None) -> dict | None:
         return type_to_response_format_param(response_format=response_format)
 
-    def is_thinking_enabled(self, non_default_params: dict) -> bool:
+    def is_thinking_enabled(self, non_default_params: Mapping[str, object]) -> bool:
         thinking: Final = non_default_params.get("thinking")
         thinking_type: Final = thinking.get("type") if isinstance(thinking, dict) else None
         return thinking is True or thinking_type == "enabled" or non_default_params.get("reasoning_effort") is not None
@@ -141,13 +160,15 @@ class BaseConfig(ABC):
             case _:
                 return False
 
-    def is_max_tokens_in_request(self, non_default_params: dict) -> bool:
+    def is_max_tokens_in_request(self, non_default_params: Mapping[str, object]) -> bool:
         """
         OpenAI spec allows max_tokens or max_completion_tokens to be specified.
         """
         return "max_tokens" in non_default_params or "max_completion_tokens" in non_default_params
 
-    def update_optional_params_with_thinking_tokens(self, non_default_params: dict, optional_params: dict):
+    def update_optional_params_with_thinking_tokens(
+        self, non_default_params: dict[str, object], optional_params: dict[str, object]
+    ):
         """
         Handles scenario where max tokens is not specified. For anthropic models (anthropic api/bedrock/vertex ai), this requires having the max tokens being set and being greater than the thinking token budget.
 
@@ -177,7 +198,7 @@ class BaseConfig(ABC):
         """
         return False
 
-    def _add_tools_to_optional_params(self, optional_params: dict, tools: list) -> dict:
+    def _add_tools_to_optional_params(self, optional_params: dict, tools: Sequence[object]) -> dict:
         """
         Helper util to add tools to optional_params.
         """
@@ -216,7 +237,7 @@ class BaseConfig(ABC):
         return map_developer_role_to_system_role(messages=messages)
 
     def should_retry_llm_api_inside_llm_translation_on_http_error(
-        self, e: httpx.HTTPStatusError, litellm_params: dict
+        self, e: httpx.HTTPStatusError, litellm_params: dict[str, object]
     ) -> bool:
         """
         Returns True if the model/provider should retry the LLM API on UnprocessableEntityError
@@ -225,7 +246,9 @@ class BaseConfig(ABC):
         """
         return False
 
-    def transform_request_on_unprocessable_entity_error(self, e: httpx.HTTPStatusError, request_data: dict) -> dict:
+    def transform_request_on_unprocessable_entity_error(
+        self, e: httpx.HTTPStatusError, request_data: dict[str, object]
+    ) -> dict[str, object]:
         """
         Transform the request data on UnprocessableEntityError
         """
@@ -416,7 +439,7 @@ class BaseConfig(ABC):
     ) -> "ModelResponse":
         pass
 
-    def transform_parsed_response_dict(self, parsed_response: dict) -> dict:
+    def transform_parsed_response_dict(self, parsed_response: dict[str, object]) -> dict[str, object]:
         """
         Repair a parsed OpenAI-format response dict before generic conversion.
 
@@ -513,6 +536,12 @@ class BaseConfig(ABC):
 
     @property
     def accepts_reasoning_summary_in_reasoning_effort(self) -> bool:
+        return False
+
+    def hosted_mcp_tool_handling(self, model: str) -> HostedMcpToolHandling:
+        return "forwards"
+
+    def refuses_reasoning_effort(self, model: str, reasoning_effort: object, *, base_model: str | None) -> bool:
         return False
 
     def post_stream_processing(self, stream: object) -> object:

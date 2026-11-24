@@ -1,4 +1,5 @@
 import asyncio
+import json
 import os
 import threading
 import time
@@ -16,6 +17,7 @@ from httpx import HTTPStatusError, Request, Response
 import litellm
 from litellm import ModelResponse
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.llms.openai.responses.guardrail_translation.handler import OpenAIResponsesHandler
 from litellm.proxy.guardrails.guardrail_hooks.hiddenlayer.hiddenlayer import (
     HiddenlayerGuardrail,
     HiddenlayerGuardrailV2,
@@ -1282,3 +1284,44 @@ async def test_second_detection_401_propagates_without_another_jwt_refresh(
     assert route.call_count == 2
     assert route.calls[0].request.headers["Authorization"] == "Bearer expired"
     assert route.calls[1].request.headers["Authorization"] == "Bearer fresh"
+
+
+def _reply_with_reasoning(*thoughts: str) -> dict[str, object]:
+    return {
+        "output": [
+            {"type": "reasoning", "summary": [{"type": "summary_text", "text": thought} for thought in thoughts]},
+            {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "Here is a summary"}]},
+        ]
+    }
+
+
+async def test_v1_blocks_a_flagged_responses_reasoning_text_before_the_last_one(
+    httpx_transport: None, respx_mock: respx.MockRouter
+) -> None:
+    def evaluate(request: Request) -> Response:
+        action: Final = "Block" if b"exfiltrate the keys" in request.content else "Allow"
+        return Response(200, json={"evaluation": {"action": action}})
+
+    respx_mock.post("https://my.hiddenlayer/detection/v1/interactions").mock(side_effect=evaluate)
+    guardrail: Final = HiddenlayerGuardrail(api_base="https://my.hiddenlayer", guardrail_name="hiddenlayer")
+
+    with pytest.raises(HTTPException):
+        await OpenAIResponsesHandler().process_output_response(
+            _reply_with_reasoning("I could exfiltrate the keys", "I will answer briefly"), guardrail, request_data={}
+        )
+
+
+async def test_v2_blocks_a_flagged_responses_reasoning_text_after_the_first_one(
+    httpx_transport: None, respx_mock: respx.MockRouter
+) -> None:
+    def evaluate(request: Request) -> Response:
+        action: Final = "block" if b"exfiltrate the keys" in request.content else "allow"
+        return Response(200, json=json.loads(request.content), headers={"hl-runtime-action": action})
+
+    respx_mock.post("https://my.hiddenlayer/detection/v2/response-evaluations").mock(side_effect=evaluate)
+    guardrail: Final = HiddenlayerGuardrailV2(api_base="https://my.hiddenlayer", guardrail_name="hiddenlayer")
+
+    with pytest.raises(HTTPException):
+        await OpenAIResponsesHandler().process_output_response(
+            _reply_with_reasoning("I will answer briefly", "I could exfiltrate the keys"), guardrail, request_data={}
+        )

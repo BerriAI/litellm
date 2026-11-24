@@ -454,6 +454,123 @@ async def test_recreate_degrades_reader_if_reader_recreate_fails():
 
 
 @pytest.mark.asyncio
+async def test_reads_fall_back_to_writer_when_reader_recreate_is_cancelled():
+    from litellm.proxy.db.routing_prisma_wrapper import RoutingPrismaWrapper
+
+    writer: Final = MagicMock()
+    writer.recreate_prisma_client = AsyncMock()
+    reader: Final = MagicMock()
+    reader.iam_token_db_auth = False
+    reader.recreate_prisma_client = AsyncMock(side_effect=asyncio.CancelledError())
+
+    routing: Final = RoutingPrismaWrapper(writer=writer, reader=reader)
+
+    with patch.dict(os.environ, {"DATABASE_URL_READ_REPLICA": "reader-url"}):
+        with pytest.raises(asyncio.CancelledError):
+            await routing.recreate_prisma_client("writer-url")
+
+    assert routing.read_target is writer, "a reader whose recreate was cancelled must not keep serving reads"
+
+
+@pytest.mark.asyncio
+async def test_reader_that_fails_its_probe_stops_serving_reads():
+    from litellm.proxy.db.routing_prisma_wrapper import RoutingPrismaWrapper
+
+    writer: Final = MagicMock()
+    reader: Final = MagicMock()
+    reader.query_raw = AsyncMock(side_effect=RuntimeError("engine not running"))
+    routing: Final = RoutingPrismaWrapper(writer=writer, reader=reader)
+
+    await routing.degrade_reader_unless_healthy()
+
+    assert routing.read_target is writer
+
+
+@pytest.mark.asyncio
+async def test_reader_that_answers_its_probe_keeps_serving_reads():
+    from litellm.proxy.db.routing_prisma_wrapper import RoutingPrismaWrapper
+
+    writer: Final = MagicMock()
+    reader: Final = MagicMock()
+    reader.query_raw = AsyncMock(return_value=[{"result": 1}])
+    routing: Final = RoutingPrismaWrapper(writer=writer, reader=reader)
+
+    await routing.degrade_reader_unless_healthy()
+
+    assert routing.read_target is reader
+
+
+@pytest.mark.asyncio
+async def test_recovered_reader_serves_reads_again():
+    from litellm.proxy.db.routing_prisma_wrapper import RoutingPrismaWrapper
+
+    writer: Final = MagicMock()
+    reader: Final = MagicMock()
+    reader.iam_token_db_auth = False
+    reader.recreate_prisma_client = AsyncMock()
+    reader.query_raw = AsyncMock(return_value=[{"result": 1}])
+    routing: Final = RoutingPrismaWrapper(writer=writer, reader=reader)
+    routing._reader_unavailable = True
+
+    with patch.dict(os.environ, {"DATABASE_URL_READ_REPLICA": "reader-url"}):
+        recovered: Final = await routing.recover_reader()
+
+    assert (recovered, routing.read_target) == (True, reader)
+    reader.recreate_prisma_client.assert_awaited_once_with("reader-url", http_client=None)
+
+
+@pytest.mark.asyncio
+async def test_reader_that_cannot_be_recreated_stays_bypassed():
+    from litellm.proxy.db.routing_prisma_wrapper import RoutingPrismaWrapper
+
+    writer: Final = MagicMock()
+    reader: Final = MagicMock()
+    reader.iam_token_db_auth = False
+    reader.recreate_prisma_client = AsyncMock(side_effect=RuntimeError("reader still down"))
+    routing: Final = RoutingPrismaWrapper(writer=writer, reader=reader)
+    routing._reader_unavailable = True
+
+    with patch.dict(os.environ, {"DATABASE_URL_READ_REPLICA": "reader-url"}):
+        recovered: Final = await routing.recover_reader()
+
+    assert (recovered, routing.read_target) == (False, writer)
+
+
+@pytest.mark.asyncio
+async def test_older_reader_repair_cannot_route_reads_to_a_reader_a_newer_repair_left_dead():
+    from litellm.proxy.db.routing_prisma_wrapper import RoutingPrismaWrapper
+
+    first_recreate_may_finish: Final = asyncio.Event()
+
+    async def cancelled_recreate() -> None:
+        raise asyncio.CancelledError
+
+    recreates: Final = iter((first_recreate_may_finish.wait, cancelled_recreate))
+
+    async def next_recreate(*_args: object, **_kwargs: object) -> None:
+        await next(recreates)()
+
+    writer: Final = MagicMock()
+    writer.recreate_prisma_client = AsyncMock()
+    reader: Final = MagicMock()
+    reader.iam_token_db_auth = False
+    reader.recreate_prisma_client = AsyncMock(side_effect=next_recreate)
+    reader.query_raw = AsyncMock(return_value=[{"result": 1}])
+    routing: Final = RoutingPrismaWrapper(writer=writer, reader=reader)
+    routing._reader_unavailable = True
+
+    with patch.dict(os.environ, {"DATABASE_URL_READ_REPLICA": "reader-url"}):
+        older_repair: Final = asyncio.create_task(routing.recover_reader())
+        await asyncio.sleep(0)
+        with pytest.raises(asyncio.CancelledError):
+            await routing.recreate_prisma_client("writer-url")
+        first_recreate_may_finish.set()
+        recovered: Final = await older_repair
+
+    assert (recovered, routing.read_target) == (False, writer)
+
+
+@pytest.mark.asyncio
 async def test_recreate_degrades_reader_when_replica_url_missing():
     """Non-IAM reader needs DATABASE_URL_READ_REPLICA. If it's missing
     (configuration drift), the wrapper degrades instead of raising."""

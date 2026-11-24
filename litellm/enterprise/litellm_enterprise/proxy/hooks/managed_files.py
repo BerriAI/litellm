@@ -6,7 +6,7 @@ import base64
 import copy
 import json
 import time
-from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from itertools import chain
@@ -29,10 +29,11 @@ from uuid import NAMESPACE_URL, uuid5
 
 import httpx
 from fastapi import HTTPException
+from litellm_enterprise.proxy.common_utils.managed_object_attribution import creator_billing_context
 from openai import APIConnectionError, AsyncOpenAI
 from openai.types.file_deleted import FileDeleted
 from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter, ValidationError
-from typing_extensions import ReadOnly, Unpack
+from typing_extensions import ReadOnly, TypeIs, Unpack
 
 import litellm
 from litellm import Router, verbose_logger
@@ -50,12 +51,13 @@ from litellm.constants import (
 from litellm.files.types import FileRetrieveCallOptions, FileRetrieveProvider
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.cloud_storage_security import stored_s3_bucket_kwargs
-from litellm.litellm_core_utils.core_helpers import require_attributes
+from litellm.litellm_core_utils.core_helpers import as_object_list, as_str_mapping, require_attributes
 from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR
 from litellm.litellm_core_utils.internal_call_metadata import requests_background
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     extract_file_metadata,
 )
+from litellm.litellm_core_utils.prompt_templates.factory import gemini_media_source
 from litellm.llms.base_llm.files.storage_backend_factory import get_storage_backend
 from litellm.llms.base_llm.files.transformation import BaseFileEndpoints, FileListModelScope
 from litellm.llms.base_llm.managed_resources.isolation import (
@@ -64,6 +66,7 @@ from litellm.llms.base_llm.managed_resources.isolation import (
     can_access_resource,
     resolve_resource_owner_id,
 )
+from litellm.llms.vertex_ai.common_utils import GEMINI_FILES_API_URI_PREFIXES
 from litellm.llms.xai.batches.transformation import is_xai_batch_results_id
 from litellm.proxy._types import (
     CallTypes,
@@ -106,6 +109,7 @@ from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.llms.openai import (  # pyright: ignore[reportAttributeAccessIssue]
     AllMessageValues,
     AsyncCursorPage,
+    BatchInputFormat,
     ChatCompletionFileObject,
     CreateFileRequest,
     FileListPage,
@@ -203,6 +207,97 @@ def _batch_output_file_object(
 
 def _public_file_object(file_object: OpenAIFileObject, unified_file_id: str) -> OpenAIFileObject:
     return file_object.model_copy(update={"id": unified_file_id, "litellm_details_fallback": None})
+
+
+def _chat_message_file_id(part: object, role: str) -> str | None:
+    fields: Final = as_str_mapping(part)
+    if fields is None:
+        return None
+    if role == "user" and fields.get("type") == "file":
+        file: Final = as_str_mapping(fields.get("file")) or {}
+        file_id: Final = file.get("file_id")
+        if isinstance(file_id, str) and file_id:
+            return file_id
+    source: Final = gemini_media_source(fields, prefer_file_id=role == "user")
+    if source is None or not source.url.startswith(GEMINI_FILES_API_URI_PREFIXES):
+        return None
+    return source.url
+
+
+_FILE_ACCESS_PART_ROLES: Final = {"system": "user", "developer": "user"}
+
+
+def _gemini_assistant_image_file_id(image: object) -> str | None:
+    fields: Final = as_str_mapping(image)
+    if fields is None:
+        return None
+    raw_image_url: Final = fields.get("image_url")
+    url: Final = raw_image_url if isinstance(raw_image_url, str) else (as_str_mapping(raw_image_url) or {}).get("url")
+    return url if isinstance(url, str) and url.startswith(GEMINI_FILES_API_URI_PREFIXES) else None
+
+
+def _gemini_assistant_image_file_ids(value: object) -> Iterator[str]:
+    images: Final = as_object_list(value)
+    if images is None:
+        return
+    for image in images:
+        if (url := _gemini_assistant_image_file_id(image)) is not None:
+            yield url
+
+
+def _gemini_responses_input_file_id(fields: Mapping[str, object]) -> str | None:
+    from litellm.responses.litellm_completion_transformation.transformation import decode_responses_media
+
+    if fields.get("type") == "input_file" and isinstance(fields.get("file_id"), str) and fields.get("file_id"):
+        return None  # The standard Responses file ID lookup already covers explicit IDs.
+    try:
+        part: Final = decode_responses_media(fields)
+    except ValidationError:
+        return None
+    file_id: Final = _chat_message_file_id(part, "user")
+    return file_id if file_id is not None and file_id.startswith(GEMINI_FILES_API_URI_PREFIXES) else None
+
+
+def _gemini_file_ids_from_responses_input(input_data: object) -> Iterator[str]:
+    from litellm.responses.litellm_completion_transformation.transformation import (
+        TOOL_CALL_OUTPUT_ITEM_TYPES,
+        tool_output_to_chat_content,
+    )
+
+    items: Final = as_object_list(input_data)
+    if items is None:
+        return
+    for item in items:
+        if (fields := as_str_mapping(item)) is None:
+            continue
+        if (file_id := _gemini_responses_input_file_id(fields)) is not None:
+            yield file_id
+        if (content := as_object_list(fields.get("content"))) is not None:
+            for content_part in content:
+                if (part_fields := as_str_mapping(content_part)) is not None and (
+                    file_id := _gemini_responses_input_file_id(part_fields)
+                ) is not None:
+                    yield file_id
+        if (
+            not isinstance((item_type := fields.get("type")), str)
+            or item_type not in TOOL_CALL_OUTPUT_ITEM_TYPES
+            or not fields.get("call_id")
+        ):
+            continue
+        try:
+            output = tool_output_to_chat_content(fields.get("output"))
+        except ValidationError:
+            # The Responses adapter reports invalid output on its normal path.
+            continue
+        if isinstance(output, list):
+            for part in output:
+                file_id = _chat_message_file_id(part, "tool")
+                if file_id is not None:
+                    yield file_id
+
+
+def _is_object_iterable(value: object) -> TypeIs[Iterable[object]]:
+    return isinstance(value, Iterable)
 
 
 def _is_transient_file_retrieve_error(error: Exception) -> bool:
@@ -688,11 +783,7 @@ def _storage_metadata_of(file_object: OpenAIFileObject | None) -> Mapping[str, s
         "Mapping[str, object]", getattr(file_object, "_hidden_params", None) or {}
     )
     return MappingProxyType(
-        {
-            key: value
-            for key in ("storage_backend", "storage_url")
-            if isinstance(value := hidden_params.get(key), str)
-        }
+        {key: value for key in ("storage_backend", "storage_url") if isinstance(value := hidden_params.get(key), str)}
     )
 
 
@@ -907,7 +998,9 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         preserved_model_id: Final = (
             creating_model_id
             if creating_model_id is not None or create_if_missing
-            else await _stored_model_id(_writer_database(managed_database).litellm_managedobjecttable, unified_object_id)
+            else await _stored_model_id(
+                _writer_database(managed_database).litellm_managedobjecttable, unified_object_id
+            )
         )
         stored_object: Final = _with_model_id(_without_model_output(file_object), preserved_model_id)
         litellm_managed_object = LiteLLM_ManagedObjectTable(
@@ -925,13 +1018,13 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         from prisma import Json
 
         api_key = LiteLLMProxyRequestSetup.get_logged_api_key(user_api_key_dict) or None
-        raw_end_user_id: Final = user_api_key_dict.end_user_id if file_purpose in ["response", "batch"] else None
-        end_user_id: Final = _storable_text(raw_end_user_id) if raw_end_user_id else None
+        end_user_id: Final = user_api_key_dict.end_user_id if file_purpose == "response" else None
         attribution_columns = (
             {
                 **({"api_key": api_key} if api_key is not None else {}),
                 **({"request_tags": Json([_storable_text(tag) for tag in request_tags])} if request_tags else {}),
                 **({"end_user_id": end_user_id} if end_user_id else {}),
+                **({"creator_billing_context": Json(dict(billing_context))} if billing_context is not None else {}),
             }
             if persist_attribution
             else {}
@@ -1076,9 +1169,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             detail=f"Object not found: {unified_object_id}",
         )
 
-    async def enforce_batch_object_access(
-        self, object_id: str, user_api_key_dict: UserAPIKeyAuth
-    ) -> None:
+    async def enforce_batch_object_access(self, object_id: str, user_api_key_dict: UserAPIKeyAuth) -> None:
         """Deny access to a provider-format batch id owned by another caller.
 
         Ids with no ownership row (batches created before ownership tracking,
@@ -1102,9 +1193,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                 detail=f"User {user_api_key_dict.user_id} does not have access to the object {object_id}",
             )
 
-    async def enforce_provider_file_access(
-        self, file_id: str, user_api_key_dict: UserAPIKeyAuth
-    ) -> None:
+    async def enforce_provider_file_access(self, file_id: str, user_api_key_dict: UserAPIKeyAuth) -> None:
         """Deny access to a provider-format file id owned by another caller.
 
         Ownership rows for provider-format ids are written when a managed
@@ -1114,7 +1203,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         if self.prisma_client is None:
             return
         spellings: Final = list(provider_file_id_spellings(file_id))
-        managed_file = await _managed_file_table(self.prisma_client).find_first(
+        managed_files: Final = await _managed_file_table(self.prisma_client).find_many(
             where={
                 "OR": [
                     {"unified_file_id": {"in": spellings}},  # bounded-ok: at most four spellings of one file id
@@ -1122,17 +1211,16 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                 ]
             }
         )
-        if managed_file is None:
-            return
-        if not can_access_resource(
-            user_api_key_dict=user_api_key_dict,
-            created_by=managed_file.created_by,
-            resource_team_id=managed_file.team_id,
-        ):
-            raise HTTPException(
-                status_code=403,
-                detail=f"User {user_api_key_dict.user_id} does not have access to the file {file_id}",
-            )
+        for managed_file in managed_files:
+            if not can_access_resource(
+                user_api_key_dict=user_api_key_dict,
+                created_by=managed_file.created_by,
+                resource_team_id=managed_file.team_id,
+            ):
+                raise HTTPException(
+                    status_code=403,
+                    detail=f"User {user_api_key_dict.user_id} does not have access to the file {file_id}",
+                )
 
     async def store_batch_output_file_ownership(
         self, response: LiteLLMBatch, litellm_parent_otel_span: Optional[Span]
@@ -1152,16 +1240,10 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             return
         if self.prisma_client is None:
             return
-        batch_row = await _managed_object_table(self.prisma_client).find_first(
-            where={"unified_object_id": response.id}
-        )
-        if batch_row is None or (
-            batch_row.created_by is None and batch_row.team_id is None
-        ):
+        batch_row = await _managed_object_table(self.prisma_client).find_first(where={"unified_object_id": response.id})
+        if batch_row is None or (batch_row.created_by is None and batch_row.team_id is None):
             return
-        owner_identity = UserAPIKeyAuth(
-            user_id=batch_row.created_by, team_id=batch_row.team_id
-        )
+        owner_identity = UserAPIKeyAuth(user_id=batch_row.created_by, team_id=batch_row.team_id)
         for file_id in provider_file_ids:
             model_name = decode_model_from_file_id(file_id)
             raw_file_id = canonical_provider_file_id(get_original_file_id(file_id))
@@ -1271,8 +1353,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             if raise_on_failure:
                 if isinstance(error, TimeoutError) and not str(error):
                     raise TimeoutError(
-                        "Provider file retrieve timed out "
-                        f"after {BATCH_OUTPUT_FILE_LOOKUP_TIMEOUT_SECONDS} seconds"
+                        f"Provider file retrieve timed out after {BATCH_OUTPUT_FILE_LOOKUP_TIMEOUT_SECONDS} seconds"
                     ) from error
                 raise
             return None, True
@@ -1664,11 +1745,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                 },
             }
         )
-        return MappingProxyType(
-            dict(
-                _iter_provider_file_id_pairs(rows, unique_provider_file_ids)
-            )
-        )
+        return MappingProxyType(dict(_iter_provider_file_id_pairs(rows, unique_provider_file_ids)))
 
     async def get_user_created_file_ids(
         self, user_api_key_dict: UserAPIKeyAuth, model_object_ids: List[str]
@@ -1709,15 +1786,19 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                     detail=f"User {user_api_key_dict.user_id} does not have access to the file {retrieve_file_id}",
                 )
         if retrieve_file_id:
-            await self.enforce_provider_file_access(
-                retrieve_file_id, user_api_key_dict
-            )
+            await self.enforce_provider_file_access(retrieve_file_id, user_api_key_dict)
         return False
 
-    async def check_file_ids_access(self, file_ids: Sequence[str], user_api_key_dict: UserAPIKeyAuth) -> None:
+    async def check_file_ids_access(
+        self,
+        file_ids: Sequence[str],
+        user_api_key_dict: UserAPIKeyAuth,
+        *,
+        include_gemini_files_api_uris: bool = False,
+    ) -> None:
         """
         Check if the user has access to a list of file IDs.
-        Only checks managed (unified) file IDs.
+        Checks unified file IDs and, when enabled, Gemini Files API references.
 
         Args:
             file_ids: List of file IDs to check access for
@@ -1727,13 +1808,10 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             HTTPException: If user doesn't have access to any of the files
         """
         for file_id in file_ids:
-            is_unified_file_id = _is_base64_encoded_unified_file_id(file_id)
-            if is_unified_file_id:
-                if not await self.can_user_call_unified_file_id(file_id, user_api_key_dict):
-                    raise HTTPException(
-                        status_code=403,
-                        detail=f"User {user_api_key_dict.user_id} does not have access to the file {file_id}",
-                    )
+            if _is_base64_encoded_unified_file_id(file_id) or (
+                include_gemini_files_api_uris and file_id.startswith(GEMINI_FILES_API_URI_PREFIXES)
+            ):
+                await self.check_managed_file_id_access({"file_id": file_id}, user_api_key_dict)
 
     async def async_pre_call_hook(
         self,
@@ -1766,7 +1844,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                 file_ids = self.get_file_ids_from_messages(messages)
                 if file_ids:
                     # Check user has access to all managed files
-                    await self.check_file_ids_access(file_ids, user_api_key_dict)
+                    await self.check_file_ids_access(file_ids, user_api_key_dict, include_gemini_files_api_uris=True)
 
                     # Check if any files are stored in storage backends and need base64 conversion
                     # This is needed for Vertex AI/Gemini which requires base64 content
@@ -1784,24 +1862,31 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                     data["model_file_id_mapping"] = model_file_id_mapping
         elif call_type == CallTypes.aresponses.value or call_type == CallTypes.responses.value:
             # Handle managed files in responses API input and tools
-            file_ids = []
+            responses_file_ids: Final[list[str]] = []
 
             # Extract file IDs from input parameter
             input_data = data.get("input")
             if input_data:
-                file_ids.extend(self.get_file_ids_from_responses_input(input_data))
+                await self.check_file_ids_access(
+                    list(_gemini_file_ids_from_responses_input(_keyed_get(data, "input"))),
+                    user_api_key_dict,
+                    include_gemini_files_api_uris=True,
+                )
+                responses_file_ids.extend(self.get_file_ids_from_responses_input(input_data))
 
             # Extract file IDs from tools parameter (e.g., code_interpreter container)
             tools = data.get("tools")
             if tools:
-                file_ids.extend(self.get_file_ids_from_responses_tools(tools))
+                responses_file_ids.extend(self.get_file_ids_from_responses_tools(tools))
 
-            if file_ids:
+            if responses_file_ids:
                 # Check user has access to all managed files
-                await self.check_file_ids_access(file_ids, user_api_key_dict)
+                await self.check_file_ids_access(
+                    responses_file_ids, user_api_key_dict, include_gemini_files_api_uris=True
+                )
 
                 model_file_id_mapping = await self.get_model_file_id_mapping(
-                    file_ids, user_api_key_dict.parent_otel_span
+                    responses_file_ids, user_api_key_dict.parent_otel_span
                 )
                 data["model_file_id_mapping"] = model_file_id_mapping
 
@@ -1953,24 +2038,29 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         return kwargs
 
     def get_file_ids_from_messages(self, messages: List[AllMessageValues]) -> List[str]:
-        """
-        Gets file ids from messages
-        """
-        file_ids = []
+        return list(self._iter_file_ids_from_messages(messages))
+
+    @staticmethod
+    def _iter_file_ids_from_messages(messages: Sequence[AllMessageValues]) -> Iterator[str]:
         for message in messages:
-            if message.get("role") == "user":
-                content = message.get("content")
-                if content:
-                    if isinstance(content, str):
-                        continue
-                    for c in content:
-                        if c.get("type") == "file":
-                            file_object = cast(ChatCompletionFileObject, c)
-                            file_object_file_field = file_object["file"]
-                            file_id = file_object_file_field.get("file_id")
-                            if file_id:
-                                file_ids.append(file_id)
-        return file_ids
+            if not isinstance((role := _keyed_get(message, "role")), str) or role not in (
+                "user",
+                "system",
+                "developer",
+                "assistant",
+                "tool",
+                "function",
+            ):
+                continue
+            if role == "assistant":
+                yield from _gemini_assistant_image_file_ids(_keyed_get(message, "images"))
+            if not _is_object_iterable(content := _keyed_get(message, "content")) or isinstance(
+                content, (str, Mapping)
+            ):
+                continue
+            for part in content:
+                if (file_id := _chat_message_file_id(part, _FILE_ACCESS_PART_ROLES.get(role, role))) is not None:
+                    yield file_id
 
     def get_file_ids_from_responses_input(self, input: Union[str, List[Dict[str, object]]]) -> List[str]:
         """
@@ -2902,7 +2992,11 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         """
         managed_file: Final = await self.get_unified_file_id(file_id, litellm_parent_otel_span)
         if managed_file is not None and managed_file.storage_backend and managed_file.storage_url:
-            return await self._storage_backend_content(managed_file.storage_backend, managed_file.storage_url)
+            return await self._storage_backend_content(
+                managed_file.storage_backend,
+                managed_file.storage_url,
+                managed_file.file_object.purpose if managed_file.file_object else None,
+            )
 
         model_file_id_mapping = data.pop("model_file_id_mapping", None)
         model_file_id_mapping = model_file_id_mapping or await self.get_model_file_id_mapping(
@@ -2941,10 +3035,15 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         else:
             raise Exception(f"LiteLLM Managed File object with id={file_id} not found")
 
-    async def _storage_backend_content(self, storage_backend_name: str, storage_url: str) -> HttpxBinaryResponseContent:
+    async def _storage_backend_content(
+        self, storage_backend_name: str, storage_url: str, purpose: str | None
+    ) -> HttpxBinaryResponseContent:
         storage_backend: Final = get_storage_backend(storage_backend_name, prisma_client=self.prisma_client)
         content: Final = await storage_backend.download_file(storage_url)
-        return HttpxBinaryResponseContent(response=httpx.Response(status_code=httpx.codes.OK, content=content))
+        return HttpxBinaryResponseContent(
+            response=httpx.Response(status_code=httpx.codes.OK, content=content),
+            batch_input_format=BatchInputFormat.OPENAI if purpose == "batch" else BatchInputFormat.UNKNOWN,
+        )
 
     async def _convert_storage_files_to_base64(
         self,
@@ -3060,4 +3159,6 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                                 verbose_logger.debug(
                                     f"Converted file {file_id} from storage backend to base64 with format {content_type}"
                                 )
+
+
 PROXY_LiteLLMManagedFiles = _PROXY_LiteLLMManagedFiles

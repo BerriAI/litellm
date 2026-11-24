@@ -7,7 +7,8 @@ import { I18nextProvider } from "react-i18next";
 import LoadingScreen from "@/components/common_components/LoadingScreen";
 
 import i18n from "./i18n";
-import { browserLanguageStore, DEFAULT_LANGUAGE, LanguageStore, Locales, LOCALES, resolveLanguage } from "./languages";
+import { DEFAULT_LANGUAGE } from "./defaultLanguage";
+import { browserLanguageStore, LanguageStore, Locales, LOCALES, resolveLanguage } from "./languages";
 
 type LanguageGateProps = {
   i18n: I18n;

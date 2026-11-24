@@ -6,6 +6,8 @@
 - Every litellm Python internal Rust still borrows is a variant of `LegacyPython`, grouped by subsystem, with its signature pinned in `python_contract.json`
   - The enum only shrinks: when Rust owns a subsystem, delete its group rather than adding a Rust path beside it
   - Calling a user's own callback directly is permanent Python surface and gets its own type outside `LegacyPython`
+  - `record_route_cost` is the one variant that grows it: a route that priced its call hands `Logging` the receipt instead of the response cost being popped and recomputed, which removes Python's pricing from the call. It goes when the standard logging payload and spend recording read the receipt from Rust
+- A `Cost::Priced` result is recorded at `result_ready`, a `Cost::Metered` stream's price right before its end-of-stream billing once the meter settled. `NativeReceipt` (`receipt.rs`) is the receipt as Python reads it, shared with the pricing bridge
 - `PublicCall` is the caller's call as `Logging` sees it: the positional arguments, the keyword view as the call rewrites it (setup, deployment hook, preflight) and the bound request object backing omitted keywords. Shared bridge composition hands it to `LegacyLogging`. Routes use the neutral call boundary
 - `LoggingOperation` selects legacy logging entrypoints and response handling. It belongs here rather than in shared inference data contracts
 - `setup` reuses a `Logging` passed as `litellm_logging_obj` (the proxy and Router) and otherwise builds one through `function_setup`. Which callbacks run is `Logging`'s decision, never this crate's

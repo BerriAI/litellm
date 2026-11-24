@@ -1607,11 +1607,6 @@
       "count": 1
     }
   },
-  "src/components/leftnav.tsx": {
-    "local/filename-pascal-case": {
-      "count": 1
-    }
-  },
   "src/components/llm_calls/chat_completion.tsx": {
     "local/filename-pascal-case": {
       "count": 1

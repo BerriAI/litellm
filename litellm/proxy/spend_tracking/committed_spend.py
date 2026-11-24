@@ -24,7 +24,6 @@ from litellm.proxy.spend_tracking.spend_counter_batch import (
     read_batched_spend_counter,
 )
 from litellm.redis.stores.spend_counters import (
-    COMMITTED_COUNTER_PREFIX,
     END_USER_COUNTER_PREFIX,
     SPEND_COUNTERS_TARGET,
     SpendCounterStore,
@@ -48,10 +47,6 @@ def has_committed_twin(counter_key: str) -> bool:
 
 def committed_spend_keys(counter_keys: Iterable[str]) -> tuple[str, ...]:
     return tuple(committed_spend_key(counter_key) for counter_key in counter_keys if has_committed_twin(counter_key))
-
-
-def is_committed_spend_key(counter_key: str) -> bool:
-    return counter_key.startswith(COMMITTED_COUNTER_PREFIX)
 
 
 def committed_spend_tracked() -> bool:

@@ -27,6 +27,7 @@ from litellm.llms.openai.openai import OpenAIConfig
 from litellm.llms.openai.openai import OpenAIConfig as OpenAIConfigType
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.proxy._types import PassThroughEndpointLoggingTypedDict
+from litellm.proxy.pass_through_endpoints.background_response_polling import POLLABLE_BACKGROUND_RESPONSE_STATUSES
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.base_passthrough_logging_handler import (
     BasePassthroughLoggingHandler,
 )
@@ -34,7 +35,7 @@ from litellm.proxy.pass_through_endpoints.success_handler import (
     PassThroughEndpointLogging,
 )
 from litellm.types.decisions import OpenAIDecisionResponse
-from litellm.types.llms.openai import ResponsesAPIResponse
+from litellm.types.llms.openai import ResponseCreatedEvent, ResponsesAPIResponse
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     SETTLES_BACKGROUND_RESPONSE_KWARG,
     BackgroundResponseSettlement,
@@ -45,6 +46,7 @@ from litellm.types.utils import (
     EmbeddingResponse,
     ImageResponse,
     LlmProviders,
+    ModelResponseStream,
     PassthroughCallTypes,
     StandardPassThroughResponseObject,
 )
@@ -117,10 +119,15 @@ def is_openai_compatible_url(url_route: str | None) -> bool:
 _is_openai_compatible_url: Final = is_openai_compatible_url
 
 
+def targets_openai_api(url_route: str) -> bool:
+    hostname: Final = urlparse(url_route).hostname
+    return hostname is not None and _hostname_matches(hostname, _OPENAI_HOSTNAMES)
+
+
 ResponsesCallBilling: TypeAlias = Literal["unbilled", "billed", "background_settlement"]
 
 
-def _is_finished_background_response(response_body: Mapping[str, object]) -> bool:
+def is_finished_background_response(response_body: Mapping[str, object]) -> bool:
     return is_background_response(response_body) and response_body.get("usage") is not None
 
 
@@ -132,6 +139,29 @@ def _responses_sub_route(path: str) -> tuple[str, ...] | None:
     segments: Final = path.rstrip("/").split("/")
     anchor: Final = max((index for index, segment in enumerate(segments) if segment == "responses"), default=None)
     return None if anchor is None else tuple(segments[anchor + 1 :])
+
+
+def deleted_response_id(path: str) -> str | None:
+    match _responses_sub_route(path):
+        case (response_id,) if response_id:
+            return response_id
+        case _:
+            return None
+
+
+def _created_response(chunk: str) -> ResponsesAPIResponse | None:
+    try:
+        return ResponseCreatedEvent.model_validate_json(chunk.removeprefix("data: ")).response
+    except ValueError:
+        return None
+
+
+def _finishes_at_create(method: str, url_route: str, response_body: Mapping[str, object]) -> bool:
+    return (
+        method == "POST"
+        and _responses_sub_route(urlparse(url_route).path) == ()
+        and is_finished_background_response(response_body)
+    )
 
 
 _STR_MAPPING: Final = TypeAdapter(Mapping[str, object])
@@ -156,7 +186,7 @@ class _AgentsApiSessionEvent(BaseModel):
     session: _AgentsApiBody
 
 
-_AGENTS_API_BODY: Final = TypeAdapter(_AgentsApiBody | _AgentConfig)
+_AGENTS_API_BODY: Final[TypeAdapter[_AgentsApiBody | _AgentConfig]] = TypeAdapter(_AgentsApiBody | _AgentConfig)
 
 
 def _agent_model(body: Mapping[str, object]) -> str | None:
@@ -275,7 +305,7 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
             case ("POST", ("input_tokens",)) | ("GET", (_, "input_items")) | ("DELETE", (_,)):
                 return "unbilled"
             case ("GET", (_,)) | ("POST", (_, "cancel")):
-                settles: Final = not settled_before and _is_finished_background_response(response_body)
+                settles: Final = not settled_before and is_finished_background_response(response_body)
                 return "background_settlement" if settles else "unbilled"
             case _:
                 return "billed"
@@ -286,7 +316,19 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
     ) -> str | None:
         response_id: Final = response_body.get("id")
         billing: Final = OpenAIPassthroughLoggingHandler.openai_responses_call_billing(method, url_route, response_body)
-        return response_id if billing == "background_settlement" and isinstance(response_id, str) else None
+        settles: Final = billing == "background_settlement" or _finishes_at_create(method, url_route, response_body)
+        return response_id if settles and isinstance(response_id, str) else None
+
+    @staticmethod
+    def creates_pollable_background_response(
+        method: str, url_route: str, request_body: Mapping[str, object], response_body: Mapping[str, object]
+    ) -> bool:
+        return (
+            method == "POST"
+            and OpenAIPassthroughLoggingHandler.creates_in_background(url_route, request_body)
+            and response_body.get("status") in POLLABLE_BACKGROUND_RESPONSE_STATUSES
+            and isinstance(response_body.get("id"), str)
+        )
 
     @staticmethod
     def stream_may_settle_background_response(url_route: str, request_body: Mapping[str, object]) -> bool:
@@ -298,11 +340,26 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
         )
 
     @staticmethod
-    def background_response_settled_by_stream(all_chunks: Sequence[str]) -> str | None:
+    def creates_in_background(url_route: str, request_body: Mapping[str, object]) -> bool:
+        return (
+            OpenAIPassthroughLoggingHandler.is_openai_responses_route(url_route)
+            and _responses_sub_route(urlparse(url_route).path) == ()
+            and request_body.get("background") is True
+        )
+
+    @staticmethod
+    def background_response_left_unfinished_by_stream(all_chunks: Sequence[str]) -> ResponsesAPIResponse | None:
+        if OpenAIResponsesAPIConfig.parse_terminal_event_from_stream_chunks(all_chunks) is not None:
+            return None
+        created: Final = (_created_response(chunk) for chunk in all_chunks if "response.created" in chunk)
+        return next((response for response in created if response is not None), None)
+
+    @staticmethod
+    def background_response_settled_by_stream(all_chunks: Sequence[str]) -> ResponsesAPIResponse | None:
         terminal_response: Final = OpenAIResponsesAPIConfig.parse_terminal_response_from_stream_chunks(all_chunks)
         if terminal_response is None or not _settles_background_response(terminal_response):
             return None
-        return terminal_response.id
+        return terminal_response
 
     @staticmethod
     def is_openai_agents_route(url_route: str) -> bool:
@@ -381,7 +438,7 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
     @staticmethod
     def _calculate_image_generation_cost(
         model: str,
-        response_body: dict,
+        response_body: Mapping[str, object],
         request_body: dict,
     ) -> float:
         """Calculate cost for OpenAI image generation."""
@@ -415,7 +472,7 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
     @staticmethod
     def _calculate_image_editing_cost(
         model: str,
-        response_body: dict,
+        response_body: Mapping[str, object],
         request_body: dict,
     ) -> float:
         """Calculate cost for OpenAI image editing."""
@@ -783,7 +840,7 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
                 sync_stream=False,
             )
 
-            all_openai_chunks: Final = []
+            all_openai_chunks: Final[list[ModelResponseStream]] = []
             for chunk_str in all_chunks:
                 try:
                     # Parse the string chunk using the base iterator's string parser

@@ -1,6 +1,6 @@
 import json
 import os
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping, Sequence
 from typing import Final, Literal, Protocol, get_args, runtime_checkable
 
 import httpx
@@ -63,7 +63,7 @@ def _pairs(value: object) -> Iterator[tuple[object, object]]:
 
 
 def get_hf_task_embedding_for_model(
-    model: str, task_type: str | None, api_base: str, timeout: float | httpx.Timeout | None = None
+    model: str, task_type: object, api_base: str, timeout: float | httpx.Timeout | None = None
 ) -> object:
     if task_type is not None:
         if task_type in get_args(hf_tasks_embeddings):
@@ -107,7 +107,7 @@ class HuggingFaceEmbedding(BaseLLM):
     def __init__(self) -> None:
         super().__init__()
 
-    def _transform_input_on_pipeline_tag(self, input: list, pipeline_tag: object) -> dict:
+    def _transform_input_on_pipeline_tag(self, input: Sequence[object], pipeline_tag: object) -> dict[str, object]:
         if pipeline_tag is None:
             return {"inputs": input}
         if pipeline_tag == "sentence-similarity" or pipeline_tag == "similarity":
@@ -131,9 +131,9 @@ class HuggingFaceEmbedding(BaseLLM):
         model: str,
         task_type: str | None,
         embed_url: str,
-        input: list,
-        optional_params: dict,
-    ) -> dict:
+        input: Sequence[object],
+        optional_params: dict[str, object],
+    ) -> dict[str, object]:
         hf_task = await async_get_hf_task_embedding_for_model(model=model, task_type=task_type, api_base=HF_HUB_URL)
 
         data: Final = self._transform_input_on_pipeline_tag(input=input, pipeline_tag=hf_task)
@@ -143,7 +143,7 @@ class HuggingFaceEmbedding(BaseLLM):
 
         return data
 
-    def _process_optional_params(self, data: dict, optional_params: dict) -> dict:
+    def _process_optional_params(self, data: dict, optional_params: Mapping[str, object]) -> dict:
         special_options_keys: Final = config.get_special_options_params()
         special_parameters_keys: Final = [
             "min_length",
@@ -169,14 +169,14 @@ class HuggingFaceEmbedding(BaseLLM):
 
     def _transform_input(
         self,
-        input: list,
+        input: Sequence[object],
         model: str,
         call_type: Literal["sync", "async"],
-        optional_params: dict,
+        optional_params: dict[str, object],
         embed_url: str,
         timeout: float | httpx.Timeout | None = None,
-    ) -> dict:
-        data: dict = {}
+    ) -> dict[str, object]:
+        data: dict[str, object] = {}
 
         ## TRANSFORMATION ##
         if "sentence-transformers" in model:
@@ -210,10 +210,10 @@ class HuggingFaceEmbedding(BaseLLM):
         embeddings: object,
         model_response: EmbeddingResponse,
         model: str,
-        input: list,
+        input: Sequence[object],
         encoding: _SupportsTokenEncode,
     ) -> EmbeddingResponse:
-        output_data: Final = []
+        output_data: Final[list[dict[str, object]]] = []
         if json_contains(embeddings, "similarities"):
             for idx, embedding in _pairs(_subscript(embeddings, "similarities")):
                 output_data.append(
@@ -265,7 +265,7 @@ class HuggingFaceEmbedding(BaseLLM):
     async def aembedding(
         self,
         model: str,
-        input: list,
+        input: Sequence[object],
         model_response: litellm.utils.EmbeddingResponse,
         timeout: float | httpx.Timeout,
         logging_obj: LiteLLMLoggingObj,
@@ -330,7 +330,7 @@ class HuggingFaceEmbedding(BaseLLM):
     def embedding(
         self,
         model: str,
-        input: list,
+        input: Sequence[object],
         model_response: EmbeddingResponse,
         optional_params: dict,
         litellm_params: dict,

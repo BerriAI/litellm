@@ -1,5 +1,6 @@
 use std::borrow::Cow;
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
+use std::sync::Arc;
 
 use encoding_rs::Encoding;
 use indexmap::{IndexMap, IndexSet};
@@ -7,9 +8,10 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use crate::error::{Error, Loaded, Rejects, Repr, pointer_child, pointer_for_key};
-use crate::fallback::{FallbackGeneralizations, FallbackRule};
+use crate::fallback::{CapabilityRules, FallbackGeneralizations, FallbackRule};
 use crate::model::Model;
 use crate::store::{Rows, Store};
+use crate::view::CatalogView;
 use crate::wire::{EntryWire, Fields};
 
 const SAMPLE_SPEC: &str = "sample_spec";
@@ -63,6 +65,7 @@ pub struct Catalog {
     store: Store<CatalogRows>,
     sections: Vec<Section>,
     fallback_generalizations: Option<FallbackGeneralizations>,
+    capability_rules: CapabilityRules,
 }
 
 /// Models and aliases, an alias served as its owner's row
@@ -246,6 +249,10 @@ impl Catalog {
                     })
                     .ok()
             });
+        let capability_rules = fallback_generalizations
+            .as_ref()
+            .map(|generalizations| CapabilityRules::new(&generalizations.rules))
+            .unwrap_or_default();
         Ok(Loaded {
             value: Self {
                 store: Store::new(CatalogRows {
@@ -255,6 +262,7 @@ impl Catalog {
                 }),
                 sections,
                 fallback_generalizations,
+                capability_rules,
             },
             errors: problems,
         })
@@ -480,6 +488,29 @@ impl Catalog {
 
     pub fn fallback_rules(&self) -> Option<&[FallbackRule]> {
         Some(self.fallback_generalizations.as_ref()?.rules.as_slice())
+    }
+
+    pub fn capability_rules(&self) -> &CapabilityRules {
+        &self.capability_rules
+    }
+}
+
+/// The Rust host's document, which has no registrations. A row is lowered each time it is priced
+impl CatalogView for Catalog {
+    fn contains(&self, key: &str) -> bool {
+        self.rows().contains(key)
+    }
+
+    fn find_key(&self, name: &str) -> Option<String> {
+        self.store.find_key(name)
+    }
+
+    fn fields(&self, key: &str) -> Option<Arc<Fields>> {
+        self.get(key).cloned().map(Arc::new)
+    }
+
+    fn registered_fields(&self, _key: &str) -> BTreeSet<String> {
+        BTreeSet::new()
     }
 }
 
