@@ -8,7 +8,6 @@ from pydantic import ValidationError
 
 import litellm
 from litellm.constants import FAILED_MODEL_INFO_LOOKUP_RETRY_SECONDS
-from litellm.litellm_core_utils.model_cost_table import FailedLookup
 from litellm.llms.lemonade.chat.transformation import LemonadeChatConfig
 
 LEMONADE_BASE = "http://lemonade.test/api/v1"
@@ -127,25 +126,25 @@ def test_get_model_info_raises_for_non_object_payload_instead_of_defaulting(
         LemonadeChatConfig().get_model_info(model=f"lemonade/{MODEL}", api_base=LEMONADE_BASE)
 
 
-def test_get_model_info_answers_a_failed_lookup_when_server_errors(respx_mock: respx.MockRouter) -> None:
+def test_get_model_info_defaults_when_server_errors(respx_mock: respx.MockRouter) -> None:
     respx_mock.get(f"{LEMONADE_BASE}/models/{MODEL}").respond(503, json={"max_tokens": 5})
 
-    assert LemonadeChatConfig().get_model_info(model=f"lemonade/{MODEL}", api_base=LEMONADE_BASE) == FailedLookup(
-        _expected_model_info()
+    assert (
+        LemonadeChatConfig().get_model_info(model=f"lemonade/{MODEL}", api_base=LEMONADE_BASE) == _expected_model_info()
     )
 
 
-def test_litellm_get_model_info_retries_a_failed_lookup_at_the_call_api_base_with_its_key(
+def test_per_call_lookups_retry_a_failed_lookup_at_the_call_api_base_with_its_key(
     respx_mock: respx.MockRouter,
 ) -> None:
+    from litellm.utils import get_model_info_for_call
+
     lookups: Final = respx_mock.get(f"{LEMONADE_BASE}/models/{MODEL}").mock(
         side_effect=[httpx.Response(503), httpx.Response(200, json={"max_input_tokens": 4096})]
     )
 
     def max_input_tokens() -> object:
-        return litellm.get_model_info(f"lemonade/{MODEL}", api_base=LEMONADE_BASE, api_key="lemonade-call-key")[
-            "max_input_tokens"
-        ]
+        return get_model_info_for_call(f"lemonade/{MODEL}", None, LEMONADE_BASE, "lemonade-call-key")["max_input_tokens"]
 
     litellm.get_model_info.cache_clear()
     try:

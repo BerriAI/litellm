@@ -187,6 +187,15 @@ class LemonadeChatConfig(OpenAILikeChatConfig):
         model: str,
         api_base: str | None = None,
         api_key: str | None = None,
+    ) -> dict[str, object]:
+        looked_up: Final = self.look_up_model_info(model=model, api_base=api_base, api_key=api_key)
+        return dict(looked_up.value if isinstance(looked_up, FailedLookup) else looked_up)
+
+    def look_up_model_info(
+        self,
+        model: str,
+        api_base: str | None = None,
+        api_key: str | None = None,
     ) -> Mapping[str, object] | FailedLookup[Mapping[str, object]]:
         if model.startswith("lemonade/"):
             model = model.split("/", 1)[1]

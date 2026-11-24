@@ -1,7 +1,7 @@
 import json
 import re
 import time
-from collections.abc import AsyncIterator, Iterator, Mapping
+from collections.abc import AsyncIterator, Iterator
 from typing import TYPE_CHECKING, Any, Final
 
 from httpx._models import Headers, Response
@@ -12,7 +12,6 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.litellm_core_utils.allowed_tools_tool_choice import HostedMcpToolHandling
-from litellm.litellm_core_utils.model_cost_table import FailedLookup
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_str_from_messages,
 )
@@ -299,7 +298,7 @@ class OllamaConfig(BaseConfig):
         model: str,
         api_base: str | None = None,
         api_key: str | None = None,
-    ) -> Mapping[str, object] | FailedLookup[Mapping[str, object]] | None:
+    ) -> dict[str, object] | None:
         """
         curl http://localhost:11434/api/show -d '{
           "name": "mistral"

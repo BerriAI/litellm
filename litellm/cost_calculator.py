@@ -192,6 +192,7 @@ from litellm.utils import (
     cached_cost_map_key,
     cached_get_model_info_helper,
     cached_model_info_for_call,
+    get_model_info_for_call,
     mapped_model_fill_missing,
     pricing_with_overrides,
     runtime_model_cost_registrations,
@@ -2976,7 +2977,7 @@ def _cost_map_model_info(
     model: str, custom_llm_provider: str | None, api_base: str | None = None, api_key: str | None = None
 ) -> ModelInfo | None:
     try:
-        return litellm.get_model_info(
+        return get_model_info_for_call(
             model=model, custom_llm_provider=custom_llm_provider, api_base=api_base, api_key=api_key
         )
     except Exception:

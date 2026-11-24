@@ -33,7 +33,7 @@ from litellm.types.utils import (
     Usage,
     text_tokens_without_nested_reasoning,
 )
-from litellm.utils import get_model_info
+from litellm.utils import get_model_info, get_model_info_for_call
 
 # Pre-resolved CallTypes enum values for fast membership checks
 _IMAGE_RESPONSE_CALL_TYPES: Final = frozenset(
@@ -1207,7 +1207,7 @@ def get_billed_token_rates(
         resolved_model_info: Final = (
             model_info
             if model_info is not None
-            else get_model_info(
+            else get_model_info_for_call(
                 model=model, custom_llm_provider=custom_llm_provider, api_base=api_base, api_key=api_key
             )
         )

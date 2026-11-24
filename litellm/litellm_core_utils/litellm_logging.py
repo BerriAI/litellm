@@ -280,6 +280,7 @@ from litellm.types.videos.main import VideoObject
 from litellm.types.videos.utils import POLLED_VIDEO_STATUS_KWARG
 from litellm.utils import (
     get_base_model_from_metadata,
+    get_model_info_for_call,
     model_info_lookup_api_key,
     print_verbose,
 )
@@ -492,13 +493,21 @@ _ORIGINAL_RESPONSE_READER_CALLBACK_NAMES: Final = frozenset({"athina", "sentry",
 _FIRST_PARTY_PACKAGES: Final = frozenset({"litellm", "litellm_enterprise"})
 
 
-def _bearer_token(headers: object) -> str | None:
-    if not isinstance(headers, Mapping):
-        return None
-    authorization: Final = next(
-        (value for name, value in _REQUEST_MAPPING.validate_python(headers).items() if name.lower() == "authorization"),
-        None,
+def _sent_credential(headers: object, api_key: object) -> str | None:
+    authorization: Final = (
+        next(
+            (
+                value
+                for name, value in _REQUEST_MAPPING.validate_python(headers).items()
+                if name.lower() == "authorization"
+            ),
+            None,
+        )
+        if isinstance(headers, Mapping)
+        else None
     )
+    if authorization is None:
+        return api_key if isinstance(api_key, str) and api_key else None
     if not isinstance(authorization, str):
         return None
     scheme, _, token = authorization.partition(" ")
@@ -2083,6 +2092,13 @@ class Logging(LiteLLMLoggingBaseClass):
     def _get_masked_api_base(self, api_base: str | None) -> str:
         return str(mask_api_base_credentials(api_base or ""))
 
+    def record_call_target(self, api_base: str | None, api_key: object, headers: object) -> None:
+        provider: Final = self.model_call_details.get("custom_llm_provider")
+        self.model_info_api_key = model_info_lookup_api_key(
+            self.model, provider if isinstance(provider, str) else None, _sent_credential(headers, api_key)
+        )
+        self.model_call_details["litellm_params"]["api_base"] = self._get_masked_api_base(api_base)
+
     def _pre_call(self, input, api_key, model=None, additional_args={}):
         """
         Common helper function across the sync + async pre-call function
@@ -2090,13 +2106,6 @@ class Logging(LiteLLMLoggingBaseClass):
 
         self.model_call_details["input"] = input
         self.model_call_details["api_key"] = api_key
-        provider: Final = self.model_call_details.get("custom_llm_provider")
-        self.model_info_api_key = model_info_lookup_api_key(
-            self.model,
-            provider if isinstance(provider, str) else None,
-            _bearer_token(_REQUEST_MAPPING.validate_python(additional_args).get("headers"))
-            or (api_key if isinstance(api_key, str) and api_key else None),
-        )
         self.model_call_details["additional_args"] = additional_args
         self.model_call_details["log_event_type"] = "pre_api_call"
         if is_classifier_call(self.call_type, self.model_call_details.get("litellm_params") or EMPTY_MAPPING):
@@ -2109,8 +2118,10 @@ class Logging(LiteLLMLoggingBaseClass):
             )
         if model:  # if model name was changes pre-call, overwrite the initial model call name with the new one
             self.model_call_details["model"] = model
-        self.model_call_details["litellm_params"]["api_base"] = self._get_masked_api_base(
-            additional_args.get("api_base", "")
+        self.record_call_target(
+            additional_args.get("api_base", ""),
+            api_key,
+            _REQUEST_MAPPING.validate_python(additional_args).get("headers"),
         )
 
     def pre_call(self, input, api_key, model=None, additional_args={}):
@@ -8354,7 +8365,7 @@ class StandardLoggingPayloadSetup:
             model_cost_information = StandardLoggingModelInformation(model_map_key="", model_map_value=None)
         else:
             try:
-                _model_cost_information: Final = litellm.get_model_info(
+                _model_cost_information: Final = get_model_info_for_call(
                     model=pricing_model_name or model_cost_name,
                     custom_llm_provider=custom_llm_provider,
                     api_base=api_base,

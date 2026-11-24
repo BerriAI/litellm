@@ -7621,7 +7621,9 @@ def _look_up_model_info(
                 model=model, provider=LlmProviders(custom_llm_provider)
             )
         if provider_config is not None:
-            provider_get_model_info: Final = getattr(provider_config, "get_model_info", None)
+            provider_get_model_info: Final = getattr(provider_config, "look_up_model_info", None) or getattr(
+                provider_config, "get_model_info", None
+            )
             if callable(provider_get_model_info):
                 try:
                     provider_model_info: Final = provider_get_model_info(
@@ -8209,6 +8211,15 @@ def get_model_info(
             "supported_openai_params": ["temperature", "max_tokens", "top_p", "frequency_penalty", "presence_penalty"]
         }
     """
+    if api_key is not None and looks_up_model_info_at_runtime(model, custom_llm_provider):
+        built: Final = _build_model_info(model, custom_llm_provider, api_base, api_key)
+        return built.value if isinstance(built, FailedLookup) else built
+    return get_model_info_for_call(model, custom_llm_provider, api_base, None)
+
+
+def get_model_info_for_call(
+    model: str, custom_llm_provider: str | None, api_base: str | None, api_key: str | None
+) -> ModelInfo:
     if not looks_up_model_info_at_runtime(model, custom_llm_provider):
         return _cached_get_model_info(model, custom_llm_provider)
     return _cached_get_model_info(model, custom_llm_provider, api_base, api_key)

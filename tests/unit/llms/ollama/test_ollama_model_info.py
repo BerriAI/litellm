@@ -25,7 +25,6 @@ import time_machine
 import litellm
 
 from litellm.constants import FAILED_MODEL_INFO_LOOKUP_RETRY_SECONDS
-from litellm.litellm_core_utils.model_cost_table import FailedLookup
 from litellm.llms.ollama.common_utils import OllamaModelInfo
 
 
@@ -394,7 +393,9 @@ class TestOllamaGetModelInfo:
         assert model_info["max_input_tokens"] == 32768
         assert captured_headers[0] == {"Authorization": "Bearer explicit-api-key"}
 
-    def test_litellm_get_model_info_caches_ollama_lookups_per_api_key(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_per_call_lookups_are_cached_per_api_key(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from litellm.utils import get_model_info_for_call
+
         captured_headers: Final[list[Mapping[str, str] | None]] = []  # mutable-ok: the stub records each lookup
 
         def mock_post(
@@ -413,11 +414,7 @@ class TestOllamaGetModelInfo:
         litellm.get_model_info.cache_clear()
         try:
             for api_key in ("key-one", "key-two", "key-one", "key-two"):
-                litellm.get_model_info(
-                    "ollama/unknown-model",
-                    api_base="https://ollama.example",
-                    api_key=api_key,
-                )
+                get_model_info_for_call("ollama/unknown-model", None, "https://ollama.example", api_key)
 
             assert captured_headers == [
                 {"Authorization": "Bearer key-one"},
@@ -427,12 +424,12 @@ class TestOllamaGetModelInfo:
             litellm.get_model_info.cache_clear()
 
     @pytest.mark.parametrize("api_key", [None, "GATEKEY"], ids=["no-key", "keyed"])
-    @pytest.mark.parametrize("cost_path", [False, True], ids=["get_model_info", "cost-path"])
+    @pytest.mark.parametrize("cost_path", [False, True], ids=["per-call", "cost-path"])
     def test_a_failed_lookup_is_retried_after_the_retry_window_and_a_successful_one_is_cached(
         self, monkeypatch: pytest.MonkeyPatch, cost_path: bool, api_key: str | None
     ) -> None:
         from litellm.llms.custom_httpx.http_handler import HTTPHandler
-        from litellm.utils import cached_get_model_info_helper
+        from litellm.utils import cached_get_model_info_helper, get_model_info_for_call
 
         statuses: Final = iter((500, 200))
         lookups: Final[list[str | None]] = []  # mutable-ok: the transport records each lookup it serves
@@ -447,9 +444,7 @@ class TestOllamaGetModelInfo:
                     "ollama/retry-probe", "ollama", api_base="http://ollama.test:11434", api_key=api_key
                 )
                 if cost_path
-                else litellm.get_model_info(
-                    "ollama/retry-probe", api_base="http://ollama.test:11434", api_key=api_key
-                )
+                else get_model_info_for_call("ollama/retry-probe", None, "http://ollama.test:11434", api_key)
             )
             return lookup["max_input_tokens"]
 
@@ -472,6 +467,34 @@ class TestOllamaGetModelInfo:
 
         assert (failed, within_window, retried, cached) == (None, None, 8192, 8192)
         assert lookups == [f"Bearer {api_key}" if api_key else None] * 2
+
+    def test_a_direct_keyed_get_model_info_looks_up_on_every_call(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+        statuses: Final = iter((500, 200, 200))
+        lookups: Final[list[str | None]] = []  # mutable-ok: the transport records each lookup it serves
+
+        def respond(request: httpx.Request) -> httpx.Response:
+            lookups.append(request.headers.get("authorization"))
+            return httpx.Response(next(statuses), json={"template": "", "model_info": {"llama.context_length": 8192}})
+
+        monkeypatch.setattr(
+            litellm, "module_level_client", HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(respond)))
+        )
+        litellm.get_model_info.cache_clear()
+        try:
+            with time_machine.travel(0, tick=False):
+                answers: Final = tuple(
+                    litellm.get_model_info(
+                        "ollama/retry-probe", api_base="http://ollama.test:11434", api_key="GATEKEY"
+                    )["max_input_tokens"]
+                    for _ in range(3)
+                )
+        finally:
+            litellm.get_model_info.cache_clear()
+
+        assert answers == (None, 8192, 8192)
+        assert lookups == ["Bearer GATEKEY"] * 3
 
     @pytest.mark.parametrize("cost_path", [False, True], ids=["get_model_info", "cost-path"])
     def test_one_cache_entry_serves_every_api_base_and_key_when_the_lookup_sends_neither(
@@ -527,12 +550,10 @@ class TestOllamaGetModelInfo:
         monkeypatch.delenv("OLLAMA_API_BASE", raising=False)
 
         config = OllamaConfig()
-        fallback = config.get_model_info(
+        result = config.get_model_info(
             "my-custom-model", api_base="http://unreachable:11434"
         )
 
-        assert isinstance(fallback, FailedLookup)
-        result = fallback.value
         assert result["key"] == "my-custom-model"
         assert result["litellm_provider"] == "ollama"
         assert result["input_cost_per_token"] == 0.0
@@ -555,12 +576,10 @@ class TestOllamaGetModelInfo:
         monkeypatch.setattr("litellm.module_level_client.post", mock_post)
 
         config = OllamaConfig()
-        fallback = config.get_model_info(
+        result = config.get_model_info(
             "my-custom-model", api_base="http://localhost:11434"
         )
 
-        assert isinstance(fallback, FailedLookup)
-        result = fallback.value
         assert result["key"] == "my-custom-model"
         assert result["litellm_provider"] == "ollama"
         assert result["max_tokens"] is None
@@ -649,15 +668,25 @@ class TestOllamaGetModelInfo:
 
 
 @pytest.mark.parametrize(
-    ("api_key", "extra_headers", "environment_key", "authorization"),
+    ("api_key", "extra_headers", "environment_key", "authorization", "lookup_authorization"),
     [
-        (None, None, None, None),
-        ("call-key", None, "environment-key", "Bearer call-key"),
-        (None, None, "environment-key", "Bearer environment-key"),
-        (None, {"Authorization": "Bearer header-key"}, None, "Bearer header-key"),
-        ("call-key", {"Authorization": "Bearer header-key"}, None, "Bearer header-key"),
+        (None, None, None, None, None),
+        ("call-key", None, "environment-key", "Bearer call-key", "Bearer call-key"),
+        (None, None, "environment-key", "Bearer environment-key", "Bearer environment-key"),
+        (None, {"Authorization": "Bearer header-key"}, None, "Bearer header-key", "Bearer header-key"),
+        ("call-key", {"Authorization": "Bearer header-key"}, None, "Bearer header-key", "Bearer header-key"),
+        ("call-key", {"Authorization": "Basic dXNlcjpwYXNz"}, "environment-key", "Basic dXNlcjpwYXNz", None),
+        (None, {"Authorization": "Basic dXNlcjpwYXNz"}, "environment-key", "Basic dXNlcjpwYXNz", None),
     ],
-    ids=["no-key", "explicit-key", "environment-key", "header-key", "header-overrides-key"],
+    ids=[
+        "no-key",
+        "explicit-key",
+        "environment-key",
+        "header-key",
+        "header-overrides-key",
+        "basic-header-withholds-key",
+        "basic-header-withholds-environment-key",
+    ],
 )
 @pytest.mark.parametrize("show_status", [200, 401], ids=["lookup-answered", "lookup-rejected"])
 @pytest.mark.parametrize(
@@ -676,6 +705,7 @@ def test_completion_sends_every_model_info_lookup_to_the_call_api_base_with_its_
     extra_headers: Mapping[str, str] | None,
     environment_key: str | None,
     authorization: str | None,
+    lookup_authorization: str | None,
     show_status: int,
 ) -> None:
     from concurrent.futures import ThreadPoolExecutor
@@ -730,7 +760,7 @@ def test_completion_sends_every_model_info_lookup_to_the_call_api_base_with_its_
         cached_get_model_info_helper.cache_clear()
 
     assert set(generation_authorizations) == {authorization}
-    assert set(lookups) == {("ollama-call.test", authorization)}
+    assert set(lookups) == {("ollama-call.test", lookup_authorization)}
     assert len(lookups) == lookups_after_first_call
 
 

@@ -236,6 +236,15 @@ class OllamaModelInfo(BaseLLMModelInfo):
         model: str,
         api_base: str | None = None,
         api_key: str | None = None,
+    ) -> dict[str, object]:
+        looked_up: Final = self._look_up_runtime_model_info(model=model, api_base=api_base, api_key=api_key)
+        return dict(looked_up.value if isinstance(looked_up, FailedLookup) else looked_up)
+
+    def _look_up_runtime_model_info(
+        self,
+        model: str,
+        api_base: str | None,
+        api_key: str | None,
     ) -> Mapping[str, object] | FailedLookup[Mapping[str, object]]:
         from litellm import module_level_client
 
@@ -287,10 +296,20 @@ class OllamaModelInfo(BaseLLMModelInfo):
         model: str,
         api_base: str | None = None,
         api_key: str | None = None,
-    ) -> Mapping[str, object] | FailedLookup[Mapping[str, object]] | None:
+    ) -> dict[str, object] | None:
         if self._is_static_ollama_model(model):
             return None
         return self.get_runtime_model_info(model=model, api_base=api_base, api_key=api_key)
+
+    def look_up_model_info(
+        self,
+        model: str,
+        api_base: str | None = None,
+        api_key: str | None = None,
+    ) -> Mapping[str, object] | FailedLookup[Mapping[str, object]] | None:
+        if self._is_static_ollama_model(model):
+            return None
+        return self._look_up_runtime_model_info(model=model, api_base=api_base, api_key=api_key)
 
     def validate_environment(
         self,

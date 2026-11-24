@@ -2,7 +2,6 @@
 from unittest.mock import MagicMock, patch
 
 import litellm
-from litellm.litellm_core_utils.model_cost_table import FailedLookup
 from litellm.llms.lemonade.chat.transformation import LemonadeChatConfig
 from litellm.types.utils import ModelResponse
 
@@ -183,13 +182,11 @@ def test_get_model_info_falls_back_when_server_unavailable():
     with patch.object(
         litellm.module_level_client, "get", side_effect=Exception("boom")
     ):
-        fallback = config.get_model_info(
+        model_info = config.get_model_info(
             model="lemonade/Qwen3.6-35B-A3B-GGUF",
             api_base="http://lemonade.test/v1",
         )
 
-    assert isinstance(fallback, FailedLookup)
-    model_info = fallback.value
     assert model_info["key"] == "lemonade/Qwen3.6-35B-A3B-GGUF"
     assert model_info["litellm_provider"] == "lemonade"
     assert model_info["mode"] == "chat"
