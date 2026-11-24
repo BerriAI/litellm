@@ -28,7 +28,6 @@ litellm-callbacks.workspace = true
 parking_lot.workspace = true
 rand.workspace = true
 arc-swap.workspace = true
-rand.workspace = true
 litellm-config.workspace = true
 litellm-config-load.workspace = true
 litellm-core-utils.workspace = true

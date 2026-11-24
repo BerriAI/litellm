@@ -1131,6 +1131,12 @@ mod tests {
         ) -> Result<Vec<litellm_repositories::Credential>, litellm_db::Error> {
             self.rows.credentials().await
         }
+
+        async fn ui_settings(
+            &self,
+        ) -> Result<Option<litellm_repositories::RawJson>, litellm_db::Error> {
+            self.rows.ui_settings().await
+        }
     }
 
     #[rstest]
