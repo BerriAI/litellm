@@ -63,7 +63,7 @@ class BedrockRerankHandler(BaseAWSLLM):
         model: str,
         query: str,
         documents: list[str | dict[str, object]],
-        optional_params: dict,
+        optional_params: dict[str, object],
         logging_obj: LitellmLogging,
         top_n: int | None = None,
         rank_fields: list[str] | None = None,
@@ -72,7 +72,7 @@ class BedrockRerankHandler(BaseAWSLLM):
         _is_async: bool | None = False,
         timeout: float | httpx.Timeout | None = None,
         api_base: str | None = None,
-        extra_headers: dict | None = None,
+        extra_headers: dict[str, object] | None = None,
         client: HTTPHandler | AsyncHTTPHandler | None = None,
     ) -> RerankResponse:
         request_data: Final = RerankRequest(
