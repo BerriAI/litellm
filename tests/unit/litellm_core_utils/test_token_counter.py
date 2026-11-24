@@ -47,6 +47,7 @@ from litellm.litellm_core_utils.token_counter import (
     has_only_text_content,
     high_detail_image_token_upper_bound,
     inline_pdf_token_delta,
+    inline_pdf_token_deltas,
     is_openai_model,
     messages_reach_token_count,
     offload_token_count,
@@ -3505,6 +3506,48 @@ def test_repricing_pdfs_listed_in_a_server_tool_result_matches_sending_them_as_i
     assert token_counter_new(model="", messages=pdfs) + inline_pdf_token_delta(
         "", pdfs, "single_image"
     ) == token_counter_new(model="", messages=images)
+
+
+def test_repricing_a_page_that_draws_an_image_keeps_its_rendered_price_for_openai():
+    drawn: Final = _pdf_base64((_REVENUE_LINE,), xobjects=(_ONE_PIXEL_IMAGE,), drawing=_DRAW_X0)
+    messages: Final = [{"role": "user", "content": [_document(drawn), _document(_pdf_base64((_REVENUE_LINE,)))]}]
+
+    assert inline_pdf_token_deltas("", messages, ("openai", "single_image"))["openai"] == 13 - 1534
+
+
+def test_repricing_a_line_wrapped_pdf_matches_the_unwrapped_one():
+    encoded: Final = _pdf_base64((_REVENUE_LINE, ""))
+    wrapped: Final = "\n".join(encoded[start : start + 76] for start in range(0, len(encoded), 76))
+
+    def deltas(pdf_base64: str) -> Mapping[PdfDocumentPricing, int]:
+        messages: Final = [{"role": "user", "content": [_file(pdf_base64)]}]
+        return inline_pdf_token_deltas("", messages, ("openai", "single_image"))
+
+    assert deltas(wrapped) == deltas(encoded)
+    assert deltas(encoded)["openai"] == 13 - 2 * 1534
+
+
+def test_repricing_without_pypdf_moves_nothing(monkeypatch: pytest.MonkeyPatch):
+    messages: Final = [{"role": "user", "content": [_document(_THREE_PAGE_PDF), _file(_OTHER_PDF)]}]
+
+    monkeypatch.setitem(sys.modules, "pypdf", None)
+
+    assert inline_pdf_token_deltas("", messages, ("openai", "single_image")) == {"openai": 0, "single_image": 0}
+
+
+def test_repricing_an_encrypted_pdf_keeps_its_opaque_document_count():
+    from pypdf import PdfWriter
+
+    writer: Final = PdfWriter()
+    writer.add_blank_page(width=612, height=792)
+    writer.encrypt("private-document")
+    output: Final = io.BytesIO()
+    writer.write(output)
+    encoded: Final = base64.b64encode(output.getvalue()).decode("ascii")
+    messages: Final = [{"role": "user", "content": [_document(encoded)]}]
+
+    assert token_counter_new(model="", messages=messages) > 0
+    assert inline_pdf_token_deltas("", messages, ("openai", "single_image")) == {"openai": 0, "single_image": 0}
 
 
 def test_repricing_reads_a_pdf_inside_its_own_tool_result_once():

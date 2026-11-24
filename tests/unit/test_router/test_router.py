@@ -13,7 +13,7 @@ import os
 import sys
 import threading
 import warnings
-from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable, Iterator, Mapping, Sequence
+from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable, Iterable, Iterator, Mapping, Sequence
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import CodeType, FrameType, MappingProxyType, SimpleNamespace
@@ -4493,13 +4493,15 @@ async def test_a_pdf_repricing_failure_keeps_the_shared_count(monkeypatch: pytes
     from litellm.router_rust.steps import precall
 
     router: Final = _window_router(_between_pdf_prices(), _GEMINI_MODELS[0], "openai/gpt-6.1-sol")
-    attempts: Final[list[PdfDocumentPricing]] = []  # mutable-ok: records each repricing the router attempts
+    attempts: Final[list[frozenset[PdfDocumentPricing]]] = []  # mutable-ok: records each repricing the router attempts
 
-    def failing_repricing(_model: str, _messages: object, pdf_pricing: PdfDocumentPricing) -> int:
-        attempts.append(pdf_pricing)
+    def failing_repricing(
+        _model: str, _messages: object, pdf_pricings: Iterable[PdfDocumentPricing]
+    ) -> Mapping[PdfDocumentPricing, int]:
+        attempts.append(frozenset(pdf_pricings))
         raise ValueError("unreadable PDF")
 
-    monkeypatch.setattr(precall, "inline_pdf_token_delta", failing_repricing)
+    monkeypatch.setattr(precall, "inline_pdf_token_deltas", failing_repricing)
 
     with pytest.raises(litellm.ContextWindowExceededError, match=f"Got={_page_priced_pdf_tokens()}") as sync_error:
         _kept_models(router, messages=_PDF_FILE_PROMPT)
@@ -4507,9 +4509,98 @@ async def test_a_pdf_repricing_failure_keeps_the_shared_count(monkeypatch: pytes
     with pytest.raises(litellm.ContextWindowExceededError, match=f"Got={_page_priced_pdf_tokens()}") as async_error:
         await router.acompletion(model="docs", messages=_PDF_FILE_PROMPT)
 
-    assert sync_attempts >= 1 and len(attempts) > sync_attempts
+    assert attempts == [frozenset({"single_image", "openai"})] * 2
+    assert sync_attempts == 1
     assert str(sync_error.value).count(f"Got={_page_priced_pdf_tokens()}") == 2
     assert str(async_error.value).count(f"Got={_page_priced_pdf_tokens()}") == 2
+
+
+def _web_fetched(document: Mapping[str, object]) -> dict[str, object]:
+    return {
+        "type": "web_fetch_tool_result",
+        "tool_use_id": "srvtoolu_1",
+        "content": {"type": "web_fetch_result", "url": "https://example.invalid/report.pdf", "content": document},
+    }
+
+
+def _web_fetched_document(document: Mapping[str, object]) -> dict[str, object]:
+    return {"type": "web_fetch_tool_result", "tool_use_id": "srvtoolu_1", "content": document}
+
+
+def _text_with_stray_content(document: Mapping[str, object]) -> dict[str, object]:
+    return {"type": "text", "text": "the fetched report", "content": document}
+
+
+def _base64_pdf_document() -> dict[str, object]:
+    return {"type": "document", "source": {"type": "base64", "media_type": "application/pdf", "data": _PDF_BASE64}}
+
+
+def _server_tool_prompt(wrap: Callable[[Mapping[str, object]], dict[str, object]]) -> list[dict[str, object]]:
+    fetched: Final = wrap(_base64_pdf_document())
+    return [{"role": "user", "content": [{"type": "text", "text": "summarize what was fetched"}, fetched]}]
+
+
+@pytest.mark.parametrize("wrap", [_web_fetched, _web_fetched_document], ids=["web_fetch_result", "document_content"])
+@pytest.mark.parametrize(
+    ("pdf_pricing", "fitting"), [("single_image", _GEMINI_MODELS[0]), ("openai", "openai/gpt-6.1-sol")]
+)
+async def test_a_pdf_a_server_tool_returned_reaches_the_deployment_its_own_pdf_price_fits(
+    wrap: Callable[[Mapping[str, object]], dict[str, object]], pdf_pricing: PdfDocumentPricing, fitting: str
+):
+    prompt: Final = _server_tool_prompt(wrap)
+    own: Final = _repriced_pdf_tokens(prompt, pdf_pricing)
+    router: Final = _window_router(own, fitting, _CLAUDE_MODELS[0])
+
+    assert own < litellm.token_counter(model="", messages=prompt)
+    assert _kept_models(router, messages=prompt) == [fitting]
+    assert (await router.acompletion(model="docs", messages=prompt)).choices[0].message.content == fitting
+
+
+async def test_a_pdf_the_counter_does_not_read_keeps_the_shared_count():
+    prompt: Final = _server_tool_prompt(_text_with_stray_content)
+    shared: Final = litellm.token_counter(model="", messages=prompt)
+    router: Final = _window_router(shared - 1, _GEMINI_MODELS[0], "openai/gpt-6.1-sol")
+
+    with pytest.raises(litellm.ContextWindowExceededError, match=f"Got={shared}"):
+        _kept_models(router, messages=prompt)
+    with pytest.raises(litellm.ContextWindowExceededError, match=f"Got={shared}"):
+        await router.acompletion(model="docs", messages=prompt)
+
+
+async def test_repricing_reads_each_distinct_pdf_once_for_every_deployment(monkeypatch: pytest.MonkeyPatch):
+    import pypdf
+
+    first: Final = _base64_pdf_document()
+    other: Final = {"type": "file", "file": {"file_data": f"data:application/pdf;base64,{pdf_base64(('Q3 revenue',))}"}}
+    content: Final = [{"type": "text", "text": "compare"}, first, first, _base64_pdf_document(), other]
+    prompt: Final = [{"role": "user", "content": content}]
+    expected: Final = (
+        f"Got={_repriced_pdf_tokens(prompt, 'single_image')}",
+        f"Got={_repriced_pdf_tokens(prompt, 'openai')}",
+        f"Got={litellm.token_counter(model='', messages=prompt)}",
+    )
+    router: Final = _window_router(1, _GEMINI_MODELS[0], "openai/gpt-6.1-sol", _CLAUDE_MODELS[0])
+    opened: Final[list[None]] = []  # mutable-ok: one entry per PDF pypdf opens
+
+    class CountingPdfReader(pypdf.PdfReader):
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            opened.append(None)
+            super().__init__(*args, **kwargs)  # pyright: ignore[reportArgumentType]  # pypdf's own arguments
+
+    monkeypatch.setattr(pypdf, "PdfReader", CountingPdfReader)
+    litellm.token_counter(model="", messages=prompt)
+    shared_reads: Final = len(opened)
+    with pytest.raises(litellm.ContextWindowExceededError) as sync_error:
+        _kept_models(router, messages=prompt)
+    sync_reads: Final = len(opened) - shared_reads
+    with pytest.raises(litellm.ContextWindowExceededError) as async_error:
+        await router.acompletion(model="docs", messages=prompt)
+    async_reads: Final = len(opened) - shared_reads - sync_reads
+
+    assert shared_reads == 4
+    assert (sync_reads, async_reads) == (shared_reads + 2, shared_reads + 2)
+    assert all(got in str(sync_error.value) for got in expected)
+    assert all(got in str(async_error.value) for got in expected)
 
 
 @pytest.mark.parametrize("wrapped", [False, True])

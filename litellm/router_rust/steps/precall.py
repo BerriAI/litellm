@@ -28,7 +28,7 @@ from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import 
 from litellm.litellm_core_utils.prompt_templates.tpm_media_utils import is_plain_embedding_text
 from litellm.litellm_core_utils.token_counter import (
     PdfDocumentPricing,
-    inline_pdf_token_delta,
+    inline_pdf_token_deltas,
     offload_token_count,
     pdf_page_pricing,
     served_openai_models,
@@ -460,10 +460,7 @@ class PreCallFacts:
             messages: Final = self._counted_messages()
             tokenizer_model: Final = self._tokenizer_model()
             return MappingProxyType[PdfDocumentPricing, int | None](
-                {
-                    pricing: inline_pdf_token_delta(tokenizer_model, messages, pricing)
-                    for pricing in frozenset(pricings.values())
-                }
+                inline_pdf_token_deltas(tokenizer_model, messages, pricings.values())
             )
         except Exception as e:  # noqa: BLE001  # best-effort: an unpriceable PDF keeps the shared count
             verbose_router_logger.debug("litellm.router.py::_pre_call_checks: PDF repricing failed. Got - %s", e)
@@ -641,7 +638,9 @@ def _pdf_content_children(value: object) -> tuple[object, ...]:
     nested: Final = (
         source.get("content") if fields.get("type") == "document" and source.get("type") == "content" else None
     )
-    return (*_items(fields.get("content")), *_items(output), *_items(nested))
+    content: Final = fields.get("content")
+    contents: Final = (content,) if as_str_mapping(content) is not None else _items(content)
+    return (*contents, *_items(output), *_items(nested))
 
 
 def _may_carry_an_inline_pdf(*values: object) -> bool:
