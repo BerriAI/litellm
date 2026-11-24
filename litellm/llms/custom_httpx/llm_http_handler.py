@@ -616,7 +616,7 @@ class _AsyncFilesEnvironmentValidator(Protocol):
         self,
         headers: dict,  # mutable-ok: mirrors the sync validate_environment contract this overrides
         model: str,
-        messages: list,  # mutable-ok: mirrors the sync validate_environment contract this overrides
+        messages: list[AllMessageValues],  # mutable-ok: mirrors the sync validate_environment contract this overrides
         optional_params: dict[str, object],  # mutable-ok: mirrors the sync validate_environment contract this overrides
         litellm_params: dict[str, object],  # mutable-ok: mirrors the sync validate_environment contract this overrides
         api_key: str | None = None,
@@ -629,7 +629,7 @@ async def _avalidate_files_environment(
     *,
     headers: dict,  # mutable-ok: mirrors the sync validate_environment contract this overrides
     model: str,
-    messages: list,  # mutable-ok: mirrors the sync validate_environment contract this overrides
+    messages: list[AllMessageValues],  # mutable-ok: mirrors the sync validate_environment contract this overrides
     optional_params: dict[str, object],  # mutable-ok: mirrors the sync validate_environment contract this overrides
     litellm_params: dict[str, object],  # mutable-ok: mirrors the sync validate_environment contract this overrides
     api_key: str | None,
@@ -1449,7 +1449,7 @@ class BaseLLMHTTPHandler:
         headers: dict[str, object],
         data: dict[str, object],
         signed_json_body: bytes | None,
-        original_data: dict,
+        original_data: dict[str, object],
         model: str,
         messages: list,
         logging_obj: LiteLLMLoggingObj,
@@ -1524,7 +1524,7 @@ class BaseLLMHTTPHandler:
     async def acompletion_stream_function(
         self,
         model: str,
-        messages: list,
+        messages: list[AllMessageValues],
         api_base: str,
         custom_llm_provider: str,
         headers: dict[str, object],
@@ -1589,7 +1589,7 @@ class BaseLLMHTTPHandler:
         api_base: str,
         headers: dict[str, object],
         data: dict[str, object],
-        messages: list,
+        messages: list[AllMessageValues],
         logging_obj: LiteLLMLoggingObj,
         timeout: float | httpx.Timeout,
         litellm_params: dict[str, object],
@@ -1869,7 +1869,7 @@ class BaseLLMHTTPHandler:
         custom_llm_provider: str,
         logging_obj: LiteLLMLoggingObj,
         provider_config: BaseRerankConfig,
-        optional_rerank_params: dict,
+        optional_rerank_params: dict[str, object],
         timeout: float | httpx.Timeout | None,
         model_response: RerankResponse,
         _is_async: bool = False,
@@ -2876,9 +2876,9 @@ class BaseLLMHTTPHandler:
     async def async_anthropic_messages_handler(
         self,
         model: str,
-        messages: list[dict],
+        messages: list[dict[str, object]],
         anthropic_messages_provider_config: BaseAnthropicMessagesConfig,
-        anthropic_messages_optional_request_params: dict,
+        anthropic_messages_optional_request_params: dict[str, object],
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
@@ -3179,9 +3179,9 @@ class BaseLLMHTTPHandler:
     def anthropic_messages_handler(
         self,
         model: str,
-        messages: list[dict],
+        messages: list[dict[str, object]],
         anthropic_messages_provider_config: BaseAnthropicMessagesConfig,
-        anthropic_messages_optional_request_params: dict,
+        anthropic_messages_optional_request_params: dict[str, object],
         custom_llm_provider: str,
         _is_async: bool,
         litellm_params: GenericLiteLLMParams,
@@ -5377,7 +5377,7 @@ class BaseLLMHTTPHandler:
         model: str,
         input: Union[str, "ResponseInputParam"],
         responses_api_provider_config: BaseResponsesAPIConfig,
-        response_api_optional_request_params: dict,
+        response_api_optional_request_params: dict[str, object],
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
         custom_llm_provider: str | None,
@@ -6534,7 +6534,7 @@ class BaseLLMHTTPHandler:
         self,
         response: object,
         model: str,
-        messages: list[dict],
+        messages: list[dict[str, object]],
         anthropic_messages_provider_config: "BaseAnthropicMessagesConfig",
         anthropic_messages_optional_request_params: dict,
         logging_obj: "LiteLLMLoggingObj",
@@ -9812,7 +9812,7 @@ class BaseLLMHTTPHandler:
     def container_create_handler(
         self,
         name: str,
-        container_create_request_params: dict,
+        container_create_request_params: dict[str, object],
         container_provider_config: "BaseContainerConfig",
         litellm_params: GenericLiteLLMParams,
         logging_obj: "LiteLLMLoggingObj",
@@ -9902,7 +9902,7 @@ class BaseLLMHTTPHandler:
     async def async_container_create_handler(
         self,
         name: str,
-        container_create_request_params: dict,
+        container_create_request_params: dict[str, object],
         container_provider_config: "BaseContainerConfig",
         litellm_params: GenericLiteLLMParams,
         logging_obj: "LiteLLMLoggingObj",
@@ -12779,7 +12779,7 @@ class BaseLLMHTTPHandler:
         model: str,
         contents: object,
         generate_content_provider_config: BaseGoogleGenAIGenerateContentConfig,
-        generate_content_config_dict: dict,
+        generate_content_config_dict: dict[str, object],
         tools: object,
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,
@@ -12903,7 +12903,7 @@ class BaseLLMHTTPHandler:
         model: str,
         contents: object,
         generate_content_provider_config: BaseGoogleGenAIGenerateContentConfig,
-        generate_content_config_dict: dict,
+        generate_content_config_dict: dict[str, object],
         tools: object,
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,
@@ -13137,7 +13137,7 @@ class BaseLLMHTTPHandler:
         input: str,
         voice: str | None,
         text_to_speech_provider_config: BaseTextToSpeechConfig,
-        text_to_speech_optional_params: dict,
+        text_to_speech_optional_params: dict[str, object],
         custom_llm_provider: str,
         litellm_params: dict,
         logging_obj: LiteLLMLoggingObj,
@@ -13397,7 +13397,7 @@ class BaseLLMHTTPHandler:
     def list_skills_handler(
         self,
         url: str,
-        query_params: dict,
+        query_params: dict[str, object],
         skills_api_provider_config: "BaseSkillsAPIConfig",
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,
@@ -13457,7 +13457,7 @@ class BaseLLMHTTPHandler:
     async def async_list_skills_handler(
         self,
         url: str,
-        query_params: dict,
+        query_params: dict[str, object],
         skills_api_provider_config: "BaseSkillsAPIConfig",
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,
@@ -13819,7 +13819,7 @@ class BaseLLMHTTPHandler:
     def list_evals_handler(
         self,
         url: str,
-        query_params: dict,
+        query_params: dict[str, object],
         evals_api_provider_config: "BaseEvalsAPIConfig",
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,
@@ -13879,7 +13879,7 @@ class BaseLLMHTTPHandler:
     async def async_list_evals_handler(
         self,
         url: str,
-        query_params: dict,
+        query_params: dict[str, object],
         evals_api_provider_config: "BaseEvalsAPIConfig",
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,
@@ -14448,7 +14448,7 @@ class BaseLLMHTTPHandler:
     def list_runs_handler(
         self,
         url: str,
-        query_params: dict,
+        query_params: dict[str, object],
         evals_api_provider_config: "BaseEvalsAPIConfig",
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,
@@ -14508,7 +14508,7 @@ class BaseLLMHTTPHandler:
     async def async_list_runs_handler(
         self,
         url: str,
-        query_params: dict,
+        query_params: dict[str, object],
         evals_api_provider_config: "BaseEvalsAPIConfig",
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,

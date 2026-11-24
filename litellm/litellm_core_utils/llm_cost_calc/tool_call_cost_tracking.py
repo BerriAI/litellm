@@ -743,7 +743,7 @@ class StandardBuiltInToolCostTracking:
     def get_cost_for_vector_store(
         vector_store_usage: dict | None = None,
         provider: str | None = None,
-        model_info: dict | None = None,
+        model_info: dict[str, object] | None = None,
     ) -> float:
         """
         Calculate cost for vector store usage.

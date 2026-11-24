@@ -4,7 +4,7 @@ from collections.abc import Mapping, Sequence
 from datetime import datetime
 from string import Formatter
 from types import MappingProxyType
-from typing import Final, Literal
+from typing import TYPE_CHECKING, Final, Literal
 
 from fastapi import HTTPException
 from pydantic import TypeAdapter
@@ -40,6 +40,10 @@ from litellm.types.proxy.guardrails.guardrail_hooks.lakera_ai_v2 import (
     LakeraAIResponse,
 )
 from litellm.types.utils import CallTypesLiteral, GuardrailStatus, ModelResponse
+
+if TYPE_CHECKING:
+    from litellm.types.utils import LLMResponseTypes
+
 
 _DECODED_JSON: Final = TypeAdapter(object)
 _RESPONSE_FIELDS: Final = TypeAdapter(Mapping[str, object])
@@ -748,7 +752,7 @@ class LakeraAIGuardrail(CustomGuardrail):
         self,
         data: dict,
         user_api_key_dict: UserAPIKeyAuth,
-        response,
+        response: "LLMResponseTypes",
     ):
         """
         Post-call hook for Lakera guardrail.

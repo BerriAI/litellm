@@ -1743,7 +1743,7 @@ class CustomGuardrail(CustomLogger):
 
     def _process_response(
         self,
-        response: dict | None,
+        response: dict[str, object] | None,
         request_data: dict[str, object],
         start_time: float | None = None,
         end_time: float | None = None,
