@@ -136,7 +136,7 @@ class MistralEmbeddingConfig:
             "encoding_format",
         ]
 
-    def map_openai_params(self, non_default_params: Mapping[str, object], optional_params: dict):
+    def map_openai_params(self, non_default_params: Mapping[str, object], optional_params: dict[str, object]):
         for param, value in non_default_params.items():
             if param == "encoding_format":
                 optional_params["encoding_format"] = value
@@ -282,8 +282,8 @@ class OpenAIConfig(BaseConfig):
 
     def map_openai_params(
         self,
-        non_default_params: dict,
-        optional_params: dict,
+        non_default_params: dict[str, object],
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
         *,
@@ -331,8 +331,8 @@ class OpenAIConfig(BaseConfig):
         self,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         headers: dict[str, object],
     ) -> dict:
         messages = self._transform_messages(messages=messages, model=model)
@@ -346,8 +346,8 @@ class OpenAIConfig(BaseConfig):
         logging_obj: LiteLLMLoggingObj,
         request_data: dict,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
@@ -371,8 +371,8 @@ class OpenAIConfig(BaseConfig):
         headers: dict,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
     ) -> dict:
@@ -781,7 +781,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         model_response: ModelResponse,
         timeout: float | httpx.Timeout,
         optional_params: dict,
-        litellm_params: dict,
+        litellm_params: dict[str, object],
         logging_obj: LiteLLMLoggingObj,
         model: str | None = None,
         messages: list[AllMessageValues] | None = None,
@@ -1030,8 +1030,8 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
     async def acompletion(
         self,
         messages: list,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         provider_config: BaseConfig,
         model: str,
         model_response: ModelResponse,
@@ -1215,8 +1215,8 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         self,
         timeout: float | httpx.Timeout,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         provider_config: BaseConfig,
         model: str,
         logging_obj: LiteLLMLoggingObj,
@@ -1464,7 +1464,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         timeout: float,
         logging_obj: LiteLLMLoggingObj,
         model_response: EmbeddingResponse,
-        optional_params: dict,
+        optional_params: dict[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
         client=None,

@@ -230,7 +230,7 @@ class BaseSearchConfig:
     def get_complete_url(
         self,
         api_base: str | None,
-        optional_params: dict,
+        optional_params: dict[str, object],
         data: dict | list[dict] | None = None,
         **kwargs: object,
     ) -> str:
@@ -257,7 +257,7 @@ class BaseSearchConfig:
     def transform_search_request(
         self,
         query: str | list[str],
-        optional_params: dict,
+        optional_params: dict[str, object],
         **kwargs: object,
     ) -> dict | list[dict]:
         """

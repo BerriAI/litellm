@@ -125,7 +125,7 @@ class OpenAILikeChatConfig(OpenAIGPTConfig):
         model_response: ModelResponse,
         stream: bool,
         logging_obj: LiteLLMLoggingObj,
-        optional_params: dict,
+        optional_params: dict[str, object],
         api_key: str | None,
         data: dict | str,
         messages: list,
@@ -194,8 +194,8 @@ class OpenAILikeChatConfig(OpenAIGPTConfig):
 
     def map_openai_params(
         self,
-        non_default_params: dict,
-        optional_params: dict,
+        non_default_params: dict[str, object],
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
         replace_max_completion_tokens_with_max_tokens: bool = True,
