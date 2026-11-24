@@ -238,6 +238,42 @@ def test_batch_cost_uses_audio_context_and_image_output_tiers(local_model_cost_m
     )
 
 
+def test_batch_cost_falls_back_to_half_modality_rate_without_batch_rate(local_model_cost_map: None) -> None:
+    """A model with a modality rate but no modality batch rate bills batch
+    modality tokens at half the standard modality rate, not at the batch text
+    rate (e.g. gemini-2.5-flash-image image/video tokens billed at 0.5x instead
+    of the batch text rate). Follows #53867, which fixed the same fallback for
+    audio; see #53726."""
+    from litellm.cost_calculator import batch_cost_calculator
+
+    model: Final = "gemini-synthetic-batch-modality-fallback"
+    litellm.register_model(
+        {
+            model: {
+                "litellm_provider": "vertex_ai",
+                "mode": "chat",
+                "input_cost_per_token": 6e-06,
+                "output_cost_per_token": 10e-06,
+                "input_cost_per_token_batches": 3e-06,
+                "output_cost_per_token_batches": 5e-06,
+                "input_cost_per_audio_token": 8e-06,
+                "input_cost_per_image_token": 12e-06,
+                "input_cost_per_video_token": 20e-06,
+            }
+        }
+    )
+    usage: Final = Usage(
+        prompt_tokens=1000,
+        completion_tokens=10,
+        total_tokens=1010,
+        prompt_tokens_details=PromptTokensDetailsWrapper(audio_tokens=100, image_tokens=100, video_tokens=100),
+    )
+    cost: Final = batch_cost_calculator(model=model, custom_llm_provider="vertex_ai", usage=usage)
+    assert sum(cost) == pytest.approx(
+        (1000 - 300) * 3e-06 + 100 * 4e-06 + 100 * 6e-06 + 100 * 10e-06 + 10 * 5e-06
+    )
+
+
 @pytest.mark.parametrize("prompt_tokens", (200_000, 200_001))
 def test_completion_cost_uses_flex_context_input_and_output_rates(
     local_model_cost_map: None, prompt_tokens: int

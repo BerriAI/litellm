@@ -3738,6 +3738,12 @@ def _batch_prompt_cost(
     audio_batch_rate: Final = _optional_batch_rate(
         model_info, "input_cost_per_audio_token_batches", usage.prompt_tokens
     )
+    image_batch_rate: Final = _optional_batch_rate(
+        model_info, "input_cost_per_image_token_batches", usage.prompt_tokens
+    )
+    video_batch_rate: Final = _optional_batch_rate(
+        model_info, "input_cost_per_video_token_batches", usage.prompt_tokens
+    )
     return (
         text_tokens * input_rate
         + audio_tokens
@@ -3758,8 +3764,42 @@ def _batch_prompt_cost(
             ),
             default=input_rate,
         )
-        + image_tokens * _batch_rate(model_info, "input_cost_per_image_token_batches", input_rate)
-        + video_tokens * _batch_rate(model_info, "input_cost_per_video_token_batches", input_rate)
+        + image_tokens
+        * _batch_or_half(
+            _optional_batch_rate(
+                model_info,
+                "input_cost_per_image_token_batches",
+                usage.prompt_tokens,
+                threshold_is_inclusive=threshold_is_inclusive,
+            )
+            if image_batch_rate is None and threshold_is_inclusive
+            else image_batch_rate,
+            _standard_rate(
+                model_info,
+                "input_cost_per_image_token",
+                usage.prompt_tokens,
+                threshold_is_inclusive=threshold_is_inclusive,
+            ),
+            default=input_rate,
+        )
+        + video_tokens
+        * _batch_or_half(
+            _optional_batch_rate(
+                model_info,
+                "input_cost_per_video_token_batches",
+                usage.prompt_tokens,
+                threshold_is_inclusive=threshold_is_inclusive,
+            )
+            if video_batch_rate is None and threshold_is_inclusive
+            else video_batch_rate,
+            _standard_rate(
+                model_info,
+                "input_cost_per_video_token",
+                usage.prompt_tokens,
+                threshold_is_inclusive=threshold_is_inclusive,
+            ),
+            default=input_rate,
+        )
         + cached_text_tokens * (cache_read_rate or 0.0)
         + cached_audio_tokens * (cached_audio_rate or 0.0)
         + cached_image_tokens * (cached_image_rate or 0.0)
