@@ -369,6 +369,13 @@ def _convert_content_part(
         case "image_url":
             return _convert_image_part(part, custom_llm_provider, media_fetcher)
         case "image":
+            if "uri" in part:
+                raise UnsupportedParamsError(
+                    message="An image part with `uri` is not supported on the Interactions bridge. Send it as `image_url`.",
+                    model=model,
+                    llm_provider=custom_llm_provider,
+                    status_code=400,
+                )
             return {k: v for k, v in part.items() if k not in ("cache_control", "prompt_cache_breakpoint")}
         case "input_audio":
             audio_info: Final = part.get("input_audio")
@@ -680,7 +687,7 @@ def _steps_for_non_system_message(
                 return ()
             user_blocks: Final = _convert_content_blocks(msg.get("content"), model, custom_llm_provider, media_fetcher)
             return ({"type": "user_input", "content": user_blocks},) if user_blocks else ()
-        case "assistant" | "model":
+        case "assistant":
             return _build_assistant_steps(msg, model, custom_llm_provider, media_fetcher)
         case "tool" | "function":
             return (_build_tool_result_step(msg, tool_names_by_id, model, custom_llm_provider, media_fetcher),)

@@ -873,3 +873,35 @@ def test_google_maps_tool_keeps_the_caller_location_on_interactions(
         litellm_params={},
     )
     assert sent.optional_params["tools"] == [expected_tool]
+
+
+@pytest.mark.parametrize("role", ["user", "assistant"])
+def test_native_image_part_naming_a_stored_file_is_refused_so_it_cannot_skip_the_file_owner_check(role: str) -> None:
+    with pytest.raises(UnsupportedParamsError) as refused:
+        transform_chat_to_interactions_request(
+            messages=[
+                {
+                    "role": role,
+                    "content": [{"type": "image", "uri": "https://generativelanguage.googleapis.com/v1beta/files/abc"}],
+                },
+                {"role": "user", "content": "transcribe it"},
+            ],
+            model="gemini/gemini-3.1-flash-lite-preview",
+            optional_params={},
+            litellm_params={},
+        )
+    assert refused.value.status_code == 400
+
+
+def test_message_with_the_native_model_role_is_not_forwarded_as_a_model_turn() -> None:
+    file_part: Final = {
+        "type": "image_url",
+        "image_url": {"url": "https://generativelanguage.googleapis.com/v1beta/files/abc"},
+    }
+    sent: Final = transform_chat_to_interactions_request(
+        messages=[{"role": "model", "content": [file_part]}, {"role": "user", "content": "transcribe it"}],
+        model="gemini/gemini-3.1-flash-lite-preview",
+        optional_params={},
+        litellm_params={},
+    )
+    assert sent.input_steps == [{"type": "user_input", "content": [{"type": "text", "text": "transcribe it"}]}]
