@@ -147,8 +147,8 @@ class AnthropicPassthroughLoggingHandler:
             )
 
         _stamp_upstream_provider(logging_obj, url_route)
-        resolved_request_body: Final = request_body or kwargs.get("request_body")
         model: Final = response_body.get("model", "")
+        resolved_request_body: Final[Mapping[str, object] | None] = request_body or kwargs.get("request_body")  # pyright: ignore[reportUnknownVariableType]  # request_body is an untyped dict param
         speed: Final = AnthropicPassthroughLoggingHandler._cost_relevant_speed(resolved_request_body)
         anthropic_config: Final = get_anthropic_config(url_route)
         litellm_model_response: Final[ModelResponse] = anthropic_config().transform_response(
@@ -174,7 +174,9 @@ class AnthropicPassthroughLoggingHandler:
             end_time=end_time,
             logging_obj=logging_obj,
             response_id=optional_str(response_body.get("id")),
-            fallback_model=optional_str((resolved_request_body or {}).get("model")),
+            fallback_model=AnthropicPassthroughLoggingHandler._requested_model(
+                resolved_request_body  # pyright: ignore[reportUnknownArgumentType]  # request_body is an untyped dict param
+            ),
         )
 
         return {
@@ -192,6 +194,10 @@ class AnthropicPassthroughLoggingHandler:
         """
         speed: Final = (request_body or {}).get("speed")
         return speed if isinstance(speed, str) else None
+
+    @staticmethod
+    def _requested_model(request_body: Mapping[str, object] | None) -> str | None:
+        return optional_str((request_body or {}).get("model"))
 
     @staticmethod
     def _get_user_from_metadata(
@@ -553,7 +559,7 @@ class AnthropicPassthroughLoggingHandler:
         if logging_obj.model_call_details.get("stream") is True:
             logging_obj.model_call_details["complete_streaming_response"] = litellm_model_response
         try:
-            model, response_cost = AnthropicPassthroughLoggingHandler._priced_model_and_cost(
+            priced_model, response_cost = AnthropicPassthroughLoggingHandler._priced_model_and_cost(
                 litellm_model_response=litellm_model_response,
                 model=AnthropicPassthroughLoggingHandler._resolve_costing_model(model, logging_obj),
                 fallback_model=fallback_model,
@@ -561,7 +567,7 @@ class AnthropicPassthroughLoggingHandler:
             )
 
             kwargs["response_cost"] = response_cost
-            kwargs["model"] = model
+            kwargs["model"] = priced_model
             # the pass-through success path reads spend from
             # model_call_details["response_cost"], not from kwargs
             logging_obj.model_call_details["response_cost"] = response_cost
@@ -583,8 +589,8 @@ class AnthropicPassthroughLoggingHandler:
             )
 
             litellm_model_response.id = response_id or logging_obj.litellm_call_id
-            litellm_model_response.model = model
-            logging_obj.model_call_details["model"] = model
+            litellm_model_response.model = priced_model
+            logging_obj.model_call_details["model"] = priced_model
             if not logging_obj.model_call_details.get("custom_llm_provider"):
                 logging_obj.model_call_details["custom_llm_provider"] = litellm.LlmProviders.ANTHROPIC.value
             return kwargs
