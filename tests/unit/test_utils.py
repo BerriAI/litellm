@@ -1256,6 +1256,7 @@ _COST_MAP_ROW_SCHEMA: Final = {
             "supports_bedrock_converse_cache_point": {"type": "boolean"},
             "supports_openai_prompt_cache_breakpoint": {"type": "boolean"},
             "supports_thinking_cache_preservation": {"type": "boolean"},
+            "supports_configuration_update_input_item": {"type": "boolean"},
             "supports_prompt_caching": {"type": "boolean"},
             "supports_response_schema": {"type": "boolean"},
             "supports_system_messages": {"type": "boolean"},

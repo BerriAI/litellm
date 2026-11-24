@@ -785,6 +785,7 @@ jobs:
             test-path: |-
               tests/unit/responses/litellm_completion_transformation
               tests/unit/responses/test_additional_tools.py
+              tests/unit/responses/test_configuration_update.py
               tests/unit/responses/test_custom_tool_call.py
               tests/unit/responses/test_input_items_query.py
               tests/unit/responses/test_instructions_length.py

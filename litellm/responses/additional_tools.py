@@ -49,7 +49,7 @@ def _tools_of_item(item: object) -> tuple[ALL_RESPONSES_API_TOOL_PARAMS, ...]:
     return tuple(cast("ALL_RESPONSES_API_TOOL_PARAMS", tool) for tool in _tool_list_of(item))
 
 
-def _tool_identity(tool: Mapping[str, object]) -> str:
+def tool_identity(tool: Mapping[str, object]) -> str:
     name: Final = tool.get("name")
     if isinstance(name, str) and name:
         return f"{tool.get('type')}:{name}"
@@ -77,7 +77,7 @@ def _unique_tools(tools: Sequence[Mapping[str, object]]) -> tuple[Mapping[str, o
     """Codex re-sends its tool list in the input on every turn, so the same tool arrives many times.
     Keep each tool once, at its first position, with the newest copy's definition, and merge the
     members of a namespace sent more than once."""
-    keyed: Final = tuple((_tool_identity(tool), tool) for tool in tools)
+    keyed: Final = tuple((tool_identity(tool), tool) for tool in tools)
     copies_by_identity: Final = MappingProxyType(
         {
             identity: tuple(tool for _, tool in group)

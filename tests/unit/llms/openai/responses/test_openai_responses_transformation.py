@@ -2995,6 +2995,26 @@ class TestToolSchemaRegexPatternWiring:
 
         assert result["tools"][0]["tools"][0]["parameters"]["properties"]["field"] == {"type": "string"}
 
+    def test_openai_sanitizes_tools_added_through_an_additional_tools_input_item_like_top_level_tools(self):
+        tool = self._artifact_tool()
+        string_schema_tool = {**self._artifact_tool(), "name": "Encoded", "parameters": json.dumps({"type": "object"})}
+        user_message = {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hi"}]}
+        added = {"type": "additional_tools", "role": "developer", "tools": [tool, string_schema_tool]}
+
+        result = OpenAIResponsesAPIConfig().transform_responses_api_request(
+            model="gpt-6.2",
+            input=[user_message, added],
+            response_api_optional_request_params={"tools": [self._artifact_tool()]},
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+        assert result["input"] == [
+            user_message,
+            {**added, "tools": [*result["tools"], {**string_schema_tool, "parameters": {"type": "object"}}]},
+        ]
+        assert tool["parameters"]["properties"]["field"]["pattern"] == _ARTIFACT_FIELD_PATTERN
+
     def test_openai_compact_request_drops_patterns(self):
         _, data = OpenAIResponsesAPIConfig().transform_compact_response_api_request(
             model="gpt-5.6",

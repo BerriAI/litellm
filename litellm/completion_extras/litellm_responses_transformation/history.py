@@ -140,6 +140,7 @@ _PHASE: Final[TypeAdapter[Phase]] = TypeAdapter(Phase)
 
 class _RetainedFields(_PhaseFields):
     openai_responses_replay: object = None
+    openai_responses_configuration: object = None
 
 
 @dataclass(frozen=True, slots=True)

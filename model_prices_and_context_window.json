@@ -9564,6 +9564,7 @@
             "text"
         ],
         "supports_computer_use": true,
+        "supports_configuration_update_input_item": true,
         "supports_function_calling": true,
         "supports_max_reasoning_effort": false,
         "supports_minimal_reasoning_effort": false,
@@ -9616,6 +9617,7 @@
             "text"
         ],
         "supports_computer_use": true,
+        "supports_configuration_update_input_item": true,
         "supports_function_calling": true,
         "supports_max_reasoning_effort": false,
         "supports_minimal_reasoning_effort": false,
@@ -9677,6 +9679,7 @@
             "text"
         ],
         "supports_computer_use": true,
+        "supports_configuration_update_input_item": true,
         "supports_function_calling": true,
         "supports_max_reasoning_effort": true,
         "supports_minimal_reasoning_effort": false,
@@ -9725,6 +9728,7 @@
             "text"
         ],
         "supports_computer_use": true,
+        "supports_configuration_update_input_item": true,
         "supports_function_calling": true,
         "supports_max_reasoning_effort": true,
         "supports_minimal_reasoning_effort": false,
@@ -9786,6 +9790,7 @@
             "text"
         ],
         "supports_computer_use": true,
+        "supports_configuration_update_input_item": true,
         "supports_function_calling": true,
         "supports_max_reasoning_effort": true,
         "supports_minimal_reasoning_effort": false,
@@ -9847,6 +9852,7 @@
             "text"
         ],
         "supports_computer_use": true,
+        "supports_configuration_update_input_item": true,
         "supports_function_calling": true,
         "supports_max_reasoning_effort": true,
         "supports_minimal_reasoning_effort": false,
@@ -9905,6 +9911,7 @@
             "text"
         ],
         "supports_computer_use": true,
+        "supports_configuration_update_input_item": true,
         "supports_function_calling": true,
         "supports_max_reasoning_effort": true,
         "supports_minimal_reasoning_effort": false,
@@ -9953,6 +9960,7 @@
             "text"
         ],
         "supports_computer_use": true,
+        "supports_configuration_update_input_item": true,
         "supports_function_calling": true,
         "supports_max_reasoning_effort": true,
         "supports_minimal_reasoning_effort": false,
@@ -10009,6 +10017,7 @@
             "text"
         ],
         "supports_computer_use": true,
+        "supports_configuration_update_input_item": true,
         "supports_function_calling": true,
         "supports_max_reasoning_effort": true,
         "supports_minimal_reasoning_effort": false,
@@ -10067,6 +10076,7 @@
             "text"
         ],
         "supports_computer_use": true,
+        "supports_configuration_update_input_item": true,
         "supports_function_calling": true,
         "supports_max_reasoning_effort": true,
         "supports_minimal_reasoning_effort": false,
@@ -10116,6 +10126,7 @@
             "text"
         ],
         "supports_computer_use": true,
+        "supports_configuration_update_input_item": true,
         "supports_function_calling": true,
         "supports_max_reasoning_effort": true,
         "supports_minimal_reasoning_effort": false,
@@ -10166,6 +10177,7 @@
             "text"
         ],
         "supports_computer_use": true,
+        "supports_configuration_update_input_item": true,
         "supports_function_calling": true,
         "supports_max_reasoning_effort": true,
         "supports_minimal_reasoning_effort": false,
@@ -10215,6 +10227,7 @@
             "text"
         ],
         "supports_computer_use": true,
+        "supports_configuration_update_input_item": true,
         "supports_function_calling": true,
         "supports_max_reasoning_effort": true,
         "supports_minimal_reasoning_effort": false,
@@ -10265,6 +10278,7 @@
             "text"
         ],
         "supports_computer_use": true,
+        "supports_configuration_update_input_item": true,
         "supports_function_calling": true,
         "supports_max_reasoning_effort": true,
         "supports_minimal_reasoning_effort": false,
@@ -10314,6 +10328,7 @@
             "text"
         ],
         "supports_computer_use": true,
+        "supports_configuration_update_input_item": true,
         "supports_function_calling": true,
         "supports_max_reasoning_effort": true,
         "supports_minimal_reasoning_effort": false,
@@ -10663,6 +10678,7 @@
             "text"
         ],
         "supports_computer_use": true,
+        "supports_configuration_update_input_item": true,
         "supports_function_calling": true,
         "supports_max_reasoning_effort": false,
         "supports_minimal_reasoning_effort": false,
@@ -10712,6 +10728,7 @@
             "text"
         ],
         "supports_computer_use": true,
+        "supports_configuration_update_input_item": true,
         "supports_function_calling": true,
         "supports_max_reasoning_effort": true,
         "supports_minimal_reasoning_effort": false,
@@ -10765,6 +10782,7 @@
             "text"
         ],
         "supports_computer_use": true,
+        "supports_configuration_update_input_item": true,
         "supports_function_calling": true,
         "supports_max_reasoning_effort": true,
         "supports_minimal_reasoning_effort": false,
@@ -38762,6 +38780,7 @@
             "text"
         ],
         "supports_computer_use": true,
+        "supports_configuration_update_input_item": true,
         "supports_function_calling": true,
         "supports_max_reasoning_effort": true,
         "supports_minimal_reasoning_effort": false,
@@ -38859,6 +38878,7 @@
             "text"
         ],
         "supports_computer_use": true,
+        "supports_configuration_update_input_item": true,
         "supports_function_calling": true,
         "supports_max_reasoning_effort": true,
         "supports_minimal_reasoning_effort": false,
@@ -38962,6 +38982,7 @@
             "text"
         ],
         "supports_computer_use": true,
+        "supports_configuration_update_input_item": true,
         "supports_function_calling": true,
         "supports_max_reasoning_effort": true,
         "supports_minimal_reasoning_effort": false,
@@ -77115,6 +77136,7 @@
             "text"
         ],
         "supports_computer_use": true,
+        "supports_configuration_update_input_item": true,
         "supports_function_calling": true,
         "supports_max_reasoning_effort": false,
         "supports_minimal_reasoning_effort": false,
@@ -77164,6 +77186,7 @@
             "text"
         ],
         "supports_computer_use": true,
+        "supports_configuration_update_input_item": true,
         "supports_function_calling": true,
         "supports_max_reasoning_effort": true,
         "supports_minimal_reasoning_effort": false,
@@ -77213,6 +77236,7 @@
             "text"
         ],
         "supports_computer_use": true,
+        "supports_configuration_update_input_item": true,
         "supports_function_calling": true,
         "supports_max_reasoning_effort": true,
         "supports_minimal_reasoning_effort": false,
@@ -83352,6 +83376,7 @@
             "text"
         ],
         "supports_computer_use": true,
+        "supports_configuration_update_input_item": true,
         "supports_function_calling": true,
         "supports_max_reasoning_effort": true,
         "supports_minimal_reasoning_effort": false,
@@ -87033,6 +87058,7 @@
             "text"
         ],
         "supports_computer_use": true,
+        "supports_configuration_update_input_item": true,
         "supports_function_calling": true,
         "supports_max_reasoning_effort": true,
         "supports_minimal_reasoning_effort": false,
@@ -89803,6 +89829,7 @@
         "regional_processing_uplift_multiplier_us": 1.1,
         "source": "https://developers.openai.com/api/docs/pricing",
         "supports_computer_use": true,
+        "supports_configuration_update_input_item": true,
         "supports_function_calling": true,
         "supports_max_reasoning_effort": true,
         "supports_minimal_reasoning_effort": false,
@@ -89866,6 +89893,7 @@
             "text"
         ],
         "supports_computer_use": true,
+        "supports_configuration_update_input_item": true,
         "supports_function_calling": true,
         "supports_native_streaming": true,
         "supports_pdf_input": true,
@@ -89914,6 +89942,7 @@
             "text"
         ],
         "supports_computer_use": true,
+        "supports_configuration_update_input_item": true,
         "supports_function_calling": true,
         "supports_max_reasoning_effort": true,
         "supports_minimal_reasoning_effort": false,
@@ -109074,6 +109103,7 @@
             "text"
         ],
         "supports_computer_use": true,
+        "supports_configuration_update_input_item": true,
         "supports_function_calling": true,
         "supports_max_reasoning_effort": true,
         "supports_minimal_reasoning_effort": false,
@@ -109184,6 +109214,7 @@
             "text"
         ],
         "supports_computer_use": true,
+        "supports_configuration_update_input_item": true,
         "supports_function_calling": true,
         "supports_max_reasoning_effort": true,
         "supports_minimal_reasoning_effort": false,
@@ -109264,6 +109295,7 @@
             "text"
         ],
         "supports_computer_use": true,
+        "supports_configuration_update_input_item": true,
         "supports_function_calling": true,
         "supports_max_reasoning_effort": true,
         "supports_minimal_reasoning_effort": false,
@@ -109334,6 +109366,7 @@
             "text"
         ],
         "supports_computer_use": true,
+        "supports_configuration_update_input_item": true,
         "supports_function_calling": true,
         "supports_max_reasoning_effort": false,
         "supports_minimal_reasoning_effort": false,
@@ -109382,6 +109415,7 @@
             "text"
         ],
         "supports_computer_use": true,
+        "supports_configuration_update_input_item": true,
         "supports_function_calling": true,
         "supports_max_reasoning_effort": false,
         "supports_minimal_reasoning_effort": false,
@@ -109430,6 +109464,7 @@
             "text"
         ],
         "supports_computer_use": true,
+        "supports_configuration_update_input_item": true,
         "supports_function_calling": true,
         "supports_max_reasoning_effort": false,
         "supports_minimal_reasoning_effort": false,
@@ -109478,6 +109513,7 @@
             "text"
         ],
         "supports_computer_use": true,
+        "supports_configuration_update_input_item": true,
         "supports_function_calling": true,
         "supports_max_reasoning_effort": false,
         "supports_minimal_reasoning_effort": false,
@@ -109526,6 +109562,7 @@
             "text"
         ],
         "supports_computer_use": true,
+        "supports_configuration_update_input_item": true,
         "supports_function_calling": true,
         "supports_max_reasoning_effort": true,
         "supports_minimal_reasoning_effort": false,
@@ -109574,6 +109611,7 @@
             "text"
         ],
         "supports_computer_use": true,
+        "supports_configuration_update_input_item": true,
         "supports_function_calling": true,
         "supports_max_reasoning_effort": true,
         "supports_minimal_reasoning_effort": false,
@@ -109622,6 +109660,7 @@
             "text"
         ],
         "supports_computer_use": true,
+        "supports_configuration_update_input_item": true,
         "supports_function_calling": true,
         "supports_max_reasoning_effort": true,
         "supports_minimal_reasoning_effort": false,
@@ -109670,6 +109709,7 @@
             "text"
         ],
         "supports_computer_use": true,
+        "supports_configuration_update_input_item": true,
         "supports_function_calling": true,
         "supports_max_reasoning_effort": true,
         "supports_minimal_reasoning_effort": false,
