@@ -4012,6 +4012,35 @@ def test_model_info_patch_changes_the_endpoint_gate_only_when_it_sends_the_flag(
     assert json.loads(result["model_info"]).get("enforce_supported_endpoints") is expected_gate
 
 
+@pytest.mark.asyncio
+async def test_saving_the_model_info_page_does_not_pin_the_limits_discovered_from_the_backend():
+    from litellm.proxy.management_endpoints.model_management_endpoints import update_db_model
+    from litellm.proxy.proxy_server import _enrich_model_info_with_litellm_data
+
+    deployment: Final = MappingProxyType(
+        {"model_name": "local", "litellm_params": dict(_LOCAL_DEPLOYMENT_PARAMS), "model_info": {"id": "m1"}}
+    )
+    router: Final = Router(model_list=[json.loads(json.dumps(dict(deployment)))])
+    await _discover_from_upstream(router, {"id": "local-model", "max_model_len": 128000})
+    shown: Final = _enrich_model_info_with_litellm_data(json.loads(json.dumps(dict(deployment))), llm_router=router)[
+        "model_info"
+    ]
+    assert isinstance(shown, dict) and shown["max_input_tokens"] == 128000
+
+    result: Final = update_db_model(
+        db_model=Deployment.model_validate(dict(deployment)),
+        updated_patch=updateDeployment(model_info=ModelInfo.model_validate({**shown, "tpm": 5, "max_output_tokens": 4096})),
+        llm_router=router,
+    )
+
+    stored: Final = json.loads(result["model_info"])
+    assert {k: stored.get(k) for k in ("tpm", "max_output_tokens", "max_input_tokens")} == {
+        "tpm": 5,
+        "max_output_tokens": 4096,
+        "max_input_tokens": None,
+    }
+
+
 def _build_db_model_for_blocked_test():
     from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
 

@@ -196,6 +196,7 @@ from litellm.types.utils import (
     OIDC_SECRET_REFERENCE_PREFIX,
     echoed_cost_map_fields,
     echoed_cost_map_pricing_fields,
+    echoed_discovered_fields,
     is_server_derived_pricing_key,
     without_server_derived_pricing,
 )
@@ -1511,12 +1512,14 @@ def legacy_update_model_info_changes(
     )
     sent: Final = {k: v for k, v in requested.items() if k not in _LEGACY_UPDATE_IGNORED_MODEL_INFO_FIELDS and v != ""}
     echoed: Final = frozenset(
-        echoed_cost_map_fields(
-            requested,
-            _cost_map_entry(db_model, {**stored, **sent}, listed_row),
-            _routed_cost_map_entry(db_model, listed_row),
-            _loaded_catalog_entry(requested, loaded_catalog),
-            discovered_model_info,
+        (
+            *echoed_cost_map_fields(
+                requested,
+                _cost_map_entry(db_model, {**stored, **sent}, listed_row),
+                _routed_cost_map_entry(db_model, listed_row),
+                _loaded_catalog_entry(requested, loaded_catalog),
+            ),
+            *echoed_discovered_fields(requested, discovered_model_info),
         )
     )
     kept: Final[Mapping[str, object]] = without_server_derived_pricing(sent)
@@ -1611,11 +1614,19 @@ def update_db_model(
     if updated_patch.model_info:
         incoming_model_info: Final = updated_patch.model_info.model_dump(exclude_none=True)
         listed_row: Final = _ListedRow(listed_name or updated_patch.model_name, llm_router, caller_aliases)
-        echoed_fields: Final = echoed_cost_map_fields(
-            incoming_model_info,
-            _cost_map_entry(db_model, incoming_model_info, listed_row),
-            _routed_cost_map_entry(db_model, listed_row),
-            _loaded_catalog_entry(incoming_model_info, loaded_catalog),
+        echoed_fields: Final = (
+            *echoed_cost_map_fields(
+                incoming_model_info,
+                _cost_map_entry(db_model, incoming_model_info, listed_row),
+                _routed_cost_map_entry(db_model, listed_row),
+                _loaded_catalog_entry(incoming_model_info, loaded_catalog),
+            ),
+            *echoed_discovered_fields(
+                incoming_model_info,
+                llm_router.registry().discovered_model_info(db_model.model_info.id)
+                if llm_router is not None
+                else MappingProxyType({}),
+            ),
         )
         stored_model_info_fields: Final[Mapping[str, object]] = without_server_derived_pricing(incoming_model_info)
         merged_model_info.update(

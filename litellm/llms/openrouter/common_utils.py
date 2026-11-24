@@ -104,11 +104,8 @@ class OpenRouterModelInfo(BaseLLMModelInfo):
         return api_base or litellm.api_base or get_secret_str("OPENROUTER_API_BASE") or _DEFAULT_API_BASE
 
     @staticmethod
-    def get_catalog_api_key(api_key: str | None, deployment_api_base: str | None) -> str | None:
-        if (
-            deployment_api_base is None
-            or urlparse(deployment_api_base).hostname == urlparse(_DEFAULT_API_BASE).hostname
-        ):
+    def get_catalog_api_key(api_key: str | None, catalog_api_base: str) -> str | None:
+        if urlparse(catalog_api_base).hostname == urlparse(_DEFAULT_API_BASE).hostname:
             return OpenRouterModelInfo.get_api_key(api_key)
         return api_key
 

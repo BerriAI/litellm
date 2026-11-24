@@ -4549,6 +4549,10 @@ def echoed_cost_map_fields(
     )
 
 
+def echoed_discovered_fields(model_info: Mapping[str, object], discovered: Mapping[str, object]) -> tuple[str, ...]:
+    return tuple(sorted(k for k, v in discovered.items() if model_info.get(k) == v))
+
+
 def pricing_override_fields(*sources: Mapping[str, object]) -> tuple[str, ...]:
     return tuple(
         sorted(

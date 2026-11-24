@@ -935,7 +935,6 @@ class HostRegistry(HostModelInfo):
         if latest is not None and (latest.limits or latest.limits_by_model):
             self._discovered_model_info_cache.set_cache(model_id, latest)
             self._has_wildcard_catalog = self._has_wildcard_catalog or bool(latest.limits_by_model)
-        self._invalidate_model_group_info_cache()
 
     def _last_discovered_model_info(self, model_id: str) -> DiscoveredDeploymentModelInfo | None:
         cached: Final[object] = self._discovered_model_info_cache.get_cache(model_id)
@@ -992,8 +991,9 @@ class HostRegistry(HostModelInfo):
         )
         from litellm.utils import aresolve_api_key_secret_reference
 
+        catalog_api_base: Final = OpenRouterModelInfo.get_api_base(api_base)
         resolved_key: Final = await aresolve_api_key_secret_reference(
-            OpenRouterModelInfo.get_catalog_api_key(api_key, params.api_base),
+            OpenRouterModelInfo.get_catalog_api_key(api_key, catalog_api_base),
             model=params.model,
             llm_provider=LlmProviders.OPENROUTER.value,
             upstream=MappingProxyType({"api_base": params.api_base}),
@@ -1001,7 +1001,7 @@ class HostRegistry(HostModelInfo):
         if not resolved_key:
             return None
         catalog: Final = await aget_openrouter_catalog_limits(
-            api_base=OpenRouterModelInfo.get_api_base(api_base),
+            api_base=catalog_api_base,
             headers=_model_info_request_headers(params, resolved_key),
             client=client or get_async_httpx_client(llm_provider=LlmProviders.OPENROUTER),
             cache=self._core_cache.in_memory_cache,

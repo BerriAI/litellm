@@ -70,7 +70,7 @@ from litellm.types.router import (
     LiteLLM_Params,
     ModelGroupInfo,
 )
-from litellm.types.utils import COST_MAP_LOOKUP_KEY, LlmProviders, ModelInfo, echoed_cost_map_fields
+from litellm.types.utils import COST_MAP_LOOKUP_KEY, ModelInfo, echoed_cost_map_fields
 from litellm.types.utils import ModelInfo as ModelMapInfo
 from litellm.utils import get_utc_datetime, is_generalized_model_info
 
@@ -770,14 +770,8 @@ class HostModelInfo:
         if not self._has_wildcard_catalog:
             return ()
         team_router: Final = self._core_team_pattern_routers.get(team_id) if team_id is not None else None
-        team_routed: Final = (
-            team_router.get_routed_deployments(model_name, LlmProviders.OPENROUTER.value)
-            if team_router is not None
-            else ()
-        )
-        routed: Final = team_routed or self._core_pattern_router.get_routed_deployments(
-            model_name, LlmProviders.OPENROUTER.value
-        )
+        team_routed: Final = team_router.get_routed_deployments(model_name) if team_router is not None else ()
+        routed: Final = team_routed or self._core_pattern_router.get_routed_deployments(model_name)
         rows: Final = (
             (
                 _configured_model_info(deployment),

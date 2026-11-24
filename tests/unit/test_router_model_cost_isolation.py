@@ -778,6 +778,18 @@ async def test_openrouter_discovery_uses_the_key_from_the_environment(
     assert authorizations == ["Bearer environment-key"]
 
 
+def _deployment_reaching_openrouter_through(
+    base_source: str, api_base: str, monkeypatch: pytest.MonkeyPatch
+) -> DeploymentTypedDict:
+    if base_source == "litellm.api_base":
+        monkeypatch.setattr(litellm, "api_base", api_base)
+    if base_source == "OPENROUTER_API_BASE":
+        monkeypatch.setenv("OPENROUTER_API_BASE", api_base)
+    deployment_base: Final = {"api_base": api_base} if base_source == "deployment" else {}
+    return {"model_name": "named", "litellm_params": {"model": "openrouter/vendor/capped", **deployment_base}}
+
+
+@pytest.mark.parametrize("base_source", ("deployment", "litellm.api_base", "OPENROUTER_API_BASE"))
 @pytest.mark.parametrize(
     ("api_base", "expected_authorizations"),
     (
@@ -786,17 +798,14 @@ async def test_openrouter_discovery_uses_the_key_from_the_environment(
     ),
 )
 async def test_openrouter_discovery_sends_the_environment_key_only_to_openrouter(
+    base_source: str,
     api_base: str,
     expected_authorizations: tuple[str, ...],
     openrouter_settings_cleared: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("OPENROUTER_API_KEY", "environment-key")
-    router: Final = Router(
-        model_list=[
-            {"model_name": "named", "litellm_params": {"model": "openrouter/vendor/capped", "api_base": api_base}}
-        ]
-    )
+    router: Final = Router(model_list=[_deployment_reaching_openrouter_through(base_source, api_base, monkeypatch)])
     authorizations: Final[list[str | None]] = []
 
     def respond(request: httpx.Request) -> httpx.Response:
@@ -839,6 +848,20 @@ async def test_openrouter_wildcard_listing_info_shows_each_concrete_models_limit
     listing_info: Final = router.registry().group("openrouter/vendor/capped", field="listing_info")
     assert listing_info == DeploymentModelListingInfo(cost_map_keys=(), max_input_tokens=4096, max_output_tokens=1024)
     assert router.registry().group("openrouter/vendor/unlisted", field="listing_info") is None
+
+
+async def test_openrouter_wildcard_listing_info_skips_a_name_its_requests_do_not_route_to_it(
+    openrouter_settings_cleared: None,
+) -> None:
+    router: Final = Router(model_list=[_openrouter_deployment("openrouter/*", "openrouter/*", "wild-id")])
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"data": [{"id": "openai/gpt-4o", "context_length": 4096}]})
+
+    await _refresh_against(router, respond)
+
+    assert router.registry().group("openrouter/openai/gpt-4o", field="listing_info") is not None
+    assert router.registry().group("openai/gpt-4o", field="listing_info") is None
 
 
 async def test_a_team_openrouter_wildcard_listing_info_shows_each_concrete_models_limits(
