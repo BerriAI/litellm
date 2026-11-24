@@ -14,6 +14,7 @@ pub mod messages;
 mod model_restamp;
 mod ocr;
 mod rate_limited;
+pub mod record;
 mod request;
 pub mod routing;
 mod routing_cache;
@@ -124,5 +125,6 @@ pub fn router<H: Host>(gateway: Arc<Gateway<H>>) -> Router {
             gateway.clone(),
             group_usage::told::<H>,
         ))
+        .layer(axum::middleware::from_fn(record::scoped))
         .with_state(gateway)
 }
