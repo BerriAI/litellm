@@ -10,15 +10,20 @@
 import asyncio
 import copy
 import inspect
-from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import replace
-from typing import TYPE_CHECKING, Any, Final, Protocol
+import json
+from collections.abc import Awaitable, Iterable, Iterator, Mapping, Sequence
+from dataclasses import dataclass, replace
+from typing import TYPE_CHECKING, Any, Final, Protocol, TypeVar
 
 from pydantic import BaseModel, JsonValue, TypeAdapter, ValidationError
+from pydantic_core import to_jsonable_python
 
 import litellm
 from litellm.constants import REDACTED_BY_LITELLM
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.integrations.custom_logger_v2.enums import Field
+from litellm.integrations.custom_logger_v2.outcomes import Patch
+from litellm.integrations.custom_logger_v2.patches import LiveFields, apply_patch
 from litellm.litellm_core_utils.classifier_logging import without_classifier_audit
 from litellm.litellm_core_utils.core_helpers import (
     as_object_list,
@@ -26,7 +31,7 @@ from litellm.litellm_core_utils.core_helpers import (
     get_metadata_variable_name_from_kwargs,
     has_attributes,
 )
-from litellm.litellm_core_utils.served_output_texts import SERVED_OUTPUT_TEXTS_KEY
+from litellm.litellm_core_utils.served_output_texts import SERVED_OUTPUT_TEXTS_KEY, keeps_original_output
 from litellm.llms.base_llm.guardrail_translation.utils import stream_item_field, stream_item_items
 from litellm.llms.vertex_ai.common_utils import (
     redact_vertex_ai_metadata_from_litellm_params,
@@ -317,17 +322,188 @@ def _redact_provider_specific_fields(message: object) -> None:
         setattr(message, "provider_specific_fields", _redacted_provider_specific_fields(fields))  # noqa: B010  # typed as object
 
 
+def _set_field(holder: object, field: str, value: object) -> None:
+    if isinstance(holder, dict):
+        holder[field] = value  # rebind-ok: the served response is edited in place, like the setattr branch
+    else:
+        setattr(holder, field, value)
+
+
 def _drop_provider_specific_token_ids(holder: object) -> None:
-    fields: Final = _as_mapping(getattr(holder, "provider_specific_fields", None))
+    fields: Final = _as_mapping(stream_item_field(holder, "provider_specific_fields"))
     if fields is not None and fields.get("token_ids") is not None:
-        setattr(holder, "provider_specific_fields", {**fields, "token_ids": None})  # noqa: B010  # typed as object
+        _set_field(holder, "provider_specific_fields", {**fields, "token_ids": None})
 
 
 def drop_token_ids(choice: object) -> None:
-    if getattr(choice, "token_ids", None) is not None:
-        setattr(choice, "token_ids", None)  # noqa: B010  # pydantic extra, not a declared field
-    for holder in (choice, getattr(choice, "delta", None), getattr(choice, "message", None)):
+    if stream_item_field(choice, "token_ids") is not None:
+        _set_field(choice, "token_ids", None)
+    for holder in (choice, stream_item_field(choice, "delta"), stream_item_field(choice, "message")):
         _drop_provider_specific_token_ids(holder)
+
+
+_MESSAGE_OUTPUT_FIELDS: Final = (
+    "content",
+    "reasoning_content",
+    "thinking_blocks",
+    "tool_calls",
+    "function_call",
+    "refusal",
+    "audio",
+)
+
+
+_JSONABLE: Final = TypeAdapter(object)
+
+
+def _comparable_value(value: object) -> object:
+    return _JSONABLE.validate_python(to_jsonable_python(value, serialize_unknown=True))
+
+
+def _comparable_message(message: object) -> tuple[object, ...]:
+    return tuple(_comparable_value(stream_item_field(message, field)) for field in _MESSAGE_OUTPUT_FIELDS)
+
+
+def _holder_output(holder: object) -> tuple[object, ...]:
+    return (*_comparable_message(stream_item_field(holder, "message")), stream_item_field(holder, "text"))
+
+
+def _carries_logprobs(holder: object) -> bool:
+    return stream_item_field(holder, "logprobs") not in (None, [])
+
+
+def _carries_token_data(holder: object) -> bool:
+    return (
+        stream_item_field(holder, "token_ids") is not None
+        or _carries_logprobs(holder)
+        or any(
+            stream_item_field(stream_item_field(field_holder, "provider_specific_fields"), "token_ids") is not None
+            for field_holder in (holder, stream_item_field(holder, "message"))
+        )
+    )
+
+
+def _token_data_holders(response: object) -> Iterator[object]:
+    yield from stream_item_items(response, "choices")
+    for item in stream_item_items(response, "output"):
+        yield from stream_item_items(item, "content")
+
+
+def _logprob_entries(logprobs: object) -> tuple[object, ...]:
+    if isinstance(logprobs, (list, tuple)):
+        return _RESPONSE_ITEMS.validate_python(logprobs)
+    return (*stream_item_items(logprobs, "content"), *stream_item_items(logprobs, "refusal"))
+
+
+def _logprob_entry_key(entry: object) -> tuple[object, object]:
+    return stream_item_field(entry, "logprob"), stream_item_field(entry, "bytes")
+
+
+def _logprobs_key(logprobs: object) -> tuple[object, ...]:
+    values: Final = (
+        *map(_logprob_entry_key, _logprob_entries(logprobs)),
+        *stream_item_items(logprobs, "token_logprobs"),
+        *stream_item_items(logprobs, "text_offset"),
+    )
+    return values if values or logprobs in (None, []) else (logprobs,)
+
+
+def _comparable_key(part: tuple[object, ...]) -> str:
+    return json.dumps(to_jsonable_python(part, serialize_unknown=True)) if part else ""
+
+
+@dataclass(frozen=True, slots=True)
+class _TokenData:
+    token_ids: frozenset[str]
+    logprobs: str
+
+    def pairs_with(self, served: "_TokenData") -> bool:
+        if served.token_ids:
+            return not self.token_ids.isdisjoint(served.token_ids)
+        return bool(served.logprobs) and self.logprobs == served.logprobs
+
+
+def _token_data(holder: object) -> _TokenData:
+    token_ids: Final = (
+        stream_item_items(holder, "token_ids"),
+        *(
+            stream_item_items(stream_item_field(field_holder, "provider_specific_fields"), "token_ids")
+            for field_holder in (holder, stream_item_field(holder, "message"))
+        ),
+    )
+    return _TokenData(
+        token_ids=frozenset(key for key in map(_comparable_key, token_ids) if key),
+        logprobs=_comparable_key(_logprobs_key(stream_item_field(holder, "logprobs"))),
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class _TokenDataOutput:
+    token_data: _TokenData
+    output: tuple[object, ...]
+
+
+def _token_data_outputs(response: object) -> tuple[_TokenDataOutput, ...]:
+    return tuple(
+        _TokenDataOutput(_token_data(holder), _holder_output(holder))
+        for holder in _token_data_holders(response)
+        if _carries_token_data(holder)
+    )
+
+
+def _drop_token_data(holder: object) -> None:
+    drop_token_ids(holder)
+    if _carries_logprobs(holder):
+        _set_field(holder, "logprobs", None)
+
+
+def _keeps_every_field(original: tuple[object, ...], served: tuple[object, ...]) -> bool:
+    return all(keeps_original_output(before, after) for before, after in zip(original, served, strict=True))
+
+
+def _hides_original_output(holder: object, outputs_before: tuple[_TokenDataOutput, ...]) -> bool:
+    token_data: Final = _token_data(holder)
+    output: Final = _holder_output(holder)
+    originals: Final = tuple(before.output for before in outputs_before if before.token_data.pairs_with(token_data))
+    return bool(originals) and not all(_keeps_every_field(original, output) for original in originals)
+
+
+def _drop_token_data_of_rewritten_outputs(response: object, outputs_before: tuple[_TokenDataOutput, ...]) -> None:
+    for holder in _token_data_holders(response):
+        if _carries_token_data(holder) and _hides_original_output(holder, outputs_before):
+            _drop_token_data(holder)
+
+
+_Hooked = TypeVar("_Hooked")
+
+
+async def without_hidden_token_data(response: object, hooked: Awaitable[_Hooked]) -> _Hooked:
+    outputs_before: Final = _token_data_outputs(response)
+    result: Final = await hooked
+    _drop_token_data_of_rewritten_outputs(response if result is None else result, outputs_before)
+    return result
+
+
+class TokenDataCheckedFields(LiveFields):
+    __slots__ = ("_inner",)
+
+    def __init__(self, inner: Mapping[Field, object]) -> None:
+        self._inner: Final = inner
+
+    def __getitem__(self, field: Field) -> object:
+        return self._inner[field]
+
+    def __iter__(self) -> Iterator[Field]:
+        return iter(self._inner)
+
+    def __len__(self) -> int:
+        return len(self._inner)
+
+    def apply(self, patch: Patch) -> Mapping[Field, object]:
+        outputs_before: Final = _token_data_outputs(self._inner.get(Field.response))
+        applied: Final = apply_patch(self._inner, patch)
+        _drop_token_data_of_rewritten_outputs(applied.get(Field.response), outputs_before)
+        return self if applied is self._inner else TokenDataCheckedFields(applied)
 
 
 def _redact_provider_specific_fields_dict(choice: Mapping[str, object]) -> None:

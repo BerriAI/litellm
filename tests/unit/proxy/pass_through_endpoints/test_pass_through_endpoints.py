@@ -8,10 +8,10 @@ import os
 import sys
 import uuid
 import zlib
-from collections.abc import AsyncIterator, Callable, Mapping, Sequence
+from collections.abc import AsyncIterator, Callable, Coroutine, Mapping, Sequence
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from io import BytesIO
 from types import MappingProxyType, ModuleType, SimpleNamespace
 from typing import Final, Optional, cast
@@ -45,6 +45,7 @@ from litellm.proxy.common_utils.http_parsing_utils import safe_set_request_parse
 from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.hooks.parallel_request_limiter import PROXY_MaxParallelRequestsHandler
+from litellm.proxy.hooks.parallel_request_limiter_v3 import atomic_check_and_increment_by_n
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 from litellm.types.proxy.auth.user_api_key_auth import COMMITTED_BUDGET_SPEND_PARAM
 from litellm.types.proxy.carried_budget_state import CommittedBudgetSpend, EntitySpendCounterKeys
@@ -89,6 +90,7 @@ from litellm.proxy.route_llm_request import ProxyModelNotFoundError
 from litellm.proxy.spend_tracking.spend_tracking_utils import get_spend_logs_id
 from litellm.proxy.utils import InternalUsageCache, ProxyLogging, hash_token
 from litellm.redis.stores.auth_cache import AuthObject
+from litellm.redis.stores.rate_limits import RateLimitScope
 from litellm.types import utils as types_utils
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import CallTypes
@@ -8109,6 +8111,48 @@ async def test_websocket_passthrough_does_not_relay_unsendable_upstream_close(rc
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(("code", "reason"), [(1000, ""), (1006, "connection died")], ids=["normal", "abnormal"])
+async def test_websocket_passthrough_closes_the_client_before_its_release_waits_for_turn_logging(
+    code: int, reason: str
+) -> None:
+    from websockets.exceptions import ConnectionClosedError
+    from websockets.frames import Close
+
+    upstream_ws: Final = ClosingUpstreamWebSocket(
+        ConnectionClosedError(rcvd=Close(code, reason), sent=None, rcvd_then_sent=None)
+    )
+    websocket: Final = _client_websocket(_pending_receive)
+    release_started: Final = asyncio.Event()
+    release_may_finish: Final = asyncio.Event()
+
+    async def release_waiting_for_turn_logging(*args: object) -> None:
+        release_started.set()
+        await release_may_finish.wait()
+
+    with _patched_websocket_passthrough_environment(upstream_ws) as proxy_logging:
+        proxy_logging.arelease_responses_websocket_slot = AsyncMock(side_effect=release_waiting_for_turn_logging)
+        session: Final = asyncio.create_task(
+            websocket_passthrough_request(
+                websocket=websocket,
+                target="wss://api.openai.com/v1/responses",
+                custom_headers={"Authorization": "Bearer sk-provider"},
+                user_api_key_dict=UserAPIKeyAuth(),
+                forward_headers=False,
+                endpoint="/openai_passthrough/v1/responses",
+                accept_websocket=False,
+                upstream_frame_kind=openai_websocket_frame_kind,
+            )
+        )
+        await asyncio.wait_for(release_started.wait(), timeout=10)
+        closes_while_the_release_waited: Final = tuple(websocket.close.await_args_list)
+        release_may_finish.set()
+        await asyncio.wait_for(session, timeout=10)
+
+    assert closes_while_the_release_waited == (call(),)
+    websocket.close.assert_awaited_once_with()
+
+
+@pytest.mark.asyncio
 async def test_websocket_passthrough_rewrites_alias_of_unrecognised_upstream_model():
     llm_router = MagicMock()
     llm_router.registry.return_value.deployments.return_value = [
@@ -8894,6 +8938,12 @@ async def test_websocket_passthrough_frees_one_legacy_parallel_slot_only_when_th
             )
         proxy_logging.pre_call_hook = AsyncMock(side_effect=admit)
         proxy_logging.arelease_responses_websocket_slot = proxy_logging_obj.arelease_responses_websocket_slot
+        proxy_logging.leave_responses_websocket_reservation_to_close = (
+            proxy_logging_obj.leave_responses_websocket_reservation_to_close
+        )
+        proxy_logging.arelease_refused_responses_websocket_slot = (
+            proxy_logging_obj.arelease_refused_responses_websocket_slot
+        )
         worker.ensure_initialized_and_enqueue = MagicMock(
             side_effect=lambda async_coroutine: logged_rows.append(asyncio.create_task(async_coroutine))
         )
@@ -8916,6 +8966,423 @@ async def test_websocket_passthrough_frees_one_legacy_parallel_slot_only_when_th
 
     assert len(logged_rows) == len(models)
     assert (seen_while_open, after_close) == (while_open, (True, False))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("upstream_replies", "answers_due", "rows_and_sessions_after_close"),
+    [
+        pytest.param([_responses_turn("gpt-5.4-mini")], None, (1, (True, False)), id="turn_finished"),
+        pytest.param([], (0, 0), (0, (False, False)), id="turn_left_unfinished"),
+    ],
+)
+async def test_websocket_passthrough_gives_back_its_tpm_reservation_only_once_its_turns_finish(
+    upstream_replies: Sequence[Sequence[str]],
+    answers_due: Sequence[int] | None,
+    rows_and_sessions_after_close: tuple[int, tuple[bool, bool]],
+):
+    limiter_cache: Final = DualCache()
+    limiter: Final = RustParallelRequestLimiter(internal_usage_cache=InternalUsageCache(limiter_cache))
+    proxy_logging_obj: Final = ProxyLogging(user_api_key_cache=DualCache())
+    proxy_logging_obj.proxy_hook_mapping["parallel_request_limiter"] = limiter
+    key: Final = UserAPIKeyAuth(
+        api_key=hash_token("sk-tpm-socket"), tpm_limit=100, metadata={"default_estimated_output_tokens": 60}
+    )
+    logged_rows: Final[list[asyncio.Task[None]]] = []
+
+    async def admit(user_api_key_dict: UserAPIKeyAuth, data: Mapping[str, object], call_type: str) -> None:
+        await limiter.async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict, cache=limiter_cache, data=dict(data), call_type=call_type
+        )
+
+    async def log_row(**row: object) -> None:
+        await limiter.async_log_success_event(
+            kwargs=row, response_obj=None, start_time=row["start_time"], end_time=row["end_time"]
+        )
+
+    async def opens_another_session() -> bool:
+        await asyncio.gather(*logged_rows)
+        try:
+            await asyncio.create_task(
+                admit(key, {"litellm_call_id": str(uuid.uuid4())}, "pass_through_endpoint"),
+                context=contextvars.Context(),
+            )
+        except ProxyRateLimitError:
+            return False
+        return True
+
+    client: Final = _turn_taking_client(
+        [json.dumps({"type": "response.create", "model": "gpt-5.4-mini"})],
+        answered_by='"response.completed"',
+        answers_due=answers_due,
+    )
+    take_frame: Final = client.receive
+    while_open: Final[list[bool]] = []
+
+    async def receive() -> Mapping[str, str | bytes]:
+        message: Final = await take_frame()
+        if message["type"] == "websocket.disconnect":
+            while_open.append(await opens_another_session())
+        return message
+
+    client.receive = receive
+
+    with (
+        _patched_websocket_passthrough_environment(ScriptedUpstreamWebSocket(replies=upstream_replies)) as proxy_logging,
+        patch("litellm.proxy.pass_through_endpoints.pass_through_endpoints.GLOBAL_LOGGING_WORKER") as worker,
+        patch(SUCCESS_HANDLER, new_callable=AsyncMock, side_effect=log_row),
+    ):
+        proxy_logging.pre_call_hook = AsyncMock(side_effect=admit)
+        proxy_logging.arelease_responses_websocket_slot = proxy_logging_obj.arelease_responses_websocket_slot
+        proxy_logging.leave_responses_websocket_reservation_to_close = (
+            proxy_logging_obj.leave_responses_websocket_reservation_to_close
+        )
+        proxy_logging.arelease_refused_responses_websocket_slot = (
+            proxy_logging_obj.arelease_refused_responses_websocket_slot
+        )
+        worker.ensure_initialized_and_enqueue = MagicMock(
+            side_effect=lambda async_coroutine: logged_rows.append(asyncio.create_task(async_coroutine))
+        )
+        await asyncio.wait_for(
+            websocket_passthrough_request(
+                websocket=client,
+                target="wss://api.openai.com/v1/responses",
+                custom_headers={"Authorization": "Bearer sk-provider"},
+                user_api_key_dict=key,
+                forward_headers=False,
+                endpoint="/openai_passthrough/v1/responses",
+                accept_websocket=False,
+                client_frame_model_gate=RecordingFrameModelGate(),
+                upstream_frame_kind=openai_websocket_frame_kind,
+                walkout_turn_drain_seconds=0.05,
+            ),
+            timeout=10,
+        )
+    after_close: Final = (await opens_another_session(), await opens_another_session())
+
+    assert while_open == [False]
+    assert (len(logged_rows), after_close) == rows_and_sessions_after_close
+
+
+@dataclass(frozen=True, slots=True)
+class _TpmLimitedKey:
+    limiter: RustParallelRequestLimiter
+    cache: DualCache
+    key: UserAPIKeyAuth
+    proxy_logging_obj: ProxyLogging
+
+    @classmethod
+    def new(cls, api_key: str) -> "_TpmLimitedKey":
+        cache: Final = DualCache()
+        limiter: Final = RustParallelRequestLimiter(internal_usage_cache=InternalUsageCache(cache))
+        proxy_logging_obj: Final = ProxyLogging(user_api_key_cache=DualCache())
+        proxy_logging_obj.proxy_hook_mapping["parallel_request_limiter"] = limiter
+        key: Final = UserAPIKeyAuth(
+            api_key=hash_token(api_key), tpm_limit=100, metadata={"default_estimated_output_tokens": 60}
+        )
+        return cls(limiter=limiter, cache=cache, key=key, proxy_logging_obj=proxy_logging_obj)
+
+    async def admit(self, user_api_key_dict: UserAPIKeyAuth, data: Mapping[str, object], call_type: str) -> None:
+        await self.limiter.async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict, cache=self.cache, data=dict(data), call_type=call_type
+        )
+
+    async def log_row(self, **row: object) -> None:
+        await self.limiter.async_log_success_event(
+            kwargs=row, response_obj=None, start_time=row["start_time"], end_time=row["end_time"]
+        )
+
+    async def admits_another_session(self) -> bool:
+        try:
+            await asyncio.create_task(
+                self.admit(self.key, {"litellm_call_id": str(uuid.uuid4())}, "pass_through_endpoint"),
+                context=contextvars.Context(),
+            )
+        except ProxyRateLimitError:
+            return False
+        return True
+
+
+@pytest.mark.asyncio
+async def test_websocket_passthrough_holds_its_tpm_reservation_until_its_turn_rows_charge_their_usage():
+    limited: Final = _TpmLimitedKey.new("sk-socket-turn-rows")
+    rows: Final[list[asyncio.Task[None]]] = []
+    admitted_while_its_turn_logged: Final[list[bool]] = []
+
+    async def log_row(**row: object) -> None:
+        admitted_while_its_turn_logged.append(await limited.admits_another_session())
+        await limited.log_row(**row)
+
+    async def logged_later(row: Coroutine[object, object, None]) -> None:
+        await asyncio.sleep(0.05)
+        await row
+
+    client: Final = _turn_taking_client(
+        [json.dumps({"type": "response.create", "model": "gpt-5.4-mini"})], answered_by='"response.completed"'
+    )
+    with (
+        _patched_websocket_passthrough_environment(
+            ScriptedUpstreamWebSocket(replies=[_responses_turn("gpt-5.4-mini")])
+        ) as proxy_logging,
+        patch("litellm.proxy.pass_through_endpoints.pass_through_endpoints.GLOBAL_LOGGING_WORKER") as worker,
+        patch(SUCCESS_HANDLER, new_callable=AsyncMock, side_effect=log_row),
+    ):
+        proxy_logging.pre_call_hook = AsyncMock(side_effect=limited.admit)
+        proxy_logging.arelease_responses_websocket_slot = limited.proxy_logging_obj.arelease_responses_websocket_slot
+        proxy_logging.leave_responses_websocket_reservation_to_close = (
+            limited.proxy_logging_obj.leave_responses_websocket_reservation_to_close
+        )
+        proxy_logging.arelease_refused_responses_websocket_slot = (
+            limited.proxy_logging_obj.arelease_refused_responses_websocket_slot
+        )
+        worker.ensure_initialized_and_enqueue = MagicMock(
+            side_effect=lambda async_coroutine: rows.append(asyncio.create_task(logged_later(async_coroutine)))
+        )
+        await asyncio.wait_for(
+            websocket_passthrough_request(
+                websocket=client,
+                target="wss://api.openai.com/v1/responses",
+                custom_headers={"Authorization": "Bearer sk-provider"},
+                user_api_key_dict=limited.key,
+                forward_headers=False,
+                endpoint="/openai_passthrough/v1/responses",
+                accept_websocket=False,
+                client_frame_model_gate=RecordingFrameModelGate(),
+                upstream_frame_kind=openai_websocket_frame_kind,
+                walkout_turn_drain_seconds=0.05,
+            ),
+            timeout=10,
+        )
+    await asyncio.gather(*rows)
+
+    assert admitted_while_its_turn_logged == [False]
+    assert await limited.admits_another_session()
+
+
+@pytest.mark.asyncio
+async def test_websocket_passthrough_cancelled_mid_turn_keeps_its_tpm_reservation():
+    limited: Final = _TpmLimitedKey.new("sk-socket-cancelled-mid-turn")
+    upstream_ws: Final = ScriptedUpstreamWebSocket(replies=[[]])
+    client_leaves: Final = asyncio.Event()
+    frames: Final = iter([_received_frame(json.dumps({"type": "response.create", "model": "gpt-5.4-mini"}))])
+
+    async def receive() -> Mapping[str, str | bytes]:
+        frame: Final = next(frames, None)
+        if frame is not None:
+            return frame
+        await client_leaves.wait()
+        return {"type": "websocket.disconnect"}
+
+    async def turn_sent_upstream() -> None:
+        while upstream_ws.send.await_count == 0:
+            await asyncio.sleep(0)
+
+    with _patched_websocket_passthrough_environment(upstream_ws) as proxy_logging:
+        proxy_logging.pre_call_hook = AsyncMock(side_effect=limited.admit)
+        proxy_logging.arelease_responses_websocket_slot = limited.proxy_logging_obj.arelease_responses_websocket_slot
+        proxy_logging.leave_responses_websocket_reservation_to_close = (
+            limited.proxy_logging_obj.leave_responses_websocket_reservation_to_close
+        )
+        proxy_logging.arelease_refused_responses_websocket_slot = (
+            limited.proxy_logging_obj.arelease_refused_responses_websocket_slot
+        )
+        session: Final = asyncio.create_task(
+            websocket_passthrough_request(
+                websocket=_client_websocket(receive),
+                target="wss://api.openai.com/v1/responses",
+                custom_headers={"Authorization": "Bearer sk-provider"},
+                user_api_key_dict=limited.key,
+                forward_headers=False,
+                endpoint="/openai_passthrough/v1/responses",
+                accept_websocket=False,
+                client_frame_model_gate=RecordingFrameModelGate(),
+                upstream_frame_kind=openai_websocket_frame_kind,
+            )
+        )
+        await asyncio.wait_for(turn_sent_upstream(), timeout=10)
+        tasks_before_the_cancel: Final = asyncio.all_tasks()
+        session.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await session
+        await asyncio.wait_for(asyncio.gather(*(asyncio.all_tasks() - tasks_before_the_cancel)), timeout=10)
+        admitted_after_the_cancel: Final = await limited.admits_another_session()
+        client_leaves.set()
+        await upstream_ws.close()
+
+    assert not admitted_after_the_cancel
+
+
+@pytest.mark.asyncio
+async def test_websocket_passthrough_without_a_turn_classifier_leaves_its_tpm_reservation_to_its_session_row():
+    limited: Final = _TpmLimitedKey.new("sk-socket-session-row")
+    rows: Final[list[asyncio.Task[None]]] = []
+    session_row_may_log: Final = asyncio.Event()
+
+    async def logged_once_allowed(row: Coroutine[object, object, None]) -> None:
+        await session_row_may_log.wait()
+        await row
+
+    client: Final = _turn_taking_client([json.dumps({"type": "ping"})], answered_by='"pong"')
+    with (
+        _patched_websocket_passthrough_environment(
+            ScriptedUpstreamWebSocket(replies=[[json.dumps({"type": "pong"})]])
+        ) as proxy_logging,
+        patch("litellm.proxy.pass_through_endpoints.pass_through_endpoints.GLOBAL_LOGGING_WORKER") as worker,
+        patch(SUCCESS_HANDLER, new_callable=AsyncMock, side_effect=limited.log_row),
+    ):
+        proxy_logging.pre_call_hook = AsyncMock(side_effect=limited.admit)
+        proxy_logging.arelease_responses_websocket_slot = limited.proxy_logging_obj.arelease_responses_websocket_slot
+        proxy_logging.leave_responses_websocket_reservation_to_close = (
+            limited.proxy_logging_obj.leave_responses_websocket_reservation_to_close
+        )
+        proxy_logging.arelease_refused_responses_websocket_slot = (
+            limited.proxy_logging_obj.arelease_refused_responses_websocket_slot
+        )
+        worker.ensure_initialized_and_enqueue = MagicMock(
+            side_effect=lambda async_coroutine: rows.append(asyncio.create_task(logged_once_allowed(async_coroutine)))
+        )
+        await asyncio.wait_for(
+            websocket_passthrough_request(
+                websocket=client,
+                target="wss://live.example.com/v1/session",
+                custom_headers={"Authorization": "Bearer sk-provider"},
+                user_api_key_dict=limited.key,
+                forward_headers=False,
+                endpoint="/live/v1/session",
+                accept_websocket=False,
+            ),
+            timeout=2,
+        )
+        admitted_before_its_session_row: Final = await limited.admits_another_session()
+        session_row_may_log.set()
+        await asyncio.gather(*rows)
+
+    assert (admitted_before_its_session_row, len(rows)) == (False, 1)
+
+
+@pytest.mark.asyncio
+async def test_websocket_passthrough_refused_by_a_later_pre_call_hook_frees_its_tpm_reservation():
+    limiter_cache: Final = DualCache()
+    limiter: Final = RustParallelRequestLimiter(internal_usage_cache=InternalUsageCache(limiter_cache))
+    proxy_logging_obj: Final = ProxyLogging(user_api_key_cache=DualCache())
+    proxy_logging_obj.proxy_hook_mapping["parallel_request_limiter"] = limiter
+    key: Final = UserAPIKeyAuth(
+        api_key=hash_token("sk-refused-socket"), tpm_limit=100, metadata={"default_estimated_output_tokens": 60}
+    )
+
+    async def admit(user_api_key_dict: UserAPIKeyAuth, data: Mapping[str, object], call_type: str) -> None:
+        await limiter.async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict, cache=limiter_cache, data=dict(data), call_type=call_type
+        )
+
+    async def admit_then_refuse(user_api_key_dict: UserAPIKeyAuth, data: Mapping[str, object], call_type: str) -> None:
+        await admit(user_api_key_dict, data, call_type)
+        raise HTTPException(status_code=429, detail="Max iterations exceeded")
+
+    async def opens_another_session() -> bool:
+        try:
+            await asyncio.create_task(
+                admit(key, {"litellm_call_id": str(uuid.uuid4())}, "pass_through_endpoint"),
+                context=contextvars.Context(),
+            )
+        except ProxyRateLimitError:
+            return False
+        return True
+
+    async def refused_session() -> None:
+        with _patched_websocket_passthrough_environment(ScriptedUpstreamWebSocket()) as proxy_logging:
+            proxy_logging.pre_call_hook = AsyncMock(side_effect=admit_then_refuse)
+            proxy_logging.arelease_responses_websocket_slot = proxy_logging_obj.arelease_responses_websocket_slot
+            proxy_logging.leave_responses_websocket_reservation_to_close = (
+                proxy_logging_obj.leave_responses_websocket_reservation_to_close
+            )
+            proxy_logging.arelease_refused_responses_websocket_slot = (
+                proxy_logging_obj.arelease_refused_responses_websocket_slot
+            )
+            await websocket_passthrough_request(
+                websocket=_turn_taking_client([], answered_by='"response.completed"'),
+                target="wss://api.openai.com/v1/responses",
+                custom_headers={"Authorization": "Bearer sk-provider"},
+                user_api_key_dict=key,
+                forward_headers=False,
+                endpoint="/openai_passthrough/v1/responses",
+                accept_websocket=False,
+            )
+
+    with pytest.raises(HTTPException, match="Max iterations exceeded"):
+        await asyncio.create_task(refused_session(), context=contextvars.Context())
+
+    assert (await opens_another_session(), await opens_another_session()) == (True, False)
+
+
+@pytest.mark.asyncio
+async def test_websocket_passthrough_rejected_by_its_upstream_in_a_later_minute_leaves_that_minutes_tpm_alone():
+    clock: Final = [datetime(2026, 11, 9, 12, 0, 0)]
+    limiter_cache: Final = DualCache()
+    limiter: Final = RustParallelRequestLimiter(
+        internal_usage_cache=InternalUsageCache(limiter_cache), time_provider=lambda: clock[-1]
+    )
+    proxy_logging_obj: Final = ProxyLogging(user_api_key_cache=DualCache())
+    proxy_logging_obj.proxy_hook_mapping["parallel_request_limiter"] = limiter
+    key: Final = UserAPIKeyAuth(
+        api_key=hash_token("sk-rejected-socket"), tpm_limit=1_000, metadata={"default_estimated_output_tokens": 60}
+    )
+    key_tokens: Final = RateLimitScope("api_key", key.api_key or "").counter("tokens")
+
+    async def admit_then_roll_the_window(
+        user_api_key_dict: UserAPIKeyAuth, data: Mapping[str, object], call_type: str
+    ) -> None:
+        await limiter.async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict, cache=limiter_cache, data=dict(data), call_type=call_type
+        )
+        clock.append(clock[-1] + timedelta(seconds=limiter.window_size + 1))
+        await atomic_check_and_increment_by_n(
+            limiter,
+            descriptors=[
+                {
+                    "key": "api_key",
+                    "value": key.api_key or "",
+                    "rate_limit": {"tokens_per_unit": 1_000, "window_size": limiter.window_size},
+                }
+            ],
+            increments=[{"tokens": 20}],
+        )
+
+    async def rejected_session() -> None:
+        with (
+            _patched_websocket_passthrough_environment(ScriptedUpstreamWebSocket()) as proxy_logging,
+            patch(
+                "litellm.proxy.pass_through_endpoints.pass_through_endpoints.connect",
+                side_effect=_websocket_connect_failure("rejected_handshake"),
+            ),
+        ):
+            proxy_logging.pre_call_hook = AsyncMock(side_effect=admit_then_roll_the_window)
+            proxy_logging.post_call_failure_hook = AsyncMock(side_effect=limiter.async_post_call_failure_hook)
+            proxy_logging.arelease_responses_websocket_slot = proxy_logging_obj.arelease_responses_websocket_slot
+            proxy_logging.leave_responses_websocket_reservation_to_close = (
+                proxy_logging_obj.leave_responses_websocket_reservation_to_close
+            )
+            proxy_logging.arelease_refused_responses_websocket_slot = (
+                proxy_logging_obj.arelease_refused_responses_websocket_slot
+            )
+            await websocket_passthrough_request(
+                websocket=_client_websocket(_pending_receive),
+                target="wss://api.openai.com/v1/responses",
+                custom_headers={"Authorization": "Bearer sk-provider"},
+                user_api_key_dict=key,
+                forward_headers=False,
+                endpoint="/openai_passthrough/v1/responses",
+                accept_websocket=False,
+                client_frame_model_gate=RecordingFrameModelGate(),
+                upstream_frame_kind=openai_websocket_frame_kind,
+            )
+            proxy_logging.post_call_failure_hook.assert_awaited_once()
+
+    before_the_socket: Final = asyncio.all_tasks()
+    await asyncio.create_task(rejected_session(), context=contextvars.Context())
+    await asyncio.wait_for(asyncio.gather(*(asyncio.all_tasks() - before_the_socket)), timeout=5)
+
+    assert int(limiter.rate_limits.local((key_tokens,))[0] or 0) == 20
 
 
 @pytest.mark.asyncio

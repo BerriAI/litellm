@@ -82,7 +82,7 @@ class NvidiaNimRerankConfig(BaseRerankConfig):
         self,
         api_base: str | None,
         model: str,
-        optional_params: dict | None = None,
+        optional_params: Mapping[str, object] | None = None,
     ) -> str:
         """
         Construct the Nvidia NIM rerank URL.

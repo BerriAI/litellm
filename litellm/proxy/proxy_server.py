@@ -26,6 +26,7 @@ from collections.abc import (
     Callable,
     Collection,
     Container,
+    Coroutine,
     Iterable,
     Mapping,
     MutableMapping,
@@ -48,6 +49,7 @@ from typing import (
     NoReturn,
     Optional,
     Protocol,
+    TextIO,
     TypeAlias,
     TypeVar,
     Union,
@@ -266,7 +268,14 @@ REALTIME_REQUEST_SCOPE_TEMPLATE: Final[dict[str, object]] = {
 }
 
 
-def showwarning(message, category, filename, lineno, file=None, line=None):
+def showwarning(
+    message: Warning | str,
+    category: type[Warning],
+    filename: str,
+    lineno: int,
+    file: TextIO | None = None,
+    line: str | None = None,
+) -> None:
     traceback_info: Final = f"{filename}:{lineno}: {category.__name__}: {message}\n"
     if file is not None:
         file.write(traceback_info)
@@ -970,6 +979,7 @@ except ImportError:
 from fastapi.exception_handlers import http_exception_handler
 from starlette.background import BackgroundTask
 from starlette.exceptions import HTTPException as StarletteHTTPException
+from starlette.types import Receive, Scope, Send
 from starlette.websockets import WebSocketState
 
 from litellm.integrations.lens.config import LensController
@@ -7723,7 +7733,7 @@ class ProxyConfig:
             if litellm.secret_manager_client is not previous_client:
                 capture_secret_manager(litellm.secret_manager_client, key_management_system)
 
-    def get_model_info_with_id(self, model, db_model=False) -> RouterModelInfo:
+    def get_model_info_with_id(self, model, db_model: bool = False) -> RouterModelInfo:
         """
         Common logic across add + delete router models
         Parameters:
@@ -9800,7 +9810,7 @@ class ProxyConfig:
 proxy_config = ProxyConfig()
 
 
-def save_worker_config(**data):
+def save_worker_config(**data: object) -> None:
     import json
 
     os.environ["WORKER_CONFIG"] = json.dumps(data)
@@ -9819,17 +9829,17 @@ async def initialize(
     alias=None,
     api_base=None,
     api_version=None,
-    debug=False,
-    detailed_debug=False,
+    debug: object = False,
+    detailed_debug: object = False,
     temperature=None,
     max_tokens=None,
     request_timeout=600,
     max_budget=None,
-    drop_params=True,
-    add_function_to_prompt=True,
+    drop_params: object = True,
+    add_function_to_prompt: object = True,
     headers=None,
-    save=False,
-    use_queue=False,
+    save: object = False,
+    use_queue: object = False,
     config=None,
 ):
     global \
@@ -10965,12 +10975,12 @@ def get_litellm_model_info(model: dict = {}) -> Mapping[str, object]:
         return {}
 
 
-def on_backoff(details):
+def on_backoff(details: Mapping[str, object]) -> None:
     # The 'tries' key in the details dictionary contains the number of completed tries
     verbose_proxy_logger.debug("Backing off... this was attempt # %s", details["tries"])
 
 
-def giveup(e):
+def giveup(e: object) -> bool:
     result: Final = not (
         isinstance(e, ProxyException)
         and getattr(e, "message", None) is not None
@@ -21711,13 +21721,13 @@ class _AlertingDestinationEntry(TypedDict):
     variables: ReadOnly[Mapping[str, str | None]]
 
 
-def _apply_alerting_env_role_gate(env_vars: dict, is_full_admin: bool) -> dict:
+def _apply_alerting_env_role_gate(env_vars: dict[str, str | None], is_full_admin: bool) -> dict:
     if is_full_admin:
         return mask_sensitive_keys(env_vars, _ALERTING_SENSITIVE_VARS)
     return _redact_callback_env_vars(env_vars)
 
 
-def _apply_webhook_role_gate(webhook_map, is_full_admin: bool):
+def _apply_webhook_role_gate(webhook_map: object, is_full_admin: bool):
     if is_full_admin or not isinstance(webhook_map, dict):
         return webhook_map
     return {alert_type: "REDACTED" for alert_type in webhook_map}
@@ -22435,7 +22445,7 @@ async def get_config(
         _success_and_failure_callbacks = _litellm_settings.get("callbacks", [])
 
         # Normalize string callbacks to lists
-        def normalize_callback(callback):
+        def normalize_callback(callback: object):
             if isinstance(callback, str):
                 return (callback,)
             if callback is None:
@@ -23318,7 +23328,9 @@ if _server_root_paths:
     app.add_middleware(PerRequestRootPathMiddleware, root_paths=_server_root_paths)
 
 
-async def _stream_mcp_asgi_response(handle_fn, scope: dict, receive) -> "StreamingResponse":
+async def _stream_mcp_asgi_response(
+    handle_fn: Callable[[Scope, Receive, Send], Coroutine[object, object, object]], scope: dict, receive: Receive
+) -> "StreamingResponse":
     """
     Call an ASGI MCP handler and return a StreamingResponse so SSE/streaming works.
 
@@ -23330,7 +23342,7 @@ async def _stream_mcp_asgi_response(handle_fn, scope: dict, receive) -> "Streami
     headers_ready: Final[asyncio.Future] = asyncio.get_running_loop().create_future()
     body_queue: Final[asyncio.Queue] = asyncio.Queue(maxsize=1024)
 
-    async def bridging_send(message):
+    async def bridging_send(message: Mapping[str, object]) -> None:
         if message["type"] == "http.response.start":
             if not headers_ready.done():
                 headers_ready.set_result((message.get("status", 200), message.get("headers", [])))
@@ -23348,7 +23360,7 @@ async def _stream_mcp_asgi_response(handle_fn, scope: dict, receive) -> "Streami
     # below guarantees the queue gets unblocked regardless of how the task ends.
     # When this happens before response headers, propagate the original exception
     # instead of waiting for the header timeout.
-    def _ensure_eof(task: asyncio.Task) -> None:
+    def _ensure_eof(task: asyncio.Task[object]) -> None:
         if task.cancelled():
             body_queue.put_nowait(None)
             return

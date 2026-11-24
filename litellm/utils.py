@@ -2121,6 +2121,20 @@ async def async_post_call_success_deployment_hook(
     """
     Allow modifying / reviewing the response just after it's received from the deployment.
     """
+    from litellm.litellm_core_utils.redact_messages import without_hidden_token_data
+
+    return await without_hidden_token_data(
+        response, _post_call_success_deployment_response(request_data, response, call_type, include_v2=include_v2)
+    )
+
+
+async def _post_call_success_deployment_response(
+    request_data: dict[str, object],  # mutable-ok: the attempt's request dict the hooks receive
+    response: object,
+    call_type: CallTypes | None,
+    *,
+    include_v2: bool,
+) -> object:
     try:
         typed_call_type = CallTypes(call_type)
     except ValueError:
@@ -2132,9 +2146,15 @@ async def async_post_call_success_deployment_hook(
         and Hook.post_deployment_success in CustomLoggerV2.declared_hooks
         and (subscribers := hook_subscribers(Hook.post_deployment_success, callbacks, admit=Admit.every_logger)).has_v2
     ):
+        from litellm.litellm_core_utils.redact_messages import TokenDataCheckedFields
+
         fields: Final = ResultFields(request_data, PROXY_REQUEST_KEYS, Field.response, response)  # pyright: ignore[reportUnknownArgumentType]  # the attempt's request dict
         _ = kwargs_after(
-            await run_subscribers(subscribers, fields, partial(_start_post_deployment_success, fields, typed_call_type))
+            await run_subscribers(
+                subscribers,
+                TokenDataCheckedFields(fields),
+                partial(_start_post_deployment_success, fields, typed_call_type),
+            )
         )
         return fields.value
 
@@ -2166,11 +2186,16 @@ async def _post_deployment_success_patch(
 async def _post_deployment_success(
     callback: CustomLogger, request_data: object, response: object, call_type: CallTypes | None
 ) -> object:
+    from litellm.litellm_core_utils.redact_messages import without_hidden_token_data
+
     try:
-        return await callback.async_post_call_success_deployment_hook(
-            request_data,  # pyright: ignore[reportArgumentType]  # the attempt's request dict
-            cast(LLMResponseTypes, response),
-            call_type,
+        return await without_hidden_token_data(
+            response,
+            callback.async_post_call_success_deployment_hook(
+                request_data,  # pyright: ignore[reportArgumentType]  # the attempt's request dict
+                cast(LLMResponseTypes, response),
+                call_type,
+            ),
         )
     except Exception:  # noqa: BLE001  # a broken callback must not fail a completed request
         if isinstance(callback, CustomGuardrail):
@@ -6466,13 +6491,6 @@ def get_optional_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
             model=model,
-            drop_params=bool(drop_params),
-        )
-    elif custom_llm_provider == "nvidia_nim":
-        optional_params = litellm.NvidiaNimConfig().map_openai_params(
-            model=model,
-            non_default_params=non_default_params,
-            optional_params=optional_params,
             drop_params=bool(drop_params),
         )
     elif custom_llm_provider == "cerebras":

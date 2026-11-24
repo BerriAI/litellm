@@ -251,7 +251,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             return system_param
         elif isinstance(system_param, list):
             # Filter list of system content blocks
-            filtered_list: Final = []
+            filtered_list: Final[list[object]] = []
             for content_block in system_param:
                 if isinstance(content_block, dict):
                     text = content_block.get("text", "")

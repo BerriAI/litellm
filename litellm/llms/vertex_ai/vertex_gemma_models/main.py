@@ -32,6 +32,7 @@ from ..vertex_llm_base import VertexBase
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 
 
 class VertexAIGemmaModels(VertexBase):
@@ -44,11 +45,11 @@ class VertexAIGemmaModels(VertexBase):
         messages: list,
         model_response: ModelResponse,
         print_verbose: Callable[..., object],
-        encoding,
+        encoding: "Tokenizer | None",
         logging_obj: "LiteLLMLoggingObj",
         api_base: str | None,
         optional_params: dict,
-        custom_prompt_dict: dict,
+        custom_prompt_dict: Mapping[str, object],
         headers: Mapping[str, object] | None,
         timeout: float | httpx.Timeout,
         litellm_params: dict,
