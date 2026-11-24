@@ -34,13 +34,14 @@ from litellm.integrations.langfuse.langfuse import (
     installed_langfuse_version,
     raise_if_unsupported_langfuse_version,
 )
-from litellm.integrations.langfuse.langfuse_media import MediaUpload
+from litellm.integrations.langfuse.langfuse_media import MediaUpload, extract_media
 from litellm.integrations.langfuse.langfuse_sdk import (
     DiscardingSpanExporter,
     LangfuseApiClient,
     LangfusePromptError,
     LangfuseSpanExporter,
     LangfuseTracing,
+    _build_media_uploader,
     _build_span_exporter,
     _encode,
     _MediaExtractingExporter,
@@ -1980,6 +1981,40 @@ def test_mock_mode_builds_no_media_uploader(monkeypatch: pytest.MonkeyPatch):
 
     assert tracing.flush() is True
     assert built == []
+
+
+def test_media_uploads_continue_after_litellm_closes_the_pooled_http_client(monkeypatch: pytest.MonkeyPatch):
+    """litellm closes a cached handler's client once its cache entry expires; the handler then opens another."""
+    requests: list[httpx.Request] = []
+
+    def langfuse(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if request.url.path == "/api/public/media":
+            return httpx.Response(
+                201, json={"mediaId": "LPJNul-wow4m6Dsqxbninh", "uploadUrl": "https://storage.example/hello"}
+            )
+        return httpx.Response(200, json={}, request=request)
+
+    class _Handler(HTTPHandler):
+        def create_client(self) -> httpx.Client:
+            return httpx.Client(transport=httpx.MockTransport(langfuse))
+
+    handler = _Handler()
+    monkeypatch.setattr("litellm.integrations.langfuse.langfuse_sdk.get_httpx_client", lambda: handler)
+    uploader = _build_media_uploader(
+        public_key="pk-media-evict-test", secret_key="sk", base_url="https://lf.internal.example", tenant_host=False
+    )
+    upload = MediaUpload(media=extract_media(IMAGE_URI)[1][0], trace_id="0" * 32, observation_id=None, field="input")
+
+    uploader.submit((upload,))
+    assert uploader.drain(5_000) is True
+    handler.close()
+    uploader.submit((upload,))
+    assert uploader.drain(5_000) is True
+    uploader.shutdown()
+
+    assert [request.method for request in requests] == ["POST", "PUT", "PATCH"] * 2
+    assert uploader.failed_uploads == 0
 
 
 def test_live_channel_uploads_the_image_and_exports_only_its_reference(monkeypatch: pytest.MonkeyPatch):

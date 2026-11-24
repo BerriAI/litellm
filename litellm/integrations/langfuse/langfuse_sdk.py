@@ -919,14 +919,19 @@ class _MediaExtractingExporter(SpanExporter):
 
 
 def _build_media_uploader(*, public_key: str, secret_key: str, base_url: str, tenant_host: bool) -> MediaUploader:
-    """Uploads go through litellm's HTTP client, as v2's did, with the export channel's timeout and retry delays.
+    """Uploads go through litellm's HTTP handler, as v2's did, with the export channel's timeout and retry delays.
+
+    The client is read from the handler for every upload: litellm closes a pooled client once its cache entry
+    expires, and the handler then opens another.
 
     A host the operator configured is trusted to name its own storage; one that came with a key's or team's
     credentials has its upload URLs validated like any other caller-supplied URL."""
     handler: Final = get_httpx_client()
     return MediaUploader(
-        api=_rest_api(public_key=public_key, secret_key=secret_key, base_url=base_url, httpx_client=handler.client),
-        client=handler.client,
+        api=lambda client: _rest_api(
+            public_key=public_key, secret_key=secret_key, base_url=base_url, httpx_client=client
+        ),
+        client=lambda: handler.client,
         validate_upload_url=tenant_host,
         timeout=configured_timeout(),
         delays=tuple(2.0 ** min(attempt, _MAX_BACKOFF_EXPONENT) for attempt in range(configured_max_retries())),

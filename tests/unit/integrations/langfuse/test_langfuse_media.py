@@ -152,6 +152,10 @@ def _upload(field: MediaField = "input", observation_id: str | None = OBSERVATIO
     )
 
 
+def _api(client: httpx.Client) -> LangfuseAPI:
+    return LangfuseAPI(base_url="https://langfuse.example", username="pk", password="sk", httpx_client=client)
+
+
 def _uploader(
     transport: Transport,
     *,
@@ -161,8 +165,8 @@ def _uploader(
 ) -> MediaUploader:
     client: Final = httpx.Client(transport=httpx.MockTransport(transport))
     return MediaUploader(
-        api=LangfuseAPI(base_url="https://langfuse.example", username="pk", password="sk", httpx_client=client),
-        client=client,
+        api=_api,
+        client=lambda: client,
         timeout=5.0,
         delays=delays,
         max_queued_bytes=max_queued_bytes,
@@ -430,6 +434,23 @@ def test_a_failed_registration_is_logged_without_its_headers_and_the_next_upload
     assert "HTTP 400 from the media API" in caplog.text
     assert "do-not-log" not in caplog.text
     assert uploader.failed_uploads == 1
+
+
+def test_an_upload_after_the_http_client_was_closed_goes_through_the_client_that_replaced_it():
+    requests: list[httpx.Request] = []
+    clients: Final = tuple(httpx.Client(transport=httpx.MockTransport(_langfuse(requests))) for _ in range(2))
+    uploader = MediaUploader(
+        api=_api, client=lambda: next(client for client in clients if not client.is_closed), timeout=5.0, delays=()
+    )
+
+    uploader.submit((_upload(),))
+    assert uploader.drain(5_000) is True
+    clients[0].close()
+    uploader.submit((_upload(),))
+    assert uploader.drain(5_000) is True
+
+    assert [request.method for request in requests] == ["POST", "PUT", "PATCH"] * 2
+    assert uploader.failed_uploads == 0
 
 
 def _blocked_uploader(release: threading.Event, started: threading.Event, **limits: int) -> MediaUploader:

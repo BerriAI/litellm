@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import threading
 from base64 import b64decode, b64encode
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from hashlib import sha256
@@ -156,20 +156,25 @@ def _storage_headers(upload_url: str, host: str, media: Media) -> Mapping[str, s
 
 
 class MediaUploader:
-    """Uploads queued media to Langfuse on one daemon thread, so storage latency never holds up span export."""
+    """Uploads queued media to Langfuse on one daemon thread, so storage latency never holds up span export.
+
+    ``client`` is asked for the HTTP client before every upload and ``api`` builds the REST client bound to it,
+    because the owner of a pooled client closes it and opens another over the life of a process.
+    """
 
     def __init__(
         self,
         *,
-        api: LangfuseAPI,
-        client: httpx.Client,
+        api: Callable[[httpx.Client], LangfuseAPI],
+        client: Callable[[], httpx.Client],
         timeout: float,
         delays: Sequence[float],
         validate_upload_url: bool = False,
         max_queued_bytes: int = _MAX_QUEUED_BYTES,
     ) -> None:
-        self._api: Final = api
-        self._client: Final = client
+        self._api_for: Final = api
+        self._current_client: Final = client
+        self._bound: tuple[httpx.Client, LangfuseAPI] | None = None
         self._timeout: Final = timeout
         self._delays: Final = tuple(delays)
         self._validate_upload_url: Final = validate_upload_url
@@ -243,7 +248,8 @@ class MediaUploader:
         storage status but never the storage response body.
         """
         media: Final = upload.media
-        registered: Final = self._registered(upload)
+        client, api = self._connection()
+        registered: Final = self._registered(api, upload)
         upload_url: Final = registered.upload_url or ""
         try:
             url, host = validate_url(upload_url) if self._validate_upload_url and upload_url else (upload_url, "")
@@ -252,10 +258,10 @@ class MediaUploader:
         if not url:
             return None
         started: Final = monotonic()
-        response: Final = self._put(url, _storage_headers(upload_url, host, media), media)
+        response: Final = self._put(client, url, _storage_headers(upload_url, host, media), media)
         if response is None:
             return "the media storage was not reached"
-        self._api.media.patch(
+        api.media.patch(
             registered.media_id,
             uploaded_at=datetime.now(timezone.utc),
             upload_http_status=response.status_code,
@@ -264,18 +270,25 @@ class MediaUploader:
         )
         return None if response.is_success else f"the media storage refused it with HTTP {response.status_code}"
 
-    def _registered(self, upload: MediaUpload) -> GetMediaUploadUrlResponse:
+    def _connection(self) -> tuple[httpx.Client, LangfuseAPI]:
+        """The HTTP client as its owner hands it out now, with the REST client bound to it."""
+        client: Final = self._current_client()
+        if self._bound is None or self._bound[0] is not client:
+            self._bound = (client, self._api_for(client))
+        return self._bound
+
+    def _registered(self, api: LangfuseAPI, upload: MediaUpload) -> GetMediaUploadUrlResponse:
         """Re-sent after each delay while Langfuse is not reached, which is how long its span export keeps trying."""
         for delay in self._delays:
             try:
-                return self._registered_once(upload)
+                return self._registered_once(api, upload)
             except httpx.TransportError as error:
                 verbose_logger.warning("Langfuse media %s registration raised %s", upload.media.media_id, error)
                 sleep(delay)
-        return self._registered_once(upload)
+        return self._registered_once(api, upload)
 
-    def _registered_once(self, upload: MediaUpload) -> GetMediaUploadUrlResponse:
-        return self._api.media.get_upload_url(
+    def _registered_once(self, api: LangfuseAPI, upload: MediaUpload) -> GetMediaUploadUrlResponse:
+        return api.media.get_upload_url(
             content_type=upload.media.content_type,
             content_length=len(upload.media.content),
             sha256hash=upload.media.sha256_hash,
@@ -284,21 +297,23 @@ class MediaUploader:
             observation_id=upload.observation_id,
         )
 
-    def _put(self, url: str, headers: Mapping[str, str], media: Media) -> httpx.Response | None:
+    def _put(self, client: httpx.Client, url: str, headers: Mapping[str, str], media: Media) -> httpx.Response | None:
         """The storage response, re-sent after each delay on a transport failure or a retryable status; ``None``
         when the storage was never reached."""
         for delay in self._delays:
-            response: httpx.Response | None = self._put_once(url, headers, media)
+            response: httpx.Response | None = self._put_once(client, url, headers, media)
             if response is not None and not _retryable_status(response.status_code):
                 return response
             sleep(delay)
-        return self._put_once(url, headers, media)
+        return self._put_once(client, url, headers, media)
 
-    def _put_once(self, url: str, headers: Mapping[str, str], media: Media) -> httpx.Response | None:
+    def _put_once(
+        self, client: httpx.Client, url: str, headers: Mapping[str, str], media: Media
+    ) -> httpx.Response | None:
         """The response is closed with its body unread: only its status is used, and a storage URL may answer with
         a body of any size."""
         try:
-            with self._client.stream(
+            with client.stream(
                 "PUT",
                 url,
                 content=media.content,
