@@ -255,6 +255,12 @@ def _mapping_field(container: Mapping[str, object], key: str) -> Mapping[str, ob
     return _json_object(container.get(key))
 
 
+def _realtime_item_id(event: Mapping[str, object]) -> str | None:
+    item: Final = as_str_mapping(event.get("item"))
+    item_id: Final = event.get("item_id") if item is None else item.get("id")
+    return item_id if isinstance(item_id, str) and item_id else None
+
+
 _BETA_AUDIO_FORMAT_BY_GA_TYPE: Final[Mapping[str, str]] = MappingProxyType(
     {"audio/pcm": "pcm16", "audio/pcmu": "g711_ulaw", "audio/pcma": "g711_alaw"}
 )
@@ -579,6 +585,7 @@ class RealTimeStreaming:
         )
         self._ended_over_token_limit: bool = False
         self._refused_response_ids: frozenset[str] = frozenset()
+        self._refused_item_ids: frozenset[str] = frozenset()
         self._over_limit_usage_wait: asyncio.Task[None] | None = None
         # Violation counter for end_session_after_n_fails support
         self._violation_count: int = 0
@@ -1570,7 +1577,7 @@ class RealTimeStreaming:
         if self._should_drop_event_from_client(event):
             return False
         if isinstance(event, dict):
-            event = self._normalize_event_for_ga_client(event)
+            event = self._without_refused_turn_output(self._normalize_event_for_ga_client(event))
             event_str = json.dumps(event)
         if self._client_wants_beta and isinstance(event, dict):
             try:
@@ -1690,9 +1697,9 @@ class RealTimeStreaming:
     async def _session_ended_by_turn_limits(self, event: Mapping[str, object]) -> bool:
         if self._turn_limits is None:
             return False
-        response_id: Final = realtime_response_id(event)
-        if event.get("type") != "response.done" and response_id in self._refused_response_ids:
+        if self._is_refused_turn_output(event):
             return True
+        response_id: Final = realtime_response_id(event)
         if self._listens_only or event.get("type") != "response.created":
             return False
         refusal: Final = await self._turn_limits.refusal()
@@ -1705,6 +1712,27 @@ class RealTimeStreaming:
             return False
         await self._end_session_after_refused_response(refusal, client_was_told=self._turn_limits.turn_refused)
         return True
+
+    def _is_refused_turn_output(self, event: Mapping[str, object]) -> bool:
+        event_type: Final = event.get("type")
+        if event_type == "response.done":
+            return False
+        item_id: Final = _realtime_item_id(event)
+        if realtime_response_id(event) in self._refused_response_ids:
+            if item_id is not None:
+                self._refused_item_ids = self._refused_item_ids | {item_id}
+            return True
+        if not isinstance(event_type, str) or not event_type.startswith("conversation.item."):
+            return False
+        return item_id in self._refused_item_ids
+
+    def _without_refused_turn_output(self, event: Mapping[str, object]) -> Mapping[str, object]:
+        response: Final = as_str_mapping(event.get("response"))
+        if response is None or event.get("type") != "response.done":
+            return event
+        if response.get("id") not in self._refused_response_ids:
+            return event
+        return {**event, "response": {**response, "output": ()}}
 
     async def _charge_finished_turn(self, event: object) -> None:
         finished: Final = as_str_mapping(event)
@@ -2144,13 +2172,15 @@ class RealTimeStreaming:
                 await self._charge_finished_turn(event)
 
                 if not self._client_wants_beta:
-                    await self.websocket.send_text(json.dumps(event))
+                    await self.websocket.send_text(json.dumps(self._without_refused_turn_output(event)))
                     continue
 
                 translated = self._translate_event_to_beta(event)
                 if translated is None:
                     continue
-                await self.websocket.send_text(json.dumps(self._session_event_for_client(translated)))
+                await self.websocket.send_text(
+                    json.dumps(self._session_event_for_client(self._without_refused_turn_output(translated)))
+                )
 
     async def backend_to_client_send_messages(self) -> BackendClose:
         import websockets

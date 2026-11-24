@@ -6822,9 +6822,10 @@ def _scripted_session(
     user_api_key_dict: UserAPIKeyAuth | None = None,
     logging_obj: object | None = None,
     model: str = _TURN_LIMITED_MODEL,
-    provider_config: MagicMock | None = None,
+    provider_config: BaseRealtimeConfig | MagicMock | None = None,
+    beta_client: bool = False,
 ) -> tuple[RealTimeStreaming, MagicMock, MagicMock]:
-    client_ws: Final = _ga_client_ws()
+    client_ws: Final = _beta_client_ws() if beta_client else _ga_client_ws()
     client_ws.receive_text = AsyncMock(side_effect=[*client_frames, Exception("connection closed")])
     client_ws.close = AsyncMock()
     backend_ws: Final = MagicMock(send=AsyncMock(), close=AsyncMock())
@@ -7252,23 +7253,52 @@ def _response_text_delta(response_id: str) -> str:
     )
 
 
+def _answer_item(item_id: str) -> Mapping[str, object]:
+    return {"id": item_id, "type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "x"}]}
+
+
+def _response_done_with_answer(total_tokens: int, response_id: str, item_id: str) -> str:
+    usage: Final = {"input_tokens": total_tokens - 10, "output_tokens": 10, "total_tokens": total_tokens}
+    response: Final = {"id": response_id, "status": "completed", "usage": usage, "output": [_answer_item(item_id)]}
+    return json.dumps({"type": "response.done", "response": response})
+
+
 @pytest.mark.asyncio
-async def test_a_refused_turn_the_provider_started_sends_none_of_its_output_but_still_counts_its_tokens() -> None:
+@pytest.mark.parametrize(
+    ("through_provider_config", "beta_client", "later_output"),
+    [
+        (False, False, ["conversation.item.added", "response.output_text.delta"]),
+        (True, False, ["conversation.item.added", "response.output_text.delta"]),
+        (False, True, ["conversation.item.created", "response.text.delta"]),
+    ],
+    ids=["raw", "provider_config", "raw_beta_client"],
+)
+async def test_a_refused_turn_the_provider_started_sends_none_of_its_output_but_still_counts_its_tokens(
+    through_provider_config: bool, beta_client: bool, later_output: list[str]
+) -> None:
     limiter: Final = _over_limit_turn_limiter()
     streaming, client_ws, _backend_ws = _scripted_session(
         limiter,
+        provider_config=_PassthroughRealtimeConfig() if through_provider_config else None,
+        beta_client=beta_client,
         backend_frames=(
             _response_created("resp_vad"),
+            json.dumps({"type": "response.output_item.added", "response_id": "resp_vad", "item": _answer_item("it_a")}),
+            json.dumps({"type": "conversation.item.added", "item": _answer_item("it_a")}),
             _response_text_delta("resp_vad"),
-            _response_done(300, "resp_vad"),
+            json.dumps({"type": "conversation.item.done", "item": _answer_item("it_a")}),
+            _response_done_with_answer(300, "resp_vad", "it_a"),
+            json.dumps({"type": "conversation.item.added", "item": _answer_item("it_b")}),
             _response_text_delta("resp_next"),
         ),
     )
 
     await streaming.backend_to_client_send_messages()
 
-    sent: Final = [json.loads(call.args[0])["type"] for call in client_ws.send_text.await_args_list]
-    assert sent == ["error", "response.created", "response.done", "response.output_text.delta"]
+    sent: Final = [json.loads(call.args[0]) for call in client_ws.send_text.await_args_list]
+    assert [event["type"] for event in sent] == ["error", "response.created", "response.done", *later_output]
+    assert sent[2]["response"]["output"] == []
+    assert sent[2]["response"]["usage"]["total_tokens"] == 300
     assert [charge[1] for charge in limiter.charges] == [300]
 
 
