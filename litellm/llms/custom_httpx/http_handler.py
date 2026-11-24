@@ -84,6 +84,7 @@ _RequestContent: TypeAlias = str | bytes | Iterable[bytes] | AsyncIterable[bytes
 _IPV4_LOCAL_ADDRESS: Final = "0.0.0.0"
 
 _HttpxTransportT = TypeVar("_HttpxTransportT", httpx.BaseTransport, httpx.AsyncBaseTransport)
+_MaskableT = TypeVar("_MaskableT")
 
 HTTPEventHooks: TypeAlias = Mapping[str, list[Callable[..., object]]]
 
@@ -553,7 +554,7 @@ def realtime_ssl_for_url(url: str) -> bool | str | ssl.SSLContext | None:
     return unverified
 
 
-def mask_sensitive_info(error_message):
+def mask_sensitive_info(error_message: _MaskableT) -> _MaskableT | str:
     # Find the start of the key parameter
     if isinstance(error_message, str):
         key_index: Final = error_message.find("key=")
@@ -1009,7 +1010,7 @@ class AsyncHTTPHandler:
     async def post(
         self,
         url: str,
-        data: dict | str | bytes | None = None,
+        data: Mapping[str, object] | str | bytes | None = None,
         json: dict | None = None,
         params: dict | None = None,
         headers: dict | None = None,
@@ -1070,7 +1071,7 @@ class AsyncHTTPHandler:
     async def put(
         self,
         url: str,
-        data: dict | str | bytes | None = None,
+        data: Mapping[str, object] | str | bytes | None = None,
         json: dict | None = None,
         params: dict | None = None,
         headers: dict | None = None,
@@ -1134,7 +1135,7 @@ class AsyncHTTPHandler:
     async def patch(
         self,
         url: str,
-        data: dict | str | bytes | None = None,
+        data: Mapping[str, object] | str | bytes | None = None,
         json: dict | None = None,
         params: dict | None = None,
         headers: dict | None = None,
@@ -1190,7 +1191,7 @@ class AsyncHTTPHandler:
     async def delete(
         self,
         url: str,
-        data: dict | str | bytes | None = None,
+        data: Mapping[str, object] | str | bytes | None = None,
         json: dict | None = None,
         params: dict | None = None,
         headers: dict | None = None,
@@ -1247,7 +1248,7 @@ class AsyncHTTPHandler:
         url: str,
         method: str,
         client: httpx.AsyncClient,
-        data: dict | str | bytes | None = None,
+        data: Mapping[str, object] | str | bytes | None = None,
         json: dict | None = None,
         params: dict | None = None,
         headers: dict | None = None,
@@ -1824,7 +1825,7 @@ class HTTPHandler:
     def post(
         self,
         url: str,
-        data: dict | str | bytes | None = None,
+        data: Mapping[str, object] | str | bytes | None = None,
         json: dict | str | list | None = None,
         params: dict | None = None,
         headers: dict | None = None,
@@ -1877,7 +1878,7 @@ class HTTPHandler:
     def patch(
         self,
         url: str,
-        data: dict | str | bytes | None = None,
+        data: Mapping[str, object] | str | bytes | None = None,
         json: dict | str | None = None,
         params: dict | None = None,
         headers: dict | None = None,
@@ -1926,7 +1927,7 @@ class HTTPHandler:
     def put(
         self,
         url: str,
-        data: dict | str | bytes | None = None,
+        data: Mapping[str, object] | str | bytes | None = None,
         json: dict | str | None = None,
         params: dict | None = None,
         headers: dict | None = None,
@@ -1974,7 +1975,7 @@ class HTTPHandler:
     def delete(
         self,
         url: str,
-        data: dict | str | bytes | None = None,
+        data: Mapping[str, object] | str | bytes | None = None,
         json: dict | None = None,
         params: dict | None = None,
         headers: dict | None = None,

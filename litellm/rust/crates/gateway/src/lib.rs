@@ -3,10 +3,12 @@ mod boot;
 mod callbacks;
 mod db;
 mod error;
+mod gateway_requests;
 mod health;
 pub mod host;
 mod license;
 pub mod middleware;
+mod periodic;
 mod redis;
 mod resources;
 mod state;
@@ -19,6 +21,8 @@ pub use callbacks::{
     parallel_request_limiter::{self, KeyLimiter},
 };
 pub use error::Error;
+pub use gateway_requests::{Category, GatewayRequests};
+pub use periodic::PeriodicJob;
 pub use redis::RedisClients;
 pub use resources::Resources;
 pub use state::AppState;

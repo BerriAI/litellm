@@ -61,6 +61,7 @@ from litellm.proxy._types import UserAPIKeyAuth as ProxyUserAPIKeyAuth
 from litellm.proxy.auth.fallback_budget import RouterFallbackBudgetCheck
 from litellm.proxy.common_request_processing import (
     OPENAI_FIRST_CHUNK_FRAMING,
+    ANTHROPIC_LATE_SSE_FRAMING,
     RESPONSES_FIRST_CHUNK_FRAMING,
     RESPONSES_LATE_SSE_FRAMING,
     CostBreakdownHeaderValues,
@@ -3413,6 +3414,23 @@ class TestCommonRequestProcessingHelpers:
 
         plain: Final = proxy_exception_from_route_error(ValueError("boom"))
         assert (plain.code, plain.type, plain.message) == ("500", "internal_server_error", "boom")
+
+    async def test_proxy_exception_from_route_error_redacts_carried_provider_fields(self) -> None:
+        from litellm.proxy.common_request_processing import (
+            proxy_exception_from_route_error,
+        )
+
+        failure: Final = litellm.NotFoundError(message="no such assistant", model="gpt-5.4-mini", llm_provider="openai")
+        failure.provider_specific_fields = {
+            "request_id": "req_123",
+            "debug": {"token_value": "opaque-upstream-credential"},
+        }
+
+        shaped: Final = proxy_exception_from_route_error(failure)
+
+        assert shaped.provider_specific_fields is not None
+        assert shaped.provider_specific_fields["request_id"] == "req_123"
+        assert "opaque-upstream-credential" not in json.dumps(shaped.provider_specific_fields)
 
     async def test_proxy_exception_from_route_error_redacts_internal_details(self) -> None:
         from litellm.proxy.common_request_processing import (
@@ -15706,6 +15724,36 @@ class TestAnthropicMessagesStreamErrorFrame:
         assert payload["error"]["type"] == expected_error_type
         assert "upstream stopped sending" in payload["error"]["message"]
 
+    async def test_mid_stream_failure_relays_redacted_provider_fields(self) -> None:
+        failure: Final = litellm.BadRequestError(
+            message="rejected",
+            model="claude-sonnet-4-5",
+            llm_provider="hosted_vllm",
+            body={"message": "rejected", "request_id": "req-kept", "api_key": "opaque-upstream-credential"},
+        )
+
+        frames: Final = [frame async for frame in self._sse_generator_failing_with(failure)]
+
+        assert len(frames) == 1
+        payload: Final = json.loads(frames[0].split("data: ", 1)[1])
+        assert payload["error"]["provider_specific_fields"]["request_id"] == "req-kept"
+        assert "opaque-upstream-credential" not in frames[0]
+
+    def test_late_failure_relays_redacted_provider_fields(self) -> None:
+        failure: Final = litellm.BadRequestError(
+            message="rejected",
+            model="claude-sonnet-4-5",
+            llm_provider="hosted_vllm",
+            body={"message": "rejected", "request_id": "req-kept", "api_key": "opaque-upstream-credential"},
+        )
+
+        frames: Final = ANTHROPIC_LATE_SSE_FRAMING.failure(failure)
+
+        assert len(frames) == 1
+        payload: Final = json.loads(frames[0].split("data: ", 1)[1])
+        assert payload["error"]["provider_specific_fields"]["request_id"] == "req-kept"
+        assert "opaque-upstream-credential" not in frames[0]
+
     _CONTENT_DELTA_FRAME: Final = (
         b"event: content_block_delta\n"
         b'data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"1\\n2\\n3"}}\n\n'
@@ -16359,6 +16407,548 @@ async def test_a_chained_proxy_redacts_secrets_and_internal_details_from_relayed
     assert {key: answered[key] for key in _DOWNSTREAM_GUARDRAIL_FIELDS} == dict(_DOWNSTREAM_GUARDRAIL_FIELDS)
     assert answered["scanner"]["attempts"] == 2
     assert [value for value in _DOWNSTREAM_LEAKABLE_VALUES if value in json.dumps(answered)] == []
+
+
+_VLLM_BACKEND: Final = MappingProxyType(
+    {"api_base": "https://vllm-backend.example.com/v1", "api_key": "sk-vllm-key"}
+)
+
+_VLLM_ROUTES: Final = (
+    (
+        "chat/completions",
+        lambda: litellm.completion(
+            model="hosted_vllm/Qwen/Qwen2.5-7B-Instruct",
+            messages=[{"role": "user", "content": "hi"}],
+            **_VLLM_BACKEND,
+        ),
+    ),
+    (
+        "completions",
+        lambda: litellm.text_completion(
+            model="hosted_vllm/Qwen/Qwen2.5-7B-Instruct",
+            prompt="hi",
+            **_VLLM_BACKEND,
+        ),
+    ),
+    (
+        "responses",
+        lambda: litellm.responses(
+            model="hosted_vllm/Qwen/Qwen2.5-7B-Instruct",
+            input="hi",
+            **_VLLM_BACKEND,
+        ),
+    ),
+)
+
+
+@pytest.mark.usefixtures("httpx_transport")
+@pytest.mark.parametrize(("route", "call"), _VLLM_ROUTES)
+async def test_openai_compatible_backend_400_relays_param_and_unwrapped_message_with_an_openai_type(
+    route: str, call: Callable[[], object]
+) -> None:
+    body: Final = {
+        "error": {
+            "object": "error",
+            "message": "max_tokens must be at least 1, got -5.",
+            "type": "BadRequestError",
+            "param": "max_tokens",
+            "code": 400,
+        }
+    }
+    with respx.mock(assert_all_called=True) as mock:
+        _ = mock.post(f"https://vllm-backend.example.com/v1/{route}").mock(
+            return_value=httpx.Response(400, json=body)
+        )
+        with pytest.raises(litellm.BadRequestError) as caught:
+            _ = call()
+    with pytest.raises(ProxyException) as relayed:
+        await ProxyBaseLLMRequestProcessing(data={"model": "qwen"})._handle_llm_api_exception(
+            e=caught.value,
+            user_api_key_dict=ProxyUserAPIKeyAuth(api_key="sk-front"),
+            proxy_logging_obj=ProxyLogging(user_api_key_cache=DualCache()),
+        )
+    payload: Final = relayed.value.to_dict()
+    assert (payload["param"], payload["type"], payload["code"]) == ("max_tokens", "invalid_request_error", "400")
+    assert "provider_specific_fields" not in payload
+    assert str(payload["message"]).endswith("max_tokens must be at least 1, got -5.")
+    assert '{"error"' not in str(payload["message"])
+    assert "{'error'" not in str(payload["message"])
+
+
+@pytest.mark.usefixtures("httpx_transport")
+async def test_azure_responses_400_relays_param_and_unwrapped_message() -> None:
+    body: Final = {
+        "error": {
+            "message": "Invalid 'max_output_tokens': integer below minimum value.",
+            "type": "invalid_request_error",
+            "param": "max_output_tokens",
+            "code": "integer_below_min_value",
+        }
+    }
+    with respx.mock(assert_all_called=True) as mock:
+        _ = mock.post(url__startswith="https://azure-backend.example.com/openai/").mock(
+            return_value=httpx.Response(400, json=body)
+        )
+        with pytest.raises(litellm.BadRequestError) as caught:
+            _ = litellm.responses(
+                model="azure/gpt-deployment",
+                input="hi",
+                api_base="https://azure-backend.example.com",
+                api_key="azure-key",
+                api_version="2025-04-01-preview",
+            )
+    with pytest.raises(ProxyException) as relayed:
+        await ProxyBaseLLMRequestProcessing(data={"model": "azure-gpt"})._handle_llm_api_exception(
+            e=caught.value,
+            user_api_key_dict=ProxyUserAPIKeyAuth(api_key="sk-front"),
+            proxy_logging_obj=ProxyLogging(user_api_key_cache=DualCache()),
+        )
+    payload: Final = relayed.value.to_dict()
+    assert (payload["param"], payload["type"], payload["code"]) == (
+        "max_output_tokens",
+        "invalid_request_error",
+        "400",
+    )
+    assert payload["provider_specific_fields"] == {"code": "integer_below_min_value"}
+    assert str(payload["message"]).endswith("Invalid 'max_output_tokens': integer below minimum value.")
+
+
+@pytest.mark.usefixtures("httpx_transport")
+async def test_azure_chat_content_filter_400_relays_the_param_and_the_provider_code_next_to_azures_fields() -> None:
+    inner_error: Final = {"code": "ResponsibleAIPolicyViolation", "content_filter_result": {"jailbreak": {"filtered": True}}}
+    body: Final = {
+        "error": {
+            "message": "The response was filtered due to the prompt triggering Azure OpenAI's content management policy.",
+            "type": None,
+            "param": "prompt",
+            "code": "content_filter",
+            "status": 400,
+            "innererror": inner_error,
+        }
+    }
+    with respx.mock(assert_all_called=True) as mock:
+        _ = mock.post(url__startswith="https://azure-backend.example.com/openai/").mock(
+            return_value=httpx.Response(400, json=body)
+        )
+        with pytest.raises(litellm.BadRequestError) as caught:
+            _ = litellm.completion(
+                model="azure/gpt-deployment",
+                messages=[{"role": "user", "content": "hi"}],
+                api_base="https://azure-backend.example.com",
+                api_key="azure-key",
+                api_version="2025-04-01-preview",
+            )
+    with pytest.raises(ProxyException) as relayed:
+        await ProxyBaseLLMRequestProcessing(data={"model": "azure-gpt"})._handle_llm_api_exception(
+            e=caught.value,
+            user_api_key_dict=ProxyUserAPIKeyAuth(api_key="sk-front"),
+            proxy_logging_obj=ProxyLogging(user_api_key_cache=DualCache()),
+        )
+    payload: Final = relayed.value.to_dict()
+    fields: Final = json.loads(json.dumps(payload["provider_specific_fields"]))
+    assert payload["param"] == "prompt"
+    assert (fields["code"], fields["innererror"]) == ("content_filter", inner_error)
+
+
+@pytest.mark.usefixtures("httpx_transport")
+async def test_azure_chat_429_relays_the_provider_code() -> None:
+    body: Final = {"error": {"code": "RateLimitReached", "message": "Your requests have exceeded the rate limit."}}
+    with respx.mock(assert_all_called=True) as mock:
+        _ = mock.post(url__startswith="https://azure-backend.example.com/openai/").mock(
+            return_value=httpx.Response(429, json=body)
+        )
+        with pytest.raises(litellm.RateLimitError) as caught:
+            _ = litellm.completion(
+                model="azure/gpt-deployment",
+                messages=[{"role": "user", "content": "hi"}],
+                api_base="https://azure-backend.example.com",
+                api_key="azure-key",
+                api_version="2025-04-01-preview",
+                max_retries=0,
+            )
+    with pytest.raises(ProxyException) as relayed:
+        await ProxyBaseLLMRequestProcessing(data={"model": "azure-gpt"})._handle_llm_api_exception(
+            e=caught.value,
+            user_api_key_dict=ProxyUserAPIKeyAuth(api_key="sk-front"),
+            proxy_logging_obj=ProxyLogging(user_api_key_cache=DualCache()),
+        )
+    assert relayed.value.to_dict()["provider_specific_fields"] == {"code": "RateLimitReached"}
+
+
+_OPENROUTER_BACKEND: Final = MappingProxyType(
+    {"api_base": "https://openrouter-backend.example.com/api/v1", "api_key": "sk-or-key"}
+)
+
+
+_OPENROUTER_ROUTES: Final = (
+    (
+        "chat/completions",
+        lambda: litellm.completion(
+            model="openrouter/openai/gpt-6.2-sol",
+            messages=[{"role": "user", "content": "hi"}],
+            max_tokens=-5,
+            **_OPENROUTER_BACKEND,
+        ),
+    ),
+    (
+        "responses",
+        lambda: litellm.responses(
+            model="openrouter/openai/gpt-6.2-sol", input="hi", max_output_tokens=-5, **_OPENROUTER_BACKEND
+        ),
+    ),
+)
+
+
+async def _relayed_openrouter_400(route: str, call: Callable[[], object], body: Mapping[str, object]) -> ProxyException:
+    with respx.mock(assert_all_called=True) as mock:
+        _ = mock.post(f"https://openrouter-backend.example.com/api/v1/{route}").mock(
+            return_value=httpx.Response(400, json=body)
+        )
+        with pytest.raises(litellm.BadRequestError) as caught:
+            _ = call()
+    with pytest.raises(ProxyException) as relayed:
+        await ProxyBaseLLMRequestProcessing(data={"model": "openrouter-gpt"})._handle_llm_api_exception(
+            e=caught.value,
+            user_api_key_dict=ProxyUserAPIKeyAuth(api_key="sk-front"),
+            proxy_logging_obj=ProxyLogging(user_api_key_cache=DualCache()),
+        )
+    return relayed.value
+
+
+@pytest.mark.usefixtures("httpx_transport")
+@pytest.mark.parametrize(("route", "call"), _OPENROUTER_ROUTES)
+async def test_openrouter_400_relays_the_unwrapped_message_and_the_error_metadata(
+    route: str, call: Callable[[], object]
+) -> None:
+    body: Final = {
+        "error": {"message": "Expected max_tokens to be at least 1", "code": 400, "metadata": {"provider_name": None}}
+    }
+    relayed: Final = await _relayed_openrouter_400(route, call, body)
+    assert relayed.message.endswith(" - Expected max_tokens to be at least 1")
+    assert relayed.to_dict()["provider_specific_fields"] == {"metadata": {"provider_name": None}}
+
+
+_OPENROUTER_UPSTREAM_REASON: Final = "Invalid schema for response_format 'answer': Missing 'city'."
+_OPENROUTER_UPSTREAM_BODY: Final = json.dumps(
+    {"error": {"message": _OPENROUTER_UPSTREAM_REASON, "type": "invalid_request_error"}}, indent=2
+)
+
+
+@pytest.mark.usefixtures("httpx_transport")
+@pytest.mark.parametrize(("route", "call"), _OPENROUTER_ROUTES)
+@pytest.mark.parametrize(
+    ("openrouter_message", "raw"),
+    [
+        pytest.param("Provider returned error", _OPENROUTER_UPSTREAM_BODY, id="generic-message-json-raw"),
+        pytest.param(_OPENROUTER_UPSTREAM_REASON, _OPENROUTER_UPSTREAM_BODY, id="upstream-message-json-raw"),
+        pytest.param("Provider returned error", _OPENROUTER_UPSTREAM_REASON, id="generic-message-text-raw"),
+    ],
+)
+async def test_openrouter_upstream_provider_400_states_the_upstream_reason_once(
+    route: str, call: Callable[[], object], openrouter_message: str, raw: str
+) -> None:
+    body: Final = {
+        "error": {"message": openrouter_message, "code": 400, "metadata": {"raw": raw, "provider_name": "OpenAI"}}
+    }
+    relayed: Final = await _relayed_openrouter_400(route, call, body)
+    assert relayed.message.endswith(f" - {_OPENROUTER_UPSTREAM_REASON}")
+    assert relayed.message.count(_OPENROUTER_UPSTREAM_REASON) == 1
+
+
+@pytest.mark.usefixtures("httpx_transport")
+@pytest.mark.parametrize(("route", "call"), _VLLM_ROUTES)
+async def test_openai_compatible_backend_400_redacts_secrets_and_internal_details_from_param_and_type(
+    route: str, call: Callable[[], object]
+) -> None:
+    leaks: Final = (
+        "sk-9876543210abcdef9876543210",
+        "guard-scan.internal.corp",
+        "/srv/secret/app/guard.py",
+    )
+    body: Final = {
+        "error": {
+            "message": f"invalid value for {' '.join(leaks)}",
+            "type": f"BadRequestError {' '.join(leaks)}",
+            "param": f"token_field {' '.join(leaks)}",
+            "code": 400,
+        }
+    }
+    with respx.mock(assert_all_called=True) as mock:
+        _ = mock.post(f"https://vllm-backend.example.com/v1/{route}").mock(
+            return_value=httpx.Response(400, json=body)
+        )
+        with pytest.raises(litellm.BadRequestError) as caught:
+            _ = call()
+    with pytest.raises(ProxyException) as relayed:
+        await ProxyBaseLLMRequestProcessing(data={"model": "qwen"})._handle_llm_api_exception(
+            e=caught.value,
+            user_api_key_dict=ProxyUserAPIKeyAuth(api_key="sk-front"),
+            proxy_logging_obj=ProxyLogging(user_api_key_cache=DualCache()),
+        )
+    payload: Final = relayed.value.to_dict()
+    assert payload["type"] == "invalid_request_error"
+    assert str(payload["param"]).startswith("token_field ")
+    for secret_or_internal in leaks:
+        assert secret_or_internal not in str(payload["param"])
+        assert secret_or_internal not in str(payload["message"])
+
+
+_CONTENT_FILTERS: Final = (
+    {"blocked": True, "source_type": "prompt", "content_filter_results": {"jailbreak": {"detected": True}}},
+)
+
+
+@pytest.mark.usefixtures("httpx_transport")
+@pytest.mark.parametrize(("route", "call"), _VLLM_ROUTES)
+async def test_openai_compatible_backend_400_relays_the_error_fields_beyond_openais_four(
+    route: str, call: Callable[[], object]
+) -> None:
+    body: Final = {
+        "error": {
+            "message": "The response was filtered due to the prompt triggering the content management policy.",
+            "type": "invalid_request_error",
+            "param": "prompt",
+            "code": "content_filter",
+            "content_filters": list(_CONTENT_FILTERS),
+            "innererror": {"code": "ResponsibleAIPolicyViolation"},
+        }
+    }
+    with respx.mock(assert_all_called=True) as mock:
+        _ = mock.post(f"https://vllm-backend.example.com/v1/{route}").mock(
+            return_value=httpx.Response(400, json=body)
+        )
+        with pytest.raises(litellm.BadRequestError) as caught:
+            _ = call()
+    with pytest.raises(ProxyException) as relayed:
+        await ProxyBaseLLMRequestProcessing(data={"model": "qwen"})._handle_llm_api_exception(
+            e=caught.value,
+            user_api_key_dict=ProxyUserAPIKeyAuth(api_key="sk-front"),
+            proxy_logging_obj=ProxyLogging(user_api_key_cache=DualCache()),
+        )
+    assert json.loads(json.dumps(relayed.value.to_dict()["provider_specific_fields"])) == {
+        "code": "content_filter",
+        "content_filters": list(_CONTENT_FILTERS),
+        "innererror": {"code": "ResponsibleAIPolicyViolation"},
+    }
+
+
+def _chat_stream_error(frames: tuple[str, ...]) -> object:
+    return json.loads(frames[0].removeprefix("data: "))["error"]
+
+
+def _responses_stream_error(frames: tuple[str, ...]) -> object:
+    return json.loads(frames[0].split("data: ", 1)[1])["response"]["error"]
+
+
+@pytest.mark.usefixtures("httpx_transport")
+@pytest.mark.parametrize(
+    ("responses_stream_errors", "error_of"),
+    [
+        pytest.param(False, _chat_stream_error, id="chat"),
+        pytest.param(True, _responses_stream_error, id="responses"),
+    ],
+)
+async def test_openai_compatible_backend_error_raised_mid_stream_relays_the_error_fields_beyond_openais_four(
+    responses_stream_errors: bool, error_of: Callable[[tuple[str, ...]], object]
+) -> None:
+    from litellm.proxy.proxy_server import async_data_generator
+
+    body: Final = {
+        "error": {
+            "message": "The response was filtered due to the prompt triggering the content management policy.",
+            "type": "invalid_request_error",
+            "param": "prompt",
+            "code": "content_filter",
+            "content_filters": list(_CONTENT_FILTERS),
+        }
+    }
+    with respx.mock(assert_all_called=True) as mock:
+        _ = mock.post("https://vllm-backend.example.com/v1/chat/completions").mock(
+            return_value=httpx.Response(400, json=body)
+        )
+        with pytest.raises(litellm.BadRequestError) as caught:
+            _ = _VLLM_ROUTES[0][1]()
+
+    class FailingUpstream:
+        def __aiter__(self) -> "FailingUpstream":
+            return self
+
+        async def __anext__(self) -> object:
+            raise caught.value
+
+    stream: Final = async_data_generator(
+        FailingUpstream(),
+        ProxyUserAPIKeyAuth(api_key="sk-front"),
+        {"model": "qwen"},
+        responses_stream_errors=responses_stream_errors,
+    )
+    frames: Final = tuple([str(frame) async for frame in stream])
+
+    error: Final = error_of(frames)
+    assert isinstance(error, dict)
+    assert error["provider_specific_fields"] == {"code": "content_filter", "content_filters": list(_CONTENT_FILTERS)}
+
+
+_DICT_MESSAGE_ROUTES: Final = (
+    *(route for route in _VLLM_ROUTES if route[0] != "completions"),
+    (
+        "chat/completions",
+        lambda: litellm.completion(
+            model="mistral/mistral-small-latest",
+            messages=[{"role": "user", "content": "hi"}],
+            **_VLLM_BACKEND,
+        ),
+    ),
+)
+
+
+@pytest.mark.usefixtures("httpx_transport")
+@pytest.mark.parametrize(("route", "call"), _DICT_MESSAGE_ROUTES)
+async def test_openai_compatible_backend_error_with_a_structured_message_relays_its_body_as_json(
+    route: str, call: Callable[[], object]
+) -> None:
+    detail: Final = {"type": "greater_than_equal", "loc": ["body", "max_tokens"], "msg": "must be >= 0"}
+    body: Final = {
+        "object": "error",
+        "message": {"detail": [detail]},
+        "type": "invalid_request_message_error",
+        "param": None,
+        "code": None,
+    }
+    with respx.mock(assert_all_called=True) as mock:
+        _ = mock.post(f"https://vllm-backend.example.com/v1/{route}").mock(
+            return_value=httpx.Response(422, json=body)
+        )
+        with pytest.raises((litellm.BadRequestError, litellm.UnprocessableEntityError)) as caught:
+            _ = call()
+    with pytest.raises(ProxyException) as relayed:
+        await ProxyBaseLLMRequestProcessing(data={"model": "mistral-small"})._handle_llm_api_exception(
+            e=caught.value,
+            user_api_key_dict=ProxyUserAPIKeyAuth(api_key="sk-front"),
+            proxy_logging_obj=ProxyLogging(user_api_key_cache=DualCache()),
+        )
+    message: Final = str(relayed.value.to_dict()["message"])
+    relayed_body: Final = json.loads(message[message.index("{") : message.rindex("}") + 1])
+    assert relayed_body["message"] == {"detail": [detail]}
+
+
+_SDK_BACKEND: Final = MappingProxyType({"api_base": "https://sdk-backend.example.com/v1", "api_key": "sk-sdk-key"})
+
+
+_SDK_OBJECT_MESSAGE_CALLS: Final = (
+    pytest.param(
+        lambda: litellm.completion(
+            model="openai/gpt-6.2-sol", messages=[{"role": "user", "content": "hi"}], max_retries=0, **_SDK_BACKEND
+        ),
+        id="openai",
+    ),
+    pytest.param(
+        lambda: litellm.completion(
+            model="azure/gpt-deployment",
+            messages=[{"role": "user", "content": "hi"}],
+            api_version="2025-04-01-preview",
+            max_retries=0,
+            **_SDK_BACKEND,
+        ),
+        id="azure",
+    ),
+    pytest.param(
+        lambda: litellm.completion(
+            model="custom_openai/qwen", messages=[{"role": "user", "content": "hi"}], max_retries=0, **_SDK_BACKEND
+        ),
+        id="custom_openai",
+    ),
+    pytest.param(
+        lambda: litellm.completion(
+            model="deepinfra/qwen", messages=[{"role": "user", "content": "hi"}], max_retries=0, **_SDK_BACKEND
+        ),
+        id="deepinfra",
+    ),
+    pytest.param(
+        lambda: litellm.text_completion(
+            model="text-completion-openai/gpt-6.2-instruct", prompt="hi", max_retries=0, **_SDK_BACKEND
+        ),
+        id="text-completion-openai",
+    ),
+)
+
+
+@pytest.mark.usefixtures("httpx_transport")
+@pytest.mark.parametrize("call", _SDK_OBJECT_MESSAGE_CALLS)
+async def test_sdk_backend_error_with_a_structured_message_relays_its_body_as_json(call: Callable[[], object]) -> None:
+    structured_message: Final = {"detail": [{"loc": ["body", "max_tokens"], "msg": "must be >= 0"}]}
+    body: Final = {"object": "error", "message": structured_message, "type": "invalid_request_error"}
+    with respx.mock(assert_all_called=True) as mock:
+        _ = mock.post(url__startswith="https://sdk-backend.example.com/").mock(
+            return_value=httpx.Response(422, json=body)
+        )
+        with pytest.raises((litellm.BadRequestError, litellm.UnprocessableEntityError)) as caught:
+            _ = call()
+    with pytest.raises(ProxyException) as relayed:
+        await ProxyBaseLLMRequestProcessing(data={"model": "sdk-model"})._handle_llm_api_exception(
+            e=caught.value,
+            user_api_key_dict=ProxyUserAPIKeyAuth(api_key="sk-front"),
+            proxy_logging_obj=ProxyLogging(user_api_key_cache=DualCache()),
+        )
+    message: Final = str(relayed.value.to_dict()["message"])
+    assert "Error code: 422" not in message
+    assert json.loads(message[message.index("{") : message.rindex("}") + 1]) == body
+
+
+@pytest.mark.usefixtures("httpx_transport")
+@pytest.mark.parametrize(("route", "call"), _VLLM_ROUTES)
+async def test_openai_compatible_backend_400_redacts_internal_hosts_used_as_keys_in_its_extra_fields(
+    route: str, call: Callable[[], object]
+) -> None:
+    body: Final = {
+        "error": {
+            "message": "every scanner is down",
+            "type": "invalid_request_error",
+            "param": None,
+            "code": None,
+            "upstreams": {"10.0.4.17:8080": "down", "guard-scan.internal.corp": "down"},
+        }
+    }
+    with respx.mock(assert_all_called=True) as mock:
+        _ = mock.post(f"https://vllm-backend.example.com/v1/{route}").mock(
+            return_value=httpx.Response(400, json=body)
+        )
+        with pytest.raises(litellm.BadRequestError) as caught:
+            _ = call()
+    with pytest.raises(ProxyException) as relayed:
+        await ProxyBaseLLMRequestProcessing(data={"model": "qwen"})._handle_llm_api_exception(
+            e=caught.value,
+            user_api_key_dict=ProxyUserAPIKeyAuth(api_key="sk-front"),
+            proxy_logging_obj=ProxyLogging(user_api_key_cache=DualCache()),
+        )
+    answered: Final = json.dumps(relayed.value.to_dict()["provider_specific_fields"])
+    assert "upstreams" in answered
+    assert [leak for leak in ("10.0.4.17", "guard-scan.internal.corp") if leak in answered] == []
+
+
+@pytest.mark.usefixtures("httpx_transport")
+@pytest.mark.parametrize(("route", "call"), _VLLM_ROUTES)
+async def test_openai_compatible_backend_400_with_a_non_finite_number_in_its_extra_fields_still_answers_valid_json(
+    route: str, call: Callable[[], object]
+) -> None:
+    body: Final = (
+        b'{"error": {"message": "rejected", "type": "invalid_request_error", "param": "prompt", "code": null,'
+        b' "scores": {"toxicity": NaN, "bias": Infinity}}}'
+    )
+    with respx.mock(assert_all_called=True) as mock:
+        _ = mock.post(f"https://vllm-backend.example.com/v1/{route}").mock(
+            return_value=httpx.Response(400, content=body, headers={"content-type": "application/json"})
+        )
+        with pytest.raises(litellm.BadRequestError) as caught:
+            _ = call()
+    with pytest.raises(ProxyException) as relayed:
+        await ProxyBaseLLMRequestProcessing(data={"model": "qwen"})._handle_llm_api_exception(
+            e=caught.value,
+            user_api_key_dict=ProxyUserAPIKeyAuth(api_key="sk-front"),
+            proxy_logging_obj=ProxyLogging(user_api_key_cache=DualCache()),
+        )
+    answered: Final = json.loads(json.dumps(relayed.value.to_dict(), allow_nan=False))
+    assert (relayed.value.code, answered["param"]) == ("400", "prompt")
 
 
 _ScenarioT = TypeVar("_ScenarioT")

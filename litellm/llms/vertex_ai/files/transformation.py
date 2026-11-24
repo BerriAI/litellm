@@ -76,6 +76,7 @@ from litellm.llms.vertex_ai.gemini.transformation import transform_request_body
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
     VERTEX_SHARED_REQUEST_TIERS,
     VertexGeminiConfig,
+    malformed_without_output_message,
 )
 from litellm.llms.vertex_ai.gemini_embeddings.batch_embed_content_transformation import (
     embed_content_config_fields,
@@ -462,6 +463,25 @@ def _openai_batch_output_row(
             "body": body,
         },
         "error": None if error_code is None else {"code": error_code, "message": error_message},
+    }
+
+
+def _openai_batch_http_error_row(
+    custom_id: str, response: Mapping[str, object], error: _OpenAIBatchOutputError
+) -> _OpenAIBatchOutputRow:
+    """
+    A row for a request the provider ran and billed but that failed, in OpenAI's shape for an HTTP error:
+    `response.status_code` 500 with the error and the billed `usage` in `response.body`, and `error` null.
+    """
+    return {
+        "id": f"batch_req_{uuid.uuid4()}",
+        "custom_id": custom_id,
+        "response": {
+            "status_code": 500,
+            "request_id": response.get("id", ""),
+            "body": {"error": error, "model": response.get("model"), "usage": response.get("usage")},
+        },
+        "error": None,
     }
 
 
@@ -1356,14 +1376,14 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, object],
         model: str,
         messages: list[AllMessageValues],
         optional_params: Mapping[str, object],
         litellm_params: dict,
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         if not api_key:
             api_key, _ = self.get_access_token(
                 credentials=litellm_params.get("vertex_credentials"),
@@ -1506,10 +1526,10 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
     def map_openai_params(
         self,
         non_default_params: Mapping[str, object],
-        optional_params: dict,
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:
         return optional_params
 
     def _map_openai_to_vertex_params(
@@ -1649,7 +1669,9 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
             object="file",
         )
 
-    def get_error_class(self, error_message: str, status_code: int, headers: dict | Headers) -> BaseLLMException:
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: dict[str, object] | Headers
+    ) -> BaseLLMException:
         return VertexAIError(status_code=status_code, message=error_message, headers=headers)
 
     def _parse_gcs_uri(self, file_id: str, litellm_params: Mapping[str, object] | None = None) -> tuple[str, str]:
@@ -1728,7 +1750,7 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
         purpose: str | None,
         optional_params: Mapping[str, object],
         litellm_params: Mapping[str, object],
-    ) -> tuple[str, dict]:
+    ) -> tuple[str, dict[str, object]]:
         raise NotImplementedError("VertexAIFilesConfig does not support file listing")
 
     def transform_list_files_response(
@@ -2016,10 +2038,14 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
                 raw_response=mock_httpx_response,
             )
 
-            # Convert ModelResponse to dict
+            malformed: Final = malformed_without_output_message(transformed_response)
             response_dict: Final = transformed_response.model_dump()
-
-            # Return in OpenAI batch format
+            if malformed is not None:
+                return _openai_batch_http_error_row(
+                    custom_id=custom_id,
+                    response=response_dict,
+                    error={"code": "vertex_ai_error", "message": malformed},
+                )
             return _openai_batch_output_row(custom_id=custom_id, body=response_dict)
 
         except Exception as e:

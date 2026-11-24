@@ -415,9 +415,9 @@ class VigilGuardGuardrail(CustomGuardrail):
         return original
 
     def _collect_metadata(
-        self, request_data: dict, logging_obj: Optional["LiteLLMLoggingObj"]
+        self, request_data: dict[str, object], logging_obj: Optional["LiteLLMLoggingObj"]
     ) -> Mapping[str, _MetadataValue]:
-        sources: Final[list[dict]] = []
+        sources: Final[list[dict[str, object]]] = []
         if isinstance(request_data, dict):
             sources.append(request_data)
             for nested_key in ("metadata", "litellm_metadata"):
@@ -461,7 +461,7 @@ class VigilGuardGuardrail(CustomGuardrail):
         return None
 
     @staticmethod
-    def _extract_call_id(request_data: dict, logging_obj: Optional["LiteLLMLoggingObj"]) -> str | None:
+    def _extract_call_id(request_data: dict[str, object], logging_obj: Optional["LiteLLMLoggingObj"]) -> str | None:
         if logging_obj is not None:
             call_id = getattr(logging_obj, "litellm_call_id", None)
             if isinstance(call_id, str) and call_id:

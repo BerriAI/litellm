@@ -274,7 +274,7 @@ _CARRIED_METADATA_PREFIX: Final = "user_api_"
 
 _UNCARRIED_METADATA_KEY: Final = "user_api_key_auth"
 
-_JSON_VALUE: Final = TypeAdapter(JsonValue)
+_JSON_VALUE: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
 _STRING: Final = TypeAdapter(str)
 _OBJECT_MAPPING: Final = TypeAdapter(Mapping[str, object])
 _OBJECT_DICT: Final = TypeAdapter(dict[str, object])
