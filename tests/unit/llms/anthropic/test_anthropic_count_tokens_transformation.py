@@ -578,11 +578,11 @@ async def test_handler_sends_the_leading_system_run_as_system_not_as_a_message(h
 
 
 def test_headers_add_the_fallback_beta_only_for_a_history_that_echoes_the_block():
-    config = AnthropicCountTokensConfig()
-    auth_header = {"x-api-key": "sk-ant-api03-test-key"}
+    config: Final = AnthropicCountTokensConfig()
+    auth_header: Final = {"x-api-key": "sk-ant-api03-test-key"}
 
-    with_block = config.get_count_tokens_headers(auth_header, FALLBACK_HISTORY)["anthropic-beta"].split(",")
-    plain = config.get_count_tokens_headers(auth_header, [{"role": "user", "content": "hi"}])["anthropic-beta"]
+    with_block: Final = config.get_count_tokens_headers(auth_header, FALLBACK_HISTORY)["anthropic-beta"].split(",")
+    plain: Final = config.get_count_tokens_headers(auth_header, [{"role": "user", "content": "hi"}])["anthropic-beta"]
 
     assert FALLBACK_BETA in with_block
     assert ANTHROPIC_TOKEN_COUNTING_BETA_VERSION in with_block
