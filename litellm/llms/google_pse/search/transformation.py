@@ -75,11 +75,11 @@ class GooglePSESearchConfig(BaseSearchConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-        **kwargs,
-    ) -> dict:
+        **kwargs: object,
+    ) -> dict[str, object]:
         """
         Validate environment and return headers.
 
@@ -109,9 +109,9 @@ class GooglePSESearchConfig(BaseSearchConfig):
     def get_complete_url(
         self,
         api_base: str | None,
-        optional_params: dict,
+        optional_params: Mapping[str, object],
         data: dict | list[dict] | None = None,
-        **kwargs,
+        **kwargs: object,
     ) -> str:
         """
         Get complete URL for Search endpoint with query parameters.
@@ -138,8 +138,8 @@ class GooglePSESearchConfig(BaseSearchConfig):
         api_key: str | None = None,
         api_base: str | None = None,
         search_engine_id: str | None = None,
-        **kwargs,
-    ) -> dict:
+        **kwargs: object,
+    ) -> dict[str, dict[str, object]]:
         """
         Transform Search request to Google PSE API format.
 
@@ -226,7 +226,7 @@ class GooglePSESearchConfig(BaseSearchConfig):
         self,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
-        **kwargs,
+        **kwargs: object,
     ) -> SearchResponse:
         """
         Transform Google PSE API response to LiteLLM unified SearchResponse format.
@@ -247,7 +247,7 @@ class GooglePSESearchConfig(BaseSearchConfig):
         response_json: Final = _JSON_OBJECT.validate_python(raw_response.json())
 
         # Transform results to SearchResult objects
-        results: Final = []
+        results: Final[list[SearchResult]] = []
         for raw_item in _JSON_VALUES.validate_python(response_json.get("items", [])):
             item = _JSON_OBJECT.validate_python(raw_item)
             search_result = SearchResult.model_validate(

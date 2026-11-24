@@ -82,7 +82,7 @@ class BedrockClaudePlatformMixin(BaseAWSLLM):
         return BedrockError(status_code=status_code, message=error_message, headers=headers)
 
     @staticmethod
-    def _get_workspace_id(optional_params: dict, litellm_params: dict) -> str | None:
+    def _get_workspace_id(optional_params: Mapping[str, object], litellm_params: Mapping[str, object]) -> str | None:
         workspace_id = (
             optional_params.get("workspace_id")
             or litellm_params.get("workspace_id")
@@ -97,7 +97,7 @@ class BedrockClaudePlatformMixin(BaseAWSLLM):
             return str(workspace_id)
         return get_secret_str("ANTHROPIC_AWS_WORKSPACE_ID") or get_secret_str("ANTHROPIC_WORKSPACE_ID")
 
-    def _get_required_aws_region_name(self, optional_params: dict) -> str:
+    def _get_required_aws_region_name(self, optional_params: Mapping[str, object]) -> str:
         aws_region_name: Final = (
             optional_params.get("aws_region_name")
             or get_secret_str("AWS_REGION_NAME")
@@ -121,8 +121,8 @@ class BedrockClaudePlatformMixin(BaseAWSLLM):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         stream: bool | None = None,
     ) -> str:
         api_base = (
@@ -138,7 +138,7 @@ class BedrockClaudePlatformMixin(BaseAWSLLM):
 
     def sign_request(
         self,
-        headers: dict,
+        headers: dict[str, object],
         optional_params: dict,
         request_data: dict,
         api_base: str,

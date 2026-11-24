@@ -5900,6 +5900,31 @@ def test_convert_chat_completion_messages_to_responses_api_tool_result_with_tool
     assert function_call_output["output"] == [{"type": "input_text", "text": "1 tool found"}]
 
 
+@pytest.mark.parametrize(
+    ("carried", "expected_middle"),
+    ((None, ()), ("carried", ({"type": "output_text", "text": "carried"},))),
+)
+def test_convert_chat_completion_messages_to_responses_api_sends_only_the_text_a_fallback_block_carries(
+    carried: str | None, expected_middle: tuple[dict[str, str], ...]
+) -> None:
+    fallback_block: Final = {
+        "type": "fallback",
+        "from": {"model": "first-model"},
+        "to": {"model": "second-model"},
+        "trigger": {"type": "refusal", "category": "cyber"},
+        **({} if carried is None else {"text": carried}),
+    }
+    reply: Final = {"type": "text", "text": "Hello"}
+    sent_reply: Final = {"type": "output_text", "text": "Hello"}
+
+    response, _ = LiteLLMResponsesTransformationHandler().convert_chat_completion_messages_to_responses_api(
+        [{"role": "user", "content": "hi"}, {"role": "assistant", "content": [reply, fallback_block, reply]}]
+    )
+
+    assistant_message: Final = next(item for item in response if item.get("role") == "assistant")
+    assert assistant_message["content"] == [sent_reply, *expected_middle, sent_reply]
+
+
 def _litellm_encoded_response_id(upstream_id: str) -> str:
     from litellm.responses.utils import ResponsesAPIRequestUtils
 
@@ -7747,3 +7772,157 @@ async def test_truncation_auto_sends_a_system_prompt_too_long_for_instructions_a
     sent: Final = json.loads(call_sent.request.content)
     expected: Final = (None, [_system_input_item(prompt), _USER_HI]) if moves_to_input else (prompt, [_USER_HI])
     assert (sent.get("instructions"), sent["input"]) == expected
+
+
+
+def _tool_call(call_id: object, kind: Literal["function", "custom"]) -> dict[str, object]:
+    if kind == "custom":
+        return {"id": call_id, "type": "custom", "custom": {"name": "apply_patch", "input": "*** Begin Patch"}}
+    return {"id": call_id, "type": "function", "function": {"name": "get_weather", "arguments": '{"city":"Paris"}'}}
+
+
+def _tool_turn(calls: Sequence[tuple[object, Literal["function", "custom"]]]) -> list[dict[str, object]]:
+    return [
+        {"role": "user", "content": "Use the tools."},
+        {"role": "assistant", "tool_calls": [_tool_call(call_id, kind) for call_id, kind in calls]},
+        *(
+            {"role": "tool", "tool_call_id": call_id, "content": f"result {index}"}
+            for index, (call_id, _) in enumerate(calls)
+        ),
+    ]
+
+
+def _tool_items(input_items: Sequence[Mapping[str, object]]) -> list[tuple[object, object]]:
+    return [(item["type"], item["call_id"]) for item in input_items if "call_id" in item]
+
+
+def test_transform_request_leaves_overlong_tool_call_ids_for_the_dispatch_to_bound() -> None:
+    function_id: Final = "call_" + "a" * 80
+    custom_id: Final = "call_" + "b" * 80
+
+    result: Final = LiteLLMResponsesTransformationHandler().transform_request(
+        model="gpt-6.2-sol",
+        messages=cast(list[AllMessageValues], _tool_turn([(function_id, "function"), (custom_id, "custom")])),
+        optional_params={},
+        litellm_params={"custom_llm_provider": "openai", "api_base": "https://api.openai.com/v1"},
+        headers={},
+        litellm_logging_obj=Mock(),
+    )
+
+    assert _tool_items(result["input"]) == [
+        ("function_call", function_id),
+        ("custom_tool_call", custom_id),
+        ("function_call_output", function_id),
+        ("custom_tool_call_output", custom_id),
+    ], "ids are bounded at dispatch, after deployment hooks, so the bridge request keeps the caller's ids"
+
+
+def test_shared_chat_to_responses_converter_keeps_overlong_ids_for_its_other_callers() -> None:
+    call_id: Final = "call_" + "a" * 80
+
+    input_items, _ = LiteLLMResponsesTransformationHandler().convert_chat_completion_messages_to_responses_api(
+        cast(list[AllMessageValues], _tool_turn([(call_id, "function"), (call_id + "_custom", "custom")]))
+    )
+
+    assert _tool_items(cast(list[Mapping[str, object]], input_items)) == [
+        ("function_call", call_id),
+        ("custom_tool_call", call_id + "_custom"),
+        ("function_call_output", call_id),
+        ("custom_tool_call_output", call_id + "_custom"),
+    ]
+
+
+@pytest.mark.parametrize(
+    "request_body",
+    [
+        pytest.param({"input": [{"type": "function_call", "call_id": 10**70}]}, id="integer-call-id"),
+        pytest.param({"input": [{"type": "function_call_output", "call_id": None}]}, id="none-call-id"),
+        pytest.param({"input": [{"type": "function_call_output", "output": "x"}]}, id="missing-call-id"),
+        pytest.param({"input": [{"type": "tool_search_call", "call_id": "call_" + "s" * 80}]}, id="other-item-type"),
+        pytest.param({"input": [{"call_id": "call_" + "u" * 80}]}, id="untyped-item"),
+        pytest.param({"input": "a plain prompt"}, id="string-input"),
+        pytest.param({}, id="no-input"),
+    ],
+)
+def test_bounded_call_id_fields_leaves_requests_without_an_overlong_tool_call_id_alone(
+    request_body: Mapping[str, object],
+) -> None:
+    from litellm.completion_extras.litellm_responses_transformation.transformation import bounded_call_id_fields
+
+    assert bounded_call_id_fields(request_body) == {}
+
+
+def _function_pair(call_id: str) -> tuple[dict[str, object], dict[str, object]]:
+    return (
+        {"type": "function_call", "call_id": call_id, "name": "f", "arguments": "{}"},
+        {"type": "function_call_output", "call_id": call_id, "output": call_id[-8:]},
+    )
+
+
+def _sent_call_ids(request_body: Mapping[str, object]) -> list[object]:
+    from litellm.completion_extras.litellm_responses_transformation.transformation import bounded_call_id_fields
+
+    sent: Final = bounded_call_id_fields(request_body)["input"]
+    assert isinstance(sent, list), sent
+    return [item["call_id"] for item in sent]
+
+
+def test_bounded_call_id_fields_keeps_thousands_of_overlong_ids_distinct_paired_and_clear_of_short_ids() -> None:
+    import hashlib
+
+    long_ids: Final = tuple(f"call_{index:06d}_" + "x" * 70 for index in range(2000))
+    colliding_short_ids: Final = tuple(hashlib.sha256(call_id.encode()).hexdigest() for call_id in long_ids[::50])
+    pairs: Final = tuple(_function_pair(call_id) for call_id in (*long_ids, *colliding_short_ids))
+    calls: Final = [call for call, _ in pairs]
+    reversed_outputs: Final = [output for _, output in reversed(pairs)]
+
+    sent_ids: Final = _sent_call_ids({"input": [*calls, *reversed_outputs]})
+
+    sent_call_ids: Final = sent_ids[: len(calls)]
+    sent_output_ids: Final = sent_ids[len(calls) :]
+    assert sent_output_ids == sent_call_ids[::-1], "every output keeps the id of its own call"
+    assert sent_call_ids[len(long_ids) :] == list(colliding_short_ids), "short ids are sent unchanged"
+    assert len(set(sent_call_ids)) == len(pairs), "no two calls share an id"
+    assert all(isinstance(call_id, str) and len(call_id) <= 64 for call_id in sent_call_ids)
+
+
+@pytest.mark.parametrize("item_type", ["tool_search_call", "tool_search_output", "computer_call", "mcp_call"])
+def test_bounded_call_id_fields_never_reuses_a_short_id_held_by_another_item_type(item_type: str) -> None:
+    import hashlib
+
+    long_id: Final = "call_" + "r" * 80
+    held_id: Final = hashlib.sha256(long_id.encode()).hexdigest()
+    other_item: Final = {"type": item_type, "call_id": held_id}
+
+    sent_ids: Final = _sent_call_ids({"input": [*_function_pair(long_id), other_item]})
+
+    assert sent_ids[2] == held_id, sent_ids
+    assert sent_ids[0] == sent_ids[1] != held_id, sent_ids
+
+
+def test_bounded_call_id_fields_never_gives_a_later_long_id_a_replacement_already_claimed() -> None:
+    import hashlib
+
+    long_id: Final = "call_" + "a" * 80
+    claims_first: Final = "1:" + long_id
+    short_id: Final = hashlib.sha256(long_id.encode()).hexdigest()
+    pairs: Final = tuple(_function_pair(call_id) for call_id in (long_id, claims_first, short_id))
+    in_order: Final = list(itertools.chain.from_iterable(pairs))
+
+    sent_ids: Final = _sent_call_ids({"input": in_order})
+    sent_reversed_ids: Final = _sent_call_ids({"input": in_order[::-1]})
+
+    assert sent_ids[0::2] == sent_ids[1::2], "each output keeps the id of its own call"
+    assert sent_ids[4] == short_id, sent_ids
+    assert len(set(sent_ids[0::2])) == 3, sent_ids
+    assert sent_reversed_ids == sent_ids[::-1], "the assignment must not depend on item order"
+
+
+def test_bounded_call_id_fields_gives_a_long_id_repeated_across_items_one_replacement() -> None:
+    long_id: Final = "call_" + "m" * 80
+    repeated: Final = [*_function_pair(long_id), *_function_pair(long_id)]
+
+    sent_ids: Final = _sent_call_ids({"input": repeated})
+
+    assert len(set(sent_ids)) == 1 and sent_ids[0] != long_id, sent_ids
+    assert isinstance(sent_ids[0], str) and len(sent_ids[0]) <= 64, sent_ids

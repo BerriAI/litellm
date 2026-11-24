@@ -3,7 +3,7 @@ import html as _html
 import json
 import secrets
 import time
-from collections.abc import AsyncIterator, Callable, Mapping
+from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import (
@@ -143,7 +143,7 @@ if TYPE_CHECKING:
 # Keyed by (server_id, resource_url) → (expires_at_epoch, payload).
 # A payload of ``None`` is a negative-result entry that prevents repeated
 # upstream fetches when the IdP consistently has no metadata to serve.
-_OAUTH_METADATA_CACHE: Final[dict[tuple[str, str], tuple[float, dict | None]]] = {}
+_OAUTH_METADATA_CACHE: Final[dict[tuple[str, str], tuple[float, dict[str, object] | None]]] = {}
 _OAUTH_METADATA_CACHE_TTL_SECONDS: Final = 300
 _OAUTH_METADATA_NEGATIVE_CACHE_TTL_SECONDS: Final = 60
 _OAUTH_METADATA_CACHE_MAX_SIZE: Final = 128
@@ -1409,7 +1409,7 @@ async def exchange_token_with_server(
                 status_code=400,
                 detail="refresh_token is required for refresh_token grant",
             )
-        token_data: dict = {
+        token_data: dict[str, str | None] = {
             "grant_type": "refresh_token",
             "refresh_token": upstream_refresh_token,
             **token_request.body,
@@ -2064,7 +2064,9 @@ def client_supplied_redirect_uris(value: object) -> list[str] | None:
     return uris if len(uris) == len(value) else None
 
 
-_CLIENT_APPLICATION_TYPE: Final = TypeAdapter(Literal["native", "web"] | None)
+_CLIENT_APPLICATION_TYPE: Final[TypeAdapter[Literal["native", "web"] | None]] = TypeAdapter(
+    Literal["native", "web"] | None
+)
 
 
 def client_supplied_application_type(value: object) -> Literal["native", "web"] | None:
@@ -2232,8 +2234,8 @@ async def register_client_with_server(
     request: Request,
     mcp_server: MCPServer,
     client_name: str,
-    grant_types: list | None,
-    response_types: list | None,
+    grant_types: Sequence[object] | None,
+    response_types: Sequence[object] | None,
     token_endpoint_auth_method: str | None,
     fallback_client_id: str | None = None,
     replace_stale_client: bool = False,
@@ -2920,7 +2922,7 @@ async def callback(
 
 async def fetch_upstream_oauth_protected_resource(
     mcp_server: MCPServer,
-) -> dict | None:
+) -> dict[str, object] | None:
     """Fetch the upstream MCP server's ``.well-known/oauth-protected-resource``
     metadata for a pass-through server.
 
@@ -2956,7 +2958,7 @@ async def fetch_upstream_oauth_protected_resource(
             return cached[1]
         generation: Final = _OAUTH_METADATA_GENERATIONS.get(mcp_server.server_id, 0)
 
-        def store(payload: dict | None, ttl_seconds: int) -> None:
+        def store(payload: dict[str, object] | None, ttl_seconds: int) -> None:
             if _OAUTH_METADATA_GENERATIONS.get(mcp_server.server_id, 0) != generation:
                 return
             stored_at: Final = time.time()
@@ -3027,7 +3029,7 @@ async def _build_oauth_protected_resource_response(
     request: Request,
     mcp_server_name: str | None,
     use_standard_pattern: bool,
-) -> dict:
+) -> Mapping[str, object]:
     """
     Build OAuth protected resource response with the appropriate URL pattern.
 
@@ -3170,7 +3172,7 @@ def _obo_protected_resource_response(mcp_server: MCPServer | None, resource_url:
     }
 
 
-def _jwt_auth_issuers() -> list:
+def _jwt_auth_issuers() -> list[object]:
     """The OAuth issuer identifier(s) LiteLLM's JWT auth trusts, for the OBO PRM authorization_servers.
 
     In token_exchange the IdP that issues the subject JWT is the same one LiteLLM validates it
@@ -3181,7 +3183,7 @@ def _jwt_auth_issuers() -> list:
 
     from litellm.proxy.proxy_server import general_settings  # noqa: PLC0415
 
-    issuers: Final[list] = []
+    issuers: Final[list[object]] = []
     env_issuer: Final = os.getenv("JWT_ISSUER")
     if env_issuer:
         issuers.append(env_issuer)
@@ -3357,7 +3359,7 @@ def _build_oauth_authorization_server_response(
     mcp_server_name: str | None,
     *,
     issuer_path: str | None = None,
-) -> dict:
+) -> dict[str, object]:
     """Build OAuth authorization server metadata response (gateway-as-AS shape)."""
     request_base_url: Final = get_request_base_url(request)
     client_ip: Final = IPAddressUtils.get_mcp_client_ip(request)

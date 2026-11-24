@@ -1834,7 +1834,7 @@ class ContentFilterGuardrail(CustomGuardrail):
     def _apply_competitor_intent_policy(
         self,
         intent_result: CompetitorIntentResult,
-        request_data: dict,
+        request_data: dict[str, object],
         detections: list[ContentFilterDetection],
     ) -> None:
         """
@@ -1918,7 +1918,9 @@ class ContentFilterGuardrail(CustomGuardrail):
             duration: Seconds spent inside the guardrail; defaults to the wall clock since start_time
         """
         # Convert TypedDict detections to regular dicts for JSON serialization
-        guardrail_json_response: Exception | str | dict | list[dict] = [dict(detection) for detection in detections]
+        guardrail_json_response: Exception | str | dict[str, object] | list[dict[str, object]] = [
+            dict(detection) for detection in detections
+        ]
         if status != "success":
             guardrail_json_response = exception_str if exception_str else [dict(detection) for detection in detections]
 
@@ -1950,7 +1952,7 @@ class ContentFilterGuardrail(CustomGuardrail):
         )
 
     @staticmethod
-    def _get_mcp_tool_name(request_data: dict) -> str | None:
+    def _get_mcp_tool_name(request_data: dict[str, object]) -> str | None:
         raw_name: Final[object] = request_data.get("mcp_tool_name")
         if isinstance(raw_name, str) and raw_name:
             return raw_name
@@ -1998,7 +2000,7 @@ class ContentFilterGuardrail(CustomGuardrail):
 
     def _scan_mcp_tool_call_arguments(
         self,
-        request_data: dict,
+        request_data: dict[str, object],
         detections: list[ContentFilterDetection],
         logging_obj: Optional["LiteLLMLoggingObj"] = None,
     ) -> None:

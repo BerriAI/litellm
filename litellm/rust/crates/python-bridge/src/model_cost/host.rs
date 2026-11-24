@@ -106,6 +106,11 @@ pub(crate) struct GenerationRead<'py> {
     pub(crate) rules: Bound<'py, PyAny>,
 }
 
+/// The cost map behind `litellm.model_cost`
+pub(crate) fn inputs(py: Python<'_>) -> PyResult<Bound<'_, super::NativeModelCostMap>> {
+    Ok(call(py, "inputs", ())?.cast_into()?)
+}
+
 pub(crate) fn known_names(py: Python<'_>) -> PyResult<KnownNames> {
     let (providers, renamed_models) = call(py, "known_names", ())?.extract()?;
     Ok(KnownNames {

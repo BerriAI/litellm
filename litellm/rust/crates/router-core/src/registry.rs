@@ -200,6 +200,20 @@ impl Deployment {
         }
     }
 
+    /// The deployment's own `cooldown_time`: `model_info` first, then `litellm_params`
+    /// (`_first_present(model_info, litellm_params, key="cooldown_time")`).
+    pub fn cooldown_time(&self) -> Option<f64> {
+        self.model_info
+            .cooldown_time
+            .or_else(|| self.params_cooldown_time())
+    }
+
+    /// `litellm_params.cooldown_time` when it is a number. `_first_present` skips a bool or a
+    /// string, as `Value::as_f64` reads none.
+    pub(crate) fn params_cooldown_time(&self) -> Option<f64> {
+        self.raw_params.get("cooldown_time").and_then(Value::as_f64)
+    }
+
     /// The deployment's own `litellm_params.num_retries`, written as a count or as its digits.
     /// A call to the deployment carries it, so it is the retry budget of a level whose first
     /// attempt failed here, and of a stream this deployment served.
@@ -1314,6 +1328,23 @@ mod tests {
         let deployment = Deployment::from_spec(spec("primary", params, json!({}))).unwrap();
 
         assert_eq!(deployment.num_retries(), expected);
+    }
+
+    #[rstest]
+    #[case::model_info_first(json!(5), json!({"cooldown_time": 9}), Some(9.0))]
+    #[case::then_litellm_params(json!(0.5), json!({}), Some(0.5))]
+    #[case::a_string_is_skipped(json!("5"), json!({}), None)]
+    #[case::a_bool_is_skipped(json!(true), json!({}), None)]
+    #[case::a_skipped_model_info_falls_through(json!(5), json!({"cooldown_time": "9"}), Some(5.0))]
+    fn a_deployments_own_cooldown_time_is_the_first_number_set(
+        #[case] params_cooldown: Value,
+        #[case] info: Value,
+        #[case] expected: Option<f64>,
+    ) {
+        let params = json!({"model": "a/b", "cooldown_time": params_cooldown});
+        let deployment = Deployment::from_spec(spec("primary", params, info)).unwrap();
+
+        assert_eq!(deployment.cooldown_time(), expected);
     }
 
     #[rstest]

@@ -89,7 +89,7 @@ def tool_definition_attrs(
     )
 
 
-def collect(table: Mapping[str, Callable], source: object) -> AttributeMap:
+def collect(table: Mapping[str, Callable[..., AttrValue | None]], source: object) -> AttributeMap:
     """Apply an extractor table to ``source``, dropping ``None`` results."""
     return drop_none({key: extract(source) for key, extract in table.items()})
 
@@ -137,7 +137,7 @@ def message_content(message: object) -> str | None:
     return None
 
 
-def output_messages(data: LLMCallSpanData) -> list:
+def output_messages(data: LLMCallSpanData) -> list[object]:
     """The ``message`` payload of each response choice."""
     return [c.get("message") for c in data.choices_out if isinstance(c, dict)]
 

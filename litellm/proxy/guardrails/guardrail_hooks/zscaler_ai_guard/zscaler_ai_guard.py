@@ -209,7 +209,7 @@ class ZscalerAIGuard(CustomGuardrail):
             )
             verbose_proxy_logger.info("policy_id applied: %s", policy_id)
 
-            kwargs: Final = {}
+            kwargs: Final[dict[str, str]] = {}
             if self.send_user_api_key_alias:
                 kwargs["user_api_key_alias"] = self._resolve_metadata_value(request_data, "user_api_key_alias") or "N/A"
             if self.send_user_api_key_team_id:

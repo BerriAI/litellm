@@ -58,6 +58,7 @@ from litellm.proxy.guardrails._content_utils import (
 )
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.llms.openai import ChatCompletionAssistantToolCall
+from litellm.types.utils import LLMResponseTypes
 
 
 class LassoResponse(TypedDict):
@@ -247,7 +248,7 @@ class LassoGuardrail(CustomGuardrail):
         self,
         data: dict,
         user_api_key_dict: UserAPIKeyAuth,
-        response,
+        response: LLMResponseTypes,
     ):
         """
         Runs after the LLM API call to validate the response.

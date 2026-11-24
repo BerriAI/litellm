@@ -801,6 +801,8 @@ impl MessagesPythonHost {
             _ => None,
         };
         let bedrock = custom_llm_provider.as_deref() == Some(BEDROCK_PROVIDER) || mantle.is_some();
+        let base_model: Option<String> =
+            argument("base_model")?.and_then(|value| value.extract().ok());
         let capabilities = match &mantle {
             Some(_) => super::model_catalog::route_capabilities(
                 py,
@@ -815,6 +817,7 @@ impl MessagesPythonHost {
                         super::model_catalog::bedrock_capabilities(
                             py,
                             &model,
+                            base_model.as_deref(),
                             argument("model_info")?,
                         )?,
                         &requested,
@@ -835,12 +838,14 @@ impl MessagesPythonHost {
             vertex,
             settings: MessagesSettings {
                 whole_sse_frames: settings.stream_cost_model.is_some(),
+                inject_stream_cost: settings.stream_cost_model.is_some()
+                    && settings.settings.pricing.is_some(),
                 presanitized,
                 intercepted: self.may_intercept(py)?,
                 unencodable_request_header,
                 module_api_key: azure.as_ref().and_then(|azure| azure.api_key.clone()),
                 global_drop_params: global_drop_params(py)?,
-                base_model: argument("base_model")?.and_then(|value| value.extract().ok()),
+                base_model,
                 ..settings.settings
             },
         };
@@ -1199,7 +1204,10 @@ impl MessagesPythonHost {
         let settings = self
             .host_settings(py, arguments)
             .map_err(InvokeError::Python)?;
-        self.stream_cost_model = settings.stream_cost_model.clone();
+        self.stream_cost_model = settings
+            .stream_cost_model
+            .clone()
+            .filter(|_| settings.settings.pricing.is_none());
         self.projection(py, arguments, settings)
             .map_err(|error| InvokeError::Python(self.map_failure(py, error)))?
             .map_err(InvokeError::Native)
