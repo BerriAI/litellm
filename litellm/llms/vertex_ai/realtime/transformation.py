@@ -165,7 +165,7 @@ class VertexAIRealtimeConfig(GeminiRealtimeConfig):
         """Return the fully-qualified Vertex AI model resource path."""
         return f"projects/{self._project}/locations/{self._location}/publishers/google/models/{model}"
 
-    def _build_vertex_ai_setup_config(self, model: str, session_params: dict) -> dict:
+    def _build_vertex_ai_setup_config(self, model: str, session_params: dict[str, object]) -> dict[str, object]:
         """Build Vertex AI setup configuration with proper model path and defaults."""
         # Normalize GA-remapped fields (``output_modalities``, nested
         # ``audio.input.transcription``, ``audio.input.turn_detection``) back to

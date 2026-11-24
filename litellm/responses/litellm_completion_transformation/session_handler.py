@@ -353,7 +353,9 @@ def _instruction_items_before(
     )
 
 
-_NO_TOOL_NAMES: Final = SentToolNames(member_chat_names=MappingProxyType({}), self_named_namespace_members=frozenset())
+_NO_TOOL_NAMES: Final = SentToolNames(
+    member_chat_names=MappingProxyType({}), self_named_namespace_members=frozenset[str]()
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -858,7 +860,7 @@ class ResponsesSessionHandler:
         ############################################################
         if ResponsesSessionHandler._should_check_cold_storage_for_full_payload(proxy_server_request_dict):
             # Try to get cold storage object key from spend log metadata
-            _proxy_server_request_dict: dict | None = None
+            _proxy_server_request_dict: dict[str, object] | None = None
             cold_storage_object_key = ResponsesSessionHandler._get_cold_storage_object_key_from_spend_log(spend_log)
             if cold_storage_object_key:
                 # Use the object key directly from metadata

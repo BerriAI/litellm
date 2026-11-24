@@ -238,7 +238,7 @@ class GoogleAIStudioInteractionsConfig(BaseInteractionsAPIConfig):
             "previous_interaction_id",
             "continuation_token",
         ]
-        dropped_keys: Final = (
+        dropped_keys: Final[frozenset[str]] = (
             frozenset({"agent_config"})
             if drops_unsupported_params(litellm_params.get("drop_params"))
             and (not agent or not _has_agent_config_type(optional_params.get("agent_config")))
