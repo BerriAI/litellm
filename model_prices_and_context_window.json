@@ -39675,7 +39675,7 @@
         "cache_read_input_token_cost": 5e-07,
         "input_cost_per_token": 5e-06,
         "litellm_provider": "openai",
-        "max_input_tokens": 400000,
+        "max_input_tokens": 272000,
         "max_output_tokens": 128000,
         "mode": "chat",
         "output_cost_per_token": 3e-05,
@@ -126792,7 +126792,7 @@
         "input_cost_per_token": 7e-08,
         "input_cost_per_token_priority": 8.75e-08,
         "litellm_provider": "fireworks_ai",
-        "max_input_tokens": 262144,
+        "max_input_tokens": 524288,
         "mode": "chat",
         "output_cost_per_token": 2.81e-07,
         "output_cost_per_token_priority": 3.5125e-07,
@@ -126885,5 +126885,37 @@
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_vision": true
+    },
+    "us-gov.openai.gpt-5.6-cyber": {
+        "cache_creation_input_token_cost": 2.109375e-05,
+        "cache_read_input_token_cost": 1.6875e-06,
+        "input_cost_per_token": 1.6875e-05,
+        "litellm_provider": "bedrock_converse",
+        "max_input_tokens": 922000,
+        "max_output_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 0.00010125,
+        "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-56-cyber.html",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_bedrock_converse_tool_result_images": false,
+        "supports_bedrock_runtime_chat_completions_response_format": true,
+        "supports_function_calling": true,
+        "supports_minimal_reasoning_effort": false,
+        "supports_openai_prompt_cache_breakpoint": true,
+        "supports_reasoning": true,
+        "supports_sampling_params": false,
+        "supports_tool_choice": true,
+        "supports_vision": true,
+        "supports_xhigh_reasoning_effort": true
     }
 }

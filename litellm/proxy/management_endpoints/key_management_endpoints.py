@@ -5678,7 +5678,7 @@ async def generate_key_helper_fn(
     key_alias: str | None = None,
     allowed_cache_controls: list | None = [],
     permissions: Mapping[str, object] | None = {},
-    model_max_budget: dict | None = {},
+    model_max_budget: dict[str, object] | None = {},
     budget_fallbacks: Mapping[str, object] | None = None,
     model_rpm_limit: Mapping[str, object] | None = None,
     model_tpm_limit: Mapping[str, object] | None = None,

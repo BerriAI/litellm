@@ -3159,9 +3159,14 @@ def process_anthropic_headers(headers: httpx.Headers | Mapping[str, str]) -> dic
 
 
 def _anthropic_model_entry(
-    model: ModelInfoResponse, created_at: str, display_names: Mapping[str, str], listed_ids: Mapping[str, str]
+    model: ModelInfoResponse,
+    created_at: str,
+    display_names: Mapping[str, str],
+    listed_ids: Mapping[str, str],
+    descriptions: Mapping[str, str],
 ) -> Mapping[str, object]:
     listed_id: Final = listed_ids.get(model["id"])
+    description: Final = descriptions.get(model["id"])
     source: Final[Mapping[str, object]] = (
         MappingProxyType({"source_model": model["id"]}) if listed_id is not None else MappingProxyType({})
     )
@@ -3170,6 +3175,7 @@ def _anthropic_model_entry(
         "id": listed_id or model["id"],
         **source,
         "display_name": display_names.get(model["id"], model["id"]),
+        **({"description": description} if description is not None else {}),
         "created_at": created_at,
         "max_input_tokens": model.get("max_input_tokens"),
         "max_tokens": model.get("max_output_tokens"),
@@ -3180,6 +3186,8 @@ def create_anthropic_model_list_response(
     models: Sequence[ModelInfoResponse],
     display_names: Mapping[str, str] = MappingProxyType({}),
     listed_ids: Mapping[str, str] = MappingProxyType({}),
+    *,
+    descriptions: Mapping[str, str] = MappingProxyType({}),
 ) -> Mapping[str, object]:
     """Build the Anthropic-native /v1/models envelope.
 
@@ -3196,7 +3204,9 @@ def create_anthropic_model_list_response(
     created_at: Final = (
         datetime.fromtimestamp(DEFAULT_MODEL_CREATED_AT_TIME, tz=timezone.utc).isoformat().replace("+00:00", "Z")
     )
-    data: Final = [_anthropic_model_entry(model, created_at, display_names, listed_ids) for model in models]
+    data: Final = [
+        _anthropic_model_entry(model, created_at, display_names, listed_ids, descriptions) for model in models
+    ]
     return {
         "data": data,
         "has_more": False,
