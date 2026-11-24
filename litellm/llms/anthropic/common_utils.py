@@ -1686,7 +1686,7 @@ def _message_without_advisor_blocks(
     positions: Final = [
         position
         for position, block in enumerate(content)
-        if not isinstance(block, dict) or ("type" in block and block["type"] in _ADVISOR_BLOCK_TYPES)
+        if message_field(block, "type") in _ADVISOR_BLOCK_TYPES or not isinstance(block, dict)
     ]
     if not positions:
         return message, 0
@@ -1722,7 +1722,7 @@ def _message_without_advisor_blocks(
     return stripped, sum(unpaired for _, unpaired in outputs.values())
 
 
-_ADVISOR_BLOCK_TYPES: Final = frozenset({"server_tool_use", "advisor_tool_result"})
+_ADVISOR_BLOCK_TYPES: Final = ("server_tool_use", "advisor_tool_result")
 
 
 def _advisor_block_output(
