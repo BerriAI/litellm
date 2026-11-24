@@ -1594,8 +1594,13 @@ class RedisCache(BaseCache):
 
     async def flush_cache_buffer(self):
         print_verbose(f"flushing to redis....reached size of buffer {len(self.redis_batch_writing_buffer)}")
-        await self.async_set_cache_pipeline(self.redis_batch_writing_buffer)
+        batch: Final = self.redis_batch_writing_buffer
         self.redis_batch_writing_buffer = []
+        try:
+            await self.async_set_cache_pipeline(batch)
+        except BaseException:
+            self.redis_batch_writing_buffer = batch + self.redis_batch_writing_buffer
+            raise
 
     def _get_cache_logic(self, cached_response: bytes | str | None):
         """
