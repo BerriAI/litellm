@@ -32,7 +32,7 @@ class BaseCache(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    async def async_set_cache_pipeline(self, cache_list: list[tuple[str, object]], **kwargs) -> None:
+    async def async_set_cache_pipeline(self, cache_list: list[tuple[str, object]], **kwargs: object) -> None:
         pass
 
     def get_cache(self, key, **kwargs) -> object:
@@ -41,13 +41,13 @@ class BaseCache(ABC):
     async def async_get_cache(self, key, **kwargs) -> object:
         raise NotImplementedError
 
-    async def batch_cache_write(self, key, value: object, **kwargs) -> None:
+    async def batch_cache_write(self, key, value: object, **kwargs: object) -> None:
         raise NotImplementedError
 
     async def disconnect(self) -> None:
         raise NotImplementedError
 
-    async def test_connection(self) -> dict:
+    async def test_connection(self) -> dict[str, str]:
         """
         Test the cache connection.
 

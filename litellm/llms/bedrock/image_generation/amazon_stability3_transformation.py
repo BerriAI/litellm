@@ -83,7 +83,9 @@ class AmazonStability3Config:
         return data
 
     @classmethod
-    def map_openai_params(cls, non_default_params: dict, optional_params: dict) -> dict:
+    def map_openai_params(
+        cls, non_default_params: Mapping[str, object], optional_params: dict[str, object]
+    ) -> dict[str, object]:
         """
         Map the OpenAI params to the Bedrock params
 

@@ -1288,7 +1288,7 @@ def _coerce_datetime(value: object) -> datetime | None:
 
 
 def estimate_request_max_cost(
-    request_body: dict,
+    request_body: dict[str, object],
     route: str,
     llm_router: Router | None,
     input_token_counts: Mapping[str, int | None] | None = None,
@@ -1309,7 +1309,7 @@ def estimate_request_max_cost(
 
 
 def estimate_request_input_cost(
-    request_body: dict,
+    request_body: dict[str, object],
     route: str,
     llm_router: Router | None,
     input_token_counts: Mapping[str, int | None] | None = None,
@@ -1441,7 +1441,7 @@ def _billed_service_tier(request_body: Mapping[str, object], pricing: _Deploymen
 
 
 def _estimate_request_max_cost_for_model(
-    request_body: dict,
+    request_body: dict[str, object],
     route: str,
     model: str,
     llm_router: Router | None,
@@ -1805,7 +1805,7 @@ def _get_request_models(
 
 
 async def count_request_input_tokens(
-    request_body: dict,
+    request_body: dict[str, object],
     route: str,
     llm_router: Router | None,
     team_id: str | None,
@@ -1852,7 +1852,7 @@ def _largest_count(counts: Mapping[str, int], names: Sequence[str], chat_pdf_fil
 
 
 def _model_input_tokens(
-    request_body: dict, model: str, input_token_counts: Mapping[str, int | None] | None
+    request_body: dict[str, object], model: str, input_token_counts: Mapping[str, int | None] | None
 ) -> int | None:
     if input_token_counts is not None and model in input_token_counts:
         return input_token_counts[model]

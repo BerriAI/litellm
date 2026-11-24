@@ -141,7 +141,7 @@ async def get_email_event_settings(
         settings_dict = await _get_email_settings(prisma_client)
 
         # Create a response with all events (enabled or disabled)
-        response_settings = []
+        response_settings: list[EmailEventSettings] = []
         for event in EmailEvent:
             enabled = settings_dict.get(event.value, False)
             response_settings.append(EmailEventSettings(event=event, enabled=enabled))

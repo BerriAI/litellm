@@ -46,9 +46,9 @@ class PermissiveFilter(CustomGuardrail):
         self,
         user_api_key_dict: UserAPIKeyAuth,
         cache: DualCache,
-        data: dict,
+        data: dict[str, object],
         call_type: CallTypesLiteral,
-    ) -> Optional[Union[Exception, str, dict]]:
+    ) -> Optional[Union[Exception, str, dict[str, object]]]:
         verbose_proxy_logger.info("PermissiveFilter: PASSED (always passes)")
         return data
 

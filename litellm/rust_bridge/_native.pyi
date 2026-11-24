@@ -2551,6 +2551,15 @@ class NativeModelCapacity:
         facts: Mapping[str, object],
         request: NativeRequestRedis | None = None,
     ) -> Future[dict[str, object]]: ...
+    def charge_turn(
+        self,
+        connection: NativeModelCapacityState | None,
+        key: Mapping[str, object],
+        model: str,
+        usage: tuple[int, int, int, int],
+        facts: Mapping[str, object],
+        request: NativeRequestRedis | None = None,
+    ) -> Future[dict[str, object]]: ...
 
 @final
 class ResponsesWebSocketConnection:
@@ -3535,6 +3544,12 @@ class NativeParallelRequestLimiter:
         operations: Sequence[tuple[str, str, str, int | float, int | None, str | None, str | None]],
     ) -> Future[None]: ...
     def release_on_disconnect(self, state: NativeParallelRequestLimiterState) -> Future[None]: ...
+    def leave_reservation_to_socket_close(self, state: NativeParallelRequestLimiterState) -> None: ...
+    def close_socket(
+        self,
+        state: NativeParallelRequestLimiterState,
+        close: Literal["refused_at_open", "relay_failed", "turns_finished", "turn_unfinished", "settled_by_its_log"],
+    ) -> Future[None]: ...
     def scoped(
         self,
         inputs: Mapping[str, object],

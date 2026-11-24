@@ -28,6 +28,7 @@ from litellm.types.utils import (
     Choices,
     Message,
     ModelResponse,
+    ModelResponseStream,
     TextCompletionResponse,
 )
 
@@ -249,7 +250,7 @@ def build_complete_streaming_response_legacy(
         sync_stream=False,
         speed=speed,
     )
-    all_openai_chunks: Final = []
+    all_openai_chunks: Final[list[ModelResponseStream]] = []
 
     # Process each chunk - a chunk may contain multiple SSE events
     for _chunk_str in all_chunks:

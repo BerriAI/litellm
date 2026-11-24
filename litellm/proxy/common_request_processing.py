@@ -551,7 +551,7 @@ def _assembled_model_is_the_name_the_client_asked_for(
     return isinstance(stamped_model, str) and assembled_model == stamped_model
 
 
-async def _bill_partial_streamed_spend_on_disconnect(request_data: dict, response: object) -> bool:
+async def _bill_partial_streamed_spend_on_disconnect(request_data: Mapping[str, object], response: object) -> bool:
     """
     A client disconnect throws GeneratorExit/CancelledError into the streaming
     generator, so neither the success nor the failure logging callback fires
@@ -1348,7 +1348,9 @@ async def _parse_event_data_for_error(
     return None
 
 
-def _extract_error_from_sse_chunk(event_line: str | bytes, data_payload: SseDataPayload = _sse_data_payload) -> dict:
+def _extract_error_from_sse_chunk(
+    event_line: str | bytes, data_payload: SseDataPayload = _sse_data_payload
+) -> Mapping[str, object]:
     """
     Extract error dictionary from SSE format chunk.
 
@@ -2934,7 +2936,7 @@ class ProxyBaseLLMRequestProcessing:
     def _merge_passthrough_streaming_headers(
         response_headers: httpx.Headers | Mapping[str, str] | None,
         custom_headers: Mapping[str, str],
-    ) -> dict:
+    ) -> dict[str, str]:
         """
         Merge upstream passthrough headers with proxy/custom headers.
 
@@ -3066,7 +3068,7 @@ class ProxyBaseLLMRequestProcessing:
     async def build_litellm_proxy_success_headers_from_llm_response(
         *,
         response: object,
-        request_data: dict,
+        request_data: dict[str, object],
         request: Request,
         user_api_key_dict: UserAPIKeyAuth,
         logging_obj: LiteLLMLoggingObj,
@@ -3459,7 +3461,7 @@ class ProxyBaseLLMRequestProcessing:
     async def _pre_call_with_fallbacks(
         self,
         request: Request,
-        general_settings: dict,
+        general_settings: dict[str, object],
         proxy_logging_obj: ProxyLogging,
         user_api_key_dict: UserAPIKeyAuth,
         version: str | None,
@@ -4650,7 +4652,7 @@ class ProxyBaseLLMRequestProcessing:
 
         return False
 
-    def _is_streaming_request(self, data: dict, is_streaming_request: bool | None = False) -> bool:
+    def _is_streaming_request(self, data: Mapping[str, object], is_streaming_request: bool | None = False) -> bool:
         """
         Check if the request is a streaming request.
 
@@ -5194,7 +5196,7 @@ class ProxyBaseLLMRequestProcessing:
 
     @staticmethod
     async def _run_deferred_stream_guardrails(
-        captured_data: dict,
+        captured_data: dict[str, object],
         captured_user_api_key_dict: "UserAPIKeyAuth",
         captured_logging_obj: LiteLLMLoggingObj,
         assembled_response: Any,
@@ -5321,7 +5323,7 @@ class ProxyBaseLLMRequestProcessing:
             if isinstance(e, HTTPException) and hasattr(captured_logging_obj, "model_call_details"):
                 captured_logging_obj.model_call_details.setdefault("metadata", {})["guardrail_blocked"] = True
 
-    def _apply_router_cooldown_retry_after(self, headers: dict, e: Exception) -> None:
+    def _apply_router_cooldown_retry_after(self, headers: dict[str, str], e: Exception) -> None:
         if isinstance(e, RouterRateLimitError) and e.cooldown_time > 0:
             headers["retry-after"] = str(math.ceil(e.cooldown_time))
 
@@ -5537,7 +5539,7 @@ class ProxyBaseLLMRequestProcessing:
     @staticmethod
     async def finalize_streaming_generator_cleanup(
         request: Request | None,
-        request_data: dict,
+        request_data: dict[str, object],
         response: object,
         stream_completed: bool = False,
         client_disconnected: bool = False,
@@ -5801,7 +5803,7 @@ class ProxyBaseLLMRequestProcessing:
     def async_sse_data_generator(
         response: object,
         user_api_key_dict: UserAPIKeyAuth,
-        request_data: dict,
+        request_data: dict[str, object],
         proxy_logging_obj: ProxyLogging,
         request: Request | None = None,
         restamp_model: str | None = None,
@@ -6037,8 +6039,8 @@ class ProxyBaseLLMRequestProcessing:
 
     @staticmethod
     def _inject_cost_into_usage_dict(
-        obj: dict, model_name: str, litellm_logging_obj: LiteLLMLoggingObj | None = None
-    ) -> dict | None:
+        obj: Mapping[str, object], model_name: str, litellm_logging_obj: LiteLLMLoggingObj | None = None
+    ) -> dict[str, object] | None:
         """
         Inject cost information into the usage object of a streamed usage event
         (Anthropic ``message_delta`` or OpenAI ``chat.completion.chunk``).
