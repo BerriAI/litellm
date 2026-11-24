@@ -211,6 +211,7 @@ from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import is_str_keyed
 from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
 from litellm.litellm_core_utils.model_param_helper import ModelParamHelper
 from litellm.litellm_core_utils.redact_messages import (
+    MESSAGE_REDACTION_ENABLE_HEADERS,
     TokenDataCheckedFields,
     drop_token_ids,
     without_hidden_token_data,
@@ -1896,8 +1897,27 @@ def _is_text_or_message_prompt(prompt: object) -> bool:
         return bool(prompt)
     if not isinstance(prompt, list) or not prompt:
         return False
-    items: Final = cast("list[object]", prompt)
+    items: Final = cast(Sequence[object], prompt)  # cast-ok: a JSON array holds arbitrary JSON values
     return all(isinstance(item, str) for item in items) or all(isinstance(item, Mapping) for item in items)
+
+
+def _has_redaction_header(holder: object) -> bool:
+    if not isinstance(holder, Mapping):
+        return False
+    headers: Final = cast(Mapping[str, object], holder).get("headers")  # cast-ok: request bodies are str-keyed JSON
+    if not isinstance(headers, Mapping):
+        return False
+    header_map: Final = cast(Mapping[str, object], headers)  # cast-ok: header maps are str-keyed
+    return any(header_map.get(name) for name in MESSAGE_REDACTION_ENABLE_HEADERS)
+
+
+def _asks_for_message_redaction(request_data: Mapping[str, object]) -> bool:
+    """True when the request itself opts in to redaction, by the body flag or a redaction header."""
+    if request_data.get("turn_off_message_logging") not in (None, False):
+        return True
+    return any(
+        _has_redaction_header(request_data.get(key)) for key in ("metadata", "litellm_metadata", "proxy_server_request")
+    )
 
 
 _EXCEPTION_CHAIN_MAX_DEPTH: Final = 16
@@ -4687,7 +4707,11 @@ class ProxyLogging:
             route_call_type: Final = _call_type_for_route(route)
             route_prompt: Final = request_fields.get(_PROMPT_FIELD_BY_SETUP_CALL_TYPE.get(route_call_type, ""))
             litellm_logging_obj, data = litellm.utils.function_setup(
-                original_function=(route_call_type if _is_text_or_message_prompt(route_prompt) else route)
+                original_function=(
+                    route_call_type
+                    if _is_text_or_message_prompt(route_prompt) and not _asks_for_message_redaction(request_fields)
+                    else route
+                )
                 or "IGNORE_THIS",
                 rules_obj=litellm.utils.Rules(),
                 start_time=datetime.now(),
