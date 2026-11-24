@@ -4162,6 +4162,7 @@ dependencies = [
  "litellm-python-compat",
  "litellm-router-types",
  "litellm-secrets",
+ "litellm-tracing",
  "reqwest 0.12.28",
  "rstest",
  "serde",

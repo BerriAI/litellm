@@ -18,10 +18,11 @@ use crate::{
     Error,
     anthropic::common_utils::{
         ANTHROPIC_API_BASE_ENV, ANTHROPIC_API_KEY_ENV, ANTHROPIC_AUTH_TOKEN_ENV,
-        ANTHROPIC_BASE_URL_ENV, OauthHandling, complete_anthropic_url, drop_advisor_blocks,
-        get_auth_header, has_advisor_tool, has_anthropic_credential, is_tool_search_used,
-        merge_beta_headers, optionally_handle_anthropic_oauth, requires_native_compaction_beta,
-        strip_advisor_blocks, strip_encrypted_reasoning_blocks, strip_unsigned_thinking_blocks,
+        ANTHROPIC_BASE_URL_ENV, OauthHandling, complete_anthropic_url,
+        drop_unpaired_advisor_blocks, get_auth_header, has_advisor_tool, has_anthropic_credential,
+        is_tool_search_used, merge_beta_headers, optionally_handle_anthropic_oauth,
+        requires_native_compaction_beta, strip_advisor_blocks, strip_encrypted_reasoning_blocks,
+        strip_unsigned_thinking_blocks,
     },
     base_llm::{
         auth::AuthScheme,
@@ -174,7 +175,7 @@ pub(crate) fn transform_messages_request(
     let messages = if has_advisor_tool(request.params.tools.as_deref()) {
         request.messages
     } else if context.drop_params {
-        drop_advisor_blocks(request.messages)
+        drop_unpaired_advisor_blocks(request.messages)
     } else {
         strip_advisor_blocks(request.messages)
     };
@@ -1099,31 +1100,57 @@ mod tests {
         json!({"type": "server_tool_use", "id": "srvtoolu_ws", "name": "web_search", "input": {"query": "pools"}})
     }
 
+    #[derive(Clone, Default)]
+    struct Warnings(std::sync::Arc<std::sync::Mutex<Vec<String>>>);
+
+    impl litellm_tracing::Sink for Warnings {
+        fn enabled(&self, metadata: &litellm_tracing::Metadata<'_>) -> bool {
+            *metadata.level() == litellm_tracing::Level::WARN
+        }
+
+        fn emit(&self, record: &litellm_tracing::Record) {
+            self.0.lock().unwrap().push(record.message.clone());
+        }
+    }
+
+    const DROPPED_ONE_ADVISOR_BLOCK: &str = "Dropping 1 advisor blocks from the message history (drop_params=True): their id is not a non-empty string or matches no other advisor block, so the provider would reject them.";
+
     #[rstest]
     #[case::unmatched_result_kept_without_drop_params(
         json!([{"type": "advisor_tool_result", "tool_use_id": "srvtoolu_2", "content": "Advice."}]),
         false,
-        json!([{"type": "advisor_tool_result", "tool_use_id": "srvtoolu_2", "content": "Advice."}])
+        json!([{"type": "advisor_tool_result", "tool_use_id": "srvtoolu_2", "content": "Advice."}]),
+        &[]
     )]
     #[case::unmatched_result_dropped_under_drop_params(
         json!([{"type": "advisor_tool_result", "tool_use_id": "srvtoolu_2", "content": "Advice."}]),
         true,
-        json!([])
+        json!([]),
+        &[DROPPED_ONE_ADVISOR_BLOCK]
     )]
     #[case::empty_id_kept_without_drop_params(
         json!([{"type": "advisor_tool_result", "tool_use_id": "", "content": "Advice."}]),
         false,
-        json!([{"type": "advisor_tool_result", "tool_use_id": "", "content": "Advice."}])
+        json!([{"type": "advisor_tool_result", "tool_use_id": "", "content": "Advice."}]),
+        &[]
     )]
     #[case::empty_id_dropped_under_drop_params(
         json!([{"type": "advisor_tool_result", "tool_use_id": "", "content": "Advice."}]),
         true,
-        json!([])
+        json!([]),
+        &[DROPPED_ONE_ADVISOR_BLOCK]
+    )]
+    #[case::paired_result_stripped_without_a_warning_under_drop_params(
+        json!([{"type": "advisor_tool_result", "tool_use_id": "srvtoolu_1", "content": "Advice."}]),
+        true,
+        json!([]),
+        &[]
     )]
     fn advisor_history_left_unpaired_is_dropped_only_under_drop_params(
         #[case] unpaired: Value,
         #[case] drop_params: bool,
         #[case] kept: Value,
+        #[case] warned: &[&str],
         unmapped: MessagesModelCapabilities,
     ) {
         let history = |advisor_blocks: Vec<Value>| {
@@ -1144,12 +1171,16 @@ mod tests {
             ]
             .concat(),
         );
+        let warnings = Warnings::default();
+        let transformed = litellm_tracing::Logger::new(warnings.clone())
+            .scope(|| transform(json!({"messages": sent}), unmapped, drop_params));
         assert_eq!(
-            transform(json!({"messages": sent}), unmapped, drop_params),
+            transformed,
             Ok(body(
                 json!({"messages": history(kept.as_array().unwrap().clone())})
             ))
         );
+        assert_eq!(*warnings.0.lock().unwrap(), warned);
     }
 
     #[rstest]
