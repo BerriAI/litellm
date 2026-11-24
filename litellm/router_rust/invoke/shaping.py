@@ -492,7 +492,7 @@ def leaves_caller_key_behind(
     target that sets its own key, an explicit ``Authorization`` header, and a call the caller, the target or the
     deployment points at an endpoint of its own keep today's behavior."""
     caller_key: Final = request.get("api_key")
-    redirected: Final = any(key in request or key in target_params for key in ("api_base", "base_url"))
+    redirected: Final = any(key in request or key in target_params for key in _AWS_ENDPOINT_OVERRIDE_PARAMS)
     return (
         caller_key not in (None, "")
         and "api_key" not in target_params

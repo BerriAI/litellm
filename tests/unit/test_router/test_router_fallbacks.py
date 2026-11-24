@@ -1633,7 +1633,7 @@ async def test_blank_caller_key_still_signs_an_aws_fallback_instead_of_using_the
 
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("_aws_without_env_bearers_or_endpoints")
-@pytest.mark.parametrize("base_field", ("api_base", "base_url"))
+@pytest.mark.parametrize("base_field", ("api_base", "base_url", "aws_bedrock_runtime_endpoint"))
 async def test_dict_fallback_target_base_url_without_a_key_keeps_the_caller_key(
     respx_mock: respx.MockRouter, base_field: str
 ) -> None:
