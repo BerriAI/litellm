@@ -45,6 +45,17 @@ impl Document {
         (Self(overlaid.document), overlaid.shadowed)
     }
 
+    /// The keys of `section` and the value each holds, which after [`Self::overlay`] is the
+    /// stored value when the file leaves the key unset.
+    pub fn section(&self, section: &str) -> impl Iterator<Item = (&str, &Value)> {
+        self.0
+            .get(section)
+            .and_then(Value::as_mapping)
+            .into_iter()
+            .flatten()
+            .filter_map(|(key, value)| Some((key.as_str()?, value)))
+    }
+
     /// `general_settings.supported_db_objects` as the document sets it, which after
     /// [`Self::overlay`] is the stored value when the file leaves it unset.
     pub fn supported_db_objects(&self) -> SupportedDbObjects {
@@ -143,6 +154,25 @@ mod tests {
             .as_ref()
             .unwrap();
         assert_eq!(key.expose(), api_key);
+    }
+
+    #[rstest]
+    fn a_section_lists_the_files_keys_with_the_stored_ones_it_leaves_unset() {
+        let rows = SettingsRows {
+            router_settings: object("redis_host: stored\nnum_retries: 3"),
+            ..SettingsRows::default()
+        };
+        let (overlaid, _) = document("router_settings:\n  num_retries: 1\n").overlay(&rows);
+
+        let section: BTreeMap<&str, &Value> = overlaid.section("router_settings").collect();
+
+        assert_eq!(
+            section,
+            BTreeMap::from([
+                ("num_retries", &Value::from(1)),
+                ("redis_host", &Value::from("stored")),
+            ])
+        );
     }
 
     #[rstest]
