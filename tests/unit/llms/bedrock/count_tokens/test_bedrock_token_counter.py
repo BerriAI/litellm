@@ -881,6 +881,42 @@ async def test_claude_runtime_count_disables_parallel_tool_use_only_where_infere
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "deployment_model",
+    ["bedrock/converse/global.anthropic.claude-opus-4-8", "bedrock/converse/us.anthropic.claude-unlisted-v1:0"],
+    ids=["converse_native_output", "converse_json_tool"],
+)
+async def test_claude_runtime_count_forces_the_json_tool_only_where_converse_inference_does(
+    deployment_model: str,
+) -> None:
+    bedrock: Final = _Bedrock(runtime=(200, {"inputTokens": 493}), mantle=(200, {"input_tokens": 1}))
+    model: Final = deployment_model.rsplit("/", 1)[-1]
+    chat_params: Final[dict[str, JsonValue]] = {
+        "response_format": {
+            "type": "json_schema",
+            "json_schema": {"name": "city", "schema": {"type": "object", "properties": {"city": {"type": "string"}}}},
+        }
+    }
+
+    result: Final = await _counter(bedrock).count_tokens(
+        model_to_use=model,
+        messages=[{"role": "user", "content": "Weather in Paris?"}],
+        contents=None,
+        deployment=_deployment(deployment_model),
+        request_model=model,
+        messages_format="openai",
+        chat_params=chat_params,
+    )
+
+    assert result is not None
+    assert (result.error, result.total_tokens) == (False, 493)
+    inference_forces_it: Final = litellm.AmazonConverseConfig().response_format_adds_tools(chat_params, model, None)
+    assert _invoke_body(bedrock.requests[0]).get("tool_choice") == (
+        {"type": "tool", "name": RESPONSE_FORMAT_TOOL_NAME} if inference_forces_it else None
+    )
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("tool_choice", [{"type": "auto"}, {"type": "none"}], ids=["auto", "none"])
 async def test_claude_runtime_count_sends_a_choice_that_adds_no_tokens_like_no_choice(
     tool_choice: dict[str, JsonValue],

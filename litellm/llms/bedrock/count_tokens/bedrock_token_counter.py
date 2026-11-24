@@ -12,6 +12,7 @@ from typing_extensions import assert_never
 
 import litellm
 from litellm._logging import CALLER_ERROR_LOG_EXTRA, verbose_logger
+from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
 from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.llms.anthropic.common_utils import (
@@ -136,6 +137,23 @@ def _chat_params_inference_honors(
     if bedrock_converse_supports_parallel_tool_use_config(capability_model):
         return chat_params
     return MappingProxyType({key: value for key, value in chat_params.items() if key != "parallel_tool_calls"})
+
+
+def _options_inference_sends(
+    options: Mapping[str, JsonValue],
+    deployment_config: BaseConfig | None,
+    chat_params: Mapping[str, JsonValue],
+    capability_model: str,
+    model_info: Mapping[str, object] | None,
+) -> Mapping[str, JsonValue]:
+    match options.get("tool_choice"), deployment_config:
+        case {"type": "tool", "name": name}, litellm.AmazonConverseConfig() as converse_config if (
+            name == RESPONSE_FORMAT_TOOL_NAME
+            and not converse_config.response_format_adds_tools(chat_params, capability_model, model_info)
+        ):
+            return MappingProxyType({key: value for key, value in options.items() if key != "tool_choice"})
+        case _:
+            return options
 
 
 def _has_role(message: Mapping[str, object]) -> bool:
@@ -317,6 +335,7 @@ class BedrockTokenCounter(BaseTokenCounter):
         deployment_config: Final = _deployment_chat_config(litellm_params) if claude else None
         chat_config: Final = deployment_config if isinstance(deployment_config, AnthropicConfig) else None
         capability_model: Final = _inference_capability_model(litellm_params, counted_model)
+        model_info: Final = _deployment_model_info(deployment)
         converse_config: Final = (
             deployment_config
             if messages_format == "openai"
@@ -333,7 +352,7 @@ class BedrockTokenCounter(BaseTokenCounter):
                 tools,
                 chat_params,
                 capability_model,
-                _deployment_model_info(deployment),
+                model_info,
                 litellm_params,
             )
         )
@@ -357,7 +376,7 @@ class BedrockTokenCounter(BaseTokenCounter):
         if isinstance(translated, ChatCountTranslationError):
             return translated.response(request_model, model_to_use, primary_tokenizer)
         options: Final[Mapping[str, JsonValue] | ChatCountTranslationError] = (
-            translated.options
+            _options_inference_sends(translated.options, deployment_config, chat_params, capability_model, model_info)
             if translated is not None
             else await asyncify(messages_count_options)(
                 _claude_messages_translator(litellm_params),

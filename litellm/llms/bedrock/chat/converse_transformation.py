@@ -585,7 +585,7 @@ class AmazonConverseConfig(BaseConfig):
 
         return tuple(map(_rewrite, messages))
 
-    def _response_format_adds_tools(
+    def response_format_adds_tools(
         self, chat_params: Mapping[str, object], model: str, model_info: Mapping[str, object] | None
     ) -> bool:
         response_format: Final = chat_params.get("response_format")
@@ -631,7 +631,7 @@ class AmazonConverseConfig(BaseConfig):
             system_placed
             if not litellm.bedrock_neutralize_orphaned_tool_blocks
             or tools
-            or self._response_format_adds_tools(chat_params, model, model_info)
+            or self.response_format_adds_tools(chat_params, model, model_info)
             else self._orphaned_tool_blocks_as_text(system_placed, guards_tool_results=False)
         )
         user_continue_message: Final = _deployment_user_continue_message(litellm_params)
