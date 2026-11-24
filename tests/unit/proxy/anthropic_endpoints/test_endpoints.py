@@ -907,14 +907,15 @@ class TestCountTokensCompactedHistory:
         assert counted["input_tokens"] > 0
         assert counted == await count(as_text)
 
-def _claude_router() -> Router:
+def _claude_router(cache_responses: bool = False) -> Router:
     return Router(
         model_list=[
             {
                 "model_name": "claude-sonnet",
                 "litellm_params": {"model": "anthropic/claude-sonnet-5-5", "api_key": "sk-test"},
             }
-        ]
+        ],
+        cache_responses=cache_responses,
     )
 
 
@@ -1672,7 +1673,7 @@ async def response_cache(monkeypatch: pytest.MonkeyPatch, httpx_transport: None)
     cache: Final = Cache(type=LiteLLMCacheType.LOCAL)
     assert isinstance(cache.cache, InMemoryCache)
     monkeypatch.setattr(litellm, "cache", cache)
-    monkeypatch.setattr(proxy_server, "llm_router", _claude_router())
+    monkeypatch.setattr(proxy_server, "llm_router", _claude_router(cache_responses=True))
     monkeypatch.setattr(proxy_server, "proxy_logging_obj", ProxyLogging(user_api_key_cache=DualCache()))
     try:
         yield cache.cache

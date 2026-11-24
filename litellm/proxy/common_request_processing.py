@@ -2309,9 +2309,7 @@ def _anthropic_messages_cache_key_header(response_cache_key: object, logging_obj
         or not _is_cache_hit(logging_obj)
     ):
         return response_cache_key
-    litellm_params: Final[object] = logging_obj.litellm_params
-    preset_cache_key: Final = litellm_params.get("preset_cache_key") if is_str_keyed_dict(litellm_params) else None
-    return preset_cache_key if isinstance(preset_cache_key, str) else response_cache_key
+    return logging_obj.get_preset_cache_key() or response_cache_key
 
 
 def _get_cost_breakdown_from_logging_obj(
