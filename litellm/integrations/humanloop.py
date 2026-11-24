@@ -4,6 +4,7 @@ Humanloop integration
 https://humanloop.com/
 """
 
+from collections.abc import Mapping
 from typing import Final, cast
 
 import httpx
@@ -40,7 +41,7 @@ class HumanLoopPromptManager(DualCache):
         return cast(PromptManagementClient | None, self.get_cache(key=humanloop_prompt_id))
 
     def _compile_prompt_helper(
-        self, prompt_template: list[AllMessageValues], prompt_variables: dict[str, object]
+        self, prompt_template: list[AllMessageValues], prompt_variables: Mapping[str, object]
     ) -> list[AllMessageValues]:
         """
         Helper function to compile the prompt by substituting variables in the template.
@@ -118,9 +119,9 @@ class HumanLoopPromptManager(DualCache):
     def compile_prompt(
         self,
         prompt_template: list[AllMessageValues],
-        prompt_variables: dict | None,
+        prompt_variables: Mapping[str, object] | None,
     ) -> list[AllMessageValues]:
-        compiled_prompt: str | list | None = None
+        compiled_prompt: str | list[AllMessageValues] | None = None
 
         if prompt_variables is None:
             prompt_variables = {}
@@ -147,7 +148,7 @@ class HumanloopLogger(CustomLogger):
         self,
         model: str,
         messages: list[AllMessageValues],
-        non_default_params: dict,
+        non_default_params: dict[str, object],
         prompt_id: str | None,
         prompt_variables: dict | None,
         dynamic_callback_params: StandardCallbackDynamicParams,

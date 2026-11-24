@@ -24,15 +24,16 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-
+from litellm.redis.stores.auth_cache import AuthObject
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.caching.dual_cache import DualCache
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.proxy._types import (
+    LiteLLM_TeamMembership,
     LiteLLM_TeamTableCachedObj,
     LiteLLM_UserTable,
     LitellmUserRoles,
     UserAPIKeyAuth,
-    LiteLLM_TeamMembership,
     hash_token,
 )
 from litellm.proxy.auth.auth_checks import (
@@ -51,7 +52,7 @@ def rust_auth_stores(monkeypatch: pytest.MonkeyPatch) -> RustAuthStores:
 
 class CacheCallTracker:
     """
-    Tracks cache read/write operations by wrapping DualCache methods.
+    Tracks cache read/write operations by wrapping UserApiKeyCache methods.
     This is used to count network-level operations on the hot path.
     """
 
@@ -82,13 +83,11 @@ def _wrap_cache_with_tracker(cache: DualCache, tracker: CacheCallTracker) -> Dua
 
     async def tracked_async_get(key, *args, **kwargs):
         result = await original_async_get(key, *args, **kwargs)
-        tracker.cache_reads.append(
-            {"key": key, "hit": result is not None, "method": "async_get_cache"}
-        )
+        tracker.cache_reads.append({"key": key.key, "hit": result is not None, "method": "async_get_cache"})
         return result
 
     async def tracked_async_set(key, value, *args, **kwargs):
-        tracker.cache_writes.append({"key": key, "method": "async_set_cache"})
+        tracker.cache_writes.append({"key": key.key, "method": "async_set_cache"})
         return await original_async_set(key, value, *args, **kwargs)
 
     cache.async_get_cache = tracked_async_get
@@ -168,8 +167,8 @@ async def test_get_key_object_warm_cache(rust_auth_stores: RustAuthStores):
     valid_token = _create_valid_token(api_key, team_id, user_id)
 
     # Create cache with pre-populated data
-    cache = DualCache(in_memory_cache=InMemoryCache())
-    await cache.async_set_cache(key=hashed_token, value=valid_token)
+    cache = UserApiKeyCache()
+    await cache.async_set_cache(key=AuthObject.virtual_key(hashed_token), value=valid_token)
 
     # Track cache operations
     tracker = CacheCallTracker()
@@ -208,7 +207,7 @@ async def test_get_key_object_cold_cache(rust_auth_stores: RustAuthStores):
     hashed_token = hash_token(api_key)
 
     # Create empty cache
-    cache = DualCache(in_memory_cache=InMemoryCache())
+    cache = UserApiKeyCache()
 
     tracker = CacheCallTracker()
     tracked_cache = _wrap_cache_with_tracker(cache, tracker)
@@ -245,9 +244,9 @@ async def test_get_team_object_warm_cache():
     team_id = "team-warm-123"
     team_obj = _create_team_object(team_id)
 
-    cache = DualCache(in_memory_cache=InMemoryCache())
-    cache_key = f"team_id:{team_id}"
-    await cache.async_set_cache(key=cache_key, value=team_obj)
+    cache = UserApiKeyCache()
+    cache_key = AuthObject.team(team_id).key
+    await cache.async_set_cache(key=AuthObject.team(team_id), value=team_obj)
 
     tracker = CacheCallTracker()
     tracked_cache = _wrap_cache_with_tracker(cache, tracker)
@@ -280,23 +279,20 @@ async def test_get_team_object_warm_cache():
 
 
 @pytest.mark.asyncio
-async def test_get_user_object_warm_cache():
+async def test_get_user_object_warm_cache(rust_auth_stores: RustAuthStores):
     """
     Test get_user_object with a warm cache - should hit cache, no DB query.
     """
     user_id = "user-warm-456"
     user_obj = _create_user_object(user_id)
 
-    cache = DualCache(in_memory_cache=InMemoryCache())
-    await cache.async_set_cache(key=user_id, value=user_obj)
+    cache = UserApiKeyCache()
+    await cache.async_set_cache(key=AuthObject.user(user_id), value=user_obj)
 
     tracker = CacheCallTracker()
     tracked_cache = _wrap_cache_with_tracker(cache, tracker)
 
     mock_prisma = MagicMock()
-    mock_prisma.db = MagicMock()
-    mock_prisma.db.litellm_usertable = MagicMock()
-    mock_prisma.db.litellm_usertable.find_unique = AsyncMock()
 
     await get_user_object(
         user_id=user_id,
@@ -313,7 +309,7 @@ async def test_get_user_object_warm_cache():
     assert user_id in summary["cache_read_keys"]
 
     # DB should NOT have been called
-    mock_prisma.db.litellm_usertable.find_unique.assert_not_called()
+    assert rust_auth_stores.user.sign_ins == []
 
 
 # ============================================================================
@@ -337,10 +333,12 @@ async def test_get_team_membership_warm_cache():
         "litellm_budget_table": None,
     }
 
-    cache = DualCache(in_memory_cache=InMemoryCache())
+    cache = UserApiKeyCache()
     # Cache key format used by get_team_membership
-    cache_key = f"team_membership:{user_id}:{team_id}"
-    await cache.async_set_cache(key=cache_key, value=membership_dict)
+    cache_key = AuthObject.team_membership_reservation(user_id=user_id, team_id=team_id).key
+    await cache.async_set_cache(
+        key=AuthObject.team_membership_reservation(user_id=user_id, team_id=team_id), value=membership_dict
+    )
 
     tracker = CacheCallTracker()
     tracked_cache = _wrap_cache_with_tracker(cache, tracker)
@@ -389,8 +387,8 @@ async def test_team_membership_cache_key_duplication():
     team_id = "team-dup-123"
 
     # The two different cache keys used for the same data
-    key_format_1 = f"{team_id}_{user_id}"  # user_api_key_auth format
-    key_format_2 = f"team_membership:{user_id}:{team_id}"  # auth_checks format
+    key_format_1 = AuthObject.team_membership(team_id=team_id, user_id=user_id).key  # user_api_key_auth format
+    key_format_2 = AuthObject.team_membership_reservation(user_id=user_id, team_id=team_id).key  # auth_checks format
 
     _ = {
         "user_id": user_id,
@@ -443,15 +441,16 @@ async def test_full_hot_path_network_count():
     )
 
     # Pre-populate cache with all data
-    cache = DualCache(in_memory_cache=InMemoryCache())
-    await cache.async_set_cache(key=hashed_token, value=valid_token)
-    await cache.async_set_cache(key=f"team_id:{team_id}", value=team_obj)
-    await cache.async_set_cache(key=user_id, value=user_obj)
+    cache = UserApiKeyCache()
+    await cache.async_set_cache(key=AuthObject.virtual_key(hashed_token), value=valid_token)
+    await cache.async_set_cache(key=AuthObject.team(team_id), value=team_obj)
+    await cache.async_set_cache(key=AuthObject.user(user_id), value=user_obj)
     await cache.async_set_cache(
-        key=f"team_membership:{user_id}:{team_id}", value=membership_data.model_dump()
+        key=AuthObject.team_membership_reservation(user_id=user_id, team_id=team_id),
+        value=membership_data.model_dump(),
     )
     await cache.async_set_cache(
-        key=f"{team_id}_{user_id}", value=membership_data.model_dump()
+        key=AuthObject.team_membership(team_id=team_id, user_id=user_id), value=membership_data.model_dump()
     )
 
     # Create tracker AFTER populating cache
@@ -521,7 +520,7 @@ async def test_full_hot_path_network_count():
 
 
 @pytest.mark.asyncio
-async def test_get_user_object_missing_user_negative_cache():
+async def test_get_user_object_missing_user_negative_cache(rust_auth_stores: RustAuthStores):
     """
     A user_id with no DB row (e.g. the master key's default admin user_id)
     must not trigger a DB query on every request. The first lookup hits the
@@ -529,12 +528,9 @@ async def test_get_user_object_missing_user_negative_cache():
     """
     user_id = "user-missing-negative-cache"
 
-    cache = DualCache(in_memory_cache=InMemoryCache())
+    cache = UserApiKeyCache()
 
     mock_prisma = MagicMock()
-    mock_prisma.db = MagicMock()
-    mock_prisma.db.litellm_usertable = MagicMock()
-    mock_prisma.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
 
     for _ in range(3):
         with pytest.raises(ValueError, match="User doesn't exist in db\\."):
@@ -547,11 +543,11 @@ async def test_get_user_object_missing_user_negative_cache():
                 user_id_upsert=False,
             )
 
-    assert mock_prisma.db.litellm_usertable.find_unique.call_count == 1
+    assert len(rust_auth_stores.user.sign_ins) == 1
 
 
 @pytest.mark.asyncio
-async def test_get_user_object_missing_user_rechecks_after_expiry():
+async def test_get_user_object_missing_user_rechecks_after_expiry(rust_auth_stores: RustAuthStores):
     """
     The negative cache must expire: a user created after a miss becomes
     visible once the db_cache_expiry window has passed.
@@ -560,12 +556,9 @@ async def test_get_user_object_missing_user_rechecks_after_expiry():
 
     user_id = "user-missing-expiry-recheck"
 
-    cache = DualCache(in_memory_cache=InMemoryCache())
+    cache = UserApiKeyCache()
 
     mock_prisma = MagicMock()
-    mock_prisma.db = MagicMock()
-    mock_prisma.db.litellm_usertable = MagicMock()
-    mock_prisma.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
 
     with pytest.raises(ValueError, match="User doesn't exist in db\\."):
         await get_user_object(
@@ -576,7 +569,7 @@ async def test_get_user_object_missing_user_rechecks_after_expiry():
             proxy_logging_obj=None,
             user_id_upsert=False,
         )
-    assert mock_prisma.db.litellm_usertable.find_unique.call_count == 1
+    assert len(rust_auth_stores.user.sign_ins) == 1
 
     last_db_access_time[f"user_id:{user_id}"] = (
         None,
@@ -592,7 +585,7 @@ async def test_get_user_object_missing_user_rechecks_after_expiry():
             proxy_logging_obj=None,
             user_id_upsert=False,
         )
-    assert mock_prisma.db.litellm_usertable.find_unique.call_count == 2
+    assert len(rust_auth_stores.user.sign_ins) == 2
 
 
 def test_should_check_db_negative_entry_throttles_then_expires():

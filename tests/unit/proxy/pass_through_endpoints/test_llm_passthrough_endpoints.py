@@ -235,6 +235,217 @@ async def test_gemini_pass_through_endpoint_forwards_key_and_body(
     assert outbound.url.params["key"] == "gemini-test-key"
     assert json.loads(outbound.content) == json.loads(body)
 
+class _DenyingFileAccessGuard:
+    def __init__(self) -> None:
+        self.checked: tuple[str, ...] = ()
+
+    async def enforce_provider_file_access(self, file_id: str, user_api_key_dict: object) -> None:
+        from fastapi import HTTPException
+
+        self.checked = (*self.checked, file_id)
+        raise HTTPException(status_code=403, detail="not the owner")
+
+
+async def _call_gemini_pass_through(method: str, endpoint: str, override_header: str | None = None) -> object:
+    from fastapi import Request, Response
+
+    from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import gemini_proxy_route
+
+    scope: Final = {
+        "type": "http",
+        "http_version": "1.1",
+        "method": method,
+        "scheme": "http",
+        "path": f"/gemini/{endpoint}",
+        "raw_path": f"/gemini/{endpoint}".encode(),
+        "root_path": "",
+        "query_string": b"key=sk-9876",
+        "headers": [
+            (b"content-type", b"application/json"),
+            *([(override_header.encode(), b"DELETE")] if override_header else []),
+        ],
+        "client": ("127.0.0.1", 51234),
+        "server": ("proxy.local", 4000),
+        "state": {},
+    }
+
+    async def receive() -> dict:
+        return {"type": "http.request", "body": b"{}" if method == "POST" else b"", "more_body": False}
+
+    return await gemini_proxy_route(endpoint=endpoint, request=Request(scope, receive), fastapi_response=Response())
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("method", "endpoint"),
+    [
+        ("GET", "v1beta/files/abc123"),
+        ("DELETE", "v1beta/files/abc123"),
+        ("GET", "v1beta/files%2Fabc123"),
+        ("GET", "v1beta/files/abc123#fragment"),
+        ("GET", "download/v1beta/files/abc123:download"),
+        ("GET", "v1beta/files//abc123"),
+        ("DELETE", "v1beta/files/other/../abc123"),
+        ("GET", "v1beta/files/other/%2e%2e/abc123"),
+        ("GET", "v1beta/files/./abc123"),
+        ("GET", "v1beta/files/other/%252e%252e/abc123"),
+        ("DELETE", "v1beta/files/other/%25252e%25252e/abc123"),
+        ("GET", "v1beta/files/%252e/abc123"),
+        ("GET", "v1beta/files\\abc123"),
+        ("DELETE", "v1beta/files\\abc123"),
+        ("GET", "v1beta/files%5Cabc123"),
+        ("GET", "v1beta\\files\\abc123"),
+        ("DELETE", "v1beta/files/other%5c..%5cabc123"),
+    ],
+)
+async def test_gemini_pass_through_refuses_a_file_the_caller_does_not_own(
+    method: str,
+    endpoint: str,
+    respx_mock: "respx.MockRouter",
+    httpx_transport: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import httpx
+    from fastapi import HTTPException
+
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setenv("GEMINI_API_KEY", "gemini-test-key")
+    guard: Final = _DenyingFileAccessGuard()
+    monkeypatch.setattr(proxy_server.proxy_logging_obj, "get_proxy_hook", lambda name: guard)
+    upstream: Final = respx_mock.route(host="generativelanguage.googleapis.com").mock(
+        return_value=httpx.Response(200, json={})
+    )
+
+    with pytest.raises(HTTPException) as refused:
+        await _call_gemini_pass_through(method, endpoint)
+
+    assert refused.value.status_code == 403
+    assert guard.checked == ("abc123",)
+    assert upstream.call_count == 0
+
+
+@pytest.mark.asyncio
+async def test_gemini_pass_through_refuses_an_encoded_path_the_provider_would_redirect_to_another_callers_file(
+    respx_mock: "respx.MockRouter",
+    httpx_transport: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import httpx
+    from fastapi import HTTPException
+
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setenv("GEMINI_API_KEY", "gemini-test-key")
+    guard: Final = _DenyingFileAccessGuard()
+    monkeypatch.setattr(proxy_server.proxy_logging_obj, "get_proxy_hook", lambda name: guard)
+    host: Final = "generativelanguage.googleapis.com"
+    redirect: Final = respx_mock.get(url__regex=rf"https://{host}/v1beta/files/other/.+").mock(
+        return_value=httpx.Response(302, headers={"location": f"https://{host}/v1beta/files/abc123"})
+    )
+    plain_file: Final = respx_mock.get(f"https://{host}/v1beta/files/abc123").mock(
+        return_value=httpx.Response(200, json={"name": "files/abc123"})
+    )
+
+    with pytest.raises(HTTPException) as refused:
+        await _call_gemini_pass_through("GET", "v1beta/files/other/%252e%252e/abc123")
+
+    assert refused.value.status_code == 403
+    assert guard.checked == ("abc123",)
+    assert redirect.call_count == 0
+    assert plain_file.call_count == 0
+
+
+@pytest.mark.asyncio
+async def test_gemini_pass_through_rejects_a_file_path_encoded_too_many_times(
+    respx_mock: "respx.MockRouter",
+    httpx_transport: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import httpx
+    from fastapi import HTTPException
+
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setenv("GEMINI_API_KEY", "gemini-test-key")
+    guard: Final = _DenyingFileAccessGuard()
+    monkeypatch.setattr(proxy_server.proxy_logging_obj, "get_proxy_hook", lambda name: guard)
+    upstream: Final = respx_mock.route(host="generativelanguage.googleapis.com").mock(
+        return_value=httpx.Response(200, json={})
+    )
+    deeply_encoded_dots: Final = f"%{'25' * 1200}2e%{'25' * 1200}2e"
+
+    with pytest.raises(HTTPException) as rejected:
+        await _call_gemini_pass_through("GET", f"v1beta/files/other/{deeply_encoded_dots}/abc123")
+
+    assert rejected.value.status_code == 400
+    assert upstream.call_count == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("override_header", ["x-http-method-override", "x-pass-x-http-method-override"])
+async def test_gemini_pass_through_refuses_a_method_override_on_a_file_the_caller_does_not_own(
+    override_header: str,
+    respx_mock: "respx.MockRouter",
+    httpx_transport: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import httpx
+    from fastapi import HTTPException
+
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setenv("GEMINI_API_KEY", "gemini-test-key")
+    guard: Final = _DenyingFileAccessGuard()
+    monkeypatch.setattr(proxy_server.proxy_logging_obj, "get_proxy_hook", lambda name: guard)
+    upstream: Final = respx_mock.route(host="generativelanguage.googleapis.com").mock(
+        return_value=httpx.Response(200, json={})
+    )
+
+    with pytest.raises(HTTPException) as refused:
+        await _call_gemini_pass_through("POST", "v1beta/files/abc123", override_header)
+
+    assert refused.value.status_code == 403
+    assert guard.checked == ("abc123",)
+    assert upstream.call_count == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("method", "endpoint"),
+    [
+        ("GET", "v1beta/files"),
+        ("POST", "upload/v1beta/files"),
+        ("POST", "v1beta/models/gemini-2.5-flash:countTokens"),
+        ("GET", "v1beta/models/gemini-2.5-flash"),
+        ("PATCH", "v1beta/files/abc123"),
+    ],
+)
+async def test_gemini_pass_through_checks_file_ownership_only_on_single_file_get_and_delete(
+    method: str,
+    endpoint: str,
+    respx_mock: "respx.MockRouter",
+    httpx_transport: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import httpx
+
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setenv("GEMINI_API_KEY", "gemini-test-key")
+    guard: Final = _DenyingFileAccessGuard()
+    monkeypatch.setattr(proxy_server.proxy_logging_obj, "get_proxy_hook", lambda name: guard)
+    upstream: Final = respx_mock.route(host="generativelanguage.googleapis.com").mock(
+        return_value=httpx.Response(200, json={})
+    )
+
+    response: Final = await _call_gemini_pass_through(method, endpoint)
+
+    assert response.status_code == 200
+    assert guard.checked == ()
+    assert upstream.call_count == 1
+
+
 @pytest.mark.asyncio
 async def test_router_passthrough_keeps_mapped_baggage_tags_outside_upstream_body():
     from fastapi import Request

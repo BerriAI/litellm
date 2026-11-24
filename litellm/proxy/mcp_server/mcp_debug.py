@@ -118,8 +118,9 @@ import httpx
 import httpx2
 from pydantic import JsonValue, TypeAdapter
 from starlette.requests import HTTPConnection
-from starlette.types import Message, Send
+from starlette.types import Message, Scope, Send
 
+from litellm.litellm_core_utils.core_helpers import iter_items
 from litellm.litellm_core_utils.secret_redaction import REDACTED, redact_string
 from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
 
@@ -131,6 +132,7 @@ MCP_DEBUG_REQUEST_HEADER: Final = "x-litellm-mcp-debug"
 
 # Prefix for all debug response headers
 _RESPONSE_HEADER_PREFIX: Final = "x-mcp-debug"
+_ASGI_MESSAGE_FIELD: Final = TypeAdapter(object)
 
 
 MCP_AUTH_DIAGNOSTICS_SCOPE_KEY: Final = "litellm.mcp.auth_diagnostics"
@@ -296,7 +298,7 @@ class MCPDebug:
         debug: Final[dict[str, str]] = {}
 
         # --- Inbound auth summary ---
-        inbound_parts: Final = []
+        inbound_parts: Final[list[str]] = []
         for hdr_name in ("x-litellm-api-key", "authorization", "x-mcp-auth"):
             for k, v in inbound_headers.items():
                 if k.lower() == hdr_name:
@@ -345,7 +347,7 @@ class MCPDebug:
 
         async def _send_with_debug(message: Message) -> None:
             if message["type"] == "http.response.start":
-                headers: Final = list(message.get("headers", []))
+                headers: Final = list(iter_items(_ASGI_MESSAGE_FIELD.validate_python(message.get("headers", []))))
                 for k, v in debug_headers.items():
                     headers.append((k.encode(), v.encode()))
                 message = {**message, "headers": headers}
@@ -357,7 +359,7 @@ class MCPDebug:
     def maybe_build_debug_headers(
         *,
         raw_headers: dict[str, str] | None,
-        scope: dict,
+        scope: Scope,
         mcp_servers: list[str] | None,
         oauth2_headers: dict[str, str] | None,
         client_ip: str | None,
@@ -409,7 +411,7 @@ _CAPTURE_TIMEOUT_SECONDS: Final = 1.0
 _CAPTURE_EXTENSION: Final = "litellm_mcp_error_preview"
 _SAFE_HEADER_NAMES: Final = frozenset({"content-type", "content-length", "accept"})
 _PUBLIC_HEADER_NAMES: Final = _SAFE_HEADER_NAMES | frozenset(("host", "user-agent", "accept-encoding", "connection"))
-_JSON_BODY: Final = TypeAdapter(JsonValue)
+_JSON_BODY: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
 _LOG_MASKER: Final = SensitiveDataMasker(visible_prefix=0, visible_suffix=0)
 
 

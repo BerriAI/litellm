@@ -29,7 +29,7 @@ _HANDLE_HTTP = (
 _STREAM_ASGI = "litellm.proxy.proxy_server._stream_mcp_asgi_response"
 _PRISMA = "litellm.proxy.proxy_server.prisma_client"
 _IS_ACCESS_GROUP = "litellm.proxy.proxy_server._is_mcp_access_group_cached"
-_USER_API_KEY_CACHE = "litellm.proxy.proxy_server.user_api_key_cache"
+_MCP_STATE_CACHE = "litellm.proxy.proxy_server.mcp_state_cache"
 _GET_ACCESS_GROUP_SERVERS = (
     "litellm.proxy.mcp_server.auth.user_api_key_auth_mcp."
     "MCPRequestHandler.get_mcp_servers_from_access_groups"
@@ -374,7 +374,7 @@ async def test_is_mcp_access_group_cached_caches_positive_result():
     get_access_group_servers = AsyncMock(return_value=["server-id"])
 
     with (
-        patch(_USER_API_KEY_CACHE, new=fake_cache),
+        patch(_MCP_STATE_CACHE, new=fake_cache),
         patch(_GET_ACCESS_GROUP_SERVERS, new=get_access_group_servers),
     ):
         result = await _is_mcp_access_group_cached("dev_group")
@@ -401,7 +401,7 @@ async def test_is_mcp_access_group_cached_caches_negative_result_briefly():
     get_access_group_servers = AsyncMock(return_value=[])
 
     with (
-        patch(_USER_API_KEY_CACHE, new=fake_cache),
+        patch(_MCP_STATE_CACHE, new=fake_cache),
         patch(_GET_ACCESS_GROUP_SERVERS, new=get_access_group_servers),
     ):
         result = await _is_mcp_access_group_cached("dev_group")
@@ -426,7 +426,7 @@ async def test_is_mcp_access_group_cached_returns_cached_negative_without_db():
     get_access_group_servers = AsyncMock(return_value=["server-id"])
 
     with (
-        patch(_USER_API_KEY_CACHE, new=fake_cache),
+        patch(_MCP_STATE_CACHE, new=fake_cache),
         patch(_GET_ACCESS_GROUP_SERVERS, new=get_access_group_servers),
     ):
         result = await _is_mcp_access_group_cached("never_existed")
@@ -650,7 +650,7 @@ async def test_dynamic_route_observes_committed_peer_catalog_changes(monkeypatch
     if change != "create":
         manager.registry = {old_row.server_id: await manager.build_mcp_server_from_table(old_row)}
     monkeypatch.setattr(proxy_server, "prisma_client", prisma)
-    monkeypatch.setattr(proxy_server, "user_api_key_cache", DualCache())
+    monkeypatch.setattr(proxy_server, "mcp_state_cache", DualCache())
     monkeypatch.setattr(mcp_server_manager, "global_mcp_server_manager", manager)
     name = "previous" if change == "delete" else "current"
     segment = f"{name},missing" if csv else name

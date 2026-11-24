@@ -91,6 +91,15 @@ def selection_refusal(step: Mapping[str, object], model: str, request: Mapping[s
             model=named,
             llm_provider="",
         )
+    if kind == "multiple_model_groups":
+        return litellm_exceptions.BadRequestError(
+            message=(
+                f"Model '{named}' matches deployments from multiple model groups. "
+                "Request a configured model_name instead of the raw provider model string."
+            ),
+            model=named,
+            llm_provider="",
+        )
     if kind == "reserved":
         return litellm_exceptions.BadRequestError(
             message=f"Deployment {named} is reserved for another team until {step.get('error_detail')}",

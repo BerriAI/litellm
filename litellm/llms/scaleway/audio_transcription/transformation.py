@@ -4,11 +4,14 @@ Support for Scaleway's OpenAI-compatible `/v1/audio/transcriptions` endpoint.
 API reference: https://www.scaleway.com/en/developers/api/generative-apis/#path-audio-create-an-audio-transcription
 """
 
+from collections.abc import Mapping
 from typing import Final
 
 import httpx
+from pydantic import TypeAdapter
 
 from litellm.litellm_core_utils.audio_utils.utils import process_audio_file
+from litellm.litellm_core_utils.core_helpers import json_contains, require_get, subscript
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.audio_transcription.transformation import (
     AudioTranscriptionRequestData,
@@ -21,6 +24,8 @@ from litellm.types.llms.openai import (
     OpenAIAudioTranscriptionOptionalParams,
 )
 from litellm.types.utils import FileTypes, TranscriptionResponse
+
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class ScalewayAudioTranscriptionException(BaseLLMException):
@@ -39,11 +44,11 @@ class ScalewayAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
 
     def map_openai_params(
         self,
-        non_default_params: dict,
-        optional_params: dict,
+        non_default_params: Mapping[str, object],
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:
         supported_params: Final = self.get_supported_openai_params(model)
         for k, v in non_default_params.items():
             if k in supported_params:
@@ -55,13 +60,15 @@ class ScalewayAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         stream: bool | None = None,
     ) -> str:
         return join_api_base("https://api.scaleway.ai/v1" if api_base is None else api_base, "audio/transcriptions")
 
-    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: dict[str, object] | httpx.Headers
+    ) -> BaseLLMException:
         return ScalewayAudioTranscriptionException(
             message=error_message,
             status_code=status_code,
@@ -70,14 +77,14 @@ class ScalewayAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: Mapping[str, str],
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, str]:
         if api_key is None:
             api_key = get_secret_str("SCW_SECRET_KEY")
 
@@ -101,12 +108,12 @@ class ScalewayAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         self,
         model: str,
         audio_file: FileTypes,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
     ) -> AudioTranscriptionRequestData:
         processed_audio: Final = process_audio_file(audio_file)
 
-        form_fields: Final[dict] = {"model": model}
+        form_fields: Final[dict[str, object]] = {"model": model}
         for key in self.get_supported_openai_params(model):
             value = optional_params.get(key)
             if value is not None:
@@ -131,7 +138,7 @@ class ScalewayAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
             return TranscriptionResponse(text=raw_response.text)
 
         try:
-            response_json: Final = raw_response.json()
+            response_json: Final = _DECODED_JSON.validate_python(raw_response.json())
         except Exception:
             raise ScalewayAudioTranscriptionException(
                 message="Received non-JSON response from Scaleway audio transcription",
@@ -139,13 +146,17 @@ class ScalewayAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
                 headers=raw_response.headers,
             )
 
-        text: Final = response_json.get("text") or ""
-        response: Final = TranscriptionResponse(text=text)
+        text: Final = require_get(response_json).get("text") or ""
+        response: Final = (
+            TranscriptionResponse(text=text)
+            if isinstance(text, str)
+            else TranscriptionResponse.model_validate({"text": text})
+        )
 
-        if "segments" in response_json:
-            response["segments"] = response_json["segments"]
-        if "language" in response_json:
-            response["language"] = response_json["language"]
+        if json_contains(response_json, "segments"):
+            response["segments"] = subscript(response_json, "segments")
+        if json_contains(response_json, "language"):
+            response["language"] = subscript(response_json, "language")
 
-        response.hidden_params = response_json
+        response.hidden_params = response_json  # pyright: ignore[reportAttributeAccessIssue]  # main stores the raw body
         return response

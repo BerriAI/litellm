@@ -55,7 +55,7 @@ describe("DashboardHeader breadcrumb", () => {
     state.pathname = "/ui/models-and-endpoints";
     renderDashboardHeader();
 
-    expect(screen.getByText("Models + Endpoints")).toBeInTheDocument();
+    expect(screen.getByText("Model Management")).toBeInTheDocument();
   });
 
   it("titles the dashboard root as Home", () => {

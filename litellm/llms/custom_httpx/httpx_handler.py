@@ -1,4 +1,5 @@
 import os
+from collections.abc import Mapping, Sequence
 from typing import Final
 
 import httpx
@@ -9,7 +10,7 @@ except Exception:
     version = "0.0.0"
 
 
-def get_default_headers() -> dict:
+def get_default_headers() -> dict[str, str]:
     """
     Get default headers for HTTP requests.
 
@@ -24,7 +25,7 @@ def get_default_headers() -> dict:
 
 
 class HTTPHandler:
-    def __init__(self, concurrent_limit=1000):
+    def __init__(self, concurrent_limit: int = 1000):
         headers: Final = get_default_headers()
         # Create a client with a connection pool
         self.client = httpx.AsyncClient(
@@ -39,16 +40,21 @@ class HTTPHandler:
         # Close the client when you're done with it
         await self.client.aclose()
 
-    async def get(self, url: str, params: dict | None = None, headers: dict | None = None):
+    async def get(
+        self,
+        url: str,
+        params: Mapping[str, str | int | float | bool | Sequence[str | int | float | bool | None] | None] | None = None,
+        headers: Mapping[str, str] | None = None,
+    ):
         response: Final = await self.client.get(url, params=params, headers=headers)
         return response
 
     async def post(
         self,
         url: str,
-        data: dict | str | None = None,
-        params: dict | None = None,
-        headers: dict | None = None,
+        data: Mapping[str, object] | str | None = None,
+        params: Mapping[str, str | int | float | bool | Sequence[str | int | float | bool | None] | None] | None = None,
+        headers: Mapping[str, str] | None = None,
     ):
         try:
             response: Final = await self.client.post(

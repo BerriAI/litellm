@@ -1,4 +1,4 @@
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Final, cast
 
 from httpx import Headers, Response
@@ -28,16 +28,16 @@ from ..request_labels import vertex_request_label_fields
 
 
 class VertexAIMultimodalEmbeddingConfig(BaseEmbeddingConfig):
-    def get_supported_openai_params(self, model: str) -> list:
+    def get_supported_openai_params(self, model: str) -> list[str]:
         return ["dimensions"]
 
     def map_openai_params(
         self,
-        non_default_params: dict,
-        optional_params: dict,
+        non_default_params: Mapping[str, object],
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:
         for param, value in non_default_params.items():
             if param == "dimensions":
                 optional_params["outputDimensionality"] = value
@@ -45,14 +45,14 @@ class VertexAIMultimodalEmbeddingConfig(BaseEmbeddingConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, str],
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, str]:
         default_headers: Final = {
             "Content-Type": "application/json; charset=utf-8",
             "Authorization": f"Bearer {api_key}",
@@ -106,7 +106,7 @@ class VertexAIMultimodalEmbeddingConfig(BaseEmbeddingConfig):
         else:
             return Instance(text=input_element)
 
-    def _try_merge_text_with_media(self, text_str: str, next_elem: str | None) -> tuple[Instance, bool]:
+    def _try_merge_text_with_media(self, text_str: str, next_elem: object) -> tuple[Instance, bool]:
         """
         Try to merge a text element with a following media element into a single instance.
 
@@ -129,7 +129,7 @@ class VertexAIMultimodalEmbeddingConfig(BaseEmbeddingConfig):
 
         return instance_args, False
 
-    def process_openai_embedding_input(self, _input: list | str) -> list[Instance]:
+    def process_openai_embedding_input(self, _input: Sequence[object] | str) -> list[Instance]:
         """
         Process the input for multimodal embedding requests.
 
@@ -170,7 +170,7 @@ class VertexAIMultimodalEmbeddingConfig(BaseEmbeddingConfig):
         model: str,
         input: AllEmbeddingInputValues,
         optional_params: dict,
-        headers: dict,
+        headers: Mapping[str, object],
         litellm_params: Mapping[str, object] | None = None,
     ) -> dict[str, object]:
         optional_params = optional_params or {}
@@ -212,9 +212,9 @@ class VertexAIMultimodalEmbeddingConfig(BaseEmbeddingConfig):
         model_response: EmbeddingResponse,
         logging_obj: LiteLLMLoggingObj,
         api_key: str | None,
-        request_data: dict,
-        optional_params: dict,
-        litellm_params: dict,
+        request_data: Mapping[str, object],
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
     ) -> EmbeddingResponse:
         if raw_response.status_code != 200:
             raise Exception(f"Error: {raw_response.status_code} {raw_response.text}")
