@@ -79,6 +79,14 @@ impl UiSettings {
     }
 }
 
+impl std::ops::Deref for UiSettings {
+    type Target = Object;
+
+    fn deref(&self) -> &Object {
+        &self.0
+    }
+}
+
 impl<'de> Deserialize<'de> for UiSettings {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         #[derive(Deserialize)]
