@@ -2,6 +2,7 @@
 Translates from OpenAI's `/v1/audio/transcriptions` to ElevenLabs's `/v1/speech-to-text`
 """
 
+import json
 from collections.abc import Iterable, Mapping
 from typing import Final, Protocol
 
@@ -42,13 +43,18 @@ def _json_body(response: _JsonResponse) -> object:
 def _form_scalar(value: object) -> str:
     if isinstance(value, bool):
         return "true" if value else "false"
+    if isinstance(value, Mapping):
+        return json.dumps(value, default=str)
     return str(value)
 
 
 def _form_value(value: object) -> str | tuple[str, ...]:
-    if isinstance(value, (list, tuple)):
-        return tuple(_form_scalar(item) for item in _FORM_ITEMS.validate_python(value))
-    return _form_scalar(value)
+    if not isinstance(value, (list, tuple)):
+        return _form_scalar(value)
+    items: Final = _FORM_ITEMS.validate_python(value)
+    if any(isinstance(item, (Mapping, list, tuple)) for item in items):
+        return json.dumps(items, default=str)
+    return tuple(_form_scalar(item) for item in items if item is not None)
 
 
 class ElevenLabsAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
@@ -107,10 +113,13 @@ class ElevenLabsAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
                 openai_params=openai_params,
             )
         )
+        extra_body: Final = provider_specific_params.get("extra_body")
+        extra_fields: Final = _JSON_OBJECT.validate_python(extra_body if isinstance(extra_body, Mapping) else {})
         form_data: Final = {
             "model_id": model,
+            **{key: _form_value(value) for key, value in extra_fields.items() if value is not None},
             **{key: _form_value(value) for key, value in params.items() if key in openai_params and value is not None},
-            **{key: _form_value(value) for key, value in provider_specific_params.items()},
+            **{key: _form_value(value) for key, value in provider_specific_params.items() if key != "extra_body"},
         }
 
         # Prepare files

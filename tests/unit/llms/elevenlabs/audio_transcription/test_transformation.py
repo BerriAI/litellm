@@ -69,8 +69,25 @@ def _sent_fields(route: respx.Route) -> dict[str, list[str]]:
         ({"keyterms": ["EIN"]}, {"keyterms": ["EIN"]}),
         ({"diarize": True, "tag_audio_events": False}, {"diarize": ["true"], "tag_audio_events": ["false"]}),
         ({"num_speakers": 2, "language": "en"}, {"language_code": ["en"], "num_speakers": ["2"]}),
+        ({"keyterms": ("EIN", "BOI report")}, {"keyterms": ["EIN", "BOI report"]}),
+        ({"keyterms": ["EIN", None]}, {"keyterms": ["EIN"]}),
+        ({"keyterms": []}, {}),
+        ({"additional_formats": [{"format": "srt"}]}, {"additional_formats": ['[{"format": "srt"}]']}),
+        ({"webhook_metadata": {"job": "a1", "retry": False}}, {"webhook_metadata": ['{"job": "a1", "retry": false}']}),
+        ({"extra_body": {"keyterms": ["EIN"], "diarize": True}}, {"keyterms": ["EIN"], "diarize": ["true"]}),
     ],
-    ids=["keyterms-multi", "keyterms-single", "bools", "scalars"],
+    ids=[
+        "keyterms-multi",
+        "keyterms-single",
+        "bools",
+        "scalars",
+        "keyterms-tuple",
+        "keyterms-none-item",
+        "keyterms-empty",
+        "list-of-objects-as-json",
+        "object-as-json",
+        "extra-body-flattened",
+    ],
 )
 def test_transcription_sends_each_param_as_its_own_multipart_text_part(
     respx_mock: respx.MockRouter, params: dict[str, object], expected: dict[str, list[str]]
