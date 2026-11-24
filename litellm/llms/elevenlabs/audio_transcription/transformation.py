@@ -28,23 +28,30 @@ from ..common_utils import ElevenLabsException
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
 _JSON_OBJECTS: Final = TypeAdapter(Iterable[Mapping[str, object]], config=ConfigDict(hide_input_in_errors=True))
 _FORM_ITEMS: Final = TypeAdapter(tuple[object, ...])
+_EXTRA_BODY_BLOCKED_FIELDS: Final = frozenset({"model_id", "extra_body"})
+
+
+def _json_compatible(value: object) -> object:
+    if isinstance(value, Mapping):
+        return _JSON_OBJECT.validate_python(value)
+    return str(value)
 
 
 def _form_scalar(value: object) -> str:
     if isinstance(value, bool):
         return "true" if value else "false"
     if isinstance(value, Mapping):
-        return json.dumps(value, default=str)
+        return json.dumps(value, default=_json_compatible)
     return str(value)
 
 
 def _form_value(value: object) -> str | tuple[str, ...]:
     if not isinstance(value, (list, tuple)):
         return _form_scalar(value)
-    items: Final = _FORM_ITEMS.validate_python(value)
+    items: Final = tuple(item for item in _FORM_ITEMS.validate_python(value) if item is not None)
     if any(isinstance(item, (Mapping, list, tuple)) for item in items):
-        return json.dumps(items, default=str)
-    return tuple(_form_scalar(item) for item in items if item is not None)
+        return json.dumps(items, default=_json_compatible)
+    return tuple(_form_scalar(item) for item in items)
 
 
 class ElevenLabsAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
@@ -107,7 +114,11 @@ class ElevenLabsAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         extra_fields: Final = _JSON_OBJECT.validate_python(extra_body if isinstance(extra_body, Mapping) else {})
         form_data: Final = {
             "model_id": model,
-            **{key: _form_value(value) for key, value in extra_fields.items() if value is not None},
+            **{
+                key: _form_value(value)
+                for key, value in extra_fields.items()
+                if key not in _EXTRA_BODY_BLOCKED_FIELDS and value is not None
+            },
             **{key: _form_value(value) for key, value in params.items() if key in openai_params and value is not None},
             **{key: _form_value(value) for key, value in provider_specific_params.items() if key != "extra_body"},
         }
