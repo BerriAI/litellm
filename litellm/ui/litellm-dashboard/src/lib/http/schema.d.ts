@@ -6364,7 +6364,6 @@ export interface paths {
         /**
          * Get Ui Settings
          * @description Get UI-specific configuration flags.
-         *     All authenticated users can fetch these settings for client-side behavior.
          */
         get: operations["get_ui_settings_get_ui_settings_get"];
         put?: never;
