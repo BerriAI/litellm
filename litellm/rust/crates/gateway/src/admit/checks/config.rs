@@ -147,6 +147,7 @@ fn variables(environment: &Environment) -> impl Iterator<Item = Box<str>> + use<
         non_llm_connection_timeout: _,
         litellm_rate_limit_window_size: _,
         litellm_tpm_token_reservation_enabled: _,
+        proxy_batch_write_at: _,
         legacy_multi_instance_rate_limiting,
         use_aws_kms,
         litellm_ssl_ciphers,
@@ -295,6 +296,7 @@ fn general(config: &Config) -> impl Iterator<Item = Box<str>> + '_ {
 /// The settings router-core never reads. It reads every other one as Python's router does, and
 /// `model` names the ones it serves through a host step the native host does not answer, for the
 /// groups a request reaches.
+/// `optional_pre_call_checks` is honored when it names only the checks it runs itself.
 fn router(settings: &RouterSettings) -> impl Iterator<Item = Box<str>> + '_ {
     let RouterSettings {
         routing_strategy: _,
@@ -337,9 +339,9 @@ fn router(settings: &RouterSettings) -> impl Iterator<Item = Box<str>> + '_ {
             max_retries,
             weights,
             tag_routing_prefix,
-            optional_pre_call_checks,
         ],
-        on: [enable_tag_filtering]
+        on: [enable_tag_filtering],
+        by: [optional_pre_call_checks => super::router::checked_by_the_host]
     )
     .chain(other("router_settings.", additional_fields.keys(), &[]))
 }
@@ -522,6 +524,10 @@ mod tests {
     #[case::an_unknown_general_setting_beside_the_encryption_algorithm(
         "general_settings:\n  encryption_algorithm: aes-256-gcm\n  future_setting: true\n",
         "general_settings.future_setting"
+    )]
+    #[case::a_pre_call_check_the_host_runs(
+        "router_settings:\n  optional_pre_call_checks: [enforce_model_rate_limits, prompt_caching]\n",
+        "router_settings.optional_pre_call_checks"
     )]
     #[case::a_section_the_config_types_do_not_name("future_section: {}\n", "future_section")]
     #[case::a_callback_beside_the_dynamic_rate_limiter(

@@ -5,6 +5,7 @@ import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from functools import partial
 from types import MappingProxyType
 from typing import Final, Literal, Protocol, SupportsFloat, SupportsIndex, TypedDict, cast
 
@@ -33,7 +34,7 @@ from litellm.types.utils import (
     Usage,
     text_tokens_without_nested_reasoning,
 )
-from litellm.utils import get_model_info
+from litellm.utils import get_model_info, get_model_info_for_call
 
 # Pre-resolved CallTypes enum values for fast membership checks
 _IMAGE_RESPONSE_CALL_TYPES: Final = frozenset(
@@ -1196,6 +1197,8 @@ def get_billed_token_rates(
     current_time: datetime | None = None,
     custom_cost_per_token: CostPerToken | None = None,
     model_info: ModelInfo | None = None,
+    api_base: str | None = None,
+    api_key: str | None = None,
 ) -> BilledTokenRates | None:
     """Rates the cost calculator bills ``usage`` at, resolved exactly as the totals and the token-type
     breakdown resolve them. None when the model's pricing cannot be resolved."""
@@ -1205,7 +1208,9 @@ def get_billed_token_rates(
         resolved_model_info: Final = (
             model_info
             if model_info is not None
-            else get_model_info(model=model, custom_llm_provider=custom_llm_provider)
+            else get_model_info_for_call(
+                model=model, custom_llm_provider=custom_llm_provider, api_base=api_base, api_key=api_key
+            )
         )
     except Exception:  # noqa: BLE001  # get_model_info raises a bare Exception for an unmapped model: no rates
         return None
@@ -1230,6 +1235,8 @@ def get_token_type_cost_breakdown(
     current_time: datetime | None = None,
     custom_cost_per_token: CostPerToken | None = None,
     model_info: ModelInfo | None = None,
+    api_base: str | None = None,
+    api_key: str | None = None,
 ) -> TokenTypeCostBreakdown:
     """
     Provider-agnostic cost of reasoning and cache tokens, derived from the usage
@@ -1255,6 +1262,8 @@ def get_token_type_cost_breakdown(
         current_time=current_time,
         custom_cost_per_token=custom_cost_per_token,
         model_info=model_info,
+        api_base=api_base,
+        api_key=api_key,
     )
     if rates is None:
         return TokenTypeCostBreakdown(0.0, 0.0, 0.0)
@@ -1512,6 +1521,12 @@ def _model_priced_image_cost_calculator(
             )
 
             return dashscope_image_cost_calculator
+        case litellm.LlmProviders.MINIMAX.value:
+            from litellm.llms.openai.image_generation.cost_calculator import (
+                cost_calculator as openai_gpt_image_cost_calculator,
+            )
+
+            return partial(openai_gpt_image_cost_calculator, custom_llm_provider=litellm.LlmProviders.MINIMAX.value)
         case _:
             return None
 
@@ -1539,7 +1554,7 @@ class CostCalculatorUtils:
         quality: str | None = None,
         n: int | None = None,
         size: str | None = None,
-        optional_params: dict | None = None,
+        optional_params: dict[str, object] | None = None,
         call_type: str | None = None,
         model_info: ModelInfo | None = None,
         vertex_location: str | None = None,

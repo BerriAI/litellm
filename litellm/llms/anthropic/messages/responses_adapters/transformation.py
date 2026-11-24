@@ -361,7 +361,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                                 )
                             )
                         elif btype == "image":
-                            url = self._translate_anthropic_image_source_to_url(cast(dict, block.get("source", {})))
+                            url = self._translate_anthropic_image_source_to_url(block.get("source", {}))
                             if url:
                                 user_parts.append(
                                     with_prompt_cache_breakpoint(

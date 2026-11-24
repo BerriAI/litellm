@@ -139,7 +139,7 @@ class BaseBatchesConfig(ABC):
         model: str | None,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
-        litellm_params: dict,
+        litellm_params: dict[str, object],
     ) -> LiteLLMBatch:
         """
         Transform provider-specific batch response to LiteLLM format.

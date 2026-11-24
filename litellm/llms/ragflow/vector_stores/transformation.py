@@ -52,7 +52,7 @@ _RAGFLOW_EMPTY_DATA: Final[_RAGFlowDataset] = {}
 class RAGFlowVectorStoreConfig(BaseVectorStoreConfig):
     """Vector store configuration for RAGFlow datasets."""
 
-    def get_auth_credentials(self, litellm_params: dict) -> BaseVectorStoreAuthCredentials:
+    def get_auth_credentials(self, litellm_params: Mapping[str, object]) -> BaseVectorStoreAuthCredentials:
         api_key = litellm_params.get("api_key")
         if api_key is None:
             # Try to get from environment variable
@@ -72,7 +72,7 @@ class RAGFlowVectorStoreConfig(BaseVectorStoreConfig):
             "write": [],
         }
 
-    def validate_environment(self, headers: dict, litellm_params: GenericLiteLLMParams | None) -> dict:
+    def validate_environment(self, headers: dict[str, object], litellm_params: GenericLiteLLMParams | None) -> dict:
         """Validate environment and set headers for RAGFlow API."""
         litellm_params = litellm_params or GenericLiteLLMParams()
         api_key: Final = litellm_params.api_key or get_secret_str("RAGFLOW_API_KEY")
@@ -91,7 +91,7 @@ class RAGFlowVectorStoreConfig(BaseVectorStoreConfig):
     def get_complete_url(
         self,
         api_base: str | None,
-        litellm_params: dict,
+        litellm_params: Mapping[str, object],
     ) -> str:
         """
         Get the complete URL for RAGFlow datasets API.
@@ -119,9 +119,9 @@ class RAGFlowVectorStoreConfig(BaseVectorStoreConfig):
         vector_store_search_optional_params: VectorStoreSearchOptionalRequestParams,
         api_base: str,
         litellm_logging_obj: LiteLLMLoggingObj,
-        litellm_params: dict,
+        litellm_params: Mapping[str, object],
         extra_body: Mapping[str, object] | None = None,
-    ) -> tuple[str, dict]:
+    ) -> tuple[str, dict[str, object]]:
         """RAGFlow vector stores are management-only, search is not supported."""
         raise NotImplementedError("RAGFlow vector stores support dataset management only, not search/retrieval")
 
@@ -135,7 +135,7 @@ class RAGFlowVectorStoreConfig(BaseVectorStoreConfig):
         self,
         vector_store_create_optional_params: VectorStoreCreateOptionalRequestParams,
         api_base: str,
-    ) -> tuple[str, dict]:
+    ) -> tuple[str, dict[str, object]]:
         """
         Transform create request to RAGFlow POST /api/v1/datasets format.
 

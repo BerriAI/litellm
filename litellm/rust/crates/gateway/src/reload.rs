@@ -32,7 +32,7 @@ use litellm_config::{
     Config, Value,
     db::{
         models::DbModel,
-        settings::{Section, SettingsRows},
+        settings::{Section, SettingsRows, UiSettings},
     },
 };
 use litellm_config_load::Document;
@@ -297,17 +297,50 @@ impl Reading {
 
     /// The stored config `rows` hold now, `None` when it cannot be read. When only the settings
     /// rows cannot be read, the settings last served stand in for them and no model served is
-    /// dropped, as Python skips deletions when its config read fails.
+    /// dropped, as Python skips deletions when its config read fails. When only the UI settings
+    /// row cannot be read, the UI settings last served stand in for it, as Python keeps the flags
+    /// it has when that read fails.
     async fn read(&self, rows: &impl StoredRows) -> Option<Fetched> {
         let key = self.key.as_ref();
+        let ui_settings = match (rows.ui_settings().await, &self.served) {
+            (Ok(column), _) => column
+                .map(|column| UiSettings::from_json(column.get()))
+                .unwrap_or_default(),
+            (Err(error), Some(served)) => {
+                tracing::warn!(
+                    error = %Report::new(&error),
+                    "could not read the UI settings the proxy stores in its database, so this read keeps the ones it last served"
+                );
+                served.settings.ui_settings.clone()
+            }
+            (Err(error), None) => {
+                tracing::warn!(
+                    error = %Report::new(&error),
+                    "could not read the UI settings the proxy stores in its database"
+                );
+                return None;
+            }
+        };
         let (settings, deletes) = match (rows.settings().await, &self.served) {
-            (Ok(found), _) => (stored::settings_rows(&found, key), true),
+            (Ok(found), _) => (
+                SettingsRows {
+                    ui_settings,
+                    ..stored::settings_rows(&found, key)
+                },
+                true,
+            ),
             (Err(error), Some(served)) => {
                 tracing::warn!(
                     error = %Report::new(&error),
                     "could not read the settings the proxy stores in its database, so this read keeps the settings and every model it last served"
                 );
-                (served.settings.clone(), false)
+                (
+                    SettingsRows {
+                        ui_settings,
+                        ..served.settings.clone()
+                    },
+                    false,
+                )
             }
             (Err(error), None) => {
                 tracing::warn!(
@@ -404,6 +437,10 @@ impl Changes {
             (
                 "environment_variables",
                 changed(&was.environment_variables, &is.environment_variables),
+            ),
+            (
+                "ui_settings",
+                changed(&**was.ui_settings, &**is.ui_settings),
             ),
         ]
         .into_iter()
@@ -506,6 +543,7 @@ mod tests {
                 "shared",
                 &format!(r#"{{"api_key": "{credential_key}"}}"#),
             )]),
+            ui_settings: Ok(None),
         }
     }
 
@@ -703,6 +741,54 @@ mod tests {
             [api_key(&live, "a"), api_key(&live, "b")],
             keys.map(|key| key.map(str::to_owned))
         );
+    }
+
+    const FORWARD_HEADERS: &str = r#"{"forward_client_headers_to_llm_api": true}"#;
+
+    #[rstest]
+    #[tokio::test]
+    async fn a_flag_set_through_the_ui_is_a_change_and_sends_requests_to_python() {
+        let (live, mut reading) = booted(&serving(&[("a", "key-1")])).await;
+        let now = Rows {
+            ui_settings: Ok(Some(FORWARD_HEADERS)),
+            ..serving(&[("a", "key-1")])
+        };
+
+        let read = reading.read(&now).await.unwrap();
+        let changed = Changes::between(reading.served.as_ref(), &read);
+        let reloaded = reading.reload(&now, &live, &rebuild).await;
+
+        assert_eq!(
+            changed,
+            changes(
+                &[],
+                &[],
+                &[],
+                &[],
+                &["ui_settings.forward_client_headers_to_llm_api"]
+            )
+        );
+        assert_eq!(reloaded, Reloaded::Swapped);
+        assert_eq!(refused_for(&live, "a").await, Some("settings"));
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn a_ui_settings_read_that_fails_keeps_the_flags_served() {
+        let booted_rows = Rows {
+            ui_settings: Ok(Some(FORWARD_HEADERS)),
+            ..serving(&[("a", "key-1")])
+        };
+        let (live, mut reading) = booted(&booted_rows).await;
+        let now = Rows {
+            ui_settings: Err(()),
+            ..serving(&[("a", "key-1")])
+        };
+
+        let reloaded = reading.reload(&now, &live, &rebuild).await;
+
+        assert_eq!(reloaded, Reloaded::Unchanged);
+        assert_eq!(refused_for(&live, "a").await, Some("settings"));
     }
 
     #[rstest]

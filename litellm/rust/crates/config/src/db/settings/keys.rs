@@ -64,11 +64,13 @@ pub(super) const MANAGED_GENERAL_SETTINGS: &[&str] = &[
     "global_max_parallel_requests",
     "health_check_concurrency",
     "health_check_interval",
+    "health_check_skip_blocked_background_models",
     "health_check_skip_disabled_background_models",
     "include_call_id_in_error_body",
     "infer_model_from_keys",
     "key_expiry_alert_days",
     "key_management_system",
+    "ldap_sync",
     "master_key",
     "max_batch_file_records",
     "max_batch_file_size_mb",
@@ -99,6 +101,12 @@ pub(super) const MANAGED_GENERAL_SETTINGS: &[&str] = &[
     "mcp_allowed_clients",
     "mcp_client_id_header",
     "mcp_disabled_capabilities",
+    "mcp_event_max_events_per_minute",
+    "mcp_event_max_streams",
+    "mcp_event_max_streams_per_caller",
+    "mcp_event_max_subscriptions_per_key",
+    "mcp_events_enabled",
+    "mcp_events_public_base_url",
     "mcp_internal_ip_ranges",
     "mcp_prefer_client_id_metadata_document",
     "mcp_require_explicit_server_scope",
@@ -154,7 +162,9 @@ pub(super) const MANAGED_GENERAL_SETTINGS: &[&str] = &[
 ];
 
 /// The `general_settings` keys the proxy reads from the `LiteLLM_UISettings` table instead of the
-/// `general_settings` row: `_UI_SETTINGS_FIELDS` in `litellm/proxy/config_resolvers/settings_rules.py`.
+/// `general_settings` row: `_UI_SETTINGS_FIELDS` in `litellm/proxy/config_resolvers/settings_rules.py`,
+/// which equals `_RUNTIME_GENERAL_SETTINGS_FLAGS`, the keys `apply_runtime_general_settings_flags`
+/// copies from that table.
 pub(super) const UI_SETTINGS: &[&str] = &[
     "allow_agents_for_team_admins",
     "allow_public_health_readiness_details",

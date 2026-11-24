@@ -14,6 +14,9 @@ from tests.unit.proxy._prisma import prisma_with_empty_config
 
 import litellm.proxy
 import litellm.proxy.proxy_server
+from litellm.constants import LITELLM_SETTINGS_SAFE_DB_OVERRIDES
+from litellm.proxy.config_resolvers import settings_rules
+from litellm.proxy.ui_crud_endpoints import proxy_setting_endpoints
 
 load_dotenv()
 import io
@@ -4701,3 +4704,52 @@ async def test_customer_and_app_accounting_use_the_requests_original_budget_wind
     assert tuple(window["reset_at"] for window in windows) == tuple(
         counter.reset_at.isoformat() for counter in counters if counter.reset_at is not None
     )
+
+
+_RUST_DB_SETTINGS_FIXTURE: Final = (
+    Path(__file__).resolve().parents[3] / "litellm/rust/crates/config/generated/db_settings.json"
+)
+
+
+def _rust_db_settings_drift_message(name: str, live: frozenset[str], pinned: frozenset[str]) -> str:
+    return (
+        f"{name} changed, but the Rust gateway keeps its own copy of it. "
+        f"Added in Python: {sorted(live - pinned)}. Removed in Python: {sorted(pinned - live)}. "
+        "From the repository root, regenerate the fixture with "
+        "`uv run python litellm/rust/crates/config/scripts/generate_db_settings_fixtures.py "
+        "> litellm/rust/crates/config/generated/db_settings.json`, update the matching table in "
+        "litellm/rust/crates/config/src/db/settings/keys.rs, and run "
+        "`cargo test -p litellm-config --lib db::settings` from litellm/rust."
+    )
+
+
+@pytest.mark.parametrize(
+    ("name", "live", "table"),
+    [
+        (
+            "proxy_server._db_managed_general_settings_keys()",
+            litellm.proxy.proxy_server._db_managed_general_settings_keys(),
+            "managed_general_settings",
+        ),
+        (
+            "LITELLM_SETTINGS_SAFE_DB_OVERRIDES with the DB callback lists and `responses`",
+            frozenset(
+                (
+                    *LITELLM_SETTINGS_SAFE_DB_OVERRIDES,
+                    *litellm.proxy.proxy_server._DB_CONFIG_CALLBACK_EVENT_TYPES,
+                    "responses",
+                )
+            ),
+            "stored_litellm_settings",
+        ),
+        ("settings_rules._UI_SETTINGS_FIELDS", frozenset(settings_rules._UI_SETTINGS_FIELDS), "ui_settings"),
+        (
+            "proxy_setting_endpoints._RUNTIME_GENERAL_SETTINGS_FLAGS",
+            frozenset(proxy_setting_endpoints._RUNTIME_GENERAL_SETTINGS_FLAGS),
+            "ui_settings",
+        ),
+    ],
+)
+def test_rust_gateway_copy_of_db_settings_keys_matches_python(name: str, live: frozenset[str], table: str) -> None:
+    pinned: Final = frozenset(json.loads(_RUST_DB_SETTINGS_FIXTURE.read_text())["tables"][table])
+    assert live == pinned, _rust_db_settings_drift_message(name, live, pinned)

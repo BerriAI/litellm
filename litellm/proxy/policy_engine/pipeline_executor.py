@@ -147,7 +147,7 @@ class _StreamRewriteObserver(CustomGuardrail):
     async def apply_guardrail(
         self,
         inputs: GenericGuardrailAPIInputs,
-        request_data: dict,  # mutable-ok: matches CustomGuardrail.apply_guardrail
+        request_data: dict[str, object],  # mutable-ok: matches CustomGuardrail.apply_guardrail
         input_type: Literal["request", "response"],
         logging_obj: "LiteLLMLoggingObj | None" = None,
     ) -> GenericGuardrailAPIInputs:
@@ -203,7 +203,7 @@ class _ScannedTextRecorder(CustomGuardrail):
     async def apply_guardrail(
         self,
         inputs: GenericGuardrailAPIInputs,
-        request_data: dict,  # mutable-ok: matches CustomGuardrail.apply_guardrail
+        request_data: dict[str, object],  # mutable-ok: matches CustomGuardrail.apply_guardrail
         input_type: Literal["request", "response"],
         logging_obj: "LiteLLMLoggingObj | None" = None,
     ) -> GenericGuardrailAPIInputs:
@@ -245,7 +245,7 @@ class _LegacyHookStreamAdapter(CustomGuardrail):
     async def apply_guardrail(
         self,
         inputs: GenericGuardrailAPIInputs,
-        request_data: dict,  # mutable-ok: matches CustomGuardrail.apply_guardrail
+        request_data: dict[str, object],  # mutable-ok: matches CustomGuardrail.apply_guardrail
         input_type: Literal["request", "response"],
         logging_obj: "LiteLLMLoggingObj | None" = None,
     ) -> GenericGuardrailAPIInputs:
@@ -427,7 +427,7 @@ class PipelineExecutor:
         user_api_key_dict: "UserAPIKeyAuth",
         call_type: str,
         policy_name: str,
-        raw_request_snapshot: dict | None = None,  # mutable-ok: same request-payload shape as data
+        raw_request_snapshot: dict[str, object] | None = None,  # mutable-ok: same request-payload shape as data
         streaming_chunks: list[object] | None = None,  # mutable-ok: shared buffered-stream chunks, read per step
         endpoint_translation: "BaseTranslation | None" = None,
         stream_already_sent: bool = False,

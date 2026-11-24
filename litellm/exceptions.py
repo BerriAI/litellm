@@ -473,7 +473,7 @@ class Timeout(openai.APITimeoutError):
         litellm_debug_info: str | None = None,
         max_retries: int | None = None,
         num_retries: int | None = None,
-        headers: dict | None = None,
+        headers: Mapping[str, object] | None = None,
         exception_status_code: int | None = None,
         response: httpx.Response | None = None,
     ):
@@ -757,7 +757,7 @@ class RejectedRequestError(BadRequestError):
         message: object,
         model: str | None,
         llm_provider: str | None,
-        request_data: dict,
+        request_data: dict[str, object],
         litellm_debug_info: str | None = None,
     ):
         self.status_code = 400
@@ -802,7 +802,7 @@ class ContentPolicyViolationError(BadRequestError):
         llm_provider: str | None,
         response: httpx.Response | None = None,
         litellm_debug_info: str | None = None,
-        provider_specific_fields: dict | None = None,
+        provider_specific_fields: Mapping[str, object] | None = None,
         body: Mapping[str, object] | None = None,
     ):
         self.status_code = 400
@@ -1134,6 +1134,7 @@ class UnsupportedParamsError(BadRequestError):
         litellm_debug_info: str | None = None,
         max_retries: int | None = None,
         num_retries: int | None = None,
+        body: Mapping[str, object] | None = None,
     ):
         super().__init__(
             message=message,
@@ -1143,6 +1144,7 @@ class UnsupportedParamsError(BadRequestError):
             litellm_debug_info=litellm_debug_info,
             max_retries=max_retries,
             num_retries=num_retries,
+            body=body,
         )
         self.message = f"litellm.UnsupportedParamsError: {message}"
         self.args = (self.message,)

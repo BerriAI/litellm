@@ -699,9 +699,7 @@ class RedisSemanticCache(BaseCache):
             **kwargs: Additional arguments
         """
         try:
-            tasks: Final = []
-            for val in cache_list:
-                tasks.append(self.async_set_cache(val[0], val[1], **kwargs))
+            tasks: Final = [self.async_set_cache(val[0], val[1], **kwargs) for val in cache_list]
             await asyncio.gather(*tasks)
         except Exception as e:
             print_verbose(f"Error in async_set_cache_pipeline: {e}")

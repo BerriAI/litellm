@@ -14,8 +14,8 @@ use serde_json::{Map, Value};
 
 use crate::{
     limiter::{
-        Candidate, FailureFacts, IoUsage, ModelFacts, PolicyFacts, PostCallFailureFacts, PtuFacts,
-        SuccessFacts, TargetFacts,
+        Candidate, EMBEDDING_CALL_TYPES, FailureFacts, IoUsage, ModelFacts, PolicyFacts,
+        PostCallFailureFacts, PtuFacts, SuccessFacts, TargetFacts,
     },
     ptu::{Ceiling, Usage, settlement_tokens},
     settings::TokenRateLimitType,
@@ -200,6 +200,13 @@ pub fn charged_tokens(usage: Option<&UsageObject>, kind: TokenRateLimitType) -> 
     }
 }
 
+fn reported_tokens(usage: Option<&UsageObject>, kind: TokenRateLimitType) -> i64 {
+    match charged_tokens(usage, kind) {
+        0 => aggregate_only(usage),
+        charged => charged,
+    }
+}
+
 /// `_aggregate_only_total_tokens`: the total of a usage that reports no input/output split, which
 /// a pass-through target pricing its own multi-model call charges under every rate limit type.
 pub fn aggregate_only(usage: Option<&UsageObject>) -> i64 {
@@ -377,6 +384,12 @@ impl LoggedCall {
         }
     }
 
+    fn embedding(&self) -> bool {
+        self.call_type
+            .as_deref()
+            .is_some_and(|call_type| EMBEDDING_CALL_TYPES.contains(&call_type))
+    }
+
     fn socket(&self) -> bool {
         self.call_type.as_deref() == Some(RESPONSES_WEBSOCKET_CALL_TYPE)
     }
@@ -458,10 +471,15 @@ impl LoggedCall {
         keep_slot: bool,
     ) -> SuccessFacts {
         let usage = self.success_usage();
-        let total_tokens = match charged_tokens(usage, kind) {
-            0 => aggregate_only(usage),
-            charged => charged,
+        let total_tokens = match reported_tokens(usage, kind) {
+            0 if self.embedding() && kind == TokenRateLimitType::Total => {
+                reported_tokens(usage, TokenRateLimitType::Input)
+            }
+            tokens => tokens,
         };
+        let embedding_reported_no_tokens = self.embedding()
+            && reported_tokens(usage, TokenRateLimitType::Total) == 0
+            && reported_tokens(usage, TokenRateLimitType::Input) == 0;
         let settled = match usage {
             Some(usage) => reconciled(source(usage)),
             None => self.response.reconciled(),
@@ -502,6 +520,9 @@ impl LoggedCall {
             call_id: self.call_id.clone(),
             exempt: self.exempt(),
             total_tokens,
+            settles_at_reservation: embedding_reported_no_tokens
+                && kind != TokenRateLimitType::Output,
+            embedding_reported_no_tokens,
             team_label: self.team_label(),
             targets,
             served_model: resolved.served_model.clone(),
