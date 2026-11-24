@@ -153,7 +153,7 @@ class TestResponsesAPIRequestUtils:
             "invalid_param": "value",
         }
 
-        result: Final[dict] = ResponsesAPIRequestUtils.get_optional_params_responses_api(
+        result: Final[dict[str, object]] = ResponsesAPIRequestUtils.get_optional_params_responses_api(
             model="gpt-5",
             responses_api_provider_config=OpenAIResponsesAPIConfig(),
             response_api_optional_params=ResponsesAPIRequestUtils.get_requested_response_api_optional_param(
