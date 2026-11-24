@@ -1277,6 +1277,10 @@ def _is_streaming_response_for_correlation(result: object) -> bool:
 def _returns_requested_stream(kwargs: dict[str, object], call_type: CallTypes | str, result: object) -> bool:
     if call_type in (CallTypes.transcription, CallTypes.atranscription):
         return isinstance(result, (openai.Stream, openai.AsyncStream))
+    if call_type in _IMAGE_STREAMING_CALL_TYPES:
+        from litellm.images.streaming import AsyncImageStream, ImageStream
+
+        return isinstance(result, (ImageStream, AsyncImageStream))
     return _is_streaming_request(kwargs=kwargs, call_type=call_type)
 
 
@@ -3167,7 +3171,18 @@ _NEVER_STREAMING_CALL_TYPES: Final = _SPEECH_CALL_TYPES | frozenset(
     }
 )
 
-_RESULT_DECIDES_STREAMING_CALL_TYPES: Final = frozenset({"get_responses", "aget_responses"})
+_IMAGE_STREAMING_CALL_TYPES: Final = frozenset(
+    {
+        CallTypes.image_generation.value,
+        CallTypes.aimage_generation.value,
+        CallTypes.image_edit.value,
+        CallTypes.aimage_edit.value,
+    }
+)
+
+_RESULT_DECIDES_STREAMING_CALL_TYPES: Final = (
+    frozenset({"get_responses", "aget_responses"}) | _IMAGE_STREAMING_CALL_TYPES
+)
 
 
 def _is_streaming_request(
