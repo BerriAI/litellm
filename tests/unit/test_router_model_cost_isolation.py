@@ -991,6 +991,34 @@ async def test_each_team_lists_the_limits_of_its_own_openrouter_wildcard(openrou
     }
 
 
+async def test_a_team_wildcard_under_the_public_wildcard_name_lists_its_limits_only_to_its_team(
+    openrouter_settings_cleared: None,
+) -> None:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "openrouter/*",
+                "litellm_params": {"model": "openrouter/*", "api_key": "key-global"},
+                "model_info": {"id": "global-wild-id"},
+            },
+            {**_team_openrouter_wildcard("team-1", "key-one"), "model_name": "openrouter/*"},
+        ]
+    )
+
+    await _refresh_against(router, _catalog_per_key)
+
+    listed: Final = {
+        team_id: router.registry().group("openrouter/vendor/capped", field="listing_info", team_id=team_id)
+        for team_id in ("team-1", "team-2", None)
+    }
+    global_limits: Final = DeploymentModelListingInfo(cost_map_keys=(), max_input_tokens=1024, max_output_tokens=256)
+    assert listed == {
+        "team-1": DeploymentModelListingInfo(cost_map_keys=(), max_input_tokens=4096, max_output_tokens=1024),
+        "team-2": global_limits,
+        None: global_limits,
+    }
+
+
 async def test_openrouter_wildcard_listing_info_keeps_the_operator_limit(openrouter_settings_cleared: None) -> None:
     router: Final = Router(
         model_list=[_openrouter_deployment("openrouter/*", "openrouter/*", "wild-id", max_output_tokens=50)]

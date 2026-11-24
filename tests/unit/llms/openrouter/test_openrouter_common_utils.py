@@ -29,6 +29,25 @@ def _no_ambient_openrouter_settings(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(litellm, "openrouter_key", None)
 
 
+@pytest.mark.parametrize(
+    ("catalog_api_base", "sent_key"),
+    (
+        (DEFAULT_BASE, "sk-or-proxy-wide"),
+        ("https://eu.openrouter.ai/api/v1", "sk-or-proxy-wide"),
+        ("https://openrouter.ai.attacker.test/api/v1", None),
+        ("https://notopenrouter.ai/api/v1", None),
+        ("http://127.0.0.1:8080/api/v1", None),
+    ),
+)
+def test_only_an_openrouter_host_gets_the_proxy_wide_key_for_the_catalog(
+    monkeypatch: pytest.MonkeyPatch, catalog_api_base: str, sent_key: str | None
+):
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-proxy-wide")
+
+    assert OpenRouterModelInfo.get_catalog_api_key(None, catalog_api_base) == sent_key
+    assert OpenRouterModelInfo.get_catalog_api_key("sk-or-own", catalog_api_base) == "sk-or-own"
+
+
 def _catalog(*model_ids: str) -> httpx.Response:
     return httpx.Response(200, json={"data": [{"id": model_id, "name": model_id} for model_id in model_ids]})
 

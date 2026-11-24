@@ -1,8 +1,8 @@
 import asyncio
 import hashlib
 import json
+import weakref
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Annotated, Final, Protocol, TypeAlias
 
@@ -19,6 +19,9 @@ MODEL_INFO_REFRESH_CONCURRENCY: Final = 8
 MODEL_INFO_DISCOVERY_PROVIDERS: Final = frozenset({"hosted_vllm", "openai", "text-completion-openai", "openai_like"})
 _EMPTY_LIMITS: Final[Mapping[str, int]] = MappingProxyType({})
 _DISCOVERY_TIMEOUT: Final = httpx.Timeout(5.0)
+_FETCH_LOCKS: Final[weakref.WeakValueDictionary[tuple[asyncio.AbstractEventLoop, str], asyncio.Lock]] = (
+    weakref.WeakValueDictionary()
+)
 
 
 def _positive_limit(value: object) -> int | None:
@@ -66,8 +69,9 @@ class ModelLimitsCache(Protocol):
     def set_cache(self, key: str, value: object, *, ttl: float) -> None: ...
 
 
-@dataclass(frozen=True, slots=True)
-class _CachedModelLimits:
+class _CachedModelLimits(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
     by_model: Mapping[str, Mapping[str, int]] | None
 
 
@@ -81,14 +85,8 @@ def _cached_limits(cache: ModelLimitsCache, cache_key: str) -> _CachedModelLimit
     return cached if isinstance(cached, _CachedModelLimits) else None
 
 
-def _fetch_lock(cache: ModelLimitsCache, cache_key: str) -> asyncio.Lock:
-    lock_key: Final = f"{cache_key}:lock"
-    existing: Final[object] = cache.get_cache(lock_key)
-    if isinstance(existing, asyncio.Lock):
-        return existing
-    lock: Final = asyncio.Lock()
-    cache.set_cache(lock_key, lock, ttl=MODEL_INFO_REFRESH_SECONDS)
-    return lock
+def _fetch_lock(cache_key: str) -> asyncio.Lock:
+    return _FETCH_LOCKS.setdefault((asyncio.get_running_loop(), cache_key), asyncio.Lock())
 
 
 async def _fetch_model_limits(
@@ -113,10 +111,10 @@ async def _fetch_model_limits(
         limits: Final = parse(response.content)
     except Exception:  # noqa: BLE001  # optional upstream metadata must not interrupt proxy refresh
         verbose_logger.debug("Could not discover upstream model token limits")
-        cache.set_cache(cache_key, _CachedModelLimits(None), ttl=60)
+        cache.set_cache(cache_key, _CachedModelLimits(by_model=None), ttl=60)
         return None
 
-    cache.set_cache(cache_key, _CachedModelLimits(limits), ttl=MODEL_INFO_REFRESH_SECONDS)
+    cache.set_cache(cache_key, _CachedModelLimits(by_model=limits), ttl=MODEL_INFO_REFRESH_SECONDS)
     return limits
 
 
@@ -135,7 +133,7 @@ async def get_cached_model_limits(
     cached: Final = _cached_limits(cache, cache_key)
     if cached is not None:
         return cached.by_model
-    async with _fetch_lock(cache, cache_key):
+    async with _fetch_lock(cache_key):
         fetched_while_waiting: Final = _cached_limits(cache, cache_key)
         if fetched_while_waiting is not None:
             return fetched_while_waiting.by_model

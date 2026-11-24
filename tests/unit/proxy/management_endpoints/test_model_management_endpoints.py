@@ -4041,6 +4041,94 @@ async def test_saving_the_model_info_page_does_not_pin_the_limits_discovered_fro
     }
 
 
+def _patched_max_input_tokens(db_model: Deployment, model_info: ModelInfo, router: Router) -> object:
+    from litellm.proxy.management_endpoints.model_management_endpoints import update_db_model
+
+    result: Final = update_db_model(db_model=db_model, updated_patch=updateDeployment(model_info=model_info), llm_router=router)
+    return json.loads(result["model_info"]).get("max_input_tokens")
+
+
+def _legacy_updated_max_input_tokens(db_model: Deployment, model_info: ModelInfo, router: Router) -> object:
+    from litellm.proxy.management_endpoints.model_management_endpoints import (
+        _ListedRow,
+        legacy_update_model_info_changes,
+    )
+
+    return legacy_update_model_info_changes(db_model, model_info, listed_row=_ListedRow(None, router)).get(
+        "max_input_tokens"
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("saved_max_input_tokens", [_patched_max_input_tokens, _legacy_updated_max_input_tokens])
+async def test_a_typed_limit_equal_to_the_discovered_one_is_saved(saved_max_input_tokens):
+    deployment: Final = MappingProxyType(
+        {"model_name": "local", "litellm_params": dict(_LOCAL_DEPLOYMENT_PARAMS), "model_info": {"id": "m1"}}
+    )
+    router: Final = Router(model_list=[json.loads(json.dumps(dict(deployment)))])
+    await _discover_from_upstream(router, {"id": "local-model", "max_model_len": 128000})
+    assert router.registry().discovered_model_info("m1")["max_input_tokens"] == 128000
+
+    saved: Final = saved_max_input_tokens(
+        Deployment.model_validate(dict(deployment)), ModelInfo(id="m1", max_input_tokens=128000), router
+    )
+
+    assert saved == 128000
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("listed_name", ["openrouter/vendor/capped", None], ids=["listed-row", "key-only"])
+async def test_saving_an_expanded_openrouter_wildcard_row_does_not_pin_its_catalog_limits(listed_name):
+    from litellm.proxy.management_endpoints.model_management_endpoints import (
+        _ListedRow,
+        legacy_update_model_info_changes,
+        update_db_model,
+    )
+    from litellm.proxy.proxy_server import _enrich_model_info_with_litellm_data
+
+    wildcard: Final = MappingProxyType(
+        {
+            "model_name": "openrouter/*",
+            "litellm_params": {"model": "openrouter/*", "api_key": "openrouter-key"},
+            "model_info": {"id": "wild-id"},
+        }
+    )
+    router: Final = Router(model_list=[json.loads(json.dumps(dict(wildcard)))])
+    handler: Final = AsyncHTTPHandler()
+    await handler.client.aclose()
+    catalog: Final = {"data": [{"id": "vendor/capped", "context_length": 4096, "top_provider": {"max_completion_tokens": 1024}}]}
+    async with httpx.AsyncClient(transport=httpx.MockTransport(lambda request: httpx.Response(200, json=catalog))) as client:
+        handler.client = client
+        await router.arefresh_model_info(client=handler)
+    listed_row: Final = {
+        "model_name": "openrouter/vendor/capped",
+        "litellm_params": {"model": "openrouter/vendor/capped", "api_key": "openrouter-key"},
+        "model_info": {"id": "wild-id"},
+    }
+    shown: Final = _enrich_model_info_with_litellm_data(listed_row, llm_router=router)["model_info"]
+    assert isinstance(shown, dict) and (shown["max_input_tokens"], shown["max_output_tokens"]) == (4096, 1024)
+    db_model: Final = Deployment.model_validate(dict(wildcard))
+
+    patched: Final = json.loads(
+        update_db_model(
+            db_model=db_model,
+            updated_patch=updateDeployment(model_info=ModelInfo.model_validate({**shown, "tpm": 5})),
+            llm_router=router,
+            listed_name=listed_name,
+        )["model_info"]
+    )
+    legacy: Final = legacy_update_model_info_changes(
+        db_model,
+        ModelInfo.model_validate({**shown, "access_groups": ["prod"]}),
+        loaded_catalog=lambda: {},
+        listed_row=_ListedRow(listed_name, router),
+    )
+
+    shown_fields: Final = ("key", "max_tokens", "max_input_tokens", "max_output_tokens")
+    assert patched["tpm"] == 5 and [patched.get(field) for field in shown_fields] == [None] * 4
+    assert legacy.get("access_groups") == ["prod"] and [legacy.get(field) for field in shown_fields] == [None] * 4
+
+
 def _build_db_model_for_blocked_test():
     from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
 

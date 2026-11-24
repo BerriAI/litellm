@@ -772,12 +772,14 @@ class HostModelInfo:
         team_router: Final = self._core_team_pattern_routers.get(team_id) if team_id is not None else None
         team_routed: Final = team_router.get_routed_deployments(model_name) if team_router is not None else ()
         routed: Final = team_routed or self._core_pattern_router.get_routed_deployments(model_name)
-        rows: Final = (
-            (
-                _configured_model_info(deployment),
-                self._core_get_discovered_model_info(_configured_deployment_id(deployment), routed_model),
-            )
+        visible: Final = (
+            (configured, deployment, routed_model)
             for deployment, routed_model in routed
+            if (configured := _configured_model_info(deployment)).get("team_id") in (None, team_id)
+        )
+        rows: Final = (
+            (configured, self._core_get_discovered_model_info(_configured_deployment_id(deployment), routed_model))
+            for configured, deployment, routed_model in visible
         )
         return tuple(MappingProxyType({**configured, **discovered}) for configured, discovered in rows if discovered)
 

@@ -105,7 +105,9 @@ class OpenRouterModelInfo(BaseLLMModelInfo):
 
     @staticmethod
     def get_catalog_api_key(api_key: str | None, catalog_api_base: str) -> str | None:
-        if urlparse(catalog_api_base).hostname == urlparse(_DEFAULT_API_BASE).hostname:
+        host: Final = urlparse(catalog_api_base).hostname or ""
+        openrouter_host: Final = urlparse(_DEFAULT_API_BASE).hostname
+        if host == openrouter_host or host.endswith(f".{openrouter_host}"):
             return OpenRouterModelInfo.get_api_key(api_key)
         return api_key
 

@@ -1188,6 +1188,7 @@ from litellm.types.secret_managers.main import (
     KeyManagementSystem,
 )
 from litellm.types.utils import (
+    COST_MAP_LOOKUP_KEY,
     CredentialItem,
     CustomHuggingfaceTokenizer,
     RawRequestTypedDict,
@@ -2110,9 +2111,7 @@ async def _proxy_lifespan(app: FastAPI, resources: AsyncExitStack) -> AsyncGener
         await initialize_shared_aiohttp_session()
     )
 
-    model_info_refresh_disabled: Final = (
-        "disable_model_info_refresh" in general_settings and general_settings["disable_model_info_refresh"] is True
-    )
+    model_info_refresh_disabled: Final = ProxyStartupEvent.model_info_refresh_disabled()
     model_info_scheduler: Final = (
         None if model_info_refresh_disabled else scheduler if scheduler is not None else AsyncIOScheduler()
     )
@@ -7899,6 +7898,12 @@ class ProxyConfig:
                 added_models += 1
         return added_models
 
+    def add_deployments_and_refresh_model_info(self, db_models: Sequence[_ProxyModelRow]) -> int:
+        added: Final = self._add_deployment(db_models=list(db_models))
+        if added > 0:
+            ProxyStartupEvent.schedule_model_info_refresh()
+        return added
+
     def decrypt_model_list_from_db(self, new_models: list) -> list:
         _model_list: Final[list] = []
         for m in new_models:
@@ -7990,6 +7995,7 @@ class ProxyConfig:
                         )
                     )
                     verbose_proxy_logger.debug("updated llm_router: %s", llm_router)
+                    ProxyStartupEvent.schedule_model_info_refresh()
             else:
                 verbose_proxy_logger.debug("len new_models: %s", len(models_list))
                 if search_tools is not None and llm_router is not None:
@@ -7998,7 +8004,7 @@ class ProxyConfig:
                 still_desired_ids = await self._delete_deployment(db_models=models_list)
 
                 ## ADD MODEL LOGIC
-                self._add_deployment(db_models=models_list)
+                self.add_deployments_and_refresh_model_info(db_models=models_list)
 
         except Exception as e:
             verbose_proxy_logger.exception("Error adding/deleting model to llm_router: %s", e)
@@ -10989,6 +10995,15 @@ class ProxyStartupEvent:
     async def refresh_model_info() -> None:
         if llm_router is not None:
             await llm_router.aapply(ChangeSet(refresh_model_info=True))
+
+    @staticmethod
+    def model_info_refresh_disabled() -> bool:
+        return general_settings.get("disable_model_info_refresh") is True
+
+    @staticmethod
+    def schedule_model_info_refresh() -> None:
+        if not ProxyStartupEvent.model_info_refresh_disabled():
+            asyncio.create_task(ProxyStartupEvent.refresh_model_info())
 
     @staticmethod
     def warn_budget_without_db(max_budget: float | None, prisma_client: PrismaClient | None) -> None:
@@ -17324,12 +17339,16 @@ def _enrich_model_info_with_litellm_data(
         )
     )
     model_info_reader: Final = require_attributes(model_info_value, _SupportsGet, "get")
-    discovered_model_info: Final = (
-        llm_router.registry().discovered_model_info(
-            _discovered_info_lookup_id(model_info_reader), _routed_model_name(model)
-        )
+    routed_model: Final = _routed_model_name(model)
+    discovered_limits: Final = (
+        llm_router.registry().discovered_model_info(_discovered_info_lookup_id(model_info_reader), routed_model)
         if llm_router is not None
         else MappingProxyType({})
+    )
+    discovered_model_info: Final = (
+        MappingProxyType({**discovered_limits, COST_MAP_LOOKUP_KEY: routed_model})
+        if discovered_limits and litellm_model_info.get(COST_MAP_LOOKUP_KEY) is None
+        else discovered_limits
     )
     unpriced: Final = cost_map_omits_token_price(model_info_reader.get("id"), litellm_model_info.get("key"))
     model_info: Final = _model_info_mapping(model_info_value)

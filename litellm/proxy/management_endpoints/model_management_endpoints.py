@@ -196,7 +196,6 @@ from litellm.types.utils import (
     OIDC_SECRET_REFERENCE_PREFIX,
     echoed_cost_map_fields,
     echoed_cost_map_pricing_fields,
-    echoed_discovered_fields,
     is_server_derived_pricing_key,
     without_server_derived_pricing,
 )
@@ -1441,6 +1440,20 @@ def _cost_map_entry(
     return MappingProxyType({}) if lookup is None else model_info_cost_map_entry(lookup)
 
 
+def _discovered_limits(
+    db_model: Deployment, incoming_model_info: Mapping[str, object], listed_row: _ListedRow
+) -> tuple[Mapping[str, object], ...]:
+    if listed_row.llm_router is None:
+        return ()
+    catalog_key: Final = incoming_model_info.get(COST_MAP_LOOKUP_KEY)
+    registry: Final = listed_row.llm_router.registry()
+    shown_as: Final = (
+        (model, registry.discovered_model_info(db_model.model_info.id, model))
+        for model in (_live_cost_map_model(db_model, listed_row), catalog_key if isinstance(catalog_key, str) else None)
+    )
+    return tuple(MappingProxyType({**limits, COST_MAP_LOOKUP_KEY: model}) for model, limits in shown_as if limits)
+
+
 def _routed_cost_map_entry(db_model: Deployment, listed_row: _ListedRow) -> Mapping[str, object]:
     stored_model: Final = _decrypted_model(db_model.litellm_params.model)
     if stored_model is None or "*" not in stored_model or listed_row.name is None or listed_row.llm_router is None:
@@ -1492,7 +1505,6 @@ _LEGACY_UPDATE_IGNORED_MODEL_INFO_FIELDS: Final = frozenset(
 def legacy_update_model_info_changes(
     db_model: Deployment,
     incoming_model_info: ModelInfo,
-    discovered_model_info: Mapping[str, object] = MappingProxyType({}),
     loaded_catalog: LoadedCatalog = GetModelCostMap.loaded_model_cost_map,
     listed_row: _ListedRow = _NO_LISTED_ROW,
 ) -> Mapping[str, object]:
@@ -1512,14 +1524,12 @@ def legacy_update_model_info_changes(
     )
     sent: Final = {k: v for k, v in requested.items() if k not in _LEGACY_UPDATE_IGNORED_MODEL_INFO_FIELDS and v != ""}
     echoed: Final = frozenset(
-        (
-            *echoed_cost_map_fields(
-                requested,
-                _cost_map_entry(db_model, {**stored, **sent}, listed_row),
-                _routed_cost_map_entry(db_model, listed_row),
-                _loaded_catalog_entry(requested, loaded_catalog),
-            ),
-            *echoed_discovered_fields(requested, discovered_model_info),
+        echoed_cost_map_fields(
+            requested,
+            _cost_map_entry(db_model, {**stored, **sent}, listed_row),
+            _routed_cost_map_entry(db_model, listed_row),
+            _loaded_catalog_entry(requested, loaded_catalog),
+            *_discovered_limits(db_model, requested, listed_row),
         )
     )
     kept: Final[Mapping[str, object]] = without_server_derived_pricing(sent)
@@ -1534,12 +1544,11 @@ def legacy_update_model_info_changes(
 def _legacy_update_model_info_writes(
     current: Deployment,
     incoming_model_info: ModelInfo,
-    discovered_model_info: Mapping[str, object],
     member_marker: bool | None,
     listed_row: _ListedRow,
 ) -> Mapping[str, object]:
     changes: Final = {
-        **legacy_update_model_info_changes(current, incoming_model_info, discovered_model_info, listed_row=listed_row),
+        **legacy_update_model_info_changes(current, incoming_model_info, listed_row=listed_row),
         **({"member_auto_router": member_marker} if member_marker is not None else {}),
     }
     return MappingProxyType({k: v for k, v in changes.items() if getattr(current.model_info, k, None) != v})
@@ -1549,7 +1558,6 @@ async def _locked_legacy_update_model_info_json(
     table: _ProxyModelTable,
     model_id: str,
     incoming_model_info: ModelInfo,
-    discovered_model_info: Mapping[str, object],
     member_marker: bool | None,
     listed_row: _ListedRow,
 ) -> str | None:
@@ -1557,9 +1565,7 @@ async def _locked_legacy_update_model_info_json(
     if row is None:
         return None
     dumped: Final = _dump_model_row(row)
-    writes: Final = _legacy_update_model_info_writes(
-        dumped.deployment, incoming_model_info, discovered_model_info, member_marker, listed_row
-    )
+    writes: Final = _legacy_update_model_info_writes(dumped.deployment, incoming_model_info, member_marker, listed_row)
     if not writes:
         return None
     stored_model_info: Final[object] = dumped.fields.get("model_info")
@@ -1614,19 +1620,12 @@ def update_db_model(
     if updated_patch.model_info:
         incoming_model_info: Final = updated_patch.model_info.model_dump(exclude_none=True)
         listed_row: Final = _ListedRow(listed_name or updated_patch.model_name, llm_router, caller_aliases)
-        echoed_fields: Final = (
-            *echoed_cost_map_fields(
-                incoming_model_info,
-                _cost_map_entry(db_model, incoming_model_info, listed_row),
-                _routed_cost_map_entry(db_model, listed_row),
-                _loaded_catalog_entry(incoming_model_info, loaded_catalog),
-            ),
-            *echoed_discovered_fields(
-                incoming_model_info,
-                llm_router.registry().discovered_model_info(db_model.model_info.id)
-                if llm_router is not None
-                else MappingProxyType({}),
-            ),
+        echoed_fields: Final = echoed_cost_map_fields(
+            incoming_model_info,
+            _cost_map_entry(db_model, incoming_model_info, listed_row),
+            _routed_cost_map_entry(db_model, listed_row),
+            _loaded_catalog_entry(incoming_model_info, loaded_catalog),
+            *_discovered_limits(db_model, incoming_model_info, listed_row),
         )
         stored_model_info_fields: Final[Mapping[str, object]] = without_server_derived_pricing(incoming_model_info)
         merged_model_info.update(
@@ -3618,16 +3617,11 @@ async def update_model(
             renamed_update: Final[PrismaCompatibleUpdateDBModel] = (
                 {**base_update, "model_name": renamed_to} if renamed_to is not None else base_update
             )
-            discovered_model_info: Final[Mapping[str, int]] = (
-                llm_router.registry().discovered_model_info(_model_id)
-                if llm_router is not None
-                else MappingProxyType({})
-            )
             listed_row: Final = _ListedRow(
                 model_params.model_name, llm_router, await request_caller_aliases(user_api_key_dict)
             )
             requested_model_info: Final = _legacy_update_model_info_writes(
-                deployment, _model_info, discovered_model_info, member_marker, listed_row
+                deployment, _model_info, member_marker, listed_row
             )
             _raise_if_access_groups_malformed(requested_model_info)
             async with _auto_router_capability_slot(
@@ -3639,7 +3633,7 @@ async def update_model(
             ) as table:
                 model_info_json: Final = (
                     await _locked_legacy_update_model_info_json(
-                        table, _model_id, _model_info, discovered_model_info, member_marker, listed_row
+                        table, _model_id, _model_info, member_marker, listed_row
                     )
                     if requested_model_info
                     else None
