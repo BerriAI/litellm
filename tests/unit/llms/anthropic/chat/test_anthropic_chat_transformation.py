@@ -7601,6 +7601,23 @@ def test_chat_flagged_model_keeps_cache_control_on_mid_conversation_system(local
     ]
 
 
+def test_chat_flagged_model_keeps_clear_at_on_mid_conversation_system(local_model_cost_map):
+    messages = _reminder_conversation()
+    messages[4] = {
+        "role": "system",
+        "content": [{"type": "text", "text": REMINDER_TEXT}],
+        "clear_at": "next_user_message",
+    }
+
+    result = _chat_request(AnthropicConfig(), FLAGGED_CLAUDE, messages)
+
+    assert result["messages"][3] == {
+        "role": "system",
+        "content": [{"type": "text", "text": REMINDER_TEXT}],
+        "clear_at": "next_user_message",
+    }
+
+
 def test_chat_flagged_model_moves_system_after_the_user_turn_it_precedes(local_model_cost_map):
     """Anthropic only accepts role=system directly after a user turn; an
     OpenAI-shaped client that puts the reminder before its next question gets a
