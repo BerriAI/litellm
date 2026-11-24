@@ -4827,7 +4827,7 @@ async def _run_background_health_check():
         ]
         if scoped_model_groups is not None and not _llm_model_list:
             verbose_proxy_logger.warning(
-                "background_health_check_model_groups matched no eligible deployments; groups=%s",
+                "background_health_check_model_groups matched no deployments; groups=%s",
                 sorted(scoped_model_groups),
             )
         model_count_enabled = len(_llm_model_list)
