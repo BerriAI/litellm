@@ -1516,6 +1516,107 @@ def test_audit_unauthenticated_call_leaves_no_spend_row(audit_rig: _AuditRig) ->
         ), "an unauthenticated call must not write a spend row"
 
 
+def _prompt_body(endpoint: str, model: str, canary: str) -> dict[str, JsonValue]:
+    image: Final[JsonValue] = {"type": "image_url", "image_url": {"url": "data:image/png;base64," + canary}}
+    if endpoint == "/v1/responses":
+        return {
+            "model": model,
+            "input": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "input_text", "text": "describe"},
+                        {"type": "input_image", "image_url": "data:image/png;base64," + canary},
+                    ],
+                }
+            ],
+        }
+    if endpoint == "/v1/completions":
+        return {"model": model, "prompt": canary}
+    if endpoint == "/v1/embeddings":
+        return {"model": model, "input": [canary]}
+    if endpoint == "/v1/messages":
+        return {
+            "model": model,
+            "max_tokens": 16,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "describe"},
+                        {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": canary}},
+                    ],
+                }
+            ],
+        }
+    return {
+        "model": model,
+        "messages": [{"role": "user", "content": [{"type": "text", "text": "describe"}, image]}],
+        "cache": {"no-cache": True},
+    }
+
+
+def _refused_key(rejection: str, rig: _AuditRig, model: str) -> str:
+    if rejection == "unknown_key":
+        return "sk-" + uuid.uuid4().hex
+    if rejection == "model_not_allowed":
+        return rig.scenario.key(models=["integration-other-" + uuid.uuid4().hex])
+    if rejection == "budget_exceeded":
+        return rig.scenario.key(models=[model], max_budget=0.000001, spend=1.0)
+    assert rejection == "rate_limited", rejection
+    key: Final = rig.scenario.key(models=[model], rpm_limit=1)
+    primed: Final = rig.candidate.request(
+        "POST", "/v1/chat/completions", {"model": model, "messages": [{"role": "user", "content": "prime"}]}, key=key
+    )
+    assert primed.status_code == 200, primed.text
+    return key
+
+
+@pytest.mark.parametrize(
+    "endpoint", ("/v1/chat/completions", "/v1/messages", "/v1/responses", "/v1/completions", "/v1/embeddings")
+)
+@pytest.mark.parametrize("rejection", ("unknown_key", "model_not_allowed", "budget_exceeded", "rate_limited"))
+def test_refused_request_keeps_the_prompt_out_of_the_generation_model_parameters(
+    audit_rig: _AuditRig, endpoint: str, rejection: str
+) -> None:
+    marker: Final = "refused" + uuid.uuid4().hex
+    provider_secret: Final = "synthetic-provider-secret-" + marker
+    canary: Final = base64.b64encode(uuid.uuid4().bytes * 256).decode()
+    call_id: Final = str(uuid.uuid4())
+    targets: Final[list[str]] = []  # mutable-ok: the upstream records every hit
+
+    with wire_server(_audit_upstream(provider_secret, marker, targets)) as provider:
+        model: Final = audit_rig.scenario.model(api_base=provider.url + "/v1", api_key=provider_secret)
+        key: Final = _refused_key(rejection, audit_rig, model)
+        primed: Final = len(targets)
+        metadata_field: Final = "litellm_metadata" if endpoint == "/v1/messages" else "metadata"
+        refused: Final = audit_rig.candidate.request(
+            "POST",
+            endpoint,
+            {**_prompt_body(endpoint, model, canary), "litellm_call_id": call_id, metadata_field: {"tags": [marker]}},
+            key=key,
+        )
+        assert 400 <= refused.status_code < 500, refused.text
+        assert targets[primed:] == [], targets
+        received: Final[list[Request]] = []  # mutable-ok: drain() consumes the queue, later polls keep earlier ones
+
+        def exported() -> tuple[Span, ...]:
+            received.extend(audit_rig.destination.drain())
+            return tuple(
+                span
+                for span in _spans(received)
+                if _attribute(span.attributes, "langfuse.observation.metadata.litellm_call_id") == call_id
+                or marker in (_attribute(span.attributes, "langfuse.trace.tags") or ())
+            )
+
+        spans: Final = eventually(exported, lambda values: len(values) == 1, seconds=20)
+        attributes: Final = spans[0].attributes
+        assert _attribute(attributes, "langfuse.observation.level") == "ERROR"
+        assert canary not in str(_attribute(attributes, "langfuse.observation.model.parameters"))
+        if rejection != "rate_limited" and endpoint in ("/v1/chat/completions", "/v1/messages"):
+            assert canary in str(_attribute(attributes, "langfuse.observation.input"))
+
+
 @pytest.mark.parametrize(("endpoint", "kind", "expected_target"), _AUDIT_ENDPOINTS[:2])
 @pytest.mark.parametrize("upstream_status", (500, 401), ids=["upstream_500", "upstream_401"])
 def test_audit_upstream_error_still_logs_caller_session(

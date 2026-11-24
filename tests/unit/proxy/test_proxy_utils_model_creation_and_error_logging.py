@@ -258,6 +258,68 @@ async def test_proxy_only_error_log_builds_payload_when_logging_object_has_malfo
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("with_logging_object", [False, True], ids=["rejected_before_setup", "rejected_after_setup"])
+@pytest.mark.parametrize(
+    ("route", "prompt_fields"),
+    [
+        ("/v1/chat/completions", {"messages": [{"role": "user", "content": "PROMPT-CANARY"}]}),
+        ("/v1/chat/completions", {"messages": "PROMPT-CANARY"}),
+        ("/v1/completions", {"prompt": "PROMPT-CANARY"}),
+        ("/v1/completions", {"prompt": ["first", "PROMPT-CANARY"]}),
+        ("/v1/embeddings", {"input": ["first", "PROMPT-CANARY"]}),
+        ("/v1/responses", {"input": "PROMPT-CANARY"}),
+        ("/v1/chat/completions", {"messages": [{"role": "user", "content": "hi"}], "prompt": "PROMPT-CANARY"}),
+    ],
+    ids=["messages", "malformed_messages", "prompt", "prompt_list", "input_list", "input_text", "messages_and_prompt"],
+)
+async def test_proxy_only_error_log_keeps_the_prompt_out_of_optional_params(
+    route: str,
+    prompt_fields: Mapping[str, object],
+    with_logging_object: bool,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "callbacks", [])
+    monkeypatch.setattr(litellm, "input_callback", [])
+    monkeypatch.setattr(litellm, "failure_callback", [])
+    monkeypatch.setattr(litellm, "_async_failure_callback", [])
+    seen_before_pre_call: Final[dict[str, object]] = {}
+    original_pre_call: Final = Logging.pre_call
+
+    def recording_pre_call(self: Logging, *args: object, **kwargs: object) -> None:
+        seen_before_pre_call.update(self.model_call_details)
+        original_pre_call(self, *args, **kwargs)
+
+    monkeypatch.setattr(Logging, "pre_call", recording_pre_call)
+    body: Final[dict[str, object]] = {"model": "gpt-4o", "stream": True, **prompt_fields}
+    logging_object: Final = (
+        {
+            "litellm_logging_obj": litellm.utils.function_setup(
+                original_function="acompletion",
+                rules_obj=litellm.utils.Rules(),
+                start_time=real_datetime.datetime.now(),
+                model="gpt-4o",
+                litellm_call_id="rejected-after-setup",
+            )[0]
+        }
+        if with_logging_object
+        else {}
+    )
+    request_data: Final[dict[str, object]] = {**body, **logging_object}
+
+    await ProxyLogging(user_api_key_cache=DualCache())._handle_logging_proxy_only_error(
+        request_data=request_data,
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-rejected", request_route=route),
+        route=route,
+        original_exception=HTTPException(status_code=429, detail="rate limited"),
+    )
+
+    details: Final = request_data["litellm_logging_obj"].model_call_details
+    assert details["optional_params"] == {"stream": True}
+    assert "PROMPT-CANARY" not in str(details["standard_logging_object"]["model_parameters"])
+    assert {key: seen_before_pre_call[key] for key in prompt_fields} == dict(prompt_fields)
+
+
+@pytest.mark.asyncio
 async def test_proxy_only_error_log_keeps_the_request_litellm_call_id(monkeypatch: pytest.MonkeyPatch):
     """LIT-7836: a route that already stamped the caller's litellm_call_id must
     keep it when the failure is a proxy-only error, so the spend-log row and the
