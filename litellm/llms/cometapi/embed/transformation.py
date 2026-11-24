@@ -51,14 +51,14 @@ class CometAPIEmbeddingConfig(BaseEmbeddingConfig):
 
     def validate_environment(
         self,
-        headers: Mapping[str, str],
+        headers: dict,
         model: str,
         messages: list[AllMessageValues],
         optional_params: Mapping[str, object],
         litellm_params: Mapping[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict[str, str]:
+    ) -> dict:
         """
         Validate and set up authentication headers for CometAPI.
         """
@@ -90,10 +90,10 @@ class CometAPIEmbeddingConfig(BaseEmbeddingConfig):
     def map_openai_params(
         self,
         non_default_params: Mapping[str, object],
-        optional_params: dict[str, object],
+        optional_params: dict,
         model: str,
         drop_params: bool,
-    ) -> dict[str, object]:
+    ) -> dict:
         """
         Map OpenAI parameters to CometAPI format.
         """
