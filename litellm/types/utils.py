@@ -2280,7 +2280,7 @@ class StreamingChoices(OpenAIObject):
 
 
 class StreamingChatCompletionChunk(OpenAIChatCompletionChunk):
-    def __init__(self, **kwargs: object) -> None:
+    def __init__(self, **kwargs) -> None:
         new_choices: Final = []
         for choice in kwargs["choices"]:
             new_choice = StreamingChoices(**choice).model_dump()
