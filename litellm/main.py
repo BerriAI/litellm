@@ -1264,8 +1264,8 @@ def _provider_config_items(config: Mapping[str, object]) -> Iterable[tuple[str, 
     return config.items()
 
 
-def _locals_snapshot(values: Mapping[str, object]) -> Mapping[str, object]:
-    return values
+def _completion_arguments(values: Mapping[str, object]) -> Mapping[str, object]:
+    return {name: value for name, value in values.items() if name in _COMPLETION_PARAMETERS}
 
 
 def _build_custom_pricing_entry(
@@ -5542,7 +5542,7 @@ def completion(
     thinking = validate_and_fix_thinking_param(thinking=thinking)
 
     ######### unpacking kwargs #####################
-    args: Final = _locals_snapshot(locals())
+    args: Final = _completion_arguments(locals())
 
     # Set by the responses->completion fallback so completion() does not bridge
     # back to the Responses API: that round-trip mutually recurses forever for a
@@ -6489,6 +6489,9 @@ def completion(
             completion_kwargs=args,
             extra_kwargs=kwargs,
         )
+
+
+_COMPLETION_PARAMETERS: Final = frozenset(inspect.signature(completion).parameters)
 
 
 def _is_not_resent_failure(error: BaseException) -> bool:

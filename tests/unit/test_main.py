@@ -539,6 +539,49 @@ _TWO_TOOLS: Final = [
 ]
 
 
+@pytest.mark.parametrize(
+    "tool_choice",
+    [
+        None,
+        "auto",
+        {"type": "function", "function": {"name": "get_weather"}},
+        _RESPONSES_LAYOUT_ALLOWED_TOOLS_TOOL_CHOICE,
+    ],
+    ids=["no_tool_choice", "auto", "named_function", "allowed_tools"],
+)
+@pytest.mark.parametrize(
+    "routing",
+    [
+        {"fallbacks": ["openai/gpt-5.5"]},
+        {"model_list": [{"model_name": "openai/gpt-5.5", "litellm_params": {"model": "openai/gpt-5.5"}}]},
+    ],
+    ids=["fallbacks", "model_list"],
+)
+def test_fallbacks_and_model_list_send_the_provider_the_body_a_direct_call_sends(
+    respx_mock: respx.MockRouter,
+    openai_api_response: dict[str, object],
+    routing: Mapping[str, object],
+    tool_choice: object,
+):
+    respx_mock.post("http://localhost:12346/v1/chat/completions").mock(
+        return_value=httpx.Response(status_code=200, json=openai_api_response)
+    )
+    request: Final = {
+        "model": "openai/gpt-5.5",
+        "messages": [{"role": "user", "content": "What is the weather in Paris?"}],
+        "tools": _TWO_TOOLS,
+        "tool_choice": tool_choice,
+        "api_base": "http://localhost:12346/v1",
+        "api_key": "fake_api_key",
+    }
+
+    litellm.completion(**request)
+    litellm.completion(**request, **routing)
+
+    direct_body, routed_body = (json.loads(call.request.content) for call in respx_mock.calls)
+    assert routed_body == direct_body
+
+
 @pytest.mark.parametrize("tool_choice", [_ALLOWED_TOOLS_TOOL_CHOICE, _RESPONSES_LAYOUT_ALLOWED_TOOLS_TOOL_CHOICE])
 @pytest.mark.parametrize("model", ["openai/gpt-5.5", "azure/my-gpt-deployment"])
 def test_completion_forwards_allowed_tools_tool_choice_to_openai_compatible_chat(
