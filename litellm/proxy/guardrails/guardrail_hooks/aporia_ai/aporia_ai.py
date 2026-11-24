@@ -92,7 +92,7 @@ class AporiaGuardrail(CustomGuardrail):
 
     async def make_aporia_api_request(
         self,
-        request_data: dict[str, object],
+        request_data: dict,
         new_messages: Sequence[Mapping[str, object]],
         response_string: str | None = None,
     ):
@@ -173,7 +173,7 @@ class AporiaGuardrail(CustomGuardrail):
     @log_guardrail_information
     async def async_moderation_hook(
         self,
-        data: dict[str, object],
+        data: dict,
         user_api_key_dict: UserAPIKeyAuth,
         call_type: Literal[
             "completion",
