@@ -1082,7 +1082,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
             #      can't be evaded by sending uncountable rows.
             # Counting stays best-effort, so a legitimate (e.g. multimodal) row
             # the counter can't measure is estimated, not hard-rejected.
-            models: Final[set] = set()
+            models: Final[set[str]] = set()
             # Keyed by the models each row is charged to, so the project ITPM/OTPM
             # quota for that model is charged with only its own rows' tokens,
             # never the whole batch's -- see `_create_project_io_descriptors_for_models`.

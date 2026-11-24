@@ -243,9 +243,11 @@ def create_container(
         )
 
         # Get optional parameters for the container API
-        container_create_request_params: Final[dict] = ContainerRequestUtils.get_optional_params_container_create(
-            container_provider_config=container_provider_config,
-            container_create_optional_params=container_create_optional_params,
+        container_create_request_params: Final[dict[str, object]] = (
+            ContainerRequestUtils.get_optional_params_container_create(
+                container_provider_config=container_provider_config,
+                container_create_optional_params=container_create_optional_params,
+            )
         )
 
         # Pre Call logging

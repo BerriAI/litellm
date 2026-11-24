@@ -152,7 +152,7 @@ impl CapacityHost for NativeCapacityHost {
     fn estimate_tokens<'a>(
         &'a self,
         _: i64,
-        _: &'a str,
+        _: Option<&'a str>,
         _: Option<&'a str>,
     ) -> SeamFuture<'a, Estimate> {
         Box::pin(async { Ok(Estimate::NoBody) })

@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any, Final, NoReturn, Protocol, runtime_checka
 import httpx
 from pydantic import TypeAdapter
 
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import EmbeddingResponse
 from litellm.types.vector_stores import (
@@ -109,7 +110,7 @@ class RouterVectorStoreEmbeddingExecutor:
     def _embedding_kwargs(self, configuration: Mapping[str, object]) -> Mapping[str, object]:
         configured_metadata: Final = configuration.get("metadata")
         metadata: Final = {
-            **(configured_metadata if isinstance(configured_metadata, Mapping) else {}),
+            **(as_str_mapping(configured_metadata) or {}),
             **self.metadata,
         }
         return {
@@ -168,14 +169,14 @@ class BaseVectorStoreConfig:
 
     def map_openai_params(
         self,
-        non_default_params: dict,
-        optional_params: dict,
+        non_default_params: dict[str, object],
+        optional_params: dict[str, object],
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:
         return optional_params
 
     @abstractmethod
-    def get_auth_credentials(self, litellm_params: dict) -> BaseVectorStoreAuthCredentials:
+    def get_auth_credentials(self, litellm_params: dict[str, object]) -> BaseVectorStoreAuthCredentials:
         pass
 
     @abstractmethod
@@ -190,9 +191,9 @@ class BaseVectorStoreConfig:
         vector_store_search_optional_params: VectorStoreSearchOptionalRequestParams,
         api_base: str,
         litellm_logging_obj: LiteLLMLoggingObj,
-        litellm_params: dict,
+        litellm_params: dict[str, object],
         extra_body: dict[str, object] | None = None,
-    ) -> tuple[str, dict]:
+    ) -> tuple[str, dict[str, object]]:
         pass
 
     async def atransform_search_vector_store_request(
@@ -202,9 +203,9 @@ class BaseVectorStoreConfig:
         vector_store_search_optional_params: VectorStoreSearchOptionalRequestParams,
         api_base: str,
         litellm_logging_obj: LiteLLMLoggingObj,
-        litellm_params: dict,
+        litellm_params: dict[str, object],
         extra_body: dict[str, object] | None = None,
-    ) -> tuple[str, dict]:
+    ) -> tuple[str, dict[str, object]]:
         """
         Optional async version of transform_search_vector_store_request.
         If not implemented, the handler will fall back to the sync version.
@@ -232,7 +233,7 @@ class BaseVectorStoreConfig:
         self,
         vector_store_create_optional_params: VectorStoreCreateOptionalRequestParams,
         api_base: str,
-    ) -> tuple[str, dict]:
+    ) -> tuple[str, dict[str, object]]:
         pass
 
     @abstractmethod
@@ -247,7 +248,7 @@ class BaseVectorStoreConfig:
     def get_complete_url(
         self,
         api_base: str | None,
-        litellm_params: dict,
+        litellm_params: dict[str, object],
     ) -> str:
         """
         OPTIONAL
@@ -268,7 +269,9 @@ class BaseVectorStoreConfig:
     def get_vector_store_list_url(self, api_base: str) -> str:
         return api_base
 
-    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: dict[str, object] | httpx.Headers
+    ) -> BaseLLMException:
         from ..chat.transformation import BaseLLMException
 
         raise BaseLLMException(
@@ -279,12 +282,12 @@ class BaseVectorStoreConfig:
 
     def sign_request(
         self,
-        headers: dict,
-        optional_params: dict,
-        request_data: dict,
+        headers: dict[str, object],
+        optional_params: dict[str, object],
+        request_data: dict[str, object],
         api_base: str,
         api_key: str | None = None,
-    ) -> tuple[dict, bytes | None]:
+    ) -> tuple[dict[str, object], bytes | None]:
         """Optionally sign or modify the request before sending.
 
         Providers like AWS Bedrock require SigV4 signing. Providers that don't

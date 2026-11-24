@@ -1886,7 +1886,7 @@ def test_agentic_stream_tags_the_head_only_when_a_hook_runs(monkeypatch: pytest.
     call: Final = bound["call"]
     assert isinstance(call, messages_host._AgenticCall)  # pyright: ignore[reportPrivateUsage]  # the partial binds the handler call
     assert call.messages == [{"role": "user", "content": [{"type": "text", "text": "hi"}]}]
-    assert call.params == {"stream": True, "tools": request["tools"]}
+    assert call.params == {"max_tokens": 16, "stream": True, "tools": request["tools"]}
     assert call.params["tools"] is request["tools"]
     assert call.kwargs["api_key"] == "sk-test"
     assert "tools" not in call.kwargs
@@ -1911,7 +1911,7 @@ def test_agentic_params_take_the_callers_system_not_the_hoisted_wire_system(
 
     params: Final = messages_host._agentic_params(sent, requested, {"model": "azure_ai/claude-sonnet-4-5"})  # pyright: ignore[reportPrivateUsage]  # the follow-up params the handler's hooks read
 
-    assert params == {"stream": False, **expected}
+    assert params == {"stream": False, "max_tokens": 16, **expected}
 
 
 _DANGEROUS_TOOL_USE: Final = [{"type": "dangerous_tool_use"}]

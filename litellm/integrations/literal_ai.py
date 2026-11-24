@@ -45,7 +45,7 @@ class LiteralAILogger(CustomBatchLogger):
             batch_size=int(batch_size) if batch_size else None,
         )
 
-    def log_success_event(self, kwargs, response_obj: object, start_time: datetime, end_time: datetime):
+    def log_success_event(self, kwargs: object, response_obj: object, start_time: datetime, end_time: datetime):
         try:
             verbose_logger.debug(
                 "Literal AI Layer Logging - kwargs: %s, response_obj: %s",
@@ -64,7 +64,7 @@ class LiteralAILogger(CustomBatchLogger):
         except Exception:
             verbose_logger.exception("Literal AI Layer Error - error logging success event.")
 
-    def log_failure_event(self, kwargs, response_obj: object, start_time: datetime, end_time: datetime):
+    def log_failure_event(self, kwargs: object, response_obj: object, start_time: datetime, end_time: datetime):
         verbose_logger.info("Literal AI Failure Event Logging!")
         try:
             data: Final = self._prepare_log_data(kwargs, response_obj, start_time, end_time)
@@ -103,7 +103,9 @@ class LiteralAILogger(CustomBatchLogger):
         except Exception:
             verbose_logger.exception("Literal AI Layer Error")
 
-    async def async_log_success_event(self, kwargs, response_obj: object, start_time: datetime, end_time: datetime):
+    async def async_log_success_event(
+        self, kwargs: object, response_obj: object, start_time: datetime, end_time: datetime
+    ):
         try:
             verbose_logger.debug(
                 "Literal AI Async Layer Logging - kwargs: %s, response_obj: %s",
@@ -122,7 +124,9 @@ class LiteralAILogger(CustomBatchLogger):
         except Exception:
             verbose_logger.exception("Literal AI Layer Error - error logging async success event.")
 
-    async def async_log_failure_event(self, kwargs, response_obj: object, start_time: datetime, end_time: datetime):
+    async def async_log_failure_event(
+        self, kwargs: object, response_obj: object, start_time: datetime, end_time: datetime
+    ):
         verbose_logger.info("Literal AI Failure Event Logging!")
         try:
             data: Final = self._prepare_log_data(kwargs, response_obj, start_time, end_time)
