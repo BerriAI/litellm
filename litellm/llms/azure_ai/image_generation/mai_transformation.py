@@ -207,10 +207,10 @@ class AzureFoundryMAIImageGenerationConfig(BaseImageGenerationConfig):
     def map_openai_params(
         self,
         non_default_params: dict,
-        optional_params: dict,
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:
         supported_params: Final = self.get_supported_openai_params(model)
 
         for k, v in non_default_params.items():
