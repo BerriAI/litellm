@@ -3,6 +3,7 @@ import contextvars
 import copy
 import functools
 import logging
+import re
 import shutil
 import socket
 import subprocess
@@ -1841,13 +1842,23 @@ async def test_fail_closed_refuses_in_a_request_batch_with_the_breaker_open_like
     assert outcomes[0] is not None and outcomes[0][:2] == ("RateLimitUnverifiableError", 503), outcomes  # pyright: ignore[reportIndexIssue]  # an outcome is the refusal tuple
 
 
+_OS_ERROR: Final = re.compile(r"\(os error \d+\)")
+_DELIVERY_SECONDS: Final = 30
+
+
 class _Lines(logging.Handler):
     def __init__(self) -> None:
         super().__init__(logging.WARNING)
         self.lines: Final[list[tuple[str, str]]] = []
 
     def emit(self, record: logging.LogRecord) -> None:
-        self.lines.append((record.levelname, record.getMessage()))
+        self.lines.append((record.levelname, _OS_ERROR.sub("(os error <errno>)", record.getMessage())))
+
+    async def delivered(self) -> list[tuple[str, str]]:
+        deadline: Final = time.monotonic() + _DELIVERY_SECONDS
+        while not _GOLDEN.agrees(sorted(self.lines)) and time.monotonic() < deadline:
+            await asyncio.sleep(0.01)
+        return sorted(self.lines)
 
 
 @pytest.mark.asyncio
@@ -1865,9 +1876,9 @@ async def test_redis_failures_are_logged_like_python(fail_closed: bool, monkeypa
         try:
             await _run(side, 0, _admit, request)
             await _run(side, 0, _end, request)
+            logged.append(await handler.delivered())
         finally:
             verbose_proxy_logger.removeHandler(handler)
-        logged.append(handler.lines)
     _GOLDEN.agree(logged[0])
     assert logged[0] != []
 
