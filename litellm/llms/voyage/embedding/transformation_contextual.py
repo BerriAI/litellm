@@ -28,7 +28,7 @@ class VoyageError(BaseLLMException):
         self,
         status_code: int,
         message: str,
-        headers: dict | httpx.Headers = {},
+        headers: dict[str, object] | httpx.Headers = {},
     ):
         self.status_code = status_code
         self.message = message
@@ -57,19 +57,19 @@ class VoyageContextualEmbeddingConfig(BaseEmbeddingConfig):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         stream: bool | None = None,
     ) -> str:
         return ensure_api_route(get_voyage_api_base(api_base, api_key), "contextualizedembeddings")
 
-    def get_supported_openai_params(self, model: str) -> list:  # mutable-ok: base class signature
+    def get_supported_openai_params(self, model: str) -> list[str]:  # mutable-ok: base class signature
         return ["encoding_format", "dimensions"]
 
     def map_openai_params(
         self,
-        non_default_params: dict,  # mutable-ok: base class signature
-        optional_params: dict,  # mutable-ok: base class signature
+        non_default_params: dict[str, object],  # mutable-ok: base class signature
+        optional_params: dict[str, object],  # mutable-ok: base class signature
         model: str,
         drop_params: bool,
     ) -> dict:  # mutable-ok: base class signature
@@ -86,14 +86,14 @@ class VoyageContextualEmbeddingConfig(BaseEmbeddingConfig):
 
     def validate_environment(
         self,
-        headers: dict,  # mutable-ok: base class signature
+        headers: dict[str, object],  # mutable-ok: base class signature
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, str]:
         return {
             "Authorization": f"Bearer {get_voyage_api_key(api_key)}",
         }
@@ -104,9 +104,9 @@ class VoyageContextualEmbeddingConfig(BaseEmbeddingConfig):
         self,
         model: str,
         input: AllEmbeddingInputValues | list[list[str]],
-        optional_params: dict,
-        headers: dict,
-    ) -> dict:
+        optional_params: dict[str, object],
+        headers: dict[str, object],
+    ) -> dict[str, object]:
         return {
             "inputs": [input] if isinstance(input, str) else input,
             "model": model,
@@ -136,9 +136,9 @@ class VoyageContextualEmbeddingConfig(BaseEmbeddingConfig):
         model_response: EmbeddingResponse,
         logging_obj: LiteLLMLoggingObj,
         api_key: str | None = None,
-        request_data: dict = {},
-        optional_params: dict = {},
-        litellm_params: dict = {},
+        request_data: dict[str, object] = {},
+        optional_params: dict[str, object] = {},
+        litellm_params: dict[str, object] = {},
     ) -> EmbeddingResponse:
         try:
             raw_response_json: Final = raw_response.json()
@@ -161,7 +161,9 @@ class VoyageContextualEmbeddingConfig(BaseEmbeddingConfig):
         model_response.usage = usage
         return model_response
 
-    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: dict[str, object] | httpx.Headers
+    ) -> BaseLLMException:
         return VoyageError(message=error_message, status_code=status_code, headers=headers)
 
     @staticmethod

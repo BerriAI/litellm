@@ -60,7 +60,7 @@ class GigaChatPassthroughConfig(BasePassthroughConfig):
         litellm_params: Mapping[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:  # mutable-ok: base class contract returns dict for httpx
+    ) -> dict[str, object]:  # mutable-ok: base class contract returns dict for httpx
         """
         Set up headers with OAuth token.
         """

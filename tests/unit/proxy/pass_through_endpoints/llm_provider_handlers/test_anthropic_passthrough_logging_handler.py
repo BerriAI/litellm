@@ -1,6 +1,7 @@
 import asyncio
 import json
 from datetime import datetime
+from itertools import chain
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
@@ -2633,6 +2634,49 @@ class TestRecordPartialUsageForFailure:
         assert usage.prompt_tokens == 52
         assert logging_obj.model_call_details["response_cost"] == 0.0
 
+    @pytest.mark.parametrize("events_before_failure", [1, 3], ids=["after-message-start", "after-content"])
+    def test_upstream_error_frame_stashes_the_same_usage_as_a_dropped_connection(self, events_before_failure: int):
+        received: Final = self._interrupted_chunks()[:events_before_failure]
+        error_frame: Final = self._sse(
+            "error", {"type": "error", "error": {"type": "api_error", "message": "upstream"}}
+        )
+        dropped: Final = self._make_logging_obj()
+        errored: Final = self._make_logging_obj()
+
+        for logging_obj, chunks in ((dropped, received), (errored, [*received, error_frame])):
+            AnthropicPassthroughLoggingHandler.record_partial_usage_for_failure(
+                litellm_logging_obj=logging_obj,
+                request_body={"model": "claude-sonnet-5", "stream": True},
+                all_chunks=chunks,
+            )
+
+        assert (
+            errored.model_call_details["combined_usage_object"] == dropped.model_call_details["combined_usage_object"]
+        )
+        assert errored.model_call_details["response_cost"] == dropped.model_call_details["response_cost"]
+
+    @pytest.mark.parametrize("events_before_failure", [1, 3], ids=["after-message-start", "after-content"])
+    def test_upstream_error_frame_split_into_lines_logs_the_same_usage_as_a_dropped_connection(
+        self, events_before_failure: int
+    ):
+        received: Final = self._interrupted_chunks()[:events_before_failure]
+        error_frame: Final = self._sse(
+            "error", {"type": "error", "error": {"type": "api_error", "message": "upstream"}}
+        )
+        dropped, errored = (
+            AnthropicPassthroughLoggingHandler._build_streaming_response_for_logging(
+                litellm_logging_obj=self._make_logging_obj(),
+                request_body={"model": "claude-sonnet-5", "stream": True},
+                all_chunks=[line for line in chain.from_iterable(chunk.splitlines() for chunk in chunks) if line],
+                model="claude-sonnet-5",
+            )
+            for chunks in (received, [*received, error_frame])
+        )
+
+        assert dropped is not None
+        assert errored is not None
+        assert errored.usage == dropped.usage
+
     def test_leaves_logging_obj_untouched_when_nothing_streamed(self):
         logging_obj = self._make_logging_obj()
 
@@ -2665,6 +2709,68 @@ def test_stream_was_interrupted_skips_data_lines_that_are_not_json_objects(
     assert AnthropicPassthroughLoggingHandler._stream_was_interrupted(all_chunks) is interrupted
 
 
+_UNDECODABLE_DATA_LINES: Final = (
+    "data: " + "[" * 100_000 + "]" * 100_000 + "\n\n",
+    "data: " + '{"a": ' * 100_000 + "1" + "}" * 100_000 + "\n\n",
+)
+
+
+@pytest.mark.parametrize("position", ["before_message_start", "after_message_stop"])
+@pytest.mark.parametrize("undecodable_line", _UNDECODABLE_DATA_LINES, ids=["deep-array", "deep-object"])
+def test_streamed_messages_are_logged_when_an_undecodable_data_line_surrounds_the_stream(
+    position: str, undecodable_line: str
+) -> None:
+    events: Final = (
+        {
+            "type": "message_start",
+            "message": {
+                "id": "msg_undecodable_line",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-haiku-5-5",
+                "content": [],
+                "usage": {"input_tokens": 12, "output_tokens": 1},
+            },
+        },
+        {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+        {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "Sunny."}},
+        {"type": "content_block_stop", "index": 0},
+        {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 3}},
+        {"type": "message_stop"},
+    )
+    stream: Final = [f"event: {event['type']}\ndata: {json.dumps(event)}\n\n" for event in events]
+    all_chunks: Final = (
+        [undecodable_line, *stream] if position == "before_message_start" else [*stream, undecodable_line]
+    )
+    logging_obj: Final = LiteLLMLoggingObj(
+        model="claude-haiku-5-5",
+        messages=[{"role": "user", "content": "Weather?"}],
+        stream=True,
+        call_type="pass_through_endpoint",
+        start_time=datetime.now(),
+        litellm_call_id="undecodable-line-call",
+        function_id="1",
+    )
+    logging_obj.model_call_details["custom_llm_provider"] = "anthropic"
+    logging_obj.model_call_details["litellm_params"] = {}
+    logging_obj.litellm_params = {}
+
+    handled: Final = AnthropicPassthroughLoggingHandler._handle_logging_anthropic_collected_chunks(
+        litellm_logging_obj=logging_obj,
+        passthrough_success_handler_obj=MagicMock(),
+        url_route="/anthropic/v1/messages",
+        request_body={"model": "claude-haiku-5-5", "stream": True},
+        endpoint_type="messages",
+        start_time=datetime.now(),
+        all_chunks=all_chunks,
+        end_time=datetime.now(),
+    )
+
+    assert handled["result"].id == "msg_undecodable_line"
+    assert handled["result"].choices[0].message.content == "Sunny."
+    assert (handled["result"].usage.prompt_tokens, handled["result"].usage.completion_tokens) == (12, 3)
+    assert handled["kwargs"]["response_cost"] > 0
+
 
 def test_stream_was_interrupted_reads_a_message_delta_whose_json_holds_unicode_line_separators() -> None:
     message_delta: Final = {
@@ -2691,6 +2797,7 @@ def test_extract_model_reads_a_message_start_whose_json_holds_unicode_line_separ
     chunk: Final = f"event: message_start\ndata: {json.dumps(message_start, ensure_ascii=False)}\n\n"
 
     assert AnthropicPassthroughLoggingHandler._extract_model_from_anthropic_chunks([chunk]) == "claude-sonnet-5"
+
 
 @pytest.mark.asyncio
 async def test_anthropic_passthrough_handler(mock_httpx_response, mock_response, mock_logging_obj):
@@ -3282,3 +3389,30 @@ def test_a_stream_naming_a_dated_snapshot_is_billed_at_the_resolved_deployment_p
 
     assert result["result"].usage.prompt_tokens > 0
     assert result["kwargs"]["response_cost"] == pytest.approx(_deployment_price_of(result["result"].usage))
+
+
+def test_a_stream_the_rust_route_priced_is_billed_at_that_price_without_pricing_it_again(
+    monkeypatch: pytest.MonkeyPatch, all_chunks: list[str]
+) -> None:
+    logging_obj: Final = _deployment_priced_logging_obj(monkeypatch, stream=True)
+    logging_obj.optional_params = {}
+    logging_obj.record_route_cost(0.0421)
+
+    def repriced(*_args: object, **_kwargs: object) -> float:
+        raise AssertionError("a route-priced stream was priced again")
+
+    monkeypatch.setattr(litellm, "completion_cost", repriced)
+    monkeypatch.setattr(litellm, "response_cost_calculator", repriced)
+    result: Final = AnthropicPassthroughLoggingHandler.handle_logging_anthropic_collected_chunks(  # pyright: ignore[reportUnknownMemberType]  # the handler leaves its passthrough logging object untyped
+        litellm_logging_obj=logging_obj,
+        passthrough_success_handler_obj=MagicMock(),
+        url_route="/v1/messages",
+        request_body={"model": "claude-sonnet-4-5", "stream": True, "messages": []},
+        endpoint_type=MagicMock(),
+        start_time=datetime(2025, 1, 1),
+        all_chunks=all_chunks,
+        end_time=datetime(2025, 1, 1),
+    )
+
+    assert result["kwargs"]["response_cost"] == 0.0421, result["kwargs"]
+    assert logging_obj.model_call_details["response_cost"] == 0.0421

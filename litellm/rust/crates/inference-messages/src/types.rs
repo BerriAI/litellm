@@ -124,6 +124,12 @@ pub struct MessagesSettings {
     /// Python's async client retries a request whose connection failed to open, once.
     #[serde(default)]
     pub connect_retry: bool,
+    /// The deployment facts the route prices the call with. Absent when the host prices the call itself
+    #[serde(default)]
+    pub pricing: Option<crate::pricing::PricingIdentity>,
+    /// Each streamed usage event carries its cost as `usage.cost`
+    #[serde(default)]
+    pub inject_stream_cost: bool,
 }
 
 impl MessagesSettings {

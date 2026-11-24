@@ -1,7 +1,15 @@
-import asyncio, base64, importlib, litellm, litellm.types
+import asyncio, base64, importlib, json, litellm, litellm.types, re, struct, zlib
+from collections.abc import Iterator, Mapping
+from types import MappingProxyType
+from typing import Final
 from unittest.mock import patch
 
+import httpx
+import openai
 import pytest
+import respx
+from botocore.loaders import Loader
+from botocore.model import ServiceModel
 
 
 from litellm.llms.bedrock.chat.invoke_agent.transformation import (
@@ -376,3 +384,229 @@ def test_bedrock_agents_with_custom_params():
 
         mock_post.assert_called_once()
         print(f"mock_post.call_args.kwargs: {mock_post.call_args.kwargs}")
+
+
+def _agent_frame_header(name: str, value: str) -> bytes:
+    return struct.pack("!B", len(name)) + name.encode() + b"\x07" + struct.pack("!H", len(value)) + value.encode()
+
+
+def _agent_frame(headers: Mapping[str, str], payload: bytes) -> bytes:
+    encoded_headers: Final = b"".join(_agent_frame_header(name, value) for name, value in headers.items())
+    prelude: Final = struct.pack("!II", 16 + len(encoded_headers) + len(payload), len(encoded_headers))
+    message: Final = prelude + struct.pack("!I", zlib.crc32(prelude)) + encoded_headers + payload
+    return message + struct.pack("!I", zlib.crc32(message))
+
+
+def _agent_chunk(text: str) -> bytes:
+    return _agent_frame(
+        {":event-type": "chunk", ":content-type": "application/json", ":message-type": "event"},
+        json.dumps({"bytes": base64.b64encode(text.encode()).decode()}).encode(),
+    )
+
+
+def _agent_exception(exception_type: str, message: str) -> bytes:
+    return _agent_frame(
+        {":exception-type": exception_type, ":content-type": "application/json", ":message-type": "exception"},
+        json.dumps({"message": message}).encode(),
+    )
+
+
+_AGENT_URL: Final = re.compile(r"https://bedrock-agent-runtime\.us-east-1\.amazonaws\.com/.*")
+_AGENT_RESPONSE_HEADERS: Final = MappingProxyType(
+    {
+        "content-type": "application/vnd.amazon.eventstream",
+        "x-amzn-RequestId": "req-agent-1",
+        "x-agent-secret": "s3cr3t",
+    }
+)
+_UNDECODABLE_AGENT_BODIES: Final = (
+    pytest.param(b"", id="empty"),
+    pytest.param(b"\x00\x00\x00\x05", id="shorter-than-a-prelude"),
+    pytest.param(_agent_chunk("Hello")[:-8], id="truncated-first-message"),
+)
+
+
+@pytest.fixture
+def _agent_http(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "agent-test-aws-access-key")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "agent-test-aws-secret-key")
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    yield
+    litellm.in_memory_llm_clients_cache.flush_cache()
+
+
+async def _invoke_agent(
+    respx_mock: respx.MockRouter,
+    body: bytes,
+    sync_mode: bool,
+    stream: bool,
+    response_headers: Mapping[str, str] = _AGENT_RESPONSE_HEADERS,
+) -> str:
+    respx_mock.post(_AGENT_URL).mock(return_value=httpx.Response(200, content=body, headers=response_headers))
+    request: Final = {
+        "model": "bedrock/agent/AGENT1234/ALIAS1234",
+        "messages": [{"role": "user", "content": "hi"}],
+        "aws_region_name": "us-east-1",
+        "num_retries": 0,
+        "stream": stream,
+    }
+    if sync_mode:
+        response: Final = litellm.completion(**request)
+        if stream:
+            return "".join(chunk.choices[0].delta.content or "" for chunk in response)
+        return response.choices[0].message.content
+    async_response: Final = await litellm.acompletion(**request)
+    if stream:
+        return "".join([chunk.choices[0].delta.content or "" async for chunk in async_response])
+    return async_response.choices[0].message.content
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_agent_http")
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.parametrize("body", _UNDECODABLE_AGENT_BODIES)
+async def test_invoke_agent_200_body_that_decodes_to_no_events_raises_bad_gateway(
+    respx_mock: respx.MockRouter, body: bytes, sync_mode: bool, stream: bool
+) -> None:
+    with pytest.raises(litellm.BadGatewayError) as exc_info:
+        await _invoke_agent(respx_mock, body, sync_mode, stream)
+
+    assert exc_info.value.status_code == 502
+    assert "HTTP 200" in exc_info.value.message
+    assert "decoded to no events" in exc_info.value.message
+    assert f"{len(body)} bytes received" in exc_info.value.message
+    assert "application/vnd.amazon.eventstream" in exc_info.value.message
+    assert "req-agent-1" in exc_info.value.message
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_agent_http")
+@pytest.mark.parametrize("sync_mode", [True, False])
+async def test_invoke_agent_body_cut_inside_a_message_raises_bad_gateway(
+    respx_mock: respx.MockRouter, sync_mode: bool
+) -> None:
+    cut_message: Final = _agent_chunk(" world")[:-8]
+
+    with pytest.raises(litellm.BadGatewayError) as exc_info:
+        await _invoke_agent(respx_mock, _agent_chunk("Hello") + cut_message, sync_mode, stream=False)
+
+    assert exc_info.value.status_code == 502
+    assert f"{len(cut_message)} undecoded bytes after 1 events" in exc_info.value.message
+    assert "req-agent-1" in exc_info.value.message
+
+
+_NOT_AN_EVENT_STREAM_BODIES: Final = (
+    pytest.param(b"<html><body>Service Unavailable</body></html>", "text/html", id="html-page"),
+    pytest.param(b'{"message":"Service Unavailable"}', "application/json", id="json-body"),
+    pytest.param(b"\x00" * 16, "application/vnd.amazon.eventstream", id="zero-bytes"),
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_agent_http")
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.parametrize(("body", "content_type"), _NOT_AN_EVENT_STREAM_BODIES)
+async def test_invoke_agent_200_body_that_is_not_an_event_stream_raises_bad_gateway_naming_the_request(
+    respx_mock: respx.MockRouter, body: bytes, content_type: str, sync_mode: bool, stream: bool
+) -> None:
+    response_headers: Final = {**_AGENT_RESPONSE_HEADERS, "content-type": content_type}
+
+    with pytest.raises(litellm.BadGatewayError) as exc_info:
+        await _invoke_agent(respx_mock, body, sync_mode, stream, response_headers)
+
+    assert exc_info.value.status_code == 502
+    assert "stopped decoding as an AWS event stream after 0 events" in exc_info.value.message
+    assert f"content-type='{content_type}'" in exc_info.value.message
+    assert f"{len(body)} bytes received" in exc_info.value.message
+    assert "req-agent-1" in exc_info.value.message
+    assert "Service Unavailable" not in exc_info.value.message
+
+
+def _modeled_agent_stream_status(exception_type: str) -> int:
+    service_model: Final = ServiceModel(Loader().load_service_model("bedrock-agent-runtime", "service-2"))
+    return service_model.shape_for("ResponseStream").members[exception_type].metadata["error"]["httpStatusCode"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_agent_http")
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.parametrize(
+    "exception_type", ["throttlingException", "dependencyFailedException", "accessDeniedException"]
+)
+async def test_invoke_agent_exception_event_raises_its_modeled_status_instead_of_an_empty_turn(
+    respx_mock: respx.MockRouter, exception_type: str, sync_mode: bool, stream: bool
+) -> None:
+    body: Final = _agent_chunk("Hello") + _agent_exception(exception_type, "agent call failed")
+
+    with pytest.raises(openai.APIStatusError) as exc_info:
+        await _invoke_agent(respx_mock, body, sync_mode, stream)
+
+    assert exc_info.value.status_code == _modeled_agent_stream_status(exception_type)
+    assert exception_type in exc_info.value.message
+    assert "agent call failed" in exc_info.value.message
+    assert exc_info.value.response.headers.get("x-amzn-requestid") == "req-agent-1"
+    assert "x-agent-secret" not in exc_info.value.response.headers
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_agent_http")
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.parametrize(
+    ("error_code", "expected_error"),
+    [("InternalFailure", litellm.ServiceUnavailableError), ("ThrottlingException", litellm.RateLimitError)],
+)
+async def test_invoke_agent_error_event_raises_a_retryable_error_with_its_code_and_message(
+    respx_mock: respx.MockRouter, sync_mode: bool, error_code: str, expected_error: type[openai.APIStatusError]
+) -> None:
+    error_event: Final = _agent_frame(
+        {":message-type": "error", ":error-code": error_code, ":error-message": "agent runtime failed"}, b""
+    )
+
+    with pytest.raises(openai.APIStatusError) as exc_info:
+        await _invoke_agent(respx_mock, _agent_chunk("Hello") + error_event, sync_mode, stream=False)
+
+    assert type(exc_info.value) is expected_error
+    assert litellm._should_retry(exc_info.value.status_code)
+    assert f"{error_code} agent runtime failed" in exc_info.value.message
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_agent_http")
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize("sync_mode", [True, False])
+async def test_invoke_agent_complete_body_returns_its_text(
+    respx_mock: respx.MockRouter, sync_mode: bool, stream: bool
+) -> None:
+    content: Final = await _invoke_agent(respx_mock, _agent_chunk("Hello") + _agent_chunk(" world"), sync_mode, stream)
+
+    assert content == "Hello world"
+
+
+def _agent_trace(trace: Mapping[str, object]) -> bytes:
+    return _agent_frame(
+        {":event-type": "trace", ":content-type": "application/json", ":message-type": "event"},
+        json.dumps({"trace": trace}).encode(),
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_agent_http")
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize("sync_mode", [True, False])
+async def test_invoke_agent_reply_with_trace_events_returns_its_text(
+    respx_mock: respx.MockRouter, sync_mode: bool, stream: bool
+) -> None:
+    body: Final = (
+        _agent_trace({"preProcessingTrace": {"modelInvocationOutput": {"metadata": {"usage": {"inputTokens": 7}}}}})
+        + _agent_chunk("Hello")
+        + _agent_trace({"orchestrationTrace": {"rationale": {"text": "answer directly"}}})
+        + _agent_chunk(" world")
+    )
+
+    content: Final = await _invoke_agent(respx_mock, body, sync_mode, stream)
+
+    assert content == "Hello world"

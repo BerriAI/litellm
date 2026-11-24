@@ -5,6 +5,7 @@ Test guardrails for pipeline E2E testing.
 - PermissiveFilter: always passes (simulates an advanced guardrail that is more lenient)
 """
 
+from collections.abc import Mapping
 from typing import Optional, Union
 
 from fastapi import HTTPException
@@ -59,9 +60,9 @@ class AlwaysBlockFilter(CustomGuardrail):
         self,
         user_api_key_dict: UserAPIKeyAuth,
         cache: DualCache,
-        data: dict,
+        data: Mapping[str, object],
         call_type: CallTypesLiteral,
-    ) -> Optional[Union[Exception, str, dict]]:
+    ) -> Optional[Union[Exception, str, dict[str, object]]]:
         verbose_proxy_logger.info("AlwaysBlockFilter: BLOCKED")
         raise HTTPException(
             status_code=400,

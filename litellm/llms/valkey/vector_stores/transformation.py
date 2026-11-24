@@ -50,7 +50,7 @@ DEFAULT_EMBEDDING_FIELD_NAME: Final = "embedding"
 DEFAULT_TEXT_FIELD_NAME: Final = "text"
 DISTANCE_FIELD_NAME: Final = "vector_distance"
 
-_EMPTY_EMBEDDING_CONFIG: Final = MappingProxyType({})
+_EMPTY_EMBEDDING_CONFIG: Final[Mapping[str, object]] = MappingProxyType({})
 _REDIS_INSTALL_HINT: Final = (
     "The Valkey vector store requires the 'redis' package. Run 'pip install redis' to install it."
 )

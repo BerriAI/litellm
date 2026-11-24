@@ -455,7 +455,7 @@ def _get_cli_sso_flow_or_raise(login_id: str | None, cache: DualCache) -> dict:
 
 
 @with_service_target(CLI_SSO_SESSIONS_TARGET)
-def _set_cli_sso_flow(login_id: str, cache: DualCache, flow: dict) -> None:
+def _set_cli_sso_flow(login_id: str, cache: DualCache, flow: Mapping[str, object]) -> None:
     cache_key: Final = _get_cli_sso_flow_cache_key(login_id)
     redis_cache: Final = cache.redis_cache
     if redis_cache is not None:
@@ -464,7 +464,7 @@ def _set_cli_sso_flow(login_id: str, cache: DualCache, flow: dict) -> None:
         cache.set_cache(key=cache_key, value=flow, ttl=CLI_SSO_SESSION_TTL_SECONDS)
 
 
-def _verify_cli_sso_poll_secret(flow: dict, poll_secret: str | None) -> bool:
+def _verify_cli_sso_poll_secret(flow: Mapping[str, object], poll_secret: str | None) -> bool:
     expected_poll_secret_hash: Final = flow.get("poll_secret_hash")
     if not isinstance(expected_poll_secret_hash, str) or not isinstance(poll_secret, str):
         return False
@@ -1270,15 +1270,16 @@ async def google_login(
     # No SSO: sign in on the dashboard login page. return_to is kept in the same one-shot cookie the
     # SSO branch uses and honoured by /login/resume, which a browser that is already signed in goes
     # to directly, since the login page would send it to the dashboard and drop the return_to.
-    from litellm.proxy.mcp_server.byok_oauth_endpoints import get_authenticated_browser_user_id
+    from litellm.proxy.mcp_server.byok_oauth_endpoints import live_browser_session
 
     base_url: Final = get_custom_url(str(request.base_url)).rstrip("/")
-    signed_in: Final = await get_authenticated_browser_user_id(request) is not None
+    session: Final = await live_browser_session(request)
+    signed_in: Final = session is not None and session[0] == session[1]
     login_response: Final = RedirectResponse(
         url=f"{base_url}/login/resume" if signed_in and return_to is not None else f"{base_url}/ui/login",
         status_code=303,
     )
-    if return_to is not None and not signed_in:
+    if return_to is not None and session is None:
         login_response.delete_cookie("token")
         login_response.delete_cookie("token", path=f"{get_server_root_path().rstrip('/')}/ui")
     _persist_return_to_cookie(login_response, return_to, request)
@@ -1286,7 +1287,7 @@ async def google_login(
 
 
 def generic_response_convertor(
-    response,
+    response: Mapping[str, object],
     jwt_handler: ClaimReading,
     sso_jwt_handler: ClaimReading | None = None,
     role_mappings: Optional["RoleMappings"] = None,
@@ -1591,7 +1592,7 @@ def _handle_generic_sso_error(
     e: Exception,
     generic_authorization_endpoint: str | None,
     generic_token_endpoint: str | None,
-    additional_headers: dict,
+    additional_headers: object,
 ) -> NoReturn:
     """Handle errors from generic SSO verify_and_process. Always re-raises."""
     error_message: Final = str(e)
@@ -2206,7 +2207,7 @@ def _build_sso_user_update_data(
 @with_service_target(AUTH_OBJECTS_TARGET)
 async def _sync_user_role_from_jwt_role_map(
     jwt_handler: ClaimReading | None,
-    received_response: dict | None,
+    received_response: dict[str, object] | None,
     user_info: LiteLLM_UserTable | NewUserResponse | None,
     prisma_client: PrismaClient,
     user_api_key_cache: UserApiKeyCache,
@@ -2526,7 +2527,7 @@ async def saml_callback(request: Request):
 
 
 async def _build_cli_sso_user_defined_values(
-    result: OpenID | dict,
+    result: OpenID | dict[str, object],
     parsed_openid_result: ParsedOpenIDResult,
 ) -> SSOUserDefinedValues | None:
     custom_sso_handler: Final = _configured_custom_sso()
@@ -2616,8 +2617,8 @@ async def _complete_cli_sso_callback_session(
     *,
     request: Request,
     key: str,
-    flow: dict,
-    result: OpenID | dict,
+    flow: dict[str, object],
+    result: OpenID | dict[str, object],
     parsed_openid_result: ParsedOpenIDResult,
     user_defined_values: SSOUserDefinedValues | None,
     prisma_client: PrismaClient,
@@ -2716,7 +2717,7 @@ async def cli_sso_callback(
     request: Request,
     key: str | None = None,
     result: OpenID | dict | None = None,
-    received_response: dict | None = None,
+    received_response: Mapping[str, object] | None = None,
     prefill_user_code: str | None = None,
     sso_assertion: SSOIdentityAssertion | None = None,
 ):
@@ -2919,7 +2920,7 @@ async def cli_poll_key(
 
 
 async def insert_sso_user(
-    result_openid: OpenID | dict | None,
+    result_openid: OpenID | Mapping[str, object] | None,
     user_defined_values: SSOUserDefinedValues | None = None,
 ) -> NewUserResponse:
     """
@@ -3340,7 +3341,7 @@ class SSOAuthenticationHandler:
         if control_plane_url is None:
             return False
 
-        def _origin(url: str) -> tuple:
+        def _origin(url: str) -> tuple[str, str, int]:
             parsed: Final = urlparse(url)
             scheme: Final = (parsed.scheme or "").lower()
             hostname: Final = (parsed.hostname or "").lower()
@@ -3703,7 +3704,7 @@ class SSOAuthenticationHandler:
 
     @staticmethod
     async def upsert_sso_user(
-        result: CustomOpenID | OpenID | dict | None,
+        result: CustomOpenID | OpenID | Mapping[str, object] | None,
         user_info: NewUserResponse | LiteLLM_UserTable | None,
         user_email: str | None,
         user_defined_values: SSOUserDefinedValues | None,
@@ -3752,7 +3753,7 @@ class SSOAuthenticationHandler:
 
     @staticmethod
     async def add_user_to_teams_from_sso_response(
-        result: CustomOpenID | OpenID | dict | None,
+        result: CustomOpenID | OpenID | Mapping[str, object] | None,
         user_info: NewUserResponse | LiteLLM_UserTable | None,
     ):
         """
@@ -3773,9 +3774,9 @@ class SSOAuthenticationHandler:
 
     @staticmethod
     def verify_user_in_restricted_sso_group(
-        general_settings: dict,
-        result: CustomOpenID | OpenID | dict | None,
-        received_response: dict | None,
+        general_settings: Mapping[str, object],
+        result: CustomOpenID | OpenID | Mapping[str, object] | None,
+        received_response: Mapping[str, object] | None,
     ) -> Literal[True]:
         """
         when ui_access_mode.type == "restricted_sso_group":
@@ -3869,7 +3870,7 @@ class SSOAuthenticationHandler:
 
     @staticmethod
     def _cast_and_deepcopy_litellm_default_team_params(
-        default_team_params: DefaultTeamSSOParams | dict,
+        default_team_params: DefaultTeamSSOParams | Mapping[str, object],
         team_request: NewTeamRequest,
         litellm_team_id: str,
         litellm_team_name: str | None = None,
@@ -3924,7 +3925,7 @@ class SSOAuthenticationHandler:
 
     @staticmethod
     def get_user_email_and_id_from_result(
-        result: OpenID | dict | None,
+        result: OpenID | Mapping[str, object] | None,
         generic_client_id: str | None = None,
     ) -> ParsedOpenIDResult:
         """
@@ -3984,11 +3985,11 @@ class SSOAuthenticationHandler:
 
     @staticmethod
     async def get_redirect_response_from_openid(
-        result: OpenID | dict | CustomOpenID,
+        result: OpenID | Mapping[str, object] | CustomOpenID,
         request: Request,
         received_response: dict | None = None,
         generic_client_id: str | None = None,
-        ui_access_mode: dict | None = None,
+        ui_access_mode: Mapping[str, object] | None = None,
         access_token_payload: dict | None = None,
         jwt_handler: ClaimReading | None = None,
         return_to: str | None = None,

@@ -32,6 +32,12 @@ from litellm.integrations.custom_logger_v2.legacy import (
 )
 from litellm.integrations.custom_logger_v2.logger import CustomLoggerV2
 from litellm.integrations.custom_logger_v2.outcomes import Patch
+from litellm.litellm_core_utils.bridged_audio_output import (
+    AudioOnlyModel,
+    AudioRequested,
+    bridged_audio_output_request,
+    raise_audio_output_refusal,
+)
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, drops_unsupported_params
 from litellm.litellm_core_utils.exception_mapping_utils import exception_type
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -72,6 +78,7 @@ from ..safeguards import (
     proxy_serves_safeguards,
     with_safeguard_results,
 )
+from ..utils import RESPONSES_API_PROVIDERS
 from .interceptors import get_messages_interceptors
 from .utils import (
     AnthropicMessagesRequestUtils,
@@ -85,9 +92,6 @@ from .utils import (
 
 __all__ = ("anthropic_messages", "anthropic_messages_handler")
 
-# Providers that are routed directly to the OpenAI Responses API instead of
-# going through chat/completions.
-_RESPONSES_API_PROVIDERS: Final = frozenset({"openai"})
 _SAFEGUARD_KWARGS: Final = TypeAdapter(Mapping[str, object])
 _SAFEGUARD_MESSAGES: Final = TypeAdapter(Sequence[Mapping[str, object]])
 _DROP_PATHS: Final = TypeAdapter(list[object])
@@ -206,7 +210,7 @@ def _should_route_to_responses_api(
         return False
     if stop_sequences:
         return False
-    if custom_llm_provider in _RESPONSES_API_PROVIDERS:
+    if custom_llm_provider in RESPONSES_API_PROVIDERS:
         return True
     if custom_llm_provider is None or requested_model is None or resolved_model is None:
         return False
@@ -364,7 +368,7 @@ async def _execute_pre_request_hooks(
     tools: list[dict] | None,
     stream: bool | None,
     custom_llm_provider: str | None,
-    **kwargs,
+    **kwargs: object,
 ) -> dict:
     """
     Execute pre-request hooks from CustomLogger callbacks.
@@ -921,6 +925,9 @@ def anthropic_messages_handler(
                 **kwargs,
             )
 
+        chat_kwargs: Final = bridged_audio_output_request(kwargs, model, custom_llm_provider)
+        if isinstance(chat_kwargs, AudioOnlyModel | AudioRequested):
+            raise_audio_output_refusal(chat_kwargs, "/v1/messages")
         # The in-gateway context_management polyfill runs inside
         # ``async_anthropic_messages_handler`` so it can ``await`` the
         # summarization model for ``compact_20260112``. ``context_management``
@@ -946,7 +953,7 @@ def anthropic_messages_handler(
             api_base=bridge.api_base,
             client=client,
             custom_llm_provider=custom_llm_provider,
-            **kwargs,
+            **chat_kwargs,  # pyright: ignore[reportArgumentType]  # output_format only arrives through untyped **kwargs
         )
 
     if custom_llm_provider is None:

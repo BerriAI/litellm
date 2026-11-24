@@ -13,6 +13,7 @@ from litellm.constants import ANTHROPIC_BATCHES_ROUTE
 from litellm.litellm_core_utils.core_helpers import (
     claude_subscription_usage,
     json_contains,
+    loads_json_object,
     native_messages_reported_cost,
     override_stamped_response_cost,
     response_cost_in_hidden_params,
@@ -24,6 +25,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 )
 from litellm.llms.anthropic import get_anthropic_config
 from litellm.llms.anthropic.messages.stream_assembly import (
+    anthropic_sse_events_before_upstream_error,
     build_complete_streaming_response,
     build_complete_streaming_response_legacy,
     build_usage_only_response_from_chunks,
@@ -245,7 +247,7 @@ class AnthropicPassthroughLoggingHandler:
     ) -> ModelResponse | TextCompletionResponse | None:
         try:
             assembled: Final = AnthropicPassthroughLoggingHandler.build_complete_streaming_response(
-                all_chunks=all_chunks,
+                all_chunks=anthropic_sse_events_before_upstream_error(all_chunks),
                 litellm_logging_obj=litellm_logging_obj,
                 model=model,
                 speed=speed,
@@ -345,6 +347,9 @@ class AnthropicPassthroughLoggingHandler:
         )
         if subscription_usage is not None and not subscription_usage["is_overage"]:
             return 0.0
+        route_cost: Final = logging_obj.route_priced_cost
+        if isinstance(route_cost, float):
+            return route_cost
         custom_llm_provider: Final = logging_obj.model_call_details.get("custom_llm_provider")
         model_for_cost: Final = (
             f"{custom_llm_provider}/{model}"
@@ -379,11 +384,8 @@ class AnthropicPassthroughLoggingHandler:
             for line in split_sse_lines(text):
                 if not line.startswith("data:"):
                     continue
-                try:
-                    data = _JSON_OBJECT.validate_python(json.loads(line[len("data:") :].strip()))
-                except (json.JSONDecodeError, ValueError):
-                    continue
-                if not isinstance(data, dict):
+                data = loads_json_object(line[len("data:") :])
+                if data is None:
                     continue
                 if data.get("type") == "message_start":
                     value = _JSON_OBJECT.validate_python(data.get("message") or {}).get(field)
@@ -419,9 +421,8 @@ class AnthropicPassthroughLoggingHandler:
             for line in reversed(split_sse_lines(text)):
                 if not line.startswith("data:"):
                     continue
-                try:
-                    data = _JSON_OBJECT.validate_python(json.loads(line[len("data:") :].strip()))
-                except (json.JSONDecodeError, ValueError):
+                data = loads_json_object(line[len("data:") :])
+                if data is None:
                     continue
                 etype = data.get("type")
                 if etype == "message_delta":
@@ -545,7 +546,7 @@ class AnthropicPassthroughLoggingHandler:
         litellm_logging_obj: LiteLLMLoggingObj,
         passthrough_success_handler_obj: PassThroughEndpointLogging,
         url_route: str,
-        request_body: dict,
+        request_body: Mapping[str, object],
         endpoint_type: EndpointType,
         start_time: datetime,
         all_chunks: list[str],
@@ -609,7 +610,7 @@ class AnthropicPassthroughLoggingHandler:
         end_time: datetime,
         cache_hit: bool,
         request_body: dict | None = None,
-        **kwargs,
+        **kwargs: object,
     ) -> PassThroughEndpointLoggingTypedDict:
         """
         Handle Anthropic batch creation passthrough logging.
@@ -651,7 +652,7 @@ class AnthropicPassthroughLoggingHandler:
                     if model_name == "unknown":
                         # Anthropic batches: look under requests[0].params.model
                         requests_list: Final = request_body.get("requests", [])
-                        if isinstance(requests_list, list) and len(requests_list) > 0:
+                        if isinstance(requests_list, list) and requests_list:
                             first_req: Final = requests_list[0]
                             if isinstance(first_req, dict):
                                 params: Final = first_req.get("params", {})
