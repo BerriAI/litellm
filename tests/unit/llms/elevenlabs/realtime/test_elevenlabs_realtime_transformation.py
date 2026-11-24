@@ -726,6 +726,22 @@ async def test_a_commit_after_too_little_audio_tops_it_up_with_silence_so_the_se
     assert (sent_samples + len(padding) // 2) / 24_000 >= MIN_COMMIT_AUDIO_SECONDS
 
 
+async def test_a_commit_with_no_speech_still_gets_an_empty_completed_transcript_billing_its_audio():
+    config, backend = await _audio_session()
+    await _send_audio(config, backend, b"\x00\x00" * 2_400)
+    for message in config.transform_realtime_request(
+        json.dumps({"type": "input_audio_buffer.commit"}), SCRIBE_REALTIME_MODEL
+    ):
+        await backend.send(message)
+    events: Final = _response(config, _frame("committed_transcript", text=""))
+
+    assert [event["type"] for event in events][-1] == "conversation.item.input_audio_transcription.completed"
+    assert (events[-1]["transcript"], events[-1]["usage"]) == (
+        "",
+        {"type": "duration", "seconds": pytest.approx(MIN_COMMIT_AUDIO_SECONDS)},
+    )
+
+
 async def test_clear_discards_the_uncommitted_turn_and_bills_its_audio_with_the_next_one():
     config, backend = await _audio_session()
     await _send_audio(config, backend, b"\x00\x00" * 24_000)
