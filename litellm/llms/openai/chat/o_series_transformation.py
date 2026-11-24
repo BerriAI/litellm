@@ -11,7 +11,7 @@ Translations handled by LiteLLM:
 - Logprobs => drop param (if user opts in to dropping param)
 """
 
-from collections.abc import Coroutine, Sequence
+from collections.abc import Collection, Coroutine, Sequence
 from typing import Final, Literal, cast, overload
 
 import litellm
@@ -99,12 +99,18 @@ class OpenAIOSeriesConfig(OpenAIGPTConfig):
         optional_params: dict,
         model: str,
         drop_params: bool,
+        *,
+        declared_reasoning_efforts: Collection[str] | None = None,
     ):
         requested_effort: Final = get_effort_level(
             non_default_params.get("reasoning_effort") or optional_params.get("reasoning_effort")  # pyright: ignore[reportUnknownMemberType]  # the request params arrive as a bare dict
         )
-        if requested_effort is not None and is_explicitly_disabled_factory(
-            model=model, custom_llm_provider=None, key=f"supports_{requested_effort}_reasoning_effort"
+        if (
+            requested_effort is not None
+            and requested_effort not in (declared_reasoning_efforts or ())
+            and is_explicitly_disabled_factory(
+                model=model, custom_llm_provider=None, key=f"supports_{requested_effort}_reasoning_effort"
+            )
         ):
             if not (litellm.drop_params or drop_params):
                 raise litellm.utils.UnsupportedParamsError(

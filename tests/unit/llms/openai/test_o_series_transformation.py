@@ -308,10 +308,28 @@ def test_o3_judges_every_form_of_a_requested_level(
 
 
 @pytest.mark.parametrize("custom_llm_provider", ["openai", "azure"])
-def test_o3_chat_request_drops_minimal_under_drop_params(local_model_cost_map: None, custom_llm_provider: str):
-    assert "reasoning_effort" not in get_optional_params(
-        model="o3", custom_llm_provider=custom_llm_provider, reasoning_effort="minimal", drop_params=True
+@pytest.mark.parametrize(
+    ("model_info", "drop_params", "sent"),
+    [
+        (None, True, None),
+        ({"reasoning_effort_levels": ["minimal", "low"]}, False, "minimal"),
+    ],
+)
+def test_o3_chat_request_forwards_minimal_only_when_the_deployment_declares_it(
+    local_model_cost_map: None,
+    custom_llm_provider: str,
+    model_info: Mapping[str, object] | None,
+    drop_params: bool,
+    sent: str | None,
+):
+    optional_params: Final = get_optional_params(
+        model="o3",
+        custom_llm_provider=custom_llm_provider,
+        reasoning_effort="minimal",
+        drop_params=drop_params,
+        model_info=model_info,
     )
+    assert optional_params.get("reasoning_effort") == sent
 
 
 @pytest.mark.parametrize("custom_llm_provider", ["openai", "azure"])
