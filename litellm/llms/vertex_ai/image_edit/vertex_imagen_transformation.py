@@ -117,7 +117,7 @@ class VertexAIImagenImageEditConfig(BaseImageEditConfig, VertexLLM):
         headers: dict,
         model: str,
         api_key: str | None = None,
-        litellm_params: dict | None = None,
+        litellm_params: dict[str, object] | None = None,
         api_base: str | None = None,
     ) -> dict:
         headers = headers or {}
@@ -140,7 +140,7 @@ class VertexAIImagenImageEditConfig(BaseImageEditConfig, VertexLLM):
         self,
         model: str,
         api_base: str | None,
-        litellm_params: dict,
+        litellm_params: dict[str, object],
     ) -> str:
         """
         Get the complete URL for Vertex AI Imagen predict API
@@ -170,7 +170,7 @@ class VertexAIImagenImageEditConfig(BaseImageEditConfig, VertexLLM):
         image: FileTypes | Sequence[FileTypes | None] | None,
         image_edit_optional_request_params: Mapping[str, object],
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
+        headers: Mapping[str, object],
     ) -> tuple[dict[str, object], RequestFiles | None]:
         # Prepare reference images in the correct Imagen format
         if image is None:

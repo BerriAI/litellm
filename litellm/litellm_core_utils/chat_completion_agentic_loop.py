@@ -23,7 +23,7 @@ from litellm.litellm_core_utils.allowed_tools_tool_choice import (
     parse_allowed_tools_tool_choice,
     tool_calls_the_choice_excludes,
 )
-from litellm.litellm_core_utils.core_helpers import qualify_agentic_followup_model
+from litellm.litellm_core_utils.core_helpers import as_object_list, qualify_agentic_followup_model
 from litellm.litellm_core_utils.get_litellm_params import AGENTIC_LOOP_TOOL_CHOICE_KEY
 from litellm.litellm_core_utils.hidden_params import get_hidden_params, served_from_cache, set_hidden_params
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObject
@@ -146,8 +146,8 @@ def _agentic_loop_settings(kwargs: Mapping[str, object]) -> tuple[int, int, tupl
         kwargs.get("max_agentic_loops"), field="litellm_params.max_agentic_loops"
     )
     max_loops: Final = DEFAULT_MAX_AGENTIC_LOOPS if configured is None else configured
-    raw_fingerprints: Final = kwargs.get("_agentic_loop_fingerprints")
-    fingerprints: Final = tuple(str(fp) for fp in raw_fingerprints) if isinstance(raw_fingerprints, list) else ()
+    raw_fingerprints: Final = as_object_list(kwargs.get("_agentic_loop_fingerprints"))
+    fingerprints: Final = tuple(str(fp) for fp in raw_fingerprints) if raw_fingerprints is not None else ()
     return depth, max_loops, fingerprints
 
 
@@ -349,7 +349,7 @@ def _with_agentic_loop_metadata(kwargs_for_followup: Mapping[str, object]) -> Ma
             **kwargs_for_followup,
             "litellm_metadata": dict(
                 chain(
-                    metadata.items() if isinstance(metadata, dict) else (),
+                    metadata.items() if is_str_keyed_dict(metadata) else (),
                     (
                         (key, value)
                         for key, value in kwargs_for_followup.items()

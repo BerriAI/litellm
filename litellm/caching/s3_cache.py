@@ -118,7 +118,7 @@ class S3Cache(BaseCache):
         except Exception as e:
             verbose_logger.error("S3 Caching: async_set_cache() - Got exception from S3: %s", e)
 
-    def get_cache(self, key: str, **kwargs: object):
+    def get_cache(self, key: str, **kwargs: object) -> object:
         import botocore
 
         try:
@@ -162,7 +162,7 @@ class S3Cache(BaseCache):
         except Exception as e:
             verbose_logger.error("S3 Caching: get_cache() - Got exception from S3: %s", e)
 
-    async def async_get_cache(self, key: str, **kwargs: object):
+    async def async_get_cache(self, key: str, **kwargs: object) -> object:
         """
         Asynchronously get cache using run_in_executor to avoid blocking the event loop.
         Compatible with Python 3.8+.

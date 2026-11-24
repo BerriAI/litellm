@@ -177,7 +177,7 @@ class VertexAITextEmbeddingConfig(LiteLLMBaseModel):
         return vertex_request
 
     def _transform_openai_request_to_fine_tuned_embedding_request(
-        self, input: list | str, optional_params: dict, model: str
+        self, input: list[str] | str, optional_params: Mapping[str, object], model: str
     ) -> VertexEmbeddingRequest:
         """
         Transforms an openai request to a vertex fine-tuned embedding request.

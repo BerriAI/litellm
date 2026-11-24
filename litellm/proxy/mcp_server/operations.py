@@ -1576,7 +1576,7 @@ async def _get_prompts_from_mcp_servers(
     )
 
     # Get prompts from each allowed server
-    all_prompts: Final = []
+    all_prompts: Final[list[Prompt]] = []
     for server in allowed_mcp_servers:
         if server is None:
             continue

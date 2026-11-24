@@ -129,7 +129,9 @@ class DeepEvalLogger(CustomLogger):
 
         verbose_logger.debug("DeepEvalLogger: async_event_handler: Api response %s", response)
 
-    def _create_base_api_span(self, kwargs, standard_logging_object, start_time: str, end_time: str, is_success: bool):
+    def _create_base_api_span(
+        self, kwargs: Mapping[str, object], standard_logging_object, start_time: str, end_time: str, is_success: bool
+    ):
         # extract usage
         usage: Final = standard_logging_object.get("response", {}).get("usage", {})
         if is_success:

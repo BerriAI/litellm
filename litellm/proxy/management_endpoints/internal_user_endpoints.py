@@ -246,7 +246,7 @@ async def _hash_password_in_dict(
         data["last_breach_check_at"] = None
 
 
-def _strip_password_from_response(response) -> None:
+def _strip_password_from_response(response: object) -> None:
     """Strip password from API response (handles dicts, nested dicts, and Prisma models)."""
     if isinstance(response, dict):
         response.pop("password", None)
@@ -718,6 +718,7 @@ async def new_user(
             **data_json,
             llm_router=None,
             actor=actor,
+            key_writer=None,
         )
         created_user_id: Final = cast(str | None, response.get("user_id", None))
         if created_user_id is not None:

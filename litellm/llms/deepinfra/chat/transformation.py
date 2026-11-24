@@ -1,5 +1,5 @@
 import json
-from collections.abc import Coroutine, Mapping
+from collections.abc import Coroutine, Mapping, Sequence
 from typing import Final, Literal, cast, overload
 
 import litellm
@@ -21,34 +21,34 @@ class DeepInfraConfig(OpenAIGPTConfig):
         return "deepinfra"
 
     frequency_penalty: int | None = None
-    function_call: str | dict | None = None
-    functions: list | None = None
-    logit_bias: dict | None = None
+    function_call: str | dict[str, object] | None = None
+    functions: list[object] | None = None
+    logit_bias: dict[str, object] | None = None
     max_tokens: int | None = None
     n: int | None = None
     presence_penalty: int | None = None
-    stop: str | list | None = None
+    stop: str | list[object] | None = None
     temperature: int | None = None
     top_p: int | None = None
-    response_format: dict | None = None
-    tools: list | None = None
-    tool_choice: str | dict | None = None
+    response_format: dict[str, object] | None = None
+    tools: list[object] | None = None
+    tool_choice: str | dict[str, object] | None = None
 
     def __init__(
         self,
         frequency_penalty: int | None = None,
-        function_call: str | dict | None = None,
-        functions: list | None = None,
-        logit_bias: dict | None = None,
+        function_call: str | Mapping[str, object] | None = None,
+        functions: Sequence[object] | None = None,
+        logit_bias: Mapping[str, object] | None = None,
         max_tokens: int | None = None,
         n: int | None = None,
         presence_penalty: int | None = None,
-        stop: str | list | None = None,
+        stop: str | Sequence[object] | None = None,
         temperature: int | None = None,
         top_p: int | None = None,
-        response_format: dict | None = None,
-        tools: list | None = None,
-        tool_choice: str | dict | None = None,
+        response_format: Mapping[str, object] | None = None,
+        tools: Sequence[object] | None = None,
+        tool_choice: str | Mapping[str, object] | None = None,
     ) -> None:
         locals_: Final[Mapping[str, object]] = dict(locals())
         for key, value in locals_.items():
@@ -87,7 +87,7 @@ class DeepInfraConfig(OpenAIGPTConfig):
 
     def map_openai_params(
         self,
-        non_default_params: dict,
+        non_default_params: Mapping[str, object],
         optional_params: dict,
         model: str,
         drop_params: bool,
