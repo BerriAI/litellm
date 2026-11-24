@@ -1322,9 +1322,11 @@ def _bedrock_stream_event_error(
     stream raised unmapped before, so retries, cooldowns and the proxy's answer stay as they were."""
     mapped: Final = _public_provider_error(stream_error, error, request, request_provider)
     status: Final = getattr(stream_error, "status_code", None)
-    if isinstance(status, int) and isinstance(mapped, openai.APIStatusError):
+    if isinstance(status, int) and isinstance(mapped, (openai.APIStatusError, litellm.Timeout)):
         mapped.status_code = status
-        mapped.response = error_response_without_credentials(status, mapped.response, _UNKNOWN_REQUEST_URL)
+        response: Final = getattr(mapped, "response", None)
+        if isinstance(response, httpx.Response):
+            mapped.response = error_response_without_credentials(status, response, _UNKNOWN_REQUEST_URL)
     keep_routing_classification(mapped, stream_error)
     return mapped
 

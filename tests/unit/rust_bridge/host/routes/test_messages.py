@@ -679,6 +679,32 @@ def test_a_bedrock_stream_error_event_maps_to_the_pre_stream_class_keeping_the_s
     assert routing_classification(before_the_stream) is before_the_stream
 
 
+@pytest.mark.parametrize(
+    ("status", "exception_type"),
+    [(424, "modelStreamErrorException"), (500, "internalServerException")],
+)
+def test_a_bedrock_stream_error_event_that_reads_as_a_timeout_keeps_the_status_bedrock_sent(
+    status: int, exception_type: str
+) -> None:
+    from litellm.litellm_core_utils.exception_mapping_utils import provider_origin_status, routing_classification
+    from litellm.llms.bedrock.common_utils import BedrockError
+
+    body: Final = f'{exception_type} {{"message":"Model invocation timed out"}}'
+    mapped: Final = messages_host.map_failure(
+        _bedrock_upstream(status, body, stream_failure=True, stream_event=True), {"model": _BEDROCK_INVOKE}, "bedrock"
+    )
+
+    routed_as: Final = routing_classification(mapped)
+    response: Final = getattr(mapped, "response", None)
+    assert type(mapped) is litellm.Timeout
+    assert mapped.status_code == status
+    assert provider_origin_status(mapped) == status
+    assert isinstance(response, httpx.Response)
+    assert response.status_code == status
+    assert type(routed_as) is BedrockError
+    assert (routed_as.status_code, routed_as.message) == (status, body)
+
+
 @pytest.mark.parametrize("status", [502, 500])
 def test_a_bedrock_stream_failure_the_decoder_made_up_still_raises_the_raw_bedrock_error(status: int) -> None:
     from litellm.litellm_core_utils.exception_mapping_utils import routing_classification
