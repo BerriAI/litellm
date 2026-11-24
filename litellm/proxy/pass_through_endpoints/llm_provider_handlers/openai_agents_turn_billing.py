@@ -162,6 +162,8 @@ class _SubagentsPage(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     data: tuple[_Subagent, ...]
+    has_more: bool = False
+    last_id: str | None = None
 
 
 class _Item(BaseModel):
@@ -332,14 +334,23 @@ class TurnClaims:
     async def claim(self, turn_id: str, claimant: str) -> bool:
         if self._held_here(turn_id):
             return False
-        self._local.set_cache(turn_id, claimant)
+        self._hold_here(turn_id, claimant)
         return await self._shared_owner(turn_id, claimant) == claimant
 
     async def taken(self, turn_id: str) -> bool:
-        return self._held_here(turn_id) or await self._shared_claimant(turn_id) is not None
+        if self._held_here(turn_id):
+            return True
+        claimant: Final = await self._shared_claimant(turn_id)
+        if claimant is None:
+            return False
+        self._hold_here(turn_id, claimant)
+        return True
 
     def _held_here(self, turn_id: str) -> bool:
         return self._local.get_cache(turn_id) is not None
+
+    def _hold_here(self, turn_id: str, claimant: object) -> None:
+        self._local.set_cache(turn_id, claimant)
 
     @with_service_target("openai_agents_turn_claims")
     async def _shared_claimant(self, turn_id: str) -> object:
@@ -682,8 +693,10 @@ class OpenAIAgentsTurnBiller:
         waiting: Final = tuple(self._tasks)
         if not waiting:
             return
-        _, still_polling = await asyncio.wait(waiting, timeout=timeout * OPENAI_AGENTS_TURN_DRAIN_POLL_SHARE)
-        self._abandoning.set()
+        try:
+            _, still_polling = await asyncio.wait(waiting, timeout=timeout * OPENAI_AGENTS_TURN_DRAIN_POLL_SHARE)
+        finally:
+            self._abandoning.set()
         if still_polling:
             _ = await asyncio.wait(still_polling, timeout=timeout * (1 - OPENAI_AGENTS_TURN_DRAIN_POLL_SHARE))
 
@@ -849,16 +862,12 @@ class OpenAIAgentsTurnBiller:
         self, turn_start: AgentsTurnStart, claimant: str, root: _ClaimedTurn, known: tuple[_ClaimedTurn, ...]
     ) -> tuple[_ClaimedTurn, ...] | _FetchFailed:
         session_path: Final = f"agents/sessions/{turn_start.session_id}"
-        subagents: Final = await self._fetch_page(
-            turn_start, f"{session_path}/subagents?order=desc&limit={OPENAI_AGENTS_LIST_PAGE_LIMIT}", _SubagentsPage
-        )
+        subagents: Final = await self._subagents(turn_start, session_path)
         if isinstance(subagents, _FetchFailed):
             return subagents
         root_created_at: Final = root.turn.created_at
         open_during_turn: Final = (
-            subagent
-            for subagent in subagents.data
-            if subagent.closed_at is None or subagent.closed_at >= root_created_at
+            subagent for subagent in subagents if subagent.closed_at is None or subagent.closed_at >= root_created_at
         )
         turns_paths: Final = tuple(f"{session_path}/subagents/{subagent.id}/turns" for subagent in open_during_turn)
         pages: Final = await asyncio.gather(*(self._fetch_turns(turn_start, turns_path) for turns_path in turns_paths))
@@ -883,6 +892,22 @@ class OpenAIAgentsTurnBiller:
             ]
         )
         return (*(latest.get(claimed_turn.turn.id, claimed_turn) for claimed_turn in known), *claimed_now)
+
+    async def _subagents(
+        self, turn_start: AgentsTurnStart, session_path: str, after: str | None = None
+    ) -> tuple[_Subagent, ...] | _FetchFailed:
+        cursor: Final = "" if after is None else f"&after={after}"
+        page: Final = await self._fetch_page(
+            turn_start,
+            f"{session_path}/subagents?order=desc&limit={OPENAI_AGENTS_LIST_PAGE_LIMIT}{cursor}",
+            _SubagentsPage,
+        )
+        if isinstance(page, _FetchFailed):
+            return page
+        if not page.has_more or page.last_id is None:
+            return page.data
+        older: Final = await self._subagents(turn_start, session_path, page.last_id)
+        return older if isinstance(older, _FetchFailed) else (*page.data, *older)
 
     async def _next_root_created_at(self, turn_start: AgentsTurnStart, root: _ClaimedTurn) -> float | _FetchFailed:
         roots: Final = await self._fetch_turns(turn_start, root.turns_path)

@@ -1494,6 +1494,7 @@ async def _flush_spend_around_logging_drain_on_shutdown(
         )
     finally:
         await worker.stop(discard_pending=True, timeout=GracefulShutdownManager.remaining(2.0, clock=clock))
+    await drain_deferred_rows(GracefulShutdownManager.remaining(5.0, clock=clock))
     await drain_tasks(GracefulShutdownManager.remaining(5.0, clock=clock))
     _ = await asyncio.gather(
         flush_spend(), _bounded_rust_flush(flush_rust, GracefulShutdownManager.remaining(clock=clock))

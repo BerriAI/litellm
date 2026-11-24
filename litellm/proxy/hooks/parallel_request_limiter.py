@@ -51,7 +51,8 @@ def _response_total_tokens(kwargs: Mapping[str, object], response_obj: object) -
         if isinstance(response_obj, (ModelResponse, EmbeddingResponse, TextCompletionResponse))
         else socket_session_usage(kwargs, response_obj)
     )
-    return response_usage.total_tokens if isinstance(response_usage, Usage) else 0
+    usage: Final = response_usage if response_usage is not None else kwargs.get("combined_usage_object")
+    return usage.total_tokens if isinstance(usage, Usage) else 0
 
 
 _CONNECTION_SCOPED_CALL_TYPES: Final = frozenset({CallTypes.aresponses_websocket.value})
