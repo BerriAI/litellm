@@ -3,7 +3,7 @@
 # UI container — Next.js static export served by nginx.
 
 ARG UI_BUILD_IMAGE=node:24.19-alpine3.24@sha256:d32cdf619f63fe0471182d08996dd516c6275bb5fd31ae06e55a570bd9e1ad43
-ARG NGINX_VERSION=1.31.8-alpine3.24-slim@sha256:4c734d33ee731135dc9f2349914a34551c920f4451fca8bb05bf5880eb9079e8
+ARG NGINX_VERSION=1.31.10-alpine3.24-slim@sha256:c293b28729906d97fa5302fce3bd79bd27a3ea9a5d9604e21c6ff0ebf14549fc
 
 # ---------- builder ----------
 FROM ${UI_BUILD_IMAGE} AS builder
