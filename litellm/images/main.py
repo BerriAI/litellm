@@ -807,7 +807,7 @@ def image_edit(
     timeout: float | httpx.Timeout | None = None,
     # LiteLLM specific params,
     custom_llm_provider: str | None = None,
-    markup: FileTypes | None = None,
+    markup: FileTypes | list[FileTypes] | None = None,  # mutable-ok: a tuple is one upload, a list is several
     **kwargs,
 ) -> ImageResponse | Coroutine[object, object, ImageResponse]:
     """
@@ -1130,7 +1130,7 @@ async def aimage_edit(
     timeout: float | httpx.Timeout | None = None,
     # LiteLLM specific params,
     custom_llm_provider: str | None = None,
-    markup: FileTypes | None = None,
+    markup: FileTypes | list[FileTypes] | None = None,  # mutable-ok: a tuple is one upload, a list is several
     **kwargs,
 ) -> ImageResponse:
     """
