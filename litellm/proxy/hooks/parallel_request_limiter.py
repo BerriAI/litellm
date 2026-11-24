@@ -42,18 +42,24 @@ def _precise_minute(now: datetime) -> str:
     return now.strftime("%Y-%m-%d-%H-%M")
 
 
+SLOT_RELEASED_BEFORE_LOGGING: Final = "parallel_request_slot_released_before_logging"
+
+
 def _response_total_tokens(kwargs: Mapping[str, object], response_obj: object) -> int:
     response_usage: Final = (
         getattr(response_obj, "usage", None)
         if isinstance(response_obj, (ModelResponse, EmbeddingResponse, TextCompletionResponse))
         else None
     )
-    usage: Final = response_usage if response_usage is not None else kwargs.get("combined_usage_object")
+    usage: Final = (
+        kwargs.get("combined_usage_object")
+        if response_usage is None and kwargs.get(SLOT_RELEASED_BEFORE_LOGGING) is True
+        else response_usage
+    )
     return usage.total_tokens if isinstance(usage, Usage) else 0
 
 
 _CONNECTION_SCOPED_CALL_TYPES: Final = frozenset({CallTypes.aresponses_websocket.value})
-SLOT_RELEASED_BEFORE_LOGGING: Final = "parallel_request_slot_released_before_logging"
 
 
 def _slots_released(kwargs: Mapping[str, object]) -> int:

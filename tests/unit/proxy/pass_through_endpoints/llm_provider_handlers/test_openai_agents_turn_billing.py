@@ -1664,6 +1664,9 @@ async def test_a_turn_row_counts_toward_the_keys_tpm_limit_on_the_legacy_limiter
     limiter: Final = PROXY_MaxParallelRequestsHandler(
         internal_usage_cache=InternalUsageCache(DualCache()), clock=lambda: CALL_TIME
     )
+    proxy_logging: Final = ProxyLogging(user_api_key_cache=DualCache())
+    proxy_logging.proxy_hook_mapping["parallel_request_limiter"] = limiter
+    clock: Final = _Clock()
     key: Final = UserAPIKeyAuth(api_key=hash_token("sk-agents-legacy-tpm"), tpm_limit=7240)
     api: Final = _AgentsApi(
         turn_pages=((_turn("turn_1", CALL_STARTED_AT + 1, "completed", TURN_USAGE),),), session=_session()
@@ -1680,7 +1683,9 @@ async def test_a_turn_row_counts_toward_the_keys_tpm_limit_on_the_legacy_limiter
 
     await call("6f8b0d2f-4b6d-4f8b-9d2f-4b6d8f0b2d01")
     await _relay_call(
-        _biller(api, _Clock()),
+        OpenAIAgentsTurnBiller(
+            get=api.get, sleep=clock.sleep, clock=clock, release_request_slot=proxy_logging.arelease_slot_before_logging
+        ),
         rows,
         EVENTS_URL,
         {"events": [INPUT_MESSAGE]},
@@ -1844,6 +1849,9 @@ async def test_a_turn_row_logged_in_a_new_minute_counts_once_toward_user_team_an
     limiter: Final = PROXY_MaxParallelRequestsHandler(
         internal_usage_cache=InternalUsageCache(DualCache()), clock=limiter_clock
     )
+    proxy_logging: Final = ProxyLogging(user_api_key_cache=DualCache())
+    proxy_logging.proxy_hook_mapping["parallel_request_limiter"] = limiter
+    clock: Final = _Clock()
     api: Final = _AgentsApi(
         turn_pages=((_turn("turn_1", CALL_STARTED_AT + 1, "completed", TURN_USAGE),),), session=_session()
     )
@@ -1857,10 +1865,15 @@ async def test_a_turn_row_logged_in_a_new_minute_counts_once_toward_user_team_an
             call_type="pass_through_endpoint",
         )
 
+    async def release_then_reach_the_next_minute(logging_obj: LiteLLMLoggingObj) -> None:
+        await proxy_logging.arelease_slot_before_logging(logging_obj)
+        limiter_clock.now = CALL_TIME + timedelta(minutes=1)
+
     await call("9c1e3a5c-7e9a-4c1e-8a3c-5e7a9c1e3a01")
-    limiter_clock.now = CALL_TIME + timedelta(minutes=1)
     await _relay_call(
-        _biller(api, _Clock()),
+        OpenAIAgentsTurnBiller(
+            get=api.get, sleep=clock.sleep, clock=clock, release_request_slot=release_then_reach_the_next_minute
+        ),
         rows,
         EVENTS_URL,
         {"events": [INPUT_MESSAGE]},
