@@ -346,6 +346,19 @@ def _kept_allowed_tools_tool_choice(optional_params: Mapping[str, object]) -> Ma
     return allowed_tools_tool_choice_kept_on_follow_up(optional_params.get("tool_choice"))
 
 
+def _auto_keeping_parallel_tool_use_limit(tool_choice: object, auto_choice: str | Mapping[str, str]) -> object:
+    choice: Final = _as_str_mapping(tool_choice)
+    if isinstance(auto_choice, str) or choice is None or "disable_parallel_tool_use" not in choice:
+        return auto_choice
+    return {**auto_choice, "disable_parallel_tool_use": choice["disable_parallel_tool_use"]}
+
+
+def _without_tool_only_chat_params(tool_params: Mapping[str, object]) -> Mapping[str, object]:
+    if tool_params.get("tools") is not None:
+        return tool_params
+    return {**tool_params, "parallel_tool_calls": None}
+
+
 def _is_litellm_web_search_function_responses(tool: Mapping[str, object]) -> bool:
     return tool.get("type") == "function" and tool.get("name") == LITELLM_WEB_SEARCH_TOOL_NAME
 
@@ -448,21 +461,24 @@ class WebSearchInterceptionLogger(CustomLogger):
     ) -> object:
         match tool_choice:
             case "required" | {"type": "any"}:
-                return auto_choice
+                return _auto_keeping_parallel_tool_use_limit(tool_choice, auto_choice)
             case _ if is_allowed_tools_tool_choice(tool_choice):
                 return allowed_tools_tool_choice_in_auto_mode(tool_choice)
             case _:
-                return cls._tool_choice_naming_a_remaining_tool(tool_choice, remaining_tools)
+                return cls._tool_choice_naming_a_remaining_tool(tool_choice, remaining_tools, auto_choice)
 
     @classmethod
     def _tool_choice_naming_a_remaining_tool(
-        cls, tool_choice: object, remaining_tools: Sequence[Mapping[str, object]]
+        cls,
+        tool_choice: object,
+        remaining_tools: Sequence[Mapping[str, object]],
+        auto_choice: str | Mapping[str, str],
     ) -> object:
         choice: Final = _as_str_mapping(tool_choice)
         chosen_name: Final = None if choice is None else cls._tool_name(choice)
         if chosen_name is None or chosen_name in {cls._tool_name(tool) for tool in remaining_tools}:
             return tool_choice
-        return None
+        return _auto_keeping_parallel_tool_use_limit(tool_choice, auto_choice)
 
     @classmethod
     def _final_followup_tool_params(
@@ -926,7 +942,7 @@ class WebSearchInterceptionLogger(CustomLogger):
 
         # Check if tools include any web search tool (LiteLLM standard or native)
         has_websearch_tool: Final = any(is_web_search_tool(t) for t in (tools or []))
-        if not has_websearch_tool:
+        if not has_websearch_tool and not self._is_capped_call(custom_llm_provider, kwargs):
             verbose_logger.debug("WebSearchInterception: No web search tool in request")
             return False, {}
 
@@ -2104,7 +2120,8 @@ class WebSearchInterceptionLogger(CustomLogger):
             len(follow_up_messages),
         )
 
-        tools_param: Final = _STR_KEYED_MAPPING.validate_python(optional_params).get("tools")
+        chat_params: Final = _STR_KEYED_MAPPING.validate_python(optional_params)
+        tools_param: Final = chat_params.get("tools")
         optional_params_clean: Final = {
             **{
                 k: v
@@ -2119,15 +2136,17 @@ class WebSearchInterceptionLogger(CustomLogger):
                     "custom_prompt_dict",
                 }
             },
-            **_kept_allowed_tools_tool_choice(_OPTIONAL_PARAMS.validate_python(optional_params)),
+            **_kept_allowed_tools_tool_choice(chat_params),
         }
         tool_params: Final = (
-            self._final_followup_tool_params(
-                tools_param,
-                optional_params_clean.get("tool_choice"),
-                is_web_search_tool_chat_completion,
-                "none",
-                "auto",
+            _without_tool_only_chat_params(
+                self._final_followup_tool_params(
+                    tools_param,
+                    chat_params.get("tool_choice"),
+                    is_web_search_tool_chat_completion,
+                    "none",
+                    "auto",
+                )
             )
             if capped
             else ({} if tools_param is None else {"tools": tools_param})

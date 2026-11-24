@@ -60,7 +60,13 @@ from litellm.types.integrations.custom_logger import (
 )
 from litellm.types.utils import ChatCompletionMessageToolCall, Choices, Function, Message, ModelResponse
 
-from .conftest import FINAL_ANSWER, OPENAI_CHAT_URL, SEARCH_LIMIT_ERROR_CODE, offered_tool_names
+from .conftest import (
+    FINAL_ANSWER,
+    OPENAI_CHAT_URL,
+    SEARCH_LIMIT_ERROR_CODE,
+    RecordingUpstream,
+    offered_tool_names,
+)
 
 INTERNAL_TOOL_NAME = "litellm_web_search"
 CODE_EXECUTION_TOOL_NAME = "litellm_code_execution"
@@ -1263,7 +1269,9 @@ class TestACappedTurnEndsWithTheModelAnswer:
         assert [block.get("text") for block in response["content"] if block["type"] == "text"] == [FINAL_ANSWER]
 
     @pytest.mark.asyncio
-    async def test_a_forced_search_choice_is_not_sent_once_search_is_gone(self, anthropic_messages_upstream, perplexity_search):
+    async def test_a_forced_search_choice_relaxes_to_auto_once_search_is_gone(
+        self, anthropic_messages_upstream, perplexity_search
+    ):
         await self._ask(
             tools=[get_litellm_web_search_tool(), WEATHER_TOOL],
             tool_choice={"type": "tool", "name": INTERNAL_TOOL_NAME},
@@ -1272,7 +1280,7 @@ class TestACappedTurnEndsWithTheModelAnswer:
         bodies = anthropic_messages_upstream.bodies
         assert [body.get("tool_choice") for body in bodies] == [
             *[{"type": "tool", "name": INTERNAL_TOOL_NAME}] * 3,
-            None,
+            {"type": "auto"},
         ]
         assert offered_tool_names(bodies[-1]) == ["get_weather"]
 
@@ -1293,6 +1301,25 @@ class TestACappedTurnEndsWithTheModelAnswer:
 
         assert anthropic_messages_upstream.bodies[-1]["tool_choice"] == {"type": "auto"}
         assert [block.get("text") for block in response["content"] if block["type"] == "text"] == [FINAL_ANSWER]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "tool_choice",
+        [
+            {"type": "any", "disable_parallel_tool_use": True},
+            {"type": "tool", "name": INTERNAL_TOOL_NAME, "disable_parallel_tool_use": True},
+        ],
+        ids=["forcing some tool", "forcing the search"],
+    )
+    async def test_a_relaxed_choice_keeps_the_one_tool_call_limit(
+        self, anthropic_messages_upstream, perplexity_search, tool_choice
+    ):
+        await self._ask(tools=[get_litellm_web_search_tool(), WEATHER_TOOL], tool_choice=tool_choice)
+
+        assert anthropic_messages_upstream.bodies[-1]["tool_choice"] == {
+            "type": "auto",
+            "disable_parallel_tool_use": True,
+        }
 
     @pytest.mark.asyncio
     async def test_a_turn_that_ends_before_the_cap_makes_no_extra_call(
@@ -1542,6 +1569,26 @@ async def test_gemini_responses_never_hands_the_client_a_search_call_the_capped_
     assert [item.type for item in response.output if item.type == "function_call"] == []
 
 
+@pytest.mark.asyncio
+async def test_anthropic_messages_never_hands_the_client_a_search_call_the_capped_call_still_made(
+    monkeypatch: pytest.MonkeyPatch,
+    always_searching_anthropic_messages_upstream: RecordingUpstream,
+    perplexity_search: respx.Route,
+):
+    monkeypatch.setattr(litellm, "callbacks", [WebSearchInterceptionLogger(enabled_providers=["anthropic"])])
+
+    response: Final = await litellm.anthropic_interface.messages.acreate(
+        model="anthropic/claude-sonnet-5-5",
+        messages=[{"role": "user", "content": "Who won the last World Cup?"}],
+        max_tokens=1024,
+        tools=[get_litellm_web_search_tool()],
+        max_agentic_loops=1,
+    )
+
+    assert len(always_searching_anthropic_messages_upstream.bodies) == _model_calls_in_a_turn_that_reaches_the_cap(1)
+    assert _tool_use_names(response) == []
+
+
 def _chat_function_tool(name: str) -> dict[str, object]:
     return {"type": "function", "function": {"name": name, "parameters": {"type": "object", "properties": {}}}}
 
@@ -1592,6 +1639,40 @@ async def test_openai_chat_completion_keeps_the_allowed_tools_limit_on_the_last_
     last_call: Final = json.loads(openai_route.calls.last.request.content)
     assert offered_tool_names(last_call) == last_call_tools
     assert last_call.get("tool_choice") == last_call_tool_choice
+    assert response.choices[0].message.content == WORLD_CUP_ANSWER
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("client_tools", "last_call_parallel_tool_calls"),
+    [((), None), ((_chat_function_tool("get_time"),), False)],
+    ids=["no client tool left", "a client tool left"],
+)
+async def test_openai_chat_completion_last_call_at_the_cap_sends_parallel_tool_calls_only_with_tools(
+    client_tools: tuple[dict[str, object], ...],
+    last_call_parallel_tool_calls: bool | None,
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+    perplexity_search: respx.Route,
+):
+    monkeypatch.setattr(litellm, "callbacks", [WebSearchInterceptionLogger(enabled_providers=["openai"])])
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    openai_route: Final = respx_mock.post(f"{OPENAI_COMPATIBLE_API_BASE}/chat/completions").mock(
+        side_effect=_openai_reply_asking_for_another_search_until_enough_results
+    )
+
+    response: Final = await litellm.acompletion(
+        model="openai/gpt-5.6",
+        messages=[{"role": "user", "content": "Who won the last World Cup?"}],
+        tools=[{"type": "web_search"}, *client_tools],
+        parallel_tool_calls=False,
+        api_key="sk-test",
+        api_base=OPENAI_COMPATIBLE_API_BASE,
+        max_agentic_loops=1,
+    )
+
+    last_call: Final = json.loads(openai_route.calls.last.request.content)
+    assert last_call.get("parallel_tool_calls") == last_call_parallel_tool_calls
     assert response.choices[0].message.content == WORLD_CUP_ANSWER
 
 

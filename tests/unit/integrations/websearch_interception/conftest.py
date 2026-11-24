@@ -181,7 +181,22 @@ class RecordingUpstream:
 
 @pytest.fixture
 def anthropic_messages_upstream(monkeypatch: pytest.MonkeyPatch, fresh_http_clients: None) -> Iterator[RecordingUpstream]:
-    respond: Final = _searching_model_reply(_anthropic_reply)
+    yield from _serve_anthropic_messages(monkeypatch, _searching_model_reply(_anthropic_reply))
+
+
+@pytest.fixture
+def always_searching_anthropic_messages_upstream(
+    monkeypatch: pytest.MonkeyPatch, fresh_http_clients: None
+) -> Iterator[RecordingUpstream]:
+    call_numbers: Final = itertools.count(1)
+    yield from _serve_anthropic_messages(
+        monkeypatch, lambda content: _anthropic_reply(json.loads(content), next(call_numbers), True, "")
+    )
+
+
+def _serve_anthropic_messages(
+    monkeypatch: pytest.MonkeyPatch, respond: Callable[[bytes], Mapping[str, object]]
+) -> Iterator[RecordingUpstream]:
     received: Final[list[dict]] = []  # mutable-ok: the server thread appends each request body as it arrives
 
     class SearchingModel(BaseHTTPRequestHandler):
