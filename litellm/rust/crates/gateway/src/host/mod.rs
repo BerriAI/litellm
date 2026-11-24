@@ -17,10 +17,7 @@ use std::sync::Arc;
 
 use litellm_gateway_auth::Authenticated;
 use litellm_gateway_auth_core::{Caller, authz::Layer};
-use litellm_gateway_inference::{
-    CallType,
-    routing::{Host, RouteAttempt},
-};
+use litellm_gateway_inference::routing::{Host, RouteAttempt};
 
 use crate::{Gateway, callbacks, callbacks::Callbacks};
 
@@ -59,8 +56,8 @@ impl Host for NativeHost {
         layers(identity)
     }
 
-    fn hooks(&self, identity: &Authenticated<NativeRows>, call_type: CallType) -> callbacks::Call {
-        self.callbacks.begin(identity, call_type)
+    fn hooks(&self, identity: &Authenticated<NativeRows>) -> callbacks::Call {
+        self.callbacks.begin(identity)
     }
 
     fn router_host<'a, A: RouteAttempt>(

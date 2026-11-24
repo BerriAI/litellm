@@ -8876,7 +8876,7 @@ async def atranscription(
         # tricks the OpenAI SDK's "best match deserialization" into thinking
         # a plain Transcription is a TranscriptionVerbose/Diarized type.
         if response is not None and not isinstance(response, Coroutine) and file is not None:
-            existing_duration: Final = getattr(response, "duration", None)
+            existing_duration: Final[object] = getattr(response, "duration", None)
             if existing_duration is None:
                 sync_calculated_duration: Final = calculate_request_duration(file)
                 if sync_calculated_duration is not None:
