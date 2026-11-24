@@ -382,7 +382,7 @@ class AmazonBedrockRuntimeChatCompletionsConfig(OpenAILikeChatConfig):
             return api_base.rstrip("/")
         default_endpoint_region: Final = (
             ""
-            if api_base is not None
+            if api_base
             else self._aws_signer._get_aws_region_name(  # pyright: ignore[reportPrivateUsage]  # BaseAWSLLM has no public region resolver
                 optional_params=self._params_with_region_from_path(optional_params, model), model=model
             )
