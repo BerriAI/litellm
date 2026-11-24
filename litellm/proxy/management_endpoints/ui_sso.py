@@ -3789,7 +3789,7 @@ class SSOAuthenticationHandler:
         - if result.team_ids is a list, return True if the restricted_sso_group is in the list, otherwise return False
         """
 
-        ui_access_mode: Final = cast(dict[str, object] | str | None, general_settings.get("ui_access_mode"))
+        ui_access_mode: Final = cast(dict | str | None, general_settings.get("ui_access_mode"))
 
         if ui_access_mode is None:
             return True
