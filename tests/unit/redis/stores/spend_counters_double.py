@@ -70,7 +70,7 @@ class DeclaredRead:
 class FakeSpendCounters:
     """``redis`` is None for a worker without Redis, and ``redis_default`` answers reads of a key it lacks. ``fail``
     makes every Redis call fail with ``failure``, ``fail_pipelines`` only the increment pipelines and ``failing`` only
-    the named writes ("set", "delete")."""
+    the named writes ("set", "set_max", "delete")."""
 
     redis: dict[str, object] | None = field(default_factory=dict)
     memory: dict[str, float] = field(default_factory=dict)
@@ -181,7 +181,7 @@ class FakeSpendCounters:
             self.memory[counter] = spend
         if self.redis is None:
             return _done(None)
-        if self.fail:
+        if self.fail or "set_max" in self.failing:
             return _failed(unavailable(self.failure))
         self.commands.append(f"SETMAX {counter} {spend}")
         current: Final = self.redis.get(counter)

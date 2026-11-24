@@ -12,7 +12,9 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache, InMemoryCache, RedisCache, response_cache_phase
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.types.semantic_cache import semantic_cache_policy
 
 
 class _PROXY_BatchRedisRequests(CustomLogger):
@@ -57,18 +59,23 @@ class _PROXY_BatchRedisRequests(CustomLogger):
                 if isinstance(key, str) and key.startswith(cache_key_name):
                     in_memory_cache_exists = True
 
-            if in_memory_cache_exists is False and litellm.cache is not None:
+            response_cache: Final = litellm.cache
+            request_fields: Final = as_str_mapping(data) or {}
+            if not in_memory_cache_exists and response_cache is not None:
                 """
                 - Check if `litellm.Cache` is redis
                 - Get the relevant values
                 """
-                if litellm.cache.type is not None and isinstance(litellm.cache.cache, RedisCache):
+                allow_read: Final = semantic_cache_policy(request_fields) is None or response_cache.should_use_cache(
+                    **request_fields
+                )
+                if allow_read and isinstance(response_cache.cache, RedisCache):
                     self.print_verbose(f"cache_key_name: {cache_key_name}")
                     with response_cache_phase("get"):
-                        keys = await litellm.cache.cache.async_scan_iter(pattern=cache_key_name, count=100)
+                        keys = await response_cache.cache.async_scan_iter(pattern=cache_key_name, count=100)
                         self.print_verbose(f"redis keys: {keys}")
                         if len(keys) > 0:
-                            key_value_dict = await litellm.cache.cache.async_batch_get_cache(key_list=keys)
+                            key_value_dict = await response_cache.cache.async_batch_get_cache(key_list=keys)
 
             ## Add to cache
             if len(key_value_dict.items()) > 0:
@@ -83,7 +90,7 @@ class _PROXY_BatchRedisRequests(CustomLogger):
             )
             verbose_proxy_logger.debug(traceback.format_exc())
 
-    async def async_get_cache(self, *args, **kwargs) -> object | None:
+    async def async_get_cache(self, *args: object, **kwargs: object) -> object | None:
         """
         - Check if the cache key is in-memory
 
@@ -93,26 +100,31 @@ class _PROXY_BatchRedisRequests(CustomLogger):
             - return redis cache request
         """
         try:  # never block execution
-            cache_key: str | None = None
-            if "cache_key" in kwargs:
-                cache_key = kwargs["cache_key"]
-            elif litellm.cache is not None:
-                cache_key = litellm.cache.get_cache_key(
-                    *args, **kwargs
-                )  # returns "<cache_key_name>:<hash>" - we pass redis_namespace in async_pre_call_hook. Done to avoid rewriting the async_set_cache logic
-
-            if cache_key is not None and self.in_memory_cache is not None and litellm.cache is not None:
-                cache_control_args: Final = kwargs.get("cache", {})
-                max_age: Final = cache_control_args.get("s-max-age", cache_control_args.get("s-maxage", float("inf")))
-                cached_result = self.in_memory_cache.get_cache(cache_key, *args, **kwargs)
-                if cached_result is None:
-                    with response_cache_phase("get"):
-                        cached_result = await litellm.cache.cache.async_get_cache(cache_key, *args, **kwargs)
-                    if cached_result is not None:
-                        await self.in_memory_cache.async_set_cache(cache_key, cached_result, ttl=60)
-                return litellm.cache.get_cache_logic(cached_result=cached_result, max_age=max_age)
+            response_cache: Final = litellm.cache
+            if response_cache is None:
+                return None
+            if semantic_cache_policy(kwargs) is not None and not response_cache.should_use_cache(**kwargs):
+                return None
+            cache_key: Final = kwargs["cache_key"] if "cache_key" in kwargs else response_cache.get_cache_key(**kwargs)
+            worker_cache: Final = self.in_memory_cache
+            if not isinstance(cache_key, str) or worker_cache is None:
+                return None
+            max_age: Final = response_cache.response_cache_max_age(kwargs)
+            local_entry: Final = worker_cache.get_cache(cache_key, *args, **kwargs)
+            local_response: Final = response_cache.get_cache_logic(local_entry, max_age)
+            if local_response is not None:
+                return local_response
+            with response_cache_phase("get"):
+                redis_entry: Final = await response_cache.cache.async_get_cache(cache_key, *args, **kwargs)
+            redis_response: Final = response_cache.get_cache_logic(redis_entry, max_age)
+            if redis_response is not None:
+                await worker_cache.async_set_cache(
+                    cache_key, redis_entry, ttl=60, replace_ttl=True, preserve_newer_response=True
+                )
         except Exception:
             return None
+        else:
+            return redis_response
 
 
 PROXY_BatchRedisRequests: Final = _PROXY_BatchRedisRequests

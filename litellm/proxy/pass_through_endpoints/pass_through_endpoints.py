@@ -90,6 +90,7 @@ from litellm.litellm_core_utils.initialize_dynamic_callback_params import valida
 from litellm.litellm_core_utils.internal_call_metadata import MODEL_ACCESS_GROUP_METADATA_KEY
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.litellm_logging import get_masked_values
+from litellm.litellm_core_utils.logging_utils import truncate_base64_in_messages_async
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.litellm_core_utils.realtime_errors import realtime_error_event
 from litellm.litellm_core_utils.redact_messages import should_redact_message_logging
@@ -770,7 +771,7 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
         user_api_key_dict: UserAPIKeyAuth,
         passthrough_logging_payload: PassthroughStandardLoggingPayload,
         logging_obj: LiteLLMLoggingObj,
-        _parsed_body: dict | None = None,
+        _parsed_body: dict[str, object] | None = None,
         litellm_call_id: str | None = None,
         customer_usage: ResolvedCustomerUsage | None = None,
     ) -> dict:
@@ -1628,7 +1629,7 @@ async def pass_through_request(
     custom_body: Mapping[str, object] | None = None,
     forward_headers: bool | None = False,
     merge_query_params: bool | None = False,
-    query_params: dict | None = None,
+    query_params: dict[str, object] | None = None,
     default_query_params: dict | None = None,
     stream: bool | None = None,
     cost_per_request: float | None = None,
@@ -1771,9 +1772,10 @@ async def pass_through_request(
             route_description="pass_through_endpoint",
         )
         litellm_trace_id: Final[str | None] = get_chain_id_from_headers(dict(request.headers))
+        received_body_for_logging: Final = safe_dumps(await truncate_base64_in_messages_async(_parsed_body))
         logging_obj = Logging(
             model=passthrough_model,
-            messages=[{"role": "user", "content": safe_dumps(_parsed_body)}],
+            messages=[{"role": "user", "content": received_body_for_logging}],
             stream=False,
             call_type="pass_through_endpoint",
             start_time=start_time,
@@ -2023,8 +2025,9 @@ async def pass_through_request(
             _with_anthropic_user_id(outgoing_body, client_user_id),
             _METADATA_ADAPTER.validate_python(kwargs["litellm_params"]),
         )
+        hooked_body_for_logging: Final = safe_dumps(await truncate_base64_in_messages_async(_parsed_body))
         logging_obj.pre_call(
-            input=[{"role": "user", "content": safe_dumps(_parsed_body)}],
+            input=[{"role": "user", "content": hooked_body_for_logging}],
             api_key="",
             additional_args={
                 "complete_input_dict": upstream_body,
@@ -2726,7 +2729,7 @@ def create_pass_through_route(
     custom_llm_provider: str | None = None,
     is_streaming_request: bool | None = False,
     query_params: dict | None = None,
-    default_query_params: dict | None = None,
+    default_query_params: dict[str, object] | None = None,
     guardrails: dict[str, object] | None = None,
     config_file_path: str | None = None,
     timeout: float | None = None,
@@ -2907,7 +2910,7 @@ def create_pass_through_route(
 def create_websocket_passthrough_route(
     endpoint: str,
     target: str,
-    custom_headers: dict | None = None,
+    custom_headers: dict[str, object] | None = None,
     _forward_headers: bool | None = False,
     dependencies: Sequence[params.Depends] | None = None,
     cost_per_request: float | None = None,
@@ -2930,7 +2933,7 @@ def create_websocket_passthrough_route(
     async def websocket_endpoint_func(
         websocket: WebSocket,
         user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth_websocket),
-        **kwargs,  # For additional query parameters
+        **kwargs: object,  # For additional query parameters
     ):
         """
         WebSocket passthrough endpoint function.
@@ -4338,9 +4341,9 @@ class InitPassThroughEndpointHelpers:
         dependencies: Sequence[params.Depends] | None,
         cost_per_request: float | None,
         endpoint_id: str,
-        guardrails: dict | None = None,
+        guardrails: dict[str, object] | None = None,
         methods: list[str] | None = None,
-        default_query_params: dict | None = None,
+        default_query_params: dict[str, object] | None = None,
         config_file_path: str | None = None,
         auth: bool = False,
         timeout: float | None = None,
@@ -4422,9 +4425,9 @@ class InitPassThroughEndpointHelpers:
         dependencies: Sequence[params.Depends] | None,
         cost_per_request: float | None,
         endpoint_id: str,
-        guardrails: dict | None = None,
+        guardrails: dict[str, object] | None = None,
         methods: list[str] | None = None,
-        default_query_params: dict | None = None,
+        default_query_params: dict[str, object] | None = None,
         config_file_path: str | None = None,
         auth: bool = False,
         timeout: float | None = None,

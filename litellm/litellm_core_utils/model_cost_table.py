@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+import time
+from collections import OrderedDict
+from collections.abc import Callable, Hashable, Mapping
 from dataclasses import dataclass
 from functools import lru_cache
 from typing import Final, Generic, ParamSpec, TypeVar
 
-from litellm.constants import DEFAULT_MAX_LRU_CACHE_SIZE
+from litellm.constants import DEFAULT_MAX_LRU_CACHE_SIZE, FAILED_MODEL_INFO_LOOKUP_RETRY_SECONDS
 
 P = ParamSpec("P")
 R = TypeVar("R")
@@ -75,27 +77,71 @@ def changed_in_place() -> None:
     _WRITES.record()
 
 
+@dataclass(frozen=True, slots=True)
+class FailedLookup(Generic[R]):
+    """The default a failed lookup answered with, which ``VersionCached`` keeps for
+    ``FAILED_MODEL_INFO_LOOKUP_RETRY_SECONDS`` after the failure, so the lookup is sent again at most that often."""
+
+    value: R
+
+
+@dataclass(frozen=True, slots=True)
+class _Failure(Generic[R]):
+    value: R
+    failed_at: float
+
+
 class VersionCached(Generic[P, R]):
     """Decorates ``function`` with an ``lru_cache`` keyed on the ``litellm.model_cost`` version each call read, and
-    exposes that cache's ``cache_clear`` and ``cache_info``."""
+    exposes that cache's ``cache_clear`` and ``cache_info``. A result ``function`` wraps in ``FailedLookup`` is returned
+    unwrapped and kept for ``FAILED_MODEL_INFO_LOOKUP_RETRY_SECONDS`` after the call that failed returned."""
 
-    __slots__ = ("_at", "cache_clear", "cache_info")
+    __slots__ = ("_call", "cache_clear", "cache_info")
 
-    def __init__(self, function: Callable[P, R]) -> None:
+    def __init__(self, function: Callable[P, R | FailedLookup[R]]) -> None:
+        class Failed(Exception):
+            def __init__(self, value: R) -> None:
+                super().__init__()
+                self.value: Final = value
+
         def at(
             _version: ModelCostVersion,
             *args: P.args,
             **kwargs: P.kwargs,  # kwargs-ok: forwards a ParamSpec unchanged
         ) -> R:
-            return function(*args, **kwargs)
+            result: Final = function(*args, **kwargs)
+            if isinstance(result, FailedLookup):
+                raise Failed(result.value)
+            return result
 
-        cached: Final = lru_cache(maxsize=DEFAULT_MAX_LRU_CACHE_SIZE)(at)
-        self._at: Final = cached
-        self.cache_clear: Final = cached.cache_clear
-        self.cache_info: Final = cached.cache_info
+        lasting: Final = lru_cache(maxsize=DEFAULT_MAX_LRU_CACHE_SIZE)(at)
+        failures: Final = OrderedDict[Hashable, _Failure[R]]()
+
+        def call(*args: P.args, **kwargs: P.kwargs) -> R:  # kwargs-ok: forwards a ParamSpec unchanged
+            version: Final = model_cost_version()
+            key: Final = (version, args, tuple(sorted(kwargs.items())))
+            recent: Final = failures.get(key)
+            if recent is not None and time.monotonic() - recent.failed_at < FAILED_MODEL_INFO_LOOKUP_RETRY_SECONDS:
+                return recent.value
+            try:
+                return lasting(version, *args, **kwargs)
+            except Failed as failed:
+                failures.pop(key, None)
+                failures[key] = _Failure(failed.value, time.monotonic())
+                if len(failures) > DEFAULT_MAX_LRU_CACHE_SIZE:
+                    failures.popitem(last=False)
+                return failed.value
+
+        def cache_clear() -> None:
+            lasting.cache_clear()
+            failures.clear()
+
+        self._call: Final = call
+        self.cache_clear: Final = cache_clear
+        self.cache_info: Final = lasting.cache_info
 
     def __call__(self, *args: P.args, **kwargs: P.kwargs) -> R:  # kwargs-ok: forwards a ParamSpec unchanged
-        return self._at(model_cost_version(), *args, **kwargs)
+        return self._call(*args, **kwargs)
 
 
 @dataclass(frozen=True, slots=True)

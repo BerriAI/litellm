@@ -86,7 +86,7 @@ class AmazonInvokeNovaConfig(AmazonInvokeConfig, AmazonConverseConfig):
     Config for sending `nova` requests to `/bedrock/invoke/`
     """
 
-    def __init__(self, **kwargs):
+    def __init__(self, **kwargs: object):
         super().__init__(**kwargs)
 
     def get_supported_openai_params(self, model: str) -> list:

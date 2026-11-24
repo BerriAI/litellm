@@ -147,6 +147,7 @@ from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 from litellm.litellm_core_utils.tool_fields import raise_if_a_forced_hosted_tool_stays
 from litellm.litellm_core_utils.url_utils import ensure_api_route
 from litellm.llms.base_llm import BaseConfig, BaseImageGenerationConfig
+from litellm.llms.base_llm.auth.provider_oauth import oauth_credential_free_headers, provider_oauth_token
 from litellm.llms.base_llm.base_model_iterator import (
     MockResponseIterator,
     convert_model_response_to_streaming,
@@ -2969,17 +2970,54 @@ def _missing_provider_key_error(ctx: CompletionDispatchContext) -> Authenticatio
     )
 
 
+def _openai_sdk_client_with_provider_bearer(
+    client: openai.OpenAI | openai.AsyncOpenAI,
+    api_base: str | None,
+    token: str,
+    model: str,
+) -> openai.OpenAI | openai.AsyncOpenAI:
+    if getattr(client, "workload_identity", None) is not None:
+        raise AuthenticationError(
+            message="OAuth client credentials cannot be combined with OpenAI SDK workload identity.",
+            llm_provider="openai",
+            model=model,
+        )
+    return client.with_options(
+        api_key=token,
+        base_url=api_base,
+        set_default_headers={
+            name: value
+            for name, value in oauth_credential_free_headers(client.default_headers).items()
+            if isinstance(value, str)
+        },
+    )
+
+
 def _complete_custom_openai(
     ctx: CompletionDispatchContext,
 ) -> _CompletionDispatchResult:
     acompletion: Final = ctx.acompletion
     api_base = ctx.api_base
     api_key = ctx.api_key
-    client: Final = _dispatch_client_http(ctx)
+    oauth_token: Final = (
+        provider_oauth_token(ctx.litellm_params, api_base=api_base, provider=ctx.custom_llm_provider, model=ctx.model)
+        if ctx.custom_llm_provider in ("openai", "custom_openai")
+        else None
+    )
+    supplied_client: Final = _dispatch_client_http(ctx)
+    client: Final = (
+        _openai_sdk_client_with_provider_bearer(supplied_client, api_base, oauth_token, ctx.model)
+        if oauth_token is not None and isinstance(supplied_client, (openai.OpenAI, openai.AsyncOpenAI))
+        else supplied_client
+    )
     custom_llm_provider: Final = ctx.custom_llm_provider
     custom_prompt_dict: Final = ctx.custom_prompt_dict
-    extra_headers = with_canonical_authorization(custom_llm_provider, ctx.extra_headers)
-    headers = ctx.headers
+    configured_extra_headers: Final = with_canonical_authorization(custom_llm_provider, ctx.extra_headers)
+    extra_headers = (
+        oauth_credential_free_headers(_FORWARDED_HEADERS_ADAPTER.validate_python(configured_extra_headers))
+        if oauth_token is not None
+        else configured_extra_headers
+    )
     litellm_params: Final = ctx.litellm_params
     logger_fn: Final = ctx.logger_fn
     logging: Final = ctx.logging
@@ -2996,7 +3034,7 @@ def _complete_custom_openai(
 
     # for deepinfra/perplexity/anyscale/groq/friendliai we check in get_llm_provider and pass in the api base from there
     api_base = _resolve_openai_api_base(api_base)
-    if (missing_key_error := _missing_provider_key_error(ctx)) is not None:
+    if oauth_token is None and (missing_key_error := _missing_provider_key_error(ctx)) is not None:
         raise missing_key_error
     _validate_vispark_api_key(
         custom_llm_provider,
@@ -3013,12 +3051,14 @@ def _complete_custom_openai(
     openai.organization = organization
     # set API KEY
     api_key = (
-        api_key
+        oauth_token
+        or api_key
         or litellm.api_key  # for deepinfra/perplexity/anyscale/friendliai we check in get_llm_provider and pass in the api key from there
         or _openai_key_fallback(custom_llm_provider)
     )
 
-    headers = with_canonical_authorization(custom_llm_provider, headers or litellm.headers)
+    configured_headers: Final = with_canonical_authorization(custom_llm_provider, ctx.headers or litellm.headers)
+    headers = oauth_credential_free_headers(configured_headers) if oauth_token is not None else configured_headers
 
     # Add GitHub Copilot headers (same as /responses endpoint does)
     if custom_llm_provider == "github_copilot":
@@ -3099,7 +3139,7 @@ def _complete_custom_openai(
                 stream=stream,
                 api_key=api_key,
                 headers=outbound_headers,
-                client=client,
+                client=supplied_client,
                 provider_config=provider_config,
             )
         else:
@@ -6565,6 +6605,7 @@ def completion(
                     *ANTHROPIC_WIF_KWARGS_KEYS,
                     *OPENAI_WIF_KWARGS_KEYS,
                     *OAUTH_TOKEN_EXCHANGE_KWARGS_KEYS,
+                    *litellm.types.utils.provider_oauth_litellm_params,
                     *AGENTIC_LOOP_CONTROL_KWARGS_KEYS,
                     "vertex_credentials",
                     "vertex_ai_credentials",
@@ -7979,6 +8020,7 @@ def embedding(
                     model=model,
                     llm_provider="ollama",
                 )
+            logging.record_call_target(api_base, api_key, headers)
             ollama_embeddings_fn: Final = ollama.ollama_aembeddings if aembedding is True else ollama.ollama_embeddings
             response = ollama_embeddings_fn(
                 api_base=api_base,
@@ -9405,7 +9447,7 @@ def speech(
     organization: str | None = None,
     project: str | None = None,
     max_retries: int | None = None,
-    metadata: dict | None = None,
+    metadata: dict[str, object] | None = None,
     timeout: float | httpx.Timeout | openai.Timeout | None = None,
     response_format: str | None = None,
     speed: int | None = None,
