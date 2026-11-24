@@ -1,17 +1,24 @@
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from itertools import chain
-from typing import Final, cast  # noqa: TID251  # narrows untyped request dicts at the session boundary
+from typing import TYPE_CHECKING, Final, cast  # noqa: TID251  # narrows untyped request dicts at the session boundary
 
+import httpx
 from pydantic import TypeAdapter
 
 from litellm.exceptions import AuthenticationError, UnsupportedParamsError
-from litellm.litellm_core_utils.core_helpers import as_object_list, as_str_mapping, drops_unsupported_params
+from litellm.litellm_core_utils.core_helpers import (
+    as_object_list,
+    as_str_mapping,
+    drops_unsupported_params,
+    loads_json_object,
+)
 from litellm.litellm_core_utils.prompt_templates.factory import EMPTY_TEXT_PLACEHOLDER
 from litellm.litellm_core_utils.url_utils import ensure_api_route
 from litellm.llms.anthropic.messages.native.transformation import (
     AnthropicMessagesConfig,
 )
+from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicMessagesResponse
 from litellm.types.router import GenericLiteLLMParams
 
 from ..authenticator import Authenticator
@@ -22,6 +29,10 @@ from ..common_utils import (
     pin_session_authorization,
 )
 from ..per_user_auth import require_github_copilot_user_session
+from ..usage import copilot_cache_counts
+
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
 _MESSAGES_PROXY_API_VERSION: Final = "2026-06-01"
 _REQUEST_FIELDS: Final = TypeAdapter(dict[str, object])
@@ -191,6 +202,23 @@ class GithubCopilotAnthropicMessagesConfig(AnthropicMessagesConfig):
                 headers=headers,
             )
         )
+
+    def transform_anthropic_messages_response(
+        self,
+        model: str,
+        raw_response: httpx.Response,
+        logging_obj: "LiteLLMLoggingObj",
+    ) -> AnthropicMessagesResponse:
+        response: Final = super().transform_anthropic_messages_response(model, raw_response, logging_obj)
+        usage: Final = response.get("usage")
+        raw_payload: Final = loads_json_object(raw_response.content)
+        if usage is not None and raw_payload is not None:
+            read, write = copilot_cache_counts(usage, raw_payload.get("copilot_usage"))
+            if read is not None:
+                usage["cache_read_input_tokens"] = read
+            if write is not None:
+                usage["cache_creation_input_tokens"] = write
+        return response
 
     def handles_web_search_natively(self) -> bool:
         """

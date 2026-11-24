@@ -60,6 +60,7 @@ from litellm.litellm_core_utils.model_response_utils import (
 from litellm.litellm_core_utils.redact_messages import LiteLLMLoggingObject, drop_token_ids
 from litellm.litellm_core_utils.thread_pool_executor import executor
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
+from litellm.llms.github_copilot.usage import chat_usage_with_copilot_cache
 from litellm.llms.ollama.common_utils import OllamaResponseIdNormalizer
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.router import GenericLiteLLMParams
@@ -1001,7 +1002,6 @@ class CustomStreamWrapper:
             is_finished = False
             finish_reason = None
             logprobs = None
-            usage = None
             if str_line and str_line.choices and len(str_line.choices) > 0:
                 if str_line.choices[0].delta is not None and str_line.choices[0].delta.content is not None:
                     text = str_line.choices[0].delta.content
@@ -1023,7 +1023,21 @@ class CustomStreamWrapper:
                 else:
                     logprobs = None
 
-            usage = getattr(str_line, "usage", None)
+            usage: Final[object] = getattr(str_line, "usage", None)
+            copilot_usage: Final[object] = (
+                getattr(str_line, "copilot_usage", None)
+                if "github_copilot" in (self._cached_logging_llm_provider, self.custom_llm_provider)
+                and isinstance(str_line, BaseModel)
+                else None
+            )
+            payload: Final[dict[str, object] | None] = (
+                usage.model_dump(exclude_unset=True)
+                if copilot_usage is not None and isinstance(usage, BaseModel)
+                else None
+            )
+            normalized_usage: Final = (
+                chat_usage_with_copilot_cache(payload, copilot_usage) if payload is not None else None
+            )
 
             return {
                 "text": text,
@@ -1031,7 +1045,7 @@ class CustomStreamWrapper:
                 "finish_reason": finish_reason,
                 "logprobs": logprobs,
                 "original_chunk": str_line,
-                "usage": usage,
+                "usage": normalized_usage if normalized_usage is not payload else usage,
                 "chunk_choice_fields": _non_null_upstream_choice_fields(str_line, STREAM_CHUNK_CHOICE_FIELDS),
             }
         except Exception as e:

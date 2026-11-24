@@ -7,6 +7,7 @@ import httpx
 from pydantic import TypeAdapter
 
 from litellm.exceptions import AuthenticationError
+from litellm.litellm_core_utils.core_helpers import as_object_list, as_str_mapping
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.llms.openai.common_utils import decoded_json_object
 from litellm.llms.openai.openai import OpenAIConfig
@@ -21,6 +22,7 @@ from ..common_utils import (
     pin_session_authorization,
 )
 from ..per_user_auth import require_github_copilot_user_session
+from ..usage import chat_usage_with_copilot_cache
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -224,18 +226,27 @@ class GithubCopilotConfig(OpenAIConfig):
         return text_content, tool_calls, thinking_blocks
 
     @staticmethod
-    def _normalize_anthropic_usage(usage: dict) -> dict:
+    def _normalize_anthropic_usage(usage: Mapping[str, object]) -> Mapping[str, object]:
         normalized: Final = dict(usage)
-        if "input_tokens" in usage and "prompt_tokens" not in usage:
-            normalized["prompt_tokens"] = usage["input_tokens"]
+        if isinstance(input_tokens := usage.get("input_tokens"), int) and "prompt_tokens" not in usage:
+            cache_tokens: Final = sum(
+                count
+                for key in ("cache_read_input_tokens", "cache_creation_input_tokens")
+                if isinstance(count := usage.get(key), int)
+            )
+            normalized["prompt_tokens"] = input_tokens + cache_tokens
         if "output_tokens" in usage and "completion_tokens" not in usage:
             normalized["completion_tokens"] = usage["output_tokens"]
         if "total_tokens" not in normalized:
-            normalized["total_tokens"] = normalized.get("prompt_tokens", 0) + normalized.get("completion_tokens", 0)
+            normalized["total_tokens"] = sum(
+                total_count
+                for key in ("prompt_tokens", "completion_tokens")
+                if isinstance(total_count := normalized.get(key), int)
+            )
         return normalized
 
     @classmethod
-    def _synthesize_choices_for_anthropic_native(cls, response_json: dict) -> dict:
+    def _synthesize_choices_for_anthropic_native(cls, response_json: dict[str, object]) -> dict[str, object]:
         """
         Synthesize a `choices` array from an Anthropic-native Copilot response.
 
@@ -249,14 +260,13 @@ class GithubCopilotConfig(OpenAIConfig):
         if response_json.get("choices"):
             return response_json
 
-        content = ""
-        tool_calls: list[ChatCompletionToolCallChunk] = []
-        thinking_blocks: Sequence[object] | None = None
         raw_content: Final = response_json.get("content")
-        if isinstance(raw_content, list):
-            content, tool_calls, thinking_blocks = cls._parse_anthropic_native_content(raw_content)
-        elif isinstance(raw_content, str):
-            content = raw_content
+        blocks: Final = as_object_list(raw_content)
+        content, tool_calls, thinking_blocks = (
+            cls._parse_anthropic_native_content(list(blocks))
+            if blocks is not None
+            else (raw_content if isinstance(raw_content, str) else "", (), None)
+        )
 
         stop_reason: Final = response_json.get("stop_reason")
         finish_reason_map: Final = {
@@ -267,7 +277,7 @@ class GithubCopilotConfig(OpenAIConfig):
         }
         if tool_calls:
             finish_reason = "tool_calls"
-        elif stop_reason in finish_reason_map:
+        elif isinstance(stop_reason, str) and stop_reason in finish_reason_map:
             finish_reason = finish_reason_map[stop_reason]
         elif content:
             finish_reason = "stop"
@@ -283,12 +293,12 @@ class GithubCopilotConfig(OpenAIConfig):
         if thinking_blocks:
             message["thinking_blocks"] = thinking_blocks
 
-        synthesized: Final = {
+        synthesized: Final[dict[str, object]] = {
             **response_json,
             "choices": [{"index": 0, "message": message, "finish_reason": finish_reason}],
         }
-        usage: Final = response_json.get("usage")
-        if isinstance(usage, dict):
+        usage: Final = as_str_mapping(response_json.get("usage"))
+        if usage is not None:
             synthesized["usage"] = cls._normalize_anthropic_usage(usage)
         return synthesized
 
@@ -297,7 +307,14 @@ class GithubCopilotConfig(OpenAIConfig):
         Repair the OpenAI-SDK-parsed response on the handler path that bypasses
         transform_response. See: https://github.com/BerriAI/litellm/issues/30927
         """
-        return self._synthesize_choices_for_anthropic_native(parsed_response)
+        usage: Final = as_str_mapping(parsed_response.get("usage"))
+        normalized_usage: Final = (
+            chat_usage_with_copilot_cache(usage, parsed_response.get("copilot_usage")) if usage is not None else usage
+        )
+        with_cache: Final = (
+            {**parsed_response, "usage": normalized_usage} if normalized_usage is not usage else parsed_response
+        )
+        return self._synthesize_choices_for_anthropic_native(with_cache)
 
     def transform_response(
         self,
@@ -330,13 +347,13 @@ class GithubCopilotConfig(OpenAIConfig):
                 json_mode=json_mode,
             )
 
-        response_json: Final = decoded_json_object(decoded_response)
-        if not response_json.get("choices"):
-            synthesized: Final = self._synthesize_choices_for_anthropic_native(dict(response_json))
+        response_json: Final = dict(decoded_json_object(decoded_response))
+        normalized: Final = self.transform_parsed_response_dict(response_json)
+        if normalized is not response_json:
             raw_response = httpx.Response(
                 status_code=raw_response.status_code,
                 headers=raw_response.headers,
-                content=json.dumps(synthesized).encode(),
+                content=json.dumps(normalized).encode(),
             )
 
         return super().transform_response(
