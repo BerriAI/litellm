@@ -101,7 +101,7 @@ async fn standalone(
     let config = litellm_gateway::load_config(settings.litellm_config).await?;
     let state = AppState::build(&config, environment).await?;
     scrub_at_the_configs_key_length(key_length, &*state.environment);
-    let admit = Arc::new(Admit::new(&config, environment, &state));
+    let admit = Arc::new(Admit::new(&config, environment, &state).standalone());
     let app = alone(native(state.clone(), &config, environment), admit);
     let listener = tokio::net::TcpListener::bind((settings.host.as_str(), settings.port)).await?;
 
@@ -115,7 +115,8 @@ async fn standalone(
 }
 
 /// `native` with nothing behind it. `admit` sees every request first, as it does in front of
-/// Python, and a request it refuses is answered 501 with why, since nothing else can serve it.
+/// Python, and a request it refuses is answered 501 with why, since nothing else can serve it. A
+/// scrape of `/metrics` goes straight to the native app, which authenticates it itself.
 fn alone<S>(
     native: S,
     admit: Arc<Admit>,
@@ -135,6 +136,9 @@ async fn admitted_or_not_served(
     request: Request,
     native: Next,
 ) -> Response {
+    if admit.scrape(&request) {
+        return native.run(request).await;
+    }
     match admit.admit(request).await {
         Ok(request) => native.run(request).await,
         Err((_, reason)) => not_served(reason.why),

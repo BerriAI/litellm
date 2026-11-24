@@ -73,6 +73,7 @@ async fn gateway(python: SocketAddr, admits: bool, root_path: &str) -> SocketAdd
     let litellm_gateway::Inference {
         gateway: inference,
         key_limiter,
+        metrics,
     } = litellm_gateway::build_inference(
         &config,
         &Environment::default(),
@@ -96,6 +97,7 @@ async fn gateway(python: SocketAddr, admits: bool, root_path: &str) -> SocketAdd
             litellm_gateway::AppState {
                 key_limiter,
                 inference,
+                metrics,
                 redis: litellm_gateway::RedisClients::default(),
                 database: None,
                 keys: None,

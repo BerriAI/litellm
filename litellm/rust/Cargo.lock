@@ -3842,6 +3842,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "litellm-callbacks-prometheus"
+version = "0.1.0"
+dependencies = [
+ "indexmap 2.14.0",
+ "litellm-callbacks",
+ "litellm-callbacks-prometheus",
+ "rstest",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "strum",
+ "thiserror 2.0.21",
+ "unicode-general-category",
+]
+
+[[package]]
 name = "litellm-callbacks-python"
 version = "0.1.0"
 dependencies = [
@@ -4129,6 +4145,7 @@ dependencies = [
  "litellm-callbacks",
  "litellm-callbacks-model-capacity",
  "litellm-callbacks-parallel-request-limiter",
+ "litellm-callbacks-prometheus",
  "litellm-circuit-breaker",
  "litellm-config",
  "litellm-config-load",
@@ -4179,6 +4196,7 @@ dependencies = [
  "tower",
  "tower-http",
  "tracing",
+ "url",
  "uuid",
  "wiremock",
  "zstd",

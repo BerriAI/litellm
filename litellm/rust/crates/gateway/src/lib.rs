@@ -19,6 +19,7 @@ pub use callbacks::{
     Callbacks, Registered, Unregistrable,
     model_capacity::{self, ModelCapacity},
     parallel_request_limiter::{self, KeyLimiter},
+    prometheus::{self, Metrics},
 };
 pub use error::Error;
 pub use gateway_requests::{Category, GatewayRequests};
@@ -67,19 +68,20 @@ pub(crate) fn environment_secrets(
     )
 }
 
-/// The inference routes of a config, and the limiter that counts their calls against each key's
-/// own limits.
+/// The inference routes of a config, the limiter that counts their calls against each key's own
+/// limits, and the metrics `/metrics` writes when the config lists the Prometheus logger.
 pub struct Inference {
     pub gateway: Arc<Gateway>,
     pub key_limiter: Arc<KeyLimiter>,
+    pub metrics: Option<Arc<Metrics>>,
 }
 
 /// Whether a license is set at all is all the proxy asks before it honors a reserved priority.
 const LICENSE: &str = "LITELLM_LICENSE";
 
 /// The inference routes of `config` with the callbacks the gateway runs around their calls, in
-/// the order the proxy registers them: the config's `callbacks`, of which only the dynamic rate
-/// limiter is built, then the proxy's own key limiter. The keys' limits and the model groups'
+/// the order the proxy registers them: the config's `callbacks`, of which the dynamic rate limiter
+/// and the Prometheus logger are built, then the proxy's own key limiter. The keys' limits and the model groups'
 /// capacity are counted in `redis`'s coordination client when there is one, and in this process's
 /// memory otherwise.
 pub async fn build_inference(
@@ -104,13 +106,20 @@ pub async fn build_inference(
         }));
         ModelCapacity::new(read, counters, active, router.clone())
     });
-    let callbacks = Callbacks::new(
-        model_capacity
-            .iter()
-            .map(|capacity| capacity.registered())
-            .chain([key_limiter.registered()])
-            .collect(),
-    )?;
+    let metrics = Metrics::read(config, &*resources.environment, router.clone())?;
+    let configured = config
+        .litellm_settings
+        .callbacks
+        .iter()
+        .flatten()
+        .filter_map(|callback| match callback.as_str()? {
+            litellm_callbacks_model_capacity::NAME => model_capacity
+                .as_ref()
+                .map(|capacity| capacity.registered()),
+            prometheus::NAME => metrics.as_ref().map(|metrics| metrics.registered()),
+            _ => None,
+        });
+    let callbacks = Callbacks::new(configured.chain([key_limiter.registered()]).collect())?;
     let gateway = Gateway::new(
         resources.core.clone(),
         resources.http.clone(),
@@ -123,6 +132,7 @@ pub async fn build_inference(
     Ok(Inference {
         gateway: Arc::new(gateway),
         key_limiter,
+        metrics,
     })
 }
 
@@ -141,5 +151,11 @@ pub fn router(state: AppState, config: &Config) -> Router {
         state.auth(config),
         litellm_gateway_auth::authenticate::<host::NativeRows>,
     ));
-    middleware::inference(inference).merge(health::router(state))
+    let auth = state.auth(config);
+    let metrics = state.metrics.clone();
+    let app = middleware::inference(inference).merge(health::router(state));
+    match metrics {
+        Some(metrics) => app.merge(prometheus::router(metrics, auth)),
+        None => app,
+    }
 }

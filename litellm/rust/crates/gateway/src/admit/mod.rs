@@ -24,6 +24,7 @@ use crate::{
     AppState, Gateway,
     callbacks::parallel_request_limiter,
     host::{self, NativeHost, NativeRows},
+    middleware::root_path,
 };
 use checks::Fields;
 pub use checks::Reason;
@@ -85,6 +86,11 @@ pub struct Admit {
     /// The native app's inference, which tells whether a caller may call the model it asks for.
     /// `None` leaves every caller with a model list to Python.
     inference: Option<Arc<Gateway>>,
+    /// Whether nothing stands behind the native app, so it serves what only Python could serve in
+    /// front of it: `/metrics`, with the Prometheus logger run natively.
+    standalone: bool,
+    /// Whether the native app serves `/metrics`.
+    metrics: bool,
 }
 
 const STORE_MODEL_IN_DB: &str = "STORE_MODEL_IN_DB";
@@ -151,6 +157,7 @@ impl Admit {
             aliased,
             host: state.inference.host().clone(),
             inference: Some(state.inference.clone()),
+            metrics: state.metrics.is_some(),
             ..Self::built(config, state.inference.router.clone(), deployed)
         }
     }
@@ -171,7 +178,30 @@ impl Admit {
             aliased: Vec::new(),
             host: NativeHost::default(),
             inference: None,
+            standalone: false,
+            metrics: false,
         }
+    }
+
+    /// For the native app with nothing behind it.
+    #[must_use]
+    pub fn standalone(self) -> Self {
+        Self {
+            standalone: true,
+            ..self
+        }
+    }
+
+    /// A scrape of `/metrics` the standalone app answers itself, which no other check reads.
+    pub fn scrape(&self, request: &Request) -> bool {
+        self.standalone
+            && self.metrics
+            && request.method() == axum::http::Method::GET
+            && matches!(
+                root_path::Settings::from_environment(&self.environment)
+                    .route(request.uri().path()),
+                "/metrics" | "/metrics/"
+            )
     }
 
     /// A caller whose model lists do not reach the model it asks for goes to Python, which
@@ -251,6 +281,35 @@ mod tests {
             ("gpt".to_owned(), Ok(LlmProviders::Openai)),
         ];
         Arc::new(Admit::over(&config, deployed))
+    }
+
+    #[rstest]
+    #[case::bare("", "/metrics", true)]
+    #[case::trailing_slash("", "/metrics/", true)]
+    #[case::under_the_root_path("/api", "/api/metrics/", true)]
+    #[case::root_path_without_it("/api", "/metrics", true)]
+    #[case::another_route("/api", "/api/v1/messages", false)]
+    fn a_scrape_is_matched_on_the_path_without_the_root_path(
+        #[case] server_root_path: &str,
+        #[case] path: &str,
+        #[case] scraped: bool,
+    ) {
+        let config = Config::from_yaml(CONFIG).unwrap();
+        let admit = Admit {
+            environment: Environment {
+                server_root_path: server_root_path.to_owned(),
+                ..Environment::default()
+            },
+            metrics: true,
+            ..Admit::over(&config, Vec::new())
+        }
+        .standalone();
+        let request = Request::builder()
+            .method(Method::GET)
+            .uri(path)
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(admit.scrape(&request), scraped);
     }
 
     const VIRTUAL_KEY: (&str, &str) = ("authorization", "Bearer sk-virtual");

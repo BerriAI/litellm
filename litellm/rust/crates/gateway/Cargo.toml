@@ -39,6 +39,9 @@ litellm-redis-client.workspace = true
 litellm-redis-store.workspace = true
 litellm-callbacks-parallel-request-limiter.workspace = true
 litellm-callbacks-model-capacity.workspace = true
+litellm-callbacks-prometheus.workspace = true
+flate2 = "1.1.10"
+url.workspace = true
 litellm-redis-connect.workspace = true
 litellm-redis-resolve.workspace = true
 litellm-redis-types.workspace = true
@@ -70,10 +73,10 @@ sqlx.workspace = true
 litellm-yaml.workspace = true
 serde_yaml_ng = "0.10.0"
 litellm-http = { workspace = true, features = ["test-support"] }
+litellm-callbacks-prometheus = { workspace = true, features = ["test-support"] }
 rstest.workspace = true
 tempfile.workspace = true
 tokio = { workspace = true, features = ["sync", "test-util"] }
-flate2 = "1.1.10"
 hyper-util = { workspace = true, features = ["client-legacy", "http1", "tokio"] }
 wiremock.workspace = true
 zstd = "0.14.4"

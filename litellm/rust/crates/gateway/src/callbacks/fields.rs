@@ -7,7 +7,8 @@ use std::time::SystemTime;
 use litellm_callbacks::{
     AttemptTiming, CallFacts, CallIds, CallKind, CallTarget, CallTiming, Deployment, Field,
     FieldSet, FieldValues, Hook, HookInput, KeyIdentity, LoggedKeyIdentity, LoggedModelGroup,
-    MetadataKind, ModelInfo, Moment, Outcome, PatchOp, Scalar, SpendLogId, Usage, UsageRecord,
+    MetadataKind, ModelInfo, Moment, Outcome, PatchOp, RateLimitState, Scalar, SpendLogId, Usage,
+    UsageRecord,
 };
 use litellm_gateway_auth::Authenticated;
 use litellm_gateway_auth_core::{Caller, StoredKey};
@@ -85,24 +86,43 @@ fn record(value: impl Serialize) -> Option<Value> {
     serde_json::to_value(value).ok()
 }
 
+/// The headers the proxy's limiters add to an answer.
+const LIMITER_HEADER_PREFIX: &str = "x-ratelimit-";
+
+/// A header value as the hidden params hold it, which the limiter writes as a number or as text.
+fn header_scalar(value: &Value) -> Option<Scalar> {
+    match value {
+        Value::Bool(flag) => Some(Scalar::Bool(*flag)),
+        Value::Number(number) => number
+            .as_i64()
+            .map(|whole| Scalar::Int(i128::from(whole)))
+            .or_else(|| number.as_f64().map(Scalar::Float)),
+        Value::String(text) => Some(Scalar::Text(text.clone())),
+        _ => None,
+    }
+}
+
 fn count(tokens: u64) -> Option<Scalar> {
     Some(Scalar::Int(i128::from(tokens)))
 }
 
-/// A served call's usage as the success log's `response_obj` carries it.
+/// A served call's usage as the success log's `response_obj` carries it, and as its logging
+/// payload counts it, which holds the same counts.
 fn usage(used: &ChatCompletionsUsage) -> Usage {
+    let record = UsageRecord {
+        prompt_tokens: count(used.prompt_tokens),
+        completion_tokens: count(used.completion_tokens),
+        total_tokens: count(used.total_tokens),
+        cached_tokens: used
+            .prompt_tokens_details
+            .as_ref()
+            .and_then(|details| details.cached_tokens)
+            .and_then(count),
+        ..UsageRecord::default()
+    };
     Usage {
-        response: Some(UsageRecord {
-            prompt_tokens: count(used.prompt_tokens),
-            completion_tokens: count(used.completion_tokens),
-            total_tokens: count(used.total_tokens),
-            cached_tokens: used
-                .prompt_tokens_details
-                .as_ref()
-                .and_then(|details| details.cached_tokens)
-                .and_then(count),
-            ..UsageRecord::default()
-        }),
+        response: Some(record.clone()),
+        logged: Some(record),
         ..Usage::default()
     }
 }
@@ -182,6 +202,27 @@ fn served_deployment(entries: &CallState) -> Option<Deployment> {
     })
 }
 
+/// What the logging handlers read of the limits a served call is under: its model group, and
+/// the limiter's `x-ratelimit-*` headers among the answer's headers, which the native answer
+/// always carries. The provider's own remaining counts and a key's per-model remaining counts
+/// are not told by the native route yet.
+fn rate_limit_state(entries: &CallState) -> Option<RateLimitState> {
+    let served = entries.served()?;
+    let limiter_headers = entries
+        .response_headers()
+        .iter()
+        .filter(|(name, _)| name.starts_with(LIMITER_HEADER_PREFIX))
+        .filter_map(|(name, value)| Some((name.clone(), header_scalar(value)?)))
+        .collect();
+    Some(RateLimitState {
+        key_model_group: Some(Scalar::Text(served.model_group.clone())),
+        limiter_headers: Some(limiter_headers),
+        hidden_params_present: Some(true),
+        additional_headers_present: Some(true),
+        ..RateLimitState::default()
+    })
+}
+
 /// The id the call's spend log row is written under, as `get_spend_logs_id` picks it: the
 /// provider's id for the answer, else the call id.
 fn spend_log_id(entries: &CallState) -> SpendLogId {
@@ -235,6 +276,9 @@ fn read(entries: &CallState, field: Field) -> Option<Value> {
         Field::Deployment => record(served_deployment(entries)?),
         Field::AttemptTiming => record(timing(entries)),
         Field::SpendLogId => record(spend_log_id(entries)),
+        Field::RateLimitState => record(rate_limit_state(entries)?),
+        // `admit` leaves a body that names tags, and a key that holds any, to Python.
+        Field::RequestTags => Some(Value::Array(Vec::new())),
         Field::LoggedModelGroup => record(LoggedModelGroup {
             value: Some(Scalar::Text(entries.served()?.model_group.clone())),
             ..LoggedModelGroup::default()

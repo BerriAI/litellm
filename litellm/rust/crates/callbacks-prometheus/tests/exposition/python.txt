@@ -1,0 +1,199 @@
+# HELP litellm_proxy_failed_requests_metric_total Total number of failed responses from proxy - the client did not get a success response from litellm proxy
+# TYPE litellm_proxy_failed_requests_metric_total counter
+# HELP litellm_proxy_total_requests_metric_total Total number of requests made to the proxy server - track number of client side requests
+# TYPE litellm_proxy_total_requests_metric_total counter
+# HELP litellm_request_total_latency_metric End-to-end latency (seconds) for a request to LiteLLM Proxy Server, from the moment the request reached the proxy through the end of processing -- includes authentication, pre-call hooks, the LLM API call, and post-call processing
+# TYPE litellm_request_total_latency_metric histogram
+litellm_request_total_latency_metric_bucket{api_key_alias="a",api_provider="openai",end_user="None",hashed_api_key="h",le="0.005",model="m2",model_group="g",model_id="id",org_alias="oa",org_id="o",requested_model="m",service_tier="None",team="t",team_alias="ta",user="u"} 0.0
+litellm_request_total_latency_metric_bucket{api_key_alias="a",api_provider="openai",end_user="None",hashed_api_key="h",le="0.01",model="m2",model_group="g",model_id="id",org_alias="oa",org_id="o",requested_model="m",service_tier="None",team="t",team_alias="ta",user="u"} 0.0
+litellm_request_total_latency_metric_bucket{api_key_alias="a",api_provider="openai",end_user="None",hashed_api_key="h",le="0.025",model="m2",model_group="g",model_id="id",org_alias="oa",org_id="o",requested_model="m",service_tier="None",team="t",team_alias="ta",user="u"} 0.0
+litellm_request_total_latency_metric_bucket{api_key_alias="a",api_provider="openai",end_user="None",hashed_api_key="h",le="0.05",model="m2",model_group="g",model_id="id",org_alias="oa",org_id="o",requested_model="m",service_tier="None",team="t",team_alias="ta",user="u"} 0.0
+litellm_request_total_latency_metric_bucket{api_key_alias="a",api_provider="openai",end_user="None",hashed_api_key="h",le="0.1",model="m2",model_group="g",model_id="id",org_alias="oa",org_id="o",requested_model="m",service_tier="None",team="t",team_alias="ta",user="u"} 0.0
+litellm_request_total_latency_metric_bucket{api_key_alias="a",api_provider="openai",end_user="None",hashed_api_key="h",le="0.25",model="m2",model_group="g",model_id="id",org_alias="oa",org_id="o",requested_model="m",service_tier="None",team="t",team_alias="ta",user="u"} 0.0
+litellm_request_total_latency_metric_bucket{api_key_alias="a",api_provider="openai",end_user="None",hashed_api_key="h",le="0.5",model="m2",model_group="g",model_id="id",org_alias="oa",org_id="o",requested_model="m",service_tier="None",team="t",team_alias="ta",user="u"} 1.0
+litellm_request_total_latency_metric_bucket{api_key_alias="a",api_provider="openai",end_user="None",hashed_api_key="h",le="1.0",model="m2",model_group="g",model_id="id",org_alias="oa",org_id="o",requested_model="m",service_tier="None",team="t",team_alias="ta",user="u"} 1.0
+litellm_request_total_latency_metric_bucket{api_key_alias="a",api_provider="openai",end_user="None",hashed_api_key="h",le="2.0",model="m2",model_group="g",model_id="id",org_alias="oa",org_id="o",requested_model="m",service_tier="None",team="t",team_alias="ta",user="u"} 1.0
+litellm_request_total_latency_metric_bucket{api_key_alias="a",api_provider="openai",end_user="None",hashed_api_key="h",le="5.0",model="m2",model_group="g",model_id="id",org_alias="oa",org_id="o",requested_model="m",service_tier="None",team="t",team_alias="ta",user="u"} 1.0
+litellm_request_total_latency_metric_bucket{api_key_alias="a",api_provider="openai",end_user="None",hashed_api_key="h",le="10.0",model="m2",model_group="g",model_id="id",org_alias="oa",org_id="o",requested_model="m",service_tier="None",team="t",team_alias="ta",user="u"} 1.0
+litellm_request_total_latency_metric_bucket{api_key_alias="a",api_provider="openai",end_user="None",hashed_api_key="h",le="30.0",model="m2",model_group="g",model_id="id",org_alias="oa",org_id="o",requested_model="m",service_tier="None",team="t",team_alias="ta",user="u"} 1.0
+litellm_request_total_latency_metric_bucket{api_key_alias="a",api_provider="openai",end_user="None",hashed_api_key="h",le="60.0",model="m2",model_group="g",model_id="id",org_alias="oa",org_id="o",requested_model="m",service_tier="None",team="t",team_alias="ta",user="u"} 1.0
+litellm_request_total_latency_metric_bucket{api_key_alias="a",api_provider="openai",end_user="None",hashed_api_key="h",le="120.0",model="m2",model_group="g",model_id="id",org_alias="oa",org_id="o",requested_model="m",service_tier="None",team="t",team_alias="ta",user="u"} 1.0
+litellm_request_total_latency_metric_bucket{api_key_alias="a",api_provider="openai",end_user="None",hashed_api_key="h",le="300.0",model="m2",model_group="g",model_id="id",org_alias="oa",org_id="o",requested_model="m",service_tier="None",team="t",team_alias="ta",user="u"} 1.0
+litellm_request_total_latency_metric_bucket{api_key_alias="a",api_provider="openai",end_user="None",hashed_api_key="h",le="420.0",model="m2",model_group="g",model_id="id",org_alias="oa",org_id="o",requested_model="m",service_tier="None",team="t",team_alias="ta",user="u"} 1.0
+litellm_request_total_latency_metric_bucket{api_key_alias="a",api_provider="openai",end_user="None",hashed_api_key="h",le="600.0",model="m2",model_group="g",model_id="id",org_alias="oa",org_id="o",requested_model="m",service_tier="None",team="t",team_alias="ta",user="u"} 1.0
+litellm_request_total_latency_metric_bucket{api_key_alias="a",api_provider="openai",end_user="None",hashed_api_key="h",le="+Inf",model="m2",model_group="g",model_id="id",org_alias="oa",org_id="o",requested_model="m",service_tier="None",team="t",team_alias="ta",user="u"} 2.0
+litellm_request_total_latency_metric_count{api_key_alias="a",api_provider="openai",end_user="None",hashed_api_key="h",model="m2",model_group="g",model_id="id",org_alias="oa",org_id="o",requested_model="m",service_tier="None",team="t",team_alias="ta",user="u"} 2.0
+litellm_request_total_latency_metric_sum{api_key_alias="a",api_provider="openai",end_user="None",hashed_api_key="h",model="m2",model_group="g",model_id="id",org_alias="oa",org_id="o",requested_model="m",service_tier="None",team="t",team_alias="ta",user="u"} 1000.3
+# HELP litellm_llm_api_latency_metric Total latency (seconds) for a models LLM API call
+# TYPE litellm_llm_api_latency_metric histogram
+# HELP litellm_llm_api_time_to_first_token_metric Time to first token for a models LLM API call
+# TYPE litellm_llm_api_time_to_first_token_metric histogram
+# HELP litellm_spend_metric_total Total spend on LLM requests
+# TYPE litellm_spend_metric_total counter
+litellm_spend_metric_total{api_key_alias="alias",api_provider="line\nbreak",client_ip="None",end_user="eu",hashed_api_key="hash",model="gpt",model_id="None",org_alias="c",org_id="b",requested_model="None",service_tier="a",team="team",team_alias="ta",user="user",user_agent="None",user_email="None"} 0.000123
+# HELP litellm_total_tokens_metric_total Total number of input + output tokens from LLM requests
+# TYPE litellm_total_tokens_metric_total counter
+# HELP litellm_input_tokens_metric_total Total number of input tokens from LLM requests
+# TYPE litellm_input_tokens_metric_total counter
+# HELP litellm_output_tokens_metric_total Total number of output tokens from LLM requests
+# TYPE litellm_output_tokens_metric_total counter
+# HELP litellm_input_cached_tokens_metric_total Provider-side cached input tokens (e.g. OpenAI prompt_tokens_details.cached_tokens, Anthropic cache_read_input_tokens)
+# TYPE litellm_input_cached_tokens_metric_total counter
+# HELP litellm_input_cache_creation_tokens_metric_total Provider-side input tokens written to prompt cache (e.g. Anthropic cache_creation_input_tokens)
+# TYPE litellm_input_cache_creation_tokens_metric_total counter
+# HELP litellm_input_audio_tokens_metric_total Audio input tokens reported in prompt_tokens_details.audio_tokens
+# TYPE litellm_input_audio_tokens_metric_total counter
+# HELP litellm_output_reasoning_tokens_metric_total Reasoning tokens reported in completion_tokens_details.reasoning_tokens
+# TYPE litellm_output_reasoning_tokens_metric_total counter
+# HELP litellm_output_audio_tokens_metric_total Audio output tokens reported in completion_tokens_details.audio_tokens
+# TYPE litellm_output_audio_tokens_metric_total counter
+# HELP litellm_video_duration_seconds_metric_total Seconds of video generated, from usage.duration_seconds on video generation calls
+# TYPE litellm_video_duration_seconds_metric_total counter
+# HELP litellm_images_generated_metric_total Number of images generated, from the image generation response
+# TYPE litellm_images_generated_metric_total counter
+# HELP litellm_remaining_team_budget_metric Remaining budget for team
+# TYPE litellm_remaining_team_budget_metric gauge
+# HELP litellm_team_max_budget_metric Maximum budget set for team
+# TYPE litellm_team_max_budget_metric gauge
+# HELP litellm_team_budget_remaining_hours_metric Remaining days for team budget to be reset
+# TYPE litellm_team_budget_remaining_hours_metric gauge
+# HELP litellm_team_members_metric Number of members in a team
+# TYPE litellm_team_members_metric gauge
+# HELP litellm_remaining_org_budget_metric Remaining budget for org
+# TYPE litellm_remaining_org_budget_metric gauge
+# HELP litellm_org_max_budget_metric Maximum budget set for org
+# TYPE litellm_org_max_budget_metric gauge
+# HELP litellm_org_budget_remaining_hours_metric Remaining hours for org budget to be reset
+# TYPE litellm_org_budget_remaining_hours_metric gauge
+# HELP litellm_remaining_api_key_budget_metric Remaining budget for api key
+# TYPE litellm_remaining_api_key_budget_metric gauge
+# HELP litellm_api_key_max_budget_metric Maximum budget set for api key
+# TYPE litellm_api_key_max_budget_metric gauge
+# HELP litellm_api_key_budget_remaining_hours_metric Remaining hours for api key budget to be reset
+# TYPE litellm_api_key_budget_remaining_hours_metric gauge
+# HELP litellm_remaining_user_budget_metric Remaining budget for user
+# TYPE litellm_remaining_user_budget_metric gauge
+# HELP litellm_user_max_budget_metric Maximum budget set for user
+# TYPE litellm_user_max_budget_metric gauge
+# HELP litellm_user_budget_remaining_hours_metric Remaining hours for user budget to be reset
+# TYPE litellm_user_budget_remaining_hours_metric gauge
+# HELP litellm_remaining_customer_budget_metric Remaining budget for customer (end user)
+# TYPE litellm_remaining_customer_budget_metric gauge
+# HELP litellm_customer_max_budget_metric Maximum budget set for customer (end user)
+# TYPE litellm_customer_max_budget_metric gauge
+# HELP litellm_customer_budget_remaining_hours_metric Remaining hours for customer (end user) budget to be reset
+# TYPE litellm_customer_budget_remaining_hours_metric gauge
+# HELP litellm_remaining_api_key_requests_for_model Remaining Requests API Key can make for model (model based rpm limit on key)
+# TYPE litellm_remaining_api_key_requests_for_model gauge
+# HELP litellm_remaining_api_key_tokens_for_model Remaining Tokens API Key can make for model (model based tpm limit on key)
+# TYPE litellm_remaining_api_key_tokens_for_model gauge
+# HELP litellm_api_key_rate_limit_allowed_metric Configured rate limit for the API Key in the current window (rpm_limit / tpm_limit), by rate_limit_type
+# TYPE litellm_api_key_rate_limit_allowed_metric gauge
+# HELP litellm_api_key_rate_limit_used_metric Requests or tokens the API Key has consumed in the current rate limit window, by rate_limit_type
+# TYPE litellm_api_key_rate_limit_used_metric gauge
+# HELP litellm_team_rate_limit_allowed_metric Configured rate limit for the Team in the current window (team rpm_limit / tpm_limit), by rate_limit_type
+# TYPE litellm_team_rate_limit_allowed_metric gauge
+# HELP litellm_team_rate_limit_used_metric Requests or tokens the Team has consumed in the current rate limit window, by rate_limit_type
+# TYPE litellm_team_rate_limit_used_metric gauge
+# HELP litellm_project_model_rate_limit_allowed_metric Configured rate limit for the Project on the requested model in the current window (model_rpm_limit / model_tpm_limit / model_itpm_limit / model_otpm_limit), by rate_limit_type
+# TYPE litellm_project_model_rate_limit_allowed_metric gauge
+# HELP litellm_project_model_rate_limit_used_metric Requests or tokens the Project has consumed on the requested model in the current rate limit window, by rate_limit_type
+# TYPE litellm_project_model_rate_limit_used_metric gauge
+# HELP litellm_remaining_requests_metric LLM Deployment Analytics - remaining requests for model, returned from LLM API Provider
+# TYPE litellm_remaining_requests_metric gauge
+# HELP litellm_remaining_tokens_metric remaining tokens for model, returned from LLM API Provider
+# TYPE litellm_remaining_tokens_metric gauge
+# HELP litellm_overhead_latency_metric Latency overhead (milliseconds) added by LiteLLM processing
+# TYPE litellm_overhead_latency_metric histogram
+# HELP litellm_overhead_with_guardrails_latency_metric Total internal latency (seconds) added by LiteLLM, including pre/post-call guardrails (excludes the LLM API call)
+# TYPE litellm_overhead_with_guardrails_latency_metric histogram
+# HELP litellm_request_queue_time_seconds Time (seconds) from request arrival at the proxy to the start of pre-call processing -- includes authentication and any ASGI-level queueing
+# TYPE litellm_request_queue_time_seconds histogram
+# HELP litellm_guardrail_latency_seconds Latency (seconds) for guardrail execution
+# TYPE litellm_guardrail_latency_seconds histogram
+# HELP litellm_guardrail_errors_total Total number of errors encountered during guardrail execution
+# TYPE litellm_guardrail_errors_total counter
+# HELP litellm_guardrail_requests_total Total number of guardrail invocations
+# TYPE litellm_guardrail_requests_total counter
+# HELP litellm_provider_remaining_budget_metric Remaining budget for provider - used when you set provider budget limits
+# TYPE litellm_provider_remaining_budget_metric gauge
+# HELP litellm_deployment_state LLM Deployment Analytics - The state of the deployment: 0 = healthy, 1 = partial outage, 2 = complete outage
+# TYPE litellm_deployment_state gauge
+# HELP litellm_deployment_tpm_limit Deployment TPM limit found in config
+# TYPE litellm_deployment_tpm_limit gauge
+# HELP litellm_deployment_rpm_limit Deployment RPM limit found in config
+# TYPE litellm_deployment_rpm_limit gauge
+# HELP litellm_deployment_cooled_down_total LLM Deployment Analytics - Number of times a deployment has been cooled down by LiteLLM load balancing logic. exception_status is the status of the exception that caused the deployment to be cooled down
+# TYPE litellm_deployment_cooled_down_total counter
+# HELP litellm_deployment_success_responses_total LLM Deployment Analytics - Total number of successful LLM API calls via litellm
+# TYPE litellm_deployment_success_responses_total counter
+# HELP litellm_deployment_failure_responses_total LLM Deployment Analytics - Total number of failed LLM API calls for a specific LLM deploymeny. exception_status is the status of the exception from the llm api
+# TYPE litellm_deployment_failure_responses_total counter
+# HELP litellm_deployment_total_requests_total LLM Deployment Analytics - Total number of LLM API calls via litellm - success + failure
+# TYPE litellm_deployment_total_requests_total counter
+# HELP litellm_deployment_latency_per_output_token LLM Deployment Analytics - Latency per output token
+# TYPE litellm_deployment_latency_per_output_token histogram
+# HELP litellm_deployment_successful_fallbacks_total LLM Deployment Analytics - Number of successful fallback requests from primary model -> fallback model
+# TYPE litellm_deployment_successful_fallbacks_total counter
+# HELP litellm_deployment_failed_fallbacks_total LLM Deployment Analytics - Number of failed fallback requests from primary model -> fallback model
+# TYPE litellm_deployment_failed_fallbacks_total counter
+# HELP litellm_dynamic_limiter_share_tokens Dynamic rate limiter: the team's share of the model's TPM, as of the team's last settled request
+# TYPE litellm_dynamic_limiter_share_tokens gauge
+# HELP litellm_dynamic_limiter_borrowed_tokens Dynamic rate limiter: tokens the team has used above its share this window, 0 while under its share
+# TYPE litellm_dynamic_limiter_borrowed_tokens gauge
+# HELP litellm_dynamic_limiter_throttled_total Dynamic rate limiter: requests refused per team, model and reason, the reason being the value of the response's rate_limited_by header
+# TYPE litellm_dynamic_limiter_throttled_total counter
+# HELP litellm_callback_logging_failures_metric_total Total number of failures when emitting logs to callbacks (e.g. s3_v2, langfuse, etc)
+# TYPE litellm_callback_logging_failures_metric_total counter
+# HELP litellm_llm_api_failed_requests_metric_total deprecated - use litellm_proxy_failed_requests_metric
+# TYPE litellm_llm_api_failed_requests_metric_total counter
+# HELP litellm_requests_metric_total deprecated - use litellm_proxy_total_requests_metric. Total number of LLM calls to litellm - track total per API Key, team, user
+# TYPE litellm_requests_metric_total counter
+litellm_requests_metric_total{api_key_alias="alias",api_provider="x",client_ip="",end_user="eu",hashed_api_key="hash",model="gpt",model_id="id2",org_alias="z",org_id="y",requested_model="id",team="team",team_alias="team alias \"q\"",user="user",user_agent="",user_email="u@x"} 3.5
+# HELP litellm_zero_cost_requests_total Requests that carried usage but were logged at $0 on a model whose pricing entry has a non-zero rate, by reason (missing_pricing_key, pricing_not_applied, cost_calculation_error)
+# TYPE litellm_zero_cost_requests_total counter
+# HELP litellm_spend_capture_rate Share of the provider's bill LiteLLM captured as spend over the scheduled check's window (captured spend / provider bill), by api_provider; NaN when the last check produced no rate
+# TYPE litellm_spend_capture_rate gauge
+# HELP litellm_cache_hits_metric_total Total number of LiteLLM cache hits
+# TYPE litellm_cache_hits_metric_total counter
+# HELP litellm_cache_misses_metric_total Total number of LiteLLM cache misses
+# TYPE litellm_cache_misses_metric_total counter
+# HELP litellm_cached_tokens_metric_total Total tokens served from LiteLLM cache
+# TYPE litellm_cached_tokens_metric_total counter
+# HELP litellm_provider_cache_read_input_tokens_metric_total Total prompt/input tokens read from provider prompt cache (e.g. OpenAI/Anthropic/Gemini/Bedrock)
+# TYPE litellm_provider_cache_read_input_tokens_metric_total counter
+# HELP litellm_provider_cache_creation_input_tokens_metric_total Total prompt/input tokens written to provider prompt cache (e.g. Anthropic/Bedrock)
+# TYPE litellm_provider_cache_creation_input_tokens_metric_total counter
+# HELP litellm_total_users Total number of users in LiteLLM
+# TYPE litellm_total_users gauge
+litellm_total_users 1.2345678e+07
+# HELP litellm_active_users Number of billable users in LiteLLM (excludes SCIM-deactivated users)
+# TYPE litellm_active_users gauge
+litellm_active_users 0.0
+# HELP litellm_teams_count Total number of teams in LiteLLM
+# TYPE litellm_teams_count gauge
+litellm_teams_count 0.0
+# HELP litellm_managed_batch_created_total Total number of managed batches created
+# TYPE litellm_managed_batch_created_total counter
+# HELP litellm_managed_file_size_bytes Size of the most recent managed batch file in bytes (last-seen value per label combination)
+# TYPE litellm_managed_file_size_bytes gauge
+# HELP litellm_managed_batch_duration_seconds Duration of completed managed batches in seconds (completed_at - created_at)
+# TYPE litellm_managed_batch_duration_seconds histogram
+# HELP litellm_managed_file_created_total Total number of managed files created
+# TYPE litellm_managed_file_created_total counter
+# HELP litellm_managed_file_deleted_total Total number of managed file deletions (success or blocked)
+# TYPE litellm_managed_file_deleted_total counter
+# HELP litellm_check_batch_cost_jobs_polled Number of unprocessed batches found by the last CheckBatchCost poll
+# TYPE litellm_check_batch_cost_jobs_polled gauge
+litellm_check_batch_cost_jobs_polled 0.0
+# HELP litellm_check_batch_cost_jobs_processed_total Total number of batches successfully cost-tracked by CheckBatchCost
+# TYPE litellm_check_batch_cost_jobs_processed_total counter
+# HELP litellm_check_batch_cost_errors_total Total number of errors in CheckBatchCost by error type
+# TYPE litellm_check_batch_cost_errors_total counter
+# HELP litellm_check_batch_cost_last_run_timestamp Unix timestamp of the last CheckBatchCost job run
+# TYPE litellm_check_batch_cost_last_run_timestamp gauge
+litellm_check_batch_cost_last_run_timestamp 1.7954091295e+09
+# HELP litellm_mcp_tool_calls_total Total MCP tool calls, segmented by tool and server name
+# TYPE litellm_mcp_tool_calls_total counter
+# HELP litellm_mcp_tool_call_spend_metric_total Total spend on MCP tool calls, segmented by tool and server name
+# TYPE litellm_mcp_tool_call_spend_metric_total counter

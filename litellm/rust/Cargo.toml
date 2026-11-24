@@ -41,6 +41,7 @@ litellm-callbacks-parallel-request-limiter = { path = "crates/callbacks-parallel
 litellm-callbacks-python = { path = "crates/callbacks-python" }
 litellm-callbacks-budgets = { path = "crates/callbacks-budgets" }
 litellm-callbacks-model-capacity = { path = "crates/callbacks-model-capacity" }
+litellm-callbacks-prometheus = { path = "crates/callbacks-prometheus" }
 litellm-callbacks-s3-log = { path = "crates/callbacks-s3-log" }
 litellm-callbacks-spend-log = { path = "crates/callbacks-spend-log" }
 litellm-callbacks-spend-logger = { path = "crates/callbacks-spend-logger" }

@@ -69,6 +69,7 @@ fn without_stores(inference: Inference) -> AppState {
     AppState {
         key_limiter: inference.key_limiter,
         inference: inference.gateway,
+        metrics: inference.metrics,
         redis: RedisClients::default(),
         database: None,
         keys: None,
