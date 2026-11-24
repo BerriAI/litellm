@@ -333,6 +333,140 @@ class TestUnpackLegacyDefs:
         assert "components" not in out
         assert out["properties"]["r0"]["properties"]["p0"] == {"type": "string"}
 
+    def test_a_defs_ref_is_inlined_from_the_legacy_block_beside_it(self):
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            unpack_legacy_defs,
+        )
+
+        address: Final = {"type": "object", "properties": {"city": {"type": "string"}}}
+        schema: Final = {
+            "type": "object",
+            "properties": {"home": {"$ref": "#/$defs/Address"}},
+            "definitions": {"Address": address},
+        }
+
+        out: Final = unpack_legacy_defs(schema)
+
+        assert out["properties"]["home"] == address
+
+    def test_a_boolean_definition_is_inlined_as_the_schema_it_means(self):
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            unpack_legacy_defs,
+        )
+
+        schema: Final = {
+            "type": "object",
+            "properties": {"anything": {"$ref": "#/definitions/Anything"}, "nothing": {"$ref": "#/definitions/Nothing"}},
+            "definitions": {"Anything": True, "Nothing": False},
+        }
+
+        out: Final = unpack_legacy_defs(schema)
+
+        assert out == {"type": "object", "properties": {"anything": {}, "nothing": {"not": {}}}}
+
+    @pytest.mark.parametrize(
+        "legacy_blocks",
+        [
+            {"definitions": 5},
+            {"definitions": {"A": {"type": "string"}}, "components": {"schemas": ["not", "a", "map"]}},
+            {"definitions": {"A": {"type": "string"}}, "components": 5},
+        ],
+        ids=["definitions_is_a_number", "components_schemas_is_a_list", "components_is_a_number"],
+    )
+    def test_a_malformed_legacy_block_is_left_for_the_provider_to_judge(self, legacy_blocks):
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            unpack_legacy_defs,
+        )
+
+        schema: Final = {"type": "object", "properties": {"a": {"$ref": "#/definitions/A"}}, **legacy_blocks}
+
+        out: Final = unpack_legacy_defs(copy.deepcopy(schema))
+
+        assert out == schema
+
+    def test_memory_stays_linear_in_schema_size_with_many_definitions(self):
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            unpack_legacy_defs,
+        )
+
+        n: Final = 2_000
+        schema: Final = {
+            "type": "object",
+            "properties": {f"f{i}": {"$ref": f"#/definitions/T{i}"} for i in range(n)},
+            "definitions": {f"T{i}": {"type": "string"} for i in range(n)},
+        }
+        schema_bytes: Final = len(json.dumps(schema))
+
+        tracemalloc.start()
+        try:
+            out: Final = unpack_legacy_defs(schema)
+            peak_bytes: Final = tracemalloc.get_traced_memory()[1]
+        finally:
+            tracemalloc.stop()
+
+        assert all(out["properties"][f"f{i}"] == {"type": "string"} for i in range(n))
+        assert peak_bytes < 50 * schema_bytes
+
+    def test_nested_definitions_shadow_outer_ones_of_the_same_name(self):
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            unpack_legacy_defs,
+        )
+
+        schema: Final = {
+            "type": "object",
+            "properties": {
+                "outer": {"$ref": "#/definitions/T"},
+                "inner": {
+                    "type": "object",
+                    "properties": {"value": {"$ref": "#/definitions/T"}},
+                    "definitions": {"T": {"type": "integer"}},
+                },
+            },
+            "definitions": {"T": {"type": "string"}},
+        }
+
+        out: Final = unpack_legacy_defs(schema)
+
+        assert out["properties"]["outer"] == {"type": "string"}
+        assert out["properties"]["inner"]["properties"]["value"] == {"type": "integer"}
+
+    def test_a_defs_block_that_is_not_a_map_is_ignored(self):
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            unpack_defs,
+        )
+
+        schema: Final = {
+            "type": "object",
+            "properties": {
+                "item": {
+                    "type": "object",
+                    "properties": {"value": {"$ref": "#/definitions/T"}},
+                    "$defs": ["not", "a", "map"],
+                }
+            },
+        }
+
+        unpack_defs(schema, {"T": {"type": "string"}})
+
+        assert schema["properties"]["item"]["properties"]["value"] == {"type": "string"}
+
+    def test_a_ref_that_is_not_a_string_is_left_as_is(self):
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            unpack_defs,
+        )
+
+        schema: Final = {
+            "type": "object",
+            "properties": {
+                "odd": {"$ref": 5},
+                "value": {"$ref": "#/definitions/T"},
+            },
+        }
+
+        unpack_defs(schema, {"T": {"type": "string"}})
+
+        assert schema["properties"] == {"odd": {"$ref": 5}, "value": {"type": "string"}}
+
 
 class TestTextCompletionPromptToMessages:
     """`/v1/completions` prompt wrapping, shared by the real-time and batch paths."""
@@ -1352,11 +1486,17 @@ def test_defs_unpacked_prefers_a_ref_targets_own_def_over_an_outer_def_of_the_sa
     assert defs_unpacked(schema) == {"type": "object", "properties": {"x": {"type": "integer"}}}
 
 
-@pytest.mark.parametrize("target", [True, 1, "string", ["a"]])
-def test_defs_unpacked_raises_attribute_error_for_a_ref_to_a_def_that_is_not_an_object(target: object) -> None:
+@pytest.mark.parametrize("target", [1, "string", ["a"]])
+def test_defs_unpacked_raises_attribute_error_for_a_ref_to_a_def_that_is_not_a_schema(target: object) -> None:
     schema: Final = {"type": "object", "properties": {"x": {"$ref": "#/$defs/T"}}, "$defs": {"T": target}}
     with pytest.raises(AttributeError):
         defs_unpacked(schema)
+
+
+@pytest.mark.parametrize(("target", "meaning"), [(True, {}), (False, {"not": {}})])
+def test_defs_unpacked_inlines_a_boolean_def_as_the_schema_it_means(target: bool, meaning: object) -> None:
+    schema: Final = {"type": "object", "properties": {"x": {"$ref": "#/$defs/T"}}, "$defs": {"T": target}}
+    assert defs_unpacked(schema) == {"type": "object", "properties": {"x": meaning}}
 
 
 def test_defs_unpacked_inlines_a_ref_target_alone_unless_asked_to_keep_its_siblings() -> None:

@@ -5,7 +5,7 @@ import json
 import logging
 import os
 import re
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from itertools import chain
 from typing import Final, Literal, TypeAlias
 from unittest.mock import MagicMock, Mock, patch
@@ -29,6 +29,7 @@ from litellm.llms.anthropic.chat.transformation import (
     NATIVE_OUTPUT_MAX_OPTIONAL_PARAMETERS,
     NATIVE_OUTPUT_MAX_UNION_PARAMETERS,
 )
+from litellm.litellm_core_utils.prompt_templates.common_utils import DEFS_MAX_INLINED_BYTES
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
 from litellm.llms.bedrock.common_utils import BEDROCK_NATIVE_OUTPUT_MAX_PROPERTIES, BedrockError
@@ -6365,6 +6366,141 @@ def test_defs_that_double_at_every_level_reach_native_output_without_being_expan
     sent: Final = json.loads(request["outputConfig"]["textFormat"]["structure"]["jsonSchema"]["schema"])
     assert sent["$defs"].keys() == schema["$defs"].keys()
     assert sent["properties"]["root"] == {"$ref": "#/$defs/Level0"}
+
+
+def _tool(name: str, parameters: Mapping[str, object]) -> Mapping[str, object]:
+    return {"type": "function", "function": {"name": name, "parameters": parameters}}
+
+
+def _completion_with_tools(model: str, tools: Sequence[Mapping[str, object]], client: HTTPHandler) -> None:
+    litellm.completion(
+        model=f"bedrock/converse/{model}",
+        messages=[{"role": "user", "content": "Call a tool."}],
+        tools=tools,
+        aws_access_key_id="AKIATOOLSCHEMAKEY",
+        aws_secret_access_key="tool-schema-secret",
+        aws_region_name="us-west-2",
+        client=client,
+    )
+
+
+@pytest.mark.parametrize(
+    ("model", "keeps_refs"),
+    [("us.anthropic.claude-sonnet-5-5", True), ("us.amazon.nova-2-lite-v1:0", False)],
+    ids=["claude-resolves-defs", "nova-needs-inlining"],
+)
+def test_shared_tool_defs_stay_references_only_for_models_that_resolve_them(model, keeps_refs):
+    schema: Final = _doubling_defs_schema(8)
+
+    request: Final = AmazonConverseConfig()._transform_request(
+        model=model,
+        messages=[{"role": "user", "content": "Call a tool."}],
+        optional_params={"tools": [_tool("walk_tree", schema)]},
+        litellm_params={},
+        headers={},
+    )
+
+    sent: Final = request["toolConfig"]["tools"][0]["toolSpec"]["inputSchema"]["json"]
+    assert (sent.get("$defs") == schema["$defs"]) is keeps_refs
+    assert (sent["properties"] == schema["properties"]) is keeps_refs
+    assert ("$ref" in _schema_keys(sent)) is keeps_refs
+
+
+@pytest.mark.timeout(30)
+def test_tool_defs_that_double_at_every_level_fail_fast_with_a_400_naming_the_tool():
+    client: Final = HTTPHandler()
+
+    with (
+        patch.object(client, "post") as mock_post,
+        pytest.raises(litellm.BadRequestError, match="tool 'walk_tree'") as raised,
+    ):
+        _completion_with_tools("us.amazon.nova-2-lite-v1:0", [_tool("walk_tree", _doubling_defs_schema(17))], client)
+
+    assert raised.value.status_code == 400
+    mock_post.assert_not_called()
+
+
+def test_tool_defs_that_inline_to_megabytes_still_reach_models_that_need_inlining():
+    description: Final = "k" * 3_000_000
+    parameters: Final = {
+        "type": "object",
+        "properties": {"key": {"$ref": "#/$defs/Key"}},
+        "$defs": {"Key": {"type": "string", "description": description}},
+    }
+
+    sent: Final = _bedrock_tools_pt([_tool("lookup", parameters)], model="us.amazon.nova-2-lite-v1:0")
+
+    assert sent[0]["toolSpec"]["inputSchema"]["json"]["properties"]["key"]["description"] == description
+
+
+def test_tool_defs_inlining_budget_covers_every_tool_in_the_request():
+    description_bytes: Final = DEFS_MAX_INLINED_BYTES * 2 // 5
+    tools: Final = [
+        _tool(
+            f"lookup_{index}",
+            {
+                "type": "object",
+                "properties": {"key": {"$ref": "#/$defs/Key"}},
+                "$defs": {"Key": {"type": "string", "description": "k" * description_bytes}},
+            },
+        )
+        for index in range(3)
+    ]
+    client: Final = HTTPHandler()
+
+    sent_alone: Final = _bedrock_tools_pt(tools[-1:], model="us.amazon.nova-2-lite-v1:0")
+    with (
+        patch.object(client, "post") as mock_post,
+        pytest.raises(litellm.BadRequestError, match="tool 'lookup_2'") as raised,
+    ):
+        _completion_with_tools("us.amazon.nova-2-lite-v1:0", tools, client)
+
+    assert sent_alone[0]["toolSpec"]["inputSchema"]["json"]["properties"]["key"]["type"] == "string"
+    assert raised.value.status_code == 400
+    mock_post.assert_not_called()
+
+
+def _legacy_doubling_defs_schema(depth: int) -> Mapping[str, object]:
+    schema: Final = _doubling_defs_schema(depth)
+    return {**{key: value for key, value in schema.items() if key != "$defs"}, "definitions": schema["$defs"]}
+
+
+@pytest.mark.timeout(30)
+@pytest.mark.parametrize(
+    ("model", "schema"),
+    [
+        ("us.anthropic.claude-sonnet-5-5", _legacy_doubling_defs_schema(17)),
+        ("us.amazon.nova-2-lite-v1:0", _doubling_defs_schema(17)),
+    ],
+    ids=["claude-legacy-definitions", "nova-defs"],
+)
+def test_tool_defs_past_the_inlining_budget_fall_back_through_context_window_fallbacks(model, schema):
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "bedrock-model",
+                "litellm_params": {
+                    "model": f"bedrock/converse/{model}",
+                    "aws_access_key_id": "AKIATOOLSCHEMAKEY",
+                    "aws_secret_access_key": "tool-schema-secret",
+                    "aws_region_name": "us-west-2",
+                },
+            },
+            {
+                "model_name": "backup",
+                "litellm_params": {"model": "openai/gpt-5.5", "api_key": "sk-backup", "mock_response": "from backup"},
+            },
+        ],
+        context_window_fallbacks=[{"bedrock-model": ["backup"]}],
+    )
+
+    response: Final = router.completion(
+        model="bedrock-model",
+        messages=[{"role": "user", "content": "Call a tool."}],
+        tools=[_tool("walk_tree", schema)],
+    )
+
+    assert response.choices[0].message.content == "from backup"
 
 
 @pytest.mark.parametrize(
