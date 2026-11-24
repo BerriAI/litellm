@@ -2422,6 +2422,34 @@
     "default_model_placeholder": "gpt-3.5-turbo"
   },
   {
+    "provider": "LLMTR",
+    "provider_display_name": "LLMTR",
+    "litellm_provider": "llmtr",
+    "credential_fields": [
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "placeholder": null,
+        "tooltip": null,
+        "required": true,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "api_base",
+        "label": "API Base",
+        "placeholder": "https://llmtr.com/v1",
+        "tooltip": "Optional. Leave blank to use the provider's default endpoint.",
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "llmtr/llmtr/qwen3-6-35b"
+  },
+  {
     "provider": "LM_STUDIO",
     "provider_display_name": "Lm Studio",
     "litellm_provider": "lm_studio",

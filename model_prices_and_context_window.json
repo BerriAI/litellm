@@ -62729,6 +62729,140 @@
         "max_input_tokens": 8000,
         "max_output_tokens": 8000
     },
+    "llmtr/llmtr/gemma-4": {
+        "cache_read_input_token_cost": 5e-07,
+        "input_cost_per_token": 2e-06,
+        "litellm_provider": "llmtr",
+        "max_input_tokens": 131072,
+        "max_output_tokens": 131072,
+        "mode": "chat",
+        "output_cost_per_token": 5e-06,
+        "source": "https://llmtr.com/v1/models",
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "llmtr/llmtr/muse-glimmer-30b-tr": {
+        "cache_read_input_token_cost": 5e-07,
+        "input_cost_per_token": 2e-06,
+        "litellm_provider": "llmtr",
+        "max_input_tokens": 131072,
+        "max_output_tokens": 131072,
+        "mode": "chat",
+        "output_cost_per_token": 5e-06,
+        "source": "https://llmtr.com/v1/models",
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "llmtr/llmtr/qwen3-5-4b": {
+        "cache_read_input_token_cost": 2.5e-07,
+        "input_cost_per_token": 1e-06,
+        "litellm_provider": "llmtr",
+        "max_input_tokens": 131072,
+        "max_output_tokens": 65536,
+        "mode": "chat",
+        "output_cost_per_token": 3e-06,
+        "source": "https://llmtr.com/v1/models",
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": false
+    },
+    "llmtr/llmtr/qwen3-6-35b": {
+        "input_cost_per_token": 5e-06,
+        "litellm_provider": "llmtr",
+        "max_input_tokens": 262144,
+        "max_output_tokens": 65536,
+        "mode": "chat",
+        "output_cost_per_token": 5e-06,
+        "source": "https://llmtr.com/v1/models",
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": false
+    },
+    "llmtr/llmtr/qwen3-8-27b": {
+        "cache_read_input_token_cost": 1.25e-06,
+        "input_cost_per_token": 5e-06,
+        "litellm_provider": "llmtr",
+        "max_input_tokens": 262144,
+        "max_output_tokens": 262144,
+        "mode": "chat",
+        "output_cost_per_token": 7e-06,
+        "source": "https://llmtr.com/v1/models",
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": false
+    },
+    "llmtr/llmtr/trendyol-asure-12b": {
+        "cache_read_input_token_cost": 2.5e-08,
+        "input_cost_per_token": 1e-07,
+        "litellm_provider": "llmtr",
+        "max_input_tokens": 40960,
+        "max_output_tokens": 40960,
+        "mode": "chat",
+        "output_cost_per_token": 5e-07,
+        "source": "https://llmtr.com/v1/models",
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": false,
+        "supports_prompt_caching": true,
+        "supports_reasoning": false,
+        "supports_system_messages": true,
+        "supports_tool_choice": false,
+        "supports_vision": true
+    },
     "llamagate/llama-3.1-8b": {
         "max_input_tokens": 131072,
         "max_output_tokens": 8192,

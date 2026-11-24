@@ -392,5 +392,13 @@
       "/v1/chat/completions",
       "/v1/completions"
     ]
+  },
+  "llmtr": {
+    "base_url": "https://llmtr.com/v1",
+    "api_key_env": "LLMTR_API_KEY",
+    "api_base_env": "LLMTR_API_BASE",
+    "provider_info": {
+      "supports_function_calling": true
+    }
   }
 }
