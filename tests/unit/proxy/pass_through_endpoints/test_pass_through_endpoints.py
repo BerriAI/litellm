@@ -10746,6 +10746,42 @@ def test_passthrough_client_cannot_forge_session_id_omission(client_metadata_key
 
 
 @pytest.mark.parametrize("client_metadata_key", ["litellm_metadata", "metadata"])
+def test_passthrough_client_cannot_forge_an_inherited_session(client_metadata_key: str):
+    """The inherited-session marker is proxy-owned: only a proxy sub-call carries it. A pass-through body that carries
+    it must not put the caller's session on a spend log row that `missing_session_id: omit` leaves empty."""
+    from litellm.constants import SESSION_ID_INHERITED_METADATA_KEY
+    from litellm.proxy.spend_tracking.spend_tracking_utils import _get_session_id_for_spend_log
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.method = "POST"
+    mock_request.url = httpx.URL("http://0.0.0.0:4000/gemini/v1beta/models/gemini-2.5-flash:generateContent")
+    mock_request.headers = Headers({})
+    mock_request.scope = {}
+
+    kwargs = HttpPassThroughEndpointHelpers._init_kwargs_for_pass_through_endpoint(
+        request=mock_request,
+        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+        passthrough_logging_payload=MagicMock(),
+        logging_obj=MagicMock(),
+        _parsed_body={
+            "litellm_session_id": "caller-session",
+            client_metadata_key: {SESSION_ID_INHERITED_METADATA_KEY: True},
+        },
+        litellm_call_id="lit-10761-call-id",
+    )
+
+    assert (
+        _get_session_id_for_spend_log(
+            kwargs=kwargs,
+            metadata=kwargs["litellm_params"]["metadata"],
+            standard_logging_payload={"trace_id": "per-call-random-trace-id"},
+            omit_when_missing=True,
+        )
+        is None
+    )
+
+
+@pytest.mark.parametrize("client_metadata_key", ["litellm_metadata", "metadata"])
 @pytest.mark.parametrize(
     "counted_marker",
     ["_litellm_router_usage_counted_tokens", "_litellm_usage_based_routing_counted_tokens"],

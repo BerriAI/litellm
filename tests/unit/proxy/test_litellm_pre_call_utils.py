@@ -29,6 +29,7 @@ from litellm.constants import (
     SERVER_STREAMING_CLASSIFICATION_KEY,
     SERVER_STREAMING_CLASSIFICATION_MARKER,
     SESSION_ID_GENERATED_METADATA_KEY,
+    SESSION_ID_INHERITED_METADATA_KEY,
     SESSION_ID_OMITTED_METADATA_KEY,
     USAGE_BASED_ROUTING_COUNTED_TOKENS_METADATA_KEY,
 )
@@ -10532,6 +10533,32 @@ async def test_client_supplied_omit_marker_never_reaches_the_spend_log(
         if general_settings.get("missing_session_id") == "generate"
         else "per-call-random-trace-id"
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("general_settings", [{}, {"missing_session_id": "omit"}])
+@pytest.mark.parametrize("sent_in", ["metadata", "litellm_metadata"])
+@pytest.mark.parametrize("path", ["/v1/chat/completions", "/v1/messages"])
+async def test_client_supplied_inherited_session_marker_keeps_the_switchyard_session(
+    path: str, sent_in: str, general_settings: dict[str, str]
+):
+    """The inherited-session marker is proxy-owned: only a proxy sub-call carries it. A caller that sends it must not
+    take its own request out of session-scoped routing."""
+    from litellm.router_strategy.switchyard_router.switchyard_router import switchyard_headers
+
+    async def switchyard_session(client_metadata: dict[str, object]) -> str | None:
+        updated = await add_litellm_data_to_request(
+            data={"model": "gpt-4o", "messages": [], "litellm_session_id": "caller-session", sent_in: client_metadata},
+            request=_request_for(path),
+            user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+            proxy_config=MagicMock(),
+            general_settings=general_settings,
+        )
+        return switchyard_headers(updated).get("x-switchyard-session-id")
+
+    unmarked: Final = await switchyard_session({})
+    assert unmarked is not None
+    assert await switchyard_session({SESSION_ID_INHERITED_METADATA_KEY: True}) == unmarked
 
 
 def test_default_team_settings_bool_turn_off_message_logging_redacts():
