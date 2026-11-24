@@ -96,7 +96,7 @@ class AdvisorOrchestrationHandler(MessagesInterceptor):
 
         # Strip prior advisor blocks from history, preserving advice text as context.
         current_messages: list[dict[str, object]] = strip_advisor_blocks_from_messages(
-            [dict(m) for m in messages], replace_with_text=True
+            [dict(m) for m in messages], replace_with_text=True, drop_params=kwargs.get("drop_params")
         )
 
         parent_request_id: Final[str] = str(kwargs.pop("litellm_call_id", None) or uuid.uuid4())

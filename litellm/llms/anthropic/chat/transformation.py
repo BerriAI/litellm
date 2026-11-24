@@ -2162,7 +2162,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         return AnthropicOutputSchema(type="json_schema", schema=dict(native_schema))
 
     def map_response_format_to_anthropic_tool(
-        self, value: dict | None, optional_params: dict, tool_is_forced: bool
+        self, value: dict | None, optional_params: dict[str, object], tool_is_forced: bool
     ) -> AnthropicMessagesTool | None:
         ignore_response_format_types: Final = ["text"]
         if value is None or value["type"] in ignore_response_format_types:  # value is a no-op
@@ -2272,7 +2272,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
     def map_openai_params(
         self,
         non_default_params: dict,
-        optional_params: dict,
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
     ) -> dict:
@@ -2756,7 +2756,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         model: str,
         messages: list[AllMessageValues],
         optional_params: dict,
-        litellm_params: dict,
+        litellm_params: dict[str, object],
         headers: dict,
     ) -> dict:
         """
@@ -2920,7 +2920,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         _has_advisor = any(isinstance(t, dict) and t.get("type") == ANTHROPIC_ADVISOR_TOOL_TYPE for t in _all_tools)
         anthropic_messages = list(
             without_stale_tool_search_results(
-                anthropic_messages if _has_advisor else strip_advisor_blocks_from_messages(anthropic_messages),
+                anthropic_messages
+                if _has_advisor
+                else strip_advisor_blocks_from_messages(anthropic_messages, drop_params=drop_params),
                 _TOOLS_ADAPTER.validate_python(_all_tools),
             )
         )
@@ -3695,10 +3697,10 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         raw_response: httpx.Response,
         model_response: ModelResponse,
         logging_obj: LoggingClass,
-        request_data: dict,
+        request_data: dict[str, object],
         messages: list[AllMessageValues],
         optional_params: dict,
-        litellm_params: dict,
+        litellm_params: dict[str, object],
         encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
@@ -3792,7 +3794,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
     ) -> LitellmMessage | None:
         return cls._convert_tool_response_to_message(tool_calls, response_format_schema)
 
-    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: dict[str, object] | httpx.Headers
+    ) -> BaseLLMException:
         return AnthropicError(
             status_code=status_code,
             message=error_message,

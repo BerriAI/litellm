@@ -101,7 +101,33 @@ resource "google_sql_database" "this" {
   deletion_policy = "ABANDON"
 }
 
+locals {
+  create_db_password    = var.db_password_secret_id == null
+  db_password_secret_id = local.create_db_password ? google_secret_manager_secret.db_password[0].id : var.db_password_secret_id
+}
+
+moved {
+  from = random_password.db_password
+  to   = random_password.db_password[0]
+}
+
+moved {
+  from = google_sql_user.app
+  to   = google_sql_user.app[0]
+}
+
+moved {
+  from = google_secret_manager_secret.db_password
+  to   = google_secret_manager_secret.db_password[0]
+}
+
+moved {
+  from = google_secret_manager_secret_version.db_password
+  to   = google_secret_manager_secret_version.db_password[0]
+}
+
 resource "random_password" "db_password" {
+  count       = local.create_db_password ? 1 : 0
   length      = 32
   special     = false
   min_lower   = 4
@@ -110,14 +136,16 @@ resource "random_password" "db_password" {
 }
 
 resource "google_sql_user" "app" {
+  count    = local.create_db_password ? 1 : 0
   name     = var.db_username
   instance = google_sql_database_instance.writer.name
-  password = random_password.db_password.result
+  password = random_password.db_password[0].result
 
   deletion_policy = "ABANDON"
 }
 
 resource "google_secret_manager_secret" "db_password" {
+  count     = local.create_db_password ? 1 : 0
   secret_id = "${local.name}-db-password"
   labels    = local.labels
   replication {
@@ -126,6 +154,7 @@ resource "google_secret_manager_secret" "db_password" {
 }
 
 resource "google_secret_manager_secret_version" "db_password" {
-  secret      = google_secret_manager_secret.db_password.id
-  secret_data = random_password.db_password.result
+  count       = local.create_db_password ? 1 : 0
+  secret      = google_secret_manager_secret.db_password[0].id
+  secret_data = random_password.db_password[0].result
 }

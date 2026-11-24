@@ -28,7 +28,7 @@ use crate::{
     error::{Ended, NoDeployments},
     headers::Routing,
     hooks::CallHooks,
-    stream_event::Read,
+    stream_event::{Counts, Read},
     stream_hold::{self, Cause, Chunks, Held},
     stream_outcome,
 };
@@ -58,7 +58,8 @@ pub trait Host: Send + Sync + Sized + 'static {
     /// The callback hooks of one call `identity` makes, which read and write the call's record.
     fn hooks(&self, identity: &Authenticated<Self::Rows>) -> Self::Hooks;
 
-    /// router-core's host for one call that runs `route` on each attempt for `identity`.
+    /// router-core's host for one call that runs `route` on each attempt for `identity`. The host
+    /// counts `route`'s [`RouteAttempt::prompt`] for the pre-call checks.
     fn router_host<'a, A: RouteAttempt>(
         &'a self,
         gateway: &'a Gateway<Self>,
@@ -74,8 +75,14 @@ pub trait RouteAttempt: Send + Sync {
 
     fn run(&self, attempt: &Attempt) -> impl Future<Output = Result<Self::Outcome, Error>> + Send;
 
-    /// The tokens a complete outcome used. A stream's are counted as it is read.
-    fn total_tokens(outcome: &Self::Outcome) -> u64;
+    /// What a complete outcome counted, which the router counts against the deployment. A
+    /// stream's counts are read from its events.
+    /// Required, so a new route says what it counts rather than counting nothing by default.
+    fn counts(outcome: &Self::Outcome) -> Option<Counts>;
+
+    /// The request's prompt, which the host counts for the pre-call checks. `None` holds the
+    /// route's calls to no context window, so each route says so itself.
+    fn prompt(&self) -> Option<Prompt<'_>>;
 
     /// The stream of an outcome and the reader of its format: its outcome is reported to the
     /// router as it is read, and another attempt may answer in its place while it has sent no
@@ -84,6 +91,14 @@ pub trait RouteAttempt: Send + Sync {
         let _ = outcome;
         None
     }
+}
+
+/// The prompt a request carries, in the format its route reads it in. A route only hands it over,
+/// and the host decides how it is counted.
+#[derive(Clone, Copy)]
+pub enum Prompt<'a> {
+    /// A Messages body: its `system`, its `messages` and its `tools`.
+    Messages(&'a Map<String, Value>),
 }
 
 /// One attempt of `route` as router-core hears it. A complete outcome is served with the tokens
@@ -102,7 +117,7 @@ pub async fn attempt<H: Host, A: RouteAttempt>(
         .await
         .map_err(|error| attempt_failure(attempt, error))?;
     let Some((chunks, read)) = A::held(&mut outcome) else {
-        let total_tokens = A::total_tokens(&outcome);
+        let total_tokens = A::counts(&outcome).map_or(0, Counts::total);
         return Ok(Served::new(outcome, total_tokens));
     };
     let unreported = std::mem::replace(chunks, stream::empty().boxed());
@@ -290,7 +305,12 @@ async fn answered<H: Host, O>(
             error: litellm_router_core::Error::NoHealthyDeployments { model, .. },
             ..
         } => no_deployments(gateway, model).await.into(),
-        CallError { error, .. } => Error::Routing(error).into(),
+        CallError { error, .. } => Ended {
+            routing: error
+                .refused()
+                .map(|refused| Routing::failed_on(&refused.deployment_id)),
+            error: Box::new(Error::Routing(error)),
+        },
     })
 }
 
@@ -439,13 +459,8 @@ pub(crate) fn timeout(
     streamed: bool,
     configured: Option<Duration>,
 ) -> Option<Duration> {
-    let seconds = |written: &Option<Spelled<f64>>| {
-        let seconds = match written.as_ref()? {
-            Spelled::Value(seconds) => *seconds,
-            Spelled::Text(text) => text.trim().parse().ok()?,
-        };
-        Duration::try_from_secs_f64(seconds).ok()
-    };
+    let seconds =
+        |written: &Option<Spelled<f64>>| Duration::try_from_secs_f64(written.as_ref()?.lax()?).ok();
     let params = &attempt.deployment.params;
     let request_timeout = || {
         let seconds = params.extra.get("request_timeout")?.as_f64()?;
@@ -465,23 +480,6 @@ pub(crate) fn api_key(deployment: &Deployment) -> Option<String> {
         .api_key
         .as_ref()
         .map(|key| key.expose().to_owned())
-}
-
-/// The tokens a response's `usage` counts: its `total_tokens`, else its input plus output.
-pub(crate) fn total_tokens(usage: Option<&Value>) -> u64 {
-    let count = |name: &str| {
-        usage
-            .and_then(|usage| usage.get(name))
-            .and_then(Value::as_u64)
-    };
-    count("total_tokens").unwrap_or_else(|| {
-        count("input_tokens")
-            .or(count("prompt_tokens"))
-            .unwrap_or(0)
-            + count("output_tokens")
-                .or(count("completion_tokens"))
-                .unwrap_or(0)
-    })
 }
 
 #[cfg(test)]
@@ -643,8 +641,13 @@ mod tests {
             Ok(litellm_framer::sse::blocks(sent).boxed())
         }
 
-        fn total_tokens(_outcome: &RouteChunks) -> u64 {
-            0
+        /// Only ever a stream, whose counts are read from its events.
+        fn counts(_outcome: &RouteChunks) -> Option<Counts> {
+            None
+        }
+
+        fn prompt(&self) -> Option<Prompt<'_>> {
+            None
         }
 
         fn held(outcome: &mut RouteChunks) -> Option<(&mut RouteChunks, Read)> {

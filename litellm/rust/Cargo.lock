@@ -4161,6 +4161,7 @@ dependencies = [
  "litellm-router-core",
  "litellm-secret-value",
  "litellm-secrets",
+ "litellm-token-counter",
  "litellm-tracing",
  "litellm-yaml",
  "parking_lot",
@@ -5020,7 +5021,9 @@ dependencies = [
 name = "litellm-router-types"
 version = "0.1.0"
 dependencies = [
+ "jiff",
  "litellm-auth-types",
+ "litellm-python-compat",
  "litellm-secret-value",
  "rstest",
  "serde",

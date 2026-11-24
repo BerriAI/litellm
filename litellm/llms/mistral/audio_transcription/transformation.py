@@ -65,7 +65,9 @@ class MistralAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
     ) -> str:
         return join_api_base("https://api.mistral.ai/v1" if api_base is None else api_base, "audio/transcriptions")
 
-    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: dict[str, object] | httpx.Headers
+    ) -> BaseLLMException:
         return MistralAudioTranscriptionException(
             message=error_message,
             status_code=status_code,

@@ -1,4 +1,31 @@
+locals {
+  create_master_key_secret  = var.litellm_master_key_secret_arn == null
+  create_ui_password_secret = var.ui_password_secret_arn == null && var.ui_password != ""
+  create_db_master_secret   = var.create_database && !var.db_manage_master_password
+  master_key_secret_arn     = local.create_master_key_secret ? aws_secretsmanager_secret.master_key[0].arn : var.litellm_master_key_secret_arn
+  ui_password_secret_arn    = local.create_ui_password_secret ? aws_secretsmanager_secret.ui_password[0].arn : var.ui_password_secret_arn
+  db_master_password_secret_arn = !var.create_database ? null : (
+    var.db_manage_master_password ? aws_rds_cluster.this[0].master_user_secret[0].secret_arn : aws_secretsmanager_secret.db_master_password[0].arn
+  )
+}
+
+moved {
+  from = random_password.master_key
+  to   = random_password.master_key[0]
+}
+
+moved {
+  from = aws_secretsmanager_secret.master_key
+  to   = aws_secretsmanager_secret.master_key[0]
+}
+
+moved {
+  from = aws_secretsmanager_secret_version.master_key
+  to   = aws_secretsmanager_secret_version.master_key[0]
+}
+
 resource "random_password" "master_key" {
+  count       = local.create_master_key_secret ? 1 : 0
   length      = 48
   special     = false
   min_lower   = 4
@@ -10,7 +37,7 @@ resource "random_password" "master_key" {
 # user (see rds.tf header). Runtime services authenticate via IAM tokens
 # and never read this secret.
 resource "random_password" "db_master_password" {
-  count       = var.create_database ? 1 : 0
+  count       = local.create_db_master_secret ? 1 : 0
   length      = 32
   special     = false
   min_lower   = 4
@@ -20,6 +47,7 @@ resource "random_password" "db_master_password" {
 
 # LITELLM_MASTER_KEY — must begin with `sk-` per the proxy's validator.
 resource "aws_secretsmanager_secret" "master_key" {
+  count                   = local.create_master_key_secret ? 1 : 0
   name                    = "${local.name}-master-key"
   description             = "LITELLM_MASTER_KEY for gateway + backend."
   recovery_window_in_days = 0
@@ -28,10 +56,11 @@ resource "aws_secretsmanager_secret" "master_key" {
 }
 
 resource "aws_secretsmanager_secret_version" "master_key" {
-  secret_id = aws_secretsmanager_secret.master_key.id
+  count     = local.create_master_key_secret ? 1 : 0
+  secret_id = aws_secretsmanager_secret.master_key[0].id
   # When the operator passes litellm_master_key, use it verbatim. Otherwise
   # fall back to the auto-generated `sk-…` value (trial / OSS path).
-  secret_string = coalesce(var.litellm_master_key, "sk-${random_password.master_key.result}")
+  secret_string = coalesce(var.litellm_master_key, "sk-${random_password.master_key[0].result}")
 }
 
 # LITELLM_LICENSE — only created when the operator supplies one. The
@@ -59,7 +88,7 @@ resource "aws_secretsmanager_secret_version" "license" {
 # iam.tf, and the backend task picks the env var up through
 # backend_managed_secrets in ecs.tf.
 resource "aws_secretsmanager_secret" "ui_password" {
-  count = var.ui_password == "" ? 0 : 1
+  count = local.create_ui_password_secret ? 1 : 0
 
   name                    = "${local.name}-ui-password"
   description             = "UI_PASSWORD for the backend (UI admin login)."
@@ -69,7 +98,7 @@ resource "aws_secretsmanager_secret" "ui_password" {
 }
 
 resource "aws_secretsmanager_secret_version" "ui_password" {
-  count = var.ui_password == "" ? 0 : 1
+  count = local.create_ui_password_secret ? 1 : 0
 
   secret_id     = aws_secretsmanager_secret.ui_password[0].id
   secret_string = var.ui_password
@@ -93,7 +122,7 @@ resource "aws_secretsmanager_secret_version" "billing_metrics_client_secret" {
 }
 
 resource "aws_secretsmanager_secret" "db_master_password" {
-  count                   = var.create_database ? 1 : 0
+  count                   = local.create_db_master_secret ? 1 : 0
   name                    = "${local.name}-db-master-password"
   description             = "Aurora master-user password - bootstrap only. Runtime auth is IAM-token."
   recovery_window_in_days = 0
@@ -102,7 +131,7 @@ resource "aws_secretsmanager_secret" "db_master_password" {
 }
 
 resource "aws_secretsmanager_secret_version" "db_master_password" {
-  count     = var.create_database ? 1 : 0
+  count     = local.create_db_master_secret ? 1 : 0
   secret_id = aws_secretsmanager_secret.db_master_password[0].id
   secret_string = jsonencode({
     username = var.db_master_username

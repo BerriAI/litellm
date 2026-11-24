@@ -5121,7 +5121,7 @@ def create_vertex_ai_live_websocket_endpoint():
 def create_generic_websocket_passthrough_endpoint(
     provider: str,
     target_url: str,
-    custom_headers: dict | None = None,
+    custom_headers: dict[str, object] | None = None,
     forward_headers: bool = False,
     cost_per_request: float | None = None,
 ):
@@ -5258,7 +5258,7 @@ async def handle_gigachat_passthrough_router_model(
     model: str,
     endpoint: str,
     request: Request,
-    request_body: dict,
+    request_body: dict[str, object],
     fastapi_response: Response,
     llm_router: litellm.Router,
     user_api_key_dict: UserAPIKeyAuth,

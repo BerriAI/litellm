@@ -38,6 +38,7 @@ pub struct Stash {
     pub rate_limit_response: Option<Response>,
     pub parallel_slot: Option<SlotAcquisition>,
     pub reserved_tokens: i64,
+    pub reservation_counts_unpriced_media: bool,
     pub reserved_model: Option<RateLimitedModel>,
     pub reserved_scopes: BTreeSet<(String, String)>,
     pub fallback_models: BTreeSet<String>,

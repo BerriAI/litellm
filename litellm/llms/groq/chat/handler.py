@@ -34,7 +34,7 @@ class GroqChatCompletion(OpenAILikeChatHandler):
         encoding: object,
         api_key: str | None,
         logging_obj: LiteLLMLoggingObj,
-        optional_params: dict,
+        optional_params: dict[str, object],
         acompletion: object = None,
         litellm_params=None,
         logger_fn: object = None,
