@@ -47,6 +47,17 @@ variable "litellm_master_key" {
   sensitive   = true
 }
 
+variable "litellm_master_key_secret_arn" {
+  description = "ARN of an existing Secrets Manager secret holding the LiteLLM master key as a plain string. Leave litellm_master_key empty when using this input."
+  type        = string
+  default     = null
+
+  validation {
+    condition     = var.litellm_master_key_secret_arn == null || var.litellm_master_key == ""
+    error_message = "Set either litellm_master_key_secret_arn or litellm_master_key, not both."
+  }
+}
+
 variable "litellm_license" {
   description = <<-EOT
     LiteLLM enterprise license string. When set, the stack creates a
@@ -71,6 +82,17 @@ variable "ui_password" {
   type        = string
   default     = ""
   sensitive   = true
+}
+
+variable "ui_password_secret_arn" {
+  description = "ARN of an existing Secrets Manager secret holding the UI password as a plain string. Leave ui_password empty when using this input."
+  type        = string
+  default     = null
+
+  validation {
+    condition     = var.ui_password_secret_arn == null || var.ui_password == ""
+    error_message = "Set either ui_password_secret_arn or ui_password, not both."
+  }
 }
 
 # ---------- Networking ----------
@@ -461,6 +483,12 @@ variable "db_master_username" {
   description = "Aurora master (superuser) username — used only to bootstrap the IAM-authed application user."
   type        = string
   default     = "postgres"
+}
+
+variable "db_manage_master_password" {
+  description = "Have Aurora generate and manage its master password in Secrets Manager without passing it through Terraform."
+  type        = bool
+  default     = false
 }
 
 variable "db_username" {

@@ -81,8 +81,8 @@ locals {
   # job has its own narrower env list — see migrations_env_secrets below).
   shared_env_secrets = concat(
     [
-      { name = "LITELLM_MASTER_KEY", secret = google_secret_manager_secret.master_key.id, version = "latest" },
-      { name = "DATABASE_PASSWORD", secret = google_secret_manager_secret.db_password.id, version = "latest" },
+      { name = "LITELLM_MASTER_KEY", secret = local.master_key_secret_id, version = "latest" },
+      { name = "DATABASE_PASSWORD", secret = local.db_password_secret_id, version = "latest" },
     ],
     var.litellm_license == "" ? [] : [
       { name = "LITELLM_LICENSE", secret = google_secret_manager_secret.license[0].id, version = "latest" },
@@ -209,7 +209,7 @@ locals {
   ]
 
   migrations_env_secrets = [
-    { name = "DATABASE_PASSWORD", secret = google_secret_manager_secret.db_password.id, version = "latest" },
+    { name = "DATABASE_PASSWORD", secret = local.db_password_secret_id, version = "latest" },
   ]
 }
 
@@ -614,6 +614,13 @@ resource "google_cloud_run_v2_service" "ui" {
   invoker_iam_disabled = var.private_ingress != null
   labels               = local.labels
   deletion_protection  = false
+
+  lifecycle {
+    precondition {
+      condition     = lower(local.planned_ui_account_email) != lower(local.planned_runtime_account_email)
+      error_message = "The Cloud Run UI and LiteLLM runtime must use distinct service accounts."
+    }
+  }
 
   template {
     service_account                  = var.ui_service_account_email == null ? google_service_account.ui_runtime[0].email : var.ui_service_account_email

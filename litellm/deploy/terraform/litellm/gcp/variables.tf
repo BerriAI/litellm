@@ -53,6 +53,17 @@ variable "litellm_master_key" {
   sensitive   = true
 }
 
+variable "litellm_master_key_secret_id" {
+  description = "Resource ID of an existing Secret Manager secret (projects/PROJECT/secrets/NAME) whose latest version holds the LiteLLM master key."
+  type        = string
+  default     = null
+
+  validation {
+    condition     = var.litellm_master_key_secret_id == null || (can(regex("^projects/[^/]+/secrets/[^/]+$", var.litellm_master_key_secret_id)) && var.litellm_master_key == "")
+    error_message = "Use a full Secret Manager secret ID for litellm_master_key_secret_id and leave litellm_master_key empty."
+  }
+}
+
 variable "litellm_license" {
   description = <<-EOT
     LiteLLM enterprise license string. When set, the stack creates a
@@ -374,6 +385,17 @@ variable "db_username" {
   description = "Application Postgres user (password-auth). Password is auto-generated and stored in Secret Manager."
   type        = string
   default     = "litellm_app"
+}
+
+variable "db_password_secret_id" {
+  description = "Resource ID of an existing Secret Manager secret (projects/PROJECT/secrets/NAME) whose latest version holds the password for the customer-managed Cloud SQL app user."
+  type        = string
+  default     = null
+
+  validation {
+    condition     = var.db_password_secret_id == null || can(regex("^projects/[^/]+/secrets/[^/]+$", var.db_password_secret_id))
+    error_message = "db_password_secret_id must be a full Secret Manager secret ID."
+  }
 }
 
 variable "lb_domains" {

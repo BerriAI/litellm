@@ -1,6 +1,10 @@
 locals {
   create_runtime_service_account = var.runtime_service_account_email == null
+  runtime_service_account_id     = "${local.name}-runtime"
+  ui_service_account_id          = "${local.name}-ui-runtime"
   runtime_service_account_email  = local.create_runtime_service_account ? google_service_account.runtime[0].email : var.runtime_service_account_email
+  planned_runtime_account_email  = local.create_runtime_service_account ? "${local.runtime_service_account_id}@${var.project_id}.iam.gserviceaccount.com" : var.runtime_service_account_email
+  planned_ui_account_email       = var.ui_service_account_email == null ? "${local.ui_service_account_id}@${var.project_id}.iam.gserviceaccount.com" : var.ui_service_account_email
 }
 
 moved {
@@ -16,7 +20,8 @@ moved {
 resource "google_service_account" "runtime" {
   count = local.create_runtime_service_account ? 1 : 0
 
-  account_id   = "${local.name}-runtime"
+  project      = var.project_id
+  account_id   = local.runtime_service_account_id
   display_name = "LiteLLM Cloud Run runtime"
 }
 
@@ -28,7 +33,8 @@ resource "google_service_account" "runtime" {
 resource "google_service_account" "ui_runtime" {
   count = var.create_runtime && var.ui_service_account_email == null ? 1 : 0
 
-  account_id   = "${local.name}-ui-runtime"
+  project      = var.project_id
+  account_id   = local.ui_service_account_id
   display_name = "LiteLLM Cloud Run UI runtime (no data-plane access)"
 }
 
@@ -51,13 +57,13 @@ resource "google_project_iam_member" "runtime_cloudsql" {
 # resources because their IDs are computed-at-apply and can't drive a
 # for_each).
 resource "google_secret_manager_secret_iam_member" "master_key" {
-  secret_id = google_secret_manager_secret.master_key.id
+  secret_id = local.master_key_secret_id
   role      = "roles/secretmanager.secretAccessor"
   member    = "serviceAccount:${local.runtime_service_account_email}"
 }
 
 resource "google_secret_manager_secret_iam_member" "db_password" {
-  secret_id = google_secret_manager_secret.db_password.id
+  secret_id = local.db_password_secret_id
   role      = "roles/secretmanager.secretAccessor"
   member    = "serviceAccount:${local.runtime_service_account_email}"
 }

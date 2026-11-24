@@ -51,9 +51,9 @@ data "aws_iam_policy_document" "secrets_access" {
   statement {
     actions = ["secretsmanager:GetSecretValue"]
     resources = concat(
-      [aws_secretsmanager_secret.master_key.arn],
+      [local.master_key_secret_arn],
       aws_secretsmanager_secret.license[*].arn,
-      aws_secretsmanager_secret.ui_password[*].arn,
+      local.ui_password_secret_arn[*],
       aws_secretsmanager_secret.billing_metrics_client_secret[*].arn,
       aws_secretsmanager_secret.database_url[*].arn,
       aws_secretsmanager_secret.redis_url[*].arn,

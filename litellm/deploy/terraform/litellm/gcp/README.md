@@ -559,6 +559,41 @@ with its own provider config (one `examples/default`-style root per project),
 or fork the module to add `configuration_aliases` and pass per-instance
 `providers = { ... }`.
 
+## Customer-owned secrets
+
+Pass full Secret Manager resource IDs (`projects/PROJECT/secrets/NAME`),
+without a version suffix. The module does not read their payloads.
+
+| Input | Value stored in the enabled latest version |
+| --- | --- |
+| `litellm_master_key_secret_id` | The plain LiteLLM master key beginning with `sk-`. Leave `litellm_master_key` empty. |
+| `db_password_secret_id` | The plain password for the Cloud SQL user named by `db_username`. |
+
+The customer can choose the secret names, for example
+`<tenant>-litellm-<env>-master-key` and `<tenant>-litellm-<env>-db-password`.
+With an external database password, the module still creates Cloud SQL
+and the database, but does not create the app user. For a new deployment,
+first provision with `create_runtime = false` and the external secret IDs.
+In the customer bootstrap, create `db_username` on the writer with the
+same password and grant the user the database and schema privileges
+needed to run migrations. Then enable the runtime. Do not export either
+secret payload from the customer bootstrap.
+
+The module grants the runtime service account
+`roles/secretmanager.secretAccessor` on both referenced secrets. The
+deployment identity needs permission to manage those secret-level IAM
+bindings, not to access secret versions. With Google-managed encryption,
+no extra KMS grant is needed. With CMEK, grant
+`roles/cloudkms.cryptoKeyEncrypterDecrypter` on the key to the Secret
+Manager service agent for the secrets' project. The Cloud Run service
+account does not need direct KMS access.
+
+Switching an existing deployment does not scrub previous Terraform state.
+The existing Cloud SQL user's `ABANDON` deletion policy leaves it in the
+database when this module stops managing it. Use new secret names and rotate
+the old credentials. Memorystore AUTH is unchanged and is not enabled by
+this module.
+
 ## Bring your own service accounts
 
 Set `runtime_service_account_email` for the gateway, backend, and migration

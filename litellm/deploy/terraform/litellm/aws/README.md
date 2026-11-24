@@ -533,6 +533,42 @@ the per-component images. To pull from a private registry:
   in Secrets Manager and set `repositoryCredentials.credentialsParameter`
   on the task def container — extend `ecs.tf` accordingly.
 
+## Customer-owned secrets
+
+For a Terraform runner that must not receive these credential values, have
+the customer bootstrap in Secrets Manager and pass only the resulting ARNs:
+
+| Input | Secret value |
+| --- | --- |
+| `litellm_master_key_secret_arn` | A plain string starting with `sk-` |
+| `ui_password_secret_arn` | An optional plain string for the backend UI login |
+
+Names can be chosen by the customer, for example
+`<tenant>-litellm-<env>-master-key` and `<tenant>-litellm-<env>-ui-password`.
+Keep the corresponding plaintext variables empty. A CloudFormation
+bootstrap can generate the UI password directly with `GenerateSecretString`.
+For the master key, generate the complete `sk-`-prefixed value inside the
+customer account. `GenerateSecretString` does not add a prefix to a generated
+plain string. Do not export the secret values from the bootstrap.
+
+For a new module-created Aurora cluster, set `db_manage_master_password = true`.
+RDS creates its own Secrets Manager secret. Only the bootstrap task reads
+its `password` field. The proxy continues to authenticate to Aurora using
+IAM. The RDS create API cannot initialize a new cluster from a different
+existing Secrets Manager ARN.
+
+The module grants `secretsmanager:GetSecretValue` to the ECS task execution
+role on the referenced ARNs. The default Secrets Manager managed key needs
+no additional ECS key grant. If the customer uses a customer-managed KMS
+key, authorize that role for `kms:Decrypt` on the key and allow the action
+in any permissions boundary. For cross-account secrets, also allow the
+execution role in the secret resource policy and KMS key policy. The
+Terraform runner does not need to read secret versions.
+
+Changing an existing deployment to these options does not remove values
+from prior state versions. Rotate any previously managed credentials and
+handle historical state according to the customer's retention policy.
+
 ## IAM permissions boundary
 
 Set `permissions_boundary` to the ARN of an existing IAM managed policy
