@@ -1221,18 +1221,6 @@ async def test_an_upload_that_one_deployment_rejected_answers_with_the_provider_
     assert create_may_already_exist(raised.value)
 
 
-
-_ANTHROPIC_FILE: Final = {
-    "type": "file",
-    "id": "file_011abc",
-    "filename": "batch.jsonl",
-    "mime_type": "application/jsonl",
-    "size_bytes": 52,
-    "created_at": "2026-11-03T00:00:00Z",
-    "downloadable": False,
-}
-
-
 async def _upload_to_anthropic_group(failing_base: str, healthy_base: str) -> object:
     router: Final = Router(
         model_list=[

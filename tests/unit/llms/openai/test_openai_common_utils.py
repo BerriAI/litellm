@@ -13,6 +13,7 @@ import litellm
 from litellm.litellm_core_utils.token_counter import token_counter
 from litellm.llms.openai.common_utils import (
     BaseOpenAILLM,
+    create_may_already_exist,
     drop_params_from_unprocessable_entity_error,
     is_openai_backed_api_base,
 )
@@ -733,3 +734,10 @@ def test_an_error_body_that_is_not_a_json_object_keeps_the_upstream_status(upstr
 
     assert raised.value.status_code == 400
     assert upstream_body in raised.value.message
+
+
+@pytest.mark.parametrize(("method", "may_exist"), [("GET", False), ("POST", True)])
+def test_a_gateway_timeout_says_a_create_may_exist_only_when_it_answered_a_write(method: str, may_exist: bool) -> None:
+    response: Final = httpx.Response(504, request=httpx.Request(method, "https://files.example.invalid/v1/files"))
+
+    assert create_may_already_exist(openai.APIStatusError("Gateway Timeout", response=response, body=None)) is may_exist

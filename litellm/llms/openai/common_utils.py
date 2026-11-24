@@ -178,7 +178,9 @@ class CreatedOnSomeDeployments(Exception):
         self.__cause__ = _error_it_wraps(failure)
 
 
-def _request_it_sent(failure: httpx.TransportError | httpx.HTTPStatusError) -> httpx.Request | None:
+def _request_it_sent(
+    failure: httpx.TransportError | httpx.HTTPStatusError | openai.APIStatusError,
+) -> httpx.Request | None:
     try:
         return failure.request
     except RuntimeError:
@@ -186,7 +188,7 @@ def _request_it_sent(failure: httpx.TransportError | httpx.HTTPStatusError) -> h
 
 
 def _failed_on_a_read(failure: BaseException) -> bool:
-    if not isinstance(failure, (httpx.TransportError, httpx.HTTPStatusError)):
+    if not isinstance(failure, _WIRE_FAILURES):
         return False
     request: Final = _request_it_sent(failure)
     return request is not None and request.method in _METHODS_THAT_CREATE_NOTHING

@@ -1,7 +1,9 @@
+import asyncio
 import time
 from collections.abc import Awaitable, Callable, Mapping
 from types import MappingProxyType
 from typing import Final
+from unittest.mock import AsyncMock, MagicMock
 from urllib.parse import parse_qs, urlparse
 
 import httpx
@@ -11,6 +13,7 @@ import respx
 from pydantic import ValidationError
 
 import litellm
+from litellm.constants import JITTER
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.types.llms.openai import OpenAIFileObject
 
@@ -436,9 +439,13 @@ async def test_a_rate_limited_file_upload_waits_the_providers_retry_after_before
             _created_file(),
         ]
     )
-    started: Final = time.monotonic()
+    sync_sleep: Final = MagicMock()
+    async_sleep: Final = AsyncMock()
+    monkeypatch.setattr(time, "sleep", sync_sleep)
+    monkeypatch.setattr(asyncio, "sleep", async_sleep)
 
     await _create_file(sync_mode, _upload("openai", api_base))
 
+    waits: Final = tuple(call.args[0] for call in (*sync_sleep.call_args_list, *async_sleep.call_args_list))
     assert upload_route.call_count == 2
-    assert time.monotonic() - started >= 2
+    assert any(2 <= wait <= 2 + JITTER for wait in waits), waits
