@@ -7499,6 +7499,16 @@ def test_codellama_prompt_format():
     assert llama_2_chat_pt(messages) == expected_prompt
 
 
+def test_llama_2_chat_pt_reopens_bos_on_user_turn_after_assistant():
+    messages = [
+        {"role": "user", "content": "hi"},
+        {"role": "assistant", "content": "hello"},
+        {"role": "user", "content": "again"},
+    ]
+    expected_prompt = "<s>[INST] hi [/INST]\nhello\n</s><s>[INST] again [/INST]\n"
+    assert llama_2_chat_pt(messages) == expected_prompt
+
+
 def test_claude_2_1_pt_formatting():
 
     messages = [{"role": "user", "content": "Hello"}]

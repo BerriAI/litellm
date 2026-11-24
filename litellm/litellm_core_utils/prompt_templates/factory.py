@@ -6970,7 +6970,7 @@ def custom_prompt(
     for message in messages:
         role = message["role"]
 
-        if role in ["system", "human"] and not bos_open:
+        if role in ["system", "user", "human"] and not bos_open:
             prompt += bos_token
             bos_open = True
 
