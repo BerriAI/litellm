@@ -5160,15 +5160,14 @@ def test_strip_advisor_blocks_stays_quiet_when_drop_params_drops_nothing(
 
 
 @pytest.mark.parametrize("drop_params", [None, True], ids=["without-drop-params", "drop-params"])
-def test_strip_advisor_blocks_returns_a_message_without_advisor_blocks_as_the_same_object(drop_params: object) -> None:
-    messages: Final = [
-        {"role": "user", "content": "hi"},
-        {"role": "assistant", "content": [_OK_TEXT, {"type": "tool_use", "id": "toolu_1", "name": "f", "input": {}}]},
-    ]
+@pytest.mark.parametrize("block_type", [["server_tool_use"], {"type": "advisor_tool_result"}], ids=["list", "object"])
+def test_strip_advisor_blocks_leaves_a_block_with_a_non_string_type_for_the_provider_to_judge(
+    block_type: object, drop_params: object
+) -> None:
+    messages: Final = [{"role": "assistant", "content": [{"type": block_type, "id": "srvtoolu_1"}, _OK_TEXT]}]
+    sent: Final = copy.deepcopy(messages)
 
-    stripped: Final = strip_advisor_blocks_from_messages(messages, drop_params=drop_params)
-
-    assert [message is sent for message, sent in zip(stripped, messages, strict=True)] == [True, True]
+    assert strip_advisor_blocks_from_messages(messages, drop_params=drop_params) == sent
 
 
 def test_a_stale_tool_search_is_left_out_beside_blocks_with_list_ids() -> None:
