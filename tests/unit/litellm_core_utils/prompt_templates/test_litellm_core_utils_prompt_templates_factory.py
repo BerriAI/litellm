@@ -3415,6 +3415,13 @@ _ZIP_ONLY: Final = {"type": "object", "properties": {"zip": {"type": "string"}},
             "required": ["ship"],
             "$defs": {"Ship": {**_SHIP_TO, "$defs": {"Address": _ZIP_ONLY}}, "Address": _ADDRESS_SCHEMA},
         },
+        {"$ref": "/$defs/Ship", "$defs": {"Ship": _SHIP_TO, "Address": _ADDRESS_SCHEMA}},
+        {
+            "type": "object",
+            "properties": {"to": {"$ref": "/$defs/Address"}},
+            "required": ["to"],
+            "$defs": {"Address": _ADDRESS_SCHEMA},
+        },
     ],
     ids=[
         "root_ref_into_definitions_beside_defs",
@@ -3426,6 +3433,8 @@ _ZIP_ONLY: Final = {"type": "object", "properties": {"zip": {"type": "string"}},
         "ref_under_dependencies",
         "property_defs_shadowing_a_root_name",
         "defs_entry_shadowing_a_root_name",
+        "root_ref_without_a_leading_hash",
+        "property_ref_without_a_leading_hash",
     ],
 )
 def test_bedrock_tools_pt_sends_claude_a_schema_that_means_what_full_inlining_does(

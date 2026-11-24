@@ -118,7 +118,7 @@ def _referenced_def_names(ref: object) -> frozenset[str] | None:
 
 def ref_points_into_defs(ref: str, defs: Mapping[str, object]) -> bool:
     names: Final = _referenced_def_names(ref)
-    return names is not None and any(name in defs for name in names)
+    return ref.startswith("#") and names is not None and any(name in defs for name in names)
 
 
 def _def_names_a_ref_may_reach(ref: object) -> frozenset[str] | None:
