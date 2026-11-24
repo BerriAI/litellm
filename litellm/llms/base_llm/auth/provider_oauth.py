@@ -14,7 +14,6 @@ from typing_extensions import assert_never
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.exceptions import AuthenticationError
 from litellm.llms.base_llm.auth.token_exchange import (
-    FALLBACK_TOKEN_TTL_SECONDS,
     MAX_RESPONSE_BYTES,
     InsecureTokenUrl,
     validate_token_endpoint_url,
@@ -171,7 +170,9 @@ def provider_oauth_token(
             return cached
         started: Final = monotonic()
         token: Final = _require_token(_fetch_token(token_url, client_id, client_secret, scope), provider, model)
-        lifetime: Final = token.expires_in if token.expires_in is not None else FALLBACK_TOKEN_TTL_SECONDS
+        lifetime: Final = token.expires_in
+        if lifetime is None:
+            return token.access_token
         remaining: Final = lifetime - (monotonic() - started)
         ttl: Final = remaining - min(30.0, lifetime * 0.1)
         if ttl > 0:

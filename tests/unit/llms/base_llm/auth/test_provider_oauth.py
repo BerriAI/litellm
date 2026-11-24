@@ -106,20 +106,29 @@ def test_oauth_stops_reading_an_oversized_token_response() -> None:
 
 
 @pytest.mark.parametrize("provider", ("openai", "custom_openai"))
-@pytest.mark.parametrize("expires_in", (30, None), ids=("issuer-expiry", "fallback-expiry"))
+@pytest.mark.parametrize("expires_in", (30, None), ids=("issuer-expiry", "omitted-expiry"))
 def test_openai_compatible_completion_sends_refreshed_bearer(
     provider: str, expires_in: int | None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     clock: Final = FakeClock(start=0.0)
     expiry_field: Final = {} if expires_in is None else {"expires_in": expires_in}
-    after_expiry: Final = 61.0 if expires_in is None else 31.0
+    expected_tokens: Final = (
+        ("first-token", "second-token", "third-token")
+        if expires_in is None
+        else (
+            "first-token",
+            "first-token",
+            "second-token",
+        )
+    )
     monkeypatch.setattr(provider_oauth, "monotonic", clock)
     monkeypatch.setattr(provider_oauth, "_TOKENS", InMemoryCache(clock=clock))
     with respx.mock as upstream:
         token_route: Final = upstream.post(_TOKEN_URL).mock(
             side_effect=(
                 httpx.Response(200, json={"access_token": "first-token", **expiry_field}),
-                httpx.Response(200, json={"access_token": "fresh-token", **expiry_field}),
+                httpx.Response(200, json={"access_token": "second-token", **expiry_field}),
+                httpx.Response(200, json={"access_token": "third-token", **expiry_field}),
             ),
         )
         inference: Final = upstream.post(f"{_PROVIDER_URL}/chat/completions").mock(
@@ -136,7 +145,7 @@ def test_openai_compatible_completion_sends_refreshed_bearer(
                 },
             )
         )
-        for elapsed in (0.0, 5.0, after_expiry - 5.0):
+        for elapsed in (0.0, 16.0, 15.0):
             clock.advance(elapsed)
             litellm.completion(
                 model=f"{provider}/gpt-6-luna",
@@ -147,11 +156,9 @@ def test_openai_compatible_completion_sends_refreshed_bearer(
                 **_PARAMS,
             )
 
-    assert token_route.call_count == 2
+    assert token_route.call_count == len(set(expected_tokens))
     assert [call.request.headers.get("authorization") for call in inference.calls] == [
-        "Bearer first-token",
-        "Bearer first-token",
-        "Bearer fresh-token",
+        f"Bearer {token}" for token in expected_tokens
     ]
     assert [call.request.headers.get("x-api-key") for call in inference.calls] == [None, None, None]
 
