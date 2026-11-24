@@ -586,27 +586,34 @@ NEWS_QUESTION = [{"role": "user", "content": "What's the latest AI news?"}]
 
 
 @pytest.mark.asyncio
-async def test_anthropic_chat_turn_capped_above_the_default_ends_with_the_model_answer(
-    monkeypatch, anthropic_model, perplexity_search
+@pytest.mark.parametrize(
+    ("feature_max_loops", "deployment_max_loops", "searches"),
+    [(None, 4, 4), (4, None, 3), (1, None, 3)],
+    ids=["deployment cap above the default", "feature cap above the default", "feature cap below the default"],
+)
+async def test_anthropic_chat_turn_stops_at_the_deployment_cap_with_the_model_answer(
+    feature_max_loops, deployment_max_loops, searches, monkeypatch, anthropic_model, perplexity_search
 ):
-    """The callback's own ceiling, set above the default of 3, is the one the loop stops at."""
     monkeypatch.setattr(
-        litellm, "callbacks", [WebSearchInterceptionLogger(enabled_providers=["anthropic"], max_agentic_loops=4)]
+        litellm,
+        "callbacks",
+        [WebSearchInterceptionLogger(enabled_providers=["anthropic"], max_agentic_loops=feature_max_loops)],
     )
 
     response = await litellm.acompletion(
         model="anthropic/claude-sonnet-5-5",
         messages=NEWS_QUESTION,
         tools=[get_litellm_web_search_tool_openai(), WEATHER_FUNCTION_TOOL],
+        max_agentic_loops=deployment_max_loops,
     )
 
     assert response.choices[0].message.content == FINAL_ANSWER
     assert not response.choices[0].message.tool_calls
     assert [offered_tool_names(body) for body in request_bodies(anthropic_model)] == [
-        *[[SEARCH_TOOL_NAME, "get_weather"]] * 5,
+        *[[SEARCH_TOOL_NAME, "get_weather"]] * (searches + 1),
         ["get_weather"],
     ]
-    assert perplexity_search.call_count == 4
+    assert perplexity_search.call_count == searches
 
 
 @pytest.mark.asyncio
@@ -615,10 +622,11 @@ async def test_anthropic_chat_last_follow_up_blocks_tool_calls_when_search_was_t
 ):
     """Claude can call a tool it saw earlier in the history even when the request offers none, so the call is blocked."""
     monkeypatch.setattr(
-        litellm, "callbacks", [WebSearchInterceptionLogger(enabled_providers=["anthropic"], max_agentic_loops=1)]
+        litellm, "callbacks", [WebSearchInterceptionLogger(enabled_providers=["anthropic"])]
     )
 
     response = await litellm.acompletion(
+        max_agentic_loops=1,
         model="anthropic/claude-sonnet-5-5",
         messages=NEWS_QUESTION,
         tools=[get_litellm_web_search_tool_openai()],
@@ -636,10 +644,11 @@ async def test_openai_chat_turn_at_the_cap_ends_with_the_model_answer(
 ):
     """reasoning_effort none keeps the request on /v1/chat/completions, where the loop runs inside the OpenAI handler."""
     monkeypatch.setattr(
-        litellm, "callbacks", [WebSearchInterceptionLogger(enabled_providers=["openai"], max_agentic_loops=2)]
+        litellm, "callbacks", [WebSearchInterceptionLogger(enabled_providers=["openai"])]
     )
 
     response = await litellm.acompletion(
+        max_agentic_loops=2,
         model="openai/gpt-5.6",
         messages=NEWS_QUESTION,
         tools=[get_litellm_web_search_tool_openai(), WEATHER_FUNCTION_TOOL],
@@ -660,10 +669,11 @@ async def test_openai_chat_bridged_to_responses_at_the_cap_ends_with_the_model_a
     monkeypatch, openai_responses_model, perplexity_search
 ):
     monkeypatch.setattr(
-        litellm, "callbacks", [WebSearchInterceptionLogger(enabled_providers=["openai"], max_agentic_loops=2)]
+        litellm, "callbacks", [WebSearchInterceptionLogger(enabled_providers=["openai"])]
     )
 
     response = await litellm.acompletion(
+        max_agentic_loops=2,
         model="openai/gpt-5.6",
         messages=NEWS_QUESTION,
         tools=[get_litellm_web_search_tool_openai(), WEATHER_FUNCTION_TOOL],
@@ -683,10 +693,11 @@ async def test_openai_chat_last_follow_up_sends_no_tools_when_search_was_the_onl
     monkeypatch, openai_chat_model, perplexity_search
 ):
     monkeypatch.setattr(
-        litellm, "callbacks", [WebSearchInterceptionLogger(enabled_providers=["openai"], max_agentic_loops=1)]
+        litellm, "callbacks", [WebSearchInterceptionLogger(enabled_providers=["openai"])]
     )
 
     response = await litellm.acompletion(
+        max_agentic_loops=1,
         model="openai/gpt-5.6",
         messages=NEWS_QUESTION,
         tools=[get_litellm_web_search_tool_openai()],

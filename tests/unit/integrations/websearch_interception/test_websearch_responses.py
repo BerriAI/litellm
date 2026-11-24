@@ -511,12 +511,18 @@ def _output_text(response) -> list[str]:
 
 
 @pytest.mark.asyncio
-async def test_responses_turn_capped_above_the_default_ends_with_the_model_answer(
-    monkeypatch, openai_responses_model, perplexity_search
+@pytest.mark.parametrize(
+    ("feature_max_loops", "deployment_max_loops", "searches"),
+    [(None, 4, 4), (4, None, 3), (1, None, 3)],
+    ids=["deployment cap above the default", "feature cap above the default", "feature cap below the default"],
+)
+async def test_responses_turn_stops_at_the_deployment_cap_with_the_model_answer(
+    feature_max_loops, deployment_max_loops, searches, monkeypatch, openai_responses_model, perplexity_search
 ):
-    """The callback's own ceiling, set above the default of 3, is the one the loop stops at."""
     monkeypatch.setattr(
-        litellm, "callbacks", [WebSearchInterceptionLogger(enabled_providers=["openai"], max_agentic_loops=4)]
+        litellm,
+        "callbacks",
+        [WebSearchInterceptionLogger(enabled_providers=["openai"], max_agentic_loops=feature_max_loops)],
     )
 
     response = await litellm.aresponses(
@@ -525,16 +531,17 @@ async def test_responses_turn_capped_above_the_default_ends_with_the_model_answe
         tools=[get_litellm_web_search_tool_responses(), WEATHER_RESPONSES_TOOL],
         tool_choice="auto",
         api_key="test-openai-key-capped-responses",
+        max_agentic_loops=deployment_max_loops,
     )
 
     bodies = request_bodies(openai_responses_model)
     assert _output_text(response) == [FINAL_ANSWER]
     assert [offered_tool_names(body) for body in bodies] == [
-        *[["litellm_web_search", "get_weather"]] * 5,
+        *[["litellm_web_search", "get_weather"]] * (searches + 1),
         ["get_weather"],
     ]
-    assert [body.get("tool_choice") for body in bodies] == ["auto"] * 6
-    assert perplexity_search.call_count == 4
+    assert [body.get("tool_choice") for body in bodies] == ["auto"] * (searches + 2)
+    assert perplexity_search.call_count == searches
 
 
 @pytest.mark.asyncio
@@ -542,10 +549,11 @@ async def test_responses_last_follow_up_blocks_tool_calls_when_search_was_the_on
     monkeypatch, openai_responses_model, perplexity_search
 ):
     monkeypatch.setattr(
-        litellm, "callbacks", [WebSearchInterceptionLogger(enabled_providers=["openai"], max_agentic_loops=1)]
+        litellm, "callbacks", [WebSearchInterceptionLogger(enabled_providers=["openai"])]
     )
 
     response = await litellm.aresponses(
+        max_agentic_loops=1,
         model="openai/gpt-5.6",
         input="What's the latest AI news?",
         tools=[get_litellm_web_search_tool_responses()],
@@ -580,10 +588,11 @@ async def test_responses_last_follow_up_keeps_the_allowed_tools_limit(
     allowed_client_tools, last_call_tools, last_call_tool_choice, monkeypatch, openai_responses_model, perplexity_search
 ):
     monkeypatch.setattr(
-        litellm, "callbacks", [WebSearchInterceptionLogger(enabled_providers=["openai"], max_agentic_loops=1)]
+        litellm, "callbacks", [WebSearchInterceptionLogger(enabled_providers=["openai"])]
     )
 
     response = await litellm.aresponses(
+        max_agentic_loops=1,
         model="openai/gpt-5.6",
         input="What's the latest AI news?",
         tools=[

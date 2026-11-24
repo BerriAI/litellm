@@ -214,8 +214,7 @@ reading the first set of results. `max_agentic_loops` caps how many rounds of se
 defaults to 3. A round runs every search the model asked for in one response, so one round can run more than one
 search. LiteLLM also breaks the loop early when the model asks for the exact same tool call twice in a row.
 
-Set the ceiling on the feature, which the interceptor applies on `/v1/messages`, `/v1/chat/completions` and
-`/v1/responses`:
+Set the ceiling on the feature, which the interceptor applies to `/v1/messages` requests:
 
 ```yaml
 litellm_settings:
@@ -224,7 +223,8 @@ litellm_settings:
     max_agentic_loops: 5
 ```
 
-Or per deployment, which wins over the feature-level setting:
+Or per deployment, which wins over the feature-level setting and is the only one `/v1/chat/completions` and
+`/v1/responses` read:
 
 ```yaml
 model_list:
