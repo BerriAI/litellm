@@ -96,7 +96,7 @@ def redact_message_input_output_from_custom_logger(
 
 
 def redacted_model_call_details_for_custom_logger(
-    model_call_details: dict, custom_logger: CustomLogger
+    model_call_details: dict[str, object], custom_logger: CustomLogger
 ) -> dict[str, object]:
     """
     Returns a copy of model_call_details with the request messages, instructions and streaming responses
