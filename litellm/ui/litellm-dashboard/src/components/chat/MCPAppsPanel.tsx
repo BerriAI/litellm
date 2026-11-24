@@ -194,7 +194,10 @@ const MCPAppsPanel: React.FC<Props> = ({
     () => new Set([...oauthConnected].filter((id) => !oauthRejected.has(id))),
     [oauthConnected, oauthRejected],
   );
+  const requestClock = useRef(0);
+  const signedInAt = useRef(new Map<string, number>());
   const markSignedIn = useCallback((serverId: string) => {
+    signedInAt.current.set(serverId, ++requestClock.current);
     setOauthConnected((prev) => new Set(prev).add(serverId));
     setOauthRejected((prev) => {
       const next = new Set(prev);
@@ -245,21 +248,29 @@ const MCPAppsPanel: React.FC<Props> = ({
     onSuccess: useCallback(() => markSignedIn(returningServerId), [markSignedIn, returningServerId]),
   });
 
+  const rejectIfUnauthorized = useCallback(
+    (server: MCPServer, toolsData: { status?: number } | undefined, startedAt: number) => {
+      if (toolsData?.status !== 401 || getMcpOAuthMode(server) !== "authorization_code") return;
+      if (startedAt < (signedInAt.current.get(server.server_id) ?? 0)) return;
+      setOauthRejected((prev) => new Set(prev).add(server.server_id));
+    },
+    [],
+  );
+
   const fetchToolCount = useCallback(
     async (server: MCPServer, isCurrentLoad: () => boolean) => {
+      const startedAt = ++requestClock.current;
       try {
         const toolsData = await listMCPTools(accessToken, server.server_id);
         if (!isCurrentLoad()) return;
-        if (toolsData?.status === 401 && getMcpOAuthMode(server) === "authorization_code") {
-          setOauthRejected((prev) => new Set(prev).add(server.server_id));
-        }
+        rejectIfUnauthorized(server, toolsData, startedAt);
         const tools: MCPTool[] = Array.isArray(toolsData?.tools) ? toolsData.tools : [];
         setToolCounts((prev) => ({ ...prev, [nameOf(server)]: tools.length }));
       } catch {
         // ignore
       }
     },
-    [accessToken],
+    [accessToken, rejectIfUnauthorized],
   );
 
   const checkOauthCredential = useCallback(
@@ -456,7 +467,12 @@ const MCPAppsPanel: React.FC<Props> = ({
 
   const { data: detailToolsResult, isLoading: loadingTools } = useQuery({
     queryKey: ["mcp-apps-panel-detail-tools", detailServer?.server_id],
-    queryFn: () => listMCPTools(accessToken, detailServer!.server_id),
+    queryFn: async () => {
+      const startedAt = ++requestClock.current;
+      const toolsData = await listMCPTools(accessToken, detailServer!.server_id);
+      rejectIfUnauthorized(detailServer!, toolsData, startedAt);
+      return toolsData;
+    },
     enabled: !!detailServer,
   });
   const detailTools: MCPTool[] = Array.isArray(detailToolsResult?.tools) ? detailToolsResult.tools : [];
