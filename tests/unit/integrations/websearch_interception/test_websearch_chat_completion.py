@@ -592,7 +592,12 @@ NEWS_QUESTION = [{"role": "user", "content": "What's the latest AI news?"}]
     ids=["deployment cap above the default", "feature cap above the default", "feature cap below the default"],
 )
 async def test_anthropic_chat_turn_stops_at_the_deployment_cap_with_the_model_answer(
-    feature_max_loops, deployment_max_loops, searches, monkeypatch, anthropic_model, perplexity_search
+    feature_max_loops: int | None,
+    deployment_max_loops: int | None,
+    searches: int,
+    monkeypatch: pytest.MonkeyPatch,
+    anthropic_model: respx.Route,
+    perplexity_search: respx.Route,
 ):
     monkeypatch.setattr(
         litellm,

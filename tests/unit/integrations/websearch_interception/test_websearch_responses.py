@@ -12,6 +12,7 @@ from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+import respx
 
 import litellm
 
@@ -517,7 +518,12 @@ def _output_text(response) -> list[str]:
     ids=["deployment cap above the default", "feature cap above the default", "feature cap below the default"],
 )
 async def test_responses_turn_stops_at_the_deployment_cap_with_the_model_answer(
-    feature_max_loops, deployment_max_loops, searches, monkeypatch, openai_responses_model, perplexity_search
+    feature_max_loops: int | None,
+    deployment_max_loops: int | None,
+    searches: int,
+    monkeypatch: pytest.MonkeyPatch,
+    openai_responses_model: respx.Route,
+    perplexity_search: respx.Route,
 ):
     monkeypatch.setattr(
         litellm,
