@@ -100,6 +100,8 @@ def get_modified_max_tokens(
     user_max_tokens: int | None,
     buffer_perc: float | None,
     buffer_num: float | None,
+    api_base: str | None = None,
+    api_key: str | None = None,
 ) -> int | None:
     """
     Params:
@@ -112,14 +114,15 @@ def get_modified_max_tokens(
         if user_max_tokens is None:
             return None
 
-        ## MODEL INFO
-        _model_info: Final = litellm.get_model_info(model=model)
+        from litellm.utils import get_model_info_for_call
 
         max_output_tokens: Final = litellm.get_max_tokens(model=base_model)  # assume min context window is 4k tokens
 
         ## UNKNOWN MAX OUTPUT TOKENS - return user defined amount
         if max_output_tokens is None:
             return user_max_tokens
+
+        _model_info: Final = get_model_info_for_call(model, None, api_base, api_key)
 
         input_tokens = litellm.token_counter(model=base_model, messages=messages)
 

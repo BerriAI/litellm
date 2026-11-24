@@ -893,6 +893,23 @@ def test_pre_call_tolerates_missing_api_base(logging_obj):
     assert logging_obj.model_call_details["litellm_params"]["api_base"] == ""
 
 
+def test_pre_call_without_a_model_still_logs_the_call() -> None:
+    files_api_logging_obj: Final = LitellmLogging(
+        model=cast(str, None),
+        messages=[],
+        stream=False,
+        call_type="adelete_file",
+        start_time=time.time(),
+        litellm_call_id="12345",
+        function_id="1245",
+    )
+    files_api_logging_obj.update_environment_variables(litellm_params={}, optional_params={})
+
+    files_api_logging_obj.pre_call(input="", api_key="call-key", additional_args={"api_base": None, "headers": {}})
+
+    assert files_api_logging_obj.model_call_details["log_event_type"] == "pre_api_call"
+
+
 _Callback: TypeAlias = str | Callable[..., object] | CustomLogger
 
 _GLOBAL_CALLBACK_LISTS: Final = (
