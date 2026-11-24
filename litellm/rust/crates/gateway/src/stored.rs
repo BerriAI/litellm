@@ -1,8 +1,12 @@
 //! The config the proxy stores in its database, read once at boot and layered into the config file
 //! the way the Python proxy layers it when `store_model_in_db` is on: the `LiteLLM_Config` settings
-//! rows under the file, then the `LiteLLM_ProxyModelTable` rows added to its models with the
-//! `LiteLLM_CredentialsTable` credentials filled in, all before any `os.environ/` reference is
-//! read.
+//! rows under the file before any `os.environ/` reference is read, then the
+//! `LiteLLM_ProxyModelTable` rows added to its models with the `LiteLLM_CredentialsTable`
+//! credentials filled in, each row reading only the references Python reads in it.
+//!
+//! The runtime flags the admin UI saves in `LiteLLM_UISettings` are layered under the file whenever
+//! the gateway has a database, `store_model_in_db` or not, since the proxy syncs them at startup
+//! whenever it has one (`sync_ui_settings_to_general_settings`).
 //!
 //! Every stored string is decrypted the way Python decrypts it before it is layered in: each
 //! top-level string of a model's `litellm_params` (`_resolve_db_litellm_param`), each credential
@@ -21,7 +25,7 @@ use litellm_config::{
     Config, Object, Value,
     db::{
         models::{DbCredential, DbModel, MissingCredential},
-        settings::{Section, SettingsRows},
+        settings::{Section, SettingsRows, UiSettings},
         switches::{DbObject, store_model_in_db},
     },
 };
@@ -30,7 +34,7 @@ use litellm_env::Lookup;
 use litellm_error::Report;
 use litellm_repositories::{
     ConfigParam, ConfigRepository, Credential, CredentialRepository, Database, ProxyModel,
-    ProxyModelRepository, RawJson,
+    ProxyModelRepository, RawJson, UiSettingsRepository,
 };
 use litellm_secret_value::SecretValue;
 use litellm_secrets::SecretResolver;
@@ -73,6 +77,7 @@ pub(crate) trait StoredRows {
     async fn settings(&self) -> Result<Vec<ConfigParam>, litellm_db::Error>;
     async fn models(&self) -> Result<Vec<ProxyModel>, litellm_db::Error>;
     async fn credentials(&self) -> Result<Vec<Credential>, litellm_db::Error>;
+    async fn ui_settings(&self) -> Result<Option<RawJson>, litellm_db::Error>;
 }
 
 impl StoredRows for Database {
@@ -92,6 +97,10 @@ impl StoredRows for Database {
 
     async fn credentials(&self) -> Result<Vec<Credential>, litellm_db::Error> {
         CredentialRepository::new(self.clone()).all().await
+    }
+
+    async fn ui_settings(&self) -> Result<Option<RawJson>, litellm_db::Error> {
+        UiSettingsRepository::new(self.clone()).find().await
     }
 }
 
@@ -123,9 +132,11 @@ pub(crate) async fn load(
     Ok(loaded)
 }
 
-/// `document` with the config stored in `rows` layered in, or `file`, the same document resolved
-/// alone, when `store_model_in_db` is off or the rows cannot be read. `environment` is the file's
-/// `environment_variables` in front of the process environment.
+/// `document` with the config stored in `rows` layered in. When `store_model_in_db` is off only
+/// the UI settings are, and when there are none it is `file`, the same document resolved alone.
+/// A UI settings row that cannot be read leaves every request to Python, since one of its flags
+/// may change how the proxy answers. `environment` is the file's `environment_variables` in front
+/// of the process environment.
 pub(crate) async fn layered(
     document: Document,
     file: Config,
@@ -135,8 +146,21 @@ pub(crate) async fn layered(
 ) -> Loaded {
     let switched_on = file.general_settings.store_model_in_db;
     let key = salt_key(environment, &file);
+    let ui_settings = match rows.ui_settings().await {
+        Ok(column) => column.map(|column| UiSettings::from_json(column.get())),
+        Err(error) => {
+            tracing::warn!(
+                error = %Report::new(&error),
+                "could not read the UI settings the proxy stores in its database"
+            );
+            return without_stored(file, true);
+        }
+    };
     let settings = match rows.settings().await {
-        Ok(found) => settings_rows(&found, key.as_ref()),
+        Ok(found) => SettingsRows {
+            ui_settings: ui_settings.clone().unwrap_or_default(),
+            ..settings_rows(&found, key.as_ref())
+        },
         Err(error) => {
             let on = store_model_in_db(switched_on, environment, &SettingsRows::default());
             tracing::warn!(
@@ -144,11 +168,14 @@ pub(crate) async fn layered(
                 store_model_in_db = on,
                 "could not read the settings the proxy stores in its database"
             );
-            return without_stored(file, on);
+            if on {
+                return without_stored(file, true);
+            }
+            return with_ui_settings(document, file, ui_settings, secrets).await;
         }
     };
     if !store_model_in_db(switched_on, environment, &settings) {
-        return without_stored(file, false);
+        return with_ui_settings(document, file, ui_settings, secrets).await;
     }
     match stored(document, &settings, rows, key.as_ref(), secrets).await {
         Ok(config) => Loaded {
@@ -165,7 +192,38 @@ pub(crate) async fn layered(
     }
 }
 
-/// `file` alone, which leaves every request to Python when `store_model_in_db` is `on`.
+/// `document` with only the UI settings layered in, for a proxy that reads no other stored
+/// config, or `file` when the UI never saved settings.
+async fn with_ui_settings(
+    document: Document,
+    file: Config,
+    ui_settings: Option<UiSettings>,
+    secrets: &impl Fn() -> SecretResolver,
+) -> Loaded {
+    let Some(ui_settings) = ui_settings else {
+        return without_stored(file, false);
+    };
+    let rows = SettingsRows {
+        ui_settings,
+        ..SettingsRows::default()
+    };
+    let (document, _) = document.overlay(&rows);
+    match document.resolve(secrets()).await {
+        Ok(config) => Loaded {
+            config,
+            stored: StoredConfig::Unused,
+        },
+        Err(error) => {
+            tracing::warn!(
+                error = %Report::new(&error),
+                "the config with the stored UI settings layered in does not load, so python answers every request"
+            );
+            without_stored(file, true)
+        }
+    }
+}
+
+/// `file` alone, which leaves every request to Python when `on`.
 fn without_stored(file: Config, on: bool) -> Loaded {
     Loaded {
         config: file,
@@ -273,8 +331,9 @@ async fn merged(
     credentials: impl IntoIterator<Item = DbCredential>,
     secrets: &impl Fn() -> SecretResolver,
 ) -> Result<(Config, Box<[MissingCredential]>), litellm_config_load::Error> {
-    let (document, missing) = document.merge(models, credentials)?;
-    Ok((document.resolve(secrets()).await?, missing))
+    document
+        .resolve_with_stored(secrets(), models, credentials)
+        .await
 }
 
 /// `get_salt_key`: `LITELLM_SALT_KEY`, else the master key the proxy runs with, which is the
@@ -334,6 +393,7 @@ fn settings_rows(rows: &[ConfigParam], key: Option<&AtRestKey>) -> SettingsRows 
                 _ => None,
             })
             .collect(),
+        ui_settings: UiSettings::default(),
     }
 }
 
@@ -396,11 +456,12 @@ mod tests {
     type Variables = &'static [(&'static str, &'static str)];
 
     /// What each read of the stored config returns, `None` for a read that fails.
-    #[derive(Default)]
     struct Rows {
         settings: Option<Vec<ConfigParam>>,
         models: Option<Vec<ProxyModel>>,
         credentials: Option<Vec<Credential>>,
+        /// The UI settings column, `Err(())` for a read that fails.
+        ui_settings: Result<Option<&'static str>, ()>,
     }
 
     fn read<T: Clone>(rows: &Option<Vec<T>>) -> Result<Vec<T>, litellm_db::Error> {
@@ -418,6 +479,23 @@ mod tests {
 
         async fn credentials(&self) -> Result<Vec<Credential>, litellm_db::Error> {
             read(&self.credentials)
+        }
+
+        async fn ui_settings(&self) -> Result<Option<RawJson>, litellm_db::Error> {
+            self.ui_settings
+                .map(|column| column.map(json))
+                .map_err(|()| litellm_db::Error::TransactionTimedOut)
+        }
+    }
+
+    impl Default for Rows {
+        fn default() -> Self {
+            Self {
+                settings: None,
+                models: None,
+                credentials: None,
+                ui_settings: Ok(None),
+            }
         }
     }
 
@@ -526,6 +604,7 @@ mod tests {
             ),
             models: models.then(|| vec![model("stored", STORED)]),
             credentials: credentials.then(Vec::new),
+            ui_settings: Ok(None),
         }
     }
 
@@ -633,6 +712,7 @@ mod tests {
                     encrypted(MASTER_KEY, "from-credential")
                 ),
             )]),
+            ui_settings: Ok(None),
         };
         let file = format!("model_list: []\ngeneral_settings:\n  master_key: {MASTER_KEY}\n");
 
@@ -665,6 +745,88 @@ mod tests {
         assert_eq!(
             served(&loaded),
             (StoredConfig::Loaded, vec!["file", "stored"])
+        );
+    }
+
+    const FORWARD_HEADERS: &str = r#"{"forward_client_headers_to_llm_api": true}"#;
+
+    #[rstest]
+    #[case::store_model_in_db_on(
+        &format!("{FILE}{ON}"),
+        Ok(Some(FORWARD_HEADERS)),
+        StoredConfig::Loaded,
+        Some(true)
+    )]
+    #[case::store_model_in_db_off(
+        FILE,
+        Ok(Some(FORWARD_HEADERS)),
+        StoredConfig::Unused,
+        Some(true)
+    )]
+    #[case::saved_as_json_text(
+        FILE,
+        Ok(Some(r#""{\"forward_client_headers_to_llm_api\": true}""#)),
+        StoredConfig::Unused,
+        Some(true)
+    )]
+    #[case::the_file_wins(
+        "general_settings:\n  forward_client_headers_to_llm_api: false\n",
+        Ok(Some(FORWARD_HEADERS)),
+        StoredConfig::Unused,
+        Some(false)
+    )]
+    #[case::no_row(FILE, Ok(None), StoredConfig::Unused, None)]
+    #[case::unreadable(FILE, Err(()), StoredConfig::Unread, None)]
+    #[tokio::test]
+    async fn the_ui_settings_flags_are_layered_under_the_file(
+        #[case] yaml: &str,
+        #[case] ui_settings: Result<Option<&'static str>, ()>,
+        #[case] stored: StoredConfig,
+        #[case] forward: Option<bool>,
+    ) {
+        let rows = Rows {
+            ui_settings,
+            ..rows_with(None, true, true)
+        };
+
+        let loaded = layered_over(yaml, &rows, &[]).await;
+
+        assert_eq!(
+            (
+                loaded.stored,
+                loaded
+                    .config
+                    .general_settings
+                    .forward_client_headers_to_llm_api
+            ),
+            (stored, forward)
+        );
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn a_ui_settings_flag_python_honors_sends_requests_to_python() {
+        let rows = Rows {
+            ui_settings: Ok(Some(FORWARD_HEADERS)),
+            ..rows_with(None, true, true)
+        };
+        let loaded = layered_over(FILE, &rows, &[]).await;
+        let admit = std::sync::Arc::new(crate::admit::Admit::over(&loaded.config, vec![]));
+        let request = axum::extract::Request::builder()
+            .method("POST")
+            .uri("/v1/messages")
+            .body(axum::body::Body::from(r#"{"model": "file"}"#))
+            .unwrap();
+
+        let refused = admit
+            .admit(request)
+            .await
+            .err()
+            .map(|(_, reason)| reason.over);
+
+        assert_eq!(
+            refused.as_deref(),
+            Some("general_settings.forward_client_headers_to_llm_api")
         );
     }
 }

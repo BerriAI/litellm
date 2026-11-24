@@ -1,8 +1,10 @@
 //! The config file as one document, with the config the proxy stores in its database layered in
-//! before any `os.environ/` reference is read, which is the order `ProxyConfig.get_config` and
-//! `add_deployment` leave the Python proxy's config in.
+//! the way `ProxyConfig.get_config` and `add_deployment` leave the Python proxy's config. The
+//! stored settings rows go under the file before its `os.environ/` references are read. The stored
+//! models go in after, each reading a reference only where `_resolve_db_litellm_param` does, so
+//! `os.environ/` text a stored row holds anywhere else stays text.
 
-use std::path::Path;
+use std::{path::Path, sync::Arc};
 
 use litellm_config::{
     Config, Value,
@@ -12,6 +14,7 @@ use litellm_config::{
         switches::SupportedDbObjects,
     },
 };
+use litellm_env::Lookup;
 use litellm_secrets::SecretResolver;
 
 use crate::{ConfigEnvironment, Error, environ, environment_values, includes};
@@ -32,10 +35,33 @@ impl Document {
     /// variable.
     pub async fn resolve(self, secrets: SecretResolver) -> Result<Config, Error> {
         let process = secrets.environment();
-        let config = Config::from_value(environ::resolve(self.0, secrets).await?)?;
-        let environment =
-            ConfigEnvironment::new(environment_values(&config.environment_variables)?, process);
-        Ok(config.with_environment(&environment))
+        let (document, _) = environ::resolve(self.0, secrets).await?;
+        typed(document, process)
+    }
+
+    /// [`Self::resolve`] with `models` added to the model list and every model's named credential
+    /// filled in, and the credential names neither source holds. A stored model reads only its
+    /// top-level `litellm_params` references, through the same layered environment as the file,
+    /// and stored credential values stay as stored, as in Python.
+    pub async fn resolve_with_stored(
+        self,
+        secrets: SecretResolver,
+        models: impl IntoIterator<Item = DbModel>,
+        credentials: impl IntoIterator<Item = DbCredential>,
+    ) -> Result<(Config, Box<[MissingCredential]>), Error> {
+        let process = secrets.environment();
+        let (document, layered) = environ::resolve(self.0, secrets).await?;
+        let layered = &layered;
+        let mut resolved = Vec::new();
+        for model in models {
+            resolved.push(
+                model
+                    .resolve(|reference| async move { environ::read(&reference, layered).await })
+                    .await?,
+            );
+        }
+        let merged = models::merge(document, resolved, credentials)?;
+        Ok((typed(merged.document, process)?, merged.missing_credentials))
     }
 
     /// The document with the stored settings rows under it, and the stored keys the file
@@ -54,17 +80,15 @@ impl Document {
                 .and_then(|general| general.get("supported_db_objects")),
         )
     }
+}
 
-    /// The document with the stored models added to its `model_list` and every model's named
-    /// credential filled in, and the credential names neither source holds.
-    pub fn merge(
-        self,
-        models: impl IntoIterator<Item = DbModel>,
-        credentials: impl IntoIterator<Item = DbCredential>,
-    ) -> Result<(Self, Box<[MissingCredential]>), Error> {
-        let merged = models::merge(self.0, models, credentials)?;
-        Ok((Self(merged.document), merged.missing_credentials))
-    }
+/// The resolved `document` as the typed config, with its `environment_variables` in front of
+/// `process` under it, so a key the config leaves unset is read from its variable.
+fn typed(document: Value, process: Arc<dyn Lookup + Send + Sync>) -> Result<Config, Error> {
+    let config = Config::from_value(document)?;
+    let environment =
+        ConfigEnvironment::new(environment_values(&config.environment_variables)?, process);
+    Ok(config.with_environment(&environment))
 }
 
 #[cfg(test)]
@@ -127,14 +151,15 @@ mod tests {
             credential_values: object("api_key: credential"),
         };
         let (overlaid, _) = document("model_list: []\n").overlay(&rows);
-        let (merged, missing) = overlaid
-            .merge(
+
+        let (config, missing) = overlaid
+            .resolve_with_stored(
+                secrets,
                 [stored_model(&format!("model: anthropic/claude\n{params}"))],
                 [credential],
             )
+            .await
             .unwrap();
-
-        let config = merged.resolve(secrets).await.unwrap();
 
         assert!(missing.is_empty());
         let key = config.model_list[0]
@@ -143,6 +168,44 @@ mod tests {
             .as_ref()
             .unwrap();
         assert_eq!(key.expose(), api_key);
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn a_stored_model_reads_the_environment_only_in_its_top_level_params(
+        secrets: SecretResolver,
+    ) {
+        let model = DbModel {
+            model_name: "os.environ/PROCESS_KEY".into(),
+            model_info: object("team_public_model_name: os.environ/PROCESS_KEY"),
+            ..stored_model(
+                "{model: anthropic/claude, api_key: os.environ/PROCESS_KEY, litellm_metadata: {nested: os.environ/PROCESS_KEY}}",
+            )
+        };
+
+        let (config, _) = document("model_list: []\n")
+            .resolve_with_stored(secrets, [model], [])
+            .await
+            .unwrap();
+
+        let model = &config.model_list[0];
+        assert_eq!(model.model_name, "os.environ/PROCESS_KEY");
+        assert_eq!(
+            model.model_info.get("team_public_model_name"),
+            Some(&Value::from("os.environ/PROCESS_KEY"))
+        );
+        assert_eq!(
+            model
+                .litellm_params
+                .api_key
+                .as_ref()
+                .map(|key| key.expose()),
+            Some("from-process")
+        );
+        assert_eq!(
+            model.written_params["litellm_metadata"],
+            serde_yaml_ng::from_str::<Value>("{nested: os.environ/PROCESS_KEY}").unwrap()
+        );
     }
 
     #[rstest]
