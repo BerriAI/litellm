@@ -17,6 +17,9 @@ from litellm.types.proxy.guardrails.guardrail_hooks.agent_365 import (
 from litellm.types.proxy.guardrails.guardrail_hooks.akto import (
     AktoConfigModel,
 )
+from litellm.types.proxy.guardrails.guardrail_hooks.beyondguard import (
+    BeyondGuardConfigModel,
+)
 from litellm.types.proxy.guardrails.guardrail_hooks.block_code_execution import (
     BlockCodeExecutionGuardrailConfigModel,
 )
@@ -133,6 +136,7 @@ class SupportedGuardrailIntegrations(Enum):
     ONYX = "onyx"
     PROMPTGUARD = "promptguard"
     XECGUARD = "xecguard"
+    BEYONDGUARD = "beyondguard"
     PROMPT_SECURITY = "prompt_security"
     GENERIC_GUARDRAIL_API = "generic_guardrail_api"
     QUALIFIRE = "qualifire"
@@ -1441,6 +1445,7 @@ class LitellmParams(  # pyright: ignore[reportIncompatibleVariableOverride]  # o
     NomaGuardrailConfigModel,
     PromptGuardConfigModel,
     XecGuardConfigModel,
+    BeyondGuardConfigModel,
     ToolPermissionGuardrailConfigModel,
     ZscalerAIGuardConfigModel,
     AktoConfigModel,
