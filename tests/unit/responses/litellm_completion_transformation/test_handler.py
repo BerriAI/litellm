@@ -12,7 +12,6 @@ capture the forwarded kwargs; if the flag-setting line is removed the captured
 kwargs lack the flag and these tests fail.
 """
 
-import asyncio
 import inspect
 import json
 import sys
@@ -581,7 +580,6 @@ async def test_refused_follow_ups_do_not_count_toward_the_deployments_failure_ra
         for _ in range(6):
             with pytest.raises(litellm.BadRequestError, match="not found"):
                 await router.aresponses(model="d1", input="Double it", previous_response_id=_TURN_ONE_ID)
-    await asyncio.sleep(1)
 
     assert _should_cooldown_deployment(RoutingContext(router), "d1", 500, Exception("Test")) is False
 
