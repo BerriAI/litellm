@@ -1,3 +1,4 @@
+import copy
 import json
 from typing import Final, cast
 
@@ -184,6 +185,7 @@ def test_a_reused_model_list_sends_each_call_its_own_request(
             },
         },
     ]
+    unchanged_model_list: Final = copy.deepcopy(model_list)
     first_request: Final = {"messages": [{"role": "user", "content": "apple"}], "temperature": 0.2}
     second_request: Final = {"messages": [{"role": "user", "content": "banana"}], "temperature": 0.7}
 
@@ -195,3 +197,4 @@ def test_a_reused_model_list_sends_each_call_its_own_request(
         (first_request["messages"], 0.2),
         (second_request["messages"], 0.7),
     ]
+    assert model_list == unchanged_model_list
