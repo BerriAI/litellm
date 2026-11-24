@@ -145,11 +145,11 @@ class PromptManagementBase(ABC):
         self,
         prompt_template: PromptManagementClient,
         messages: list[AllMessageValues],
-        non_default_params: dict,
+        non_default_params: Mapping[str, object],
         model: str,
         ignore_prompt_manager_model: bool | None = False,
         ignore_prompt_manager_optional_params: bool | None = False,
-    ):
+    ) -> tuple[str, list[AllMessageValues], dict[str, object]]:
         completed_messages: Final = prompt_template["completed_messages"] or messages
 
         prompt_template_optional_params: Final = prompt_template["prompt_template_optional_params"] or {}

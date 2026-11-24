@@ -106,7 +106,7 @@ def _vertex_batch_create_error(error: httpx.HTTPStatusError) -> MaskedHTTPStatus
 
 
 class VertexAIBatchPrediction(VertexLLM):
-    def __init__(self, gcs_bucket_name: str, *args, **kwargs):
+    def __init__(self, gcs_bucket_name: str, *args: object, **kwargs: object):
         super().__init__(*args, **kwargs)
         self.gcs_bucket_name = gcs_bucket_name
 

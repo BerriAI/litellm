@@ -227,7 +227,9 @@ async def _rotate_guardrail_row(
     return await _rotate_guardrail_row(prisma_client, latest_row, encryption_key, attempts_left - 1)
 
 
-guardrail_initializer_registry: Final = {
+guardrail_initializer_registry: Final[
+    dict[str, Callable[..., CustomGuardrail | Sequence[CustomGuardrail] | None] | None]
+] = {
     SupportedGuardrailIntegrations.BEDROCK.value: initialize_bedrock,
     SupportedGuardrailIntegrations.LAKERA.value: initialize_lakera,
     SupportedGuardrailIntegrations.LAKERA_V2.value: initialize_lakera_v2,
@@ -252,7 +254,7 @@ guardrail_class_registry: Final[dict[str, type[CustomGuardrail]]] = {
 }
 
 
-def get_guardrail_initializer_from_hooks():
+def get_guardrail_initializer_from_hooks() -> dict[str, Callable[..., CustomGuardrail] | None]:
     """
     Get guardrail initializers by discovering them from the guardrail_hooks directory structure.
 
@@ -262,7 +264,7 @@ def get_guardrail_initializer_from_hooks():
     Returns:
         Dict[str, Callable]: A dictionary mapping guardrail types to their initializer functions
     """
-    discovered_initializers: Final = {}
+    discovered_initializers: Final[dict[str, Callable[..., CustomGuardrail] | None]] = {}
 
     try:
         # Get the path to the guardrail_hooks directory
@@ -330,7 +332,7 @@ def get_guardrail_initializer_from_hooks():
     return discovered_initializers
 
 
-def get_guardrail_class_from_hooks():
+def get_guardrail_class_from_hooks() -> dict[str, type[CustomGuardrail]]:
     """
     Get guardrail classes by discovering them from the guardrail_hooks directory structure.
     """
@@ -343,7 +345,7 @@ def get_guardrail_class_from_hooks():
     Returns:
         Dict[str, Callable]: A dictionary mapping guardrail types to their initializer functions
     """
-    discovered_classes: Final = {}
+    discovered_classes: Final[dict[str, type[CustomGuardrail]]] = {}
 
     try:
         # Get the path to the guardrail_hooks directory

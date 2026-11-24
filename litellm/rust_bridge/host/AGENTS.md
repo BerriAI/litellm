@@ -44,6 +44,6 @@ Python behavior Rust needs but does not own, behind one module per question. Rus
 
 ## model_cost
 
-- `model_cost` answers what Rust needs while registering models (`entry`, `published`, `write`, `resolve`, `merged` and `kept`) and pricing calls (`generation`, `known_names`). The live table, its version and every Python writer belong to `litellm_core_utils/model_cost_table.py`
+- `model_cost` answers what Rust needs while registering models (`entry`, `published`, `write`, `resolve`, `merged` and `kept`) and pricing calls (`generation`, `known_names`, and `inputs`, the `NativeModelCostMap` a route's pricing snapshot comes from). The live table, its version and every Python writer belong to `litellm_core_utils/model_cost_table.py`
 - `resolve`, `merged` and `kept` are shims until `get_model_info` and a merge generic over Python values move to Rust. Then their bodies become native calls and the signatures stay
 - `resolve` returns `None` when it was handed a table that is no longer published. That is how a pass learns a reload swapped the table

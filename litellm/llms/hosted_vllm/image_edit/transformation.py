@@ -8,7 +8,7 @@ PARAMS_VLLM_OMNI_DOES_NOT_ACCEPT: Final = frozenset({"mask", "quality", "input_f
 
 
 class HostedVLLMImageEditConfig(OpenAIImageEditConfig):
-    def get_supported_openai_params(self, model: str) -> list:  # mutable-ok: BaseImageEditConfig contract
+    def get_supported_openai_params(self, model: str) -> list[str]:  # mutable-ok: BaseImageEditConfig contract
         return [
             param
             for param in super().get_supported_openai_params(model)
@@ -17,12 +17,12 @@ class HostedVLLMImageEditConfig(OpenAIImageEditConfig):
 
     def validate_environment(
         self,
-        headers: dict,  # mutable-ok: BaseImageEditConfig contract
+        headers: dict[str, object],  # mutable-ok: BaseImageEditConfig contract
         model: str,
         api_key: str | None = None,
-        litellm_params: dict | None = None,  # mutable-ok: BaseImageEditConfig contract
+        litellm_params: dict[str, object] | None = None,  # mutable-ok: BaseImageEditConfig contract
         api_base: str | None = None,
-    ) -> dict:  # mutable-ok: BaseImageEditConfig contract
+    ) -> dict[str, object]:  # mutable-ok: BaseImageEditConfig contract
         resolved_key: Final = api_key or get_secret_str("HOSTED_VLLM_API_KEY") or "fake-api-key"
         return {**headers, "Authorization": f"Bearer {resolved_key}"}
 
@@ -30,7 +30,7 @@ class HostedVLLMImageEditConfig(OpenAIImageEditConfig):
         self,
         model: str,
         api_base: str | None,
-        litellm_params: dict,  # mutable-ok: BaseImageEditConfig contract
+        litellm_params: dict[str, object],  # mutable-ok: BaseImageEditConfig contract
     ) -> str:
         resolved_api_base: Final = api_base or get_secret_str("HOSTED_VLLM_API_BASE")
         if resolved_api_base is None:

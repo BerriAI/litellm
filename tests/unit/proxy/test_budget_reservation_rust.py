@@ -1761,7 +1761,12 @@ async def test_should_preserve_budget_error_and_continue_partial_cleanup(
 
     assert store.get_local("spend:key:key-budget-cleanup-failure") is None
     assert store.get_local("spend:team:team-budget-cleanup-failure") == pytest.approx(0.3)
-    assert "Failed to release partial budget reservation during exception cleanup" in caplog.text
+    cleanup_failure: Final = "Failed to release partial budget reservation during exception cleanup"
+    for _ in range(500):  # the Rust record reaches Python's logging from a background queue
+        if cleanup_failure in caplog.text:
+            break
+        await asyncio.sleep(0.01)
+    assert cleanup_failure in caplog.text
 
 
 @pytest.mark.asyncio

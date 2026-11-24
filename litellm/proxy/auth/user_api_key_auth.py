@@ -14,7 +14,7 @@ import secrets
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from datetime import datetime, timezone
 from functools import partial, reduce
-from typing import TYPE_CHECKING, Final, Protocol, cast
+from typing import TYPE_CHECKING, Final, Protocol, TypeVar, cast
 
 import anyio
 import fastapi
@@ -299,6 +299,7 @@ def get_model_from_request_context(
 _CLAUDE_MODEL_ROUTES: Final = frozenset(
     f"/{prefix}{endpoint}" for prefix in ("", "v1/") for endpoint in ("messages", "chat/completions", "responses")
 )
+_FetchedT = TypeVar("_FetchedT")
 _CLAUDE_MODEL_NORMALIZED: Final = "litellm.claude_model_normalized"
 _GENERAL_SETTINGS_ADAPTER: Final = TypeAdapter(dict[str, object])
 _KEY_METADATA_ADAPTER: Final = TypeAdapter(dict[str, object])
@@ -306,7 +307,7 @@ _REQUEST_HEADERS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 
 
 async def _normalize_claude_model(
-    request_data: dict, valid_token: UserAPIKeyAuth, request: Request | None, route: str
+    request_data: dict[str, object], valid_token: UserAPIKeyAuth, request: Request | None, route: str
 ) -> None:
     from litellm.proxy.proxy_server import llm_router, prisma_client, proxy_config, proxy_logging_obj
 
@@ -2315,7 +2316,7 @@ async def _impersonate_or_raise(
             )
 
 
-async def _safe_fetch(label: str, awaitable):
+async def _safe_fetch(label: str, awaitable: Awaitable[_FetchedT]) -> _FetchedT | None:
     """Run an awaitable and return its result. Re-raises authentication /
     authorization failures (HTTPException, ProxyException,
     BudgetExceededError) so they propagate to the caller.

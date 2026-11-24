@@ -91,6 +91,35 @@ impl Receipt {
     }
 }
 
+#[cfg(feature = "test-support")]
+impl Receipt {
+    /// A receipt for `total` on the prompt alone, billed at the Unix epoch, for tests of what carries a receipt
+    pub fn of_total(total: f64) -> Self {
+        Self {
+            candidate: None,
+            row: None,
+            lines: Vec::new(),
+            defaulted_to_zero: Vec::new(),
+            rates: None,
+            prompt: Usd::new(total).unwrap_or_default(),
+            completion: Usd::ZERO,
+            tools: Usd::ZERO,
+            additional: Usd::ZERO,
+            discount: Discount::default(),
+            margin: Margin::default(),
+            breakdown: Breakdown::default(),
+            cache_savings: None,
+            basis: Basis {
+                service_tier: crate::price::ServiceTier::default(),
+                data_residency: None,
+                vertex_location: None,
+                at: jiff::Timestamp::UNIX_EPOCH,
+            },
+            total,
+        }
+    }
+}
+
 impl From<Unpriced> for PriceOutcome {
     fn from(unpriced: Unpriced) -> Self {
         Self::Unpriced(unpriced)

@@ -2805,8 +2805,11 @@ class TestTemporaryMCPSessionEndpoints:
             TEMPORARY_MCP_SERVER_TTL_SECONDS,
             add_session_mcp_server,
         )
+        from litellm.types.mcp_server.mcp_server_manager import MCPServerEventsConfig
 
+        settings: Final = MCPServerEventsConfig(enabled=True, allowed_events=("build.*",))
         payload = NewMCPServerRequest(
+            events=settings,
             server_id="temp-server",
             alias="Temporary",
             url="https://temp.example.com",
@@ -2871,6 +2874,7 @@ class TestTemporaryMCPSessionEndpoints:
 
         args, _ = mock_manager.build_mcp_server_from_table.call_args
         temp_record = args[0]
+        assert temp_record.events == response.events == settings
         assert temp_record.credentials == {
             "auth_value": "token-abc",
             "client_id": "client-id",

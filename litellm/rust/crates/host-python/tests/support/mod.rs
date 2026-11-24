@@ -128,6 +128,7 @@ pub fn context() -> RequestContext {
         optional_params: serde_json::json!({}),
         secret_fields: Vec::new(),
         api_key: None,
+        host_transport: false,
     }
 }
 
@@ -208,6 +209,7 @@ impl SyntheticBinding {
 impl PythonBinding for SyntheticBinding {
     type Protocol = Synthetic;
     type Failure = Classified;
+    type Decoded = String;
 
     fn decode_request(
         &mut self,
@@ -583,6 +585,7 @@ pub struct StreamingBinding;
 impl PythonBinding for StreamingBinding {
     type Protocol = Streaming;
     type Failure = Classified;
+    type Decoded = ();
 
     fn decode_request(
         &mut self,
