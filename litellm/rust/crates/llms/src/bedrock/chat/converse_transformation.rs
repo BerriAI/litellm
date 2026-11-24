@@ -29,8 +29,9 @@ use crate::{
         chat::{
             streaming::StreamShape,
             transformation::{
-                BaseConfig, Headers, ProviderChatRequestData, ProviderChatResponseData,
-                ValidatedEnvironment, unsupported_message, unsupported_param,
+                BaseConfig, DropParams, Headers, ProviderChatRequestData, ProviderChatResponseData,
+                ValidatedEnvironment, map_openai_param_names, map_openai_stop, unsupported_message,
+                unsupported_param, without_rejected_sampling_params,
             },
         },
     },
@@ -44,11 +45,17 @@ use crate::{
 /// `inferenceConfig` otherwise, and that branch reads the model catalog the
 /// core cannot see.
 const SUPPORTED_PARAMS: &[(&str, &str)] = &[
-    ("max_tokens", "maxTokens"),
+    ("max_tokens", MAX_TOKENS),
+    ("max_completion_tokens", MAX_TOKENS),
     ("temperature", "temperature"),
     ("top_p", "topP"),
-    ("stop", "stopSequences"),
+    ("stop", STOP_SEQUENCES),
 ];
+
+const MAX_TOKENS: &str = "maxTokens";
+const STOP_SEQUENCES: &str = "stopSequences";
+
+const MODEL_SPECIFIC_OPENAI_PARAMS: &[&str] = &["max_tokens", "max_completion_tokens", "stop"];
 
 const AWS_BEDROCK_RUNTIME_ENDPOINT: &str = "aws_bedrock_runtime_endpoint";
 
@@ -66,6 +73,13 @@ const CONFIG_PARAMS: &[&str] = &[
     "aws_sts_endpoint",
     "aws_external_id",
     AWS_BEDROCK_RUNTIME_ENDPOINT,
+];
+
+const CALLER_CONFIG_PARAMS: &[&str] = &[
+    "aws_access_key_id",
+    "aws_secret_access_key",
+    "aws_session_token",
+    "aws_region_name",
 ];
 
 enum ConverseStopReason {
@@ -107,6 +121,29 @@ impl BaseConfig for AmazonConverseConfig {
 
     fn supported_openai_param_mappings(&self) -> &'static [(&'static str, &'static str)] {
         SUPPORTED_PARAMS
+    }
+
+    fn map_openai_params(
+        &self,
+        model: &str,
+        params: Map<String, Value>,
+        drop_params: DropParams,
+    ) -> Result<Map<String, Value>, Decline> {
+        if has_model_specific_token_and_stop_rules(model)
+            && MODEL_SPECIFIC_OPENAI_PARAMS
+                .iter()
+                .any(|name| params.get(*name).is_some_and(|value| !value.is_null()))
+        {
+            return Err(Decline::new("model-specific max_tokens or stop rules"));
+        }
+        map_openai_param_names(
+            SUPPORTED_PARAMS,
+            CALLER_CONFIG_PARAMS,
+            map_openai_stop(
+                without_rejected_sampling_params(params, drop_params),
+                stop_sequences,
+            ),
+        )
     }
 
     fn get_complete_url(
@@ -267,6 +304,10 @@ impl BaseConfig for AmazonConverseConfig {
         CONFIG_PARAMS
     }
 
+    fn caller_config_params(&self) -> &'static [&'static str] {
+        CALLER_CONFIG_PARAMS
+    }
+
     fn unsupported_reason(
         &self,
         messages: &[ChatMessage],
@@ -302,6 +343,22 @@ impl BaseConfig for AmazonConverseConfig {
                 "conversation does not run user turn to user turn",
             ))
         })
+    }
+}
+
+fn has_model_specific_token_and_stop_rules(model: &str) -> bool {
+    model.contains("xai.grok-")
+        || model.contains("moonshotai.kimi-k3")
+        || model.match_indices("openai.gpt-").any(|(index, prefix)| {
+            model[index + prefix.len()..].starts_with(|next: char| next.is_ascii_digit())
+        })
+}
+
+fn stop_sequences(stop: Value) -> Option<Value> {
+    match stop {
+        Value::String(stop) if stop.is_empty() => None,
+        Value::String(stop) => Some(json!([stop])),
+        stop => Some(stop),
     }
 }
 
@@ -360,7 +417,7 @@ mod tests {
         Error,
         base_llm::{
             auth::AuthScheme,
-            chat::transformation::{BaseConfig, ProviderChatResponseData},
+            chat::transformation::{BaseConfig, DropParams, ProviderChatResponseData},
         },
         bedrock::chat::converse_transformation::BEDROCK_CHAT_COMPLETIONS_CONFIG,
     };
@@ -401,6 +458,152 @@ mod tests {
 
     fn reason(msgs: Value, opts: Value) -> Option<Decline> {
         BEDROCK_CHAT_COMPLETIONS_CONFIG.unsupported_reason(&messages(msgs), &params(opts))
+    }
+
+    fn map(model: &str, opts: Value) -> Result<Map<String, Value>, Decline> {
+        BEDROCK_CHAT_COMPLETIONS_CONFIG.map_openai_params(model, params(opts), DropParams::Off)
+    }
+
+    const CLAUDE: &str = "us-east-1/anthropic.claude-sonnet-4-5-v1:0";
+
+    #[rstest]
+    #[case::stop_string(CLAUDE, json!({"stop": "5"}), json!({"stopSequences": ["5"]}))]
+    #[case::empty_stop(CLAUDE, json!({"stop": ""}), json!({}))]
+    #[case::stop_list(CLAUDE, json!({"stop": ["a", "b"]}), json!({"stopSequences": ["a", "b"]}))]
+    #[case::max_completion_tokens(
+        CLAUDE,
+        json!({"max_completion_tokens": 32}),
+        json!({"maxTokens": 32})
+    )]
+    #[case::max_completion_tokens_wins_when_sent_first(
+        CLAUDE,
+        json!({"max_completion_tokens": 32, "max_tokens": 16}),
+        json!({"maxTokens": 32})
+    )]
+    #[case::max_completion_tokens_wins_when_sent_last(
+        CLAUDE,
+        json!({"max_tokens": 16, "max_completion_tokens": 32}),
+        json!({"maxTokens": 32})
+    )]
+    #[case::null_max_completion_tokens_keeps_max_tokens(
+        CLAUDE,
+        json!({"max_tokens": 16, "max_completion_tokens": null}),
+        json!({"maxTokens": 16})
+    )]
+    #[case::sampling(
+        CLAUDE,
+        json!({"temperature": 0.2, "top_p": 0.9}),
+        json!({"temperature": 0.2, "topP": 0.9})
+    )]
+    #[case::null_is_unset(CLAUDE, json!({"max_tokens": null}), json!({}))]
+    #[case::stream_keeps_its_name(CLAUDE, json!({"stream": false}), json!({"stream": false}))]
+    #[case::gpt_oss_has_no_model_rules(
+        "openai.gpt-oss-120b-1:0",
+        json!({"max_tokens": 16}),
+        json!({"maxTokens": 16})
+    )]
+    #[case::rule_family_without_its_params(
+        "openai.gpt-5.6",
+        json!({"temperature": 0.2}),
+        json!({"temperature": 0.2})
+    )]
+    #[case::converse_names_unchanged(
+        CLAUDE,
+        json!({"maxTokens": 16, "topP": 0.5, "stopSequences": ["5"]}),
+        json!({"maxTokens": 16, "topP": 0.5, "stopSequences": ["5"]})
+    )]
+    #[case::rule_family_with_converse_names(
+        "xai.grok-4-6",
+        json!({"maxTokens": 16, "stopSequences": ["5"]}),
+        json!({"maxTokens": 16, "stopSequences": ["5"]})
+    )]
+    #[case::rule_family_with_null_params("xai.grok-4-6", json!({"max_tokens": null}), json!({}))]
+    #[case::converse_max_tokens_wins_when_sent_first(
+        CLAUDE,
+        json!({"maxTokens": 32, "max_tokens": 16}),
+        json!({"maxTokens": 32})
+    )]
+    #[case::converse_max_tokens_wins_when_sent_last(
+        CLAUDE,
+        json!({"max_tokens": 16, "maxTokens": 32}),
+        json!({"maxTokens": 32})
+    )]
+    #[case::converse_stop_wins_when_sent_first(
+        CLAUDE,
+        json!({"stopSequences": ["b"], "stop": "a"}),
+        json!({"stopSequences": ["b"]})
+    )]
+    #[case::converse_stop_wins_when_sent_last(
+        CLAUDE,
+        json!({"stop": "a", "stopSequences": ["b"]}),
+        json!({"stopSequences": ["b"]})
+    )]
+    #[case::caller_region_and_keys(
+        CLAUDE,
+        json!({"aws_region_name": "us-west-2", "aws_access_key_id": "AKIA", "aws_secret_access_key": "s", "aws_session_token": "t"}),
+        json!({"aws_region_name": "us-west-2", "aws_access_key_id": "AKIA", "aws_secret_access_key": "s", "aws_session_token": "t"})
+    )]
+    fn maps_openai_params_to_converse_names(
+        #[case] model: &str,
+        #[case] openai: Value,
+        #[case] converse: Value,
+    ) {
+        assert_eq!(map(model, openai), Ok(params(converse)));
+    }
+
+    #[rstest]
+    #[case::sampling_on_a_model_that_rejects_it(
+        DropParams::On { model_rejects_sampling: true },
+        json!({"temperature": 0.2, "top_p": 0.9, "max_tokens": 16}),
+        json!({"maxTokens": 16})
+    )]
+    #[case::sampling_on_a_model_that_takes_it(
+        DropParams::On { model_rejects_sampling: false },
+        json!({"temperature": 0.2, "top_p": 0.9}),
+        json!({"temperature": 0.2, "topP": 0.9})
+    )]
+    #[case::whitespace_stop_is_kept(
+        DropParams::On { model_rejects_sampling: false },
+        json!({"stop": " "}),
+        json!({"stopSequences": [" "]})
+    )]
+    fn drop_params_drops_what_python_drops_on_converse(
+        #[case] drop_params: DropParams,
+        #[case] openai: Value,
+        #[case] converse: Value,
+    ) {
+        assert_eq!(
+            BEDROCK_CHAT_COMPLETIONS_CONFIG.map_openai_params(CLAUDE, params(openai), drop_params),
+            Ok(params(converse))
+        );
+    }
+
+    #[rstest]
+    #[case::gpt_max_tokens("us.openai.gpt-5.6-v1:0", json!({"max_tokens": 16}))]
+    #[case::gpt_before_5_6_stop("openai.gpt-5.4", json!({"stop": "5"}))]
+    #[case::grok_stop("xai.grok-4-6", json!({"stop": ["5"]}))]
+    #[case::kimi_max_completion_tokens("moonshotai.kimi-k3", json!({"max_completion_tokens": 16}))]
+    fn declines_max_tokens_and_stop_on_models_python_rewrites_them_for(
+        #[case] model: &str,
+        #[case] openai: Value,
+    ) {
+        assert_eq!(
+            map(model, openai),
+            Err(Decline::new("model-specific max_tokens or stop rules"))
+        );
+    }
+
+    #[rstest]
+    #[case::unknown(json!({"top_k": 40}))]
+    #[case::endpoint_override(json!({"aws_bedrock_runtime_endpoint": "https://example.com"}))]
+    #[case::identity_selector(json!({"aws_role_name": "arn:aws:iam::123456789012:role/other"}))]
+    #[case::named_profile(json!({"aws_profile_name": "other"}))]
+    #[case::sts_endpoint(json!({"aws_sts_endpoint": "https://example.com"}))]
+    fn declines_an_openai_param_it_has_no_converse_name_for(#[case] openai: Value) {
+        assert_eq!(
+            map(CLAUDE, openai),
+            Err(Decline::new("unrecognized request parameter"))
+        );
     }
 
     #[test]
@@ -836,7 +1039,7 @@ mod tests {
     }
 
     #[test]
-    fn folds_converse_cache_tokens_into_prompt_tokens() {
+    fn reports_converse_cache_tokens_the_way_python_transform_usage_does() {
         let response = transform_response(json!({
             "output": {"message": {"content": [{"text": "x"}]}},
             "stopReason": "end_turn",
@@ -844,17 +1047,20 @@ mod tests {
                 "inputTokens": 10,
                 "outputTokens": 2,
                 "cacheReadInputTokens": 5,
-                "cacheWriteInputTokens": 3
+                "cacheWriteInputTokens": 3,
+                "totalTokens": 20
             }
         }))
         .expect("response transforms");
-        assert_eq!(response.usage.prompt_tokens, 18);
-        assert_eq!(response.usage.prompt_tokens_details.cached_tokens, 5);
         assert_eq!(
-            response.usage.prompt_tokens_details.cache_creation_tokens,
-            3
+            serde_json::to_value(response.usage).unwrap(),
+            json!({
+                "completion_tokens": 2, "prompt_tokens": 18, "total_tokens": 20,
+                "completion_tokens_details": {"reasoning_tokens": 0, "text_tokens": 2},
+                "prompt_tokens_details": {"cached_tokens": 5, "text_tokens": 10, "cache_write_tokens": 3, "cache_creation_tokens": 3},
+                "cache_creation_input_tokens": 3, "cache_read_input_tokens": 5
+            })
         );
-        assert_eq!(response.usage.prompt_tokens_details.text_tokens, 10);
     }
 
     #[test]

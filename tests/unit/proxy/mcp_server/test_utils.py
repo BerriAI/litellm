@@ -172,7 +172,7 @@ class TestLoggingSafeMcpHeaders:
         ids=["list-of-mappings", "bare-mapping"],
     )
     def test_keeps_identity_header_from_user_header_mappings(self, configured):
-        """get_internal_user_header_from_mapping and get_customer_user_header_from_mapping both
+        """get_internal_user_header_from_mapping and the native end-user resolver both
         accept a bare mapping as well as a list, and config_settings.md documents the key as a
         dict, so the exemption has to read both shapes."""
         with patch.dict(

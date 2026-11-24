@@ -739,7 +739,7 @@ document = Document()
             let input = project_document(&document).unwrap();
             assert!(matches!(input, OcrDocumentInput::Bytes { .. }));
             let reads: Vec<String> = document.getattr("reads").unwrap().extract().unwrap();
-            assert_eq!(reads, ["type", "mime_type", "file"]);
+            assert_eq!(reads, ["type", "file"]);
         });
     }
 }

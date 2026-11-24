@@ -42,14 +42,21 @@ vi.mock("@/components/DashboardHeader", () => ({
   ),
 }));
 
-vi.mock("@/app/(dashboard)/components/SidebarProvider", () => ({
-  default: ({ sidebarCollapsed, onToggleCollapsed }: { sidebarCollapsed: boolean; onToggleCollapsed: () => void }) => (
-    <div data-testid="sidebar" data-collapsed={String(sidebarCollapsed)}>
-      <button onClick={onToggleCollapsed}>Close navigation</button>
-      <a href="#settings">Settings</a>
-    </div>
-  ),
-}));
+vi.mock("@/app/(dashboard)/components/AppSidebar", async () => {
+  const { Sidebar, useSidebar } = await import("@/components/ui/sidebar");
+  return {
+    default: function FakeAppSidebar() {
+      const { state, toggleSidebar } = useSidebar();
+      return (
+        <Sidebar collapsible="icon">
+          <div data-testid="sidebar" data-collapsed={String(state === "collapsed")}>
+            <button onClick={toggleSidebar}>Close navigation</button>
+          </div>
+        </Sidebar>
+      );
+    },
+  };
+});
 
 vi.mock("@/components/UserBanner", () => ({
   UserBanner: () => null,
@@ -103,7 +110,8 @@ describe("(dashboard) Layout", () => {
     vi.unstubAllGlobals();
   });
 
-  it("starts mobile navigation closed, opens a modal drawer and closes it after choosing a page", async () => {
+  it("starts mobile navigation closed, opens a modal drawer and closes it from inside", async () => {
+    vi.stubGlobal("innerWidth", 390);
     render(
       <AuthProvider>
         <Layout>
@@ -113,15 +121,32 @@ describe("(dashboard) Layout", () => {
     );
     pendingUiConfig.resolve();
 
-    const trigger = await screen.findByRole("button", { name: "Open navigation" });
-    expect(screen.queryByRole("dialog", { name: "Navigation" })).not.toBeInTheDocument();
+    const trigger = await screen.findByRole("button", { name: "Toggle Sidebar" });
+    expect(screen.queryByRole("dialog", { name: "Sidebar" })).not.toBeInTheDocument();
 
     fireEvent.click(trigger);
-    const navigation = await screen.findByRole("dialog", { name: "Navigation" });
-    expect(within(navigation).getByRole("button", { name: "Close navigation" })).toBeInTheDocument();
-    fireEvent.click(within(navigation).getByRole("link", { name: "Settings" }));
-    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Navigation" })).not.toBeInTheDocument());
+    const navigation = await screen.findByRole("dialog", { name: "Sidebar" });
+    fireEvent.click(within(navigation).getByRole("button", { name: "Close navigation" }));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Sidebar" })).not.toBeInTheDocument());
   });
+
+  it.each(["/app-groups", "/ui/app-groups/"])(
+    "selects Customer Management when opening %s directly",
+    async (pathname) => {
+      localStorage.setItem("litellm_plugin_mode", "ai-gateway");
+      vi.mocked(usePathname).mockReturnValue(pathname);
+      render(
+        <AuthProvider>
+          <Layout>
+            <p>App groups content</p>
+          </Layout>
+        </AuthProvider>,
+      );
+      pendingUiConfig.resolve();
+      await screen.findByText("App groups content");
+      await waitFor(() => expect(localStorage.getItem("litellm_plugin_mode")).toBe("customer-portal"));
+    },
+  );
 
   it("records one page view per route segment, not per query change", async () => {
     const dashboard = () => (
@@ -133,7 +158,7 @@ describe("(dashboard) Layout", () => {
     );
     const { rerender } = render(dashboard());
     pendingUiConfig.resolve();
-    await screen.findByRole("button", { name: "Open navigation" });
+    await screen.findByRole("button", { name: "Toggle Sidebar" });
     searchParamsValue = new URLSearchParams("tab=members");
     rerender(dashboard());
     vi.mocked(usePathname).mockReturnValue("/ui/teams/abc-123");
@@ -150,6 +175,7 @@ describe("(dashboard) Layout", () => {
   });
 
   it("closes the mobile drawer when navigation changes outside the drawer", async () => {
+    vi.stubGlobal("innerWidth", 390);
     const dashboard = () => (
       <AuthProvider>
         <Layout>
@@ -159,15 +185,15 @@ describe("(dashboard) Layout", () => {
     );
     const { rerender } = render(dashboard());
     pendingUiConfig.resolve();
-    fireEvent.click(await screen.findByRole("button", { name: "Open navigation" }));
-    expect(await screen.findByRole("dialog", { name: "Navigation" })).toBeInTheDocument();
+    fireEvent.click(await screen.findByRole("button", { name: "Toggle Sidebar" }));
+    expect(await screen.findByRole("dialog", { name: "Sidebar" })).toBeInTheDocument();
 
     vi.mocked(usePathname).mockReturnValue("/ui/api-keys");
     rerender(dashboard());
-    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Navigation" })).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Sidebar" })).not.toBeInTheDocument());
     vi.mocked(usePathname).mockReturnValue("/ui/guardrails");
     rerender(dashboard());
-    expect(screen.queryByRole("dialog", { name: "Navigation" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: "Sidebar" })).not.toBeInTheDocument();
   });
 
   it("collapses the sidebar on Logs for a full-screen view and expands it again after leaving", async () => {
@@ -189,6 +215,29 @@ describe("(dashboard) Layout", () => {
     vi.mocked(usePathname).mockReturnValue("/ui/api-keys");
     rerender(dashboard());
     expect(screen.getByTestId("sidebar")).toHaveAttribute("data-collapsed", "false");
+  });
+
+  it.each([
+    { segment: "caching", present: ["p-4", "sm:p-6"], absent: ["h-full", "overflow-hidden", "pb-0"] },
+    { segment: "api-keys", present: ["p-4", "sm:p-6", "h-full"], absent: ["overflow-hidden", "pb-0"] },
+    { segment: "playground", present: ["p-4", "sm:p-6", "h-full", "overflow-hidden", "pb-0", "sm:pb-0"], absent: [] },
+    { segment: "", present: ["p-4", "sm:p-6"], absent: ["h-full", "overflow-hidden", "pb-0"] },
+    { segment: "teams", present: ["p-4", "sm:p-6", "h-full"], absent: ["overflow-hidden", "pb-0"] },
+    { segment: "lens", present: [], absent: ["p-4", "sm:p-6", "h-full", "pb-0"] },
+  ])("wraps /ui/$segment in only the classes of its page frame variant", async ({ segment, present, absent }) => {
+    vi.mocked(usePathname).mockReturnValue(`/ui/${segment}`);
+    render(
+      <AuthProvider>
+        <Layout>
+          <p>Route content</p>
+        </Layout>
+      </AuthProvider>,
+    );
+    pendingUiConfig.resolve();
+
+    const wrapperClasses = [...((await screen.findByText("Route content")).parentElement?.classList ?? [])];
+    expect(wrapperClasses).toEqual(expect.arrayContaining(present));
+    expect(wrapperClasses.filter((name) => absent.includes(name))).toEqual([]);
   });
 
   it("does not mount route content until getUiConfig has resolved", async () => {

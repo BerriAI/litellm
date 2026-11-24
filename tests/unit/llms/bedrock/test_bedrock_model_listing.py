@@ -3,14 +3,16 @@ import hmac
 import re
 import uuid
 from collections.abc import Callable, Mapping
+from datetime import datetime, timezone
 from functools import reduce
 from typing import Final
-from unittest.mock import Mock
+from unittest.mock import MagicMock, Mock, patch
 from urllib.parse import parse_qsl, quote
 
 import httpx
 import pytest
 
+import litellm
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.llms.bedrock.common_utils import BedrockError, BedrockModelInfo
 from litellm.llms.bedrock.model_listing import CONTROL_PLANE_ENDPOINT_RETRY_SECONDS
@@ -177,6 +179,34 @@ def _deployment(
 
 def test_lists_active_profiles_and_on_demand_models_signed_for_the_deployment() -> None:
     assert _bedrock(_control_plane()).discover_models(_deployment()) == EXPECTED_MODELS
+
+
+def test_listing_identity_reaches_the_assumed_role(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "bedrock_session_tag_fields", ["user_api_key_alias"])
+    monkeypatch.setattr(litellm, "bedrock_session_name_fields", ["user_api_key_alias"])
+    monkeypatch.delenv("AWS_WEB_IDENTITY_TOKEN", raising=False)
+    monkeypatch.delenv("AWS_SESSION_NAME", raising=False)
+    sts: Final = MagicMock()
+    sts.assume_role.return_value = {
+        "Credentials": {
+            "AccessKeyId": ACCESS_KEY,
+            "SecretAccessKey": SECRET_KEY,
+            "SessionToken": "assumed-token",
+            "Expiration": datetime(2099, 1, 1, tzinfo=timezone.utc),
+        }
+    }
+    deployment: Final = {
+        **_deployment(),
+        "aws_role_name": "arn:aws:iam::123456789012:role/invocation",
+        "metadata": {"user_api_key_alias": "model-discovery"},
+    }
+    with patch("boto3.client", return_value=sts):
+        assert _bedrock(_control_plane()).discover_models(deployment) == EXPECTED_MODELS
+    sts.assume_role.assert_called_once_with(
+        RoleArn=deployment["aws_role_name"],
+        RoleSessionName="model-discovery",
+        Tags=({"Key": "user_api_key_alias", "Value": "model-discovery"},),
+    )
 
 
 def test_lists_in_the_deployment_region_not_the_ambient_one(monkeypatch: pytest.MonkeyPatch) -> None:

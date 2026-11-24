@@ -18,8 +18,9 @@ use litellm_llms_types::{
         API_BASE, API_KEY_HEADER, AnthropicBeta, BETA_HEADER, BetaSet,
         DIRECT_BROWSER_ACCESS_HEADER, MESSAGES_PATH,
     },
-    recognized::{Recognized, map_known_runs, python_truthy},
+    recognized::{Recognized, map_known_runs},
 };
+use litellm_python_compat::truthy::json_truthy;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -119,7 +120,7 @@ fn nonempty_secret(value: Option<String>) -> Option<String> {
     value
         .map(|value| {
             value
-                .trim_matches(|c: char| c.is_whitespace() || ('\u{1c}'..='\u{1f}').contains(&c))
+                .trim_matches(litellm_python_compat::unicode::isspace)
                 .to_owned()
         })
         .filter(|value| !value.is_empty())
@@ -554,6 +555,17 @@ pub fn strip_encrypted_reasoning_blocks(messages: Vec<Message>) -> Vec<Message> 
     retain_blocks(messages, |block| !is_encrypted_reasoning_block(block))
 }
 
+fn is_unsigned_thinking_block(block: &ContentBlock) -> bool {
+    block.is_type(ContentBlockType::Thinking)
+        && block.signature.as_deref().is_none_or(str::is_empty)
+}
+
+/// Python's `strip_unsignable_thinking_blocks_for_claude` once the encrypted strip has run: Claude
+/// answers 400 to a thinking block with no signature, so an open model's reasoning goes.
+pub fn strip_unsigned_thinking_blocks(messages: Vec<Message>) -> Vec<Message> {
+    retain_blocks(messages, |block| !is_unsigned_thinking_block(block))
+}
+
 /// Python's `strip_encrypted_reasoning_blocks_from_anthropic_messages`: the same strip, and a
 /// kept `redacted_thinking` block gets Claude's own `data` back from a Bedrock Converse wrapper.
 pub fn strip_encrypted_reasoning_blocks_restoring_redacted_data(
@@ -644,6 +656,31 @@ pub fn strip_advisor_blocks(messages: Vec<Message>) -> Vec<Message> {
                             .is_some_and(|id| advisor_ids.contains(id));
                     !is_advisor_use(block) && !is_result
                 })
+                .cloned()
+                .collect();
+            message.with_blocks(kept)
+        })
+        .collect()
+}
+
+fn is_advisor_block(block: &ContentBlock) -> bool {
+    (block.is_type(ContentBlockType::ServerToolUse) && block.name.as_deref() == Some("advisor"))
+        || block.is_type(ContentBlockType::AdvisorToolResult)
+}
+
+pub fn drop_advisor_blocks(messages: Vec<Message>) -> Vec<Message> {
+    messages
+        .into_iter()
+        .map(|message| {
+            if message.role != "assistant" {
+                return message;
+            }
+            let MessageContent::Blocks(blocks) = &message.content else {
+                return message;
+            };
+            let kept: Vec<ContentBlock> = blocks
+                .iter()
+                .filter(|block| !is_advisor_block(block))
                 .cloned()
                 .collect();
             message.with_blocks(kept)
@@ -877,7 +914,7 @@ fn is_empty_raw_text_block(block: &Value) -> bool {
 fn is_empty_unsigned_raw_thinking_block(block: &Value) -> bool {
     raw_block_type(block) == Some("thinking")
         && is_raw_blank(block.get("thinking"))
-        && !block.get("signature").is_some_and(python_truthy)
+        && !block.get("signature").is_some_and(json_truthy)
 }
 
 /// [`strip_empty_content_blocks`] on a raw message: a text block whose `text` is not a
@@ -1009,49 +1046,23 @@ fn is_raw_advisor_use(block: &Value) -> bool {
         && block.get("name").and_then(Value::as_str) == Some("advisor")
 }
 
-/// A JSON value as a Python dict key: `True`, `1` and `1.0` are one key. Python cannot hash a
-/// list or dict at all, so those keep JSON equality.
-#[derive(PartialEq, Eq, Hash)]
-enum PythonKey<'a> {
-    Integer(i128),
-    Float(u64),
-    Json(&'a Value),
-}
-
-impl<'a> PythonKey<'a> {
-    fn of(value: &'a Value) -> Self {
-        const I128_RANGE: f64 = 170_141_183_460_469_231_731_687_303_715_884_105_728.0;
-        match value {
-            Value::Bool(flag) => Self::Integer(i128::from(*flag)),
-            Value::Number(number) => match (number.as_i128(), number.as_f64()) {
-                (Some(integer), _) => Self::Integer(integer),
-                (None, Some(float)) if float.fract() == 0.0 && float.abs() < I128_RANGE => {
-                    Self::Integer(float as i128)
-                }
-                (None, Some(float)) => Self::Float(float.to_bits()),
-                (None, None) => Self::Json(value),
-            },
-            _ => Self::Json(value),
-        }
-    }
-}
-
 /// Python's `strip_advisor_blocks_from_messages` on a raw assistant message: every advisor
-/// `server_tool_use` with a truthy id goes, with the `advisor_tool_result` answering it.
+/// `server_tool_use` with a non-empty string id goes, with the `advisor_tool_result` answering it.
 pub fn strip_raw_advisor_blocks(message: Value) -> Option<Value> {
     if message.get("role").and_then(Value::as_str) != Some("assistant") {
         return Some(message);
     }
     with_raw_blocks(message, |blocks| {
-        let advisor_ids: HashSet<PythonKey> = blocks
+        let advisor_ids: HashSet<&str> = blocks
             .iter()
             .filter(|block| is_raw_advisor_use(block))
-            .filter_map(|block| block.get("id"))
-            .filter(|id| python_truthy(id))
-            .map(PythonKey::of)
+            .filter_map(|block| block.get("id").and_then(Value::as_str))
+            .filter(|id| !id.is_empty())
             .collect();
-        let answers_advisor =
-            |id: Option<&Value>| id.is_some_and(|id| advisor_ids.contains(&PythonKey::of(id)));
+        let answers_advisor = |id: Option<&Value>| {
+            id.and_then(Value::as_str)
+                .is_some_and(|id| advisor_ids.contains(id))
+        };
         let kept = blocks
             .iter()
             .filter(|block| {
@@ -1063,6 +1074,24 @@ pub fn strip_raw_advisor_blocks(message: Value) -> Option<Value> {
             .cloned()
             .collect();
         Some(kept)
+    })
+}
+
+fn is_raw_advisor_block(block: &Value) -> bool {
+    is_raw_advisor_use(block) || raw_block_type(block) == Some("advisor_tool_result")
+}
+
+pub fn drop_raw_advisor_blocks(message: Value) -> Option<Value> {
+    if message.get("role").and_then(Value::as_str) != Some("assistant") {
+        return Some(message);
+    }
+    with_raw_blocks(message, |blocks| {
+        Some(
+            blocks
+                .into_iter()
+                .filter(|block| !is_raw_advisor_block(block))
+                .collect(),
+        )
     })
 }
 
@@ -1102,6 +1131,25 @@ pub fn strip_raw_encrypted_reasoning_blocks(message: Value) -> Option<Value> {
             .filter(|block| !is_raw_encrypted_reasoning_block(block))
             .cloned()
             .map(with_native_raw_redacted_data)
+            .collect();
+        (kept == blocks || !kept.is_empty()).then_some(kept)
+    })
+}
+
+fn is_raw_unsigned_thinking_block(block: &Value) -> bool {
+    raw_block_type(block) == Some("thinking")
+        && block
+            .get("signature")
+            .and_then(Value::as_str)
+            .is_none_or(str::is_empty)
+}
+
+pub fn strip_raw_unsigned_thinking_blocks(message: Value) -> Option<Value> {
+    with_raw_blocks(message, |blocks| {
+        let kept: Vec<Value> = blocks
+            .iter()
+            .filter(|block| !is_raw_unsigned_thinking_block(block))
+            .cloned()
             .collect();
         (kept == blocks || !kept.is_empty()).then_some(kept)
     })
@@ -1742,6 +1790,34 @@ mod tests {
     }
 
     #[rstest]
+    #[case::empty_signature(
+        json!([{"type": "thinking", "thinking": "plan", "signature": ""}, unparsed_block()]),
+        Some(json!([unparsed_block()]))
+    )]
+    #[case::non_string_signature(
+        json!([{"type": "thinking", "thinking": "plan", "signature": 5}, unparsed_block()]),
+        Some(json!([unparsed_block()]))
+    )]
+    #[case::signed(
+        json!([{"type": "thinking", "thinking": "plan", "signature": "sig"}, unparsed_block()]),
+        Some(json!([{"type": "thinking", "thinking": "plan", "signature": "sig"}, unparsed_block()]))
+    )]
+    #[case::redacted_kept(
+        json!([{"type": "redacted_thinking", "data": "EmwK"}, unparsed_block()]),
+        Some(json!([{"type": "redacted_thinking", "data": "EmwK"}, unparsed_block()]))
+    )]
+    #[case::only_unsigned(json!([{"type": "thinking", "thinking": "plan"}]), None)]
+    fn strip_raw_unsigned_thinking_blocks_drops_what_claude_rejects(
+        #[case] blocks: Value,
+        #[case] expected: Option<Value>,
+    ) {
+        assert_eq!(
+            strip_raw_unsigned_thinking_blocks(turn(blocks)),
+            expected.map(turn)
+        );
+    }
+
+    #[rstest]
     #[case::string_content(json!({"role": "user", "content": 5}))]
     #[case::not_an_object(json!("hi"))]
     fn raw_rewrites_leave_a_message_without_a_block_list(#[case] message: Value) {
@@ -1850,7 +1926,6 @@ mod tests {
 
     #[rstest]
     #[case::string_id(json!("srvtoolu_1"))]
-    #[case::numeric_id(json!(7))]
     fn strip_raw_advisor_blocks_drops_the_exchange_from_an_assistant_turn(#[case] id: Value) {
         assert_eq!(
             strip_raw_advisor_blocks(turn(advisor_exchange(id))),
@@ -1863,6 +1938,9 @@ mod tests {
     #[rstest]
     #[case::user_turn(json!({"role": "user", "content": advisor_exchange(json!("srvtoolu_1"))}))]
     #[case::empty_id(turn(advisor_exchange(json!(""))))]
+    #[case::numeric_id(turn(advisor_exchange(json!(7))))]
+    #[case::list_id(turn(advisor_exchange(json!(["srvtoolu_1"]))))]
+    #[case::object_id(turn(advisor_exchange(json!({"id": "srvtoolu_1"}))))]
     fn strip_raw_advisor_blocks_leaves_other_turns(#[case] message: Value) {
         assert_eq!(strip_raw_advisor_blocks(message.clone()), Some(message));
     }
@@ -1876,29 +1954,13 @@ mod tests {
     }
 
     #[rstest]
-    #[case::int_answered_by_float(
-        json!([advisor_use(json!(1)), advisor_result(json!(1.0)), unparsed_block()]),
-        json!([unparsed_block()])
-    )]
-    #[case::float_answered_by_int(
-        json!([advisor_use(json!(2.0)), advisor_result(json!(2)), unparsed_block()]),
-        json!([unparsed_block()])
-    )]
-    #[case::true_answered_by_one(
-        json!([advisor_use(json!(true)), advisor_result(json!(1)), unparsed_block()]),
-        json!([unparsed_block()])
-    )]
-    #[case::one_answered_by_true(
-        json!([advisor_use(json!(1)), advisor_result(json!(true)), unparsed_block()]),
-        json!([unparsed_block()])
+    #[case::list_answering_a_string_id(
+        json!([advisor_use(json!("srvtoolu_1")), advisor_result(json!(["srvtoolu_1"])), unparsed_block()]),
+        json!([advisor_result(json!(["srvtoolu_1"])), unparsed_block()])
     )]
     #[case::string_not_answered_by_int(
         json!([advisor_use(json!("1")), advisor_result(json!(1)), unparsed_block()]),
         json!([advisor_result(json!(1)), unparsed_block()])
-    )]
-    #[case::int_beyond_float_precision(
-        json!([advisor_use(json!(9_007_199_254_740_993_u64)), advisor_result(json!(9_007_199_254_740_992.0)), unparsed_block()]),
-        json!([advisor_result(json!(9_007_199_254_740_992.0)), unparsed_block()])
     )]
     #[case::falsy_ids_are_kept(
         json!([
@@ -1937,19 +1999,47 @@ mod tests {
             {"type": "tool_result", "tool_use_id": "a", "content": "ok"}
         ])
     )]
-    #[case::object_ids_compare_regardless_of_key_order(
-        json!([advisor_use(json!({"a": 1, "b": 2})), advisor_result(json!({"b": 2, "a": 1})), unparsed_block()]),
-        json!([unparsed_block()])
-    )]
-    #[case::nested_numbers_compare_as_json(
-        json!([advisor_use(json!([1])), advisor_result(json!([1.0])), unparsed_block()]),
-        json!([advisor_result(json!([1.0])), unparsed_block()])
-    )]
     fn strip_raw_advisor_blocks_matches_ids_as_python_does(
         #[case] blocks: Value,
         #[case] expected: Value,
     ) {
         assert_eq!(strip_raw_advisor_blocks(turn(blocks)), Some(turn(expected)));
+    }
+
+    #[rstest]
+    #[case::string_ids(json!([advisor_use(json!("srvtoolu_1")), advisor_result(json!("srvtoolu_1"))]))]
+    #[case::non_string_ids(json!([
+        advisor_use(json!(["srvtoolu_1"])), advisor_result(json!(["srvtoolu_1"])),
+        advisor_use(json!({"id": "srvtoolu_2"})), advisor_result(json!({"id": "srvtoolu_2"})),
+        advisor_use(json!(7)), advisor_result(json!(7))
+    ]))]
+    #[case::list_use_id_beside_a_string_result_id(json!([
+        advisor_use(json!(["srvtoolu_1"])), advisor_result(json!("srvtoolu_1"))
+    ]))]
+    #[case::null_empty_and_missing_ids(json!([
+        advisor_use(Value::Null), advisor_result(Value::Null),
+        advisor_use(json!("")), advisor_result(json!("")),
+        {"type": "server_tool_use", "name": "advisor", "input": {}},
+        {"type": "advisor_tool_result", "content": {}}
+    ]))]
+    fn drop_raw_advisor_blocks_drops_every_advisor_block(#[case] advisor_blocks: Value) {
+        let web_search =
+            json!({"type": "server_tool_use", "id": 7, "name": "web_search", "input": {}});
+        let blocks = [
+            advisor_blocks.as_array().unwrap().clone(),
+            vec![web_search.clone(), unparsed_block()],
+        ]
+        .concat();
+        assert_eq!(
+            drop_raw_advisor_blocks(turn(json!(blocks))),
+            Some(turn(json!([web_search, unparsed_block()])))
+        );
+    }
+
+    #[rstest]
+    fn drop_raw_advisor_blocks_leaves_a_user_turn() {
+        let message = json!({"role": "user", "content": advisor_exchange(json!(7))});
+        assert_eq!(drop_raw_advisor_blocks(message.clone()), Some(message));
     }
 
     const MANY_BLOCKS: usize = 20_000;

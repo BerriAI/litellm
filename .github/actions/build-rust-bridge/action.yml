@@ -1,0 +1,92 @@
+name: "Build the Rust bridge"
+description: >-
+  Restore the prebuilt Rust bridge for this checkout, or build it on a miss, and
+  upload it as this run's rust-bridge artifact for the jobs that install it.
+
+inputs:
+  gateway:
+    description: "'true' to also build the litellm-proxy gateway wheel on a miss"
+    required: false
+    default: "false"
+  save-cache:
+    description: "'true' to save a freshly built bridge under its cache key"
+    required: false
+    default: "false"
+  stale-cost-map:
+    description: "'true' to reuse a bridge with the same Rust inputs and an older embedded cost map"
+    required: false
+    default: "false"
+
+outputs:
+  artifact:
+    description: "Name of the uploaded rust-bridge artifact"
+    value: ${{ steps.name.outputs.artifact }}
+
+runs:
+  using: composite
+  steps:
+    - name: Restore editable Rust bridge
+      id: cache
+      uses: ./.github/actions/restore-rust-bridge
+      with:
+        stale-cost-map: ${{ inputs.stale-cost-map }}
+
+    - name: Set up Python
+      if: steps.cache.outputs.restored != 'true'
+      uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+      with:
+        python-version: "3.12"
+
+    - name: Set up uv
+      if: steps.cache.outputs.restored != 'true'
+      uses: ./.github/actions/setup-uv-with-retries
+      with:
+        version: "0.10.9"
+
+    - name: Cache the Rust build
+      if: steps.cache.outputs.restored != 'true'
+      uses: ./.github/actions/cache-cargo-build
+
+    - name: Build editable Rust bridge
+      if: steps.cache.outputs.restored != 'true'
+      shell: bash
+      env:
+        CARGO_INCREMENTAL: "0"
+        UV_PYTHON: "3.12"
+      run: |
+        mkdir -p rust-bridge-dist
+        uv run --no-project --with maturin==1.15.0 python .github/packaging/build_backend.py rust-bridge-dist
+        strip --strip-debug litellm/rust_bridge/_native.abi3.so
+        mkdir -p rust-bridge-dist/litellm/rust_bridge
+        cp litellm/rust_bridge/_native.abi3.so rust-bridge-dist/litellm/rust_bridge/_native.abi3.so
+
+    - name: Build the gateway wheel
+      if: steps.cache.outputs.restored != 'true' && inputs.gateway == 'true'
+      shell: bash
+      working-directory: litellm/packaging/litellm-proxy
+      env:
+        CARGO_INCREMENTAL: "0"
+        UV_PYTHON: "3.12"
+      run: uv run --no-project --with maturin==1.15.0 maturin build --profile dev --strip --out ../../../rust-bridge-dist
+
+    - name: Name the Rust bridge artifact
+      id: name
+      shell: bash
+      env:
+        RUN_ID: ${{ github.run_id }}
+        RUN_ATTEMPT: ${{ github.run_attempt }}
+      run: echo "artifact=rust-bridge-${RUN_ID}-${RUN_ATTEMPT}" >> "$GITHUB_OUTPUT"
+
+    - name: Upload Rust bridge artifact
+      uses: actions/upload-artifact@4cec3d8aa04e39d1a68397de0c4cd6fb9dce8ec1 # v4.6.1
+      with:
+        name: ${{ steps.name.outputs.artifact }}
+        path: rust-bridge-dist/
+        retention-days: 1
+
+    - name: Save editable Rust bridge
+      if: steps.cache.outputs.restored != 'true' && inputs.save-cache == 'true' && inputs.gateway == 'true'
+      uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+      with:
+        path: rust-bridge-dist
+        key: ${{ steps.cache.outputs.key }}

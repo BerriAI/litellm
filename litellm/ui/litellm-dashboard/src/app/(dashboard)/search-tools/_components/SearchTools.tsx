@@ -1,4 +1,7 @@
 import { isAdminRole } from "@/utils/roles";
+import { PageContent } from "@/components/shared/Page";
+import { PageHeader, PageHeaderTitle, PageHeaderDescription, PageHeaderControls } from "@/components/shared/PageHeader";
+import { Search } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import React, { useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -297,7 +300,7 @@ const SearchTools: React.FC<SearchToolsProps> = ({ accessToken, userRole, userID
     );
 
   return (
-    <div className="w-full h-full p-6">
+    <PageContent>
       <DeleteResourceModal
         isOpen={isDeleteModalOpen}
         title={t("searchTools.page.deleteModal.title")}
@@ -307,7 +310,11 @@ const SearchTools: React.FC<SearchToolsProps> = ({ accessToken, userRole, userID
           toolToDelete
             ? [
                 { label: t("searchTools.page.deleteModal.fields.name"), value: toolToDelete.search_tool_name },
-                { label: t("searchTools.page.deleteModal.fields.id"), value: toolToDelete.search_tool_id, code: true },
+                {
+                  label: t("searchTools.page.deleteModal.fields.id"),
+                  value: toolToDelete.search_tool_id,
+                  code: true,
+                },
                 {
                   label: t("searchTools.page.deleteModal.fields.provider"),
                   value: providerInfo?.ui_friendly_name || toolToDelete.litellm_params.search_provider,
@@ -363,16 +370,23 @@ const SearchTools: React.FC<SearchToolsProps> = ({ accessToken, userRole, userID
         </DialogContent>
       </Dialog>
 
-      <h1 className="text-lg font-semibold text-foreground">{t("searchTools.page.title")}</h1>
-      <p className="mt-2 text-sm text-muted-foreground">{t("searchTools.page.subtitle")}</p>
-      {isAdminRole(userRole) && (
-        <Button className="mt-4 mb-4" variant="outline" onClick={() => setCreateModalVisible(true)}>
-          {t("searchTools.page.addButton")}
-        </Button>
-      )}
+      <PageHeader>
+        <PageHeaderTitle>
+          <Search />
+          {t("searchTools.page.title")}
+        </PageHeaderTitle>
+        <PageHeaderDescription>{t("searchTools.page.subtitle")}</PageHeaderDescription>
+        {isAdminRole(userRole) && (
+          <PageHeaderControls>
+            <Button variant="outline" onClick={() => setCreateModalVisible(true)}>
+              {t("searchTools.page.addButton")}
+            </Button>
+          </PageHeaderControls>
+        )}
+      </PageHeader>
 
       <ToolsTab />
-    </div>
+    </PageContent>
   );
 };
 

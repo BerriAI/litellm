@@ -4,6 +4,8 @@ Gap characterization for /v1/messages streaming recovery (``router_python_core.p
 attempt raises before opening, and a request-level retry policy that is not a ``RetryPolicy``.
 """
 
+import gc
+import weakref
 from collections.abc import Callable
 from typing import Final
 
@@ -85,6 +87,36 @@ async def test_a_stream_retry_that_raises_before_opening_spends_a_retry_and_the_
     assert len(host.sleeps) == 2
     headers: Final = getattr(stream, "_hidden_params")["additional_headers"]
     assert (headers["x-litellm-attempted-retries"], headers["x-litellm-max-retries"]) == (2, 2)
+
+
+async def test_a_stream_retry_that_succeeds_releases_the_previous_attempts_request(
+    make_core: MakeCore, host: ScriptedHost
+) -> None:
+    host.answer(
+        "openai/a",
+        anthropic_stream(MESSAGE_START, error_frame()),
+        server_error("a"),
+        anthropic_stream(MESSAGE_START, text_delta("A"), MESSAGE_STOP),
+    )
+    core: Final = make_core(model_list=[deployment("a", "a")], num_retries=2)
+
+    class RequestState:
+        pass
+
+    async def completed_request() -> weakref.ReferenceType[RequestState]:
+        state: Final = RequestState()
+        frames: Final = await collect_bytes(await _open(core, metadata={"state": state}))
+        assert frames == [MESSAGE_START, text_delta("A"), MESSAGE_STOP]
+        assert host.deployments_called() == ["a", "a", "a"]
+        host.calls.clear()
+        host.raised.clear()
+        return weakref.ref(state)
+
+    gc.disable()
+    try:
+        assert (await completed_request())() is None
+    finally:
+        gc.enable()
 
 
 async def test_a_request_retry_policy_that_is_not_a_retry_policy_streams_with_the_plain_budget(

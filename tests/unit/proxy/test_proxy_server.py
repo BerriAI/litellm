@@ -10,6 +10,7 @@ from unittest import mock
 from dotenv import load_dotenv
 
 from tests._master_key import MASTER_KEY
+from tests.unit.proxy._prisma import prisma_with_empty_config
 
 import litellm.proxy
 import litellm.proxy.proxy_server
@@ -46,12 +47,14 @@ from starlette.testclient import WebSocketTestSession
 
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+from litellm.redis.stores.auth_cache import AuthObject
 from litellm.proxy.proxy_server import (  # Replace with the actual module where your FastAPI router is defined
     app,
     initialize,
     save_worker_config,
 )
 from litellm.proxy.utils import ProxyLogging
+
 
 @pytest.fixture
 def admin_mcp_proxy(monkeypatch: pytest.MonkeyPatch) -> FastAPI:
@@ -265,9 +268,185 @@ async def test_shutdown_commits_spend_a_logging_task_queued_while_the_first_comm
     assert committed == ["failure row spend"]
 
 
+@pytest.mark.asyncio
+async def test_shutdown_commits_spend_an_agents_row_logs_while_waiting_rows_drain():
+    queued: Final[list[str]] = []
+    committed: Final[list[str]] = []
+
+    async def commit_spend() -> None:
+        committed.extend(queued)
+        queued.clear()
+
+    waiting: Final = ["agents turn spend"]
+
+    async def drain_deferred_rows(timeout: float) -> None:
+        await asyncio.sleep(0.01)
+        queued.extend(waiting)
+        waiting.clear()
+
+    await litellm.proxy.proxy_server._flush_spend_around_logging_drain_on_shutdown(
+        flush_spend=commit_spend, drain_deferred_rows=drain_deferred_rows
+    )
+
+    assert committed == ["agents turn spend"]
+
+
+@pytest.mark.asyncio
+async def test_shutdown_commits_an_agents_row_still_logging_when_the_callback_budget_runs_out(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.litellm_core_utils.logging_worker import LoggingWorker
+    from litellm.proxy.shutdown.graceful_shutdown_manager import GracefulShutdownManager
+
+    monkeypatch.setenv("GRACEFUL_SHUTDOWN_TIMEOUT", "10.05")
+    worker: Final = LoggingWorker()
+    queued: Final[list[str]] = []
+    committed: Final[list[str]] = []
+    GracefulShutdownManager.start_shutdown(clock=lambda: 100.0)
+
+    async def commit_spend() -> None:
+        committed.extend(queued)
+        queued.clear()
+
+    async def log_row() -> None:
+        await asyncio.sleep(0.2)
+        queued.append("agents turn spend")
+
+    row: Final = asyncio.create_task(log_row())
+
+    async def drain_deferred_rows(timeout: float) -> None:
+        _ = await asyncio.wait((row,), timeout=timeout)
+
+    async def drain_tasks(timeout: float) -> None:
+        return None
+
+    try:
+        await litellm.proxy.proxy_server._flush_spend_around_logging_drain_on_shutdown(  # pyright: ignore[reportPrivateUsage]  # the shutdown sequence under test
+            commit_spend,
+            worker=worker,
+            clock=lambda: 100.0,
+            drain_tasks=drain_tasks,
+            drain_deferred_rows=drain_deferred_rows,
+        )
+        assert committed == ["agents turn spend"]
+    finally:
+        GracefulShutdownManager.reset()
+        await worker.stop()
+
+
+@pytest.mark.asyncio
+async def test_shutdown_flushes_rust_callbacks_after_the_logging_drain_next_to_the_last_spend_flush() -> None:
+    from litellm.responses.streaming_iterator import spawn_logging_task
+
+    rust_queue: Final[list[str]] = []
+    journal: Final[list[str]] = []
+
+    async def flush_spend() -> None:
+        journal.append("spend")
+
+    async def flush_rust() -> None:
+        journal.append(f"rust {','.join(rust_queue)}")
+        rust_queue.clear()
+
+    async def rust_row() -> None:
+        await asyncio.sleep(0.01)
+        rust_queue.append("row")
+
+    spawn_logging_task(asyncio.get_running_loop(), rust_row(), task_name="rust row")
+
+    await litellm.proxy.proxy_server._flush_spend_around_logging_drain_on_shutdown(  # pyright: ignore[reportPrivateUsage]  # the shutdown sequence under test
+        flush_spend=flush_spend, flush_rust=flush_rust
+    )
+
+    assert journal[0] == "spend"
+    assert sorted(journal[1:]) == ["rust row", "spend"]
+
+
+@pytest.mark.asyncio
+async def test_a_hung_rust_flush_is_cut_at_the_shutdown_deadline_and_the_last_spend_flush_still_runs(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    from litellm.litellm_core_utils.logging_worker import LoggingWorker
+    from litellm.proxy.shutdown.graceful_shutdown_manager import GracefulShutdownManager
+
+    monkeypatch.setenv("GRACEFUL_SHUTDOWN_TIMEOUT", "30")
+    worker: Final = LoggingWorker()
+    spend_flushes: Final[list[str]] = []
+    rust_cancelled: Final = asyncio.Event()
+    GracefulShutdownManager.start_shutdown(clock=lambda: 100.0)
+
+    async def flush_spend() -> None:
+        spend_flushes.append("spend")
+
+    async def hung_flush_rust() -> None:
+        try:
+            await asyncio.Event().wait()
+        finally:
+            rust_cancelled.set()
+
+    async def drain_tasks(timeout: float) -> None:
+        return None
+
+    try:
+        with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+            await asyncio.wait_for(
+                litellm.proxy.proxy_server._flush_spend_around_logging_drain_on_shutdown(  # pyright: ignore[reportPrivateUsage]  # the shutdown sequence under test
+                    flush_spend,
+                    flush_rust=hung_flush_rust,
+                    worker=worker,
+                    clock=lambda: 129.9,
+                    drain_tasks=drain_tasks,
+                ),
+                timeout=10,
+            )
+        assert spend_flushes == ["spend", "spend"]
+        assert rust_cancelled.is_set()
+        assert "Rust callback shutdown flush did not finish" in caplog.text
+    finally:
+        GracefulShutdownManager.reset()
+        await worker.stop()
+
+
+@pytest.mark.asyncio
+async def test_shutdown_flushes_each_rust_callback_in_the_callback_lists_and_the_dynamic_loggers_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.integrations.custom_logger_v2.rust import RustLogger
+
+    class _Handle:
+        def __init__(self) -> None:
+            self.flushes = 0
+
+        def manifest(self) -> str:
+            return "{}"
+
+        def request_state(self) -> object:
+            return None
+
+        async def handle(self, *_: object) -> object:
+            return None
+
+        async def flush(self) -> None:
+            self.flushes += 1
+
+    handle: Final = _Handle()
+    dynamic: Final = _Handle()
+    input_only: Final = _Handle()
+    rust_callback: Final = RustLogger(handle)
+    monkeypatch.setattr(litellm, "callbacks", [rust_callback, "langfuse"])
+    monkeypatch.setattr(litellm, "input_callback", [RustLogger(input_only), rust_callback])
+    monkeypatch.setattr(litellm, "_async_success_callback", [rust_callback])
+    monkeypatch.setattr(litellm, "_async_failure_callback", [rust_callback])
+    monkeypatch.setattr(
+        "litellm.litellm_core_utils.litellm_logging._in_memory_loggers", [RustLogger(dynamic), rust_callback]
+    )
+
+    await litellm.proxy.proxy_server.flush_rust_callbacks_on_shutdown()
+
+    assert (handle.flushes, dynamic.flushes, input_only.flushes) == (1, 1, 1)
+
+
 token = MASTER_KEY
-
-
 
 
 @pytest.mark.asyncio
@@ -805,12 +984,12 @@ async def test_team_disable_guardrails(mock_acompletion, client_no_auth, monkeyp
         last_refreshed_at=time.time(),
         metadata={"guardrails": {"modify_guardrails": False}},
     )
-    user_api_key_cache.set_cache(key=hash_token(user_key), value=valid_token)
-    user_api_key_cache.set_cache(key="team_id:{}".format(_team_id), value=team_obj)
+    user_api_key_cache.set_cache(key=AuthObject.virtual_key(hash_token(user_key)), value=valid_token)
+    user_api_key_cache.set_cache(key=AuthObject.team(_team_id), value=team_obj)
 
     monkeypatch.setattr(litellm.proxy.proxy_server, "user_api_key_cache", user_api_key_cache)
     setattr(litellm.proxy.proxy_server, "master_key", MASTER_KEY)
-    setattr(litellm.proxy.proxy_server, "prisma_client", "hello-world")
+    setattr(litellm.proxy.proxy_server, "prisma_client", prisma_with_empty_config())
 
     request = Request(scope={"type": "http", "method": "POST", "path": "/chat/completions", "headers": []})
     request._url = URL(url="/chat/completions")
@@ -840,7 +1019,7 @@ def test_custom_logger_failure_handler(mock_acompletion, client_no_auth, monkeyp
     mock_api_key = "sk-my-test-key"
     cache_value = UserAPIKeyAuth(token=hash_token(mock_api_key), rpm_limit=rpm_limit)
 
-    user_api_key_cache.set_cache(key=hash_token(mock_api_key), value=cache_value)
+    user_api_key_cache.set_cache(key=AuthObject.virtual_key(hash_token(mock_api_key)), value=cache_value)
 
     mock_logger = CustomLogger()
     mock_logger_unit_tests = CompletionCustomHandler()
@@ -853,7 +1032,7 @@ def test_custom_logger_failure_handler(mock_acompletion, client_no_auth, monkeyp
 
     monkeypatch.setattr(litellm.proxy.proxy_server, "user_api_key_cache", user_api_key_cache)
     setattr(litellm.proxy.proxy_server, "master_key", MASTER_KEY)
-    setattr(litellm.proxy.proxy_server, "prisma_client", "FAKE-VAR")
+    setattr(litellm.proxy.proxy_server, "prisma_client", prisma_with_empty_config())
     setattr(litellm.proxy.proxy_server, "proxy_logging_obj", proxy_logging_obj)
 
     with patch.object(
@@ -1219,7 +1398,6 @@ def test_health(client_no_auth):
 # test_add_new_model()
 
 
-
 class MyCustomHandler(CustomLogger):
     def log_pre_api_call(self, model, messages, kwargs):
         print(f"Pre-API Call")
@@ -1417,34 +1595,24 @@ async def test_get_team_redis(client_no_auth):
     """
     Tests if get_team_object gets value from redis cache, if set
     """
-    from litellm.caching.caching import DualCache, RedisCache
     from litellm.proxy.auth.auth_checks import get_team_object
+    from tests.unit.redis.stores.auth_cache_double import FakeAuthCache, shared_cache
 
-    proxy_logging_obj: ProxyLogging = getattr(
-        litellm.proxy.proxy_server, "proxy_logging_obj"
+    proxy_logging_obj: ProxyLogging = getattr(litellm.proxy.proxy_server, "proxy_logging_obj")
+    cache, redis = shared_cache(FakeAuthCache(redis={"team_id:1234": {"team_id": "1234", "models": ["gpt-4o"]}}))
+    database: Final = AsyncMock()
+
+    team: Final = await get_team_object(
+        team_id="1234",
+        user_api_key_cache=cache,
+        parent_otel_span=None,
+        proxy_logging_obj=proxy_logging_obj,
+        prisma_client=database,
     )
 
-    redis_cache = RedisCache()
-
-    from fastapi import HTTPException
-
-    with patch.object(
-        redis_cache,
-        "async_get_cache",
-        new=AsyncMock(),
-    ) as mock_client:
-        try:
-            await get_team_object(
-                team_id="1234",
-                user_api_key_cache=DualCache(redis_cache=redis_cache),
-                parent_otel_span=None,
-                proxy_logging_obj=proxy_logging_obj,
-                prisma_client=AsyncMock(),
-            )
-        except HTTPException:
-            pass
-
-        mock_client.assert_called_once()
+    assert (team.team_id, team.models) == ("1234", ["gpt-4o"])
+    assert ("GET", "team_id:1234") in redis.commands
+    database.db.litellm_teamtable.find_unique.assert_not_called()
 
 
 import random
@@ -1460,6 +1628,8 @@ from litellm.proxy._types import (
 from litellm.proxy.management_endpoints.internal_user_endpoints import new_user
 from litellm.proxy.management_endpoints.team_endpoints import team_member_add
 from tests.unit.proxy.management_endpoints.test_key_generate_prisma import prisma_client
+
+
 @pytest.fixture
 def mock_prisma_client():
     client = MagicMock()
@@ -1553,8 +1723,8 @@ async def test_create_team_member_add(prisma_client, new_member_method):  # noqa
         last_refreshed_at=time.time(),
         metadata={"guardrails": {"modify_guardrails": False}},
     )
-    # user_api_key_cache.set_cache(key=hash_token(user_key), value=valid_token)
-    user_api_key_cache.set_cache(key="team_id:{}".format(_team_id), value=team_obj)
+    # user_api_key_cache.set_cache(key=AuthObject.virtual_key(hash_token(user_key)), value=valid_token)
+    user_api_key_cache.set_cache(key=AuthObject.team(_team_id), value=team_obj)
 
     setattr(litellm.proxy.proxy_server, "user_api_key_cache", user_api_key_cache)
     if new_member_method == "user_id":
@@ -1668,7 +1838,7 @@ async def test_create_team_member_add_team_admin_user_api_key_auth(
         team_member=Member(role=team_member_role, user_id=user),
         last_refreshed_at=time.time(),
     )
-    user_api_key_cache.set_cache(key=hash_token(user_key), value=valid_token)
+    user_api_key_cache.set_cache(key=AuthObject.virtual_key(hash_token(user_key)), value=valid_token)
 
     team_obj = LiteLLM_TeamTableCachedObj(
         team_id=_team_id,
@@ -1677,7 +1847,7 @@ async def test_create_team_member_add_team_admin_user_api_key_auth(
         metadata={"guardrails": {"modify_guardrails": False}},
     )
 
-    user_api_key_cache.set_cache(key="team_id:{}".format(_team_id), value=team_obj)
+    user_api_key_cache.set_cache(key=AuthObject.team(_team_id), value=team_obj)
 
     monkeypatch.setattr(litellm.proxy.proxy_server, "user_api_key_cache", user_api_key_cache)
 
@@ -1744,7 +1914,7 @@ async def test_create_team_member_add_team_admin(
         token=hash_token(user_key),
         last_refreshed_at=time.time(),
     )
-    user_api_key_cache.set_cache(key=hash_token(user_key), value=valid_token)
+    user_api_key_cache.set_cache(key=AuthObject.virtual_key(hash_token(user_key)), value=valid_token)
 
     team_obj = LiteLLM_TeamTableCachedObj(
         team_id=_team_id,
@@ -1754,7 +1924,7 @@ async def test_create_team_member_add_team_admin(
         metadata={"guardrails": {"modify_guardrails": False}},
     )
 
-    user_api_key_cache.set_cache(key="team_id:{}".format(_team_id), value=team_obj)
+    user_api_key_cache.set_cache(key=AuthObject.team(_team_id), value=team_obj)
 
     setattr(litellm.proxy.proxy_server, "user_api_key_cache", user_api_key_cache)
     if new_member_method == "user_id":
@@ -2450,7 +2620,7 @@ async def test_model_info_alias_without_prisma(hidden):
 
     assert alias_found is (not hidden)
 
-    
+
 @pytest.mark.parametrize("hidden", [True, False])
 @pytest.mark.asyncio
 @pytest.mark.skip(reason="Requires reliable external DB connection (prisma).")
@@ -2675,9 +2845,8 @@ async def test_proxy_model_group_info_rerank(prisma_client):  # noqa: F811  # py
 async def test_proxy_server_prisma_setup():
     from litellm.proxy.proxy_server import ProxyStartupEvent
     from litellm.proxy.utils import ProxyLogging
-    from litellm.caching import DualCache
 
-    user_api_key_cache = DualCache()
+    user_api_key_cache = UserApiKeyCache()
 
     with patch.object(
         litellm.proxy.proxy_server, "PrismaClient", new=MagicMock()
@@ -2718,9 +2887,8 @@ async def test_proxy_server_prisma_setup_invalid_db(monkeypatch):
 
     from litellm.proxy.proxy_server import ProxyStartupEvent
     from litellm.proxy.utils import ProxyLogging
-    from litellm.caching import DualCache
 
-    user_api_key_cache = DualCache()
+    user_api_key_cache = UserApiKeyCache()
     invalid_db_url = "postgresql://invalid:invalid@localhost:5432/nonexistent"
 
     monkeypatch.setenv("DATABASE_URL", invalid_db_url)
@@ -2953,7 +3121,8 @@ async def test_run_direct_health_check_with_instrumentation_accepts_filter_only(
 @pytest.mark.asyncio
 async def test_run_direct_health_check_drops_only_the_rejected_kwarg(monkeypatch):
     """A callee that predates `router` must still get the skip-disabled filter: dropping the
-    rejected argument alongside working ones would probe deployments the operator opted out."""
+    rejected argument alongside working ones would probe deployments the operator opted out.
+    """
     import litellm.proxy.proxy_server as proxy_server
 
     seen: list[tuple[dict[str, str] | None, bool]] = []
@@ -3669,7 +3838,10 @@ def test_realtime_websocket_team_alias_selects_restricted_deployment(
     ("litellm_params", "expected_upstream_url"),
     (
         pytest.param(
-            {"model": "openai/gateway-transcribe", "api_base": "https://gateway.example/v1"},
+            {
+                "model": "openai/gateway-transcribe",
+                "api_base": "https://gateway.example/v1",
+            },
             "wss://gateway.example/v1/realtime?model=gateway-transcribe&intent=transcription",
             id="gateway",
         ),
@@ -3679,7 +3851,10 @@ def test_realtime_websocket_team_alias_selects_restricted_deployment(
             id="xai",
         ),
         pytest.param(
-            {"model": "openai/gpt-live-transcribe", "api_base": "https://api.openai.com/v1"},
+            {
+                "model": "openai/gpt-live-transcribe",
+                "api_base": "https://api.openai.com/v1",
+            },
             "wss://api.openai.com/v1/realtime?intent=transcription",
             id="openai",
         ),
@@ -3781,7 +3956,10 @@ def test_live_session_invalid_start_is_rejected_without_routing(
 
 @pytest.mark.parametrize(
     ("denial_type", "expected_code"),
-    (("user_model_access_denied", "model_not_allowed"), ("budget_exceeded", "session_not_allowed")),
+    (
+        ("user_model_access_denied", "model_not_allowed"),
+        ("budget_exceeded", "session_not_allowed"),
+    ),
 )
 def test_live_session_frame_authorization_denial_closes_with_policy_code(
     client_no_auth: TestClient,
@@ -4330,7 +4508,11 @@ class _MessageCollector(logging.Handler):
                 "tools": [
                     {
                         "type": "function",
-                        "function": {"name": "shell", "description": _LONG_PROMPT, "parameters": _TOOL_PARAMETERS},
+                        "function": {
+                            "name": "shell",
+                            "description": _LONG_PROMPT,
+                            "parameters": _TOOL_PARAMETERS,
+                        },
                     }
                 ],
             },
@@ -4339,8 +4521,18 @@ class _MessageCollector(logging.Handler):
                 "object": "chat.completion",
                 "created": 1,
                 "model": "gpt-3.5-turbo",
-                "choices": [{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "hi"}}],
-                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+                "choices": [
+                    {
+                        "index": 0,
+                        "finish_reason": "stop",
+                        "message": {"role": "assistant", "content": "hi"},
+                    }
+                ],
+                "usage": {
+                    "prompt_tokens": 1,
+                    "completion_tokens": 1,
+                    "total_tokens": 2,
+                },
             },
         ),
         (
@@ -4351,7 +4543,12 @@ class _MessageCollector(logging.Handler):
                 "instructions": _LONG_PROMPT,
                 "input": "hi",
                 "tools": [
-                    {"type": "function", "name": "shell", "description": _LONG_PROMPT, "parameters": _TOOL_PARAMETERS}
+                    {
+                        "type": "function",
+                        "name": "shell",
+                        "description": _LONG_PROMPT,
+                        "parameters": _TOOL_PARAMETERS,
+                    }
                 ],
             },
             {
@@ -4434,13 +4631,6 @@ async def test_shutdown_waits_for_enqueue_producers_before_stopping_worker() -> 
         assert worker.pending_count == 0
     finally:
         await worker.stop(discard_pending=True)
-
-
-
-
-
-
-
 
 
 @pytest.mark.parametrize(
@@ -4526,3 +4716,54 @@ def test_background_response_settings_refresh_and_respect_config(
     assert proxy_server.polling_via_cache_enabled == (["openai"] if config_owned else False)
     assert proxy_server.native_background_mode == (["config-native"] if config_owned else [])
     assert proxy_server.polling_cache_ttl == (900 if config_owned else 3600)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "started_at,window_start",
+    (
+        ("2026-10-31T23:59:59+00:00", "2026-10-01T00:00:00+00:00"),
+        ("2026-11-01T00:00:01+00:00", "2026-11-01T00:00:00+00:00"),
+        ("2026-10-31T23:59:59", "2026-10-01T00:00:00+00:00"),
+        ("2026-11-01T00:00:01", "2026-11-01T00:00:00+00:00"),
+    ),
+)
+async def test_customer_and_app_accounting_use_the_requests_original_budget_window(
+    started_at: str, window_start: str
+) -> None:
+    from datetime import datetime
+
+    from litellm.proxy import proxy_server
+    from litellm.types.proxy.auth.customer_hierarchy import (
+        AppDurationLimit,
+        CustomerHierarchyIds,
+        CustomerScopeAuth,
+    )
+
+    reset_at: Final = datetime.fromisoformat("2026-11-01T00:00:00+00:00")
+    counters: Final = await proxy_server.customer_accounting_counters(
+        CustomerHierarchyIds(customer_org_id="customer", app_id="app"),
+        (
+            CustomerScopeAuth(
+                key="customer_org",
+                entity_id="customer",
+                budget_limits=(AppDurationLimit(budget_duration="1mo", max_budget=100, reset_at=reset_at),),
+            ),
+            CustomerScopeAuth(
+                key="app_customer_org",
+                entity_id="app:customer",
+                budget_limits=(AppDurationLimit(budget_duration="1mo", max_budget=10, reset_at=reset_at),),
+            ),
+        ),
+        started_at=datetime.fromisoformat(started_at),
+    )
+    assert len(counters) == 2
+    assert {counter.entity_type for counter in counters} == {
+        "customer_org",
+        "app_customer_org",
+    }
+    assert {counter.window_start for counter in counters} == {datetime.fromisoformat(window_start)}
+    windows: Final = await proxy_server.accounting_window_keys(None, None, customer_counters=counters)
+    assert tuple(window["reset_at"] for window in windows) == tuple(
+        counter.reset_at.isoformat() for counter in counters if counter.reset_at is not None
+    )

@@ -5,7 +5,7 @@ use serde_json::{Map, Value, json};
 
 use crate::{Error, ErrorDetail, base_llm::messages::context::NativeOutputSupport};
 
-use litellm_llms_types::recognized::python_truthy;
+use litellm_python_compat::truthy::json_truthy;
 
 use super::is_int;
 
@@ -358,7 +358,7 @@ fn described_with_note(description: Option<&Value>, note: String) -> Result<Valu
         Some(Value::String(text)) if !text.is_empty() => {
             Ok(Value::String(format!("{text} {note}")))
         }
-        Some(other) if python_truthy(other) => {
+        Some(other) if json_truthy(other) => {
             Err(Error::Declined(litellm_core_utils::decline::Decline::new(
                 "a non-string output schema description next to a dropped constraint",
             )))
@@ -515,7 +515,7 @@ fn convert_bedrock_invoke_output_format_to_inline_schema(
 ) -> Result<(), Error> {
     let Some(schema) = output_format
         .get("schema")
-        .filter(|schema| python_truthy(schema))
+        .filter(|schema| json_truthy(schema))
     else {
         return Ok(());
     };
@@ -572,7 +572,7 @@ pub(crate) fn apply_bedrock_invoke_structured_output(
         }
         return Ok(());
     }
-    litellm_tracing::warn!(
+    tracing::warn!(
         "Bedrock Invoke: model={model} does not take native structured output for this schema per model_prices_and_context_window.json, so the JSON schema was inlined into the last user message and is NOT enforced by the model."
     );
     convert_bedrock_invoke_output_format_to_inline_schema(&schema_format, body)

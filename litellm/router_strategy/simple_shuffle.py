@@ -14,9 +14,13 @@ _DeploymentT = TypeVar("_DeploymentT", bound=Mapping[str, object])
 _ROUTER_LOGGER: Final = logging.getLogger("LiteLLM Router")
 
 
+def _as_mapping(value: object) -> Mapping[object, object] | None:
+    return value if isinstance(value, Mapping) else None
+
+
 def _metric_weight(deployment: Mapping[str, object], metric: str) -> float:
-    params: Final = deployment.get("litellm_params")
-    value: Final = params.get(metric) if isinstance(params, Mapping) else None
+    params: Final = _as_mapping(deployment.get("litellm_params"))
+    value: Final = params.get(metric) if params is not None else None
     if value is None:
         return 0.0
     if isinstance(value, (int, float)):
@@ -34,9 +38,9 @@ def _scoped_weights(
     if not model_weights:
         return ()
     return tuple(
-        model_weights.get(str(info.get("id")), 0.0) if isinstance(info, Mapping) else 0.0
+        model_weights.get(str(info.get("id")), 0.0) if info is not None else 0.0
         for deployment in deployments
-        for info in (deployment.get("model_info"),)
+        for info in (_as_mapping(deployment.get("model_info")),)
     )
 
 

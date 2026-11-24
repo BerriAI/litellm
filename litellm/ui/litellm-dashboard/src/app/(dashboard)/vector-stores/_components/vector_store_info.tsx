@@ -172,7 +172,7 @@ const VectorStoreInfoView: React.FC<VectorStoreInfoViewProps> = ({
 
   if (loadFailed) {
     return (
-      <div className="p-4 max-w-full">
+      <div className="max-w-full">
         <Button variant="ghost" className="mb-4" onClick={onClose}>
           <ArrowLeft />
           {t("vectorStores.info.back")}
@@ -193,7 +193,7 @@ const VectorStoreInfoView: React.FC<VectorStoreInfoViewProps> = ({
   const showEditForm = isEditing && canEdit;
 
   return (
-    <div className="p-4 max-w-full">
+    <div className="max-w-full">
       <div className="flex justify-between items-center mb-6">
         <div>
           <Button variant="ghost" className="mb-4" onClick={onClose}>

@@ -2,6 +2,8 @@
 #    On success, logs events to Promptlayer
 import os
 import traceback
+from collections.abc import Callable
+from datetime import datetime
 from typing import Final
 
 from pydantic import BaseModel, TypeAdapter
@@ -18,10 +20,17 @@ class PromptLayerLogger:
         # Instance variables
         self.key = os.getenv("PROMPTLAYER_API_KEY")
 
-    def log_event(self, kwargs, response_obj, start_time, end_time, print_verbose):
+    def log_event(
+        self,
+        kwargs,
+        response_obj,
+        start_time: datetime,
+        end_time: datetime,
+        print_verbose: Callable[[str], object],
+    ):
         # Method definition
         try:
-            new_kwargs: Final = {}
+            new_kwargs: Final[dict[str, object]] = {}
             new_kwargs["model"] = kwargs["model"]
             new_kwargs["messages"] = kwargs["messages"]
 

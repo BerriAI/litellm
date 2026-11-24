@@ -1,12 +1,15 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Protocol, TypeAlias, runtime_checkable
 
 from litellm.types.guardrails import PresidioPerRequestConfig
 
+ResponsesWsQuotaRefund: TypeAlias = Callable[[], Awaitable[None]]
 
+
+@runtime_checkable
 class ResponsesClientWebSocket(Protocol):
     """Client-facing websocket surface used by the Responses API websocket handlers."""
 
