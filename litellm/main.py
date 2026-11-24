@@ -204,7 +204,6 @@ from litellm.types.utils import (
     RawRequestTypedDict,
     StreamingChoices,
     is_decisions_model_mode,
-    provider_oauth_litellm_params,
 )
 from litellm.types.workload_identity import ANTHROPIC_WIF_KWARGS_KEYS, OPENAI_WIF_KWARGS_KEYS
 from litellm.utils import (
@@ -6552,7 +6551,7 @@ def completion(
                     *ANTHROPIC_WIF_KWARGS_KEYS,
                     *OPENAI_WIF_KWARGS_KEYS,
                     *OAUTH_TOKEN_EXCHANGE_KWARGS_KEYS,
-                    *provider_oauth_litellm_params,
+                    *litellm.types.utils.provider_oauth_litellm_params,
                     *AGENTIC_LOOP_CONTROL_KWARGS_KEYS,
                     "github_copilot_auth_type",
                     "github_copilot_host",

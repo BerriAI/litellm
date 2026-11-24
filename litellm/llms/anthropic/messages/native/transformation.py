@@ -383,22 +383,21 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         provider_token: Final = self._provider_oauth_token(
             _OAUTH_MAPPING.validate_python(litellm_params), api_base, model
         )
-        if provider_token is not None:
-            bearer_headers: Final = {
+        if provider_token is None:
+            oauth_headers, oauth_api_key = optionally_handle_anthropic_oauth(headers=headers, api_key=api_key)
+            if not _carries_caller_credential(oauth_headers):
+                self._apply_env_auth_header(
+                    oauth_headers,
+                    self._require_auth_header(
+                        AnthropicModelInfo.get_auth_header(oauth_api_key, api_base=api_base),
+                        model=model,
+                    ),
+                )
+        else:
+            oauth_headers = {  # rebind-ok: both branches provide headers for the existing finalizer
                 **oauth_credential_free_headers(_OAUTH_MAPPING.validate_python(headers)),
                 "authorization": f"Bearer {provider_token}",
             }
-            return self.finalize_messages_headers(bearer_headers, optional_params, messages), api_base
-
-        oauth_headers, oauth_api_key = optionally_handle_anthropic_oauth(headers=headers, api_key=api_key)
-        if not _carries_caller_credential(oauth_headers):
-            self._apply_env_auth_header(
-                oauth_headers,
-                self._require_auth_header(
-                    AnthropicModelInfo.get_auth_header(oauth_api_key, api_base=api_base),
-                    model=model,
-                ),
-            )
         return self.finalize_messages_headers(oauth_headers, optional_params, messages), api_base
 
     async def avalidate_anthropic_messages_environment(
@@ -424,27 +423,27 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
                 api_key=api_key,
                 api_base=api_base,
             )
+        params: Final = _OAUTH_MAPPING.validate_python(litellm_params)
         provider_token: Final = (
-            await to_thread(self._provider_oauth_token, _OAUTH_MAPPING.validate_python(litellm_params), api_base, model)
-            if litellm_params.get("oauth_client_credentials") is True
+            await to_thread(self._provider_oauth_token, params, api_base, model)
+            if params.get("oauth_client_credentials") is True
             else None
         )
-        if provider_token is not None:
-            bearer_headers: Final = {
+        if provider_token is None:
+            oauth_headers, oauth_api_key = optionally_handle_anthropic_oauth(headers=headers, api_key=api_key)
+            if not _carries_caller_credential(oauth_headers):
+                self._apply_env_auth_header(
+                    oauth_headers,
+                    self._require_auth_header(
+                        await AnthropicModelInfo.aget_auth_header(oauth_api_key, api_base=api_base),
+                        model=model,
+                    ),
+                )
+        else:
+            oauth_headers = {  # rebind-ok: both branches provide headers for the existing finalizer
                 **oauth_credential_free_headers(_OAUTH_MAPPING.validate_python(headers)),
                 "authorization": f"Bearer {provider_token}",
             }
-            return self.finalize_messages_headers(bearer_headers, optional_params, messages), api_base
-
-        oauth_headers, oauth_api_key = optionally_handle_anthropic_oauth(headers=headers, api_key=api_key)
-        if not _carries_caller_credential(oauth_headers):
-            self._apply_env_auth_header(
-                oauth_headers,
-                self._require_auth_header(
-                    await AnthropicModelInfo.aget_auth_header(oauth_api_key, api_base=api_base),
-                    model=model,
-                ),
-            )
         return self.finalize_messages_headers(oauth_headers, optional_params, messages), api_base
 
     def _provider_oauth_token(self, params: Mapping[str, object], api_base: str | None, model: str) -> str | None:

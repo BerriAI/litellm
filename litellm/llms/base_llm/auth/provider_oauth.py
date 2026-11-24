@@ -28,7 +28,11 @@ class _TokenCache(Protocol):
     def set_cache(self, key: str, value: str, *, ttl: float) -> None: ...
 
 
-_TOKENS: Final[_TokenCache] = InMemoryCache(clock=monotonic)
+def _new_token_cache() -> _TokenCache:
+    return InMemoryCache(clock=monotonic)
+
+
+_TOKENS: Final = _new_token_cache()
 
 
 class _TokenResponse(BaseModel):
@@ -41,7 +45,7 @@ class _TokenResponse(BaseModel):
 
 def oauth_credential_free_headers(
     headers: Mapping[str, _HeaderValue] | None,
-) -> dict[str, _HeaderValue]:
+) -> dict[str, _HeaderValue]:  # mutable-ok: provider header APIs require a dict
     return {name: value for name, value in (headers or {}).items() if name.lower() not in _AUTH_HEADERS}
 
 

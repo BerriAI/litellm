@@ -567,7 +567,7 @@ def _strip_bedrock_id_suffixes(model: str) -> str:
 
 _SERVER_OWNED_AUTH_HEADERS: Final = SpecialHeaders.litellm_credential_header_names()
 _WIF_ELIGIBILITY_ATTR: Final = "_workload_identity_eligible"
-_HEADER_VALUES: Final = TypeAdapter(dict[str, object])
+_REQUEST_MAPPING: Final = TypeAdapter(dict[str, object])
 _HeaderValue = TypeVar("_HeaderValue")
 
 
@@ -1674,7 +1674,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
 
     def _resolve_chat_auth(
         self,
-        headers: dict,  # mutable-ok: the consumer OAuth tier updates the caller's headers
+        headers: dict[str, object],  # mutable-ok: the consumer OAuth tier updates the caller's headers
         model: str,
         params_mapping: Mapping[str, object] | None,
         api_key: str | None,
@@ -1687,9 +1687,9 @@ class AnthropicModelInfo(BaseLLMModelInfo):
             else None
         )
         if provider_token is not None:
-            return oauth_credential_free_headers(_HEADER_VALUES.validate_python(headers)), None, provider_token, False
+            return oauth_credential_free_headers(headers), None, provider_token, False
 
-        oauth_headers, oauth_key = optionally_handle_anthropic_oauth(headers=headers, api_key=api_key)
+        _, oauth_key = optionally_handle_anthropic_oauth(headers=headers, api_key=api_key)
         configured_key: Final = AnthropicModelInfo.get_api_key(oauth_key)
         auth_token: Final = AnthropicModelInfo.get_auth_token() if configured_key is None else None
         if (configured_key is not None or auth_token is not None) and allows_wif:
@@ -1713,7 +1713,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
                 llm_provider="anthropic",
                 model=model,
             )
-        return oauth_headers, resolved_api_key, auth_token, wif_token is not None
+        return headers, resolved_api_key, auth_token, wif_token is not None
 
     def validate_environment(
         self,
@@ -1725,7 +1725,9 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         api_key: str | None = None,
         api_base: str | None = None,
     ) -> dict:
-        params_mapping: Final = litellm_params if isinstance(litellm_params, dict) else None
+        params_mapping: Final = (
+            _REQUEST_MAPPING.validate_python(litellm_params) if isinstance(litellm_params, dict) else None
+        )
         configured_base: Final = params_mapping.get("api_base") if params_mapping is not None else None
         resolved_api_base: Final = (
             configured_base if api_base is None and isinstance(configured_base, str) else api_base
