@@ -48,6 +48,7 @@ from litellm.constants import (
     SESSION_DEPLOYMENT_AFFINITY_CONVERSATION_METADATA_KEY,
     SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY,
     SESSION_ID_GENERATED_METADATA_KEY,
+    SESSION_ID_INHERITED_METADATA_KEY,
     SESSION_ID_OMITTED_METADATA_KEY,
     TYPESAFE_DANGER_ZONE_HEADER_PREFIX,
     USAGE_BASED_ROUTING_COUNTED_TOKENS_METADATA_KEY,
@@ -638,6 +639,7 @@ _UNTRUSTED_METADATA_CONTROL_FIELDS: Final = (
     CONSUMED_REQUEST_TAGS_METADATA_KEY,
     ROUTING_REQUEST_TAGS_METADATA_KEY,
     INTERNAL_CALL_ORIGIN_METADATA_KEY,
+    SESSION_ID_INHERITED_METADATA_KEY,
     BILLED_RETRY_ATTEMPT_METADATA_KEY,
     MANAGED_BACKGROUND_RESPONSE_METADATA_KEY,
     "standard_logging_object",
@@ -1366,7 +1368,19 @@ def should_auto_drop_params_for_agentic_cli(
     return normalize_drop_params(litellm_settings.get("drop_params")) is not False
 
 
-def safe_add_api_version_from_query_params(data: dict[str, object], request: Request):
+def parse_litellm_settings_drop_params(value: object) -> bool:
+    normalized: Final = normalize_drop_params(value)
+    if normalized is None and value is not None:
+        verbose_proxy_logger.warning(
+            "litellm_settings.drop_params=%r is not a flag value, treating it as off, except for Claude Code, "
+            "Codex, and VS Code Copilot Chat requests, which keep their drop_params default on. "
+            "Set it to true or false",
+            value,
+        )
+    return normalized is True
+
+
+def safe_add_api_version_from_query_params(data: dict, request: Request):
     try:
         if hasattr(request, "query_params"):
             query_params: Final = dict(request.query_params)
@@ -2103,7 +2117,7 @@ class LiteLLMProxyRequestSetup:
     @staticmethod
     def add_headers_to_llm_call_by_model_group(
         data: dict, headers: Mapping[str, str], user_api_key_dict: UserAPIKeyAuth
-    ) -> dict[str, object]:
+    ) -> dict:
         """
         Add headers to the LLM call by model group
         """
@@ -2207,7 +2221,7 @@ class LiteLLMProxyRequestSetup:
         headers: dict,
         data: dict,
         _metadata_variable_name: str,
-    ) -> dict[str, object]:
+    ) -> dict:
         """
         Add litellm metadata from request headers
 
@@ -2502,7 +2516,7 @@ class LiteLLMProxyRequestSetup:
         data: dict,
         management_endpoint_metadata: dict,
         _metadata_variable_name: str,
-    ) -> dict[str, object]:
+    ) -> dict:
         """
         Adds the `UserAPIKeyAuth` metadata to the request metadata.
 
@@ -2706,7 +2720,7 @@ class LiteLLMProxyRequestSetup:
     def add_request_tag_to_metadata(
         llm_router: Router | None,
         headers: Mapping[str, str],
-        data: Mapping[str, object],
+        data: dict,
     ) -> list[str] | None:
         tags = None
 
@@ -2857,7 +2871,7 @@ class LiteLLMProxyRequestSetup:
 
     @staticmethod
     def apply_key_tags_pre_auth(
-        request_data: dict[str, object],
+        request_data: dict,
         user_api_key_dict: UserAPIKeyAuth,
     ) -> None:
         """Merge key metadata tags into request_data before _tag_max_budget_check."""
@@ -2881,7 +2895,7 @@ class LiteLLMProxyRequestSetup:
     @staticmethod
     def apply_client_tag_policy_pre_auth(
         request: Request,
-        request_data: dict[str, object],
+        request_data: dict,
         user_api_key_dict: UserAPIKeyAuth,
     ) -> None:
         """
@@ -4418,7 +4432,7 @@ def check_if_token_is_service_account(valid_token: UserAPIKeyAuth) -> bool:
 
 def _enforced_params_check(
     request_body: Mapping[str, object],
-    general_settings: dict[str, object] | None,
+    general_settings: dict | None,
     user_api_key_dict: UserAPIKeyAuth,
     premium_user: bool,
 ) -> bool:
@@ -4963,7 +4977,7 @@ _CHATGPT_OAUTH_CREDENTIAL_PROVIDERS: Final = LlmProviders.CHATGPT.value
 
 
 def add_provider_specific_headers_to_request(
-    data: dict[str, object],
+    data: dict,
     headers: Mapping[str, str],
 ) -> bool:
     from litellm.llms.anthropic.common_utils import anthropic_oauth_token_from_header, is_anthropic_oauth_key
