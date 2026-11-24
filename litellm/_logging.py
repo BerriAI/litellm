@@ -175,16 +175,20 @@ def _names_a_credential_field(key: str | None) -> bool:
     )
 
 
-_EMBEDDED_JSON: Final[TypeAdapter[dict[str, object] | list[object]]] = TypeAdapter(dict[str, object] | list[object])
+def _embedded_json(value: str) -> object:
+    adapter: Final = _CLIENT_FIELDS if value.lstrip().startswith("{") else _CLIENT_ITEMS
+    try:
+        return adapter.validate_json(value)
+    except (ValueError, RecursionError):
+        return None
 
 
 def _redacted_embedded_json(key: str | None, value: str, depth: int) -> str:
     """A string holding a JSON object or array has its fields redacted like the structured form."""
     if not value.lstrip().startswith(("{", "[")):
         return value
-    try:
-        embedded: Final = _EMBEDDED_JSON.validate_json(value)
-    except (ValueError, RecursionError):
+    embedded: Final = _embedded_json(value)
+    if embedded is None:
         return value
     redacted: Final = _redacted_client_field(key, embedded, depth + 1)
     return value if redacted == embedded else json.dumps(redacted, separators=(",", ":"))
