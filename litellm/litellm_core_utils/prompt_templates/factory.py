@@ -468,7 +468,11 @@ def phind_codellama_pt(messages):
 
 
 def _render_chat_template(
-    env: ImmutableSandboxedEnvironment, chat_template: str, bos_token: str, eos_token: str, messages: list
+    env: ImmutableSandboxedEnvironment,
+    chat_template: str,
+    bos_token: str,
+    eos_token: str,
+    messages: Sequence[Mapping[str, object]],
 ) -> str:
     """
     Shared template rendering logic for both sync and async hf_chat_template
@@ -653,7 +657,7 @@ def _fetch_and_extract_template(
     return chat_template, bos_token, eos_token
 
 
-async def ahf_chat_template(model: str, messages: list, chat_template: str | None = None):
+async def ahf_chat_template(model: str, messages: Sequence[Mapping[str, object]], chat_template: str | None = None):
     """HuggingFace chat template (async version)"""
     from litellm.litellm_core_utils.prompt_templates.huggingface_template_handler import (
         aget_chat_template_file,
@@ -680,7 +684,7 @@ async def ahf_chat_template(model: str, messages: list, chat_template: str | Non
     )
 
 
-def hf_chat_template(model: str, messages: list, chat_template: str | None = None):
+def hf_chat_template(model: str, messages: Sequence[Mapping[str, object]], chat_template: str | None = None):
     """HuggingFace chat template (sync version)"""
     from litellm.litellm_core_utils.prompt_templates.huggingface_template_handler import (
         get_chat_template_file,
@@ -707,13 +711,13 @@ def hf_chat_template(model: str, messages: list, chat_template: str | None = Non
     )
 
 
-def deepseek_r1_pt(messages):
+def deepseek_r1_pt(messages: Sequence[Mapping[str, object]]):
     return hf_chat_template(model="deepseek-r1/deepseek-r1-7b-instruct", messages=messages)
 
 
 # Anthropic template
 def claude_2_1_pt(
-    messages: list,
+    messages: Sequence[Mapping[str, object]],
 ):  # format - https://docs.anthropic.com/claude/docs/how-to-use-system-prompts
     """
     Claude v2.1 allows system prompts (no Human: needed), but requires it be followed by Human:
@@ -808,7 +812,7 @@ def anthropic_pt(
     return prompt
 
 
-def construct_format_parameters_prompt(parameters: dict):
+def construct_format_parameters_prompt(parameters: Mapping[str, object]):
     parameter_str = "<parameter>\n"
     for k, v in parameters.items():
         parameter_str += f"<{k}>"
@@ -818,7 +822,7 @@ def construct_format_parameters_prompt(parameters: dict):
     return parameter_str
 
 
-def construct_format_tool_for_claude_prompt(name: object, description: object, parameters):
+def construct_format_tool_for_claude_prompt(name: object, description: object, parameters: Mapping[str, object]):
     constructed_prompt: Final = (
         "<tool_description>\n"
         f"<tool_name>{name}</tool_name>\n"
@@ -1017,7 +1021,7 @@ def convert_to_anthropic_tool_result_xml(message: dict) -> str:
     return anthropic_tool_result
 
 
-def convert_to_anthropic_tool_invoke_xml(tool_calls: list) -> str:
+def convert_to_anthropic_tool_invoke_xml(tool_calls: Sequence[object]) -> str:
     invokes = ""
     for tool in tool_calls:
         if get_attribute_or_key(tool, "type") != "function":
@@ -4133,7 +4137,7 @@ def convert_openai_message_to_cohere_tool_result(
         return cohere_tool_result
 
 
-def get_all_tool_calls(messages: list) -> list:
+def get_all_tool_calls(messages: Sequence[Mapping[str, object]]) -> list:
     """
     Returns extracted list of `tool_calls`.
 
@@ -4148,7 +4152,7 @@ def get_all_tool_calls(messages: list) -> list:
     return tool_calls
 
 
-def convert_to_cohere_tool_invoke(tool_calls: list) -> list[ToolCallObject]:
+def convert_to_cohere_tool_invoke(tool_calls: Sequence[object]) -> list[ToolCallObject]:
     """
     OpenAI tool invokes:
     {
@@ -4322,7 +4326,7 @@ def cohere_message_pt(messages: list):
 
 
 def amazon_titan_pt(
-    messages: list,
+    messages: Sequence[Mapping[str, object]],
 ):  # format - https://github.com/BerriAI/litellm/issues/1896
     """
     Amazon Titan uses 'User:' and 'Bot: in it's prompt template
@@ -4372,7 +4376,7 @@ def _load_image_from_url(image_url: str):
         raise e
 
 
-def _gemini_vision_convert_messages(messages: list):
+def _gemini_vision_convert_messages(messages: Sequence[Mapping[str, object]]):
     """
     Converts given messages for GPT-4 Vision to Gemini format.
 
@@ -4439,7 +4443,7 @@ def _gemini_vision_convert_messages(messages: list):
         raise e
 
 
-def gemini_text_image_pt(messages: list):
+def gemini_text_image_pt(messages: Sequence[Mapping[str, object]]):
     """
     {
         "contents":[
@@ -6644,7 +6648,7 @@ def add_cache_point_tool_block(
     return None
 
 
-def _is_bedrock_tool_block(tool: dict) -> bool:
+def _is_bedrock_tool_block(tool: Mapping[str, object]) -> bool:
     """
     Check if a tool is already a BedrockToolBlock.
 

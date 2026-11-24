@@ -764,7 +764,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         finally:
             _prefetched_pdf_urls.reset(reset_token)
 
-    def _passed_in_tools(self, optional_params: dict) -> bool:
+    def _passed_in_tools(self, optional_params: dict[str, object]) -> bool:
         return optional_params.get("tools", None) is not None
 
     def _check_and_fix_if_content_is_tool_call(
@@ -806,7 +806,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         self,
         choices: list[OpenAIChatCompletionChoices],
         json_mode: bool | None = None,
-        optional_params: dict | None = None,
+        optional_params: dict[str, object] | None = None,
     ) -> list[Choices]:
         transformed_choices: Final = []
 

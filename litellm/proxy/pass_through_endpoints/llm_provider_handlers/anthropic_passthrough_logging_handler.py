@@ -610,7 +610,7 @@ class AnthropicPassthroughLoggingHandler:
         end_time: datetime,
         cache_hit: bool,
         request_body: dict | None = None,
-        **kwargs,
+        **kwargs: object,
     ) -> PassThroughEndpointLoggingTypedDict:
         """
         Handle Anthropic batch creation passthrough logging.

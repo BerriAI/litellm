@@ -62,7 +62,7 @@ if TYPE_CHECKING:
     from litellm.llms.anthropic.messages.native.response_cache import (
         AnthropicMessagesStreamCacheWriter,
     )
-    from litellm.types.utils import PromptTokensDetailsWrapper
+    from litellm.types.utils import ModelResponseStream, PromptTokensDetailsWrapper
 else:
     LiteLLMLoggingObj = Any
 
@@ -904,7 +904,7 @@ class LLMCachingHandler:
                 merged[key] = v1 + v2
             elif isinstance(v1, dict) and isinstance(v2, dict):
                 # Recursively merge nested dicts (e.g. cache_creation_token_details)
-                nested: dict = {}
+                nested: dict[object, object] = {}
                 for nk in set(v1.keys()) | set(v2.keys()):
                     nv1 = v1.get(nk, 0)
                     nv2 = v2.get(nk, 0)
@@ -1295,7 +1295,7 @@ class LLMCachingHandler:
             convert_to_streaming_response_async,
         )
 
-        _stream_cached_result: AsyncGenerator | Generator
+        _stream_cached_result: AsyncGenerator[ModelResponseStream, None] | Generator[ModelResponseStream, None, None]
         if call_type == CallTypes.acompletion.value or call_type == CallTypes.atext_completion.value:
             _stream_cached_result = convert_to_streaming_response_async(
                 response_object=cached_result,
@@ -1315,7 +1315,7 @@ class LLMCachingHandler:
     async def async_set_cache(
         self,
         result: object,
-        original_function: Callable,
+        original_function: Callable[..., object],
         kwargs: Mapping[str, object],
         args: tuple[object, ...] | None = None,
     ):
@@ -1615,7 +1615,7 @@ class LLMCachingHandler:
 
 
 def convert_args_to_kwargs(
-    original_function: Callable,
+    original_function: Callable[..., object],
     args: tuple[object, ...] | None = None,
 ) -> dict[str, object]:
     # Get the signature of the original function
@@ -1625,7 +1625,7 @@ def convert_args_to_kwargs(
     param_names: Final = list(signature.parameters.keys())
 
     # Create a mapping of positional arguments to parameter names
-    args_to_kwargs: Final = {}
+    args_to_kwargs: Final[dict[str, object]] = {}
     if args:
         for index, arg in enumerate(args):
             if index < len(param_names):

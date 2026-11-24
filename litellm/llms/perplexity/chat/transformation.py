@@ -17,6 +17,7 @@ from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionAnnotation, ChatCompletionAnnotationURLCitation
 from litellm.types.utils import ModelResponse, PromptTokensDetailsWrapper, Usage
+from litellm.utils import declared_value_factory, is_explicitly_disabled_factory
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
@@ -36,6 +37,16 @@ _BASE_PARAMS: Final = (
     "extra_headers",
 )
 _TOOL_PARAMS: Final = ("tools", "tool_choice", "parallel_tool_calls")
+
+
+def _accepts_tools(model: str, provider: str | None) -> bool:
+    """Every Agent API (`mode: responses`) model takes function tools, so a row that leaves the flag unset
+    defaults to yes. An explicit `supports_function_calling: false` still wins, and Sonar chat rows stay off."""
+    if litellm.supports_function_calling(model, provider):
+        return True
+    return declared_value_factory(model, provider, "mode") == "responses" and not is_explicitly_disabled_factory(
+        model, provider, "supports_function_calling"
+    )
 
 
 class PerplexityChatConfig(OpenAIGPTConfig):
@@ -67,7 +78,7 @@ class PerplexityChatConfig(OpenAIGPTConfig):
             *_BASE_PARAMS,
             *(("reasoning_effort",) if litellm.supports_reasoning(model, provider) else ()),
             *(("web_search_options",) if litellm.supports_web_search(model, provider) else ()),
-            *(_TOOL_PARAMS if litellm.supports_function_calling(model, provider) else ()),
+            *(_TOOL_PARAMS if _accepts_tools(model, provider) else ()),
         ]
 
     def transform_response(

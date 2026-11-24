@@ -211,7 +211,7 @@ class OpenAIVideoConfig(BaseVideoConfig):
             )
         return data_without_files, files_list, api_base
 
-    def _decode_character_ids_in_create_video_request(self, request_dict: dict) -> dict:
+    def _decode_character_ids_in_create_video_request(self, request_dict: dict[str, object]) -> dict[str, object]:
         """
         Decode LiteLLM-managed encoded character ids for provider requests.
 

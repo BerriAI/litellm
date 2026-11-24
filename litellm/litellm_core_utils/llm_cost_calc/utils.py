@@ -5,6 +5,7 @@ import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from functools import partial
 from types import MappingProxyType
 from typing import Final, Literal, Protocol, SupportsFloat, SupportsIndex, TypedDict, cast
 
@@ -1520,6 +1521,12 @@ def _model_priced_image_cost_calculator(
             )
 
             return dashscope_image_cost_calculator
+        case litellm.LlmProviders.MINIMAX.value:
+            from litellm.llms.openai.image_generation.cost_calculator import (
+                cost_calculator as openai_gpt_image_cost_calculator,
+            )
+
+            return partial(openai_gpt_image_cost_calculator, custom_llm_provider=litellm.LlmProviders.MINIMAX.value)
         case _:
             return None
 

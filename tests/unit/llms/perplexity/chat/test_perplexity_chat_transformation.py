@@ -999,3 +999,52 @@ def test_chat_tools_stay_unsupported_for_models_the_cost_map_does_not_mark_as_fu
         )
 
     assert upstream.call_count == 0
+
+
+def _register_agent_model(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter, model: str, flags: dict[str, bool]
+) -> respx.Route:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "drop_params", False)
+    monkeypatch.setitem(
+        litellm.model_cost,
+        model,
+        {"litellm_provider": "perplexity", "mode": "responses", "input_cost_per_token": 0.0, **flags},
+    )
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    return respx_mock.post("https://api.perplexity.ai/v1/responses").mock(
+        return_value=httpx.Response(200, json=_AGENT_FUNCTION_CALL_RESPONSE)
+    )
+
+
+def test_chat_tools_reach_an_agent_model_whose_cost_map_row_leaves_function_calling_unset(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    model: Final = "perplexity/example/agent-model-unflagged"
+    upstream: Final = _register_agent_model(monkeypatch, respx_mock, model, {})
+
+    litellm.completion(
+        model=model,
+        api_key="fake-api-key",
+        messages=[{"role": "user", "content": "What time is it in Vienna?"}],
+        tools=[_GET_TIME_TOOL],
+    )
+
+    assert [tool["name"] for tool in json.loads(upstream.calls.last.request.content)["tools"]] == ["get_time"]
+
+
+def test_chat_tools_stay_rejected_for_an_agent_model_the_cost_map_marks_as_not_function_calling(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    model: Final = "perplexity/example/agent-model-disabled"
+    upstream: Final = _register_agent_model(monkeypatch, respx_mock, model, {"supports_function_calling": False})
+
+    with pytest.raises(litellm.UnsupportedParamsError):
+        litellm.completion(
+            model=model,
+            api_key="fake-api-key",
+            messages=[{"role": "user", "content": "What time is it in Vienna?"}],
+            tools=[_GET_TIME_TOOL],
+        )
+
+    assert upstream.call_count == 0
