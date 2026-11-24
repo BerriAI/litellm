@@ -126792,7 +126792,7 @@
         "input_cost_per_token": 7e-08,
         "input_cost_per_token_priority": 8.75e-08,
         "litellm_provider": "fireworks_ai",
-        "max_input_tokens": 262144,
+        "max_input_tokens": 524288,
         "mode": "chat",
         "output_cost_per_token": 2.81e-07,
         "output_cost_per_token_priority": 3.5125e-07,
