@@ -238,7 +238,7 @@ class DeepgramAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
             return str(value).lower()
         return str(value)
 
-    def _build_query_params(self, optional_params: dict, model: str) -> dict[str, str]:
+    def _build_query_params(self, optional_params: Mapping[str, object], model: str) -> dict[str, str]:
         """
         Builds a dictionary of query parameters from optional_params.
 
