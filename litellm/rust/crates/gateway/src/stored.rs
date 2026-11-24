@@ -15,8 +15,8 @@
 //! ciphertexts.
 //!
 //! Boot never fails over the database. When `store_model_in_db` is on and the stored config
-//! cannot be read, the native app runs the file alone and [`StoredConfig::Unread`] has `admit`
-//! refuse every request.
+//! cannot be read, or the settings rows that may turn it on cannot be read, the native app runs
+//! the file alone and [`StoredConfig::Unread`] has `admit` refuse every request.
 
 use std::{collections::BTreeMap, path::Path};
 
@@ -51,8 +51,8 @@ pub enum StoredConfig {
     Unused,
     /// It is on and the database was read, so the config holds what it stores.
     Loaded,
-    /// It is on and the database could not be read, so the native app runs the file alone and
-    /// serves nothing.
+    /// It is on, or the settings rows that may turn it on could not be read, and the database could
+    /// not be read, so the native app runs the file alone and serves nothing.
     Unread,
     /// It is off and the UI settings could not be read, so the native app runs the file alone and
     /// serves nothing. No stored model is ever loaded for it.
@@ -163,19 +163,11 @@ pub(crate) async fn layered(
     let settings = match rows.settings().await {
         Ok(found) => settings_rows(&found, readable_key),
         Err(error) => {
-            let on = store_model_in_db(switched_on, environment, &SettingsRows::default());
             tracing::warn!(
                 error = %Report::new(&error),
-                store_model_in_db = on,
-                "could not read the settings the proxy stores in its database"
+                "could not read the settings the proxy stores in its database, so whether store_model_in_db is on is unknown and python answers every request"
             );
-            return match (on, ui_settings) {
-                (true, _) => without_stored(file, true),
-                (false, None) => ui_settings_unread(file),
-                (false, Some(ui_settings)) => {
-                    with_ui_settings(document, file, ui_settings, secrets).await
-                }
-            };
+            return without_stored(file, true);
         }
     };
     let on = store_model_in_db(switched_on, environment, &settings);
@@ -683,10 +675,10 @@ mod tests {
         rows_with(Some(r#"{"store_model_in_db": true}"#), true, true),
         (StoredConfig::Loaded, vec!["file", "stored"])
     )]
-    #[case::settings_unreadable_while_off(
+    #[case::settings_unreadable_while_the_file_says_nothing(
         FILE,
         Rows::default(),
-        (StoredConfig::Unused, vec!["file"])
+        (StoredConfig::Unread, vec!["file"])
     )]
     #[case::settings_unreadable_while_on(
         &format!("{FILE}{ON}"),
