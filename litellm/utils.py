@@ -83,7 +83,7 @@ from litellm.constants import (
     NON_INFERENCE_CALL_TYPES,
     OPENAI_EMBEDDING_PARAMS,
     PROVIDERS_THAT_AUTHENTICATE_ON_PROVIDER_INFO,
-    PROVIDERS_THAT_SEND_KEYS_ON_MODEL_INFO_LOOKUPS,
+    PROVIDERS_WITH_RUNTIME_MODEL_INFO_LOOKUPS,
     TOGETHER_AI_API_KEY_ENV_VARS,
     TOOL_CHOICE_OBJECT_TOKEN_COUNT,
 )
@@ -126,8 +126,8 @@ from litellm.litellm_core_utils.get_model_cost_map import (
 )
 from litellm.litellm_core_utils.model_cost_table import (
     AliasedCostEntry,
+    FailedLookup,
     Landing,
-    Uncached,
     VersionCached,
     changed_in_place,
     model_cost_version,
@@ -7487,7 +7487,7 @@ def cached_get_model_info_helper(
     api_key: str | None = None,
     *,
     preserve_unset_costs: bool = False,
-) -> ModelInfoBase | Uncached[ModelInfoBase]:
+) -> ModelInfoBase | FailedLookup[ModelInfoBase]:
     return _look_up_model_info(
         model=model,
         custom_llm_provider=custom_llm_provider,
@@ -7498,6 +7498,16 @@ def cached_get_model_info_helper(
 
 
 _cached_get_model_info_helper = cached_get_model_info_helper
+
+
+def cached_model_info_for_call(
+    model: str, custom_llm_provider: str | None, api_base: str | None, api_key: str | None
+) -> ModelInfoBase:
+    if not looks_up_model_info_at_runtime(model, custom_llm_provider):
+        return cached_get_model_info_helper(model=model, custom_llm_provider=custom_llm_provider)
+    return cached_get_model_info_helper(
+        model=model, custom_llm_provider=custom_llm_provider, api_base=api_base, api_key=api_key
+    )
 
 
 @VersionCached
@@ -7570,7 +7580,7 @@ def get_model_info_helper(
         catalog_only=catalog_only,
         preserve_unset_costs=preserve_unset_costs,
     )
-    return looked_up.value if isinstance(looked_up, Uncached) else looked_up
+    return looked_up.value if isinstance(looked_up, FailedLookup) else looked_up
 
 
 def _look_up_model_info(
@@ -7581,7 +7591,7 @@ def _look_up_model_info(
     *,
     catalog_only: bool = False,
     preserve_unset_costs: bool = False,
-) -> ModelInfoBase | Uncached[ModelInfoBase]:
+) -> ModelInfoBase | FailedLookup[ModelInfoBase]:
     from litellm.litellm_core_utils.get_llm_provider_logic import declared_authenticating_provider
 
     try:
@@ -8075,7 +8085,7 @@ def _build_model_info(
     custom_llm_provider: str | None = None,
     api_base: str | None = None,
     api_key: str | None = None,
-) -> ModelInfo | Uncached[ModelInfo]:
+) -> ModelInfo | FailedLookup[ModelInfo]:
     supported_openai_params = litellm.get_supported_openai_params(model=model, custom_llm_provider=custom_llm_provider)
 
     looked_up: Final = _look_up_model_info(
@@ -8084,7 +8094,7 @@ def _build_model_info(
         api_base=api_base,
         api_key=api_key,
     )
-    _model_info: Final = looked_up.value if isinstance(looked_up, Uncached) else looked_up
+    _model_info: Final = looked_up.value if isinstance(looked_up, FailedLookup) else looked_up
 
     provider_info: Final = get_provider_info(model=model, custom_llm_provider=custom_llm_provider)
     if provider_info:
@@ -8096,12 +8106,16 @@ def _build_model_info(
     # verbose_logger.debug(f"model_info: {_model_info}")
 
     model_info: Final = ModelInfo(**_model_info, supported_openai_params=supported_openai_params)
-    return Uncached(model_info) if isinstance(looked_up, Uncached) else model_info
+    return FailedLookup(model_info) if isinstance(looked_up, FailedLookup) else model_info
+
+
+def looks_up_model_info_at_runtime(model: str | None, custom_llm_provider: str | None) -> bool:
+    provider: Final = custom_llm_provider or (model or "").partition("/")[0]
+    return provider in PROVIDERS_WITH_RUNTIME_MODEL_INFO_LOOKUPS
 
 
 def model_info_lookup_api_key(model: str | None, custom_llm_provider: str | None, api_key: str | None) -> str | None:
-    provider: Final = custom_llm_provider or (model or "").partition("/")[0]
-    return api_key if provider in PROVIDERS_THAT_SEND_KEYS_ON_MODEL_INFO_LOOKUPS else None
+    return api_key if looks_up_model_info_at_runtime(model, custom_llm_provider) else None
 
 
 @VersionCached
@@ -8110,7 +8124,7 @@ def _cached_get_model_info(
     custom_llm_provider: str | None = None,
     api_base: str | None = None,
     api_key: str | None = None,
-) -> ModelInfo | Uncached[ModelInfo]:
+) -> ModelInfo | FailedLookup[ModelInfo]:
     return _build_model_info(model=model, custom_llm_provider=custom_llm_provider, api_base=api_base, api_key=api_key)
 
 
@@ -8195,9 +8209,9 @@ def get_model_info(
             "supported_openai_params": ["temperature", "max_tokens", "top_p", "frequency_penalty", "presence_penalty"]
         }
     """
-    return _cached_get_model_info(
-        model, custom_llm_provider, api_base, model_info_lookup_api_key(model, custom_llm_provider, api_key)
-    )
+    if not looks_up_model_info_at_runtime(model, custom_llm_provider):
+        return _cached_get_model_info(model, custom_llm_provider)
+    return _cached_get_model_info(model, custom_llm_provider, api_base, api_key)
 
 
 get_model_info.cache_clear = _cached_get_model_info.cache_clear

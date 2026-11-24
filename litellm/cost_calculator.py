@@ -191,6 +191,7 @@ from litellm.utils import (
     TranscriptionResponse,
     cached_cost_map_key,
     cached_get_model_info_helper,
+    cached_model_info_for_call,
     mapped_model_fill_missing,
     pricing_with_overrides,
     runtime_model_cost_registrations,
@@ -471,9 +472,7 @@ def _per_second_pricing_cost(
     api_key: str | None = None,
 ) -> tuple[float, float] | None:
     try:
-        model_info: Final = cached_get_model_info_helper(
-            model=model, custom_llm_provider=custom_llm_provider, api_base=api_base, api_key=api_key
-        )
+        model_info: Final = cached_model_info_for_call(model, custom_llm_provider, api_base, api_key)
     except Exception:  # noqa: BLE001  # the lookup raises plain Exception for an unmapped model
         return None
     return _per_second_pricing_cost_from_info(model_info, response_time_ms, audio_seconds)
@@ -725,9 +724,7 @@ def cost_per_token(
         model = model_without_prefix
 
     if is_decisions_call_type(call_type):
-        decisions_model_info: Final = cached_get_model_info_helper(
-            model=model, custom_llm_provider=custom_llm_provider, api_base=api_base, api_key=api_key
-        )
+        decisions_model_info: Final = cached_model_info_for_call(model, custom_llm_provider, api_base, api_key)
         decisions_overrides: Final = decisions_pricing_fields(
             litellm.model_cost.get(decisions_model_info["key"], {})  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # model cost map is dynamically loaded
         )
@@ -951,9 +948,7 @@ def cost_per_token(
             service_tier=service_tier,
         )
     else:
-        model_info: Final = cached_get_model_info_helper(
-            model=model, custom_llm_provider=custom_llm_provider, api_base=api_base, api_key=api_key
-        )
+        model_info: Final = cached_model_info_for_call(model, custom_llm_provider, api_base, api_key)
         if _has_token_or_tiered_pricing(model_info):
             return generic_cost_per_token(
                 model=model,

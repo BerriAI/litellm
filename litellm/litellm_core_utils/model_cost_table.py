@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from functools import lru_cache
 from typing import Final, Generic, ParamSpec, TypeVar
 
-from litellm.constants import DEFAULT_MAX_LRU_CACHE_SIZE
+from litellm.constants import DEFAULT_MAX_LRU_CACHE_SIZE, FAILED_MODEL_INFO_LOOKUP_RETRY_SECONDS
 
 P = ParamSpec("P")
 R = TypeVar("R")
@@ -76,21 +77,22 @@ def changed_in_place() -> None:
 
 
 @dataclass(frozen=True, slots=True)
-class Uncached(Generic[R]):
-    """A result ``VersionCached`` hands back without caching, so the next call computes it again."""
+class FailedLookup(Generic[R]):
+    """The default a failed lookup answered with, which ``VersionCached`` keeps only until the current
+    ``FAILED_MODEL_INFO_LOOKUP_RETRY_SECONDS`` window ends, so the lookup is sent again at most once per window."""
 
     value: R
 
 
 class VersionCached(Generic[P, R]):
     """Decorates ``function`` with an ``lru_cache`` keyed on the ``litellm.model_cost`` version each call read, and
-    exposes that cache's ``cache_clear`` and ``cache_info``. A result ``function`` wraps in ``Uncached`` is returned
-    unwrapped and left out of the cache."""
+    exposes that cache's ``cache_clear`` and ``cache_info``. A result ``function`` wraps in ``FailedLookup`` is returned
+    unwrapped and kept for the rest of the current retry window only."""
 
     __slots__ = ("_call", "cache_clear", "cache_info")
 
-    def __init__(self, function: Callable[P, R | Uncached[R]]) -> None:
-        class NotCached(Exception):
+    def __init__(self, function: Callable[P, R | FailedLookup[R]]) -> None:
+        class Failed(Exception):
             def __init__(self, value: R) -> None:
                 super().__init__()
                 self.value: Final = value
@@ -101,21 +103,36 @@ class VersionCached(Generic[P, R]):
             **kwargs: P.kwargs,  # kwargs-ok: forwards a ParamSpec unchanged
         ) -> R:
             result: Final = function(*args, **kwargs)
-            if isinstance(result, Uncached):
-                raise NotCached(result.value)
+            if isinstance(result, FailedLookup):
+                raise Failed(result.value)
             return result
 
-        cached: Final = lru_cache(maxsize=DEFAULT_MAX_LRU_CACHE_SIZE)(at)
+        lasting: Final = lru_cache(maxsize=DEFAULT_MAX_LRU_CACHE_SIZE)(at)
+
+        def in_window(
+            version: ModelCostVersion,
+            _window: int,
+            *args: P.args,
+            **kwargs: P.kwargs,  # kwargs-ok: forwards a ParamSpec unchanged
+        ) -> R:
+            try:
+                return lasting(version, *args, **kwargs)
+            except Failed as failed:
+                return failed.value
+
+        windowed: Final = lru_cache(maxsize=DEFAULT_MAX_LRU_CACHE_SIZE)(in_window)
 
         def call(*args: P.args, **kwargs: P.kwargs) -> R:  # kwargs-ok: forwards a ParamSpec unchanged
-            try:
-                return cached(model_cost_version(), *args, **kwargs)
-            except NotCached as not_cached:
-                return not_cached.value
+            window: Final = int(time.monotonic() // FAILED_MODEL_INFO_LOOKUP_RETRY_SECONDS)
+            return windowed(model_cost_version(), window, *args, **kwargs)
+
+        def cache_clear() -> None:
+            lasting.cache_clear()
+            windowed.cache_clear()
 
         self._call: Final = call
-        self.cache_clear: Final = cached.cache_clear
-        self.cache_info: Final = cached.cache_info
+        self.cache_clear: Final = cache_clear
+        self.cache_info: Final = lasting.cache_info
 
     def __call__(self, *args: P.args, **kwargs: P.kwargs) -> R:  # kwargs-ok: forwards a ParamSpec unchanged
         return self._call(*args, **kwargs)

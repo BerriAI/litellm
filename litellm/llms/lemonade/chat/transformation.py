@@ -12,7 +12,7 @@ from pydantic import ConfigDict, TypeAdapter
 import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.litellm_core_utils.model_cost_table import Uncached
+from litellm.litellm_core_utils.model_cost_table import FailedLookup
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import (
@@ -187,23 +187,24 @@ class LemonadeChatConfig(OpenAILikeChatConfig):
         model: str,
         api_base: str | None = None,
         api_key: str | None = None,
-    ) -> Mapping[str, object] | Uncached[Mapping[str, object]]:
+    ) -> Mapping[str, object] | FailedLookup[Mapping[str, object]]:
         if model.startswith("lemonade/"):
             model = model.split("/", 1)[1]
 
         api_base, api_key = self._get_openai_compatible_provider_info(api_base=api_base, api_key=api_key)
+        server_api_base: Final = str(api_base).rstrip("/").removesuffix("/chat/completions")
         encoded_model: Final = quote(model, safe="")
 
         try:
             response: Final = litellm.module_level_client.get(
-                url=join_api_base(str(api_base), f"models/{encoded_model}"),
+                url=join_api_base(server_api_base, f"models/{encoded_model}"),
                 headers=self._get_auth_headers(api_key),
             )
             response.raise_for_status()
             model_info: Final = _json_body(response)
         except Exception:
             verbose_logger.debug("LemonadeError: Could not get model info.")
-            return Uncached(self._get_default_model_info(model))
+            return FailedLookup(self._get_default_model_info(model))
 
         model_info_fields: Final = _JSON_DICT.validate_python(model_info)
         max_input_tokens: Final = self._get_context_window(model_info_fields)

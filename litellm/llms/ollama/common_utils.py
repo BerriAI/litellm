@@ -10,7 +10,7 @@ from pydantic import BaseModel, TypeAdapter
 from litellm import verbose_logger
 from litellm._uuid import uuid
 from litellm.litellm_core_utils.core_helpers import require_attributes
-from litellm.litellm_core_utils.model_cost_table import Uncached
+from litellm.litellm_core_utils.model_cost_table import FailedLookup
 from litellm.litellm_core_utils.reasoning_effort_utils import warn_dropped_reasoning
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
@@ -236,7 +236,7 @@ class OllamaModelInfo(BaseLLMModelInfo):
         model: str,
         api_base: str | None = None,
         api_key: str | None = None,
-    ) -> Mapping[str, object] | Uncached[Mapping[str, object]]:
+    ) -> Mapping[str, object] | FailedLookup[Mapping[str, object]]:
         from litellm import module_level_client
 
         model = self._strip_ollama_model_prefix(model)
@@ -254,7 +254,7 @@ class OllamaModelInfo(BaseLLMModelInfo):
             response.raise_for_status()
         except Exception:
             verbose_logger.debug("OllamaError: Could not get model info.")
-            return Uncached(
+            return FailedLookup(
                 {
                     "key": model,
                     "litellm_provider": "ollama",
@@ -287,7 +287,7 @@ class OllamaModelInfo(BaseLLMModelInfo):
         model: str,
         api_base: str | None = None,
         api_key: str | None = None,
-    ) -> Mapping[str, object] | Uncached[Mapping[str, object]] | None:
+    ) -> Mapping[str, object] | FailedLookup[Mapping[str, object]] | None:
         if self._is_static_ollama_model(model):
             return None
         return self.get_runtime_model_info(model=model, api_base=api_base, api_key=api_key)

@@ -3,10 +3,12 @@ from typing import Final
 import httpx
 import pytest
 import respx
+import time_machine
 from pydantic import ValidationError
 
 import litellm
-from litellm.litellm_core_utils.model_cost_table import Uncached
+from litellm.constants import FAILED_MODEL_INFO_LOOKUP_RETRY_SECONDS
+from litellm.litellm_core_utils.model_cost_table import FailedLookup
 from litellm.llms.lemonade.chat.transformation import LemonadeChatConfig
 
 LEMONADE_BASE = "http://lemonade.test/api/v1"
@@ -125,10 +127,10 @@ def test_get_model_info_raises_for_non_object_payload_instead_of_defaulting(
         LemonadeChatConfig().get_model_info(model=f"lemonade/{MODEL}", api_base=LEMONADE_BASE)
 
 
-def test_get_model_info_defaults_without_caching_when_server_errors(respx_mock: respx.MockRouter) -> None:
+def test_get_model_info_answers_a_failed_lookup_when_server_errors(respx_mock: respx.MockRouter) -> None:
     respx_mock.get(f"{LEMONADE_BASE}/models/{MODEL}").respond(503, json={"max_tokens": 5})
 
-    assert LemonadeChatConfig().get_model_info(model=f"lemonade/{MODEL}", api_base=LEMONADE_BASE) == Uncached(
+    assert LemonadeChatConfig().get_model_info(model=f"lemonade/{MODEL}", api_base=LEMONADE_BASE) == FailedLookup(
         _expected_model_info()
     )
 
@@ -139,19 +141,65 @@ def test_litellm_get_model_info_retries_a_failed_lookup_at_the_call_api_base_wit
     lookups: Final = respx_mock.get(f"{LEMONADE_BASE}/models/{MODEL}").mock(
         side_effect=[httpx.Response(503), httpx.Response(200, json={"max_input_tokens": 4096})]
     )
+
+    def max_input_tokens() -> object:
+        return litellm.get_model_info(f"lemonade/{MODEL}", api_base=LEMONADE_BASE, api_key="lemonade-call-key")[
+            "max_input_tokens"
+        ]
+
     litellm.get_model_info.cache_clear()
     try:
-        limits: Final = tuple(
-            litellm.get_model_info(f"lemonade/{MODEL}", api_base=LEMONADE_BASE, api_key="lemonade-call-key")[
-                "max_input_tokens"
-            ]
-            for _ in range(3)
-        )
+        with time_machine.travel(0, tick=False) as clock:
+            failed: Final = max_input_tokens()
+            within_window: Final = max_input_tokens()
+            clock.shift(FAILED_MODEL_INFO_LOOKUP_RETRY_SECONDS)
+            retried: Final = max_input_tokens()
+            cached: Final = max_input_tokens()
     finally:
         litellm.get_model_info.cache_clear()
 
-    assert limits == (None, 4096, 4096)
+    assert (failed, within_window, retried, cached) == (None, None, 4096, 4096)
     assert [call.request.headers.get("authorization") for call in lookups.calls] == ["Bearer lemonade-call-key"] * 2
+
+
+@pytest.mark.respx(assert_all_called=False)
+def test_completion_looks_up_the_model_next_to_the_call_api_base(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    from concurrent.futures import ThreadPoolExecutor
+
+    from litellm.utils import cached_get_model_info_helper
+
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    respx_mock.post(f"{LEMONADE_BASE}/chat/completions").respond(
+        200,
+        json={
+            "id": "chatcmpl-lemonade",
+            "object": "chat.completion",
+            "created": 0,
+            "model": MODEL,
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 3, "completion_tokens": 1, "total_tokens": 4},
+        },
+    )
+    lookups: Final = respx_mock.get(f"{LEMONADE_BASE}/models/{MODEL}").respond(200, json={"max_input_tokens": 4096})
+    litellm.get_model_info.cache_clear()
+    cached_get_model_info_helper.cache_clear()
+    try:
+        with ThreadPoolExecutor(max_workers=1) as success_logging:
+            monkeypatch.setattr("litellm.utils.executor", success_logging)
+            litellm.completion(
+                model=f"lemonade/{MODEL}", messages=[{"role": "user", "content": "hi"}], api_base=LEMONADE_BASE
+            )
+    finally:
+        litellm.get_model_info.cache_clear()
+        cached_get_model_info_helper.cache_clear()
+
+    assert lookups.called
+    assert {call.request.url.path for call in respx_mock.calls} == {
+        "/api/v1/chat/completions",
+        f"/api/v1/models/{MODEL}",
+    }
 
 
 @pytest.mark.parametrize(

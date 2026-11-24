@@ -21,9 +21,11 @@ if "httpx" not in sys.modules:
 
 import httpx
 import respx
+import time_machine
 import litellm
 
-from litellm.litellm_core_utils.model_cost_table import Uncached
+from litellm.constants import FAILED_MODEL_INFO_LOOKUP_RETRY_SECONDS
+from litellm.litellm_core_utils.model_cost_table import FailedLookup
 from litellm.llms.ollama.common_utils import OllamaModelInfo
 
 
@@ -426,7 +428,7 @@ class TestOllamaGetModelInfo:
 
     @pytest.mark.parametrize("api_key", [None, "GATEKEY"], ids=["no-key", "keyed"])
     @pytest.mark.parametrize("cost_path", [False, True], ids=["get_model_info", "cost-path"])
-    def test_a_failed_lookup_is_retried_and_a_successful_one_is_cached(
+    def test_a_failed_lookup_is_retried_after_the_retry_window_and_a_successful_one_is_cached(
         self, monkeypatch: pytest.MonkeyPatch, cost_path: bool, api_key: str | None
     ) -> None:
         from litellm.llms.custom_httpx.http_handler import HTTPHandler
@@ -457,28 +459,43 @@ class TestOllamaGetModelInfo:
         litellm.get_model_info.cache_clear()
         cached_get_model_info_helper.cache_clear()
         try:
-            limits: Final = (max_input_tokens(), max_input_tokens(), max_input_tokens())
+            with time_machine.travel(0, tick=False) as clock:
+                failed: Final = max_input_tokens()
+                within_window: Final = max_input_tokens()
+                clock.shift(FAILED_MODEL_INFO_LOOKUP_RETRY_SECONDS)
+                retried: Final = max_input_tokens()
+                clock.shift(FAILED_MODEL_INFO_LOOKUP_RETRY_SECONDS)
+                cached: Final = max_input_tokens()
         finally:
             litellm.get_model_info.cache_clear()
             cached_get_model_info_helper.cache_clear()
 
-        assert limits == (None, 8192, 8192)
+        assert (failed, within_window, retried, cached) == (None, None, 8192, 8192)
         assert lookups == [f"Bearer {api_key}" if api_key else None] * 2
 
-    def test_litellm_get_model_info_shares_one_cache_entry_across_keys_when_the_lookup_sends_none(self) -> None:
+    @pytest.mark.parametrize("cost_path", [False, True], ids=["get_model_info", "cost-path"])
+    def test_one_cache_entry_serves_every_api_base_and_key_when_the_lookup_sends_neither(
+        self, cost_path: bool
+    ) -> None:
+        from litellm.utils import cached_get_model_info_helper, cached_model_info_for_call
+
         openai_model: Final = next(
             name
             for name, entry in litellm.model_cost.items()
             if entry.get("litellm_provider") == "openai" and entry.get("mode") == "chat"
         )
-        litellm.get_model_info.cache_clear()
+        cache: Final = cached_get_model_info_helper if cost_path else litellm.get_model_info
+        cache.cache_clear()
         try:
-            for api_key in ("key-one", "key-two", "key-three"):
-                litellm.get_model_info(openai_model, custom_llm_provider="openai", api_key=api_key)
+            for api_base, api_key in (("https://one.test/v1", "key-one"), ("https://two.test/v1", "key-two")):
+                if cost_path:
+                    cached_model_info_for_call(openai_model, "openai", api_base, api_key)
+                else:
+                    litellm.get_model_info(openai_model, custom_llm_provider="openai", api_base=api_base, api_key=api_key)
 
-            assert litellm.get_model_info.cache_info().currsize == 1
+            assert cache.cache_info().currsize == 1
         finally:
-            litellm.get_model_info.cache_clear()
+            cache.cache_clear()
 
     def test_get_model_info_normalizes_generate_api_base(self, monkeypatch):
         """When completion passes the final generate URL, model info should use the server base."""
@@ -514,7 +531,7 @@ class TestOllamaGetModelInfo:
             "my-custom-model", api_base="http://unreachable:11434"
         )
 
-        assert isinstance(fallback, Uncached)
+        assert isinstance(fallback, FailedLookup)
         result = fallback.value
         assert result["key"] == "my-custom-model"
         assert result["litellm_provider"] == "ollama"
@@ -542,7 +559,7 @@ class TestOllamaGetModelInfo:
             "my-custom-model", api_base="http://localhost:11434"
         )
 
-        assert isinstance(fallback, Uncached)
+        assert isinstance(fallback, FailedLookup)
         result = fallback.value
         assert result["key"] == "my-custom-model"
         assert result["litellm_provider"] == "ollama"
@@ -642,6 +659,7 @@ class TestOllamaGetModelInfo:
     ],
     ids=["no-key", "explicit-key", "environment-key", "header-key", "header-overrides-key"],
 )
+@pytest.mark.parametrize("show_status", [200, 401], ids=["lookup-answered", "lookup-rejected"])
 @pytest.mark.parametrize(
     ("model", "generation_path", "generation_body"),
     [
@@ -658,6 +676,7 @@ def test_completion_sends_every_model_info_lookup_to_the_call_api_base_with_its_
     extra_headers: Mapping[str, str] | None,
     environment_key: str | None,
     authorization: str | None,
+    show_status: int,
 ) -> None:
     from concurrent.futures import ThreadPoolExecutor
 
@@ -670,7 +689,7 @@ def test_completion_sends_every_model_info_lookup_to_the_call_api_base_with_its_
     def respond(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/api/show":
             lookups.append((request.url.host, request.headers.get("authorization")))
-            return httpx.Response(200, json={"template": "", "model_info": {}})
+            return httpx.Response(show_status, json={"template": "", "model_info": {}})
         assert request.url.path == generation_path
         generation_authorizations.append(request.headers.get("authorization"))
         return httpx.Response(
