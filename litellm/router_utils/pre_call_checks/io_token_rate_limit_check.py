@@ -326,8 +326,9 @@ def _extract_response_usage(response_obj: object) -> object:
 
 
 def _openai_shaped_usage(usage: object) -> object:
-    if isinstance(usage, dict) and litellm.AnthropicConfig.is_anthropic_usage_object(usage):
-        return litellm.AnthropicConfig().calculate_usage(usage_object=usage, reasoning_content=None)
+    usage_mapping: Final = _as_mutable_mapping(usage)
+    if usage_mapping is not None and litellm.AnthropicConfig.is_anthropic_usage_object(usage_mapping):
+        return litellm.AnthropicConfig().calculate_usage(usage_object=usage_mapping, reasoning_content=None)
     return usage
 
 

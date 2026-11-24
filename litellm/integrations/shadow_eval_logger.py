@@ -31,7 +31,11 @@ from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.websearch_interception.tools import is_web_search_tool_responses
-from litellm.litellm_core_utils.core_helpers import get_litellm_metadata_from_kwargs, independent_snapshot
+from litellm.litellm_core_utils.core_helpers import (
+    as_str_mapping,
+    get_litellm_metadata_from_kwargs,
+    independent_snapshot,
+)
 from litellm.litellm_core_utils.internal_call_metadata import sanitized_forwardable_call_metadata
 from litellm.litellm_core_utils.llm_judge import (
     default_router_provider,
@@ -87,14 +91,14 @@ _MESSAGE_ITEMS_ADAPTER: Final = TypeAdapter(tuple[object, ...])
 
 def _chat_messages(kwargs: Mapping[str, object]) -> tuple[Mapping[str, object], ...]:
     raw: Final = kwargs.get("messages")
-    return tuple(m for m in raw if isinstance(m, Mapping)) if isinstance(raw, Sequence) else ()
+    return tuple(m for m in map(as_str_mapping, raw) if m is not None) if isinstance(raw, Sequence) else ()
 
 
 def _proxy_wire_body(kwargs: Mapping[str, object]) -> Mapping[str, object]:
-    litellm_params: Final = kwargs.get("litellm_params")
-    request: Final[object] = litellm_params.get("proxy_server_request") if isinstance(litellm_params, Mapping) else None
-    body: Final[object] = request.get("body") if isinstance(request, Mapping) else None
-    return body if isinstance(body, Mapping) else _EMPTY_METADATA
+    litellm_params: Final = as_str_mapping(kwargs.get("litellm_params"))
+    request: Final = as_str_mapping(litellm_params.get("proxy_server_request") if litellm_params is not None else None)
+    body: Final = as_str_mapping(request.get("body") if request is not None else None)
+    return body if body is not None else _EMPTY_METADATA
 
 
 def _chat_request_from_chat(
@@ -278,7 +282,9 @@ def _responses_final_text(response_obj: object) -> str:
     if any(not isinstance(item, Mapping) for item in items):
         return ""
     calls: Final = tuple(
-        item for item in items if isinstance(item, Mapping) and item.get("type") in _RESPONSES_TOOL_CALL_TYPES
+        item
+        for item in map(as_str_mapping, items)
+        if item is not None and item.get("type") in _RESPONSES_TOOL_CALL_TYPES
     )
     prose: Final = str(getattr(response, "output_text", "") or "")
     if not calls:
@@ -333,8 +339,8 @@ def _request_mutating_guardrail_ran(request_metadata: Mapping[str, object]) -> b
     entries: Final[Sequence[object]] = raw if isinstance(raw, Sequence) else ()
     return any(
         not _guardrail_is_non_mutating(entry, _NON_MUTATING_GUARDRAIL_MODES)
-        for entry in entries
-        if isinstance(entry, Mapping)
+        for entry in map(as_str_mapping, entries)
+        if entry is not None
     )
 
 
@@ -344,8 +350,8 @@ def request_guardrail_fingerprint(request_metadata: Mapping[str, object]) -> str
     replay_safe_modes: Final = _NON_MUTATING_GUARDRAIL_MODES - frozenset(("logging_only",))
     relevant: Final = tuple(
         entry
-        for entry in entries
-        if isinstance(entry, Mapping) and not _guardrail_is_non_mutating(entry, replay_safe_modes)
+        for entry in map(as_str_mapping, entries)
+        if entry is not None and not _guardrail_is_non_mutating(entry, replay_safe_modes)
     )
     try:
         serialized: Final = json.dumps(relevant, sort_keys=True, default=str)
@@ -380,10 +386,10 @@ def _post_guardrail_kwargs(
 ) -> Mapping[str, object] | None:
     if guardrail_snapshot is None or guardrail_snapshot.fingerprint != request_guardrail_fingerprint(request_metadata):
         return None
-    raw_params: Final = kwargs.get("litellm_params")
-    litellm_params: Final = raw_params if isinstance(raw_params, Mapping) else _EMPTY_METADATA
-    raw_request: Final[object] = litellm_params.get("proxy_server_request")
-    request: Final = raw_request if isinstance(raw_request, Mapping) else _EMPTY_METADATA
+    raw_params: Final = as_str_mapping(kwargs.get("litellm_params"))
+    litellm_params: Final = raw_params if raw_params is not None else _EMPTY_METADATA
+    raw_request: Final = as_str_mapping(litellm_params.get("proxy_server_request"))
+    request: Final = raw_request if raw_request is not None else _EMPTY_METADATA
     body: Final = guardrail_snapshot.body
     return MappingProxyType(
         {
@@ -412,8 +418,8 @@ def _request_has_hosted_web_search(request: Mapping[str, object]) -> bool:
         return True
     tools: Final = request.get("tools")
     return isinstance(tools, Sequence) and any(
-        isinstance(tool, Mapping) and tool.get("type") != "function" and is_web_search_tool_responses(tool)
-        for tool in tools
+        tool is not None and tool.get("type") != "function" and is_web_search_tool_responses(tool)
+        for tool in map(as_str_mapping, tools)
     )
 
 
@@ -780,8 +786,8 @@ def _routing_decision(metadata: Mapping[str, object]) -> Mapping[str, object]:
     """The routing decision a pre-routing strategy wrote to a call's metadata, empty when
     a plain model served it. Read off the sampled request for the control arm, and off the
     shadow call's own write-back for the shadow arm."""
-    decision: Final = metadata.get("routing_decision")
-    return decision if isinstance(decision, Mapping) else _EMPTY_METADATA
+    decision: Final = as_str_mapping(metadata.get("routing_decision"))
+    return decision if decision is not None else _EMPTY_METADATA
 
 
 def _routed_tier(metadata: Mapping[str, object]) -> str | None:
@@ -1174,8 +1180,8 @@ class ShadowEvalLogger(CustomLogger):
             payload: Final[StandardLoggingPayload | None] = kwargs.get("standard_logging_object")  # pyright: ignore[reportAssignmentType]  # untyped callback kwargs
             if payload is None:
                 return
-            raw_meta: Final = get_litellm_metadata_from_kwargs(dict(kwargs))
-            request_metadata: Final = raw_meta if isinstance(raw_meta, Mapping) else _EMPTY_METADATA
+            raw_meta: Final = as_str_mapping(get_litellm_metadata_from_kwargs(dict(kwargs)))
+            request_metadata: Final = raw_meta if raw_meta is not None else _EMPTY_METADATA
             if request_metadata.get(INTERNAL_CALL_ORIGIN_METADATA_KEY):
                 return  # internal sub-call (our own shadow/judge, a classifier), not user traffic
             # redaction rewrites logged content before callbacks run, so this hook
