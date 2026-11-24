@@ -366,6 +366,37 @@ variable "lb_domains" {
   default     = []
 }
 
+variable "private_ingress" {
+  description = <<-EOT
+    Configure a regional internal Application Load Balancer. For a module-created VPC, provide a dedicated proxy_subnet_cidr. For an existing VPC, provide the frontend subnetwork_id and either provide proxy_subnet_cidr or provision an active regional managed proxy-only subnet yourself. For HTTPS, provide a regional Compute Engine SSL certificate ID and set lb_domains to the private DNS names it covers.
+  EOT
+  type = object({
+    subnetwork_id      = optional(string)
+    proxy_subnet_cidr  = optional(string)
+    ssl_certificate_id = optional(string)
+  })
+  default = null
+
+  validation {
+    condition = !var.create_runtime || var.private_ingress == null ? true : (
+      var.network_id == "" ? (
+        var.private_ingress.subnetwork_id == null && var.private_ingress.proxy_subnet_cidr != null
+        ) : (
+        var.private_ingress.subnetwork_id != null
+      )
+    )
+    error_message = "Private ingress needs proxy_subnet_cidr for a module-created VPC, or subnetwork_id for an existing VPC."
+  }
+
+  validation {
+    condition = !var.create_runtime || var.private_ingress == null ? true : (
+      var.private_ingress.ssl_certificate_id != null ? length(var.lb_domains) > 0 :
+      length(var.lb_domains) == 0 && var.allow_plaintext_lb
+    )
+    error_message = "For private HTTPS ingress, set ssl_certificate_id and lb_domains. For private HTTP ingress, leave both unset and set allow_plaintext_lb = true."
+  }
+}
+
 variable "allow_plaintext_lb" {
   description = <<-EOT
     Opt into HTTP-only mode on the load balancer (port 80, no TLS).

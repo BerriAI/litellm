@@ -1,11 +1,15 @@
+locals {
+  lb_ip = local.private_lb ? one(google_compute_address.private_lb[*].address) : one(google_compute_global_address.lb[*].address)
+}
+
 output "lb_ip" {
-  description = "Global anycast IP of the external HTTPS load balancer. Null when create_runtime is false."
-  value       = var.create_runtime ? one(google_compute_global_address.lb[*].address) : null
+  description = "Load balancer IP, private for internal ingress and global anycast for public ingress. Null when create_runtime is false."
+  value       = local.lb_ip
 }
 
 output "lb_url" {
   description = "Proxy URL, or null when create_runtime is false. Switches scheme based on whether lb_domains is set."
-  value       = var.create_runtime ? (local.tls_enabled ? "https://${var.lb_domains[0]}" : "http://${one(google_compute_global_address.lb[*].address)}") : null
+  value       = var.create_runtime ? (local.tls_enabled ? "https://${var.lb_domains[0]}" : "http://${local.lb_ip}") : null
 }
 
 output "gateway_service_url" {

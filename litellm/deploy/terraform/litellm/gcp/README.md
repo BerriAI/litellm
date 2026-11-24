@@ -465,6 +465,37 @@ Set `allow_plaintext_lb = true` and leave `lb_domains = []`. Without the
 flag, plan fails with a clear error pointing at the precondition.
 Intended for short-lived trial / dev stacks only.
 
+## Private ingress
+
+By default the load balancer is external. To use a regional internal
+Application Load Balancer in a module-created VPC, set:
+
+```hcl
+private_ingress = {
+  proxy_subnet_cidr  = "10.42.0.0/23"
+  ssl_certificate_id = "projects/my-project/regions/us-central1/sslCertificates/my-cert"
+}
+lb_domains = ["proxy.internal.example.com"]
+```
+
+Choose a proxy-only CIDR that does not overlap existing ranges. With an
+existing VPC, set `private_ingress.subnetwork_id` to a regular subnet in
+`region` for the frontend IP. Omit `proxy_subnet_cidr` if that VPC already
+has an active regional managed proxy-only subnet. Point private DNS at
+`lb_ip`. Private HTTPS serves port 443 only. For HTTP-only development,
+omit `ssl_certificate_id` and `lb_domains` and set `allow_plaintext_lb = true`.
+
+Private mode does not grant the `allUsers` invoker role. Cloud Run accepts
+only internal traffic, including the internal load balancer. The load
+balancer does not supply a Cloud Run identity token, so private mode disables
+the Cloud Run IAM invoker check. The project organization policy must allow
+this. LiteLLM authentication still applies. Clients need network access to
+the regional private frontend, and the default Cloud Run URLs also accept
+only internal traffic.
+
+Changing an existing deployment between public and private ingress replaces
+the load balancer and its IP. Plan for DNS changes and an interruption.
+
 ## Using as a module
 
 The directory itself is a module with **no `provider` block** — the caller

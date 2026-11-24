@@ -22,7 +22,7 @@ already provisioned (often by another team, in another Terraform state).
 
 **Networking.** Set `vpc_id` plus `public_subnet_ids` and `private_subnet_ids`
 and no VPC, subnet, route table, internet gateway, or NAT gateway is created.
-The ALB goes in the public subnets, the ECS tasks and any subnet group the
+The ALB goes in the public subnets by default, the ECS tasks and any subnet group the
 stack still needs go in the private ones, and `vpc_cidr` / `azs` go unused.
 The private subnets need their own egress (NAT gateway, or VPC endpoints
 covering ECR, S3, CloudWatch Logs, and Secrets Manager) since tasks pull
@@ -524,6 +524,14 @@ the per-component images. To pull from a private registry:
   on the task def container — extend `ecs.tf` accordingly.
 
 ## TLS
+
+Set `private_ingress = true` to use an internal ALB. The ALB uses two or
+more private subnets in different availability zones. With an existing VPC,
+omit `public_subnet_ids` and supply those private subnets in
+`private_subnet_ids`. Clients still need network reachability to the ALB
+through the VPC or a connected network. The TLS settings below apply to both
+public and internal ALBs. For HTTPS, point a private DNS record covered by
+the certificate at the ALB DNS name.
 
 `terraform plan` refuses to provision an HTTP-only ALB by default — TLS
 is the supported posture. Two paths:

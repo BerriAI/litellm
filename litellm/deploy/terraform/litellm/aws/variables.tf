@@ -81,7 +81,8 @@ variable "ui_password" {
 #      and private subnets per AZ, an internet gateway, a NAT gateway, and
 #      the route tables wiring them together. `vpc_cidr` + `azs` drive it.
 #   2. Bring-your-own (`vpc_id` set): the stack creates no networking and
-#      places the ALB in `public_subnet_ids` and every task, plus the Aurora
+#      places the ALB in `public_subnet_ids` (or `private_subnet_ids` for private
+#      ingress) and every task, plus the Aurora
 #      and ElastiCache subnet groups, in `private_subnet_ids`. `vpc_cidr` and
 #      `azs` are then unused.
 
@@ -89,7 +90,8 @@ variable "vpc_id" {
   description = <<-EOT
     Existing VPC to deploy into. Leave empty ("") to have the module create
     its own VPC, subnets, NAT gateway, and route tables. When set,
-    `public_subnet_ids` and `private_subnet_ids` are required and no
+    `private_subnet_ids` is required, as is `public_subnet_ids` for public
+    ingress, and no
     networking is created: the private subnets must already have egress
     (NAT gateway or equivalent) so tasks can reach LLM providers, ECR/GHCR,
     and Secrets Manager.
@@ -99,15 +101,21 @@ variable "vpc_id" {
 }
 
 variable "public_subnet_ids" {
-  description = "Existing public subnets for the ALB, in at least 2 AZs. Required when `vpc_id` is set, ignored otherwise."
+  description = "Existing public subnets for the public ALB, in at least 2 AZs. Required when `vpc_id` is set and private_ingress is false."
   type        = list(string)
   default     = []
 }
 
 variable "private_subnet_ids" {
-  description = "Existing private subnets for the ECS tasks, Aurora, and ElastiCache. Required when `vpc_id` is set, ignored otherwise."
+  description = "Existing private subnets for the ECS tasks, Aurora, ElastiCache, and internal ALB. Required when `vpc_id` is set, ignored otherwise."
   type        = list(string)
   default     = []
+}
+
+variable "private_ingress" {
+  description = "Use an internal ALB in private subnets instead of the public ALB."
+  type        = bool
+  default     = false
 }
 
 variable "additional_task_security_group_ids" {

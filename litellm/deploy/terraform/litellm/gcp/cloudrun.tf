@@ -217,11 +217,12 @@ locals {
 resource "google_cloud_run_v2_service" "gateway" {
   count = var.create_runtime ? 1 : 0
 
-  name                = "${local.name}-gateway"
-  location            = var.region
-  ingress             = "INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER"
-  labels              = local.labels
-  deletion_protection = false
+  name                 = "${local.name}-gateway"
+  location             = var.region
+  ingress              = var.private_ingress == null ? "INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER" : "INGRESS_TRAFFIC_INTERNAL_ONLY"
+  invoker_iam_disabled = var.private_ingress != null
+  labels               = local.labels
+  deletion_protection  = false
 
   lifecycle {
     precondition {
@@ -487,11 +488,12 @@ resource "google_cloud_run_v2_service" "gateway" {
 resource "google_cloud_run_v2_service" "backend" {
   count = var.create_runtime ? 1 : 0
 
-  name                = "${local.name}-backend"
-  location            = var.region
-  ingress             = "INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER"
-  labels              = local.labels
-  deletion_protection = false
+  name                 = "${local.name}-backend"
+  location             = var.region
+  ingress              = var.private_ingress == null ? "INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER" : "INGRESS_TRAFFIC_INTERNAL_ONLY"
+  invoker_iam_disabled = var.private_ingress != null
+  labels               = local.labels
+  deletion_protection  = false
 
   template {
     service_account                  = google_service_account.runtime.email
@@ -606,11 +608,12 @@ resource "google_cloud_run_v2_service" "backend" {
 resource "google_cloud_run_v2_service" "ui" {
   count = var.create_runtime ? 1 : 0
 
-  name                = "${local.name}-ui"
-  location            = var.region
-  ingress             = "INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER"
-  labels              = local.labels
-  deletion_protection = false
+  name                 = "${local.name}-ui"
+  location             = var.region
+  ingress              = var.private_ingress == null ? "INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER" : "INGRESS_TRAFFIC_INTERNAL_ONLY"
+  invoker_iam_disabled = var.private_ingress != null
+  labels               = local.labels
+  deletion_protection  = false
 
   template {
     service_account                  = google_service_account.ui_runtime[0].email
@@ -655,7 +658,7 @@ resource "google_cloud_run_v2_service" "ui" {
 # (LITELLM_MASTER_KEY); these IAM bindings just open up Cloud Run's invoker
 # gate so the LB request makes it to the container.
 resource "google_cloud_run_v2_service_iam_member" "gateway_allusers" {
-  count = var.create_runtime ? 1 : 0
+  count = local.public_lb ? 1 : 0
 
   project  = var.project_id
   location = google_cloud_run_v2_service.gateway[0].location
@@ -665,7 +668,7 @@ resource "google_cloud_run_v2_service_iam_member" "gateway_allusers" {
 }
 
 resource "google_cloud_run_v2_service_iam_member" "backend_allusers" {
-  count = var.create_runtime ? 1 : 0
+  count = local.public_lb ? 1 : 0
 
   project  = var.project_id
   location = google_cloud_run_v2_service.backend[0].location
@@ -675,7 +678,7 @@ resource "google_cloud_run_v2_service_iam_member" "backend_allusers" {
 }
 
 resource "google_cloud_run_v2_service_iam_member" "ui_allusers" {
-  count = var.create_runtime ? 1 : 0
+  count = local.public_lb ? 1 : 0
 
   project  = var.project_id
   location = google_cloud_run_v2_service.ui[0].location

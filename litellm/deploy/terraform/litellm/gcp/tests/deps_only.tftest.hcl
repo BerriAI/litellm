@@ -48,6 +48,11 @@ run "default_creates_everything" {
   }
 
   assert {
+    condition     = google_compute_global_forwarding_rule.http[0].load_balancing_scheme == "EXTERNAL_MANAGED" && google_cloud_run_v2_service_iam_member.gateway_allusers[0].member == "allUsers"
+    error_message = "The default public frontend and Cloud Run invoker grant must continue to work."
+  }
+
+  assert {
     condition     = length(local.shared_env_kv) == 12
     error_message = "The default runtime environment must include GCS and the three Redis TLS entries."
   }
@@ -57,7 +62,8 @@ run "deps_only_creates_no_runtime" {
   command = plan
 
   variables {
-    create_runtime = false
+    create_runtime  = false
+    private_ingress = {}
     proxy_config = {
       model_list = []
     }
@@ -86,6 +92,8 @@ run "deps_only_creates_no_runtime" {
       length(google_compute_managed_ssl_certificate.this) == 0,
       length(google_compute_target_https_proxy.this) == 0,
       length(google_compute_global_forwarding_rule.https) == 0,
+      length(google_compute_forwarding_rule.private_lb) == 0,
+      length(google_compute_subnetwork.lb_proxy) == 0,
       length(terraform_data.migration) == 0,
       length(google_vpc_access_connector.this) == 0,
       length(google_service_account.ui_runtime) == 0,

@@ -70,6 +70,11 @@ run "existing_vpc_creates_no_networking" {
   }
 
   assert {
+    condition     = !aws_lb.this.internal && aws_lb.this.subnets == toset(var.public_subnet_ids)
+    error_message = "Public ingress must still use the supplied public subnets by default."
+  }
+
+  assert {
     condition = alltrue([
       length(aws_vpc.this) == 0,
       length(aws_subnet.public) == 0,
@@ -100,6 +105,27 @@ run "existing_vpc_creates_no_networking" {
   assert {
     condition     = length(local.task_security_group_ids) == 2
     error_message = "additional_task_security_group_ids must be attached alongside the module's own tasks group."
+  }
+}
+
+run "private_alb_does_not_need_public_subnets" {
+  command = plan
+
+  variables {
+    vpc_id              = "vpc-00000000000000001"
+    private_subnet_ids  = ["subnet-priv-a", "subnet-priv-b"]
+    private_ingress     = true
+    acm_certificate_arn = "arn:aws:acm:us-east-1:111111111111:certificate/00000000-0000-0000-0000-000000000000"
+  }
+
+  assert {
+    condition     = aws_lb.this.internal && aws_lb.this.subnets == toset(var.private_subnet_ids)
+    error_message = "The internal ALB must use only the supplied private subnets."
+  }
+
+  assert {
+    condition     = aws_lb_listener.https[0].certificate_arn == var.acm_certificate_arn
+    error_message = "The internal ALB must use the configured HTTPS certificate."
   }
 }
 
