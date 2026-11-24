@@ -101,7 +101,10 @@ def _with_root_ref_inlined(schema: Mapping[str, object] | None) -> Mapping[str, 
 
 def schema_with_root_ref_resolved(schema: Mapping[str, object]) -> Mapping[str, object] | None:
     unresolved: Final[Mapping[str, object] | None] = schema
-    return reduce(lambda resolved, _hop: _with_root_ref_inlined(resolved), range(_MAX_SCHEMA_FLATTEN_DEPTH), unresolved)
+    resolved: Final = reduce(
+        lambda partial, _hop: _with_root_ref_inlined(partial), range(_MAX_SCHEMA_FLATTEN_DEPTH), unresolved
+    )
+    return None if resolved is None or isinstance(resolved.get("$ref"), str) else resolved
 
 
 def _referenced_def_names(ref: object) -> frozenset[str] | None:
