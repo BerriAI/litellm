@@ -517,7 +517,7 @@ _OPUS_NEEDS_1HR: Final = [
 
 @pytest.fixture
 def price_map(monkeypatch: pytest.MonkeyPatch) -> None:
-    model_cost: Final = cast("dict[str, object]", litellm.model_cost)  # pyright: ignore[reportUnknownMemberType]
+    model_cost: Final = cast("dict[str, object]", litellm.model_cost)  # pyright: ignore[reportUnknownMemberType]  # litellm.model_cost is an untyped dict
     monkeypatch.setitem(model_cost, "lint-opus", _OPUS_MAP_ENTRY)
     monkeypatch.setitem(model_cost, "lint-gpt", _GPT_MAP_ENTRY)
 
