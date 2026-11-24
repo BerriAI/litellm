@@ -2,10 +2,11 @@
 Translates from OpenAI's `/v1/chat/completions` to Moonshot AI's `/v1/chat/completions`
 """
 
-from collections.abc import Coroutine, Mapping
+from collections.abc import Coroutine
 from typing import Final, Literal, cast, overload
 
 import litellm
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     handle_messages_with_content_list_to_str_conversion,
 )
@@ -22,7 +23,8 @@ def _reasoning_effort_string(value: object) -> str | None:
     providers with a reasoning-summary surface. Moonshot's API takes only the bare string and 400s
     on an object, so the level is unwrapped and the summary, which has no Moonshot equivalent, is
     dropped."""
-    effort: Final = value.get("effort") if isinstance(value, Mapping) else value
+    wrapped: Final = as_str_mapping(value)
+    effort: Final = wrapped.get("effort") if wrapped is not None else value
     return effort if isinstance(effort, str) else None
 
 

@@ -191,11 +191,11 @@ def _grounding_metadata_from_frame(frame: Mapping[str, object]) -> tuple[Mapping
     Live reports grounding in the server frames rather than in ``usageMetadata``, and it emits both
     on the same frame, so the per-query charge is countable at the point usage is built.
     """
-    server_content: Final = frame.get("serverContent")
-    if not isinstance(server_content, Mapping):
+    server_content: Final = as_str_mapping(frame.get("serverContent"))
+    if server_content is None:
         return ()
-    metadata: Final = server_content.get("groundingMetadata")
-    return (metadata,) if isinstance(metadata, Mapping) else ()
+    metadata: Final = as_str_mapping(server_content.get("groundingMetadata"))
+    return (metadata,) if metadata is not None else ()
 
 
 # Google bills Live transcription at an estimated 25 audio tokens/sec of input and
