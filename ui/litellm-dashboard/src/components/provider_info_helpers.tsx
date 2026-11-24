@@ -136,6 +136,7 @@ export enum Providers {
   LLAMAFILE = "Llamafile",
   LM_STUDIO = "Lm Studio",
   LLAMA = "Meta Llama",
+  META = "Meta Model API",
   MARITALK = "Maritalk",
   MICROSOFT_365_COPILOT = "Microsoft 365 Copilot",
   MiniMax = "MiniMax",
@@ -262,6 +263,7 @@ export const provider_map: Record<string, string> = {
   LEMONADE: "lemonade",
   LLAMAFILE: "llamafile",
   LLAMA: "meta_llama",
+  META: "meta",
   LM_STUDIO: "lm_studio",
   MICROSOFT_365_COPILOT: "microsoft_365_copilot",
   MARITALK: "maritalk",
@@ -327,7 +329,7 @@ export const provider_map: Record<string, string> = {
   ZAI: "zai",
 };
 
-const standaloneSubproviderSlugs = new Set<string>(["bedrock_mantle", "perplexity_orchestrator"]);
+const standaloneSubproviderSlugs = new Set<string>(["bedrock_mantle", "perplexity_orchestrator", "meta_llama"]);
 
 export const resolveLitellmProviderSlug = (provider: string): string =>
   provider_map[provider] ?? provider.toLowerCase();
@@ -380,6 +382,7 @@ export const providerLogoMap: Partial<Record<Providers, string>> = {
   [Providers.LAMBDA_AI]: lambdaLogo.src,
   [Providers.LM_STUDIO]: lmstudioLogo.src,
   [Providers.LLAMA]: metaLlamaLogo.src,
+  [Providers.META]: metaLlamaLogo.src,
   [Providers.MiniMax]: minimaxLogo.src,
   [Providers.MICROSOFT_365_COPILOT]: microsoft365CopilotLogo.src,
   [Providers.MistralAI]: mistralLogo.src,
@@ -479,6 +482,7 @@ const providerPlaceholderMap: Partial<Record<Providers, string>> = {
   [Providers.FalAI]: "fal_ai/fal-ai/flux-pro/v1.1-ultra",
   [Providers.Google_AI_Studio]: "gemini-pro",
   [Providers.JinaAI]: "jina_ai/",
+  [Providers.META]: "meta/muse-spark-1.1",
   [Providers.MICROSOFT_365_COPILOT]: "microsoft_365_copilot/chat",
   [Providers.NVIDIA_RIVA]: "nvidia_riva/nvidia/parakeet-ctc-1_1b-asr",
   [Providers.Oracle]: "oci/xai.grok-4",
