@@ -42,7 +42,7 @@ from litellm.litellm_core_utils.cli_token_utils import (
     load_cli_token_left_in_keychain,
     save_cli_token,
 )
-from litellm.litellm_core_utils.core_helpers import joined, length_of, require_get, subscript
+from litellm.litellm_core_utils.core_helpers import as_object_list, joined, length_of, require_get, subscript
 
 from .claude_settings import (
     STARTING_MODEL_ROLE,
@@ -146,7 +146,7 @@ class CliAuthResult(TypedDict):
     team_id: str | None
 
 
-_TeamMapping: Final = TypeVar("_TeamMapping", bound=Mapping[str, object])
+_TeamMapping = TypeVar("_TeamMapping", bound=Mapping[str, object])
 
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
 _DECODED_JSON: Final = TypeAdapter(object)
@@ -633,17 +633,19 @@ def _normalize_teams(teams: object, team_details: object) -> list[CliTeam]:
     Returns:
         _type_: _description_
     """
-    if isinstance(team_details, list) and team_details:
+    team_detail_list: Final = as_object_list(team_details)
+    if team_detail_list:
         return [
             {
                 "team_id": i.get("team_id") or i.get("id"),
                 "team_alias": i.get("team_alias"),
             }
-            for i in team_details
+            for i in team_detail_list
             if isinstance(i, dict) and (i.get("team_id") or i.get("id"))
         ]
-    if isinstance(teams, list):
-        return [{"team_id": str(t), "team_alias": None} for t in teams]
+    team_list: Final = as_object_list(teams)
+    if team_list is not None:
+        return [{"team_id": str(t), "team_alias": None} for t in team_list]
     return []
 
 

@@ -29,7 +29,7 @@ from litellm.integrations.custom_logger_v2.patches import LiveFields
 from litellm.integrations.custom_logger_v2.planner import Entry, HookPlan, plan_hook
 from litellm.integrations.custom_logger_v2.selection import RequestSelection, Selection
 
-ResultT: Final = TypeVar("ResultT")
+ResultT = TypeVar("ResultT")
 
 SyncLegacyBinding: TypeAlias = Callable[[object, object], object]
 

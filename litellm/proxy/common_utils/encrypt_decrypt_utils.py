@@ -61,6 +61,14 @@ class _KdfCtxNew(Protocol):
     def __call__(self, kdf: int | None, /) -> int | None: ...
 
 
+class _CipherFetch(Protocol):
+    def __call__(self, libctx: None, algorithm: bytes, properties: bytes, /) -> int | None: ...
+
+
+class _CipherCtxNew(Protocol):
+    def __call__(self, /) -> int | None: ...
+
+
 class _OsslParam(ctypes.Structure):
     _fields_ = (
         ("key", ctypes.c_char_p),
@@ -83,6 +91,16 @@ def _kdf_fetch_function(libcrypto: ctypes.CDLL) -> _KdfFetch:
 
 def _kdf_ctx_new_function(libcrypto: ctypes.CDLL) -> _KdfCtxNew:
     return ctypes.CFUNCTYPE(ctypes.c_void_p, ctypes.c_void_p)(("EVP_KDF_CTX_new", libcrypto))
+
+
+def _cipher_fetch_function(libcrypto: ctypes.CDLL) -> _CipherFetch:
+    return ctypes.CFUNCTYPE(ctypes.c_void_p, ctypes.c_void_p, ctypes.c_char_p, ctypes.c_char_p)(
+        ("EVP_CIPHER_fetch", libcrypto)
+    )
+
+
+def _cipher_ctx_new_function(libcrypto: ctypes.CDLL) -> _CipherCtxNew:
+    return ctypes.CFUNCTYPE(ctypes.c_void_p)(("EVP_CIPHER_CTX_new", libcrypto))
 
 
 def _kbkdf_hmac_sha256(key: bytes, label: bytes, context: bytes) -> bytes:
@@ -154,10 +172,8 @@ def _fips_seal_aes_gcm(key: bytes, plaintext: bytes) -> bytes | None:
 
     libcrypto: Final = ctypes.CDLL(_hashlib.__file__)
     int_p: Final = ctypes.POINTER(ctypes.c_int)
-    fetch: Final = ctypes.CFUNCTYPE(ctypes.c_void_p, ctypes.c_void_p, ctypes.c_char_p, ctypes.c_char_p)(
-        ("EVP_CIPHER_fetch", libcrypto)
-    )
-    ctx_new: Final = ctypes.CFUNCTYPE(ctypes.c_void_p)(("EVP_CIPHER_CTX_new", libcrypto))
+    fetch: Final = _cipher_fetch_function(libcrypto)
+    ctx_new: Final = _cipher_ctx_new_function(libcrypto)
     init: Final = ctypes.CFUNCTYPE(
         ctypes.c_int, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_char_p, ctypes.c_char_p, ctypes.c_void_p
     )(("EVP_EncryptInit_ex2", libcrypto))
@@ -299,7 +315,7 @@ def decrypt_bearer_token(token: str, prefix: str) -> str | None:
         return None
 
 
-_Passthrough: Final = TypeVar("_Passthrough")
+_Passthrough = TypeVar("_Passthrough")
 
 
 @overload

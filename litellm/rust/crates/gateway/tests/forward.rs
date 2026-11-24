@@ -1,3 +1,5 @@
+mod keys;
+
 use std::{fmt, io::Write, net::SocketAddr, sync::Arc, time::Duration};
 
 use axum::{
@@ -11,6 +13,7 @@ use flate2::{Compression, write::GzEncoder};
 use http_body_util::BodyExt;
 use hyper_util::{client::legacy::Client, rt::TokioExecutor};
 use litellm_config::{Config, Environment};
+use litellm_gateway::host::auth::AuthStore;
 use litellm_gateway::middleware;
 use litellm_gateway_forward::ANSWERED_BY_HEADER;
 use litellm_license::Entitlements;
@@ -67,6 +70,21 @@ async fn python() -> (SocketAddr, mpsc::UnboundedReceiver<Received>) {
 /// admitting every request or refusing every one.
 async fn gateway(python: SocketAddr, admits: bool, root_path: &str) -> SocketAddr {
     let config = Config::from_yaml("model_list: []").unwrap();
+    let litellm_gateway::Inference {
+        gateway: inference,
+        key_limiter,
+    } = litellm_gateway::build_inference(
+        &config,
+        &Environment::default(),
+        &litellm_gateway::Resources::build(&config).unwrap(),
+        litellm_gateway_inference::RoutingCache::new(
+            None,
+            litellm_gateway_inference::RouterTiers::default(),
+        ),
+        &litellm_gateway::RedisClients::default(),
+    )
+    .await
+    .unwrap();
     let native = middleware::root_path::layer(middleware::root_path::Settings::from_environment(
         &Environment {
             server_root_path: root_path.into(),
@@ -76,26 +94,22 @@ async fn gateway(python: SocketAddr, admits: bool, root_path: &str) -> SocketAdd
     .layer(middleware::global(
         litellm_gateway::router(
             litellm_gateway::AppState {
-                inference: litellm_gateway::build_inference(
-                    &config,
-                    &litellm_gateway::Resources::build(&config).unwrap(),
-                    litellm_gateway_inference::RoutingCache::new(
-                        None,
-                        litellm_gateway_inference::RouterTiers::default(),
-                    ),
-                )
-                .await
-                .unwrap(),
+                key_limiter,
+                inference,
                 redis: litellm_gateway::RedisClients::default(),
                 database: None,
+                keys: None,
                 entitlements: Arc::new(Entitlements::Community),
                 environment: Arc::new(litellm_env::ProcessEnvironment),
+                gateway_requests: None,
+                gateway_requests_flush: None,
             },
             &config,
         ),
         &middleware::Settings::default(),
         Arc::new(Entitlements::Community),
         &middleware::InFlight::new(),
+        None,
     ));
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
@@ -220,6 +234,11 @@ const MASTER_KEY: &str = "Bearer gateway-key";
 /// The native gateway built from `config` the way `main` builds it in front of `python`, with the
 /// real `Admit` and no variable in its environment.
 async fn configured_gateway(python: SocketAddr, config: &str) -> SocketAddr {
+    holding_keys(python, config, None).await
+}
+
+/// [`configured_gateway`] whose database holds `keys`.
+async fn holding_keys(python: SocketAddr, config: &str, keys: Option<AuthStore>) -> SocketAddr {
     litellm_gateway::install_crypto_provider();
     let config = Config::from_yaml(config).unwrap();
     let resources =
@@ -227,6 +246,10 @@ async fn configured_gateway(python: SocketAddr, config: &str) -> SocketAddr {
     let state = litellm_gateway::AppState::over(&config, &Environment::default(), &resources)
         .await
         .unwrap();
+    let state = litellm_gateway::AppState {
+        keys: keys.map(Arc::new).or(state.keys.clone()),
+        ..state
+    };
     let admit = Arc::new(litellm_gateway::Admit::new(
         &config,
         &Environment::default(),
@@ -237,6 +260,7 @@ async fn configured_gateway(python: SocketAddr, config: &str) -> SocketAddr {
         &middleware::Settings::default(),
         Arc::new(Entitlements::Community),
         &middleware::InFlight::new(),
+        None,
     );
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
@@ -582,4 +606,26 @@ async fn the_milestone_shuffle_follows_the_deployments_weights() {
         (250..=350).contains(&by_the_heavier),
         "claude-a holds 3 of the 4 parts of the weight and answered {by_the_heavier} of 400"
     );
+}
+
+#[rstest]
+#[tokio::test(flavor = "multi_thread")]
+async fn an_admitted_virtual_key_is_looked_up_once() {
+    let (python, mut received) = python().await;
+    let provider = provider().await;
+    let held = keys::Held::holding("sk-virtual", serde_json::json!({})).await;
+    let keys = AuthStore::new(keys::memory_cache(), held.database());
+    let gateway = holding_keys(python, &serving(&provider, ""), Some(keys)).await;
+
+    let response = post_as(gateway, "/v1/messages", "Bearer sk-virtual").await;
+
+    assert_eq!(
+        (
+            response.status(),
+            response.headers()[ANSWERED_BY_HEADER].to_str().unwrap()
+        ),
+        (StatusCode::OK, "rust")
+    );
+    assert_eq!(held.key_reads(), 1);
+    assert!(received.try_recv().is_err());
 }

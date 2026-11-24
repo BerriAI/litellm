@@ -221,6 +221,12 @@ def _turn_time_utc(start_time_iso: str) -> datetime | None:
     return parsed.astimezone(timezone.utc).replace(tzinfo=None)
 
 
+def _mapping_or_none(value: object) -> Mapping[object, object] | None:
+    if isinstance(value, Mapping):
+        return value
+    return None
+
+
 def _write_ttl_seconds(usage_object: Mapping[str, object] | None) -> int | None:
     """The TTL this turn's cache write used, or None when nothing was written.
 
@@ -231,9 +237,9 @@ def _write_ttl_seconds(usage_object: Mapping[str, object] | None) -> int | None:
 
     if not usage_object:
         return None
-    details: Final = usage_object.get("prompt_tokens_details")
-    creation: Final = details.get("cache_creation_token_details") if isinstance(details, Mapping) else None
-    if isinstance(creation, Mapping):
+    details: Final = _mapping_or_none(usage_object.get("prompt_tokens_details"))
+    creation: Final = _mapping_or_none(details.get("cache_creation_token_details")) if details is not None else None
+    if creation is not None:
         if creation.get("ephemeral_1h_input_tokens"):
             return CACHE_TTL_1H_SECONDS
         if creation.get("ephemeral_5m_input_tokens"):

@@ -50,7 +50,7 @@ else:
     LiteLLMLoggingObj = Any
     HttpxBinaryResponseContent = Any
 
-_LyriaVoice: TypeAlias = str | dict | None
+_LyriaVoice: TypeAlias = str | dict[str, object] | None
 
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
 _JSON_ARRAY: Final = TypeAdapter(tuple[object, ...], config=ConfigDict(hide_input_in_errors=True))
@@ -298,7 +298,7 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
         voice: str | dict[str, object] | None,
         model: str | None = None,
         drop_params: bool = False,
-    ) -> tuple[str | None, dict | None]:
+    ) -> tuple[str | None, dict[str, object] | None]:
         """
         Map voice to Vertex AI format.
 
@@ -339,12 +339,10 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
         else:
             language_code = self.DEFAULT_LANGUAGE_CODE
 
-        voice_dict: Final = {
+        return voice_str, {
             "languageCode": language_code,
             "name": mapped_voice_name,
         }
-
-        return voice_str, voice_dict
 
     @staticmethod
     def _is_gemini_tts_model(model: str) -> bool:
@@ -639,7 +637,7 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
 
         return response
 
-    def get_supported_openai_params(self, model: str) -> list:
+    def get_supported_openai_params(self, model: str) -> list[str]:
         """
         Vertex AI TTS supports these OpenAI parameters
 
@@ -655,7 +653,7 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
         voice: str | dict[str, object] | None = None,
         drop_params: bool = False,
         kwargs: dict = {},
-    ) -> tuple[str | None, dict]:
+    ) -> tuple[str | None, dict[str, object]]:
         """
         Map OpenAI parameters to Vertex AI TTS parameters
 
@@ -800,7 +798,7 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
     def _validate_vertex_input(
         self,
         input_data: VertexTextToSpeechInput,
-        optional_params: dict,
+        optional_params: Mapping[str, object],
         detect_ssml: bool,
     ) -> VertexTextToSpeechInput:
         """
@@ -1026,7 +1024,7 @@ class VertexAILyriaTextToSpeechConfig(VertexAITextToSpeechConfig):
 
     def get_supported_openai_params(
         self, model: str
-    ) -> list:  # mutable-ok: inherited provider interface returns a concrete parameter list
+    ) -> list[str]:  # mutable-ok: inherited provider interface returns a concrete parameter list
         return ["response_format"]
 
     def map_openai_params(

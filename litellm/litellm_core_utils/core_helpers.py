@@ -32,6 +32,7 @@ from litellm.litellm_core_utils.hidden_params import set_extra_attribute
 from litellm.litellm_core_utils.llm_response_utils.get_headers import get_provider_request_id
 from litellm.types.litellm_params import MCP_HANDLER_KWARG_NAMES
 from litellm.types.llms.openai import AllMessageValues, OpenAIChatCompletionFinishReason
+from litellm.types.rerank import RerankResponse
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
@@ -46,8 +47,24 @@ else:
 _CODEX_CLIENT_PREFIX_RE: Final = re.compile(r"^codex[-_ /]", re.IGNORECASE)
 
 
+def _camel_case(key: str) -> str:
+    head, *rest = key.split("_")
+    return head + "".join(part[:1].upper() + part[1:] for part in rest)
+
+
+def camel_case_keys(config: Mapping[str, object]) -> Mapping[str, object]:
+    return {
+        **{_camel_case(key): value for key, value in config.items() if "_" in key},
+        **{key: value for key, value in config.items() if "_" not in key},
+    }
+
+
 def is_codex_user_agent(user_agent: str) -> bool:
     return bool(_CODEX_CLIENT_PREFIX_RE.match(user_agent))
+
+
+def is_github_copilot_chat_user_agent(user_agent: str) -> bool:
+    return user_agent.startswith("GitHubCopilotChat/")
 
 
 def qualify_provider_stripped_model(model: str, custom_llm_provider: str) -> str:
@@ -116,6 +133,44 @@ _LAX_BOOL: Final = TypeAdapter(bool)
 
 def as_str_mapping(value: object) -> Mapping[str, object] | None:
     return value if isinstance(value, (dict, Mapping)) else None
+
+
+_DECODED_JSON: Final = TypeAdapter(object)
+
+
+def loads_json_object(payload: str | bytes | bytearray) -> Mapping[str, object] | None:
+    opens_object: Final = (
+        payload.lstrip().startswith(b"{")
+        if isinstance(payload, (bytes, bytearray))
+        else payload.lstrip().startswith("{")
+    )
+    if not opens_object:
+        return None
+    try:
+        return as_str_mapping(_DECODED_JSON.validate_python(json.loads(payload)))
+    except (ValueError, RecursionError):
+        return None
+
+
+_JSON_NESTING_ALWAYS_DECODABLE: Final = 100
+_DIGIT_RUN_PYTHON_MAY_REFUSE: Final = re.compile(r"[0-9]{640}")
+
+
+def is_undecodable_json_object(payload: str) -> bool:
+    if not payload.lstrip().startswith("{"):
+        return False
+    if (
+        payload.count("{") + payload.count("[") < _JSON_NESTING_ALWAYS_DECODABLE
+        and _DIGIT_RUN_PYTHON_MAY_REFUSE.search(payload) is None
+    ):
+        return False
+    try:
+        json.loads(payload)
+    except json.JSONDecodeError:
+        return False
+    except (ValueError, RecursionError):
+        return True
+    return False
 
 
 def as_object_list(value: object) -> Sequence[object] | None:
@@ -202,15 +257,15 @@ _HTTP_ERROR_STATUSES: Final = range(HTTPStatus.BAD_REQUEST, 600)
 def error_status_code(exc: object, default: int) -> int:
     """The 4xx or 5xx HTTP status an exception carries as ``status_code`` (an int or a decimal string) or,
     the way ``ProxyException`` stores it, as a stringified ``code``; ``default`` when it carries neither."""
-    carried: Final = _http_error_status(attribute_or_none(exc, "status_code"))
+    carried: Final = http_error_status(attribute_or_none(exc, "status_code"))
     if carried is not None:
         return carried
     stringified: Final = attribute_or_none(exc, "code")
-    from_code: Final = _http_error_status(stringified) if isinstance(stringified, str) else None
+    from_code: Final = http_error_status(stringified) if isinstance(stringified, str) else None
     return default if from_code is None else from_code
 
 
-def _http_error_status(value: object) -> int | None:
+def http_error_status(value: object) -> int | None:
     match value:
         case bool():
             return None
@@ -222,7 +277,7 @@ def _http_error_status(value: object) -> int | None:
             return None
 
 
-_Shape: Final = TypeVar("_Shape")
+_Shape = TypeVar("_Shape")
 
 
 @dataclass(frozen=True, slots=True)
@@ -1173,7 +1228,7 @@ def redact_nested_match_and_regex_keys(payload: object, keys: Collection[str] = 
 
     # Iterative traversal; `seen` guards against cyclic refs preserved by deepcopy.
     try:
-        seen: Final[set] = set()
+        seen: Final[set[int]] = set()
         stack: Final[list[object]] = [redacted]
         while stack:
             node = stack.pop()
@@ -1298,9 +1353,13 @@ def billed_usage_cost(response: object, custom_llm_provider: str | None) -> floa
     cost: Final = (
         _numeric(hidden[UPSTREAM_USAGE_COST])
         if hidden is not None and UPSTREAM_USAGE_COST in hidden
-        else provider_reported_usage_cost(_usage_field(response, "usage"), custom_llm_provider)
+        else provider_reported_usage_cost(_billed_usage_block(response), custom_llm_provider)
     )
     return cost if cost is not None and math.isfinite(cost) and cost >= 0 else None
+
+
+def _billed_usage_block(response: object) -> object:
+    return response.provider_usage if isinstance(response, RerankResponse) else _usage_field(response, "usage")
 
 
 _MESSAGES_REPORTED_COST_PROVIDERS: Final = frozenset({"opencode_go"})
