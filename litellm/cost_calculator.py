@@ -55,7 +55,6 @@ from litellm.litellm_core_utils.llm_cost_calc.usage_object_transformation import
     TranscriptionUsageObjectTransformation,
 )
 from litellm.litellm_core_utils.llm_cost_calc.utils import (
-    _SERVICE_TIER_TO_COST_KEY_SUFFIX,
     BilledTokenRates,
     CostCalculatorUtils,
     calculate_cache_writing_cost,
@@ -141,6 +140,7 @@ from litellm.llms.vertex_ai.cost_calculator import (
 from litellm.llms.vertex_ai.cost_calculator import cost_router as google_cost_router
 from litellm.llms.xai.cost_calculator import cost_per_token as xai_cost_per_token
 from litellm.responses.utils import ResponseAPILoggingUtils
+from litellm.rust_bridge._native import NativeReceipt, billable_service_tier
 from litellm.types.agents import LiteLLMSendMessageResponse
 from litellm.types.decisions import (
     DecisionsResponse,
@@ -1361,9 +1361,6 @@ def _map_traffic_type_to_service_tier(traffic_type: object) -> str | None:
     return service_tier
 
 
-_BASE_PRICING_SERVICE_TIERS: Final[frozenset[str]] = frozenset({"default", "standard"})
-
-
 def _served_image_service_tier(completion_response: object, usage_object: Usage | None) -> str | None:
     """Image requests never send a tier upstream, so only the tier the provider reports can price them."""
     return _resolve_billable_service_tier(
@@ -1374,12 +1371,9 @@ def _served_image_service_tier(completion_response: object, usage_object: Usage 
 
 def _resolve_billable_service_tier(requested: object, served: object) -> str | None:
     """Served tier wins when it names a priced tier or explicitly says base pricing; otherwise the request decides."""
-    served_lower: Final = served.lower() if isinstance(served, str) else None
-    if served_lower is not None and served_lower in _SERVICE_TIER_TO_COST_KEY_SUFFIX:
-        return served_lower
-    if served_lower in _BASE_PRICING_SERVICE_TIERS:
-        return None
-    return normalize_service_tier(requested)
+    return billable_service_tier(
+        requested if isinstance(requested, str) else None, served if isinstance(served, str) else None
+    )
 
 
 def _served_service_tier(completion_response: object, usage_object: Usage | None) -> str | None:
@@ -1972,6 +1966,18 @@ def rust_priced_cost(
     )
     if receipt is None:
         return None
+    store_receipt_breakdown(litellm_logging_obj, receipt, service_tier, data_residency, vertex_location)
+    return receipt.total
+
+
+def store_receipt_breakdown(
+    litellm_logging_obj: LitellmLoggingObject | None,
+    receipt: NativeReceipt,
+    service_tier: str | None,
+    data_residency: str | None,
+    vertex_location: str | None,
+) -> None:
+    """The cost breakdown of a call Rust priced, stored on its logging object as ``completion_cost`` stores it."""
     _store_cost_breakdown_in_logging_obj(
         litellm_logging_obj=litellm_logging_obj,
         prompt_tokens_cost_usd_dollar=receipt.prompt_cost,
@@ -1992,7 +1998,6 @@ def rust_priced_cost(
         vertex_location=vertex_location,
         billed_token_rates=billed_token_rates(receipt),
     )
-    return receipt.total
 
 
 def completion_cost(

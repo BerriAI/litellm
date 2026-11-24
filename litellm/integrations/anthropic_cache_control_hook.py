@@ -836,7 +836,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         messages: list[AllMessageValues],
         non_default_params: dict,
         prompt_id: str | None,
-        prompt_variables: dict | None,
+        prompt_variables: Mapping[str, object] | None,
         dynamic_callback_params: StandardCallbackDynamicParams,
         prompt_spec: PromptSpec | None = None,
         prompt_label: str | None = None,
@@ -1591,10 +1591,10 @@ class AnthropicCacheControlHook(CustomPromptManagement):
     @staticmethod
     def get_default_injection_points(
         messages: list[AllMessageValues],
-        system: str | list | None,
+        system: str | Sequence[object] | None,
         model: str,
         custom_llm_provider: str | None,
-        tools: list | None = None,
+        tools: Sequence[object] | None = None,
         enable_prompt_caching: bool | None = None,
         cache_control: object = None,
         request_kwargs: object = None,
@@ -1692,7 +1692,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         messages: list[AllMessageValues],
         model: str,
         custom_llm_provider: str | None,
-        tools: list | None = None,
+        tools: Sequence[object] | None = None,
         enable_prompt_caching: bool | None = None,
         api_base: object = None,
         model_info: Mapping[str, object] | None = None,
@@ -1909,7 +1909,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         self,
         prompt_id: str | None,
         prompt_spec: PromptSpec | None,
-        prompt_variables: dict | None,
+        prompt_variables: Mapping[str, object] | None,
         dynamic_callback_params: StandardCallbackDynamicParams,
         prompt_label: str | None = None,
         prompt_version: int | None = None,
@@ -1926,7 +1926,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
     async def async_compile_prompt_helper(
         self,
         prompt_id: str | None,
-        prompt_variables: dict | None,
+        prompt_variables: Mapping[str, object] | None,
         dynamic_callback_params: StandardCallbackDynamicParams,
         prompt_spec: PromptSpec | None = None,
         prompt_label: str | None = None,
@@ -1948,11 +1948,11 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         messages: list[AllMessageValues],
         non_default_params: dict,
         prompt_id: str | None,
-        prompt_variables: dict | None,
+        prompt_variables: Mapping[str, object] | None,
         dynamic_callback_params: StandardCallbackDynamicParams,
         litellm_logging_obj: LiteLLMLoggingObj,
         prompt_spec: PromptSpec | None = None,
-        tools: list[dict] | None = None,
+        tools: Sequence[object] | None = None,
         prompt_label: str | None = None,
         prompt_version: int | None = None,
         ignore_prompt_manager_model: bool | None = False,
@@ -1974,14 +1974,14 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         )
 
     @staticmethod
-    def should_use_anthropic_cache_control_hook(non_default_params: dict) -> bool:
+    def should_use_anthropic_cache_control_hook(non_default_params: Mapping[str, object]) -> bool:
         if non_default_params.get("cache_control_injection_points", None):
             return True
         return False
 
     @staticmethod
     def get_custom_logger_for_anthropic_cache_control_hook(
-        non_default_params: dict,
+        non_default_params: Mapping[str, object],
     ) -> CustomLogger | None:
         from litellm.litellm_core_utils.litellm_logging import (
             _init_custom_logger_compatible_class,

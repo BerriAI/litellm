@@ -1464,7 +1464,7 @@ def _estimate_request_max_cost_for_model(
     output_multiplier: Final = _output_multiplier(body, serving=serving, llm_router=llm_router)
     estimates: Final = [
         _max_cost_for_cost_info(
-            request_body=request_body,
+            request_body=body,
             route=route,
             pricing=pricing,
             requested_output_tokens=requested_output_tokens,
@@ -1478,7 +1478,7 @@ def _estimate_request_max_cost_for_model(
 
 
 def _max_cost_for_cost_info(
-    request_body: dict,
+    request_body: Mapping[str, object],
     route: str,
     pricing: _DeploymentPricing,
     requested_output_tokens: int,
@@ -1648,7 +1648,7 @@ def _prompt_cost(rates: _HoldRates, *, input_tokens: int, cached_tokens: int) ->
 
 
 def _estimate_image_generation_cost(
-    request_body: dict,
+    request_body: Mapping[str, object],
     model_info: Mapping[str, object],
 ) -> float | None:
     """

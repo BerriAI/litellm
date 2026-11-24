@@ -347,6 +347,9 @@ class AnthropicPassthroughLoggingHandler:
         )
         if subscription_usage is not None and not subscription_usage["is_overage"]:
             return 0.0
+        route_cost: Final = logging_obj.route_priced_cost
+        if isinstance(route_cost, float):
+            return route_cost
         custom_llm_provider: Final = logging_obj.model_call_details.get("custom_llm_provider")
         model_for_cost: Final = (
             f"{custom_llm_provider}/{model}"
@@ -543,7 +546,7 @@ class AnthropicPassthroughLoggingHandler:
         litellm_logging_obj: LiteLLMLoggingObj,
         passthrough_success_handler_obj: PassThroughEndpointLogging,
         url_route: str,
-        request_body: dict,
+        request_body: Mapping[str, object],
         endpoint_type: EndpointType,
         start_time: datetime,
         all_chunks: list[str],
@@ -649,7 +652,7 @@ class AnthropicPassthroughLoggingHandler:
                     if model_name == "unknown":
                         # Anthropic batches: look under requests[0].params.model
                         requests_list: Final = request_body.get("requests", [])
-                        if isinstance(requests_list, list) and len(requests_list) > 0:
+                        if isinstance(requests_list, list) and requests_list:
                             first_req: Final = requests_list[0]
                             if isinstance(first_req, dict):
                                 params: Final = first_req.get("params", {})

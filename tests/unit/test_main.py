@@ -622,6 +622,62 @@ def test_completion_strips_eager_input_streaming_before_openai(respx_mock: respx
     assert sent_tool["function"]["name"] == "write_file"
 
 
+_EMPTY_LAST_USER_MESSAGES: Final = (
+    pytest.param({"role": "user", "content": ""}, id="empty_string"),
+    pytest.param({"role": "user", "content": []}, id="empty_list"),
+    pytest.param({"role": "user", "content": [{"type": "text", "text": ""}]}, id="empty_text_block"),
+)
+_GEMINI_REPLY: Final = {
+    "candidates": [
+        {"content": {"role": "model", "parts": [{"text": "How can I help?"}]}, "finishReason": "STOP", "index": 0}
+    ],
+    "usageMetadata": {"promptTokenCount": 4, "candidatesTokenCount": 4, "totalTokenCount": 8},
+}
+
+
+@pytest.mark.parametrize("empty_user_message", _EMPTY_LAST_USER_MESSAGES)
+def test_an_alternating_gemini_deployment_sends_the_continue_message_for_an_empty_last_user_message(
+    respx_mock: respx.MockRouter, empty_user_message: dict[str, object]
+):
+    route: Final = respx_mock.post(
+        url__regex=r"https://generativelanguage\.googleapis\.com/[^/]+/models/gemini-3\.8-flash:generateContent.*"
+    ).mock(return_value=httpx.Response(status_code=200, json=_GEMINI_REPLY))
+
+    litellm.completion(
+        model="gemini/gemini-3.8-flash",
+        messages=[{"role": "user", "content": "Hi"}, {"role": "assistant", "content": "Hello!"}, empty_user_message],
+        ensure_alternating_roles=True,
+        user_continue_message={"role": "user", "content": "Keep going"},
+        api_key="fake_gemini_api_key",
+    )
+
+    assert json.loads(route.calls.last.request.read())["contents"] == [
+        {"role": "user", "parts": [{"text": "Hi"}]},
+        {"role": "model", "parts": [{"text": "Hello!"}]},
+        {"role": "user", "parts": [{"text": "Keep going"}]},
+    ]
+
+
+@pytest.mark.parametrize("empty_user_message", _EMPTY_LAST_USER_MESSAGES)
+def test_an_alternating_deployment_that_accepts_a_model_turn_end_keeps_an_empty_last_user_message(
+    respx_mock: respx.MockRouter, openai_api_response: dict[str, object], empty_user_message: dict[str, object]
+):
+    route: Final = respx_mock.post(url__regex=r"http://localhost:12346/v1/chat/completions.*").mock(
+        return_value=httpx.Response(status_code=200, json=openai_api_response)
+    )
+
+    litellm.completion(
+        model="openai/gpt-5.6",
+        messages=[{"role": "user", "content": "Hi"}, {"role": "assistant", "content": "Hello!"}, empty_user_message],
+        ensure_alternating_roles=True,
+        user_continue_message={"role": "user", "content": "Keep going"},
+        api_base="http://localhost:12346/v1",
+        api_key="fake_openai_api_key",
+    )
+
+    assert json.loads(route.calls.last.request.read())["messages"][-1] == empty_user_message
+
+
 _ALLOWED_TOOLS_TOOL_CHOICE: Final = {
     "type": "allowed_tools",
     "allowed_tools": {"mode": "required", "tools": [{"type": "function", "function": {"name": "get_time"}}]},
