@@ -120,6 +120,10 @@ class KeyManagementRoutes(str, enum.Enum):
     # team usage routes
     TEAM_DAILY_ACTIVITY = "/team/daily/activity"
     TEAM_DAILY_ACTIVITY_AGGREGATED = "/team/daily/activity/aggregated"
+    TEAM_DAILY_ACTIVITY_AGGREGATED_KEYS = "/team/daily/activity/aggregated/keys"
+    TEAM_DAILY_ACTIVITY_AGGREGATED_SEARCH = "/team/daily/activity/aggregated/search"
+    TEAM_DAILY_ACTIVITY_AGGREGATED_MODEL_TOP_KEYS = "/team/daily/activity/aggregated/model_top_keys"
+    TEAM_DAILY_ACTIVITY_EXPORT = "/team/daily/activity/export"
 
     # team spend-log viewing
     SPEND_LOGS = "/spend/logs"

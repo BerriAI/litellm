@@ -7430,7 +7430,7 @@ async def update_team_member_permissions(
     # Update the team member permissions
     updated_team: Final = await _team_db(prisma_client).update(
         where={"team_id": data.team_id},
-        data={"team_member_permissions": data.team_member_permissions},
+        data={"team_member_permissions": [p.value if hasattr(p, "value") else p for p in data.team_member_permissions]},
     )
     if updated_team is None:
         raise HTTPException(

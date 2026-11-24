@@ -42,7 +42,12 @@ class TeamMemberPermissionChecks:
           DEFAULT_TEAM_MEMBER_PERMISSIONS.
         """
         if team_table.team_member_permissions is not None and isinstance(team_table.team_member_permissions, list):
-            permissions: Final = {KeyManagementRoutes(permission) for permission in team_table.team_member_permissions}
+            permissions: set[KeyManagementRoutes] = set()
+            for permission in team_table.team_member_permissions:
+                try:
+                    permissions.add(KeyManagementRoutes(permission))
+                except ValueError:
+                    continue
             # Always include baseline permissions
             permissions.update(BASELINE_TEAM_MEMBER_PERMISSIONS)
             return list(permissions)

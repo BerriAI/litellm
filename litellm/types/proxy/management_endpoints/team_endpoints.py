@@ -60,7 +60,7 @@ class UpdateTeamMemberPermissionsRequest(LiteLLMBaseModel):
     """Request to update the team member permissions for a team"""
 
     team_id: str
-    team_member_permissions: list[str]
+    team_member_permissions: list[KeyManagementRoutes]
 
 
 class BulkUpdateTeamMemberPermissionsRequest(LiteLLMBaseModel):
