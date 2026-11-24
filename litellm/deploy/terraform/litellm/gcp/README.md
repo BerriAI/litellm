@@ -14,7 +14,8 @@ Deploys the componentized LiteLLM proxy on GCP:
 - **GCS bucket** — private, versioned, uniform IAM; exposed as `GCS_BUCKET_NAME`
 - **Secret Manager** entries for `LITELLM_MASTER_KEY` and `DATABASE_PASSWORD`
 - **Cloud Run v2** services for `gateway` (port 4000), `backend` (port 4001),
-  and `ui` (port 3000), all using a shared runtime service account
+  and `ui` (port 3000). The gateway, backend, and migration job share a
+  runtime service account. The UI uses a separate service account.
 - **Cloud Run Job** (`litellm-migrations`) that runs `prisma migrate deploy` through the `migrations` component of the same image
 - **External global HTTP(S) load balancer** with serverless NEGs and a URL
   map mirroring the helm-chart ingress path routing:
@@ -548,10 +549,38 @@ with its own provider config (one `examples/default`-style root per project),
 or fork the module to add `configuration_aliases` and pass per-instance
 `providers = { ... }`.
 
+## Bring your own service accounts
+
+Set `runtime_service_account_email` for the gateway, backend, and migration
+job, and `ui_service_account_email` for the UI. Both inputs are optional
+strings and default to `null`. If an input is omitted, the module manages
+that service account as before. With `create_runtime = false`, the UI
+service account is not used or created.
+
+Grant the existing runtime account these roles in the deployment project
+before deploying:
+
+| Project role | When needed |
+| --- | --- |
+| `roles/cloudsql.client` | Always |
+| `roles/monitoring.metricWriter` | When the gateway metrics sidecar is enabled |
+| `roles/logging.logWriter` | When the gateway metrics sidecar is enabled |
+
+The UI account needs no project roles. Give the deployment identity
+`iam.serviceAccounts.actAs` (for example, via `roles/iam.serviceAccountUser`
+on each account) to attach them to Cloud Run. The module skips project IAM
+grants for the supplied accounts, but still manages secret- and bucket-level
+grants for the runtime account. Cloud Run image pulls use the Cloud Run
+service agent, not either runtime account.
+
+Switching an existing deployment to a supplied account removes the
+corresponding module-managed account and its project grants. Review the
+plan and provision the replacement identity before switching.
+
 ## Dependencies only (run LiteLLM on GKE)
 
 Set `create_runtime = false` to provision Cloud SQL, Memorystore, GCS,
-Secret Manager, and the runtime service account without Cloud Run or the
+Secret Manager, and the runtime service account (unless supplied) without Cloud Run or the
 load balancer. For a Shared VPC, set the full host-project network ID and
 skip PSA creation after the host project has configured it:
 

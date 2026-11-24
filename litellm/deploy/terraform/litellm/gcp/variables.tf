@@ -87,6 +87,31 @@ variable "create_runtime" {
   default     = true
 }
 
+variable "runtime_service_account_email" {
+  description = "Email of an existing service account for the gateway, backend, and migration job. The caller manages its project-level IAM grants."
+  type        = string
+  default     = null
+
+  validation {
+    condition     = var.runtime_service_account_email == null || can(regex("^[^@\\s]+@[^@\\s]+\\.gserviceaccount\\.com$", var.runtime_service_account_email))
+    error_message = "runtime_service_account_email must be a Google service account email."
+  }
+}
+
+variable "ui_service_account_email" {
+  description = "Email of an existing service account for the Cloud Run UI. It should have no project roles and must be separate from the runtime service account."
+  type        = string
+  default     = null
+
+  validation {
+    condition = var.ui_service_account_email == null || (
+      can(regex("^[^@\\s]+@[^@\\s]+\\.gserviceaccount\\.com$", var.ui_service_account_email)) &&
+      var.ui_service_account_email != var.runtime_service_account_email
+    )
+    error_message = "ui_service_account_email must be a Google service account email distinct from runtime_service_account_email."
+  }
+}
+
 variable "network_id" {
   description = "Existing VPC network resource ID (`projects/<host-project>/global/networks/<name>`). When set, no VPC or subnet is created. A VPC connector requires this network to be in the deployment project when create_runtime is true."
   type        = string
@@ -624,6 +649,13 @@ variable "billing_metrics_endpoint" {
   EOT
   type        = string
   default     = ""
+
+  validation {
+    condition = !var.create_runtime || var.billing_metrics_endpoint == "" || (
+      var.billing_metrics_client_id != "" && var.billing_metrics_client_secret != ""
+    )
+    error_message = "billing_metrics_client_id and billing_metrics_client_secret are required when billing_metrics_endpoint is set and create_runtime is true."
+  }
 }
 
 variable "billing_metrics_client_id" {

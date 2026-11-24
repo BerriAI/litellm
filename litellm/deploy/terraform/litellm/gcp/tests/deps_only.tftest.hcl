@@ -43,6 +43,15 @@ run "default_creates_everything" {
   }
 
   assert {
+    condition = (
+      google_service_account.runtime[0].account_id == "tenant-litellm-test-runtime" &&
+      google_service_account.ui_runtime[0].account_id == "tenant-litellm-test-ui-runtime" &&
+      google_project_iam_member.runtime_cloudsql[0].role == "roles/cloudsql.client"
+    )
+    error_message = "The default mode must create separate runtime and UI identities and grant the runtime identity Cloud SQL access."
+  }
+
+  assert {
     condition     = google_redis_instance.this.transit_encryption_mode == "SERVER_AUTHENTICATION"
     error_message = "Redis transit encryption must remain enabled by default."
   }
@@ -56,6 +65,51 @@ run "default_creates_everything" {
     condition     = length(local.shared_env_kv) == 12
     error_message = "The default runtime environment must include GCS and the three Redis TLS entries."
   }
+}
+
+run "existing_service_accounts_require_no_project_iam_writes" {
+  command = plan
+
+  variables {
+    runtime_service_account_email = "customer-runtime@test-project.iam.gserviceaccount.com"
+    ui_service_account_email      = "customer-ui@test-project.iam.gserviceaccount.com"
+    gateway_metrics_port          = 4001
+  }
+
+  assert {
+    condition = alltrue([
+      length(google_service_account.runtime) == 0,
+      length(google_service_account.ui_runtime) == 0,
+      length(google_project_iam_member.runtime_cloudsql) == 0,
+      length(google_project_iam_member.runtime_metric_writer) == 0,
+      length(google_project_iam_member.runtime_log_writer) == 0,
+    ])
+    error_message = "Using both existing service accounts must skip service account creation and all project IAM grants, even with metrics enabled."
+  }
+
+  assert {
+    condition = alltrue([
+      google_cloud_run_v2_service.gateway[0].template[0].service_account == var.runtime_service_account_email,
+      google_cloud_run_v2_service.backend[0].template[0].service_account == var.runtime_service_account_email,
+      google_cloud_run_v2_job.migrations[0].template[0].template[0].service_account == var.runtime_service_account_email,
+      google_cloud_run_v2_service.ui[0].template[0].service_account == var.ui_service_account_email,
+      output.runtime_service_account_email == var.runtime_service_account_email,
+      google_secret_manager_secret_iam_member.master_key.member == "serviceAccount:${var.runtime_service_account_email}",
+      google_storage_bucket_iam_member.runtime.member == "serviceAccount:${var.runtime_service_account_email}",
+    ])
+    error_message = "Cloud Run, the migration job, and resource-level access must use the supplied service accounts."
+  }
+}
+
+run "existing_service_account_still_requires_billing_credentials" {
+  command = plan
+
+  variables {
+    runtime_service_account_email = "customer-runtime@test-project.iam.gserviceaccount.com"
+    billing_metrics_endpoint      = "https://metrics.example.com"
+  }
+
+  expect_failures = [var.billing_metrics_endpoint]
 }
 
 run "deps_only_creates_no_runtime" {
@@ -110,7 +164,7 @@ run "deps_only_creates_no_runtime" {
       google_storage_bucket.this.force_destroy == false,
       google_secret_manager_secret.master_key.secret_id == "tenant-litellm-test-master-key",
       google_secret_manager_secret.db_password.secret_id == "tenant-litellm-test-db-password",
-      google_service_account.runtime.account_id == "tenant-litellm-test-runtime",
+      google_service_account.runtime[0].account_id == "tenant-litellm-test-runtime",
     ])
     error_message = "Dependencies-only mode must retain data stores, secrets, and the runtime service account."
   }

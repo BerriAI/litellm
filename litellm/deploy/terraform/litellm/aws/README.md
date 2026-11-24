@@ -523,6 +523,13 @@ the per-component images. To pull from a private registry:
   in Secrets Manager and set `repositoryCredentials.credentialsParameter`
   on the task def container — extend `ecs.tf` accordingly.
 
+## IAM permissions boundary
+
+Set `permissions_boundary` to the ARN of an existing IAM managed policy
+to limit the ECS task execution, shared task, and UI task roles. The policy
+must allow the permissions those roles need. It does not grant permissions
+on its own. If omitted, the module does not set a permissions boundary.
+
 ## TLS
 
 Set `private_ingress = true` to use an internal ALB. The ALB uses two or

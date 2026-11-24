@@ -57,6 +57,25 @@ run "module_owns_everything_by_default" {
     condition     = length(terraform_data.bootstrap_db) == 1 && length(aws_ecs_task_definition.migrations) == 1
     error_message = "The IAM-user bootstrap and the schema migration must both run against the module-created Aurora."
   }
+
+  assert {
+    condition     = alltrue([for role in [aws_iam_role.task_execution, aws_iam_role.task, aws_iam_role.ui_task] : role.permissions_boundary == null])
+    error_message = "The module must leave all role boundaries unset by default."
+  }
+}
+
+run "permissions_boundary_applies_to_every_role" {
+  command = plan
+
+  variables {
+    azs                  = ["us-east-1a", "us-east-1b"]
+    permissions_boundary = "arn:aws:iam::123456789012:policy/litellm-tenant-boundary"
+  }
+
+  assert {
+    condition     = alltrue([for role in [aws_iam_role.task_execution, aws_iam_role.task, aws_iam_role.ui_task] : role.permissions_boundary == var.permissions_boundary])
+    error_message = "Every module-created role must use the supplied permissions boundary."
+  }
 }
 
 run "existing_vpc_creates_no_networking" {

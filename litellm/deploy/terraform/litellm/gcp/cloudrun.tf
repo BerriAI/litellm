@@ -232,7 +232,7 @@ resource "google_cloud_run_v2_service" "gateway" {
   }
 
   template {
-    service_account                  = google_service_account.runtime.email
+    service_account                  = local.runtime_service_account_email
     max_instance_request_concurrency = var.gateway_max_instance_request_concurrency
 
     vpc_access {
@@ -496,7 +496,7 @@ resource "google_cloud_run_v2_service" "backend" {
   deletion_protection  = false
 
   template {
-    service_account                  = google_service_account.runtime.email
+    service_account                  = local.runtime_service_account_email
     max_instance_request_concurrency = var.backend_max_instance_request_concurrency
 
     vpc_access {
@@ -616,7 +616,7 @@ resource "google_cloud_run_v2_service" "ui" {
   deletion_protection  = false
 
   template {
-    service_account                  = google_service_account.ui_runtime[0].email
+    service_account                  = var.ui_service_account_email == null ? google_service_account.ui_runtime[0].email : var.ui_service_account_email
     max_instance_request_concurrency = var.ui_max_instance_request_concurrency
 
     scaling {
@@ -698,7 +698,7 @@ resource "google_cloud_run_v2_job" "migrations" {
 
   template {
     template {
-      service_account = google_service_account.runtime.email
+      service_account = local.runtime_service_account_email
 
       vpc_access {
         connector = google_vpc_access_connector.this[0].id

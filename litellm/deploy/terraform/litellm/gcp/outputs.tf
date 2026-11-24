@@ -44,7 +44,7 @@ output "redis_endpoint" {
 
 output "runtime_service_account_email" {
   description = "Runtime service account email for Cloud Run or GKE Workload Identity."
-  value       = google_service_account.runtime.email
+  value       = local.runtime_service_account_email
 }
 
 output "redis_host" {

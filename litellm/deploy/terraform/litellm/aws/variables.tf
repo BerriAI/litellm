@@ -112,6 +112,12 @@ variable "private_subnet_ids" {
   default     = []
 }
 
+variable "permissions_boundary" {
+  description = "ARN of an existing IAM permissions boundary policy to attach to every role created by the module."
+  type        = string
+  default     = null
+}
+
 variable "private_ingress" {
   description = "Use an internal ALB in private subnets instead of the public ALB."
   type        = bool
