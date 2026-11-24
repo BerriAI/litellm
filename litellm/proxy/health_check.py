@@ -313,9 +313,14 @@ async def run_with_timeout(
         return {"error": "Timeout exceeded", "exception": timeout_exception}
 
 
+def _mapping_or_none(value: object) -> Mapping[object, object] | None:
+    """The value itself when it is a mapping, else None."""
+    return value if isinstance(value, Mapping) else None
+
+
 def _skips_health_checks(deployment: Mapping[str, object]) -> bool:
-    info: Final = deployment.get("model_info")
-    return bool(info.get("disable_background_health_check", False)) if isinstance(info, Mapping) else False
+    info: Final = _mapping_or_none(deployment.get("model_info"))
+    return bool(info.get("disable_background_health_check", False)) if info is not None else False
 
 
 def _health_check_eligible(
@@ -336,14 +341,14 @@ def _deployment_model(deployment: Mapping[str, object]) -> str | None:
 
 
 def _owner_team_id(deployment: Mapping[str, object]) -> str | None:
-    info: Final = deployment.get("model_info")
-    owner: Final = info.get("team_id") if isinstance(info, Mapping) else None
+    info: Final = _mapping_or_none(deployment.get("model_info"))
+    owner: Final = info.get("team_id") if info is not None else None
     return owner if isinstance(owner, str) else None
 
 
 def _team_public_model_name(deployment: Mapping[str, object]) -> str | None:
-    info: Final = deployment.get("model_info")
-    name: Final = info.get("team_public_model_name") if isinstance(info, Mapping) else None
+    info: Final = _mapping_or_none(deployment.get("model_info"))
+    name: Final = info.get("team_public_model_name") if info is not None else None
     return name if isinstance(name, str) else None
 
 
@@ -403,8 +408,8 @@ def _is_marker(deployment: Mapping[str, object]) -> bool:
 
 
 def _deployment_id(deployment: Mapping[str, object]) -> str | None:
-    info: Final = deployment.get("model_info")
-    ident: Final = info.get("id") if isinstance(info, Mapping) else None
+    info: Final = _mapping_or_none(deployment.get("model_info"))
+    ident: Final = info.get("id") if info is not None else None
     return str(ident) if ident else None
 
 
@@ -663,7 +668,7 @@ def _finalize_strategy_router_endpoints(
     The probes exist to judge the routers that depend on them; reporting them would answer a
     targeted request with deployments the caller never asked about.
     """
-    verdicts: Final = (
+    verdicts: Final[Mapping[str, str]] = (
         _strategy_router_verdicts(healthy_endpoints, unhealthy_endpoints, checked, router)
         if router is not None
         else MappingProxyType({})
@@ -686,7 +691,7 @@ def _finalize_strategy_router_endpoints(
     )
 
 
-async def _run_model_health_check(model: dict):
+async def _run_model_health_check(model: dict) -> Mapping[str, object]:
     litellm_params = model["litellm_params"]
     model_info: Final = model.get("model_info", {})
 
@@ -716,13 +721,15 @@ async def _run_model_health_check(model: dict):
     )
 
 
-async def _run_health_checks_with_bounded_concurrency(models: list, concurrency_limit: int) -> tuple[list, int]:
+async def _run_health_checks_with_bounded_concurrency(
+    models: list, concurrency_limit: int
+) -> tuple[list[Mapping[str, object] | Exception | None], int]:
     """
     Run health checks with at most `concurrency_limit` active tasks.
     Preserves result ordering to match `models`.
     """
-    results: Final[list] = [None] * len(models)
-    tasks_to_index: Final[dict[asyncio.Task, int]] = {}
+    results: Final[list[Mapping[str, object] | Exception | None]] = [None] * len(models)
+    tasks_to_index: Final[dict[asyncio.Task[Mapping[str, object]], int]] = {}
     model_iter: Final = iter(enumerate(models))
     peak_in_flight = 0
 
@@ -955,7 +962,7 @@ def _same_health_check_model(deployment_model: str | None, probe_params: Mapping
 
 def update_litellm_params_for_health_check(
     model_info: dict, litellm_params: dict, deployment_model: str | None = None
-) -> dict:
+) -> dict[str, object]:
     """
     Update the litellm params for health check.
 
@@ -1086,7 +1093,7 @@ _update_litellm_params_for_health_check: Final = update_litellm_params_for_healt
 
 
 async def perform_health_check(
-    model_list: list,
+    model_list: Sequence[Mapping[str, object]],
     model: str | None = None,
     cli_model: str | None = None,
     details: bool | None = True,
