@@ -78,7 +78,7 @@ from litellm.proxy.utils import InternalUsageCache
 from litellm.redis.stores.rate_limits import RATE_LIMITS_TARGET, RateLimitStore
 from litellm.types.integrations.custom_logger_v2 import KeyIdentity
 from litellm.types.integrations.custom_logger_v2 import Outcome as AttemptOutcome
-from litellm.types.utils import PriorityReservationSettings
+from litellm.types.utils import PriorityReservationSettings, Usage
 
 if TYPE_CHECKING:
     from litellm.integrations.prometheus import PrometheusLogger
@@ -883,6 +883,28 @@ class NativeDynamicRateLimiter(RustLogger):
         refused: Final = as_str_mapping(_native_answer(answer, live).get("refused"))
         if refused is not None:
             raise _proxy_rate_limit_error(refused)
+
+    async def charge_realtime_capacity_turn(
+        self, user_api_key_dict: UserAPIKeyAuth, requested_model: str | None, usage: Usage
+    ) -> None:
+        if requested_model is None:
+            return
+        state: Final = self._state_for(get_request_stash())
+        live: Final = LiveRequest(auth=user_api_key_dict, state=state)
+        token: Final = _LIVE.set(live)
+        prompt_details: Final = usage.prompt_tokens_details
+        cached_tokens: Final = 0 if prompt_details is None else prompt_details.cached_tokens or 0
+        try:
+            answer: Final = await self.capacity.charge_turn(
+                state,
+                key_inputs(user_api_key_dict),
+                requested_model,
+                (usage.prompt_tokens, usage.completion_tokens, usage.total_tokens, cached_tokens),
+                self.delegate.facts(requested_model),
+            )
+        finally:
+            _LIVE.reset(token)
+        _ = _native_answer(answer, live)
 
 
 def build_native_dynamic_rate_limiter(

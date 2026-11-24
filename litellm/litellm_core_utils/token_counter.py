@@ -1969,7 +1969,13 @@ def _count_anthropic_content(
 
 
 _TEXT_FIELD_BY_BLOCK_TYPE: Final = MappingProxyType(
-    {"text": "text", "thinking": "thinking", "redacted_thinking": "thinking", "compaction": "content"}
+    {
+        "text": "text",
+        "thinking": "thinking",
+        "redacted_thinking": "thinking",
+        "compaction": "content",
+        "fallback": "text",
+    }
 )
 
 

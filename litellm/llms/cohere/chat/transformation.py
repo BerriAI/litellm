@@ -147,7 +147,7 @@ class CohereChatConfig(BaseConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, object],
         model: str,
         messages: list[AllMessageValues],
         optional_params: dict,
@@ -218,7 +218,7 @@ class CohereChatConfig(BaseConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        headers: dict,
+        headers: dict[str, object],
     ) -> dict:
         ## Load Config
         config: Final[Mapping[str, object]] = litellm.CohereChatConfig.get_config()
@@ -393,5 +393,7 @@ class CohereChatConfig(BaseConfig):
             json_mode=json_mode,
         )
 
-    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: dict[str, object] | httpx.Headers
+    ) -> BaseLLMException:
         return CohereError(status_code=status_code, message=error_message)

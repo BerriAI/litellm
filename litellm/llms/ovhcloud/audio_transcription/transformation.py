@@ -68,7 +68,9 @@ class OVHCloudAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         base_url: Final = "https://oai.endpoints.kepler.ai.cloud.ovh.net/v1" if api_base is None else api_base
         return join_api_base(base_url, "audio/transcriptions")
 
-    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: dict[str, object] | httpx.Headers
+    ) -> BaseLLMException:
         return OVHCloudException(
             message=error_message,
             status_code=status_code,

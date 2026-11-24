@@ -234,7 +234,7 @@ class VertexAgentEngineConfig(BaseConfig, VertexBase):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, object],
         model: str,
         messages: list[AllMessageValues],
         optional_params: Mapping[str, object],
@@ -368,7 +368,7 @@ class VertexAgentEngineConfig(BaseConfig, VertexBase):
         custom_llm_provider: str,
         logging_obj: LiteLLMLoggingObj,
         api_base: str,
-        headers: dict,
+        headers: dict[str, object],
         data: Mapping[str, object],
         messages: Sequence[object],
         client: Union[HTTPHandler, "AsyncHTTPHandler"] | None = None,
@@ -429,7 +429,7 @@ class VertexAgentEngineConfig(BaseConfig, VertexBase):
         custom_llm_provider: str,
         logging_obj: LiteLLMLoggingObj,
         api_base: str,
-        headers: dict,
+        headers: dict[str, object],
         data: Mapping[str, object],
         messages: Sequence[object],
         client: Optional["AsyncHTTPHandler"] = None,

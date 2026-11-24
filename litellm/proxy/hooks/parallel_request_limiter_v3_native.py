@@ -125,6 +125,14 @@ def _member(source: object, name: str) -> object:
     return value
 
 
+def _socket_turn_owner(request: object) -> Mapping[str, str]:
+    owners: Final = (
+        ("agent_id", _member(request, "resolved_agent_id")),
+        ("session_id", _member(request, "session_id")),
+    )
+    return MappingProxyType({name: str(value) for name, value in owners if value})
+
+
 def _rate_limited(wire: WireAbort) -> Exception:
     fields: Final[Mapping[str, object]] = wire.error.fields if wire.error is not None else MappingProxyType({})
     requested_model: Final = fields.get("requested_model")
@@ -452,6 +460,7 @@ class ParallelRequestLimiterNativeLogger(RustLogger):
             )
         finally:
             self._stash_descriptors(stash, state, ceiling)
+            stash.socket_turn_owner = _socket_turn_owner(_member(view, Field.limiter_request.value))
             mirror_rate_limit_response(self.bridge, state)
 
     async def _hosted(

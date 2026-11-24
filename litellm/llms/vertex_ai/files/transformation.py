@@ -81,6 +81,7 @@ from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
 from litellm.llms.vertex_ai.gemini_embeddings.batch_embed_content_transformation import (
     embed_content_config_fields,
     transform_openai_input_gemini_embed_content,
+    vertex_batch_row_audio_track_extraction_enabled,
 )
 from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.transformation import VertexAIAnthropicConfig
 from litellm.types.files import StreamingMediaUploadConfig
@@ -778,11 +779,15 @@ def _openai_batch_jsonl_entry_to_vertex_embeddings_rows(
     if not elements:
         raise ValueError("`input` on /v1/embeddings batch requests must not be empty")
 
+    audio_track_extraction: Final = vertex_batch_row_audio_track_extraction_enabled(
+        _JSON_OBJECT.validate_python(openai_request_body)
+    )
     embed_content_requests = tuple(
         transform_openai_input_gemini_embed_content(
             input=element,
             model=openai_request_body.get("model", ""),
             optional_params=openai_request_body,
+            audio_track_extraction=audio_track_extraction,
         )
         for element in elements
     )

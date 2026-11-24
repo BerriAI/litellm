@@ -186,7 +186,7 @@ class BaseResponsesAPIConfig(ABC):
         input: str | ResponseInputParam,
         response_api_optional_request_params: dict[str, object],
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
+        headers: dict[str, object],
     ) -> dict[str, object]:
         return self.transform_responses_api_request(
             model=model,

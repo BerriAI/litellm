@@ -1802,7 +1802,7 @@ Model Info:
 
     async def _run_scheduler_helper(
         self,
-        llm_router,
+        llm_router: Router,
         pod_lock_manager: "PodLockManager | None" = None,
     ) -> bool:
         """
@@ -1855,7 +1855,7 @@ Model Info:
 
     async def _run_scheduled_daily_report(
         self,
-        llm_router: object | None = None,
+        llm_router: Router | None = None,
         pod_lock_manager: "PodLockManager | None" = None,
     ):
         """

@@ -149,6 +149,13 @@ impl Charge {
             Self::Reported(tokens) | Self::Estimated(tokens) => tokens,
         }
     }
+
+    pub fn map(self, f: impl FnOnce(i64) -> i64) -> Self {
+        match self {
+            Self::Reported(tokens) => Self::Reported(f(tokens)),
+            Self::Estimated(tokens) => Self::Estimated(f(tokens)),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -444,6 +451,15 @@ impl LoggedGroup {
             keyed: matches!(value, Scalar::Text(_)),
             hash_error: value.hash_error().map(str::to_owned),
         }))
+    }
+
+    pub fn served(text: String) -> Self {
+        Self {
+            truthy: !text.is_empty(),
+            keyed: true,
+            hash_error: None,
+            text,
+        }
     }
 
     pub fn key(&self) -> Result<Option<&str>, CapacityError> {

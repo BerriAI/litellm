@@ -16,7 +16,7 @@ import litellm
 from litellm.constants import ANTHROPIC_TOKEN_COUNTING_BETA_VERSION
 from litellm.exceptions import BadRequestError
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
-from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+from litellm.llms.anthropic.common_utils import AnthropicModelInfo, count_tokens_feature_betas
 from litellm.llms.anthropic.count_tokens.handler import AnthropicCountTokensHandler
 from litellm.llms.anthropic.count_tokens.token_counter import AnthropicTokenCounter
 from litellm.llms.anthropic.count_tokens.transformation import (
@@ -38,6 +38,17 @@ from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import CountContextManagement, TokenCountMessagesFormat, TokenCountResponse
 
 COMPACTION_BETA = ANTHROPIC_BETA_HEADER_VALUES.COMPACT_2026_09_04.value
+FALLBACK_BETA: Final = ANTHROPIC_BETA_HEADER_VALUES.SERVER_SIDE_FALLBACK_2026_06_01.value
+FALLBACK_HISTORY: Final = [
+    {"role": "user", "content": "hi"},
+    {
+        "role": "assistant",
+        "content": [
+            {"type": "text", "text": "Hello"},
+            {"type": "fallback", "from": {"model": "first-model"}, "to": {"model": "second-model"}},
+        ],
+    },
+]
 COMPACTED_HISTORY = [
     {
         "role": "assistant",
@@ -1423,6 +1434,24 @@ def test_headers_add_the_compaction_beta_only_for_a_compacted_history():
     assert COMPACTION_BETA in with_block
     assert ANTHROPIC_TOKEN_COUNTING_BETA_VERSION in with_block
     assert plain == ANTHROPIC_TOKEN_COUNTING_BETA_VERSION
+
+
+def test_headers_add_the_fallback_beta_only_for_a_history_that_echoes_the_block():
+    config: Final = AnthropicCountTokensConfig()
+    auth_header: Final = {"x-api-key": "sk-ant-api03-test-key"}
+
+    with_block: Final = config.get_count_tokens_headers(auth_header, FALLBACK_HISTORY)["anthropic-beta"].split(",")
+    plain: Final = config.get_count_tokens_headers(auth_header, [{"role": "user", "content": "hi"}])["anthropic-beta"]
+
+    assert FALLBACK_BETA in with_block
+    assert ANTHROPIC_TOKEN_COUNTING_BETA_VERSION in with_block
+    assert plain == ANTHROPIC_TOKEN_COUNTING_BETA_VERSION
+
+
+@pytest.mark.parametrize("provider", ("azure_ai", "vertex_ai"))
+def test_platform_count_betas_carry_the_fallback_beta_only_for_a_history_that_echoes_the_block(provider: str) -> None:
+    assert FALLBACK_BETA in count_tokens_feature_betas(provider, {}, FALLBACK_HISTORY)
+    assert FALLBACK_BETA not in count_tokens_feature_betas(provider, {}, [{"role": "user", "content": "hi"}])
 
 
 @pytest.mark.asyncio

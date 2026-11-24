@@ -296,6 +296,7 @@ pub struct Plan {
 pub const EMBEDDING_CALL_TYPES: [&str; 2] = ["aembedding", "embedding"];
 const RESPONSES_CALL_TYPES: [&str; 2] = ["aresponses", "responses"];
 const EXTRACTION_CALL_TYPES: [&str; 2] = ["extraction", "aextraction"];
+const REALTIME_CALL_TYPES: [&str; 1] = ["_arealtime"];
 const MCP_TOOL_CALL_TYPE: &str = "call_mcp_tool";
 const DECISIONS_ENDPOINT: &str = "decisions";
 
@@ -468,7 +469,8 @@ fn cap_decision(input: &HookInput, call: &CallFacts) -> Result<CapDecision, Call
         exempt: explicit
             || embedding
             || call.kind.endpoint_type.as_deref() == Some(DECISIONS_ENDPOINT)
-            || EXTRACTION_CALL_TYPES.contains(&call_type),
+            || EXTRACTION_CALL_TYPES.contains(&call_type)
+            || REALTIME_CALL_TYPES.contains(&call_type),
         responses: RESPONSES_CALL_TYPES.contains(&call_type),
     })
 }

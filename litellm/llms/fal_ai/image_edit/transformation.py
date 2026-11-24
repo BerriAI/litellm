@@ -103,7 +103,7 @@ class FalAIImageEditConfig(BaseImageEditConfig):
         image: FileTypes | Sequence[FileTypes | None] | None,
         image_edit_optional_request_params: dict[str, object],
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
+        headers: dict[str, object],
     ) -> tuple[dict[str, object], RequestFiles]:
         images: Final = tuple(img for img in (image if isinstance(image, list) else (image,)) if img is not None)
         if not images:
