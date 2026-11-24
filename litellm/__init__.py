@@ -710,6 +710,7 @@ publicai_models: Set[str] = set()
 darkbloom_models: Set[str] = set()
 openinfer_models: Final[Set[str]] = set()
 kyma_models: Final[set[str]] = set()  # mutable-ok: populated when the shared model catalog loads
+apistore_models: Final[set[str]] = set()  # mutable-ok: populated when the shared model catalog loads
 streamlake_models: Final[Set[str]] = set()
 resetdata_models: Final[set[str]] = set()  # mutable-ok: populated when the shared model catalog loads
 wally_models: Final[Set[str]] = set()
@@ -1014,6 +1015,8 @@ def _populate_provider_model_sets(model_cost_map: Mapping[str, Mapping[str, obje
             openinfer_models.add(key)
         elif value.get("litellm_provider") == "kyma":
             kyma_models.add(key)
+        elif value.get("litellm_provider") == "apistore":
+            apistore_models.add(key)
         elif value.get("litellm_provider") == "streamlake":
             streamlake_models.add(key)
         elif value.get("litellm_provider") == "resetdata":
@@ -1208,6 +1211,7 @@ model_list = list(
     | darkbloom_models
     | openinfer_models
     | kyma_models
+    | apistore_models
     | streamlake_models
     | resetdata_models
     | wally_models
@@ -1346,6 +1350,7 @@ def _build_models_by_provider() -> dict[str, Collection[str]]:
         "darkbloom": darkbloom_models,
         "openinfer": openinfer_models,
         "kyma": kyma_models,
+        "apistore": apistore_models,
         "streamlake": streamlake_models,
         "resetdata": resetdata_models,
         "wally": wally_models,

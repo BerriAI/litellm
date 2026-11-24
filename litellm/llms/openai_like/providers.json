@@ -392,5 +392,13 @@
       "/v1/chat/completions",
       "/v1/completions"
     ]
+  },
+  "apistore": {
+    "base_url": "https://api.apistore.cloud/v1",
+    "api_key_env": "APISTORE_API_KEY",
+    "api_base_env": "APISTORE_API_BASE",
+    "provider_info": {
+      "supports_function_calling": true
+    }
   }
 }

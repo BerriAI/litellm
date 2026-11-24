@@ -2066,11 +2066,19 @@ def _complete_azure_ai(ctx: CompletionDispatchContext) -> _CompletionDispatchRes
     return response
 
 
-def _validate_vispark_api_key(provider: str | None, api_key: str | None, model: str, has_client: bool = False) -> None:
-    if provider == "vispark" and not api_key and not has_client:
-        raise litellm.AuthenticationError(
-            message="Set VISPARK_LAB_API_KEY or pass api_key", llm_provider="vispark", model=model
-        )
+# Providers whose calls must carry their own key: without one, the OpenAI-compatible path would
+# fall back to litellm.openai_key or OPENAI_API_KEY and send that credential to the provider.
+_PROVIDER_KEY_ENV: Final[Mapping[str, str]] = MappingProxyType(
+    {"vispark": "VISPARK_LAB_API_KEY", "apistore": "APISTORE_API_KEY"}
+)
+
+
+def _validate_required_api_key(provider: str | None, api_key: str | None, model: str, has_client: bool = False) -> None:
+    if provider is None or api_key or has_client:
+        return
+    key_env: Final = _PROVIDER_KEY_ENV.get(provider)
+    if key_env:
+        raise litellm.AuthenticationError(message=f"Set {key_env} or pass api_key", llm_provider=provider, model=model)
 
 
 def _complete_text_completion_openai(
@@ -2107,7 +2115,7 @@ def _complete_text_completion_openai(
     openai.api_version = None
     # set API KEY
 
-    _validate_vispark_api_key(custom_llm_provider, api_key, model, has_client=client is not None)
+    _validate_required_api_key(custom_llm_provider, api_key, model, has_client=client is not None)
 
     api_key = api_key or litellm.api_key or litellm.openai_key or get_secret("OPENAI_API_KEY")
 
@@ -2999,7 +3007,7 @@ def _complete_custom_openai(
     api_base = _resolve_openai_api_base(api_base)
     if (missing_key_error := _missing_provider_key_error(ctx)) is not None:
         raise missing_key_error
-    _validate_vispark_api_key(
+    _validate_required_api_key(
         custom_llm_provider,
         api_key,
         model,
