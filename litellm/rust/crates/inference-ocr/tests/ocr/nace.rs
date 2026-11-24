@@ -240,7 +240,7 @@ async fn an_inline_document_is_uploaded_parsed_by_file_and_deleted() {
 
 #[rstest]
 #[case::boolean_false(json!({"include_image_base64": false}))]
-#[case::boolean_true(json!({"include_image_base64": true}))]
+#[case::dropped(json!({"include_image_base64": true, "drop_params": true}))]
 #[tokio::test]
 async fn an_open_webui_request_is_parsed_without_include_image_base64(#[case] options: Value) {
     let upstream = upload_upstream([succeeded(workspace_source()), job_deleted(), deleted()]).await;
@@ -256,6 +256,28 @@ async fn an_open_webui_request_is_parsed_without_include_image_base64(#[case] op
     let requests = received(&upstream).await;
     assert_eq!(requests[2].url.path(), "/v1/documents/parse");
     assert_eq!(requests[2].json().get("include_image_base64"), None);
+    assert_eq!(requests[2].json().get("drop_params"), None);
+}
+
+#[tokio::test]
+async fn include_image_base64_true_is_refused_before_anything_is_uploaded() {
+    let upstream = upstream([]).await;
+
+    let error = perform(nace_request(
+        "nace/parse-low",
+        &upstream.uri(),
+        json!({"include_image_base64": true}),
+    ))
+    .await
+    .unwrap_err();
+
+    assert!(
+        error
+            .to_string()
+            .contains("unsupported OCR param include_image_base64"),
+        "{error}"
+    );
+    assert!(received(&upstream).await.is_empty());
 }
 
 #[tokio::test]

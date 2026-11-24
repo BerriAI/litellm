@@ -37,9 +37,10 @@ use crate::{
         error::Error,
         handler::{CallHooks, OcrClient, read_response_bytes},
         transformation::{
-            BaseOcrConfig, DecodedOcrResponse, OCR_INLINE_MAX_BYTES, OCR_POLL_RETRY_SECS,
-            OcrConnection, OcrRequestContext, OcrResponseContext, PreparedOcrRequest,
-            decode_and_normalize_response, decode_response,
+            BaseOcrConfig, DROP_PARAMS_PARAM, DecodedOcrResponse, OCR_INLINE_MAX_BYTES,
+            OCR_POLL_RETRY_SECS, OcrConnection, OcrRequestContext, OcrResponseContext,
+            PreparedOcrRequest, decode_and_normalize_response, decode_response,
+            drops_unsupported_params,
         },
     },
     reducto::ocr::transformation::prepare_upload_request,
@@ -78,7 +79,10 @@ const SUPPORTED_PARAMS: &[&str] = &[
     "project_id",
     OUTPUT_PARAM,
     INCLUDE_IMAGE_BASE64_PARAM,
+    DROP_PARAMS_PARAM,
 ];
+const IMAGE_BASE64_REASON: &str =
+    "Nace returns images as links through `output.include_images`, never as base64";
 const URL_SOURCE_EXTENSIONS: &[&str] = &[
     "avi", "csv", "doc", "docm", "docx", "eml", "flac", "htm", "html", "jpeg", "jpg", "json",
     "log", "m4a", "md", "mdx", "mkv", "mov", "mp3", "mp4", "mpga", "msg", "oft", "oga", "ogg",
@@ -325,6 +329,14 @@ impl BaseOcrConfig for NaceParseConfig {
                 Refusal::NestedPassword,
             ));
         }
+        if non_default_params.get(INCLUDE_IMAGE_BASE64_PARAM) == Some(&Value::Bool(true))
+            && !drops_unsupported_params(non_default_params)
+        {
+            return Err(Error::UnsupportedParam {
+                param: INCLUDE_IMAGE_BASE64_PARAM.to_owned(),
+                reason: IMAGE_BASE64_REASON,
+            });
+        }
         compose_body(non_default_params, &Map::new(), SUPPORTED_PARAMS)?;
         requested_page_ranges(non_default_params)?;
         let output = match non_default_params.get(OUTPUT_PARAM) {
@@ -342,7 +354,7 @@ impl BaseOcrConfig for NaceParseConfig {
                 .filter(|(name, _)| {
                     !matches!(
                         name.as_str(),
-                        OUTPUT_PARAM | INCLUDE_IMAGE_BASE64_PARAM | PAGES_PARAM
+                        OUTPUT_PARAM | INCLUDE_IMAGE_BASE64_PARAM | PAGES_PARAM | DROP_PARAMS_PARAM
                     )
                 })
                 .chain(mapped_pages.map(|ranges| (PAGE_RANGES_PARAM.to_owned(), json!(ranges))))
@@ -1777,7 +1789,6 @@ mod tests {
 
     /// Other top-level options such as `image_limit` still go to
     /// Nace on a host that passes them, which Nace refuses as unknown fields.
-    /// The top-level `include_image_base64` is accepted and never sent.
     #[test]
     fn only_nace_options_are_mapped_into_the_parse_options() {
         let params = NaceParseConfig
@@ -1786,7 +1797,8 @@ mod tests {
                     "page_ranges": [{"start": 1, "end": 2}],
                     "ocr": {"languages": ["en"]},
                     "image_limit": 2,
-                    "include_image_base64": true
+                    "include_image_base64": true,
+                    "drop_params": true
                 })),
                 "parse-low",
             )
@@ -1799,7 +1811,7 @@ mod tests {
 
     #[rstest]
     #[case::boolean_false(json!({"include_image_base64": false}))]
-    #[case::boolean_true(json!({"include_image_base64": true}))]
+    #[case::dropped(json!({"include_image_base64": true, "drop_params": true}))]
     #[case::null(json!({"include_image_base64": null}))]
     fn include_image_base64_is_accepted_and_never_sent(#[case] options: Value) {
         let call = arguments(options);
@@ -1815,6 +1827,20 @@ mod tests {
         )
         .unwrap();
         assert_eq!(body.get(INCLUDE_IMAGE_BASE64_PARAM), None);
+        assert_eq!(body.get(DROP_PARAMS_PARAM), None);
+    }
+
+    #[rstest]
+    #[case::alone(json!({"include_image_base64": true}))]
+    #[case::drop_params_off(json!({"include_image_base64": true, "drop_params": false}))]
+    fn include_image_base64_true_is_refused_unless_params_are_dropped(#[case] options: Value) {
+        let error = NaceParseConfig
+            .map_ocr_params(&arguments(options), "parse-low")
+            .unwrap_err();
+        assert!(
+            matches!(&error, Error::UnsupportedParam { param, .. } if param == INCLUDE_IMAGE_BASE64_PARAM),
+            "{error}"
+        );
     }
 
     #[rstest]
