@@ -640,7 +640,7 @@ class PassThroughEndpointLogging:
     def normalize_llm_passthrough_logging_payload(
         self,
         httpx_response: httpx.Response,
-        response_body: dict | list[dict[str, object]] | None,
+        response_body: Mapping[str, object] | list[dict[str, object]] | None,
         request_body: dict,
         logging_obj: LiteLLMLoggingObj,
         url_route: str,
@@ -943,7 +943,7 @@ class PassThroughEndpointLogging:
         passthrough_logging_payload: PassthroughStandardLoggingPayload,
         custom_llm_provider: str | None = None,
         finalize_before_dispatch: bool = False,
-        **kwargs,
+        **kwargs: object,
     ) -> None:
         logging_obj.model_call_details["passthrough_logging_payload"] = passthrough_logging_payload
         if self.is_tinyfish_route(url_route, custom_llm_provider):

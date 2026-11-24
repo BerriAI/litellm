@@ -467,7 +467,9 @@ def phind_codellama_pt(messages):
     return prompt
 
 
-def _render_chat_template(env, chat_template: str, bos_token: str, eos_token: str, messages: list) -> str:
+def _render_chat_template(
+    env: ImmutableSandboxedEnvironment, chat_template: str, bos_token: str, eos_token: str, messages: list
+) -> str:
     """
     Shared template rendering logic for both sync and async hf_chat_template
 
@@ -816,7 +818,7 @@ def construct_format_parameters_prompt(parameters: dict):
     return parameter_str
 
 
-def construct_format_tool_for_claude_prompt(name, description, parameters):
+def construct_format_tool_for_claude_prompt(name: object, description: object, parameters):
     constructed_prompt: Final = (
         "<tool_description>\n"
         f"<tool_name>{name}</tool_name>\n"
@@ -832,7 +834,7 @@ def construct_format_tool_for_claude_prompt(name, description, parameters):
 
 
 def construct_tool_use_system_prompt(
-    tools,
+    tools: Iterable[object],
 ):  # from https://github.com/anthropics/anthropic-cookbook/blob/main/function_calling/function_calling.ipynb
     tool_str_list: Final = []
     for tool in tools:
@@ -3930,7 +3932,7 @@ def contains_tag(tag: str, string: str) -> bool:
     return bool(re.search(f"<{tag}>(.+?)</{tag}>", string, re.DOTALL))
 
 
-def parse_xml_params(xml_content, json_schema: dict | None = None):
+def parse_xml_params(xml_content: str | bytes, json_schema: dict | None = None):
     """
     Compare the xml output to the json schema
 
@@ -4309,7 +4311,7 @@ def amazon_titan_pt(
     return prompt
 
 
-def _load_image_from_url(image_url):
+def _load_image_from_url(image_url: str):
     try:
         from PIL import Image
     except Exception:
@@ -4538,7 +4540,7 @@ class BedrockImageProcessor:
         return base64_bytes, content_type
 
     @staticmethod
-    async def get_image_details_async(image_url) -> tuple[str, str]:
+    async def get_image_details_async(image_url: str) -> tuple[str, str]:
         try:
             client: Final = get_async_httpx_client(
                 llm_provider=httpxSpecialProvider.PromptFactory,
@@ -4554,7 +4556,7 @@ class BedrockImageProcessor:
             raise e
 
     @staticmethod
-    def get_image_details(image_url) -> tuple[str, str]:
+    def get_image_details(image_url: str) -> tuple[str, str]:
         try:
             client: Final = HTTPHandler(concurrent_limit=1)
             # Send a GET request to the image URL
@@ -6558,7 +6560,7 @@ def _bedrock_converse_messages_pt(
 def make_valid_bedrock_tool_name(input_tool_name: str) -> str:
     """Normalize tool names to Bedrock pattern [a-zA-Z][a-zA-Z0-9_-]*."""
 
-    def replace_invalid(char):
+    def replace_invalid(char: str) -> str:
         if char.isalnum() or char in ("_", "-"):
             return char
         return "_"

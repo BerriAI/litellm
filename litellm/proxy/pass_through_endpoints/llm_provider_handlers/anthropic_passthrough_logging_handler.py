@@ -25,6 +25,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 )
 from litellm.llms.anthropic import get_anthropic_config
 from litellm.llms.anthropic.messages.stream_assembly import (
+    anthropic_sse_events_before_upstream_error,
     build_complete_streaming_response,
     build_complete_streaming_response_legacy,
     build_usage_only_response_from_chunks,
@@ -246,7 +247,7 @@ class AnthropicPassthroughLoggingHandler:
     ) -> ModelResponse | TextCompletionResponse | None:
         try:
             assembled: Final = AnthropicPassthroughLoggingHandler.build_complete_streaming_response(
-                all_chunks=all_chunks,
+                all_chunks=anthropic_sse_events_before_upstream_error(all_chunks),
                 litellm_logging_obj=litellm_logging_obj,
                 model=model,
                 speed=speed,
@@ -542,7 +543,7 @@ class AnthropicPassthroughLoggingHandler:
         litellm_logging_obj: LiteLLMLoggingObj,
         passthrough_success_handler_obj: PassThroughEndpointLogging,
         url_route: str,
-        request_body: dict,
+        request_body: Mapping[str, object],
         endpoint_type: EndpointType,
         start_time: datetime,
         all_chunks: list[str],

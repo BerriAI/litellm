@@ -5805,6 +5805,14 @@ class ProxyLogging:
             return
         await limiter.async_release_max_parallel_requests_on_disconnect(user_api_key_dict)
 
+    async def arelease_refused_responses_websocket_slot(self, user_api_key_dict: UserAPIKeyAuth) -> None:
+        """Release the slot of a Responses WebSocket refused while opening, only when its admission got that far."""
+        limiter: Final = self.get_proxy_hook("parallel_request_limiter")
+        if isinstance(limiter, _PROXY_MaxParallelRequestsHandler):
+            await limiter.async_release_admitted_max_parallel_requests(user_api_key_dict)
+        elif isinstance(limiter, ParallelRequestLimiterHook):
+            await limiter.async_release_max_parallel_requests_on_disconnect(user_api_key_dict)
+
     async def enforce_mcp_server_rate_limits(
         self,
         user_api_key_dict: UserAPIKeyAuth | None,

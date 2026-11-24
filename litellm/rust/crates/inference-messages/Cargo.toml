@@ -14,6 +14,7 @@ futures-util.workspace = true
 http.workspace = true
 litellm-auth = { workspace = true, features = ["aws", "azure", "gcp"] }
 litellm-auth-aws.workspace = true
+litellm-cache.workspace = true
 litellm-cache-response.workspace = true
 litellm-core-utils.workspace = true
 litellm-host.workspace = true
@@ -37,7 +38,6 @@ base64.workspace = true
 litellm-error.workspace = true
 litellm-auth-gcp = { workspace = true, features = ["test-support"] }
 litellm-framer = { workspace = true, features = ["sse"] }
-litellm-cache.workspace = true
 litellm-cache-memory.workspace = true
 litellm-host-native.workspace = true
 litellm-http = { workspace = true, features = ["test-support"] }

@@ -1113,9 +1113,9 @@ async def _resolve_group_member_ids(
     created_users: Final = await _create_group_member_users(unique_unknown_ids, created_via, prisma_client)
 
     return GroupMemberExtractionResult(
-        existing_member_ids=partition.resolved_ids,
-        created_users=created_users,
-        all_member_ids=_admitted_member_ids(classified, frozenset(unique_unknown_ids)),
+        existing_member_ids=list(partition.resolved_ids),
+        created_users=list(created_users),
+        all_member_ids=list(_admitted_member_ids(classified, frozenset(unique_unknown_ids))),
     )
 
 

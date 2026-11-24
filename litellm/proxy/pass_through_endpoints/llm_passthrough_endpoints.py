@@ -71,6 +71,7 @@ from litellm.litellm_core_utils.core_helpers import (
     require_get,
 )
 from litellm.litellm_core_utils.fallback_generalizations import match_routing_generalization
+from litellm.litellm_core_utils.get_llm_provider_logic import resolve_model_and_provider_for_metadata
 from litellm.llms.anthropic.common_utils import (
     AnthropicModelInfo,
     anthropic_pass_through_api_base,
@@ -288,10 +289,14 @@ class RelayRejection(TypedDict):
     error: ReadOnly[str]
 
 
+def _declared_model_and_provider(litellm_params: LiteLLMParamsTypedDict) -> tuple[str, str | None]:
+    return litellm_params.get("model", ""), litellm_params.get("custom_llm_provider")
+
+
 def _deployment_model_name(litellm_params: LiteLLMParamsTypedDict) -> str:
-    model: Final = litellm_params.get("model", "")
+    model, custom_llm_provider = _declared_model_and_provider(litellm_params)
     try:
-        return get_llm_provider(model=model, custom_llm_provider=litellm_params.get("custom_llm_provider"))[0]
+        return get_llm_provider(model=model, custom_llm_provider=custom_llm_provider)[0]
     except litellm.BadRequestError:
         return model
 
@@ -299,6 +304,25 @@ def _deployment_model_name(litellm_params: LiteLLMParamsTypedDict) -> str:
 def _models_served_by_group(llm_router: litellm.Router, model_group: str) -> frozenset[str]:
     return frozenset(
         _deployment_model_name(row["litellm_params"]) for row in llm_router.registry().deployments(model_group) or ()
+    )
+
+
+_AZURE_PASSTHROUGH_PROVIDERS: Final = frozenset((LlmProviders.AZURE.value, LlmProviders.AZURE_AI.value))
+
+
+def _is_azure_deployment(litellm_params: LiteLLMParamsTypedDict) -> bool:
+    model, custom_llm_provider = _declared_model_and_provider(litellm_params)
+    try:
+        return resolve_model_and_provider_for_metadata(model, custom_llm_provider)[1] in _AZURE_PASSTHROUGH_PROVIDERS
+    except litellm.BadRequestError:
+        return False
+
+
+def is_azure_router_model_group(llm_router: litellm.Router | None, model_group: str) -> bool:
+    if llm_router is None or not is_known_model(model_group, llm_router):
+        return False
+    return any(
+        _is_azure_deployment(row["litellm_params"]) for row in llm_router.registry().deployments(model_group) or ()
     )
 
 
@@ -2920,7 +2944,7 @@ async def _relay_azure_body_model_group(
         return None
     request_body: Final = await get_request_body(request)
     model: Final = _optional_str(request_body.get("model"))
-    if model is None or not is_passthrough_request_using_router_model(request_body, llm_router):
+    if model is None or not is_azure_router_model_group(llm_router, model):
         return None
     is_streaming_request: Final = is_passthrough_request_streaming(request_body)
     return await open_sse_before_first_byte(
@@ -2991,9 +3015,7 @@ async def azure_proxy_route(
     if len(parts) > 1 and llm_router:
         for part in parts:
             # check if LLM MODEL
-            is_router_model = is_passthrough_request_using_router_model(
-                request_body={"model": part}, llm_router=llm_router
-            )
+            is_router_model = is_azure_router_model_group(llm_router, part)
             # check if vector store index
             is_vector_store_index = (
                 part == search_index_name
