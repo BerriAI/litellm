@@ -28,6 +28,7 @@ from litellm import CustomLLM, acompletion, aembedding, completion, embedding
 import litellm.caching.redis_cache as redis_cache_module
 from litellm._internal_context import current_service_target
 from litellm.caching.caching import Cache, CacheMode, enable_cache, response_cache_phase, update_cache
+from litellm.caching.base_cache import BaseCache
 from litellm.caching.caching_handler import _PENDING_CACHE_WRITES
 from litellm.constants import CACHE_WRITE_SHUTDOWN_FLUSH_TIMEOUT_SECONDS
 from litellm.caching.dual_cache import DualCache
@@ -38,8 +39,11 @@ from litellm.types.caching import (
     DEFAULT_CACHING_SUPPORTED_CALL_TYPES,
     EMBEDDING_CACHE_FORMAT_VERSION,
     LiteLLMCacheType,
+    SemanticCachePrompt,
     SemanticCacheScope,
 )
+from litellm.types.semantic_cache import SemanticCacheParams, SemanticCachePolicy
+from litellm.constants import SEMANTIC_CACHE_POLICY_KEY
 from litellm.types.utils import Embedding, EmbeddingResponse, Usage
 
 _CACHING_TEST_MESSAGES: Final = [{"role": "user", "content": "who is ishaan 5222"}]
@@ -2364,3 +2368,370 @@ def test_excluded_call_types_leave_the_callers_lists_and_later_defaults_intact()
     assert supported == ["embedding", "aembedding", "completion"]
     assert excluded == ["embedding", "aembedding"]
     assert Cache(type=LiteLLMCacheType.LOCAL).supported_call_types == list(DEFAULT_CACHING_SUPPORTED_CALL_TYPES)
+
+
+_SYSTEM_PROMPT: Final = {"role": "system", "content": "You are a support agent for ACME bank."}
+_QUESTION_A: Final = {"role": "user", "content": "What is my balance?"}
+_QUESTION_B: Final = {"role": "user", "content": "How do I close my account?"}
+_TENANT: Final = {"user_api_key": "hash-abc"}
+
+
+class _RecordingBackend(BaseCache):
+    def __init__(self, similarity: float | None = None) -> None:
+        super().__init__()
+        self.similarity = similarity
+        self.reads: list[dict[str, object]] = []
+        self.writes: list[dict[str, object]] = []
+
+    def get_cache(self, key, **kwargs) -> object:
+        self.reads.append(kwargs)
+        if self.similarity is not None:
+            kwargs["metadata"]["semantic-similarity"] = self.similarity
+        return None
+
+    async def async_get_cache(self, key, **kwargs) -> object:
+        return self.get_cache(key, **kwargs)
+
+    def set_cache(self, key, value: object, **kwargs) -> None:
+        self.writes.append(kwargs)
+
+    async def async_set_cache(self, key, value: object, **kwargs) -> object:
+        self.set_cache(key, value, **kwargs)
+
+    async def async_set_cache_pipeline(self, cache_list: list[tuple[str, object]], **kwargs: object) -> None:
+        return None
+
+
+def _last_user_cache(backend: BaseCache | None = None, **cache_kwargs) -> Cache:
+    return Cache(
+        type=LiteLLMCacheType.REDIS_SEMANTIC,
+        _backend=backend or _RecordingBackend(),
+        semantic_cache_prompt="last_user_message",
+        **cache_kwargs,
+    )
+
+
+def _semantic_key(cache: Cache, **request) -> str:
+    return cache.get_cache_key(model="gpt-4o-mini", metadata=dict(_TENANT), **request)
+
+
+def test_semantic_cache_prompt_defaults_to_all_messages_and_accepts_last_user_message():
+    assert _semantic_cache().semantic_cache_prompt == "all_messages"
+    assert _semantic_cache(semantic_cache_prompt="last_user_message").semantic_cache_prompt == "last_user_message"
+
+
+def test_semantic_cache_prompt_rejects_unknown_value():
+    with pytest.raises(ValueError, match="system_prompt"):
+        _semantic_cache(semantic_cache_prompt="system_prompt")
+
+
+def test_enable_cache_forwards_semantic_cache_prompt(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(litellm, "cache", None)
+    monkeypatch.setattr(litellm, "input_callback", list(litellm.input_callback))
+    monkeypatch.setattr(litellm, "success_callback", list(litellm.success_callback))
+    monkeypatch.setattr(litellm, "_async_success_callback", list(litellm._async_success_callback))
+
+    enable_cache(
+        type=LiteLLMCacheType.REDIS_SEMANTIC, _backend=_RecordingBackend(), semantic_cache_prompt="last_user_message"
+    )
+
+    assert litellm.cache is not None
+    assert litellm.cache.semantic_cache_prompt == SemanticCachePrompt.LAST_USER_MESSAGE
+
+
+@pytest.mark.parametrize(
+    "request_kwargs",
+    [
+        {"messages": [_SYSTEM_PROMPT, _QUESTION_A]},
+        {"input": [_SYSTEM_PROMPT, _QUESTION_A]},
+        {"input": "What is my balance?"},
+    ],
+)
+def test_all_messages_explicit_matches_the_default_key_and_sends_the_whole_conversation(request_kwargs):
+    default_cache: Final = _semantic_cache()
+    explicit_backend: Final = _RecordingBackend()
+    explicit_cache: Final = Cache(
+        type=LiteLLMCacheType.REDIS_SEMANTIC, _backend=explicit_backend, semantic_cache_prompt="all_messages"
+    )
+
+    assert _semantic_key(explicit_cache, **request_kwargs) == _semantic_key(default_cache, **request_kwargs)
+    explicit_cache.get_cache(model="gpt-4o-mini", metadata=dict(_TENANT), **request_kwargs)
+
+    assert explicit_backend.reads[0] | request_kwargs == explicit_backend.reads[0]
+
+
+def test_last_user_message_key_ignores_only_the_question_text():
+    cache: Final = _last_user_cache()
+    history: Final = [_SYSTEM_PROMPT, {"role": "assistant", "content": "Hello"}]
+
+    key_a: Final = _semantic_key(cache, messages=[*history, _QUESTION_A])
+    key_b: Final = _semantic_key(cache, messages=[*history, _QUESTION_B])
+
+    assert key_a == key_b
+    assert re.fullmatch(r"[0-9a-f]{64}", key_a)
+    assert key_a != _semantic_key(_semantic_cache(), messages=[*history, _QUESTION_A])
+
+
+def test_last_user_message_key_changes_with_the_system_prompt():
+    cache: Final = _last_user_cache()
+    other_system: Final = {"role": "system", "content": "You are a pirate."}
+
+    assert _semantic_key(cache, messages=[_SYSTEM_PROMPT, _QUESTION_A]) != _semantic_key(
+        cache, messages=[other_system, _QUESTION_A]
+    )
+
+
+def test_last_user_message_key_tells_a_turn_before_the_question_from_one_after_it():
+    cache: Final = _last_user_cache()
+    note: Final = {"role": "assistant", "content": "Noted"}
+
+    assert _semantic_key(cache, messages=[note, _QUESTION_A]) != _semantic_key(cache, messages=[_QUESTION_A, note])
+
+
+def test_last_user_message_key_follows_the_non_text_parts_of_the_question():
+    cache: Final = _last_user_cache()
+
+    def question(url: str, text: str) -> dict[str, object]:
+        return {
+            "role": "user",
+            "content": [{"type": "text", "text": text}, {"type": "image_url", "image_url": {"url": url}}],
+        }
+
+    same_image: Final = (
+        _semantic_key(cache, messages=[question("https://x/a.png", "What is this?")]),
+        _semantic_key(cache, messages=[question("https://x/a.png", "Describe it")]),
+    )
+
+    assert same_image[0] == same_image[1]
+    assert same_image[0] != _semantic_key(cache, messages=[question("https://x/b.png", "What is this?")])
+
+
+def test_last_user_message_key_follows_pydantic_messages():
+    cache: Final = _last_user_cache()
+
+    class _Turn(BaseModel):
+        role: str
+        content: object
+
+    def request(text: str, image: str) -> list[_Turn]:
+        return [
+            _Turn(role="system", content="s"),
+            _Turn(role="user", content=[{"type": "text", "text": text}, {"type": "image_url", "url": image}]),
+        ]
+
+    assert _semantic_key(cache, messages=request("a", "i1")) == _semantic_key(cache, messages=request("b", "i1"))
+    assert _semantic_key(cache, messages=request("a", "i1")) != _semantic_key(cache, messages=request("a", "i2"))
+
+
+@pytest.mark.parametrize(
+    "after",
+    [
+        [
+            {"role": "assistant", "content": None, "tool_calls": [{"id": "1", "type": "function"}]},
+            {"role": "tool", "tool_call_id": "1", "content": "42"},
+        ],
+        [
+            {"role": "assistant", "content": [{"type": "tool_use", "id": "1", "name": "f", "input": {}}]},
+            {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "1", "content": "42"}]},
+        ],
+    ],
+    ids=["chat-tool-role", "anthropic-tool-result"],
+)
+def test_last_user_message_key_follows_the_tool_calls_after_the_question(after):
+    cache: Final = _last_user_cache()
+
+    assert _semantic_key(cache, messages=[_QUESTION_A]) != _semantic_key(cache, messages=[_QUESTION_A, *after])
+
+
+def test_last_user_message_key_follows_the_function_calls_after_a_responses_question():
+    cache: Final = _last_user_cache()
+    function_call_output: Final = {"type": "function_call_output", "call_id": "1", "output": "42"}
+
+    assert _semantic_key(cache, input=[_QUESTION_A]) != _semantic_key(cache, input=[_QUESTION_A, function_call_output])
+    assert _semantic_key(cache, input=[_QUESTION_A]) == _semantic_key(cache, input=[_QUESTION_B])
+
+
+def test_last_user_message_key_keeps_separating_tenants():
+    cache: Final = _last_user_cache()
+    messages: Final = [_SYSTEM_PROMPT, _QUESTION_A]
+
+    assert cache.get_cache_key(model="m", messages=messages, metadata={"user_api_key": "a"}) != cache.get_cache_key(
+        model="m", messages=messages, metadata={"user_api_key": "b"}
+    )
+
+
+def test_last_user_message_key_handles_a_system_prompt_too_large_to_inline():
+    cache: Final = _last_user_cache()
+    big_system: Final = {"role": "system", "content": "policy " * 50_000}
+
+    assert _semantic_key(cache, messages=[big_system, _QUESTION_A]) == _semantic_key(
+        cache, messages=[big_system, _QUESTION_B]
+    )
+    assert _semantic_key(cache, messages=[big_system, _QUESTION_A]) != _semantic_key(
+        cache, messages=[{"role": "system", "content": "policy " * 50_001}, _QUESTION_A]
+    )
+
+
+def test_last_user_message_leaves_the_key_of_a_non_semantic_cache_alone():
+    plain: Final = Cache(type=LiteLLMCacheType.LOCAL)
+    last_user: Final = Cache(type=LiteLLMCacheType.LOCAL, semantic_cache_prompt="last_user_message")
+    messages: Final = [_SYSTEM_PROMPT, _QUESTION_A]
+
+    assert last_user.get_cache_key(model="m", messages=messages) == plain.get_cache_key(model="m", messages=messages)
+    assert last_user.get_cache_key(model="m", messages=messages) != last_user.get_cache_key(
+        model="m", messages=[_SYSTEM_PROMPT, _QUESTION_B]
+    )
+    assert last_user.should_use_cache(messages=[_SYSTEM_PROMPT]) is True
+
+
+def test_last_user_message_keeps_a_string_responses_input_whole():
+    backend: Final = _RecordingBackend()
+    cache: Final = _last_user_cache(backend)
+
+    cache.get_cache(model="m", input="What is my balance?", metadata=dict(_TENANT))
+
+    assert backend.reads[0]["input"] == "What is my balance?"
+    assert _semantic_key(cache, input="What is my balance?") == _semantic_key(
+        _semantic_cache(), input="What is my balance?"
+    )
+
+
+_CHAT_TOOL_CONVERSATION: Final = [
+    _SYSTEM_PROMPT,
+    _QUESTION_A,
+    {"role": "assistant", "content": None, "tool_calls": [{"id": "1", "type": "function"}]},
+    {"role": "tool", "tool_call_id": "1", "content": "42"},
+]
+_ANTHROPIC_TOOL_CONVERSATION: Final = [
+    {"role": "user", "content": "What is my balance?"},
+    {"role": "assistant", "content": [{"type": "tool_use", "id": "1", "name": "f", "input": {}}]},
+    {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "1", "content": "42"}]},
+]
+_RESPONSES_TOOL_CONVERSATION: Final = [
+    {"role": "user", "content": [{"type": "input_text", "text": "What is my balance?"}]},
+    {"type": "function_call", "call_id": "1", "name": "f", "arguments": "{}"},
+    {"type": "function_call_output", "call_id": "1", "output": "42"},
+]
+
+
+@pytest.mark.parametrize(
+    ("field", "conversation", "expected_turn"),
+    [
+        ("messages", _CHAT_TOOL_CONVERSATION, _QUESTION_A),
+        ("messages", _ANTHROPIC_TOOL_CONVERSATION, _ANTHROPIC_TOOL_CONVERSATION[0]),
+        ("messages", [_QUESTION_A, {"role": "user", "content": [{"type": "image_url", "image_url": {"url": "u"}}]}],
+         _QUESTION_A),
+        ("input", _RESPONSES_TOOL_CONVERSATION, _RESPONSES_TOOL_CONVERSATION[0]),
+        ("input", [_SYSTEM_PROMPT, {"role": "user", "content": "first"}, _QUESTION_A], _QUESTION_A),
+    ],
+    ids=["chat", "anthropic", "image-only-turn-after", "responses", "responses-two-user-turns"],
+)
+@pytest.mark.asyncio
+async def test_last_user_message_sends_only_the_last_user_turn_to_the_backend_in_all_four_operations(
+    field, conversation, expected_turn
+):
+    backend: Final = _RecordingBackend()
+    cache: Final = _last_user_cache(backend)
+    request: Final = {"model": "m", "metadata": dict(_TENANT), field: conversation}
+
+    cache.get_cache(**request)
+    await cache.async_get_cache(**request)
+    cache.add_cache("answer", **request)
+    await cache.async_add_cache("answer", **request)
+
+    assert [call[field] for call in (*backend.reads, *backend.writes)] == [[expected_turn]] * 4
+
+
+def test_last_user_message_keeps_every_part_of_a_mixed_question_turn_for_the_backend():
+    backend: Final = _RecordingBackend()
+    cache: Final = _last_user_cache(backend)
+    mixed: Final = {
+        "role": "user",
+        "content": [
+            {"type": "text", "text": "What does this say?"},
+            {"type": "tool_result", "tool_use_id": "1", "content": "42"},
+            {"type": "image_url", "image_url": {"url": "u"}},
+        ],
+    }
+
+    cache.get_cache(model="m", messages=[_SYSTEM_PROMPT, mixed])
+
+    assert backend.reads[0]["messages"] == [mixed]
+
+
+def test_last_user_message_hands_the_semantic_similarity_back_to_the_request_metadata():
+    backend: Final = _RecordingBackend(similarity=0.97)
+    cache: Final = _last_user_cache(backend)
+    metadata: Final = dict(_TENANT)
+
+    cache.get_cache(model="m", messages=[_SYSTEM_PROMPT, _QUESTION_A], metadata=metadata)
+
+    assert metadata["semantic-similarity"] == 0.97
+
+
+@pytest.mark.asyncio
+async def test_last_user_message_lets_an_async_backend_write_into_the_request_metadata():
+    backend: Final = _RecordingBackend(similarity=0.91)
+    cache: Final = _last_user_cache(backend)
+    metadata: Final = dict(_TENANT)
+
+    await cache.async_get_cache(model="m", messages=[_SYSTEM_PROMPT, _QUESTION_A], metadata=metadata)
+
+    assert metadata["semantic-similarity"] == 0.91
+
+
+_NO_USER_REQUESTS: Final = [
+    {"messages": [_SYSTEM_PROMPT]},
+    {"messages": [{"role": "assistant", "content": "hi"}, {"role": "tool", "content": "42"}]},
+    {"messages": [{"role": "user", "content": [{"type": "tool_result", "tool_use_id": "1", "content": "42"}]}]},
+    {"messages": [{"role": "user", "content": [{"type": "image_url", "image_url": {"url": "u"}}]}]},
+    {"input": [{"type": "function_call_output", "call_id": "1", "output": "42"}]},
+]
+
+
+@pytest.mark.parametrize("request_kwargs", _NO_USER_REQUESTS)
+def test_requests_without_a_user_message_use_the_cache_only_under_all_messages(request_kwargs):
+    assert _last_user_cache().should_use_cache(model="m", **request_kwargs) is False
+    assert _semantic_cache().should_use_cache(model="m", **request_kwargs) is True
+
+
+@pytest.mark.parametrize("request_kwargs", _NO_USER_REQUESTS)
+@pytest.mark.asyncio
+async def test_requests_without_a_user_message_never_reach_the_semantic_backend(request_kwargs):
+    backend: Final = _RecordingBackend()
+    cache: Final = _last_user_cache(backend)
+    request: Final = {"model": "m", "metadata": dict(_TENANT), **request_kwargs}
+
+    cache.get_cache(**request)
+    await cache.async_get_cache(**request)
+    cache.add_cache("answer", **request)
+    await cache.async_add_cache("answer", **request)
+
+    assert (backend.reads, backend.writes) == ([], [])
+
+
+def test_skipping_a_request_without_a_user_message_logs_one_debug_line(caplog: pytest.LogCaptureFixture):
+    skipped: Final = "semantic cache skipped: request has no user message"
+    with caplog.at_level(logging.DEBUG, logger="LiteLLM"):
+        _last_user_cache().should_use_cache(model="m", messages=[_SYSTEM_PROMPT])
+        _semantic_cache().should_use_cache(model="m", messages=[_SYSTEM_PROMPT])
+
+    assert [record.getMessage() for record in caplog.records].count(skipped) == 1
+
+
+def test_last_user_message_still_honors_the_semantic_cache_policy():
+    backend: Final = _RecordingBackend()
+    cache: Final = _last_user_cache(backend)
+    messages: Final = [_SYSTEM_PROMPT, _QUESTION_A]
+    disabled: Final = SemanticCachePolicy(scope="key", params=SemanticCacheParams(enabled=False))
+    tuned: Final = SemanticCachePolicy(scope="key", params=SemanticCacheParams(similarity_threshold=0.95))
+
+    assert cache.should_use_cache(model="m", messages=messages, cache={SEMANTIC_CACHE_POLICY_KEY: disabled}) is False
+    cache.get_cache(model="m", messages=messages, cache={SEMANTIC_CACHE_POLICY_KEY: tuned})
+
+    assert backend.reads[0]["cache"] == {SEMANTIC_CACHE_POLICY_KEY: tuned}
+    assert backend.reads[0]["messages"] == [_QUESTION_A]
+
+
+def test_semantic_cache_params_do_not_carry_the_prompt_option():
+    assert "semantic_cache_prompt" not in SemanticCacheParams.model_fields

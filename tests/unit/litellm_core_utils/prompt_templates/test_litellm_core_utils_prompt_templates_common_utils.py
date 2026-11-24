@@ -9,6 +9,7 @@ from typing import Final, cast
 from unittest import mock
 
 import pytest
+from pydantic import BaseModel
 
 from litellm.litellm_core_utils.prompt_templates import common_utils
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
@@ -24,7 +25,11 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     handle_any_messages_to_chat_completion_str_messages_conversion,
     handle_messages_with_content_list_to_str_conversion,
     hoist_images_from_tool_messages,
+    is_blank_content,
+    is_empty_user_message,
     merge_consecutive_system_messages,
+    semantic_cache_turn_without_text,
+    split_last_user_turn,
     strip_litellm_internal_message_fields,
     strip_litellm_response_only_fields,
     system_messages_first,
@@ -1574,3 +1579,124 @@ def test_defs_unpacked_counts_the_annotations_next_to_a_ref_against_the_inlining
     }
     with pytest.raises(ValueError, match="byte budget"):
         defs_unpacked(schema, keep_ref_siblings=True)
+
+
+class _PydanticTurn(BaseModel):
+    role: str
+    content: object = None
+
+
+_TOOL_RESULT_TURN: Final = {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "1", "content": "42"}]}
+_IMAGE_TURN: Final = {"role": "user", "content": [{"type": "image_url", "image_url": {"url": "u"}}]}
+
+
+def test_split_last_user_turn_returns_the_turns_around_a_user_turn_in_the_middle():
+    turns: Final = [{"role": "system", "content": "s"}, {"role": "user", "content": "q"}, {"role": "assistant"}]
+
+    split: Final = split_last_user_turn(turns)
+
+    assert split is not None
+    assert (split.before, split.turn, split.after) == (({"role": "system", "content": "s"},), turns[1], (turns[2],))
+
+
+def test_split_last_user_turn_returns_empty_sides_for_a_lone_user_turn():
+    split: Final = split_last_user_turn([{"role": "user", "content": "q"}])
+
+    assert split is not None
+    assert (split.before, split.after) == ((), ())
+
+
+def test_split_last_user_turn_picks_the_last_of_two_user_turns():
+    first, second = {"role": "user", "content": "one"}, {"role": "user", "content": "two"}
+
+    split: Final = split_last_user_turn([first, second])
+
+    assert split is not None
+    assert (split.before, split.turn) == ((first,), second)
+
+
+@pytest.mark.parametrize(
+    "turns",
+    [
+        [],
+        [{"role": "system", "content": "s"}],
+        [{"role": "assistant", "content": "a"}, {"role": "tool", "content": "42"}],
+        [{"type": "function_call_output", "call_id": "1", "output": "42"}],
+        [_TOOL_RESULT_TURN],
+        [_IMAGE_TURN],
+        [{"role": "user"}],
+        [{"role": "user", "content": []}],
+        [{"role": "user", "content": [{"type": "text", "text": None}]}],
+        [{"role": "user", "content": [{"type": "refusal", "text": "x"}]}],
+        [{"role": "user", "content": [{"text": "no type"}]}],
+        ["a bare string"],
+    ],
+)
+def test_split_last_user_turn_finds_nothing_without_a_user_turn_that_has_text(turns):
+    assert split_last_user_turn(turns) is None
+
+
+def test_split_last_user_turn_skips_turns_without_text_after_the_question():
+    question: Final = {"role": "user", "content": "q"}
+
+    split: Final = split_last_user_turn([question, _IMAGE_TURN, _TOOL_RESULT_TURN])
+
+    assert split is not None
+    assert (split.turn, split.after) == (question, (_IMAGE_TURN, _TOOL_RESULT_TURN))
+
+
+def test_split_last_user_turn_picks_a_turn_that_mixes_text_and_tool_result():
+    mixed: Final = {"role": "user", "content": [*_TOOL_RESULT_TURN["content"], {"type": "input_text", "text": "q"}]}
+
+    split: Final = split_last_user_turn([{"role": "system", "content": "s"}, mixed])
+
+    assert split is not None
+    assert split.turn is mixed
+
+
+def test_split_last_user_turn_reads_pydantic_turns():
+    question: Final = _PydanticTurn(role="user", content=[{"type": "text", "text": "q"}])
+
+    split: Final = split_last_user_turn([_PydanticTurn(role="system", content="s"), question])
+
+    assert split is not None
+    assert split.turn is question
+
+
+def test_semantic_cache_turn_without_text_keeps_the_parts_that_are_not_text():
+    turn: Final = {
+        "role": "user",
+        "name": "ana",
+        "content": [{"type": "text", "text": "q"}, _IMAGE_TURN["content"][0], _TOOL_RESULT_TURN["content"][0]],
+    }
+
+    assert semantic_cache_turn_without_text(turn) == {
+        "role": "user",
+        "name": "ana",
+        "content": (_IMAGE_TURN["content"][0], _TOOL_RESULT_TURN["content"][0]),
+    }
+
+
+def test_semantic_cache_turn_without_text_drops_a_string_content():
+    assert semantic_cache_turn_without_text({"role": "user", "content": "q", "name": "ana"}) == {
+        "role": "user",
+        "name": "ana",
+    }
+
+
+def test_semantic_cache_turn_without_text_dumps_a_pydantic_turn():
+    turn: Final = _PydanticTurn(role="user", content=[{"type": "input_text", "text": "q"}, _IMAGE_TURN["content"][0]])
+
+    assert semantic_cache_turn_without_text(turn) == {"role": "user", "content": (_IMAGE_TURN["content"][0],)}
+
+
+def test_semantic_cache_turn_without_text_returns_a_non_mapping_as_is():
+    assert semantic_cache_turn_without_text("a bare string") == "a bare string"
+
+
+def test_blank_content_helpers_do_not_treat_a_type_less_block_as_text():
+    typeless: Final = [{"text": ""}]
+
+    assert is_blank_content(typeless) is False
+    assert is_empty_user_message({"role": "user", "content": typeless}) is False
+    assert is_blank_content([{"type": "text", "text": ""}]) is True

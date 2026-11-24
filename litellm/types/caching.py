@@ -23,6 +23,11 @@ class SemanticCacheScope(str, Enum):
     END_USER = "end_user"
 
 
+class SemanticCachePrompt(str, Enum):
+    ALL_MESSAGES = "all_messages"
+    LAST_USER_MESSAGE = "last_user_message"
+
+
 CachingSupportedCallTypes = Literal[
     "completion",
     "acompletion",

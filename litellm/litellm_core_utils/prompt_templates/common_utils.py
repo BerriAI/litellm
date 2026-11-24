@@ -12,7 +12,7 @@ from itertools import chain, groupby
 from types import MappingProxyType, ModuleType
 from typing import TYPE_CHECKING, Final, Literal, TypeAlias, cast
 
-from pydantic import TypeAdapter
+from pydantic import BaseModel, TypeAdapter
 
 import litellm
 from litellm.litellm_core_utils.core_helpers import as_object_list, as_str_mapping
@@ -555,6 +555,58 @@ def _semantic_cache_block_text(block: Mapping[str, object]) -> str:
         return _semantic_cache_content_text(block.get("content"))
     text: Final = block.get("text")
     return text if isinstance(text, str) else ""
+
+
+def _turn_field(turn: object, name: str) -> object:
+    mapping: Final = as_str_mapping(turn)
+    return mapping.get(name) if mapping is not None else getattr(turn, name, None)
+
+
+def _is_text_block(block: object) -> bool:
+    return isinstance(_turn_field(block, "text"), str) and _turn_field(block, "type") in _TEXT_BLOCK_TYPES
+
+
+def _is_user_text_turn(turn: object) -> bool:
+    if _turn_field(turn, "role") != "user":
+        return False
+    content: Final = _turn_field(turn, "content")
+    if isinstance(content, str):
+        return True
+    blocks: Final = as_object_list(content)
+    return blocks is not None and any(_is_text_block(block) for block in blocks)
+
+
+@dataclass(frozen=True, slots=True)
+class LastUserTurnSplit:
+    before: tuple[object, ...]
+    turn: object
+    after: tuple[object, ...]
+
+
+def split_last_user_turn(turns: Sequence[object]) -> LastUserTurnSplit | None:
+    """The last `role: user` turn with a text block of a chat, Messages or Responses conversation and the turns around it"""
+    last_user_index: Final = next((i for i in reversed(range(len(turns))) if _is_user_text_turn(turns[i])), None)
+    if last_user_index is None:
+        return None
+    return LastUserTurnSplit(
+        before=tuple(turns[:last_user_index]),
+        turn=turns[last_user_index],
+        after=tuple(turns[last_user_index + 1 :]),
+    )
+
+
+def semantic_cache_turn_without_text(turn: object) -> object:
+    """Everything in a user turn the semantic cache doesn't embed: images, audio, files and other non-text parts"""
+    if isinstance(turn, BaseModel):
+        return semantic_cache_turn_without_text(turn.model_dump(mode="json"))
+    mapping: Final = as_str_mapping(turn)
+    if mapping is None:
+        return turn
+    rest: Final = {key: value for key, value in mapping.items() if key != "content"}
+    blocks: Final = as_object_list(mapping.get("content"))
+    if blocks is None:
+        return rest
+    return {**rest, "content": tuple(block for block in blocks if not _is_text_block(block))}
 
 
 def is_non_content_values_set(message: AllMessageValues) -> bool:

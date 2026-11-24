@@ -63,6 +63,24 @@ router_settings:
   redis_port: 6379
 ```
 
+## Semantic cache prompt
+
+By default a semantic cache embeds the text of every message in the request, system prompt included. With a long system prompt the embeddings of different questions end up almost identical, so one question can be answered with the cached answer of another. Set `semantic_cache_prompt: last_user_message` to embed only the last user message and match everything else exactly.
+
+```yaml
+litellm_settings:
+  cache: true
+  cache_params:
+    type: redis-semantic
+    similarity_threshold: 0.9
+    semantic_cache_prompt: last_user_message
+    max_messages: null
+```
+
+The value defaults to `all_messages`, which keeps the current behavior. It applies to the semantic cache types and is ignored by the others. A user message is the last `role: user` message with a text block. A turn that holds only `tool_result` blocks, images or files, a `role: tool` result and a Responses API `function_call_output` item are not user messages. They stay out of the embedding and go into the cache key, together with the system prompt, the earlier messages, the turns after the question and the non-text parts of the question itself. The key is a SHA-256 hash, so none of that context is stored in clear text. A request that has no user message skips the semantic cache and goes to the provider, and the proxy logs that at debug level.
+
+The embedded text is now just the question, so similarities between paraphrases are lower than with whole conversations. Re-tune `similarity_threshold` when you switch. `max_messages` still applies and defaults to 4, which skips the cache for conversations with more messages, so raise it or set it to `null` to cache longer agent conversations. The option is global and is not part of `semantic_cache_policy`.
+
 ## Documentation
 - [Caching on LiteLLM Gateway](https://docs.litellm.ai/docs/proxy/caching)
 - [Caching on LiteLLM Python](https://docs.litellm.ai/docs/caching/all_caches)

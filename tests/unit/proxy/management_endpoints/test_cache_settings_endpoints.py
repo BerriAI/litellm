@@ -93,6 +93,16 @@ def test_cache_settings_fields_expose_url_and_db():
     assert by_name["db"].redis_type is None
 
 
+def test_cache_settings_fields_expose_semantic_cache_prompt():
+    field = {f.field_name: f for f in CACHE_SETTINGS_FIELDS}["semantic_cache_prompt"]
+
+    assert field.options == ["all_messages", "last_user_message"]
+    assert field.field_default == "all_messages"
+    assert field.field_type == "String"
+    assert field.redis_type == "semantic"
+    assert "similarity_threshold" in field.field_description
+
+
 class TestResolveCacheUrlPrecedence:
     """url wins over the discrete host/port/db/password fields."""
 
