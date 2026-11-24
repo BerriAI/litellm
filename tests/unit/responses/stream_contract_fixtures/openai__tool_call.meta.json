@@ -1,0 +1,37 @@
+{
+  "provider": "openai",
+  "endpoint": "https://api.openai.com/v1/responses",
+  "model": "gpt-6.2-sol",
+  "scenario": "tool_call",
+  "recorded_at": "2026-11-24T03:17:26.949129+00:00",
+  "http_status": 200,
+  "request_body": {
+    "model": "gpt-6.2-sol",
+    "stream": true,
+    "max_output_tokens": 60,
+    "input": "What's the weather in Paris?",
+    "tools": [
+      {
+        "type": "function",
+        "name": "get_weather",
+        "description": "Get the current weather for a city.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "city": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "city"
+          ],
+          "additionalProperties": false
+        }
+      }
+    ],
+    "tool_choice": {
+      "type": "function",
+      "name": "get_weather"
+    }
+  }
+}

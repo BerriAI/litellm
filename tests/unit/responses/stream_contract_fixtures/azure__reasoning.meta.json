@@ -1,0 +1,18 @@
+{
+  "provider": "azure",
+  "endpoint": "https://litellm-ryan-local-qa.openai.azure.com/openai/v1/responses",
+  "model": "gpt-6.1-sol",
+  "scenario": "reasoning",
+  "recorded_at": "2026-11-24T03:18:31.776616+00:00",
+  "http_status": 200,
+  "request_body": {
+    "model": "gpt-6.1-sol",
+    "stream": true,
+    "max_output_tokens": 2000,
+    "input": "How many positive integers below 200 are divisible by 3 or 7 but not by 5? Reply with just the number.",
+    "reasoning": {
+      "effort": "high",
+      "summary": "auto"
+    }
+  }
+}

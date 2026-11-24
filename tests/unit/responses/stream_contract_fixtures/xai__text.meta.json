@@ -1,0 +1,14 @@
+{
+  "provider": "xai",
+  "endpoint": "https://api.x.ai/v1/responses",
+  "model": "grok-4.7",
+  "scenario": "text",
+  "recorded_at": "2026-11-24T03:19:15.195568+00:00",
+  "http_status": 200,
+  "request_body": {
+    "model": "grok-4.7",
+    "stream": true,
+    "max_output_tokens": 60,
+    "input": "Say hi in five words."
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "provider": "azure",
+  "endpoint": "https://litellm-ryan-local-qa.openai.azure.com/openai/v1/responses",
+  "model": "gpt-6.1-sol",
+  "scenario": "text",
+  "recorded_at": "2026-11-24T03:17:34.320892+00:00",
+  "http_status": 200,
+  "request_body": {
+    "model": "gpt-6.1-sol",
+    "stream": true,
+    "max_output_tokens": 60,
+    "input": "Say hi in five words."
+  }
+}

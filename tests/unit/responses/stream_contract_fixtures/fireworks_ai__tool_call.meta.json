@@ -1,0 +1,40 @@
+{
+  "provider": "fireworks_ai",
+  "endpoint": "https://api.fireworks.ai/inference/v1/responses",
+  "model": "accounts/fireworks/models/kimi-k3p1-pro",
+  "scenario": "tool_call",
+  "recorded_at": "2026-11-24T03:14:22.066154+00:00",
+  "http_status": 200,
+  "request_body": {
+    "model": "accounts/fireworks/models/kimi-k3p1-pro",
+    "stream": true,
+    "max_output_tokens": 60,
+    "input": "What's the weather in Paris?",
+    "tools": [
+      {
+        "type": "function",
+        "name": "get_weather",
+        "description": "Get the current weather for a city.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "city": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "city"
+          ],
+          "additionalProperties": false
+        }
+      }
+    ],
+    "tool_choice": {
+      "type": "function",
+      "name": "get_weather"
+    },
+    "reasoning": {
+      "effort": "none"
+    }
+  }
+}

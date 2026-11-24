@@ -1,0 +1,18 @@
+{
+  "provider": "xai",
+  "endpoint": "https://api.x.ai/v1/responses",
+  "model": "grok-4.7",
+  "scenario": "reasoning",
+  "recorded_at": "2026-11-24T03:19:34.885577+00:00",
+  "http_status": 200,
+  "request_body": {
+    "model": "grok-4.7",
+    "stream": true,
+    "max_output_tokens": 2000,
+    "input": "How many positive integers below 200 are divisible by 3 or 7 but not by 5? Reply with just the number.",
+    "reasoning": {
+      "effort": "high",
+      "summary": "auto"
+    }
+  }
+}
