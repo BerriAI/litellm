@@ -9,6 +9,13 @@ mod owner;
 mod project;
 mod team;
 
+/// A key's project, as far as any host reads it: the two values a key in it carries.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ProjectRecord {
+    pub project_alias: Option<String>,
+    pub metadata: Option<serde_json::Map<String, serde_json::Value>>,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Owner<U> {
     /// Deactivated through SCIM.

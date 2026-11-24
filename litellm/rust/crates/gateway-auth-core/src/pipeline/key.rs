@@ -57,6 +57,7 @@ mod tests {
             jwt::JwtSettings,
             key::{KeyRecord, Keyed},
         },
+        identity::key::ProjectRecord,
         testing::{Labels, ScriptedHost},
     };
 
@@ -563,7 +564,10 @@ mod tests {
                 belongs: Belongs {
                     user: Some("owner u".to_owned()),
                     team: TeamGrant::Loaded("team t".to_owned()),
-                    project: Some("project p".to_owned()),
+                    project: Some(ProjectRecord {
+                        project_alias: Some("project p".to_owned()),
+                        metadata: None,
+                    }),
                     end_user: Some("end-user".to_owned()),
                     ..Belongs::default()
                 },

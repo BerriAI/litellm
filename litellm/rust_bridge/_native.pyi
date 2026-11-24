@@ -24,7 +24,7 @@ from litellm.models.object_permission import LiteLLM_ObjectPermissionTable
 from litellm.models.team import LiteLLM_TeamTable, LiteLLM_TeamTableCachedObj
 from litellm.models.team_membership import LiteLLM_TeamMembership
 from litellm.models.user import LiteLLM_UserTable
-from litellm.proxy._types import LiteLLM_JWTAuth, LiteLLM_ProjectTableCachedObj
+from litellm.proxy._types import LiteLLM_JWTAuth
 from litellm.proxy.auth.host.facts import EndUserRow
 from litellm.redis.store_settings import RedisBreakerSettings, RedisStoreSettings
 from litellm.redis.stores.auth_cache.handle import TeamRoster
@@ -811,6 +811,12 @@ class _ManagedAgent(Protocol):
     @property
     def subject_oid(self) -> str | None: ...
 
+class _Project(Protocol):
+    @property
+    def project_alias(self) -> str | None: ...
+    @property
+    def metadata(self) -> dict[str, object] | None: ...
+
 class _AgentFailure(Protocol):
     @property
     def code(self) -> str: ...
@@ -1105,6 +1111,14 @@ _AuthenticatedIdentity = (
 )
 
 @final
+class RustProject:
+    def __new__(cls, *, project_alias: str | None = None, metadata: dict[str, object] | None = None) -> RustProject: ...
+    @property
+    def project_alias(self) -> str | None: ...
+    @property
+    def metadata(self) -> dict[str, object] | None: ...
+
+@final
 class RustManagedAgent:
     def __new__(
         cls,
@@ -1155,7 +1169,7 @@ class RustKeyContext:
         *,
         owner: LiteLLM_UserTable | None = None,
         team: RustTeamGrant,
-        project: LiteLLM_ProjectTableCachedObj | None = None,
+        project: RustProject | None = None,
     ) -> RustKeyContext: ...
     @property
     def key(self) -> UserAPIKeyAuth: ...
@@ -1166,7 +1180,7 @@ class RustKeyContext:
     @property
     def team(self) -> RustTeamGrant: ...
     @property
-    def project(self) -> LiteLLM_ProjectTableCachedObj | None: ...
+    def project(self) -> RustProject | None: ...
 
 @disjoint_base
 class RustDenial:
@@ -1943,12 +1957,9 @@ class RustAuth:
     def row(self, row: UserAPIKeyAuth | EndUserRow | LiteLLM_UserTable) -> None: ...
     def found_row(
         self,
-        row: LiteLLM_TeamTableCachedObj
-        | LiteLLM_ObjectPermissionTable
-        | LiteLLM_ProjectTableCachedObj
-        | LiteLLM_TeamMembership
-        | None = None,
+        row: LiteLLM_TeamTableCachedObj | LiteLLM_ObjectPermissionTable | LiteLLM_TeamMembership | None = None,
     ) -> None: ...
+    def project(self, project: _Project | None = None) -> None: ...
     def key(self, facts: _KeyFacts | None = None, row: UserAPIKeyAuth | None = None) -> None: ...
     def key_owner(self, row: LiteLLM_UserTable | None = None, *, deactivated: bool = False) -> None: ...
     def cached_team(
@@ -2776,6 +2787,7 @@ __all__ = [
     "RustObjectPermissionRepository",
     "RustOrganizationRepository",
     "RustPlan",
+    "RustProject",
     "RustProjectRepository",
     "RustSpendLog",
     "RustSpendLogRepository",

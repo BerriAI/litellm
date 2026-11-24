@@ -40,8 +40,9 @@ mod _native {
     #[pymodule_export]
     use crate::auth::{
         AuthCall, AuthOutcome, AuthSettings, AuthStep, ClaimIdentityView, DenialView, IdentityView,
-        KeyContextView, ManagedAgentView, MappedClaimsView, MappingView, PlanView, TeamGrantView,
-        jwt_claims, jwt_is_allowed_domain, jwt_is_jwt, jwt_presents_claims, jwt_unverified_claims,
+        KeyContextView, ManagedAgentView, MappedClaimsView, MappingView, PlanView, ProjectView,
+        TeamGrantView, jwt_claims, jwt_is_allowed_domain, jwt_is_jwt, jwt_presents_claims,
+        jwt_unverified_claims,
     };
     #[pymodule_export]
     use crate::auth::{
@@ -342,6 +343,7 @@ mod tests {
                 "RustManagedAgent",
                 "RustMappedClaims",
                 "RustPlan",
+                "RustProject",
                 "RustTeamGrant",
                 "jwt_claims",
                 "jwt_is_allowed_domain",

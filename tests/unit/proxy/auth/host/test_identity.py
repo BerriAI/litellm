@@ -8,11 +8,10 @@ from litellm.models.end_user import LiteLLM_EndUserTable
 from litellm.models.object_permission import LiteLLM_ObjectPermissionTable
 from litellm.models.team import LiteLLM_TeamTableCachedObj
 from litellm.models.user import LiteLLM_UserTable
-from litellm.proxy._types import LiteLLM_ProjectTableCachedObj
 from litellm.proxy.auth.host import identity as auth_identity
 from litellm.proxy.auth.host.facts import EndUserRow
 from litellm.proxy.auth.host.python import PythonAuthHost
-from litellm.rust_bridge._native import RustDenial, RustIdentity, RustKeyContext, RustTeamGrant
+from litellm.rust_bridge._native import RustDenial, RustIdentity, RustKeyContext, RustProject, RustTeamGrant
 from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 from litellm.types.proxy.auth.user_roles import LitellmUserRoles
 
@@ -42,7 +41,7 @@ def _context(
     end_user: EndUserRow = NO_END_USER,
     owner: LiteLLM_UserTable | None = None,
     team: RustTeamGrant | None = None,
-    project: LiteLLM_ProjectTableCachedObj | None = None,
+    project: RustProject | None = None,
 ) -> RustKeyContext:
     return RustKeyContext(key, end_user, owner=owner, team=team or RustTeamGrant.NoTeam(), project=project)
 
@@ -118,7 +117,7 @@ async def test_owner_budget_and_project_values_reach_the_virtual_key(
     project_outcome: Callable[[RustIdentity], Awaitable[UserAPIKeyAuth]],
 ) -> None:
     owner: Final = LiteLLM_UserTable(user_id="u", model_max_budget={"gpt-a": 1.0})
-    project_row: Final = LiteLLM_ProjectTableCachedObj(project_id="p", project_alias="alias", metadata={"m": 1})
+    project_row: Final = RustProject(project_alias="alias", metadata={"m": 1})
     context: Final = _context(UserAPIKeyAuth(token="hashed", user_id="u"), owner=owner, project=project_row)
 
     token: Final = await project_outcome(RustIdentity.VirtualKey(context=context))

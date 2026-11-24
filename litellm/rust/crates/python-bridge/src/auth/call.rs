@@ -14,7 +14,7 @@ use litellm_gateway_auth_core::{
             ManagedAgent, ModelAccess, Org, Provisioning, RegisteredAgent, Team, TeamRead, User,
             UserRead,
         },
-        key::{KeyContext, KeyOutcome, Owner},
+        key::{KeyContext, KeyOutcome, Owner, ProjectRecord},
     },
     plan::Plan,
     routes::passthrough::{ForwardedRoutes, PassthroughGrants},
@@ -241,6 +241,56 @@ pub(crate) struct ManagedAgentFacts {
     binding_revision: Option<String>,
     #[pyo3(attribute)]
     subject_oid: Option<String>,
+}
+
+/// `LiteLLM_ProjectTable`, read as is.
+#[derive(FromPyObject)]
+pub(crate) struct ProjectFacts {
+    #[pyo3(attribute)]
+    project_alias: Option<String>,
+    #[pyo3(attribute)]
+    metadata: Option<Py<PyAny>>,
+}
+
+/// A key's project as the core holds it, with the two values `facts.with_project` reads.
+#[pyclass(
+    frozen,
+    get_all,
+    name = "RustProject",
+    module = "litellm.rust_bridge._native"
+)]
+pub(crate) struct ProjectView {
+    project_alias: Option<String>,
+    metadata: Option<Py<PyAny>>,
+}
+
+#[pymethods]
+impl ProjectView {
+    #[new]
+    #[pyo3(signature = (*, project_alias = None, metadata = None))]
+    fn py_new(project_alias: Option<String>, metadata: Option<Py<PyAny>>) -> Self {
+        Self {
+            project_alias,
+            metadata,
+        }
+    }
+}
+
+impl ProjectView {
+    fn new(py: Python<'_>, project: &ProjectRecord) -> PyResult<Py<Self>> {
+        let metadata = project
+            .metadata
+            .as_ref()
+            .map(|metadata| to_py(py, metadata))
+            .transpose()?;
+        Py::new(
+            py,
+            Self {
+                project_alias: project.project_alias.clone(),
+                metadata,
+            },
+        )
+    }
 }
 
 /// A managed agent as the core holds it, which `identity.managed_agent_context` turns back into
@@ -631,7 +681,7 @@ pub(crate) struct KeyContextView {
     owner: Option<Py<PyAny>>,
     /// A `RustTeamGrant` variant.
     team: Py<PyAny>,
-    project: Option<Py<PyAny>>,
+    project: Option<Py<ProjectView>>,
 }
 
 #[pymethods]
@@ -643,7 +693,7 @@ impl KeyContextView {
         end_user: Py<PyAny>,
         owner: Option<Py<PyAny>>,
         team: Bound<'_, TeamGrantView>,
-        project: Option<Py<PyAny>>,
+        project: Option<Py<ProjectView>>,
     ) -> Self {
         Self {
             key,
@@ -677,7 +727,11 @@ impl KeyContextView {
                 end_user: row(py, end_user),
                 owner: rows(py, belongs.user.as_ref()),
                 team: team.into_pyobject(py)?.into_any().unbind(),
-                project: rows(py, belongs.project.as_ref()),
+                project: belongs
+                    .project
+                    .as_ref()
+                    .map(|project| ProjectView::new(py, project))
+                    .transpose()?,
             },
         )
     }
@@ -1610,6 +1664,30 @@ impl AuthCall {
         })
     }
 
+    /// A key's project, or nothing when it has no row.
+    #[pyo3(signature = (project = None))]
+    fn project(&self, py: Python<'_>, project: Option<ProjectFacts>) -> PyResult<()> {
+        let project = project
+            .map(|facts| {
+                let metadata = facts
+                    .metadata
+                    .map(|metadata| from_py(metadata.bind(py)))
+                    .transpose()?;
+                PyResult::Ok(ProjectRecord {
+                    project_alias: facts.project_alias,
+                    metadata,
+                })
+            })
+            .transpose()?;
+        self.stepper.answer("a project", |ask| match ask {
+            Ask::Project { reply, .. } => {
+                reply.send(project);
+                Ok(())
+            }
+            other => Err(other),
+        })
+    }
+
     /// A row read by id, or nothing when there is none.
     #[pyo3(signature = (row = None))]
     fn found_row(&self, row: Option<Py<PyAny>>) -> PyResult<()> {
@@ -1617,7 +1695,6 @@ impl AuthCall {
         self.stepper.answer("a row or nothing", |ask| match ask {
             Ask::KeyTeam { reply, .. }
             | Ask::ObjectPermission { reply, .. }
-            | Ask::Project { reply, .. }
             | Ask::LoadTeamMembership { reply, .. } => {
                 reply.send(row);
                 Ok(())

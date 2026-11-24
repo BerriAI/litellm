@@ -11,7 +11,7 @@ use crate::{
     authn::key::KeyRecord,
     identity::{
         jwt::Org,
-        key::{KeyContext, KeyOutcome},
+        key::{KeyContext, KeyOutcome, ProjectRecord},
     },
     outcome::Identity,
 };
@@ -37,7 +37,7 @@ pub struct Belongs<R: Rows> {
     /// The user's membership of `team`.
     pub membership: Option<R::Membership>,
     pub org: Option<Org>,
-    pub project: Option<R::Project>,
+    pub project: Option<ProjectRecord>,
     /// The key path always reads one, which is empty for a request that names no end user.
     pub end_user: Option<R::EndUser>,
 }
@@ -157,7 +157,6 @@ mod tests {
         type Team = String;
         type EndUser = String;
         type ObjectPermission = String;
-        type Project = String;
         type Membership = String;
     }
 
