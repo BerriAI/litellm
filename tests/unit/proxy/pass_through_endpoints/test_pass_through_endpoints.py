@@ -6898,6 +6898,42 @@ async def test_pass_through_request_replaces_a_sent_body_profile_id_with_the_pin
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "key_metadata",
+    [pytest.param(_PINNED_KEY_METADATA, id="pinned-key"), pytest.param({}, id="unpinned-key")],
+)
+async def test_pass_through_request_fetches_no_model_config_for_a_caller_named_model(
+    monkeypatch: pytest.MonkeyPatch,
+    key_metadata: dict[str, str],
+) -> None:
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", _PROXY_MASTER_KEY)
+    body: Final = {"model": "huggingface/attacker/repo", "user_profile_id": "own-api-user-42"}
+    fake_client, cleanup = _inject_fake_passthrough_client(
+        httpx.MockTransport(lambda upstream_request: httpx.Response(200, json={"ok": True}, request=upstream_request)),
+        timeout=None,
+    )
+    try:
+        with respx.mock(assert_all_called=False) as respx_mock, ExitStack() as stack:
+            hf_config: Final = respx_mock.get(url__regex=r"https://huggingface\.co/.*/config\.json").respond(
+                json={"max_position_embeddings": 512}
+            )
+            _enter_relay_logging_mocks(stack, body)
+            response: Final = await pass_through_request(
+                request=_configured_route_request(method="POST", headers={}),
+                target="http://internal-api.test/v1/users",
+                custom_headers=dict(_SERVER_MANTLE_KEY),
+                user_api_key_dict=UserAPIKeyAuth(api_key="sk-test", metadata=key_metadata),
+                forward_headers=True,
+                custom_body=body,
+            )
+    finally:
+        cleanup()
+        await fake_client.aclose()
+
+    assert (response.status_code, hf_config.call_count) == (200, 0)
+
+
+@pytest.mark.asyncio
 async def test_pass_through_request_relays_non_json_body_without_buffering():
     """
     Regression (LIT-4009): non-SSE passthrough responses used to be fully

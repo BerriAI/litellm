@@ -1364,6 +1364,11 @@ def _with_pinned_profile_id_where_taken_or_sent(
     headers: Mapping[str, str],
     body: Mapping[str, object] | None,
 ) -> UpstreamRequest:
+    sends_caller_credential: Final = any(
+        caller_credentials.get(name.lower()) == value for name, value in headers.items()
+    )
+    if pinned_profile_id is None or sends_caller_credential:
+        return headers, body
     model: Final = None if body is None else body.get("model")
     sends_mantle_profile_id: Final = (
         body is not None
@@ -1374,11 +1379,8 @@ def _with_pinned_profile_id_where_taken_or_sent(
     sends_profile_id: Final = (
         any(name.lower() == ANTHROPIC_USER_PROFILE_ID_HEADER for name in headers) or sends_mantle_profile_id
     )
-    sends_caller_credential: Final = any(
-        caller_credentials.get(name.lower()) == value for name, value in headers.items()
-    )
     takes_profile_id: Final = isinstance(model, str) and supports_anthropic_user_profile_id(model, custom_llm_provider)
-    if pinned_profile_id is None or sends_caller_credential or not (sends_profile_id or takes_profile_id):
+    if not (sends_profile_id or takes_profile_id):
         return headers, body
     return (
         override_headers(headers, {ANTHROPIC_USER_PROFILE_ID_HEADER: pinned_profile_id}),
