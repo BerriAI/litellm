@@ -5,7 +5,7 @@ Might include fastapi/proxy requirements.txt related imports
 """
 
 from collections.abc import Callable, Iterable, Sequence
-from typing import Final, cast
+from typing import Final, Protocol, cast
 
 import email_validator
 from fastapi_sso.sso.base import OpenID
@@ -101,6 +101,14 @@ class CustomOpenID(OpenID):
     email_verified: bool | None = None
 
 
+class _EmailValidator(Protocol):
+    @property
+    def SPECIAL_USE_DOMAIN_NAMES(self) -> Sequence[str]: ...
+
+
+_EMAIL_VALIDATOR: Final = cast(_EmailValidator, email_validator)
+
+
 class GenericOpenID(CustomOpenID):
     @field_validator("email", mode="wrap")
     @classmethod
@@ -115,7 +123,7 @@ class GenericOpenID(CustomOpenID):
         special_use_name: Final = max(
             (
                 name
-                for name in email_validator.SPECIAL_USE_DOMAIN_NAMES
+                for name in _EMAIL_VALIDATOR.SPECIAL_USE_DOMAIN_NAMES
                 if lower_domain == name or lower_domain.endswith("." + name)
             ),
             key=len,
