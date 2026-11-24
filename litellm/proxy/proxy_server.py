@@ -2069,6 +2069,19 @@ async def _proxy_lifespan(app: FastAPI, resources: AsyncExitStack) -> AsyncGener
         await install_background_interaction_settlement(
             prisma_client, router=lambda: llm_router, spend_logs_kept=lambda: disable_spend_logs is False
         )
+        from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+            openai_passthrough_base_url,
+            openai_passthrough_poll_headers,
+        )
+        from litellm.proxy.pass_through_endpoints.pass_through_endpoints import pass_through_endpoint_logging
+
+        await resources.enter_async_context(
+            database_runtime.background_task(
+                pass_through_endpoint_logging.sweep_background_response_polls_periodically(
+                    api_base=openai_passthrough_base_url(), poll_headers=openai_passthrough_poll_headers
+                )
+            )
+        )
 
     # Start background health checks AFTER models are loaded and index is built
     if use_background_health_checks:
@@ -4007,7 +4020,11 @@ async def _accounting_scope_windows(
 ) -> tuple[Mapping[str, object], ...]:
     from litellm.proxy.spend_tracking.budget_reservation import fixed_budget_window
 
-    cached: Final[object] = _UNTYPED_VALUE.validate_python(await user_api_key_cache.async_get_cache(key=cache_key))
+    cached: Final[object] = (
+        await user_api_key_cache.get_team_fields(cache_key, ("budget_limits",))
+        if entity_type == Litellm_EntityType.TEAM
+        else _UNTYPED_VALUE.validate_python(await user_api_key_cache.async_get_cache(key=cache_key))
+    )
     limits: Final = (
         await _stored_budget_limits(entity_type, entity_id) if cached is None else _cached_budget_limits(cached)
     )
@@ -4288,6 +4305,9 @@ _CachedSpendObjectT = TypeVar(
 def _add_spend_to_locally_cached_object(
     cache: UserApiKeyCache, key: AuthObject, model_type: type[_CachedSpendObjectT], response_cost: float
 ) -> None:
+    if model_type is LiteLLM_TeamTableCachedObj:
+        cache.add_local_team_spend(key, response_cost)
+        return
     current: Final = cache.get_cache(key=key, local_only=True, model_type=model_type)
     if current is None:
         return
@@ -8199,6 +8219,7 @@ class ProxyConfig:
                     prisma_client=prisma_client,
                     user_api_key_cache=user_api_key_cache,
                     proxy_logging_obj=proxy_logging_obj,
+                    for_auth=True,
                 )
                 team_settings: Final = self._parse_router_settings_value(getattr(team_obj, "router_settings", None))
                 if team_settings is not None:

@@ -8724,6 +8724,56 @@ async def test_key_cache_controls_merge_into_request_cache_controls(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
+    ("key_params", "user_params", "team_params", "scope", "uses_cache"),
+    [
+        ({"enabled": False}, {"enabled": True}, {"enabled": True}, "key", False),
+        ({"enabled": False, "similarity_threshold": 0}, None, {"enabled": True}, "key", False),
+        ({"enabled": False, "similarity_threshold": 1}, None, {"enabled": True}, "key", False),
+        ({"enabled": False, "ttl": 0}, None, {"enabled": True}, "key", False),
+        ({"enabled": False, "similarity_threshold": "0"}, None, {"enabled": True}, "key", False),
+        ({"ttl": 0}, {"enabled": False}, {"enabled": True}, "user", False),
+        ({}, None, {"enabled": False}, "team", False),
+        (None, None, None, "global", True),
+    ],
+)
+async def test_semantic_cache_uses_authenticated_policy_and_reports_scope(
+    monkeypatch,
+    key_params: dict[str, object] | None,
+    user_params: dict[str, object] | None,
+    team_params: dict[str, object] | None,
+    scope: str,
+    uses_cache: bool,
+):
+    from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+    from litellm.types.semantic_cache import SemanticCacheParams
+
+    cache = Cache(
+        type=LiteLLMCacheType.REDIS_SEMANTIC,
+        redis_url="redis://localhost:6379",
+        similarity_threshold=0.8,
+    )
+    monkeypatch.setattr(litellm, "cache", cache)
+    key = UserAPIKeyAuth(
+        api_key="hashed-key",
+        metadata={"cache_params": key_params},
+        user_semantic_cache_params=SemanticCacheParams.model_validate(user_params) if user_params else None,
+        team_metadata={"cache_params": team_params},
+    )
+    updated = await add_litellm_data_to_request(
+        data={"model": "gpt-4.1-mini", "cache": {"_semantic_cache_policy": {"scope": "key"}}},
+        request=_callback_credential_request_mock(),
+        user_api_key_dict=key,
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+    headers = ProxyBaseLLMRequestProcessing.get_custom_headers(user_api_key_dict=key, request_data=updated)
+    assert headers["x-litellm-cache-scope"] == scope
+    assert cache.should_use_cache(**updated) is uses_cache
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
     "allowed_cache_controls, request_cache, expected_cache",
     [
         pytest.param(["no-store"], {"use-cache": True}, {"ttl": 600}, id="opt-in-not-allowed-is-replaced"),

@@ -154,6 +154,7 @@ pub(super) async fn provider_call(
     model: String,
     call: MessagesCall,
     secrets: &(dyn Lookup + Send + Sync),
+    host_transport: bool,
     context: &CallContext<'_, impl Interceptors<Error>>,
 ) -> Result<ProviderCall, Error> {
     let MessagesCall {
@@ -270,6 +271,7 @@ pub(super) async fn provider_call(
         optional_params: logged_params,
         secret_fields: Vec::new(),
         api_key: api_key.map(SecretValue::new),
+        host_transport,
     };
     let authenticated = resolve_auth(
         auth_services,
@@ -777,6 +779,7 @@ mod tests {
             model,
             call,
             secrets,
+            false,
             &context,
         )
         .await
