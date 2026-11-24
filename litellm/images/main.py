@@ -1073,7 +1073,7 @@ def image_edit(
                 **image_edit_request_params,
                 **(
                     _passthrough_edit_params(
-                        non_default_params,
+                        kept_params,
                         extra_body if isinstance(extra_body, dict) else None,
                         provider_supported_params,
                         additional_drop_params,
