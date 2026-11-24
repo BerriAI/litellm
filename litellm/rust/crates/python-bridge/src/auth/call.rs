@@ -189,6 +189,8 @@ pub(crate) struct TeamFacts {
     denied_passthrough_routes: Option<RouteList>,
     #[pyo3(attribute)]
     members: Vec<String>,
+    #[pyo3(attribute)]
+    roster: Option<Py<PyAny>>,
 }
 
 fn team(facts: TeamFacts, row: Py<PyAny>) -> Team<PyRow> {
@@ -200,7 +202,7 @@ fn team(facts: TeamFacts, row: Py<PyAny>) -> Team<PyRow> {
             denied: facts.denied_passthrough_routes,
         },
         members: facts.members,
-        row: PyRow::new(row),
+        row: PyRow::team(row, facts.roster),
     }
 }
 
@@ -370,6 +372,11 @@ pub(crate) enum AuthStep {
     },
     GrantingTeam {
         team_id: String,
+    },
+    BindTeamMember {
+        team: Py<PyAny>,
+        roster: Py<PyAny>,
+        user_id: String,
     },
     LoadTeamMembership {
         user_id: String,
@@ -1097,6 +1104,16 @@ impl AuthStep {
             Ask::GrantingTeam { team_id, .. } => Self::GrantingTeam {
                 team_id: team_id.clone(),
             },
+            Ask::BindTeamMember {
+                team,
+                roster,
+                user_id,
+                ..
+            } => Self::BindTeamMember {
+                team: team.object(py),
+                roster: roster.clone_ref(py),
+                user_id: user_id.clone(),
+            },
             Ask::LoadTeamMembership {
                 user_id, team_id, ..
             } => Self::LoadTeamMembership {
@@ -1614,7 +1631,9 @@ impl AuthCall {
     fn team(&self, read: TeamAnswer, row: Option<Py<PyAny>>) -> PyResult<()> {
         let read = team_read(read, row)?;
         self.stepper.answer("a team", |ask| match ask {
-            Ask::Team { reply, .. } | Ask::GrantingTeam { reply, .. } => {
+            Ask::Team { reply, .. }
+            | Ask::GrantingTeam { reply, .. }
+            | Ask::BindTeamMember { reply, .. } => {
                 reply.send(read);
                 Ok(())
             }

@@ -277,31 +277,35 @@ class CompressionInterceptionLogger(CustomLogger):
         retrieval_results: Final = [self._resolve_retrieval_content(tc, cache) for tc in tool_calls]
         streamed_text_blocks: Final = _text_blocks_streamed_before_first_tool_use(response) if stream else ()
 
-        assistant_message: Final = {
-            "role": "assistant",
-            "content": thinking_blocks
-            + list(streamed_text_blocks)
-            + [
-                {
-                    "type": "tool_use",
-                    "id": tc.get("id"),
-                    "name": tc.get("name", LITELLM_CONTENT_RETRIEVE_TOOL_NAME),
-                    "input": tc.get("input", {}),
-                }
-                for tc in tool_calls
-            ],
-        }
-        user_message: Final = {
-            "role": "user",
-            "content": [
-                {
-                    "type": "tool_result",
-                    "tool_use_id": tool_calls[i].get("id"),
-                    "content": retrieval_results[i],
-                }
-                for i in range(len(tool_calls))
-            ],
-        }
+        assistant_message: Final = dict[str, object](
+            {
+                "role": "assistant",
+                "content": thinking_blocks
+                + list(streamed_text_blocks)
+                + [
+                    {
+                        "type": "tool_use",
+                        "id": tc.get("id"),
+                        "name": tc.get("name", LITELLM_CONTENT_RETRIEVE_TOOL_NAME),
+                        "input": tc.get("input", {}),
+                    }
+                    for tc in tool_calls
+                ],
+            }
+        )
+        user_message: Final = dict[str, object](
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": tool_calls[i].get("id"),
+                        "content": retrieval_results[i],
+                    }
+                    for i in range(len(tool_calls))
+                ],
+            }
+        )
         follow_up_messages: Final = messages + [assistant_message, user_message]
 
         max_tokens: Final = cast(

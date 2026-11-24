@@ -15,20 +15,25 @@ class AllQueryScope(typing_extensions.TypedDict):
 
 
 class OwnedQueryScope(typing_extensions.TypedDict):
-    kind: ReadOnly[Literal["owned"]]
-    team_ids: ReadOnly[tuple[str, ...]]
     user_id: ReadOnly[str]
+    team_ids: ReadOnly[tuple[str, ...]]
+    kind: ReadOnly[Literal["owned"]]
 
 
 QueryScope: TypeAlias = AllQueryScope | OwnedQueryScope
 
 
+class UIText(typing_extensions.TypedDict):
+    text: ReadOnly[str]
+    kind: ReadOnly[Literal["text"]]
+
+
 ChatRole: TypeAlias = Literal["system", "user", "assistant", "tool"]
 
 
-class UIText(typing_extensions.TypedDict):
-    kind: ReadOnly[Literal["text"]]
-    text: ReadOnly[str]
+class UIToolCall(typing_extensions.TypedDict):
+    name: ReadOnly[str]
+    arguments: ReadOnly[str]
 
 
 class UIField(typing_extensions.TypedDict):
@@ -36,33 +41,28 @@ class UIField(typing_extensions.TypedDict):
     value: ReadOnly[str]
 
 
-class UIToolCall(typing_extensions.TypedDict):
-    arguments: ReadOnly[str]
-    name: ReadOnly[str]
-
-
 class SpanErrorPage(typing_extensions.TypedDict):
-    message: ReadOnly[str]
-    next_cursor: ReadOnly[str | None]
     span_id: ReadOnly[str]
+    message: ReadOnly[str]
     total_chars: ReadOnly[Annotated[int, Field(ge=0, le=18446744073709551615)]]
+    next_cursor: ReadOnly[str | None]
 
 
-class AgentNode(typing_extensions.TypedDict):
-    duration_ms: ReadOnly[float]
-    invocations: ReadOnly[Annotated[int, Field(ge=0, le=18446744073709551615)]]
-    llm_calls: ReadOnly[Annotated[int, Field(ge=0, le=18446744073709551615)]]
-    name: ReadOnly[str]
-    parent_agent: ReadOnly[str | None]
-    priced_calls: ReadOnly[Annotated[int, Field(ge=0, le=18446744073709551615)]]
-    spend: ReadOnly[float | None]
-    tool_calls: ReadOnly[Annotated[int, Field(ge=0, le=18446744073709551615)]]
+SpanStatus: TypeAlias = Literal["ok", "error", "unset"]
 
 
 RunSourceType: TypeAlias = Literal["slack", "teams", "discord", "linear", "github", "jira", "custom"]
 
 
-SpanStatus: TypeAlias = Literal["ok", "error", "unset"]
+class AgentNode(typing_extensions.TypedDict):
+    name: ReadOnly[str]
+    parent_agent: ReadOnly[str | None]
+    invocations: ReadOnly[Annotated[int, Field(ge=0, le=18446744073709551615)]]
+    llm_calls: ReadOnly[Annotated[int, Field(ge=0, le=18446744073709551615)]]
+    tool_calls: ReadOnly[Annotated[int, Field(ge=0, le=18446744073709551615)]]
+    duration_ms: ReadOnly[float]
+    spend: ReadOnly[float | None]
+    priced_calls: ReadOnly[Annotated[int, Field(ge=0, le=18446744073709551615)]]
 
 
 SpanType: TypeAlias = Literal[
@@ -86,8 +86,10 @@ SpendMatch: TypeAlias = Literal["matched", "no_call_id", "no_spend_log", "ambigu
 
 class TraceScope(typing_extensions.TypedDict):
     all_teams: ReadOnly[Literal[0, 1]]
-    team_ids: ReadOnly[tuple[str, ...]]
     user_id: ReadOnly[str]
+    team_ids: ReadOnly[tuple[str, ...]]
+    filter_team_id: ReadOnly[NotRequired[str]]
+    filter_api_key_hash: ReadOnly[NotRequired[str]]
 
 
 ReadQueryName: TypeAlias = Literal[
@@ -109,72 +111,89 @@ class UIFields(typing_extensions.TypedDict):
 
 
 class UIMessage(typing_extensions.TypedDict):
+    role: ReadOnly[ChatRole]
     content: ReadOnly[str]
     name: ReadOnly[NotRequired[str | None]]
-    role: ReadOnly[ChatRole]
     tool_calls: ReadOnly[NotRequired[tuple[UIToolCall, ...]]]
 
 
 class RunSource(typing_extensions.TypedDict):
-    title: ReadOnly[str]
     type: ReadOnly[RunSourceType]
     url: ReadOnly[str]
+    title: ReadOnly[str]
     user: ReadOnly[NotRequired[str]]
 
 
 class Span(typing_extensions.TypedDict):
+    span_id: ReadOnly[str]
+    parent_span_id: ReadOnly[str | None]
+    name: ReadOnly[str]
+    type: ReadOnly[SpanType]
     agent: ReadOnly[str]
+    framework: ReadOnly[str]
+    start_offset_ms: ReadOnly[float]
     duration_ms: ReadOnly[float]
+    status: ReadOnly[SpanStatus]
     error: ReadOnly[str | None]
     error_truncated: ReadOnly[bool]
-    framework: ReadOnly[str]
     input_preview: ReadOnly[str]
-    input_tokens: ReadOnly[Annotated[int, Field(ge=0, le=4294967295)]]
-    litellm_request_id: ReadOnly[str | None]
     model: ReadOnly[str | None]
-    name: ReadOnly[str]
+    input_tokens: ReadOnly[Annotated[int, Field(ge=0, le=4294967295)]]
     output_tokens: ReadOnly[Annotated[int, Field(ge=0, le=4294967295)]]
-    parent_span_id: ReadOnly[str | None]
-    span_id: ReadOnly[str]
+    litellm_request_id: ReadOnly[str | None]
     spend: ReadOnly[float | None]
     spend_log_request_id: ReadOnly[str | None]
     spend_match: ReadOnly[SpendMatch | None | None]
-    start_offset_ms: ReadOnly[float]
-    status: ReadOnly[SpanStatus]
-    type: ReadOnly[SpanType]
+
+
+class UIMessages(typing_extensions.TypedDict):
+    messages: ReadOnly[tuple[UIMessage, ...]]
+    kind: ReadOnly[Literal["messages"]]
+
+
+UIContent: TypeAlias = UIMessages | UIFields | UIText
+
+
+class SpanDetail(typing_extensions.TypedDict):
+    span_id: ReadOnly[str]
+    input_ui: ReadOnly[UIContent]
+    output_ui: ReadOnly[UIContent]
+    input: ReadOnly[str]
+    output: ReadOnly[str]
+    attributes: ReadOnly[Mapping[str, str]]
 
 
 class TraceSummary(typing_extensions.TypedDict):
-    agent_count: ReadOnly[Annotated[int, Field(ge=0, le=18446744073709551615)]]
-    agent_invocations: ReadOnly[Annotated[int, Field(ge=0, le=18446744073709551615)]]
-    agent_names: ReadOnly[NotRequired[tuple[str, ...]]]
-    duration_ms: ReadOnly[float]
-    error_count: ReadOnly[Annotated[int, Field(ge=0, le=18446744073709551615)]]
-    frameworks: ReadOnly[NotRequired[tuple[str, ...]]]
-    input_preview: ReadOnly[str]
-    input_tokens: ReadOnly[Annotated[int, Field(ge=0, le=18446744073709551615)]]
-    llm_calls: ReadOnly[Annotated[int, Field(ge=0, le=18446744073709551615)]]
-    models: ReadOnly[tuple[str, ...]]
-    name: ReadOnly[str]
-    output_tokens: ReadOnly[Annotated[int, Field(ge=0, le=18446744073709551615)]]
-    priced_calls: ReadOnly[Annotated[int, Field(ge=0, le=18446744073709551615)]]
     resolution_limited: ReadOnly[NotRequired[bool]]
-    service: ReadOnly[str]
-    source: ReadOnly[NotRequired[RunSource | None | None]]
-    span_count: ReadOnly[Annotated[int, Field(ge=0, le=18446744073709551615)]]
-    spend: ReadOnly[float | None]
-    start_time: ReadOnly[str]
-    status: ReadOnly[SpanStatus]
-    tool_calls: ReadOnly[Annotated[int, Field(ge=0, le=18446744073709551615)]]
     trace_id: ReadOnly[str]
     trace_ref: ReadOnly[NotRequired[str]]
+    name: ReadOnly[str]
+    service: ReadOnly[str]
+    agent_names: ReadOnly[NotRequired[tuple[str, ...]]]
+    frameworks: ReadOnly[NotRequired[tuple[str, ...]]]
+    input_preview: ReadOnly[str]
+    start_time: ReadOnly[str]
+    duration_ms: ReadOnly[float]
+    status: ReadOnly[SpanStatus]
+    span_count: ReadOnly[Annotated[int, Field(ge=0, le=18446744073709551615)]]
+    agent_count: ReadOnly[Annotated[int, Field(ge=0, le=18446744073709551615)]]
+    agent_invocations: ReadOnly[Annotated[int, Field(ge=0, le=18446744073709551615)]]
+    llm_calls: ReadOnly[Annotated[int, Field(ge=0, le=18446744073709551615)]]
+    tool_calls: ReadOnly[Annotated[int, Field(ge=0, le=18446744073709551615)]]
+    error_count: ReadOnly[Annotated[int, Field(ge=0, le=18446744073709551615)]]
+    input_tokens: ReadOnly[Annotated[int, Field(ge=0, le=18446744073709551615)]]
+    output_tokens: ReadOnly[Annotated[int, Field(ge=0, le=18446744073709551615)]]
+    models: ReadOnly[tuple[str, ...]]
+    spend: ReadOnly[float | None]
+    priced_calls: ReadOnly[Annotated[int, Field(ge=0, le=18446744073709551615)]]
+    source: ReadOnly[NotRequired[RunSource | None | None]]
 
 
 class Trace(typing_extensions.TypedDict):
-    agents: ReadOnly[tuple[AgentNode, ...]]
-    next_cursor: ReadOnly[NotRequired[str | None]]
-    spans: ReadOnly[tuple[Span, ...]]
     summary: ReadOnly[TraceSummary]
+    agents: ReadOnly[tuple[AgentNode, ...]]
+    spans: ReadOnly[tuple[Span, ...]]
+    next_cursor: ReadOnly[NotRequired[str | None]]
 
 
 class TracePage(typing_extensions.TypedDict):
@@ -182,21 +201,22 @@ class TracePage(typing_extensions.TypedDict):
     next_cursor: ReadOnly[str | None]
 
 
-class UIMessages(typing_extensions.TypedDict):
-    kind: ReadOnly[Literal["messages"]]
-    messages: ReadOnly[tuple[UIMessage, ...]]
-
-
-UIContent: TypeAlias = UIMessages | UIFields | UIText
-
-
-class SpanDetail(typing_extensions.TypedDict):
-    attributes: ReadOnly[Mapping[str, str]]
-    input: ReadOnly[str]
-    input_ui: ReadOnly[UIContent]
-    output: ReadOnly[str]
-    output_ui: ReadOnly[UIContent]
+class TraceConversationTurn(typing_extensions.TypedDict):
+    trace_id: ReadOnly[str]
+    trace_ref: ReadOnly[str]
     span_id: ReadOnly[str]
+    start_time: ReadOnly[str]
+    input: ReadOnly[str]
+    output: ReadOnly[str]
+    input_ui: ReadOnly[UIContent]
+    output_ui: ReadOnly[UIContent]
 
 
-TraceWireTypes: TypeAlias = QueryScope | SpanDetail | SpanErrorPage | Trace | TracePage | TraceScope | ReadQueryName
+class TraceConversationPage(typing_extensions.TypedDict):
+    turns: ReadOnly[tuple[TraceConversationTurn, ...]]
+    next_cursor: ReadOnly[str | None]
+
+
+TraceWireTypes: TypeAlias = (
+    QueryScope | SpanDetail | SpanErrorPage | Trace | TracePage | TraceScope | TraceConversationPage | ReadQueryName
+)

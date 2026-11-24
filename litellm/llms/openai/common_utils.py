@@ -37,6 +37,7 @@ from litellm.litellm_core_utils.reasoning_effort_utils import warn_dropped_reaso
 from litellm.litellm_core_utils.token_counter import token_counter, usage_tokenizer_model
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.custom_httpx.accept_encoding import ACCEPT_ENCODING_HEADER
+from litellm.llms.custom_httpx.http2_graceful_goaway import drain_http2_connections_on_graceful_goaway
 from litellm.llms.custom_httpx.http_handler import (
     _DEFAULT_TTL_FOR_HTTPX_CLIENTS,
     AsyncHTTPHandler,
@@ -490,11 +491,14 @@ class BaseOpenAILLM:
 
         # Get unified SSL configuration
         ssl_config: Final = get_ssl_configuration()
+        use_http2: Final = http2_enabled()
+        if use_http2:
+            drain_http2_connections_on_graceful_goaway()
 
         return httpx.Client(
             verify=ssl_config,
             follow_redirects=True,
-            http2=http2_enabled(),
+            http2=use_http2,
             headers=ACCEPT_ENCODING_HEADER,
         )
 

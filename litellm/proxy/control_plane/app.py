@@ -33,6 +33,7 @@ from litellm.proxy.control_plane.roles.router import router as roles_router
 from litellm.proxy.control_plane.store.dependencies import get_runtime_config
 from litellm.proxy.control_plane.usage.router import router as usage_router
 from litellm.proxy.middleware.request_size_limit_middleware import RequestSizeLimitMiddleware
+from litellm.proxy.scalar_reference import mount_api_references
 
 TITLE: Final = "LiteLLM Control Plane"
 MAX_REQUEST_SIZE_MB: Final = 1
@@ -110,15 +111,19 @@ def create_app(container: Container, license_check: License) -> FastAPI:
     if not license_check.is_premium():
         raise LicenseRequired()
 
+    api_prefix: Final = container.settings.api_prefix
+    docs_url: Final = f"{api_prefix}/docs"
+    swagger_url: Final = f"{api_prefix}/swagger"
     app: Final = FastAPI(
         title=TITLE,
         version="1",
         lifespan=_Lifespan(container),
-        docs_url=f"{container.settings.api_prefix}/docs",
-        openapi_url=f"{container.settings.api_prefix}/openapi.json",
+        docs_url=None,
+        redoc_url=None,
+        openapi_url=f"{api_prefix}/openapi.json",
     )
     app.add_middleware(ControlPlaneRequestSizeLimitMiddleware)
-    container.telemetry.instrument(app)
+    container.telemetry.instrument(app, documentation_paths=(docs_url, swagger_url))
     app.dependency_overrides[get_token_verifier] = lambda: container.token_verifier
     app.dependency_overrides[get_telemetry] = lambda: container.telemetry
     app.dependency_overrides[get_login_service] = lambda: container.login_service
@@ -137,4 +142,5 @@ def create_app(container: Container, license_check: License) -> FastAPI:
     app.include_router(proxy_router, prefix=container.settings.api_prefix)
     app.include_router(audit_router, prefix=container.settings.api_prefix)
     app.include_router(roles_router, prefix=container.settings.api_prefix)
+    mount_api_references(app, docs_url, swagger_url)
     return app

@@ -2200,6 +2200,7 @@ GEMINI_3_1_PRO_PREVIEW_AGENT_TEST_CASE: Final = replace(
     },
     expected_litellm_response={
         **CODING_AGENT_RESPONSE,
+        "service_tier": "default",
         "id": "QDDSavvOJ6-q_9MP5byA4Qo",
         "model": "vertex_ai/gemini-3.1-pro-preview",
         "choices": [
@@ -2447,6 +2448,7 @@ GEMINI_3_1_PRO_PREVIEW_AGENT_FOLLOWUP_TEST_CASE: Final = replace(
     },
     expected_litellm_response={
         **CODING_AGENT_RESPONSE,
+        "service_tier": "default",
         "id": "kDDSauHAIq6d4_UPv9qnMQ",
         "model": "vertex_ai/gemini-3.1-pro-preview",
         "choices": [
@@ -2659,6 +2661,7 @@ GEMINI_3_8_FLASH_AGENT_TEST_CASE: Final = replace(
     },
     expected_litellm_response={
         **CODING_AGENT_RESPONSE,
+        "service_tier": "default",
         "id": "OjDSapDuHpCG9LsPreTxQA",
         "model": "vertex_ai/gemini-3.8-flash",
         "choices": [
@@ -2810,6 +2813,7 @@ GEMINI_3_8_FLASH_AGENT_FOLLOWUP_TEST_CASE: Final = replace(
     },
     expected_litellm_response={
         **CODING_AGENT_RESPONSE,
+        "service_tier": "default",
         "id": "jTDSatiRE9ap4_UPuPC7wQo",
         "model": "vertex_ai/gemini-3.8-flash",
         "choices": [
@@ -2983,6 +2987,7 @@ GEMINI_4_ARGON_AGENT_TEST_CASE: Final = replace(
     },
     expected_litellm_response={
         **CODING_AGENT_RESPONSE,
+        "service_tier": "default",
         "id": "wErQat30Mp-hpucPhIzf2AM",
         "model": "vertex_ai/gemini-4-argon",
         "choices": [
@@ -3139,6 +3144,7 @@ GEMINI_4_ARGON_AGENT_FOLLOWUP_TEST_CASE: Final = replace(
     },
     expected_litellm_response={
         **CODING_AGENT_RESPONSE,
+        "service_tier": "default",
         "id": "xUrQatG0HcubpucPg4md8Ag",
         "model": "vertex_ai/gemini-4-argon",
         "choices": [

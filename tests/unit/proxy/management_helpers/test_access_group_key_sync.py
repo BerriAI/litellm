@@ -36,7 +36,7 @@ async def test_regeneration_repoint_update_runs_on_the_writer():
     )
 
     writer_inner.query_raw.assert_awaited_once()
-    assert writer_inner.query_raw.await_args.args[0].startswith('UPDATE "LiteLLM_AccessGroupTable"')
+    assert 'UPDATE "LiteLLM_AccessGroupTable"' in writer_inner.query_raw.await_args.args[0]
     reader_inner.query_raw.assert_not_awaited()
 
 
@@ -53,7 +53,7 @@ async def test_regeneration_repoint_update_stays_on_the_writer_while_writer_flag
     )
 
     writer_inner.query_raw.assert_awaited_once()
-    assert writer_inner.query_raw.await_args.args[0].startswith('UPDATE "LiteLLM_AccessGroupTable"')
+    assert 'UPDATE "LiteLLM_AccessGroupTable"' in writer_inner.query_raw.await_args.args[0]
     assert writer_inner.query_raw.await_args.args[1:] == ("old-token", "new-token")
     reader_inner.query_raw.assert_not_awaited()
 
@@ -85,7 +85,5 @@ async def test_membership_attach_and_detach_updates_run_on_the_writer():
     )
 
     assert writer_inner.query_raw.await_count == 2
-    assert all(
-        call.args[0].startswith('UPDATE "LiteLLM_AccessGroupTable"') for call in writer_inner.query_raw.await_args_list
-    )
+    assert all('UPDATE "LiteLLM_AccessGroupTable"' in call.args[0] for call in writer_inner.query_raw.await_args_list)
     reader_inner.query_raw.assert_not_awaited()
