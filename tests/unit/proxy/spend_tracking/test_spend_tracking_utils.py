@@ -1,12 +1,13 @@
 import asyncio
 import datetime
+import itertools
 import json
 import threading
 from collections.abc import Callable, Iterator, Mapping
 from copy import deepcopy
 from datetime import timezone
 from types import MappingProxyType
-from typing import Any, ClassVar, Final, cast
+from typing import Any, Final, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -3767,20 +3768,16 @@ def test_sanitize_guardrail_information_stores_none_for_a_value_with_no_json_for
 
 @patch("litellm.proxy.proxy_server.general_settings", _PROMPTS_NOT_STORED)
 def test_sanitize_guardrail_information_does_not_walk_a_large_value() -> None:
-    class _CountingDict(dict[str, object]):
-        reads: ClassVar[list[str]] = []
-
+    class _FirstKeyOnlyDict(dict[str, object]):
         def __iter__(self) -> Iterator[str]:
-            for key in super().__iter__():
-                self.reads.append(key)
-                yield key
+            yield from itertools.islice(super().__iter__(), 1)
+            raise AssertionError("the value was walked past its first key")
 
-    large: Final = _CountingDict({f"k{index}": "v" for index in range(1000)})
+    large: Final = _FirstKeyOnlyDict({f"k{index}": "v" for index in range(1000)})
 
     result: Final = _sanitize_guardrail_information_for_spend_logs([{"guardrail_response": large}])
 
     assert result == [{"guardrail_response": None}]
-    assert len(_CountingDict.reads) == 1
 
 
 @patch("litellm.proxy.proxy_server.general_settings", _PROMPTS_NOT_STORED)
