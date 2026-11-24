@@ -460,7 +460,8 @@ _TAPE_ROUTES: Final = frozenset({("GET", "/mcp-rest/tools/list"), ("POST", "/mcp
 def gateway_base(gateway_url: str) -> str:
     """Only a plain http(s) gateway address, with no embedded credentials, may be recorded from or replayed against."""
     parsed: Final = urlsplit(gateway_url)
-    if parsed.scheme not in ("http", "https") or not parsed.hostname or parsed.username or parsed.password:
+    plain: Final = parsed.scheme in ("http", "https") and bool(parsed.hostname)
+    if not plain or "@" in parsed.netloc:
         raise HTTPException(status_code=400, detail="gateway_url must be an http(s) URL without credentials")
     return gateway_url.rstrip("/")
 
