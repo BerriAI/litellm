@@ -353,5 +353,15 @@ def test_a_repeated_local_time_stays_in_one_budgeted_period(at: str) -> None:
 def test_periods_meeting_at_a_skipped_local_time_leave_no_gap() -> None:
     before: Final = BudgetSchedule(timezone=BERLIN, start="01:00", end="02:30")
     after: Final = BudgetSchedule(timezone=BERLIN, start="02:30", end="04:00")
-    assert before.period_at(_utc("2026-03-29T00:30:00")) == (_utc("2026-03-29T00:00:00"), _utc("2026-03-29T01:30:00"))
-    assert after.period_at(_utc("2026-03-29T01:30:00")) == (_utc("2026-03-29T01:30:00"), _utc("2026-03-29T02:00:00"))
+    assert before.period_at(_utc("2026-03-29T00:30:00")) == (_utc("2026-03-29T00:00:00"), _utc("2026-03-29T01:00:00"))
+    assert after.period_at(_utc("2026-03-29T01:00:00")) == (_utc("2026-03-29T01:00:00"), _utc("2026-03-29T02:00:00"))
+
+
+def test_a_skipped_start_time_still_leaves_the_period_active_after_the_jump() -> None:
+    closed: Final = BudgetSchedule(timezone=BERLIN, start="02:30", end="03:15")
+    assert closed.period_at(_utc("2026-03-29T01:10:00")) == (_utc("2026-03-29T01:00:00"), _utc("2026-03-29T01:15:00"))
+
+
+def test_a_start_one_minute_before_the_skipped_hour_ends_maps_to_the_jump() -> None:
+    late: Final = BudgetSchedule(timezone=BERLIN, start="02:59", end="03:30")
+    assert late.period_at(_utc("2026-03-29T01:10:00")) == (_utc("2026-03-29T01:00:00"), _utc("2026-03-29T01:30:00"))

@@ -128,10 +128,21 @@ class BudgetSchedule(LiteLLMPydanticObjectBase):
 
 def _instant(local: datetime, zone: ZoneInfo, pick: Callable[[Iterable[datetime]], datetime]) -> datetime:
     """A wall time repeated when clocks fall back is both occurrences, so periods start at the first and end at the
-    second. A wall time skipped when clocks spring forward maps to the instant after the jump."""
+    second. A wall time skipped when clocks spring forward maps to the moment the clocks jump."""
     folds: Final = tuple(local.replace(tzinfo=zone, fold=fold).astimezone(timezone.utc) for fold in (0, 1))
-    real: Final = tuple(instant for instant in folds if instant.astimezone(zone).replace(tzinfo=None) == local)
-    return pick(real) if real else folds[0]
+    real: Final = tuple(instant for instant in folds if _wall_time(instant, zone) == local)
+    if real:
+        return pick(real)
+    before_jump: Final = min(folds)
+    return next(
+        instant
+        for instant in (before_jump + timedelta(minutes=minute) for minute in range(1, _DAY_MINUTES))
+        if _wall_time(instant, zone) >= local
+    )
+
+
+def _wall_time(instant: datetime, zone: ZoneInfo) -> datetime:
+    return instant.astimezone(zone).replace(tzinfo=None)
 
 
 def _minutes(value: time) -> int:
