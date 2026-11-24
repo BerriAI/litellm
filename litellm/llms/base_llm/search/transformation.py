@@ -231,7 +231,7 @@ class BaseSearchConfig:
         self,
         api_base: str | None,
         optional_params: dict[str, object],
-        data: dict | list[dict] | None = None,
+        data: dict[str, object] | list[dict] | None = None,
         **kwargs: object,
     ) -> str:
         """

@@ -43,7 +43,11 @@ fn usage(used: &ChatCompletionsUsage) -> Usage {
             prompt_tokens: count(used.prompt_tokens),
             completion_tokens: count(used.completion_tokens),
             total_tokens: count(used.total_tokens),
-            cached_tokens: count(used.prompt_tokens_details.cached_tokens),
+            cached_tokens: used
+                .prompt_tokens_details
+                .as_ref()
+                .and_then(|details| details.cached_tokens)
+                .and_then(count),
             ..UsageRecord::default()
         }),
         ..Usage::default()

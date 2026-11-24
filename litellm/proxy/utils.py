@@ -4166,7 +4166,7 @@ class ProxyLogging:
 
     async def during_call_hook(
         self,
-        data: dict,
+        data: dict[str, object],
         user_api_key_dict: UserAPIKeyAuth | None,
         call_type: CallTypesLiteral,
         guardrails_only: bool = False,
@@ -4824,7 +4824,7 @@ class ProxyLogging:
 
     async def post_call_success_hook(
         self,
-        data: dict,
+        data: dict[str, object],
         response: LLMResponseTypes,
         user_api_key_dict: UserAPIKeyAuth,
     ):
@@ -5093,7 +5093,7 @@ class ProxyLogging:
 
     async def post_call_response_headers_hook(
         self,
-        data: dict,
+        data: dict[str, object],
         user_api_key_dict: UserAPIKeyAuth,
         response: object,
         request_headers: dict[str, str] | None = None,
@@ -5229,7 +5229,7 @@ class ProxyLogging:
 
     async def async_post_call_streaming_hook(
         self,
-        data: dict,
+        data: dict[str, object],
         response: object,
         user_api_key_dict: UserAPIKeyAuth,
         str_so_far: str | None = None,

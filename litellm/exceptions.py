@@ -757,7 +757,7 @@ class RejectedRequestError(BadRequestError):
         message: object,
         model: str | None,
         llm_provider: str | None,
-        request_data: dict,
+        request_data: dict[str, object],
         litellm_debug_info: str | None = None,
     ):
         self.status_code = 400

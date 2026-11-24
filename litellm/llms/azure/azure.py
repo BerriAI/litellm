@@ -884,7 +884,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         api_base: str,
         api_version: str,
         api_key: str,
-        data: dict,
+        data: dict[str, object],
         headers: dict,
         deployment_name: str | None = None,
     ) -> httpx.Response:

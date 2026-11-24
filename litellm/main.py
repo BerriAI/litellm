@@ -7922,6 +7922,7 @@ def embedding(
                     model=model,
                     llm_provider="ollama",
                 )
+            logging.record_call_target(api_base, api_key, headers)
             ollama_embeddings_fn: Final = ollama.ollama_aembeddings if aembedding is True else ollama.ollama_embeddings
             response = ollama_embeddings_fn(
                 api_base=api_base,

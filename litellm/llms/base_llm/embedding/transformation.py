@@ -91,7 +91,7 @@ class BaseEmbeddingConfig(BaseConfig, ABC):
         model_response: EmbeddingResponse,
         logging_obj: LiteLLMLoggingObj,
         api_key: str | None,
-        request_data: dict,
+        request_data: dict[str, object],
         optional_params: dict[str, object],
         litellm_params: dict[str, object],
     ) -> EmbeddingResponse:
