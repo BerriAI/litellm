@@ -26,6 +26,7 @@ from litellm.constants import (
     MAX_SPEND_LOG_MODEL_NAME_LENGTH,
     REDACTED_BY_LITELM_STRING,
     SESSION_ID_GENERATED_METADATA_KEY,
+    SESSION_ID_INHERITED_METADATA_KEY,
     SESSION_ID_OMITTED_METADATA_KEY,
     UNKNOWN_MODEL_SPEND_LOG_MODEL,
 )
@@ -35,6 +36,7 @@ from litellm.constants import (
     MANAGED_BACKGROUND_RESPONSE_METADATA_KEY,
 )
 from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+from litellm.litellm_core_utils.litellm_logging import get_standard_logging_object_payload
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.ocr.transformation import OCRResponse, OCRUsageInfo
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
@@ -46,10 +48,6 @@ from litellm.types.passthrough_endpoints.pass_through_endpoints import Passthrou
 from litellm.proxy.route_llm_request import ProxyModelNotFoundError
 from litellm.proxy.spend_tracking.spend_tracking_utils import (
     _extract_usage_for_ocr_call,
-    _get_messages_for_spend_logs_payload,
-    _get_proxy_server_request_for_spend_logs_payload,
-    _get_request_duration_ms,
-    _get_response_for_spend_logs_payload,
     _get_session_id_for_spend_log,
     _get_spend_logs_metadata,
     _get_vector_store_request_for_spend_logs_payload,
@@ -59,15 +57,21 @@ from litellm.proxy.spend_tracking.spend_tracking_utils import (
     sanitize_error_information_for_spend_logs,
     _sanitize_guardrail_information_for_spend_logs,
     _sanitize_request_body_for_spend_logs_payload,
-    _scrub_raw_model_from_error_information,
     configured_spend_logs_metadata_fields,
     get_logging_payload,
     get_logging_payload_async,
     get_spend_logs_id,
-    _stored_request_without_requester_ip_address,
     requester_ip_address_logging_disabled,
     should_store_prompts_and_responses_in_spend_logs,
     spend_log_row_with_retained_metadata,
+)
+from litellm.proxy.spend_tracking.legacy_spend_log_rows import (
+    _get_messages_for_spend_logs_payload,
+    _get_proxy_server_request_for_spend_logs_payload,
+    _get_request_duration_ms,
+    _get_response_for_spend_logs_payload,
+    _scrub_raw_model_from_error_information,
+    _stored_request_without_requester_ip_address,
 )
 from litellm.proxy.utils import hash_token
 from litellm.types.proxy.auth.customer_hierarchy import CustomerHierarchyAuth
@@ -89,11 +93,60 @@ from litellm.types.utils import (
 )
 
 
+@pytest.mark.parametrize("call_type", ("completion", "anthropic_messages", "pass_through_endpoint"))
+def test_spend_log_keeps_subscription_usage_from_standard_logging(call_type: str) -> None:
+    now: Final = datetime.datetime(2025, 1, 1, tzinfo=timezone.utc)
+    logger: Final = LiteLLMLoggingObj(
+        model="subscription-log-test",
+        messages=[],
+        stream=False,
+        call_type=call_type,
+        start_time=now,
+        litellm_call_id="subscription",
+        function_id="subscription",
+    )
+    logger.update_environment_variables(
+        optional_params={},
+        custom_llm_provider="anthropic",
+        litellm_params={"metadata": {"used_client_oauth_token": True}},
+    )
+    response: Final = litellm.ModelResponse(model="subscription-log-test")
+    response._hidden_params["additional_headers"] = {
+        "llm_provider-anthropic-ratelimit-unified-status": "rejected",
+        "llm_provider-anthropic-ratelimit-unified-overage-status": "allowed",
+    }
+    standard: Final = get_standard_logging_object_payload(
+        kwargs=logger.model_call_details,
+        init_response_obj=response,
+        start_time=now,
+        end_time=now,
+        logging_obj=logger,
+        status="success",
+    )
+    assert standard is not None
+    payload: Final = get_logging_payload(
+        kwargs={**logger.model_call_details, "standard_logging_object": standard},
+        response_obj=response,
+        start_time=now,
+        end_time=now,
+    )
+    expected: Final = {
+        "is_overage": True,
+        "status": "rejected",
+        "overage_status": "allowed",
+    }
+    assert standard["metadata"]["claude_subscription_usage"] == expected
+    assert json.loads(payload["metadata"])["claude_subscription_usage"] == expected
+
+
 @pytest.mark.parametrize("bucket", ("metadata", "litellm_metadata"))
 @pytest.mark.parametrize("call_type", ("acompletion", "aresponses", "anthropic_messages"))
 @pytest.mark.parametrize("failed", (False, True))
 def test_spend_log_retains_resolved_customer_identity(bucket: str, call_type: str, failed: bool) -> None:
     hierarchy: Final = CustomerHierarchyAuth(
+        app_id="app-1",
+        app_group_id="app-group-1",
+        app_alias="App display",
         customer_org_id="customer-org-1",
         customer_org_alias="Customer org display",
         customer_team_id="customer-team-1",
@@ -117,6 +170,9 @@ def test_spend_log_retains_resolved_customer_identity(bucket: str, call_type: st
     )
     stored: Final = TypeAdapter(Mapping[str, object]).validate_json(payload["metadata"])
     expected: Final = {
+        "user_api_key_app_id": "app-1",
+        "user_api_key_app_group_id": "app-group-1",
+        "user_api_key_app_alias": "App display",
         "user_api_key_customer_org_id": "customer-org-1",
         "user_api_key_customer_org_alias": "Customer org display",
         "user_api_key_customer_team_id": "customer-team-1",
@@ -604,7 +660,11 @@ _TRACE_ONLY_STANDARD_LOGGING: Final = cast(
 def _trace_only_session_id(omit_when_missing: bool) -> str | None:
     """get_litellm_params copies metadata.trace_id into litellm_session_id, so every field echoes the trace id."""
     return _get_session_id_for_spend_log(
-        kwargs={"litellm_trace_id": "trace-abc", "litellm_session_id": "trace-abc"},
+        kwargs={
+            "litellm_trace_id": "trace-abc",
+            "litellm_session_id": "trace-abc",
+            "litellm_params": {"litellm_session_id": "trace-abc", "metadata": {"trace_id": "trace-abc"}},
+        },
         metadata={"trace_id": "trace-abc"},
         standard_logging_payload=_TRACE_ONLY_STANDARD_LOGGING,
         omit_when_missing=omit_when_missing,
@@ -632,6 +692,26 @@ def test_omit_records_metadata_session_id():
     assert session_id == "chain-1"
 
 
+@pytest.mark.parametrize(
+    ("request_metadata", "expected"),
+    [
+        ({SESSION_ID_INHERITED_METADATA_KEY: True}, "parent-session"),
+        ({}, None),
+    ],
+    ids=["proxy-sub-call", "caller-request"],
+)
+def test_omit_records_a_sent_session_only_for_a_sub_call_inheriting_it(
+    request_metadata: dict[str, object], expected: str | None
+):
+    session_id: Final = _get_session_id_for_spend_log(
+        kwargs={"litellm_params": {"litellm_session_id": "parent-session", "metadata": request_metadata}},
+        metadata={},
+        standard_logging_payload=None,
+        omit_when_missing=True,
+    )
+    assert session_id == expected
+
+
 def test_legacy_policy_keeps_trace_id_fallback():
     assert _trace_only_session_id(omit_when_missing=False) == "trace-abc"
     generated: Final = _get_session_id_for_spend_log(
@@ -645,7 +725,9 @@ def test_batch_lifecycle_rows_derive_the_same_session_from_the_batch_id():
     _batch_cost to it, so deriving the session from the request id lands both rows in one
     trace on the logs UI even though the poller builds a fresh logging context per cycle.
     """
-    from litellm.proxy.spend_tracking.spend_tracking_utils import _get_batch_trace_session_id
+    from litellm.proxy.spend_tracking.legacy_spend_log_rows import (
+        _get_batch_trace_session_id,
+    )
 
     create_session: Final = _get_batch_trace_session_id(call_type="acreate_batch", request_id="batch-uid-1")
     cost_session: Final = _get_batch_trace_session_id(call_type="aretrieve_batch", request_id="batch-uid-1_batch_cost")
@@ -653,7 +735,9 @@ def test_batch_lifecycle_rows_derive_the_same_session_from_the_batch_id():
 
 
 def test_non_batch_call_types_derive_no_batch_session():
-    from litellm.proxy.spend_tracking.spend_tracking_utils import _get_batch_trace_session_id
+    from litellm.proxy.spend_tracking.legacy_spend_log_rows import (
+        _get_batch_trace_session_id,
+    )
 
     assert _get_batch_trace_session_id(call_type="acompletion", request_id="chatcmpl-1") is None
 
@@ -7761,6 +7845,7 @@ def test_spend_logs_payload(model_id: str | None):
         "user_api_key_customer_member_alias",
         "user_api_key_app_id",
         "user_api_key_app_alias",
+        "user_api_key_app_group_id",
     }
 
     assert "metadata" in payload
@@ -7990,6 +8075,20 @@ _STATELESS_CASES: Final[tuple[tuple[dict[str, object], dict[str, object]], ...]]
             ]
         },
         {"input": _user_turn("summarize\n[file omitted]")},
+    ),
+    (
+        {
+            "input": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "input_text", "text": "Is this a duplicate charge?"},
+                        {"type": "input_json", "data": {"charges": [49, 49]}},
+                    ],
+                }
+            ]
+        },
+        {"input": _user_turn("Is this a duplicate charge?\n[json omitted]")},
     ),
     (
         {

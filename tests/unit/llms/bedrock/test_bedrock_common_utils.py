@@ -2610,7 +2610,7 @@ def test_is_bedrock_native_output_rejection_matches_only_the_400s_that_reject_na
     [
         ("us.anthropic.claude-opus-4-8", None, False),
         ("global.anthropic.claude-sonnet-5", None, False),
-        ("us-gov.anthropic.claude-opus-4-8", None, False),
+        ("us-gov.anthropic.claude-opus-4-8", None, True),
         ("us.anthropic.claude-opus-4-8", {"supports_bedrock_native_structured_output": False}, False),
         ("us.anthropic.claude-opus-5-5", {"supports_bedrock_native_structured_output": True}, False),
         ("us.anthropic.claude-sonnet-4-6", {"supports_bedrock_native_structured_output": True}, False),

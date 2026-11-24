@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applicationInitials, applicationRows } from "./applications";
+import { applicationInitials, applicationRows, grantedApplicationRows } from "./applications";
 import type { App, AppResource } from "./appForms";
 
 const resource = (alias: string, appId: string | null): AppResource => ({
@@ -34,5 +34,22 @@ describe("application rows", () => {
   it("should build initials from the first two words", () => {
     expect(applicationInitials("customer chat bot")).toBe("CC");
     expect(applicationInitials("search")).toBe("S");
+  });
+});
+
+describe("granted application rows", () => {
+  it("should list each granted app by alias using the resource the app is linked to", () => {
+    const granted = (alias: string, resourceId: string | null): App =>
+      ({ app_id: `app-${alias}`, resource_type: "team", resource_id: resourceId, alias, spend: 3 }) as App;
+    const rows = grantedApplicationRows([granted("search", "team-search"), granted("chat", "team-chat")]);
+    expect(rows.map((row) => [row.resource.alias, row.resource.resource_id, row.app?.app_id])).toEqual([
+      ["chat", "team-chat", "app-chat"],
+      ["search", "team-search", "app-search"],
+    ]);
+  });
+
+  it("should leave out an app that is no longer linked to a resource", () => {
+    const unlinked = { app_id: "app-old", resource_type: "team", resource_id: null, alias: "old", spend: 0 } as App;
+    expect(grantedApplicationRows([unlinked])).toEqual([]);
   });
 });

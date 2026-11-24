@@ -19,7 +19,7 @@ import json
 import re
 import tempfile
 from collections import OrderedDict
-from collections.abc import Generator, Iterator, Sequence
+from collections.abc import Generator, Iterator, Mapping, Sequence
 from contextvars import ContextVar
 from functools import partial
 from typing import TYPE_CHECKING, ClassVar, Final, Literal, Optional
@@ -34,7 +34,12 @@ from litellm.integrations.custom_guardrail import (
 )
 from litellm.llms.base_llm.guardrail_translation.utils import effective_skip_tool_message_for_guardrail
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.proxy.guardrails._content_utils import iter_tool_json_fields, map_tool_json_text, walk_user_text
+from litellm.proxy.guardrails._content_utils import (
+    iter_json_keys,
+    iter_tool_json_fields,
+    map_tool_json_text,
+    walk_user_text,
+)
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import GenericGuardrailAPIInputs
 
@@ -612,7 +617,7 @@ class _ENTERPRISE_SecretDetection(CustomGuardrail):
     # path skips should_run_check and never sees data["prompt"]).
     use_native_lifecycle_hooks: ClassVar[bool] = True
 
-    def __init__(self, detect_secrets_config: Optional[dict] = None, **kwargs):
+    def __init__(self, detect_secrets_config: Optional[Mapping[str, object]] = None, **kwargs):
         self.user_defined_detect_secrets_config = detect_secrets_config
         self._clean_scans: OrderedDict[bytes, None] = OrderedDict()
         super().__init__(**kwargs)
@@ -666,8 +671,15 @@ class _ENTERPRISE_SecretDetection(CustomGuardrail):
 
     def redact_tool_payload(self, payload: JsonValue) -> JsonValue:
         """Redact secrets in a tool payload's string values, scanning each value alone and as its JSON lines."""
+        return self._redact_json(payload, rewrite_keys=False)
+
+    def redact_json_input(self, payload: JsonValue) -> JsonValue:
+        return self._redact_json(payload, rewrite_keys=True)
+
+    def _redact_json(self, payload: JsonValue, *, rewrite_keys: bool) -> JsonValue:
         fields: Final = tuple(iter_tool_json_fields(payload))
-        texts: Final = tuple(text for _, text in fields)
+        keys: Final = tuple(iter_json_keys(payload)) if rewrite_keys else ()
+        texts: Final = (*(text for _, text in fields), *keys)
         contexts: Final = {key: _key_context(key) for key in {key for key, _ in fields if key is not None}}
         keyed: Final = tuple(
             itertools.chain.from_iterable(
@@ -686,12 +698,13 @@ class _ENTERPRISE_SecretDetection(CustomGuardrail):
             for secret in detected:
                 counts[secret["type"]] = counts.get(secret["type"], 0) + 1
         verbose_proxy_logger.warning(
-            "Detected and redacted secrets in tool payload: %s",
+            "Detected and redacted secrets in %s: %s",
+            "JSON input" if rewrite_keys else "tool payload",
             sorted(dict.fromkeys(secret["type"] for secret in detected)),
         )
         values: Final = sorted({secret["value"] for secret in detected}, key=len, reverse=True)
         pattern: Final = re.compile("|".join(re.escape(value) for value in values))
-        return map_tool_json_text(payload, lambda text: pattern.sub("[REDACTED]", text))
+        return map_tool_json_text(payload, lambda text: pattern.sub("[REDACTED]", text), rewrite_keys=rewrite_keys)
 
     async def should_run_check(self, user_api_key_dict: UserAPIKeyAuth) -> bool:
         if user_api_key_dict.permissions is not None:
@@ -705,7 +718,7 @@ class _ENTERPRISE_SecretDetection(CustomGuardrail):
     async def apply_guardrail(
         self,
         inputs: GenericGuardrailAPIInputs,
-        request_data: dict,
+        request_data: Mapping[str, object],
         input_type: Literal["request", "response"],
         logging_obj: Optional["LiteLLMLoggingObj"] = None,
     ) -> GenericGuardrailAPIInputs:
@@ -718,7 +731,7 @@ class _ENTERPRISE_SecretDetection(CustomGuardrail):
         _masked_entity_count.set({})
         return {**inputs, "texts": [self.redact_text(text) for text in texts]}
 
-    def _redact_prompt(self, data: dict) -> int:
+    def _redact_prompt(self, data: dict[str, object]) -> int:
         """Redact ``data["prompt"]`` (the text-completion shape, which
         ``walk_user_text`` does not cover) and return how many non-empty
         strings were inspected."""
@@ -759,6 +772,7 @@ class _ENTERPRISE_SecretDetection(CustomGuardrail):
             self.redact_text,
             self.redact_tool_payload,
             skip_tool_message=effective_skip_tool_message_for_guardrail(self),
+            visit_json=self.redact_json_input,
         ) + self._redact_prompt(data)
 
         if inspected == 0:
@@ -777,7 +791,7 @@ class _ENTERPRISE_SecretDetection(CustomGuardrail):
         end_time: Optional[float] = None,
         duration: Optional[float] = None,
         event_type: Optional[GuardrailEventHooks] = None,
-        original_inputs: Optional[dict] = None,
+        original_inputs: Optional[Mapping[str, object]] = None,
     ):
         """Record allow/mask plus the masked-entity tally for a completed run.
 

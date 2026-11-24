@@ -18,8 +18,8 @@ use litellm_host_python::{from_py_argument, json_loads, to_py};
 use litellm_router_core::lookup::{ListScope, Lookup, Row};
 use litellm_router_core::{
     AttemptError, Blocked, BuildPath, Built, Deployment, DeploymentSpec, Error, FailureKind,
-    FailureReport, HostFacts, Op, OutcomeCallbacks, PreRouted, Provided, RetryCause, Router,
-    RouterEvent, SecretAt, SuccessReport, UsageWindow,
+    FailureReport, Op, OutcomeCallbacks, PreRouted, Provided, RetryCause, Router, RouterEvent,
+    SecretAt, SuccessReport, UsageWindow,
     build::Install,
     registry::{DeploymentFilter, ResolveKind, ResolveScope},
     strategy::routing_context,
@@ -76,6 +76,8 @@ enum ErrorKind {
     RoutingPluginsNeedAsync,
     #[strum(serialize = "multiple_teams")]
     MultipleTeams,
+    #[strum(serialize = "multiple_model_groups")]
+    MultipleModelGroups,
     #[strum(serialize = "reserved")]
     Reserved,
     #[strum(serialize = "invalid_router_weights")]
@@ -112,6 +114,7 @@ impl From<&Error> for ErrorKind {
             Error::RoutingPluginsLeftNothing { .. } => Self::RoutingPluginsLeftNothing,
             Error::RoutingPluginsNeedAsync => Self::RoutingPluginsNeedAsync,
             Error::MultipleTeams { .. } => Self::MultipleTeams,
+            Error::MultipleModelGroups { .. } => Self::MultipleModelGroups,
             Error::Reserved { .. } => Self::Reserved,
             Error::InvalidRouterWeights => Self::InvalidRouterWeights,
             Error::NonNumericWeight { .. } => Self::NonNumericWeight,
@@ -175,7 +178,7 @@ impl RouterCoreHandle {
         let build = || {
             let config = config::parse_router_config(config)?;
             let dynamic = config::parse_dynamic_config(dynamic)?;
-            Ok(Router::builder(config, dynamic, HostFacts::everything())
+            Ok(Router::builder(config, dynamic)
                 .randomness(Arc::new(PythonRandomness))
                 .build()?)
         };
@@ -417,7 +420,7 @@ impl RouterCoreHandle {
     /// (`cooled`, `cooldown_time`). `counts_request` also counts the failed request against the deployment's
     /// per-minute requests, as an async call's failure callback does. `callbacks` is the logged
     /// request's `OutcomeCallbacks`.
-    #[pyo3(signature = (id, failure, deployment_cooldown=false, count_only=false, requested_group=None, cooldown_time=None, uncounted=false, counts_request=false, usage_model=None, callbacks=None))]
+    #[pyo3(signature = (id, failure, deployment_cooldown=false, count_only=false, requested_group=None, cooldown_time=None, uncounted=false, counts_request=false, usage_model=None, callbacks=None, batch_api=false))]
     #[allow(clippy::too_many_arguments)]
     fn report_failure(
         &self,
@@ -431,6 +434,7 @@ impl RouterCoreHandle {
         counts_request: bool,
         usage_model: Option<String>,
         callbacks: Option<&Bound<'_, PyAny>>,
+        batch_api: bool,
     ) -> PyResult<RouterCall> {
         let failure = match attempt_outcome(failure)? {
             Err(failure) => failure,
@@ -447,6 +451,7 @@ impl RouterCoreHandle {
             cooldown_time,
             count_only,
             requested_group,
+            batch_api,
             uncounted,
             counts_request,
             usage_model,
@@ -935,10 +940,12 @@ impl RouterCoreHandle {
     ) -> PyResult<Bound<'py, PyList>> {
         let request = config::parse_request(document(request)?, Some(model))
             .map_err(config_error_to_pyerr)?;
+        let settings = self.router.settings();
         let records = litellm_router_core::resolve::routable(
             &self.router.registry(),
-            &self.router.settings().dynamic,
+            &settings.dynamic,
             &request,
+            settings.enable_cross_model_group_collision_check,
         )
         .iter()
         .map(|d| to_py(py, &host::deployment_record(d)))
@@ -1446,6 +1453,7 @@ fn error_items(dict: &Bound<'_, PyDict>, error: &Error) -> PyResult<()> {
         | Error::NoPassThroughDeployments { model }
         | Error::PtuReserved { model }
         | Error::MultipleTeams { model }
+        | Error::MultipleModelGroups { model }
         | Error::DefaultDeploymentRaises { model }
         | Error::IndexOutOfRange { model } => dict.set_item("error_model", model),
         Error::ContextWindowExceeded { model, detail } => {

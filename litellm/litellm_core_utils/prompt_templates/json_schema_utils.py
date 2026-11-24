@@ -21,8 +21,8 @@ _DEFINITION_BLOCKS: Final = frozenset({"$defs", "definitions", "components"})
 
 
 def _schema_properties(schema: Mapping[str, object]) -> Mapping[str, object]:
-    properties: Final = schema.get("properties")
-    return properties if isinstance(properties, dict) else _EMPTY_SCHEMA
+    properties: Final = _schema_at(schema, "properties")
+    return _EMPTY_SCHEMA if properties is None else properties
 
 
 def _schema_branches(schema: Mapping[str, object], combinator: str) -> tuple[object, ...]:
@@ -54,11 +54,10 @@ def _resolve_local_schema_ref(root: Mapping[str, object], ref: str) -> Mapping[s
     if matched is None:
         return None
     prefix, container = matched
-    definitions: Final = root.get(container)
-    if not isinstance(definitions, dict):
+    definitions: Final = _schema_at(root, container)
+    if definitions is None:
         return None
-    target: Final = definitions.get(ref[len(prefix) :])
-    return target if isinstance(target, dict) else None
+    return _schema_at(definitions, ref[len(prefix) :])
 
 
 def _required_names_in_order(schema: Mapping[str, object]) -> tuple[str, ...]:

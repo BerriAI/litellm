@@ -20,7 +20,10 @@ use crate::{
     },
     base_llm::{
         auth::{AuthScheme, Headers, ValidatedEnvironment},
-        messages::{context::MessagesTransformContext, transformation::BaseMessagesConfig},
+        messages::{
+            context::MessagesTransformContext,
+            transformation::{MessagesAuth, MessagesDialect, MessagesEndpoint, MessagesReply},
+        },
     },
 };
 
@@ -29,19 +32,37 @@ const API_BASE_ENV: &str = "OPENROUTER_API_BASE";
 const DEFAULT_BASE: &str = "https://openrouter.ai/api/v1";
 const MESSAGES_PATH: &str = "/v1/messages";
 
-pub struct OpenRouterAnthropicMessagesConfig;
-pub const OPENROUTER_MESSAGES_CONFIG: OpenRouterAnthropicMessagesConfig =
-    OpenRouterAnthropicMessagesConfig;
+pub struct OpenRouterMessagesConfig;
+pub const OPENROUTER_MESSAGES_CONFIG: OpenRouterMessagesConfig = OpenRouterMessagesConfig;
 
-impl BaseMessagesConfig for OpenRouterAnthropicMessagesConfig {
-    fn retry_after_http_error(
+impl MessagesEndpoint for OpenRouterMessagesConfig {
+    fn get_complete_url(
         &self,
-        status: u16,
-        error_text: &str,
-        request_body: &Value,
-        context: &MessagesTransformContext,
-    ) -> Option<RetriedRequest> {
-        retry_anthropic_messages_after_http_error(status, error_text, request_body, context)
+        api_base: Option<&str>,
+        _model: &str,
+        params: &LitellmParams,
+        _stream: bool,
+        env: &dyn Fn(&str) -> Option<String>,
+    ) -> Result<String, Error> {
+        let explicit = api_base
+            .filter(|base| !base.trim().is_empty())
+            .or(params.api_base.as_deref());
+        let base = resolve_non_empty(explicit, env, &[API_BASE_ENV])
+            .unwrap_or_else(|| DEFAULT_BASE.into());
+        let trimmed = base.trim_end_matches('/');
+        if trimmed.ends_with(MESSAGES_PATH) {
+            return Ok(trimmed.into());
+        }
+        Ok(format!(
+            "{}{MESSAGES_PATH}",
+            trimmed.strip_suffix("/v1").unwrap_or(trimmed)
+        ))
+    }
+}
+
+impl MessagesAuth for OpenRouterMessagesConfig {
+    fn secret_names(&self) -> &'static [&'static str] {
+        &[API_KEY_ENV, API_BASE_ENV]
     }
 
     fn validate_environment(
@@ -74,30 +95,9 @@ impl BaseMessagesConfig for OpenRouterAnthropicMessagesConfig {
             },
         })
     }
+}
 
-    fn get_complete_url(
-        &self,
-        api_base: Option<&str>,
-        _model: &str,
-        params: &LitellmParams,
-        _stream: bool,
-        env: &dyn Fn(&str) -> Option<String>,
-    ) -> Result<String, Error> {
-        let explicit = api_base
-            .filter(|base| !base.trim().is_empty())
-            .or(params.api_base.as_deref());
-        let base = resolve_non_empty(explicit, env, &[API_BASE_ENV])
-            .unwrap_or_else(|| DEFAULT_BASE.into());
-        let trimmed = base.trim_end_matches('/');
-        if trimmed.ends_with(MESSAGES_PATH) {
-            return Ok(trimmed.into());
-        }
-        Ok(format!(
-            "{}{MESSAGES_PATH}",
-            trimmed.strip_suffix("/v1").unwrap_or(trimmed)
-        ))
-    }
-
+impl MessagesDialect for OpenRouterMessagesConfig {
     fn transform_anthropic_messages_request(
         &self,
         request: MessagesRequest,
@@ -115,16 +115,24 @@ impl BaseMessagesConfig for OpenRouterAnthropicMessagesConfig {
         })
     }
 
-    fn secret_names(&self) -> &'static [&'static str] {
-        &[API_KEY_ENV, API_BASE_ENV]
-    }
-
     fn default_headers(&self) -> &'static [(&'static str, &'static str)] {
         DEFAULT_HEADERS
     }
 
     fn request_headers(&self, headers: Headers, request: &MessagesRequest) -> Headers {
         update_headers_with_anthropic_beta(headers, request)
+    }
+}
+
+impl MessagesReply for OpenRouterMessagesConfig {
+    fn retry_after_http_error(
+        &self,
+        status: u16,
+        error_text: &str,
+        request_body: &Value,
+        context: &MessagesTransformContext,
+    ) -> Option<RetriedRequest> {
+        retry_anthropic_messages_after_http_error(status, error_text, request_body, context)
     }
 }
 

@@ -38,7 +38,7 @@ const organization = {
   customer_org_id: "org-1",
   alias: "Customer organization",
   budget: { max_budget: 100 },
-  default_budgets: [],
+  default_budgets: [{ budget_id: "member-standard", name: "Member standard" }],
 };
 const teams = [
   { ...audit, customer_team_id: "team-a", parent_org_id: "org-1", alias: "Product", budget: null },
@@ -50,6 +50,7 @@ const members = [
     customer_member_id: "member-a",
     parent_team_ids: ["team-a"],
     alias: "Member One",
+    budget_id: "member-standard",
     effective_budget: { max_budget: 10 },
   },
   {
@@ -157,6 +158,11 @@ const activityUrl = (resource: string, id: string, endDate = "2026-11-03") => {
       url.searchParams.get("end_date") === endDate,
   );
 };
+const activityIds = (url: URL, resource: string | undefined, aggregated: boolean) => {
+  if (aggregated)
+    return url.searchParams.get("customer_org_ids")?.split(",") ?? [url.searchParams.get("customer_org_id")];
+  return url.searchParams.get(filterFor(resource))?.split(",") ?? [];
+};
 const createUsageHandler =
   ({ appsEnabled = false }: Readonly<{ appsEnabled?: boolean }> = {}) =>
   (input: Parameters<typeof fetch>[0]): Response => {
@@ -185,6 +191,15 @@ const createUsageHandler =
         spend: app.app_id === "app-chat" ? 27 : 3,
         budget_override_id: `budget-${app.app_id}`,
         effective_budget: { max_budget: 100, budget_duration: "1mo" },
+        budget_usage: [
+          {
+            source: "scalar",
+            budget_duration: "1mo",
+            spend: app.app_id === "app-chat" ? 27 : 3,
+            max_budget: 100,
+            reset_at: null,
+          },
+        ],
       };
       return json(appBudget);
     }
@@ -192,10 +207,7 @@ const createUsageHandler =
     if (url.pathname.endsWith("/daily/activity") || aggregated) {
       const resource = url.pathname.split("/").at(aggregated ? -4 : -3);
       const dimension = activityDimension(resource);
-      const filter = filterFor(resource);
-      const ids = aggregated
-        ? [url.searchParams.get("customer_org_id")]
-        : url.searchParams.get(filter)?.split(",") ?? [];
+      const ids = activityIds(url, resource, aggregated);
       const selected = records
         .filter((record) => ids.includes(record[dimension]))
         .filter((record) => !url.searchParams.get("app_id") || appForRecord(record) === url.searchParams.get("app_id"))
@@ -273,6 +285,13 @@ describe("CustomerHierarchyUsagePage", () => {
     const globalBudget = screen.getByRole("region", { name: "Current budget" });
     const appBudget = screen.getByRole("region", { name: "App budgets" });
     expect(globalBudget.compareDocumentPosition(appBudget) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    const chat = within(await within(appBudget).findByRole("row", { name: /^chat Monthly/ }));
+    expect(await chat.findByRole("button", { name: "100 total tokens. View breakdown" })).toBeInTheDocument();
+    expect(chat.getByText("$27.00 / $100.00")).toBeInTheDocument();
+    expect(chat.getByText("$73.00 left")).toBeInTheDocument();
+    expect(chat.getByText("27% used")).toBeInTheDocument();
+    expect(chat.getByText("$69.00")).toBeInTheDocument();
+    expect(chat.getByText("90%")).toBeInTheDocument();
   });
 
   it("should filter the usage graph by app while retaining the global customer budget and date range", async () => {
@@ -281,14 +300,14 @@ describe("CustomerHierarchyUsagePage", () => {
     const onUrlUpdate = vi.fn();
     renderWithProviders(<CustomerHierarchyUsagePage />, { searchParams: initialUrl, onUrlUpdate });
     await screen.findByRole("button", { name: "Edit budget for search" });
-    await user.click(screen.getByRole("combobox", { name: "App" }));
-    expect(await screen.findByRole("option", { name: "search" })).toBeInTheDocument();
-    expect(screen.queryByRole("option", { name: "Unconfigured resource" })).not.toBeInTheDocument();
-    await user.click(screen.getByRole("option", { name: "search" }));
+    await user.click(
+      within(screen.getByRole("table", { name: "App budgets" })).getByRole("button", { name: "search", exact: true }),
+    );
     await waitFor(() =>
       expect(activityUrl("customer_organizations", "org-1")?.searchParams.get("app_id")).toBe("app-search"),
     );
     await waitFor(() => expect(tableRows("Models")).toHaveLength(1));
+    expect(await within(screen.getByRole("table", { name: "App budgets" })).findByText("90%")).toBeInTheDocument();
     expect(tableRows("Models")[0]).toHaveTextContent("model-b");
     expect(
       within(screen.getByRole("region", { name: "Current budget" })).getByText("$40.00 / $100.00"),
@@ -376,10 +395,7 @@ describe("CustomerHierarchyUsagePage", () => {
     const budget = screen.getByRole("region", { name: "Current budget" });
     expect(within(budget).getByText("$40.00 / $100.00")).toBeInTheDocument();
     expect(within(budget).getByText("Recorded budget spend")).toBeInTheDocument();
-    expect(within(budget).getByRole("link", { name: "Edit budget" })).toHaveAttribute(
-      "href",
-      "/ui/customers/manage?org=org-1&from=2026-11-01&to=2026-11-03&tab=settings",
-    );
+    expect(within(budget).getByRole("button", { name: "Edit budget" })).toBeEnabled();
     expect(screen.getByTitle("700 tokens")).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Usage over time" })).toBeInTheDocument();
     expect(tableRows("Models")[0]).toHaveTextContent("model-a");
@@ -448,6 +464,9 @@ describe("CustomerHierarchyUsagePage", () => {
       within(screen.getByRole("table", { name: "Customer teams" })).getByRole("button", { name: "Product" }),
     );
     expect(await screen.findByRole("heading", { name: "Product" })).toBeInTheDocument();
+    expect(
+      within(screen.getByRole("table", { name: "Customer member spend" })).getByText("Member standard"),
+    ).toBeInTheDocument();
     expect(activityUrl("customer_teams", "team-a")?.pathname).toBe("/management/v1/customer_teams/daily/activity");
     expect(activityUrl("customer_teams", "team-a")?.searchParams.get("customer_team_ids")).toBe("team-a");
     const teamBudget = screen.getByRole("region", { name: "Current budget" });
@@ -462,12 +481,12 @@ describe("CustomerHierarchyUsagePage", () => {
       within(screen.getByRole("table", { name: "Customer member spend" })).getByRole("button", { name: "Member One" }),
     );
     expect(await screen.findByRole("heading", { name: "Member One" })).toBeInTheDocument();
+    expect(
+      within(screen.getByRole("table", { name: "Customer member spend" })).getByText("Member standard"),
+    ).toBeInTheDocument();
     const memberBudget = screen.getByRole("region", { name: "Current budget" });
     expect(within(memberBudget).getByText("$40.00 / $10.00")).toBeInTheDocument();
-    expect(within(memberBudget).getByRole("link", { name: "Edit budget" })).toHaveAttribute(
-      "href",
-      "/ui/customers/manage?org=org-1&team=team-a&member=member-a&from=2026-11-01&to=2026-11-03&tab=settings",
-    );
+    expect(within(memberBudget).getByRole("button", { name: "Edit budget" })).toBeEnabled();
     const memberUrl = activityUrl("customer_members", "member-a")!;
     expect(memberUrl.pathname).toBe("/management/v1/customer_members/daily/activity");
     expect(memberUrl.searchParams.get("customer_member_ids")).toBe("member-a");
@@ -481,9 +500,53 @@ describe("CustomerHierarchyUsagePage", () => {
       }),
     );
 
-    await user.click(screen.getByRole("button", { name: "Customer organization" }));
+    await user.click(
+      within(screen.getByRole("navigation", { name: "Customer hierarchy" })).getByRole("link", {
+        name: "Customer organization",
+        exact: true,
+      }),
+    );
     expect(await screen.findByRole("heading", { name: "Customer organization" })).toBeInTheDocument();
     expect(onUrlUpdate).toHaveBeenLastCalledWith(expect.objectContaining({ queryString: initialUrl }));
+  });
+
+  it("shows the complete breadcrumb for a member deep link and returns to each parent with the same filters", async () => {
+    const user = userEvent.setup();
+    const onUrlUpdate = vi.fn();
+    renderWithProviders(<CustomerHierarchyUsagePage />, {
+      searchParams: `${initialUrl}&member=member-a`,
+      onUrlUpdate,
+    });
+    await screen.findByRole("heading", { name: "Member One" });
+    const path = within(screen.getByRole("navigation", { name: "Customer hierarchy" }));
+    expect(path.getAllByRole("link").map((link) => link.textContent)).toEqual([
+      "All customers",
+      "Customer organization",
+      "Product",
+      "Member One",
+    ]);
+    expect(path.getByRole("link", { name: "Member One", exact: true })).toHaveAttribute("aria-current", "page");
+    expect(path.getByRole("link", { name: "Product", exact: true })).toHaveAttribute(
+      "href",
+      "/ui/customers/usage?org=org-1&team=team-a&from=2026-11-01&to=2026-11-03",
+    );
+    await user.click(path.getByRole("link", { name: "Product", exact: true }));
+    expect(await screen.findByRole("heading", { name: "Product" })).toBeInTheDocument();
+    expect(path.getAllByRole("link").map((link) => link.textContent)).toEqual([
+      "All customers",
+      "Customer organization",
+      "Product",
+    ]);
+    expect(path.getByRole("link", { name: "Product", exact: true })).toHaveAttribute("aria-current", "page");
+    await user.click(path.getByRole("link", { name: "Customer organization", exact: true }));
+    expect(await screen.findByRole("heading", { name: "Customer organization" })).toBeInTheDocument();
+    expect(path.getByRole("link", { name: "Customer organization", exact: true })).toHaveAttribute(
+      "aria-current",
+      "page",
+    );
+    await waitFor(() =>
+      expect(onUrlUpdate).toHaveBeenLastCalledWith(expect.objectContaining({ queryString: initialUrl })),
+    );
   });
 
   it("should fall back to Models for a removed Members breakdown and offer only chart breakdowns", async () => {
@@ -508,12 +571,17 @@ describe("CustomerHierarchyUsagePage", () => {
     const table = await screen.findByRole("table", { name: "Customer member spend" });
     const firstMember = within(table).getAllByRole("row")[1];
     expect(firstMember).toHaveTextContent("Member One");
-    expect(within(firstMember).getByText("$20.00 / No monthly limit")).toBeInTheDocument();
+    expect(within(firstMember).getByText("Member standard")).toBeInTheDocument();
+    expect(within(firstMember).getByText("66.7%")).toBeInTheDocument();
+    expect(within(firstMember).getByRole("button", { name: "100 total tokens. View breakdown" })).toBeInTheDocument();
+    expect(within(firstMember).getByRole("cell", { name: "$20.00 No monthly limit", exact: true })).toBeInTheDocument();
+    expect(
+      within(firstMember).getByRole("cell", { name: "$10.00 total No automatic reset", exact: true }),
+    ).toBeInTheDocument();
     expect(within(firstMember).getByRole("meter", { name: "Share of customer spend" })).toHaveAttribute(
       "aria-valuetext",
       "66.7%",
     );
-    expect(firstMember).toHaveTextContent("Recorded budget spend$40.00 / $10.00");
     expect(within(firstMember).getByText("Reached limit")).toBeInTheDocument();
 
     await selectBreakdown(user, "Customer teams");
@@ -611,7 +679,8 @@ describe("CustomerHierarchyUsagePage", () => {
       const row = within(table).getAllByRole("row")[1];
       expect(within(row).getByText("$40.00 / $50.00")).toBeInTheDocument();
       expect(within(row).getByText(`$${monthlySpend.toFixed(2)} / $10.00`)).toBeInTheDocument();
-      expect(within(row).getByText(`$${yearlySpend.toFixed(2)} / $100.00`)).toBeInTheDocument();
+      expect(within(row).getByText(`$${yearlySpend.toFixed(2)}`)).toBeInTheDocument();
+      expect(within(row).getByText("$100.00 limit")).toBeInTheDocument();
       expect(
         within(row)
           .getAllByRole("progressbar")
@@ -621,7 +690,7 @@ describe("CustomerHierarchyUsagePage", () => {
         "aria-valuetext",
         "66.7%",
       );
-      expect(within(row).getAllByRole("cell")[5]).toHaveTextContent(status);
+      expect(within(row).getByRole("cell", { name: status, exact: true })).toBeInTheDocument();
       await user.click(within(row).getByRole("button", { name: "Member One" }));
       expect(await screen.findByRole("heading", { name: "Member One" })).toBeInTheDocument();
       const summary = screen.getByRole("region", { name: "Current budget" });

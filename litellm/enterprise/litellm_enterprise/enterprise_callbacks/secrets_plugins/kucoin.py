@@ -15,7 +15,7 @@ class KucoinDetector(RegexBasedDetector):
         return "Kucoin Secret"
 
     @property
-    def denylist(self) -> list[re.Pattern]:
+    def denylist(self) -> list[re.Pattern[str]]:
         return [
             # Kucoin Access Token
             re.compile(

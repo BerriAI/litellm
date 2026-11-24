@@ -48,6 +48,15 @@ describe("provider_info_helpers", () => {
     expect(getProviderModels("LLAMA", BUNDLED_MODEL_MAP).sort()).toEqual(llamaModels.sort());
   });
 
+  it("keeps Perplexity Orchestrator models out of the Perplexity dropdown and lists them under their own provider", () => {
+    const modelsOf = (provider: string) =>
+      Object.keys(BUNDLED_MODEL_MAP).filter((key) => BUNDLED_MODEL_MAP[key]?.litellm_provider === provider);
+    const orchestratorModels = modelsOf("perplexity_orchestrator");
+    expect(orchestratorModels.length).toBeGreaterThan(0);
+    expect(getProviderModels("Perplexity", BUNDLED_MODEL_MAP).sort()).toEqual(modelsOf("perplexity").sort());
+    expect(getProviderModels("PERPLEXITY_ORCHESTRATOR", BUNDLED_MODEL_MAP).sort()).toEqual(orchestratorModels.sort());
+  });
+
   it("resolves BigModel metadata, name, logo and model placeholder", () => {
     const metadata = PROVIDER_CREATE_FIELDS.find((provider) => provider.provider === "BIGMODEL");
     expect(provider_map.BIGMODEL).toBe(metadata?.litellm_provider);
@@ -70,6 +79,17 @@ describe("provider_info_helpers", () => {
     expect(getProviderLogoAndName("AIAND")).toEqual(getProviderLogoAndName("aiand"));
     expect(providerLogoMap[Providers.AIAND]).toContain("aiand");
     expect(getPlaceholder(Providers.AIAND)).toBe("aiand/openai/gpt-oss-120b");
+  });
+
+  it("resolves ResetData name, logo and model placeholder", () => {
+    expect(provider_map.RESETDATA).toBe("resetdata");
+    expect(getProviderLogoAndName("resetdata")).toEqual({
+      displayName: "ResetData",
+      logo: providerLogoMap[Providers.RESETDATA],
+    });
+    expect(getProviderLogoAndName("RESETDATA")).toEqual(getProviderLogoAndName("resetdata"));
+    expect(providerLogoMap[Providers.RESETDATA]).toContain("resetdata");
+    expect(getPlaceholder(Providers.RESETDATA)).toBe("resetdata/zai/glm-5.3");
   });
 
   it("maps Microsoft 365 Copilot to its chat model provider and placeholder", () => {
@@ -432,6 +452,12 @@ describe("provider_info_helpers", () => {
 
     it("should return a coralbricks/ placeholder for the CoralBricks provider", () => {
       expect(getPlaceholder(Providers.CORALBRICKS)).toBe("coralbricks/glm-5.3-fast");
+    });
+
+    it("should return a perplexity_orchestrator/ placeholder for the Perplexity Orchestrator provider", () => {
+      expect(getPlaceholder(Providers.PERPLEXITY_ORCHESTRATOR)).toBe(
+        "perplexity_orchestrator/anthropic/claude-sonnet-5-5",
+      );
     });
 
     it("should return decision model placeholders for the TypeSafe and StrandsDecider dropdown keys", () => {

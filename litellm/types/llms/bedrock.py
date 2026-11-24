@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Final, Literal, TypeAlias
 
-from pydantic import ConfigDict
+from pydantic import ConfigDict, TypeAdapter
 from typing_extensions import NotRequired, ReadOnly, Required, TypedDict, override
 
 from litellm.types.llms.base import LiteLLMBaseModel
@@ -483,6 +483,9 @@ class Document(TypedDict):
     snippet: str
 
 
+_DECODED_JSON: Final = TypeAdapter(object)
+
+
 class ServerSentEvent:
     def __init__(
         self,
@@ -516,8 +519,8 @@ class ServerSentEvent:
     def data(self) -> str:
         return self._data
 
-    def json(self) -> Any:
-        return json.loads(self.data)
+    def json(self) -> object:
+        return _DECODED_JSON.validate_python(json.loads(self.data))
 
     @override
     def __repr__(self) -> str:

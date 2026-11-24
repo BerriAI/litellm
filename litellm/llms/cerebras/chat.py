@@ -51,7 +51,7 @@ class CerebrasConfig(OpenAIGPTConfig):
     def get_config(cls):
         return super().get_config()
 
-    def get_supported_openai_params(self, model: str) -> list:
+    def get_supported_openai_params(self, model: str) -> list[str]:
         """
         Get the supported OpenAI params for the given model
 
@@ -81,7 +81,7 @@ class CerebrasConfig(OpenAIGPTConfig):
 
     def map_openai_params(
         self,
-        non_default_params: dict,
+        non_default_params: Mapping[str, object],
         optional_params: dict,
         model: str,
         drop_params: bool,

@@ -3,8 +3,8 @@ Arize Phoenix prompt manager that integrates with LiteLLM's prompt management sy
 Fetches prompt versions from Arize Phoenix and provides workspace-based access control.
 """
 
-from collections.abc import Mapping, Sequence
-from typing import Any, Final, cast
+from collections.abc import Iterable, Mapping, Sequence
+from typing import Final, Protocol, cast
 
 from jinja2 import DictLoader, select_autoescape
 from jinja2.sandbox import ImmutableSandboxedEnvironment
@@ -14,6 +14,13 @@ from litellm.integrations.custom_prompt_management import CustomPromptManagement
 from litellm.integrations.prompt_management_base import (
     PromptManagementBase,
     PromptManagementClient,
+)
+from litellm.litellm_core_utils.core_helpers import (
+    iter_items,
+    json_contains,
+    require_attributes,
+    require_get,
+    subscript,
 )
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.prompts.init_prompts import PromptSpec
@@ -37,14 +44,29 @@ class ArizePhoenixTemplateBody(TypedDict, total=False):
 
 
 class ArizePhoenixPromptMetadata(TypedDict):
-    model_name: ReadOnly[str | None]
-    model_provider: ReadOnly[str | None]
-    description: ReadOnly[str]
-    template_type: ReadOnly[str | None]
-    template_format: ReadOnly[str]
-    invocation_parameters: ReadOnly[Mapping[str, Mapping[str, object]]]
-    temperature: ReadOnly[float | None]
-    max_tokens: ReadOnly[int | None]
+    model_name: ReadOnly[object]
+    model_provider: ReadOnly[object]
+    description: ReadOnly[object]
+    template_type: ReadOnly[object]
+    template_format: ReadOnly[object]
+    invocation_parameters: ReadOnly[object]
+    temperature: ReadOnly[object]
+    max_tokens: ReadOnly[object]
+
+
+class _SupportsItems(Protocol):
+    def items(self) -> Iterable[tuple[str, object]]: ...
+
+
+def _provider_params_of(invocation_params: object) -> object:
+    if json_contains(invocation_params, "openai"):
+        return subscript(invocation_params, "openai")
+    if json_contains(invocation_params, "anthropic"):
+        return subscript(invocation_params, "anthropic")
+    for _, value in require_attributes(invocation_params, _SupportsItems, "items").items():
+        if isinstance(value, dict):
+            return value
+    return {}
 
 
 class ArizePhoenixPromptTemplate:
@@ -55,7 +77,7 @@ class ArizePhoenixPromptTemplate:
     def __init__(
         self,
         template_id: str,
-        messages: Sequence[ArizePhoenixTemplateMessage],
+        messages: object,
         metadata: ArizePhoenixPromptMetadata,
         model: str | None = None,
     ) -> None:
@@ -136,26 +158,13 @@ class ArizePhoenixTemplateManager:
 
     _load_prompt_from_arize = load_prompt_from_arize
 
-    def _parse_prompt_data(self, data: dict[str, Any], prompt_version_id: str) -> ArizePhoenixPromptTemplate:
+    def _parse_prompt_data(self, data: Mapping[str, object], prompt_version_id: str) -> ArizePhoenixPromptTemplate:
         """Parse Arize Phoenix prompt data and extract messages and metadata."""
-        template_data: Final[ArizePhoenixTemplateBody] = data.get("template", {})
-        messages: Final = template_data.get("messages", [])
+        messages: Final = require_get(data.get("template", {})).get("messages", [])
 
         # Extract invocation parameters
         invocation_params: Final = data.get("invocation_parameters", {})
-        provider_params = {}
-
-        # Extract provider-specific parameters
-        if "openai" in invocation_params:
-            provider_params = invocation_params["openai"]
-        elif "anthropic" in invocation_params:
-            provider_params = invocation_params["anthropic"]
-        else:
-            # Try to find any nested provider params
-            for key, value in invocation_params.items():
-                if isinstance(value, dict):
-                    provider_params = value
-                    break
+        provider_params: Final = require_get(_provider_params_of(invocation_params))
 
         # Build metadata dictionary
         metadata: Final[ArizePhoenixPromptMetadata] = {
@@ -185,17 +194,19 @@ class ArizePhoenixTemplateManager:
         template: Final = self.prompts[template_id]
         rendered_messages: Final[list[AllMessageValues]] = []
 
-        for message in template.messages:
+        for message in map(require_get, iter_items(template.messages)):
             role = message.get("role", "user")
             content_parts = message.get("content", [])
 
             # Render each content part
             rendered_content_parts = []
-            for part in content_parts:
+            for part in map(require_get, iter_items(content_parts)):
                 if part.get("type") == "text":
                     text = part.get("text", "")
                     # Render the text with Jinja2 (Mustache-style)
-                    jinja_template = self.jinja_env.from_string(text)
+                    jinja_template = self.jinja_env.from_string(
+                        text  # pyright: ignore[reportArgumentType]  # from_string raises its own TypeError
+                    )
                     rendered_text = jinja_template.render(**(variables or {}))
                     rendered_content_parts.append(rendered_text)
                 else:
@@ -304,15 +315,17 @@ class ArizePhoenixPromptManager(CustomPromptManagement):
 
         # Add additional invocation parameters
         invocation_params: Final = template.invocation_parameters
-        provider_params: Mapping[str, object] = {}
-
-        if "openai" in invocation_params:
-            provider_params = invocation_params["openai"]
-        elif "anthropic" in invocation_params:
-            provider_params = invocation_params["anthropic"]
+        provider_name: Final = next(
+            (name for name in ("openai", "anthropic") if json_contains(invocation_params, name)), None
+        )
+        provider_params: Final = (
+            ()
+            if provider_name is None
+            else require_attributes(subscript(invocation_params, provider_name), _SupportsItems, "items").items()
+        )
 
         # Add any additional parameters
-        for key, value in provider_params.items():
+        for key, value in provider_params:
             if key not in metadata:
                 metadata[key] = value
 
@@ -326,7 +339,7 @@ class ArizePhoenixPromptManager(CustomPromptManagement):
         litellm_params: dict[str, object] | None = None,
         prompt_id: str | None = None,
         prompt_variables: dict[str, object] | None = None,
-        **kwargs,
+        **kwargs: object,
     ) -> tuple[list[AllMessageValues], dict[str, object] | None]:
         """
         Pre-call hook that processes the prompt template before making the LLM call.
@@ -401,7 +414,7 @@ class ArizePhoenixPromptManager(CustomPromptManagement):
         self,
         prompt_id: str | None,
         prompt_spec: PromptSpec | None,
-        prompt_variables: dict | None,
+        prompt_variables: dict[str, object] | None,
         dynamic_callback_params: StandardCallbackDynamicParams,
         prompt_label: str | None = None,
         prompt_version: int | None = None,
@@ -430,7 +443,7 @@ class ArizePhoenixPromptManager(CustomPromptManagement):
             template_model: Final = raw_template_model if isinstance(raw_template_model, str) else None
 
             # Extract optional parameters from metadata
-            optional_params: Final = {}
+            optional_params: Final[dict[str, object]] = {}
             for param in [
                 "temperature",
                 "max_tokens",
@@ -455,7 +468,7 @@ class ArizePhoenixPromptManager(CustomPromptManagement):
     async def async_compile_prompt_helper(
         self,
         prompt_id: str | None,
-        prompt_variables: dict | None,
+        prompt_variables: dict[str, object] | None,
         dynamic_callback_params: StandardCallbackDynamicParams,
         prompt_spec: PromptSpec | None = None,
         prompt_label: str | None = None,
@@ -480,16 +493,16 @@ class ArizePhoenixPromptManager(CustomPromptManagement):
         self,
         model: str,
         messages: list[AllMessageValues],
-        non_default_params: dict,
+        non_default_params: dict[str, object],
         prompt_id: str | None,
-        prompt_variables: dict | None,
+        prompt_variables: dict[str, object] | None,
         dynamic_callback_params: StandardCallbackDynamicParams,
         prompt_spec: PromptSpec | None = None,
         prompt_label: str | None = None,
         prompt_version: int | None = None,
         ignore_prompt_manager_model: bool | None = False,
         ignore_prompt_manager_optional_params: bool | None = False,
-    ) -> tuple[str, list[AllMessageValues], dict]:
+    ) -> tuple[str, list[AllMessageValues], dict[str, object]]:
         """
         Get chat completion prompt from Arize Phoenix and return processed model, messages, and parameters.
         """

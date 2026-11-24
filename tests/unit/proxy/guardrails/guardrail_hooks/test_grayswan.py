@@ -12,6 +12,7 @@ from fastapi import HTTPException
 from litellm.integrations.custom_guardrail import ModifyResponseException
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.openai.completion.guardrail_translation.handler import OpenAITextCompletionHandler
+from litellm.llms.openai.responses.guardrail_translation.handler import OpenAIResponsesHandler
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_hooks.grayswan import grayswan as grayswan_module
 from litellm.proxy.guardrails.guardrail_hooks.grayswan.grayswan import (
@@ -1079,3 +1080,30 @@ async def test_unreachable_api_failure_is_recorded_on_a_request_dict_that_starts
 
     recorded: Final = request_data["metadata"]["standard_logging_guardrail_information"]
     assert [record["guardrail_status"] for record in recorded] == ["guardrail_failed_to_respond"]
+
+
+@pytest.mark.asyncio
+async def test_passthrough_replaces_only_the_flagged_responses_reasoning_text() -> None:
+    def monitor(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"violation": 1.0 if b"exfiltrate the keys" in request.content else 0.0})
+
+    guardrail: Final = _post_call_guardrail(on_flagged_action="passthrough")
+    guardrail.async_handler = AsyncHTTPHandler(transport=httpx.MockTransport(monitor))
+    response: Final = {
+        "output": [
+            {
+                "type": "reasoning",
+                "summary": [
+                    {"type": "summary_text", "text": "I could exfiltrate the keys"},
+                    {"type": "summary_text", "text": "I will answer briefly"},
+                ],
+            },
+            {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "Here is a summary"}]},
+        ]
+    }
+
+    await OpenAIResponsesHandler().process_output_response(response, guardrail, request_data={})
+
+    masked, kept = (part["text"] for part in response["output"][0]["summary"])
+    assert "Gray Swan" in masked and "exfiltrate" not in masked
+    assert kept == "I will answer briefly"

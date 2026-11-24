@@ -161,6 +161,41 @@ def test_deleted_files_helpers_and_package_inits_select_nothing(tmp_path):
     )
 
 
+@pytest.mark.parametrize(
+    "changed",
+    (
+        "litellm/proxy-extras/litellm_proxy_extras/migrations/20990101000000_add_column/migration.sql",
+        "litellm/proxy-extras/litellm_proxy_extras/schema.prisma",
+        "litellm/proxy-extras/litellm_proxy_extras/utils.py",
+    ),
+)
+def test_a_proxy_extras_change_selects_every_proxy_extras_test(tmp_path, changed):
+    root: Final = _tree(
+        tmp_path,
+        "tests/unit/litellm_proxy_extras/test_litellm_proxy_extras_utils.py",
+        "tests/unit/litellm_proxy_extras/test_migration_dry_run.py",
+        "tests/unit/litellm_proxy_extras/helpers.py",
+        "tests/unit/db_scripts/test_db_scripts.py",
+    )
+    assert _select(root, changed) == (
+        "tests/unit/litellm_proxy_extras/test_litellm_proxy_extras_utils.py",
+        "tests/unit/litellm_proxy_extras/test_migration_dry_run.py",
+    )
+
+
+def test_a_change_outside_proxy_extras_selects_no_proxy_extras_test(tmp_path):
+    root: Final = _tree(tmp_path, "tests/unit/litellm_proxy_extras/test_litellm_proxy_extras_utils.py")
+    assert _select(root, "litellm/proxy/schema.prisma", "litellm/proxy-extras-notes.md") == ()
+
+
+def test_the_real_unit_workflow_lets_a_migration_change_run_the_migration_ddl_tests():
+    workflow: Final = yaml.safe_load((_REPO_ROOT / ".github/workflows/test-unit.yml").read_text(encoding="utf-8"))
+    changed: Final = ("litellm/proxy-extras/litellm_proxy_extras/migrations/20990101000000_add_column/migration.sql",)
+    assert "tests/unit/litellm_proxy_extras/test_litellm_proxy_extras_utils.py" in selector.select(
+        changed, selector.exclusions(workflow, "3.12"), _REPO_ROOT
+    )
+
+
 def test_the_real_unit_workflow_yields_core_exclusions_that_exist():
     workflow: Final = yaml.safe_load((_REPO_ROOT / ".github/workflows/test-unit.yml").read_text(encoding="utf-8"))
     core_paths: Final = selector.exclusions({"jobs": {"unit-core": workflow["jobs"]["unit-core"]}}, "3.12")

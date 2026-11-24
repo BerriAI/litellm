@@ -133,10 +133,10 @@ Non-sensitive plaintext (feature flags, observability hosts, etc.):
 gateway_extra_env = {
   LANGFUSE_HOST = "https://us.cloud.langfuse.com"
 }
-backend_extra_env = {
-  STORE_MODEL_IN_DB = "True"
-}
 ```
+
+When a database is configured, the module sets `STORE_MODEL_IN_DB=true` on
+both the gateway and backend by default.
 
 ### Extra secrets (API keys)
 

@@ -142,6 +142,43 @@ export function useLogFilterLogic({
   const usesSessionCursor = sortBy === "startTime";
   const sessionCursor = usesSessionCursor ? sessionCursors[pagination.pageIndex] : undefined;
 
+  const getRequestOptions = () => {
+    const window = formatLogsWindow(startTime, endTime, isCustomDate);
+
+    const userIdFilter = getFilterValue(columnFilters, LOG_FILTER_IDS.USER_ID);
+
+    return {
+      accessToken: accessToken ?? "",
+      start_date: window.start_date,
+      end_date: window.end_date,
+      page: pagination.pageIndex + 1,
+      page_size: pageSize,
+      params: {
+        api_key: getFilterValue(columnFilters, LOG_FILTER_IDS.KEY_HASH),
+        team_id: getFilterValue(columnFilters, LOG_FILTER_IDS.TEAM_ID),
+        request_id: getFilterValue(columnFilters, LOG_FILTER_IDS.REQUEST_ID),
+        search: getFilterValue(columnFilters, LOG_FILTER_IDS.SEARCH),
+        session_id: getFilterValue(columnFilters, LOG_FILTER_IDS.SESSION_ID),
+        user_id: userIdFilter,
+        end_user: getFilterValue(columnFilters, LOG_FILTER_IDS.END_USER),
+        status_filter: getFilterValue(columnFilters, LOG_FILTER_IDS.STATUS),
+        cache_hit_filter: getFilterValue(columnFilters, LOG_FILTER_IDS.CACHE_STATUS),
+        used_client_oauth_token: getFilterValue(columnFilters, LOG_FILTER_IDS.CREDENTIAL),
+        span_type: getFilterValue(columnFilters, LOG_FILTER_IDS.SPAN_TYPE),
+        model_id: getFilterValue(columnFilters, LOG_FILTER_IDS.MODEL_ID),
+        model_group: getFilterValue(columnFilters, LOG_FILTER_IDS.PUBLIC_MODEL_OR_SEARCH_TOOL),
+        key_alias: getFilterValue(columnFilters, LOG_FILTER_IDS.KEY_ALIAS),
+        error_code: getFilterValue(columnFilters, LOG_FILTER_IDS.ERROR_CODE),
+        error_message: getFilterValue(columnFilters, LOG_FILTER_IDS.ERROR_MESSAGE),
+        sort_by: sortBy,
+        sort_order: sortOrder,
+        exclude_internal_health_checks: excludeInternalHealthChecks,
+        group_by_session: true,
+        session_cursor: sessionCursor,
+      },
+    };
+  };
+
   const logsQueryOptions: UseQueryOptions<PaginatedResponse> = {
     queryKey: [
       "logs",
@@ -168,40 +205,7 @@ export function useLogFilterLogic({
         };
       }
 
-      const window = formatLogsWindow(startTime, endTime, isCustomDate);
-
-      const userIdFilter = getFilterValue(columnFilters, LOG_FILTER_IDS.USER_ID);
-
-      return await uiSpendLogsCall({
-        accessToken,
-        start_date: window.start_date,
-        end_date: window.end_date,
-        page: pagination.pageIndex + 1,
-        page_size: pageSize,
-        params: {
-          api_key: getFilterValue(columnFilters, LOG_FILTER_IDS.KEY_HASH),
-          team_id: getFilterValue(columnFilters, LOG_FILTER_IDS.TEAM_ID),
-          request_id: getFilterValue(columnFilters, LOG_FILTER_IDS.REQUEST_ID),
-          search: getFilterValue(columnFilters, LOG_FILTER_IDS.SEARCH),
-          session_id: getFilterValue(columnFilters, LOG_FILTER_IDS.SESSION_ID),
-          user_id: userIdFilter,
-          end_user: getFilterValue(columnFilters, LOG_FILTER_IDS.END_USER),
-          status_filter: getFilterValue(columnFilters, LOG_FILTER_IDS.STATUS),
-          cache_hit_filter: getFilterValue(columnFilters, LOG_FILTER_IDS.CACHE_STATUS),
-          used_client_oauth_token: getFilterValue(columnFilters, LOG_FILTER_IDS.CREDENTIAL),
-          span_type: getFilterValue(columnFilters, LOG_FILTER_IDS.SPAN_TYPE),
-          model_id: getFilterValue(columnFilters, LOG_FILTER_IDS.MODEL_ID),
-          model: getFilterValue(columnFilters, LOG_FILTER_IDS.PUBLIC_MODEL_OR_SEARCH_TOOL),
-          key_alias: getFilterValue(columnFilters, LOG_FILTER_IDS.KEY_ALIAS),
-          error_code: getFilterValue(columnFilters, LOG_FILTER_IDS.ERROR_CODE),
-          error_message: getFilterValue(columnFilters, LOG_FILTER_IDS.ERROR_MESSAGE),
-          sort_by: sortBy,
-          sort_order: sortOrder,
-          exclude_internal_health_checks: excludeInternalHealthChecks,
-          group_by_session: true,
-          session_cursor: sessionCursor,
-        },
-      });
+      return await uiSpendLogsCall(getRequestOptions());
     },
     enabled: !!accessToken && !!token && !!userRole && !!userID && activeTab === "request logs",
     refetchInterval: getLiveTailRefetchInterval(isLiveTail, pagination.pageIndex),
@@ -234,6 +238,7 @@ export function useLogFilterLogic({
   const { data: allTeams } = useQuery(allTeamsQueryOptions);
 
   return {
+    getRequestOptions,
     logsQuery,
     filteredLogs,
     allTeams,

@@ -1,5 +1,6 @@
 from collections.abc import Mapping, Sequence
-from typing import TYPE_CHECKING, Final
+from functools import partial
+from typing import TYPE_CHECKING, Final, NoReturn
 
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.proxy.auth.customer_hierarchy_auth import (
@@ -40,12 +41,15 @@ def app_scope(
     return customer_scope(key, entity_id, spend, budget).model_copy(
         update={
             "budget_limits": app_budget_limits(budget),
+            "soft_budget_duration": budget.budget_duration
+            if budget is not None and budget.soft_budget is not None
+            else None,
             **({"max_budget": None} if has_duration else {}),
         }
     )
 
 
-def raise_app_failure(error: AppFailure) -> None:
+def raise_app_failure(error: AppFailure) -> NoReturn:
     raise ProxyException(
         message=error.detail,
         type="auth_error",
@@ -63,7 +67,27 @@ async def authenticated_resource_id(
         case AppResourceType.PROJECT:
             return authenticated.project_id
         case AppResourceType.VIRTUAL_KEY:
-            return await store.key_resource_id(authenticated.token)
+            return authenticated.key_id or await store.key_resource_id(authenticated.token)
+
+
+def authenticated_resource_alias(
+    resource_type: AppResourceType, resource_id: str, authenticated: UserAPIKeyAuth
+) -> str | None:
+    match resource_type:
+        case AppResourceType.TEAM:
+            return (authenticated.team_alias or resource_id) if "team_alias" in authenticated.model_fields_set else None
+        case AppResourceType.PROJECT:
+            return (
+                (authenticated.project_alias or resource_id)
+                if "project_alias" in authenticated.model_fields_set
+                else None
+            )
+        case AppResourceType.VIRTUAL_KEY:
+            return (
+                (authenticated.key_alias or resource_id)
+                if authenticated.key_id is not None or "key_alias" in authenticated.model_fields_set
+                else None
+            )
 
 
 async def resolve_app_hierarchy(
@@ -96,7 +120,11 @@ async def resolve_app_hierarchy(
                 )
             )
         return hierarchy
-    app: Final = await store.by_resource(definition.resource_type, resource_id)
+    app: Final = await store.by_resource(
+        definition.resource_type,
+        resource_id,
+        authenticated_resource_alias(definition.resource_type, resource_id, authenticated),
+    )
     if app is None:
         if assertion is not None and assertion != resource_id:
             resource: Final = await store.resource(definition.resource_type, resource_id)
@@ -119,7 +147,31 @@ async def resolve_app_hierarchy(
         if hierarchy is not None and hierarchy.customer_member_id and org is not None
         else None
     )
+    from litellm.proxy.management_helpers.app_groups import AppGroupStore
+
+    groups: Final = AppGroupStore(store) if app.app_group_id is not None else None
+    group: Final = await groups.get(app.app_group_id) if groups is not None and app.app_group_id is not None else None
+    if isinstance(group, AppFailure):
+        raise_app_failure(group)
+    group_org: Final = (
+        await groups.organization(group.app_group_id, hierarchy.customer_org_id)
+        if groups is not None and group is not None and hierarchy is not None and hierarchy.customer_org_id
+        else None
+    )
     app_scopes: Final = (
+        *((app_scope("app_group", group.app_group_id, group.spend, group.budget),) if group is not None else ()),
+        *(
+            (
+                app_scope(
+                    "app_group_customer_org",
+                    app_scope_id(group_org.app_group_id, group_org.customer_org_id),
+                    group_org.spend,
+                    group_org.budget,
+                ),
+            )
+            if group_org is not None
+            else ()
+        ),
         app_scope("app", app.app_id, app.spend, app.budget),
         *(
             (
@@ -146,11 +198,15 @@ async def resolve_app_hierarchy(
             else ()
         ),
     )
-    app_hierarchy: Final = await current_customer_spend(CustomerHierarchyAuth(scopes=app_scopes), get_current_spend)
+    app_hierarchy: Final = await current_customer_spend(
+        CustomerHierarchyAuth(scopes=app_scopes),
+        partial(get_current_spend, recheck_recorded_spend=True),
+    )
     base: Final = hierarchy or CustomerHierarchyAuth(scopes=())
     combined: Final = base.model_copy(
         update={
             "app_id": app.app_id,
+            "app_group_id": app.app_group_id,
             "app_alias": app.alias,
             "app_customer_margin": app.customer_margin,
             "scopes": (*base.scopes, *app_hierarchy.scopes),

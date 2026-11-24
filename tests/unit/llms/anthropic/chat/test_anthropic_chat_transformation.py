@@ -5135,86 +5135,102 @@ def test_fast_mode_usage_calculation():
     assert usage.speed == "fast"
 
 
-def test_fast_mode_cost_calculation():
-    """
-    Test that fast mode applies the 'fast' multiplier from provider_specific_entry
-    on top of the base model cost (1.1x for claude-opus-4-6).
-    """
+_FAST_MODE_ROW: Final = {
+    "litellm_provider": "anthropic",
+    "mode": "chat",
+    "input_cost_per_token": 5e-06,
+    "output_cost_per_token": 2.5e-05,
+    "provider_specific_entry": {"fast": 1.1, "us": 1.2},
+}
 
+
+@pytest.mark.parametrize(
+    "served, multiplier",
+    [({"speed": "fast"}, 1.1), ({"speed": "fast", "inference_geo": "us"}, 1.1 * 1.2), ({"inference_geo": "US"}, 1.2)],
+    ids=["fast", "fast-and-us", "geo-is-case-folded"],
+)
+def test_fast_mode_and_inference_geo_multiply_the_row_rates(served: Mapping[str, str], multiplier: float):
+    """``speed: fast`` and ``inference_geo`` multiply both directions by the factors the row's
+    ``provider_specific_entry`` lists for them."""
+    from litellm.llms.anthropic.cost_calculation import cost_per_token
+    from litellm.types.utils import ModelInfo, Usage
+
+    row: Final = cast(ModelInfo, _FAST_MODE_ROW)
+    plain: Final = cost_per_token(
+        model="claude-opus-4-6", usage=Usage(prompt_tokens=1000, completion_tokens=1000), model_info=row
+    )
+    uplifted: Final = cost_per_token(
+        model="claude-opus-4-6",
+        usage=Usage(prompt_tokens=1000, completion_tokens=1000, **served),
+        model_info=row,
+    )
+
+    assert plain == (1000 * 5e-06, 1000 * 2.5e-05)
+    assert uplifted == pytest.approx((plain[0] * multiplier, plain[1] * multiplier), rel=1e-12)
+
+
+def test_an_unreadable_provider_specific_entry_drops_both_uplifts():
+    """Main's ``except Exception: pass`` around the uplifts: a geo factor ``float()`` rejects drops the speed
+    uplift too, so the call bills at the plain row rates."""
+    from litellm.llms.anthropic.cost_calculation import cost_per_token
+    from litellm.types.utils import ModelInfo, Usage
+
+    row: Final = cast(ModelInfo, {**_FAST_MODE_ROW, "provider_specific_entry": {"fast": 1.1, "us": "high"}})
+
+    assert cost_per_token(
+        model="claude-opus-4-6",
+        usage=Usage(prompt_tokens=1000, completion_tokens=1000, speed="fast", inference_geo="us"),
+        model_info=row,
+    ) == (1000 * 5e-06, 1000 * 2.5e-05)
+
+
+def test_a_reported_web_search_keeps_the_speed_uplift_of_an_overriding_row(monkeypatch: pytest.MonkeyPatch):
+    """``cost_per_token`` never bills the search fee, so a web search the usage reports must not change the price,
+    even when the catalog row the model names lists no search price."""
+    from litellm.llms.anthropic.cost_calculation import cost_per_token
+    from litellm.types.utils import ModelInfo, Usage
+
+    monkeypatch.setattr(litellm, "model_cost", {**litellm.model_cost, "claude-probe-unsearched": _FAST_MODE_ROW})
+    row: Final = cast(ModelInfo, {**_FAST_MODE_ROW, "provider_specific_entry": {"fast": 6.0}})
+
+    plain: Final = cost_per_token(
+        model="claude-probe-unsearched", usage=Usage(prompt_tokens=1000, completion_tokens=1000), model_info=row
+    )
+    searched: Final = cost_per_token(
+        model="claude-probe-unsearched",
+        usage=Usage(
+            prompt_tokens=1000, completion_tokens=1000, speed="fast", server_tool_use={"web_search_requests": 2}
+        ),
+        model_info=row,
+    )
+
+    assert searched == pytest.approx((plain[0] * 6.0, plain[1] * 6.0), rel=1e-12)
+
+
+def test_a_model_rust_leaves_to_python_still_bills_its_speed_uplift():
+    """A model only a ``fallback_generalizations`` rule prices is left to Python, which applies the rule's uplift."""
+    from litellm.litellm_core_utils.fallback_generalizations import (
+        get_fallback_generalization_rules,
+        set_fallback_generalizations,
+    )
     from litellm.llms.anthropic.cost_calculation import cost_per_token
     from litellm.types.utils import Usage
 
-    base_prompt = 0.005
-    base_completion = 0.025
-
-    with (
-        patch("litellm.llms.anthropic.cost_calculation.generic_cost_per_token") as mock_cost,
-        patch("litellm.get_model_info") as mock_info,
-    ):
-        mock_cost.return_value = (base_prompt, base_completion)
-        mock_info.return_value = {"provider_specific_entry": {"fast": 1.1, "us": 1.1}}
-
-        usage_fast = Usage(
-            prompt_tokens=1000,
-            completion_tokens=1000,
-            speed="fast",
+    previous: Final = list(get_fallback_generalization_rules())
+    rule: Final = {key: value for key, value in _FAST_MODE_ROW.items() if key != "litellm_provider"}
+    set_fallback_generalizations([{"name": "probe", "pattern": "^claude-probe-rule-", "model_info": rule}])
+    try:
+        plain: Final = cost_per_token(
+            model="claude-probe-rule-1", usage=Usage(prompt_tokens=1000, completion_tokens=1000)
         )
-
-        prompt_cost, completion_cost = cost_per_token(
-            model="claude-opus-4-6",
-            usage=usage_fast,
+        fast: Final = cost_per_token(
+            model="claude-probe-rule-1", usage=Usage(prompt_tokens=1000, completion_tokens=1000, speed="fast")
         )
+    finally:
+        set_fallback_generalizations(previous)
 
-        # generic_cost_per_token called with the plain base model name
-        mock_cost.assert_called_once()
-        assert mock_cost.call_args[1]["model"] == "claude-opus-4-6"
-        assert mock_cost.call_args[1]["custom_llm_provider"] == "anthropic"
-
-        # 1.1x multiplier applied
-        assert abs(prompt_cost - base_prompt * 1.1) < 1e-10
-        assert abs(completion_cost - base_completion * 1.1) < 1e-10
-
-
-def test_fast_mode_with_inference_geo():
-    """
-    Test that fast mode + inference_geo both apply their multipliers from
-    provider_specific_entry (1.1 * 1.1 = 1.21x for claude-opus-4-6).
-    """
-
-    from litellm.llms.anthropic.cost_calculation import cost_per_token
-    from litellm.types.utils import Usage
-
-    base_prompt = 0.005
-    base_completion = 0.025
-
-    with (
-        patch("litellm.llms.anthropic.cost_calculation.generic_cost_per_token") as mock_cost,
-        patch("litellm.get_model_info") as mock_info,
-    ):
-        mock_cost.return_value = (base_prompt, base_completion)
-        mock_info.return_value = {"provider_specific_entry": {"fast": 1.1, "us": 1.1}}
-
-        usage = Usage(
-            prompt_tokens=1000,
-            completion_tokens=1000,
-            speed="fast",
-            inference_geo="us",
-        )
-
-        prompt_cost, completion_cost = cost_per_token(
-            model="claude-opus-4-6",
-            usage=usage,
-        )
-
-        # generic_cost_per_token called with the plain base model name
-        mock_cost.assert_called_once()
-        assert mock_cost.call_args[1]["model"] == "claude-opus-4-6"
-        assert mock_cost.call_args[1]["custom_llm_provider"] == "anthropic"
-
-        # 1.1 (fast) * 1.1 (us) = 1.21x multiplier applied
-        expected_multiplier = 1.1 * 1.1
-        assert abs(prompt_cost - base_prompt * expected_multiplier) < 1e-10
-        assert abs(completion_cost - base_completion * expected_multiplier) < 1e-10
+    assert plain[0] > 0
+    assert fast == pytest.approx((plain[0] * 1.1, plain[1] * 1.1), rel=1e-12)
 
 
 def test_calculate_usage_captures_service_tier():
@@ -11799,3 +11815,21 @@ def test_modify_params_keeps_adaptive_thinking_when_tool_call_history_has_no_thi
     )
 
     assert request.get("thinking") == sent_thinking
+
+
+def test_transform_request_leaves_the_callers_extra_body_for_a_repeat_call() -> None:
+    optional_params: Final = {"max_tokens": 16, "extra_body": {"top_k": 5}}
+
+    requests: Final = tuple(
+        AnthropicConfig().transform_request(
+            model="claude-sonnet-5-5",
+            messages=[{"role": "user", "content": "Hello"}],
+            optional_params=optional_params,
+            litellm_params={},
+            headers={},
+        )
+        for _ in range(2)
+    )
+
+    assert [request.get("top_k") for request in requests] == [5, 5]
+    assert all("extra_body" not in request for request in requests)
