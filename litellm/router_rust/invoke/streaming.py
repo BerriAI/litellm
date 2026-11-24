@@ -141,6 +141,8 @@ class StreamAttempt:
     # attempt's failure blocks this one's report, the stream's own log of its failure does not.
     failure_logged_before: frozenset[str] = frozenset()
     counted_tokens: int = 0
+    # The provider the walk that opened this stream first sent the caller's key to, for a recovery walk to keep.
+    caller_key_origin: str | None = None
     outcome_reported: bool = False
     # The background recording of the stream's failure, which a same-group retry waits for so it
     # picks with the failed deployment already cooled down.
@@ -184,14 +186,25 @@ class StreamAttempt:
 
     async def fallback(self, trigger: BaseException, request: Mapping[str, object] | None = None) -> object:
         """The fallback walk for this stream's failure; raises when no fallback answers."""
-        return await self.core.recover_stream("fallback", self.op, request or self.request, self.origin(), trigger)
+        return await self.core.recover_stream(
+            "fallback",
+            self.op,
+            request or self.request,
+            self.origin(),
+            trigger,
+            caller_key_origin=self.caller_key_origin,
+        )
 
     def fallback_sync(self, trigger: BaseException) -> object:
-        return self.core.recover_stream_sync("fallback", self.op, self.request, self.origin(), trigger)
+        return self.core.recover_stream_sync(
+            "fallback", self.op, self.request, self.origin(), trigger, caller_key_origin=self.caller_key_origin
+        )
 
     async def retry(self, trigger: BaseException) -> "tuple[object, int, int] | BaseException":
         """A same-group retry: the retried response with the retry count and budget, or the newest failure."""
-        return await self.core.retry_stream(self.op, self.request, self.origin(), trigger)
+        return await self.core.retry_stream(
+            self.op, self.request, self.origin(), trigger, caller_key_origin=self.caller_key_origin
+        )
 
     # -- the stream's outcome, reported once when it ends --------------------------------------
 

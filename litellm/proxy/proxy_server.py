@@ -958,6 +958,7 @@ from litellm.redis.stores.connection import connect
 from litellm.redis.stores.spend_counters import (
     SPEND_COUNTERS_TARGET,
     SpendCounterStore,
+    is_rejected,
     is_unavailable,
 )
 from litellm.router import router_arguments
@@ -1014,6 +1015,9 @@ from litellm.proxy.openai_files_endpoints.files_endpoints import (
 )
 from litellm.proxy.openai_files_endpoints.files_endpoints import (
     set_files_config,
+)
+from litellm.proxy.pass_through_endpoints.llm_provider_handlers.openai_agents_turn_billing import (
+    openai_agents_turn_biller,
 )
 from litellm.proxy.pass_through_endpoints.openai_passthrough_endpoints import (
     router as openai_passthrough_router,
@@ -1478,6 +1482,7 @@ async def _flush_spend_around_logging_drain_on_shutdown(
     worker: LoggingWorker = GLOBAL_LOGGING_WORKER,
     clock: Callable[[], float] = time.monotonic,
     drain_tasks: Callable[[float], Awaitable[None]] = drain_logging_tasks,
+    drain_deferred_rows: Callable[[float], Awaitable[None]] = openai_agents_turn_biller.drain,
 ) -> None:
     await flush_spend()
     remaining: Final = GracefulShutdownManager.remaining(clock=clock)
@@ -1489,6 +1494,7 @@ async def _flush_spend_around_logging_drain_on_shutdown(
     )
 
     async def drain_callbacks() -> None:
+        await drain_deferred_rows(callback_timeout)
         await drain_tasks(callback_timeout)
         await worker.flush()
 
@@ -1501,6 +1507,7 @@ async def _flush_spend_around_logging_drain_on_shutdown(
         )
     finally:
         await worker.stop(discard_pending=True, timeout=GracefulShutdownManager.remaining(2.0, clock=clock))
+    await drain_deferred_rows(GracefulShutdownManager.remaining(5.0, clock=clock))
     await drain_tasks(GracefulShutdownManager.remaining(5.0, clock=clock))
     _ = await asyncio.gather(
         flush_spend(), _bounded_rust_flush(flush_rust, GracefulShutdownManager.remaining(clock=clock))
@@ -4111,7 +4118,7 @@ async def ensure_spend_counter_initialized(
             # DB unavailable - fall back to in-process cache (may be stale).
             base_spend: Final = await _get_source_cache_base_spend(source_cache_key=source_cache_key)
             if base_spend > 0:
-                await increment_spend_counter_cache(counter_key=counter_key, increment=base_spend)
+                await _seed_spend_counter_cache(counter_key=counter_key, spend=base_spend)
 
 
 _ensure_spend_counter_initialized: Final = ensure_spend_counter_initialized
@@ -4214,6 +4221,24 @@ async def increment_spend_counter_cache(counter_key: str, increment: float) -> f
 
 
 _increment_spend_counter_cache: Final = increment_spend_counter_cache
+
+
+@with_service_target(SPEND_COUNTERS_TARGET)
+async def _seed_spend_counter_cache(counter_key: str, spend: float) -> None:
+    try:
+        _ = await spend_counter_store.set_max(counter_key, spend)
+    except Exception as error:
+        if is_rejected(error):
+            # set_max is a Lua script; a Redis that refuses scripts still takes the plain increment.
+            await increment_spend_counter_cache(counter_key=counter_key, increment=spend)
+            return
+        # The script may have applied, so the counter is dropped everywhere, as a failed increment drops it.
+        await invalidate_spend_counter(counter_key)
+        raise
+    # The charge that follows is an INCRBYFLOAT, so the seed still ends with one: a counter that command cannot
+    # reach (a Redis Cluster slot mid-migration) fails here and is dropped on its own, as it was when the seed was
+    # that increment.
+    _ = await increment_spend_counter_cache(counter_key=counter_key, increment=0.0)
 
 
 @with_service_target(SPEND_COUNTERS_TARGET)
