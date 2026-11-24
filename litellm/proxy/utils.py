@@ -836,15 +836,25 @@ def _is_messages_route(user_api_key_dict: UserAPIKeyAuth) -> bool:
     return bool(call_types) and call_types[0] == CallTypes.anthropic_messages
 
 
-class _ReadBytesTap:
-    def __init__(self) -> None:
+class _ReadBytesTap(Generic[_T]):
+    __slots__ = ("_source", "_upstream", "read")
+
+    def __init__(self, upstream: AsyncIterable[_T]) -> None:
+        self._source: Final = upstream
+        self._upstream: Final = upstream.__aiter__()
         self.read: Final[list[bytes]] = []  # mutable-ok: appended while the stream is read
 
-    async def tap(self, stream: AsyncIterable[object]) -> AsyncGenerator[object, None]:
-        async for chunk in stream:
-            if isinstance(chunk, bytes):
-                self.read.append(chunk)
-            yield chunk
+    def __getattr__(self, name: str) -> object:
+        return _DELEGATED_ATTRIBUTE.validate_python(getattr(self._source, name))
+
+    def __aiter__(self) -> "_ReadBytesTap[_T]":
+        return self
+
+    async def __anext__(self) -> _T:
+        chunk: Final = await self._upstream.__anext__()
+        if isinstance(chunk, bytes):
+            self.read.append(chunk)
+        return chunk
 
 
 def _pipelines_stream_live(pipelines: Sequence[tuple[str, "GuardrailPipeline"]]) -> bool:
@@ -5363,8 +5373,9 @@ class ProxyLogging:
         )
         if drops_token_ids:
             _drop_built_stream_token_ids(request_data)
-        read_tap: Final = _ReadBytesTap() if _is_messages_route(user_api_key_dict) else None
-        source: Final = response if read_tap is None else read_tap.tap(response)  # pyright: ignore[reportUnknownVariableType, reportUnknownArgumentType]  # the hook's response parameter is untyped
+        upstream: Final = cast(AsyncIterable[object], response)  # cast-ok: the hook's response parameter is untyped
+        read_tap: Final = _ReadBytesTap(upstream) if _is_messages_route(user_api_key_dict) else None
+        source: Final = upstream if read_tap is None else read_tap
         current_response = _without_token_id_only_chunks(source) if drops_token_ids else source
         guarded_layers: Final[list[AsyncGenerator[object, None]]] = []  # mutable-ok: closed on disconnect
         for resolved_callback, kind in running_overrides:
@@ -5502,7 +5513,7 @@ class ProxyLogging:
 
     async def _pipeline_gated_stream(
         self,
-        response: "AsyncGenerator[object, None]",
+        response: AsyncIterable[object],
         user_api_key_dict: UserAPIKeyAuth,
         request_data: dict[str, object],  # mutable-ok: same request-payload shape the hooks mutate
         pipelines: "tuple[tuple[str, GuardrailPipeline], ...]",
@@ -5575,7 +5586,7 @@ class ProxyLogging:
 
     async def _pipeline_scanned_live_stream(
         self,
-        response: "AsyncGenerator[object, None]",
+        response: AsyncIterable[object],
         user_api_key_dict: UserAPIKeyAuth,
         request_data: dict[str, object],  # mutable-ok: same request-payload shape the hooks mutate
         pipelines: "tuple[tuple[str, GuardrailPipeline], ...]",
@@ -5796,7 +5807,8 @@ class ProxyLogging:
         request_data: Mapping[str, object], error: Exception, read: tuple[bytes, ...]
     ) -> bool:
         """Drop the success log of a /v1/messages byte stream that ends in an error ``post_call_failure_hook`` logs
-        as a failure, parked or still to come at teardown, and bill the bytes it read on the failure row instead.
+        as a failure, parked or still to come at teardown, and bill the stream on the failure row instead: a native
+        provider stream is stopped and billed for every chunk it sent, any other for the bytes the hooks read.
         Returns False when the error is not one, or when the stream parked an assembled chat response instead,
         so the caller handles it as a chat stream."""
         from litellm.litellm_core_utils.asyncify import asyncify
@@ -5818,6 +5830,11 @@ class ProxyLogging:
         logging_obj.refuse_stream_success()
         logging_obj._on_deferred_stream_complete = None  # pyright: ignore[reportAttributeAccessIssue]  # slot parked by the stream iterators
         logging_obj._deferred_stream_complete_args = None  # pyright: ignore[reportAttributeAccessIssue]  # slot parked by the stream iterators
+        stop_provider_stream: Final = logging_obj.on_stream_refused
+        logging_obj.on_stream_refused = None
+        if stop_provider_stream is not None:
+            await stop_provider_stream()
+            return True
         pricing_request: Final[Mapping[str, object]] = (
             {"speed": request_data["speed"]} if "speed" in request_data else {}
         )

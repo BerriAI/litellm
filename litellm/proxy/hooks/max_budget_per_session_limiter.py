@@ -16,6 +16,7 @@ Follows the same pattern as max_iterations_limiter.py.
 
 import logging
 import os
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final
 
 from pydantic import ConfigDict, TypeAdapter
@@ -229,6 +230,11 @@ class _PROXY_MaxBudgetPerSessionHandler(CustomLogger):
                 "MaxBudgetPerSessionHandler: error in async_log_success_event: %s",
                 str(e),
             )
+
+    async def async_log_failure_event(
+        self, kwargs: Mapping[str, object], response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        await self.async_log_success_event(kwargs, response_obj, start_time, end_time)  # pyright: ignore[reportUnknownMemberType]  # the success hook keeps CustomLogger's unannotated signature
 
     def _get_session_id(self, data: dict) -> str | None:
         """Extract session_id from request metadata."""

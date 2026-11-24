@@ -1288,6 +1288,7 @@ class Logging(LiteLLMLoggingBaseClass):
         self._async_success_enqueued: bool = False
         self._sync_success_scheduled: bool = False
         self.on_detached_stream_failure: Callable[[Logging, Exception], Awaitable[None]] | None = None
+        self.on_stream_refused: Callable[[], Awaitable[None]] | None = None
         self._stream_failure_claimed: bool = False
         self._stream_success_refused: bool = False
         self._holding_stream_failure: bool = False

@@ -1,5 +1,6 @@
 import asyncio
 import contextlib
+import functools
 import json
 import math
 import re
@@ -549,7 +550,7 @@ class BaseAnthropicMessagesStreamingIterator:
     def __init__(
         self,
         litellm_logging_obj: LiteLLMLoggingObj,
-        request_body: dict,
+        request_body: dict[str, object],
     ):
         self.litellm_logging_obj = litellm_logging_obj
         self.request_body = request_body
@@ -672,12 +673,17 @@ class BaseAnthropicMessagesStreamingIterator:
         )
         client_detached: Final = asyncio.Event()
         drain_deadline: Final = anyio.CancelScope()
+        collected_chunks: Final[list[bytes]] = []  # mutable-ok: SSE billing buffer the pump appends to across the drain
 
         pump_task: Final = asyncio.create_task(
-            self._pump_upstream_to_queue(completion_stream, queue, client_detached, drain_deadline)
+            self._pump_upstream_to_queue(completion_stream, queue, client_detached, drain_deadline, collected_chunks)
         )
         _UPSTREAM_PUMP_TASKS.add(pump_task)
         pump_task.add_done_callback(_UPSTREAM_PUMP_TASKS.discard)
+        stop_on_refusal: Final = functools.partial(
+            self._stop_refused_stream, pump_task, client_detached, drain_deadline, collected_chunks
+        )
+        self.litellm_logging_obj.on_stream_refused = stop_on_refusal
 
         reached_end = False  # rebind-ok: flipped once the relay consumes the end-of-stream sentinel
         relayed_terminal_event = False  # rebind-ok: flipped once a message_stop or error event reaches the client
@@ -698,8 +704,33 @@ class BaseAnthropicMessagesStreamingIterator:
         finally:
             client_detached.set()
             _start_detached_drain_deadline(drain_deadline)
+            if self.litellm_logging_obj.on_stream_refused is stop_on_refusal:
+                self.litellm_logging_obj.on_stream_refused = None
             if not reached_end:
                 self._dispatch_pending_deferred_logging()
+
+    async def _stop_refused_stream(
+        self,
+        pump_task: "asyncio.Task[None]",
+        client_detached: asyncio.Event,
+        drain_deadline: anyio.CancelScope,
+        collected_chunks: Sequence[bytes],
+    ) -> None:
+        """A post-call hook refused this stream, so nobody reads the rest of it: stop the provider stream, which
+        stops it generating, and bill every chunk the provider sent on the failure log."""
+        from litellm.litellm_core_utils.asyncify import asyncify
+        from litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passthrough_logging_handler import (
+            AnthropicPassthroughLoggingHandler,
+        )
+
+        client_detached.set()
+        drain_deadline.cancel()
+        await asyncio.wait((pump_task,))
+        await asyncify(AnthropicPassthroughLoggingHandler.record_partial_usage_for_failure)(
+            litellm_logging_obj=self.litellm_logging_obj,
+            request_body=self.request_body or {},
+            all_chunks=tuple(collected_chunks),
+        )
 
     def _dispatch_pending_deferred_logging(self) -> None:
         """Fire deferred billing that a torn-down response would otherwise drop.
@@ -787,9 +818,10 @@ class BaseAnthropicMessagesStreamingIterator:
         finally:
             if not detached_task.done():
                 detached_task.cancel()
+            if not put_task.done():
+                put_task.cancel()
         if put_task.done() and not put_task.cancelled():
             return True
-        put_task.cancel()
         client_detached.set()
         return False
 
@@ -799,6 +831,7 @@ class BaseAnthropicMessagesStreamingIterator:
         queue: "asyncio.Queue[bytes | None | BaseException]",
         client_detached: "asyncio.Event",
         drain_deadline: anyio.CancelScope,
+        collected_chunks: list[bytes],  # mutable-ok: SSE billing buffer appended to across the drain
     ) -> None:
         """Drain the whole upstream into ``queue`` (backpressured) and bill once.
 
@@ -812,7 +845,6 @@ class BaseAnthropicMessagesStreamingIterator:
         """
         from litellm._logging import verbose_proxy_logger
 
-        collected_chunks: Final[list[bytes]] = []  # mutable-ok: SSE billing buffer appended to across the drain
         saw_terminal_event = False  # rebind-ok: accumulates across the upstream loop
         draining_detached = False  # rebind-ok: set once this pump claims a detached-drain slot
         over_drain_cap = False  # rebind-ok: set when no detached-drain slot is free

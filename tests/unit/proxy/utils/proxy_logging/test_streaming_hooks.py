@@ -334,6 +334,29 @@ async def test_wrap_streaming_iterator_missing_attribute_still_raises(proxy_logg
     assert request_data["metadata"]["applied_guardrails"] == ["hook-bug"]
 
 
+@pytest.mark.asyncio
+async def test_messages_stream_hook_reads_upstream_attributes(proxy_logging, make_user_api_key_auth, monkeypatch):
+    class _ModelIdTagger(CustomLogger):
+        async def async_post_call_streaming_iterator_hook(
+            self, user_api_key_dict: UserAPIKeyAuth, response: AsyncIterator[object], request_data: dict[str, object]
+        ) -> AsyncGenerator[object, None]:
+            async for chunk in response:
+                yield f"{response._hidden_params['model_id']}:{chunk}"
+
+    monkeypatch.setattr(litellm, "callbacks", [_ModelIdTagger()])
+
+    served = [
+        chunk
+        async for chunk in proxy_logging.async_post_call_streaming_iterator_hook(
+            response=_AttributeStream(),
+            user_api_key_dict=make_user_api_key_auth(request_route="/v1/messages"),
+            request_data={"metadata": {}},
+        )
+    ]
+
+    assert served == ["m-1:chunk-1", "m-1:chunk-2"]
+
+
 # ---------------------------------------------------------------------------
 # async_post_call_streaming_hook
 # ---------------------------------------------------------------------------
