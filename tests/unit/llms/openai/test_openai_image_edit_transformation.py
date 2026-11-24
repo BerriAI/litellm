@@ -1,10 +1,12 @@
 from datetime import datetime
 from io import BufferedReader, BytesIO
+from pathlib import Path
 from typing import Dict, Final
 
 import httpx
 import pytest
 
+import litellm
 from litellm import image_edit
 from litellm.images.utils import ImageEditRequestUtils
 from litellm.litellm_core_utils.litellm_logging import Logging
@@ -408,6 +410,41 @@ def test_transform_image_edit_request_unpacks_markup_tuples(
     assert markup_part[1] == expected_part
 
 
+def test_transform_image_edit_request_detects_content_type_of_a_two_part_tuple(
+    image_edit_config: OpenAIImageEditConfig,
+) -> None:
+    jpeg_bytes: Final = b"\xff\xd8\xff\xe0\x00\x10JFIF\x00"
+    _, files = image_edit_config.transform_image_edit_request(
+        model="gpt-image-2.5-flare",
+        prompt="Apply the marked changes",
+        image=[b"\x89PNG\r\n\x1a\n"],
+        image_edit_optional_request_params={"markup": ("overlay.jpg", jpeg_bytes)},
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    markup_parts: Final = [part for field_name, part in files if field_name == "markup"]
+    assert markup_parts == [("overlay.jpg", jpeg_bytes, "image/jpeg")]
+
+
+def test_transform_image_edit_request_names_an_unnamed_tuple_after_its_open_file(
+    image_edit_config: OpenAIImageEditConfig, tmp_path: Path
+) -> None:
+    overlay_path: Final = tmp_path / "overlay.png"
+    overlay_path.write_bytes(b"\x89PNG\r\n\x1a\n")
+    with overlay_path.open("rb") as overlay:
+        _, files = image_edit_config.transform_image_edit_request(
+            model="gpt-image-2.5-flare",
+            prompt="Apply the marked changes",
+            image=[b"\x89PNG\r\n\x1a\n"],
+            image_edit_optional_request_params={"markup": (None, overlay)},
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+        markup_parts: Final = [part for field_name, part in files if field_name == "markup"]
+        assert markup_parts == [(str(overlay_path), overlay, "image/png")]
+
 
 def test_transform_image_edit_request_unpacks_mask_tuple(
     image_edit_config: OpenAIImageEditConfig,
@@ -425,6 +462,42 @@ def test_transform_image_edit_request_unpacks_mask_tuple(
     mask_part: Final = next((f for f in files if f[0] == "mask"), None)
     assert mask_part is not None
     assert mask_part[1] == ("cutout", b"\x89PNG\r\n\x1a\n", "image/png")
+
+
+def test_transform_image_edit_request_sends_first_file_of_a_markup_list(
+    image_edit_config: OpenAIImageEditConfig,
+) -> None:
+    """A markup list sends its first file as the single markup part, the way a mask list does."""
+    _, files = image_edit_config.transform_image_edit_request(
+        model="gpt-image-2.5-flare",
+        prompt="Apply the marked changes",
+        image=[b"\x89PNG\r\n\x1a\n"],
+        image_edit_optional_request_params={
+            "markup": [("overlay.png", b"\x89PNG\r\n\x1a\n"), ("ignored.png", b"\x89PNG\r\n\x1a\n")]
+        },
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    markup_parts: Final = [part for field_name, part in files if field_name == "markup"]
+    assert markup_parts == [("overlay.png", b"\x89PNG\r\n\x1a\n", "image/png")]
+
+
+@pytest.mark.parametrize("field_name", ["mask", "markup"])
+def test_transform_image_edit_request_rejects_json_image_reference_as_bad_request(
+    image_edit_config: OpenAIImageEditConfig, field_name: str
+) -> None:
+    """A JSON image reference cannot be a multipart file part, so the caller gets a 400 instead of a failed send."""
+    with pytest.raises(litellm.BadRequestError, match=f"'{field_name}' must be an uploaded image file"):
+        image_edit_config.transform_image_edit_request(
+            model="gpt-image-2.5-flare",
+            prompt="Apply the marked changes",
+            image=[b"\x89PNG\r\n\x1a\n"],
+            image_edit_optional_request_params={field_name: {"image_url": "https://images.example/overlay.png"}},
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
 
 @pytest.mark.asyncio
 async def test_aimage_edit_sends_markup_as_multipart_file_not_repr() -> None:
