@@ -179,39 +179,41 @@ const CacheDashboard: React.FC<CachePageProps> = ({ accessToken, token, userRole
         <PageHeaderDescription>{t("shell.pageDescriptions.caching")}</PageHeaderDescription>
       </PageHeader>
       <Tabs defaultValue="analytics" className="w-full gap-2">
-        <div className="flex w-full items-center justify-between gap-2 border-b">
-          <div className="-mb-1.5 min-w-0 overflow-x-auto pb-1.5">
-            <TabsList variant="line" className="h-auto rounded-none p-0">
-              <TabsTrigger value="analytics" className="flex-none rounded-none px-4 py-2">
-                {t("caching.dashboard.tabs.analytics")}
-              </TabsTrigger>
-              <TabsTrigger value="health" className="flex-none rounded-none px-4 py-2">
-                {t("caching.dashboard.tabs.health")}
-              </TabsTrigger>
-              <TabsTrigger value="settings" className="flex-none rounded-none px-4 py-2">
-                {t("caching.dashboard.tabs.settings")}
-              </TabsTrigger>
-              <TabsTrigger value="coordination" className="flex-none rounded-none px-4 py-2">
-                {t("caching.dashboard.tabs.coordination")}
-              </TabsTrigger>
-            </TabsList>
-          </div>
+        <div className="@container w-full border-b">
+          <div className="flex flex-col-reverse gap-2 @3xl:flex-row @3xl:items-center @3xl:justify-between">
+            <div className="-mb-1.5 min-w-0 overflow-x-auto pb-1.5">
+              <TabsList variant="line" className="h-auto rounded-none p-0">
+                <TabsTrigger value="analytics" className="flex-none rounded-none px-4 py-2">
+                  {t("caching.dashboard.tabs.analytics")}
+                </TabsTrigger>
+                <TabsTrigger value="health" className="flex-none rounded-none px-4 py-2">
+                  {t("caching.dashboard.tabs.health")}
+                </TabsTrigger>
+                <TabsTrigger value="settings" className="flex-none rounded-none px-4 py-2">
+                  {t("caching.dashboard.tabs.settings")}
+                </TabsTrigger>
+                <TabsTrigger value="coordination" className="flex-none rounded-none px-4 py-2">
+                  {t("caching.dashboard.tabs.coordination")}
+                </TabsTrigger>
+              </TabsList>
+            </div>
 
-          <div className="flex shrink-0 items-center space-x-2">
-            {lastRefreshed && (
-              <p className="text-sm text-muted-foreground">
-                {t("caching.dashboard.lastRefreshed")}
-                {lastRefreshed}
-              </p>
-            )}
-            <Button
-              variant="outline"
-              size="icon-sm"
-              onClick={handleRefreshClick}
-              aria-label={t("caching.dashboard.refresh")}
-            >
-              <RefreshCw />
-            </Button>
+            <div className="flex shrink-0 items-center justify-end space-x-2">
+              {lastRefreshed && (
+                <p className="text-sm text-muted-foreground">
+                  {t("caching.dashboard.lastRefreshed")}
+                  {lastRefreshed}
+                </p>
+              )}
+              <Button
+                variant="outline"
+                size="icon-sm"
+                onClick={handleRefreshClick}
+                aria-label={t("caching.dashboard.refresh")}
+              >
+                <RefreshCw />
+              </Button>
+            </div>
           </div>
         </div>
 
