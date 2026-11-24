@@ -4890,6 +4890,12 @@ def has_catalog_entry(model: str, custom_llm_provider: str | None) -> bool:
     return catalog_entry(model, custom_llm_provider) is not None
 
 
+def _declared_reasoning_efforts(model_info: Mapping[str, object] | None) -> tuple[str, ...]:
+    from litellm.router_utils.reasoning_effort_capability import declared_reasoning_efforts
+
+    return (declared_reasoning_efforts(model_info) if model_info is not None else None) or ()
+
+
 def _map_params_with_provider_config(
     provider_config: BaseConfig,
     *,
@@ -4898,6 +4904,7 @@ def _map_params_with_provider_config(
     optional_params: dict[str, object],  # mutable-ok: map_openai_params fills and returns the caller's dict
     model: str,
     drop_params: bool,
+    model_info: Mapping[str, object] | None,
     base_model: str | None,
     allowed_openai_params: Sequence[str] | None,
 ) -> dict[str, object]:  # mutable-ok: get_optional_params keeps building on the mapped params
@@ -4907,7 +4914,17 @@ def _map_params_with_provider_config(
             optional_params=optional_params,
             model=model,
             drop_params=drop_params,
+            declared_reasoning_efforts=_declared_reasoning_efforts(model_info),
             base_model=base_model,
+            allowed_openai_params=allowed_openai_param_names(allowed_openai_params),
+        )
+    if isinstance(provider_config, litellm.OpenAIConfig):
+        return provider_config.map_openai_params(  # pyright: ignore[reportUnknownMemberType]  # the request params arrive as a bare dict
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model=model,
+            drop_params=drop_params,
+            declared_reasoning_efforts=_declared_reasoning_efforts(model_info),
             allowed_openai_params=allowed_openai_param_names(allowed_openai_params),
         )
     from litellm.llms.openai_like.dynamic_config import MapsAllowedOpenAIParams
@@ -5444,11 +5461,22 @@ def get_optional_params(
             drop_params=bool(drop_params),
         )
     elif custom_llm_provider == "openai":
-        optional_params = litellm.OpenAIConfig().map_openai_params(
-            non_default_params=non_default_params,
-            optional_params=optional_params,
-            model=model,
-            drop_params=bool(drop_params),
+        optional_params = (
+            litellm.openaiOSeriesConfig.map_openai_params(  # pyright: ignore[reportUnknownMemberType]  # the request params arrive as a bare dict
+                non_default_params=non_default_params,
+                optional_params=optional_params,
+                model=model,
+                drop_params=bool(drop_params),
+                declared_reasoning_efforts=_declared_reasoning_efforts(model_info),
+                allowed_openai_params=allowed_openai_param_names(allowed_openai_params),
+            )
+            if litellm.openaiOSeriesConfig.is_model_o_series_model(model=model)
+            else litellm.OpenAIConfig().map_openai_params(
+                non_default_params=non_default_params,
+                optional_params=optional_params,
+                model=model,
+                drop_params=bool(drop_params),
+            )
         )
     elif custom_llm_provider == "nebius":
         optional_params = litellm.NebiusConfig().map_openai_params(
@@ -5465,6 +5493,8 @@ def get_optional_params(
                 optional_params=optional_params,
                 model=_azure_detection_model,
                 drop_params=bool(drop_params),
+                declared_reasoning_efforts=_declared_reasoning_efforts(model_info),
+                allowed_openai_params=allowed_openai_param_names(allowed_openai_params),
             )
         elif litellm.AzureOpenAIGPT5Config.is_model_gpt_5_model(model=_azure_detection_model):
             optional_params = litellm.AzureOpenAIGPT5Config().map_openai_params(
@@ -5500,6 +5530,7 @@ def get_optional_params(
             optional_params=optional_params,
             model=model,
             drop_params=bool(drop_params),
+            model_info=model_info,
             base_model=base_model,
             allowed_openai_params=allowed_openai_params,
         )

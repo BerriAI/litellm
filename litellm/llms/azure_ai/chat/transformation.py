@@ -251,6 +251,7 @@ class AzureAIStudioConfig(OpenAIConfig):
         model: str,
         drop_params: bool,
         *,
+        declared_reasoning_efforts: Collection[str] | None = None,
         base_model: str | None = None,
         allowed_openai_params: Collection[str] = (),
     ) -> dict[str, object]:  # mutable-ok: OpenAIConfig.map_openai_params signature
@@ -274,6 +275,8 @@ class AzureAIStudioConfig(OpenAIConfig):
                 optional_params=optional_params,
                 model=model,
                 drop_params=drop_params,
+                declared_reasoning_efforts=declared_reasoning_efforts,
+                allowed_openai_params=allowed_openai_params,
             ),
             **foundry_effort,
         }
