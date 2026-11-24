@@ -1015,6 +1015,9 @@ from litellm.proxy.openai_files_endpoints.files_endpoints import (
 from litellm.proxy.openai_files_endpoints.files_endpoints import (
     set_files_config,
 )
+from litellm.proxy.pass_through_endpoints.llm_provider_handlers.openai_agents_turn_billing import (
+    openai_agents_turn_biller,
+)
 from litellm.proxy.pass_through_endpoints.openai_passthrough_endpoints import (
     router as openai_passthrough_router,
 )
@@ -1478,6 +1481,7 @@ async def _flush_spend_around_logging_drain_on_shutdown(
     worker: LoggingWorker = GLOBAL_LOGGING_WORKER,
     clock: Callable[[], float] = time.monotonic,
     drain_tasks: Callable[[float], Awaitable[None]] = drain_logging_tasks,
+    drain_deferred_rows: Callable[[float], Awaitable[None]] = openai_agents_turn_biller.drain,
 ) -> None:
     await flush_spend()
     remaining: Final = GracefulShutdownManager.remaining(clock=clock)
@@ -1489,6 +1493,7 @@ async def _flush_spend_around_logging_drain_on_shutdown(
     )
 
     async def drain_callbacks() -> None:
+        await drain_deferred_rows(callback_timeout)
         await drain_tasks(callback_timeout)
         await worker.flush()
 
@@ -1501,6 +1506,7 @@ async def _flush_spend_around_logging_drain_on_shutdown(
         )
     finally:
         await worker.stop(discard_pending=True, timeout=GracefulShutdownManager.remaining(2.0, clock=clock))
+    await drain_deferred_rows(GracefulShutdownManager.remaining(5.0, clock=clock))
     await drain_tasks(GracefulShutdownManager.remaining(5.0, clock=clock))
     _ = await asyncio.gather(
         flush_spend(), _bounded_rust_flush(flush_rust, GracefulShutdownManager.remaining(clock=clock))
@@ -2058,6 +2064,11 @@ async def _proxy_lifespan(app: FastAPI, resources: AsyncExitStack) -> AsyncGener
         redis_usage_cache=redis_usage_cache,
     )
     register_prompt_cache_alerts(general_settings_view(), prisma_client, resources)
+
+    from litellm.proxy.common_utils.ldap_sync import ldap_sync_settings
+
+    if prisma_client is None and ldap_sync_settings(general_settings_view()) is not None:
+        raise ValueError("ldap_sync requires a database")
 
     ### START BATCH WRITING DB + CHECKING NEW MODELS###
     worker_heartbeat: Final = (
@@ -11735,6 +11746,19 @@ class ProxyStartupEvent:
         )
 
         await cls._initialize_spend_tracking_background_jobs(scheduler=scheduler)
+
+        from litellm.proxy.common_utils.ldap_sync import initialize_ldap_sync, ldap_sync_settings
+
+        ldap_settings: Final = ldap_sync_settings(general_settings_view())
+        if ldap_settings is not None:
+            initialize_ldap_sync(
+                scheduler=scheduler,
+                settings=ldap_settings,
+                prisma_client=prisma_client,
+                pod_lock_manager=proxy_logging_obj.db_spend_update_writer.pod_lock_manager,
+                user_api_key_cache=user_api_key_cache,
+                proxy_logging_obj=proxy_logging_obj,
+            )
 
         cls._initialize_spend_capture_rate_check_job(
             scheduler=scheduler,

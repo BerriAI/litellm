@@ -113,6 +113,7 @@ from litellm.llms.anthropic.messages.safeguards import (
 from litellm.llms.anthropic.messages.utils import is_reasoning_auto_summary_enabled
 from litellm.llms.anthropic.wif import get_anthropic_wif_token
 from litellm.llms.base_llm.anthropic_messages.transformation import BaseAnthropicMessagesConfig
+from litellm.llms.base_llm.auth.provider_oauth import provider_oauth_token
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.bedrock.common_utils import (
     ensure_bedrock_anthropic_messages_tool_names,  # pyright: ignore[reportUnknownVariableType]  # takes an untyped request dict
@@ -138,7 +139,12 @@ from litellm.secret_managers.main import get_secret_str
 from litellm.types.integrations.custom_logger import WEBSEARCH_CONVERTED_STREAM_KEY
 from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicMessagesResponse
 from litellm.types.router import GenericLiteLLMParams
-from litellm.types.utils import CallTypes, ProviderSpecificHeader, anthropic_wif_litellm_params
+from litellm.types.utils import (
+    CallTypes,
+    ProviderSpecificHeader,
+    anthropic_wif_litellm_params,
+    provider_oauth_litellm_params,
+)
 from litellm.utils import clamp_max_tokens, get_base_model_from_metadata
 
 _RaisedT = TypeVar("_RaisedT", bound=Exception)
@@ -146,6 +152,7 @@ _METADATA: Final = TypeAdapter(dict[str, object])
 _BODY_FIELDS: Final = frozenset(_native.messages_optional_params())
 
 WORKLOAD_IDENTITY_FIELDS: Final = anthropic_wif_litellm_params
+ANTHROPIC_AUTH_FIELDS: Final = (*WORKLOAD_IDENTITY_FIELDS, *provider_oauth_litellm_params)
 
 
 @dataclass(frozen=True, slots=True)
@@ -1961,6 +1968,10 @@ _ENTRA_SCOPE: Final = "https://cognitiveservices.azure.com/.default"
 def workload_identity_token(params: Mapping[str, object], api_base: str | None) -> str | None:
     litellm_params: Final = GenericLiteLLMParams(**params)
     return get_anthropic_wif_token(dict(litellm_params), api_base, "")
+
+
+def client_credentials_token(params: Mapping[str, object], api_base: str | None, model: str) -> str | None:
+    return provider_oauth_token(params, api_base=api_base, provider="anthropic", model=model)
 
 
 class RawTransportFailure(Exception):

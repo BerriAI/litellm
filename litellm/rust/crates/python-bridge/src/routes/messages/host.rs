@@ -373,12 +373,12 @@ fn global_drop_params(py: Python<'_>) -> PyResult<bool> {
     Ok(module_global(py, "drop_params")?.is_some_and(|value| value.is(PyBool::new(py, true))))
 }
 
-fn workload_identity_fields(py: Python<'_>) -> PyResult<&'static [String]> {
+fn anthropic_auth_fields(py: Python<'_>) -> PyResult<&'static [String]> {
     static FIELDS: PyOnceLock<Vec<String>> = PyOnceLock::new();
     FIELDS
         .get_or_try_init(py, || {
             py.import(ROUTE_HOST_MODULE)?
-                .getattr("WORKLOAD_IDENTITY_FIELDS")?
+                .getattr("ANTHROPIC_AUTH_FIELDS")?
                 .extract()
         })
         .map(Vec::as_slice)
@@ -852,7 +852,7 @@ impl MessagesPythonHost {
             },
         };
         let provider_fields: Vec<&str> = match custom_llm_provider.as_deref() {
-            Some(FEDERATING_PROVIDER) => workload_identity_fields(py)?
+            Some(FEDERATING_PROVIDER) => anthropic_auth_fields(py)?
                 .iter()
                 .map(String::as_str)
                 .collect(),
