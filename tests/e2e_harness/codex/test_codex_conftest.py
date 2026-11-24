@@ -41,7 +41,9 @@ def test_a_codex_test_is_rerun_once_after_a_failed_assertion_or_a_configured_err
     for name, error in SUITE_FILES:
         _ = (pytester.path / name).write_text(FAILS_ONCE.format(error=error))
 
-    run: Final = pytester.runpytest_subprocess("-p", "no:cacheprovider", "-p", "no:asyncio", "-rA")
+    run: Final = pytester.runpytest_subprocess(
+        "-p", "no:cacheprovider", "-p", "no:asyncio", "-p", "no:pytest-retry", "-rA"
+    )
 
     run.assert_outcomes(passed=2, failed=2)
     assert run.parseoutcomes()["rerun"] == 2
