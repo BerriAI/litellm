@@ -33,7 +33,7 @@ class BaseRerankConfig(ABC):
     def transform_rerank_request(
         self,
         model: str,
-        optional_rerank_params: dict,
+        optional_rerank_params: dict[str, object],
         headers: dict[str, object],
         litellm_params: dict[str, object] | None = None,
     ) -> dict:

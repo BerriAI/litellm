@@ -9349,7 +9349,7 @@ def speech(
     organization: str | None = None,
     project: str | None = None,
     max_retries: int | None = None,
-    metadata: dict | None = None,
+    metadata: dict[str, object] | None = None,
     timeout: float | httpx.Timeout | openai.Timeout | None = None,
     response_format: str | None = None,
     speed: int | None = None,
