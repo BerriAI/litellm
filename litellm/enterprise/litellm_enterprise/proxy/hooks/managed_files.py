@@ -224,18 +224,24 @@ def _chat_message_file_id(part: object, role: str) -> str | None:
     return source.url
 
 
+_FILE_ACCESS_PART_ROLES: Final = {"system": "user", "developer": "user"}
+
+
+def _gemini_assistant_image_file_id(image: object) -> str | None:
+    fields: Final = as_str_mapping(image)
+    if fields is None:
+        return None
+    raw_image_url: Final = fields.get("image_url")
+    url: Final = raw_image_url if isinstance(raw_image_url, str) else (as_str_mapping(raw_image_url) or {}).get("url")
+    return url if isinstance(url, str) and url.startswith(GEMINI_FILES_API_URI_PREFIXES) else None
+
+
 def _gemini_assistant_image_file_ids(value: object) -> Iterator[str]:
     images: Final = as_object_list(value)
     if images is None:
         return
     for image in images:
-        if (fields := as_str_mapping(image)) is None:
-            continue
-        raw_image_url: Final = fields.get("image_url")
-        url: Final = (
-            raw_image_url if isinstance(raw_image_url, str) else (as_str_mapping(raw_image_url) or {}).get("url")
-        )
-        if isinstance(url, str) and url.startswith(GEMINI_FILES_API_URI_PREFIXES):
+        if (url := _gemini_assistant_image_file_id(image)) is not None:
             yield url
 
 
@@ -2053,9 +2059,8 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                 content, (str, Mapping)
             ):
                 continue
-            part_role: Final = "user" if role in ("system", "developer") else role
             for part in content:
-                if (file_id := _chat_message_file_id(part, part_role)) is not None:
+                if (file_id := _chat_message_file_id(part, _FILE_ACCESS_PART_ROLES.get(role, role))) is not None:
                     yield file_id
 
     def get_file_ids_from_responses_input(self, input: Union[str, List[Dict[str, object]]]) -> List[str]:
