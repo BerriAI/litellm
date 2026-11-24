@@ -92,7 +92,7 @@ pub async fn build_inference(
     let catalog = Catalog::parse(BUNDLED_REGISTRY)?.value;
     let (router, shaping) = boot::router(config, &catalog).await?;
     let deployments = router.registry().deployments(&DeploymentFilter::default());
-    let windows = host::Windows::read(&catalog, &deployments).await;
+    let windows = host::ContextWindows::read(&catalog, &deployments).await;
     let limits = parallel_request_limiter::Settings::read(config, environment);
     let counters = parallel_request_limiter::counters(redis.coordination.clone());
     let key_limiter = KeyLimiter::new(limits, counters.clone(), router.clone());

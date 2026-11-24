@@ -87,10 +87,6 @@ impl Endpoint for OcrAttempt<'_> {
     const PATH: &'static str = "/ocr";
     const ERRORS: ErrorFormat = ErrorFormat::OpenAi;
 
-    fn prompt(&self) -> Option<Prompt<'_>> {
-        None
-    }
-
     fn render(outcome: Value, _reported: ReportedModel<'_>) -> Result<Response, Error> {
         Ok(Json(outcome).into_response())
     }
@@ -98,6 +94,10 @@ impl Endpoint for OcrAttempt<'_> {
 
 impl RouteAttempt for OcrAttempt<'_> {
     type Outcome = Value;
+
+    fn prompt(&self) -> Option<Prompt<'_>> {
+        None
+    }
 
     async fn run(&self, attempt: &Attempt) -> Result<Value, Error> {
         let deployment = &attempt.deployment;

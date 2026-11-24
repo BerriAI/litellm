@@ -58,15 +58,13 @@ pub trait Host: Send + Sync + Sized + 'static {
     /// The callback hooks of one call `identity` makes, which read and write the call's record.
     fn hooks(&self, identity: &Authenticated<Self::Rows>) -> Self::Hooks;
 
-    /// router-core's host for one call that runs `route` on each attempt for `identity`.
-    /// `prompt` is the request's prompt, which the host counts for the pre-call checks, and
-    /// `None` holds the call to no context window.
+    /// router-core's host for one call that runs `route` on each attempt for `identity`. The host
+    /// counts `route`'s [`RouteAttempt::prompt`] for the pre-call checks.
     fn router_host<'a, A: RouteAttempt>(
         &'a self,
         gateway: &'a Gateway<Self>,
         identity: &'a Authenticated<Self::Rows>,
         route: &'a A,
-        prompt: Option<Prompt<'a>>,
     ) -> Self::RouterHost<'a, A>;
 }
 
@@ -81,6 +79,10 @@ pub trait RouteAttempt: Send + Sync {
     /// stream's counts are read from its events.
     /// Required, so a new route says what it counts rather than counting nothing by default.
     fn counts(outcome: &Self::Outcome) -> Option<Counts>;
+
+    /// The request's prompt, which the host counts for the pre-call checks. `None` holds the
+    /// route's calls to no context window, so each route says so itself.
+    fn prompt(&self) -> Option<Prompt<'_>>;
 
     /// The stream of an outcome and the reader of its format: its outcome is reported to the
     /// router as it is read, and another attempt may answer in its place while it has sent no
@@ -258,7 +260,6 @@ pub(crate) async fn call<H: Host, A: RouteAttempt>(
     path: &'static str,
     model: &str,
     route: &A,
-    prompt: Option<Prompt<'_>>,
 ) -> Result<RouterResponse<A::Outcome>, Ended> {
     let request = caller_request(identity, gateway.host.layers(identity), model);
     if !known(gateway, &request) {
@@ -269,7 +270,7 @@ pub(crate) async fn call<H: Host, A: RouteAttempt>(
         .into());
     }
     authorize(gateway, identity, model).map_err(Error::from)?;
-    let host = gateway.host.router_host(gateway, identity, route, prompt);
+    let host = gateway.host.router_host(gateway, identity, route);
     let ended = gateway
         .router
         .call(&host, op.clone(), request.clone())
@@ -591,6 +592,10 @@ mod tests {
 
         /// Only ever a stream, whose counts are read from its events.
         fn counts(_outcome: &RouteChunks) -> Option<Counts> {
+            None
+        }
+
+        fn prompt(&self) -> Option<Prompt<'_>> {
             None
         }
 

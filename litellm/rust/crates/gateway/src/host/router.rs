@@ -11,7 +11,7 @@ use litellm_router_core::{
 };
 use tokio::sync::OnceCell;
 
-use super::precall::{self, Windows};
+use super::precall::{self, ContextWindows};
 use crate::{
     Gateway,
     host::{NativeHost, NativeRows},
@@ -23,7 +23,7 @@ impl NativeHost {
     /// such call to Python.
     ///
     /// The pre-call facts are answered for a group whose every deployment has a window in
-    /// [`Windows`], since the proxy's own cost map may hold a window the native host reads none
+    /// [`ContextWindows`], since the proxy's own cost map may hold a window the native host reads none
     /// for.
     pub(crate) fn unanswered(&self, reached: &Reached) -> Option<Box<str>> {
         reached.steps.iter().find_map(|step| match step {
@@ -43,7 +43,7 @@ pub struct NativeRouterHost<'a, A> {
     pub(super) identity: &'a Authenticated<NativeRows>,
     pub(super) route: &'a A,
     pub(super) prompt: Option<Prompt<'a>>,
-    pub(super) windows: &'a Windows,
+    pub(super) windows: &'a ContextWindows,
     pub(super) prompt_tokens: OnceCell<Option<i64>>,
 }
 

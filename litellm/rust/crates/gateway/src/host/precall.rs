@@ -4,7 +4,7 @@
 //! hands over, as [`prompt_estimate`](super::prompt_estimate) estimates them. router-core decides
 //! with them, and a route that hands over no prompt is held to no window.
 //!
-//! A deployment's window depends on the deployment and the cost map alone, so [`Windows`] reads
+//! A deployment's window depends on the deployment and the cost map alone, so [`ContextWindows`] reads
 //! each one once at boot. A call and `admit` read that one table, and so hold to the same window.
 //!
 //! Region and params are decided in router-core (`precall/region.rs`, `precall/params.rs`), and
@@ -30,13 +30,13 @@ use super::{model_info::NativeModelInfoHost, prompt_estimate::Countable};
 
 /// The context window of each deployment the router was built with.
 #[derive(Default)]
-pub struct Windows {
+pub struct ContextWindows {
     by_deployment: HashMap<String, i64>,
     /// The model group of each deployment no window was read for.
     windowless: HashSet<String>,
 }
 
-impl Windows {
+impl ContextWindows {
     pub(crate) async fn read(catalog: &Catalog, deployments: &[Arc<Deployment>]) -> Self {
         let read = future::join_all(
             deployments
@@ -113,7 +113,7 @@ const REQUESTED_PARAMS: Vec<String> = Vec::new();
 /// The facts for one call. Its prompt is the same on every retry and fallback, so it is counted
 /// once into `counted`, and only when a candidate has a window to hold it to.
 pub(super) async fn facts(
-    windows: &Windows,
+    windows: &ContextWindows,
     prompt: Option<Prompt<'_>>,
     counted: &OnceCell<Option<i64>>,
     candidates: &[Arc<Deployment>],

@@ -106,10 +106,6 @@ impl<H: Host> Endpoint for MessagesAttempt<'_, H> {
     const PATH: &'static str = "/v1/messages";
     const ERRORS: ErrorFormat = ErrorFormat::Anthropic;
 
-    fn prompt(&self) -> Option<Prompt<'_>> {
-        Some(Prompt::Messages(&self.body))
-    }
-
     fn usage(counts: Counts) -> Option<ChatCompletionsUsage> {
         Some(counts.messages_usage())
     }
@@ -125,6 +121,10 @@ impl<H: Host> Endpoint for MessagesAttempt<'_, H> {
 
 impl<H: Host> RouteAttempt for MessagesAttempt<'_, H> {
     type Outcome = (Streamed<Messages>, CacheHeaders);
+
+    fn prompt(&self) -> Option<Prompt<'_>> {
+        Some(Prompt::Messages(&self.body))
+    }
 
     async fn run(&self, attempt: &Attempt) -> Result<Self::Outcome, Error> {
         let deployment = &attempt.deployment;
