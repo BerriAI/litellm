@@ -47,6 +47,12 @@ run "private_http_creates_only_a_regional_internal_frontend" {
 run "private_https_uses_a_regional_certificate_and_existing_subnets" {
   command = plan
 
+  override_resource {
+    target          = google_compute_region_ssl_policy.private_lb[0]
+    override_during = plan
+    values          = { id = "projects/test-project/regions/us-central1/sslPolicies/private-tls" }
+  }
+
   variables {
     network_id            = "projects/test-project/global/networks/existing"
     create_psa_connection = false
@@ -67,5 +73,14 @@ run "private_https_uses_a_regional_certificate_and_existing_subnets" {
       output.lb_url == "https://proxy.internal.example.com"
     )
     error_message = "Private HTTPS must reuse the supplied network and certificate, with no HTTP forwarding or new proxy subnet."
+  }
+
+  assert {
+    condition = (
+      google_compute_region_target_https_proxy.private_lb[0].ssl_policy == google_compute_region_ssl_policy.private_lb[0].id &&
+      google_compute_region_ssl_policy.private_lb[0].profile == "MODERN" &&
+      google_compute_region_ssl_policy.private_lb[0].min_tls_version == "TLS_1_2"
+    )
+    error_message = "Private HTTPS must attach the modern TLS policy and require at least TLS 1.2."
   }
 }

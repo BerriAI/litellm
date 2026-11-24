@@ -79,6 +79,15 @@ resource "google_compute_region_target_http_proxy" "private_lb" {
   url_map = google_compute_region_url_map.private_lb[0].id
 }
 
+resource "google_compute_region_ssl_policy" "private_lb" {
+  count = local.private_lb && local.tls_enabled ? 1 : 0
+
+  name            = "${local.name}-tls"
+  region          = var.region
+  profile         = "MODERN"
+  min_tls_version = "TLS_1_2"
+}
+
 resource "google_compute_region_target_https_proxy" "private_lb" {
   count = local.private_lb && local.tls_enabled ? 1 : 0
 
@@ -86,6 +95,7 @@ resource "google_compute_region_target_https_proxy" "private_lb" {
   region           = var.region
   url_map          = google_compute_region_url_map.private_lb[0].id
   ssl_certificates = [var.private_ingress.ssl_certificate_id]
+  ssl_policy       = google_compute_region_ssl_policy.private_lb[0].id
 }
 
 resource "google_compute_forwarding_rule" "private_lb" {
