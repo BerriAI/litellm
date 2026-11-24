@@ -21,6 +21,7 @@ from litellm.anthropic_beta_gated_fields import active_beta_values, log_beta_gat
 from litellm.anthropic_beta_headers_manager import filter_and_transform_beta_headers
 from litellm.constants import (
     BEDROCK_MIN_THINKING_BUDGET_TOKENS,
+    DROP_UNSUPPORTED_PARAMS_HINT,
     RESPONSE_FORMAT_TOOL_NAME,
     RESPONSE_FORMAT_UNFORCED_TOOL_DESCRIPTION,
 )
@@ -1439,10 +1440,7 @@ class AmazonConverseConfig(BaseConfig):
                 elif not self._supports_sampling_params(model):
                     if not (litellm.drop_params or drop_params):
                         raise litellm.utils.UnsupportedParamsError(
-                            message=(
-                                f"{model} does not support {param}={value}. "
-                                "To drop unsupported params, set `litellm.drop_params = True`."
-                            ),
+                            message=f"{model} does not support {param}={value}. {DROP_UNSUPPORTED_PARAMS_HINT}",
                             status_code=400,
                         )
                 else:
@@ -1522,10 +1520,7 @@ class AmazonConverseConfig(BaseConfig):
             ):
                 if not (litellm.drop_params or drop_params):
                     raise litellm.utils.UnsupportedParamsError(
-                        message=(
-                            f"{model} does not support reasoning_effort={value}. "
-                            "To drop unsupported params, set `litellm.drop_params = True`."
-                        ),
+                        message=f"{model} does not support reasoning_effort={value}. {DROP_UNSUPPORTED_PARAMS_HINT}",
                         status_code=400,
                     )
                 verbose_logger.warning(DROP_DISABLED_REASONING_EFFORT_WARNING, "reasoning_effort", value, model)
@@ -1614,8 +1609,7 @@ class AmazonConverseConfig(BaseConfig):
             raise litellm.utils.UnsupportedParamsError(
                 message=(
                     f"{model} does not support service_tier={value!r} on this Bedrock route, which takes "
-                    f"auto, standard, or one of {', '.join(BEDROCK_SERVICE_TIERS)}. "
-                    "To drop unsupported params, set `litellm.drop_params = True`."
+                    f"auto, standard, or one of {', '.join(BEDROCK_SERVICE_TIERS)}. {DROP_UNSUPPORTED_PARAMS_HINT}"
                 ),
                 status_code=400,
             )

@@ -26,6 +26,7 @@ from litellm.constants import (
     DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET,
+    DROP_UNSUPPORTED_PARAMS_HINT,
 )
 from litellm.exceptions import UnsupportedParamsError
 from litellm.litellm_core_utils.core_helpers import (
@@ -1083,11 +1084,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         elif not (litellm.drop_params or drop_params):
             supported_hint: Final = "Only temperature=1 is supported. " if param == "temperature" else ""
             raise litellm.utils.UnsupportedParamsError(
-                message=(
-                    f"{model} does not support {param}={value}. {supported_hint}"
-                    "To drop unsupported params, set `litellm.drop_params = True`, or "
-                    "`drop_params: true` under `litellm_settings` in the proxy config."
-                ),
+                message=(f"{model} does not support {param}={value}. {supported_hint}{DROP_UNSUPPORTED_PARAMS_HINT}"),
                 status_code=400,
             )
 

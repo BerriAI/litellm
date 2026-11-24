@@ -22,6 +22,10 @@ PREFIX_BLOCK_HASHES_BLOCK_SIZE: Final = get_env_int_in_range(
 )
 OAUTH_TOKEN_EXCHANGE_CACHE_SAFETY_MARGIN_SECONDS: Final = 60
 MICROSOFT_365_COPILOT_DEFAULT_TOKEN_EXCHANGE_PROFILE: Final = "jwt_bearer_obo"
+DROP_UNSUPPORTED_PARAMS_HINT: Final = (
+    "To drop unsupported params, set `litellm.drop_params = True`, "
+    "or `drop_params: true` under `litellm_settings` in the proxy config."
+)
 MICROSOFT_365_COPILOT_DEFAULT_TOKEN_EXCHANGE_SCOPE: Final = "https://graph.microsoft.com/.default"
 # Replies depend on the caller's delegated identity, which response-cache keys do not include.
 RESPONSE_CACHE_EXCLUDED_PROVIDERS: Final = frozenset({"microsoft_365_copilot", "databricks_agent"})

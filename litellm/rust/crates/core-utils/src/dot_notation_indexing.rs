@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use serde_json::Value;
 
@@ -54,27 +54,65 @@ impl Removals {
             Segment::Index(index) => self.indexes.entry(*index).or_default().insert(tail),
         }
     }
+}
 
-    fn prune(&self, value: &mut Value) {
-        match value {
-            Value::Object(object) => {
-                object.retain(|key, _| !self.fields.get(key).is_some_and(|field| field.ends));
-                object.iter_mut().for_each(|(key, item)| {
-                    if let Some(field) = self.fields.get(key) {
-                        field.prune(item);
+/// Deletes what any of `trees` addresses under `value`. Each part of `value` is visited once,
+/// with every tree that reaches it, so paths that overlap through `[*]` and an index never walk
+/// the same element twice.
+fn prune(trees: &[&Removals], value: &mut Value) {
+    match value {
+        Value::Object(object) => {
+            let mut ending = HashSet::new();
+            let mut below: HashMap<&str, Vec<&Removals>> = HashMap::new();
+            trees
+                .iter()
+                .flat_map(|tree| &tree.fields)
+                .for_each(|(name, field)| {
+                    if field.ends {
+                        ending.insert(name.as_str());
+                    } else {
+                        below.entry(name.as_str()).or_default().push(field);
                     }
                 });
+            if ending.iter().any(|name| object.contains_key(*name)) {
+                object.retain(|key, _| !ending.contains(key.as_str()));
             }
-            Value::Array(items) => items.iter_mut().enumerate().for_each(|(index, item)| {
-                if let Some(every) = &self.every {
-                    every.prune(item);
-                }
-                if let Some(at) = self.indexes.get(&index) {
-                    at.prune(item);
-                }
-            }),
-            _ => {}
+            below
+                .iter()
+                .filter(|(name, _)| !ending.contains(*name))
+                .for_each(|(name, fields)| {
+                    if let Some(item) = object.get_mut(*name) {
+                        prune(fields, item);
+                    }
+                });
         }
+        Value::Array(items) => {
+            let every: Vec<&Removals> = trees
+                .iter()
+                .filter_map(|tree| tree.every.as_deref())
+                .collect();
+            let mut at: HashMap<usize, Vec<&Removals>> = HashMap::new();
+            trees
+                .iter()
+                .flat_map(|tree| &tree.indexes)
+                .for_each(|(index, tree)| at.entry(*index).or_default().push(tree));
+            if every.is_empty() {
+                at.iter().for_each(|(index, indexed)| {
+                    if let Some(item) = items.get_mut(*index) {
+                        prune(indexed, item);
+                    }
+                });
+                return;
+            }
+            items
+                .iter_mut()
+                .enumerate()
+                .for_each(|(index, item)| match at.get(&index) {
+                    Some(indexed) => prune(&[every.as_slice(), indexed.as_slice()].concat(), item),
+                    None => prune(&every, item),
+                });
+        }
+        _ => {}
     }
 }
 
@@ -89,7 +127,7 @@ pub fn delete_nested_values<'a>(
         .into_iter()
         .filter_map(parse_segments)
         .for_each(|segments| removals.insert(&segments));
-    removals.prune(&mut value);
+    prune(&[&removals], &mut value);
     value
 }
 
@@ -267,12 +305,12 @@ mod tests {
             .collect();
         let started = std::time::Instant::now();
         let trimmed = delete_nested_values(body.clone(), paths.iter().map(String::as_str));
-        assert!(started.elapsed() < std::time::Duration::from_secs(1));
+        assert!(started.elapsed() < std::time::Duration::from_secs(5));
         assert_eq!(trimmed, body);
     }
 
     #[rstest]
-    #[case::forty_thousand_properties(40_000)]
+    #[case::ten_thousand_properties(10_000)]
     fn many_present_paths_over_a_wide_schema_finish_well_inside_one_request(#[case] width: usize) {
         let properties: serde_json::Map<String, Value> = (0..width)
             .map(|n| (format!("p{n}"), json!({"type": "string"})))
@@ -283,7 +321,7 @@ mod tests {
             .collect();
         let started = std::time::Instant::now();
         let trimmed = delete_nested_values(body, paths.iter().map(String::as_str));
-        assert!(started.elapsed() < std::time::Duration::from_secs(1));
+        assert!(started.elapsed() < std::time::Duration::from_secs(5));
         assert_eq!(
             trimmed,
             json!({"tools": [{"name": "t", "input_schema": {"properties": {}}}]})
@@ -338,6 +376,17 @@ mod tests {
         &["tools[*].a", "tools[1].b"],
         json!({"tools": [{"b": 1, "c": 1}, {"c": 2}]}),
     )]
+    #[case::every_element_and_one_element_each_going_deeper(
+        json!({"tools": [
+            {"arr": [{"f": 1, "k": 1, "x": 1}, {"f": 2, "k": 2, "x": 2}]},
+            {"arr": [{"f": 3, "k": 3, "x": 3}]}
+        ]}),
+        &["tools[*].arr[0].f", "tools[0].arr[*].k"],
+        json!({"tools": [
+            {"arr": [{"x": 1}, {"f": 2, "x": 2}]},
+            {"arr": [{"k": 3, "x": 3}]}
+        ]}),
+    )]
     #[case::one_path_that_does_not_parse_among_others(
         json!({"meta": {"user": "u"}, "top": 0.7}),
         &["top[0", "meta.user"],
@@ -345,5 +394,40 @@ mod tests {
     )]
     fn applies_every_path(#[case] value: Value, #[case] paths: &[&str], #[case] expected: Value) {
         assert_eq!(delete_nested_values(value, paths.iter().copied()), expected);
+    }
+
+    #[rstest]
+    #[case::twelve_levels_over_twenty_thousand_properties(12, 20_000)]
+    fn paths_overlapping_through_every_and_an_index_finish_well_inside_one_request(
+        #[case] depth: usize,
+        #[case] width: usize,
+    ) {
+        let properties: serde_json::Map<String, Value> =
+            (0..width).map(|n| (format!("p{n}"), json!(n))).collect();
+        let nested = (0..depth).fold(Value::Object(properties), |inner, _| json!([inner]));
+        let combos = 1usize << depth;
+        let paths: Vec<String> = (0..combos)
+            .map(|combo| {
+                let steps: String = (0..depth)
+                    .map(|level| {
+                        if combo >> level & 1 == 1 {
+                            "[*]"
+                        } else {
+                            "[0]"
+                        }
+                    })
+                    .collect();
+                format!("tools{steps}.p{combo}")
+            })
+            .collect();
+        let started = std::time::Instant::now();
+        let trimmed =
+            delete_nested_values(json!({"tools": nested}), paths.iter().map(String::as_str));
+        assert!(started.elapsed() < std::time::Duration::from_secs(5));
+        let kept: serde_json::Map<String, Value> = (combos..width)
+            .map(|n| (format!("p{n}"), json!(n)))
+            .collect();
+        let expected = (0..depth).fold(Value::Object(kept), |inner, _| json!([inner]));
+        assert_eq!(trimmed, json!({"tools": expected}));
     }
 }

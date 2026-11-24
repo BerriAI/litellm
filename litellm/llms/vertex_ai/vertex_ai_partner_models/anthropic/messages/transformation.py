@@ -1,6 +1,7 @@
 from collections.abc import Mapping
 from typing import Final
 
+from litellm.constants import DROP_UNSUPPORTED_PARAMS_HINT
 from litellm.exceptions import UnsupportedParamsError
 from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
 from litellm.llms.anthropic.messages.api_versions import requested_api_version
@@ -26,9 +27,7 @@ def _vertex_version(headers: Mapping[str, object], model: str, drop_params: bool
         return _VERTEX_DEFAULT_VERSION
     return UnsupportedParamsError(
         message=(
-            f"{model} does not support {_VERSION_HEADER_VERTEX_READS_FROM_BODY}={requested}. "
-            "To drop unsupported params, set `litellm.drop_params = True`, or `drop_params: true` under "
-            "`litellm_settings` in the proxy config."
+            f"{model} does not support {_VERSION_HEADER_VERTEX_READS_FROM_BODY}={requested}. {DROP_UNSUPPORTED_PARAMS_HINT}"
         ),
         llm_provider="vertex_ai",
         model=model,

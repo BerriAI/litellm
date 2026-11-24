@@ -26,6 +26,7 @@ from litellm.constants import (
     DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET,
+    DROP_UNSUPPORTED_PARAMS_HINT,
     RESPONSE_FORMAT_TOOL_NAME,
     RESPONSE_FORMAT_UNFORCED_TOOL_DESCRIPTION,
 )
@@ -1092,11 +1093,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         if not (litellm.drop_params or drop_params):
             speed_value: Final = optional_params.get("speed")
             raise litellm.utils.UnsupportedParamsError(
-                message=(
-                    f"{model} does not support speed={speed_value!r}. "
-                    "To drop unsupported params, set `litellm.drop_params = True`, or "
-                    "`drop_params: true` under `litellm_settings` in the proxy config."
-                ),
+                message=f"{model} does not support speed={speed_value!r}. {DROP_UNSUPPORTED_PARAMS_HINT}",
                 status_code=400,
             )
         litellm.verbose_logger.warning(
@@ -1114,8 +1111,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             raise litellm.utils.UnsupportedParamsError(
                 message=(
                     f"{model} does not support service_tier={value!r}. Anthropic accepts 'auto', "
-                    "'standard_only', or OpenAI's 'default' (sent as 'standard_only'). "
-                    "To drop unsupported params, set `litellm.drop_params = True`."
+                    f"'standard_only', or OpenAI's 'default' (sent as 'standard_only'). {DROP_UNSUPPORTED_PARAMS_HINT}"
                 ),
                 status_code=400,
             )

@@ -5298,6 +5298,7 @@ def test_service_tier_without_anthropic_equivalent_raises_with_drop_params_hint(
         litellm.utils.get_optional_params(model="claude-sonnet-4-6", custom_llm_provider="anthropic", service_tier=tier)
 
     assert exc_info.value.status_code == 400
+    assert "`drop_params: true` under `litellm_settings`" in str(exc_info.value)
 
 
 def test_service_tier_without_anthropic_equivalent_dropped_with_drop_params(monkeypatch):
