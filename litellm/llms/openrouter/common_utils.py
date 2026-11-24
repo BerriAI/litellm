@@ -1,6 +1,7 @@
 from collections.abc import Mapping, Sequence
 from types import MappingProxyType
 from typing import Annotated, Final
+from urllib.parse import urlparse
 
 import httpx
 from pydantic import BaseModel, BeforeValidator, ConfigDict
@@ -76,7 +77,7 @@ def _limits_by_catalog_id(content: bytes) -> Mapping[str, Mapping[str, int]]:
 
 async def aget_openrouter_catalog_limits(
     *, api_base: str, headers: Mapping[str, str], client: AsyncHTTPHandler, cache: InMemoryCache
-) -> Mapping[str, Mapping[str, int]]:
+) -> Mapping[str, Mapping[str, int]] | None:
     return await get_cached_model_limits(
         url=_chat_catalog_url(api_base),
         headers=headers,
@@ -101,6 +102,15 @@ class OpenRouterModelInfo(BaseLLMModelInfo):
     @staticmethod
     def get_api_base(api_base: str | None = None) -> str:
         return api_base or litellm.api_base or get_secret_str("OPENROUTER_API_BASE") or _DEFAULT_API_BASE
+
+    @staticmethod
+    def get_catalog_api_key(api_key: str | None, deployment_api_base: str | None) -> str | None:
+        if (
+            deployment_api_base is None
+            or urlparse(deployment_api_base).hostname == urlparse(_DEFAULT_API_BASE).hostname
+        ):
+            return OpenRouterModelInfo.get_api_key(api_key)
+        return api_key
 
     @staticmethod
     def get_base_model(model: str) -> str:

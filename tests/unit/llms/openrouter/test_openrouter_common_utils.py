@@ -241,7 +241,7 @@ async def test_a_failed_catalog_fetch_is_cached_so_the_next_refresh_does_not_cal
         for _ in range(2):
             assert (
                 await aget_openrouter_catalog_limits(api_base=DEFAULT_BASE, headers={}, client=handler, cache=cache)
-                == {}
+                is None
             )
     assert responder.call_count == 1
 

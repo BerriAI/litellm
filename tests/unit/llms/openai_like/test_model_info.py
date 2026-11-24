@@ -82,9 +82,11 @@ async def test_cache_is_scoped_to_endpoint_and_authentication_and_expires() -> N
         cache: Final = InMemoryCache(clock=clock)
 
         async def lookup(model: str = "first", host: str = "one.test", key: str = "one") -> Mapping[str, int]:
-            return await get_openai_compatible_model_info(
+            limits: Final = await get_openai_compatible_model_info(
                 model=model, api_base=f"https://{host}", headers={"Authorization": key}, client=handler, cache=cache
             )
+            assert limits is not None
+            return limits
 
         assert (await lookup())["max_input_tokens"] == 1024
         assert (await lookup("second"))["max_input_tokens"] == 2048
@@ -121,7 +123,7 @@ async def test_unavailable_metadata_is_best_effort_and_negative_cached(
                 await get_openai_compatible_model_info(
                     model="model", api_base="https://backend.test", headers={}, client=handler, cache=cache
                 )
-                == {}
+                is None
             )
         assert responder.call_count == 1
 

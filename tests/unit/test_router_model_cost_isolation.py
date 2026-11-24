@@ -19,7 +19,7 @@ import queue
 import re
 import sys
 import threading
-from collections.abc import Callable, Iterator
+from collections.abc import Awaitable, Callable, Iterator
 from pathlib import Path
 from types import MappingProxyType
 from typing import Final, cast
@@ -28,6 +28,7 @@ from unittest.mock import Mock, patch
 import httpx
 import pytest
 import respx
+import time_machine
 
 import litellm
 from litellm import Router
@@ -36,6 +37,7 @@ from litellm.litellm_core_utils.ptu_pricing import ptu_config_error
 from litellm.litellm_core_utils.llm_cost_calc.utils import SERVICE_TIER_COST_KEY_SUFFIXES
 from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from litellm.llms.openai_like.model_info import MODEL_INFO_REFRESH_SECONDS
 from litellm.proxy.utils import create_model_info_response
 from litellm.router_api import ChangeSet
 from litellm.types.router import (
@@ -450,7 +452,9 @@ def _openrouter_deployment(
     }
 
 
-async def _refresh_against(router: Router, respond: Callable[[httpx.Request], httpx.Response]) -> None:
+async def _refresh_against(
+    router: Router, respond: Callable[[httpx.Request], httpx.Response | Awaitable[httpx.Response]]
+) -> None:
     handler: Final = AsyncHTTPHandler()
     await handler.client.aclose()
     async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
@@ -603,11 +607,16 @@ async def test_openrouter_deployments_on_one_key_share_one_catalog_fetch(openrou
             _openrouter_deployment("openrouter/*", "openrouter/*", "wild-id"),
         ]
     )
-    responder: Final = Mock(side_effect=_openrouter_catalog_response)
+    requests: Final[list[httpx.Request]] = []
 
-    await _refresh_against(router, responder)
+    async def respond_slowly(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        await asyncio.sleep(0.05)
+        return _openrouter_catalog_response(request)
 
-    assert responder.call_count == 1
+    await _refresh_against(router, respond_slowly)
+
+    assert len(requests) == 1
     assert _group_limits(router, "first") == (4096, 1024)
     assert _group_limits(router, "second") == (8192, None)
     assert _group_limits(router, "openrouter/vendor/capped") == (4096, 1024)
@@ -625,11 +634,33 @@ async def test_an_openrouter_catalog_outage_keeps_the_last_published_limits(
 ) -> None:
     router: Final = Router(model_list=[_openrouter_deployment(*deployment)])
 
+    with time_machine.travel("2026-07-15T10:17:00Z", tick=False) as traveller:
+        await _refresh_against(router, _openrouter_catalog_response)
+        traveller.shift(MODEL_INFO_REFRESH_SECONDS + 1)
+        await _refresh_against(router, lambda request: httpx.Response(503))
+        traveller.shift(MODEL_INFO_REFRESH_SECONDS + 1)
+        await _refresh_against(router, lambda request: httpx.Response(503))
+
+        assert _group_limits(router, model_group) == (4096, 1024)
+
+
+@pytest.mark.parametrize(
+    ("deployment", "model_group"),
+    (
+        (("named", "openrouter/vendor/capped", "named-id"), "named"),
+        (("openrouter/*", "openrouter/*", "wild-id"), "openrouter/vendor/capped"),
+    ),
+)
+async def test_a_model_dropped_from_the_openrouter_catalog_loses_its_limits(
+    deployment: tuple[str, str, str], model_group: str, openrouter_settings_cleared: None
+) -> None:
+    router: Final = Router(model_list=[_openrouter_deployment(*deployment)])
+
     await _refresh_against(router, _openrouter_catalog_response)
     router.cache.in_memory_cache.flush_cache()
-    await _refresh_against(router, lambda request: httpx.Response(503))
+    await _refresh_against(router, lambda request: httpx.Response(200, json={"data": []}))
 
-    assert _group_limits(router, model_group) == (4096, 1024)
+    assert _group_limits(router, model_group) == (None, None)
 
 
 async def test_openrouter_discovery_without_a_key_makes_no_call(openrouter_settings_cleared: None) -> None:
@@ -716,6 +747,36 @@ async def test_openrouter_discovery_uses_the_key_from_the_environment(
     assert authorizations == ["Bearer environment-key"]
 
 
+@pytest.mark.parametrize(
+    ("api_base", "expected_authorizations"),
+    (
+        ("https://openrouter.ai/api/v1", ("Bearer environment-key",)),
+        ("https://elsewhere.test/api/v1", ()),
+    ),
+)
+async def test_openrouter_discovery_sends_the_environment_key_only_to_openrouter(
+    api_base: str,
+    expected_authorizations: tuple[str, ...],
+    openrouter_settings_cleared: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OPENROUTER_API_KEY", "environment-key")
+    router: Final = Router(
+        model_list=[
+            {"model_name": "named", "litellm_params": {"model": "openrouter/vendor/capped", "api_base": api_base}}
+        ]
+    )
+    authorizations: Final[list[str | None]] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        authorizations.append(request.headers.get("Authorization"))
+        return _openrouter_catalog_response(request)
+
+    await _refresh_against(router, respond)
+
+    assert tuple(authorizations) == expected_authorizations
+
+
 async def test_a_wildcard_on_another_provider_is_still_not_discovered(openrouter_settings_cleared: None) -> None:
     router: Final = Router(
         model_list=[
@@ -747,6 +808,25 @@ async def test_openrouter_wildcard_listing_info_shows_each_concrete_models_limit
     listing_info: Final = router.registry().group("openrouter/vendor/capped", field="listing_info")
     assert listing_info == DeploymentModelListingInfo(cost_map_keys=(), max_input_tokens=4096, max_output_tokens=1024)
     assert router.registry().group("openrouter/vendor/unlisted", field="listing_info") is None
+
+
+async def test_a_team_openrouter_wildcard_listing_info_shows_each_concrete_models_limits(
+    openrouter_settings_cleared: None,
+) -> None:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "team-wild-name",
+                "litellm_params": {"model": "openrouter/*", "api_key": "openrouter-key"},
+                "model_info": {"id": "team-wild-id", "team_id": "team-1", "team_public_model_name": "openrouter/*"},
+            }
+        ]
+    )
+
+    await _refresh_against(router, _openrouter_catalog_response)
+
+    listing_info: Final = router.registry().group("openrouter/vendor/capped", field="listing_info")
+    assert listing_info == DeploymentModelListingInfo(cost_map_keys=(), max_input_tokens=4096, max_output_tokens=1024)
 
 
 async def test_openrouter_wildcard_listing_info_keeps_the_operator_limit(openrouter_settings_cleared: None) -> None:

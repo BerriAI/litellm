@@ -927,15 +927,19 @@ class HostRegistry(HostModelInfo):
             )
         )
         model_id: Final = deployment.model_info.id
-        if discovered is None or not (discovered.limits or discovered.limits_by_model):
-            return
         if model_id is None or self._core_get_model_info(model_id) is not raw_deployment:
             return
+        latest: Final = discovered if discovered is not None else self._last_discovered_model_info(model_id)
         self._discovered_model_info_cache.max_size_in_memory = max(len(self._core_model_list), 1)
         self._discovered_model_info_cache.delete_cache(model_id)
-        self._discovered_model_info_cache.set_cache(model_id, discovered)
-        self._has_wildcard_catalog = self._has_wildcard_catalog or bool(discovered.limits_by_model)
+        if latest is not None and (latest.limits or latest.limits_by_model):
+            self._discovered_model_info_cache.set_cache(model_id, latest)
+            self._has_wildcard_catalog = self._has_wildcard_catalog or bool(latest.limits_by_model)
         self._invalidate_model_group_info_cache()
+
+    def _last_discovered_model_info(self, model_id: str) -> DiscoveredDeploymentModelInfo | None:
+        cached: Final[object] = self._discovered_model_info_cache.get_cache(model_id)
+        return cached if isinstance(cached, DiscoveredDeploymentModelInfo) else None
 
     async def _adiscover_openai_compatible_model_info(
         self,
@@ -967,6 +971,8 @@ class HostRegistry(HostModelInfo):
             client=client or get_async_httpx_client(llm_provider=LlmProviders.OPENAI),
             cache=self._core_cache.in_memory_cache,
         )
+        if limits is None:
+            return None
         return DiscoveredDeploymentModelInfo(deployment=raw_deployment, limits=limits)
 
     async def _adiscover_openrouter_model_info(
@@ -987,7 +993,7 @@ class HostRegistry(HostModelInfo):
         from litellm.utils import aresolve_api_key_secret_reference
 
         resolved_key: Final = await aresolve_api_key_secret_reference(
-            OpenRouterModelInfo.get_api_key(api_key),
+            OpenRouterModelInfo.get_catalog_api_key(api_key, params.api_base),
             model=params.model,
             llm_provider=LlmProviders.OPENROUTER.value,
             upstream=MappingProxyType({"api_base": params.api_base}),
@@ -1000,6 +1006,8 @@ class HostRegistry(HostModelInfo):
             client=client or get_async_httpx_client(llm_provider=LlmProviders.OPENROUTER),
             cache=self._core_cache.in_memory_cache,
         )
+        if catalog is None:
+            return None
         if "*" in params.model:
             return DiscoveredDeploymentModelInfo(
                 deployment=raw_deployment, limits=MappingProxyType({}), limits_by_model=catalog
@@ -1070,6 +1078,7 @@ class HostRegistry(HostModelInfo):
 
     def _replace_model_list(self, build: _Build) -> None:
         self._discovered_model_info_cache.flush_cache()
+        self._has_wildcard_catalog = False
         original_model_list: Final = build.raw
         if self.strategies is not None:
             self.strategies.reset()

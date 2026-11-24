@@ -26,6 +26,7 @@ import dataclasses
 import math
 from collections.abc import Callable, Mapping, Sequence
 from functools import partial
+from itertools import chain
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Union, cast  # noqa: TID251  # the core's own signatures, ported unchanged
 
@@ -749,8 +750,9 @@ class HostModelInfo:
                 _configured_model_info(deployment),
                 self._core_get_discovered_model_info(_configured_deployment_id(deployment), routed_model),
             )
-            for deployment, routed_model in self._core_pattern_router.get_routed_deployments(
-                model_name, LlmProviders.OPENROUTER.value
+            for deployment, routed_model in chain.from_iterable(
+                router.get_routed_deployments(model_name, LlmProviders.OPENROUTER.value)
+                for router in (self._core_pattern_router, *self._core_team_pattern_routers.values())
             )
         )
         return tuple(MappingProxyType({**configured, **discovered}) for configured, discovered in rows if discovered)
