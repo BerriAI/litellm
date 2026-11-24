@@ -8060,6 +8060,7 @@
         "chatTitle": "Models",
         "chatCount": "{{shown}} models",
         "makePublic": "Select Models to Make Public",
+        "everyModelGroupPublic": "Every model group is published on the AI Hub because <code>public_model_groups</code> is set to <code>[\"*\"]</code> in the config. Edit the config to choose models one by one.",
         "loading": "Loading models…",
         "showing": "Showing {{shown}} of {{total}} models",
         "empty": {

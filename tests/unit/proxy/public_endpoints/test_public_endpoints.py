@@ -199,6 +199,24 @@ def test_public_ai_hub_info_is_public_by_default(monkeypatch):
     assert response.status_code == 200, response.text
 
 
+@pytest.mark.parametrize(
+    ("public_model_groups", "publishes_every_model_group"),
+    [(["*"], True), (["gpt-4", "*"], True), (["gpt-4"], False), (None, False)],
+)
+def test_public_ai_hub_info_says_whether_every_model_group_is_published(
+    monkeypatch: pytest.MonkeyPatch, public_model_groups: list[str] | None, publishes_every_model_group: bool
+) -> None:
+    app: Final = FastAPI()
+    app.include_router(router)
+    monkeypatch.setattr(litellm, "public_model_groups", public_model_groups)
+
+    response: Final = TestClient(app).get("/public/model_hub/info")
+
+    assert response.status_code == 200, response.text
+    assert response.json()["publishes_every_model_group"] is publishes_every_model_group
+    assert "public_model_groups" not in response.json()
+
+
 def test_watsonx_provider_fields():
     """Test that Watsonx provider has all required credential fields including multiple auth options."""
     app = FastAPI()

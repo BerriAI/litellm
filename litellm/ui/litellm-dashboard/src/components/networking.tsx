@@ -410,6 +410,7 @@ interface PublicModelHubInfo {
   litellm_version: string;
   // Supports both old format (Record<string, string>) and new format (Record<string, {url: string, index: number}>)
   useful_links: Record<string, string | { url: string; index: number }>;
+  publishes_every_model_group?: boolean;
 }
 
 export interface WorkerInfo {

@@ -230,6 +230,59 @@ describe("ModelHubTable", () => {
     expect(networking.modelHubCall).not.toHaveBeenCalled();
   });
 
+  describe("when public_model_groups decides which models are public", () => {
+    const hubInfo = (publishesEveryModelGroup: boolean) => ({
+      docs_title: "Docs",
+      custom_docs_description: null,
+      litellm_version: "1.0.0",
+      useful_links: {},
+      publishes_every_model_group: publishesEveryModelGroup,
+    });
+
+    const renderAdminHub = (publishesEveryModelGroup: boolean) => {
+      vi.mocked(networking.getPublicModelHubInfo).mockResolvedValue(hubInfo(publishesEveryModelGroup));
+      vi.mocked(networking.modelHubCall).mockResolvedValue({
+        data: [{ model_group: "chat-model", providers: ["openai"], mode: "chat" }],
+      });
+      vi.mocked(networking.getConfigFieldSetting).mockResolvedValue({ field_value: false });
+      vi.mocked(networking.getAgentsList).mockResolvedValue({ agents: [] });
+      vi.mocked(networking.fetchMCPServers).mockResolvedValue([]);
+      mockUseUISettings.mockReturnValue({ data: { values: {} }, isLoading: false });
+      renderWithProviders(
+        <ModelHubTable
+          accessToken="test-token"
+          publicPage={false}
+          premiumUser
+          userRole="Admin"
+          canOpenPlayground
+          canAddModels
+        />,
+      );
+    };
+
+    afterEach(() => {
+      vi.mocked(networking.getPublicModelHubInfo).mockResolvedValue(hubInfo(false));
+    });
+
+    it("explains that the config publishes every model group and blocks the per-model Make Public flow", async () => {
+      renderAdminHub(true);
+
+      expect(await screen.findByRole("alert")).toHaveTextContent(
+        'Every model group is published on the AI Hub because public_model_groups is set to ["*"] in the config.',
+      );
+      expect(screen.getByRole("button", { name: "Select Models to Make Public" })).toBeDisabled();
+    });
+
+    it("keeps the Make Public flow and shows no banner for a named list", async () => {
+      renderAdminHub(false);
+
+      const makePublic = await screen.findByRole("button", { name: "Select Models to Make Public" });
+      await waitFor(() => expect(networking.getPublicModelHubInfo).toHaveBeenCalled());
+      expect(makePublic).toBeEnabled();
+      expect(screen.queryByText(/Every model group is published on the AI Hub/)).not.toBeInTheDocument();
+    });
+  });
+
   it("should limit the chat catalog to browsing models even for an admin", async () => {
     vi.mocked(networking.modelHubCall).mockResolvedValue({
       data: [{ model_group: "chat-model", providers: ["openai"], mode: "chat" }],

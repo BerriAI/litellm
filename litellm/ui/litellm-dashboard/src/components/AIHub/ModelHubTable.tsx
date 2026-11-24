@@ -22,6 +22,7 @@ import {
   getAgentsList,
   getConfigFieldSetting,
   getGlobalLitellmHeaderName,
+  getPublicModelHubInfo,
   getProxyBaseUrl,
   getUiPageUrl,
   getUiConfig,
@@ -35,11 +36,12 @@ import { filterBySearchTerm } from "@/utils/searchUtils";
 import { SortingState } from "@tanstack/react-table";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Card } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from "@/components/ui/input-group";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Copy, Inbox, LayoutGrid, Search as SearchIcon, X } from "lucide-react";
+import { Copy, Inbox, Info, LayoutGrid, Search as SearchIcon, X } from "lucide-react";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { Trans, useTranslation } from "react-i18next";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
@@ -138,6 +140,7 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
   const isDashboardCatalog = !isChat && !publicPage;
   const showDecisionGarden = isDashboardCatalog && (selectedMode === "" || selectedMode === DECISIONS_MODE);
   const [isMakePublicModalVisible, setIsMakePublicModalVisible] = useState(false);
+  const [publishesEveryModelGroup, setPublishesEveryModelGroup] = useState(false);
   // Agent Hub state
   const [agentHubData, setAgentHubData] = useState<AgentHubData[] | null>(null);
   const [isMakeAgentPublicModalVisible, setIsMakeAgentPublicModalVisible] = useState(false);
@@ -197,6 +200,9 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
             .catch((error) => {
               // do nothing
             });
+          getPublicModelHubInfo()
+            .then((info) => setPublishesEveryModelGroup(info.publishes_every_model_group === true))
+            .catch(() => setPublishesEveryModelGroup(false));
         }
       } catch (error) {
         console.error("There was an error fetching the model data", error);
@@ -544,9 +550,20 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
                       </div>
                     )}
                     {/* Header with Make Public Button */}
+                    {publicPage == false && canModify && publishesEveryModelGroup && (
+                      <Alert className="mb-4">
+                        <Info />
+                        <AlertDescription>
+                          <Trans
+                            i18nKey="aiHub.modelHubTable.models.everyModelGroupPublic"
+                            components={{ code: <code /> }}
+                          />
+                        </AlertDescription>
+                      </Alert>
+                    )}
                     {publicPage == false && canModify && (
                       <div className="flex justify-end mb-4">
-                        <Button onClick={() => handleMakePublicPage()}>
+                        <Button onClick={() => handleMakePublicPage()} disabled={publishesEveryModelGroup}>
                           {t("aiHub.modelHubTable.models.makePublic")}
                         </Button>
                       </div>

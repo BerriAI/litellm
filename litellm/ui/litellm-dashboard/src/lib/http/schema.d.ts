@@ -46420,6 +46420,11 @@ export interface components {
             docs_title: string;
             /** Litellm Version */
             litellm_version: string;
+            /**
+             * Publishes Every Model Group
+             * @default false
+             */
+            publishes_every_model_group: boolean;
             /** Useful Links */
             useful_links: {
                 [key: string]: string | {

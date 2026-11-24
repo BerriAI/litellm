@@ -78,7 +78,9 @@ def named_public(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Gateway]:
 
 
 def _hub_payload(gateway: Gateway, path: str, page: int) -> JsonValue:
-    listed: Final = gateway.request("GET", path, params={"page_size": "100", "page": str(page)} if path == V1_HUB else None)
+    listed: Final = gateway.request(
+        "GET", path, params={"page_size": "100", "page": str(page)} if path == V1_HUB else None
+    )
     assert listed.status_code == 200, listed.text
     return listed.json()
 
@@ -169,3 +171,11 @@ def test_named_list_still_publishes_only_the_named_groups(named_public: Gateway,
     rows: Final = _admin_rows(named_public)
     assert rows[NAMED].get("is_public_model_group") is True, rows[NAMED]
     assert rows[OTHER].get("is_public_model_group") is False, rows[OTHER]
+
+
+def test_hub_info_says_star_publishes_every_model_group(all_public: Gateway) -> None:
+    assert all_public.get("/public/model_hub/info").get("publishes_every_model_group") is True
+
+
+def test_hub_info_says_a_named_list_does_not_publish_every_model_group(named_public: Gateway) -> None:
+    assert named_public.get("/public/model_hub/info").get("publishes_every_model_group") is False
