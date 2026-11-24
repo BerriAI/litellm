@@ -1,4 +1,4 @@
-"""Tests for FocusTransformer organization metadata in Tags."""
+"""Tests for FocusTransformer metadata in Tags."""
 
 from __future__ import annotations
 
@@ -60,3 +60,32 @@ def test_should_omit_missing_organization_fields_from_tags():
     assert "organization_id" not in tags
     assert "organization_alias" not in tags
     assert tags["team_id"] == "team-1"
+
+
+def test_should_include_project_tags_only_when_present_and_keep_team_subaccounts():
+    frame = pl.DataFrame(
+        {
+            "date": [date(2024, 1, 2)] * 3,
+            "spend": [1.25] * 3,
+            "api_requests": [1] * 3,
+            "api_key": ["scoped-key", "unnamed-project-key", "unscoped-key"],
+            "api_key_alias": ["scoped", "unnamed-project", "unscoped"],
+            "model": ["gpt-4o"] * 3,
+            "model_group": ["gpt-4o"] * 3,
+            "custom_llm_provider": ["openai"] * 3,
+            "team_id": ["team-1"] * 3,
+            "team_alias": ["Platform"] * 3,
+            "project_id": ["project-1", "project-2", None],
+            "project_alias": ["Production", None, None],
+        }
+    )
+
+    normalized = FocusTransformer().transform(frame)
+
+    tags = [json.loads(value) for value in normalized["Tags"]]
+    assert [{key: value for key, value in row.items() if key.startswith("project_")} for row in tags] == [
+        {"project_id": "project-1", "project_alias": "Production"},
+        {"project_id": "project-2"},
+        {},
+    ]
+    assert normalized.select("SubAccountId", "SubAccountName").rows() == [("team-1", "Platform")] * 3
