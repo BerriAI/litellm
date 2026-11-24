@@ -313,7 +313,7 @@ class CodeInterpreterInterceptionLogger(CustomLogger):
 
     async def async_pre_call_deployment_hook(
         self, kwargs: dict[str, object], call_type: CallTypes | None
-    ) -> dict | None:
+    ) -> dict[str, object] | None:
         if not kwargs.get("_agentic_loop_depth") and not _bridged_from_responses(kwargs, call_type):
             kwargs.pop(_INTERCEPTION_ACTIVE_KEY, None)
             kwargs.pop(_SANDBOX_KEY, None)
@@ -463,12 +463,12 @@ class CodeInterpreterInterceptionLogger(CustomLogger):
         self,
         response: object,
         model: str,
-        messages: list[dict],
-        tools: list[dict] | None,
+        messages: Sequence[Mapping[str, object]],
+        tools: Sequence[Mapping[str, object]] | None,
         stream: bool,
         custom_llm_provider: str,
-        kwargs: dict,
-    ) -> tuple[bool, dict]:
+        kwargs: Mapping[str, object],
+    ) -> tuple[bool, dict[str, object]]:
         if not self.enabled:
             return False, {}
         if not kwargs.get(_INTERCEPTION_ACTIVE_KEY):
@@ -488,9 +488,9 @@ class CodeInterpreterInterceptionLogger(CustomLogger):
 
     async def async_build_agentic_loop_plan(
         self,
-        tools: dict,
+        tools: Mapping[str, object],
         model: str,
-        messages: list[dict],
+        messages: Sequence[Mapping[str, object]],
         response: object,
         anthropic_messages_provider_config: object,
         anthropic_messages_optional_request_params: dict[str, object],
@@ -577,9 +577,9 @@ class CodeInterpreterInterceptionLogger(CustomLogger):
 
     async def _build_chat_completion_agentic_loop_plan(
         self,
-        tools: dict[str, object],
+        tools: Mapping[str, object],
         model: str,
-        messages: list[dict],
+        messages: Sequence[Mapping[str, object]],
         optional_params: dict[str, object],
         kwargs: dict[str, object],
     ) -> AgenticLoopPlan:
@@ -640,7 +640,7 @@ class CodeInterpreterInterceptionLogger(CustomLogger):
                 return None
 
     @staticmethod
-    def _agentic_tool_calls(tools: dict[str, object]) -> list[CodeExecutionToolCall]:
+    def _agentic_tool_calls(tools: Mapping[str, object]) -> list[CodeExecutionToolCall]:
         tool_calls: Final = tools.get("tool_calls")
         if not isinstance(tool_calls, list):
             return []
@@ -678,7 +678,7 @@ class CodeInterpreterInterceptionLogger(CustomLogger):
             },
         )
 
-    async def async_agentic_loop_cleanup_hook(self, plan: AgenticLoopPlan, kwargs: dict) -> None:
+    async def async_agentic_loop_cleanup_hook(self, plan: AgenticLoopPlan, kwargs: Mapping[str, object]) -> None:
         metadata: Final[dict[str, object]] = plan.metadata or {} if plan else {}
         if metadata.get("is_session_scoped"):
             return
@@ -719,7 +719,7 @@ class CodeInterpreterInterceptionLogger(CustomLogger):
         }
 
     async def async_post_agentic_loop_response_hook(
-        self, response: object, plan: AgenticLoopPlan, kwargs: dict
+        self, response: object, plan: AgenticLoopPlan, kwargs: Mapping[str, object]
     ) -> object:
         metadata: Final[dict[str, object]] = plan.metadata or {} if plan else {}
         if not metadata.get("is_session_scoped"):

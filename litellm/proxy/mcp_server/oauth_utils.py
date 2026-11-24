@@ -448,7 +448,7 @@ def _matches_trusted_origin_entry(netloc: str, entry: str) -> bool:
 
 
 def _normalize_native_redirect_uri(
-    parsed,
+    parsed: ParseResult,
 ) -> str:
     """Lowercase scheme, netloc, and path for allowlist comparison."""
     return urlunparse(
@@ -493,7 +493,7 @@ def _native_wildcard_prefix_matches(normalized: str, prefix: str) -> bool:
     return suffix[0] == "/"
 
 
-def _matches_trusted_native_redirect_uri(parsed) -> bool:
+def _matches_trusted_native_redirect_uri(parsed: ParseResult) -> bool:
     """Allowlisted private-use / custom-scheme OAuth callbacks for native MCP clients."""
     if parsed.fragment:
         return False

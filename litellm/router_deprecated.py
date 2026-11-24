@@ -62,8 +62,8 @@ if TYPE_CHECKING:
     )
     from litellm.types.utils import ModelInfo as ModelMapInfo
 
-_T: Final = TypeVar("_T")
-_P: Final = ParamSpec("_P")
+_T = TypeVar("_T")
+_P = ParamSpec("_P")
 
 DEPRECATED_ROUTER_MEMBER_USES: Final[Counter[str]] = Counter()  # mutable-ok: the live tally _note increments
 
@@ -398,9 +398,9 @@ class DeprecatedRouterMembers:
         _note("get_router_model_info", "registry().router_model_info(...)")
         return _as_router(self).registry().router_model_info(deployment, received_model_name, id)
 
-    def get_discovered_model_info(self, model_id: str | None) -> Mapping[str, int]:
+    def get_discovered_model_info(self, model_id: str | None, model: str | None = None) -> Mapping[str, int]:
         _note("get_discovered_model_info", "registry().discovered_model_info(id)")
-        return _as_router(self).registry().discovered_model_info(model_id)
+        return _as_router(self).registry().discovered_model_info(model_id, model)
 
     # -- registry: many deployments -------------------------------------------------------------
     def get_model_list(
@@ -836,7 +836,7 @@ class DeprecatedRouterMembers:
 # Router-family functions and classes that took the Router (``litellm_router_instance=``,
 # ``router=``, ...) take its RoutingContext now. These keep the old spellings working.
 
-_RoutingCallable: Final = TypeVar("_RoutingCallable", bound=Callable[..., object])
+_RoutingCallable = TypeVar("_RoutingCallable", bound=Callable[..., object])
 
 
 @functools.cache

@@ -65,6 +65,8 @@ if TYPE_CHECKING:
 # `RoutingArgs.ttl`: a usage counter lives for its minute.
 _USAGE_TTL: Final = 60
 
+_NO_TURN_PARAMS: Final[Mapping[str, object]] = MappingProxyType({})
+
 # What `initialize_assistants_endpoint` binds.
 _ASSISTANTS_ENDPOINTS: Final = (
     "acreate_assistants",
@@ -393,11 +395,15 @@ class RustLegacyMembers(RustRegistryMembers, RustOptionalChecks):
         return remaining
 
     async def async_admit_deployment_turn(
-        self, model_group: str, opened_on: Mapping[str, object], request_kwargs: Mapping[str, object]
+        self,
+        model_group: str,
+        opened_on: Mapping[str, object],
+        request_kwargs: Mapping[str, object],
+        turn_params: Mapping[str, object] = _NO_TURN_PARAMS,
     ) -> Mapping[str, object]:
         """Admit a later turn of an open websocket (``async_admit_deployment_turn``)."""
         port: Final[EndpointCore] = self.__dict__["_port"]  # pyright: ignore[reportAny]  # RustCore's own attribute
-        return await admit_deployment_turn(port, model_group, opened_on, request_kwargs)
+        return await admit_deployment_turn(port, model_group, opened_on, request_kwargs, turn_params)
 
     # -- one provider call -------------------------------------------------------------------------
 

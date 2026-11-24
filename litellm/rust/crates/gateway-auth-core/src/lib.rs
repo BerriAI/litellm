@@ -1,6 +1,7 @@
 mod admission;
 pub mod authn;
 pub mod authz;
+mod caller;
 mod commit;
 mod error;
 mod host;
@@ -19,6 +20,7 @@ mod testing;
 mod token;
 mod value;
 
+pub use caller::{Caller, NotACaller, StoredKey};
 pub use error::{
     AgentIdentityFailure, AssertionRejection, BudgetExceeded, ClaimDenial, Error, JwtDenial,
     KeyDenial, KeyError, KeyFailure, ModelAccessDenied, PremiumRequired, RbacDenial, Searched,

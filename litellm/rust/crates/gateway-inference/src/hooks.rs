@@ -9,12 +9,12 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use futures_util::{StreamExt, stream};
-use litellm_gateway_auth::AuthenticatedRequest;
+use litellm_gateway_auth::Authenticated;
 use litellm_llms_types::formats::chat_completions::ChatCompletionsUsage;
 use serde_json::{Map, Value};
 
 use crate::{
-    Ended, Gateway, Host,
+    Ended, Gateway, Host, record,
     serve::Endpoint,
     stream_event::Counts,
     stream_outcome::{self, Outcome},
@@ -28,11 +28,27 @@ pub enum CallType {
     Aocr,
 }
 
-/// A call a callback refused, in that callback's status and words.
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// A call a callback refused, as the proxy's `ProxyException` carries it to a route's handler.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Refusal {
     pub status: StatusCode,
     pub message: String,
+    /// The exception's `type`, when it is not the one its status gives.
+    pub kind: Option<String>,
+    /// The exception's `code`, when it is not its status.
+    pub code: Option<String>,
+    /// In the order Python sends them.
+    pub headers: Vec<(String, String)>,
+}
+
+impl Refusal {
+    pub fn new(status: StatusCode, message: impl Into<String>) -> Self {
+        Self {
+            status,
+            message: message.into(),
+            ..Self::default()
+        }
+    }
 }
 
 /// How a hook ended a call: a callback refused it, or one failed on a hook where the proxy raises
@@ -111,14 +127,13 @@ impl Told {
     }
 }
 
-/// Serves one call of the `call_type` route with the host's hooks around it: `serve` runs on the
+/// Serves one call with the host's hooks around it: `serve` runs on the
 /// body the pre-call hook left, a complete answer is logged off the request, as the proxy logs
 /// it after it went out, and a call that ends on an error, a refusal by that hook included,
 /// tells the hooks it failed.
 pub(crate) async fn around<H, F, Fut>(
     gateway: &Gateway<H>,
-    identity: &AuthenticatedRequest,
-    call_type: CallType,
+    identity: &Authenticated<H::Rows>,
     body: Map<String, Value>,
     serve: F,
 ) -> Result<Response, Ended>
@@ -127,7 +142,7 @@ where
     F: FnOnce(Arc<H::Hooks>, Map<String, Value>) -> Fut,
     Fut: Future<Output = Result<Answer, Ended>>,
 {
-    let hooks = Arc::new(gateway.host.hooks(identity, call_type));
+    let hooks = Arc::new(gateway.host.hooks(identity));
     let served = match hooks.pre_call(body).await {
         Ok(body) => serve(hooks.clone(), body).await,
         Err(ended) => Err(ended.into()),
@@ -135,7 +150,7 @@ where
     match served {
         Ok(Answer { response, complete }) => {
             if let Some(served) = complete {
-                tokio::spawn(async move { hooks.succeeded(served).await });
+                record::spawn_in_call(async move { hooks.succeeded(served).await });
             }
             Ok(response)
         }
