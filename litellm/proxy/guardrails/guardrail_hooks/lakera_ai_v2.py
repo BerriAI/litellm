@@ -2,6 +2,7 @@ import copy
 import os
 from collections.abc import Mapping, Sequence
 from datetime import datetime
+from itertools import chain
 from string import Formatter
 from types import MappingProxyType
 from typing import Final, Literal
@@ -20,6 +21,8 @@ from litellm.llms.base_llm.guardrail_translation.utils import (
     effective_skip_tool_message_for_guardrail,
     filter_messages_by_skip_flags,
     merge_guardrailed_scoped_messages,
+    stream_item_field,
+    stream_item_items,
 )
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
@@ -33,7 +36,7 @@ from litellm.proxy.guardrails._content_utils import (
 )
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.guardrails import GuardrailEventHooks, LitellmParams
-from litellm.types.llms.openai import AllMessageValues
+from litellm.types.llms.openai import AllMessageValues, ResponsesAPIResponse
 from litellm.types.proxy.guardrails.guardrail_hooks.lakera_ai_v2 import (
     LakeraAIBreakdownItem,
     LakeraAIRequest,
@@ -235,6 +238,32 @@ def _build_lakera_inspection_messages(data: Mapping[str, object]) -> Sequence[Ma
         *leading,
         *build_inspection_messages(dict(data)),
     ]
+
+
+def _text_blocks(container: object, text_type: str) -> tuple[tuple[object, str], ...]:
+    blocks: Final = tuple(
+        (block, stream_item_field(block, "text"))
+        for block in stream_item_items(container, "content")
+        if stream_item_field(block, "type") == text_type
+    )
+    return tuple((block, text) for block, text in blocks if isinstance(text, str) and text)
+
+
+def _native_output_text_blocks(response: object) -> tuple[tuple[object, str], ...]:
+    """Assistant text blocks of a Responses API or Anthropic Messages response, which carry no ``choices``."""
+    if isinstance(response, ResponsesAPIResponse):
+        output: Final = stream_item_items(response, "output")
+        return tuple(chain.from_iterable(_text_blocks(item, "output_text") for item in output))
+    if stream_item_field(response, "type") == "message":
+        return _text_blocks(response, "text")
+    return ()
+
+
+def _write_block_text(block: object, text: object) -> None:
+    if isinstance(block, dict):
+        block["text"] = text  # rebind-ok: masking rewrites the served response's text block in place
+        return
+    setattr(block, "text", text)  # noqa: B010  # block is a Responses or Anthropic SDK model with no shared typed base
 
 
 class LakeraAIGuardrail(CustomGuardrail):
@@ -761,8 +790,9 @@ class LakeraAIGuardrail(CustomGuardrail):
         if self.should_run_guardrail(data=data, event_type=event_type) is not True:
             return response
 
-        messages_or_none: Final[list[AllMessageValues] | None] = data.get("messages")
-        original_messages, _ = self._filter_skipped_messages(messages_or_none or [])
+        original_messages, _ = self._filter_skipped_messages(
+            _build_lakera_inspection_messages(data)  # pyright: ignore[reportArgumentType]  # build_inspection_messages returns plain dicts, not typed message unions
+        )
 
         # Extract assistant messages from the response, keeping only role/content.
         # Track choice indices so we write masked content back to the correct choice
@@ -779,9 +809,14 @@ class LakeraAIGuardrail(CustomGuardrail):
             if role and content:
                 response_messages.append({"role": role, "content": content})
                 choice_indices.append(i)
+        native_text_blocks: Final = _native_output_text_blocks(response)
+        response_messages.extend({"role": "assistant", "content": text} for _, text in native_text_blocks)
 
         # Use a copy of original_messages so _mask_pii_in_messages does not mutate data["messages"]
         post_call_messages: Final = list(copy.deepcopy(original_messages)) + response_messages
+        if not post_call_messages:
+            verbose_proxy_logger.warning("Lakera AI: not running guardrail. No inspectable text in request or response")
+            return response
 
         # Call Lakera guardrail
         lakera_guardrail_response, _ = await self.call_v2_guard(
@@ -800,11 +835,16 @@ class LakeraAIGuardrail(CustomGuardrail):
                     masked_entity_count=masked_entity_count,
                 )
                 assistant_messages: Final = masked_messages[len(original_messages) :]
+                native_masked: Final = assistant_messages[len(choice_indices) :]
+                for (block, _), masked in zip(native_text_blocks, native_masked, strict=True):
+                    _write_block_text(block, stream_item_field(masked, "content"))
                 for idx, msg in enumerate(assistant_messages):
                     if idx < len(choice_indices):
                         choice_idx = choice_indices[idx]
                         response_dict["choices"][choice_idx]["message"]["content"] = msg.get("content", "")
                 add_guardrail_to_applied_guardrails_header(request_data=data, guardrail_name=self.guardrail_name)
+                if native_text_blocks:
+                    return response
                 return ModelResponse(**_RESPONSE_FIELDS.validate_python(response_dict))
 
             # inject_system_message has nothing left to inject into once a response
