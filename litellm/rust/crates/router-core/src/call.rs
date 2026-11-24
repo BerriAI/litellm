@@ -339,9 +339,15 @@ fn context_window_refusal(failed: &Failed) -> Option<Failed> {
 
 fn refused_or(refusal: Option<Failed>, failed: Failed) -> Failed {
     match refusal {
-        Some(refusal) if !ends_call(&failed.error) => refusal,
+        Some(refusal) if !ends_call(&failed.error) && !blocked_by_guardrail(&failed.error) => {
+            refusal
+        }
         _ => failed,
     }
+}
+
+fn blocked_by_guardrail(error: &Error) -> bool {
+    retried_failure(error).is_some_and(|failure| failure.kind == FailureKind::GuardrailIntervention)
 }
 
 /// `fallback_lookup_groups`: the group a pre-routing hook selected, the group being served, then

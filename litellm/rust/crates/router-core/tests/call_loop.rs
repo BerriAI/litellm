@@ -470,6 +470,10 @@ fn server_error() -> AttemptError {
     failure(FailureKind::InternalServer, 500)
 }
 
+fn guardrail_block() -> AttemptError {
+    failure(FailureKind::GuardrailIntervention, 400)
+}
+
 fn agentic_followup() -> AttemptError {
     let mut failed = server_error();
     failed.agentic_followup = true;
@@ -2099,6 +2103,27 @@ async fn a_retry_that_fails_after_a_context_window_error_falls_back_on_that_erro
 
 #[rstest]
 #[tokio::test]
+async fn a_guardrail_block_on_a_retry_after_a_context_window_error_ends_the_call(
+    config: RouterConfig,
+) {
+    let host = Arc::new(ScriptedHost::failing(
+        "primary",
+        vec![context_window(), guardrail_block()],
+    ));
+    let router = router(
+        config,
+        json!({"num_retries": 2, "fallbacks": [{"primary": ["backup"]}]}),
+        host.clone(),
+    );
+    let refused = router.call(Op::from("acompletion"), request()).await;
+    assert!(
+        matches!(refused, Err(Error::Attempt { failure, .. }) if failure.kind == FailureKind::GuardrailIntervention)
+    );
+    assert_eq!(host.selected().len(), 2);
+}
+
+#[rstest]
+#[tokio::test]
 async fn a_retry_that_fails_after_a_context_window_error_raises_that_error(config: RouterConfig) {
     let host = Arc::new(ScriptedHost::failing(
         "primary",
@@ -2325,6 +2350,31 @@ async fn a_stream_context_window_error_in_an_order_tier_is_not_retried() {
         matches!(refused, Err(Error::Attempt { failure, .. }) if failure.kind == FailureKind::ContextWindowExceeded)
     );
     assert!(host.selected().is_empty());
+}
+
+#[rstest]
+#[tokio::test]
+async fn a_stream_guardrail_block_on_a_retry_after_a_context_window_error_ends_the_call(
+    config: RouterConfig,
+) {
+    let host = Arc::new(ScriptedHost::failing("primary", vec![guardrail_block()]));
+    let router = router(
+        config,
+        json!({"fallbacks": [{"primary": ["backup"]}]}),
+        host.clone(),
+    );
+    let refused = router
+        .retry_stream(
+            Op::from("acompletion"),
+            stream_request(),
+            origin_on("a1"),
+            context_window(),
+        )
+        .await;
+    assert!(
+        matches!(refused, Err(Error::Attempt { failure, .. }) if failure.kind == FailureKind::GuardrailIntervention)
+    );
+    assert_eq!(host.selected().len(), 1);
 }
 
 #[rstest]
