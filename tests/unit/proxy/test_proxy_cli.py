@@ -2328,7 +2328,7 @@ class TestProxyInitializationHelpers:
             )
 
         banner: Final = capsys.readouterr().out
-        assert "curl --location 'http://0.0.0.0:4012/chat/completions'" in banner
+        assert "curl --location --noproxy '*' 'http://0.0.0.0:4012/chat/completions'" in banner
         assert '--header "Authorization: Bearer $LITELLM_MASTER_KEY"' in banner
         assert '"model": "<your-model-name>"' in banner
 
