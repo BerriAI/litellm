@@ -153,7 +153,7 @@ def migration_lock(
     wait_seconds: Final = migration_lock_timeout()
     deadline: Final = time.monotonic() + wait_seconds
     try:
-        connection: Final = psycopg.connect(database_url, connect_timeout=10, autocommit=True)
+        connection: Final = psycopg.connect(database_url, connect_timeout=10, autocommit=True, client_encoding="utf8")
     except psycopg.Error as exc:
         raise RuntimeError(_coordination_failure(database_url, exc, connecting=True)) from None
     try:

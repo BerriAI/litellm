@@ -57,7 +57,8 @@ fn run_messages(py: Python<'_>, call: NativeCall<'_>, asynchronous: bool) -> PyR
             )
             .with_workload_identity(std::sync::Arc::new(
                 workload_identity::PythonWorkloadIdentity::new(context.clone()),
-            ));
+            ))
+            .with_pricing(std::sync::Arc::new(crate::model_cost::route_pricing(py)?));
             let route =
                 route.with_azure_ad_token_hosts(litellm_llms::base_llm::auth::AzureAdTokenHosts {
                     caller: crate::credentials::azure_ad_token_provider(arguments)?.map(

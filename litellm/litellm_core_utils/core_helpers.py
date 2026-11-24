@@ -252,15 +252,15 @@ _HTTP_ERROR_STATUSES: Final = range(HTTPStatus.BAD_REQUEST, 600)
 def error_status_code(exc: object, default: int) -> int:
     """The 4xx or 5xx HTTP status an exception carries as ``status_code`` (an int or a decimal string) or,
     the way ``ProxyException`` stores it, as a stringified ``code``; ``default`` when it carries neither."""
-    carried: Final = _http_error_status(attribute_or_none(exc, "status_code"))
+    carried: Final = http_error_status(attribute_or_none(exc, "status_code"))
     if carried is not None:
         return carried
     stringified: Final = attribute_or_none(exc, "code")
-    from_code: Final = _http_error_status(stringified) if isinstance(stringified, str) else None
+    from_code: Final = http_error_status(stringified) if isinstance(stringified, str) else None
     return default if from_code is None else from_code
 
 
-def _http_error_status(value: object) -> int | None:
+def http_error_status(value: object) -> int | None:
     match value:
         case bool():
             return None

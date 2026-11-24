@@ -524,7 +524,7 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
     ) -> tuple[int | None, int | None, int | None, int | None, int | None, int | None]:
         return self._parse_timestamps_and_status(response_data, status_str)
 
-    def _extract_file_configs(self, response_data: SupportsGet):
+    def _extract_file_configs(self, response_data: SupportsGet) -> tuple[object, object]:
         """Helper to extract input and output file configurations."""
         # Extract input file ID
         input_file_id = ""

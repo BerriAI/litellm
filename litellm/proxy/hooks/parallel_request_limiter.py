@@ -856,7 +856,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
         self,
         user_id: str,
         user_api_key_dict: UserAPIKeyAuth,
-    ) -> dict | None:
+    ) -> Mapping[str, object] | None:
         """
         Helper to get the 'Internal User Object'
 
