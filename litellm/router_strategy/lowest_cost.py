@@ -210,7 +210,7 @@ class LowestCostLoggingHandler(CustomLogger):
         model_group: str,
         healthy_deployments: list,
         messages: list[dict[str, str]] | None = None,
-        input: str | list[str] | None = None,
+        input: str | list | None = None,
         request_kwargs: Mapping[str, object] | None = None,
     ):
         """
