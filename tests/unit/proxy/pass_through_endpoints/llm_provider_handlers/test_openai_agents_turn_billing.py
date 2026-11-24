@@ -216,6 +216,16 @@ class _SwallowingRedis:
         return None
 
 
+class _SlowDownRedis:
+    async def async_set_cache(self, key: str, value: object, *, nx: bool, ttl: int) -> object:
+        await asyncio.sleep(0)
+        raise ConnectionError("redis is down")
+
+    async def async_get_cache(self, key: str) -> object:
+        await asyncio.sleep(0)
+        raise ConnectionError("redis is down")
+
+
 class _SpendRows(CustomLogger):
     def __init__(self) -> None:
         super().__init__()
@@ -451,6 +461,15 @@ async def test_a_shared_claim_store_outage_still_bills_the_turn(
     )
 
     assert (await rows.only_row())["total_tokens"] == TURN_USAGE["total_tokens"]
+
+
+@pytest.mark.asyncio
+async def test_concurrent_calls_on_one_worker_claim_a_turn_once_while_the_shared_claim_store_is_down():
+    claims: Final = TurnClaims(lambda: _SlowDownRedis())
+
+    granted: Final = await asyncio.gather(claims.claim("turn_1", "call_a"), claims.claim("turn_1", "call_b"))
+
+    assert sorted(granted) == [False, True]
 
 
 @pytest.mark.asyncio
@@ -1298,6 +1317,38 @@ async def test_a_turn_whose_messages_cannot_be_read_is_never_claimed_by_the_call
         {"events": [INPUT_MESSAGE]},
         None,
         "3c5e7a9c-1e3a-4c5e-9a7c-9e1a3c5e7a01",
+    )
+    row: Final = await rows.only_row()
+
+    assert row["total_tokens"] == TURN_USAGE["total_tokens"]
+    assert row["spend"] == pytest.approx(_expected_cost(TURN_USAGE))
+
+
+@pytest.mark.asyncio
+async def test_a_failed_read_of_the_calls_own_turn_never_bills_a_later_turn_with_the_same_text(
+    local_model_cost_map: None,
+):
+    api: Final = _AgentsApi(
+        turn_pages=(
+            (
+                _turn("turn_2", CALL_STARTED_AT + 1, "completed", SECOND_TURN_USAGE),
+                _turn("turn_1", CALL_STARTED_AT, "completed", TURN_USAGE),
+            ),
+        ),
+        session=_session(),
+        replies={
+            f"{SESSIONS_URL}/{SESSION_ID}/turns/turn_1/items?order=asc&limit=100": (503, _user_messages((USER_TEXT,)))
+        },
+    )
+    rows: Final = _SpendRows()
+
+    await _relay_call(
+        _biller(api, _Clock()),
+        rows,
+        EVENTS_URL,
+        {"events": [INPUT_MESSAGE]},
+        None,
+        "3c5e7a9c-1e3a-4c5e-9a7c-9e1a3c5e7a02",
     )
     row: Final = await rows.only_row()
 

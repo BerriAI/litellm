@@ -70,18 +70,18 @@ def _slots_released(kwargs: Mapping[str, object]) -> int:
     if (
         kwargs.get("call_type") in _CONNECTION_SCOPED_CALL_TYPES
         or _is_websocket_passthrough_row(kwargs)
-        or kwargs.get(USAGE_ONLY_SETTLEMENT_KEY) is True
-        or kwargs.get(SLOT_RELEASED_BEFORE_LOGGING) is True
+        or _released_by_its_request(kwargs)
     ):
         return 0
     return 1
 
 
+def _released_by_its_request(kwargs: Mapping[str, object]) -> bool:
+    return kwargs.get(USAGE_ONLY_SETTLEMENT_KEY) is True or kwargs.get(SLOT_RELEASED_BEFORE_LOGGING) is True
+
+
 def _request_count_for_an_uncounted_minute(kwargs: Mapping[str, object]) -> int:
-    already_counted: Final = (
-        kwargs.get(USAGE_ONLY_SETTLEMENT_KEY) is True or kwargs.get(SLOT_RELEASED_BEFORE_LOGGING) is True
-    )
-    return 0 if already_counted else 1
+    return 0 if _released_by_its_request(kwargs) else 1
 
 
 class CacheObject(TypedDict):

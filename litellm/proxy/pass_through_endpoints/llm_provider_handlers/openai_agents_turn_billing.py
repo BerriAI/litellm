@@ -196,8 +196,8 @@ class _MessageItemsPage(BaseModel):
     data: tuple[_MessageItem, ...]
 
 
-_PageT: Final = TypeVar("_PageT", _TurnsPage, _SubagentsPage, _ItemsPage, _MessageItemsPage, _Session)
-_ResultT: Final = TypeVar("_ResultT")
+_PageT = TypeVar("_PageT", _TurnsPage, _SubagentsPage, _ItemsPage, _MessageItemsPage, _Session)
+_ResultT = TypeVar("_ResultT")
 
 
 @dataclass(frozen=True, slots=True)
@@ -330,9 +330,8 @@ class TurnClaims:
     async def claim(self, turn_id: str, claimant: str) -> bool:
         if self._local.get_cache(turn_id) is not None:
             return False
-        owner: Final = await self._shared_owner(turn_id, claimant)
-        self._local.set_cache(turn_id, owner)
-        return owner == claimant
+        self._local.set_cache(turn_id, claimant)
+        return await self._shared_owner(turn_id, claimant) == claimant
 
     @with_service_target("openai_agents_turn_claims")
     async def _shared_owner(self, turn_id: str, claimant: str) -> object:
@@ -796,19 +795,19 @@ class OpenAIAgentsTurnBiller:
 
     async def _claim(
         self, page: _TurnsPage, turn_start: AgentsTurnStart, claimant: str, turns_path: str
-    ) -> _ClaimedTurn | None:
+    ) -> _ClaimedTurn | _FetchFailed | None:
         candidates: Final = sorted(
             (turn for turn in reversed(page.data) if turn.created_at >= turn_start.earliest_turn_created_at),
             key=lambda turn: turn.created_at,
         )
         for turn in candidates:
-            if await self._started_by_call(turn_start, turns_path, turn) and await self._claims.claim(
-                turn.id, claimant
-            ):
+            if isinstance(started := await self._started_by_call(turn_start, turns_path, turn), _FetchFailed):
+                return started
+            if started and await self._claims.claim(turn.id, claimant):
                 return _ClaimedTurn(turn=turn, turns_path=turns_path)
         return None
 
-    async def _started_by_call(self, turn_start: AgentsTurnStart, turns_path: str, turn: _Turn) -> bool:
+    async def _started_by_call(self, turn_start: AgentsTurnStart, turns_path: str, turn: _Turn) -> bool | _FetchFailed:
         if not turn_start.input_texts:
             return True
         items: Final = await self._fetch_page(
@@ -817,7 +816,7 @@ class OpenAIAgentsTurnBiller:
             _MessageItemsPage,
         )
         if isinstance(items, _FetchFailed):
-            return False
+            return items if items.retryable else False
         turn_texts: Final = itertools.chain.from_iterable(item.user_texts for item in items.data)
         return not turn_start.input_texts.isdisjoint(turn_texts)
 
