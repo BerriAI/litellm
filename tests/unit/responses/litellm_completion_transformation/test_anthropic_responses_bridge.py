@@ -53,6 +53,7 @@ async def test_async_response_api_handler_merges_trace_id_without_error():
         instructions: str | None = None,
         request_kwargs: Mapping[str, object] | None = None,
         previous_response_client_ids: tuple[str, ...] = (),
+        request_input: str | None = None,
     ) -> dict[str, object]:
         litellm_completion_request["litellm_trace_id"] = "session-trace"
         return litellm_completion_request

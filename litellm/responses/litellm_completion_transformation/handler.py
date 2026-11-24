@@ -19,6 +19,7 @@ from litellm.responses.litellm_completion_transformation.streaming_iterator impo
 )
 from litellm.responses.litellm_completion_transformation.transformation import (
     LiteLLMCompletionResponsesConfig,
+    holds_an_earlier_reply,
     previous_response_not_found,
 )
 from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
@@ -128,7 +129,7 @@ class LiteLLMCompletionTransformationHandler:
                 **kwargs,
             )
 
-        if previous_response_id:
+        if previous_response_id and not holds_an_earlier_reply(bridged_input):
             raise _sync_follow_up_refusal(
                 previous_response_client_ids[-1] if previous_response_client_ids else previous_response_id,
                 model,
@@ -186,6 +187,7 @@ class LiteLLMCompletionTransformationHandler:
                     instructions=responses_api_request.get("instructions"),
                     request_kwargs=_REQUEST_KWARGS_ADAPTER.validate_python(kwargs),
                     previous_response_client_ids=previous_response_client_ids,
+                    request_input=request_input,
                 )
             )
             if previous_response_id

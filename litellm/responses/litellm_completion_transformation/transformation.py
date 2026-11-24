@@ -332,8 +332,18 @@ def previous_response_not_found(
     )
 
 
+_TOOL_CALL_ITEM_TYPES: Final = frozenset({"function_call", "custom_tool_call"})
+
+
 def _input_item_role(input_item: Mapping[str, object]) -> str:
     return cast(str, input_item.get("role") or "user")  # cast-ok: client-supplied role forwarded verbatim, unvalidated
+
+
+def holds_an_earlier_reply(request_input: str | ResponseInputParam | None) -> bool:
+    return isinstance(request_input, list) and any(
+        _input_item_role(input_item) == "assistant" or input_item.get("type") in _TOOL_CALL_ITEM_TYPES
+        for input_item in request_input
+    )
 
 
 SessionMessage: TypeAlias = (
@@ -1071,6 +1081,7 @@ class LiteLLMCompletionResponsesConfig:
         session_lookup: Callable[[str], Awaitable[ChatCompletionSession]] | None = None,
         request_kwargs: Mapping[str, object] = MappingProxyType({}),
         previous_response_client_ids: tuple[str, ...] = (),
+        request_input: str | ResponseInputParam | None = None,
     ) -> dict:
         """
         Async hook to get the chain of previous input and output pairs and return a list of Chat Completion messages
@@ -1094,7 +1105,7 @@ class LiteLLMCompletionResponsesConfig:
         )
         _messages: Final = litellm_completion_request.get("messages") or []
         stored_messages: Final = chat_completion_session.get("messages") or []
-        if previous_response_id and not stored_messages:
+        if previous_response_id and not stored_messages and not holds_an_earlier_reply(request_input):
             raise previous_response_not_found(
                 previous_response_client_ids[-1] if previous_response_client_ids else previous_response_id,
                 model,
@@ -2112,7 +2123,7 @@ class LiteLLMCompletionResponsesConfig:
         Both need to be reconstructed as assistant tool_calls for Chat
         Completions providers.
         """
-        return input_item.get("type") in ("function_call", "custom_tool_call")
+        return input_item.get("type") in _TOOL_CALL_ITEM_TYPES
 
     @staticmethod
     def _transform_responses_api_tool_call_output_to_chat_completion_message(

@@ -14,7 +14,7 @@ kwargs lack the flag and these tests fail.
 
 import json
 import sys
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from types import MappingProxyType, SimpleNamespace
 from typing import Final
 from unittest.mock import patch
@@ -31,6 +31,7 @@ from litellm.responses.litellm_completion_transformation.handler import (
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.router_utils.router_callbacks.track_deployment_metrics import get_deployment_failures_for_current_minute
 from litellm.types.llms.openai import ResponsesAPIOptionalRequestParams, ResponsesAPIResponse
+from litellm.types.router import RetryPolicy
 from litellm.types.utils import ADDRESSED_RESPONSE_ID_FIELD
 
 
@@ -428,14 +429,17 @@ def _turn_stored_without_prompts(request_id: str) -> Mapping[str, object]:
 
 
 async def _bridged_follow_up(
-    asynchronous: bool, provider: _RecordingAnthropicHandler, proxy_fields: Mapping[str, object] = MappingProxyType({})
+    asynchronous: bool,
+    provider: _RecordingAnthropicHandler,
+    proxy_fields: Mapping[str, object] = MappingProxyType({}),
+    follow_up_input: str | Sequence[Mapping[str, object]] = "Double it",
 ) -> object:
     request: Final = {
         **proxy_fields,
         "model": "azure_ai/claude-sonnet-4-6",
         "api_base": "https://fake-foundry-resource.services.ai.azure.com",
         "api_key": "fake-api-key",
-        "input": "Double it",
+        "input": follow_up_input,
         "previous_response_id": _TURN_ONE_ID,
     }
     if not asynchronous:
@@ -460,14 +464,21 @@ async def _bridged_follow_up(
         ),
     ],
 )
+@pytest.mark.parametrize(
+    "follow_up_input",
+    [
+        pytest.param("Double it", id="user_turn"),
+        pytest.param([{"type": "function_call_output", "call_id": "call_1", "output": "7"}], id="tool_output_only"),
+    ],
+)
 async def test_bridged_follow_up_without_a_replayable_previous_turn_is_refused_before_the_provider_call(
-    asynchronous: bool, prisma_client: SimpleNamespace | None
+    asynchronous: bool, prisma_client: SimpleNamespace | None, follow_up_input: str | Sequence[Mapping[str, object]]
 ):
     provider: Final = _RecordingAnthropicHandler(_ANTHROPIC_MESSAGE_PAYLOAD)
 
     with patch("litellm.proxy.proxy_server.prisma_client", prisma_client):
         with pytest.raises(litellm.BadRequestError) as refused:
-            await _bridged_follow_up(asynchronous, provider)
+            await _bridged_follow_up(asynchronous, provider, follow_up_input=follow_up_input)
 
     assert provider.request_body is None, "the follow-up reached the provider with no conversation history"
     assert (refused.value.status_code, refused.value.param, refused.value.code) == (
@@ -501,6 +512,48 @@ async def test_refused_follow_ups_do_not_count_toward_the_deployments_failure_ra
 
     assert get_deployment_failures_for_current_minute(router, "d1") == 0
     assert get_deployment_failures_for_current_minute(router, "d2") == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "fallback_settings",
+    [
+        pytest.param({"fallbacks": [{"bridged": ["native"]}]}, id="fallbacks"),
+        pytest.param({"default_fallbacks": ["native"]}, id="default_fallbacks"),
+    ],
+)
+async def test_a_refused_follow_up_is_neither_retried_nor_sent_to_a_fallback(fallback_settings: Mapping[str, object]):
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "bridged",
+                "litellm_params": {
+                    "model": "azure_ai/claude-sonnet-4-6",
+                    "api_base": "https://fake-foundry-resource.services.ai.azure.com",
+                    "api_key": "fake-api-key",
+                },
+                "model_info": {"id": "d1"},
+            },
+            {
+                "model_name": "native",
+                "litellm_params": {
+                    "model": "openai/gpt-5.4-mini",
+                    "api_key": "fake-api-key",
+                    "mock_response": "answered by the fallback without the history",
+                },
+                "model_info": {"id": "n1"},
+            },
+        ],
+        num_retries=3,
+        retry_policy=RetryPolicy(BadRequestErrorRetries=2),
+        **fallback_settings,
+    )
+
+    with patch("litellm.proxy.proxy_server.prisma_client", None):
+        with pytest.raises(litellm.BadRequestError, match="not found") as refused:
+            await router.aresponses(model="bridged", input="Double it", previous_response_id=_TURN_ONE_ID)
+
+    assert not getattr(refused.value, "num_retries", None)
 
 
 @pytest.mark.asyncio
@@ -550,6 +603,60 @@ async def test_a_sync_follow_up_beside_the_proxy_database_asks_for_aresponses_wi
     assert (refused.value.status_code, refused.value.param) == (400, "previous_response_id")
     assert "'resp_the_client_held'" in refused.value.message
     assert "litellm.aresponses()" in refused.value.message
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("follow_up_input", "earlier_reply"),
+    [
+        pytest.param(
+            [
+                {"role": "user", "content": "My favorite number is 7."},
+                {"role": "assistant", "content": "Noted."},
+                {"role": "user", "content": "Double it"},
+            ],
+            "Noted.",
+            id="assistant_message",
+        ),
+        pytest.param(
+            [
+                {"role": "user", "content": "Look up my favorite number."},
+                {"type": "function_call", "call_id": "call_1", "name": "lookup_number", "arguments": "{}"},
+                {"type": "function_call_output", "call_id": "call_1", "output": "7"},
+            ],
+            "lookup_number",
+            id="function_call",
+        ),
+    ],
+)
+@pytest.mark.parametrize(
+    ("asynchronous", "prisma_client"),
+    [
+        pytest.param(False, None, id="sync-no_database"),
+        pytest.param(False, SimpleNamespace(db=_DatabaseOnTheProxyLoop()), id="sync-proxy_database"),
+        pytest.param(True, None, id="async-no_database"),
+        pytest.param(True, SimpleNamespace(db=_StoredTurns(())), id="async-unknown_id"),
+        pytest.param(
+            True,
+            SimpleNamespace(db=_StoredTurns((_turn_stored_without_prompts(_TURN_ONE_RESPONSE_ID),))),
+            id="async-prompts_not_stored",
+        ),
+    ],
+)
+async def test_a_follow_up_carrying_its_earlier_reply_in_input_reaches_the_provider_when_the_id_does_not_resolve(
+    asynchronous: bool,
+    prisma_client: SimpleNamespace | None,
+    follow_up_input: Sequence[Mapping[str, object]],
+    earlier_reply: str,
+):
+    provider: Final = _RecordingAnthropicHandler(_ANTHROPIC_MESSAGE_PAYLOAD)
+
+    with patch("litellm.proxy.proxy_server.prisma_client", prisma_client):
+        response = await _bridged_follow_up(asynchronous, provider, follow_up_input=follow_up_input)
+
+    assert isinstance(response, ResponsesAPIResponse)
+    assert provider.request_body is not None, "the follow-up that carried its history never reached the provider"
+    assert earlier_reply in json.dumps(provider.request_body["messages"])
 
 
 @pytest.mark.asyncio
