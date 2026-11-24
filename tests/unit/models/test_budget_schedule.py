@@ -323,7 +323,6 @@ def test_key_and_user_lists_reject_schedules_before_checking_them() -> None:
     assert "overlap" not in str(error.value)
 
 
-
 @pytest.mark.parametrize(
     "monday, overlaps",
     [(("08:00", "09:00"), False), (("00:00", "00:01"), True)],
@@ -339,3 +338,20 @@ def test_sunday_night_wraps_into_monday_with_exact_edges(monday: tuple[str, str]
         return
     with pytest.raises(ValidationError, match="overlap"):
         _team_limits(*windows)
+
+
+@pytest.mark.parametrize(
+    "at",
+    ["2026-10-25T00:15:00", "2026-10-25T01:15:00"],
+    ids=["first_0215_of_the_fall_back_night", "repeated_0215_of_the_fall_back_night"],
+)
+def test_a_repeated_local_time_stays_in_one_budgeted_period(at: str) -> None:
+    small_hours: Final = BudgetSchedule(timezone=BERLIN, start="02:00", end="02:30")
+    assert small_hours.period_at(_utc(at)) == (_utc("2026-10-25T00:00:00"), _utc("2026-10-25T01:30:00"))
+
+
+def test_periods_meeting_at_a_skipped_local_time_leave_no_gap() -> None:
+    before: Final = BudgetSchedule(timezone=BERLIN, start="01:00", end="02:30")
+    after: Final = BudgetSchedule(timezone=BERLIN, start="02:30", end="04:00")
+    assert before.period_at(_utc("2026-03-29T00:30:00")) == (_utc("2026-03-29T00:00:00"), _utc("2026-03-29T01:30:00"))
+    assert after.period_at(_utc("2026-03-29T01:30:00")) == (_utc("2026-03-29T01:30:00"), _utc("2026-03-29T02:00:00"))

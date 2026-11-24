@@ -1,4 +1,4 @@
-from collections.abc import Generator, Sequence
+from collections.abc import Callable, Generator, Iterable, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
 from datetime import date, datetime, time, timedelta, timezone
@@ -100,10 +100,10 @@ class BudgetSchedule(LiteLLMPydanticObjectBase):
 
     def _period_from(self, day: date) -> tuple[datetime, datetime]:
         zone: Final = ZoneInfo(self.timezone)
-        start: Final = datetime.combine(day, self.start, tzinfo=zone)
         end_day: Final = day if self.end > self.start else day + timedelta(days=1)
-        end: Final = datetime.combine(end_day, self.end, tzinfo=zone)
-        return start.astimezone(timezone.utc), end.astimezone(timezone.utc)
+        return _instant(datetime.combine(day, self.start), zone, min), _instant(
+            datetime.combine(end_day, self.end), zone, max
+        )
 
     def _starts_on(self, day: date) -> bool:
         return WEEKDAYS[day.weekday()] in self.days
@@ -124,6 +124,14 @@ class BudgetSchedule(LiteLLMPydanticObjectBase):
             if self._starts_on(local_day + timedelta(days=offset))
         )
         return next(start for start in starts if start > at)
+
+
+def _instant(local: datetime, zone: ZoneInfo, pick: Callable[[Iterable[datetime]], datetime]) -> datetime:
+    """A wall time repeated when clocks fall back is both occurrences, so periods start at the first and end at the
+    second. A wall time skipped when clocks spring forward maps to the instant after the jump."""
+    folds: Final = tuple(local.replace(tzinfo=zone, fold=fold).astimezone(timezone.utc) for fold in (0, 1))
+    real: Final = tuple(instant for instant in folds if instant.astimezone(zone).replace(tzinfo=None) == local)
+    return pick(real) if real else folds[0]
 
 
 def _minutes(value: time) -> int:
