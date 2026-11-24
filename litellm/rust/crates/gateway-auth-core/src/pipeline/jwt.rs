@@ -14,11 +14,12 @@ use crate::{
     identity::{
         Caller, CallerKind, Principal,
         jwt::{
-            AgentMode, ClaimIdentity, FinishedJwt, JwtIdentity, JwtMapping, JwtOutcome,
+            AgentMode, AutoRegisteredJwt, ClaimIdentity, JwtIdentity, JwtMapping, JwtOutcome,
             Provisioning, Team, TeamSettings, UserInfo, agent, caller, claims, org,
             team::{self, Joined},
             user::{self, ResolvedUser},
         },
+        key::project,
     },
 };
 
@@ -29,7 +30,7 @@ struct Authorized<R: Rows> {
 }
 
 /// The builder's JWT block: the token, the key it maps to, the operator's check, then who it
-/// acts as and what it may call, then the grants and the token the host finishes.
+/// acts as and what it may call, then the grants and the user's per-model budget.
 pub(crate) async fn build<H: AuthHost>(
     host: &H,
     token: &Token,
@@ -468,17 +469,30 @@ fn joined<R: Rows>(found: Option<Joined<R>>) -> JoinedTeam<R> {
     }
 }
 
-/// The token the host finishes for an identity, or the identity itself for a proxy admin.
+/// The identity, once the user's per-model budget allows the request. A proxy admin has none.
 async fn finished<H: AuthHost>(
     host: &H,
     identity: JwtIdentity<H::Rows>,
 ) -> Result<JwtOutcome<H::Rows>, Error> {
-    if identity.is_proxy_admin {
-        return Ok(JwtOutcome::Admin(identity));
+    if !identity.is_proxy_admin {
+        let user = identity.affiliation.holder.user().and_then(Named::stored);
+        let user_id = identity.user_id.as_deref();
+        user_model_budget(host, user, user_id, identity.team_id.as_deref()).await?;
     }
-    Ok(JwtOutcome::Finished(
-        host.finish_jwt(FinishedJwt::Identity(&identity)).await?,
-    ))
+    Ok(JwtOutcome::Jwt(identity))
+}
+
+/// Only a user row can hold a per-model budget, and only a user id names whose spend it caps.
+async fn user_model_budget<H: AuthHost>(
+    host: &H,
+    user: Option<&UserRow<H>>,
+    user_id: Option<&str>,
+    team_id: Option<&str>,
+) -> Result<(), Error> {
+    match (user, user_id) {
+        (Some(user), Some(user_id)) => host.jwt_user_model_budget(user, user_id, team_id).await,
+        _ => Ok(()),
+    }
 }
 
 /// The mapping for a claim no key was mapped to yet, written together with the other grants.
@@ -493,7 +507,7 @@ async fn register<H: AuthHost>(
     if identity.is_proxy_admin {
         commit::apply(host, grants).await?;
         mapping::remember_proxy_admin(host, pending, settings).await?;
-        return Ok(JwtOutcome::Admin(identity));
+        return Ok(JwtOutcome::Jwt(identity));
     }
     let registration = mapping::registration(host, pending, &identity, settings).await?;
     let grants = grants.with(Grant::CreateKeyMapping(registration.clone()));
@@ -524,10 +538,21 @@ async fn register<H: AuthHost>(
     if falls_through_to_key_checks {
         return Ok(JwtOutcome::MappedKey(mapped.key, jwt));
     }
-    Ok(JwtOutcome::Finished(
-        host.finish_jwt(FinishedJwt::AutoRegisteredKey(&jwt, &mapped.key.row))
-            .await?,
-    ))
+    let record = &mapped.key.record;
+    let project = project::read(host, record).await?;
+    let user = jwt.user.as_ref();
+    user_model_budget(
+        host,
+        user,
+        record.user_id.as_deref(),
+        record.team_id.as_deref(),
+    )
+    .await?;
+    Ok(JwtOutcome::AutoRegistered(AutoRegisteredJwt {
+        jwt,
+        key: mapped.key.row,
+        project: project.and_then(Named::into_stored),
+    }))
 }
 
 #[cfg(test)]
@@ -1420,32 +1445,75 @@ mod tests {
         assert_eq!(team_id_of(&identity), expected.as_ref().map(|team| *team));
     }
 
-    #[tokio::test]
-    async fn user_over_the_model_budget_is_denied_once_the_token_is_finished() {
-        let exceeded = BudgetExceeded {
+    fn exceeded() -> BudgetExceeded {
+        BudgetExceeded {
             current_cost: 2.0,
             max_budget: 1.0,
             message: "Budget has been exceeded!".to_owned(),
             subject: None,
             entity_type: Some("user".to_owned()),
             entity_id: Some("u1".to_owned()),
-        };
+        }
+    }
+
+    #[rstest]
+    #[case::over_it(
+        json!({"sub": "u1"}),
+        "internal_user",
+        Some(exceeded()),
+        Err(Some(PublicDenial::BudgetExceeded(exceeded()))),
+        "jwt_user_model_budget u1 u1 -"
+    )]
+    #[case::within_it_for_the_claimed_team(
+        json!({"sub": "u1", "groups": ["t1"]}),
+        "internal_user",
+        None,
+        Ok(Some("u1")),
+        "jwt_user_model_budget u1 u1 t1"
+    )]
+    #[case::a_proxy_admin_is_not_asked(
+        json!({"sub": "u1"}),
+        "proxy_admin",
+        Some(exceeded()),
+        Ok(Some("u1")),
+        "resolve_user u1 team=-"
+    )]
+    #[case::a_jwt_without_a_user_is_not_asked(
+        json!({"groups": ["t1"]}),
+        "internal_user",
+        Some(exceeded()),
+        Ok(None),
+        "team t1"
+    )]
+    #[tokio::test]
+    async fn the_users_model_budget_is_the_last_step_before_the_identity(
+        #[case] claims: Value,
+        #[case] role: &str,
+        #[case] over_budget: Option<BudgetExceeded>,
+        #[case] expected: Result<Option<&str>, Option<PublicDenial>>,
+        #[case] last_call: &str,
+    ) {
         let host = ScriptedHost {
-            users: HashMap::from([("u1", user("u1", "internal_user", &[]))]),
-            jwt_user_over_budget: Some(exceeded.clone()),
-            ..host(json!({"sub": "u1"}))
+            teams: HashMap::from([("t1", team("t1"))]),
+            users: HashMap::from([("u1", user("u1", role, &[]))]),
+            jwt_user_over_budget: over_budget,
+            ..host(claims)
         };
-        let Err(denial) = build_with(&host, CHAT, &settings(config())).await else {
-            panic!("expected the budget to deny");
-        };
-        assert_eq!(
-            denial.public(),
-            Some(PublicDenial::BudgetExceeded(exceeded))
-        );
-        assert_eq!(
-            calls(&host).last().map(String::as_str),
-            Some("finish identity")
-        );
+        let settings = settings(JwtAuthSettings {
+            team_ids_jwt_field: Some("groups".into()),
+            ..config()
+        });
+
+        let outcome = build_with(&host, CHAT, &settings).await;
+
+        let user_id = outcome
+            .map(|outcome| match outcome {
+                JwtOutcome::Jwt(identity) => identity.user_id,
+                other => panic!("expected the JWT's own identity, got {other:?}"),
+            })
+            .map_err(|denial| denial.public());
+        assert_eq!(user_id, expected.map(|id| id.map(str::to_owned)));
+        assert_eq!(calls(&host).last().map(String::as_str), Some(last_call));
     }
 
     async fn build_with(
@@ -1487,12 +1555,15 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn auto_register_maps_the_authorized_identity() {
+    /// A host that mints a key in project `p1`, owned by `owner` in team `kt`, for the JWT's `u1`.
+    fn auto_registering(over_budget: Option<BudgetExceeded>) -> (ScriptedHost, JwtSettings) {
         let minted = MappedKey {
             key: Keyed {
                 record: KeyRecord {
                     token: Some(KeyHash::new("minted")),
+                    user_id: Some("owner".to_owned()),
+                    team_id: Some("kt".to_owned()),
+                    project_id: Some("p1".to_owned()),
                     ..KeyRecord::default()
                 },
                 row: "minted row".to_owned(),
@@ -1502,6 +1573,7 @@ mod tests {
         let host = ScriptedHost {
             users: HashMap::from([("u1", user("u1", "internal_user", &[]))]),
             keys: HashMap::from([("minted", minted)]),
+            jwt_user_over_budget: over_budget,
             ..host(json!({"client_id": "app", "sub": "u1", "email": "u1@corp.com", "org": "o1"}))
         };
         let settings = JwtSettings {
@@ -1511,13 +1583,21 @@ mod tests {
             },
             ..mapping(UnregisteredJwtClientBehavior::AutoRegister)
         };
+        (host, settings)
+    }
+
+    #[tokio::test]
+    async fn auto_register_maps_the_authorized_identity() {
+        let (host, settings) = auto_registering(None);
+        let Ok(JwtOutcome::AutoRegistered(registered)) = build_with(&host, CHAT, &settings).await
+        else {
+            panic!("expected the auto-registered key");
+        };
         assert_eq!(
-            build_with(&host, CHAT, &settings).await,
-            Ok(JwtOutcome::Finished(
-                "finish auto_registered minted row".to_owned()
-            ))
+            (registered.key.as_str(), registered.project.as_deref()),
+            ("minted row", Some("project p1"))
         );
-        let jwt = host.finished_mapping.lock().unwrap().clone().unwrap();
+        let jwt = registered.jwt;
         assert_eq!(
             jwt.origin,
             KeyOrigin::AutoRegistered {
@@ -1539,8 +1619,25 @@ mod tests {
                 "create_mapping client_id=app existing=-",
                 "set jwt_key_mapping:client_id:app 300",
                 "key_by_hash minted",
-                "finish auto_registered minted row",
+                "project p1",
+                "jwt_user_model_budget u1 owner kt",
             ]
+        );
+    }
+
+    #[tokio::test]
+    async fn auto_registered_key_over_the_users_model_budget_is_denied_once_mapped() {
+        let (host, settings) = auto_registering(Some(exceeded()));
+
+        let outcome = build_with(&host, CHAT, &settings).await;
+
+        assert_eq!(
+            outcome.map_err(|denial| denial.public()),
+            Err(Some(PublicDenial::BudgetExceeded(exceeded())))
+        );
+        assert_eq!(
+            calls(&host).last().map(String::as_str),
+            Some("jwt_user_model_budget u1 owner kt")
         );
     }
 
@@ -1560,7 +1657,7 @@ mod tests {
         .await;
         assert!(matches!(
             outcome,
-            Ok(JwtOutcome::Admin(JwtIdentity {
+            Ok(JwtOutcome::Jwt(JwtIdentity {
                 is_proxy_admin: true,
                 ..
             }))

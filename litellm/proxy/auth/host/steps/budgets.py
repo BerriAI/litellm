@@ -17,16 +17,18 @@ After the move:
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Final
 
 from fastapi import Request
+from pydantic import TypeAdapter
 
 import litellm
 from litellm._internal_context import with_service_target
 from litellm.constants import AUTH_OBJECTS_TARGET
+from litellm.litellm_core_utils.core_helpers import attribute_or_none
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.models.team_membership import LiteLLM_TeamMembership
 from litellm.models.user import LiteLLM_UserTable
@@ -43,6 +45,7 @@ from litellm.proxy.auth.user_api_key_auth import (
     budget_served_model,
     check_key_model_budget_with_fallback,
     check_user_model_budget,
+    enforce_user_model_budget,
     fetch_global_spend_with_event_coordination,
     get_model_from_request_context,
     get_model_names_for_budget_checks,
@@ -55,6 +58,8 @@ from litellm.redis.stores.spend_counters import team_member_counter
 from litellm.repositories.team_membership_repository import TeamMembershipRepository
 from litellm.types.integrations.slack_alerting import CallInfo, Litellm_EntityType
 from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
+
+_MODEL_MAX_BUDGET: Final[TypeAdapter[Mapping[str, object] | None]] = TypeAdapter(Mapping[str, object] | None)
 
 if TYPE_CHECKING:
     from litellm.proxy.hooks.model_max_budget_limiter import PROXY_VirtualKeyModelMaxBudgetLimiter
@@ -76,13 +81,13 @@ class BudgetChecks:
     llm_model_list: Sequence[object] | None
     model_max_budget_limiter: PROXY_VirtualKeyModelMaxBudgetLimiter
 
-    def _requested_model(self, token: UserAPIKeyAuth) -> str | list[str] | None:
+    def _requested_model(self, team_id: str | None) -> str | list[str] | None:
         return get_model_from_request_context(
             request_data=self.request_data,
             route=self.route,
             request=self.request,
             llm_router=self.llm_router,
-            team_id=token.team_id,
+            team_id=team_id,
         )
 
     def _skips_budget_checks_for(self, model: str | Sequence[str] | None) -> bool:
@@ -97,12 +102,12 @@ class BudgetChecks:
     async def _key_skips_budget_checks(self, token: UserAPIKeyAuth) -> bool:
         return self._skips_budget_checks_for(
             await budget_served_model(
-                self._requested_model(token), self.request_data, self.request, self.llm_router, token
+                self._requested_model(token.team_id), self.request_data, self.request, self.llm_router, token
             )
         )
 
     def _request_models(self, token: UserAPIKeyAuth) -> Sequence[str]:
-        return get_model_names_for_budget_checks(model=self._requested_model(token))
+        return get_model_names_for_budget_checks(model=self._requested_model(token.team_id))
 
     @with_service_target(AUTH_OBJECTS_TARGET)
     async def _team_membership(
@@ -203,10 +208,18 @@ class BudgetChecks:
             return
         await self._user_model(token, models)
 
-    async def jwt_user_model(self, token: UserAPIKeyAuth) -> None:
-        """The per-model user budget the JWT path checks, under the same zero-cost model skip as the key path."""
-        if not self._skips_budget_checks_for(self._requested_model(token)):
-            await self._user_model(token, self._request_models(token))
+    async def jwt_user_model(self, user: LiteLLM_UserTable, user_id: str, team_id: str | None) -> None:
+        """The per-model budget of the user a JWT acts as, under the same zero-cost model skip as the key path."""
+        model: Final = self._requested_model(team_id)
+        if self._skips_budget_checks_for(model):
+            return
+        await enforce_user_model_budget(
+            user_id=user_id,
+            user_model_max_budget=_MODEL_MAX_BUDGET.validate_python(attribute_or_none(user, "model_max_budget")),
+            team_id=team_id,
+            model_max_budget_limiter=self.model_max_budget_limiter,
+            models=get_model_names_for_budget_checks(model=model),
+        )
 
     async def _user_model(self, token: UserAPIKeyAuth, models: Sequence[str]) -> None:
         await check_user_model_budget(

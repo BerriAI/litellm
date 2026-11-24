@@ -31,7 +31,7 @@ use super::passthrough::route_list;
 
 use super::{
     convert::{py_method, py_optional_timestamp, py_timestamp, timestamp},
-    host::{Ask, Finished, PyRow, PyRows, PythonAuthHost},
+    host::{Ask, PyRow, PyRows, PythonAuthHost},
     settings::AuthSettings,
     stepper::Stepper,
 };
@@ -326,6 +326,11 @@ pub(crate) enum AuthStep {
         owner: Option<Py<PyAny>>,
         runs_inference_checks: bool,
     },
+    JwtUserModelBudget {
+        user: Py<PyAny>,
+        user_id: String,
+        team_id: Option<String>,
+    },
     KeyTeam {
         team_id: String,
     },
@@ -429,20 +434,6 @@ pub(crate) enum AuthStep {
     },
     JwtEndUser {
         end_user_id: String,
-    },
-    /// A `RustIdentity.Jwt` to finish a token from.
-    FinishJwt {
-        identity: Py<PyAny>,
-    },
-    /// The key auto-registered for a JWT, to finish a token from. `org_id` and `user` are those
-    /// of `RustIdentity.AutoRegisteredJwtKey`.
-    FinishAutoRegisteredJwt {
-        claims: Py<PyAny>,
-        end_user_id: Option<String>,
-        user_email: Option<String>,
-        org_id: Option<String>,
-        user: Option<Py<PyAny>>,
-        key: Py<PyAny>,
     },
     KeyMappingHash {
         claim_field: String,
@@ -660,12 +651,19 @@ pub(crate) enum IdentityView {
         user: Option<Py<PyAny>>,
         context: Py<KeyContextView>,
     },
-    /// The token the host's `finish_jwt` built.
-    FinishedJwt {
-        token: Py<PyAny>,
+    /// A key auto-registered for a JWT that stands in for it without the key checks, with the
+    /// key's project. `org_id` and `user` are as on `AutoRegisteredJwtKey`.
+    AutoRegisteredJwt {
+        claims: Py<PyAny>,
+        end_user_id: Option<String>,
+        user_email: Option<String>,
+        org_id: Option<String>,
+        user: Option<Py<PyAny>>,
+        key: Py<PyAny>,
+        project: Option<Py<PyAny>>,
     },
-    /// A JWT's ids and the rows behind them: a proxy admin's outcome or `authorize_jwt`'s result.
-    /// `RustAuthStep.FinishJwt` carries one too, for the host to finish.
+    /// A JWT's ids and the rows behind them: the outcome of a JWT that acts as itself, or
+    /// `authorize_jwt`'s result.
     Jwt {
         claims: Py<PyAny>,
         is_proxy_admin: bool,
@@ -763,9 +761,15 @@ impl IdentityView {
                 context: KeyContextView::new(py, context)?,
             },
             Identity::MappedJwtKey(mapped, context) => Self::mapped(py, mapped, context)?,
-            Identity::AdminJwt(jwt) => Self::jwt(py, jwt)?,
-            Identity::FinishedJwt(token) => Self::FinishedJwt {
-                token: row(py, token),
+            Identity::Jwt(jwt) => Self::jwt(py, jwt)?,
+            Identity::AutoRegisteredJwt(registered) => Self::AutoRegisteredJwt {
+                claims: to_py(py, &registered.jwt.claims)?,
+                end_user_id: registered.jwt.end_user_id.clone(),
+                user_email: registered.jwt.user_email.clone(),
+                org_id: minted_org_id(&registered.jwt.origin),
+                user: rows(py, registered.jwt.user.as_ref()),
+                key: row(py, &registered.key),
+                project: rows(py, registered.project.as_ref()),
             },
         })
     }
@@ -1074,6 +1078,16 @@ impl AuthStep {
                 owner: rows(py, owner.as_ref()),
                 runs_inference_checks: *runs_inference_checks,
             },
+            Ask::JwtUserModelBudget {
+                user,
+                user_id,
+                team_id,
+                ..
+            } => Self::JwtUserModelBudget {
+                user: row(py, user),
+                user_id: user_id.clone(),
+                team_id: team_id.clone(),
+            },
             Ask::KeyTeam { team_id, .. } => Self::KeyTeam {
                 team_id: team_id.clone(),
             },
@@ -1202,26 +1216,6 @@ impl AuthStep {
             },
             Ask::JwtEndUser { end_user_id, .. } => Self::JwtEndUser {
                 end_user_id: end_user_id.clone(),
-            },
-            Ask::FinishJwt {
-                finished: Finished::Identity(identity),
-                ..
-            } => Self::FinishJwt {
-                identity: IdentityView::jwt(py, identity)?
-                    .into_pyobject(py)?
-                    .into_any()
-                    .unbind(),
-            },
-            Ask::FinishJwt {
-                finished: Finished::AutoRegisteredKey(jwt, key),
-                ..
-            } => Self::FinishAutoRegisteredJwt {
-                claims: to_py(py, &jwt.claims)?,
-                end_user_id: jwt.end_user_id.clone(),
-                user_email: jwt.user_email.clone(),
-                org_id: minted_org_id(&jwt.origin),
-                user: rows(py, jwt.user.as_ref()),
-                key: row(py, key),
             },
             Ask::KeyMappingHash {
                 claim_field,
@@ -1505,7 +1499,9 @@ impl AuthCall {
                 reply.send(());
                 Ok(())
             }
-            Ask::TeamMemberBudget { reply, .. } | Ask::KeyBudgets { reply, .. } => {
+            Ask::TeamMemberBudget { reply, .. }
+            | Ask::KeyBudgets { reply, .. }
+            | Ask::JwtUserModelBudget { reply, .. } => {
                 reply.send(Ok(()));
                 Ok(())
             }
@@ -1518,11 +1514,13 @@ impl AuthCall {
     fn budget_exceeded(&self, error: BudgetFacts) -> PyResult<()> {
         let exceeded = BudgetExceeded::from(error);
         self.stepper.answer("an exceeded budget", |ask| match ask {
-            Ask::TeamMemberBudget { reply, .. } | Ask::KeyBudgets { reply, .. } => {
+            Ask::TeamMemberBudget { reply, .. }
+            | Ask::KeyBudgets { reply, .. }
+            | Ask::JwtUserModelBudget { reply, .. } => {
                 reply.send(Err(exceeded));
                 Ok(())
             }
-            Ask::EndUser { reply, .. } | Ask::FinishJwt { reply, .. } => {
+            Ask::EndUser { reply, .. } => {
                 reply.send(Err(exceeded));
                 Ok(())
             }
@@ -1540,12 +1538,12 @@ impl AuthCall {
         })
     }
 
-    /// A row the host built: the end user, a key with team values or prepared for the checks, a
-    /// user with its role or teams synced, or a finished JWT token.
+    /// A row the host built: the end user, a key with team values or prepared for the checks, or a
+    /// user with its role or teams synced.
     fn row(&self, row: Py<PyAny>) -> PyResult<()> {
         let row = PyRow::new(row);
         self.stepper.answer("a row", |ask| match ask {
-            Ask::EndUser { reply, .. } | Ask::FinishJwt { reply, .. } => {
+            Ask::EndUser { reply, .. } => {
                 reply.send(Ok(row));
                 Ok(())
             }
