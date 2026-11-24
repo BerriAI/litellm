@@ -139,6 +139,7 @@ def _mcp_server_table(name: str, server: McpServer) -> str:
         f"args = {json.dumps(server.args)}\n"
         f"env = {{ {env} }}\n"
         'default_tools_approval_mode = "approve"\n'
+        "required = true\n"
     )
 
 
