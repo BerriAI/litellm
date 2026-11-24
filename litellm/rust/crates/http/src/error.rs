@@ -203,7 +203,13 @@ impl Error {
     }
 
     pub fn is_upstream_stream_event(&self) -> bool {
-        matches!(&*self.0, Repr::Status { stream_event: true, .. })
+        matches!(
+            &*self.0,
+            Repr::Status {
+                stream_event: true,
+                ..
+            }
+        )
     }
 
     /// The provider's response headers on an upstream failure; empty for every other error.
