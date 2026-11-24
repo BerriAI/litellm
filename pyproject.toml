@@ -95,7 +95,7 @@ proxy = [
     "mcp>=2.3.0,<3",
     "httpx2>=2.10.0,<3",
     "pydantic>=2.12.0,<3",
-    "litellm-proxy-extras==0.4.120",
+    "litellm-proxy-extras==0.4.121",
     "litellm-enterprise==0.1.89",
     "RestrictedPython>=8.5,<9.0",
     "rich>=13.9.4,<14.0",
