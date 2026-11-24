@@ -57,6 +57,71 @@ run "module_owns_everything_by_default" {
     condition     = length(terraform_data.bootstrap_db) == 1 && length(aws_ecs_task_definition.migrations) == 1
     error_message = "The IAM-user bootstrap and the schema migration must both run against the module-created Aurora."
   }
+
+  assert {
+    condition     = alltrue([for role in [aws_iam_role.task_execution, aws_iam_role.task, aws_iam_role.ui_task] : role.permissions_boundary == null])
+    error_message = "The module must leave all role boundaries unset by default."
+  }
+
+  assert {
+    condition = alltrue([
+      length(random_password.master_key) == 1,
+      length(random_password.db_master_password) == 1,
+      length(aws_secretsmanager_secret_version.master_key) == 1,
+      length(aws_secretsmanager_secret_version.db_master_password) == 1,
+    ])
+    error_message = "The default plan must still create the LiteLLM and Aurora secrets."
+  }
+}
+
+run "customer_and_rds_secrets_are_referenced_only" {
+  command = plan
+
+  variables {
+    azs                           = ["us-east-1a", "us-east-1b"]
+    db_manage_master_password     = true
+    litellm_master_key_secret_arn = "arn:aws:secretsmanager:us-east-1:123456789012:secret:customer-master-key-AbCdEf"
+    ui_password_secret_arn        = "arn:aws:secretsmanager:us-east-1:123456789012:secret:customer-ui-password-AbCdEf"
+  }
+
+  assert {
+    condition = alltrue([
+      length(random_password.master_key) == 0,
+      length(random_password.db_master_password) == 0,
+      length(aws_secretsmanager_secret.master_key) == 0,
+      length(aws_secretsmanager_secret.ui_password) == 0,
+      length(aws_secretsmanager_secret.db_master_password) == 0,
+      length(aws_secretsmanager_secret_version.master_key) == 0,
+      length(aws_secretsmanager_secret_version.ui_password) == 0,
+      length(aws_secretsmanager_secret_version.db_master_password) == 0,
+      aws_rds_cluster.this[0].manage_master_user_password,
+      aws_rds_cluster.this[0].master_password == null,
+    ])
+    error_message = "External and RDS-managed credentials must not create Terraform-managed password values or secret versions."
+  }
+
+  assert {
+    condition = alltrue([
+      one([for secret in local.shared_secrets : secret.valueFrom if secret.name == "LITELLM_MASTER_KEY"]) == var.litellm_master_key_secret_arn,
+      one([for secret in local.backend_managed_secrets : secret.valueFrom if secret.name == "UI_PASSWORD"]) == var.ui_password_secret_arn,
+      output.master_key_secret_arn == var.litellm_master_key_secret_arn,
+    ])
+    error_message = "ECS runtime tasks must use the supplied secret ARNs."
+  }
+}
+
+run "permissions_boundary_applies_to_every_role" {
+  command = plan
+
+  variables {
+    azs                  = ["us-east-1a", "us-east-1b"]
+    permissions_boundary = "arn:aws:iam::123456789012:policy/litellm-tenant-boundary"
+  }
+
+  assert {
+    condition     = alltrue([for role in [aws_iam_role.task_execution, aws_iam_role.task, aws_iam_role.ui_task] : role.permissions_boundary == var.permissions_boundary])
+    error_message = "Every module-created role must use the supplied permissions boundary."
+  }
 }
 
 run "existing_vpc_creates_no_networking" {
@@ -67,6 +132,11 @@ run "existing_vpc_creates_no_networking" {
     public_subnet_ids                  = ["subnet-pub-a", "subnet-pub-b"]
     private_subnet_ids                 = ["subnet-priv-a", "subnet-priv-b"]
     additional_task_security_group_ids = ["sg-caller-owned"]
+  }
+
+  assert {
+    condition     = !aws_lb.this.internal && aws_lb.this.subnets == toset(var.public_subnet_ids)
+    error_message = "Public ingress must still use the supplied public subnets by default."
   }
 
   assert {
@@ -100,6 +170,27 @@ run "existing_vpc_creates_no_networking" {
   assert {
     condition     = length(local.task_security_group_ids) == 2
     error_message = "additional_task_security_group_ids must be attached alongside the module's own tasks group."
+  }
+}
+
+run "private_alb_does_not_need_public_subnets" {
+  command = plan
+
+  variables {
+    vpc_id              = "vpc-00000000000000001"
+    private_subnet_ids  = ["subnet-priv-a", "subnet-priv-b"]
+    private_ingress     = true
+    acm_certificate_arn = "arn:aws:acm:us-east-1:111111111111:certificate/00000000-0000-0000-0000-000000000000"
+  }
+
+  assert {
+    condition     = aws_lb.this.internal && aws_lb.this.subnets == toset(var.private_subnet_ids)
+    error_message = "The internal ALB must use only the supplied private subnets."
+  }
+
+  assert {
+    condition     = aws_lb_listener.https[0].certificate_arn == var.acm_certificate_arn
+    error_message = "The internal ALB must use the configured HTTPS certificate."
   }
 }
 

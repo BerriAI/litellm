@@ -64,7 +64,7 @@ async def acreate(
     extra_body: dict[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> VectorStoreFileObject:
     local_vars: Final = locals()
     try:
@@ -192,7 +192,7 @@ async def alist(
     extra_query: dict[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> VectorStoreFileListResponse:
     local_vars: Final = locals()
     try:
@@ -312,7 +312,7 @@ async def aretrieve(
     extra_headers: dict[str, str] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> VectorStoreFileObject:
     local_vars: Final = locals()
     try:
@@ -421,7 +421,7 @@ async def aretrieve_content(
     extra_headers: dict[str, str] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> VectorStoreFileContentResponse:
     local_vars: Final = locals()
     try:
@@ -531,7 +531,7 @@ async def aupdate(
     extra_body: dict[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> VectorStoreFileObject:
     local_vars: Final = locals()
     try:
@@ -650,7 +650,7 @@ async def adelete(
     extra_headers: dict[str, str] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> VectorStoreFileDeleteResponse:
     local_vars: Final = locals()
     try:

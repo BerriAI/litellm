@@ -606,6 +606,11 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
         def __init__(self, /, **data: object) -> None: ...  # kwargs-ok: provider parameters vary by deployment
 
     custom_llm_provider: str | None = None
+    oauth_client_credentials: bool | None = None
+    oauth_token_url: str | None = None
+    oauth_client_id: str | None = None
+    oauth_client_secret: str | None = Field(default=None, repr=False)
+    oauth_scope: str | None = None
     responses_api_version: str | None = None
     tpm: int | None = None
     rpm: int | None = None
@@ -980,6 +985,7 @@ class Deployment(LiteLLMBaseModel):
 class DiscoveredDeploymentModelInfo:
     deployment: Mapping[str, object]
     limits: Mapping[str, int]
+    limits_by_model: Mapping[str, Mapping[str, int]] = field(default_factory=lambda: MappingProxyType({}))
 
 
 @dataclass(frozen=True, slots=True)
@@ -1270,7 +1276,7 @@ class RouterRateLimitError(ValueError):
         model: str,
         cooldown_time: float,
         enable_pre_call_checks: bool,
-        cooldown_list: list,
+        cooldown_list: Sequence[object],
         model_ids: Sequence[str] = (),
         cooldown_deployments: Sequence[CooldownDeploymentInfo] | None = None,
     ) -> None:
@@ -1554,7 +1560,7 @@ class AdaptiveRouterWeights(LiteLLMBaseModel):
 
     @field_validator("cost")
     @classmethod
-    def _weights_sum_to_one(cls, v, info):
+    def _weights_sum_to_one(cls, v: float, info):
         q: Final = info.data.get("quality", 0.7)
         if abs(q + v - 1.0) > 0.001:
             raise ValueError(f"weights must sum to 1.0, got quality={q} + cost={v} = {q + v}")

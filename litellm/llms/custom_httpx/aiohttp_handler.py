@@ -1,5 +1,5 @@
 import ssl
-from collections.abc import AsyncIterable, Callable, Iterable
+from collections.abc import AsyncIterable, Callable, Iterable, Mapping
 from typing import TYPE_CHECKING, Any, Final, cast
 
 import aiohttp
@@ -163,8 +163,8 @@ class BaseLLMAIOHTTPHandler:
         async_client_session: ClientSession | None,
         provider_config: BaseConfig,
         api_base: str,
-        headers: dict,
-        data: dict | None,
+        headers: Mapping[str, str],
+        data: dict[str, object] | None,
         timeout: float | httpx.Timeout,
         litellm_params: dict,
         form_data: FormData | None = None,
@@ -208,7 +208,7 @@ class BaseLLMAIOHTTPHandler:
         provider_config: BaseConfig,
         api_base: str,
         headers: dict,
-        data: dict,
+        data: dict[str, object],
         timeout: float | httpx.Timeout | None,
         litellm_params: dict,
         stream: bool = False,
@@ -260,7 +260,7 @@ class BaseLLMAIOHTTPHandler:
         custom_llm_provider: str,
         provider_config: BaseConfig,
         api_base: str,
-        headers: dict,
+        headers: Mapping[str, str],
         data: dict,
         timeout: float | httpx.Timeout,
         model: str,
@@ -433,8 +433,8 @@ class BaseLLMAIOHTTPHandler:
         self,
         provider_config: BaseConfig,
         api_base: str,
-        headers: dict,
-        data: dict,
+        headers: dict[str, object],
+        data: dict[str, object],
         model: str,
         messages: list,
         logging_obj: LiteLLMLoggingObj,
@@ -486,7 +486,7 @@ class BaseLLMAIOHTTPHandler:
         client: ClientSession | None,
         provider_config: BaseImageVariationConfig,
         api_base: str,
-        headers: dict,
+        headers: Mapping[str, str],
         data: HttpHandlerRequestFields,
         timeout: float,
         litellm_params: dict,
@@ -560,7 +560,7 @@ class BaseLLMAIOHTTPHandler:
         logger_fn: object = None,
         client=None,
         organization: str | None = None,
-        headers: dict | None = None,
+        headers: dict[str, object] | None = None,
     ) -> ImageResponse:
         provider_config: Final = ProviderConfigManager.get_provider_image_variation_config(
             model=model or "",

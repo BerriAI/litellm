@@ -16,16 +16,20 @@ use litellm_redis_store::{
     spend_counters::SpendCounters,
     system_clock,
 };
-use litellm_repositories::{Database, KeyRepository, ObjectPermissionRepository};
+use litellm_repositories::{
+    Database, GatewayRequestRepository, KeyRepository, ObjectPermissionRepository,
+};
 use tokio::runtime::Handle;
 
 use crate::{
     Error, Gateway, Inference, KeyLimiter, RedisClients, Resources, db,
+    gateway_requests::GatewayRequests,
     host::{
         self, NativeRows,
         auth::{AuthStore, KEY_TTL},
     },
     license::build_license,
+    periodic::{self, PeriodicJob},
 };
 
 #[derive(Clone)]
@@ -42,6 +46,11 @@ pub struct AppState {
     pub key_limiter: Arc<KeyLimiter>,
     /// The config's `environment_variables` in front of the process environment.
     pub environment: Arc<dyn Lookup + Send + Sync>,
+    /// The gateway request counts the request volume middleware records. `None` without a
+    /// database.
+    pub gateway_requests: Option<Arc<GatewayRequests>>,
+    /// The job that writes `gateway_requests` every `PROXY_BATCH_WRITE_AT` seconds.
+    pub gateway_requests_flush: Option<Arc<PeriodicJob>>,
 }
 
 impl AppState {
@@ -61,10 +70,21 @@ impl AppState {
             gateway: inference,
             key_limiter,
         } = crate::build_inference(config, environment, resources, routing, &redis).await?;
-        let (database, keys) = db::connect(config, &resources.secrets)
+        let (database, connected) = db::connect(config, &resources.secrets)
             .await?
-            .map(|(pools, repositories)| (pools, Arc::new(keys(config, &redis, repositories))))
+            .map(|(pools, repositories)| {
+                let requests = Arc::new(GatewayRequests::new());
+                let flush = gateway_requests_flush(
+                    requests.clone(),
+                    GatewayRequestRepository::new(repositories.clone()),
+                    environment,
+                );
+                let keys = Arc::new(keys(config, &redis, repositories));
+                (pools, (keys, (requests, Arc::new(flush))))
+            })
             .unzip();
+        let (keys, gateway_requests) = connected.unzip();
+        let (gateway_requests, gateway_requests_flush) = gateway_requests.unzip();
         let entitlements = Arc::new(build_license(config, environment, resources).await);
         Ok(Self {
             inference,
@@ -74,6 +94,8 @@ impl AppState {
             entitlements,
             key_limiter,
             environment: resources.environment.clone(),
+            gateway_requests,
+            gateway_requests_flush,
         })
     }
 
@@ -83,11 +105,29 @@ impl AppState {
         host::auth::auth(config, self.keys.clone())
     }
 
+    /// Writes the gateway request counts still in memory, then closes the database pools.
     pub async fn close(&self) {
+        if let Some(flush) = &self.gateway_requests_flush {
+            flush.close().await;
+        }
         if let Some(database) = &self.database {
             database.close().await;
         }
     }
+}
+
+/// `update_gateway_requests_job`: flushes `requests` through `repository` every batch write
+/// interval and once more on shutdown.
+fn gateway_requests_flush(
+    requests: Arc<GatewayRequests>,
+    repository: GatewayRequestRepository,
+    environment: &Environment,
+) -> PeriodicJob {
+    let repository = Arc::new(repository);
+    PeriodicJob::start(periodic::batch_write_interval(environment), move || {
+        let (requests, repository) = (requests.clone(), repository.clone());
+        async move { requests.flush(&repository).await }
+    })
 }
 
 /// Where the gateway reads a virtual key: through the auth cache Python's `UserApiKeyCache` is,

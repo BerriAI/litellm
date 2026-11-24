@@ -1,6 +1,6 @@
 import json
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any, Final, cast
+from typing import Final, cast
 
 import httpx
 from pydantic import ConfigDict, TypeAdapter
@@ -22,11 +22,6 @@ from litellm.types.utils import RerankResponse
 from ..base_aws_llm import BaseAWSLLM
 from ..common_utils import BedrockError
 from .transformation import BedrockRerankConfig
-
-if TYPE_CHECKING:
-    from botocore.awsrequest import AWSPreparedRequest
-else:
-    AWSPreparedRequest = Any
 
 _JSON_DICT: Final = TypeAdapter(dict[str, object], config=ConfigDict(hide_input_in_errors=True))
 
@@ -68,7 +63,7 @@ class BedrockRerankHandler(BaseAWSLLM):
         model: str,
         query: str,
         documents: list[str | dict[str, object]],
-        optional_params: dict,
+        optional_params: dict[str, object],
         logging_obj: LitellmLogging,
         top_n: int | None = None,
         rank_fields: list[str] | None = None,

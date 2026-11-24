@@ -23,7 +23,7 @@ use serde_json::{Map, Value};
 use crate::{
     AppState, Gateway,
     callbacks::parallel_request_limiter,
-    host::{self, NativeRows},
+    host::{self, NativeHost, NativeRows},
 };
 use checks::Fields;
 pub use checks::Reason;
@@ -79,6 +79,8 @@ pub struct Admit {
     /// The router the native app serves through, which says where a request for a name can be
     /// served and what a call served there asks of its host.
     router: Router,
+    /// The native host, which says which of a model group's host steps it answers.
+    host: NativeHost,
     auth: Auth<NativeRows>,
     /// The native app's inference, which tells whether a caller may call the model it asks for.
     /// `None` leaves every caller with a model list to Python.
@@ -147,6 +149,7 @@ impl Admit {
                 .map(|_| STORE_MODEL_IN_DB.into()),
             auth: state.auth(config),
             aliased,
+            host: state.inference.host().clone(),
             inference: Some(state.inference.clone()),
             ..Self::built(config, state.inference.router.clone(), deployed)
         }
@@ -166,6 +169,7 @@ impl Admit {
             stored_models: None,
             deployed,
             aliased: Vec::new(),
+            host: NativeHost::default(),
             inference: None,
         }
     }

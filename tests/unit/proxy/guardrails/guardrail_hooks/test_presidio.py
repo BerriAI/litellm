@@ -8,7 +8,7 @@ import copy
 import json
 import os
 import re
-from collections.abc import AsyncIterator, Iterable, Sequence
+from collections.abc import AsyncIterator, Iterable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from typing import Final, Literal
@@ -38,8 +38,21 @@ from litellm.proxy.guardrails.guardrail_hooks.presidio import (
     PresidioPerRequestConfig,
 )
 from litellm.proxy.guardrails.guardrail_initializers import initialize_presidio
+from litellm.proxy.policy_engine.pipeline_executor import UndeliverableStreamRewrite
 from litellm.types.guardrails import LitellmParams, Mode, PiiAction, PiiEntityType
-from litellm.types.llms.openai import ResponsesAPIResponse
+from litellm.types.llms.openai import (
+    BaseLiteLLMOpenAIResponseObject,
+    FunctionCallArgumentsDeltaEvent,
+    OutputItemAddedEvent,
+    OutputItemDoneEvent,
+    OutputTextDeltaEvent,
+    OutputTextDoneEvent,
+    RefusalDeltaEvent,
+    RefusalDoneEvent,
+    ResponseCompletedEvent,
+    ResponsesAPIResponse,
+    ResponsesAPIStreamEvents,
+)
 from litellm.types.proxy.guardrails.guardrail_hooks.presidio import PresidioAnalyzeRequest, PresidioAnalyzeResponseItem
 from litellm.types.utils import (
     ChatCompletionDeltaToolCall,
@@ -6981,3 +6994,164 @@ async def test_the_presidio_callback_masks_reply_text_and_leaves_tool_calls_as_t
 
     assert result["texts"] == ["Call <PHONE_NUMBER>"]
     assert [call["function"]["arguments"] for call in result["tool_calls"]] == [json.dumps({"to": _PHONE})]
+
+
+_PART_POSITION: Final = {"item_id": "msg_1", "output_index": 0, "content_index": 0}
+
+
+def _email_masking_guardrail() -> OPTIONAL_PresidioPIIMasking:
+    return OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        apply_to_output=True,
+        mock_redacted_text={"text": "I cannot help <EMAIL_ADDRESS>"},
+    )
+
+
+def _text_part_events(part_type: str, text: str) -> tuple[Mapping[str, object], tuple[object, ...]]:
+    deltas: Final = ("I cannot help ", "alice@example.com")
+    if part_type == "refusal":
+        return {"type": "refusal", "refusal": text}, (
+            *(
+                RefusalDeltaEvent(type=ResponsesAPIStreamEvents.REFUSAL_DELTA, **_PART_POSITION, delta=delta)
+                for delta in deltas
+            ),
+            RefusalDoneEvent(type=ResponsesAPIStreamEvents.REFUSAL_DONE, **_PART_POSITION, refusal=text),
+        )
+    return {"type": "output_text", "text": text, "annotations": []}, (
+        *(
+            OutputTextDeltaEvent(type=ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA, **_PART_POSITION, delta=delta)
+            for delta in deltas
+        ),
+        OutputTextDoneEvent(type=ResponsesAPIStreamEvents.OUTPUT_TEXT_DONE, **_PART_POSITION, text=text),
+    )
+
+
+def _message_stream_events(part_type: str = "refusal") -> tuple[object, ...]:
+    part, text_events = _text_part_events(part_type, "I cannot help alice@example.com")
+    message: Final = BaseLiteLLMOpenAIResponseObject(type="message", id="msg_1", role="assistant", content=[part])
+    return (
+        *text_events,
+        OutputItemDoneEvent(type=ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE, output_index=0, item=message),
+        ResponseCompletedEvent(
+            type=ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
+            response=ResponsesAPIResponse.model_validate(
+                {
+                    "id": "resp_1",
+                    "created_at": 1,
+                    "model": "gpt-4o",
+                    "object": "response",
+                    "status": "completed",
+                    "output": [
+                        {
+                            "type": "message",
+                            "id": "msg_1",
+                            "status": "completed",
+                            "role": "assistant",
+                            "content": [part],
+                        }
+                    ],
+                    "parallel_tool_calls": False,
+                    "tool_choice": "auto",
+                    "tools": [],
+                }
+            ),
+        ),
+    )
+
+
+async def _drain_output_masking(guardrail: OPTIONAL_PresidioPIIMasking, events: Iterable[object]) -> list[object]:
+    async def stream():
+        for event in events:
+            yield event
+
+    return [
+        event
+        async for event in guardrail.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
+            response=stream(),
+            request_data={"input": "hello"},
+        )
+    ]
+
+
+@pytest.mark.asyncio
+async def test_mask_and_unmask_cover_a_chat_refusal():
+    guardrail: Final = _email_masking_guardrail()
+    response: Final = ModelResponse(
+        choices=[Choices(index=0, message=Message(role="assistant", refusal="I cannot help alice@example.com"))]
+    )
+
+    await guardrail._process_response_for_pii(response=response, request_data={}, mode="mask")
+    assert response.choices[0].message.refusal == "I cannot help <EMAIL_ADDRESS>"
+
+    await guardrail._process_response_for_pii(
+        response=response,
+        request_data={"metadata": {"pii_tokens": {"<EMAIL_ADDRESS>": "alice@example.com"}}},
+        mode="unmask",
+    )
+    assert response.choices[0].message.refusal == "I cannot help alice@example.com"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("part_type", ["refusal", "output_text"])
+async def test_apply_to_output_masks_every_event_of_a_responses_message_stream(part_type: str):
+    collected: Final = await _drain_output_masking(_email_masking_guardrail(), _message_stream_events(part_type))
+
+    assert len(collected) == len(_message_stream_events(part_type))
+    assert "alice@example.com" not in json.dumps([event.model_dump() for event in collected], default=str)
+    assert "".join(event.delta for event in collected[:2]) == "I cannot help <EMAIL_ADDRESS>"
+
+
+@pytest.mark.asyncio
+async def test_apply_to_output_blocks_a_responses_stream_before_any_event_is_released():
+    guardrail: Final = _email_masking_guardrail()
+    blocked: Final = BlockedPiiEntityError(entity_type="EMAIL_ADDRESS", guardrail_name="presidio")
+
+    with patch.object(guardrail, "check_pii", side_effect=blocked):
+        with pytest.raises(BlockedPiiEntityError):
+            await _drain_output_masking(guardrail, _message_stream_events())
+
+
+@pytest.mark.asyncio
+async def test_apply_to_output_ends_a_responses_stream_before_any_event_when_the_analyzer_is_unreachable():
+    guardrail: Final = OPTIONAL_PresidioPIIMasking(
+        presidio_analyzer_api_base="http://127.0.0.1:9/",
+        presidio_anonymizer_api_base="http://127.0.0.1:9/",
+        apply_to_output=True,
+    )
+
+    async def stream():
+        for event in _message_stream_events():
+            yield event
+
+    released: Final = guardrail.async_post_call_streaming_iterator_hook(
+        user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
+        response=stream(),
+        request_data={"input": "hello"},
+    )
+
+    with pytest.raises(Exception, match="Presidio PII analysis failed"):
+        await anext(released)
+
+
+@pytest.mark.asyncio
+async def test_apply_to_output_ends_a_responses_stream_cut_short_mid_tool_call_before_releasing_its_raw_arguments():
+    tool_call: Final = BaseLiteLLMOpenAIResponseObject(
+        type="function_call", id="fc_1", call_id="call_1", name="save", arguments="", status="in_progress"
+    )
+
+    async def cut_short_stream():
+        yield OutputItemAddedEvent(type=ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED, output_index=0, item=tool_call)
+        for delta in ('{"email":', '"alice@example.com"}'):
+            yield FunctionCallArgumentsDeltaEvent(
+                type=ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DELTA, item_id="fc_1", output_index=0, delta=delta
+            )
+
+    released: Final = _email_masking_guardrail().async_post_call_streaming_iterator_hook(
+        user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
+        response=cut_short_stream(),
+        request_data={"input": "hello"},
+    )
+
+    with pytest.raises(UndeliverableStreamRewrite):
+        await anext(released)
