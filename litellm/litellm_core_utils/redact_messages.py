@@ -140,8 +140,12 @@ def _redacted_entries_for_opted_out_logger(model_call_details: Mapping[str, obje
 
 
 def redacted_response_obj_for_custom_logger(response_obj: object, custom_logger: CustomLogger) -> object:
-    if not _opted_out_of_message_logging(custom_logger) or not _is_redactable_response(response_obj):
+    if not _opted_out_of_message_logging(custom_logger) or not (
+        _is_redactable_response(response_obj) or isinstance(response_obj, litellm.TranscriptionResponse)
+    ):
         return response_obj
+    # A transcription comes back as perform_redaction's {"text": REDACTED_BY_LITELLM}, the same shape
+    # turn_off_message_logging hands every callback, so an opted-out logger never sees the transcript.
     return perform_redaction({}, response_obj)
 
 

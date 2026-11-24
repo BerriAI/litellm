@@ -185,6 +185,21 @@ def test_an_opted_out_callback_gets_a_text_completion_with_its_answer_redacted()
     assert response.choices[0].text == SECRET, "the caller's own response is not redacted"
 
 
+def test_an_opted_out_callback_gets_a_transcription_with_its_text_redacted() -> None:
+    response: Final = litellm.TranscriptionResponse(text=SECRET)
+
+    redacted: Final = redacted_response_obj_for_custom_logger(response, CustomLogger(message_logging=False))
+
+    assert redacted == {"text": REDACTED_BY_LITELLM}
+    assert response.text == SECRET, "the caller's own response is not redacted"
+
+
+def test_an_opted_in_callback_gets_the_transcription_unchanged() -> None:
+    response: Final = litellm.TranscriptionResponse(text=SECRET)
+
+    assert redacted_response_obj_for_custom_logger(response, CustomLogger(message_logging=True)) is response
+
+
 def test_redaction_redacts_reasoning_copied_into_hidden_params_in_place() -> None:
     hidden_params: Final = {"model_id": "deployment", "provider_specific_fields": _provider_fields()}
     original_hidden_params: Final = copy.deepcopy(hidden_params)

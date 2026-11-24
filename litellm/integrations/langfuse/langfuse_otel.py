@@ -259,7 +259,11 @@ class LangfuseOtelLogger(OpenTelemetry):
     def _observation_output(response_obj: _Gettable | None) -> str | None:
         if not response_obj or not hasattr(response_obj, "get"):
             return None
-        return _extract_output_items(response_obj) or _extract_choices_output(response_obj)
+        return (
+            _extract_output_items(response_obj)
+            or _extract_choices_output(response_obj)
+            or _extract_transcription_output(response_obj)
+        )
 
     @staticmethod
     def _trace_tags(kwargs: Mapping[str, object], metadata: Mapping[str, object]) -> tuple[str, ...]:
@@ -667,6 +671,15 @@ def _tool_call_arguments(arguments: object) -> object:
         return _DECODED_JSON.validate_python(json.loads(arguments))
     except json.JSONDecodeError:
         return {}
+
+
+def _extract_transcription_output(response_obj: _Gettable) -> str | None:
+    # Duck-typed like the sibling extractors: a callback that opted out of message logging gets the
+    # transcription as a plain {"text": REDACTED_BY_LITELLM} mapping, which then shows as the marker.
+    text: Final = response_obj.get("text")
+    if not isinstance(text, str) or not text:
+        return None
+    return safe_dumps({"role": "assistant", "content": text})
 
 
 def _extract_output_items(response_obj: _Gettable) -> str | None:
