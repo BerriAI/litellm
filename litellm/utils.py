@@ -10450,11 +10450,6 @@ class ProviderConfigManager:
         non-standard deployment names still route to the correct config.
         """
         # Handle OpenAI special cases (O-series and GPT-5 models)
-        if provider.value == "acedatacloud":
-            from litellm.llms.openai_like.acedatacloud import acedatacloud_uses_messages
-
-            if acedatacloud_uses_messages(model):
-                return litellm.AnthropicConfig()
         if provider == LlmProviders.OPENAI:
             from litellm.llms.openai.chat.gpt_transformation import (
                 OpenAIGPTConfig,
@@ -11131,10 +11126,10 @@ class ProviderConfigManager:
         model: str | None,
         provider: LlmProviders,
     ) -> BaseLLMModelInfo | None:
-        if provider.value == "acedatacloud":
-            from litellm.llms.openai_like.acedatacloud import AceDataCloudModelInfo
+        if provider == LlmProviders.ACEDATACLOUD:
+            from litellm.llms.openai_like.acedatacloud import AceDataCloudChatConfig
 
-            return AceDataCloudModelInfo()
+            return AceDataCloudChatConfig()
         if provider == LlmProviders.OPENCODE_GO:
             from litellm.llms.opencode.chat.transformation import OpenCodeGoChatConfig
 

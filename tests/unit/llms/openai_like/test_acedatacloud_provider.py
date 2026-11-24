@@ -7,7 +7,7 @@ import respx
 
 import litellm
 from litellm import completion, cost_per_token, get_llm_provider, model_cost, responses
-from litellm.llms.openai_like.acedatacloud import CATALOG_URL, AceDataCloudModelInfo
+from litellm.llms.openai_like.acedatacloud import CATALOG_URL, AceDataCloudChatConfig
 from litellm.llms.openai_like.dynamic_config import create_config_class, create_responses_config_class
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 from litellm.types.utils import PromptTokensDetails, Usage
@@ -104,6 +104,45 @@ def test_acedatacloud_chat_request_and_credit_usage(monkeypatch: pytest.MonkeyPa
     assert (response.usage.prompt_tokens, response.usage.completion_tokens) == (11, 5)
 
 
+def test_stream_usage_keeps_tokens_and_excludes_credit_cost() -> None:
+    choice = {"index": 0, "delta": {"role": "assistant", "content": "OK"}, "finish_reason": None}
+    meta = {"id": "chatcmpl-fixture", "object": "chat.completion.chunk", "created": 1, "model": "gpt-6-luna"}
+    events = [
+        {**meta, "choices": [choice]},
+        {**meta, "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]},
+        {
+            **meta,
+            "choices": [],
+            "usage": {
+                "prompt_tokens": 11,
+                "completion_tokens": 5,
+                "total_tokens": 16,
+                "cost": {"amount": 7, "currency": "credit"},
+            },
+        },
+    ]
+    content = "".join(f"data: {json.dumps(event)}\n\n" for event in events) + "data: [DONE]\n\n"
+    with respx.mock() as upstream:
+        route = upstream.post("https://api.acedata.cloud/v1/chat/completions").respond(
+            200, content=content, headers={"content-type": "text/event-stream"}
+        )
+        chunks = list(
+            completion(
+                model="acedatacloud/gpt-6-luna",
+                api_key="fixture",
+                messages=[{"role": "user", "content": "Hi"}],
+                stream=True,
+                stream_options={"include_usage": True},
+                num_retries=0,
+            )
+        )
+    assert route.call_count == 1
+    assert "".join(c.choices[0].delta.content or "" for c in chunks if c.choices) == "OK"
+    usage = [c.model_dump(warnings="error")["usage"] for c in chunks if getattr(c, "usage", None)]
+    assert usage and usage[-1]["total_tokens"] == 16
+    assert not isinstance(usage[-1].get("cost"), dict)
+
+
 def test_acedatacloud_responses_request(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("ACEDATACLOUD_API_KEY", "ace-test-key")
     with respx.mock() as upstream:
@@ -124,7 +163,12 @@ def test_acedatacloud_responses_request(monkeypatch: pytest.MonkeyPatch) -> None
                         "content": [{"type": "output_text", "text": "OK", "annotations": []}],
                     }
                 ],
-                "usage": {"input_tokens": 11, "output_tokens": 5, "total_tokens": 16},
+                "usage": {
+                    "input_tokens": 11,
+                    "output_tokens": 5,
+                    "total_tokens": 16,
+                    "cost": {"amount": 7, "currency": "credit"},
+                },
             },
         )
         response: Final = responses(
@@ -188,44 +232,11 @@ def test_public_discovery_includes_new_chat_ids_without_sending_the_key() -> Non
                 ]
             },
         )
-        assert AceDataCloudModelInfo().get_models(api_key="private-key") == [
+        assert AceDataCloudChatConfig().get_models(api_key="private-key") == [
             "acedatacloud/new-chat",
             "acedatacloud/gpt-4o-image",
         ]
     assert "authorization" not in route.calls.last.request.headers
-
-
-@pytest.mark.parametrize("api_base", [None, "https://api.acedata.cloud/v1", "https://api.acedata.cloud/openai"])
-def test_messages_model_uses_native_transport_and_bearer_auth(api_base: str | None) -> None:
-    # Published contract, 2026-11-23: https://platform.acedata.cloud/api/v1/apis/a43a98fc-f833-4cfb-8596-8066faad2c42/
-    model: Final = "claude-sonnet-5-5"
-    with respx.mock() as upstream:
-        route: Final = upstream.post("https://api.acedata.cloud/v1/messages").respond(
-            200,
-            json={
-                "id": "msg_ace",
-                "type": "message",
-                "role": "assistant",
-                "model": model,
-                "content": [{"type": "text", "text": "OK"}],
-                "stop_reason": "end_turn",
-                "usage": {"input_tokens": 3, "output_tokens": 1},
-            },
-        )
-        response: Final = completion(
-            model=f"acedatacloud/{model}",
-            api_key="private-key",
-            api_base=api_base,
-            messages=[{"role": "user", "content": "Hello"}],
-            max_tokens=16,
-            num_retries=0,
-        )
-    request: Final = route.calls.last.request
-    assert request.headers["authorization"] == "Bearer private-key"
-    assert "x-api-key" not in request.headers
-    assert json.loads(request.content)["model"] == model
-    assert response.choices[0].message.content == "OK"
-    assert (response.usage.prompt_tokens, response.usage.completion_tokens) == (3, 1)
 
 
 def test_native_endpoints_follow_each_model_contract() -> None:
@@ -242,75 +253,38 @@ def test_custom_discovery_does_not_use_another_providers_environment_key(monkeyp
     monkeypatch.setenv("ACEDATACLOUD_API_KEY", "ace-secret")
     with respx.mock() as upstream:
         route: Final = upstream.get("https://custom.test/v1/models").respond(200, json={"data": [{"id": "custom"}]})
-        assert AceDataCloudModelInfo().get_models(api_base="https://custom.test/v1") == ["custom"]
+        assert AceDataCloudChatConfig().get_models(api_base="https://custom.test/v1") == ["custom"]
     assert route.calls.last.request.headers["authorization"] == "Bearer ace-secret"
 
 
-def test_messages_model_streams_through_the_same_native_transport() -> None:
-    events: Final = (
-        {
-            "type": "message_start",
-            "message": {
-                "id": "msg_stream",
+@pytest.mark.asyncio
+async def test_messages_only_id_uses_native_bearer_messages(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    with respx.mock() as upstream:
+        route = upstream.post("https://api.acedata.cloud/v1/messages").respond(
+            200,
+            json={
+                "id": "msg_fixture",
                 "type": "message",
                 "role": "assistant",
                 "model": "claude-sonnet-5-5",
-                "content": [],
-                "usage": {"input_tokens": 3, "output_tokens": 0},
+                "content": [{"type": "text", "text": "OK"}],
+                "stop_reason": "end_turn",
+                "stop_sequence": None,
+                "usage": {"input_tokens": 3, "output_tokens": 1},
             },
-        },
-        {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
-        {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "Hello"}},
-        {"type": "content_block_stop", "index": 0},
-        {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 1}},
-        {"type": "message_stop"},
-    )
-    body: Final = "".join(f"event: {event['type']}\ndata: {json.dumps(event)}\n\n" for event in events)
-    with respx.mock() as upstream:
-        route: Final = upstream.post("https://api.acedata.cloud/v1/messages").respond(
-            200, content=body, headers={"content-type": "text/event-stream"}
         )
-        stream: Final = completion(
+        result = await litellm.anthropic_messages(
             model="acedatacloud/claude-sonnet-5-5",
-            api_key="private-key",
-            messages=[{"role": "user", "content": "Hello"}],
+            messages=[{"role": "user", "content": "Hi"}],
             max_tokens=16,
-            stream=True,
-            num_retries=0,
+            api_key="fixture-key",
         )
-        assert "".join(chunk.choices[0].delta.content or "" for chunk in stream if chunk.choices) == "Hello"
-    assert route.calls.last.request.headers["authorization"] == "Bearer private-key"
-
-
-def test_messages_authentication_error_does_not_fall_back_to_chat() -> None:
-    with respx.mock() as upstream:
-        route: Final = upstream.post("https://api.acedata.cloud/v1/messages").respond(
-            401, json={"type": "error", "error": {"type": "authentication_error", "message": "invalid key"}}
-        )
-        with pytest.raises(litellm.AuthenticationError):
-            completion(
-                model="acedatacloud/claude-sonnet-5-5",
-                api_key="bad-key",
-                messages=[{"role": "user", "content": "Hello"}],
-                max_tokens=16,
-                num_retries=0,
-            )
     assert route.call_count == 1
-
-
-def test_messages_does_not_send_another_providers_key(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("ACEDATACLOUD_API_KEY", raising=False)
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "unrelated-anthropic-key")
-    monkeypatch.setenv("OPENAI_API_KEY", "unrelated-openai-key")
-    with respx.mock() as upstream:
-        with pytest.raises(litellm.AuthenticationError, match="ACEDATACLOUD_API_KEY"):
-            completion(
-                model="acedatacloud/claude-sonnet-5-5",
-                messages=[{"role": "user", "content": "Hello"}],
-                max_tokens=16,
-                num_retries=0,
-            )
-        assert not upstream.calls
+    assert route.calls.last.request.headers["authorization"] == "Bearer fixture-key"
+    assert "x-api-key" not in route.calls.last.request.headers
+    assert json.loads(route.calls.last.request.content)["model"] == "claude-sonnet-5-5"
+    assert result["content"][0]["text"] == "OK"
 
 
 def test_request_priced_models_do_not_turn_the_fee_into_token_pricing() -> None:

@@ -81,7 +81,13 @@ def create_config_class(provider: SimpleProviderConfig):
     """Generate config class dynamically from JSON configuration"""
 
     # Choose base class
-    base_class: Final[type] = OpenAIGPTConfig if provider.base_class == "openai_gpt" else OpenAILikeChatConfig
+    base_class: Final[type]
+    if provider.slug == "acedatacloud":
+        from .acedatacloud import AceDataCloudChatConfig
+
+        base_class = AceDataCloudChatConfig
+    else:
+        base_class = OpenAIGPTConfig if provider.base_class == "openai_gpt" else OpenAILikeChatConfig
 
     class JSONProviderConfig(base_class):
         def get_attribution_headers(self) -> Mapping[str, str]:

@@ -614,16 +614,11 @@ def cost_per_token(
         return response_cost[0], response_cost[1]
 
     if custom_llm_provider == "acedatacloud":
-        from litellm.llms.openai_like.acedatacloud import acedatacloud_model_entry
+        from litellm.llms.openai_like.acedatacloud import request_price
 
-        ace_price_info: Final[Mapping[str, object]] = (
-            requested_model_info_override
-            if requested_model_info_override is not None
-            else acedatacloud_model_entry(model)
-        )
-        ace_request_price: Final = ace_price_info.get("input_cost_per_request")
-        if isinstance(ace_request_price, (int, float)):
-            return ace_request_price, 0.0
+        ace_fee: Final = request_price(model, requested_model_info_override)
+        if ace_fee is not None:
+            return ace_fee, 0.0
 
     if requested_model_info_override is not None:
         per_second: Final = _per_second_pricing_cost_from_info(

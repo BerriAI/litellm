@@ -23,7 +23,7 @@ from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine, Itera
 from concurrent import futures
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from copy import deepcopy
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from functools import partial
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal, Optional, Protocol, TypeAlias, Union, cast, get_args
@@ -163,7 +163,6 @@ from litellm.llms.openai.chat.gpt_reasoning_transformation import (
     OpenAIGPT5Config,
 )
 from litellm.llms.openai.common_utils import get_openai_credentials
-from litellm.llms.openai_like.acedatacloud import acedatacloud_api_key, acedatacloud_uses_messages
 from litellm.llms.openai_like.common_utils import missing_json_provider_key_error, with_canonical_authorization
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 from litellm.llms.vertex_ai.common_utils import (
@@ -2932,8 +2931,6 @@ def _missing_provider_key_error(ctx: CompletionDispatchContext) -> Authenticatio
 def _complete_custom_openai(
     ctx: CompletionDispatchContext,
 ) -> _CompletionDispatchResult:
-    if ctx.custom_llm_provider == "acedatacloud" and acedatacloud_uses_messages(ctx.model):
-        return _complete_acedatacloud_messages(ctx)
     acompletion: Final = ctx.acompletion
     api_base = ctx.api_base
     api_key = ctx.api_key
@@ -3012,7 +3009,9 @@ def _complete_custom_openai(
         if is_app_session:
             headers = dict[str, object](copilot_headers)  # rebind-ok: pin App headers in both transports
 
-    use_base_llm_http_handler: Final = get_secret_bool("EXPERIMENTAL_OPENAI_BASE_LLM_HTTP_HANDLER")
+    use_base_llm_http_handler: Final = custom_llm_provider == "acedatacloud" or get_secret_bool(
+        "EXPERIMENTAL_OPENAI_BASE_LLM_HTTP_HANDLER"
+    )
     request_headers: Final = headers
     attribution_source: Final = (
         provider_config if provider_config is not None else JSONProviderRegistry.get(custom_llm_provider)
@@ -3255,30 +3254,6 @@ def _complete_anthropic_text(
         encoding=_get_encoding(),
         api_key=api_key,
         logging_obj=logging,  # model call logging done inside the class as we make need to modify I/O to fit aleph alpha's requirements
-    )
-
-
-def _complete_acedatacloud_messages(ctx: CompletionDispatchContext) -> _CompletionDispatchResult:
-    ace_key: Final = acedatacloud_api_key(
-        ctx.api_key, _FORWARDED_HEADERS_ADAPTER.validate_python(ctx.headers or litellm.headers)
-    )
-    if not ace_key:
-        raise AuthenticationError(
-            message="Set ACEDATACLOUD_API_KEY or pass api_key", llm_provider="acedatacloud", model=ctx.model
-        )
-    configured_base: Final = (ctx.api_base or "https://api.acedata.cloud").rstrip("/")
-    messages_base: Final = (
-        "https://api.acedata.cloud"
-        if configured_base == "https://api.acedata.cloud/openai"
-        else configured_base.removesuffix("/v1")
-    )
-    return _complete_anthropic(
-        replace(
-            ctx,
-            api_key=ace_key,
-            api_base=messages_base,
-            litellm_params={**ctx.litellm_params, "use_bearer_for_custom_base": True},
-        )
     )
 
 

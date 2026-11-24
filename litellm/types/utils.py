@@ -329,7 +329,6 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     max_input_tokens: Required[int | None]
     max_output_tokens: Required[int | None]
     input_cost_per_token: Required[float | None]
-    input_cost_per_request: ReadOnly[float | None]
     input_cost_per_token_flex: float | None  # OpenAI flex service tier pricing
     input_cost_per_token_priority: float | None  # OpenAI priority service tier pricing
     input_cost_per_token_balanced: ReadOnly[float | None]
@@ -2044,10 +2043,6 @@ class ServerToolUse(LiteLLMBaseModel):
         return getattr(self, key)
 
 
-def _is_credit_cost(value: object) -> bool:
-    return isinstance(value, dict) and value.get("currency") == "credit"
-
-
 _COST_BREAKDOWN_ADAPTER: Final = TypeAdapter(Mapping[object, object])
 
 
@@ -2178,7 +2173,7 @@ class Usage(SafeAttributeModel, CompletionUsage):
             del self.server_tool_use
 
         dropped_non_finite_cost: Final = cost is not None and _carries_non_finite_number(cost)
-        if cost is None or _is_credit_cost(cost):
+        if cost is None:
             del self.cost
         elif dropped_non_finite_cost:
             verbose_logger.warning("Dropping a non-finite provider usage cost")

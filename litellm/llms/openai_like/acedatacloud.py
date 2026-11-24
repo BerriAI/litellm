@@ -1,56 +1,94 @@
-from collections.abc import Mapping
-from typing import Final
+from collections.abc import AsyncIterator, Iterator, Mapping
+from typing import TYPE_CHECKING, Final
 
+import httpx
 from pydantic import TypeAdapter
 
 import litellm
-from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
+from litellm.llms.openai.chat.gpt_transformation import OpenAIChatCompletionStreamingHandler, OpenAIGPTConfig
 from litellm.secret_managers.main import get_secret_str
+from litellm.types.llms.openai import AllMessageValues
+from litellm.types.utils import ModelResponse, ModelResponseStream, Usage
+
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.litellm_core_utils.tokenizer import Encoding
 
 CATALOG_URL: Final = "https://platform.acedata.cloud/api/v1/models/catalog/"
 _CATALOG: Final = TypeAdapter(dict[str, object])
 _ITEMS: Final = TypeAdapter(tuple[Mapping[str, object], ...])
-_ENDPOINTS: Final = TypeAdapter(tuple[str, ...])
 
 
-def acedatacloud_model_entry(model: str) -> Mapping[str, object]:
-    return _CATALOG.validate_python(
-        litellm.model_cost.get(  # pyright: ignore[reportUnknownMemberType]  # legacy registry has no parameterized row type
-            f"acedatacloud/{model.removeprefix('acedatacloud/')}", {}
+def request_price(model: str, override: Mapping[str, object] | None) -> float | None:
+    info: Final = (
+        override
+        if override is not None
+        else _CATALOG.validate_python(
+            litellm.model_cost.get(  # pyright: ignore[reportUnknownMemberType]  # legacy registry has no parameterized row type
+                f"acedatacloud/{model.removeprefix('acedatacloud/')}", {}
+            )
         )
     )
+    fee: Final = info.get("input_cost_per_request")
+    return float(fee) if isinstance(fee, (int, float)) else None
 
 
-def acedatacloud_native_endpoint(model: str, endpoint: str) -> bool:
-    entry: Final = acedatacloud_model_entry(model)
-    return endpoint in _ENDPOINTS.validate_python(entry.get("supported_endpoints", ()))
+def _without_credit_cost(usage: Usage | None) -> None:
+    # Ace reports settlement Credits. LiteLLM's numeric cost field represents USD.
+    cost: Final[object] = getattr(usage, "cost", None)
+    if usage is not None and isinstance(cost, Mapping) and cost.get("currency") == "credit":
+        del usage.cost
 
 
-def acedatacloud_uses_messages(model: str) -> bool:
-    return acedatacloud_native_endpoint(model, "/v1/messages") and not acedatacloud_native_endpoint(
-        model, "/v1/chat/completions"
-    )
+class _AceChatStream(OpenAIChatCompletionStreamingHandler):
+    def chunk_parser(self, chunk: dict[str, object]) -> ModelResponseStream:
+        result: Final = super().chunk_parser(chunk)
+        _without_credit_cost(getattr(result, "usage", None))
+        return result
 
 
-def acedatacloud_api_key(api_key: str | None, headers: Mapping[str, object] | None = None) -> str | None:
-    explicit: Final = api_key or get_secret_str("ACEDATACLOUD_API_KEY") or litellm.api_key
-    if explicit:
-        return explicit
-    authorization: Final = next(
-        (
-            value
-            for name, value in (headers or {}).items()
-            if name.lower() == "authorization" and isinstance(value, str)
-        ),
-        "",
-    )
-    return authorization[7:].strip() if authorization.lower().startswith("bearer ") else None
-
-
-class AceDataCloudModelInfo(OpenAIGPTConfig):
+class AceDataCloudChatConfig(OpenAIGPTConfig):
     @staticmethod
     def get_api_key(api_key: str | None = None) -> str | None:
-        return acedatacloud_api_key(api_key)
+        return api_key or get_secret_str("ACEDATACLOUD_API_KEY")
+
+    def transform_response(
+        self,
+        model: str,
+        raw_response: httpx.Response,
+        model_response: ModelResponse,
+        logging_obj: "LiteLLMLoggingObj",
+        request_data: dict[str, object],
+        messages: list[AllMessageValues],
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
+        encoding: "Encoding | None",
+        api_key: str | None = None,
+        json_mode: bool | None = None,
+    ) -> ModelResponse:
+        response: Final = super().transform_response(
+            model,
+            raw_response,
+            model_response,
+            logging_obj,
+            request_data,
+            messages,
+            optional_params,
+            litellm_params,
+            encoding,
+            api_key,
+            json_mode,
+        )
+        _without_credit_cost(getattr(response, "usage", None))
+        return response
+
+    def get_model_response_iterator(
+        self,
+        streaming_response: Iterator[str] | AsyncIterator[str] | ModelResponse,
+        sync_stream: bool,
+        json_mode: bool | None = False,
+    ) -> _AceChatStream:
+        return _AceChatStream(streaming_response=streaming_response, sync_stream=sync_stream, json_mode=json_mode)
 
     @staticmethod
     def get_api_base(api_base: str | None = None) -> str:
