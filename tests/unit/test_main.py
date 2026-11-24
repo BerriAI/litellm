@@ -1381,6 +1381,146 @@ def test_embedding_keeps_an_internal_prefixed_kwarg_out_of_the_provider_request(
     assert sent["model"] == "text-embedding-3-small"
 
 
+_EMBEDDING_RESPONSE: Final = {
+    "object": "list",
+    "data": [{"object": "embedding", "index": 0, "embedding": [0.25, -0.5]}],
+    "model": "test-embedding-model",
+    "usage": {"prompt_tokens": 2, "total_tokens": 2},
+}
+
+
+_PROVIDERS_THAT_CANNOT_TAKE_A_PLAIN_MODEL_NAME: Final = {
+    "anyscale": "get_llm_provider does not accept the prefix",
+    "github_copilot": "needs an OAuth device login",
+    "ragflow": "model names must carry a chat or agent id",
+}
+
+
+@pytest.mark.parametrize(
+    "provider",
+    [
+        *(p for p in litellm.openai_compatible_providers if p not in _PROVIDERS_THAT_CANNOT_TAKE_A_PLAIN_MODEL_NAME),
+        "custom_openai",
+    ],
+)
+def test_embedding_reaches_every_openai_compatible_provider(provider: str, respx_mock: respx.MockRouter) -> None:
+    api_base: Final = "http://openai-compatible.test/v1"
+    route: Final = respx_mock.post(url__regex=r"http://openai-compatible\.test/.*").respond(json=_EMBEDDING_RESPONSE)
+
+    response: Final = litellm.embedding(
+        model=f"{provider}/test-embedding-model",
+        input=["hello world"],
+        api_base=api_base,
+        api_key="test-key",
+    )
+
+    assert route.called
+    assert response.data[0]["embedding"] == [0.25, -0.5]
+
+
+def test_deepinfra_embedding_uses_the_deepinfra_base_and_key_and_forwards_dimensions(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("DEEPINFRA_API_KEY", "deepinfra-test-key")
+    monkeypatch.delenv("DEEPINFRA_API_BASE", raising=False)
+    route: Final = respx_mock.post("https://api.deepinfra.com/v1/openai/embeddings").respond(json=_EMBEDDING_RESPONSE)
+
+    litellm.embedding(model="deepinfra/Qwen/Qwen3-Embedding-8B", input=["hello world"], dimensions=2)
+
+    request: Final = route.calls.last.request
+    assert request.headers["authorization"] == "Bearer deepinfra-test-key"
+    assert json.loads(request.content) == {
+        "model": "Qwen/Qwen3-Embedding-8B",
+        "input": ["hello world"],
+        "dimensions": 2,
+    }
+
+
+def test_custom_openai_embedding_forwards_dimensions_to_the_custom_base(respx_mock: respx.MockRouter) -> None:
+    route: Final = respx_mock.post("http://custom-openai.test/v1/embeddings").respond(json=_EMBEDDING_RESPONSE)
+
+    litellm.embedding(
+        model="custom_openai/Qwen/Qwen3-Embedding-8B",
+        input=["hello world"],
+        dimensions=2,
+        api_base="http://custom-openai.test/v1",
+        api_key="test-key",
+    )
+
+    assert json.loads(route.calls.last.request.content)["dimensions"] == 2
+
+
+@pytest.mark.parametrize("key_kwargs", [{}, {"api_key": ""}], ids=["no_key", "empty_key"])
+def test_openai_compatible_embedding_without_a_provider_key_never_sends_the_openai_key(
+    key_kwargs: Mapping[str, str], respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("GROQ_API_KEY", raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "openai-key-that-must-stay-home")
+    route: Final = respx_mock.post(url__regex=r".*").respond(json=_EMBEDDING_RESPONSE)
+
+    with pytest.raises(litellm.AuthenticationError, match="Missing API key for groq"):
+        litellm.embedding(
+            model="groq/test-embedding-model",
+            input=["hello world"],
+            api_base="http://caller-chosen.test/v1",
+            **key_kwargs,
+        )
+
+    assert not route.called
+
+
+def test_openai_compatible_embedding_uses_a_passed_client_without_a_separate_key(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("DEEPINFRA_API_KEY", raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "openai-key-that-must-stay-home")
+    route: Final = respx_mock.post("http://client-base.test/v1/embeddings").respond(json=_EMBEDDING_RESPONSE)
+
+    litellm.embedding(
+        model="deepinfra/Qwen/Qwen3-Embedding-8B",
+        input=["hello world"],
+        client=OpenAI(api_key="client-key", base_url="http://client-base.test/v1"),
+    )
+
+    assert route.calls.last.request.headers["authorization"] == "Bearer client-key"
+
+
+@pytest.mark.parametrize(
+    ("api_base_kwargs", "expected_url"),
+    [
+        ({}, "http://localhost:22088/engines/llama.cpp/v1/embeddings"),
+        (
+            {"api_base": "http://docker-host.test:12434/engines/llama.cpp"},
+            "http://docker-host.test:12434/engines/llama.cpp/v1/embeddings",
+        ),
+    ],
+    ids=["default_base", "custom_base"],
+)
+def test_docker_model_runner_embedding_hits_the_v1_embeddings_url(
+    api_base_kwargs: Mapping[str, str], expected_url: str, respx_mock: respx.MockRouter
+) -> None:
+    route: Final = respx_mock.post(expected_url).respond(json=_EMBEDDING_RESPONSE)
+
+    litellm.embedding(
+        model="docker_model_runner/ai/embeddinggemma", input=["hello world"], api_key="dmr", **api_base_kwargs
+    )
+
+    assert route.called
+
+
+def test_openai_compatible_embedding_without_an_api_base_never_falls_back_to_openai(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+    monkeypatch.delenv("OPENAI_API_BASE", raising=False)
+    route: Final = respx_mock.post(url__regex=r".*").respond(json=_EMBEDDING_RESPONSE)
+
+    with pytest.raises(litellm.BadRequestError, match="ai21 has no default api_base"):
+        litellm.embedding(model="ai21/test-embedding-model", input=["hello world"], api_key="test-key")
+
+    assert not route.called
+
+
 def test_embedding_keeps_deployment_prompt_management_params_out_of_the_bedrock_body(
     respx_mock: respx.MockRouter,
 ) -> None:

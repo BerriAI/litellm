@@ -5551,6 +5551,7 @@ def get_optional_params_embeddings(
                 )
     elif (
         custom_llm_provider != "openai"
+        and custom_llm_provider != "custom_openai"
         and custom_llm_provider != "azure"
         and custom_llm_provider not in litellm.openai_compatible_providers
     ):

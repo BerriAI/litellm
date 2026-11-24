@@ -73,7 +73,7 @@ from litellm.constants import (
     NADIR_DEFAULT_API_BASE,
     OPENAI_AUDIO_TRANSCRIPTION_PROVIDERS,
 )
-from litellm.exceptions import AuthenticationError, LiteLLMUnknownProvider
+from litellm.exceptions import AuthenticationError, BadRequestError, LiteLLMUnknownProvider
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.allowed_tools_tool_choice import (
     drops_unsupported_allowed_tools_tool_choice,
@@ -2948,6 +2948,32 @@ def _complete_hosted_vllm(ctx: CompletionDispatchContext) -> _CompletionDispatch
     logging.post_call(input=messages, api_key=api_key, original_response=response)
 
     return response
+
+
+def _openai_compatible_embedding_target_error(
+    provider: str, model: str, api_base: str | None, api_key: str | None, client: object
+) -> BadRequestError | AuthenticationError | None:
+    if isinstance(client, openai.OpenAI | openai.AsyncOpenAI):
+        return None
+    if api_base is None:
+        return BadRequestError(
+            message=f"{provider} has no default api_base for embeddings. Pass api_base.",
+            model=model,
+            llm_provider=provider,
+        )
+    if not api_key:
+        return AuthenticationError(
+            message=f"Missing API key for {provider}. Set the provider's API key env var or pass api_key.",
+            llm_provider=provider,
+            model=model,
+        )
+    return None
+
+
+def _openai_compatible_embedding_api_base(provider: str, api_base: str | None) -> str | None:
+    if provider == "docker_model_runner" and api_base is not None:
+        return ensure_api_route(api_base, "v1")
+    return api_base
 
 
 def _openai_key_fallback(custom_llm_provider: str | None) -> str | None:
@@ -7276,7 +7302,7 @@ def embedding(
 
 @client
 def embedding(
-    model,
+    model: str,
     input=[],
     # Optional params
     dimensions: int | None = None,
@@ -7289,7 +7315,7 @@ def embedding(
     api_type: str | None = None,
     caching: bool = False,
     user: str | None = None,
-    custom_llm_provider=None,
+    custom_llm_provider: str | None = None,
     litellm_call_id=None,
     logger_fn=None,
     **kwargs,
@@ -7325,16 +7351,26 @@ def embedding(
         cast(object, kwargs["drop_params"]) if "drop_params" in kwargs else None  # cast-ok: untyped request kwargs
     )
     drop_unsupported_params: Final = litellm.drop_params is True or normalize_drop_params(drop_params_kwarg) is True
-    shared_session: Final = kwargs.get("shared_session", None)
-    max_retries: Final = kwargs.get("max_retries", None)
+    shared_session: Final[ClientSession | None] = kwargs.get("shared_session", None)
+    max_retries: Final[int | None] = kwargs.get("max_retries", None)
     litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
     mock_response: Final[list[float] | None] = kwargs.get("mock_response", None)
     azure_ad_token_provider: Final = kwargs.get("azure_ad_token_provider", None)
     aembedding: Final[bool | None] = kwargs.get("aembedding", None)
     extra_headers: Final = kwargs.get("extra_headers", None)
     headers = {
-        **_embedding_headers("headers", kwargs.get("headers"), model, drop_unsupported_params),
-        **_embedding_headers("extra_headers", extra_headers, model, drop_unsupported_params),
+        **_embedding_headers(
+            "headers",
+            cast(object, kwargs.get("headers")),  # cast-ok: untyped request kwargs
+            model,
+            drop_unsupported_params,
+        ),
+        **_embedding_headers(
+            "extra_headers",
+            cast(object, extra_headers),  # cast-ok: untyped request kwargs
+            model,
+            drop_unsupported_params,
+        ),
     }
     # Inject proxy auth headers if configured
     if litellm.proxy_auth is not None:
@@ -7363,7 +7399,7 @@ def embedding(
         kwargs, excluding=(*default_params, *DynamicPromptManagementParamLiteral.list_all_params())
     )
 
-    litellm_params_dict: Final = get_litellm_params(**kwargs)
+    litellm_params_dict: Final[Mapping[str, object]] = get_litellm_params(**kwargs)
 
     model, custom_llm_provider, dynamic_api_key, api_base = get_llm_provider(
         model=model,
@@ -7459,12 +7495,8 @@ def embedding(
                 aembedding=aembedding,
                 litellm_params=litellm_params_dict,
             )
-        elif (
-            custom_llm_provider == "openai"
-            or custom_llm_provider == "together_ai"
-            or custom_llm_provider == "nvidia_nim"
-            or custom_llm_provider == "litellm_proxy"
-            or (model in litellm.open_ai_embedding_models and custom_llm_provider is None)
+        elif custom_llm_provider in ("openai", "custom_openai", "together_ai", "nvidia_nim", "litellm_proxy") or (
+            model in litellm.open_ai_embedding_models and custom_llm_provider is None
         ):
             api_base = (
                 api_base
@@ -8307,6 +8339,34 @@ def embedding(
                 client=client,
                 aembedding=aembedding,
                 litellm_params={},
+            )
+        elif custom_llm_provider in litellm.openai_compatible_providers:
+            if (
+                target_error := _openai_compatible_embedding_target_error(
+                    custom_llm_provider,
+                    model,
+                    api_base,
+                    api_key,
+                    cast(object, client),  # cast-ok: client arrives untyped in request kwargs
+                )
+            ) is not None:
+                raise target_error
+            if headers:
+                optional_params["extra_headers"] = headers
+            response = openai_chat_completions.embedding(  # rebind-ok: dispatch chain binds response per branch
+                model=model,
+                input=input,
+                api_base=_openai_compatible_embedding_api_base(custom_llm_provider, api_base),
+                api_key=api_key,
+                logging_obj=logging,
+                timeout=timeout,
+                model_response=EmbeddingResponse(),
+                optional_params=optional_params,
+                client=client,
+                aembedding=aembedding,
+                max_retries=max_retries,
+                shared_session=shared_session,
+                litellm_params=litellm_params_dict,
             )
         else:
             raise LiteLLMUnknownProvider(model=model, custom_llm_provider=custom_llm_provider)
