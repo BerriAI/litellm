@@ -1,3 +1,10 @@
+def _declares_rpm(deployments: object) -> bool:
+    """Check if any deployment declares an RPM rate limit."""
+    return isinstance(deployments, list) and any(
+        isinstance(d, dict) and (d.get("litellm_params") or {}).get("rpm") is not None
+        for d in deployments
+    )
+
 """
 The Router's entry points and the typed views they return.
 
