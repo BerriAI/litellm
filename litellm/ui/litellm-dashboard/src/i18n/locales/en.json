@@ -12799,9 +12799,6 @@
         "valueLabel": "Authentication Value",
         "valueTooltip": "Token, password, or header value to send with each request for the selected auth type.",
         "valueWhitespace": "Authentication value cannot be empty whitespace",
-        "discoveryTokenRequired": "Enter your API token before adding this server",
-        "discoveryTokenHint": "Enter your API token to test this connection. Copy only the token, without Bearer or quotes.",
-        "getApiToken": "Get your API token",
         "valuePlaceholder": "Enter token or secret"
       },
       "actions": {
