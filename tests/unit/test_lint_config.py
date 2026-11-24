@@ -414,6 +414,22 @@ def test_provider_field_and_stored_credentials_decide_what_a_model_needs(
     assert _lint(tmp_path, _model_entry(litellm_params), {}) == expected
 
 
+def test_azure_client_secret_needs_its_tenant_and_client_from_settings_or_the_environment(tmp_path: Path) -> None:
+    text: Final = _model_entry("{model: azure/gpt-4o, api_base: https://example.com, api_version: v, client_secret: s}")
+    assert _lint(tmp_path, text, {"AZURE_TENANT_ID": "t", "AZURE_CLIENT_ID": "c"}) == []
+    assert _lint(tmp_path, text, {"AZURE_TENANT_ID": "t"}) == [
+        "config.yaml:3: warning: model_list[0].litellm_params: azure/gpt-4o needs "
+        "AZURE_API_KEY in the environment or litellm_params.api_key"
+    ]
+
+
+def test_declared_environment_variable_can_reference_an_earlier_declared_one(tmp_path: Path) -> None:
+    text: Final = _model_entry("{model: openai/gpt-5}") + (
+        "environment_variables:\n  SHARED_KEY: sk-test\n  OPENAI_API_KEY: os.environ/SHARED_KEY\n"
+    )
+    assert _lint(tmp_path, text, {}) == []
+
+
 def test_declared_environment_variable_wins_over_the_process_environment(tmp_path: Path) -> None:
     text: Final = _model_entry("{model: openai/gpt-5}") + "environment_variables:\n  OPENAI_API_KEY: sk-test\n"
     assert _lint(tmp_path, text, {"OPENAI_API_KEY": ""}) == []

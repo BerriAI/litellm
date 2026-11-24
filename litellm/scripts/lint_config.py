@@ -280,9 +280,17 @@ def _model_info_findings(
             )
 
 
-def _declared_value(value: object, environ: Mapping[str, str]) -> str:
-    text: Final = "" if value is None else str(value)
-    return environ.get(text.removeprefix(_ENV_PREFIX), "") if text.startswith(_ENV_PREFIX) else text
+_AZURE_CLIENT_LOGIN: Final = ("tenant_id", "client_id", "client_secret")
+
+
+def _effective_environ(declared: Mapping[str, object], environ: Mapping[str, str]) -> dict[str, str]:
+    effective: Final = dict(environ)
+    for name, value in declared.items():
+        text: Final = "" if value is None else str(value)
+        effective[str(name)] = (
+            effective.get(text.removeprefix(_ENV_PREFIX), "") if text.startswith(_ENV_PREFIX) else text
+        )
+    return effective
 
 
 def _provider_model(params: Mapping[str, object], model: str) -> str:
@@ -317,7 +325,8 @@ def _credential_findings(
     fields: Final = [name for name in GenericLiteLLMParams.model_fields if name.partition("_")[0] in provider | {"api"}]
     set_params: Final = {key for key, value in params.items() if value is not None}
     has_other_auth: Final = any(_ALTERNATIVE_AUTH.search(key) for key in set_params.intersection(fields)) or (
-        "azure" in provider and "client_secret" in set_params
+        "azure" in provider
+        and all(name in set_params or environ.get(f"AZURE_{name.upper()}") for name in _AZURE_CLIENT_LOGIN)
     )
     for name in missing:
         setting: Final = name.lower().partition("_")[2]
@@ -465,7 +474,7 @@ def lint_config(config: Mapping[str, object], environ: Mapping[str, str]) -> Ite
         declared: Final = _mapping(config.get("environment_variables")) or {}
         yield from _model_list_findings(
             config["model_list"],
-            {**environ, **{str(name): _declared_value(value, environ) for name, value in declared.items()}},
+            _effective_environ(declared, environ),
         )
     yield from _section_findings(config, _model_names(config))
     yield from _env_findings(config, environ)
