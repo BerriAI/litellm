@@ -1726,6 +1726,39 @@ async def test_a_callers_own_provider_specific_headers_reach_the_provider_beside
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
+    "malformed",
+    [
+        {"custom_llm_provider": "anthropic", "extra_headers": {USER_PROFILE_ID_HEADER: 5}},
+        {"custom_llm_provider": "anthropic"},
+        {"custom_llm_provider": ["anthropic"], "extra_headers": {USER_PROFILE_ID_HEADER: "uprof_client"}},
+        "anthropic",
+    ],
+    ids=["non-string-header-value", "no-extra-headers", "non-string-provider", "not-an-object"],
+)
+async def test_a_malformed_caller_provider_specific_header_is_dropped_and_the_rest_still_reach_the_provider(
+    malformed: object,
+) -> None:
+    updated: Final = await _request_data_added_by_the_proxy(
+        {
+            "provider_specific_header": [
+                malformed,
+                {"custom_llm_provider": "anthropic", "extra_headers": {"x-trace": "t1"}},
+            ]
+        },
+        {"anthropic-beta": "beta-1"},
+        {},
+        _PINNED_KEY,
+    )
+    forwarded: Final = ProviderSpecificHeaderUtils.get_provider_specific_headers(
+        model="claude-sonnet-5-5",
+        provider_specific_header=updated.get("provider_specific_header"),
+        custom_llm_provider="anthropic",
+    )
+    assert forwarded == {"x-trace": "t1", "anthropic-beta": "beta-1", USER_PROFILE_ID_HEADER: "uprof_key"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
     "request_headers", [{}, {"anthropic-beta": "beta-1"}], ids=["caller-entry-only", "beside-proxy-entries"]
 )
 async def test_the_router_isolates_the_deployment_on_a_callers_conditional_authorization(
