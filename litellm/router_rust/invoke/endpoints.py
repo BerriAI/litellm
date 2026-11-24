@@ -906,8 +906,13 @@ def attempt_call(
     group: str,
     requested: str,
     fallback_model_group: str | None = None,
+    authenticated: Mapping[str, object] | None = None,
 ) -> AttemptCall:
-    params, merged_request, ignored = with_model_cache_controls(as_dict(deployment.get("litellm_params")), request)
+    """``authenticated`` is the request before a fallback's own params went over it, the only place the
+    virtual key's cache controls are read from."""
+    params, merged_request, ignored = with_model_cache_controls(
+        as_dict(deployment.get("litellm_params")), request, authenticated
+    )
     call: Final = _attempt_call(
         core,
         plan,

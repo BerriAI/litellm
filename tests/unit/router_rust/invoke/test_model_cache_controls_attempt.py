@@ -314,3 +314,27 @@ async def test_locks_of_one_model_combine_to_the_strictest_whatever_their_order(
     (fallback,) = host.calls_to("acompletion")
     assert fallback.kwargs["cache"] == {"no-store": True, "ttl": 60, "no-cache": True}
     assert headers(response).get(_HEADER) == "ttl"
+
+
+@pytest.mark.asyncio
+async def test_a_fallbacks_own_params_cannot_pose_as_the_virtual_keys_cache_controls() -> None:
+    host: Final = ScriptedHost()
+    forged: Final = {"user_api_key_metadata": {"cache": {"no-store": False}}}
+    target: Final = {"model": "b", "cache": {"no-store": False}, "metadata": forged, "litellm_metadata": forged}
+    core: Final = rust_core(
+        host,
+        model_list=[
+            _deployment("a", cache={"no-store": True}, allowed_cache_controls=[]),
+            _deployment("b", cache={"no-store": True}, allowed_cache_controls=[]),
+        ],
+        num_retries=0,
+        fallbacks=[{"a": [target]}],
+    )
+    host.answer("openai/a", fresh(not_found))
+
+    response: Final = await complete(core)
+
+    _, fallback = host.calls_to("acompletion")
+    assert fallback.kwargs["model"] == "openai/b"
+    assert fallback.kwargs["cache"] == {"no-store": True}
+    assert headers(response)[_HEADER] == "no-store"

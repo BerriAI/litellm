@@ -2,7 +2,7 @@
 
 import dataclasses
 import itertools
-from collections.abc import Collection, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from typing import Final
 
 from litellm.litellm_core_utils.add_retry_fallback_headers import ensure_response_additional_headers
@@ -25,11 +25,12 @@ class ModelCacheControls:
 
 
 def model_cache_controls(
-    litellm_params: Mapping[str, object], request_cache: object, key_controls: Collection[str] = ()
+    litellm_params: Mapping[str, object], request_cache: object, key_controls: Mapping[str, object] | None = None
 ) -> ModelCacheControls:
     """The deployment's ``cache`` is the default for each control and the request overrides the controls
     it sends. When the deployment sets ``allowed_cache_controls``, a request control outside that list is
-    ignored and named in ``ignored``, except the ``key_controls`` the virtual key itself enforces."""
+    ignored and named in ``ignored``, except a control still at the value the virtual key's own
+    ``key_controls`` enforce."""
     allowed: Final = _listed(litellm_params.get(ALLOWED_CACHE_CONTROLS_PARAM))
     deployment_controls: Final = _canonical(as_dict(litellm_params.get("cache")))
     request_controls: Final = as_dict(request_cache)
@@ -42,7 +43,7 @@ def model_cache_controls(
         for control in request_controls
         if _CONTROL_NAMES.get(control, control) in _LOCKABLE_CONTROLS
         and _CONTROL_NAMES.get(control, control) not in allowed
-        and control not in key_controls
+        and not (key_controls and control in key_controls and key_controls[control] == request_controls[control])
     )
     kept: Final = {control: value for control, value in request_controls.items() if control not in ignored}
     return ModelCacheControls({**deployment_controls, **_canonical(kept)}, ignored)
@@ -113,11 +114,15 @@ def _canonical(controls: Mapping[str, object]) -> Mapping[str, object]:
 
 
 def with_model_cache_controls(
-    litellm_params: Mapping[str, object], request: Mapping[str, object]
+    litellm_params: Mapping[str, object],
+    request: Mapping[str, object],
+    authenticated: Mapping[str, object] | None = None,
 ) -> tuple[Mapping[str, object], Mapping[str, object], tuple[str, ...]]:
     """The deployment's params and the request, each carrying the merged ``cache``, and the ignored controls.
-    An empty merge leaves ``cache`` out of both, so the router's default params still apply."""
-    cache: Final = model_cache_controls(litellm_params, request.get("cache"), _key_cache_controls(request))
+    An empty merge leaves ``cache`` out of both, so the router's default params still apply. The virtual
+    key's controls are read from ``authenticated``, the request before any fallback params went over it."""
+    key_controls: Final = _key_cache_controls(request if authenticated is None else authenticated)
+    cache: Final = model_cache_controls(litellm_params, request.get("cache"), key_controls)
     params: Final = without(litellm_params, ALLOWED_CACHE_CONTROLS_PARAM)
     if cache.controls is None:
         return params, request, ()
@@ -125,11 +130,12 @@ def with_model_cache_controls(
     return {**without(params, "cache"), **controls}, {**without(request, "cache"), **controls}, cache.ignored
 
 
-def _key_cache_controls(request: Mapping[str, object]) -> Collection[str]:
+def _key_cache_controls(request: Mapping[str, object]) -> Mapping[str, object]:
     """The controls the proxy merged into the request's ``cache`` from the virtual key's own ``cache``."""
     buckets: Final = (as_dict(request.get(field)) for field in ("metadata", "litellm_metadata"))
     key_caches: Final = (as_dict(as_dict(bucket.get("user_api_key_metadata")).get("cache")) for bucket in buckets)
-    return frozenset(itertools.chain.from_iterable(key_caches)) & frozenset(SupportedCacheControls)
+    merged: Final = dict(itertools.chain.from_iterable(key_cache.items() for key_cache in key_caches))
+    return {control: value for control, value in merged.items() if control in SupportedCacheControls}
 
 
 def report_ignored_cache_controls(response: object, ignored: Sequence[str]) -> None:

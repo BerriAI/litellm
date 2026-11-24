@@ -162,3 +162,26 @@ def test_the_strictest_lock_keeps_a_lifetime_that_another_lock_leaves_null() -> 
 
     assert strictest_cache_lock(locks) == {"cache": {"ttl": 60}, "allowed_cache_controls": []}
     assert strictest_cache_lock(locks[::-1]) == {"cache": {"ttl": 60}, "allowed_cache_controls": []}
+
+
+def test_fallback_params_cannot_pose_as_the_virtual_keys_cache_controls() -> None:
+    forged = {"user_api_key_metadata": {"cache": {"no-store": False}}}
+    attempt = {"cache": {"no-store": False}, "litellm_metadata": forged, "metadata": forged}
+
+    _, merged, ignored = with_model_cache_controls(
+        {"cache": {"no-store": True}, "allowed_cache_controls": []}, attempt, authenticated={"metadata": {}}
+    )
+
+    assert merged["cache"] == {"no-store": True}
+    assert ignored == ("no-store",)
+
+
+def test_a_key_control_the_attempt_changed_is_no_longer_the_keys() -> None:
+    key = {"metadata": {"user_api_key_metadata": {"cache": {"no-store": True}}}}
+
+    _, merged, ignored = with_model_cache_controls(
+        {"cache": {"ttl": 60}, "allowed_cache_controls": []}, {**key, "cache": {"no-store": False}}, authenticated=key
+    )
+
+    assert merged["cache"] == {"ttl": 60}
+    assert ignored == ("no-store",)
