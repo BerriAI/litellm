@@ -14,6 +14,7 @@ from litellm._internal_context import internal_sub_call
 from litellm.litellm_core_utils.allowed_tools_tool_choice import (
     allowed_tools_tool_choice_kept_on_follow_up,
     allowed_tools_tool_choice_with_gateway_tools_as_functions,
+    raise_if_mcp_tool_choice_forces_a_gateway_server,
 )
 from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR, set_hidden_params
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -140,6 +141,7 @@ async def acompletion_with_mcp(
             _skip_mcp_handler=True,
             **kwargs,
         )
+    raise_if_mcp_tool_choice_forces_a_gateway_server(kwargs.get("tool_choice"), mcp_tools_with_litellm_proxy, model)
 
     context: Final = MCPRequestContext.resolve(kwargs=MappingProxyType({**kwargs, "model": model}), tools=tools)
     user_api_key_auth: Final[UserAPIKeyAuth | None] = context.user_api_key_auth

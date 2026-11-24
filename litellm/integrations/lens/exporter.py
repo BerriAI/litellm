@@ -17,6 +17,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.integrations.clickhouse.clickhouse_spend_logger import spend_log_row_from_payload
 from litellm.integrations.clickhouse.spend_log_types import SpendLogPayload
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.integrations.lens.policy import lens_logging_enabled_for_call
 
 if TYPE_CHECKING:
     from prometheus_client import Counter as PrometheusCounter
@@ -206,7 +207,7 @@ class LensExporter(CustomLogger):
 
     def _log(self, kwargs: Mapping[str, object]) -> None:
         raw: Final = kwargs.get("standard_logging_object")
-        if raw is None or self.closed:
+        if raw is None or self.closed or not lens_logging_enabled_for_call(kwargs):
             return
         if self.buffered_events >= MAX_BUFFER_EVENTS or self.buffered_bytes >= MAX_BUFFER_BYTES:
             self._drop(1)

@@ -1,7 +1,7 @@
-from collections.abc import Mapping
-from typing import Any, Final
+from collections.abc import Mapping, Sequence
+from typing import Annotated, Any, Final
 
-from pydantic import Field
+from pydantic import AfterValidator, Field
 
 from litellm.types.litellm_params import AgenticSurface
 from litellm.types.llms.base import LiteLLMBaseModel
@@ -104,7 +104,7 @@ class AgenticLoopRequestPatch(LiteLLMBaseModel):
     """
 
     model: str | None = None
-    messages: list[dict[str, Any]] | None = None
+    messages: Annotated[Sequence[Mapping[str, object]], AfterValidator(list)] | None = None
     tools: list[dict[str, object]] | None = None
     max_tokens: int | None = None
     optional_params: dict[str, object] = Field(default_factory=dict)

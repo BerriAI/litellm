@@ -42,6 +42,17 @@ BUDGET_COLUMNS: Final = (
 VOLATILE_INFO_FIELDS: Final = frozenset({"created_at", "updated_at", "budget_reset_at"})
 UNLOADED_RELATIONS: Final[dict[str, JsonValue]] = dict.fromkeys(
     (
+        "apps",
+        "app_groups",
+        "app_group_org_budgets",
+        "app_default_tiers",
+        "app_default_members",
+        "app_org_tiers",
+        "app_org_budgets",
+        "app_member_budgets",
+        "app_org_overrides",
+        "app_org_members",
+        "app_member_overrides",
         "customer_organization_defaults",
         "customer_organizations",
         "customer_teams",

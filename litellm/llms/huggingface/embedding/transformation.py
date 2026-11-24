@@ -120,10 +120,10 @@ class HuggingFaceEmbeddingConfig(BaseConfig):
     def get_config(cls) -> dict[str, object]:
         return super().get_config()
 
-    def get_special_options_params(self):
+    def get_special_options_params(self) -> list[str]:
         return ["use_cache", "wait_for_model"]
 
-    def get_supported_openai_params(self, model: str):
+    def get_supported_openai_params(self, model: str) -> list[str]:
         return [
             "stream",
             "temperature",
@@ -183,7 +183,7 @@ class HuggingFaceEmbeddingConfig(BaseConfig):
             if (tgi_models_cache is not None) and (conv_models_cache is not None):
                 return tgi_models_cache, conv_models_cache
             # If not, read the file and populate the cache
-            tgi_models: Final = set()
+            tgi_models: Final[set[str]] = set()
             script_directory = os.path.dirname(os.path.abspath(__file__))
             script_directory = os.path.dirname(script_directory)
             # Construct the file path relative to the script's directory
@@ -206,7 +206,7 @@ class HuggingFaceEmbeddingConfig(BaseConfig):
                 "huggingface_llms_metadata",
                 "hf_conversational_models.txt",
             )
-            conv_models: Final = set()
+            conv_models: Final[set[str]] = set()
             with open(file_path, "r") as file:
                 for line in file:
                     conv_models.add(line.strip())

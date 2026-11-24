@@ -138,6 +138,11 @@ from litellm.proxy.common_utils.cache_invalidation_pubsub import (
     evict_shared,
     publish_cache_invalidation,
 )
+from litellm.proxy.common_utils.callback_config_validation import (
+    InvalidLoggingMetadata,
+    normalize_logging_entries,
+    string_keyed,
+)
 from litellm.proxy.common_utils.callback_utils import encrypt_callback_vars
 from litellm.proxy.common_utils.json_merge_patch import apply_json_merge_patch
 from litellm.proxy.common_utils.openai_error_payload import proxy_exception_for
@@ -178,6 +183,7 @@ from litellm.proxy.management_endpoints.common_utils import (  # noqa: F401  # l
     check_passthrough_routes_caller_permission,
     check_require_trace_id_caller_permission,
     member_budget_patch,
+    semantic_cache_metadata_changed,
     set_object_metadata_field,
     team_member_has_permission,
     update_metadata_fields,
@@ -185,6 +191,7 @@ from litellm.proxy.management_endpoints.common_utils import (  # noqa: F401  # l
     user_api_key_has_admin_view,
     validate_budget_duration,
     validate_rollover_budget_patch,
+    validate_semantic_cache_metadata,
     validate_team_model_max_budget,
 )
 from litellm.proxy.management_endpoints.organization_endpoints import (
@@ -309,6 +316,12 @@ class _TeamIdKeyCount(TypedDict):
 class _TeamIdGroupRow(TypedDict):
     team_id: str
     _count: _TeamIdKeyCount
+
+
+def raise_on_invalid_team_logging_shape(metadata: object) -> None:
+    entries: Final = normalize_logging_entries(string_keyed(metadata).get("logging"))
+    if isinstance(entries, InvalidLoggingMetadata):
+        raise HTTPException(status_code=400, detail={"error": entries.message})
 
 
 def _as_object(value: object) -> object:
@@ -1891,6 +1904,7 @@ async def new_team(
         if prisma_client is None:
             raise HTTPException(status_code=500, detail={"error": "No db connected"})
 
+        validate_semantic_cache_metadata(attribute_or_none(data, "metadata"))
         validate_required_customer_headers_metadata(
             _TEAM_METADATA_ADAPTER.validate_python(getattr(data, "metadata", None) or {})
         )
@@ -2092,6 +2106,7 @@ async def new_team(
         if isinstance(data.metadata, dict):
             TeamMemberBudgetHandler.strip_system_managed_metadata_keys(data.metadata)
 
+        raise_on_invalid_team_logging_shape(data.metadata)
         await validate_team_metadata_if_configured(
             operation="create",
             metadata=data.metadata,
@@ -2780,6 +2795,11 @@ async def update_team(
         )
 
         _existing_team_metadata: Final[object] = getattr(existing_team_row, "metadata", None)
+        requested_metadata: Final = attribute_or_none(data, "metadata")
+        if "metadata" in data.model_fields_set and semantic_cache_metadata_changed(
+            requested_metadata, _existing_team_metadata
+        ):
+            validate_semantic_cache_metadata(requested_metadata, _existing_team_metadata)
         validate_required_customer_headers_metadata(
             _TEAM_METADATA_ADAPTER.validate_python(getattr(data, "metadata", None) or {})
         )
@@ -2959,6 +2979,7 @@ async def update_team(
             TeamMemberBudgetHandler.strip_system_managed_metadata_keys(metadata_update)
 
         if "metadata" in updated_kv:
+            raise_on_invalid_team_logging_shape(updated_kv.get("metadata"))
             stored_metadata: Final[Mapping[str, JsonValue] | None] = (
                 {
                     key: value

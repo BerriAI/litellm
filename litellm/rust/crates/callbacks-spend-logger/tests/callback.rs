@@ -819,9 +819,12 @@ async fn a_claimed_job_row_keeps_the_metadata_fields_of_its_request_settings(
         .map(String::as_str)
         .collect();
     assert_eq!(
-        names
-            .iter()
-            .all(|name| ["cold_storage_object_key", "status"].contains(name)),
+        names.iter().all(|name| [
+            "cold_storage_object_key",
+            "litellm_previous_response_ids",
+            "status"
+        ]
+        .contains(name)),
         cut,
         "{names:?}"
     );

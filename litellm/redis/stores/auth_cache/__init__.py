@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Final
 from litellm._internal_context import with_service_target
 from litellm.caching.redis_batch import Batch, active_request_redis_batches
 from litellm.redis.stores._route import route
-from litellm.redis.stores.auth_cache.handle import AuthCacheHandle
+from litellm.redis.stores.auth_cache.handle import AuthCacheHandle, TeamRoster
 from litellm.redis.stores.auth_cache.types import AUTH_CACHE_TARGET, AuthCacheSettings, WriteBack
 from litellm.rust_bridge._native import AuthObject, LocalSizes, NativeAuthCache, NativeRequestRedis
 
@@ -151,6 +151,24 @@ class AuthCacheStore:
 
     def get_local(self, key: AuthObject) -> object:
         return self._handle.get_local(key)
+
+    @with_service_target(AUTH_CACHE_TARGET)
+    async def team_snapshot(self, key: AuthObject) -> tuple[object, TeamRoster | None] | None:
+        return await self._handle.team_snapshot(key, _built_request() if self.has_redis else None)
+
+    @with_service_target(AUTH_CACHE_TARGET)
+    async def team_fields(
+        self, key: AuthObject, fields: Sequence[str] | None = None, user_id: str | None = None
+    ) -> object:
+        if not self.has_redis:
+            return self._handle.local_team_fields(key, fields, user_id)
+        return await self._handle.team_fields(key, fields, user_id, _built_request())
+
+    def has_local_team(self, key: AuthObject) -> bool:
+        return self._handle.local_team_fields(key, (), None) is not None
+
+    def add_local_team_spend(self, key: AuthObject, delta: float) -> bool:
+        return self._handle.add_local_team_spend(key, delta)
 
     def get_local_by_key(self, key: str) -> object:
         return self._handle.get_local_by_key(key)

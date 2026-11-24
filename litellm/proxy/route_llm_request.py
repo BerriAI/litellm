@@ -524,7 +524,7 @@ def endpoint_unsupported_by_model(
     if not isinstance(model, str) or llm_router is None:
         return False
     metadata: Final = data.get("metadata")
-    request_kwargs: Final = {
+    request_kwargs: Final[dict[str, object]] = {
         **data,
         "metadata": {
             **(metadata if isinstance(metadata, Mapping) else {}),

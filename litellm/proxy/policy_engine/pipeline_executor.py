@@ -330,7 +330,7 @@ def _prepare_hook_input(
     step: PipelineStep,
     callback: CustomGuardrail,
     data: dict,  # mutable-ok: same request-payload shape the hooks mutate
-    raw_request_snapshot: dict | None,  # mutable-ok: same request-payload shape as data
+    raw_request_snapshot: dict[str, object] | None,  # mutable-ok: same request-payload shape as data
 ) -> tuple[dict[str, object], bool]:  # mutable-ok: returns that same request-payload dict
     """Inject the step's guardrail name into metadata so should_run_guardrail() allows it,
     and pick the payload the step scans: a scan_raw_request step evaluates the pristine
@@ -628,13 +628,13 @@ class PipelineExecutor:
         user_api_key_dict: "UserAPIKeyAuth",
         call_type: str,
         metadata_key: Literal["metadata", "litellm_metadata"],
-        raw_request_snapshot: dict | None = None,  # mutable-ok: same request-payload shape as data
+        raw_request_snapshot: dict[str, object] | None = None,  # mutable-ok: same request-payload shape as data
         streaming_chunks: list[object] | None = None,  # mutable-ok: shared buffered-stream chunks, read per step
         endpoint_translation: "BaseTranslation | None" = None,
         stream_already_sent: bool = False,
     ) -> tuple[
         Literal["pass", "fail", "error", "skip"],
-        dict | None,
+        dict[str, object] | None,
         str | None,
         Exception | None,
     ]:
@@ -771,8 +771,8 @@ class PipelineExecutor:
 
 def _allow_result(
     step_results: Sequence[PipelineStepResult],
-    working_data: dict,  # mutable-ok: same request-payload shape as execute_steps' data
-    request_data: dict,  # mutable-ok: same request-payload shape as execute_steps' data
+    working_data: dict[str, object],  # mutable-ok: same request-payload shape as execute_steps' data
+    request_data: dict[str, object],  # mutable-ok: same request-payload shape as execute_steps' data
 ) -> PipelineExecutionResult:
     """Build the terminal-allow result, propagating pipeline modifications without the per-step guardrail override."""
     restored: Final = _restore_request_guardrails(working_data, request_data)
@@ -784,9 +784,9 @@ def _allow_result(
 
 
 def _restore_request_guardrails(
-    working_data: dict,  # mutable-ok: same request-payload shape as execute_steps' data
-    request_data: dict,  # mutable-ok: same request-payload shape as execute_steps' data
-) -> dict:  # mutable-ok: merged back into the request dict, which downstream code mutates
+    working_data: dict[str, object],  # mutable-ok: same request-payload shape as execute_steps' data
+    request_data: dict[str, object],  # mutable-ok: same request-payload shape as execute_steps' data
+) -> dict[str, object]:  # mutable-ok: merged back into the request dict, which downstream code mutates
     """
     Restore the request's own metadata["guardrails"] activation list.
 

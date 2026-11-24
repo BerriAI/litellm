@@ -50,6 +50,7 @@ from litellm.llms.base_llm.auth.types import MintedToken
 from litellm.llms.custom_httpx.accept_encoding import ACCEPT_ENCODING_HEADER
 from litellm.llms.custom_httpx.aiohttp_pool_diagnostics import build_pool_wait_trace_config
 from litellm.llms.custom_httpx.http2_connection_spread import AsyncHTTP2ConnectionSpread
+from litellm.llms.custom_httpx.http2_graceful_goaway import drain_http2_connections_on_graceful_goaway
 from litellm.types.llms.custom_http import *
 
 if TYPE_CHECKING:
@@ -284,9 +285,9 @@ def _repair_surrogates(value: str) -> str:
 
 
 def _prepare_request_data_and_content(
-    data: dict | str | bytes | None = None,
+    data: Mapping[str, object] | str | bytes | None = None,
     content: _RequestContent | None = None,
-) -> tuple[dict | Mapping | None, _RequestContent | None]:
+) -> tuple[Mapping[str, object] | None, _RequestContent | None]:
     """
     Helper function to route data/content parameters correctly for httpx requests
 
@@ -765,7 +766,7 @@ class AsyncHTTPHandler:
         self,
         timeout: float | httpx.Timeout | None = None,
         event_hooks: Mapping[str, list[Callable[..., object]]] | None = None,
-        concurrent_limit=None,  # Kept for backward compatibility, but ignored (no limits)
+        concurrent_limit: object = None,  # Kept for backward compatibility, but ignored (no limits)
         client_alias: str | None = None,  # name for client in logs
         ssl_verify: VerifyTypes | None = None,
         shared_session: Optional["ClientSession"] = None,
@@ -1572,6 +1573,7 @@ class AsyncHTTPHandler:
             else verify
         )
         if http2 or http2_enabled():
+            drain_http2_connections_on_graceful_goaway()
             return AsyncHTTP2ConnectionSpread(
                 lambda lane_limits: AsyncHTTPTransport(
                     local_address=local_address, verify=transport_verify, cert=cert, http2=True, limits=lane_limits
@@ -1612,7 +1614,7 @@ class HTTPHandler:
     def __init__(
         self,
         timeout: float | httpx.Timeout | None = None,
-        concurrent_limit=None,  # Kept for backward compatibility, but ignored (no limits)
+        concurrent_limit: object = None,  # Kept for backward compatibility, but ignored (no limits)
         client: httpx.Client | None = None,
         ssl_verify: bool | str | None = None,
         disable_default_headers: bool
@@ -1629,6 +1631,8 @@ class HTTPHandler:
 
     def create_client(self) -> httpx.Client:
         use_http2: Final = http2_enabled()
+        if use_http2:
+            drain_http2_connections_on_graceful_goaway()
         # Get unified SSL configuration
         ssl_config: Final = get_ssl_configuration(self.ssl_verify, http2=use_http2)
 
