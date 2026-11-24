@@ -45,6 +45,8 @@ _EXPECTED_ENDPOINTS: Final = {
     "batches": False,
     "rerank": False,
 }
+# Huawei bills Period 2 from 21:00 to 07:59 Beijing time, which is 13:00 to 23:59 UTC. Read on 2026-11-24 from
+# https://support.huaweicloud.com/intl/en-us/price-maas/price-maas-0002.html
 _LAST_PEAK_MINUTE: Final = datetime(2026, 11, 24, 12, 59, tzinfo=timezone.utc)
 _FIRST_OFF_PEAK_MINUTE: Final = datetime(2026, 11, 24, 13, 0, tzinfo=timezone.utc)
 _LAST_OFF_PEAK_MINUTE: Final = datetime(2026, 11, 24, 23, 59, tzinfo=timezone.utc)
