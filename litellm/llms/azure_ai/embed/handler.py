@@ -1,5 +1,5 @@
-from collections.abc import Mapping
-from typing import Final
+from collections.abc import Mapping, Sequence
+from typing import TYPE_CHECKING, Final
 from urllib.parse import urlsplit, urlunsplit
 
 import httpx
@@ -24,6 +24,9 @@ from litellm.utils import convert_to_model_response_object
 
 from .cohere_transformation import AzureAICohereConfig
 
+if TYPE_CHECKING:
+    from aiohttp import ClientSession
+
 
 def _foundry_models_route_base(api_base: str | None) -> str | None:
     if api_base is None or not is_foundry_model_inference_base(api_base):
@@ -47,11 +50,11 @@ def _embedding_api_base(api_base: str | None) -> str | None:
 class AzureAIEmbedding(OpenAIChatCompletion):
     def _process_response(
         self,
-        image_embedding_responses: list | None,
-        text_embedding_responses: list | None,
+        image_embedding_responses: list[object] | None,
+        text_embedding_responses: list[object] | None,
         image_embeddings_idx: list[int],
         model_response: EmbeddingResponse,
-        input: list,
+        input: Sequence[object],
     ):
         combined_responses: Final = []
         if image_embedding_responses is not None and text_embedding_responses is not None:
@@ -84,7 +87,7 @@ class AzureAIEmbedding(OpenAIChatCompletion):
         timeout: float,
         logging_obj: object,
         model_response: EmbeddingResponse,
-        optional_params: dict,
+        optional_params: dict[str, object],
         api_key: str | None,
         api_base: str | None,
         client: HTTPHandler | AsyncHTTPHandler | None = None,
@@ -126,7 +129,7 @@ class AzureAIEmbedding(OpenAIChatCompletion):
         timeout: float,
         logging_obj: object,
         model_response: EmbeddingResponse,
-        optional_params: dict,
+        optional_params: dict[str, object],
         api_key: str | None,
         api_base: str | None,
         client: HTTPHandler | AsyncHTTPHandler | None = None,
@@ -165,11 +168,11 @@ class AzureAIEmbedding(OpenAIChatCompletion):
     async def async_embedding(
         self,
         model: str,
-        input: list,
+        input: list[str],
         timeout: float,
         logging_obj: object,
         model_response: EmbeddingResponse,
-        optional_params: dict,
+        optional_params: dict[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
         client=None,
@@ -180,8 +183,8 @@ class AzureAIEmbedding(OpenAIChatCompletion):
             image_embeddings_idx,
         ) = AzureAICohereConfig().transform_request(input=input, optional_params=optional_params, model=model)
 
-        image_embedding_responses: list | None = None
-        text_embedding_responses: list | None = None
+        image_embedding_responses: list[object] | None = None
+        text_embedding_responses: list[object] | None = None
 
         if image_embeddings_request["input"]:
             image_response: Final = await self.async_image_embedding(
@@ -228,17 +231,17 @@ class AzureAIEmbedding(OpenAIChatCompletion):
     def embedding(
         self,
         model: str,
-        input: list,
+        input: list[str],
         timeout: float,
         logging_obj: object,
         model_response: EmbeddingResponse,
-        optional_params: dict,
+        optional_params: dict[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
         client=None,
         aembedding: object = None,
         max_retries: int | None = None,
-        shared_session=None,
+        shared_session: "ClientSession | None" = None,
         litellm_params: Mapping[str, object] | None = None,
     ) -> EmbeddingResponse:
         """
@@ -267,8 +270,8 @@ class AzureAIEmbedding(OpenAIChatCompletion):
             image_embeddings_idx,
         ) = AzureAICohereConfig().transform_request(input=input, optional_params=optional_params, model=model)
 
-        image_embedding_responses: list | None = None
-        text_embedding_responses: list | None = None
+        image_embedding_responses: list[object] | None = None
+        text_embedding_responses: list[object] | None = None
 
         if image_embeddings_request["input"]:
             image_response: Final = self.image_embedding(
