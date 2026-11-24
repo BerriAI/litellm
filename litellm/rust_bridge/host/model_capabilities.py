@@ -1,12 +1,19 @@
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping
 from functools import lru_cache
 from typing import Final, TypeAlias
 
+from pydantic import TypeAdapter
+
 import litellm
-from litellm.litellm_core_utils.core_helpers import as_str_mapping
+from litellm.litellm_core_utils import fallback_generalizations
+from litellm.litellm_core_utils.core_helpers import as_object_list, as_str_mapping
+from litellm.litellm_core_utils.get_model_cost_map import FALLBACK_GENERALIZATIONS_KEY
 from litellm.litellm_core_utils.model_cost_table import ModelCostVersion, model_cost_version
+
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class _Held:
@@ -22,6 +29,7 @@ class _Held:
         return isinstance(other, _Held) and other.value is self.value
 
 
+_CatalogVersion: TypeAlias = tuple[int, int, int]
 _Fingerprint: TypeAlias = tuple[str, str | None, _Held, ModelCostVersion, int, tuple[_Held, ...]]
 
 
@@ -95,3 +103,18 @@ def _capabilities(fingerprint: _Fingerprint, resolved_model: str, provider: str)
         "supports_mid_conversation_system": supports("supports_mid_conversation_system"),
         "effort_tiers": {level: tier(level) for level in ("minimal", "low", "medium", "high", "xhigh", "max")},
     }
+
+
+def model_cost_document(known: _CatalogVersion | None) -> tuple[_CatalogVersion, Mapping[str, object] | None]:
+    """The live model map and its active fallback rules as one document, which the native catalog reads, or
+    ``None`` when the map is still at version ``known``."""
+    version: Final = model_cost_version()
+    current: Final = (version.table, version.size, version.writes)
+    if current == known:
+        return current, None
+    rows: Final = as_str_mapping(litellm.model_cost) or {}  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # the model map is an untyped dict of rows
+    rules: Final = as_object_list(fallback_generalizations.get_fallback_generalization_rules()) or []  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # the rule registry keeps the raw untyped list
+    document: Final = _DECODED_JSON.validate_python(
+        json.loads(json.dumps({**rows, FALLBACK_GENERALIZATIONS_KEY: {"rules": list(rules)}}, default=str))
+    )
+    return current, as_str_mapping(document)

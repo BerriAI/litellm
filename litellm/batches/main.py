@@ -13,9 +13,9 @@ https://platform.openai.com/docs/api-reference/batch
 import asyncio
 import contextvars
 import os
-from collections.abc import Coroutine
+from collections.abc import Coroutine, Mapping
 from functools import partial
-from typing import Any, Final, Literal, Protocol, cast
+from typing import Final, Literal, Protocol, cast
 
 import httpx
 from openai.types.batch import BatchRequestCounts
@@ -23,7 +23,7 @@ from pydantic import TypeAdapter
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.litellm_core_utils.core_helpers import require_attributes
+from litellm.litellm_core_utils.core_helpers import float_of, require_attributes
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.anthropic.batches.handler import AnthropicBatchesHandler
 from litellm.llms.azure.batches.handler import AzureBatchesAPI
@@ -44,6 +44,7 @@ from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import (
     LIST_BATCHES_SUPPORTED_PROVIDERS,
     OPENAI_COMPATIBLE_BATCH_AND_FILES_PROVIDERS,
+    CallTypes,
     ListBatchesSupportedProvider,
     LiteLLMBatch,
     LlmProviders,
@@ -53,6 +54,7 @@ from litellm.utils import (
     client,
     get_litellm_params,
     get_llm_provider,
+    load_credentials_from_list,
     supports_httpx_timeout,
 )
 
@@ -73,7 +75,7 @@ class _PopsKeys(Protocol):
 
 def _resolve_timeout(
     optional_params: GenericLiteLLMParams,
-    kwargs: dict[str, Any],
+    kwargs: Mapping[str, object],
     custom_llm_provider: str,
     default_timeout: float = 600.0,
 ) -> float:
@@ -107,7 +109,7 @@ def _resolve_timeout(
         return float(default_timeout)
 
     # Handle numeric values (int, float, string representations)
-    return float(timeout)
+    return float_of(timeout)
 
 
 @client
@@ -134,7 +136,7 @@ async def acreate_batch(
     extra_headers: dict[str, str] | None = None,
     extra_body: dict[str, str] | None = None,
     output_expires_after: FileExpiresAfter | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> LiteLLMBatch:
     """
     Async: Creates and executes a batch from an uploaded file of request
@@ -365,6 +367,7 @@ def create_batch(
                 max_retries=optional_params.max_retries,
                 create_batch_data=_create_batch_request,
                 custom_endpoint=optional_params.get("custom_endpoint"),
+                litellm_params=litellm_params,
             )
         else:
             raise litellm.exceptions.BadRequestError(
@@ -391,7 +394,7 @@ async def aretrieve_batch(
     metadata: dict[str, str] | None = None,
     extra_headers: dict[str, str] | None = None,
     extra_body: dict[str, str] | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> LiteLLMBatch:
     """
     Async: Retrieves a batch.
@@ -430,7 +433,7 @@ def _handle_retrieve_batch_providers_without_provider_config(
     batch_id: str,
     optional_params: GenericLiteLLMParams,
     timeout: float | httpx.Timeout,
-    litellm_params: dict,
+    litellm_params: dict[str, object],
     _retrieve_batch_request: RetrieveBatchRequest,
     _is_async: bool,
     custom_llm_provider: Literal[
@@ -713,7 +716,7 @@ async def alist_batches(
     metadata: dict[str, str] | None = None,
     extra_headers: dict[str, str] | None = None,
     extra_body: dict[str, str] | None = None,
-    **kwargs,
+    **kwargs: object,
 ):
     """
     Async: List your organization's batches.
@@ -956,6 +959,7 @@ def cancel_batch(
     LiteLLM Equivalent of POST https://api.openai.com/v1/batches/{batch_id}/cancel
     """
     try:
+        load_credentials_from_list(kwargs, CallTypes.cancel_batch.value)  # pyright: ignore[reportUnknownArgumentType]  # **kwargs is untyped
         try:
             if model is not None:
                 _, custom_llm_provider, _, _ = get_llm_provider(

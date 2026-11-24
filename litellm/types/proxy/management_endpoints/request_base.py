@@ -1,8 +1,9 @@
+from collections.abc import Sequence
 from typing import Any  # noqa: TID251  # metadata and models stay Any so existing callers keep type-checking
 
 from pydantic import ConfigDict, field_validator
 
-from litellm.models.team import BudgetLimitEntry
+from litellm.models.budget import BudgetLimitList
 from litellm.types.utils import LiteLLMPydanticObjectBase
 
 
@@ -19,6 +20,7 @@ class LiteLLM_ObjectPermissionBase(LiteLLMPydanticObjectBase):
     search_tools: list[str] | None = None
     mcp_tool_search_enabled: bool | None = None
     skills: list[str] | None = None
+    apps: Sequence[str] | None = None
 
 
 class GenerateRequestBase(LiteLLMPydanticObjectBase):
@@ -40,7 +42,7 @@ class GenerateRequestBase(LiteLLMPydanticObjectBase):
     rpm_limit: int | None = None
 
     budget_duration: str | None = None
-    budget_limits: list[BudgetLimitEntry] | None = None  # multiple concurrent budget windows
+    budget_limits: BudgetLimitList | None = None
     allowed_cache_controls: list[object] | None = []
     config: dict[object, object] | None = {}
     permissions: dict[object, object] | None = {}

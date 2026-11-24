@@ -69,7 +69,7 @@ class _CiscoAIDefenseMcpMixin:
 
         def should_run_guardrail(self, data: dict, event_type: GuardrailEventHooks) -> bool: ...
 
-        async def _post_inspection(self, url: str, payload: dict[str, object], surface: str) -> dict[str, object]: ...
+        async def _post_inspection(self, url: str, payload: dict[str, object], surface: str) -> object: ...
 
         def _handle_api_error(
             self,
@@ -83,12 +83,12 @@ class _CiscoAIDefenseMcpMixin:
 
         def _finalize_inspection(
             self,
-            inspect_response: dict[str, object],
+            inspect_response: object,
             request_data: dict,
             context: "_ScanContext",
             start_time: datetime,
             response_obj: object = ...,
-        ) -> dict[str, object]: ...
+        ) -> object: ...
 
     # ------------------------------------------------------------------
     # MCP post-tool hook (dispatcher contract)
@@ -286,9 +286,9 @@ class _CiscoAIDefenseMcpMixin:
 
     async def _inspect_mcp_request(
         self,
-        data: dict,
+        data: dict[str, object],
         user_api_key_dict: UserAPIKeyAuth,
-    ) -> dict[str, object]:
+    ) -> object:
         del user_api_key_dict  # carried via logging metadata, not the wire payload
         url: Final = f"{self.api_base}{self.inspect_path}"
         payload: Final = self._build_mcp_request_payload(data=data)
@@ -320,11 +320,11 @@ class _CiscoAIDefenseMcpMixin:
 
     async def _inspect_mcp_response(
         self,
-        request_data: dict,
+        request_data: dict[str, object],
         response: object,
         user_api_key_dict: UserAPIKeyAuth | None = None,
         redact_response_obj: object = None,
-    ) -> dict[str, object]:
+    ) -> object:
         del user_api_key_dict  # carried via logging metadata, not the wire payload
         url: Final = f"{self.api_base}{self.inspect_path}"
         payload: Final = self._build_mcp_response_payload(
@@ -360,7 +360,7 @@ class _CiscoAIDefenseMcpMixin:
 
     def _build_mcp_request_payload(
         self,
-        data: dict,
+        data: dict[str, object],
     ) -> dict[str, object] | None:
         """Build the JSON-RPC ``tools/call`` envelope sent to ``/inspect/mcp``.
 
@@ -400,7 +400,7 @@ class _CiscoAIDefenseMcpMixin:
 
     def _build_mcp_response_payload(
         self,
-        request_data: dict,
+        request_data: dict[str, object],
         response: object,
     ) -> dict[str, object] | None:
         """Build the MCP response-inspection body sent to ``/inspect/mcp``."""

@@ -14,9 +14,12 @@ from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.optional_imports import ensure_optional_import
+from litellm.llms.base_llm.embedding.transformation import extra_body_fields
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM, pop_aws_auth_params
 from litellm.llms.bedrock.web_identity_session_policy import SAGEMAKER_SESSION_POLICY, WebIdentitySessionPolicy
 from litellm.llms.custom_httpx.http_handler import (
+    AsyncHTTPHandler,
+    HTTPHandler,
     get_async_httpx_client,
     get_httpx_client,
 )
@@ -146,8 +149,8 @@ class SagemakerLLM(BaseAWSLLM):
         litellm_params: dict,
         timeout: float | httpx.Timeout | None = None,
         custom_prompt_dict={},
-        hf_model_name=None,
-        logger_fn=None,
+        hf_model_name: str | None = None,
+        logger_fn: object = None,
         acompletion: bool = False,
         headers: dict = {},
     ):
@@ -329,8 +332,8 @@ class SagemakerLLM(BaseAWSLLM):
         api_base: str,
         headers: dict,
         data: str,
-        logging_obj,
-        client=None,
+        logging_obj: LiteLLMLoggingObj,
+        client: HTTPHandler | None = None,
     ):
         if client is None:
             client = get_httpx_client()
@@ -345,15 +348,15 @@ class SagemakerLLM(BaseAWSLLM):
             raise SagemakerError(status_code=sync_response.status_code, message=str(sync_response.read()))
 
         decoder: Final = AWSEventStreamDecoder(model="")
-        return decoder.iter_bytes(sync_response.iter_bytes())
+        return decoder.iter_bytes(sync_response.iter_bytes(), response_headers=sync_response.headers)
 
     async def make_async_call(
         self,
         api_base: str,
         headers: dict,
         data: str,
-        logging_obj,
-        client=None,
+        logging_obj: LiteLLMLoggingObj,
+        client: AsyncHTTPHandler | None = None,
     ):
         try:
             if client is None:
@@ -371,7 +374,7 @@ class SagemakerLLM(BaseAWSLLM):
                 raise SagemakerError(status_code=response.status_code, message=response.text)
 
             decoder: Final = AWSEventStreamDecoder(model="")
-            completion_stream: Final = decoder.aiter_bytes(response.aiter_bytes())
+            completion_stream: Final = decoder.aiter_bytes(response.aiter_bytes(), response_headers=response.headers)
 
             return completion_stream
 
@@ -550,11 +553,11 @@ class SagemakerLLM(BaseAWSLLM):
         model_response: EmbeddingResponse,
         print_verbose: Callable,
         encoding,
-        logging_obj,
+        logging_obj: LiteLLMLoggingObj,
         optional_params: dict,
-        custom_prompt_dict={},
+        custom_prompt_dict: object = {},
         litellm_params=None,
-        logger_fn=None,
+        logger_fn: object = None,
     ):
         """
         Supports Hugging Face (TGI), Voyage, and Cohere embedding endpoints
@@ -594,8 +597,11 @@ class SagemakerLLM(BaseAWSLLM):
         inference_component_name: Final = embedding_params.get("model_id")
         if inference_component_name is not None and not isinstance(inference_component_name, str):
             raise SagemakerError(status_code=400, message="model_id must be the inference component name as a string")
-        body_params: Final = {k: v for k, v in embedding_params.items() if k != "model_id"}
-        request_data: Final = provider_config.transform_embedding_request(endpoint_name, input, body_params, {})
+        body_params: Final = {k: v for k, v in embedding_params.items() if k not in ("model_id", "extra_body")}
+        request_data: Final = {
+            **extra_body_fields(embedding_params),
+            **provider_config.transform_embedding_request(endpoint_name, input, body_params, {}),
+        }
         data: Final = json.dumps(request_data).encode("utf-8")
         invoke_args: Final = _InvokeEndpointArgs(
             EndpointName=endpoint_name,

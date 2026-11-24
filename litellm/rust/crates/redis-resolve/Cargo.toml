@@ -1,0 +1,27 @@
+[package]
+name = "litellm-redis-resolve"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+futures-util.workspace = true
+litellm-config.workspace = true
+litellm-env.workspace = true
+litellm-python-compat.workspace = true
+litellm-redis-types.workspace = true
+litellm-secret-value.workspace = true
+litellm-secrets.workspace = true
+serde_json.workspace = true
+strum.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+url.workspace = true
+veil.workspace = true
+
+[dev-dependencies]
+litellm-http = { workspace = true, features = ["test-support"] }
+rstest.workspace = true
+serde.workspace = true
+tokio = { workspace = true, features = ["macros", "rt"] }

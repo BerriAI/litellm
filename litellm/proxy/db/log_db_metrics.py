@@ -13,13 +13,19 @@ from functools import wraps
 from types import MappingProxyType
 from typing import Final
 
+from typing_extensions import ReadOnly, TypedDict, Unpack
+
 from litellm._logging import verbose_proxy_logger
-from litellm._service_logger import ServiceTypes
+from litellm._service_logger import ServiceTypes, Span
 
 _PRISMA_CLIENT_CRUD: Final = frozenset({"get_data", "update_data", "delete_data"})
 _DEFAULT_TABLE_BY_KWARG: Final[Mapping[str, str]] = MappingProxyType(
     {"token": "key", "tokens": "key", "user_id": "user", "team_id": "team"}
 )
+
+
+class _DbCallKwargs(TypedDict, total=False, extra_items=object):
+    parent_otel_span: ReadOnly[Span | None]
 
 
 def _table_metadata_reader(infers_table: bool) -> Callable[[Mapping[str, object]], dict[str, str] | None]:
@@ -130,7 +136,7 @@ def log_db_metrics(func):
     metadata_of: Final = _table_metadata_reader(func.__name__ in _PRISMA_CLIENT_CRUD)
 
     @wraps(func)
-    async def wrapper(*args, **kwargs: object):
+    async def wrapper(*args, **kwargs: Unpack[_DbCallKwargs]):
         start_time: Final[datetime] = datetime.now()
         witness: Final = _DbIoWitness(parent=_db_io_witness.get())
         witness_token: Final = _db_io_witness.set(witness)
@@ -192,7 +198,7 @@ _is_exception_related_to_db: Final = is_exception_related_to_db
 async def _handle_logging_db_exception(
     e: Exception,
     func: Callable,
-    kwargs: Mapping[str, object],
+    kwargs: _DbCallKwargs,
     args: tuple,
     start_time: datetime,
     end_time: datetime,

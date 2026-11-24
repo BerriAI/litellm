@@ -1,7 +1,9 @@
 import asyncio
 import hashlib
+import json
 import os
 import threading
+import time
 import uuid
 from collections.abc import AsyncIterator, Callable, Iterator, Mapping
 from contextlib import asynccontextmanager, contextmanager
@@ -26,6 +28,7 @@ from integration._support.client import (
     list_value,
     object_value,
     string_value,
+    until_asserted,
 )
 from integration._support.process import graceful_stop_seconds, owned_proxy
 from integration._support.responses_ws_peer import (
@@ -54,11 +57,30 @@ TURN_SPEND: Final = USAGE["input_tokens"] * INPUT_RATE + USAGE["output_tokens"] 
 TURN_TOKENS: Final = USAGE["total_tokens"]
 MANAGED_PROVIDER: Final = "mistral"
 SPEND_ROWS_FOR_KEY: Final = (
-    'SELECT request_id, spend, status, model_group, metadata, request_tags FROM "LiteLLM_SpendLogs" WHERE api_key = %s'
+    "SELECT request_id, spend, status, model_group, call_type, metadata, request_tags, proxy_server_request,"
+    ' extract(epoch from "startTime")::float8 AS started_at FROM "LiteLLM_SpendLogs" WHERE api_key = %s'
 )
+STORED_TIME_RESOLUTION_SECONDS: Final = 0.001
 TURN_CHECK_FAULT: Final = "turn_check_fault"
+PASSTHROUGH_WORD: Final = "rutabaga"
+CRASH_WORD: Final = "parsnip"
 FAULTING_TURN_CHECK: Final = f"""
+from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
+
+
+class PassthroughTurnGuardrail(CustomGuardrail):
+    async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
+        if "{PASSTHROUGH_WORD}" in str(data.get("input")):
+            self.raise_passthrough_exception(violation_message="passthrough blocked {PASSTHROUGH_WORD}", request_data=data)
+        return data
+
+
+class CrashingTurnGuardrail(CustomGuardrail):
+    async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
+        if "{CRASH_WORD}" in str(data.get("input")):
+            raise RuntimeError("guardrail crashed on {CRASH_WORD}")
+        return data
 
 
 class FaultingTurnCheck(CustomLogger):
@@ -78,6 +100,37 @@ HEAVY_TURN_USAGE: Final[dict[str, JsonValue]] = {
     "total_tokens": HEAVY_TURN_TOKENS,
 }
 SOCKET_TPM_LIMIT: Final = 1000
+BLOCKED_WORD: Final = "kumquat"
+TURN_GUARDRAIL: Final = "ws-turn-content-filter"
+PASSTHROUGH_GUARDRAIL: Final = "ws-turn-passthrough"
+CRASHING_GUARDRAIL: Final = "ws-turn-crashing"
+TURN_GUARDRAIL_CONFIGS: Final[tuple[dict[str, JsonValue], ...]] = (
+    {
+        "guardrail_name": TURN_GUARDRAIL,
+        "litellm_params": {
+            "guardrail": "litellm_content_filter",
+            "mode": "pre_call",
+            "default_on": False,
+            "blocked_words": [{"keyword": BLOCKED_WORD, "action": "BLOCK"}],
+        },
+    },
+    {
+        "guardrail_name": PASSTHROUGH_GUARDRAIL,
+        "litellm_params": {
+            "guardrail": "faulting_turn_check.PassthroughTurnGuardrail",
+            "mode": "pre_call",
+            "default_on": False,
+        },
+    },
+    {
+        "guardrail_name": CRASHING_GUARDRAIL,
+        "litellm_params": {
+            "guardrail": "faulting_turn_check.CrashingTurnGuardrail",
+            "mode": "pre_call",
+            "default_on": False,
+        },
+    },
+)
 FrameReader = Callable[[], int]
 
 
@@ -96,13 +149,20 @@ def _redis() -> Redis:
     return Redis(host=os.environ["REDIS_HOST"], port=int(os.environ["REDIS_PORT"]), decode_responses=True)
 
 
-def _config(directory: Path, router_settings: Mapping[str, JsonValue], callbacks: tuple[str, ...]) -> Path:
+def _config(
+    directory: Path,
+    router_settings: Mapping[str, JsonValue],
+    callbacks: tuple[str, ...],
+    guardrails: tuple[Mapping[str, JsonValue], ...],
+) -> Path:
     base: Final = JSON_OBJECT.validate_python(yaml.safe_load(PROXY_CONFIG.read_text()))
     path: Final = directory / "turn-admission.yaml"
     path.write_text(
         yaml.safe_dump(
             {
                 **base,
+                **({"guardrails": [dict(guardrail) for guardrail in guardrails]} if guardrails else {}),
+                "general_settings": {**object_value(base["general_settings"]), "store_prompts_in_spend_logs": True},
                 "litellm_settings": {
                     **object_value(base["litellm_settings"]),
                     **({"callbacks": list(callbacks)} if callbacks else {}),
@@ -125,11 +185,14 @@ def _admitting_proxy(
     cert: tuple[Path, Path],
     router_settings: Mapping[str, JsonValue],
     callback_sources: Mapping[str, str] = MappingProxyType({}),
+    guardrails: tuple[Mapping[str, JsonValue], ...] = (),
 ) -> Iterator[Gateway]:
     directory: Final = tmp_path_factory.mktemp("responses-ws-turn-admission")
     for module, source in callback_sources.items():
         (directory / f"{module}.py").write_text(source)
-    config: Final = _config(directory, router_settings, tuple(f"{module}.instance" for module in callback_sources))
+    config: Final = _config(
+        directory, router_settings, tuple(f"{module}.instance" for module in callback_sources), guardrails
+    )
     with gateway_from_environment() as base:
         with owned_proxy(
             base,
@@ -157,7 +220,9 @@ def limited(tmp_path_factory: pytest.TempPathFactory, cert: tuple[Path, Path]) -
 
 @pytest.fixture(scope="module")
 def faulting(tmp_path_factory: pytest.TempPathFactory, cert: tuple[Path, Path]) -> Iterator[Gateway]:
-    with _admitting_proxy(tmp_path_factory, cert, {}, {"faulting_turn_check": FAULTING_TURN_CHECK}) as proxy:
+    with _admitting_proxy(
+        tmp_path_factory, cert, {}, {"faulting_turn_check": FAULTING_TURN_CHECK}, TURN_GUARDRAIL_CONFIGS
+    ) as proxy:
         yield proxy
 
 
@@ -189,17 +254,17 @@ def _upstream_chats(gateway: Gateway, provider_model: str) -> int:
     return sum(object_value(object_value(entry)["body"]).get("model") == provider_model for entry in observed)
 
 
-def _managed(scenario: Scenario, **limits: JsonValue) -> Deployment:
+def _managed(scenario: Scenario, provider_model: str = "", **limits: JsonValue) -> Deployment:
     identity: Final = f"ws-admission-{uuid.uuid4().hex}"
-    provider_model: Final = f"ws-managed-{uuid.uuid4().hex}"
+    upstream_model: Final = provider_model or f"ws-managed-{uuid.uuid4().hex}"
     name: Final = scenario.model(
         model_info={"id": identity},
-        model=f"{MANAGED_PROVIDER}/{provider_model}",
+        model=f"{MANAGED_PROVIDER}/{upstream_model}",
         input_cost_per_token=INPUT_RATE,
         output_cost_per_token=OUTPUT_RATE,
         **limits,
     )
-    return Deployment(name, identity, lambda: _upstream_chats(scenario.gateway, provider_model))
+    return Deployment(name, identity, lambda: _upstream_chats(scenario.gateway, upstream_model))
 
 
 def _socket_url(gateway: Gateway, model: str) -> str:
@@ -275,17 +340,54 @@ async def _until(read: Callable[[], float], satisfied: Callable[[float], bool]) 
     return await asyncio.to_thread(eventually, read, satisfied, 15)
 
 
-def _failure_rows(gateway: Gateway, key: str) -> list[dict[str, JsonValue]]:
-    rows: Final = eventually(
-        lambda: gateway.rows(SPEND_ROWS_FOR_KEY, (_key_hash(key),)),
-        lambda found: any(row["status"] == "failure" for row in found),
-        seconds=70,
-    )
-    return [row for row in rows if row["status"] == "failure"]
+def _failures_now(gateway: Gateway, key: str) -> list[dict[str, JsonValue]]:
+    return [row for row in gateway.rows(SPEND_ROWS_FOR_KEY, (_key_hash(key),)) if row["status"] == "failure"]
+
+
+def _failure_rows(gateway: Gateway, key: str, count: int = 1) -> list[dict[str, JsonValue]]:
+    return eventually(lambda: _failures_now(gateway, key), lambda found: len(found) >= count, seconds=70)
+
+
+def _settled_failure_rows(gateway: Gateway, key: str, count: int) -> list[dict[str, JsonValue]]:
+    return held(lambda: _failures_now(gateway, key), lambda found: len(found) == count, holding=5, seconds=70)
+
+
+@dataclass(frozen=True, slots=True)
+class AnsweredTurn:
+    text: str
+    sent_at: float
+    answered_at: float
+    received: tuple[dict[str, JsonValue], ...]
+
+
+async def _timed_turn(connection: websockets.ClientConnection, model: str, label: str) -> AnsweredTurn:
+    text: Final = f"{label} {uuid.uuid4().hex}"
+    sent_at: Final = time.time()
+    received: Final = await _say(connection, model, text)
+    return AnsweredTurn(text, sent_at, time.time(), received)
+
+
+def _stored_text(row: Mapping[str, JsonValue]) -> str:
+    message: Final = object_value(list_value(object_value(row["proxy_server_request"])["input"])[0])
+    return string_value(object_value(list_value(message["content"])[0])["text"])
+
+
+def _assert_logged_as_its_own_failure(
+    row: Mapping[str, JsonValue], turn: AnsweredTurn, deployment: Deployment
+) -> dict[str, JsonValue]:
+    assert _stored_text(row) == turn.text, row
+    started_at: Final = row["started_at"]
+    assert isinstance(started_at, float), row
+    assert turn.sent_at - STORED_TIME_RESOLUTION_SECONDS <= started_at, (turn, row)
+    assert started_at <= turn.answered_at + STORED_TIME_RESOLUTION_SECONDS, (turn, row)
+    assert row["model_group"] == deployment.name, row
+    assert row["call_type"] == "_aresponses_websocket", row
+    assert float(row["spend"]) == 0.0, row
+    return object_value(object_value(row["metadata"])["error_information"])
 
 
 @pytest.mark.parametrize("relay", ("native", "managed"))
-def test_a_turn_past_the_deployment_budget_is_refused_on_the_open_socket_and_logged_once_as_its_failure(
+def test_each_turn_past_the_deployment_budget_is_refused_on_the_open_socket_and_logged_as_its_own_failure(
     limited: Gateway, cert: tuple[Path, Path], relay: str
 ) -> None:
     with responses_peer(cert) as peer, limited.scenario() as scenario:
@@ -294,25 +396,71 @@ def test_a_turn_past_the_deployment_budget_is_refused_on_the_open_socket_and_log
         key: Final = scenario.key(models=[deployment.name])
         tag: Final = f"ws-turn-{uuid.uuid4().hex}"
 
-        async def session() -> tuple[tuple[dict[str, JsonValue], ...], ...]:
+        async def session() -> tuple[tuple[dict[str, JsonValue], ...], tuple[AnsweredTurn, ...], list[str]]:
             async with _socket(limited, key, deployment.name, {"x-litellm-tags": tag}) as connection:
                 first: Final = await _say(connection, deployment.name)
                 await _until(lambda: _deployment_spend(deployment), lambda spent: spent > TURN_SPEND / 2)
-                return (first, await _say(connection, deployment.name), await _say(connection, deployment.name))
+                refused: Final = (
+                    await _timed_turn(connection, deployment.name, "second"),
+                    await _timed_turn(connection, deployment.name, "third"),
+                )
+                logged_while_open: Final = await asyncio.to_thread(_failure_rows, limited, key, len(refused))
+                return first, refused, [string_value(row["request_id"]) for row in logged_while_open]
 
-        first, second, third = asyncio.run(session())
+        first, refused, logged_while_open = asyncio.run(session())
 
         completed(first)
-        _assert_refused(second)
-        _assert_refused(third)
+        for answered in refused:
+            _assert_refused(answered.received)
         assert deployment.forwarded_turns() == 1
-        failures: Final = _failure_rows(limited, key)
-        assert len(failures) == 1, failures
-        assert failures[0]["model_group"] == deployment.name, failures
-        assert tag in list_value(failures[0]["request_tags"]), failures
-        assert float(failures[0]["spend"]) == 0.0, failures
-        error: Final = object_value(object_value(failures[0]["metadata"])["error_information"])
-        assert str(error["error_code"]) == "429", error
+        failures: Final = _settled_failure_rows(limited, key, len(refused))
+        assert sorted(string_value(row["request_id"]) for row in failures) == sorted(logged_while_open), failures
+        assert len(set(logged_while_open)) == len(refused), failures
+        by_text: Final = {_stored_text(row): row for row in failures}
+        for answered in refused:
+            row = by_text[answered.text]
+            error = _assert_logged_as_its_own_failure(row, answered, deployment)
+            assert str(error["error_code"]) == "429", error
+            assert tag in list_value(row["request_tags"]), row
+
+
+def test_a_refused_turn_s_failure_row_leaves_the_socket_s_parallel_slot_held_until_the_socket_closes(
+    limited: Gateway, cert: tuple[Path, Path]
+) -> None:
+    with responses_peer(cert) as peer, limited.scenario() as scenario:
+        deployment: Final = _native(scenario, peer, max_budget=TURN_SPEND / 2, budget_duration="1d")
+        key: Final = scenario.key(models=[deployment.name], max_parallel_requests=1)
+
+        async def opened_once() -> tuple[tuple[dict[str, JsonValue], ...], int | None]:
+            async with _socket(limited, key, deployment.name) as connection:
+                received: Final = await _say(connection, deployment.name)
+                await asyncio.wait_for(connection.wait_closed(), timeout=20)
+                return received, connection.close_code
+
+        async def second_socket_while_the_first_is_open() -> None:
+            async with _socket(limited, key, deployment.name) as holding:
+                completed(await _say(holding, deployment.name))
+                await _until(lambda: _deployment_spend(deployment), lambda spent: spent > TURN_SPEND / 2)
+                _assert_refused(await _say(holding, deployment.name))
+                await asyncio.to_thread(_failure_rows, limited, key)
+                second, second_close_code = await opened_once()
+                _assert_refused(second)
+                assert "max_parallel_requests" in string_value(object_value(second[0]["error"])["message"]), second
+                assert second_close_code == 1008, second
+
+        def reopened_once_the_slot_frees() -> tuple[tuple[dict[str, JsonValue], ...], int | None]:
+            try:
+                received, close_code = asyncio.run(opened_once())
+            except websockets.exceptions.InvalidStatus as refused:
+                raise AssertionError(refused) from refused
+            assert close_code != 1008, received
+            return received, close_code
+
+        asyncio.run(second_socket_while_the_first_is_open())
+        reopened, _ = until_asserted(reopened_once_the_slot_frees, seconds=15)
+
+        _assert_refused(reopened)
+        assert deployment.forwarded_turns() == 1
 
 
 def _set_turn_check_fault(gateway: Gateway, deployment: Deployment, fault: str) -> None:
@@ -354,27 +502,249 @@ def test_a_turn_whose_admission_check_fails_gets_a_500_frame_and_the_socket_serv
         key: Final = scenario.key(models=[deployment.name])
         fault: Final = f"turn check unavailable {uuid.uuid4().hex}"
 
-        async def session() -> tuple[tuple[dict[str, JsonValue], ...], ...]:
+        async def session() -> tuple[tuple[dict[str, JsonValue], ...], tuple[AnsweredTurn, ...], AnsweredTurn]:
             async with _socket(faulting, key, deployment.name) as connection:
                 first: Final = await _say(connection, deployment.name)
                 await asyncio.to_thread(_set_turn_check_fault, faulting, deployment, fault)
-                second: Final = await _say(connection, deployment.name)
-                third: Final = await _say(connection, deployment.name)
+                failed: Final = (
+                    await _timed_turn(connection, deployment.name, "second"),
+                    await _timed_turn(connection, deployment.name, "third"),
+                )
                 await asyncio.to_thread(_set_turn_check_fault, faulting, deployment, "")
-                return first, second, third, await _say(connection, deployment.name)
+                return first, failed, await _timed_turn(connection, deployment.name, "fourth")
 
-        first, second, third, fourth = asyncio.run(session())
+        first, failed, fourth = asyncio.run(session())
 
         completed(first)
-        _assert_turn_check_failed(second, fault)
-        _assert_turn_check_failed(third, fault)
-        completed(fourth)
+        for answered in failed:
+            _assert_turn_check_failed(answered.received, fault)
+        completed(fourth.received)
         assert deployment.forwarded_turns() == 2
-        failures: Final = _failure_rows(faulting, key)
-        assert len(failures) == 1, failures
-        assert failures[0]["model_group"] == deployment.name, failures
-        recorded: Final = object_value(object_value(failures[0]["metadata"])["error_information"])
-        assert fault in string_value(recorded["error_message"]), recorded
+        failures: Final = _settled_failure_rows(faulting, key, len(failed))
+        assert len({row["request_id"] for row in failures}) == len(failed), failures
+        by_text: Final = {_stored_text(row): row for row in failures}
+        for answered in failed:
+            recorded = _assert_logged_as_its_own_failure(by_text[answered.text], answered, deployment)
+            assert fault in string_value(recorded["error_message"]), recorded
+
+
+UPSTREAM_FAILURES_SCRIPTED: Final = 30
+
+
+def _script_upstream_failures(gateway: Gateway, provider_model: str, status: int) -> None:
+    with httpx.Client(base_url=gateway.upstream_url, timeout=15, trust_env=False) as upstream:
+        upstream.post(
+            f"/__scripts/{provider_model}", json={"statuses": [status] * UPSTREAM_FAILURES_SCRIPTED}
+        ).raise_for_status()
+
+
+def _clear_upstream_script(gateway: Gateway, provider_model: str) -> None:
+    with httpx.Client(base_url=gateway.upstream_url, timeout=15, trust_env=False) as upstream:
+        upstream.delete(f"/__scripts/{provider_model}").raise_for_status()
+
+
+def _assert_turn_ended_by_one_error_frame(received: tuple[dict[str, JsonValue], ...], status: int) -> None:
+    assert [event.get("type") for event in received].count("error") == 1, received
+    assert received[-1].get("type") == "error", received
+    assert received[-1].get("status") == status, received
+
+
+def _assert_completed_without_error(received: tuple[dict[str, JsonValue], ...]) -> None:
+    assert "error" not in [event.get("type") for event in received], received
+    completed(received)
+
+
+@pytest.mark.parametrize("status", (503, 429, 400))
+def test_a_managed_turn_whose_provider_call_fails_gets_an_error_frame_with_the_provider_status(
+    faulting: Gateway, status: int
+) -> None:
+    """Regression: Codex ignores an error frame without a numeric status and hangs on the open socket."""
+    with faulting.scenario() as scenario:
+        provider_model: Final = f"ws-managed-{uuid.uuid4().hex}"
+        deployment: Final = _managed(scenario, provider_model)
+        key: Final = scenario.key(models=[deployment.name])
+
+        async def session() -> tuple[tuple[dict[str, JsonValue], ...], ...]:
+            async with _socket(faulting, key, deployment.name) as connection:
+                first: Final = await _say(connection, deployment.name)
+                await asyncio.to_thread(_script_upstream_failures, faulting, provider_model, status)
+                failed: Final = await _say(connection, deployment.name)
+                await asyncio.to_thread(_clear_upstream_script, faulting, provider_model)
+                return first, failed, await _say(connection, deployment.name)
+
+        first, failed, after = asyncio.run(session())
+
+        _assert_completed_without_error(first)
+        _assert_turn_ended_by_one_error_frame(failed, status)
+        _assert_completed_without_error(after)
+
+
+def test_a_managed_socket_frame_that_is_not_json_gets_a_400_error_frame_and_the_next_turn_completes(
+    faulting: Gateway,
+) -> None:
+    """Regression: the malformed-frame error must carry status 400 so the client stops waiting on it."""
+    with faulting.scenario() as scenario:
+        deployment: Final = _managed(scenario)
+        key: Final = scenario.key(models=[deployment.name])
+
+        async def session() -> tuple[tuple[dict[str, JsonValue], ...], ...]:
+            async with _socket(faulting, key, deployment.name) as connection:
+                first: Final = await _say(connection, deployment.name)
+                rejected: Final = await turn(connection, f"not json {uuid.uuid4().hex}")
+                return first, rejected, await _say(connection, deployment.name)
+
+        first, rejected, after = asyncio.run(session())
+
+        _assert_completed_without_error(first)
+        _assert_turn_ended_by_one_error_frame(rejected, 400)
+        _assert_completed_without_error(after)
+        assert deployment.forwarded_turns() == 2
+
+
+def test_managed_turns_that_succeed_stream_from_created_to_completed_with_no_error_frame(faulting: Gateway) -> None:
+    """Guard: successful managed turns keep their frames."""
+    with faulting.scenario() as scenario:
+        deployment: Final = _managed(scenario)
+        key: Final = scenario.key(models=[deployment.name])
+
+        async def session() -> tuple[tuple[dict[str, JsonValue], ...], ...]:
+            async with _socket(faulting, key, deployment.name) as connection:
+                return (await _say(connection, deployment.name), await _say(connection, deployment.name))
+
+        turns: Final = asyncio.run(session())
+
+        for received in turns:
+            _assert_completed_without_error(received)
+            assert "response.created" in [event.get("type") for event in received], received
+        assert deployment.forwarded_turns() == 2
+
+
+def _provider_error_on_second_turn(error: Mapping[str, JsonValue]) -> Script:
+    def script(response_id: str) -> tuple[dict[str, JsonValue], ...]:
+        if response_id == "resp_peer_2":
+            return (dict(error),)
+        return events(f"resp_{uuid.uuid4().hex}", "seven")
+
+    return script
+
+
+def test_a_native_turn_the_provider_fails_relays_the_provider_error_frame_unchanged(
+    faulting: Gateway, cert: tuple[Path, Path]
+) -> None:
+    """Guard: the native relay forwards the provider's own error frame as is."""
+    error: Final = MappingProxyType(
+        {
+            "type": "error",
+            "status": 503,
+            "error": {"type": "server_error", "code": "server_is_overloaded", "message": f"busy {uuid.uuid4().hex}"},
+        }
+    )
+    with responses_peer(cert, _provider_error_on_second_turn(error)) as peer, faulting.scenario() as scenario:
+        deployment: Final = _native(scenario, peer)
+        key: Final = scenario.key(models=[deployment.name])
+
+        async def session() -> tuple[tuple[dict[str, JsonValue], ...], ...]:
+            async with _socket(faulting, key, deployment.name) as connection:
+                return (
+                    await _say(connection, deployment.name),
+                    await _say(connection, deployment.name),
+                    await _say(connection, deployment.name),
+                )
+
+        first, failed, after = asyncio.run(session())
+
+        _assert_completed_without_error(first)
+        assert failed == (dict(error),), failed
+        _assert_completed_without_error(after)
+        assert deployment.forwarded_turns() == 3
+
+
+@contextmanager
+def _relay_deployment(relay: str, scenario: Scenario, cert: tuple[Path, Path]) -> Iterator[Deployment]:
+    if relay == "managed":
+        yield _managed(scenario)
+        return
+    with responses_peer(cert) as peer:
+        yield _native(scenario, peer)
+
+
+@pytest.mark.parametrize("relay", ("managed", "native"))
+@pytest.mark.parametrize(
+    ("guardrail", "blocked_word", "status", "error_type"),
+    (
+        (TURN_GUARDRAIL, BLOCKED_WORD, 400, "invalid_request_error"),
+        (PASSTHROUGH_GUARDRAIL, PASSTHROUGH_WORD, 400, "invalid_request_error"),
+        (CRASHING_GUARDRAIL, CRASH_WORD, 500, "server_error"),
+    ),
+    ids=("raising", "passthrough", "crashing"),
+)
+def test_a_turn_a_guardrail_stops_gets_an_error_frame_with_its_status_and_the_socket_serves_the_next_turn(
+    faulting: Gateway,
+    cert: tuple[Path, Path],
+    relay: str,
+    guardrail: str,
+    blocked_word: str,
+    status: int,
+    error_type: str,
+) -> None:
+    """Regression: Codex ignores the guardrail's error frame without a numeric status and hangs on the open socket,
+    retries a passthrough block sent as a 5xx, and should not read a crashed guardrail as a bad request."""
+    with faulting.scenario() as scenario, _relay_deployment(relay, scenario, cert) as deployment:
+        key: Final = scenario.key(models=[deployment.name], guardrails=[guardrail])
+
+        async def session() -> tuple[tuple[dict[str, JsonValue], ...], ...]:
+            async with _socket(faulting, key, deployment.name) as connection:
+                return (
+                    await _say(connection, deployment.name),
+                    await _say(connection, deployment.name, f"{blocked_word} {uuid.uuid4().hex}"),
+                    await _say(connection, deployment.name),
+                )
+
+        first, blocked, after = asyncio.run(session())
+
+        _assert_completed_without_error(first)
+        _assert_turn_ended_by_one_error_frame(blocked, status)
+        error: Final = object_value(blocked[-1]["error"])
+        assert error["type"] == error_type, blocked
+        assert blocked_word in string_value(error["message"]), blocked
+        _assert_completed_without_error(after)
+        assert deployment.forwarded_turns() == 2
+
+
+@pytest.mark.parametrize(
+    ("model_in_url", "first_frame"),
+    (
+        pytest.param(True, "not json", id="not-json"),
+        pytest.param(True, json.dumps({"type": "response.cancel"}), id="not-response-create"),
+        pytest.param(False, json.dumps({"type": "response.create", "input": "hi"}), id="no-model"),
+    ),
+)
+def test_a_first_frame_the_socket_cannot_start_from_gets_a_400_error_frame_before_the_1008_close(
+    faulting: Gateway, model_in_url: bool, first_frame: str
+) -> None:
+    """Regression: every error frame on the socket carries the HTTP status a client like Codex reads."""
+    with faulting.scenario() as scenario:
+        deployment: Final = _managed(scenario)
+        key: Final = scenario.key(models=[deployment.name])
+        with_model: Final = _socket_url(faulting, deployment.name)
+        url: Final = with_model if model_in_url else with_model.split("?", 1)[0]
+
+        async def rejected() -> tuple[dict[str, JsonValue], int | None]:
+            async with websockets.connect(
+                url, additional_headers={"Authorization": f"Bearer {key}"}, open_timeout=10
+            ) as connection:
+                await connection.send(first_frame)
+                received: Final = JSON_OBJECT.validate_json(await asyncio.wait_for(connection.recv(), timeout=20))
+                await asyncio.wait_for(connection.wait_closed(), timeout=20)
+                return received, connection.close_code
+
+        received, close_code = asyncio.run(rejected())
+
+        assert received["type"] == "error", received
+        assert received["status"] == 400, received
+        assert object_value(received["error"])["type"] == "invalid_request_error", received
+        assert close_code == 1008, close_code
+        assert deployment.forwarded_turns() == 0
 
 
 def test_a_turn_still_streaming_when_the_next_turns_check_fails_completes_and_is_billed(

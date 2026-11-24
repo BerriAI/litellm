@@ -2,6 +2,7 @@ import asyncio
 import concurrent.futures
 import inspect
 import os
+import re
 import socket
 import ssl
 import sys
@@ -46,6 +47,7 @@ from litellm.litellm_core_utils.request_timeout_resolver import (
 )
 from litellm.llms.base_llm.auth.token_exchange import JwtBearerTokenExchangeEngine, default_token_exchange_engine
 from litellm.llms.base_llm.auth.types import MintedToken
+from litellm.llms.custom_httpx.accept_encoding import ACCEPT_ENCODING_HEADER
 from litellm.llms.custom_httpx.aiohttp_pool_diagnostics import build_pool_wait_trace_config
 from litellm.llms.custom_httpx.http2_connection_spread import AsyncHTTP2ConnectionSpread
 from litellm.types.llms.custom_http import *
@@ -78,7 +80,7 @@ _RequestContent: TypeAlias = str | bytes | Iterable[bytes] | AsyncIterable[bytes
 
 _IPV4_LOCAL_ADDRESS: Final = "0.0.0.0"
 
-_HttpxTransportT: Final = TypeVar("_HttpxTransportT", httpx.BaseTransport, httpx.AsyncBaseTransport)
+_HttpxTransportT = TypeVar("_HttpxTransportT", httpx.BaseTransport, httpx.AsyncBaseTransport)
 
 HTTPEventHooks: TypeAlias = Mapping[str, list[Callable[..., object]]]
 
@@ -186,12 +188,10 @@ def get_default_headers() -> dict[str, str]:
 
     - Default: `User-Agent: litellm/{version}`
     - Override: set `LITELLM_USER_AGENT` to fully override the header value.
+    - `Accept-Encoding` offers everything httpx decodes but zstd (see accept_encoding.py).
     """
     user_agent: Final = os.environ.get("LITELLM_USER_AGENT")
-    if user_agent is not None:
-        return {"User-Agent": user_agent}
-
-    return {"User-Agent": default_user_agent()}
+    return {**ACCEPT_ENCODING_HEADER, "User-Agent": user_agent if user_agent is not None else default_user_agent()}
 
 
 def default_user_agent() -> str:
@@ -274,10 +274,19 @@ _STREAMING_ERROR_BODY_READ_EXECUTOR: Final = concurrent.futures.ThreadPoolExecut
 )
 
 
+_SURROGATE_RE: Final = re.compile(r"[\ud800-\udfff]")
+
+
+def _repair_surrogates(value: str) -> str:
+    if not _SURROGATE_RE.search(value):
+        return value
+    return value.encode("utf-16-le", errors="surrogatepass").decode("utf-16-le", errors="replace")
+
+
 def _prepare_request_data_and_content(
-    data: dict | str | bytes | None = None,
+    data: Mapping[str, object] | str | bytes | None = None,
     content: _RequestContent | None = None,
-) -> tuple[dict | Mapping | None, _RequestContent | None]:
+) -> tuple[Mapping[str, object] | None, _RequestContent | None]:
     """
     Helper function to route data/content parameters correctly for httpx requests
 
@@ -311,7 +320,7 @@ def _prepare_request_data_and_content(
             # dict/Mapping stays in data= parameter
             request_data = data
 
-    return request_data, request_content
+    return request_data, _repair_surrogates(request_content) if isinstance(request_content, str) else request_content
 
 
 # Cache for SSL contexts to avoid creating duplicate contexts with the same configuration
@@ -756,7 +765,7 @@ class AsyncHTTPHandler:
         self,
         timeout: float | httpx.Timeout | None = None,
         event_hooks: Mapping[str, list[Callable[..., object]]] | None = None,
-        concurrent_limit=None,  # Kept for backward compatibility, but ignored (no limits)
+        concurrent_limit: object = None,  # Kept for backward compatibility, but ignored (no limits)
         client_alias: str | None = None,  # name for client in logs
         ssl_verify: VerifyTypes | None = None,
         shared_session: Optional["ClientSession"] = None,
@@ -1603,7 +1612,7 @@ class HTTPHandler:
     def __init__(
         self,
         timeout: float | httpx.Timeout | None = None,
-        concurrent_limit=None,  # Kept for backward compatibility, but ignored (no limits)
+        concurrent_limit: object = None,  # Kept for backward compatibility, but ignored (no limits)
         client: httpx.Client | None = None,
         ssl_verify: bool | str | None = None,
         disable_default_headers: bool
@@ -1671,6 +1680,7 @@ class HTTPHandler:
         follow_redirects: bool | None = None,
         timeout: float | httpx.Timeout | None = None,
         stream: bool = False,
+        max_response_bytes: int | None = None,
     ):
         # Set follow_redirects to UseClientDefault if None
         _follow_redirects: Final = follow_redirects if follow_redirects is not None else USE_CLIENT_DEFAULT
@@ -1679,6 +1689,16 @@ class HTTPHandler:
         if stream:
             return self._send_streaming_get(
                 url, params=query, headers=headers, follow_redirects=follow_redirects, timeout=timeout
+            )
+
+        if max_response_bytes is not None:
+            return self._get_with_response_limit(
+                url,
+                params=query,
+                headers=headers,
+                max_bytes=max_response_bytes,
+                follow_redirects=self.client.follow_redirects if follow_redirects is None else follow_redirects,
+                timeout=self.client.timeout if timeout is None else httpx.Timeout(timeout),
             )
 
         response: Final = self.client.get(
@@ -1690,6 +1710,67 @@ class HTTPHandler:
         )
 
         return response
+
+    def _get_with_response_limit(
+        self,
+        url: str,
+        *,
+        params: httpx.QueryParams,
+        headers: Mapping[str, str] | None,
+        timeout: httpx.Timeout,
+        max_bytes: int,
+        follow_redirects: bool,
+    ) -> httpx.Response:
+        request: Final = self.client.build_request(
+            "GET",
+            url,
+            headers=MappingProxyType({**(headers or {}), "accept-encoding": "identity"}),
+            params=params,
+            timeout=timeout,
+        )
+        response: Final = self.client.send(request, stream=True, follow_redirects=False)
+        return self._read_with_response_limit(response, max_bytes=max_bytes, follow_redirects=follow_redirects)
+
+    def _next_redirect_hop(self, hop: httpx.Response) -> httpx.Response:
+        if hop.next_request is None:
+            return hop
+        hop.close()
+        return self.client.send(hop.next_request, auth=None, stream=True, follow_redirects=False)
+
+    def _last_redirect_hop(self, response: httpx.Response, *, follow_redirects: bool) -> httpx.Response:
+        hop = response  # rebind-ok: walks the redirect chain without recursion
+        for _ in range(10):
+            if hop.next_request is None or not follow_redirects:
+                return hop
+            hop = self._next_redirect_hop(hop)
+        if hop.next_request is None or not follow_redirects:
+            return hop
+        hop.close()
+        raise ValueError("Too many redirects")
+
+    def _read_with_response_limit(
+        self, response: httpx.Response, *, max_bytes: int, follow_redirects: bool
+    ) -> httpx.Response:
+        final: Final = self._last_redirect_hop(response, follow_redirects=follow_redirects)
+        try:
+            if final.is_redirect or final.is_error:
+                return httpx.Response(final.status_code, headers=final.headers, request=final.request)
+            content_encoding: Final = header_value(final.headers, "content-encoding")
+            if ("identity" if content_encoding is None else content_encoding).lower() != "identity":
+                raise HTTPResponseLimitError("Response size limits require an uncompressed response")
+            content_length: Final = header_value(final.headers, "content-length")
+            if int("0" if content_length is None else content_length) > max_bytes:
+                raise HTTPResponseLimitError("Response exceeds the configured size limit")
+            with BytesIO() as body:
+                for chunk in final.iter_bytes(chunk_size=65536):
+                    if body.tell() + len(chunk) > max_bytes:
+                        raise HTTPResponseLimitError("Response exceeds the configured size limit")
+                    body.write(chunk)
+                return httpx.Response(
+                    final.status_code, headers=final.headers, content=body.getvalue(), request=final.request
+                )
+        finally:
+            final.close()
 
     def _send_streaming_get(
         self,

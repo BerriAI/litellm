@@ -1,0 +1,25 @@
+# Python reads use_chat_completions_url_for_anthropic_messages only on /v1/messages.
+config:
+  model_list:
+    - model_name: claude
+      litellm_params:
+        model: anthropic/claude-haiku-5-5
+        api_key: provider-key
+  litellm_settings:
+    drop_params: true
+    use_chat_completions_url_for_anthropic_messages: true
+  general_settings:
+    master_key: gateway-key
+
+requests:
+  - name: messages
+    headers: {authorization: Bearer gateway-key}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: python
+    reason: settings
+
+  - name: other route
+    path: /v1/chat/completions
+    headers: {authorization: Bearer gateway-key}
+    expect: python
+    reason: route
