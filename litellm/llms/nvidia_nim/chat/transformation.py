@@ -20,7 +20,7 @@ from litellm.llms.openai_like.dynamic_config import MapsAllowedOpenAIParams
 
 def _serves_logprobs(model: str) -> bool:
     catalog: Final = cast(Mapping[str, object], litellm.model_cost)  # cast-ok: validating the map per call is slow
-    row: Final = as_str_mapping(catalog.get(f"nvidia_nim/{model}"))
+    row: Final = as_str_mapping(catalog.get(f"nvidia_nim/{model.removeprefix('nvidia_nim/')}"))
     return row is None or row.get("supports_logprobs") is not False
 
 
@@ -144,8 +144,9 @@ class NvidiaNimConfig(OpenAIGPTConfig, MapsAllowedOpenAIParams):
                 message=(
                     f"nvidia_nim does not support parameters: {sorted(malformed_params)}, for model={model}. "
                     "NVIDIA takes logprobs as true or false, and returns top_logprobs only with logprobs=true. "
-                    "To drop these, set `litellm.drop_params=True`, or send "
-                    f"allowed_openai_params={sorted(malformed_params)} to pass them as is."
+                    "To drop these, set `litellm.drop_params=True`, "
+                    "or on the proxy `litellm_settings: drop_params: true`. "
+                    f"To pass them as is, send allowed_openai_params={sorted(malformed_params)}."
                 ),
                 llm_provider="nvidia_nim",
                 model=model,

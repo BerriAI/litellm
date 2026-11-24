@@ -1,4 +1,5 @@
 import json
+from collections.abc import Callable
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -424,6 +425,42 @@ def test_completion_nvidia_nim_treats_logprobs_as_unsupported_for_models_the_cos
         return
     send()
     assert _sent_logprobs_params(transport) == expected_body
+
+
+@pytest.mark.parametrize(
+    "read_supported_params",
+    [
+        pytest.param(
+            lambda: litellm.get_supported_openai_params(model="nvidia_nim/acme/no-logprobs-chat"),
+            id="prefixed_model",
+        ),
+        pytest.param(
+            lambda: litellm.get_supported_openai_params(
+                model="acme/no-logprobs-chat", custom_llm_provider="nvidia_nim"
+            ),
+            id="provider_argument",
+        ),
+        pytest.param(
+            lambda: litellm.get_model_info("nvidia_nim/acme/no-logprobs-chat")["supported_openai_params"],
+            id="model_info",
+        ),
+    ],
+)
+def test_nvidia_nim_supported_params_leave_out_logprobs_for_models_the_cost_map_flags(
+    monkeypatch: pytest.MonkeyPatch,
+    read_supported_params: Callable[[], list[str] | None],
+):
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "nvidia_nim/acme/no-logprobs-chat",
+        {"litellm_provider": "nvidia_nim", "mode": "chat", "supports_logprobs": False},
+    )
+
+    supported_params: Final = read_supported_params() or []
+
+    assert "tools" in supported_params
+    assert "logprobs" not in supported_params
+    assert "top_logprobs" not in supported_params
 
 
 def test_embedding_nvidia_nim_sends_extra_body_fields_without_an_extra_body_key():
