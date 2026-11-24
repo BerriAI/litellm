@@ -22,6 +22,10 @@ from litellm.repositories.spend_log_insert import spend_log_insert_statement
 from tests.integration._support.database import scratch_database
 
 _MIGRATIONS: Final = Path(__file__).resolve().parents[3] / "litellm/proxy-extras/litellm_proxy_extras/migrations"
+_RUST_DELIVERY_INSERT: Final = (
+    Path(__file__).resolve().parents[3]
+    / "litellm/rust/crates/repositories/src/spend_log/queries/insert_spend_log_deliveries.sql"
+)
 
 
 @pytest.fixture
@@ -301,7 +305,7 @@ async def test_a_failed_full_batch_is_scheduled_for_retry_within_one_short_trans
 
     assert (result.failed, result.parked, result.error) == (batch - 1, (), "ConnectionError")
     assert delivery_database.execute(
-        """SELECT state::text, attempts, last_error, bool_and(next_attempt_at > CURRENT_TIMESTAMP), count(*)
+        """SELECT state::text, attempts, last_error, bool_and(next_attempt_at > (NOW() AT TIME ZONE 'UTC')), count(*)
         FROM "LiteLLM_SpendLogDelivery" GROUP BY 1, 2, 3 ORDER BY attempts"""
     ).fetchall() == [
         ("pending", 1, "ConnectionError", True, batch - 2),
@@ -353,6 +357,49 @@ async def test_two_workers_claim_disjoint_rows_and_apply_once(
     assert delivery_database.execute(
         "SELECT COUNT(*) FROM \"LiteLLM_SpendLogDelivery\" WHERE state = 'applied'"
     ).fetchone() == (2,)
+
+
+@pytest.mark.asyncio
+async def test_a_delivery_the_rust_writer_stores_is_due_on_a_database_behind_utc(
+    delivery_database: psycopg.Connection[tuple[object, ...]],
+) -> None:
+    from psycopg.types.json import Jsonb
+
+    name: Final = delivery_database.info.dbname
+    delivery_database.execute(f"ALTER DATABASE \"{name}\" SET timezone = 'America/Los_Angeles'")
+    delivery_database.execute("CREATE TABLE totals (spend float8 NOT NULL)")
+    delivery_database.execute("INSERT INTO totals VALUES (0)")
+    delivery_database.execute("SET TimeZone = 'UTC'")
+    _insert(delivery_database, (_row("utc"),), ledger=False)
+    delivery_database.execute(
+        _RUST_DELIVERY_INSERT.read_text().replace("$1", "%s"),
+        (
+            Jsonb(
+                [
+                    {
+                        "delivery_id": "utc",
+                        "request_id": "utc",
+                        "accounting_payload": dict(_row("utc")),
+                        "is_batch": False,
+                    }
+                ]
+            ),
+        ),
+    )
+
+    async def apply(transaction: LedgerTransaction, rows: tuple[DeliveryProjection, ...]) -> None:
+        await transaction.execute_raw("UPDATE totals SET spend = spend + $1::float8", float(str(rows[0].row["spend"])))
+
+    url: Final = urlunsplit(urlsplit(os.environ["DATABASE_URL"])._replace(path=f"/{name}"))
+    client: Final = Prisma(datasource={"url": url})
+    await client.connect()
+    try:
+        assert (await client.query_raw("SHOW TimeZone"))[0]["TimeZone"] == "America/Los_Angeles"
+        result: Final = await AccountingDeliveryRepository(client).apply_pending(apply)
+    finally:
+        await client.disconnect()
+    assert result.applied == 1
+    assert delivery_database.execute("SELECT spend FROM totals").fetchone() == (0.5,)
 
 
 @pytest.mark.asyncio

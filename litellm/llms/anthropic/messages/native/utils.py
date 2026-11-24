@@ -271,11 +271,24 @@ def prepare_native_messages(
     api_base: str | None = None,
     presanitized: bool = False,
 ) -> tuple[list[dict[str, JsonValue]], str | list[dict[str, JsonValue]] | None]:
+    from litellm.responses.bridge_check import needs_empty_user_turn_back
+
     normalized: Final = messages if presanitized else normalize_native_messages(messages)
+    restored: Final = (
+        [*normalized, {"role": "user", "content": ""}]
+        if needs_empty_user_turn_back(
+            messages[-1] if messages else None,
+            normalized,
+            model,
+            custom_llm_provider,
+            {**kwargs, "api_base": api_base},
+        )
+        else normalized
+    )
     return cast(  # cast-ok: legacy normalizers and injection preserve the JSON message and system shapes
         tuple[list[dict[str, JsonValue]], str | list[dict[str, JsonValue]] | None],
         AnthropicCacheControlHook.maybe_inject_cache_control(
-            normalized,
+            restored,
             system,
             kwargs,
             model=model,
@@ -414,10 +427,10 @@ class AnthropicMessagesRequestUtils:
 
 def mock_response(
     model: str,
-    messages: list[dict],
+    messages: Sequence[Mapping[str, object]],
     max_tokens: int,
     mock_response: str = "Hi! My name is Claude.",
-    **kwargs,
+    **kwargs: object,
 ) -> AnthropicMessagesResponse:
     """
     Mock response for Anthropic messages

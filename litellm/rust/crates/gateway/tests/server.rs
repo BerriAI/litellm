@@ -1074,7 +1074,7 @@ async fn a_stream_no_other_attempt_may_answer_goes_out_as_the_provider_sent_it(
     #[case] error: &str,
 ) {
     let sent = failing.concat();
-    let (app, _, second) = streamed_app(&sent, "backup", settings).await;
+    let (app, first, second) = streamed_app(&sent, "backup", settings).await;
 
     let response = app.oneshot(stream_of("primary")).await.unwrap();
 
@@ -1086,9 +1086,10 @@ async fn a_stream_no_other_attempt_may_answer_goes_out_as_the_provider_sent_it(
         (
             body.matches("event: ").count(),
             body.contains(error),
+            first.received_requests().await.unwrap().len(),
             second.received_requests().await.unwrap().len(),
         ),
-        (sent.matches("event: ").count(), true, 0),
+        (sent.matches("event: ").count(), true, 1, 0),
         "{body}"
     );
 }

@@ -11,7 +11,7 @@ from dataclasses import dataclass, replace
 from datetime import datetime
 from functools import partial, reduce
 from types import EllipsisType
-from typing import Final, NoReturn, TypeAlias, overload
+from typing import Final, NoReturn, Protocol, TypeAlias, overload
 
 import anyio
 from fastapi import HTTPException
@@ -2639,6 +2639,15 @@ async def _execute_mcp_tool(
     )
 
 
+class _CarriesData(Protocol):
+    @property
+    def data(self) -> object: ...
+
+
+def _error_data(error: _CarriesData) -> object:
+    return error.data
+
+
 def _json_object(value: object) -> Mapping[str, JsonValue] | None:
     return TypeAdapter(dict[str, JsonValue]).validate_python(value) if isinstance(value, dict) else None
 
@@ -2670,7 +2679,8 @@ async def _relay_guarded_url_elicitation(
     elicitation_error: Final = await _result_or_url_elicitation(execution)
     if not isinstance(elicitation_error, MCPError):
         return elicitation_error
-    data: Final = _json_object(elicitation_error.error.data)
+    raw_data: Final = _error_data(elicitation_error.error)
+    data: Final = _json_object(raw_data)
     listed: Final = data.get("elicitations") if data is not None else None
     elicitations: Final = TypeAdapter(list[JsonValue]).validate_python(listed) if isinstance(listed, list) else []
     entries: Final = tuple(_json_object(elicitation) for elicitation in elicitations)
@@ -2711,7 +2721,7 @@ async def _relay_guarded_url_elicitation(
             ],
         }
         if data is not None and replaced
-        else elicitation_error.error.data,
+        else raw_data,
     )
 
 

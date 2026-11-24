@@ -384,7 +384,7 @@ def build_usage_only_response_from_chunks(
     # build usage via the same AnthropicConfig.calculate_usage path the success
     # cases use, so prompt_tokens are cache-inclusive and cache / server_tool_use /
     # inference_geo tokens are priced instead of left at $0
-    usage_object: Final[dict] = {
+    usage_object: Final[dict[str, object]] = {
         "input_tokens": input_tokens,
         "output_tokens": output_tokens,
     }
@@ -398,7 +398,7 @@ def build_usage_only_response_from_chunks(
             "ephemeral_1h_input_tokens": cache_creation_1h or 0,
         }
     if web_search_requests is not None or tool_search_requests is not None:
-        _server_tool_use: Final[dict] = {}
+        _server_tool_use: Final[dict[str, object]] = {}
         if web_search_requests is not None:
             _server_tool_use["web_search_requests"] = web_search_requests
         if tool_search_requests is not None:
@@ -704,6 +704,13 @@ def anthropic_sse_error_events(all_chunks: Sequence[object]) -> tuple[str, ...]:
     Anthropic may send anything as the data.
     """
     return tuple(_plain_error_event(event) for event in _error_events(_joined_sse_stream(all_chunks) or ""))
+
+
+def anthropic_sse_events_before_upstream_error(all_chunks: Sequence[str | bytes]) -> Sequence[str | bytes]:
+    """The stream without its upstream ``error`` events, so what arrived before the failure still assembles."""
+    events: Final = tuple(chain.from_iterable(map(split_sse_chunk_into_events, all_chunks)))
+    received: Final = tuple(event for event in events if "error" not in event or not _is_error_event(event))
+    return all_chunks if len(received) == len(events) else received
 
 
 @dataclass(frozen=True, slots=True)

@@ -521,7 +521,7 @@ def _serialize_scan_metadata_header(entries: Iterable[object], *, max_length: in
     return f"[{','.join(encoded[:kept])}]"
 
 
-def get_logging_caching_headers(request_data: dict) -> dict | None:
+def get_logging_caching_headers(request_data: Mapping[str, object]) -> dict[str, str] | None:
     _metadata: Final[dict] = {}
     metadata_bucket: Final = request_data.get("metadata")
     litellm_metadata_bucket: Final = request_data.get("litellm_metadata")

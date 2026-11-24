@@ -13,6 +13,7 @@ import asyncio
 import contextvars
 import datetime
 import inspect
+import itertools
 import json
 import os
 import random
@@ -268,6 +269,7 @@ from .litellm_core_utils.fallback_utils import (
 from .litellm_core_utils.prompt_templates.common_utils import (
     add_system_prompt_to_messages,
     get_completion_messages,
+    is_empty_user_message,
     update_messages_with_model_file_ids,
 )
 from .litellm_core_utils.prompt_templates.factory import (
@@ -580,12 +582,29 @@ def _messages_without_unreadable_pdfs(
     return readable_messages
 
 
+def _messages_without_empty_last_user_turns(
+    messages: Sequence[AllMessageValues],
+    model: str,
+    custom_llm_provider: str,
+    route_params: Mapping[str, object],
+) -> tuple[AllMessageValues, ...] | None:
+    kept_messages: Final = tuple(itertools.dropwhile(is_empty_user_message, reversed(messages)))[::-1]
+    if not kept_messages or len(kept_messages) == len(messages):
+        return None
+    from litellm.responses.bridge_check import target_rejects_model_turn_end
+
+    if not target_rejects_model_turn_end(model, custom_llm_provider, route_params):
+        return None
+    return kept_messages
+
+
 def _messages_readable_by_model(
     messages: Sequence[AllMessageValues],
     model: str,
     custom_llm_provider: str,
     model_info: Mapping[str, object] | None,
     base_model: str | None,
+    api_base: str | None,
     drop_params: bool,
     ensure_alternating_roles: bool | None,
     user_continue_message: ChatCompletionUserMessage | None,
@@ -599,11 +618,22 @@ def _messages_readable_by_model(
         base_model=base_model,
         drop_params=drop_params,
     )
-    if pdf_free_messages is None:
+    sent_messages: Final = messages if pdf_free_messages is None else pdf_free_messages
+    alternating_messages: Final = (
+        _messages_without_empty_last_user_turns(
+            sent_messages,
+            model,
+            custom_llm_provider,
+            {"model_info": model_info, "base_model": base_model, "api_base": api_base},
+        )
+        if ensure_alternating_roles
+        else None
+    )
+    if pdf_free_messages is None and alternating_messages is None:
         return None
     return tuple(
         get_completion_messages(
-            messages=list(pdf_free_messages),
+            messages=list(sent_messages if alternating_messages is None else alternating_messages),
             ensure_alternating_roles=ensure_alternating_roles or False,
             user_continue_message=user_continue_message,
             assistant_continue_message=assistant_continue_message,
@@ -1409,7 +1439,9 @@ from litellm.responses.bridge_check import (  # noqa: E402  # re-export at the o
 )
 from litellm.responses.bridge_check import (
     bridge_reasoning_effort,
+    drop_refused_extra_body_reasoning,
     serves_only_responses,
+    settle_chat_reasoning_effort,
     str_keyed_mapping,
 )
 from litellm.responses.bridge_check import (  # noqa: E402  # re-export at the old definition site
@@ -6133,6 +6165,13 @@ def completion(
         deployment_model_info: Final = str_keyed_mapping(
             cast(object, model_info)  # cast-ok: model_info is the untyped dict kwarg
         )
+        deployment_base_model: Final = base_model if isinstance(base_model, str) else None
+        supplied_client_api_base: Final = (
+            str(client.base_url)
+            if custom_llm_provider == "openai" and isinstance(client, openai.OpenAI | openai.AsyncOpenAI)
+            else None
+        )
+        reached_api_base: Final = supplied_client_api_base or api_base
         ## RESPONSES API BRIDGE LOGIC ## - check early and normalize model name
         responses_api_model_info, model = responses_api_bridge_check(
             model=model,
@@ -6147,7 +6186,16 @@ def completion(
         reasoning_model_group: Final = model_group_from_metadata(
             routing_kwargs.get("metadata"), routing_kwargs.get("litellm_metadata")
         )
-        requested_output_config: Final = as_str_mapping(non_default_params.get("output_config"))
+        chat_params: Final = drop_refused_extra_body_reasoning(
+            non_default_params,
+            model=model,
+            base_model=deployment_base_model,
+            custom_llm_provider=custom_llm_provider,
+            api_base=reached_api_base,
+            deployment_model_info=deployment_model_info,
+            drop_params=drop_unsupported_reasoning,
+        )
+        requested_output_config: Final = as_str_mapping(chat_params.get("output_config"))
         chat_reasoning: Final = resolve_chat_reasoning(
             reasoning_effort,
             thinking,
@@ -6161,10 +6209,10 @@ def completion(
         resolved_reasoning_effort: Final = chat_reasoning.effort.value
         resolved_output_config: Final = chat_reasoning.output_config
         provider_params: Final = (
-            non_default_params
+            chat_params
             if resolved_output_config is requested_output_config
             else {
-                **{key: value for key, value in non_default_params.items() if key != "output_config"},
+                **{key: value for key, value in chat_params.items() if key != "output_config"},
                 **({"output_config": resolved_output_config} if resolved_output_config is not None else {}),
             }
         )
@@ -6357,7 +6405,6 @@ def completion(
         validated_model_info: Final = (
             _MODEL_INFO_ADAPTER.validate_python(model_info) if isinstance(model_info, dict) else None
         )
-        deployment_base_model: Final = base_model if isinstance(base_model, str) else None
         optional_params = optional_params_for_model_info(validated_model_info, reasoning_drop_warnings)
         fakes_stream: Final = partial(
             _completion_fakes_stream,
@@ -6418,6 +6465,7 @@ def completion(
             custom_llm_provider=custom_llm_provider,
             model_info=validated_model_info,
             base_model=deployment_base_model,
+            api_base=api_base,
             drop_params=drop_unsupported_reasoning,
             ensure_alternating_roles=ensure_alternating_roles,
             user_continue_message=user_continue_message,
@@ -6427,11 +6475,6 @@ def completion(
             messages if readable_messages is None else list(readable_messages)
         )
 
-        supplied_client_api_base: Final = (
-            str(client.base_url)
-            if custom_llm_provider == "openai" and isinstance(client, openai.OpenAI | openai.AsyncOpenAI)
-            else None
-        )
         # For logging - save the values of the litellm-specific params passed in
         requested_litellm_params: Final = get_litellm_params(
             acompletion=acompletion,
@@ -6440,7 +6483,7 @@ def completion(
             logger_fn=logger_fn,
             verbose=verbose,
             custom_llm_provider=custom_llm_provider,
-            api_base=supplied_client_api_base or api_base,
+            api_base=reached_api_base,
             litellm_call_id=kwargs.get("litellm_call_id", None),
             model_alias_map=litellm.model_alias_map,
             completion_call_id=id,
@@ -6596,7 +6639,12 @@ def completion(
                 custom_llm_provider=custom_llm_provider,
                 web_search_options=web_search_options,
                 tools=tools,
-                reasoning_effort=bridge_reasoning_effort(resolved_reasoning_effort, optional_params.get("extra_body")),
+                reasoning_effort=bridge_reasoning_effort(
+                    resolved_reasoning_effort,
+                    optional_params.get("extra_body"),
+                    custom_llm_provider=custom_llm_provider,
+                    api_base=reached_api_base,
+                ),
                 reasoning_summary=_reasoning_summary_for_bridge,
                 api_base=api_base,
                 deployment_model_info=typed_deployment_model_info,
@@ -6655,6 +6703,18 @@ def completion(
         ):
             optional_params, _ = strip_reasoning_summary_aliases_from_optional_params(optional_params)
 
+        chat_optional_params: Final = settle_chat_reasoning_effort(
+            optional_params,
+            requested=resolved_reasoning_effort,
+            model=model,
+            base_model=deployment_base_model,
+            custom_llm_provider=custom_llm_provider,
+            api_base=reached_api_base,
+            deployment_model_info=typed_deployment_model_info,
+            drop_params=drop_unsupported_reasoning,
+            additional_drop_params=routing_kwargs.get("additional_drop_params"),
+        )
+
         _dispatch_ctx: Final = CompletionDispatchContext(
             _azure_detection_model=_azure_detection_model,
             acompletion=acompletion,
@@ -6677,7 +6737,7 @@ def completion(
             metadata=metadata,
             model=model,
             model_response=model_response,
-            optional_params=optional_params,
+            optional_params=chat_optional_params,
             optional_params_for_model_info=optional_params_for_model_info,
             organization=organization,
             provider_config=provider_config,
@@ -8470,7 +8530,7 @@ def text_completion(
         optional_params["custom_llm_provider"] = custom_llm_provider
 
     # get custom_llm_provider
-    _model, custom_llm_provider, dynamic_api_key, api_base = get_llm_provider(
+    _model, custom_llm_provider, _, api_base = get_llm_provider(
         model=model,
         custom_llm_provider=custom_llm_provider,
         api_base=api_base,
@@ -8845,7 +8905,7 @@ async def atranscription(
         # tricks the OpenAI SDK's "best match deserialization" into thinking
         # a plain Transcription is a TranscriptionVerbose/Diarized type.
         if response is not None and not isinstance(response, Coroutine) and file is not None:
-            existing_duration: Final = getattr(response, "duration", None)
+            existing_duration: Final[object] = getattr(response, "duration", None)
             if existing_duration is None:
                 sync_calculated_duration: Final = calculate_request_duration(file)
                 if sync_calculated_duration is not None:

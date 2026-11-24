@@ -169,7 +169,7 @@ class DatadogMetricsLogger(CustomBatchLogger):
         }
         self.log_queue.append(series_count)
 
-    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+    async def async_log_success_event(self, kwargs, response_obj: object, start_time: object, end_time: object) -> None:
         try:
             standard_logging_object: Final[StandardLoggingPayload | None] = kwargs.get("standard_logging_object", None)
 
@@ -184,7 +184,7 @@ class DatadogMetricsLogger(CustomBatchLogger):
         except Exception as e:
             verbose_logger.exception("Datadog Metrics: Error in async_log_success_event: %s", e)
 
-    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+    async def async_log_failure_event(self, kwargs, response_obj: object, start_time: object, end_time: object) -> None:
         try:
             standard_logging_object: Final[StandardLoggingPayload | None] = kwargs.get("standard_logging_object", None)
 
@@ -283,5 +283,5 @@ class DatadogMetricsLogger(CustomBatchLogger):
         request_id: str,
         start_time_utc: datetime | None,
         end_time_utc: datetime | None,
-    ) -> dict | None:
+    ) -> dict[str, object] | None:
         pass

@@ -54,6 +54,7 @@ _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_i
 _JSON_OBJECTS: Final = TypeAdapter(Iterable[Mapping[str, object]], config=ConfigDict(hide_input_in_errors=True))
 _OPTIONAL_INT: Final[TypeAdapter[int | None]] = TypeAdapter(int | None)
 _STR: Final = TypeAdapter(str)
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class DashScopeRerankConfig(BaseRerankConfig):
@@ -189,19 +190,20 @@ class DashScopeRerankConfig(BaseRerankConfig):
                 status_code=raw_response.status_code,
                 message=raw_response.text,
             )
+        decoded_response: Final = _DECODED_JSON.validate_python(response_json)
 
         logging_obj.post_call(
             input=request_data.get("query"),
             api_key=api_key,
             additional_args={"complete_input_dict": request_data},
-            original_response=response_json,
+            original_response=decoded_response,
         )
 
         # DashScope error envelope: {"code": "...", "message": "...", "request_id": "..."}
         if "code" in response_json and "results" not in response_json:
             raise DashScopeError(
                 status_code=raw_response.status_code,
-                message=response_json.get("message", str(response_json)),
+                message=response_json.get("message", str(decoded_response)),
             )
 
         payload: Final = _JSON_OBJECT.validate_python(response_json)

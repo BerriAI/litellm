@@ -124,6 +124,132 @@ class NativeProvenance:
     def etag(self) -> str | None: ...
 
 @final
+class NativePrices:
+    def __new__(cls, row: Mapping[str, object], provider: str | None) -> NativePrices: ...
+    def calculate(self, usage: NativeTokenUsage, call: NativeCallContext) -> NativePriced: ...
+    def quote(self, prompt_tokens: int, call: NativeCallContext) -> NativeQuote: ...
+
+@final
+class NativeTokenUsage:
+    def __new__(cls, quantities: Mapping[str, object]) -> NativeTokenUsage: ...
+
+@final
+class NativeCallContext:
+    def __new__(
+        cls,
+        *,
+        service_tier: str | None,
+        data_residency: str | None,
+        vertex_location: str | None,
+        at: datetime,
+    ) -> NativeCallContext: ...
+
+@final
+class NativePriced:
+    @property
+    def prompt_cost(self) -> float: ...
+    @property
+    def completion_cost(self) -> float: ...
+
+@final
+class NativeQuote:
+    @property
+    def input(self) -> float: ...
+    @property
+    def output(self) -> float: ...
+    @property
+    def reasoning(self) -> float: ...
+    @property
+    def cache_read(self) -> float: ...
+    @property
+    def explicit_cache_read(self) -> float: ...
+    @property
+    def cache_read_audio(self) -> float | None: ...
+    @property
+    def cache_read_image(self) -> float | None: ...
+    @property
+    def cache_write(self) -> float: ...
+    @property
+    def cache_write_1h(self) -> float: ...
+    @property
+    def cache_write_12h(self) -> float: ...
+    @property
+    def uplift(self) -> float: ...
+
+@final
+class NativeBilledRates:
+    @property
+    def input(self) -> float: ...
+    @property
+    def output(self) -> float: ...
+    @property
+    def cache_read(self) -> float: ...
+    @property
+    def cache_read_audio(self) -> float: ...
+    @property
+    def cache_read_image(self) -> float | None: ...
+    @property
+    def cache_write(self) -> float: ...
+    @property
+    def cache_write_1h(self) -> float: ...
+    @property
+    def cache_write_12h(self) -> float: ...
+    @property
+    def reasoning(self) -> float: ...
+
+@final
+class NativeReceipt:
+    @property
+    def model(self) -> str | None: ...
+    @property
+    def prompt_cost(self) -> float: ...
+    @property
+    def completion_cost(self) -> float: ...
+    @property
+    def tools_cost(self) -> float: ...
+    @property
+    def original_cost(self) -> float: ...
+    @property
+    def discount_percent(self) -> float: ...
+    @property
+    def discount_amount(self) -> float: ...
+    @property
+    def margin_percent(self) -> float: ...
+    @property
+    def margin_fixed_amount(self) -> float: ...
+    @property
+    def margin_total_amount(self) -> float: ...
+    @property
+    def cache_read_cost(self) -> float: ...
+    @property
+    def cache_creation_cost(self) -> float: ...
+    @property
+    def reasoning_cost(self) -> float: ...
+    @property
+    def rates(self) -> NativeBilledRates | None: ...
+    @property
+    def cache_savings(self) -> float | None: ...
+    @property
+    def total(self) -> float: ...
+
+@final
+class NativeRateCard:
+    @property
+    def pricing(self) -> Literal["priced", "explicitly_free", "unpriced"]: ...
+    @property
+    def input_cost_per_token(self) -> float | None: ...
+    @property
+    def output_cost_per_token(self) -> float | None: ...
+    @property
+    def token_rate_key(self) -> bool: ...
+    @property
+    def positive_cost_per_key(self) -> bool: ...
+    @property
+    def cost_per_key(self) -> bool: ...
+    @property
+    def ptu_flat_cost(self) -> bool: ...
+
+@final
 class NativeModelCostMap:
     @staticmethod
     def bundled(min_model_count: int, max_shrink_ratio: float) -> NativeModelCostMap: ...
@@ -149,6 +275,16 @@ class NativeModelCostMap:
     def restore(self, state: NativeModelCostMapState) -> None: ...
     @property
     def provenance(self) -> NativeProvenance: ...
+    def price(
+        self, document: Mapping[str, object], row: Mapping[str, object] | None = None
+    ) -> NativeReceipt | None: ...
+    def bound(
+        self, document: Mapping[str, object], rows: Sequence[Mapping[str, object]]
+    ) -> tuple[float | None, float | None]: ...
+    def rates(self, key: str) -> NativeRateCard | None: ...
+    def adjust(
+        self, cost: float, provider: str | None, model: str | None = None, region: str | None = None
+    ) -> tuple[float, float, float, float, float, float]: ...
 
 @final
 class NativeModelCostMapState: ...
@@ -297,6 +433,7 @@ class ActiveMember:
     @property
     def priority_class(self) -> str: ...
 
+@final
 class NativeActiveTeams:
     def __new__(
         cls, client: NativeRedisClient | None, clock: Callable[[], float] | None = None
@@ -308,6 +445,7 @@ class NativeActiveTeams:
     ) -> Future[list[ActiveMember]]: ...
     def touch_local(self, model: str, member: str, priority_class: str, window_seconds: int) -> list[ActiveMember]: ...
 
+@final
 class NativeSensitiveRoutePins:
     def __new__(cls, client: NativeRedisClient | None) -> NativeSensitiveRoutePins: ...
     def get(self, tenant: str, session_id: str, default_ttl_seconds: float) -> Future[str | None]: ...
@@ -1818,6 +1956,7 @@ class RustAuth:
     def registered_agent(self, agent: _RegisteredAgent | None = None) -> None: ...
 
 JWT_ID_JAG_TYP: Final[str]
+BOUND_DEFAULT_MAX_OUTPUT_TOKENS: Final[int]
 
 def jwt_is_jwt(token: str | None) -> bool: ...
 def jwt_unverified_claims(token: str) -> dict[str, object] | None: ...
@@ -1918,6 +2057,7 @@ class AuthObject:
 class NativeTeamRoster:
     def member(self, user_id: str) -> object: ...
 
+@final
 class NativeAuthCache:
     def __new__(
         cls,
@@ -2031,6 +2171,7 @@ class NativeBudgets:
         /,
     ) -> Execution: ...
 
+def billable_service_tier(requested: str | None, served: str | None) -> str | None: ...
 def budget_check_decision(check: BudgetCheck) -> JsonValue: ...
 
 @final
@@ -2262,6 +2403,15 @@ class RustSpendLog:
         token_redactor: NativeTokenRedactor,
     ) -> RustSpendLog: ...
     def callback(self) -> RustHandle: ...
+    def start(
+        self,
+        hook: str,
+        fields: Mapping[str, object],
+        call: Mapping[str, object] | None,
+        host: object,
+        request: NativeRequestRedis | None,
+        /,
+    ) -> Execution: ...
 
 @final
 class NativeTokenRedactor:
@@ -2524,6 +2674,7 @@ def process_state_started() -> bool: ...
 def reserve_process_for_forking() -> None: ...
 
 __all__ = [
+    "BOUND_DEFAULT_MAX_OUTPUT_TOKENS",
     "JWT_ID_JAG_TYP",
     "ActiveMember",
     "AtomicApplied",
@@ -2540,7 +2691,10 @@ __all__ = [
     "NativeActiveTeams",
     "NativeAdmission",
     "NativeAuthCache",
+    "NativeBilledRates",
     "NativeBudgets",
+    "NativeCacheInvalidation",
+    "NativeCallContext",
     "NativeClickHouseSpendConfig",
     "NativeClickHouseSpendStorage",
     "NativeCostMapSource",
@@ -2559,8 +2713,13 @@ __all__ = [
     "NativeParallelRequestLimiter",
     "NativeParallelRequestLimiterState",
     "NativePending",
+    "NativePriced",
+    "NativePrices",
     "NativeProvenance",
+    "NativeQuote",
+    "NativeRateCard",
     "NativeRateLimits",
+    "NativeReceipt",
     "NativeRedisBreaker",
     "NativeRedisClient",
     "NativeRedisStoreError",
@@ -2575,7 +2734,9 @@ __all__ = [
     "NativeSensitiveRoutePins",
     "NativeSpendCounters",
     "NativeTableSwapped",
+    "NativeTeamRoster",
     "NativeTokenRedactor",
+    "NativeTokenUsage",
     "NativeUsageRead",
     "ProcessReservedForForking",
     "ResponsesWebSocketConnection",
@@ -2632,6 +2793,7 @@ __all__ = [
     "auth_route_matches_denied",
     "auth_route_matches_prefix",
     "auth_route_matches_wildcard",
+    "billable_service_tier",
     "budget_check_decision",
     "bundled_model_cost_map",
     "completion",

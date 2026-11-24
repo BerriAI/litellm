@@ -8,6 +8,7 @@ use std::{
         Arc, Mutex,
         atomic::{AtomicUsize, Ordering},
     },
+    time::Duration,
 };
 
 use litellm_callbacks::{
@@ -18,18 +19,24 @@ use litellm_callbacks_budgets::Budgets;
 use litellm_callbacks_spend_logger::{SpendLogCallback, SpendLogParts};
 use litellm_coroutine::CoroutineState;
 use litellm_redaction::TokenRedactor;
+use litellm_redis_client::{
+    Credentials, Namespace, RedisClient, RedisConfig, RedisUrl, Target, Timeouts,
+};
 use litellm_redis_store::{
-    Number,
+    Number, Remote, RequestRedis,
     spend_counters::{SpendCounter, SpendCounters},
 };
+use litellm_redis_testing::RedisServer;
 use litellm_repositories::SpendLogWrite;
 use litellm_spend_log_writer::{
     LedgerStore, QueuedSpendLog, SpendLogFlusher, SpendLogWriter, WriterSettings,
 };
 use rstest::{fixture, rstest};
 use serde_json::{Value as Json, json};
+use tokio::runtime::Handle;
 
 const KEY_COUNTER: &str = "spend:key:hashed";
+const COMMITTED_KEY_COUNTER: &str = "spend:committed:key:hashed";
 const REQUEST_ID: &str = "chatcmpl-golden";
 
 #[derive(Clone, Default)]
@@ -61,6 +68,10 @@ fn harness(store: Store) -> Harness {
             None,
         )
         .unwrap();
+    harness_over(store, counters)
+}
+
+fn harness_over(store: Store, counters: Arc<SpendCounters>) -> Harness {
     let wakes = Arc::new(AtomicUsize::new(0));
     let woken = Arc::clone(&wakes);
     let writer = Arc::new(SpendLogWriter::new(
@@ -189,10 +200,21 @@ struct Ran {
     written_back: Option<BudgetReservation>,
 }
 
-/// Runs one hook with a host that answers every call and records them.
+/// Runs one hook outside a request, with a host that answers every call and records them.
 async fn run(harness: &Harness, input: HookInput, chains: bool) -> Ran {
+    run_on(harness, input, chains, None).await
+}
+
+/// `run` with the counter step's increments declared on `redis`, the request's Redis batches.
+async fn run_on(
+    harness: &Harness,
+    input: HookInput,
+    chains: bool,
+    redis: Option<RequestRedis>,
+) -> Ran {
     let callback = Arc::clone(&harness.callback);
-    let mut body = hosted(|host| async move { callback.handle_hosted(&input, None, host).await });
+    let mut body =
+        hosted(|host| async move { callback.handle_with(&input, host, redis.as_ref()).await });
     let mut calls = Vec::new();
     loop {
         match body.resume().await.unwrap() {
@@ -819,9 +841,12 @@ async fn a_claimed_job_row_keeps_the_metadata_fields_of_its_request_settings(
         .map(String::as_str)
         .collect();
     assert_eq!(
-        names
-            .iter()
-            .all(|name| ["cold_storage_object_key", "status"].contains(name)),
+        names.iter().all(|name| [
+            "cold_storage_object_key",
+            "litellm_previous_response_ids",
+            "status"
+        ]
+        .contains(name)),
         cut,
         "{names:?}"
     );
@@ -1202,4 +1227,97 @@ async fn an_unbilled_failure_row_takes_no_surcharge(golden: (Json, Json)) {
     assert_eq!(stored["spend"], json!(0.0));
     assert!(stored_breakdown(&stored).is_null());
     assert_eq!(counter(&harness, "spend:user:user-1"), None);
+}
+
+fn redis_counters(server: &RedisServer) -> Arc<SpendCounters> {
+    let client = RedisClient::new(RedisConfig {
+        target: Target::Url(RedisUrl {
+            url: litellm_secret_value::SecretValue::new(server.url().to_owned()),
+            tls: None,
+            db: None,
+            username: None,
+            password: None,
+        }),
+        credentials: Credentials::NONE,
+        namespace: Namespace::default(),
+        timeouts: Timeouts::new(Duration::from_millis(500), None),
+        breaker: None,
+        events: None,
+        health_check: None,
+        keepalive: true,
+    })
+    .unwrap();
+    Arc::new(SpendCounters::new(Some(Remote {
+        client,
+        default_ttl: Duration::from_secs(60),
+    })))
+}
+
+/// A harness over Redis whose key counter and committed twin are warm at 5.0, and a request.
+async fn in_a_request(server: &RedisServer) -> (Harness, RequestRedis) {
+    let counters = redis_counters(server);
+    for key in [KEY_COUNTER, COMMITTED_KEY_COUNTER] {
+        counters
+            .set(&SpendCounter::parse(key).unwrap(), Number::Float(5.0), None)
+            .await
+            .unwrap();
+    }
+    (
+        harness_over(Store::default(), counters),
+        RequestRedis::new(Handle::current(), Duration::from_secs(60)),
+    )
+}
+
+#[rstest]
+#[tokio::test]
+async fn a_success_charge_waits_on_the_requests_post_call_batch_which_tracks_it(
+    golden: (Json, Json),
+) {
+    let (config, row) = golden;
+    let server = RedisServer::start().await.unwrap();
+    let (harness, request) = in_a_request(&server).await;
+    let mut charged = success(&config, row);
+    charged["row"]["committed_tracked"] = json!([KEY_COUNTER]);
+
+    run_on(
+        &harness,
+        input(Hook::AttemptEnded, charged, priced(0.25), None),
+        false,
+        Some(request.clone()),
+    )
+    .await;
+
+    assert_eq!(counter(&harness, COMMITTED_KEY_COUNTER), Some(5.0));
+    assert!(!request.tracked_writes_settled());
+    request.flush_post().await;
+    litellm_redis_testing::eventually(async || request.tracked_writes_settled().then_some(()))
+        .await;
+    assert_eq!(counter(&harness, COMMITTED_KEY_COUNTER), Some(5.25));
+}
+
+#[rstest]
+#[case::a_billed_failure_row(json!({"failure_row_response_cost": 0.25}))]
+#[case::a_completed_cost(json!({"cost_finalized": true, "failure_row_response_cost": 0.25}))]
+#[tokio::test]
+async fn a_failure_charge_is_sent_on_the_requests_post_call_batch_by_the_hook_itself(
+    golden: (Json, Json),
+    #[case] cost: Json,
+) {
+    let (config, row) = golden;
+    let server = RedisServer::start().await.unwrap();
+    let (harness, request) = in_a_request(&server).await;
+    let mut charged = failure(&config, vec![row]);
+    charged["rows"][0]["committed_tracked"] = json!([KEY_COUNTER]);
+
+    run_on(
+        &harness,
+        failure_input(charged, cost, Json::Null, None),
+        false,
+        Some(request.clone()),
+    )
+    .await;
+
+    litellm_redis_testing::eventually(async || request.tracked_writes_settled().then_some(()))
+        .await;
+    assert_eq!(counter(&harness, COMMITTED_KEY_COUNTER), Some(5.25));
 }

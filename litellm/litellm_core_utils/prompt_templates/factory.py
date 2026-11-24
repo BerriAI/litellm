@@ -467,7 +467,9 @@ def phind_codellama_pt(messages):
     return prompt
 
 
-def _render_chat_template(env, chat_template: str, bos_token: str, eos_token: str, messages: list) -> str:
+def _render_chat_template(
+    env: ImmutableSandboxedEnvironment, chat_template: str, bos_token: str, eos_token: str, messages: list
+) -> str:
     """
     Shared template rendering logic for both sync and async hf_chat_template
 
@@ -816,7 +818,7 @@ def construct_format_parameters_prompt(parameters: dict):
     return parameter_str
 
 
-def construct_format_tool_for_claude_prompt(name, description, parameters):
+def construct_format_tool_for_claude_prompt(name: object, description: object, parameters):
     constructed_prompt: Final = (
         "<tool_description>\n"
         f"<tool_name>{name}</tool_name>\n"
@@ -832,7 +834,7 @@ def construct_format_tool_for_claude_prompt(name, description, parameters):
 
 
 def construct_tool_use_system_prompt(
-    tools,
+    tools: Iterable[object],
 ):  # from https://github.com/anthropics/anthropic-cookbook/blob/main/function_calling/function_calling.ipynb
     tool_str_list: Final = []
     for tool in tools:
@@ -1144,48 +1146,67 @@ def anthropic_messages_pt_xml(messages: list):
 
 def _azure_tool_call_invoke_helper(
     function_call_params: ChatCompletionToolCallFunctionChunk,
-) -> ChatCompletionToolCallFunctionChunk | None:
+) -> ChatCompletionToolCallFunctionChunk:
     """
     Azure requires 'arguments' to be a string.
     """
-    if function_call_params.get("arguments") is None:
-        function_call_params["arguments"] = ""
-    return function_call_params
+    if function_call_params.get("arguments") is not None:
+        return function_call_params
+    return {**function_call_params, "arguments": ""}
 
 
-def _azure_image_url_helper(content: ChatCompletionImageObject):
-    if isinstance(content["image_url"], str):
-        content["image_url"] = {"url": content["image_url"]}
-    else:
-        content["image_url"] = cast(
-            ChatCompletionImageUrlObject,
-            {k: v for k, v in content["image_url"].items() if k != "format"},
-        )
+def _azure_image_url_helper(content: ChatCompletionImageObject) -> ChatCompletionImageObject:
+    image_url: Final = content["image_url"]
+    if isinstance(image_url, str):
+        return {**content, "image_url": {"url": image_url}}
+    return {
+        **content,
+        "image_url": cast(  # cast-ok: dropping format keeps the required url
+            ChatCompletionImageUrlObject, {k: v for k, v in image_url.items() if k != "format"}
+        ),
+    }
 
 
-def _azure_file_helper(content: ChatCompletionFileObject) -> None:
-    content["file"] = cast(
-        ChatCompletionFileObjectFile,
-        {k: v for k, v in content.get("file", {}).items() if k != "format"},
+def _azure_file_helper(content: ChatCompletionFileObject) -> ChatCompletionFileObject:
+    return {
+        **content,
+        "file": cast(  # cast-ok: dropping format leaves only ChatCompletionFileObjectFile keys
+            ChatCompletionFileObjectFile, {k: v for k, v in content.get("file", {}).items() if k != "format"}
+        ),
+    }
+
+
+def _azure_content_part(part: object) -> object:
+    mapping: Final = as_str_mapping(part)
+    part_type: Final = None if mapping is None else mapping.get("type")
+    if part_type == "image_url":
+        return _azure_image_url_helper(cast(ChatCompletionImageObject, part))  # cast-ok: the type tag says image_url
+    if part_type == "file":
+        return _azure_file_helper(cast(ChatCompletionFileObject, part))  # cast-ok: the type tag says file
+    return part
+
+
+def _azure_message(message: AllMessageValues) -> AllMessageValues:
+    if message["role"] == "assistant":
+        function_call: Final = message.get("function_call")
+        if function_call is None:
+            return message
+        return {**message, "function_call": _azure_tool_call_invoke_helper(function_call)}
+    if message["role"] != "user":
+        return message
+    content: Final = message.get("content")
+    if not isinstance(content, list):
+        return message
+    parts: Final[tuple[object, ...]] = tuple(content)
+    return cast(  # cast-ok: only image_url and file parts change, each to the shape Azure takes
+        AllMessageValues, {**message, "content": [_azure_content_part(part) for part in parts]}
     )
 
 
 def convert_to_azure_openai_messages(
     messages: list[AllMessageValues],
 ) -> list[AllMessageValues]:
-    for m in messages:
-        if m["role"] == "assistant":
-            function_call = m.get("function_call", None)
-            if function_call is not None:
-                m["function_call"] = _azure_tool_call_invoke_helper(function_call)
-
-        if m["role"] == "user" and isinstance(m.get("content"), list):
-            for content in m.get("content", []):
-                if isinstance(content, dict) and content.get("type") == "image_url":
-                    _azure_image_url_helper(cast(ChatCompletionImageObject, content))
-                elif isinstance(content, dict) and content.get("type") == "file":
-                    _azure_file_helper(cast(ChatCompletionFileObject, content))
-    return messages
+    return [_azure_message(message) for message in messages]
 
 
 # ------------------------------------------------------------------------------
@@ -1548,6 +1569,8 @@ class GeminiMediaSource:
     detail: str | None = None
     video_metadata: Mapping[str, object] | None = None
     inline_in_tool_result: bool = False
+    document_metadata: Mapping[str, object] | None = None
+    spreadsheet_metadata: Mapping[str, object] | None = None
     max_download_bytes: int | None = None
 
 
@@ -1665,13 +1688,15 @@ def gemini_media_source(content: Mapping[str, object], *, prefer_file_id: bool =
     if source is None:
         return None
     file_format: Final = _gemini_media_format(file)
-    file_detail: Final = file.get("detail")
+    file_detail: Final = file.get("resolution") or file.get("detail")
     return GeminiMediaSource(
         url=_gemini_inline_url(source, file_format) if source == file_data else source,
         format=file_format,
         detail=file_detail if isinstance(file_detail, str) else None,
         video_metadata=as_str_mapping(file.get("video_metadata")),
         inline_in_tool_result=source == file_data,
+        document_metadata=as_str_mapping(file.get("document_metadata")),
+        spreadsheet_metadata=as_str_mapping(file.get("spreadsheet_metadata")),
     )
 
 
@@ -1685,7 +1710,7 @@ def _gemini_tool_media_part(
     vertex_credentials: VERTEX_CREDENTIALS_TYPES | None,
     drop_params: bool = False,
 ) -> VertexPartType | None:
-    from litellm.llms.vertex_ai.common_utils import gemini_fetches_url_itself
+    from litellm.llms.vertex_ai.common_utils import GEMINI_FILES_API_URI_PREFIXES, gemini_fetches_url_itself
     from litellm.llms.vertex_ai.gemini.transformation import changes_gemini_media_settings, encode_gemini_media_source
 
     source: Final = gemini_media_source(content)
@@ -1712,7 +1737,7 @@ def _gemini_tool_media_part(
             model=model or "",
             llm_provider=custom_llm_provider or "vertex_ai",
         )
-    inline_only: Final = nested and not vertex_nested
+    inline_only: Final = nested and not vertex_nested and not source.url.startswith(GEMINI_FILES_API_URI_PREFIXES)
     if inline_only and (source.url.startswith("gs://") or gemini_fetches_url_itself(source.url)):
         if drop_params:
             verbose_logger.warning("Dropped a media link from a Gemini tool result, which takes inline data only")
@@ -1740,8 +1765,10 @@ def _gemini_tool_media_part(
             or (inline_only and kept_source.url.startswith(("http://", "https://")))
             else kept_source
         )
-        part: Final = encode_gemini_media_source(encoded_source, model, vertex_project, vertex_credentials)
-        if nested and "file_data" in part and not part["file_data"].get("mime_type"):
+        part: Final = encode_gemini_media_source(
+            encoded_source, model, vertex_project, vertex_credentials, custom_llm_provider=custom_llm_provider
+        )
+        if vertex_nested and "file_data" in part and not part["file_data"].get("mime_type"):
             raise litellm.BadRequestError(
                 message="Vertex tool result file references require an explicit MIME type in format.",
                 model=model or "",
@@ -1788,7 +1815,9 @@ def skip_unfetched_media(
     verbose_logger.warning("Dropped media from %s because it could not be downloaded", location)
 
 
-def _function_response_part(part: VertexPartType) -> FunctionResponsePartType:
+def _function_response_part(part: VertexPartType, *, include_file_inspection: bool) -> FunctionResponsePartType:
+    from litellm.llms.vertex_ai.gemini.transformation import gemini_file_inspection_metadata
+
     inline: Final = (
         FunctionResponsePartType(inline_data=part["inline_data"])
         if "inline_data" in part
@@ -1807,7 +1836,14 @@ def _function_response_part(part: VertexPartType) -> FunctionResponsePartType:
         if "video_metadata" in part
         else FunctionResponsePartType()
     )
-    return inline | file | resolution | clip
+    selection: Final = (
+        FunctionResponsePartType(
+            **gemini_file_inspection_metadata(part.get("document_metadata"), part.get("spreadsheet_metadata"))
+        )
+        if include_file_inspection
+        else FunctionResponsePartType()
+    )
+    return inline | file | resolution | clip | selection
 
 
 def convert_to_gemini_tool_call_result(
@@ -1942,7 +1978,9 @@ def convert_to_gemini_tool_call_result(
         if not supports_multimodal_function_responses:
             return [_part, *media_parts]
         _function_response["parts"] = [
-            _function_response_part(part) for part in media_parts if "inline_data" in part or "file_data" in part
+            _function_response_part(part, include_file_inspection=custom_llm_provider == "gemini")
+            for part in media_parts
+            if "inline_data" in part or "file_data" in part
         ]
         return [_part]
 
@@ -3930,7 +3968,7 @@ def contains_tag(tag: str, string: str) -> bool:
     return bool(re.search(f"<{tag}>(.+?)</{tag}>", string, re.DOTALL))
 
 
-def parse_xml_params(xml_content, json_schema: dict | None = None):
+def parse_xml_params(xml_content: str | bytes, json_schema: dict | None = None):
     """
     Compare the xml output to the json schema
 
@@ -4309,7 +4347,7 @@ def amazon_titan_pt(
     return prompt
 
 
-def _load_image_from_url(image_url):
+def _load_image_from_url(image_url: str):
     try:
         from PIL import Image
     except Exception:
@@ -4538,7 +4576,7 @@ class BedrockImageProcessor:
         return base64_bytes, content_type
 
     @staticmethod
-    async def get_image_details_async(image_url) -> tuple[str, str]:
+    async def get_image_details_async(image_url: str) -> tuple[str, str]:
         try:
             client: Final = get_async_httpx_client(
                 llm_provider=httpxSpecialProvider.PromptFactory,
@@ -4554,7 +4592,7 @@ class BedrockImageProcessor:
             raise e
 
     @staticmethod
-    def get_image_details(image_url) -> tuple[str, str]:
+    def get_image_details(image_url: str) -> tuple[str, str]:
         try:
             client: Final = HTTPHandler(concurrent_limit=1)
             # Send a GET request to the image URL
@@ -6558,7 +6596,7 @@ def _bedrock_converse_messages_pt(
 def make_valid_bedrock_tool_name(input_tool_name: str) -> str:
     """Normalize tool names to Bedrock pattern [a-zA-Z][a-zA-Z0-9_-]*."""
 
-    def replace_invalid(char):
+    def replace_invalid(char: str) -> str:
         if char.isalnum() or char in ("_", "-"):
             return char
         return "_"

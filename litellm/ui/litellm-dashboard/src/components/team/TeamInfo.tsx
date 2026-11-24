@@ -94,6 +94,7 @@ import MetadataKeyValueFields, {
   metadataPairsToObject,
 } from "../common_components/MetadataKeyValueFields";
 import { useTeamMetadataSchema } from "@/app/(dashboard)/hooks/teams/useTeamMetadataSchema";
+import { SemanticCacheControls } from "@/components/shared/SemanticCacheControls";
 import ModelAliasManager from "../common_components/ModelAliasManager";
 import AgentSelector from "../agent_management/AgentSelector";
 import DeleteResourceModal from "../common_components/DeleteResourceModal";
@@ -2224,6 +2225,19 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                     {({ ref, value, ...field }) => <NumericalInput {...field} ref={ref} value={value ?? ""} step={1} />}
                   </FormField>
 
+                  <FormField control={form.control} name="metadata">
+                    {({ value, onChange }) => (
+                      <SemanticCacheControls
+                        value={metadataPairsToObject(value).cache_params}
+                        onChange={(params) =>
+                          onChange([
+                            ...(value ?? []).filter(({ key }) => key !== "cache_params"),
+                            ...(params ? [{ key: "cache_params", value: JSON.stringify(params) }] : []),
+                          ])
+                        }
+                      />
+                    )}
+                  </FormField>
                   <Field>
                     <FieldLabel>{t("teams.teamInfo.editForm.metadata")}</FieldLabel>
                     <FormField control={form.control} name="metadata">

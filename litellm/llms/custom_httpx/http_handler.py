@@ -50,6 +50,7 @@ from litellm.llms.base_llm.auth.types import MintedToken
 from litellm.llms.custom_httpx.accept_encoding import ACCEPT_ENCODING_HEADER
 from litellm.llms.custom_httpx.aiohttp_pool_diagnostics import build_pool_wait_trace_config
 from litellm.llms.custom_httpx.http2_connection_spread import AsyncHTTP2ConnectionSpread
+from litellm.llms.custom_httpx.http2_graceful_goaway import drain_http2_connections_on_graceful_goaway
 from litellm.types.llms.custom_http import *
 
 if TYPE_CHECKING:
@@ -1572,6 +1573,7 @@ class AsyncHTTPHandler:
             else verify
         )
         if http2 or http2_enabled():
+            drain_http2_connections_on_graceful_goaway()
             return AsyncHTTP2ConnectionSpread(
                 lambda lane_limits: AsyncHTTPTransport(
                     local_address=local_address, verify=transport_verify, cert=cert, http2=True, limits=lane_limits
@@ -1629,6 +1631,8 @@ class HTTPHandler:
 
     def create_client(self) -> httpx.Client:
         use_http2: Final = http2_enabled()
+        if use_http2:
+            drain_http2_connections_on_graceful_goaway()
         # Get unified SSL configuration
         ssl_config: Final = get_ssl_configuration(self.ssl_verify, http2=use_http2)
 
