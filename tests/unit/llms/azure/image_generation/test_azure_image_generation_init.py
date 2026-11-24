@@ -1,6 +1,7 @@
 import json
 import traceback
-from typing import Callable, Optional
+from datetime import datetime, timezone
+from typing import Callable, Final, Optional
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import httpx
@@ -9,6 +10,7 @@ import respx
 
 import litellm
 from litellm.caching.llm_caching_handler import LLMClientCache
+from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.azure.azure import AzureChatCompletion
 from litellm.llms.azure.common_utils import (
     _cached_azure_ad_token_refresh_provider,
@@ -328,7 +330,7 @@ async def test_azure_aimage_generation_base_model_vs_deployment_name():
             model_response=None,
             azure_client_params=azure_client_params,
             api_key=api_key,
-            input=[],
+            input=data["prompt"],
             logging_obj=logging_obj,
             headers={},
             model=model,
@@ -439,7 +441,7 @@ async def test_azure_aimage_generation_v1_route_sends_deployment_name_in_body(
         model_response=None,
         azure_client_params=azure_client_params,
         api_key="test-api-key",
-        input=[],
+        input=data["prompt"],
         logging_obj=logging_obj,
         headers={},
         model=model,
@@ -783,3 +785,35 @@ def test_redact_azure_auth_headers_masks_only_credential_values():
     }
     assert headers["api-key"] == "sk-secret"
     assert headers["authorization"] == "Bearer secret"
+
+
+@pytest.mark.asyncio
+async def test_azure_aimage_generation_logs_the_prompt_when_the_provider_fails(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "in_memory_llm_clients_cache", LLMClientCache())
+    respx_mock.post(url__regex=r"https://my-resource\.openai\.azure\.com/openai/deployments/img-dep/.*").mock(
+        return_value=httpx.Response(500, json={"error": {"message": "provider failure"}})
+    )
+    prompt: Final = "A beautiful image of a cat"
+    logging_obj: Final = Logging(
+        model="azure/img-dep",
+        messages=[],
+        stream=False,
+        call_type="aimage_generation",
+        start_time=datetime(2025, 1, 1, tzinfo=timezone.utc),
+        litellm_call_id="call-id",
+        function_id="function-id",
+    )
+
+    with pytest.raises(litellm.APIError):
+        await litellm.aimage_generation(
+            model="azure/img-dep",
+            prompt=prompt,
+            api_key="test-api-key",
+            api_base="https://my-resource.openai.azure.com",
+            litellm_logging_obj=logging_obj,
+        )
+
+    assert logging_obj.model_call_details["input"] == prompt

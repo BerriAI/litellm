@@ -2070,6 +2070,35 @@ def test_sync_delete_responses_omits_body_for_azure():
     assert captured["url"].endswith("/openai/responses/resp_xyz?api-version=2025-03-01-preview")
 
 
+@pytest.mark.parametrize("is_async", [False, True])
+def test_delete_responses_logs_an_empty_input(is_async: bool) -> None:
+    transport: Final = httpx.MockTransport(
+        lambda request: httpx.Response(200, json={"id": "resp_xyz", "object": "response", "deleted": True})
+    )
+    logging_obj: Final = LiteLLMLoggingObj(
+        model="openai/responses",
+        messages=[],
+        stream=False,
+        call_type="adelete_responses" if is_async else "delete_responses",
+        start_time=datetime(2025, 1, 1),
+        litellm_call_id="call-id",
+        function_id="function-id",
+    )
+    delete_kwargs: Final = {
+        "response_id": "resp_xyz",
+        "custom_llm_provider": "openai",
+        "api_key": "test-key",
+        "litellm_logging_obj": logging_obj,
+    }
+
+    if is_async:
+        asyncio.run(litellm.adelete_responses(client=AsyncHTTPHandler(transport=transport), **delete_kwargs))
+    else:
+        litellm.delete_responses(client=HTTPHandler(client=httpx.Client(transport=transport)), **delete_kwargs)
+
+    assert logging_obj.model_call_details["input"] == ""
+
+
 def _content_type(headers: dict) -> str:
     for key, value in headers.items():
         if key.lower() == "content-type":

@@ -1,4 +1,5 @@
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Final
 
@@ -10,6 +11,7 @@ from openai import AsyncAzureOpenAI, AzureOpenAI
 import litellm
 from litellm.cost_calculator import completion_cost
 from litellm.litellm_core_utils.audio_utils.utils import calculate_request_duration
+from litellm.litellm_core_utils.litellm_logging import Logging
 
 AUDIO_FILE: Final = Path(__file__).parents[3] / "gettysburg.wav"
 WHISPER_COST_PER_SECOND: Final = 0.0001
@@ -218,6 +220,42 @@ def test_azure_sync_transcription_uses_the_deployments_route(
     assert sent_url.path == "/openai/deployments/gpt-transcribe/audio/transcriptions"
     assert sent_url.params.get("api-version") == expected_api_version
     assert response.text == "hello"
+
+
+@pytest.mark.asyncio
+async def test_azure_async_transcription_logs_the_audio_file_when_the_provider_fails() -> None:
+    logging_obj: Final = Logging(
+        model="azure/whisper-1",
+        messages=[],
+        stream=False,
+        call_type="atranscription",
+        start_time=datetime(2025, 1, 1, tzinfo=timezone.utc),
+        litellm_call_id="call-id",
+        function_id="function-id",
+    )
+    failing_transport: Final = httpx.MockTransport(
+        lambda request: httpx.Response(500, json={"error": {"message": "provider failure"}})
+    )
+
+    async with AsyncAzureOpenAI(
+        api_key="test-key",
+        api_version="2024-06-01",
+        azure_endpoint="https://example.cognitiveservices.azure.com",
+        max_retries=0,
+        http_client=httpx.AsyncClient(transport=failing_transport),
+    ) as client:
+        with AUDIO_FILE.open("rb") as audio, pytest.raises(litellm.APIError):
+            await litellm.atranscription(
+                model="azure/whisper-1",
+                file=audio,
+                api_base="https://example.openai.azure.com",
+                api_key="test-key",
+                api_version="2024-06-01",
+                client=client,
+                litellm_logging_obj=logging_obj,
+            )
+
+    assert logging_obj.model_call_details["input"] == str(AUDIO_FILE)
 
 
 @pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
