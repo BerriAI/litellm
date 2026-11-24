@@ -1363,7 +1363,7 @@ def _spend_once_settled(expected: Mapping[str, float], timeout: float = 5.0) -> 
             {"A": _BilledImageRefusalHandler()},
             (),
             False,
-            {"image-regression-A/image-model": 0.25},
+            {"image-model": 0.25},
             id="refused_without_a_served_answer",
         ),
     ),
