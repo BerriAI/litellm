@@ -20,6 +20,7 @@ from litellm.constants import (
     BEDROCK_REALTIME_PENDING_OPENING_MESSAGE_SCOPE_KEY,
     REALTIME_LAZY_SETUP_DEADLINE_SECONDS,
     REALTIME_METERED_USAGE_KEY,
+    REALTIME_SESSION_ENDED_ABNORMALLY_KEY,
     REALTIME_SESSION_FAILURE_LOGGED_KEY,
     REALTIME_SESSION_SUCCESS_LOGGED_KEY,
 )
@@ -7113,6 +7114,26 @@ async def test_a_refused_response_the_provider_cannot_cancel_still_counts_the_to
     assert [charge[1] for charge in limiter.charges] == [30]
     assert close.code == 1013
     backend.ws.close.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_a_session_ended_over_its_limit_is_not_reported_as_a_provider_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "gemini_live_defer_setup", False, raising=False)
+    backend: Final = _closable_backend(
+        (json.dumps({"setupComplete": {}}), _GEMINI_TURN_STARTED, _GEMINI_TURN_USAGE), stays_open_after_frames=True
+    )
+    streaming, client_ws = _gemini_turn_limited_session(_over_limit_turn_limiter(), backend)
+    client_ws.receive_text = AsyncMock(side_effect=asyncio.Event().wait)
+    streaming.logging_obj.model_call_details = {}
+
+    await asyncio.wait_for(streaming.bidirectional_forward(), timeout=5)
+
+    sent: Final = [json.loads(call.args[0]) for call in client_ws.send_text.await_args_list]
+    assert [event["error"]["type"] for event in sent if event["type"] == "error"] == ["rate_limit_exceeded"]
+    assert client_ws.close.await_args.kwargs["code"] == 1013
+    assert REALTIME_SESSION_ENDED_ABNORMALLY_KEY not in streaming.logging_obj.model_call_details
 
 
 @pytest.mark.asyncio

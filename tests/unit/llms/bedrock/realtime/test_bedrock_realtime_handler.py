@@ -2516,6 +2516,51 @@ class TestBedrockRealtimeTurnLimits:
         assert client_ws.close_code == 1013
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("response_finished_after_refusal", "refusals_at_close"),
+        [(False, 0), (True, 1)],
+        ids=["same_turn", "later_turn"],
+    )
+    async def test_a_turn_bedrock_starts_after_a_refusal_is_refused_once_per_turn(
+        self, stub_aws_models: None, response_finished_after_refusal: bool, refusals_at_close: int
+    ) -> None:
+        over_limit: Final = _ScriptedTurnLimiter(
+            check_error=RateLimitError(message="tpm limit reached", llm_provider="litellm_proxy", model=_NOVA_SONIC)
+        )
+        turn_limits: Final = _bedrock_turn_limits(over_limit)
+        refused_client: Final = DisconnectingClientWS([*_TURN_OPENING, json.dumps({"type": "response.create"})])
+        closed_client: Final = RealtimeClientWS()
+        config: Final = BedrockRealtimeConfig()
+        config.client_audio_streamed = False
+
+        await BedrockRealtime()._forward_client_to_bedrock(
+            refused_client,
+            FakeBedrockStream(),
+            BedrockRealtimeConfig(),
+            _NOVA_SONIC,
+            {},
+            signals=SessionEndSignals(),
+            turn_limits=turn_limits,
+        )
+        if response_finished_after_refusal:
+            await turn_limits.charge({"type": "response.done", "response": {"id": "resp_finished"}})
+        async for _ in BedrockRealtime()._forward_bedrock_to_client(
+            ScriptedBedrockStream([json.dumps({"event": {"contentStart": {"role": "ASSISTANT", "type": "TEXT"}}})]),
+            closed_client,
+            config,
+            _NOVA_SONIC,
+            FakeLogging(),
+            {},
+            signals=_closing_input(),
+            turn_limits=turn_limits,
+        ):
+            pass
+
+        events_at_close: Final = [json.loads(message) for message in closed_client.sent_to_client]
+        assert [event["type"] for event in events_at_close].count("error") == refusals_at_close
+        assert closed_client.close_code == 1013
+
+    @pytest.mark.asyncio
     async def test_a_guardrail_voice_reply_over_the_limit_is_not_sent_to_bedrock(self, stub_aws_models: None) -> None:
         over_limit: Final = _ScriptedTurnLimiter(
             check_error=RateLimitError(message="tpm limit reached", llm_provider="litellm_proxy", model=_NOVA_SONIC)

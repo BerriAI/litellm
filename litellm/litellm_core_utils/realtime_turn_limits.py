@@ -104,6 +104,16 @@ class RealtimeTurnLimits:
     capacity_charges: tuple[RealtimeCapacityCharge, ...] = ()
     _charged_response_ids: frozenset[str] = field(default=frozenset(), init=False)
     _uncharged: tuple[_UnchargedTurn, ...] = field(default=(), init=False)
+    _turn_refused: bool = field(default=False, init=False)
+
+    @property
+    def turn_refused(self) -> bool:
+        return self._turn_refused
+
+    async def refuse_turn(self) -> str | None:
+        refusal: Final = await self.refusal()
+        self._turn_refused = refusal is not None
+        return refusal
 
     async def refusal(self) -> str | None:
         await self._settle_uncharged()
@@ -124,6 +134,8 @@ class RealtimeTurnLimits:
         return None
 
     async def charge(self, event: Mapping[str, object]) -> None:
+        if event.get("type") == "response.done":
+            self._turn_refused = False
         usage: Final = turn_token_usage(event)
         if usage is None:
             return

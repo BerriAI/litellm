@@ -287,7 +287,7 @@ def _raise_provider_failure(scope: MutableMapping[str, object], failure: BaseExc
 
 
 async def _refused_turn(turn_limits: RealtimeTurnLimits | None, client_ws: RealtimeClientWebSocket) -> bool:
-    refusal: Final = None if turn_limits is None else await turn_limits.refusal()
+    refusal: Final = None if turn_limits is None else await turn_limits.refuse_turn()
     if refusal is None:
         return False
     await client_ws.send_text(refusal)
@@ -305,13 +305,14 @@ async def _ended_turn_over_limit(
     provider_event: Mapping[str, object],
     client_ws: RealtimeClientWebSocket,
 ) -> bool:
-    if provider_event.get("type") != "response.created":
+    if turn_limits is None or provider_event.get("type") != "response.created":
         return False
-    refusal: Final = None if turn_limits is None else await turn_limits.refusal()
+    refusal: Final = await turn_limits.refusal()
     if refusal is None:
         return False
-    with contextlib.suppress(Exception):
-        await client_ws.send_text(refusal)
+    if not turn_limits.turn_refused:
+        with contextlib.suppress(Exception):
+            await client_ws.send_text(refusal)
     with contextlib.suppress(Exception):
         await client_ws.close(code=REALTIME_OVER_TOKEN_LIMIT_CLOSE_CODE, reason="session ended at its token rate limit")
     return True

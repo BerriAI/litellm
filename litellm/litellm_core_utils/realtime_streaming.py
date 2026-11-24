@@ -95,10 +95,11 @@ else:
 class BackendClose:
     code: int
     reason: str
+    ended_by_token_limit: bool = False
 
     @property
     def ended_cleanly(self) -> bool:
-        return self.code == 1000
+        return self.code == 1000 or self.ended_by_token_limit
 
     @property
     def message(self) -> str:
@@ -114,7 +115,9 @@ class ClientLoopExit(Enum):
 
 
 OVER_TOKEN_LIMIT_CLOSE: Final = BackendClose(
-    code=REALTIME_OVER_TOKEN_LIMIT_CLOSE_CODE, reason="session ended at its token rate limit"
+    code=REALTIME_OVER_TOKEN_LIMIT_CLOSE_CODE,
+    reason="session ended at its token rate limit",
+    ended_by_token_limit=True,
 )
 
 
@@ -574,7 +577,6 @@ class RealTimeStreaming:
             turn_limiters, user_api_key_dict, logging_obj.model_call_details, model
         )
         self._ended_over_token_limit: bool = False
-        self._turn_refusal_sent: bool = False
         self._over_limit_usage_wait: asyncio.Task[None] | None = None
         # Violation counter for end_session_after_n_fails support
         self._violation_count: int = 0
@@ -1621,10 +1623,9 @@ class RealTimeStreaming:
     async def _refuses_turn_over_token_limit(self) -> bool:
         if self._turn_limits is None:
             return False
-        refusal: Final = await self._turn_limits.refusal()
+        refusal: Final = await self._turn_limits.refuse_turn()
         if refusal is None:
             return False
-        self._turn_refusal_sent = True
         await self.websocket.send_text(refusal)
         return True
 
@@ -1639,9 +1640,9 @@ class RealTimeStreaming:
         await self.websocket.send_text(refusal)
         await self.backend_ws.close()
 
-    async def _end_session_after_refused_response(self, refusal: str) -> None:
+    async def _end_session_after_refused_response(self, refusal: str, *, client_was_told: bool) -> None:
         self._ended_over_token_limit = True
-        if not self._turn_refusal_sent:
+        if not client_was_told:
             await self.websocket.send_text(refusal)
         self._over_limit_usage_wait = asyncio.create_task(self._close_backend_after_usage_wait())
 
@@ -1681,7 +1682,6 @@ class RealTimeStreaming:
         if self._turn_limits is None:
             return False
         if event.get("type") == "response.done":
-            self._turn_refusal_sent = False
             await self._turn_limits.charge(event)
             return False
         if self._listens_only or event.get("type") != "response.created":
@@ -1692,7 +1692,7 @@ class RealTimeStreaming:
         if await self._send_guardrail_cancel(realtime_response_id(event)):
             await self.websocket.send_text(refusal)
             return False
-        await self._end_session_after_refused_response(refusal)
+        await self._end_session_after_refused_response(refusal, client_was_told=self._turn_limits.turn_refused)
         return True
 
     async def _session_ended_by_transcription_limits(self, event: Mapping[str, object]) -> bool:
@@ -2578,10 +2578,8 @@ class RealTimeStreaming:
                 if self._ended_over_token_limit:
                     continue
 
-                if msg_type == "response.create":
-                    if await self._refuses_turn_over_token_limit():
-                        continue
-                    self._turn_refusal_sent = False
+                if msg_type == "response.create" and await self._refuses_turn_over_token_limit():
+                    continue
 
                 ## LOGGING
                 # Log after any in-place modifications (GA remap, guardrail
