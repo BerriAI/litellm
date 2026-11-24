@@ -1014,3 +1014,52 @@ def test_request_has_pre_call_guardrails_reads_pipelines_from_both_metadata_buck
     monkeypatch.setattr(litellm, "callbacks", [])
 
     assert proxy_logging.request_has_pre_call_guardrails(request_data) is expected
+
+
+@pytest.mark.asyncio
+async def test_stored_prompt_on_responses_logs_role_less_input_items(proxy_logging, monkeypatch):
+    from datetime import datetime
+
+    from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.proxy.prompts.prompt_registry import IN_MEMORY_PROMPT_REGISTRY
+    from litellm.types.prompts.init_prompts import PromptLiteLLMParams, PromptSpec
+
+    monkeypatch.setattr(IN_MEMORY_PROMPT_REGISTRY, "IN_MEMORY_PROMPTS", {})
+    monkeypatch.setattr(IN_MEMORY_PROMPT_REGISTRY, "prompt_id_to_custom_prompt", {})
+    IN_MEMORY_PROMPT_REGISTRY.initialize_prompt(
+        PromptSpec(
+            prompt_id="weather_prompt",
+            litellm_params=PromptLiteLLMParams(
+                prompt_id="weather_prompt",
+                prompt_integration="dotprompt",
+                dotprompt_content="---\nmodel: gpt-4o\n---\nSystem: Answer in one short sentence",
+            ),
+        )
+    )
+    client_input = [
+        {"role": "user", "content": "What is the weather in Bogota?"},
+        {"type": "function_call", "call_id": "call_1", "name": "get_weather", "arguments": '{"city": "Bogota"}'},
+        {"type": "function_call_output", "call_id": "call_1", "output": '{"temp_c": 14}'},
+    ]
+    data = {"model": "gpt-4o", "input": list(client_input)}
+    logging_obj = Logging(
+        model="gpt-4o",
+        messages=list(client_input),
+        stream=False,
+        call_type="aresponses",
+        start_time=datetime(2026, 1, 1),
+        litellm_call_id="call-id",
+        function_id="function-id",
+    )
+
+    await proxy_logging._process_prompt_template(
+        data=data,
+        litellm_logging_obj=logging_obj,
+        prompt_id="weather_prompt",
+        prompt_version=None,
+        call_type="aresponses",
+    )
+
+    expected = [{"role": "system", "content": "Answer in one short sentence"}, *client_input]
+    assert data["input"] == expected
+    assert logging_obj.model_call_details["messages"] == expected

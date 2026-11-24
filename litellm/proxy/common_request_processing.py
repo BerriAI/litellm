@@ -501,6 +501,20 @@ async def _record_streaming_client_disconnect_if_needed(
     return True
 
 
+_LOGGED_MESSAGES: Final[TypeAdapter[str | list[object]]] = TypeAdapter(
+    str | list[object], config=ConfigDict(strict=True)
+)
+
+
+def _messages_field_to_log(data: Mapping[str, object], route_type: str) -> Sequence[object] | None:
+    if route_type in {"aresponses", "_aresponses_websocket"} and data.get("input"):
+        return None
+    try:
+        return _LOGGED_MESSAGES.validate_python(data.get("messages")) or None
+    except ValidationError:
+        return None
+
+
 def _deferred_stream_logging_is_armed(request_data: Mapping[str, object]) -> bool:
     logging_obj: Final = request_data.get("litellm_logging_obj")
     if logging_obj is None:
@@ -3437,10 +3451,9 @@ class ProxyBaseLLMRequestProcessing:
         # add_litellm_data_to_request predates that mutation.
         refresh_proxy_server_request_body_snapshot(self.data, guardrails_applied=True)
 
-        if self.data.get("messages") and not (
-            route_type in {"aresponses", "_aresponses_websocket"} and self.data.get("input")
-        ):
-            logging_obj.update_messages(self.data["messages"])
+        messages_to_log: Final = _messages_field_to_log(self.data, route_type)
+        if messages_to_log:
+            logging_obj.update_messages(messages_to_log)
 
         if (
             self.served_model is not None
