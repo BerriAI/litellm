@@ -325,6 +325,26 @@ def _prepare_request_data_and_content(
     return request_data, _repair_surrogates(request_content) if isinstance(request_content, str) else request_content
 
 
+def _rewind_files(files: RequestFiles | None) -> None:
+    """
+    Rewind file streams before retrying a request on connection failure.
+    """
+    if not files:
+        return
+    try:
+        items = files.values() if isinstance(files, Mapping) else [item[1] for item in files]
+        for item in items:
+            file_obj = item[1] if isinstance(item, tuple) and len(item) > 1 else item
+            seek_fn = getattr(file_obj, "seek", None)
+            if callable(seek_fn):
+                try:
+                    seek_fn(0)
+                except (AttributeError, OSError, ValueError):  # noqa: S110
+                    pass
+    except (TypeError, KeyError, AttributeError):  # noqa: S110
+        pass
+
+
 # Cache for SSL contexts to avoid creating duplicate contexts with the same configuration
 _ssl_context_cache: Final[dict[tuple[str | None, str | None, str | None, bool], ssl.SSLContext]] = {}
 _rsa_key_exchange_and_chacha20_excluded: Final = threading.Event()
@@ -1046,6 +1066,7 @@ class AsyncHTTPHandler:
             # Retry the request with a new session if there is a connection error
             new_client: Final = self.create_client(timeout=timeout, event_hooks=self.event_hooks)
             try:
+                _rewind_files(files)
                 return await self.single_connection_request(
                     url=url,
                     method="POST",
@@ -1056,6 +1077,7 @@ class AsyncHTTPHandler:
                     headers=headers,
                     stream=stream,
                     content=content,
+                    files=files,
                 )
             finally:
                 await new_client.aclose()
@@ -1252,6 +1274,7 @@ class AsyncHTTPHandler:
         headers: dict | None = None,
         stream: bool = False,
         content: _RequestContent | None = None,
+        files: RequestFiles | None = None,
     ):
         """
         Making request for a single connection client.
@@ -1269,6 +1292,7 @@ class AsyncHTTPHandler:
             params=params,
             headers=await _with_current_bearer(headers, url, self.token_exchange_engine),
             content=request_content,
+            files=files,
         )
         response: Final = await client.send(req, stream=stream)
         response.raise_for_status()

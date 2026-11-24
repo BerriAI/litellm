@@ -11,6 +11,7 @@ from collections.abc import AsyncIterator, Callable, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from contextvars import Context
+from io import BytesIO
 from typing import Final
 from unittest.mock import MagicMock, patch
 
@@ -1561,6 +1562,70 @@ async def test_connection_error_retry_forwards_content(method: str):
         await getattr(handler, method)("https://api.example.com/runs/batch", content=body)
 
         assert captured == [(method.upper(), body)]
+        await handler.close()
+
+
+@pytest.mark.asyncio
+async def test_connection_error_retry_forwards_files():
+    captured: Final[list[tuple[str, str, bytes]]] = []  # mutable-ok: async closure capture buffer
+
+    async def raise_connection_error(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("connection dropped", request=request)
+
+    async def capture_and_succeed(request: httpx.Request) -> httpx.Response:
+        captured.append((request.method, request.headers.get("content-type", ""), request.content))
+        return httpx.Response(200, request=request)
+
+    first: Final = httpx.AsyncClient(transport=httpx.MockTransport(raise_connection_error))
+    retry: Final = httpx.AsyncClient(transport=httpx.MockTransport(capture_and_succeed))
+    async with first, retry:
+        handler: Final = _RetryClientHandler(first=first, retry=retry)
+
+        file_obj = BytesIO(b"fake image bytes")
+        data = {"model": "dall-e-2", "prompt": "a cute baby sea otter"}
+        files = {"image": ("image.png", file_obj, "image/png")}
+
+        response = await handler.post(
+            "https://api.openai.com/v1/images/edits",
+            data=data,
+            files=files,
+        )
+        assert response.status_code == 200
+        assert len(captured) == 1
+        method, content_type, body = captured[0]
+        assert method == "POST"
+        assert "multipart/form-data" in content_type
+        assert b"fake image bytes" in body
+        assert b"a cute baby sea otter" in body
+        await handler.close()
+
+
+@pytest.mark.asyncio
+async def test_connection_error_retry_rewinds_files():
+    captured: Final[list[tuple[str, str, bytes]]] = []  # mutable-ok: async closure capture buffer
+
+    async def raise_connection_error(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("connection dropped", request=request)
+
+    async def capture_and_succeed(request: httpx.Request) -> httpx.Response:
+        captured.append((request.method, request.headers.get("content-type", ""), request.content))
+        return httpx.Response(200, request=request)
+
+    first: Final = httpx.AsyncClient(transport=httpx.MockTransport(raise_connection_error))
+    retry: Final = httpx.AsyncClient(transport=httpx.MockTransport(capture_and_succeed))
+    async with first, retry:
+        handler: Final = _RetryClientHandler(first=first, retry=retry)
+
+        file_obj = BytesIO(b"file stream content to rewind")
+        file_obj.read()  # pointer now at EOF
+        assert file_obj.tell() > 0
+
+        files = {"file": ("data.txt", file_obj, "text/plain")}
+        response = await handler.post("https://api.example.com/upload", files=files)
+        assert response.status_code == 200
+        assert len(captured) == 1
+        _, _, body = captured[0]
+        assert b"file stream content to rewind" in body
         await handler.close()
 
 
