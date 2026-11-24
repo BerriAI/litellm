@@ -272,7 +272,7 @@ class HuggingFaceEmbedding(BaseLLM):
         optional_params: dict,
         api_base: str,
         api_key: str | None,
-        headers: dict,
+        headers: dict[str, object],
         encoding: _SupportsTokenEncode,
         client: AsyncHTTPHandler | None = None,
     ):

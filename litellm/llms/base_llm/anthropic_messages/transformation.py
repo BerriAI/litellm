@@ -44,7 +44,7 @@ class BaseAnthropicMessagesConfig(ABC):
 
     async def avalidate_anthropic_messages_environment(
         self,
-        headers: dict,  # mutable-ok: mirrors the sync validate_anthropic_messages_environment contract
+        headers: dict[str, object],  # mutable-ok: mirrors the sync validate_anthropic_messages_environment contract
         model: str,
         messages: Sequence[object],
         optional_params: dict,  # mutable-ok: mirrors the sync validate_anthropic_messages_environment contract

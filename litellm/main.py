@@ -6648,7 +6648,19 @@ def completion(
                 reasoning_summary=_reasoning_summary_for_bridge,
                 api_base=api_base,
                 deployment_model_info=typed_deployment_model_info,
+                base_model=deployment_base_model,
             )
+            if (
+                responses_api_model_info.get("mode") == "responses"
+                and may_bridge_to_responses_api
+                and custom_llm_provider == LlmProviders.AZURE_AI.value
+            ):
+                litellm.AzureAIStudioConfig.raise_if_base_model_bridge_would_drop_a_param(
+                    optional_params,
+                    model=model,
+                    base_model=deployment_base_model,
+                    drop_params=drop_unsupported_reasoning,
+                )
 
         # Use base_model (the true underlying model) for Azure model-type
         # detection when the deployment name differs from the model name.
@@ -6697,7 +6709,7 @@ def completion(
             )
 
         reasoning_drop_warnings.log_unless_dropped_effort_sent(optional_params)
-        if (custom_llm_provider == "openai" and OpenAIGPT5Config.is_model_gpt_5_model(model)) or (
+        if (custom_llm_provider == "openai" and OpenAIGPT5Config.is_openai_gpt_5_model(model)) or (
             custom_llm_provider == "azure"
             and litellm.AzureOpenAIGPT5Config.is_model_gpt_5_model(_azure_detection_model)
         ):
@@ -9342,7 +9354,7 @@ def speech(
     speed: int | None = None,
     instructions: str | None = None,
     client=None,
-    headers: dict | None = None,
+    headers: dict[str, object] | None = None,
     custom_llm_provider: str | None = None,
     aspeech: bool | None = None,
     base_url: str | None = None,

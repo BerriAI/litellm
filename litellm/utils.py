@@ -6198,7 +6198,8 @@ def get_optional_params(
         else get_supported_openai_params(model=model, custom_llm_provider=custom_llm_provider, base_model=base_model)
     )
     if supported_params is None:
-        supported_params = get_supported_openai_params(model=model, custom_llm_provider="openai")
+        fallback_config: Final = litellm.OpenAIConfig().config_for_openai_compatible_provider(model=model)
+        supported_params = fallback_config.get_supported_openai_params(model=model)
 
     supported_params = supported_params or []
     supported_params.extend(allowed_openai_param_names(allowed_openai_params))
@@ -6603,7 +6604,7 @@ def get_optional_params(
                 declared_reasoning_efforts=_declared_reasoning_efforts(model_info),
                 reasoning_drop_logger=_litellm_reasoning_drop_logger,
             )
-            if litellm.OpenAIGPT5Config.is_model_gpt_5_model(model=model)
+            if litellm.OpenAIGPT5Config.is_openai_gpt_5_model(model=model)
             else litellm.OpenAIConfig().map_openai_params(
                 non_default_params=non_default_params,
                 optional_params=optional_params,
@@ -10651,7 +10652,7 @@ class ProviderConfigManager:
 
             if litellm.openaiOSeriesConfig.is_model_o_series_model(model=model):
                 return litellm.openaiOSeriesConfig
-            if litellm.OpenAIGPT5Config.is_model_gpt_5_model(model=model):
+            if litellm.OpenAIGPT5Config.is_openai_gpt_5_model(model=model):
                 return litellm.OpenAIGPT5Config()
             if not OpenAIGPTConfig.is_openai_catalog_model(model):
                 return OpenAIUnknownModelConfig()

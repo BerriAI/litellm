@@ -310,6 +310,9 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
     ) -> list[dict[str, object]]:
         return healthy_deployments
 
+    def filters_deployments_for(self, request_kwargs: Mapping[str, object]) -> bool:
+        return True
+
     async def async_pre_call_deployment_hook(
         self, kwargs: dict[str, object], call_type: CallTypes | None
     ) -> dict[str, object] | None:
