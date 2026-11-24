@@ -1361,7 +1361,7 @@ def should_auto_drop_params_for_agentic_cli(
     return normalize_drop_params(litellm_settings.get("drop_params")) is not False
 
 
-def safe_add_api_version_from_query_params(data: dict[str, object], request: Request):
+def safe_add_api_version_from_query_params(data: dict, request: Request):
     try:
         if hasattr(request, "query_params"):
             query_params: Final = dict(request.query_params)
@@ -2098,7 +2098,7 @@ class LiteLLMProxyRequestSetup:
     @staticmethod
     def add_headers_to_llm_call_by_model_group(
         data: dict, headers: Mapping[str, str], user_api_key_dict: UserAPIKeyAuth
-    ) -> dict[str, object]:
+    ) -> dict:
         """
         Add headers to the LLM call by model group
         """
@@ -2202,7 +2202,7 @@ class LiteLLMProxyRequestSetup:
         headers: dict,
         data: dict,
         _metadata_variable_name: str,
-    ) -> dict[str, object]:
+    ) -> dict:
         """
         Add litellm metadata from request headers
 
@@ -2497,7 +2497,7 @@ class LiteLLMProxyRequestSetup:
         data: dict,
         management_endpoint_metadata: dict,
         _metadata_variable_name: str,
-    ) -> dict[str, object]:
+    ) -> dict:
         """
         Adds the `UserAPIKeyAuth` metadata to the request metadata.
 
@@ -2852,7 +2852,7 @@ class LiteLLMProxyRequestSetup:
 
     @staticmethod
     def apply_key_tags_pre_auth(
-        request_data: dict[str, object],
+        request_data: dict,
         user_api_key_dict: UserAPIKeyAuth,
     ) -> None:
         """Merge key metadata tags into request_data before _tag_max_budget_check."""
@@ -2876,7 +2876,7 @@ class LiteLLMProxyRequestSetup:
     @staticmethod
     def apply_client_tag_policy_pre_auth(
         request: Request,
-        request_data: dict[str, object],
+        request_data: dict,
         user_api_key_dict: UserAPIKeyAuth,
     ) -> None:
         """
@@ -4958,7 +4958,7 @@ _CHATGPT_OAUTH_CREDENTIAL_PROVIDERS: Final = LlmProviders.CHATGPT.value
 
 
 def add_provider_specific_headers_to_request(
-    data: dict[str, object],
+    data: dict,
     headers: Mapping[str, str],
 ) -> bool:
     from litellm.llms.anthropic.common_utils import anthropic_oauth_token_from_header, is_anthropic_oauth_key
