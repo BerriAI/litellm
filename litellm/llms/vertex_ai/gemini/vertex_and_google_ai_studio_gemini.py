@@ -3787,41 +3787,53 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:
-        ## LOGGING
+        return self._log_and_transform_response(
+            model=model,
+            raw_response=raw_response,
+            model_response=model_response,
+            logging_obj=logging_obj,
+            logged_input=messages,
+            request_data=request_data,
+            keeps_requested_audio_format=requests_audio_mime_type(request_data),
+        )
+
+    def transform_pass_through_response(
+        self, model: str, raw_response: httpx.Response, logging_obj: LoggingClass
+    ) -> ModelResponse:
+        return self._log_and_transform_response(
+            model=model,
+            raw_response=raw_response,
+            model_response=ModelResponse(),
+            logging_obj=logging_obj,
+            logged_input=[{"role": "user", "content": "no-message-pass-through-endpoint"}],
+            request_data={},
+            keeps_requested_audio_format=True,
+        )
+
+    def _log_and_transform_response(
+        self,
+        *,
+        model: str,
+        raw_response: httpx.Response,
+        model_response: ModelResponse,
+        logging_obj: LoggingClass,
+        logged_input: Sequence[AllMessageValues],
+        request_data: Mapping[str, object],
+        keeps_requested_audio_format: bool,
+    ) -> ModelResponse:
         logging_obj.post_call(
-            input=messages,
+            input=logged_input,
             api_key="",
             original_response=raw_response.text,
             additional_args={"complete_input_dict": request_data},
         )
-
         return self._transform_google_generate_content_to_openai_model_response(
             completion_response=parse_body(raw_response),
             model_response=model_response,
             model=model,
             logging_obj=logging_obj,
             raw_response=raw_response,
-            keeps_requested_audio_format=requests_audio_mime_type(
-                cast(Mapping[str, object], request_data)  # cast-ok: untyped shared signature
-            ),
-        )
-
-    def transform_pass_through_response(
-        self, model: str, raw_response: httpx.Response, logging_obj: LoggingClass
-    ) -> ModelResponse:
-        logging_obj.post_call(
-            input=[{"role": "user", "content": "no-message-pass-through-endpoint"}],
-            api_key="",
-            original_response=raw_response.text,
-            additional_args={"complete_input_dict": {}},
-        )
-        return self._transform_google_generate_content_to_openai_model_response(
-            completion_response=parse_body(raw_response),
-            model_response=ModelResponse(),
-            model=model,
-            logging_obj=logging_obj,
-            raw_response=raw_response,
-            keeps_requested_audio_format=True,
+            keeps_requested_audio_format=keeps_requested_audio_format,
         )
 
     def _transform_google_generate_content_to_openai_model_response(
