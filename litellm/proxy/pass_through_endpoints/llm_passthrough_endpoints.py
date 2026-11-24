@@ -3977,7 +3977,7 @@ def openai_api_key_headers(api_key: str | None) -> Mapping[str, str]:
 
 
 async def openai_passthrough_poll_headers(base_target_url: str) -> Mapping[str, str] | None:
-    api_key: Final = await _openai_passthrough_credential(base_target_url)
+    api_key: Final = await openai_passthrough_credential(base_target_url)
     return None if api_key is None else openai_api_key_headers(api_key)
 
 
@@ -3990,7 +3990,7 @@ def _openai_passthrough_static_api_key() -> str | None:
     )
 
 
-async def _openai_passthrough_credential(base_target_url: str) -> str | None:
+async def openai_passthrough_credential(base_target_url: str) -> str | None:
     static_api_key: Final = _openai_passthrough_static_api_key()
     if static_api_key is not None:
         return static_api_key
@@ -4044,7 +4044,7 @@ async def openai_proxy_route(
         raise ProxyException(
             message=FEDERATED_PASSTHROUGH_BATCH_CREATE_MESSAGE, type="invalid_request_error", param=None, code=400
         )
-    openai_api_key: Final = await _openai_passthrough_credential(base_target_url)
+    openai_api_key: Final = await openai_passthrough_credential(base_target_url)
     if openai_api_key is None:
         raise Exception("Required 'OPENAI_API_KEY' in environment to make pass-through calls to OpenAI.")
 
@@ -4280,7 +4280,7 @@ async def openai_websocket_proxy_route(
 
     base_target_url: Final = openai_passthrough_base_url()
     try:
-        openai_api_key: Final = await _openai_passthrough_credential(base_target_url)
+        openai_api_key: Final = await openai_passthrough_credential(base_target_url)
     except (openai.OpenAIError, httpx.HTTPError, LiteLLMOpenAIError):
         verbose_proxy_logger.exception("OpenAI workload identity token exchange failed for websocket passthrough")
         await websocket.close(code=1011, reason=_OPENAI_WS_TOKEN_EXCHANGE_FAILED_REASON)
@@ -5141,7 +5141,7 @@ def create_vertex_ai_live_websocket_endpoint():
 def create_generic_websocket_passthrough_endpoint(
     provider: str,
     target_url: str,
-    custom_headers: dict | None = None,
+    custom_headers: dict[str, object] | None = None,
     forward_headers: bool = False,
     cost_per_request: float | None = None,
 ):
@@ -5278,7 +5278,7 @@ async def handle_gigachat_passthrough_router_model(
     model: str,
     endpoint: str,
     request: Request,
-    request_body: dict,
+    request_body: dict[str, object],
     fastapi_response: Response,
     llm_router: litellm.Router,
     user_api_key_dict: UserAPIKeyAuth,

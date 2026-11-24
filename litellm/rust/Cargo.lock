@@ -3786,6 +3786,7 @@ dependencies = [
 name = "litellm-callbacks-legacy-python"
 version = "0.1.0"
 dependencies = [
+ "litellm-cost",
  "litellm-error",
  "litellm-host",
  "litellm-host-python",
@@ -3916,8 +3917,11 @@ dependencies = [
  "litellm-db",
  "litellm-python-compat",
  "litellm-redaction",
+ "litellm-redis-client",
  "litellm-redis-store",
+ "litellm-redis-testing",
  "litellm-repositories",
+ "litellm-secret-value",
  "litellm-spend-log-writer",
  "rstest",
  "serde",
@@ -4157,9 +4161,11 @@ dependencies = [
  "litellm-router-core",
  "litellm-secret-value",
  "litellm-secrets",
+ "litellm-token-counter",
  "litellm-tracing",
  "litellm-yaml",
  "parking_lot",
+ "rand 0.8.7",
  "rstest",
  "rustls 0.23.42",
  "serde",
@@ -4250,6 +4256,7 @@ dependencies = [
  "axum",
  "bytes",
  "futures-util",
+ "http-body 1.1.0",
  "litellm-auth",
  "litellm-cache",
  "litellm-cache-memory",
@@ -4299,6 +4306,7 @@ dependencies = [
  "bytes",
  "futures-util",
  "litellm-coroutine",
+ "litellm-cost",
  "litellm-secret-value",
  "rstest",
  "serde",
@@ -4451,6 +4459,7 @@ dependencies = [
  "flate2",
  "futures-util",
  "http 1.4.2",
+ "jiff",
  "litellm-auth",
  "litellm-auth-aws",
  "litellm-auth-gcp",
@@ -4458,6 +4467,7 @@ dependencies = [
  "litellm-cache-memory",
  "litellm-cache-response",
  "litellm-core-utils",
+ "litellm-cost",
  "litellm-env",
  "litellm-error",
  "litellm-framer",
@@ -4651,6 +4661,7 @@ dependencies = [
  "tokio-util",
  "tracing",
  "url",
+ "uuid",
 ]
 
 [[package]]
@@ -4969,6 +4980,7 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "jiff",
+ "litellm-core-utils",
  "litellm-db",
  "litellm-error",
  "litellm-python-compat",
@@ -5009,7 +5021,9 @@ dependencies = [
 name = "litellm-router-types"
 version = "0.1.0"
 dependencies = [
+ "jiff",
  "litellm-auth-types",
+ "litellm-python-compat",
  "litellm-secret-value",
  "rstest",
  "serde",

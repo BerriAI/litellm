@@ -187,7 +187,7 @@ class LangfusePromptManagement(LangFuseLogger, PromptManagementBase, CustomLogge
     def _compile_prompt(
         self,
         langfuse_prompt_client: PROMPT_CLIENT,
-        langfuse_prompt_variables: dict | None,
+        langfuse_prompt_variables: Mapping[str, object] | None,
         call_type: Literal["completion", "text_completion"],
     ) -> list[AllMessageValues]:
         compiled_prompt: str | list | None = None
@@ -204,14 +204,14 @@ class LangfusePromptManagement(LangFuseLogger, PromptManagementBase, CustomLogge
 
         return compiled_prompt
 
-    def _get_optional_params_from_langfuse(self, langfuse_prompt_client: PROMPT_CLIENT) -> dict:
+    def _get_optional_params_from_langfuse(self, langfuse_prompt_client: PROMPT_CLIENT) -> dict[str, object]:
         return dict(_params_without_model(langfuse_prompt_client.config))
 
     async def async_get_chat_completion_prompt(
         self,
         model: str,
         messages: list[AllMessageValues],
-        non_default_params: dict,
+        non_default_params: dict[str, object],
         prompt_id: str | None,
         prompt_variables: dict | None,
         dynamic_callback_params: StandardCallbackDynamicParams,
@@ -257,7 +257,7 @@ class LangfusePromptManagement(LangFuseLogger, PromptManagementBase, CustomLogge
         self,
         prompt_id: str | None,
         prompt_spec: PromptSpec | None,
-        prompt_variables: dict | None,
+        prompt_variables: Mapping[str, object] | None,
         dynamic_callback_params: StandardCallbackDynamicParams,
         prompt_label: str | None = None,
         prompt_version: int | None = None,
@@ -295,7 +295,7 @@ class LangfusePromptManagement(LangFuseLogger, PromptManagementBase, CustomLogge
     async def async_compile_prompt_helper(
         self,
         prompt_id: str | None,
-        prompt_variables: dict | None,
+        prompt_variables: Mapping[str, object] | None,
         dynamic_callback_params: StandardCallbackDynamicParams,
         prompt_spec: PromptSpec | None = None,
         prompt_label: str | None = None,

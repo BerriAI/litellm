@@ -47,7 +47,7 @@ O(number of rules); callers must only invoke them on a cache miss.
 
 import logging
 import re
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Final
 
@@ -62,13 +62,13 @@ EXTENDS_FIELD: Final = "extends"
 
 @dataclass(frozen=True, slots=True)
 class _RoutingRule:
-    pattern: re.Pattern
+    pattern: re.Pattern[str]
     provider: str
 
 
 @dataclass(frozen=True, slots=True)
 class _CapabilityRule:
-    pattern: re.Pattern
+    pattern: re.Pattern[str]
     model_info: dict
     fill_missing_for_providers: frozenset[str]
 
@@ -76,7 +76,7 @@ class _CapabilityRule:
 _CompiledRule = _RoutingRule | _CapabilityRule
 
 
-def _parse_fill_missing_for_providers(rule: Mapping[str, object], pattern_label: object) -> frozenset[str] | None:
+def _parse_fill_missing_for_providers(rule: Mapping[object, object], pattern_label: object) -> frozenset[str] | None:
     if FILL_MISSING_FOR_PROVIDERS_FIELD not in rule:
         return frozenset()
     raw_fill_missing_for_providers: Final = rule.get(FILL_MISSING_FOR_PROVIDERS_FIELD)
@@ -102,8 +102,13 @@ def _warn_old_format_rule(rule_label: str, reason: str) -> None:
     )
 
 
-def _compile_rule(rule: object) -> _CompiledRule | None:
-    if not isinstance(rule, dict):
+def _as_dict(value: object) -> Mapping[object, object] | None:
+    return value if isinstance(value, dict) else None
+
+
+def _compile_rule(raw_rule: object) -> _CompiledRule | None:
+    rule: Final = _as_dict(raw_rule)
+    if rule is None:
         return None
     pattern: Final = rule.get(PATTERN_FIELD)
     model_info: Final = rule.get(MODEL_INFO_FIELD)
@@ -155,13 +160,13 @@ class _FallbackGeneralizations:
     """Holds the raw rule list and its install-time-compiled routing and capability rules."""
 
     def __init__(self) -> None:
-        self.rules: list = []
+        self.rules: list[object] = []
         self.version: int = 0
-        self.routing_rules: tuple = ()
-        self.capability_rules: tuple = ()
+        self.routing_rules: tuple[_RoutingRule, ...] = ()
+        self.capability_rules: tuple[_CapabilityRule, ...] = ()
         self.fill_missing_rules: tuple[_CapabilityRule, ...] = ()
 
-    def set_rules(self, rules: list | None) -> None:
+    def set_rules(self, rules: Sequence[object] | None) -> None:
         installed: Final = rules if isinstance(rules, list) else []
         compiled: Final = tuple(kind for kind in map(_compile_rule, installed) if kind is not None)
         self.rules = installed
@@ -178,7 +183,7 @@ class _FallbackGeneralizations:
             None,
         )
 
-    def match_capabilities(self, model: str) -> dict | None:
+    def match_capabilities(self, model: str) -> dict[object, object] | None:
         if not model:
             return None
         matched = tuple(rule.model_info for rule in self.capability_rules if rule.pattern.search(model) is not None)
@@ -202,7 +207,7 @@ class _FallbackGeneralizations:
 _registry: Final = _FallbackGeneralizations()
 
 
-def set_fallback_generalizations(rules: list | None) -> None:
+def set_fallback_generalizations(rules: Sequence[object] | None) -> None:
     """Install the active rule list, compiling and classifying each rule.
 
     Malformed, mixed-kind, and invalid-regex rules are warned about and skipped.
@@ -211,7 +216,7 @@ def set_fallback_generalizations(rules: list | None) -> None:
     _registry.set_rules(rules)
 
 
-def get_fallback_generalization_rules() -> list:
+def get_fallback_generalization_rules() -> list[object]:
     """Return the raw rule list (read-only view for callers/tests)."""
     return _registry.rules
 

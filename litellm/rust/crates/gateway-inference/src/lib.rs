@@ -14,6 +14,7 @@ pub mod messages;
 mod model_restamp;
 mod ocr;
 mod rate_limited;
+pub mod record;
 mod request;
 pub mod routing;
 mod routing_cache;
@@ -23,6 +24,7 @@ mod stream_hold;
 mod stream_outcome;
 #[cfg(test)]
 mod test_support;
+mod worker_outcomes;
 
 use std::{collections::HashMap, sync::Arc};
 
@@ -70,6 +72,10 @@ impl<H: Host> Gateway<H> {
     /// The deployments' routing state, which the host hands router-core.
     pub fn routing(&self) -> &RoutingCache {
         &self.routing
+    }
+
+    pub fn host(&self) -> &H {
+        &self.host
     }
 
     /// How the messages route shapes a call to deployment `id`.
@@ -123,5 +129,6 @@ pub fn router<H: Host>(gateway: Arc<Gateway<H>>) -> Router {
             gateway.clone(),
             group_usage::told::<H>,
         ))
+        .layer(axum::middleware::from_fn(record::scoped))
         .with_state(gateway)
 }

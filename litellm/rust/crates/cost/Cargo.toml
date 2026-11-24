@@ -8,6 +8,7 @@ repository.workspace = true
 [features]
 serde = ["dep:serde", "dep:serde_with", "jiff/serde"]
 schema = ["serde", "dep:schemars"]
+test-support = []
 
 [dependencies]
 jiff = { version = "0.2.37", default-features = false, features = ["std", "tzdb-bundle-always"] }

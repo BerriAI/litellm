@@ -66,14 +66,14 @@ class AnthropicBatchesConfig(BaseBatchesConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: Mapping[str, str],
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
+        optional_params: Mapping[str, object],
         litellm_params: dict,
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, str]:
         """Validate and prepare environment-specific headers and parameters."""
         params_mapping: Final = litellm_params if isinstance(litellm_params, dict) else None
         if api_base is None and params_mapping is not None:
@@ -105,8 +105,8 @@ class AnthropicBatchesConfig(BaseBatchesConfig):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         data: CreateBatchRequest,
     ) -> str:
         """Get the complete URL for batch creation request."""
@@ -117,8 +117,8 @@ class AnthropicBatchesConfig(BaseBatchesConfig):
         self,
         model: str,
         create_batch_data: CreateBatchRequest,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
     ) -> bytes | str | dict[str, object]:
         """
         Transform the batch creation request to Anthropic format.
@@ -132,7 +132,7 @@ class AnthropicBatchesConfig(BaseBatchesConfig):
         model: str | None,
         raw_response: httpx.Response,
         logging_obj: LoggingClass,
-        litellm_params: dict,
+        litellm_params: Mapping[str, object],
     ) -> LiteLLMBatch:
         """
         Transform Anthropic MessageBatch creation response to LiteLLM format.
@@ -145,8 +145,8 @@ class AnthropicBatchesConfig(BaseBatchesConfig):
         self,
         api_base: str | None,
         batch_id: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
     ) -> str:
         """
         Get the complete URL for batch retrieval request.
@@ -167,8 +167,8 @@ class AnthropicBatchesConfig(BaseBatchesConfig):
     def transform_retrieve_batch_request(
         self,
         batch_id: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
     ) -> bytes | str | dict[str, object]:
         """
         Transform batch retrieval request for Anthropic.
@@ -184,7 +184,7 @@ class AnthropicBatchesConfig(BaseBatchesConfig):
         model: str | None,
         raw_response: httpx.Response,
         logging_obj: LoggingClass,
-        litellm_params: dict,
+        litellm_params: Mapping[str, object],
     ) -> LiteLLMBatch:
         """Transform Anthropic MessageBatch retrieval response to LiteLLM format."""
         try:
@@ -277,7 +277,9 @@ class AnthropicBatchesConfig(BaseBatchesConfig):
             metadata={},
         )
 
-    def get_error_class(self, error_message: str, status_code: int, headers: dict | Headers) -> "BaseLLMException":
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: Mapping[str, str] | Headers
+    ) -> "BaseLLMException":
         """Get the appropriate error class for Anthropic."""
         from ..common_utils import AnthropicError
 
@@ -295,10 +297,10 @@ class AnthropicBatchesConfig(BaseBatchesConfig):
         raw_response: Response,
         model_response: ModelResponse,
         logging_obj: LoggingClass,
-        request_data: dict,
+        request_data: Mapping[str, object],
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
