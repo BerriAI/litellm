@@ -4,10 +4,11 @@ Translates from OpenAI's `/v1/audio/transcriptions` to ElevenLabs's `/v1/speech-
 
 import json
 from collections.abc import Iterable, Mapping
+from contextlib import suppress
 from typing import Final
 
 from httpx import Headers, Response
-from pydantic import ConfigDict, TypeAdapter
+from pydantic import ConfigDict, TypeAdapter, ValidationError
 
 import litellm
 from litellm.litellm_core_utils.audio_utils.utils import process_audio_file
@@ -28,33 +29,46 @@ from ..common_utils import ElevenLabsException
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
 _JSON_OBJECTS: Final = TypeAdapter(Iterable[Mapping[str, object]], config=ConfigDict(hide_input_in_errors=True))
 _FORM_ITEMS: Final = TypeAdapter(tuple[object, ...])
-_JSON_KEYED_OBJECT: Final = TypeAdapter(
-    dict[str | int | float | bool | None, object], config=ConfigDict(hide_input_in_errors=True)
-)
 _CLIENT_BLOCKED_FIELDS: Final = frozenset({"model_id", "extra_body"})
 
 
 def _json_compatible(value: object) -> object:
     if isinstance(value, Mapping):
-        return _JSON_KEYED_OBJECT.validate_python(value)
+        return dict(value.items())
     return str(value)
+
+
+def _json_text(value: object) -> str:
+    return json.dumps(value, default=_json_compatible)
+
+
+def _extra_body_fields(extra_body: object) -> Mapping[str, object]:
+    with suppress(ValidationError):
+        return _JSON_OBJECT.validate_python(extra_body if isinstance(extra_body, Mapping) else {})
+    raise ElevenLabsException(status_code=400, message="ElevenLabs extra_body keys must be strings")
 
 
 def _form_scalar(value: object) -> str:
     if isinstance(value, bool):
         return "true" if value else "false"
     if isinstance(value, Mapping):
-        return json.dumps(value, default=_json_compatible)
+        return _json_text(value)
     return str(value)
 
 
-def _form_value(value: object) -> str | tuple[str, ...]:
+def _encoded_form_value(value: object) -> str | tuple[str, ...]:
     if not isinstance(value, (list, tuple)):
         return _form_scalar(value)
     items: Final = tuple(item for item in _FORM_ITEMS.validate_python(value) if item is not None)
     if any(isinstance(item, (Mapping, list, tuple)) for item in items):
-        return json.dumps(items, default=_json_compatible)
+        return _json_text(items)
     return tuple(_form_scalar(item) for item in items)
+
+
+def _form_value(value: object) -> str | tuple[str, ...]:
+    with suppress(TypeError, ValueError, RecursionError):
+        return _encoded_form_value(value)
+    raise ElevenLabsException(status_code=400, message="ElevenLabs form value cannot be encoded as JSON or text")
 
 
 class ElevenLabsAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
@@ -113,8 +127,7 @@ class ElevenLabsAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
                 openai_params=openai_params,
             )
         )
-        extra_body: Final = provider_specific_params.get("extra_body")
-        extra_fields: Final = _JSON_OBJECT.validate_python(extra_body if isinstance(extra_body, Mapping) else {})
+        extra_fields: Final = _extra_body_fields(provider_specific_params.get("extra_body"))
         form_data: Final = {
             "model_id": model,
             **{
