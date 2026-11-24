@@ -167,7 +167,9 @@ class TopazImageVariationConfig(TopazModelInfo, BaseImageVariationConfig):
 
         return self._common_transform_response_image_variation(image_content, response_ms)
 
-    def get_error_class(self, error_message: str, status_code: int, headers: dict | Headers) -> BaseLLMException:
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: dict[str, object] | Headers
+    ) -> BaseLLMException:
         return TopazException(
             status_code=status_code,
             message=error_message,

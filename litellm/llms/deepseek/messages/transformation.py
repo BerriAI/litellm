@@ -140,7 +140,7 @@ class DeepSeekAnthropicMessagesConfig(AnthropicMessagesConfig):
 
     def validate_anthropic_messages_environment(
         self,
-        headers: dict,
+        headers: dict[str, str],
         model: str,
         messages: Sequence[object],
         optional_params: dict,
@@ -214,7 +214,7 @@ class DeepSeekAnthropicMessagesConfig(AnthropicMessagesConfig):
         messages: list[dict],
         anthropic_messages_optional_request_params: dict,
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
+        headers: dict[str, str],
     ) -> dict[str, object]:
         effort_params: Final = _deepseek_request_params(
             model,

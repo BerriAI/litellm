@@ -1598,7 +1598,7 @@ def get_api_key(
     elif pass_through_endpoints is not None:
         for endpoint in pass_through_endpoints:
             if endpoint.get("path", "") == route:
-                headers: dict | None = endpoint.get("headers", None)
+                headers: Mapping[str, object] | None = endpoint.get("headers", None)
                 if headers is not None:
                     header_key: str = headers.get("litellm_user_api_key", "")
                     if request.headers.get(header_key) is not None:

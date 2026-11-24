@@ -128,7 +128,7 @@ class AmazonAnthropicClaudeMessagesConfig(
 
     def sign_request(
         self,
-        headers: dict,
+        headers: dict[str, object],
         optional_params: dict,
         request_data: dict,
         api_base: str,
@@ -527,7 +527,7 @@ class AmazonAnthropicClaudeMessagesConfig(
         model: str,
         messages: list[dict],
         anthropic_messages_optional_request_params: dict,
-        headers: dict,
+        headers: Mapping[str, object],
         anthropic_messages_request: dict,
         injected_thinking_for_clear_thinking: bool,
         litellm_params: GenericLiteLLMParams,
@@ -713,7 +713,7 @@ class AmazonAnthropicClaudeMessagesConfig(
         messages: list[dict],
         anthropic_messages_optional_request_params: dict,
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
+        headers: dict[str, str],
     ) -> dict:
         requested_thinking: Final = anthropic_messages_optional_request_params.get("thinking")
         requested_display_updates: Final = AnthropicModelInfo().is_thinking_display_updates_used(requested_thinking)

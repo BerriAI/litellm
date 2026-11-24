@@ -388,7 +388,7 @@ class AzureAVATextToSpeechConfig(BaseTextToSpeechConfig):
         voice: str | None,
         optional_params: dict,
         litellm_params: dict,
-        headers: dict,
+        headers: dict[str, str],
     ) -> TextToSpeechRequestData:
         """
         Transform OpenAI TTS request to Azure AVA TTS SSML format

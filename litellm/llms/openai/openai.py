@@ -333,7 +333,7 @@ class OpenAIConfig(BaseConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        headers: dict,
+        headers: dict[str, object],
     ) -> dict:
         messages = self._transform_messages(messages=messages, model=model)
         return {"model": model, "messages": messages, **optional_params}

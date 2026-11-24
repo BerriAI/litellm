@@ -72,7 +72,9 @@ class DeepgramAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
                 optional_params[k] = v
         return optional_params
 
-    def get_error_class(self, error_message: str, status_code: int, headers: dict | Headers) -> BaseLLMException:
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: dict[str, object] | Headers
+    ) -> BaseLLMException:
         return DeepgramException(message=error_message, status_code=status_code, headers=headers)
 
     def transform_audio_transcription_request(
