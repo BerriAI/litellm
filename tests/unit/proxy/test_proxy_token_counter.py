@@ -7338,6 +7338,29 @@ def test_utils_token_counter_answers_400_naming_a_content_block_the_local_counte
     assert [line["status_code"] for line in token_count_log_lines()] == [400]
 
 
+def test_utils_token_counter_answers_400_naming_a_malformed_server_tool_block(monkeypatch: pytest.MonkeyPatch) -> None:
+    block: Final[JsonValue] = {"type": "web_search_tool_result", "tool_use_id": "srv_1", "content": [{"type": "image"}]}
+
+    response: Final = _utils_token_counter(
+        monkeypatch, {"model": "count-log-gpt", "messages": [{"role": "user", "content": [block]}]}, {}
+    )
+
+    assert response.status_code == 400, response.text
+    error: Final = response.json()["error"]
+    assert (error["type"], error["param"]) == ("invalid_request_error", "messages"), error
+    assert error["message"].startswith(
+        "The token counter can't read the content field of a web_search_tool_result block: "
+    ), error
+
+
+def test_utils_token_counter_keeps_500_for_a_known_block_it_fails_to_count(monkeypatch: pytest.MonkeyPatch) -> None:
+    response: Final = _utils_token_counter(
+        monkeypatch, {"model": "count-log-gpt", "messages": [{"role": "user", "content": [{"type": "image"}]}]}, {}
+    )
+
+    assert response.status_code == 500, response.text
+
+
 def test_responses_input_tokens_points_param_at_input_for_a_content_block_the_local_counter_cannot_read(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

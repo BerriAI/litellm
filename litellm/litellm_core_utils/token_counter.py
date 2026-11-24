@@ -1936,8 +1936,12 @@ def _count_anthropic_content(
                 return default_token_count
             if isinstance(e, UnsupportedContentTypeError):
                 raise
-            raise (UnsupportedContentTypeError if server_fields is not None else ValueError)(
-                f"Error counting field '{field_name}': {e}"
+            raise (
+                UnsupportedContentTypeError(
+                    f"The token counter can't read the {field_name} field of a {content_type} block: {e}"
+                )
+                if server_fields is not None
+                else ValueError(f"Error counting field '{field_name}': {e}")
             )
     return tokens
 
@@ -2048,10 +2052,10 @@ def _count_content_list(
                 content_type = c.get("type", type(c).__name__) if isinstance(c, dict) else type(c).__name__
                 raise UnsupportedContentTypeError(
                     f"The token counter can't count content blocks of type {content_type}. "
-                    f"It counts str items and dicts whose 'type' is "
+                    f"It counts strings and blocks of type "
                     f"text, image_url, image, document, file, tool_use, tool_result, thinking, redacted_thinking, "
                     f"compaction, tool_reference, tool_addition, tool_removal, search_result, "
-                    f"or an Anthropic server tool block"
+                    f"and Anthropic server tool results"
                 )
         return num_tokens
     except Exception as e:
@@ -2080,7 +2084,8 @@ def _tool_change_tokens(count_function: TokenCounterFunction, tool: Mapping[str,
             return count_function(server_name)
         case _:
             raise UnsupportedContentTypeError(
-                f"Invalid tool change target type: {None if tool is None else tool.get('type')}"
+                f"The token counter can't count tool changes whose target type is "
+                f"{None if tool is None else tool.get('type')}"
             )
 
 

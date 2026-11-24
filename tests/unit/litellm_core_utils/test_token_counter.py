@@ -2336,7 +2336,7 @@ def test_counting_tool_changes_leaves_the_messages_unchanged() -> None:
     ids=["unknown_target_type", "definition_not_an_object", "missing_target"],
 )
 def test_tool_change_with_an_unrecognized_target_stays_unsupported(tool_change: dict[str, object]) -> None:
-    with pytest.raises(UnsupportedContentTypeError, match="Invalid tool change target type"):
+    with pytest.raises(UnsupportedContentTypeError, match=r"^The token counter can't count tool changes whose target"):
         _count_content_list(len, [tool_change], False, None)
 
 
@@ -2668,7 +2668,10 @@ def test_malformed_server_tool_block_is_unsupported_content(block: Mapping[str, 
 
     content: Final = [{"type": "tool_result", "tool_use_id": "toolu_1", "content": [block]}] if nested else [block]
 
-    with pytest.raises(UnsupportedContentTypeError):
+    with pytest.raises(
+        UnsupportedContentTypeError,
+        match=rf"^The token counter can't read the content field of a {block['type']} block: ",
+    ):
         _count_content_list(len, content, False, None)
     assert _count_content_list(len, content, False, 7) == 7
 
