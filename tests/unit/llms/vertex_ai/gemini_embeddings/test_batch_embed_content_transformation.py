@@ -43,6 +43,10 @@ PDF_GCS_URL = "gs://my-bucket/invoice.pdf"
 VIDEO_DATA_URI = "data:video/mp4;base64,AAAAIGZ0eXBpc29tAAACAGlzb21pc28yYXZjMW1wNDEAAAAIZnJlZQAA"
 AUDIO_DATA_URI = "data:audio/mpeg;base64,SUQzBAAAAAAAI1RTU0UAAAAPAAADTGF2ZjU4Ljc2LjEwMAAAAAAAAAAAAAAA"
 FILES_URI = "https://generativelanguage.googleapis.com/v1beta/files/clip123"
+AUDIO_TRACK_EXTRACTION_ON: Final = (
+    {"audio_track_extraction": True},
+    {"extra_body": {"embedContentConfig": {"audioTrackExtraction": True}}},
+)
 
 
 def _prompt_cost(model: str, usage: Usage) -> float:
@@ -702,19 +706,16 @@ class TestFileContentBlocks:
     @pytest.mark.parametrize(
         "transform", [transform_openai_input_gemini_content, transform_openai_input_gemini_embed_content]
     )
-    @pytest.mark.parametrize(
-        "optional_params",
-        [{"audio_track_extraction": True}, {"extra_body": {"embedContentConfig": {"audioTrackExtraction": True}}}],
-    )
+    @pytest.mark.parametrize("optional_params", AUDIO_TRACK_EXTRACTION_ON)
     @pytest.mark.parametrize(
         ("video_metadata", "named_in_error"),
         [
-            ({"fps": 0.2, "start_offset": "0s", "end_offset": "1s"}, r"\(1s\) at 0\.2 fps rounds to 0 frames"),
             ({"fps": 1, "start_offset": "0s", "end_offset": "0.3s"}, r"\(0\.3s\) at 1 fps rounds to 0 frames"),
+            ({"fps": 0.2, "start_offset": "3s", "end_offset": "3.5s"}, r"\(0\.5s\) at 0\.2 fps rounds to 0 frames"),
             ({"fps": 0, "end_offset": "10s"}, r"\.fps: must be greater than 0, got 0"),
         ],
     )
-    def test_audio_track_extraction_still_answers_400_for_a_window_with_no_frames(
+    def test_audio_track_extraction_still_answers_400_for_a_sub_second_window_with_no_frames(
         self,
         transform: Callable[..., object],
         optional_params: dict[str, object],
@@ -724,6 +725,33 @@ class TestFileContentBlocks:
         block: Final = _file_block(file_data=VIDEO_DATA_URI, video_metadata=video_metadata)
         with pytest.raises(BadRequestError, match=named_in_error):
             transform(input=[block], model=self.MODEL, optional_params=optional_params)
+
+    @pytest.mark.parametrize(
+        ("transform", "parts_of"),
+        [
+            (transform_openai_input_gemini_content, lambda request: request["requests"][0]["content"]["parts"]),
+            (transform_openai_input_gemini_embed_content, lambda request: request["content"]["parts"]),
+        ],
+    )
+    @pytest.mark.parametrize("optional_params", AUDIO_TRACK_EXTRACTION_ON)
+    @pytest.mark.parametrize(
+        "video_metadata",
+        [
+            {"fps": 0.2, "start_offset": "0s", "end_offset": "1s"},
+            {"fps": 0.25, "start_offset": "0s", "end_offset": "1.9s"},
+            {"fps": 0.2, "start_offset": "3s", "end_offset": "5s"},
+        ],
+    )
+    def test_audio_track_extraction_forwards_a_window_of_a_second_or_more_with_no_frames(
+        self,
+        transform: Callable[..., Mapping[str, object]],
+        parts_of: Callable[[Mapping[str, object]], list[Mapping[str, object]]],
+        optional_params: dict[str, object],
+        video_metadata: dict[str, object],
+    ) -> None:
+        block: Final = _file_block(file_data=VIDEO_DATA_URI, video_metadata=video_metadata)
+        request: Final = transform(input=[block], model=self.MODEL, optional_params=optional_params)
+        assert parts_of(request)[0]["video_metadata"] == gemini_video_metadata_from_openai(video_metadata)
 
     @pytest.mark.parametrize(
         "transform", [transform_openai_input_gemini_content, transform_openai_input_gemini_embed_content]
