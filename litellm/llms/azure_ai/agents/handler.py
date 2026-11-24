@@ -302,11 +302,11 @@ class AzureAIAgentsHandler:
         api_key: str,
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
-        optional_params: dict[str, object],
+        optional_params: dict,
         litellm_params: Mapping[str, object],
         timeout: float | str | httpx.Timeout | None,
         client: HTTPHandler | None = None,
-        headers: dict[str, str] | None = None,
+        headers: dict | None = None,
     ) -> ModelResponse:
         """Execute synchronous completion using Azure Agent Service."""
         from litellm.llms.custom_httpx.http_handler import get_httpx_client
@@ -424,11 +424,11 @@ class AzureAIAgentsHandler:
         api_key: str,
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
-        optional_params: dict[str, object],
+        optional_params: dict,
         litellm_params: Mapping[str, object],
         timeout: float | str | httpx.Timeout | None,
         client: AsyncHTTPHandler | None = None,
-        headers: dict[str, str] | None = None,
+        headers: dict | None = None,
     ) -> ModelResponse:
         """Execute asynchronous completion using Azure Agent Service."""
         import litellm
@@ -549,10 +549,10 @@ class AzureAIAgentsHandler:
         api_base: str,
         api_key: str,
         logging_obj: LiteLLMLoggingObj,
-        optional_params: dict[str, object],
+        optional_params: dict,
         litellm_params: Mapping[str, object],
         timeout: float | str | httpx.Timeout | None,
-        headers: dict[str, str] | None = None,
+        headers: dict | None = None,
     ) -> AsyncIterator[ModelResponseStream]:
         """Execute async streaming completion using Azure Agent Service with native SSE."""
         import litellm
