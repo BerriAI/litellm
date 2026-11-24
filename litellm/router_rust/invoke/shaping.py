@@ -79,6 +79,8 @@ _MAPPING: Final = TypeAdapter(Mapping[str, object])
 _FORWARDED_CREDENTIAL_ISOLATION_PROVIDERS: Final = frozenset({"chatgpt", "anthropic"})
 _CALLER_KEY_ORIGIN_PROVIDERS: Final = frozenset({LlmProviders.ANTHROPIC.value})
 _AWS_SIGNED_FALLBACK_PROVIDERS: Final = frozenset({LlmProviders.BEDROCK.value, LlmProviders.BEDROCK_MANTLE.value})
+_AWS_ENDPOINT_OVERRIDE_PARAMS: Final = ("api_base", "base_url", "aws_bedrock_runtime_endpoint")
+_AWS_ENDPOINT_OVERRIDE_ENV_VARS: Final = ("AWS_BEDROCK_RUNTIME_ENDPOINT", "BEDROCK_MANTLE_API_BASE")
 _ALIAS_MARKER_FORWARDED_PARAMS_KWARG: Final = "_alias_marker_forwarded_params"
 # Generic handlers whose stream timeout is split from the request timeout.
 STREAM_TIMEOUT_AWARE_GENERIC_HANDLERS: Final = frozenset({"anthropic_messages", "aresponses", "responses"})
@@ -487,8 +489,8 @@ def leaves_caller_key_behind(
     """Whether an attempt onto ``deployment_params`` must not send the caller's ``api_key``: the key was meant for
     Anthropic and the deployment authenticates with AWS IAM credentials. A deployment with a bearer of its own (its
     ``api_key`` or the provider's env bearer), a blank caller key (which already turns off the env bearer), a fallback
-    target that sets its own key, an explicit ``Authorization`` header, and a call the caller or the target points at a
-    base URL keep today's behavior."""
+    target that sets its own key, an explicit ``Authorization`` header, and a call the caller, the target or the
+    deployment points at an endpoint of its own keep today's behavior."""
     caller_key: Final = request.get("api_key")
     redirected: Final = any(key in request or key in target_params for key in ("api_base", "base_url"))
     return (
@@ -498,7 +500,18 @@ def leaves_caller_key_behind(
         and not _sets_authorization_header(request, target_params, deployment_params)
         and deployment_provider(deployment_params) in _AWS_SIGNED_FALLBACK_PROVIDERS
         and owner_provider() in _CALLER_KEY_ORIGIN_PROVIDERS
+        and not _targets_a_custom_aws_endpoint(deployment_params)
         and _signs_with_aws_credentials(deployment_params)
+    )
+
+
+def _targets_a_custom_aws_endpoint(deployment_params: Mapping[str, object]) -> bool:
+    """Whether the AWS deployment overrides where it sends the call, in its params or the providers' endpoint env
+    vars. A custom endpoint may be a gateway that takes the caller's bearer, so its auth is left as it is."""
+    from litellm.secret_managers.main import get_secret_str
+
+    return any(deployment_params.get(key) for key in _AWS_ENDPOINT_OVERRIDE_PARAMS) or any(
+        get_secret_str(name) for name in _AWS_ENDPOINT_OVERRIDE_ENV_VARS
     )
 
 

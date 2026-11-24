@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from typing import Final, Literal
 from unittest.mock import MagicMock, patch
 
@@ -1428,14 +1428,19 @@ def _carries_caller_key(request: httpx.Request) -> bool:
 
 
 @pytest.fixture
-def _aws_without_env_bearer(monkeypatch: pytest.MonkeyPatch) -> None:
+def _aws_without_env_bearers_or_endpoints(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-    for name in ("AWS_BEARER_TOKEN_BEDROCK", "BEDROCK_MANTLE_API_KEY"):
+    for name in (
+        "AWS_BEARER_TOKEN_BEDROCK",
+        "BEDROCK_MANTLE_API_KEY",
+        "AWS_BEDROCK_RUNTIME_ENDPOINT",
+        "BEDROCK_MANTLE_API_BASE",
+    ):
         monkeypatch.delenv(name, raising=False)
 
 
 @pytest.mark.asyncio
-@pytest.mark.usefixtures("_aws_without_env_bearer")
+@pytest.mark.usefixtures("_aws_without_env_bearers_or_endpoints")
 @pytest.mark.parametrize("target", ("bedrock", "bedrock_mantle"))
 async def test_anthropic_fallback_onto_aws_signs_with_the_deployment_credentials_not_the_caller_key(
     respx_mock: respx.MockRouter, target: str
@@ -1457,7 +1462,7 @@ async def test_anthropic_fallback_onto_aws_signs_with_the_deployment_credentials
 
 
 @pytest.mark.asyncio
-@pytest.mark.usefixtures("_aws_without_env_bearer")
+@pytest.mark.usefixtures("_aws_without_env_bearers_or_endpoints")
 async def test_anthropic_fallback_after_an_aws_hop_still_sends_the_caller_key_to_anthropic(
     respx_mock: respx.MockRouter,
 ) -> None:
@@ -1480,7 +1485,7 @@ async def test_anthropic_fallback_after_an_aws_hop_still_sends_the_caller_key_to
 
 
 @pytest.mark.asyncio
-@pytest.mark.usefixtures("_aws_without_env_bearer")
+@pytest.mark.usefixtures("_aws_without_env_bearers_or_endpoints")
 async def test_context_window_fallback_that_never_reached_anthropic_still_leaves_its_key_behind(
     respx_mock: respx.MockRouter,
 ) -> None:
@@ -1502,7 +1507,7 @@ async def test_context_window_fallback_that_never_reached_anthropic_still_leaves
 
 
 @pytest.mark.asyncio
-@pytest.mark.usefixtures("_aws_without_env_bearer")
+@pytest.mark.usefixtures("_aws_without_env_bearers_or_endpoints")
 async def test_aws_bearer_sent_to_bedrock_is_kept_on_a_bedrock_mantle_fallback(respx_mock: respx.MockRouter) -> None:
     router: Final = Router(
         model_list=[
@@ -1534,7 +1539,7 @@ async def test_aws_bearer_sent_to_bedrock_is_kept_on_a_bedrock_mantle_fallback(r
 
 
 @pytest.mark.asyncio
-@pytest.mark.usefixtures("_aws_without_env_bearer")
+@pytest.mark.usefixtures("_aws_without_env_bearers_or_endpoints")
 async def test_dict_fallback_target_api_key_is_sent_to_aws_in_place_of_the_caller_key(
     respx_mock: respx.MockRouter,
 ) -> None:
@@ -1552,7 +1557,7 @@ async def test_dict_fallback_target_api_key_is_sent_to_aws_in_place_of_the_calle
 
 
 @pytest.mark.asyncio
-@pytest.mark.usefixtures("_aws_without_env_bearer")
+@pytest.mark.usefixtures("_aws_without_env_bearers_or_endpoints")
 async def test_caller_api_base_keeps_the_caller_key_on_an_aws_fallback(respx_mock: respx.MockRouter) -> None:
     router: Final = _anthropic_to_aws_router("bedrock", [{"claude": ["claude-aws"]}])
     gateway: Final = respx_mock.post(host="caller-gateway.local").mock(
@@ -1570,7 +1575,7 @@ async def test_caller_api_base_keeps_the_caller_key_on_an_aws_fallback(respx_moc
 
 
 @pytest.mark.asyncio
-@pytest.mark.usefixtures("_aws_without_env_bearer")
+@pytest.mark.usefixtures("_aws_without_env_bearers_or_endpoints")
 @pytest.mark.parametrize(
     ("forwarding_scope", "x_app_at_fallback", "expected_headers"),
     (
@@ -1612,10 +1617,10 @@ async def test_aws_fallback_drops_only_the_proxy_forwarded_headers_its_group_may
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("_aws_without_env_bearers_or_endpoints")
 async def test_blank_caller_key_still_signs_an_aws_fallback_instead_of_using_the_env_bearer(
     respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     monkeypatch.setenv("AWS_BEARER_TOKEN_BEDROCK", "env-bearer")
     router: Final = _anthropic_to_aws_router("bedrock", [{"claude": ["claude-aws"]}])
     respx_mock.post("https://api.anthropic.com/v1/messages").mock(return_value=_anthropic_overloaded())
@@ -1627,7 +1632,7 @@ async def test_blank_caller_key_still_signs_an_aws_fallback_instead_of_using_the
 
 
 @pytest.mark.asyncio
-@pytest.mark.usefixtures("_aws_without_env_bearer")
+@pytest.mark.usefixtures("_aws_without_env_bearers_or_endpoints")
 @pytest.mark.parametrize("base_field", ("api_base", "base_url"))
 async def test_dict_fallback_target_base_url_without_a_key_keeps_the_caller_key(
     respx_mock: respx.MockRouter, base_field: str
@@ -1646,7 +1651,7 @@ async def test_dict_fallback_target_base_url_without_a_key_keeps_the_caller_key(
 
 
 @pytest.mark.asyncio
-@pytest.mark.usefixtures("_aws_without_env_bearer")
+@pytest.mark.usefixtures("_aws_without_env_bearers_or_endpoints")
 @pytest.mark.parametrize("carrier", ("request", "deployment"))
 @pytest.mark.parametrize(
     ("caller_key", "expected_authorization"),
@@ -1728,7 +1733,7 @@ def _mantle_stream_answer() -> httpx.Response:
 
 
 @pytest.mark.asyncio
-@pytest.mark.usefixtures("_aws_without_env_bearer")
+@pytest.mark.usefixtures("_aws_without_env_bearers_or_endpoints")
 async def test_mid_stream_continuation_from_an_aws_hop_does_not_bring_the_caller_key_back(
     respx_mock: respx.MockRouter,
 ) -> None:
@@ -1818,7 +1823,7 @@ async def test_mid_stream_continuation_from_an_aws_hop_does_not_bring_the_caller
     ),
 )
 async def test_anthropic_fallback_onto_aws_drops_the_caller_key_only_where_the_deployment_signs_with_iam(
-    _aws_without_env_bearer: None,
+    _aws_without_env_bearers_or_endpoints: None,
     respx_mock: respx.MockRouter,
     monkeypatch: pytest.MonkeyPatch,
     target: str,
@@ -1853,3 +1858,84 @@ async def test_anthropic_fallback_onto_aws_drops_the_caller_key_only_where_the_d
 
     sent: Final = aws.calls[0].request.headers["authorization"]
     assert sent[: len(expected_authorization)] == expected_authorization, sent
+
+
+def _gateway_requiring_the_caller_bearer(target: str) -> Callable[[httpx.Request], httpx.Response]:
+    def answer(request: httpx.Request) -> httpx.Response:
+        if request.headers.get("authorization") != f"Bearer {_CALLER_ANTHROPIC_KEY}":
+            return httpx.Response(401, json={"message": "caller bearer required"})
+        return _aws_answer(target)
+
+    return answer
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_aws_without_env_bearers_or_endpoints")
+@pytest.mark.parametrize(
+    ("target", "endpoint_params", "endpoint_env", "expected_content"),
+    (
+        pytest.param(
+            "bedrock",
+            {"aws_bedrock_runtime_endpoint": "https://aws-gateway.local"},
+            {},
+            "hi",
+            id="bedrock-runtime-endpoint",
+        ),
+        pytest.param("bedrock", {"api_base": "https://aws-gateway.local"}, {}, "hi", id="bedrock-api-base"),
+        pytest.param(
+            "bedrock",
+            {},
+            {"AWS_BEDROCK_RUNTIME_ENDPOINT": "https://aws-gateway.local"},
+            "hi",
+            id="bedrock-env-endpoint",
+        ),
+        pytest.param(
+            "bedrock_mantle", {"api_base": "https://aws-gateway.local/v1"}, {}, "served by mantle", id="mantle-api-base"
+        ),
+        pytest.param(
+            "bedrock_mantle",
+            {},
+            {"BEDROCK_MANTLE_API_BASE": "https://aws-gateway.local/v1"},
+            "served by mantle",
+            id="mantle-env-base",
+        ),
+    ),
+)
+async def test_iam_deployment_behind_a_custom_endpoint_still_gets_the_caller_bearer(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    target: str,
+    endpoint_params: dict[str, str],
+    endpoint_env: dict[str, str],
+    expected_content: str,
+) -> None:
+    for name, value in endpoint_env.items():
+        monkeypatch.setenv(name, value)
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "claude",
+                "litellm_params": {"model": "anthropic/claude-haiku-4-5", "api_key": "sk-ant-deployment"},
+            },
+            {
+                "model_name": "claude-aws",
+                "litellm_params": {
+                    "model": _AWS_FALLBACK_TARGETS[target][0],
+                    **_AWS_DEPLOYMENT_CREDENTIALS,
+                    **endpoint_params,
+                },
+            },
+        ],
+        fallbacks=[{"claude": ["claude-aws"]}],
+        num_retries=0,
+    )
+    respx_mock.post("https://api.anthropic.com/v1/messages").mock(return_value=_anthropic_overloaded())
+    gateway: Final = respx_mock.post(host="aws-gateway.local").mock(
+        side_effect=_gateway_requiring_the_caller_bearer(target)
+    )
+
+    response: Final = await router.acompletion(
+        model="claude", messages=[{"role": "user", "content": "hi"}], api_key=_CALLER_ANTHROPIC_KEY
+    )
+
+    assert (response.choices[0].message.content, gateway.call_count) == (expected_content, 1)
