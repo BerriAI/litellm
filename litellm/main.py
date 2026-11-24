@@ -7459,13 +7459,8 @@ def embedding(
                 aembedding=aembedding,
                 litellm_params=litellm_params_dict,
             )
-        elif (
-            custom_llm_provider == "openai"
-            or custom_llm_provider == "custom_openai"
-            or custom_llm_provider == "together_ai"
-            or custom_llm_provider == "nvidia_nim"
-            or custom_llm_provider == "litellm_proxy"
-            or (model in litellm.open_ai_embedding_models and custom_llm_provider is None)
+        elif custom_llm_provider in ("openai", "custom_openai", "together_ai", "nvidia_nim", "litellm_proxy") or (
+            model in litellm.open_ai_embedding_models and custom_llm_provider is None
         ):
             api_base = (
                 api_base
@@ -8312,7 +8307,7 @@ def embedding(
         elif custom_llm_provider in litellm.openai_compatible_providers:
             if headers:
                 optional_params["extra_headers"] = headers
-            response = openai_chat_completions.embedding(
+            response = openai_chat_completions.embedding(  # rebind-ok: dispatch chain binds response per branch
                 model=model,
                 input=input,
                 api_base=api_base,
