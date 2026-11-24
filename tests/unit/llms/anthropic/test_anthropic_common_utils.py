@@ -4995,6 +4995,11 @@ def test_strip_advisor_blocks_replaces_a_string_id_exchange_beside_a_list_id_one
             [{"type": "text", "text": "<advisor_feedback>\nUse channels.\n</advisor_feedback>"}, _OK_TEXT],
             id="first-text-part",
         ),
+        pytest.param(
+            {"type": "advisor_result", "text": "Use channels."},
+            [{"type": "text", "text": "<advisor_feedback>\nUse channels.\n</advisor_feedback>"}, _OK_TEXT],
+            id="anthropic-advisor-result-object",
+        ),
         pytest.param(7, [_OK_TEXT], id="unreadable-content"),
     ],
 )
@@ -5100,3 +5105,30 @@ def test_strip_advisor_blocks_replaces_a_string_id_exchange_and_drops_a_list_id_
             "content": [{"type": "text", "text": "<advisor_feedback>\nadvice\n</advisor_feedback>"}, _OK_TEXT],
         }
     ]
+
+
+def test_a_stale_tool_search_is_left_out_beside_advisor_blocks_with_list_ids() -> None:
+    search_use: Final = {
+        "type": "server_tool_use",
+        "id": "srvtoolu_01Search",
+        "name": "tool_search_tool_regex",
+        "input": {"pattern": "gone"},
+    }
+    search_result: Final = {
+        "type": "tool_search_tool_result",
+        "tool_use_id": "srvtoolu_01Search",
+        "content": {
+            "type": "tool_search_tool_search_result",
+            "tool_references": [{"type": "tool_reference", "tool_name": "gone_tool"}],
+        },
+    }
+    advisor_blocks: Final = [_advisor_use(["srvtoolu_01A"]), _advisor_result(["srvtoolu_01A"])]
+    messages: Final = [
+        {"role": "user", "content": "hi"},
+        {"role": "assistant", "content": [search_use, search_result, *advisor_blocks, _OK_TEXT]},
+        {"role": "user", "content": "and now?"},
+    ]
+
+    kept: Final = without_stale_tool_search_results(messages, [{"name": "get_weather"}])
+
+    assert kept == (messages[0], {"role": "assistant", "content": [*advisor_blocks, _OK_TEXT]}, messages[2])
