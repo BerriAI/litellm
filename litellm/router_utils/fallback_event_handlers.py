@@ -949,7 +949,11 @@ async def run_async_fallback(
                 kwargs=kwargs,
                 original_exception=original_exception,
             )
-            if logging_obj is not None and logging_obj.model_call_details.get("has_logged_async_failure", False):
+            if (
+                logging_obj is not None
+                and logging_obj.model_call_details.get("has_logged_async_failure", False)
+                and not (billing_logging_obj is not None and billing_logging_obj.logs_each_attempt)
+            ):
                 _trigger_cooldown_for_failed_deployment(
                     litellm_router=litellm_router,
                     kwargs=kwargs,

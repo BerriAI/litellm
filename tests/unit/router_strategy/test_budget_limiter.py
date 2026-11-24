@@ -17,6 +17,7 @@ import respx
 
 from litellm import Router
 from litellm.caching.caching import DualCache
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.router_strategy.budget_limiter import RouterBudgetLimiting
 from litellm.types.router import RetryPolicy
 from litellm.types.utils import BudgetConfig
@@ -550,14 +551,11 @@ _SERVED_IMAGE: Final = {
 }
 
 
-async def _settled_spend(cache: DualCache, keys: tuple[str, ...], settled_key: str) -> tuple[object, ...]:
-    for _ in range(300):
-        if await cache.async_get_cache(settled_key):
-            await asyncio.sleep(0.2)
-            return tuple([await cache.async_get_cache(key) for key in keys])
-        await asyncio.sleep(0.05)
-    raise AssertionError(f"{settled_key} never moved")
 
+async def _spend_once_logging_drains(cache: DualCache, keys: tuple[str, ...]) -> tuple[float, ...]:
+    await asyncio.sleep(0)
+    await GLOBAL_LOGGING_WORKER.flush()
+    return tuple([float(await cache.async_get_cache(key) or 0.0) for key in keys])
 
 
 async def _budget_spend_after_falling_back_from(
@@ -597,13 +595,10 @@ async def _budget_spend_after_falling_back_from(
     await router.aimage_generation(
         model="primary", prompt="draw a circle", litellm_logging_obj=logging_obj, litellm_call_id=f"budget-{primary}"
     )
-    primary_spend, backup_spend, provider_spend = await _settled_spend(
-        router.cache,
-        ("deployment_spend:primary-id:1d", "deployment_spend:backup-id:1d", "provider_spend:gemini:1d"),
-        settled_key="deployment_spend:backup-id:1d",
+    primary_spend, backup_spend, provider_spend = await _spend_once_logging_drains(
+        router.cache, ("deployment_spend:primary-id:1d", "deployment_spend:backup-id:1d", "provider_spend:gemini:1d")
     )
-    assert isinstance(backup_spend, float) and isinstance(provider_spend, float)
-    return float(primary_spend or 0.0), backup_spend, provider_spend
+    return primary_spend, backup_spend, provider_spend
 
 
 @pytest.mark.asyncio
@@ -636,17 +631,6 @@ async def test_a_billed_image_refusal_counts_once_toward_the_budgets_of_the_depl
     assert [(primary, backup, provider) for primary, backup, provider in unbilled_failures] == [
         (0.0, pytest.approx(served_spend), pytest.approx(served_spend))
     ] * 2
-
-
-async def _spend_once_it_settles(cache: DualCache, keys: tuple[str, ...]) -> tuple[float, ...]:
-    previous: tuple[float, ...] | None = None  # rebind-ok: polls until two reads agree
-    for _ in range(300):
-        await asyncio.sleep(0.1)
-        current: Final = tuple([float(await cache.async_get_cache(key) or 0.0) for key in keys])
-        if current == previous and all(spend > 0 for spend in current):
-            return current
-        previous = current
-    raise AssertionError(f"{keys} never settled")
 
 
 async def _budget_spend_after_refused_attempts(
@@ -688,7 +672,9 @@ async def _budget_spend_after_refused_attempts(
         await getattr(router, call)(
             model="refuses", prompt="draw a circle", litellm_logging_obj=logging_obj, litellm_call_id=call_id, **image
         )
-    return await _spend_once_it_settles(router.cache, ("deployment_spend:refuses-id:1d", "provider_spend:gemini:1d"))
+    return await _spend_once_logging_drains(
+        router.cache, ("deployment_spend:refuses-id:1d", "provider_spend:gemini:1d")
+    )
 
 
 @pytest.mark.asyncio
@@ -710,3 +696,71 @@ async def test_every_billed_image_refusal_a_retry_repeats_counts_toward_the_budg
     three_attempts: Final = await _budget_spend_after_refused_attempts(call, 3, monkeypatch)
 
     assert three_attempts == pytest.approx(tuple(3 * spend for spend in one_attempt))
+
+
+async def _budget_spend_for_a_served_image(
+    request_fields: dict[str, object], monkeypatch: pytest.MonkeyPatch
+) -> tuple[float, ...]:
+    monkeypatch.setattr(litellm, "callbacks", [])
+    monkeypatch.setattr(litellm, "_async_success_callback", [])
+    monkeypatch.setattr(litellm, "_async_failure_callback", [])
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "serves",
+                "litellm_params": {
+                    "model": "gemini/gemini-3.1-flash-image",
+                    "api_key": "test-key",
+                    "api_base": "https://serves.example",
+                    "max_budget": 100.0,
+                    "budget_duration": "1d",
+                },
+                "model_info": {"id": "serves-id"},
+            }
+        ],
+        provider_budget_config={"gemini": {"budget_limit": 100.0, "time_period": "1d"}},
+        num_retries=0,
+    )
+    call_id: Final = f"served-{sorted(request_fields)}"
+    logging_obj, _ = litellm.utils.function_setup(
+        original_function="aimage_generation",
+        rules_obj=litellm.utils.Rules(),
+        start_time=datetime.now(),
+        model="serves",
+        prompt="draw a circle",
+        litellm_call_id=call_id,
+    )
+    await router.aimage_generation(
+        model="serves",
+        prompt="draw a circle",
+        litellm_logging_obj=logging_obj,
+        litellm_call_id=call_id,
+        **request_fields,
+    )
+    return await _spend_once_logging_drains(router.cache, ("deployment_spend:serves-id:1d", "provider_spend:gemini:1d"))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "request_fields",
+    (
+        {"image_answers_billed_on_failure": 1000},
+        {"failed_attempts_billed_on_success": [["usage", 1000.0]]},
+    ),
+)
+async def test_a_request_cannot_lower_its_own_budget_charge_by_naming_a_billing_field(
+    disable_budget_sync: None,
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    request_fields: dict[str, object],
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    respx_mock.post(url__startswith="https://serves.example/").mock(
+        return_value=httpx.Response(200, json=_SERVED_IMAGE)
+    )
+
+    honest: Final = await _budget_spend_for_a_served_image({}, monkeypatch)
+    spoofed: Final = await _budget_spend_for_a_served_image(request_fields, monkeypatch)
+
+    assert honest[0] > 0
+    assert spoofed == pytest.approx(honest)

@@ -343,6 +343,13 @@ _PREVIOUS_ATTEMPT_FAILURE_DETAILS: Final = (
     "exception",
     "traceback_exception",
 )
+_LOGGING_OWNED_BILLING_FIELDS: Final = frozenset({IMAGE_ANSWERS_BILLED_ON_FAILURE, "failed_attempts_billed_on_success"})
+
+
+def _without_logging_owned_billing_fields(request_fields: Mapping[str, object]) -> Mapping[str, object]:
+    return {key: value for key, value in request_fields.items() if key not in _LOGGING_OWNED_BILLING_FIELDS}
+
+
 _UNSERIALIZABLE_METADATA_KEYS: Final[frozenset[str]] = frozenset(
     ("user_api_key_auth", "user_api_key_budget_reservation")
 )
@@ -1115,8 +1122,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 "litellm_call_id": self.litellm_call_id,
                 "completion_start_time": self.completion_start_time,
                 "standard_callback_dynamic_params": self.standard_callback_dynamic_params,
-                **self.optional_params,
-                **additional_params,
+                **_without_logging_owned_billing_fields({**self.optional_params, **additional_params}),
             }
         )
 

@@ -4,6 +4,7 @@ import json
 import threading
 from collections.abc import AsyncIterator
 from datetime import datetime, timedelta
+from io import BytesIO
 from types import MappingProxyType
 from typing import Any, Final, Literal, NoReturn
 from unittest.mock import MagicMock, patch
@@ -18,7 +19,7 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils import get_llm_provider_logic
 from litellm.llms.gemini.empty_image_response import ImageRefusalError
 from litellm.proxy.utils import _failure_fields_to_lift
-from litellm.router_utils.cooldown_handlers import mark_advisor_orchestration_failure
+from litellm.router_utils.cooldown_handlers import async_get_cooldown_deployments, mark_advisor_orchestration_failure
 from litellm.router_utils.fallback_event_handlers import (
     MID_STREAM_FALLBACK_CONTROLS_KEY,
     PRE_ROUTING_SELECTED_MODEL_KEY,
@@ -42,7 +43,7 @@ from litellm.router_utils.fallback_event_handlers import (
     routed_deployment_id,
     run_async_fallback,
 )
-from litellm.types.router import FallbackSkipReason, SkippedFallbackTarget
+from litellm.types.router import AllowedFailsPolicy, FallbackSkipReason, SkippedFallbackTarget
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 from tests.fake_openai_endpoint import FAKE_OPENAI_API_BASE
 from typing import Dict
@@ -2963,3 +2964,58 @@ async def test_a_fallback_attempt_that_fails_before_sending_logs_its_own_api_bas
     await asyncio.wait_for(capture.unsupported_logged.wait(), timeout=30)
 
     assert capture.api_base_by_error.get("UnsupportedParamsError") == logged_api_base
+
+
+async def _backup_cooled_down_after_a_failed_edit(router: Router, attempt: int) -> bool:
+    call_id: Final = f"failed-edit-{attempt}"
+    logging_obj, _ = litellm.utils.function_setup(
+        original_function="aimage_edit",
+        rules_obj=litellm.utils.Rules(),
+        start_time=datetime.now(),
+        model="primary",
+        prompt="draw a circle",
+        litellm_call_id=call_id,
+    )
+    with pytest.raises(litellm.InternalServerError):
+        await router.aimage_edit(
+            model="primary",
+            prompt="draw a circle",
+            image=BytesIO(b"\x89PNG\r\n\x1a\nimage"),
+            litellm_logging_obj=logging_obj,
+            litellm_call_id=call_id,
+        )
+    return "backup-id" in await async_get_cooldown_deployments(litellm_router_instance=router, parent_otel_span=None)
+
+
+@pytest.mark.asyncio
+async def test_a_failed_image_edit_fallback_counts_once_toward_the_backups_allowed_fails(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    respx_mock.post(url__startswith="https://fails.example/").mock(
+        return_value=httpx.Response(500, json={"error": {"code": 500, "message": "upstream failed"}})
+    )
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": group,
+                "litellm_params": {
+                    "model": "gemini/gemini-3.1-flash-image",
+                    "api_key": "test-key",
+                    "api_base": "https://fails.example",
+                },
+                "model_info": {"id": f"{group}-id"},
+            }
+            for group in ("primary", "backup")
+        ],
+        fallbacks=[{"primary": ["backup"]}],
+        num_retries=0,
+        retry_after=0,
+        allowed_fails_policy=AllowedFailsPolicy(InternalServerErrorAllowedFails=1),
+    )
+
+    cooled_after_each_request: Final = [
+        await _backup_cooled_down_after_a_failed_edit(router, attempt) for attempt in (1, 2)
+    ]
+
+    assert cooled_after_each_request == [False, True]
