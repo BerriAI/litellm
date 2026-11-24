@@ -1869,7 +1869,10 @@ async def test_model_group_encrypted_content_affinity_overrides_global_deploymen
 
 
 @pytest.mark.asyncio
-async def test_encrypted_content_affinity_pins_anthropic_messages_replayed_through_the_bridge():
+@pytest.mark.parametrize(
+    "turn_settings", ["", "litellm_turn_settings:eyJ2IjoxfQ;"], ids=["plain-signature", "signature-with-turn-settings"]
+)
+async def test_encrypted_content_affinity_pins_anthropic_messages_replayed_through_the_bridge(turn_settings: str):
     """
     Claude Code behind /v1/messages replays the encrypted reasoning the bridge packed
     into a thinking block's signature (or a redacted block's data). The pin has to be
@@ -1886,7 +1889,7 @@ async def test_encrypted_content_affinity_pins_anthropic_messages_replayed_throu
     pinned = await check.async_filter_deployments(
         model="gpt-5.1",
         healthy_deployments=deployments,
-        messages=_bridge_replayed_anthropic_messages(minted_by="openai-org-b"),
+        messages=_bridge_replayed_anthropic_messages(minted_by="openai-org-b", turn_settings=turn_settings),
         request_kwargs=request_kwargs,
     )
 
@@ -1894,8 +1897,8 @@ async def test_encrypted_content_affinity_pins_anthropic_messages_replayed_throu
     assert request_kwargs["_encrypted_content_affinity_pinned"] is True
 
 
-def _bridge_replayed_anthropic_messages(minted_by: str) -> list:
-    wrapped = ResponsesAPIRequestUtils.wrap_encrypted_content_with_model_id("gAAAAA_turn_one", minted_by)
+def _bridge_replayed_anthropic_messages(minted_by: str, turn_settings: str = "") -> list:
+    wrapped = turn_settings + ResponsesAPIRequestUtils.wrap_encrypted_content_with_model_id("gAAAAA_turn_one", minted_by)
     return [
         {"role": "user", "content": "Solve the zebra puzzle"},
         {

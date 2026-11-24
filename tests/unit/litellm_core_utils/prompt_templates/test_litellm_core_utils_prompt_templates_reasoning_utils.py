@@ -8,6 +8,7 @@ from litellm.litellm_core_utils.prompt_templates.reasoning_utils import (
     ENCRYPTED_REASONING_SIGNATURE_PREFIX,
     converse_redacted_content,
     encrypted_content_from_signature,
+    encrypted_content_of_block,
     encrypted_reasoning_signature,
     is_encrypted_reasoning_block,
     native_redacted_thinking_data,
@@ -169,3 +170,91 @@ def test_native_redacted_thinking_data_only_unwraps_the_converse_base64_layer(da
 @pytest.mark.parametrize("data", [_NATIVE_REDACTED_DATA, _CONVERSE_REDACTED_DATA], ids=["native", "legacy-wrapped"])
 def test_converse_redacted_content_wraps_claude_native_data_exactly_once(data: str) -> None:
     assert converse_redacted_content(data) == _CONVERSE_REDACTED_DATA
+
+
+_TURN_SETTINGS_MARKER: Final = "litellm_turn_settings:"
+_TURN_SETTINGS_SEGMENT: Final = "eyJyZWFzb25pbmdfZWZmb3J0IjoiaGlnaCJ9"
+
+
+def _enveloped_signature(segment: str, encrypted_content: str) -> str:
+    return f"{ENCRYPTED_REASONING_SIGNATURE_PREFIX}{_TURN_SETTINGS_MARKER}{segment};{encrypted_content}"
+
+
+_ENVELOPE_CASES: Final = (
+    pytest.param(_TURN_SETTINGS_SEGMENT, "gAAAA_turn_blob", id="plain-blob"),
+    pytest.param(_TURN_SETTINGS_SEGMENT, "litellm_enc:abc;def", id="blob-with-semicolon"),
+    pytest.param("", "gAAAA_turn_blob", id="empty-segment"),
+)
+
+_MALFORMED_ENVELOPES: Final = (
+    pytest.param(
+        f"{ENCRYPTED_REASONING_SIGNATURE_PREFIX}{_TURN_SETTINGS_MARKER}{_TURN_SETTINGS_SEGMENT}", id="no-semicolon"
+    ),
+    pytest.param(f"{ENCRYPTED_REASONING_SIGNATURE_PREFIX}{_TURN_SETTINGS_MARKER}", id="marker-only"),
+)
+
+
+@pytest.mark.parametrize(("segment", "encrypted_content"), _ENVELOPE_CASES)
+def test_turn_settings_envelope_signature_yields_only_the_encrypted_content(
+    segment: str, encrypted_content: str
+) -> None:
+    """regression: the settings segment never leaks into the encrypted content read from a signature."""
+    assert encrypted_content_from_signature(_enveloped_signature(segment, encrypted_content)) == encrypted_content
+
+
+@pytest.mark.parametrize(("segment", "encrypted_content"), _ENVELOPE_CASES)
+@pytest.mark.parametrize("block_type", ["thinking", "redacted_thinking"])
+def test_turn_settings_envelope_block_yields_only_the_encrypted_content(
+    block_type: str, segment: str, encrypted_content: str
+) -> None:
+    """regression: thinking signatures and redacted data both unwrap the envelope to the bare blob."""
+    signature: Final = _enveloped_signature(segment, encrypted_content)
+    block: Final = (
+        {"type": "thinking", "thinking": "Plan.", "signature": signature}
+        if block_type == "thinking"
+        else {"type": "redacted_thinking", "data": signature}
+    )
+    assert encrypted_content_of_block(block) == encrypted_content
+
+
+@pytest.mark.parametrize(("segment", "encrypted_content"), _ENVELOPE_CASES)
+def test_turn_settings_envelope_replays_the_bare_blob_as_responses_reasoning(
+    segment: str, encrypted_content: str
+) -> None:
+    """regression: the Responses reasoning items rebuilt from enveloped blocks carry only the blob."""
+    signature: Final = _enveloped_signature(segment, encrypted_content)
+    items: Final = responses_reasoning_items_from_thinking_blocks(
+        [
+            {"type": "thinking", "thinking": "Plan.", "signature": signature},
+            {"type": "redacted_thinking", "data": signature},
+        ]
+    )
+    assert [item.get("encrypted_content") for item in items] == [encrypted_content, encrypted_content]
+
+
+@pytest.mark.parametrize("encrypted_content", ["gAAAA_legacy_blob", "litellm_enc:abc;def"])
+@pytest.mark.parametrize("block_type", ["thinking", "redacted_thinking"])
+def test_legacy_signature_without_envelope_keeps_the_whole_blob(block_type: str, encrypted_content: str) -> None:
+    """guard: a signature minted before the envelope existed still yields its full blob, semicolons included."""
+    signature: Final = encrypted_reasoning_signature(encrypted_content)
+    block: Final = (
+        {"type": "thinking", "thinking": "Plan.", "signature": signature}
+        if block_type == "thinking"
+        else {"type": "redacted_thinking", "data": signature}
+    )
+    assert encrypted_content_from_signature(signature) == encrypted_content
+    assert encrypted_content_of_block(block) == encrypted_content
+
+
+@pytest.mark.parametrize("signature", _MALFORMED_ENVELOPES)
+def test_malformed_turn_settings_envelope_never_yields_the_marker(signature: str) -> None:
+    """regression: an envelope without its ';' separator never passes the marker off as encrypted content."""
+    from_signature: Final = encrypted_content_from_signature(signature)
+    from_blocks: Final = (
+        encrypted_content_of_block({"type": "thinking", "thinking": "Plan.", "signature": signature}),
+        encrypted_content_of_block({"type": "redacted_thinking", "data": signature}),
+    )
+    assert all(value is None or _TURN_SETTINGS_MARKER not in value for value in (from_signature, *from_blocks)), (
+        from_signature,
+        from_blocks,
+    )
