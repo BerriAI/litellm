@@ -428,6 +428,7 @@ autorouter_presets_url: str = os.getenv(
 )
 suppress_debug_info: bool = False
 include_litellm_headers: bool = True
+include_llm_provider_headers: bool = True
 dynamodb_table_name: Optional[str] = None
 s3_callback_params: Optional[Dict] = None
 s3_audit_callback_params: Optional[Dict] = None

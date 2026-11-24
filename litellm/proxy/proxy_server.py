@@ -2781,6 +2781,10 @@ def _include_litellm_headers() -> bool:
     return litellm.include_litellm_headers is not False
 
 
+def _include_llm_provider_headers() -> bool:
+    return litellm.include_llm_provider_headers is not False
+
+
 @app.exception_handler(Exception)
 async def otel_unhandled_exception_handler(request: Request, exc: Exception):
     if isinstance(exc, (ProxyException, HTTPException, RequestValidationError)):
@@ -23417,7 +23421,11 @@ app.add_middleware(
     get_settings=lambda: get_admission_control_settings(general_settings),
     state=admission_control_state,
 )
-app.add_middleware(LiteLLMResponseHeadersMiddleware, include_litellm_headers=_include_litellm_headers)
+app.add_middleware(
+    LiteLLMResponseHeadersMiddleware,
+    include_litellm_headers=_include_litellm_headers,
+    include_llm_provider_headers=_include_llm_provider_headers,
+)
 
 # Added last on purpose - last-added is outermost, and the client-visible URL
 # prefix must be resolved into scope["root_path"] before any inner middleware
