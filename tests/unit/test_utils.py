@@ -13261,3 +13261,66 @@ async def test_post_deployment_failure_reaches_the_legacy_hook_and_keeps_the_rea
     assert type(recorder.failures[0]) is type(raised.value)
     assert recorder.failures[0] is not raised.value
     assert seen == (["v2", "legacy"] if with_v2 else ["legacy"])
+
+
+_OPENAI_SERVER_ERROR_BODY: Final = {"error": {"message": "boom"}}
+
+
+def _openai_server_error_route() -> respx.Route:
+    return respx.post("https://api.openai.com/v1/chat/completions").respond(500, json=_OPENAI_SERVER_ERROR_BODY)
+
+
+def test_failed_completion_keeps_global_num_retries_for_later_calls(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A failed call relying on the litellm.num_retries global must leave the global usable for later calls."""
+    monkeypatch.setattr(litellm, "num_retries", 3)
+    with respx.mock:
+        route: Final = _openai_server_error_route()
+        for _ in range(2):
+            with pytest.raises(litellm.InternalServerError):
+                litellm.completion(
+                    model="openai/gpt-4o",
+                    api_key="sk-test",
+                    max_retries=0,
+                    messages=[{"role": "user", "content": "hi"}],
+                )
+
+    # each call reaches the wire 4 times: the first attempt plus the 3 wrapper retries
+    assert route.call_count == 8
+    assert litellm.num_retries == 3
+
+
+async def test_failed_acompletion_keeps_global_num_retries_for_later_calls(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An async failed call must not permanently clear the litellm.num_retries global either."""
+    monkeypatch.setattr(litellm, "num_retries", 3)
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    with respx.mock:
+        route: Final = _openai_server_error_route()
+        for _ in range(2):
+            with pytest.raises(litellm.InternalServerError):
+                await litellm.acompletion(
+                    model="openai/gpt-4o",
+                    api_key="sk-test",
+                    max_retries=0,
+                    messages=[{"role": "user", "content": "hi"}],
+                )
+
+    assert route.call_count == 8
+    assert litellm.num_retries == 3
+
+
+def test_explicit_zero_num_retries_stops_after_one_attempt(monkeypatch: pytest.MonkeyPatch) -> None:
+    """num_retries=0 on the call means no wrapper retries, even with a global default configured."""
+    monkeypatch.setattr(litellm, "num_retries", 3)
+    with respx.mock:
+        route: Final = _openai_server_error_route()
+        with pytest.raises(litellm.InternalServerError):
+            litellm.completion(
+                model="openai/gpt-4o",
+                api_key="sk-test",
+                max_retries=0,
+                num_retries=0,
+                messages=[{"role": "user", "content": "hi"}],
+            )
+
+    assert route.call_count == 1
+    assert litellm.num_retries == 3
