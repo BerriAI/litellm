@@ -552,6 +552,46 @@ async def test_anthropic_messages_claude_platform_sends_exact_body_through_stric
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("api_base", "anthropic_base_url"),
+    [("https://aws-external-anthropic.us-west-2.api.aws", None), (None, "https://api.deepseek.com/anthropic")],
+    ids=["explicit_api_base", "anthropic_base_url_elsewhere"],
+)
+async def test_anthropic_messages_claude_platform_drops_another_models_unsigned_thought(
+    monkeypatch, api_base, anthropic_base_url
+):
+    import litellm
+
+    monkeypatch.delenv("ANTHROPIC_API_BASE", raising=False)
+    monkeypatch.delenv("ANTHROPIC_BASE_URL", raising=False)
+    if anthropic_base_url is not None:
+        monkeypatch.setenv("ANTHROPIC_BASE_URL", anthropic_base_url)
+    requests: Final[list[dict]] = []
+
+    await litellm.anthropic_messages(
+        model="bedrock/claude_platform/claude-sonnet-4-6",
+        messages=[
+            {"role": "user", "content": "Pick a number."},
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "thinking", "thinking": "Gemini's plan", "signature": ""},
+                    {"type": "text", "text": "Seven."},
+                ],
+            },
+            {"role": "user", "content": "Double it."},
+        ],
+        max_tokens=10,
+        api_base=api_base,
+        client=_async_gateway_client(requests),
+        workspace_id="wrkspc_test",
+        **API_KEY_KWARGS,
+    )
+
+    assert [request["body"]["messages"][1]["content"] for request in requests] == [[{"type": "text", "text": "Seven."}]]
+
+
+@pytest.mark.asyncio
 async def test_anthropic_messages_claude_platform_workspace_and_region_lookups_leave_the_event_loop_free(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

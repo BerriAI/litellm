@@ -327,7 +327,7 @@ def release_unstarted_picks(store: _ReservationStore, call_id: str | None) -> No
 
 @contextlib.contextmanager
 def owning_picks(store: _ReservationStore, call_id: str | None) -> Generator[None, None, None]:
-    owner: Final = call_id or _PICK_OWNER.get() or uuid.uuid4().hex
+    owner: Final = call_id or uuid.uuid4().hex
     token: Final = _PICK_OWNER.set(owner)
     try:
         yield

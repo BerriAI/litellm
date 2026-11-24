@@ -20,6 +20,7 @@ from litellm.caching.caching import DualCache
 from litellm.caching.in_memory_cache import DEFAULT_MAX_SIZE_IN_MEMORY, InMemoryCache
 from litellm.caching.redis_cache import RedisCircuitBreakerOpenError
 from litellm.constants import LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.attempt_settlement import routed_attempt
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.router_strategy.least_busy import (
@@ -1348,3 +1349,59 @@ def test_every_call_in_flight_at_once_frees_its_count_with_the_default_store_siz
         attempt.run(worker.log_failure_event, call, None, None, None)
 
     assert worker.get_available_deployments(GROUP, HEALTHY) is DEPLOYMENT_A
+
+
+class _JudgeInsideDeploymentHook(CustomLogger):
+    def __init__(self, router: Router) -> None:
+        super().__init__()
+        self._router: Final = router
+        self._entered: Final = asyncio.Event()
+        self.judged: Final = asyncio.Event()
+        self.second_call_done: Final = asyncio.Event()
+
+    async def async_pre_call_deployment_hook(
+        self, kwargs: dict[str, object], call_type: CallTypes | None
+    ) -> dict[str, object] | None:
+        if self._entered.is_set():
+            return None
+        self._entered.set()
+        await self._router.acompletion(model="judge", messages=[{"role": "user", "content": "safe?"}])
+        self.judged.set()
+        await self.second_call_done.wait()
+        return None
+
+
+@pytest.mark.asyncio
+async def test_a_routed_call_made_by_a_deployment_hook_keeps_the_chat_calls_pick_held(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    router: Final = Router(
+        model_list=[
+            *(
+                {
+                    "model_name": ROUTER_GROUP,
+                    "litellm_params": {"model": "openai/gpt-4.1-mini", "api_key": "key", "mock_response": "ok"},
+                    "model_info": {"id": deployment_id},
+                }
+                for deployment_id in ("1", "2")
+            ),
+            {
+                "model_name": "judge",
+                "litellm_params": {"model": "openai/gpt-4.1-mini", "api_key": "key", "mock_response": "SAFE"},
+                "model_info": {"id": "judge"},
+            },
+        ],
+        routing_strategy="least-busy",
+        num_retries=0,
+    )
+    hook: Final = _JudgeInsideDeploymentHook(router)
+    monkeypatch.setattr(litellm, "callbacks", [hook])
+    messages: Final = [{"role": "user", "content": "hi"}]
+
+    judged_call: Final = asyncio.ensure_future(router.acompletion(model=ROUTER_GROUP, messages=messages))
+    await hook.judged.wait()
+    arriving: Final = await router.acompletion(model=ROUTER_GROUP, messages=messages)
+    hook.second_call_done.set()
+    judged: Final = await judged_call
+
+    assert {judged._hidden_params["model_id"], arriving._hidden_params["model_id"]} == {"1", "2"}

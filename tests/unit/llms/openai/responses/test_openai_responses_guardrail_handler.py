@@ -43,6 +43,9 @@ from litellm.llms.openai.responses.guardrail_translation.handler import (
     OpenAIResponsesHandler,
 )
 from litellm.llms.openai.responses.guardrail_translation.tool_merge import merge_guardrailed_tools
+from litellm.litellm_core_utils.tool_fields import chat_member_name
+from litellm.llms.base_llm.guardrail_translation.utils import UnappliableRequestRewrite
+from litellm.llms.vertex_ai.gemini.web_search_calls import gemini_web_search_calls
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_hooks.generic_guardrail_api import GenericGuardrailAPI
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
@@ -1906,6 +1909,26 @@ class TestOpenAIResponsesHandlerToolCallExtraction:
         assert _web_call_actions(result.output) == _MASKED_WEB_CALL_ACTIONS
 
     @pytest.mark.asyncio
+    async def test_process_output_response_blocks_a_gemini_web_search_query_with_a_blocked_word(self):
+        content_filter: Final = ContentFilterGuardrail(
+            guardrail_name="block-persimmon",
+            blocked_words=[BlockedWord(keyword="persimmon", action=ContentFilterAction.BLOCK)],
+        )
+        response: Final = ResponsesAPIResponse(
+            id="resp_1",
+            created_at=1,
+            model="gemini-3-pro-preview",
+            object="response",
+            status="completed",
+            output=[*gemini_web_search_calls("resp_1", ["persimmon tree"]), _message_item("a fig")],
+        )
+
+        with pytest.raises(HTTPException) as blocked:
+            await OpenAIResponsesHandler().process_output_response(response, content_filter, request_data={})
+
+        assert blocked.value.status_code == 400
+
+    @pytest.mark.asyncio
     async def test_process_output_response_never_returns_original_search_arguments_after_a_non_json_rewrite(self):
         response = ResponsesAPIResponse(
             id="resp_1",
@@ -2940,6 +2963,27 @@ class TestOpenAIResponsesHandlerStreamingOutputProcessing:
             item=BaseLiteLLMOpenAIResponseObject(
                 **build_web_search_call("srvtoolu_1", {"query": "persimmon"}, None, "completed").model_dump()
             ),
+        )
+        guardrail: Final = RecordingPersimmonMaskingGuardrail(guardrail_name="mask")
+
+        await OpenAIResponsesHandler().process_output_streaming_response(
+            responses_so_far=[done],
+            guardrail_to_apply=guardrail,
+            litellm_logging_obj=None,
+        )
+
+        assert guardrail.seen_tool_calls == [("web_search", '{"query": "persimmon"}')]
+
+    @pytest.mark.asyncio
+    async def test_streaming_output_item_done_reports_a_gemini_web_search_call(self):
+        from litellm.types.llms.base import BaseLiteLLMOpenAIResponseObject
+        from litellm.types.llms.openai import OutputItemDoneEvent, ResponsesAPIStreamEvents
+
+        done: Final = OutputItemDoneEvent(
+            type=ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
+            output_index=0,
+            sequence_number=1,
+            item=BaseLiteLLMOpenAIResponseObject(**gemini_web_search_calls("resp_1", ["persimmon"])[0].model_dump()),
         )
         guardrail: Final = RecordingPersimmonMaskingGuardrail(guardrail_name="mask")
 
@@ -4503,6 +4547,43 @@ def _tool_named(tools, name):
     return next(tool for tool in tools if tool.get("name") == name)
 
 
+def _with_description(chat_tool: dict, description: str) -> dict:
+    return {**chat_tool, "function": {**chat_tool["function"], "description": description}}
+
+
+def _replayed_tool_calls(messages: list[dict]) -> list[dict]:
+    return list(chain.from_iterable(message.get("tool_calls") or [] for message in messages))
+
+
+_LONG_NAMESPACE: Final = "mcp__codex_apps__codex_document_control"
+_LONG_MEMBER: Final = "_get_document_tool_schemas"
+_LONG_MEMBER_TOOLS: Final = (
+    {
+        "type": "namespace",
+        "name": _LONG_NAMESPACE,
+        "description": "Document tools",
+        "tools": [{"type": "function", "name": _LONG_MEMBER, "description": "Get schemas", "parameters": {}}],
+    },
+)
+
+
+def _replayed_long_member_call_input(call: dict) -> list[dict]:
+    return [
+        {"type": "message", "role": "user", "content": "Get the schemas"},
+        call,
+        {"type": "function_call_output", "call_id": call["call_id"], "output": "the schemas"},
+        {"type": "message", "role": "user", "content": "Thanks"},
+    ]
+
+
+def _function_tool_descriptions(tools: list[dict]) -> list[tuple[str | None, str, str]]:
+    return [
+        (tool["name"] if tool["type"] == "namespace" else None, function["name"], function["description"])
+        for tool in tools
+        for function in (tool["tools"] if tool["type"] == "namespace" else [tool])
+    ]
+
+
 class TestOpenAIResponsesHandlerNamespaceTools:
     """Codex sends MCP tools as ``namespace`` tools; a guardrail must never flatten them (GH #39183)"""
 
@@ -4541,6 +4622,246 @@ class TestOpenAIResponsesHandlerNamespaceTools:
             "mcp__confluence__confluence_search",
             "apply_patch",
         ]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("top_level", [False, True], ids=["sibling_member", "top_level_function"])
+    async def test_scanning_tools_whose_chat_names_collide_leaves_them_for_the_route_to_judge(self, top_level: bool):
+        namespace: Final = "mcp__codex_apps__codex_document_control"
+        long_member: Final = {"type": "function", "name": "_get_document_tool_schemas", "parameters": {"type": "object"}}
+        shortened: Final = chat_member_name(namespace, long_member["name"])
+        colliding: Final = {
+            "type": "function",
+            "name": shortened if top_level else shortened.removeprefix(f"{namespace}__"),
+            "parameters": {"type": "object"},
+        }
+        members: Final = [long_member] if top_level else [long_member, colliding]
+        data: Final = {
+            **_codex_request("hi"),
+            "tools": [*([colliding] if top_level else []), {"type": "namespace", "name": namespace, "tools": members}],
+        }
+        expected_tools: Final = copy.deepcopy(data["tools"])
+        guardrail: Final = MockRecordingGuardrail(guardrail_name="test")
+
+        result: Final = await OpenAIResponsesHandler().process_input_messages(data, guardrail)
+
+        assert result["tools"] == expected_tools
+        assert [tool["function"]["name"] for tool in guardrail.seen_inputs[0]["tools"]] == (
+            [shortened, f"{namespace}__{long_member['name']}"]
+            if top_level
+            else [f"{namespace}__{long_member['name']}", shortened]
+        )
+
+    @staticmethod
+    def _tools_sharing_a_shortened_name(top_level: bool) -> tuple[list[dict], dict, dict, str]:
+        namespace: Final = "mcp__codex_apps__codex_document_control"
+        long_member: Final = {
+            "type": "function",
+            "name": "_get_document_tool_schemas",
+            "description": "Fetch the schemas of a document",
+            "parameters": {"type": "object"},
+        }
+        shortened: Final = chat_member_name(namespace, long_member["name"])
+        colliding: Final = {
+            "type": "function",
+            "name": shortened if top_level else shortened.removeprefix(f"{namespace}__"),
+            "description": "Fetch the raw bytes of a document",
+            "parameters": {"type": "object"},
+        }
+        tools: Final = (
+            [colliding, {"type": "namespace", "name": namespace, "tools": [long_member]}]
+            if top_level
+            else [{"type": "namespace", "name": namespace, "tools": [long_member, colliding]}]
+        )
+        return tools, long_member, colliding, namespace
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("top_level", [False, True], ids=["sibling_member", "top_level_function"])
+    async def test_a_guardrail_dropping_the_first_of_two_tools_sharing_a_shortened_name_keeps_the_second(
+        self, top_level: bool
+    ):
+        tools, long_member, colliding, namespace = self._tools_sharing_a_shortened_name(top_level)
+        expected_tools: Final = (
+            [{"type": "namespace", "name": namespace, "tools": [long_member]}]
+            if top_level
+            else [{"type": "namespace", "name": namespace, "tools": [colliding]}]
+        )
+        guardrail: Final = ToolEditingGuardrail(edit=lambda chat_tools: chat_tools[1:], guardrail_name="test")
+
+        result: Final = await OpenAIResponsesHandler().process_input_messages(
+            {**_codex_request("hi"), "tools": tools}, guardrail
+        )
+
+        assert result["tools"] == expected_tools
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("top_level", [False, True], ids=["sibling_member", "top_level_function"])
+    async def test_a_guardrail_dropping_one_tool_sharing_a_shortened_name_edits_the_one_it_kept(self, top_level: bool):
+        tools, long_member, colliding, namespace = self._tools_sharing_a_shortened_name(top_level)
+        expected_tools: Final = (
+            [{"type": "namespace", "name": namespace, "tools": [{**long_member, "description": "edited"}]}]
+            if top_level
+            else [{"type": "namespace", "name": namespace, "tools": [{**colliding, "description": "edited"}]}]
+        )
+        guardrail: Final = ToolEditingGuardrail(
+            edit=lambda chat_tools: [_with_description(chat_tools[1], "edited")], guardrail_name="test"
+        )
+
+        result: Final = await OpenAIResponsesHandler().process_input_messages(
+            {**_codex_request("hi"), "tools": tools}, guardrail
+        )
+
+        assert result["tools"] == expected_tools
+
+    @staticmethod
+    def _top_level_function_named_like_a_member(member_parameters: dict) -> list[dict]:
+        return [
+            {
+                "type": "function",
+                "name": "mcp__docs__get_document",
+                "description": "Top-level document getter",
+                "parameters": {"type": "object", "properties": {"doc_id": {"type": "string"}}},
+            },
+            {
+                "type": "namespace",
+                "name": "mcp__docs",
+                "tools": [
+                    {
+                        "type": "function",
+                        "name": "get_document",
+                        "description": "Namespace document getter",
+                        "parameters": member_parameters,
+                    }
+                ],
+            },
+        ]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "dropped, expected",
+        [
+            (0, [("mcp__docs", "get_document", "edited")]),
+            (1, [(None, "mcp__docs__get_document", "edited")]),
+        ],
+        ids=["drop_top_level", "drop_member"],
+    )
+    async def test_a_guardrail_dropping_one_of_two_same_named_tools_edits_the_one_it_kept(
+        self, dropped: int, expected: list[tuple[str | None, str, str]]
+    ):
+        tools: Final = self._top_level_function_named_like_a_member(
+            {"type": "object", "properties": {"path": {"type": "string"}}}
+        )
+        guardrail: Final = ToolEditingGuardrail(
+            edit=lambda chat_tools: [_with_description(chat_tools[1 - dropped], "edited")], guardrail_name="test"
+        )
+
+        result: Final = await OpenAIResponsesHandler().process_input_messages(
+            {**_codex_request("hi"), "tools": tools}, guardrail
+        )
+
+        assert _function_tool_descriptions(result["tools"]) == expected
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "dropped, expected",
+        [
+            (0, [("mcp__docs", "get_document", "Namespace document getter")]),
+            (1, [(None, "mcp__docs__get_document", "Top-level document getter")]),
+        ],
+        ids=["drop_top_level", "drop_member"],
+    )
+    async def test_a_guardrail_dropping_one_of_two_same_named_tools_and_stripping_defaults_keeps_the_right_one(
+        self, dropped: int, expected: list[tuple[str | None, str, str]]
+    ):
+        tools: Final = self._top_level_function_named_like_a_member(
+            {"type": "object", "properties": {"doc_id": {"type": "string"}}}
+        )
+
+        def drop_and_strip_defaults(chat_tools: list[dict]) -> list[dict]:
+            kept: Final = chat_tools[1 - dropped]
+            function: Final = {key: value for key, value in kept["function"].items() if key != "strict"}
+            return [{**kept, "function": function}]
+
+        guardrail: Final = ToolEditingGuardrail(edit=drop_and_strip_defaults, guardrail_name="test")
+
+        result: Final = await OpenAIResponsesHandler().process_input_messages(
+            {**_codex_request("hi"), "tools": tools}, guardrail
+        )
+
+        assert _function_tool_descriptions(result["tools"]) == expected
+
+    @pytest.mark.asyncio
+    async def test_a_guardrail_dropping_one_of_two_same_named_tools_and_rewriting_the_other_beyond_recognition_is_rejected(
+        self,
+    ):
+        tools: Final = self._top_level_function_named_like_a_member(
+            {"type": "object", "properties": {"doc_id": {"type": "string"}}}
+        )
+        guardrail: Final = ToolEditingGuardrail(
+            edit=lambda chat_tools: [_with_description(chat_tools[1], "edited")], guardrail_name="test"
+        )
+
+        with pytest.raises(UnappliableRequestRewrite):
+            await OpenAIResponsesHandler().process_input_messages({**_codex_request("hi"), "tools": tools}, guardrail)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("dropped", [0, 1], ids=["drop_first", "drop_second"])
+    async def test_a_guardrail_dropping_one_of_two_same_named_top_level_functions_edits_the_one_it_kept(
+        self, dropped: int
+    ):
+        parameters: Final = {"type": "object", "properties": {"city": {"type": "string"}}}
+        tools: Final = [
+            {"type": "function", "name": "lookup_city", "description": "Look up a city", "parameters": parameters},
+            {"type": "function", "name": "lookup_city", "description": "Find a city", "parameters": parameters},
+        ]
+        guardrail: Final = ToolEditingGuardrail(
+            edit=lambda chat_tools: [_with_description(chat_tools[1 - dropped], "edited")], guardrail_name="test"
+        )
+
+        result: Final = await OpenAIResponsesHandler().process_input_messages(
+            {**_codex_request("hi"), "tools": tools}, guardrail
+        )
+
+        assert _function_tool_descriptions(result["tools"]) == [(None, "lookup_city", "edited")]
+
+    @pytest.mark.asyncio
+    async def test_a_guardrail_sees_a_replayed_long_member_call_under_the_name_it_sees_the_tool_by(self):
+        call: Final = {
+            "type": "function_call",
+            "namespace": _LONG_NAMESPACE,
+            "name": _LONG_MEMBER,
+            "call_id": "call_1",
+            "arguments": "{}",
+        }
+        guardrail: Final = MockRecordingGuardrail(guardrail_name="test")
+
+        await OpenAIResponsesHandler().process_input_messages(
+            {**_codex_request(_replayed_long_member_call_input(call)), "tools": list(_LONG_MEMBER_TOOLS)}, guardrail
+        )
+
+        seen: Final = guardrail.seen_inputs[0]
+        tool_names: Final = [tool["function"]["name"] for tool in seen["tools"]]
+        call_names: Final = [call["function"]["name"] for call in _replayed_tool_calls(seen["structured_messages"])]
+        assert call_names == tool_names == [f"{_LONG_NAMESPACE}__{_LONG_MEMBER}"]
+
+    @pytest.mark.asyncio
+    async def test_a_message_rewrite_resends_a_replayed_long_member_call_as_it_came(self):
+        call: Final = {
+            "type": "function_call",
+            "namespace": _LONG_NAMESPACE,
+            "name": _LONG_MEMBER,
+            "call_id": "call_1",
+            "arguments": "{}",
+            "id": "fc_1",
+            "status": "completed",
+        }
+
+        result: Final = await OpenAIResponsesHandler().process_input_messages(
+            {**_codex_request(_replayed_long_member_call_input(call)), "tools": list(_LONG_MEMBER_TOOLS)},
+            StructuredRewriteGuardrail(guardrail_name="test"),
+        )
+
+        assert result["input"][0]["content"] == COMPRESSED_MARKER
+        assert [item for item in result["input"] if item.get("type") == "function_call"] == [call]
 
     @pytest.mark.asyncio
     async def test_a_function_only_guardrail_keeps_the_tool_search_tool_it_never_scans(self):
@@ -5250,6 +5571,34 @@ class TestCompactionOutputSummaryReachesOutputGuardrails:
         result: Final = await OpenAIResponsesHandler().process_output_response(response, self._lane_masking_guardrail())
 
         assert self._summary(result.output[0]) == "The user lives at 1 [MASKED]."
+
+    @pytest.mark.asyncio
+    async def test_spreading_one_rewrite_over_message_text_leaves_the_summary_alone(self) -> None:
+        response: Final = ResponsesAPIResponse(
+            id="resp_1",
+            created_at=1,
+            model="claude-sonnet-5-5",
+            object="response",
+            status="completed",
+            output=[
+                self._compaction_item(),
+                {
+                    "type": "message",
+                    "id": "msg_1",
+                    "status": "completed",
+                    "role": "assistant",
+                    "content": [
+                        {"type": "output_text", "text": "first", "annotations": []},
+                        {"type": "refusal", "refusal": "second"},
+                    ],
+                },
+            ],
+        )
+
+        await OpenAIResponsesHandler().spread_text_rewrite(response, "rewritten")
+
+        assert self._summary(response.output[0]) == self.SUMMARY
+        assert [response.output[1].content[0].text, response.output[1].content[1].refusal] == ["rewritten", ""]
 
     @pytest.mark.asyncio
     async def test_ended_stream_summary_is_masked_in_the_done_item_and_the_envelope(self) -> None:
@@ -6353,13 +6702,6 @@ class TestReasoningOutputReachesOutputGuardrails:
         "stray_event",
         [
             {
-                "type": "response.refusal.delta",
-                "item_id": "msg_1",
-                "output_index": 1,
-                "content_index": 0,
-                "delta": "the persimmon",
-            },
-            {
                 "type": "response.code_interpreter_call_code.delta",
                 "item_id": "ci_1",
                 "output_index": 1,
@@ -6382,7 +6724,6 @@ class TestReasoningOutputReachesOutputGuardrails:
             {"type": "response.reasoning_summary_text.delta", "item_id": "rs_2", "delta": "the persimmon"},
         ],
         ids=[
-            "refusal",
             "code-interpreter",
             "unannounced-tool-call",
             "answer-at-the-reasoning-index",
@@ -6407,6 +6748,28 @@ class TestReasoningOutputReachesOutputGuardrails:
             await _deliver([reasoning, stray_event], guardrail)
 
         assert guardrail.scanned_texts == ["I think of a fig the persimmon"]
+
+    @pytest.mark.asyncio
+    async def test_a_refusal_streamed_next_to_reasoning_carries_the_mask(self) -> None:
+        events: Final = [
+            {
+                "type": "response.reasoning_summary_text.delta",
+                "item_id": "rs_1",
+                "output_index": 0,
+                "delta": "I think of a fig ",
+            },
+            {
+                "type": "response.refusal.delta",
+                "item_id": "msg_1",
+                "output_index": 1,
+                "content_index": 0,
+                "delta": "the persimmon",
+            },
+        ]
+
+        await _deliver(events)
+
+        assert [event["delta"] for event in events] == ["I think of a fig ", "the [MASKED]"]
 
     @pytest.mark.asyncio
     async def test_a_streamed_tool_call_next_to_reasoning_stays_on_the_released_envelope(self) -> None:
@@ -7311,3 +7674,11 @@ class TestRefusalPartsReachTextGuardrails:
         )
 
         assert (events[0].delta, events[1].refusal) == (_MASKED_REFUSAL, _MASKED_REFUSAL)
+
+
+
+def test_a_refusal_done_event_alone_supplies_the_text_to_scan() -> None:
+    refusal: Final = "I cannot help alice@example.com"
+    done_event: Final = {"type": "response.refusal.done", "output_index": 0, "content_index": 0, "refusal": refusal}
+
+    assert OpenAIResponsesHandler().get_streaming_string_so_far([done_event]) == refusal

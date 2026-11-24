@@ -4,7 +4,7 @@ from enum import Enum
 from types import MappingProxyType
 from typing import Annotated, Final, Literal, TypeAlias, cast
 
-from pydantic import ConfigDict, Field, JsonValue, field_validator, model_validator
+from pydantic import ConfigDict, Field, JsonValue, TypeAdapter, field_validator, model_validator
 from pydantic.fields import FieldInfo
 from typing_extensions import ReadOnly, Required, TypedDict
 
@@ -1028,10 +1028,13 @@ def _is_blank(value: object) -> bool:
     return isinstance(value, str) and not value.strip()
 
 
+_OPAQUE_VALUE: Final = TypeAdapter(object)
+
+
 def _default_if_blank(field: FieldInfo | None, value: object) -> object:
     if field is None or field.is_required() or not _is_blank(value):
         return value
-    return field.get_default(call_default_factory=True)
+    return _OPAQUE_VALUE.validate_python(field.get_default(call_default_factory=True))
 
 
 GuardrailNumRetries: TypeAlias = Annotated[
@@ -1400,7 +1403,7 @@ class BaseLitellmParams(ContentFilterConfigModel):  # works for new and patch up
         check_fields=False,
     )
     @classmethod
-    def normalize_lowercase(cls, v):
+    def normalize_lowercase(cls, v: object) -> object:
         """Normalize string and list fields to lowercase for ALL guardrail types."""
         if isinstance(v, str):
             return v.lower()
@@ -1514,11 +1517,11 @@ class LitellmParams(  # pyright: ignore[reportIncompatibleVariableOverride]  # o
         # Define custom behavior for the 'in' operator
         return hasattr(self, key)
 
-    def get(self, key, default=None):
+    def get(self, key: str, default: object = None):
         # Custom .get() method to access attributes with a default value if the attribute doesn't exist
         return getattr(self, key, default)
 
-    def __getitem__(self, key):
+    def __getitem__(self, key: str):
         # Allow dictionary-style access to attributes
         return getattr(self, key)
 
@@ -1555,7 +1558,7 @@ class GuardrailInfoResponse(LiteLLMBaseModel):
     updated_at: datetime | None = None
     guardrail_definition_location: GUARDRAIL_DEFINITION_LOCATION = GUARDRAIL_DEFINITION_LOCATION.CONFIG
 
-    def __init__(self, **kwargs) -> None:
+    def __init__(self, **kwargs: object) -> None:
         super().__init__(**kwargs)
 
 

@@ -1,3 +1,4 @@
+from collections.abc import Sequence
 from io import BufferedReader
 from typing import TYPE_CHECKING, Any, Final, cast
 
@@ -38,6 +39,10 @@ class _ImageResponseFields(TypedDict, total=False, extra_items=object):
     pass
 
 
+def _upload_file_name(image: object) -> object:
+    return image.name if isinstance(image, BufferedReader) else "image.png"
+
+
 class OpenAIImageEditConfig(BaseImageEditConfig):
     """
     Base configuration for OpenAI image edit API.
@@ -71,33 +76,29 @@ class OpenAIImageEditConfig(BaseImageEditConfig):
         image_edit_optional_params: ImageEditOptionalRequestParams,
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:
         """No mapping applied since inputs are in OpenAI spec already"""
         return dict(image_edit_optional_params)
 
     def _add_image_to_files(
         self,
-        files_list: list[tuple[str, Any]],
+        files_list: list[tuple[str, object]],
         image: object,
         field_name: str,
     ) -> None:
         """Add an image to the files list with appropriate content type"""
         image_content_type: Final = ImageEditRequestUtils.get_image_content_type(image)
-
-        if isinstance(image, BufferedReader):
-            files_list.append((field_name, (image.name, image, image_content_type)))
-        else:
-            files_list.append((field_name, ("image.png", image, image_content_type)))
+        files_list.append((field_name, (_upload_file_name(image), image, image_content_type)))
 
     def transform_image_edit_request(
         self,
         model: str,
         prompt: str | None,
-        image: FileTypes | None,
+        image: FileTypes | Sequence[FileTypes | None] | None,
         image_edit_optional_request_params: dict,
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
-    ) -> tuple[dict, RequestFiles]:
+        headers: dict[str, str],
+    ) -> tuple[dict[str, object], RequestFiles]:
         """
         Transform image edit request to OpenAI API format.
 
@@ -169,7 +170,7 @@ class OpenAIImageEditConfig(BaseImageEditConfig):
         headers: dict,
         model: str,
         api_key: str | None = None,
-        litellm_params: dict | None = None,
+        litellm_params: dict[str, object] | None = None,
         api_base: str | None = None,
     ) -> dict:
         bearer_token: Final = resolve_openai_bearer_token(
@@ -182,7 +183,7 @@ class OpenAIImageEditConfig(BaseImageEditConfig):
         self,
         model: str,
         api_base: str | None,
-        litellm_params: dict,
+        litellm_params: dict[str, object],
     ) -> str:
         """
         Get the endpoint for OpenAI responses API

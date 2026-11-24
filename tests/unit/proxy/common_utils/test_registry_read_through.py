@@ -432,8 +432,9 @@ async def test_resync_model_deployments_mutates_router_under_model_reconcile_loc
     router.registry.return_value.deployments.return_value = []
     lock_states: list[bool] = []
 
-    def record_add_deployment(db_models) -> None:
+    def record_add_deployment(db_models) -> int:
         lock_states.append(proxy_server.DB_RECONCILE_LOCK.locked())
+        return 0
 
     monkeypatch.setattr(proxy_server, "prisma_client", prisma_client)
     monkeypatch.setattr(proxy_server, "store_model_in_db", True)
@@ -476,8 +477,9 @@ async def test_resync_model_deployments_loads_db_credentials_before_reconciling_
             ]
         )
 
-    def install_models(db_models: object) -> None:
+    def install_models(db_models: object) -> int:
         installed(db_models=db_models, credential=CredentialAccessor.get_credential_values("openai-cred"))
+        return 0
 
     monkeypatch.setattr(litellm, "credential_list", [])
     monkeypatch.setattr(proxy_server, "prisma_client", prisma_client)

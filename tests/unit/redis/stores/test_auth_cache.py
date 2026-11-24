@@ -7,7 +7,6 @@ import pytest
 
 from litellm.caching.redis_batch import request_redis_batch_scope
 from litellm.caching.redis_cache import RedisCache
-from litellm.proxy.common_utils.user_api_key_cache import is_user_key_cache_key
 from litellm.redis.stores.auth_cache import AuthCacheSettings, AuthCacheStore, AuthObject
 from litellm.redis.stores.connection import connect
 from litellm.rust_bridge._native import LocalSizes, NativeAuthCache
@@ -53,21 +52,6 @@ _WRITTEN: Final[tuple[tuple[object, str, str], ...]] = (
 
 
 @pytest.mark.parametrize(
-    ("key", "key_object"),
-    [
-        (_KEY_OBJECT, True),
-        ("88DC28D0F030C55ED4AB77ED8FAF098196CB1C05DF778539800C9F1243FE6B4B", False),
-        ("88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4", False),
-        ("team_id:88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b", False),
-        ("team_membership:user-1:team-1", False),
-        ("end_user_restricted_registry", False),
-    ],
-)
-def test_the_native_partition_rule_is_is_user_key_cache_key(key: str, key_object: bool) -> None:
-    assert is_user_key_cache_key(key) is key_object
-
-
-@pytest.mark.parametrize(
     ("auth_object", "key"),
     [
         (AuthObject.virtual_key(_KEY_OBJECT), _KEY_OBJECT),
@@ -87,6 +71,14 @@ def test_the_native_partition_rule_is_is_user_key_cache_key(key: str, key_object
         (AuthObject.customer_member("m-1"), "customer_member_id:m-1"),
         (AuthObject.customer_org_alias("acme"), "customer_org_alias:acme"),
         (AuthObject.customer_app_definition(), "customer_app_definition:global"),
+        (AuthObject.customer_app("team", 't"1'), 'customer_app:["team", "t\\"1"]'),
+        (
+            AuthObject.customer_app_association("member", "a-1", "\u00fc"),
+            'customer_app_association:["member", "a-1", "\\u00fc"]',
+        ),
+        (AuthObject.customer_app_budget("b-1"), "customer_app_budget:b-1"),
+        (AuthObject.customer_app_key_resource(_KEY_OBJECT), f"customer_app_key_resource:{_KEY_OBJECT}"),
+        (AuthObject.customer_app_shared_profiles(), "customer_app_shared_profiles"),
         (AuthObject.default_end_user_budget("b-1"), "default_end_user_budget:b-1"),
         (AuthObject.team_member_default_budget("b-1"), "team_member_default_budget:b-1"),
         (AuthObject.tag("prod"), "tag:prod"),
@@ -145,29 +137,29 @@ def test_reads_are_what_redis_cache_reads(stored: str, value: object) -> None:
 def test_plain_values_cross_the_bridge_unchanged(value: object) -> None:
     store: Final = NativeAuthCache(None, memory_entries=200)
 
-    store.set_local("team_id:t1", value)
+    store.set_local(AuthObject.team("t1"), value)
 
-    assert store.get_local("team_id:t1") == value
-    assert type(store.get_local("team_id:t1")) is type(value)
+    assert store.get_local(AuthObject.team("t1")) == value
+    assert type(store.get_local(AuthObject.team("t1"))) is type(value)
 
 
 def test_a_live_object_is_refused_rather_than_cached_as_something_else() -> None:
     store: Final = NativeAuthCache(None, memory_entries=200)
 
     with pytest.raises(TypeError):
-        store.set_local("team_id:t1", {"created_at": datetime.datetime(2026, 1, 1)})
+        store.set_local(AuthObject.team("t1"), {"created_at": datetime.datetime(2026, 1, 1)})
 
-    assert store.get_local("team_id:t1") is None
+    assert store.get_local(AuthObject.team("t1")) is None
 
 
 def test_user_key_objects_live_in_their_own_memory_partition() -> None:
     store: Final = NativeAuthCache(None, memory_entries=2)
-    store.set_local(_KEY_OBJECT, {"token": _KEY_OBJECT})
+    store.set_local(AuthObject.virtual_key(_KEY_OBJECT), {"token": _KEY_OBJECT})
 
     for index in range(5):
-        store.set_local(f"team_id:t{index}", {"team_id": index})
+        store.set_local(AuthObject.team(f"t{index}"), {"team_id": index})
 
-    assert store.get_local(_KEY_OBJECT) == {"token": _KEY_OBJECT}
+    assert store.get_local(AuthObject.virtual_key(_KEY_OBJECT)) == {"token": _KEY_OBJECT}
     assert store.len_local() == LocalSizes(objects=2, key_objects=1)
 
 
@@ -177,14 +169,14 @@ async def test_reads_and_writes_hand_the_native_store_the_requests_batches_once_
     store: Final = AuthCacheStore(fake)
     natives: Final = FakeNatives()
 
-    await store.get("team_id:t1")
+    await store.get(AuthObject.team("t1"))
     with request_redis_batch_scope(native_factory=natives, native_send_factory=fake_send) as request:  # pyright: ignore[reportArgumentType]  # test double
-        await store.get("team_id:t1")
+        await store.get(AuthObject.team("t1"))
         built: Final = request.native()
-        await store.get("team_id:t1")
-        await store.set("team_id:t1", {"team_id": "t1"}, None)
-        store.set_sync("team_id:t1", {"team_id": "t1"}, None)
-        await store.set_many([("team_id:t1", {"team_id": "t1"})], None)
+        await store.get(AuthObject.team("t1"))
+        await store.set(AuthObject.team("t1"), {"team_id": "t1"}, None)
+        store.set_sync(AuthObject.team("t1"), {"team_id": "t1"}, None)
+        await store.set_many([(AuthObject.team("t1"), {"team_id": "t1"})], None)
 
     assert fake.requests == [
         ("get", None),
@@ -201,18 +193,18 @@ async def test_outside_a_request_a_read_is_a_round_trip_of_its_own() -> None:
     fake: Final = FakeAuthCache(redis={"team_id:t1": {"team_id": "t1"}})
     store: Final = AuthCacheStore(fake)
 
-    assert await store.read_missing(["team_id:t1", "team_id:t2"]) == {
-        "team_id:t1": {"team_id": "t1"},
-        "team_id:t2": None,
+    assert await store.read_missing([AuthObject.team("t1"), AuthObject.team("t2")]) == {
+        AuthObject.team("t1"): {"team_id": "t1"},
+        AuthObject.team("t2"): None,
     }
-    assert store.declare_set("team_id:t3", {}, None) is None
+    assert store.declare_set(AuthObject.team("t3"), {}, None) is None
     assert fake.commands == [("MGET", ("team_id:t1", "team_id:t2"))]
 
 
 def test_a_new_memory_configuration_keeps_what_memory_holds() -> None:
     store: Final = AuthCacheStore(connect(None).auth_cache(AuthCacheSettings(200, 60)))
-    store.set_local("team_id:t1", {"team_id": "t1"}, None)
+    store.set_local(AuthObject.team("t1"), {"team_id": "t1"}, None)
 
     store.reconfigure(AuthCacheSettings(500, 5))
 
-    assert store.get_local("team_id:t1") == {"team_id": "t1"}
+    assert store.get_local(AuthObject.team("t1")) == {"team_id": "t1"}

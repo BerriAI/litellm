@@ -7,10 +7,12 @@ from typing import Final, Literal
 from urllib.parse import urlparse
 
 import httpx
+from pydantic import TypeAdapter
 from typing_extensions import TypedDict
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.litellm_core_utils.core_helpers import require_attributes
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.litellm_logging import (
     get_standard_logging_object_payload,
@@ -23,6 +25,8 @@ from litellm.types.passthrough_endpoints.assembly_ai import (
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     PassthroughStandardLoggingPayload,
 )
+
+_TRANSCRIPT_JSON: Final = TypeAdapter(object)
 
 
 class AssemblyAITranscriptResponse(TypedDict, total=False):
@@ -63,7 +67,7 @@ class AssemblyAIPassthroughLoggingHandler:
         start_time: datetime,
         end_time: datetime,
         cache_hit: bool,
-        **kwargs,
+        **kwargs: object,
     ):
         """
         Since cost tracking requires polling the AssemblyAI API, we need to handle this in a separate thread. Hence the executor.submit.
@@ -158,7 +162,7 @@ class AssemblyAIPassthroughLoggingHandler:
             )
         )
 
-    def _get_response_to_log(self, transcript_response: AssemblyAITranscriptResponse | None) -> dict:
+    def _get_response_to_log(self, transcript_response: AssemblyAITranscriptResponse | None) -> dict[str, object]:
         if transcript_response is None:
             return {}
         return dict(transcript_response)
@@ -201,10 +205,13 @@ class AssemblyAIPassthroughLoggingHandler:
             response: Final = httpx.get(url, headers=headers)
             response.raise_for_status()
 
-            return response.json()
+            transcript: Final = _TRANSCRIPT_JSON.validate_python(response.json())
         except Exception as e:
             verbose_proxy_logger.exception("[Non blocking logging error] Error getting AssemblyAI transcript: %s", e)
             return None
+        if transcript is None:
+            return None
+        return require_attributes(transcript, dict[str, object], "get")
 
     def _poll_assembly_for_transcript_response(
         self,

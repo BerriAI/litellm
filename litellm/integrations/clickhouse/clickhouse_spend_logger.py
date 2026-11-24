@@ -7,7 +7,7 @@ so `response_id` is always the raw provider response id (cache-hit suffix stripp
 
 import json
 import re
-from collections.abc import Iterable, Iterator, Mapping
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from math import isfinite
 from types import MappingProxyType
 from typing import Any, Final, Protocol
@@ -19,7 +19,6 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.constants import ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY, USAGE_BASED_ROUTING_COUNTED_TOKENS_METADATA_KEY
 from litellm.integrations.clickhouse.clickhouse_batch_logger import ClickHouseBatchLogger
-from litellm.integrations.clickhouse.context import is_lens_analysis
 from litellm.integrations.clickhouse.schema import SPEND_LOGS_TABLE
 from litellm.integrations.clickhouse.spend_log_types import SpendLogPayload, SpendLogRecord
 from litellm.litellm_core_utils.core_helpers import require_attributes
@@ -37,7 +36,8 @@ _INVALID_TRACE_ID: Final = "0" * 32
 _INVALID_SPAN_ID: Final = "0" * 16
 TRACE_INGEST_ROUTE: Final = "/v1/traces"
 _METADATA_MAPPING: Final = TypeAdapter(Mapping[str, object])
-_METADATA_VALUE: Final = TypeAdapter(JsonValue)
+_METADATA_VALUE: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
+_EMPTY_MAPPING: Final[Mapping[str, object]] = MappingProxyType({})
 _INTERNAL_METADATA_KEYS: Final = frozenset(
     (
         "user_api_key",
@@ -108,11 +108,14 @@ def _json_mapping(value: Mapping[str, object]) -> str:
 
 
 def _find_traceparent(metadata: Mapping[str, object], kwargs: Mapping[str, object]) -> tuple[str, str]:
-    custom_headers = metadata.get("requester_custom_headers") or MappingProxyType({})
-    proxy_request = require_attributes(kwargs.get("litellm_params") or MappingProxyType({}), _SupportsGet, "get").get(
-        "proxy_server_request"
-    ) or MappingProxyType({})
-    request_headers = require_attributes(proxy_request, _SupportsGet, "get").get("headers") or MappingProxyType({})
+    custom_headers: Final = metadata.get("requester_custom_headers") or _EMPTY_MAPPING
+    proxy_request: Final = (
+        require_attributes(kwargs.get("litellm_params") or _EMPTY_MAPPING, _SupportsGet, "get").get(
+            "proxy_server_request"
+        )
+        or _EMPTY_MAPPING
+    )
+    request_headers: Final = require_attributes(proxy_request, _SupportsGet, "get").get("headers") or _EMPTY_MAPPING
     for headers in (custom_headers, request_headers):
         for name, value in require_attributes(headers, _SupportsItems, "items").items():
             if str(name).lower() == "traceparent":
@@ -120,9 +123,9 @@ def _find_traceparent(metadata: Mapping[str, object], kwargs: Mapping[str, objec
     return "", ""
 
 
-def _cache_tokens(usage: Mapping[str, object]) -> tuple[int, int]:
+def _cache_tokens(usage: _SupportsGet) -> tuple[int, int]:
     """(cache_read, cache_write) from a Usage dict: OpenAI prompt_tokens_details first, Anthropic fields as fallback."""
-    details = require_attributes(usage.get("prompt_tokens_details") or MappingProxyType({}), _SupportsGet, "get")
+    details: Final = require_attributes(usage.get("prompt_tokens_details") or _EMPTY_MAPPING, _SupportsGet, "get")
     cache_read = _int(details.get("cached_tokens")) or _int(usage.get("cache_read_input_tokens"))
     cache_write = (
         _int(details.get("cache_write_tokens"))
@@ -132,7 +135,7 @@ def _cache_tokens(usage: Mapping[str, object]) -> tuple[int, int]:
     return cache_read, cache_write
 
 
-def _request_tags(value: object) -> list[str]:
+def _request_tags(value: Sequence[object] | None) -> list[str]:
     if not isinstance(value, list):
         return []
     return [str(tag) for tag in value]
@@ -140,9 +143,10 @@ def _request_tags(value: object) -> list[str]:
 
 def _session_id(payload: StandardLoggingPayload | SpendLogPayload, kwargs: Mapping[str, object]) -> str:
     """Mirrors proxy `_get_session_id_for_spend_log`: explicit session id, else the payload trace id."""
-    request_metadata = require_attributes(
-        kwargs.get("litellm_params") or MappingProxyType({}), _SupportsGet, "get"
-    ).get("metadata") or MappingProxyType({})
+    request_metadata: Final = (
+        require_attributes(kwargs.get("litellm_params") or _EMPTY_MAPPING, _SupportsGet, "get").get("metadata")
+        or _EMPTY_MAPPING
+    )
     return str(
         payload.get("session_id")
         or require_attributes(request_metadata, _SupportsGet, "get").get("session_id")
@@ -160,8 +164,10 @@ def spend_log_row_from_payload(
     payload: StandardLoggingPayload | SpendLogPayload, kwargs: Mapping[str, object]
 ) -> SpendLogRecord:
     metadata: Mapping[str, Any] = payload.get("metadata") or MappingProxyType({})
-    hidden_params: Mapping[str, Any] = payload.get("hidden_params") or MappingProxyType({})
-    usage: Mapping[str, Any] = metadata.get("usage_object") or hidden_params.get("usage_object") or MappingProxyType({})
+    hidden_params: Final[Mapping[str, object]] = payload.get("hidden_params") or _EMPTY_MAPPING
+    usage: Final = require_attributes(
+        metadata.get("usage_object") or hidden_params.get("usage_object") or _EMPTY_MAPPING, _SupportsGet, "get"
+    )
     cache_read_tokens, cache_write_tokens = _cache_tokens(usage)
     trace_id, span_id = _find_traceparent(metadata, kwargs)
     response_id: Final = str(payload.get("id") or "")
@@ -175,7 +181,7 @@ def spend_log_row_from_payload(
     )
     litellm_params: Final = _METADATA_MAPPING.validate_python(kwargs.get("litellm_params") or {})
     request_metadata: Final = (
-        MappingProxyType({})
+        _EMPTY_MAPPING
         if redact
         else redact_credentials_in_payload(
             MappingProxyType(
@@ -229,7 +235,6 @@ def spend_log_row_from_payload(
                 {
                     **request_metadata,
                     **metadata,
-                    "litellm_lens_internal": is_lens_analysis(),
                     **({} if track_end_user else {"user_api_key_end_user_id": None}),
                 }
             )
@@ -242,10 +247,14 @@ def spend_log_row_from_payload(
 class ClickHouseSpendLogger(ClickHouseBatchLogger):
     table = SPEND_LOGS_TABLE
 
-    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time) -> None:
+    async def async_log_success_event(
+        self, kwargs: _SpendLogKwargs, response_obj: object, start_time: object, end_time: object
+    ) -> None:
         self._log(kwargs)
 
-    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time) -> None:
+    async def async_log_failure_event(
+        self, kwargs: _SpendLogKwargs, response_obj: object, start_time: object, end_time: object
+    ) -> None:
         self._log(kwargs)
 
     def _log(self, kwargs: _SpendLogKwargs) -> None:

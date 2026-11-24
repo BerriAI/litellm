@@ -18,10 +18,20 @@ import os
 import re
 import secrets
 import traceback
-from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Iterable, Iterator, Mapping, Sequence
 from datetime import datetime, timedelta, timezone
+from functools import partial
 from types import MappingProxyType, TracebackType
-from typing import TYPE_CHECKING, Final, Literal, Optional, Protocol, TypeVar, cast
+from typing import (
+    TYPE_CHECKING,
+    Annotated,
+    Final,
+    Literal,
+    Optional,
+    Protocol,
+    TypeVar,
+    cast,
+)
 
 import fastapi
 import yaml
@@ -40,8 +50,23 @@ from litellm.constants import (
     MINIMUM_CUSTOM_KEY_LENGTH,
     UI_SESSION_TOKEN_TEAM_ID,
 )
-from litellm.litellm_core_utils.core_helpers import as_object_list
-from litellm.litellm_core_utils.duration_parser import duration_in_seconds
+from litellm.integrations.lens.policy import LENS_ENABLED_METADATA_KEY, lens_logging_metadata_error
+from litellm.litellm_core_utils.core_helpers import (
+    as_object_list,
+    as_str_mapping,
+    attribute_or_none,
+    has_attributes,
+    int_of,
+    iter_items,
+    require_attributes,
+    sum_of,
+    without,
+)
+from litellm.litellm_core_utils.duration_parser import (
+    duration_in_seconds,
+    duration_in_seconds_from,
+    normalize_budget_window_start,
+)
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.models.credentials import CredentialItem
 from litellm.models.project import LiteLLM_ProjectTable
@@ -64,9 +89,10 @@ from litellm.proxy.auth.auth_utils import (
     enforce_output_token_estimates_are_admin_only,
     enforce_vector_store_index_grants_are_admin_only,
 )
+from litellm.proxy.auth.customer_hierarchy_auth import validate_required_customer_headers_metadata
 from litellm.proxy.auth.master_key_boot_check import SALT_KEY_ENV_VAR
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
+from litellm.proxy.common_utils.cache_invalidation_pubsub import (
     evict_and_broadcast,
 )
 from litellm.proxy.common_utils.callback_config_validation import (
@@ -92,8 +118,12 @@ from litellm.proxy.common_utils.customer_usage import (
 from litellm.proxy.common_utils.key_expiry_alerts import key_expiry_alert_metadata_error
 from litellm.proxy.common_utils.openai_error_payload import openai_error_param, proxy_exception_for
 from litellm.proxy.common_utils.rbac_utils import check_org_admin_can_generate_keys
-from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time, keeps_due_budget_reset
-from litellm.proxy.common_utils.user_api_key_cache import AUTH_OBJECTS_TARGET, UserApiKeyCache, is_user_key_cache_key
+from litellm.proxy.common_utils.timezone_utils import (
+    get_budget_reset_time,
+    get_budget_window_reset_fields,
+    keeps_budget_reset,
+)
+from litellm.proxy.common_utils.user_api_key_cache import AUTH_OBJECTS_TARGET, UserApiKeyCache
 from litellm.proxy.db.master_key_migration import reencrypt_stored_values
 from litellm.proxy.guardrails.guardrail_helpers import validate_guardrail_names
 from litellm.proxy.hooks.key_management_event_hooks import KeyManagementEventHooks
@@ -110,11 +140,13 @@ from litellm.proxy.management_endpoints.common_utils import (  # noqa: F401  # l
     check_denied_passthrough_routes_caller_permission,
     check_disable_global_guardrails_caller_permission,
     check_passthrough_routes_caller_permission,
+    semantic_cache_metadata_changed,
     set_object_metadata_field,
     team_member_has_permission,
     user_api_key_has_admin_view,
     validate_budget_duration,
     validate_finite_spend,
+    validate_semantic_cache_metadata,
 )
 from litellm.proxy.management_endpoints.key_budget_change import (
     KeyBudgetAdminOnly,
@@ -180,19 +212,21 @@ from litellm.proxy.spend_tracking.spend_tracking_utils import (  # noqa: F401  #
     is_master_key,
 )
 from litellm.proxy.utils import (
+    KeyWriter,
     PrismaClient,
     ProxyLogging,
     _hash_token_if_needed,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     handle_exception_on_proxy,
     hash_token_if_needed,
     is_valid_api_key,
+    query_raw_rows,
     require_enterprise_license,
 )
 from litellm.redis.stores.spend_counters import (
     key_counter,
     key_window_counter,
 )
-from litellm.repositories.base_repository import BaseRepository, record_to_dict
+from litellm.repositories.base_repository import BaseRepository, SupportsDict, SupportsModelDump, record_to_dict
 from litellm.repositories.budget_limits_repository import (
     BudgetLimitsTransaction,
     lock_budget_limits,
@@ -240,7 +274,6 @@ if TYPE_CHECKING:
     from prisma import models as prisma_models
 
 _RepositoryModelT = TypeVar("_RepositoryModelT", bound=BaseModel)
-_RawRowT = TypeVar("_RawRowT")
 
 
 class _UserRowLike(Protocol):
@@ -368,6 +401,14 @@ class KeyProjectBindingError(HTTPException):
     pass
 
 
+class KeyPersistenceError(HTTPException):
+    pass
+
+
+class KeyAliasConflictError(ProxyException):
+    pass
+
+
 def _deleted_verification_token_table(
     prisma_client: PrismaClient,
 ) -> "TableActions[prisma_models.LiteLLM_DeletedVerificationToken]":
@@ -388,10 +429,6 @@ def _credentials_table(prisma_client: PrismaClient) -> TableActions[CredentialIt
     return cast(  # cast-ok: the rotation loop reads and rewrites these rows through CredentialItem names only
         "TableActions[CredentialItem]", CredentialsRepository(prisma_client).table
     )
-
-
-async def _query_raw_rows(prisma_client: PrismaClient, query: str, *args: object) -> Sequence[_RawRowT]:
-    return await prisma_client.db.query_raw(query, *args)
 
 
 def _model_reencrypt_transaction(prisma_client: PrismaClient) -> _ModelReencryptTransaction:
@@ -468,6 +505,9 @@ _KEY_METADATA_REQUEST_FIELDS: Final = frozenset(
 
 
 _DECODED_JSON: Final = TypeAdapter(object)
+_ROLLOVER_CAP_VALUE: Final[TypeAdapter[BudgetRolloverCap]] = TypeAdapter(BudgetRolloverCap)
+_METADATA_OBJECT: Final = TypeAdapter(Mapping[str, object])
+_HASHED_TOKEN: Final = re.compile(r"[0-9a-f]{64}")
 
 
 def _decode_json_string_column(column: str, value: object) -> object:
@@ -518,7 +558,7 @@ def _generate_budget_windows(
         MappingProxyType(
             {
                 **window.model_dump(),
-                "reset_at": get_budget_reset_time(budget_duration=window.budget_duration).isoformat(),
+                **get_budget_window_reset_fields(window.budget_duration),
             }
         )
         for window in budget_limits
@@ -557,7 +597,7 @@ def _effective_key_for_generate(data: GenerateKeyRequest, now: datetime) -> Lite
         MappingProxyType(
             {
                 **columns,
-                "metadata": encrypt_callback_vars(folded_metadata),
+                "metadata": encrypt_callback_vars(folded_metadata, logging_references_approved=True),
                 "expires": expires,
                 "budget_reset_at": budget_reset_at,
                 "key_rotation_at": key_rotation_at,
@@ -906,6 +946,11 @@ def key_generation_check(
     _is_admin: Final = (
         user_api_key_dict.user_role is not None and user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
     )
+    if data.spend and not _is_admin:
+        raise HTTPException(
+            status_code=403,
+            detail={"error": "Only proxy admins can set spend when creating a key."},
+        )
     if is_team_key:
         if team_table is None and litellm.key_generation_settings is not None:
             raise HTTPException(
@@ -979,6 +1024,10 @@ def raise_on_invalid_key_metadata(metadata: Mapping[str, object] | None) -> None
     """Every key metadata check that rejects a write: logging config and expiry alert days."""
     raise_on_invalid_key_logging_config(metadata)
     raise_on_invalid_key_expiry_alert_days(metadata)
+    error: Final = lens_logging_metadata_error(metadata)
+    if error is not None:
+        raise HTTPException(status_code=400, detail={"error": error})
+    validate_required_customer_headers_metadata(metadata)
 
 
 def raise_on_logging_credential_change(
@@ -1045,7 +1094,7 @@ _KEY_TYPE_PRESET_ROUTES: Final = MappingProxyType(
 )
 
 
-_KeyJsonT: Final = TypeVar("_KeyJsonT", bound=dict[str, object])
+_KeyJsonT = TypeVar("_KeyJsonT", bound=dict[str, object])
 
 
 def handle_key_type(data: GenerateKeyRequest, data_json: _KeyJsonT) -> _KeyJsonT:
@@ -1081,16 +1130,37 @@ def _configured_default_allowed_routes() -> tuple[str, ...] | None:
     return string_routes if len(string_routes) == len(routes) else None
 
 
+_TEAM_SERVICE_ACCOUNT_DEFAULT_EXTRA_ROUTES: Final = frozenset(
+    {
+        "/key/spend/report",
+        "/key/info",
+        "/key/health",
+        "/model/info",
+        "/v1/model/info",
+        "/v2/model/info",
+        "/model_group/info",
+    }
+)
+
+
 def _default_allowed_routes_for(request: GenerateKeyRequest, key_routes: object) -> tuple[str, ...] | None:
     configured_routes: Final = _configured_default_allowed_routes()
-    if configured_routes is None or _creates_team_service_account(request):
+    if configured_routes is None:
         return None
     if "key_type" not in request.model_fields_set or request.key_type is None:
-        return None if key_routes else configured_routes
+        return None if key_routes or _creates_team_service_account(request) else configured_routes
     match request.key_type:
         case LiteLLMKeyType.LLM_API:
             llm_api_routes: Final = _KEY_TYPE_PRESET_ROUTES[LiteLLMKeyType.LLM_API]
-            return configured_routes if all(route in configured_routes for route in llm_api_routes) else None
+            if not all(route in configured_routes for route in llm_api_routes):
+                return None
+            if _creates_team_service_account(request):
+                return tuple(
+                    route
+                    for route in configured_routes
+                    if route in llm_api_routes or route in _TEAM_SERVICE_ACCOUNT_DEFAULT_EXTRA_ROUTES
+                )
+            return configured_routes
         case _:
             return None
 
@@ -1145,7 +1215,7 @@ def _validate_caller_can_change_key_ownership(
 
 
 def _check_allowed_routes_caller_permission(
-    allowed_routes: list | None,
+    allowed_routes: Sequence[object] | None,
     user_api_key_dict: UserAPIKeyAuth,
     *,
     allowed_routes_was_provided: bool = False,
@@ -1191,8 +1261,8 @@ _READ_ONLY_ALLOWED_ROUTES_PRESET: Final = frozenset(("info_routes",))
 
 
 def _is_safe_preset_route_transition(
-    incoming_allowed_routes: Sequence[str] | None,
-    existing_allowed_routes: Sequence[str] | None,
+    incoming_allowed_routes: Sequence[object] | None,
+    existing_allowed_routes: Sequence[object] | None,
 ) -> bool:
     """
     True when every route on BOTH sides is a safe `key_type` preset bucket
@@ -1272,10 +1342,8 @@ def _check_budget_limits_delegation_ceiling(
     team_table: LiteLLM_TeamTableCachedObj | None,
 ) -> None:
     """
-    Enforce three invariants on `budget_limits`:
+    Enforce two invariants on `budget_limits`:
 
-    - Every `budget_limits[*].max_budget` must be a finite number; applies
-      to every caller including proxy admin.
     - A CLI session token caller may not set `budget_limits` on a personal
       key (one with no `team_id`); mirrors the scalar `max_budget` guard in
       `_common_key_generation_helper`.
@@ -1283,12 +1351,6 @@ def _check_budget_limits_delegation_ceiling(
     """
     if not budget_limits:
         return
-    non_finite: Final = next((w for w in budget_limits if not math.isfinite(w.max_budget)), None)
-    if non_finite is not None:
-        raise HTTPException(
-            status_code=400,
-            detail={"error": (f"budget_limits entry max_budget ({non_finite.max_budget}) must be a finite number.")},
-        )
     if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
         return
     if is_ui_session_team_key:
@@ -1437,43 +1499,69 @@ def _enforce_upperbound_key_params(
                     detail={"error": f"{field_name} must be a finite number. Received: {field_value}"},
                 )
 
-    if litellm.upperbound_key_generate_params is None:
+    upperbound: Final = litellm.upperbound_key_generate_params
+    if upperbound is None:
         return
 
-    for elem in data:
-        key, value = elem
-        upperbound_value = getattr(litellm.upperbound_key_generate_params, key, None)
-        if upperbound_value is not None:
-            if value is None:
-                if fill_defaults:
-                    setattr(data, key, upperbound_value)
-            else:
-                if key in [
-                    "max_budget",
-                    "max_parallel_requests",
-                    "tpm_limit",
-                    "rpm_limit",
-                ]:
-                    if value > upperbound_value:
-                        raise HTTPException(
-                            status_code=400,
-                            detail={
-                                "error": f"{key} is over max limit set in config - user_value={value}; max_value={upperbound_value}"
-                            },
-                        )
-                elif key in ["budget_duration", "duration"]:
-                    upperbound_duration = duration_in_seconds(duration=upperbound_value)
-                    if value == "-1":
-                        user_duration = float("inf")
-                    else:
-                        user_duration = duration_in_seconds(duration=value)
-                    if user_duration > upperbound_duration:
-                        raise HTTPException(
-                            status_code=400,
-                            detail={
-                                "error": f"{key} is over max limit set in config - user_value={value}; max_value={upperbound_value}"
-                            },
-                        )
+    _enforce_duration_upperbound(data, "duration", data.duration, upperbound.duration, fill_defaults=fill_defaults)
+    _enforce_numeric_upperbound(data, "max_budget", data.max_budget, upperbound.max_budget, fill_defaults=fill_defaults)
+    _enforce_numeric_upperbound(
+        data,
+        "max_parallel_requests",
+        data.max_parallel_requests,
+        upperbound.max_parallel_requests,
+        fill_defaults=fill_defaults,
+    )
+    _enforce_numeric_upperbound(data, "tpm_limit", data.tpm_limit, upperbound.tpm_limit, fill_defaults=fill_defaults)
+    _enforce_numeric_upperbound(data, "rpm_limit", data.rpm_limit, upperbound.rpm_limit, fill_defaults=fill_defaults)
+    _enforce_duration_upperbound(
+        data, "budget_duration", data.budget_duration, upperbound.budget_duration, fill_defaults=fill_defaults
+    )
+
+
+def _over_upperbound_error(key: str, value: object, upperbound_value: object) -> HTTPException:
+    return HTTPException(
+        status_code=400,
+        detail={"error": f"{key} is over max limit set in config - user_value={value}; max_value={upperbound_value}"},
+    )
+
+
+def _enforce_numeric_upperbound(
+    data: GenerateKeyRequest | UpdateKeyRequest,
+    key: str,
+    value: float | None,
+    upperbound_value: float | None,
+    *,
+    fill_defaults: bool,
+) -> None:
+    if upperbound_value is None:
+        return
+    if value is None:
+        if fill_defaults:
+            setattr(data, key, upperbound_value)
+        return
+    if value > upperbound_value:
+        raise _over_upperbound_error(key, value, upperbound_value)
+
+
+def _enforce_duration_upperbound(
+    data: GenerateKeyRequest | UpdateKeyRequest,
+    key: str,
+    value: str | None,
+    upperbound_value: str | None,
+    *,
+    fill_defaults: bool,
+) -> None:
+    if upperbound_value is None:
+        return
+    if value is None:
+        if fill_defaults:
+            setattr(data, key, upperbound_value)
+        return
+    upperbound_duration: Final = duration_in_seconds(duration=upperbound_value)
+    user_duration: Final = float("inf") if value == "-1" else duration_in_seconds(duration=value)
+    if user_duration > upperbound_duration:
+        raise _over_upperbound_error(key, value, upperbound_value)
 
 
 def _team_admin_requests_member_key(
@@ -1531,6 +1619,7 @@ async def _common_key_generation_helper(
     user_api_key_dict: UserAPIKeyAuth,
     litellm_changed_by: str | None,
     team_table: LiteLLM_TeamTableCachedObj | None,
+    key_writer: KeyWriter | None = None,
 ) -> GenerateKeyResponse:
     from litellm.proxy import proxy_server
     from litellm.proxy.proxy_server import (
@@ -1571,6 +1660,10 @@ async def _common_key_generation_helper(
     validate_budget_duration(data.budget_duration)
     if prisma_client is not None:
         await validate_scalar_budget_attachment(prisma_client, data.budget_id)
+    requested_metadata: Final = attribute_or_none(data, "metadata")
+    if semantic_cache_metadata_changed(requested_metadata, None):
+        _enforce_key_semantic_cache_admin(user_api_key_dict, team_table)
+        validate_semantic_cache_metadata(requested_metadata)
     raise_on_invalid_key_metadata(data.metadata)
     raise_on_logging_credential_change(data.metadata, None, user_api_key_dict)
 
@@ -1628,6 +1721,11 @@ async def _common_key_generation_helper(
             if (
                 value is None
                 and (key != "budget_duration" or key not in data.model_fields_set)
+                and (
+                    key not in {"user_id", "team_id"}
+                    or key not in data.model_fields_set
+                    or user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN
+                )
                 and key
                 in [
                     "max_budget",
@@ -1724,7 +1822,7 @@ async def _common_key_generation_helper(
             set_object_metadata_field(
                 object_data=data,
                 field_name=field,
-                value=getattr(data, field),
+                value=attribute_or_none(data, field),
             )
             delattr(data, field)
 
@@ -1733,7 +1831,7 @@ async def _common_key_generation_helper(
             set_object_metadata_field(
                 object_data=data,
                 field_name=field,
-                value=getattr(data, field),
+                value=attribute_or_none(data, field),
             )
             delattr(data, field)
 
@@ -1842,11 +1940,6 @@ async def _common_key_generation_helper(
 
     _validate_key_alias_format(key_alias=data_json.get("key_alias", None))
 
-    await _enforce_unique_key_alias(
-        key_alias=data_json.get("key_alias", None),
-        prisma_client=prisma_client,
-    )
-
     # Reject custom key values if disabled by admin
     await _check_custom_key_allowed(data.key)
 
@@ -1907,10 +2000,19 @@ async def _common_key_generation_helper(
             )
 
     try:
-        response = await generate_key_helper_fn(
-            request_type="key", **data_json, table_name="key", llm_router=llm_router, actor=user_api_key_dict
+        await _enforce_unique_key_alias(
+            key_alias=data_json.get("key_alias", None),
+            prisma_client=prisma_client,
         )
-    except KeyProjectBindingError:
+        response = await generate_key_helper_fn(
+            request_type="key",
+            **data_json,
+            table_name="key",
+            llm_router=llm_router,
+            actor=user_api_key_dict,
+            key_writer=key_writer,
+        )
+    except (KeyProjectBindingError, KeyPersistenceError, KeyAliasConflictError):
         if prisma_client is not None:
             if created_object_permission_id is not None:
                 await ObjectPermissionRepository(prisma_client).table.delete(
@@ -1938,31 +2040,46 @@ async def _common_key_generation_helper(
     return response
 
 
+class _ModelLimits(Protocol):
+    def items(self) -> Iterable[tuple[object, object]]: ...
+
+
+class _AddsToAllocation(Protocol):
+    def __radd__(self, other: int, /) -> float: ...
+
+
+def _allocation_total(allocated: int, requested: object) -> float:
+    if has_attributes(requested, _AddsToAllocation, "__radd__"):
+        return allocated + requested
+    sum_of(allocated, requested)
+    raise TypeError(f"unsupported operand type(s) for +: 'int' and {type(requested).__name__!r}")
+
+
 def _check_key_model_specific_limits(
     keys: Sequence[LiteLLM_VerificationToken],
     data: GenerateKeyRequest | UpdateKeyRequest,
     entity_rpm_limit: int | None,
     entity_tpm_limit: int | None,
-    entity_model_rpm_limit_dict: dict[str, int],
-    entity_model_tpm_limit_dict: dict[str, int],
+    entity_model_rpm_limit_dict: Mapping[object, int],
+    entity_model_tpm_limit_dict: Mapping[object, int],
     entity_type: str,  # "team" or "organization"
 ) -> None:
     """
     Generic function to check if a key is allocating model specific limits.
     Raises an error if we're overallocating.
     """
-    model_rpm_limit: Final = getattr(data, "model_rpm_limit", None) or (
-        data.metadata.get("model_rpm_limit", None) if data.metadata else None
+    model_rpm_limit: Final = attribute_or_none(data, "model_rpm_limit") or (
+        _DECODED_JSON.validate_python(data.metadata.get("model_rpm_limit", None)) if data.metadata else None
     )
-    model_tpm_limit: Final = getattr(data, "model_tpm_limit", None) or (
-        data.metadata.get("model_tpm_limit", None) if data.metadata else None
+    model_tpm_limit: Final = attribute_or_none(data, "model_tpm_limit") or (
+        _DECODED_JSON.validate_python(data.metadata.get("model_tpm_limit", None)) if data.metadata else None
     )
     if model_rpm_limit is None and model_tpm_limit is None:
         return
 
     # get total model specific tpm/rpm limit
-    model_specific_rpm_limit: Final[dict[str, int]] = {}
-    model_specific_tpm_limit: Final[dict[str, int]] = {}
+    model_specific_rpm_limit: Final[dict[object, int]] = {}
+    model_specific_tpm_limit: Final[dict[object, int]] = {}
 
     for key in keys:
         if key.metadata.get("model_rpm_limit", None) is not None:
@@ -1973,8 +2090,11 @@ def _check_key_model_specific_limits(
                 model_specific_tpm_limit[model] = model_specific_tpm_limit.get(model, 0) + tpm_limit
 
     if model_rpm_limit is not None:
-        for model, rpm_limit in model_rpm_limit.items():
-            if entity_rpm_limit is not None and model_specific_rpm_limit.get(model, 0) + rpm_limit > entity_rpm_limit:
+        for model, rpm_limit in require_attributes(model_rpm_limit, _ModelLimits, "items").items():
+            if (
+                entity_rpm_limit is not None
+                and _allocation_total(model_specific_rpm_limit.get(model, 0), rpm_limit) > entity_rpm_limit
+            ):
                 raise HTTPException(
                     status_code=400,
                     detail=f"Allocated RPM limit={model_specific_rpm_limit.get(model, 0)} + Key RPM limit={rpm_limit} is greater than {entity_type} RPM limit={entity_rpm_limit}",
@@ -1983,7 +2103,8 @@ def _check_key_model_specific_limits(
                 entity_model_specific_rpm_limit = entity_model_rpm_limit_dict.get(model)
                 if (
                     entity_model_specific_rpm_limit
-                    and model_specific_rpm_limit.get(model, 0) + rpm_limit > entity_model_specific_rpm_limit
+                    and _allocation_total(model_specific_rpm_limit.get(model, 0), rpm_limit)
+                    > entity_model_specific_rpm_limit
                 ):
                     raise HTTPException(
                         status_code=400,
@@ -1991,8 +2112,11 @@ def _check_key_model_specific_limits(
                     )
 
     if model_tpm_limit is not None:
-        for model, tpm_limit in model_tpm_limit.items():
-            if entity_tpm_limit is not None and model_specific_tpm_limit.get(model, 0) + tpm_limit > entity_tpm_limit:
+        for model, tpm_limit in require_attributes(model_tpm_limit, _ModelLimits, "items").items():
+            if (
+                entity_tpm_limit is not None
+                and _allocation_total(model_specific_tpm_limit.get(model, 0), tpm_limit) > entity_tpm_limit
+            ):
                 raise HTTPException(
                     status_code=400,
                     detail=f"Allocated TPM limit={model_specific_tpm_limit.get(model, 0)} + Key TPM limit={tpm_limit} is greater than {entity_type} TPM limit={entity_tpm_limit}",
@@ -2001,7 +2125,8 @@ def _check_key_model_specific_limits(
                 entity_model_specific_tpm_limit = entity_model_tpm_limit_dict.get(model)
                 if (
                     entity_model_specific_tpm_limit
-                    and model_specific_tpm_limit.get(model, 0) + tpm_limit > entity_model_specific_tpm_limit
+                    and _allocation_total(model_specific_tpm_limit.get(model, 0), tpm_limit)
+                    > entity_model_specific_tpm_limit
                 ):
                     raise HTTPException(
                         status_code=400,
@@ -2442,6 +2567,10 @@ async def _check_org_key_limits(
     )
 
 
+def _default_key_writer() -> None:
+    return None
+
+
 @router.post(
     "/key/generate",
     tags=["key management"],
@@ -2456,6 +2585,7 @@ async def generate_key_fn(
         None,
         description="The litellm-changed-by header enables tracking of actions performed by authorized users on behalf of other users, providing an audit trail for accountability",
     ),
+    key_writer: Annotated[KeyWriter | None, Depends(_default_key_writer)] = None,
 ):
     """
     Generate an API key based on the provided data.
@@ -2649,6 +2779,7 @@ async def generate_key_fn(
             user_api_key_dict=user_api_key_dict,
             litellm_changed_by=litellm_changed_by,
             team_table=team_table,
+            key_writer=key_writer,
         )
 
     except Exception as e:
@@ -2828,7 +2959,9 @@ async def generate_service_account_key_fn(
     )
 
 
-def prepare_metadata_fields(data: BaseModel, non_default_values: dict, existing_metadata: dict) -> dict:
+def prepare_metadata_fields(
+    data: BaseModel, non_default_values: dict, existing_metadata: dict, *, logging_references_approved: bool = False
+) -> dict:
     """
     Check LiteLLM_ManagementEndpoint_MetadataFields (proxy/_types.py) for fields that are allowed to be updated
     """
@@ -2875,7 +3008,9 @@ def prepare_metadata_fields(data: BaseModel, non_default_values: dict, existing_
             "litellm.proxy.proxy_server.prepare_metadata_fields(): Exception occured - %s", e
         )
 
-    non_default_values["metadata"] = encrypt_callback_vars(casted_metadata)
+    non_default_values["metadata"] = encrypt_callback_vars(
+        casted_metadata, logging_references_approved=logging_references_approved
+    )
     return non_default_values
 
 
@@ -3114,7 +3249,7 @@ async def _write_key_update(
     existing_key_row: LiteLLM_VerificationToken,
     include: Mapping[str, object] | None = None,
 ) -> "prisma_models.LiteLLM_VerificationToken | None":
-    if "budget_limits" not in data:
+    if "budget_limits" not in data and "budget_duration" not in data:
         return await VerificationTokenRepository(prisma_client).table.update(
             where={"token": hashed_token}, data=data, include=include
         )
@@ -3132,7 +3267,7 @@ async def _update_key_row(
     update_values: Mapping[str, object],
     existing_key_row: LiteLLM_VerificationToken,
 ) -> _KeyUpdateResult | None:
-    if "budget_limits" in update_values:
+    if "budget_limits" in update_values or "budget_duration" in update_values:
         hashed_token: Final = hash_token_if_needed(key)
         updated: Final = await _write_key_update(
             prisma_client,
@@ -3149,6 +3284,79 @@ async def _update_key_row(
     return cast("_KeyUpdateResult", response)  # cast-ok: key update_data returns token and data
 
 
+async def _check_customer_header_team_change(
+    data: UpdateKeyRequest | RegenerateKeyRequest,
+    existing: LiteLLM_VerificationToken,
+    actor: UserAPIKeyAuth,
+    prisma_client: PrismaClient | None,
+) -> None:
+    from litellm.proxy._types import REQUIRED_CUSTOMER_HEADERS_ADAPTER, REQUIRED_CUSTOMER_HEADERS_SETTING
+    from litellm.proxy.proxy_server import user_api_key_cache
+
+    if actor.user_role == LitellmUserRoles.PROXY_ADMIN or existing.team_id is None:
+        return
+    if "team_id" not in data.model_fields_set or data.team_id == existing.team_id:
+        return
+    team: Final = await get_team_object(
+        team_id=existing.team_id,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        check_db_only=True,
+    )
+    metadata: Final = _METADATA_OBJECT.validate_python(getattr(team, "metadata", None) or {})
+    required: Final = metadata.get(REQUIRED_CUSTOMER_HEADERS_SETTING)
+    if required is not None and REQUIRED_CUSTOMER_HEADERS_ADAPTER.validate_python(required):
+        raise HTTPException(
+            status_code=403,
+            detail={"error": "Only proxy admins can move a key out of a team with required_customer_headers."},
+        )
+
+
+def _enforce_key_semantic_cache_admin(caller: UserAPIKeyAuth, team: LiteLLM_TeamTable | None) -> None:
+    if caller.user_role == LitellmUserRoles.PROXY_ADMIN or (team is not None and is_team_admin(caller, team)):
+        return
+    raise HTTPException(
+        status_code=403,
+        detail={"error": "Only proxy admins or the key's team admins can change metadata.cache_params."},
+    )
+
+
+async def _check_key_semantic_cache_update(
+    data: UpdateKeyRequest | RegenerateKeyRequest,
+    existing_key_row: LiteLLM_VerificationToken,
+    caller: UserAPIKeyAuth,
+    prisma_client: PrismaClient | None,
+) -> None:
+    from litellm.proxy.proxy_server import user_api_key_cache
+
+    requested_metadata: Final = attribute_or_none(data, "metadata")
+    stored_metadata: Final = attribute_or_none(existing_key_row, "metadata")
+    if "metadata" not in data.model_fields_set or not semantic_cache_metadata_changed(
+        requested_metadata, stored_metadata
+    ):
+        return
+    if caller.user_role == LitellmUserRoles.PROXY_ADMIN:
+        validate_semantic_cache_metadata(requested_metadata, stored_metadata)
+        return
+    existing_team: Final = existing_key_row.team_id
+    target_team: Final = data.team_id if "team_id" in data.model_fields_set else existing_team
+    for team_id in dict.fromkeys((existing_team, target_team)):
+        _enforce_key_semantic_cache_admin(
+            caller,
+            (
+                await get_team_object(
+                    team_id=team_id,
+                    prisma_client=prisma_client,
+                    user_api_key_cache=user_api_key_cache,
+                    check_db_only=True,
+                )
+                if team_id is not None
+                else None
+            ),
+        )
+    validate_semantic_cache_metadata(requested_metadata, stored_metadata)
+
+
 async def prepare_key_update_data(
     data: UpdateKeyRequest | RegenerateKeyRequest,
     existing_key_row: LiteLLM_VerificationToken,
@@ -3157,6 +3365,10 @@ async def prepare_key_update_data(
     llm_router: Router | None = None,
     user_api_key_dict: UserAPIKeyAuth | None = None,
 ):
+    if user_api_key_dict is not None:
+        await _check_key_semantic_cache_update(data, existing_key_row, user_api_key_dict, prisma_client)
+        raise_on_logging_credential_change(data.metadata, existing_key_row, user_api_key_dict)
+        await _check_customer_header_team_change(data, existing_key_row, user_api_key_dict, prisma_client)
     if data.router_settings is not None or (
         "router_settings" not in data.model_fields_set
         and "team_id" in data.model_fields_set
@@ -3173,7 +3385,7 @@ async def prepare_key_update_data(
             prisma_client=prisma_client,
             llm_router=llm_router,
         )
-    data_json: Final[dict] = data.model_dump(exclude_unset=True)
+    data_json: Final[dict] = data.model_dump(exclude_unset=True, exclude={LENS_ENABLED_METADATA_KEY})
     if "metadata" in data_json:
         customer_binding: Final = validated_customer_key_metadata(
             data.metadata,
@@ -3181,6 +3393,15 @@ async def prepare_key_update_data(
             user_api_key_dict,
         )
         data_json["metadata"] = dict(customer_binding) if customer_binding is not None else None
+    if isinstance(data, UpdateKeyRequest) and "lens_enabled" in data.model_fields_set:
+        stored_metadata: Final = _StoredKeyMetadata.model_validate(existing_key_row, from_attributes=True).metadata
+        requested_metadata: Final = (
+            _StoredKeyMetadata.model_validate(data_json).metadata if "metadata" in data_json else stored_metadata
+        )
+        data_json["metadata"] = {
+            **(as_str_mapping(requested_metadata) or {}),
+            LENS_ENABLED_METADATA_KEY: data.lens_enabled,
+        }
     data_json.pop("key", None)
     data_json.pop("new_key", None)
     data_json.pop("grace_period", None)  # Request-only param, not a DB column
@@ -3203,7 +3424,7 @@ async def prepare_key_update_data(
             set_object_metadata_field(
                 object_data=data,
                 field_name=field,
-                value=getattr(data, field),
+                value=attribute_or_none(data, field),
             )
     for k, v in data_json.items():
         if k in LiteLLM_ManagementEndpoint_MetadataFields or k in LiteLLM_ManagementEndpoint_MetadataFields_Premium:
@@ -3227,7 +3448,7 @@ async def prepare_key_update_data(
             non_default_values["budget_reset_at"] = None
         elif isinstance(budget_duration, str) and len(budget_duration) > 0:
             non_default_values["budget_duration"] = budget_duration
-            if not keeps_due_budget_reset(
+            if not keeps_budget_reset(
                 budget_duration, existing_key_row.budget_duration, existing_key_row.budget_reset_at
             ):
                 non_default_values["budget_reset_at"] = get_budget_reset_time(budget_duration=budget_duration)
@@ -3255,7 +3476,12 @@ async def prepare_key_update_data(
         non_default_values["router_settings"] = safe_dumps(non_default_values["router_settings"])
 
     non_default_values = prepare_metadata_fields(
-        data=data, non_default_values=non_default_values, existing_metadata=_metadata
+        data=data,
+        non_default_values=non_default_values,
+        existing_metadata=_metadata,
+        logging_references_approved=(
+            user_api_key_dict is not None and data.metadata is not None and "logging" in data.metadata
+        ),
     )
 
     return non_default_values
@@ -3433,7 +3659,7 @@ async def _process_single_key_update(
     user_api_key_cache: UserApiKeyCache,
     proxy_logging_obj: ProxyLogging,
     llm_router: Router | None,
-    user_custom_key_update: Callable | None = None,
+    user_custom_key_update: Callable[..., Awaitable[Mapping[str, object]]] | None = None,
     existing_key_row: LiteLLM_VerificationToken | None = None,
     user_custom_key_policy: Callable[..., Awaitable[Mapping[str, object]]] | None = None,
 ) -> dict[str, object]:
@@ -3577,7 +3803,6 @@ async def _process_single_key_update(
     )
 
     # Prepare update data
-    raise_on_logging_credential_change(key_request.metadata, existing_key_row, user_api_key_dict)
     non_default_values = await prepare_key_update_data(
         data=key_request,
         existing_key_row=existing_key_row,
@@ -4280,6 +4505,7 @@ async def update_key_fn(
     - router_settings: Optional[UpdateRouterConfig] - key-specific router settings. Example - {"model_group_retry_policy": {"gpt-4": {"RateLimitErrorRetries": 5}}}. IF null or {} then no router settings.
     - access_group_ids: Optional[List[str]] - List of access group IDs to associate with the key. Access groups define which models a key can access. Example - ["access_group_1", "access_group_2"].
     - budget_limits: Optional[list] - List of concurrent budget windows for the key. Each window specifies a budget_limit, time_period, and optional budget_duration. Example - [{"budget_limit": 10.0, "time_period": "1d"}, {"budget_limit": 50.0, "time_period": "7d"}].
+    - lens_enabled: Optional[bool] - Whether this key's requests are sent to Lens. `null` inherits the team default, which is on when unset.
 
     Example:
     ```bash
@@ -4339,7 +4565,6 @@ async def update_key_fn(
 
         # Enforce upperbound key params on update (don't fill defaults)
         _enforce_upperbound_key_params(data, fill_defaults=False)
-        raise_on_logging_credential_change(data.metadata, existing_key_row, user_api_key_dict)
         non_default_values: Final = await prepare_key_update_data(
             data=data,
             existing_key_row=existing_key_row,
@@ -4632,15 +4857,15 @@ async def bulk_update_keys(
 
             key_info = None
             try:
-                existing_key_row = await prisma_client.get_data(
+                existing_key_row: object = await prisma_client.get_data(
                     token=key_update_item.key,
                     table_name="key",
                     query_type="find_unique",
                 )
                 if existing_key_row is not None:
-                    if hasattr(existing_key_row, "model_dump"):
+                    if has_attributes(existing_key_row, SupportsModelDump, "model_dump"):
                         key_info = existing_key_row.model_dump()
-                    elif hasattr(existing_key_row, "dict"):
+                    elif has_attributes(existing_key_row, SupportsDict, "dict"):
                         key_info = existing_key_row.dict()
                     if key_info:
                         key_info.pop("token", None)
@@ -5034,10 +5259,6 @@ async def delete_key_fn(
                 },
             )
 
-        verbose_proxy_logger.debug(
-            "/keys/delete - cache after delete: %s", user_api_key_cache.key_object_cache.in_memory_cache.cache_dict
-        )
-
         asyncio.create_task(
             KeyManagementEventHooks.async_key_deleted_hook(
                 data=data,
@@ -5054,9 +5275,34 @@ async def delete_key_fn(
         raise handle_exception_on_proxy(e)
 
 
+class _QueriedKeyOwner(Protocol):
+    @property
+    def user_id(self) -> str | None: ...
+
+    @property
+    def team_id(self) -> str | None: ...
+
+
+class _ListedKeyRow(_QueriedKeyOwner, Protocol):
+    @property
+    def token(self) -> str | None: ...
+
+
+def _dict_or_none(value: object) -> Mapping[str, object] | None:
+    return value if isinstance(value, dict) else None
+
+
+def _listed_key_model_max_budget(key_dump: Mapping[str, object]) -> object:
+    own_budget: Final = key_dump.get("model_max_budget")
+    if own_budget:
+        return own_budget
+    budget_table: Final = _dict_or_none(key_dump.get("litellm_budget_table"))
+    return budget_table.get("model_max_budget") if budget_table is not None else None
+
+
 async def _build_model_max_budget_usage(
     api_key_hash: str,
-    model_max_budget: Mapping[str, Mapping[str, object]],
+    model_max_budget: object,
     user_api_key_cache: DualCache | None,
 ) -> dict[str, dict[str, object]]:
     return await build_model_max_budget_usage(
@@ -5068,7 +5314,7 @@ async def _build_model_max_budget_usage(
 
 
 async def _build_budget_limits_usage(
-    budget_limits: Sequence[object] | str | None, api_key_hash: str
+    budget_limits: object, api_key_hash: str
 ) -> Mapping[str, Mapping[str, object]] | None:
     return await build_budget_limits_usage(
         budget_limits=budget_limits,
@@ -5133,12 +5379,15 @@ async def info_key_fn_v2(
         if not tokens_to_query:
             return {"key": data.keys, "info": []}
 
-        key_info: Final = await prisma_client.get_data(token=tokens_to_query, table_name="key", query_type="find_all")
-        if not key_info:
+        key_rows: Final = _DECODED_JSON.validate_python(
+            await prisma_client.get_data(token=tokens_to_query, table_name="key", query_type="find_all")
+        )
+        if not key_rows:
             return {"key": data.keys, "info": []}
 
         filtered_key_info: Final = []
-        for k in key_info:
+        for key_row in iter_items(key_rows):
+            k = require_attributes(key_row, _ListedKeyRow, "token", "user_id", "team_id")
             if not await _can_user_query_key_info(
                 user_api_key_dict=user_api_key_dict,
                 key=k.token,
@@ -5146,15 +5395,14 @@ async def info_key_fn_v2(
             ):
                 continue
             try:
-                k_dict = k.model_dump()
+                k_dump = require_attributes(k, _KeyRowDumpable, "model_dump").model_dump()
             except Exception:
-                k_dict = k.dict()
-            k_token_hash = k_dict.pop("token", None)
+                k_dump = _legacy_model_dict(require_attributes(k, _LegacyDumpable, "dict"))
+            k_dict = without(k_dump, "token")
+            dumped_token = k_dump.get("token")
+            k_token_hash = dumped_token if isinstance(dumped_token, str) else None
 
-            model_max_budget = k_dict.get("model_max_budget") or {}
-            budget_table = k_dict.get("litellm_budget_table") or {}
-            if not model_max_budget and isinstance(budget_table, dict):
-                model_max_budget = budget_table.get("model_max_budget") or {}
+            model_max_budget = _listed_key_model_max_budget(k_dump)
             if model_max_budget and k_token_hash:
                 k_dict["model_max_budget_usage"] = await _build_model_max_budget_usage(
                     api_key_hash=k_token_hash,
@@ -5163,7 +5411,7 @@ async def info_key_fn_v2(
                 )
             if k_token_hash:
                 budget_limits_usage = await _build_budget_limits_usage(
-                    budget_limits=k_dict.get("budget_limits"),
+                    budget_limits=k_dump.get("budget_limits"),
                     api_key_hash=k_token_hash,
                 )
                 if budget_limits_usage is not None:
@@ -5292,7 +5540,8 @@ async def info_key_fn(
             )
         ## REMOVE HASHED TOKEN INFO BEFORE RETURNING ##
         key_info_dict: Final = key_info.model_dump()
-        key_token_hash: Final[str | None] = key_info_dict.pop("token")
+        popped_token: Final = _DECODED_JSON.validate_python(key_info_dict.pop("token"))
+        key_token_hash: Final = popped_token if isinstance(popped_token, str) else None
         key_info_dict["status"] = (
             "deleted" if live_key_info is None else _derive_key_status(key_info_dict, now=datetime.now(timezone.utc))
         )
@@ -5374,6 +5623,7 @@ def metadata_json_with_limits(
     guardrails: Sequence[str] | None,
     policies: Sequence[str] | None,
     prompts: Sequence[str] | None,
+    logging_references_approved: bool = False,
 ) -> str:
     """Serialize the stored metadata blob with the per-model, MCP, tag, guardrail, policy and prompt settings folded in."""
     limits: Final = tuple(
@@ -5392,15 +5642,15 @@ def metadata_json_with_limits(
     if metadata is None and not limits:
         return json.dumps(None)
     merged: Final = {**(metadata or _NO_METADATA), **dict(limits)}
-    return json.dumps(encrypt_callback_vars(merged))
+    return json.dumps(encrypt_callback_vars(merged, logging_references_approved=logging_references_approved))
 
 
 async def generate_key_helper_fn(
     request_type: Literal["user", "key"],  # identifies if this request is from /user/new or /key/generate
     duration: str | None = None,
     models: list = [],
-    aliases: dict = {},
-    config: dict = {},
+    aliases: Mapping[str, object] = {},
+    config: Mapping[str, object] = {},
     spend: float = 0.0,
     key_max_budget: float | None = None,  # key_max_budget is used to Budget Per key
     key_budget_duration: str | None = None,
@@ -5419,24 +5669,24 @@ async def generate_key_helper_fn(
     user_email: str | None = None,
     user_role: str | None = None,
     max_parallel_requests: int | None = None,
-    metadata: dict | None = {},
+    metadata: Mapping[str, object] | None = {},
     tpm_limit: int | None = None,
     rpm_limit: int | None = None,
     tpd_limit: int | None = None,
     query_type: Literal["insert_data", "update_data"] = "insert_data",
-    update_key_values: dict | None = None,
+    update_key_values: Mapping[str, object] | None = None,
     key_alias: str | None = None,
     allowed_cache_controls: list | None = [],
-    permissions: dict | None = {},
+    permissions: Mapping[str, object] | None = {},
     model_max_budget: dict | None = {},
-    budget_fallbacks: dict | None = None,
-    model_rpm_limit: dict | None = None,
-    model_tpm_limit: dict | None = None,
-    mcp_rpm_limit: dict | None = None,
-    tag_rpm_limit: dict | None = None,
-    guardrails: list | None = None,
-    policies: list | None = None,
-    prompts: list | None = None,
+    budget_fallbacks: Mapping[str, object] | None = None,
+    model_rpm_limit: Mapping[str, object] | None = None,
+    model_tpm_limit: Mapping[str, object] | None = None,
+    mcp_rpm_limit: Mapping[str, int] | None = None,
+    tag_rpm_limit: Mapping[str, int] | None = None,
+    guardrails: Sequence[str] | None = None,
+    policies: Sequence[str] | None = None,
+    prompts: Sequence[str] | None = None,
     teams: list | None = None,
     organization_id: str | None = None,
     project_id: str | None = None,
@@ -5457,6 +5707,8 @@ async def generate_key_helper_fn(
     *,
     llm_router: Router | None = None,
     actor: UserAPIKeyAuth | None = None,
+    rollover_max_budget: object = None,
+    key_writer: KeyWriter | None = None,
 ):
     customer_metadata: Final = validated_customer_key_metadata(_DECODED_JSON.validate_python(metadata), None, actor)
     from litellm.proxy.proxy_server import premium_user, prisma_client
@@ -5500,8 +5752,7 @@ async def generate_key_helper_fn(
         initialized_windows: Final = []
         for window in budget_limits:
             w = dict(window) if not isinstance(window, dict) else {**window}
-            w["reset_at"] = get_budget_reset_time(budget_duration=w["budget_duration"]).isoformat()
-            initialized_windows.append(w)
+            initialized_windows.append({**w, **get_budget_window_reset_fields(str(w["budget_duration"]))})
         budget_limits_json = json.dumps(initialized_windows)
 
     aliases_json: Final = json.dumps(aliases)
@@ -5518,6 +5769,7 @@ async def generate_key_helper_fn(
         guardrails=guardrails,
         policies=policies,
         prompts=prompts,
+        logging_references_approved=actor is not None and actor.user_role == LitellmUserRoles.PROXY_ADMIN,
     )
     validate_model_max_budget(model_max_budget)
     model_max_budget_json: Final = json.dumps(model_max_budget)
@@ -5552,6 +5804,8 @@ async def generate_key_helper_fn(
         }
         if teams is not None:
             user_data["teams"] = teams
+        if request_type == "user" and rollover_max_budget is not None:
+            user_data["rollover_max_budget"] = _ROLLOVER_CAP_VALUE.validate_python(rollover_max_budget)
         if request_type == "user" and budget_limits_json is not None:
             user_data["budget_limits"] = budget_limits_json
         if model_max_budget:
@@ -5675,7 +5929,15 @@ async def generate_key_helper_fn(
                 "prisma_client: Creating Key= %s",
                 {**key_data, "token": hash_token(token=token)},
             )
-            create_key_response: Final = await prisma_client.insert_data(data=key_data, table_name="key")
+            insert_key: Final = (
+                prisma_client.insert_data
+                if key_writer is None
+                else partial(prisma_client.insert_data, key_writer=key_writer)
+            )
+            insert_data: Final = cast(  # cast-ok: key_data is constructed locally with string keys
+                Mapping[str, object], key_data
+            )
+            create_key_response: Final = await insert_key(data=insert_data, table_name="key")
 
             key_data["token_id"] = getattr(create_key_response, "token", None)
             created_token_hash: Final = getattr(create_key_response, "token", None)
@@ -5833,7 +6095,7 @@ async def delete_verification_tokens(
     user_api_key_cache: UserApiKeyCache,
     user_api_key_dict: UserAPIKeyAuth,
     litellm_changed_by: str | None = None,
-) -> tuple[dict | None, list[LiteLLM_VerificationToken]]:
+) -> tuple[dict[str, object] | None, list[LiteLLM_VerificationToken]]:
     """
     Helper that deletes the list of tokens from the database
 
@@ -5937,7 +6199,7 @@ async def delete_verification_tokens(
         raise e
 
     await delete_cache_key_objects(
-        hashed_tokens=tuple(token for token in hashed_tokens if is_user_key_cache_key(token)),
+        hashed_tokens=tuple(token for token in hashed_tokens if _HASHED_TOKEN.fullmatch(token) is not None),
         user_api_key_cache=user_api_key_cache,
         proxy_logging_obj=proxy_logging_obj,
     )
@@ -6062,7 +6324,7 @@ async def delete_key_aliases(
     prisma_client: PrismaClient,
     user_api_key_dict: UserAPIKeyAuth,
     litellm_changed_by: str | None = None,
-) -> tuple[dict | None, list[LiteLLM_VerificationToken]]:
+) -> tuple[dict[str, object] | None, list[LiteLLM_VerificationToken]]:
     _keys_being_deleted: Final = await _prisma_table(VerificationTokenRepository(prisma_client)).find_many(
         where={"key_alias": {"in": key_aliases}}
     )
@@ -6505,7 +6767,6 @@ async def _execute_virtual_key_regeneration(
             await _enforce_custom_key_update_policy(hook=_custom_key_update_hook(proxy_server), data=update_request)
         # Enforce upperbound key params on regenerate (don't fill defaults)
         _enforce_upperbound_key_params(data, fill_defaults=False)
-        raise_on_logging_credential_change(data.metadata, key_in_db, user_api_key_dict)
         non_default_values = await prepare_key_update_data(
             data=data,
             existing_key_row=key_in_db,
@@ -7002,44 +7263,30 @@ def _window_with_reset_at(
 ) -> Mapping[str, object]:
     """A resubmitted window keeps its running period, so editing one window never restarts the others."""
     duration: Final = str(window["budget_duration"])
-    now: Final = datetime.now(timezone.utc)
-    open_reset_at: Final = next(
-        (w.reset_at for w in stored_windows if w.budget_duration == duration and _is_open_reset_at(w.reset_at, now)),
+    stored: Final = next(
+        (w for w in stored_windows if w.budget_duration == duration and w.reset_at is not None),
         None,
     )
-    reset_at: Final = open_reset_at if open_reset_at is not None else get_budget_reset_time(budget_duration=duration)
-    return {**window, "reset_at": reset_at.isoformat()}
+    fields: Final = {key: value for key, value in window.items() if key not in ("window_start", "reset_at")}
+    if stored is None or stored.reset_at is None:
+        return {**fields, **get_budget_window_reset_fields(duration)}
+    return {
+        **fields,
+        "reset_at": stored.reset_at.isoformat(),
+        **({"window_start": stored.window_start.isoformat()} if stored.window_start is not None else {}),
+    }
 
 
-def _is_open_reset_at(reset_at: datetime | None, now: datetime) -> bool:
-    if reset_at is None:
-        return False
-    return (reset_at if reset_at.tzinfo is not None else reset_at.replace(tzinfo=timezone.utc)) > now
-
-
-def _advance_one_key_budget_window(window: Mapping[str, object]) -> Mapping[str, object]:
-    """Restart one budget window from now, by advancing its `reset_at`.
-
-    `window_start` is derived elsewhere as `reset_at - budget_duration`
-    (`get_budget_window_start`), so `reset_at` must be set to `now +
-    budget_duration` -- a window floating from THIS moment -- to make
-    `window_start` land at `now` and exclude the historical spend that
-    triggered the block. Reusing `get_budget_reset_time`/
-    `compute_budget_reset_at`'s calendar-standardized boundary
-    (e.g. "next midnight") would not do that: for a "1d" window `next
-    midnight - 1d` is simply the START of the calendar day already in
-    progress, which still covers that spend. That reuse is only safe for the
-    scheduled job, which runs right as `reset_at` naturally elapses, so the
-    elapsed boundary it computes is already close to "now". A manual reset
-    can happen at any point mid-window, so it needs the floating form
-    instead. A window with no `budget_duration` is returned unchanged.
-    """
-    duration = window.get("budget_duration")
+def _advance_one_key_budget_window(window: Mapping[str, object], now: datetime) -> Mapping[str, object]:
+    """Persist the manual reset's start so calendar arithmetic cannot restore cleared spend."""
+    duration: Final = window.get("budget_duration")
     if not isinstance(duration, str) or not duration:
         return window
-    new_reset_at: Final = datetime.now(timezone.utc) + timedelta(seconds=duration_in_seconds(duration))
+    start: Final = normalize_budget_window_start(now.astimezone(timezone.utc))
+    new_reset_at: Final = start + timedelta(seconds=duration_in_seconds_from(start, duration))
     return {
         **window,
+        "window_start": start.isoformat(),
         "reset_at": new_reset_at.isoformat(),
     }
 
@@ -7070,7 +7317,8 @@ async def _reset_key_budget_windows(
         windows: Final = await lock_budget_limits(tx, "LiteLLM_VerificationToken", hashed_api_key)
         if not windows:
             return
-        reset_windows: Final = tuple(_advance_one_key_budget_window(w) for w in windows)
+        now: Final = datetime.now(timezone.utc)
+        reset_windows: Final = tuple(_advance_one_key_budget_window(w, now) for w in windows)
         await tx.litellm_verificationtoken.update(
             where={"token": hashed_api_key},
             data={"budget_limits": json.dumps(reset_windows, default=str)},
@@ -7688,8 +7936,8 @@ async def key_aliases(
         where_sql: Final = " AND ".join(where_parts)
 
         count_sql: Final = f'SELECT COUNT(*) AS count FROM "LiteLLM_VerificationToken" WHERE {where_sql}'
-        count_rows: Final[Sequence[Mapping[str, int]]] = await _query_raw_rows(prisma_client, count_sql, *query_params)
-        total_count: Final = int(count_rows[0]["count"]) if count_rows else 0
+        count_rows: Final = await query_raw_rows(prisma_client.db, count_sql, *query_params)
+        total_count: Final = int_of(count_rows[0]["count"]) if count_rows else 0
 
         aliases_params: Final = query_params + [size, (page - 1) * size]
         limit_idx: Final = len(aliases_params) - 1
@@ -7701,10 +7949,8 @@ async def key_aliases(
             f" ORDER BY key_alias ASC"
             f" LIMIT ${limit_idx} OFFSET ${offset_idx}"
         )
-        alias_rows: Final[Sequence[Mapping[str, str]]] = await _query_raw_rows(
-            prisma_client, aliases_sql, *aliases_params
-        )
-        aliases: Final[list[str]] = [row["key_alias"] for row in alias_rows if row.get("key_alias")]
+        alias_rows: Final = await query_raw_rows(prisma_client.db, aliases_sql, *aliases_params)
+        aliases: Final = [row["key_alias"] for row in alias_rows if row.get("key_alias")]
 
         total_pages: Final = -(-total_count // size) if total_count > 0 else 0
         verbose_proxy_logger.debug(
@@ -8517,25 +8763,24 @@ async def key_health(
 async def _can_user_query_key_info(
     user_api_key_dict: UserAPIKeyAuth,
     key: str | None,
-    key_info: LiteLLM_VerificationToken,
+    key_info: _QueriedKeyOwner,
 ) -> bool:
     """
     Helper to check if the user has access to the key's info
     """
     if (
-        (
-            user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
-            or user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value
-        )
-        or (user_api_key_dict.impersonated_by is None and user_api_key_dict.api_key == key)
-        or (key_info.user_id and key_info.user_id == user_api_key_dict.user_id)
-        or await TeamMemberPermissionChecks.user_belongs_to_keys_team(
-            user_api_key_dict=user_api_key_dict,
-            existing_key_row=key_info,
-        )
-    ):
+        user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
+        or user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value
+    ) or (user_api_key_dict.impersonated_by is None and user_api_key_dict.api_key == key):
         return True
-    return False
+    if user_api_key_dict.is_team_service_account:
+        return False
+    if key_info.user_id and key_info.user_id == user_api_key_dict.user_id:
+        return True
+    return await TeamMemberPermissionChecks.user_belongs_to_keys_team(
+        user_api_key_dict=user_api_key_dict,
+        existing_key_row=key_info,
+    )
 
 
 async def test_key_logging(
@@ -8712,7 +8957,7 @@ async def _enforce_unique_key_alias(
 
         existing_key = await _prisma_table(VerificationTokenRepository(prisma_client)).find_first(where=where_clause)
         if existing_key is not None:
-            raise ProxyException(
+            raise KeyAliasConflictError(
                 message=f"Key with alias '{key_alias}' already exists. Unique key aliases across all keys are required.",
                 type=ProxyErrorTypes.bad_request_error,
                 param="key_alias",

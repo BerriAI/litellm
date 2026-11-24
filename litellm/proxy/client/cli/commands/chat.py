@@ -1,7 +1,7 @@
 import json
 import sys
 from collections.abc import Mapping, Sequence
-from typing import Final
+from typing import Final, Protocol
 
 import click
 import requests
@@ -11,25 +11,22 @@ from rich.prompt import Prompt
 from rich.table import Table
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
+from litellm.litellm_core_utils.core_helpers import (
+    as_object_list,
+    as_str_mapping,
+    concatenated,
+    require_get,
+    subscript,
+)
+
 from ... import Client
 from ...chat import ChatClient
 from ._cli_context import cli_context_values
+from .auth import sized_len
 
 
 class _MessagesView(TypedDict):
     messages: ReadOnly[list[dict[str, str]]]
-
-
-class _StreamDelta(TypedDict):
-    content: ReadOnly[NotRequired[str]]
-
-
-class _StreamChoice(TypedDict):
-    delta: ReadOnly[NotRequired[_StreamDelta]]
-
-
-class _StreamChunkView(TypedDict):
-    choices: ReadOnly[Sequence[_StreamChoice]]
 
 
 class _StreamErrorBody(TypedDict):
@@ -40,23 +37,37 @@ class _ErrorBodyView(TypedDict):
     body: ReadOnly[_StreamErrorBody]
 
 
+class _ConsolePrinter(Protocol):
+    """The one rich Console method the chat helpers call."""
+
+    def print(
+        self,
+        *objects: object,
+        end: str = ...,
+        style: str | None = ...,
+        emoji: bool | None = ...,
+        markup: bool | None = ...,
+        highlight: bool | None = ...,
+    ) -> None: ...
+
+
 def _get_available_models(ctx: click.Context) -> Sequence[Mapping[str, object]]:
     """Get list of available models from the proxy server"""
     try:
         context: Final = cli_context_values(ctx)
         client: Final = Client(base_url=context["base_url"], api_key=context["api_key"])
-        models_list: Final = client.models.list()
+        models_list: Final = as_object_list(client.models.list())
         # Ensure we return a list of dictionaries
-        if isinstance(models_list, list):
+        if models_list is not None:
             # Filter to ensure all items are dictionaries
-            return [model for model in models_list if isinstance(model, dict)]
+            return [model for model in map(as_str_mapping, models_list) if isinstance(model, dict)]
         return []
     except Exception as e:
         click.echo(f"Warning: Could not fetch models list: {e}", err=True)
         return []
 
 
-def _select_model(console: Console, available_models: Sequence[Mapping[str, object]]) -> str | None:
+def _select_model(console: _ConsolePrinter, available_models: Sequence[Mapping[str, object]]) -> str | None:
     """Interactive model selection"""
     if not available_models:
         console.print("[yellow]No models available or could not fetch models list.[/yellow]")
@@ -245,7 +256,7 @@ def chat(
         console.print("\n[yellow]Chat session interrupted.[/yellow]")
 
 
-def _show_help(console: Console):
+def _show_help(console: _ConsolePrinter):
     """Show help for interactive chat commands"""
     help_text: Final = """
 [bold]Interactive Chat Commands:[/bold]
@@ -267,7 +278,7 @@ def _show_help(console: Console):
     console.print(Panel(help_text, title="Help"))
 
 
-def _show_history(console: Console, messages: list[dict[str, str]]):
+def _show_history(console: _ConsolePrinter, messages: list[dict[str, str]]):
     """Show conversation history"""
     if not messages:
         console.print("[yellow]No conversation history.[/yellow]")
@@ -289,7 +300,7 @@ def _show_history(console: Console, messages: list[dict[str, str]]):
             )
 
 
-def _save_conversation(console: Console, messages: list[dict[str, str]], command: str):
+def _save_conversation(console: _ConsolePrinter, messages: list[dict[str, str]], command: str):
     """Save conversation to a file"""
     parts: Final = command.split()
     if len(parts) < 2:
@@ -308,7 +319,7 @@ def _save_conversation(console: Console, messages: list[dict[str, str]], command
         console.print(f"[red]Error saving conversation: {e}[/red]")
 
 
-def _load_conversation(console: Console, command: str, system: str | None) -> list[dict[str, str]]:
+def _load_conversation(console: _ConsolePrinter, command: str, system: str | None) -> list[dict[str, str]]:
     """Load conversation from a file"""
     parts: Final = command.split()
     if len(parts) < 2:
@@ -336,7 +347,7 @@ def _load_conversation(console: Console, command: str, system: str | None) -> li
 
 
 def _handle_special_commands(
-    console: Console,
+    console: _ConsolePrinter,
     user_input: str,
     messages: list[dict[str, str]],
     system: str | None,
@@ -376,8 +387,21 @@ def _handle_special_commands(
     return False, messages, None
 
 
+def _stream_chunk_content(chunk: object) -> str:
+    choices: Final = require_get(chunk).get("choices", ())
+    if sized_len(choices) == 0:
+        return ""
+    delta: Final = require_get(subscript(choices, 0)).get("delta", {})
+    content: Final = require_get(delta).get("content", "")
+    if not content:
+        return ""
+    if isinstance(content, str):
+        return content
+    return concatenated("", content)
+
+
 def _stream_response(
-    console: Console,
+    console: _ConsolePrinter,
     client: ChatClient,
     model: str,
     messages: list[dict[str, str]],
@@ -393,14 +417,11 @@ def _stream_response(
             temperature=temperature,
             max_tokens=max_tokens,
         ):
-            streamed: _StreamChunkView = {"choices": chunk.get("choices", ())}
-            if len(streamed["choices"]) > 0:
-                delta = streamed["choices"][0].get("delta", {})
-                content = delta.get("content", "")
-                if content:
-                    assistant_content += content
-                    console.print(content, end="")
-                    sys.stdout.flush()
+            content = _stream_chunk_content(chunk)
+            if content:
+                assistant_content += content
+                console.print(content, end="")
+                sys.stdout.flush()
 
         console.print()  # Add newline after streaming
         return assistant_content if assistant_content else None

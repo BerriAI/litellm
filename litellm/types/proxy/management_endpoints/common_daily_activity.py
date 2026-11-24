@@ -110,6 +110,10 @@ class GuardrailMetric(LiteLLMBaseModel):
     )
 
 
+def _is_none(value: object) -> bool:
+    return value is None
+
+
 class BreakdownMetrics(LiteLLMBaseModel):
     """Breakdown of spend by different dimensions"""
 
@@ -122,7 +126,7 @@ class BreakdownMetrics(LiteLLMBaseModel):
     entities: dict[str, MetricWithMetadata] = Field(default_factory=dict)  # entity -> {metrics, metadata}
     teams: Mapping[str, MetricWithMetadata] | None = Field(
         default=None,
-        exclude_if=lambda value: value is None,
+        exclude_if=_is_none,
         description="Customer spend by the key's current team, or last team for deleted keys. "
         "Keys without a known team are grouped under Unassigned",
     )

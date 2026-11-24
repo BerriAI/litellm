@@ -1,76 +1,156 @@
 {
-  "$defs": {
-    "ChatRole": {
-      "enum": [
-        "system",
-        "user",
-        "assistant",
-        "tool"
-      ],
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "SpanDetail",
+  "type": "object",
+  "properties": {
+    "span_id": {
       "type": "string"
     },
+    "input_ui": {
+      "$ref": "#/$defs/UIContent"
+    },
+    "output_ui": {
+      "$ref": "#/$defs/UIContent"
+    },
+    "input": {
+      "type": "string"
+    },
+    "output": {
+      "type": "string"
+    },
+    "attributes": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      }
+    }
+  },
+  "required": [
+    "span_id",
+    "input_ui",
+    "output_ui",
+    "input",
+    "output",
+    "attributes"
+  ],
+  "$defs": {
     "UIContent": {
       "oneOf": [
         {
+          "title": "UIMessages",
+          "type": "object",
           "properties": {
-            "kind": {
-              "const": "messages",
-              "type": "string"
-            },
             "messages": {
+              "type": "array",
               "items": {
                 "$ref": "#/$defs/UIMessage"
-              },
-              "type": "array"
+              }
+            },
+            "kind": {
+              "type": "string",
+              "const": "messages"
             }
           },
           "required": [
             "kind",
             "messages"
-          ],
-          "title": "UIMessages",
-          "type": "object"
+          ]
         },
         {
+          "title": "UIFields",
+          "type": "object",
           "properties": {
             "fields": {
+              "type": "array",
               "items": {
                 "$ref": "#/$defs/UIField"
-              },
-              "type": "array"
+              }
             },
             "kind": {
-              "const": "fields",
-              "type": "string"
+              "type": "string",
+              "const": "fields"
             }
           },
           "required": [
             "kind",
             "fields"
-          ],
-          "title": "UIFields",
-          "type": "object"
+          ]
         },
         {
+          "title": "UIText",
+          "type": "object",
           "properties": {
-            "kind": {
-              "const": "text",
-              "type": "string"
-            },
             "text": {
               "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "const": "text"
             }
           },
           "required": [
             "kind",
             "text"
-          ],
-          "title": "UIText",
-          "type": "object"
+          ]
         }
       ]
     },
+    "UIMessage": {
+      "type": "object",
+      "properties": {
+        "role": {
+          "$ref": "#/$defs/ChatRole"
+        },
+        "content": {
+          "type": "string"
+        },
+        "name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tool_calls": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/UIToolCall"
+          }
+        }
+      },
+      "required": [
+        "role",
+        "content"
+      ]
+    },
+    "ChatRole": {
+      "type": "string",
+      "enum": [
+        "system",
+        "user",
+        "assistant",
+        "tool"
+      ]
+    },
+    "UIToolCall": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "arguments": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "arguments"
+      ]
+    },
     "UIField": {
+      "type": "object",
       "properties": {
         "key": {
           "type": "string"
@@ -82,87 +162,7 @@
       "required": [
         "key",
         "value"
-      ],
-      "type": "object"
-    },
-    "UIMessage": {
-      "properties": {
-        "content": {
-          "type": "string"
-        },
-        "name": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "role": {
-          "$ref": "#/$defs/ChatRole"
-        },
-        "tool_calls": {
-          "items": {
-            "$ref": "#/$defs/UIToolCall"
-          },
-          "type": [
-            "array",
-            "null"
-          ]
-        }
-      },
-      "required": [
-        "role",
-        "content"
-      ],
-      "type": "object"
-    },
-    "UIToolCall": {
-      "properties": {
-        "arguments": {
-          "type": "string"
-        },
-        "name": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "name",
-        "arguments"
-      ],
-      "type": "object"
+      ]
     }
-  },
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "properties": {
-    "attributes": {
-      "additionalProperties": {
-        "type": "string"
-      },
-      "type": "object"
-    },
-    "input": {
-      "type": "string"
-    },
-    "input_ui": {
-      "$ref": "#/$defs/UIContent"
-    },
-    "output": {
-      "type": "string"
-    },
-    "output_ui": {
-      "$ref": "#/$defs/UIContent"
-    },
-    "span_id": {
-      "type": "string"
-    }
-  },
-  "required": [
-    "span_id",
-    "input_ui",
-    "output_ui",
-    "input",
-    "output",
-    "attributes"
-  ],
-  "title": "SpanDetail",
-  "type": "object"
+  }
 }

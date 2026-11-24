@@ -15,7 +15,7 @@ class GitHubTokenCustomDetector(RegexBasedDetector):
         return "GitHub Token"
 
     @property
-    def denylist(self) -> list[re.Pattern]:
+    def denylist(self) -> list[re.Pattern[str]]:
         return [
             # GitHub App/Personal Access/OAuth Access/Refresh Token
             # ref. https://github.blog/2021-04-05-behind-githubs-new-authentication-token-formats/
