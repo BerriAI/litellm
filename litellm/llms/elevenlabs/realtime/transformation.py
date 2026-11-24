@@ -374,7 +374,9 @@ class ElevenLabsRealtimeConfig(BaseRealtimeConfig):
         *,
         options: ElevenLabsRealtimeOptions | None = None,
         drop_params: bool = False,
-        backend_factory: Callable[[str, Mapping[str, str], Callable[[float], None]], RealtimeBackend] = _default_backend_factory,
+        backend_factory: Callable[
+            [str, Mapping[str, str], Callable[[float], None]], RealtimeBackend
+        ] = _default_backend_factory,
         transformer: ElevenLabsEventTransformer | None = None,
     ) -> None:
         self._options: Final = options or ElevenLabsRealtimeOptions()
