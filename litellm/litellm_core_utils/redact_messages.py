@@ -95,7 +95,9 @@ def redact_message_input_output_from_custom_logger(
     return result
 
 
-def redacted_model_call_details_for_custom_logger(model_call_details: dict, custom_logger: CustomLogger) -> dict:
+def redacted_model_call_details_for_custom_logger(
+    model_call_details: dict, custom_logger: CustomLogger
+) -> dict[str, object]:
     """
     Returns a copy of model_call_details with the request messages, instructions and streaming responses
     redacted when the custom logger has opted out of message logging. The shared model_call_details is left
@@ -882,7 +884,9 @@ def redacted_litellm_params(params: Mapping[str, object], *, redact_request_body
     }
 
 
-def perform_redaction(model_call_details: dict[str, object], result: object, redact_streaming_responses: bool = True):
+def perform_redaction(
+    model_call_details: dict[str, object], result: object, redact_streaming_responses: bool = True
+) -> object:
     """
     Performs the actual redaction on the logging object and result.
 
