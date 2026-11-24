@@ -9,7 +9,7 @@ import time
 from collections.abc import Awaitable, Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from itertools import chain
+from itertools import accumulate, chain, repeat, takewhile
 from types import MappingProxyType
 from typing import (
     TYPE_CHECKING,
@@ -294,6 +294,35 @@ def _gemini_file_ids_from_responses_input(input_data: object) -> Iterator[str]:
                 file_id = _chat_message_file_id(part, "tool")
                 if file_id is not None:
                     yield file_id
+
+
+_PROXY_ADDED_REQUEST_FIELDS: Final = frozenset(
+    {"metadata", "litellm_metadata", "proxy_server_request", "secret_fields"}
+)
+
+
+def _child_values(value: object) -> Sequence[object]:
+    fields: Final = as_str_mapping(value)
+    if fields is not None:
+        return tuple(fields.values())
+    return as_object_list(value) or ()
+
+
+def _next_body_level(level: tuple[object, ...], _: None) -> tuple[object, ...]:
+    return tuple(chain.from_iterable(map(_child_values, level)))
+
+
+def _own_file_id(value: object) -> str | None:
+    fields: Final = as_str_mapping(value)
+    file_id: Final = fields.get("file_id") if fields is not None else None
+    return file_id if isinstance(file_id, str) and file_id else None
+
+
+def _nested_file_ids(request_body: Mapping[str, object]) -> tuple[str, ...]:
+    caller_fields: Final = tuple(value for key, value in request_body.items() if key not in _PROXY_ADDED_REQUEST_FIELDS)
+    levels: Final = accumulate(repeat(None), _next_body_level, initial=caller_fields)
+    nodes: Final = chain.from_iterable(takewhile(bool, levels))
+    return tuple(dict.fromkeys(filter(None, map(_own_file_id, nodes))))
 
 
 def _is_object_iterable(value: object) -> TypeIs[Iterable[object]]:
@@ -1909,6 +1938,8 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                     data["model"] = model_id
                     data["file_id"] = provider_file_id
                     data.update(stored_s3_bucket_kwargs(provider_file_id))
+        elif call_type == CallTypes.aimage_edit.value or call_type == CallTypes.image_edit.value:
+            await self.check_file_ids_access(_nested_file_ids(data), user_api_key_dict)
         elif call_type == CallTypes.acreate_batch.value:
             input_file_id = cast(Optional[str], data.get("input_file_id"))
             if input_file_id:
