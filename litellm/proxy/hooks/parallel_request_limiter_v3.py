@@ -1053,6 +1053,11 @@ def _get_explicit_output_cap(data: object, call_type: str | None) -> int | None:
     return max(output_cap_values, default=None)
 
 
+def _embedding_input_type(request: Mapping[str, object] | None) -> str | None:
+    input_type: Final = (request.get("inputType") or request.get("input_type")) if request is not None else None
+    return input_type if isinstance(input_type, str) else None
+
+
 def _is_embedding_request(data: object, call_type: str | None) -> bool:
     if call_type in EMBEDDING_API_CALL_TYPES:
         return True
@@ -2042,7 +2047,10 @@ def estimate_precise_input_tokens(
         return pretokenized_input_tokens
     embedding_text, embedding_media_tokens = (
         split_embedding_input_tokens(
-            raw_embedding_input, lambda: limiter.media_model_resolver(model or "", team_id), model
+            raw_embedding_input,
+            lambda: limiter.media_model_resolver(model or "", team_id),
+            model,
+            _embedding_input_type(request),
         )
         if is_embedding_request
         else (None, 0)
@@ -2538,6 +2546,7 @@ def estimate_input_and_output_tokens(
             original_input,
             lambda: _media_models(media_model_resolver, fallback_model or "", team_id),
             fallback_model,
+            _embedding_input_type(estimable_data),
         )
         if include_media and is_embedding_call
         else (original_input, 0)

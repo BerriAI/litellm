@@ -130,6 +130,25 @@ pub struct GroupInfo {
     pub output_cost_per_token: Option<f64>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Charge {
+    Reported(i64),
+    Reservation,
+}
+
+impl Charge {
+    pub fn against(self, reserved: i64) -> i64 {
+        match self {
+            Self::Reported(tokens) => tokens,
+            Self::Reservation => reserved,
+        }
+    }
+
+    pub fn reported(self) -> i64 {
+        self.against(0)
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TokenRateLimitType {
@@ -486,6 +505,18 @@ impl UsageTokens {
             .or_else(|| modeled(usage.combined.as_ref()))
             .or(usage.socket_session.as_ref())
             .map(Self::of)
+    }
+
+    pub fn charge(
+        usage: Option<&Self>,
+        rate_limit_type: TokenRateLimitType,
+        embedding: bool,
+    ) -> Charge {
+        let reported_nothing = Self::settled(usage, TokenRateLimitType::Total) == 0;
+        if embedding && reported_nothing && rate_limit_type != TokenRateLimitType::Output {
+            return Charge::Reservation;
+        }
+        Charge::Reported(Self::settled(usage, rate_limit_type))
     }
 
     pub fn settled(usage: Option<&Self>, rate_limit_type: TokenRateLimitType) -> i64 {

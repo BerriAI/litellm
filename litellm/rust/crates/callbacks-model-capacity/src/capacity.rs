@@ -9,8 +9,8 @@ use crate::{
     error::CapacityError,
     host::{CapacityHost, CounterStore, Estimate, Facts, Published, Throttle, Touched},
     model::{
-        BORROWER_KINDS, BorrowerKind, BorrowingLimits, Counter, CounterKind, Descriptor, GroupInfo,
-        Increment, KeyFacts, LimiterResponse, LoggedGroup, MODEL_SATURATION_CHECK,
+        BORROWER_KINDS, BorrowerKind, BorrowingLimits, Charge, Counter, CounterKind, Descriptor,
+        GroupInfo, Increment, KeyFacts, LimiterResponse, LoggedGroup, MODEL_SATURATION_CHECK,
         PRIORITY_CLASS_SHARE_AT_SATURATION, PRIORITY_MODEL, Priority, RateLimit, ReservationOp,
         Settings, Status, TeamShare, TokenRateLimitType, Window,
     },
@@ -332,35 +332,53 @@ fn capped_idle_share(
 fn team_settlement(
     state: &ShareState,
     served: Option<&Hold>,
-    total_tokens: i64,
+    charge: Charge,
     ttl: i64,
 ) -> Vec<ReservationOp> {
-    let own_usage = if served.is_none() { total_tokens } else { 0 };
+    let own_usage = |reserved: i64| {
+        if served.is_none() {
+            charge.against(reserved)
+        } else {
+            0
+        }
+    };
     let mut operations = window_guarded(
-        team_increment(state.limit.as_ref(), own_usage - state.reserved_tokens, ttl),
+        team_increment(
+            state.limit.as_ref(),
+            own_usage(state.reserved_tokens) - state.reserved_tokens,
+            ttl,
+        ),
         state.reserved_window.as_ref(),
     );
     operations.extend(window_guarded(
         team_increment(
             state.cap.as_ref(),
-            own_usage - state.cap_reserved_tokens,
+            own_usage(state.cap_reserved_tokens) - state.cap_reserved_tokens,
             ttl,
         ),
         state.cap_reserved_window.as_ref(),
     ));
     if let Some(hold) = served {
-        operations.extend(hold_settlement(hold, total_tokens, ttl));
+        operations.extend(hold_settlement(hold, charge, ttl));
     }
     operations
 }
 
-fn hold_settlement(hold: &Hold, used: i64, ttl: i64) -> Vec<ReservationOp> {
+fn hold_settlement(hold: &Hold, charge: Charge, ttl: i64) -> Vec<ReservationOp> {
     let mut operations = window_guarded(
-        team_increment(hold.descriptor.as_ref(), used - hold.reserved_tokens, ttl),
+        team_increment(
+            hold.descriptor.as_ref(),
+            charge.against(hold.reserved_tokens) - hold.reserved_tokens,
+            ttl,
+        ),
         hold.window.as_ref(),
     );
     operations.extend(window_guarded(
-        team_increment(hold.cap.as_ref(), used - hold.cap_reserved_tokens, ttl),
+        team_increment(
+            hold.cap.as_ref(),
+            charge.against(hold.cap_reserved_tokens) - hold.cap_reserved_tokens,
+            ttl,
+        ),
         hold.cap_window.as_ref(),
     ));
     operations
@@ -370,7 +388,7 @@ fn hold_settlement(hold: &Hold, used: i64, ttl: i64) -> Vec<ReservationOp> {
 fn borrowing_settlement(
     stash: &Stash,
     served: &Holds,
-    total_tokens: i64,
+    charge: Charge,
     ttl: i64,
 ) -> Vec<ReservationOp> {
     BORROWER_KINDS
@@ -379,7 +397,7 @@ fn borrowing_settlement(
             team_settlement(
                 stash.share(kind),
                 served[kind.index()].as_deref(),
-                total_tokens,
+                charge,
                 ttl,
             )
         })
@@ -1227,10 +1245,11 @@ impl Engine {
         stash: Option<&SharedStash>,
         settlement: &Settlement<'_>,
         priority: Option<&str>,
-        total_tokens: i64,
+        charge: Charge,
         redis: Option<&RequestRedis>,
     ) -> Result<(), CapacityError> {
         let ttl = settings.window_size;
+        let total_tokens = charge.reported();
         let group = settlement.model_group;
         let (team_tokens, served) = match stash {
             None => (Vec::new(), Holds::default()),
@@ -1240,7 +1259,7 @@ impl Engine {
                     Some(group) => served_holds(&stash, group.key()?),
                     None => Holds::default(),
                 };
-                let team_tokens = borrowing_settlement(&stash, &served, total_tokens, ttl);
+                let team_tokens = borrowing_settlement(&stash, &served, charge, ttl);
                 release_holds(&mut stash, &served);
                 (team_tokens, served)
             }
@@ -1319,7 +1338,12 @@ impl Engine {
                 Some(group) => served_holds(&stash, group.key()?),
                 None => Holds::default(),
             };
-            let refund = borrowing_settlement(&stash, &failed, used, settings.window_size);
+            let refund = borrowing_settlement(
+                &stash,
+                &failed,
+                Charge::Reported(used),
+                settings.window_size,
+            );
             release_holds(&mut stash, &failed);
             (refund, failed)
         };
@@ -1338,7 +1362,8 @@ impl Engine {
         let refund = {
             let mut stash = stash.lock();
             let none = Holds::default();
-            let refund = borrowing_settlement(&stash, &none, 0, settings.window_size);
+            let refund =
+                borrowing_settlement(&stash, &none, Charge::Reported(0), settings.window_size);
             for kind in BORROWER_KINDS {
                 stash.share_mut(kind).clear_reservation();
             }
@@ -2097,7 +2122,7 @@ mod tests {
         };
         state.put_hold("other", &Arc::new(Hold::empty()));
         let served = state.hold("other");
-        let operations = team_settlement(&state, served.as_deref(), 90, 60);
+        let operations = team_settlement(&state, served.as_deref(), Charge::Reported(90), 60);
         assert_eq!(
             operations,
             vec![ReservationOp::Increment {

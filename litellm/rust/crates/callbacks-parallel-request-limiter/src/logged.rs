@@ -176,6 +176,13 @@ fn text(value: Option<&Value>) -> Option<String> {
 
 /// `_get_total_tokens_from_usage`: the tokens a usage charges under the rate limit type, cache
 /// reads left out of input and total. Only litellm's `Usage` and plain dicts report them.
+fn reported_tokens(usage: Option<&UsageObject>, kind: TokenRateLimitType) -> i64 {
+    match charged_tokens(usage, kind) {
+        0 => aggregate_only(usage),
+        charged => charged,
+    }
+}
+
 pub fn charged_tokens(usage: Option<&UsageObject>, kind: TokenRateLimitType) -> i64 {
     let (members, cached) = match usage {
         Some(UsageObject::Chat { members }) => (members, count(members.get("cached_tokens"))),
@@ -464,10 +471,9 @@ impl LoggedCall {
         keep_slot: bool,
     ) -> SuccessFacts {
         let usage = self.success_usage();
-        let total_tokens = match charged_tokens(usage, kind) {
-            0 => aggregate_only(usage),
-            charged => charged,
-        };
+        let total_tokens = reported_tokens(usage, kind);
+        let embedding_reported_no_tokens =
+            self.embedding() && reported_tokens(usage, TokenRateLimitType::Total) == 0;
         let settled = match usage {
             Some(usage) => reconciled(source(usage)),
             None => self.response.reconciled(),
@@ -508,9 +514,9 @@ impl LoggedCall {
             call_id: self.call_id.clone(),
             exempt: self.exempt(),
             total_tokens,
-            settles_at_reservation: total_tokens == 0
-                && kind != TokenRateLimitType::Output
-                && self.embedding(),
+            settles_at_reservation: embedding_reported_no_tokens
+                && kind != TokenRateLimitType::Output,
+            embedding_reported_no_tokens,
             team_label: self.team_label(),
             targets,
             served_model: resolved.served_model.clone(),

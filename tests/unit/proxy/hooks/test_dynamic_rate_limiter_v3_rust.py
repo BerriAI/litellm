@@ -1917,6 +1917,23 @@ async def test_an_embedding_responses_tokens_count_against_the_team_limit(monkey
 
 
 @pytest.mark.asyncio
+async def test_an_embedding_the_provider_reports_as_zero_tokens_keeps_its_reservation_on_the_team_share(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    handler: Final = _borrowing_handler(monkeypatch, borrows=True)
+    await _check(handler, _team_key(), saturation=0.5, data={"model": "shared-model", "input": "word " * 30})
+    remaining: Final = await _team_tokens_remaining(handler)
+    assert remaining < 100
+    await _settle_tokens(
+        handler,
+        0,
+        response=litellm.EmbeddingResponse(usage=litellm.Usage(prompt_tokens=0, completion_tokens=0, total_tokens=0)),
+        call_type="aembedding",
+    )
+    assert await _team_tokens_remaining(handler) == remaining
+
+
+@pytest.mark.asyncio
 async def test_a_null_auth_metadata_still_settles_the_teams_tokens(monkeypatch: pytest.MonkeyPatch):
     handler = _borrowing_handler(monkeypatch, borrows=True)
     await _check(handler, _team_key(), saturation=0.5)

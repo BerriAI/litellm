@@ -218,6 +218,8 @@ pub struct SuccessFacts {
     #[serde(default)]
     pub settles_at_reservation: bool,
     #[serde(default)]
+    pub embedding_reported_no_tokens: bool,
+    #[serde(default)]
     pub targets: TargetFacts,
     #[serde(default)]
     pub served_model: Option<RateLimitedModel>,
@@ -289,7 +291,7 @@ pub struct Plan {
     pub ptu: bool,
 }
 
-pub(crate) const EMBEDDING_CALL_TYPES: [&str; 2] = ["aembedding", "embedding"];
+pub const EMBEDDING_CALL_TYPES: [&str; 2] = ["aembedding", "embedding"];
 const RESPONSES_CALL_TYPES: [&str; 2] = ["aresponses", "responses"];
 const EXTRACTION_CALL_TYPES: [&str; 2] = ["extraction", "aextraction"];
 const MCP_TOOL_CALL_TYPE: &str = "call_mcp_tool";
@@ -1549,11 +1551,15 @@ impl ParallelRequestLimiter {
             operations.extend(self.engine.project_ops(
                 &reserved_ptu,
                 &stash.reserved_scopes,
-                settlement_tokens(
-                    stash.ptu_ceiling.as_ref(),
-                    facts.usage.as_ref(),
-                    facts.total_tokens,
-                ),
+                if facts.embedding_reported_no_tokens {
+                    stash.ptu_reserved_tokens
+                } else {
+                    settlement_tokens(
+                        stash.ptu_ceiling.as_ref(),
+                        facts.usage.as_ref(),
+                        facts.total_tokens,
+                    )
+                },
                 if stash.reservation_released {
                     0
                 } else {

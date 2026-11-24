@@ -673,7 +673,7 @@ def _is_pdf_block(block: Mapping[str, object]) -> bool:
 
 
 def _bedrock_data_uri_media_scope(
-    resolved_model: str, media: Sequence[Mapping[str, object]]
+    resolved_model: str, media: Sequence[Mapping[str, object]], input_type: str | None
 ) -> _DataUriMediaScope | None:
     from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
     from litellm.llms.bedrock.common_utils import BedrockModelInfo
@@ -686,14 +686,16 @@ def _bedrock_data_uri_media_scope(
         case "cohere":
             return "whole_batch"
         case "twelvelabs":
-            return None
+            return "per_item" if input_type == "image" else None
         case "nova" if any(map(_is_pdf_block, media)):
             return None
         case _:
             return "per_item"
 
 
-def _data_uri_media_scope(model: str, media: Sequence[Mapping[str, object]]) -> _DataUriMediaScope | None:
+def _data_uri_media_scope(
+    model: str, media: Sequence[Mapping[str, object]], input_type: str | None
+) -> _DataUriMediaScope | None:
     from litellm.utils import supports_embedding_image_input
 
     try:
@@ -701,7 +703,7 @@ def _data_uri_media_scope(model: str, media: Sequence[Mapping[str, object]]) -> 
     except litellm.exceptions.BadRequestError:
         return None
     if provider == "bedrock":
-        return _bedrock_data_uri_media_scope(resolved_model, media)
+        return _bedrock_data_uri_media_scope(resolved_model, media, input_type)
     if not supports_embedding_image_input(model):
         return None
     if provider == "cohere":
@@ -710,7 +712,10 @@ def _data_uri_media_scope(model: str, media: Sequence[Mapping[str, object]]) -> 
 
 
 def split_embedding_input_tokens(
-    value: _EmbeddingInputT, media_models: Callable[[], Sequence[str]], fallback_model: str | None = None
+    value: _EmbeddingInputT,
+    media_models: Callable[[], Sequence[str]],
+    fallback_model: str | None = None,
+    input_type: str | None = None,
 ) -> tuple[_EmbeddingInputT, int]:
     from litellm.litellm_core_utils.prompt_templates.tpm_media_utils import (
         embedding_input_is_all_media,
@@ -721,7 +726,7 @@ def split_embedding_input_tokens(
     if not media:
         return value, 0
     models: Final = tuple(media_models())
-    scopes: Final = frozenset(_data_uri_media_scope(model, media) for model in models)
+    scopes: Final = frozenset(_data_uri_media_scope(model, media, input_type) for model in models)
     if not models or None in scopes or ("whole_batch" in scopes and not embedding_input_is_all_media(value)):
         return value, 0
     media_tokens: Final = sum(estimate_media_block_tokens(block, models, fallback_model) for block in media)

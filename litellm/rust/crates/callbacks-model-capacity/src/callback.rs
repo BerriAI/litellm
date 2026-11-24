@@ -6,6 +6,7 @@ use litellm_callbacks::{
     LimiterRequest, LoggedKeyIdentity, Manifest, MetadataKind, Outcome, Patch, Scalar, Selection,
     Subscription, Verdict, typed,
 };
+use litellm_callbacks_parallel_request_limiter::EMBEDDING_CALL_TYPES;
 use litellm_redis_store::RequestRedis;
 use serde::{Deserialize, de::DeserializeOwned};
 use serde_json::{Value, json};
@@ -312,8 +313,18 @@ impl ModelCapacity {
             }
             Outcome::Success => {
                 let used = UsageTokens::delivered(usage.as_ref());
+                let embedding = input.call.as_ref().is_some_and(|call| {
+                    EMBEDDING_CALL_TYPES.contains(&call.kind.call_type.as_str())
+                });
                 if let Err(error) = self
-                    .success(&gaps, group, identity.as_ref(), used, stash, host)
+                    .success(
+                        &gaps,
+                        group,
+                        identity.as_ref(),
+                        (used, embedding),
+                        stash,
+                        host,
+                    )
                     .await
                 {
                     let message = format!("Error in dynamic rate limiter success event: {error}");
@@ -330,7 +341,7 @@ impl ModelCapacity {
         gaps: &AttemptGaps,
         group: Result<Option<LoggedGroup>, String>,
         identity: Option<&LoggedKeyIdentity>,
-        used: Option<UsageTokens>,
+        (used, embedding): (Option<UsageTokens>, bool),
         stash: Option<SharedStash>,
         host: Host<'_>,
     ) -> Result<(), String> {
@@ -344,7 +355,7 @@ impl ModelCapacity {
             .facts
             .settings()
             .map_err(|error| error.python_message())?;
-        let total = UsageTokens::settled(used.as_ref(), settings.rate_limit_type);
+        let charge = UsageTokens::charge(used.as_ref(), settings.rate_limit_type, embedding);
         let settlement = team.settlement(group.as_ref(), gaps);
         self.engine
             .settle_success(
@@ -352,7 +363,7 @@ impl ModelCapacity {
                 stash.as_ref(),
                 &settlement,
                 team.priority.as_deref(),
-                total,
+                charge,
                 host.redis,
             )
             .await
