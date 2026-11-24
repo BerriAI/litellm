@@ -76,6 +76,7 @@ from litellm.llms.vertex_ai.gemini.transformation import transform_request_body
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
     VERTEX_SHARED_REQUEST_TIERS,
     VertexGeminiConfig,
+    malformed_without_output_message,
 )
 from litellm.llms.vertex_ai.gemini_embeddings.batch_embed_content_transformation import (
     embed_content_config_fields,
@@ -462,6 +463,25 @@ def _openai_batch_output_row(
             "body": body,
         },
         "error": None if error_code is None else {"code": error_code, "message": error_message},
+    }
+
+
+def _openai_batch_http_error_row(
+    custom_id: str, response: Mapping[str, object], error: _OpenAIBatchOutputError
+) -> _OpenAIBatchOutputRow:
+    """
+    A row for a request the provider ran and billed but that failed, in OpenAI's shape for an HTTP error:
+    `response.status_code` 500 with the error and the billed `usage` in `response.body`, and `error` null.
+    """
+    return {
+        "id": f"batch_req_{uuid.uuid4()}",
+        "custom_id": custom_id,
+        "response": {
+            "status_code": 500,
+            "request_id": response.get("id", ""),
+            "body": {"error": error, "model": response.get("model"), "usage": response.get("usage")},
+        },
+        "error": None,
     }
 
 
@@ -2016,10 +2036,14 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
                 raw_response=mock_httpx_response,
             )
 
-            # Convert ModelResponse to dict
+            malformed: Final = malformed_without_output_message(transformed_response)
             response_dict: Final = transformed_response.model_dump()
-
-            # Return in OpenAI batch format
+            if malformed is not None:
+                return _openai_batch_http_error_row(
+                    custom_id=custom_id,
+                    response=response_dict,
+                    error={"code": "vertex_ai_error", "message": malformed},
+                )
             return _openai_batch_output_row(custom_id=custom_id, body=response_dict)
 
         except Exception as e:
