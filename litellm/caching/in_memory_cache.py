@@ -22,6 +22,7 @@ if TYPE_CHECKING:
 from pydantic import BaseModel, TypeAdapter
 
 from litellm.constants import MAX_SIZE_PER_ITEM_IN_MEMORY_CACHE_IN_KB
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 
 from .base_cache import BaseCache
 
@@ -179,6 +180,8 @@ class InMemoryCache(BaseCache):
             return  # Don't cache anything if max size is 0
 
         with self._write_lock:
+            if kwargs.get("preserve_newer_response") is True and self._has_newer_response(key, value):
+                return
             # Always prune expired/outdated heap roots before inserting.
             # This keeps expiration_heap bounded even when the live cache stays
             # below max_size_in_memory and keys are reinserted after TTL expiry.
@@ -187,7 +190,7 @@ class InMemoryCache(BaseCache):
                 return
 
             self.cache_dict[key] = value
-            if self.allow_ttl_override(key):  # if ttl is not set, set it to default ttl
+            if kwargs.get("replace_ttl") is True or self.allow_ttl_override(key):
                 if "ttl" in kwargs and kwargs["ttl"] is not None:
                     self.ttl_dict[key] = self._clock() + float(kwargs["ttl"])
                     heapq.heappush(self.expiration_heap, (self.ttl_dict[key], key))
@@ -195,15 +198,29 @@ class InMemoryCache(BaseCache):
                     self.ttl_dict[key] = self._clock() + self.default_ttl
                     heapq.heappush(self.expiration_heap, (self.ttl_dict[key], key))
 
+    def _has_newer_response(self, key: str, value: object) -> bool:
+        current: Final = as_str_mapping(_UNTYPED_VALUE.validate_python(self.get_cache(key)))
+        incoming: Final = as_str_mapping(value)
+        if current is None or incoming is None:
+            return False
+        current_timestamp: Final = current.get("timestamp")
+        incoming_timestamp: Final = incoming.get("timestamp")
+        return (
+            isinstance(current_timestamp, (int, float))
+            and isinstance(incoming_timestamp, (int, float))
+            and current_timestamp > incoming_timestamp
+        )
+
     async def async_set_cache(self, key: str, value: object, **kwargs):
         self.set_cache(key=key, value=value, **kwargs)
 
     async def async_set_cache_pipeline(
         self, cache_list: Iterable[tuple[str, object]], ttl: object = None, **kwargs: object
     ):
+        replace_ttl: Final = kwargs.get("replace_ttl") is True
         for cache_key, cache_value in cache_list:
             if ttl is not None:
-                self.set_cache(key=cache_key, value=cache_value, ttl=ttl)
+                self.set_cache(key=cache_key, value=cache_value, ttl=ttl, replace_ttl=replace_ttl)
             else:
                 self.set_cache(key=cache_key, value=cache_value)
 

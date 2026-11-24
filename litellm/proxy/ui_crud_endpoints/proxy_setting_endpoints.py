@@ -427,6 +427,9 @@ class UISettingsResponse(SettingsResponse):
     """Response model for UI settings"""
 
     source: dict[str, FieldSource]
+    supports_similarity_threshold: bool = Field(
+        default=False, description="Whether the active response cache supports similarity thresholds"
+    )
 
 
 # Allowlist of UI settings that can be stored
@@ -2081,10 +2084,12 @@ async def get_ui_settings():
             for key in values
         }
     )
+    response_cache: Final = litellm.cache
     return UISettingsResponse(
         values=values,
         field_schema=resolved_settings.field_schema,
         source=source,
+        supports_similarity_threshold=response_cache is not None and response_cache.is_semantic_cache(),
     )
 
 

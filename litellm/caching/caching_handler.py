@@ -44,6 +44,7 @@ from litellm.types.integrations.custom_logger import converted_stream_requested
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import ChatCompletionFileObject, ResponsesAPIResponse
 from litellm.types.rerank import RerankResponse
+from litellm.types.semantic_cache import semantic_cache_policy
 from litellm.types.utils import (
     CachingDetails,
     CallTypes,
@@ -1076,6 +1077,11 @@ class LLMCachingHandler:
             new_kwargs["cache_key"] = litellm.cache.get_cache_key(**new_kwargs)
         cached_result: object | None = None
         if call_type == CallTypes.aembedding.value:
+            scoped_controls: Final = (
+                {"cache": new_kwargs["cache"]}
+                if not litellm.cache.is_semantic_cache() and semantic_cache_policy(new_kwargs) is not None
+                else {}
+            )
             new_kwargs["input"] = self.handle_kwargs_input_list_or_str(new_kwargs)
             tasks: Final[list[Awaitable[object]]] = []
             for idx, i in enumerate(new_kwargs["input"]):
@@ -1084,6 +1090,7 @@ class LLMCachingHandler:
                     litellm.cache.async_get_cache(
                         cache_key=preset_cache_key,
                         dynamic_cache_object=self.dual_cache,
+                        **scoped_controls,
                     )
                 )
             with response_cache_phase("get"):
