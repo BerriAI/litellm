@@ -30,7 +30,7 @@ import litellm
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
-from litellm.litellm_core_utils.core_helpers import as_str_mapping, require_get
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, attribute_or_none, require_get
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.models.team import BudgetLimitEntry
 from litellm.proxy._types import *
@@ -73,10 +73,12 @@ from litellm.proxy.management_endpoints.common_utils import (  # noqa: F401  # l
     ROLLOVER_BUDGET_FIELDS,
     _user_has_admin_view,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     require_caller_user_id_for_non_admin,
+    semantic_cache_metadata_changed,
     user_api_key_has_admin_view,
     validate_budget_duration,
     validate_finite_spend,
     validate_rollover_budget_patch,
+    validate_semantic_cache_metadata,
 )
 from litellm.proxy.management_endpoints.key_management_endpoints import (  # noqa: F401  # legacy module exports
     _check_permissions_caller_permission,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
@@ -553,6 +555,17 @@ async def _fetch_user_team_ids(user_id: str, prisma_client: "PrismaClient") -> t
     return tuple(user_row.teams) if user_row is not None else ()
 
 
+def enforce_user_semantic_cache_admin(caller: UserAPIKeyAuth, requested: object, stored: object) -> None:
+    if not semantic_cache_metadata_changed(requested, stored):
+        return
+    if caller.user_role != LitellmUserRoles.PROXY_ADMIN:
+        raise HTTPException(
+            status_code=403,
+            detail={"error": "Only proxy admins can change metadata.cache_params on a user."},
+        )
+    validate_semantic_cache_metadata(requested, stored)
+
+
 @router.post(
     "/user/new",
     tags=["Internal User management"],
@@ -633,6 +646,7 @@ async def new_user(
     if data.auto_create_key and actor is not None:
         validated_customer_key_metadata(data.metadata, None, actor)
     try:
+        enforce_user_semantic_cache_admin(user_api_key_dict, attribute_or_none(data, "metadata"), None)
         from litellm.proxy.proxy_server import _license_check, prisma_client
 
         if prisma_client is None:
@@ -919,6 +933,13 @@ class _UserInfoDataClient(Protocol):
     ) -> "Sequence[TeamListResponseObject] | None": ...
 
 
+async def _get_user_info_row(
+    prisma_client: "_UserInfoDataClient",
+    user_id: str,
+) -> "prisma_models.LiteLLM_UserTable | None":
+    return await prisma_client.get_data(user_id=user_id)
+
+
 async def _get_user_info_keys(
     prisma_client: "_UserInfoDataClient",
     user_id: str | None,
@@ -1114,7 +1135,7 @@ async def user_info(
 
         user_info = None
         if user_id is not None:
-            user_info = await prisma_client.get_data(user_id=user_id)
+            user_info = await _get_user_info_row(prisma_client, user_id)
 
         if user_info is None:
             raise HTTPException(
@@ -1818,6 +1839,13 @@ async def _update_single_user_helper(
     existing_metadata: Final = (
         cast(dict, getattr(existing_user_row, "metadata", {}) or {}) if existing_user_row is not None else {}
     )
+
+    if "metadata" in non_default_values:
+        enforce_user_semantic_cache_admin(
+            user_api_key_dict,
+            attribute_or_none(user_request, "metadata"),
+            attribute_or_none(existing_user_row, "metadata"),
+        )
 
     non_default_values = prepare_metadata_fields(
         data=user_request,

@@ -42,7 +42,10 @@ def validate_budget_duration(budget_duration: str | None, status_code: int = 400
         raise HTTPException(status_code=status_code, detail={"error": error})
 
 
+import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.constants import SEMANTIC_CACHE_PARAMS_KEY
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.models.budget import active_rollover_credit
 from litellm.proxy._types import (  # re-exported
     CommonProxyErrors,
@@ -67,6 +70,8 @@ from litellm.proxy.utils import (  # noqa: F401  # legacy module exports
     premium_user_check,
 )
 from litellm.repositories.team_repository import TeamRepository
+from litellm.types.caching import LiteLLMCacheType
+from litellm.types.semantic_cache import SemanticCacheParams
 from litellm.types.utils import BudgetConfig
 
 if TYPE_CHECKING:
@@ -81,6 +86,41 @@ _is_user_team_admin: Final = is_team_admin
 ROLLOVER_BUDGET_FIELDS: Final = frozenset({"max_budget", "budget_duration", "rollover_max_budget"})
 _ROLLOVER_AMOUNT: Final[TypeAdapter[float | None]] = TypeAdapter(float | None)
 _ROLLOVER_DURATION: Final[TypeAdapter[str | None]] = TypeAdapter(str | None)
+
+
+def semantic_cache_metadata_changed(requested: object, stored: object) -> bool:
+    return _cache_params_json(requested) != _cache_params_json(stored)
+
+
+def _cache_params_json(metadata: object) -> str:
+    fields: Final = as_str_mapping(metadata)
+    return json.dumps(
+        {SEMANTIC_CACHE_PARAMS_KEY: fields[SEMANTIC_CACHE_PARAMS_KEY]}
+        if fields is not None and SEMANTIC_CACHE_PARAMS_KEY in fields
+        else {},
+        sort_keys=True,
+    )
+
+
+def validate_semantic_cache_metadata(metadata: object, stored: object = None) -> None:
+    fields: Final = as_str_mapping(metadata)
+    raw: Final = fields.get(SEMANTIC_CACHE_PARAMS_KEY) if fields is not None else None
+    if raw is None:
+        return
+    try:
+        params: Final = SemanticCacheParams.model_validate(raw)
+    except ValidationError as exc:
+        raise HTTPException(status_code=400, detail={"error": "Invalid metadata.cache_params."}) from exc
+    cache: Final = litellm.cache
+    if params.ttl is None or cache is None or cache.type != LiteLLMCacheType.QDRANT_SEMANTIC:
+        return
+    stored_fields: Final = as_str_mapping(stored)
+    stored_params: Final = as_str_mapping(stored_fields.get(SEMANTIC_CACHE_PARAMS_KEY) if stored_fields else None)
+    stored_ttl: Final = stored_params.get("ttl") if stored_params is not None else None
+    if type(stored_ttl) is not int or stored_ttl != params.ttl:
+        raise HTTPException(
+            status_code=400, detail={"error": "Qdrant semantic cache does not support metadata.cache_params.ttl."}
+        )
 
 
 def validate_rollover_budget_patch(

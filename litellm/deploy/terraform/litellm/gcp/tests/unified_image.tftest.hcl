@@ -50,6 +50,44 @@ run "registry_and_tag_compose_one_image_for_every_workload" {
     ])
     error_message = "UI and migrations must keep the image entrypoint with their component as args; gateway and backend must exec it with their component after the DATABASE_URL bootstrap."
   }
+
+  assert {
+    condition     = [for e in google_cloud_run_v2_service.gateway[0].template[0].containers[0].env : e.value if e.name == "STORE_MODEL_IN_DB"] == ["true"]
+    error_message = "The gateway must load models from Cloud SQL."
+  }
+}
+
+run "explicit_gateway_model_storage_setting_takes_precedence" {
+  command = plan
+
+  variables {
+    gateway_extra_env = { STORE_MODEL_IN_DB = "false" }
+  }
+
+  assert {
+    condition     = [for e in google_cloud_run_v2_service.gateway[0].template[0].containers[0].env : e.value if e.name == "STORE_MODEL_IN_DB"] == ["false"]
+    error_message = "The gateway must keep the explicit model storage setting without duplicating it."
+  }
+}
+
+run "gateway_model_storage_secret_replaces_plaintext_default" {
+  command = plan
+
+  variables {
+    gateway_extra_secrets = {
+      STORE_MODEL_IN_DB = "projects/test-project/secrets/model-storage"
+    }
+  }
+
+  assert {
+    condition     = !anytrue([for e in google_cloud_run_v2_service.gateway[0].template[0].containers[0].env : e.name == "STORE_MODEL_IN_DB" && length(e.value_source) == 0])
+    error_message = "The gateway must omit the plaintext model storage default when a secret is configured."
+  }
+
+  assert {
+    condition     = [for e in google_cloud_run_v2_service.gateway[0].template[0].containers[0].env : e.value_source[0].secret_key_ref[0].secret if e.name == "STORE_MODEL_IN_DB" && length(e.value_source) == 1] == [var.gateway_extra_secrets["STORE_MODEL_IN_DB"]]
+    error_message = "The gateway must inject the configured model storage secret."
+  }
 }
 
 run "image_overrides_the_composed_uri_everywhere" {

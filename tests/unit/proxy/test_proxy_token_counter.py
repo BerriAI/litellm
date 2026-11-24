@@ -6687,7 +6687,7 @@ async def test_responses_count_on_claude_refuses_to_count_turns_stored_redacted_
     assert "cannot be replayed" in refused.value.message
 
 
-_MULTILINGUAL_TEXT: Final ="日本語のテキストとहिन्दी पाठ और русский текст. " * 20
+_MULTILINGUAL_TEXT: Final = "日本語のテキストとहिन्दी पाठ और русский текст. " * 20
 
 
 @pytest.mark.asyncio

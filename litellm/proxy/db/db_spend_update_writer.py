@@ -37,7 +37,7 @@ from litellm.constants import (
     INTERNAL_CALL_ORIGIN_METADATA_KEY,
 )
 from litellm.litellm_core_utils.batch_utils import BATCH_COST_REQUEST_ID_SUFFIX
-from litellm.litellm_core_utils.core_helpers import finite_cost, require_attributes, single_log_line
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, finite_cost, require_attributes, single_log_line
 from litellm.litellm_core_utils.litellm_logging import coerce_model_access_groups
 from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import guardrail_share_of_spend
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
@@ -602,7 +602,7 @@ def _is_billed_retry_attempt(metadata: SpendLogsMetadata) -> bool:
 
 
 def _timed_request_duration_ms(
-    payload: dict | SpendLogsPayload,
+    payload: Mapping[str, object],
     request_status: Literal["success", "failure"],
     is_internal_call: bool,
 ) -> int | None:
@@ -810,8 +810,8 @@ def _served_model_access_groups(
     deployment: Final = router.registry().deployment_dict(served_model_id)
     if deployment is None:
         return None
-    model_info: Final = deployment.get("model_info")
-    if not isinstance(model_info, Mapping):
+    model_info: Final = as_str_mapping(deployment.get("model_info"))
+    if model_info is None:
         return None
     declared: Final = model_info.get("access_groups")
     if not isinstance(declared, (list, tuple)):
@@ -1267,7 +1267,7 @@ class DBSpendUpdateWriter:
         payload: SpendLogsPayload,
         completion_response: object,
         prisma_client: "PrismaClient | None",
-        kwargs: "dict | None" = None,
+        kwargs: "Mapping[str, object] | None" = None,
     ) -> None:
         try:
             if prisma_client is None:
@@ -1277,6 +1277,9 @@ class DBSpendUpdateWriter:
                 logged_full_tool_names,
             )
 
+            litellm_params: Final = as_str_mapping((kwargs or {}).get("litellm_params"))
+            metadata: Final = as_str_mapping(litellm_params.get("metadata")) if litellm_params is not None else None
+            key_alias: Final = metadata.get("user_api_key_alias") if metadata is not None else None
             transaction: Final = build_tool_usage_transaction(
                 request_id=payload["request_id"],
                 start_time_iso=str(payload["startTime"]),
@@ -1286,6 +1289,7 @@ class DBSpendUpdateWriter:
                 completion_response=completion_response,
                 realtime_tool_calls=_CALL_KWARG_VALUE.validate_python((kwargs or {}).get("realtime_tool_calls")),
                 full_names=logged_full_tool_names(_CALL_KWARG_VALUE.validate_python(kwargs or {})),
+                key_alias=key_alias if isinstance(key_alias, str) else None,
             )
             if transaction is None:
                 return
@@ -1321,30 +1325,28 @@ class DBSpendUpdateWriter:
             if not metadata_raw:
                 return
             metadata: Final = _SPEND_METADATA_ADAPTER.validate_json(metadata_raw)
-            routing_decision: Final = metadata.get("routing_decision")
-            if not isinstance(routing_decision, Mapping) or not routing_decision:
+            routing_decision: Final = as_str_mapping(metadata.get("routing_decision"))
+            if not routing_decision:
                 return
             from litellm.proxy.db.autorouter_session_rollup import (
                 build_autorouter_turn_transaction,
             )
 
-            usage_object_raw: Final = metadata.get("usage_object")
-            cost_breakdown: Final = metadata.get("cost_breakdown")
-            savings_estimate: Final = metadata.get("autorouter_savings_estimate")
+            usage_object: Final = as_str_mapping(metadata.get("usage_object"))
+            cost_breakdown: Final = as_str_mapping(metadata.get("cost_breakdown"))
+            savings_estimate: Final = as_str_mapping(metadata.get("autorouter_savings_estimate"))
             savings_spend: Final = compute_savings_spend(
                 model=payload.get("model"),
                 custom_llm_provider=payload.get("custom_llm_provider"),
                 compression_saved_tokens=0,
                 gateway_injected_cache=marks_gateway_injection(metadata, payload.get("model_id")),
                 routing_decision=routing_decision,
-                usage_object=usage_object_raw if isinstance(usage_object_raw, dict) else None,
+                usage_object=usage_object,
                 model_id=payload.get("model_id"),
                 llm_router=get_llm_router,
-                cost_breakdown=cost_breakdown if isinstance(cost_breakdown, Mapping) else None,
+                cost_breakdown=cost_breakdown,
                 recorded_autorouter_savings=metadata.get("autorouter_savings"),
-                recorded_autorouter_savings_estimate=(
-                    savings_estimate if isinstance(savings_estimate, Mapping) else None
-                ),
+                recorded_autorouter_savings_estimate=savings_estimate,
                 billed_at=payload.get("endTime"),
             )
             transaction: Final = build_autorouter_turn_transaction(
@@ -1489,11 +1491,17 @@ class DBSpendUpdateWriter:
             _metadata: Final = _litellm_params.get("metadata") or {}
             key_alias = _metadata.get("user_api_key_alias") or None
             user_agent: Final = _metadata.get("user_agent") or None
-            from litellm.proxy.db.spend_log_tool_index import logged_full_tool_names, response_tool_call_names
+            from litellm.proxy.db.spend_log_tool_index import (
+                logged_full_tool_names,
+                response_tool_call_names,
+                tool_name_fits_index,
+            )
 
             full_names: Final = logged_full_tool_names(_CALL_KWARG_VALUE.validate_python(kwargs or {}))
 
             def _enqueue(tool_name: str, origin: str = "user_defined") -> None:
+                if not tool_name_fits_index(tool_name, key_alias if isinstance(key_alias, str) else None):
+                    return
                 self.tool_discovery_queue.add_update(
                     ToolDiscoveryQueueItem(
                         tool_name=tool_name,

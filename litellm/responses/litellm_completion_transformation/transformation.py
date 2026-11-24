@@ -36,6 +36,7 @@ from litellm._logging import verbose_logger
 from litellm.caching import InMemoryCache
 from litellm.constants import (
     CALLER_SESSION_ID_METADATA_KEY,
+    PREVIOUS_RESPONSE_IDS_METADATA_KEY,
     REDACTED_BY_LITELLM,
     REDACTED_TOOL_CALL_ARGUMENTS_PLACEHOLDER,
 )
@@ -96,7 +97,10 @@ from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.bedrock.common_utils import bedrock_declared_cache_point_support
 from litellm.llms.openrouter.chat.transformation import openrouter_model_supports_cache_control
 from litellm.llms.snowflake.chat.transformation import is_snowflake_claude_model
-from litellm.responses.bridge_check import chat_target_accepts_reasoning_summary
+from litellm.responses.bridge_check import (
+    chat_target_accepts_reasoning_summary,
+    empty_user_turn_for_model_turn_end,
+)
 from litellm.responses.litellm_completion_transformation.session_handler import (
     ResponsesSessionHandler,
     StoredTurns,
@@ -1136,6 +1140,9 @@ class ChatCompletionSession(TypedDict, total=False):
     litellm_session_id: object
     instructions: ReadOnly[str | None]
     replays_redacted_turns: ReadOnly[bool]
+    previous_response_ids: ReadOnly[tuple[str, ...]]
+    """Spend log request ids of the replayed turns, root first, stored on the new turn so a follow-up or a fork
+    rebuilds exactly this path instead of the whole session."""
 
 
 ########### End of Initialize Classes used for Responses API  ###########
@@ -1164,10 +1171,28 @@ def _redacted_history_error(
 
 def _chain_session_metadata(chain_session: object, request_kwargs: Mapping[str, object]) -> Mapping[str, object]:
     key: Final = "litellm_metadata" if request_kwargs.get("litellm_metadata") else "metadata"
+    return _with_metadata(key, {CALLER_SESSION_ID_METADATA_KEY: chain_session}, request_kwargs)
+
+
+def previous_response_ids_metadata(
+    previous_response_ids: Sequence[str], request_kwargs: Mapping[str, object]
+) -> Mapping[str, object]:
+    """The proxy's ``litellm_metadata`` carrying the path to the root, so the spend log row of this turn stores it."""
+    return _with_metadata(
+        "litellm_metadata", {PREVIOUS_RESPONSE_IDS_METADATA_KEY: list(previous_response_ids)}, request_kwargs
+    )
+
+
+def _with_metadata(key: str, extra: Mapping[str, object], request_kwargs: Mapping[str, object]) -> Mapping[str, object]:
     metadata: Final = request_kwargs.get(key)
     if not isinstance(metadata, dict):
         return MappingProxyType({})
-    return {key: {**_STR_KEY_DICT_ADAPTER.validate_python(metadata), CALLER_SESSION_ID_METADATA_KEY: chain_session}}
+    _STR_KEY_DICT_ADAPTER.validate_python(metadata)
+    channel: Final = cast(  # cast-ok: validated on the line above, and the router dedupes io token refunds by popping sentinels from this exact dict, so a copy would refund twice
+        "dict[str, object]", metadata
+    )
+    channel.update(extra)
+    return {key: channel}
 
 
 def claude_web_search_call_tool_call(search: ResponseFunctionWebSearch) -> ChatCompletionAssistantToolCall | None:
@@ -1495,7 +1520,7 @@ class LiteLLMCompletionResponsesConfig:
             request_input, context_management
         ) and provider_takes_compaction_blocks(model, custom_llm_provider)
         numbered_input: Final = request_input if caller_input is None else caller_input
-        bridged_messages: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+        converted_messages: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
             input=request_input,
             responses_api_request=responses_api_request,
             replay_reasoning=True,
@@ -1527,12 +1552,22 @@ class LiteLLMCompletionResponsesConfig:
             )
             if names_non_string_fields
             and isinstance(numbered_input, list)
-            and any(map(_carries_non_string_field, bridged_messages))
+            and any(map(_carries_non_string_field, converted_messages))
             and provider_builds_anthropic_request(model, custom_llm_provider)
             else None
         )
         if malformed_field_error is not None:
             raise malformed_field_error
+        bridged_messages: Final = [
+            *converted_messages,
+            *empty_user_turn_for_model_turn_end(
+                input[-1] if isinstance(input, list) and input else None,
+                converted_messages,
+                model,
+                custom_llm_provider,
+                request_kwargs,
+            ),
+        ]
 
         litellm_completion_request: dict[str, object] = {
             "messages": (
@@ -1884,7 +1919,13 @@ class LiteLLMCompletionResponsesConfig:
             if chain_session and litellm.request_correlation_in_logs
             else MappingProxyType({})
         )
-        return {**litellm_completion_request, **chain_session_metadata}
+        replayed_path: Final = chat_completion_session.get("previous_response_ids")
+        path_metadata: Final[Mapping[str, object]] = (
+            previous_response_ids_metadata(replayed_path, {**request_kwargs, **chain_session_metadata})
+            if replayed_path is not None
+            else MappingProxyType({})
+        )
+        return {**litellm_completion_request, **chain_session_metadata, **path_metadata}
 
     @staticmethod
     def _transform_response_input_param_to_chat_completion_message(

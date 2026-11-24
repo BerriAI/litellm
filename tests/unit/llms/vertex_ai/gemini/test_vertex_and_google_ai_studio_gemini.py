@@ -2499,6 +2499,160 @@ async def test_gemini_image_generation_async_stream(respx_mock: respx.MockRouter
     assert chunks[-1].choices[0].finish_reason == "stop"
 
 
+GEMINI_IMAGE_MODEL: Final = "gemini-3.1-flash-image"
+N_AND_IMAGE_MODALITIES_IN_EITHER_ORDER: Final = (
+    pytest.param({"modalities": ["image", "text"], "n": 2}, id="modalities_before_n"),
+    pytest.param({"n": 2, "modalities": ["image", "text"]}, id="n_before_modalities"),
+)
+
+
+def _gemini_chat_config(custom_llm_provider: Literal["vertex_ai", "gemini"]) -> VertexGeminiConfig:
+    return GoogleAIStudioGeminiConfig() if custom_llm_provider == "gemini" else VertexGeminiConfig()
+
+
+@pytest.mark.parametrize("custom_llm_provider", ["vertex_ai", "gemini"])
+@pytest.mark.parametrize(
+    "non_default_params",
+    [
+        *N_AND_IMAGE_MODALITIES_IN_EITHER_ORDER,
+        pytest.param({"modalities": ["image"], "n": 2}, id="image_only"),
+        pytest.param({"modalities": ["text", "image"], "n": 2}, id="image_after_text"),
+        pytest.param({"modalities": ["image", "x" * 50_000], "n": 2}, id="long_modalities"),
+    ],
+)
+def test_n_above_one_with_image_modalities_answers_a_400_naming_n(
+    custom_llm_provider: Literal["vertex_ai", "gemini"],
+    non_default_params: dict[str, object],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+
+    with pytest.raises(litellm.UnsupportedParamsError) as excinfo:
+        _gemini_chat_config(custom_llm_provider).map_openai_params(
+            non_default_params=non_default_params, optional_params={}, model=GEMINI_IMAGE_MODEL, drop_params=False
+        )
+
+    assert excinfo.value.status_code == 400
+    assert excinfo.value.llm_provider == custom_llm_provider
+    assert "n=2" in excinfo.value.message
+    assert "drop_params" in excinfo.value.message
+    assert len(excinfo.value.message) < 1_000
+
+
+@pytest.mark.parametrize("custom_llm_provider", ["vertex_ai", "gemini"])
+@pytest.mark.parametrize("non_default_params", N_AND_IMAGE_MODALITIES_IN_EITHER_ORDER)
+def test_drop_params_drops_n_above_one_with_image_modalities_and_warns_once(
+    custom_llm_provider: Literal["vertex_ai", "gemini"],
+    non_default_params: dict[str, object],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+        mapped: Final = _gemini_chat_config(custom_llm_provider).map_openai_params(
+            non_default_params=non_default_params, optional_params={}, model=GEMINI_IMAGE_MODEL, drop_params=True
+        )
+
+    assert "candidate_count" not in mapped
+    assert mapped["responseModalities"] == ["IMAGE", "TEXT"]
+    assert len([record for record in caplog.records if "n=2" in record.getMessage()]) == 1
+
+
+@pytest.mark.parametrize("custom_llm_provider", ["vertex_ai", "gemini"])
+@pytest.mark.parametrize(
+    ("n", "modalities", "drop_params", "allowed_openai_params", "candidate_count"),
+    [
+        pytest.param(2, ["image", "text"], True, None, None, id="drop_params_drops_n"),
+        pytest.param(2, ["image", "text"], False, ["n"], 2, id="allowed_openai_params_forwards_n"),
+        pytest.param(2, ["image", "text"], True, ["n"], 2, id="allowed_openai_params_wins_over_drop_params"),
+        pytest.param(2, None, False, None, 2, id="no_modalities"),
+        pytest.param(2, ["text"], False, None, 2, id="text_modalities"),
+        pytest.param(2, ["audio"], False, None, 2, id="audio_modalities"),
+        pytest.param(1, ["image", "text"], False, None, 1, id="one_image_candidate"),
+    ],
+)
+def test_n_reaches_gemini_as_candidate_count_unless_it_asks_for_several_image_candidates(
+    custom_llm_provider: Literal["vertex_ai", "gemini"],
+    n: int,
+    modalities: list[str] | None,
+    drop_params: bool,
+    allowed_openai_params: list[str] | None,
+    candidate_count: int | None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.utils import get_optional_params
+
+    monkeypatch.setattr(litellm, "drop_params", False)
+
+    optional_params: Final = get_optional_params(
+        model=GEMINI_IMAGE_MODEL,
+        custom_llm_provider=custom_llm_provider,
+        n=n,
+        modalities=modalities,
+        drop_params=drop_params,
+        allowed_openai_params=allowed_openai_params,
+    )
+
+    assert optional_params.get("candidate_count") == candidate_count
+
+
+@pytest.mark.respx(assert_all_called=False)
+def test_completion_with_n_above_one_and_image_modalities_answers_a_400_before_calling_gemini(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    respx_mock.route().mock(return_value=httpx.Response(200, json=GEMINI_IMAGE_RESPONSE))
+
+    with pytest.raises(litellm.UnsupportedParamsError) as excinfo:
+        completion(
+            model=f"gemini/{GEMINI_IMAGE_MODEL}",
+            messages=[{"role": "user", "content": "Draw a red square"}],
+            modalities=["image", "text"],
+            n=2,
+            api_key="test-api-key",
+            client=HTTPHandler(),
+        )
+
+    assert excinfo.value.status_code == 400
+    assert "n=2" in excinfo.value.message
+    assert not respx_mock.calls
+
+
+@pytest.mark.respx(assert_all_called=True)
+@pytest.mark.parametrize(
+    ("modalities", "drop_params", "generation_config"),
+    [
+        pytest.param(["image", "text"], True, {"responseModalities": ["IMAGE", "TEXT"]}, id="drop_params_drops_n"),
+        pytest.param(None, False, {"candidate_count": 2}, id="no_modalities_keeps_n"),
+    ],
+)
+def test_completion_sends_n_above_one_to_gemini_only_without_image_modalities(
+    modalities: list[str] | None,
+    drop_params: bool,
+    generation_config: dict[str, object],
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    route: Final = respx_mock.post(
+        url__regex=(
+            rf"https://generativelanguage\.googleapis\.com/v1\w+/models/{re.escape(GEMINI_IMAGE_MODEL)}"
+            r":generateContent"
+        )
+    ).mock(return_value=httpx.Response(200, json=GEMINI_IMAGE_RESPONSE))
+
+    response: Final = completion(
+        model=f"gemini/{GEMINI_IMAGE_MODEL}",
+        messages=[{"role": "user", "content": "Draw a red square"}],
+        modalities=modalities,
+        n=2,
+        drop_params=drop_params,
+        api_key="test-api-key",
+        client=HTTPHandler(),
+    )
+
+    assert json.loads(route.calls.last.request.content)["generationConfig"] == generation_config
+    assert response.choices[0].message.images[0]["image_url"]["url"] == "data:image/png;base64,iVBORw0KGgoAAAANSUhEUg=="
+
+
 def _gemini_tts_audio_event(audio_base64: str) -> dict[str, object]:
     return {
         "candidates": [
@@ -13773,6 +13927,22 @@ def test_gemini_keeps_tool_choice_none_for_legacy_functions_after_dropping_every
     assert "deepwiki" not in json.dumps(mapped)
     assert "get_weather" in json.dumps(mapped["tools"])
     assert mapped["tool_choice"] == {"functionCallingConfig": {"mode": "NONE"}}
+
+
+@pytest.mark.parametrize(("config_class", "route"), _GEMINI_ROUTES)
+def test_gemini_clears_a_tool_choice_naming_the_hosted_mcp_tool_drop_params_dropped(monkeypatch, config_class, route):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    mapped: Final = config_class().map_openai_params(
+        non_default_params={
+            "tools": [_HOSTED_MCP_TOOL, _WEATHER_FUNCTION_TOOL],
+            "tool_choice": {"type": "function", "function": {"name": "deepwiki"}},
+        },
+        optional_params={},
+        model="gemini-3.8-flash",
+        drop_params=True,
+    )
+    assert "get_weather" in json.dumps(mapped["tools"])
+    assert "deepwiki" not in json.dumps(mapped)
 
 
 class _BodyInChunks(httpx.SyncByteStream, httpx.AsyncByteStream):

@@ -1423,7 +1423,7 @@ class ResponsesAPIOptionalRequestParams(TypedDict, total=False):
     include: list[ResponseIncludable] | None
     instructions: str | None
     max_output_tokens: int | None
-    metadata: dict[str, Any] | None
+    metadata: Mapping[str, object] | None
     parallel_tool_calls: bool | None
     previous_response_id: str | None
     reasoning: Reasoning | None

@@ -1483,7 +1483,7 @@ def _resolve_targeted_model_ids(
     }
 
 
-def _filter_health_check_results_by_model_ids(results: dict, allowed_model_ids: Container[object]) -> dict:
+def _filter_health_check_results_by_model_ids(results: dict, allowed_model_ids: Container[object]) -> dict[str, object]:
     """
     Restrict a cached background health-check result dict to endpoints whose
     model_id is in ``allowed_model_ids``.
