@@ -19,8 +19,7 @@ from openai.types.responses.response_function_web_search import (
 from pydantic import TypeAdapter, ValidationError
 
 import litellm
-from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import message_field
-from litellm.constants import CALLER_SESSION_ID_METADATA_KEY
+from litellm.constants import CALLER_SESSION_ID_METADATA_KEY, PREVIOUS_RESPONSE_IDS_METADATA_KEY
 from litellm.integrations.anthropic_cache_control_hook import MAX_CACHE_CONTROL_BLOCKS, AnthropicCacheControlHook
 from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR
 from litellm.litellm_core_utils.tool_fields import chat_member_name
@@ -28,6 +27,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     _bedrock_converse_messages_pt,
     anthropic_messages_pt,
 )
+from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import message_field
 from litellm.responses.litellm_completion_transformation.reasoning_items import encode_thinking_blocks
 from litellm.responses.litellm_completion_transformation.tool_search import tool_search_routing
 from litellm.responses.litellm_completion_transformation.transformation import (
@@ -8484,8 +8484,6 @@ def test_a_continued_chain_logs_its_spend_under_the_chain_session_with_request_c
     monkeypatch: pytest.MonkeyPatch, request_kwargs: Mapping[str, object], logged_metadata_key: str
 ):
     monkeypatch.setattr(litellm, "request_correlation_in_logs", True)
-    sent_kwargs: Final = deepcopy(request_kwargs)
-
     request: Final = _continued_chain_request(request_kwargs)
 
     assert request["litellm_trace_id"] == "chain-session"
@@ -8494,7 +8492,7 @@ def test_a_continued_chain_logs_its_spend_under_the_chain_session_with_request_c
         **TypeAdapter(dict[str, object]).validate_python(request_kwargs[logged_metadata_key]),
         CALLER_SESSION_ID_METADATA_KEY: "chain-session",
     }
-    assert request_kwargs == sent_kwargs
+    assert request[logged_metadata_key] is request_kwargs[logged_metadata_key]
 
 
 def test_a_continued_chain_leaves_the_turns_metadata_alone_without_request_correlation(
@@ -8508,6 +8506,42 @@ def test_a_continued_chain_leaves_the_turns_metadata_alone_without_request_corre
     assert request["litellm_trace_id"] == "chain-session"
     assert "litellm_metadata" not in request
     assert request["metadata"] == {CALLER_SESSION_ID_METADATA_KEY: "turn-session", "user_api_key": "hashed"}
+
+
+@pytest.mark.parametrize("request_correlation_in_logs", [True, False])
+def test_a_continued_chain_stores_the_replayed_turns_as_its_path_to_the_root(
+    monkeypatch: pytest.MonkeyPatch, request_correlation_in_logs: bool
+):
+    """The proxy's spend log row for this turn carries the ids it replayed, so a fork off it replays only them."""
+    monkeypatch.setattr(litellm, "request_correlation_in_logs", request_correlation_in_logs)
+
+    async def session_lookup(previous_response_id: str) -> ChatCompletionSession:
+        return ChatCompletionSession(
+            messages=[{"role": "user", "content": "turn 1"}],
+            litellm_session_id="chain-session",
+            previous_response_ids=("chatcmpl-root", "chatcmpl-turn-1"),
+        )
+
+    request: Final = asyncio.run(
+        LiteLLMCompletionResponsesConfig.async_responses_api_session_handler(
+            previous_response_id="resp_turn_1",
+            litellm_completion_request={
+                "model": _CLAUDE_ON_BEDROCK,
+                "custom_llm_provider": "bedrock",
+                "messages": [{"role": "user", "content": "turn 2"}],
+            },
+            instructions=None,
+            session_lookup=session_lookup,
+            request_kwargs={"litellm_metadata": {"user_api_key": "hashed"}, "metadata": {"tag": "client"}},
+        )
+    )
+
+    assert request["litellm_metadata"] == {
+        "user_api_key": "hashed",
+        **({CALLER_SESSION_ID_METADATA_KEY: "chain-session"} if request_correlation_in_logs else {}),
+        PREVIOUS_RESPONSE_IDS_METADATA_KEY: ["chatcmpl-root", "chatcmpl-turn-1"],
+    }
+    assert "metadata" not in request
 
 
 @pytest.mark.asyncio
@@ -8947,3 +8981,165 @@ def test_a_malformed_item_after_a_codex_additional_tools_item_is_named_by_its_in
         )
 
     assert f"'{field_path}'" in raised.value.message
+
+
+_HELLO: Final = {"role": "assistant", "content": "Hello!"}
+_EMPTY_USER_TURN: Final = {"role": "user", "content": ""}
+
+
+@pytest.mark.parametrize(
+    ("model", "custom_llm_provider", "last_item", "extra_kwargs", "expected_tail"),
+    [
+        pytest.param("gemini/gemini-3.8-flash", None, {"role": "user"}, {}, [_HELLO, _EMPTY_USER_TURN], id="gemini"),
+        pytest.param(
+            "gemini-3.8-flash",
+            "vertex_ai",
+            {"role": "user", "content": None},
+            {},
+            [_HELLO, _EMPTY_USER_TURN],
+            id="vertex_ai_gemini",
+        ),
+        pytest.param(
+            "1234567890123",
+            "vertex_ai",
+            {"role": "user"},
+            {"base_model": "vertex_ai/gemini-3.8-flash"},
+            [_HELLO, _EMPTY_USER_TURN],
+            id="vertex_ai_endpoint_with_a_gemini_base_model",
+        ),
+        pytest.param(
+            "1234567890123",
+            "vertex_ai",
+            {"role": "user"},
+            {"model_info": {"base_model": "vertex_ai/gemini-3.8-flash"}},
+            [_HELLO, _EMPTY_USER_TURN],
+            id="vertex_ai_endpoint_with_a_gemini_base_model_in_model_info",
+        ),
+        pytest.param(
+            "1234567890123",
+            "vertex_ai",
+            {"role": "user"},
+            {"base_model": "vertex_ai/claude-sonnet-4-5", "model_info": {"base_model": "vertex_ai/gemini-3.8-flash"}},
+            [_HELLO],
+            id="vertex_ai_endpoint_base_model_param_wins_over_model_info",
+        ),
+        pytest.param(
+            "1234567890",
+            "vertex_ai",
+            {"role": "user"},
+            {"api_base": "http://10.96.32.8"},
+            [_HELLO, _EMPTY_USER_TURN],
+            id="vertex_ai_private_service_connect_endpoint",
+        ),
+        pytest.param(
+            "claude-sonnet-4-5", "vertex_ai", {"role": "user"}, {}, [_HELLO], id="vertex_ai_claude_accepts_it_as_before"
+        ),
+        pytest.param(
+            "command-a-03-2025", "cohere", {"role": "user"}, {}, [_HELLO], id="cohere_accepts_a_model_turn_end"
+        ),
+        pytest.param(
+            "gemini/gemini-3.8-flash",
+            None,
+            {"role": "user"},
+            {"ensure_alternating_roles": True},
+            [_HELLO, _EMPTY_USER_TURN],
+            id="gemini_with_ensure_alternating_roles",
+        ),
+        pytest.param(
+            "gemini/gemini-3.8-flash",
+            None,
+            {"role": "user", "content": "Go on"},
+            {},
+            [_HELLO, {"role": "user", "content": "Go on"}],
+            id="gemini_with_user_text",
+        ),
+        pytest.param(
+            "gemini/gemini-3.8-flash",
+            None,
+            {"role": "assistant", "content": "Sure,"},
+            {},
+            [_HELLO, {"role": "assistant", "content": "Sure,"}],
+            id="gemini_with_assistant_prefill",
+        ),
+        pytest.param("an-unmapped-model", None, {"role": "user"}, {}, [_HELLO], id="unresolvable_provider"),
+    ],
+)
+def test_a_dropped_trailing_user_item_becomes_an_empty_user_turn_only_for_a_gemini_target(
+    model: str,
+    custom_llm_provider: str | None,
+    last_item: dict[str, object],
+    extra_kwargs: dict[str, object],
+    expected_tail: list[dict[str, object]],
+) -> None:
+    result: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+        model=model,
+        input=[{"role": "user", "content": "Hi"}, _HELLO, last_item],
+        responses_api_request={},
+        custom_llm_provider=custom_llm_provider,
+        **extra_kwargs,
+    )
+
+    assert [
+        {key: message_field(message, key) for key in ("role", "content")} for message in result["messages"][1:]
+    ] == expected_tail
+
+
+@pytest.mark.parametrize(
+    ("input_items", "expected_roles"),
+    [
+        pytest.param(
+            [
+                {"role": "user", "content": "Hi"},
+                {"type": "function_call", "call_id": "call_1", "name": "lookup", "arguments": "{}"},
+                {"type": "function_call_output", "call_id": "call_1", "output": "42"},
+                {"role": "user"},
+            ],
+            ["user", "assistant", "tool"],
+            id="after_a_tool_result",
+        ),
+        pytest.param([{"role": "user", "content": "Hi"}, {"role": "user"}], ["user"], id="after_a_user_message"),
+    ],
+)
+def test_a_dropped_empty_user_item_gets_no_empty_user_turn_for_gemini_when_a_user_side_turn_ends_the_request(
+    input_items: list[dict[str, object]], expected_roles: list[str]
+) -> None:
+    result: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+        model="gemini/gemini-3.8-flash",
+        input=input_items,
+        responses_api_request={},
+        custom_llm_provider=None,
+    )
+
+    assert [message_field(message, "role") for message in result["messages"]] == expected_roles
+
+
+@pytest.mark.parametrize("empty_item", [{"role": "user", "content": None}, {"role": "user"}], ids=["null", "missing"])
+def test_an_empty_user_item_after_a_previous_response_reaches_gemini_as_an_empty_user_turn(
+    empty_item: dict[str, object],
+) -> None:
+    async def session_lookup(previous_response_id: str) -> ChatCompletionSession:
+        return ChatCompletionSession(
+            messages=[{"role": "user", "content": "Hi"}, Message(role="assistant", content="Hello!")],
+            litellm_session_id=None,
+        )
+
+    bridged: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+        model="gemini/gemini-3.8-flash",
+        input=[empty_item],
+        responses_api_request={"previous_response_id": "resp_earlier"},
+        custom_llm_provider=None,
+    )
+    request: Final = asyncio.run(
+        LiteLLMCompletionResponsesConfig.async_responses_api_session_handler(
+            previous_response_id="resp_earlier",
+            litellm_completion_request=bridged,
+            instructions=None,
+            session_lookup=session_lookup,
+        )
+    )
+
+    assert [(message_field(message, "role"), message_field(message, "content")) for message in request["messages"]] == [
+        ("user", "Hi"),
+        ("assistant", "Hello!"),
+        ("user", ""),
+    ]

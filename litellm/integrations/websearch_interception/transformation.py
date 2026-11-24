@@ -159,7 +159,7 @@ class WebSearchTransformation:
             return False, []
 
         # Find all WebSearch tool_use blocks
-        tool_calls: Final = []
+        tool_calls: Final[list[dict[str, object]]] = []
         for block in content:
             # Handle both dict and object blocks
             if isinstance(block, dict):
@@ -184,7 +184,7 @@ class WebSearchTransformation:
                 "web_search",
             ):
                 # Convert to dict for easier handling
-                tool_call = {
+                tool_call: dict[str, object] = {
                     "id": block_id,
                     "type": "tool_use",
                     "name": block_name,  # Preserve original name
@@ -236,7 +236,7 @@ class WebSearchTransformation:
             return False, []
 
         # Find all WebSearch tool calls
-        tool_calls: Final = []
+        tool_calls: Final[list[dict[str, object]]] = []
         for tool_call in openai_tool_calls:
             # Handle both dict and object tool calls
             if isinstance(tool_call, dict):
@@ -275,7 +275,7 @@ class WebSearchTransformation:
                     arguments = function_arguments or {}
 
                 # Convert to internal format (similar to Anthropic)
-                tool_call_dict = {
+                tool_call_dict: dict[str, object] = {
                     "id": tool_id,
                     "type": "function",
                     "name": function_name,
@@ -296,7 +296,7 @@ class WebSearchTransformation:
         search_results: Sequence[str],
         response_format: str = "anthropic",
         thinking_blocks: Sequence[Mapping[str, object]] | None = None,
-    ) -> tuple[dict, dict | list[dict]]:
+    ) -> tuple[dict[str, object], dict[str, object] | list[dict[str, object]]]:
         """
         Transform LiteLLM search results to Anthropic/OpenAI tool_result format.
 
@@ -329,7 +329,7 @@ class WebSearchTransformation:
         tool_calls: Sequence[Mapping[str, object]],
         search_results: Sequence[str],
         thinking_blocks: Sequence[Mapping[str, object]] | None = None,
-    ) -> tuple[dict, dict]:
+    ) -> tuple[dict[str, object], dict[str, object]]:
         """Transform to Anthropic format (single user message with tool_result blocks)"""
         # Build assistant message content
         assistant_content: Final[list[Mapping[str, object]]] = []
@@ -354,13 +354,13 @@ class WebSearchTransformation:
             ]
         )
 
-        assistant_message: Final = {
+        assistant_message: Final[dict[str, object]] = {
             "role": "assistant",
             "content": assistant_content,
         }
 
         # Build user message with tool_result blocks
-        user_message: Final = {
+        user_message: Final[dict[str, object]] = {
             "role": "user",
             "content": [
                 {
@@ -378,10 +378,10 @@ class WebSearchTransformation:
     def _transform_response_openai(
         tool_calls: Sequence[Mapping[str, object]],
         search_results: Sequence[str],
-    ) -> tuple[dict, list[dict]]:
+    ) -> tuple[dict[str, object], list[dict[str, object]]]:
         """Transform to OpenAI format (assistant with tool_calls, separate tool messages)"""
         # Build assistant message with tool_calls
-        assistant_message: Final = {
+        assistant_message: Final[dict[str, object]] = {
             "role": "assistant",
             "tool_calls": [
                 {
@@ -397,7 +397,7 @@ class WebSearchTransformation:
         }
 
         # Build separate tool messages (one per tool call)
-        tool_messages: Final = [
+        tool_messages: Final[list[dict[str, object]]] = [
             {
                 "role": "tool",
                 "tool_call_id": tool_calls[i]["id"],

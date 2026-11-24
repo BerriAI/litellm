@@ -51,11 +51,11 @@ class AzureSpeechAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
 
     def map_openai_params(
         self,
-        non_default_params: dict,
-        optional_params: dict,
+        non_default_params: Mapping[str, object],
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:
         supported_params: Final = self.get_supported_openai_params(model=model)
         for key, value in non_default_params.items():
             if key in supported_params:
@@ -64,14 +64,14 @@ class AzureSpeechAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, object],
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         api_key = api_key or get_secret_str("AZURE_SPEECH_API_KEY")
         if not api_key:
             raise AzureSpeechAudioTranscriptionException(
@@ -90,8 +90,8 @@ class AzureSpeechAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         stream: bool | None = None,
     ) -> str:
         api_base = api_base or get_secret_str("AZURE_SPEECH_API_BASE")
@@ -117,8 +117,8 @@ class AzureSpeechAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         self,
         model: str,
         audio_file: FileTypes,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
     ) -> AudioTranscriptionRequestData:
         processed_audio: Final = process_audio_file(audio_file)
         return AudioTranscriptionRequestData(
@@ -145,7 +145,9 @@ class AzureSpeechAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         response.hidden_params = dict(payload)
         return response
 
-    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: dict[str, object] | httpx.Headers
+    ) -> BaseLLMException:
         return AzureSpeechAudioTranscriptionException(
             message=error_message,
             status_code=status_code,
@@ -193,7 +195,7 @@ class AzureSpeechAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
             return f"https://{region}.{self.STT_SPEECH_DOMAIN}"
         return f"https://{self.STT_SPEECH_DOMAIN}"
 
-    def _get_azure_response_format(self, response_format: str | None) -> str:
+    def _get_azure_response_format(self, response_format: object) -> str:
         if response_format == "verbose_json":
             return "detailed"
         return "simple"

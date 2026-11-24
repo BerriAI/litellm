@@ -1,6 +1,6 @@
 import { LensCreateField } from "@/components/lens/LensControls";
 import { lensCreationMetadata, readLensPolicy, type LensPolicy } from "@/components/lens/lensPolicy";
-import { Page, PageTabs, PageTabsList, PageTabsTrigger } from "@/components/shared/Page";
+import { PageTabs, PageTabsBar, PageTabsTrigger } from "@/components/shared/Page";
 import { useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
 import useCan from "@/app/(dashboard)/hooks/useCan";
 import AvailableTeamsPanel from "@/components/team/AvailableTeamsPanel";
@@ -690,7 +690,7 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, isViewOnly 
   ];
 
   return (
-    <Page className={selectedTeamId ? undefined : "h-full"}>
+    <>
       {selectedTeamId ? (
         <TeamInfoView
           teamId={selectedTeamId}
@@ -709,6 +709,7 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, isViewOnly 
           userModels={userModels}
           editTeam={editTeam}
           premiumUser={premiumUser}
+          framed
         />
       ) : (
         <PageTabs defaultValue={tabItems[0].key}>
@@ -718,22 +719,25 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, isViewOnly 
               {t("teams.page.header.title")}
             </PageHeaderTitle>
             <PageHeaderDescription>{t("teams.page.header.description")}</PageHeaderDescription>
-            {canCreateOrManageTeams(userRole, userID, organizations) && (
-              <PageHeaderControls>
-                <UIButton onClick={openCreateTeamModal} data-testid="create-team-button">
-                  <Plus className="size-4" />
-                  {t("teams.page.header.createTeam")}
-                </UIButton>
-              </PageHeaderControls>
-            )}
+            <PageHeaderControls>
+              <PageTabsBar
+                actions={
+                  canCreateOrManageTeams(userRole, userID, organizations) && (
+                    <UIButton onClick={openCreateTeamModal} data-testid="create-team-button">
+                      <Plus className="size-4" />
+                      {t("teams.page.header.createTeam")}
+                    </UIButton>
+                  )
+                }
+              >
+                {tabItems.map((item) => (
+                  <PageTabsTrigger key={item.key} value={item.key}>
+                    {item.label}
+                  </PageTabsTrigger>
+                ))}
+              </PageTabsBar>
+            </PageHeaderControls>
           </PageHeader>
-          <PageTabsList>
-            {tabItems.map((item) => (
-              <PageTabsTrigger key={item.key} value={item.key}>
-                {item.label}
-              </PageTabsTrigger>
-            ))}
-          </PageTabsList>
           {tabItems.map((item) => (
             <TabsContent key={item.key} value={item.key} className={item.className}>
               {item.children}
@@ -1394,7 +1398,7 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, isViewOnly 
           </DialogContent>
         </Dialog>
       )}
-    </Page>
+    </>
   );
 };
 

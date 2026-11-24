@@ -683,11 +683,11 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         headers: MutableMapping[str, object],
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
+        optional_params: dict[str, object],
         litellm_params: MutableMapping[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         result: Final[dict[str, object]] = {}
         result.update(headers)
         signed_headers: Final = litellm_params.pop(S3_SIGNED_REQUEST_HEADERS_PARAM, None)
@@ -803,11 +803,11 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
 
     def map_openai_params(
         self,
-        non_default_params: dict,
-        optional_params: dict,
+        non_default_params: Mapping[str, object],
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:
         return optional_params
 
     # Providers whose InvokeModel body uses the Converse API format
@@ -1155,6 +1155,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
 
         # --- Anthropic: use existing AmazonAnthropicClaudeConfig ---
         if provider == LlmProviders.ANTHROPIC:
+            from litellm.llms.anthropic.chat.transformation import without_malformed_thinking_blocks
             from litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude_transformation import (
                 AmazonAnthropicClaudeConfig,
             )
@@ -1194,7 +1195,9 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
             )
             return config.transform_request(
                 model=model,
-                messages=messages,
+                messages=[without_malformed_thinking_blocks(message) for message in messages]
+                if drop_params
+                else messages,
                 optional_params={
                     k: v for k, v in mapped_params.items() if k not in _MAPPED_PARAMS_THE_REQUEST_HANDLER_STRIPS
                 },
@@ -1381,7 +1384,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         self,
         model: str,
         create_file_data: CreateFileRequest,
-        optional_params: dict,
+        optional_params: dict[str, object],
         litellm_params: dict[str, object],
     ) -> bytes | str | dict:
         """
@@ -1468,7 +1471,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         self,
         content: str,
         api_base: str,
-        optional_params: dict,
+        optional_params: dict[str, object],
         s3_encryption_key_id: str | None = None,
     ) -> tuple[dict, str]:
         """
@@ -1619,7 +1622,9 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
             object="file",
         )
 
-    def get_error_class(self, error_message: str, status_code: int, headers: dict | Headers) -> BaseLLMException:
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: dict[str, object] | Headers
+    ) -> BaseLLMException:
         return BedrockError(status_code=status_code, message=error_message, headers=headers)
 
     def transform_retrieve_file_request(
@@ -1894,7 +1899,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         self,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
-        litellm_params: dict,
+        litellm_params: Mapping[str, object],
     ) -> HttpxBinaryResponseContent:
         if raw_response.status_code >= 400:
             raise BedrockError(

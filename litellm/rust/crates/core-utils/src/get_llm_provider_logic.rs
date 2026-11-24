@@ -28,6 +28,8 @@ pub enum LlmProviders {
     Minimax,
     #[strum(serialize = "mistral")]
     Mistral,
+    #[strum(serialize = "nace")]
+    Nace,
     #[strum(serialize = "openai")]
     Openai,
     #[strum(serialize = "openai_like")]

@@ -157,8 +157,8 @@ class OpenAITextCompletionConfig(BaseTextCompletionConfig, OpenAIGPTConfig):
         self,
         model: str,
         messages: list[AllMessageValues] | list[OpenAITextCompletionUserMessage],
-        optional_params: dict,
-        headers: dict,
+        optional_params: dict[str, object],
+        headers: dict[str, object],
     ) -> dict[str, object]:
         prompt: Final = transform_prompt(messages)
         return {

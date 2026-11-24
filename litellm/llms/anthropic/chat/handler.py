@@ -6,7 +6,7 @@ import copy
 import io
 import json
 import re
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal, Union, cast
 
@@ -54,6 +54,7 @@ from litellm.types.llms.anthropic import (
     MessageStartBlock,
 )
 from litellm.types.llms.openai import (
+    AllMessageValues,
     ChatCompletionRedactedThinkingBlock,
     ChatCompletionThinkingBlock,
     ChatCompletionToolCallChunk,
@@ -93,6 +94,7 @@ from .transformation import (
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
     from litellm.llms.base_llm.chat.transformation import BaseConfig
 
 _THINKING_BLOCK_TYPES: Final = frozenset({"thinking", "redacted_thinking"})
@@ -228,10 +230,10 @@ def _envelope_verdict(buffered_json: str, schema: ResponseFormatSchema, tool_nam
 async def make_call(
     client: AsyncHTTPHandler | None,
     api_base: str,
-    headers: dict,
+    headers: dict[str, object],
     data: str,
     model: str,
-    messages: list,
+    messages: Sequence[object],
     logging_obj: "LiteLLMLoggingObj",
     timeout: float | httpx.Timeout | None,
     json_mode: bool,
@@ -294,10 +296,10 @@ async def make_call(
 def make_sync_call(
     client: HTTPHandler | None,
     api_base: str,
-    headers: dict,
+    headers: dict[str, object],
     data: str,
     model: str,
-    messages: list,
+    messages: Sequence[object],
     logging_obj: "LiteLLMLoggingObj",
     timeout: float | httpx.Timeout | None,
     json_mode: bool,
@@ -375,11 +377,11 @@ class AnthropicChatCompletion(BaseLLM):
     async def acompletion_stream_function(
         self,
         model: str,
-        messages: list,
+        messages: Sequence[object],
         api_base: str,
-        custom_prompt_dict: dict,
+        custom_prompt_dict: Mapping[str, object],
         model_response: ModelResponse,
-        print_verbose: Callable,
+        print_verbose: Callable[..., object],
         timeout: float | httpx.Timeout,
         client: AsyncHTTPHandler | None,
         encoding: object,
@@ -387,10 +389,10 @@ class AnthropicChatCompletion(BaseLLM):
         logging_obj: "LiteLLMLoggingObj",
         stream: object,
         _is_function_call: object,
-        data: dict,
+        data: dict[str, object],
         json_mode: bool,
         optional_params=None,
-        litellm_params=None,
+        litellm_params: object = None,
         logger_fn: object = None,
         headers={},
     ):
@@ -428,21 +430,21 @@ class AnthropicChatCompletion(BaseLLM):
     async def acompletion_function(
         self,
         model: str,
-        messages: list,
+        messages: list[AllMessageValues],
         api_base: str,
-        custom_prompt_dict: dict,
+        custom_prompt_dict: Mapping[str, object],
         model_response: ModelResponse,
-        print_verbose: Callable,
+        print_verbose: Callable[..., object],
         timeout: float | httpx.Timeout,
-        encoding,
+        encoding: "Tokenizer | None",
         api_key: str | None,
         logging_obj: "LiteLLMLoggingObj",
         stream: object,
         _is_function_call: object,
-        data: dict,
-        optional_params: dict,
+        data: dict[str, object],
+        optional_params: dict[str, object],
         json_mode: bool,
-        litellm_params: dict,
+        litellm_params: dict[str, object],
         provider_config: "BaseConfig",
         logger_fn: object = None,
         headers={},
@@ -500,12 +502,12 @@ class AnthropicChatCompletion(BaseLLM):
     def completion(
         self,
         model: str,
-        messages: list,
+        messages: list[AllMessageValues],
         api_base: str,
         custom_llm_provider: str,
         custom_prompt_dict: dict,
         model_response: ModelResponse,
-        print_verbose: Callable,
+        print_verbose: Callable[..., object],
         encoding,
         api_key: str | None,
         logging_obj: "LiteLLMLoggingObj",
@@ -1010,7 +1012,7 @@ class ModelResponseIterator:
             tool_name=tool_name,
         )
 
-    def _build_code_interpreter_results(self) -> list:
+    def _build_code_interpreter_results(self) -> list[OutputCodeInterpreterCall]:
         """Convert accumulated tool_results to OutputCodeInterpreterCall objects.
 
         Called during streaming to produce provider-neutral code_interpreter_results
@@ -1022,7 +1024,7 @@ class ModelResponseIterator:
         wins" for list-valued provider_specific_fields keys, so the last
         emission must contain every result.
         """
-        results: Final = []
+        results: Final[list[OutputCodeInterpreterCall]] = []
         for tr in self.tool_results:
             if tr.get("type") != "bash_code_execution_tool_result":
                 continue

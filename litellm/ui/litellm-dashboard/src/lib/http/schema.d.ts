@@ -6364,7 +6364,6 @@ export interface paths {
         /**
          * Get Ui Settings
          * @description Get UI-specific configuration flags.
-         *     All authenticated users can fetch these settings for client-side behavior.
          */
         get: operations["get_ui_settings_get_ui_settings_get"];
         put?: never;
@@ -9365,6 +9364,7 @@ export interface paths {
          *     - router_settings: Optional[UpdateRouterConfig] - key-specific router settings. Example - {"model_group_retry_policy": {"gpt-4": {"RateLimitErrorRetries": 5}}}. IF null or {} then no router settings.
          *     - access_group_ids: Optional[List[str]] - List of access group IDs to associate with the key. Access groups define which models a key can access. Example - ["access_group_1", "access_group_2"].
          *     - budget_limits: Optional[list] - List of concurrent budget windows for the key. Each window specifies a budget_limit, time_period, and optional budget_duration. Example - [{"budget_limit": 10.0, "time_period": "1d"}, {"budget_limit": 50.0, "time_period": "7d"}].
+         *     - lens_enabled: Optional[bool] - Whether this key's requests are sent to Lens. `null` inherits the team default, which is on when unset.
          *
          *     Example:
          *     ```bash
@@ -9566,6 +9566,28 @@ export interface paths {
         head?: never;
         /** Lens Request */
         patch: operations["lens_request_lens_patch"];
+        trace?: never;
+    };
+    "/lens/admin/gateway/connect": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Connect Model Gateway
+         * @description Connect this gateway's models to Lens using a dedicated virtual key.
+         *
+         *     Requires a proxy administrator. Existing Lens model settings are preserved.
+         */
+        post: operations["connect_model_gateway_lens_admin_gateway_connect_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/lens/login": {
@@ -33247,6 +33269,12 @@ export interface components {
              */
             health_check_interval: number;
             /**
+             * Health Check Skip Blocked Background Models
+             * @description When true, deployments with model_info.blocked set to true are skipped by background health checks. With background checks enabled, GET /health reads cached results and can return 503 for a skipped deployment because there is no healthy result. On-demand checks and Test Connection are unaffected.
+             * @default false
+             */
+            health_check_skip_blocked_background_models: boolean;
+            /**
              * Health Check Skip Disabled Background Models
              * @description When true, deployments with model_info.disable_background_health_check are skipped for on-demand GET /health as well as the background health loop.
              * @default false
@@ -33269,6 +33297,8 @@ export interface components {
             key_expiry_alert_days?: number | null;
             /** @description key manager to load keys from / decrypt keys with */
             key_management_system?: components["schemas"]["KeyManagementSystem"] | null;
+            /** @description Periodically synchronize LDAP groups to teams and existing users' memberships. Requires Redis. */
+            ldap_sync?: components["schemas"]["LDAPSyncSettings"] | null;
             /**
              * Master Key
              * @description require a key for all calls to proxy
@@ -33411,6 +33441,37 @@ export interface components {
              * @description MCP capabilities the gateway stops serving on every route, any of 'prompts' and 'resources'. A disabled capability is left out of the initialize and server/discover responses, its list operations return an empty list without contacting any upstream MCP server, and its get/read operations answer METHOD_NOT_FOUND. Unset means prompts and resources stay advertised.
              */
             mcp_disabled_capabilities?: ("prompts" | "resources")[] | null;
+            /**
+             * Mcp Event Max Events Per Minute
+             * @description Events delivered to one caller per minute before events are dropped. Defaults to 600.
+             */
+            mcp_event_max_events_per_minute?: number | null;
+            /**
+             * Mcp Event Max Streams
+             * @description Concurrent events/stream requests one replica serves. Defaults to 512.
+             */
+            mcp_event_max_streams?: number | null;
+            /**
+             * Mcp Event Max Streams Per Caller
+             * @description Concurrent events/stream requests one caller may hold on a replica. Defaults to 50.
+             */
+            mcp_event_max_streams_per_caller?: number | null;
+            /**
+             * Mcp Event Max Subscriptions Per Key
+             * @description Webhook event subscriptions one caller may hold. Defaults to 50.
+             */
+            mcp_event_max_subscriptions_per_key?: number | null;
+            /**
+             * Mcp Events Enabled
+             * @description Serve the MCP Events extension (io.modelcontextprotocol/events) on /mcp for 2026-07-28 clients. Each upstream server also needs events.enabled. Off by default.
+             * @default false
+             */
+            mcp_events_enabled: boolean;
+            /**
+             * Mcp Events Public Base Url
+             * @description Public https base URL of this proxy that upstream MCP servers can reach, used to build the callback URL for webhook event subscriptions. Webhook delivery is unavailable while unset.
+             */
+            mcp_events_public_base_url?: string | null;
             /**
              * Mcp Internal Ip Ranges
              * @description Custom CIDR ranges that define internal/private networks for MCP access control. When set, only these ranges are treated as internal. Defaults to RFC 1918 private ranges (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 127.0.0.0/8).
@@ -36297,6 +36358,41 @@ export interface components {
             /** Status Code */
             status_code: number;
         };
+        /** GatewaySetupRequest */
+        GatewaySetupRequest: Record<string, never>;
+        /** GatewayStatus */
+        GatewayStatus: {
+            /**
+             * Analysis Models
+             * @default 0
+             */
+            analysis_models: number;
+            /** Api Base */
+            api_base?: string | null;
+            /** Configured */
+            configured: boolean;
+            /** Connected */
+            connected: boolean;
+            /** Error */
+            error?: string | null;
+            /**
+             * Evaluation Models
+             * @default 0
+             */
+            evaluation_models: number;
+            /** Last Refreshed */
+            last_refreshed?: string | null;
+            /**
+             * Login Connected
+             * @default false
+             */
+            login_connected: boolean;
+            /**
+             * Supports Gateway Connect
+             * @default false
+             */
+            supports_gateway_connect: boolean;
+        };
         /** GenerateKeyRequest */
         GenerateKeyRequest: {
             /** Access Group Ids */
@@ -37589,6 +37685,96 @@ export interface components {
             /** Service Host */
             service_host: string;
         };
+        /** LDAPSyncSettings */
+        LDAPSyncSettings: {
+            /**
+             * Allow Empty Groups
+             * @default false
+             */
+            allow_empty_groups: boolean;
+            /** Bind Dn */
+            bind_dn?: string | null;
+            /** Bind Password */
+            bind_password?: string | null;
+            /** Ca Cert Path */
+            ca_cert_path?: string | null;
+            /**
+             * Dry Run
+             * @default false
+             */
+            dry_run: boolean;
+            /**
+             * Enabled
+             * @default false
+             */
+            enabled: boolean;
+            /**
+             * Group Filter
+             * @default
+             */
+            group_filter: string;
+            /**
+             * Group Id Attribute
+             * @default cn
+             */
+            group_id_attribute: string;
+            /**
+             * Group Name Attribute
+             * @default cn
+             */
+            group_name_attribute: string;
+            /**
+             * Group Search Base
+             * @default
+             */
+            group_search_base: string;
+            /**
+             * Interval Minutes
+             * @default 30
+             */
+            interval_minutes: number;
+            /**
+             * Litellm Match Field
+             * @default user_email
+             * @enum {string}
+             */
+            litellm_match_field: "user_email" | "user_id" | "sso_user_id";
+            /**
+             * Member Attribute
+             * @default member
+             */
+            member_attribute: string;
+            /**
+             * Member Lookup Attribute
+             * @default uid
+             */
+            member_lookup_attribute: string;
+            /**
+             * Server Url
+             * @default
+             */
+            server_url: string;
+            /**
+             * Start Tls
+             * @default false
+             */
+            start_tls: boolean;
+            /**
+             * Timeout Seconds
+             * @default 30
+             */
+            timeout_seconds: number;
+            /**
+             * User Match Attribute
+             * @default mail
+             */
+            user_match_attribute: string;
+            /**
+             * User Search Base
+             * @default
+             */
+            user_search_base: string;
+        };
         /** LLMV2Calibration */
         LLMV2Calibration: {
             capable: components["schemas"]["LLMV2ProbabilityCalibration"];
@@ -38351,6 +38537,7 @@ export interface components {
             };
             /** Env Vars */
             env_vars?: components["schemas"]["MCPEnvVar"][] | null;
+            events?: components["schemas"]["MCPServerEventsConfig"] | null;
             /** Extra Headers */
             extra_headers?: string[];
             /** Has User Credential */
@@ -39200,6 +39387,16 @@ export interface components {
             model_info?: {
                 [key: string]: unknown;
             } | null;
+            /** Oauth Client Credentials */
+            oauth_client_credentials?: boolean | null;
+            /** Oauth Client Id */
+            oauth_client_id?: string | null;
+            /** Oauth Client Secret */
+            oauth_client_secret?: string | null;
+            /** Oauth Scope */
+            oauth_scope?: string | null;
+            /** Oauth Token Url */
+            oauth_token_url?: string | null;
             /** Ocr Cost Per Credit */
             ocr_cost_per_credit?: number | null;
             /** Ocr Cost Per Page */
@@ -41627,6 +41824,29 @@ export interface components {
                 [key: string]: unknown;
             };
         };
+        /** MCPServerEventsConfig */
+        MCPServerEventsConfig: {
+            /**
+             * Allowed Events
+             * @description Event names or globs this server may publish. Omit for every event; set enabled false for none.
+             */
+            allowed_events?: string[] | null;
+            /**
+             * Enabled
+             * @default false
+             */
+            enabled: boolean;
+            /**
+             * Legacy Webhook Id Equals Event Id
+             * @default false
+             */
+            legacy_webhook_id_equals_event_id: boolean;
+            /**
+             * Min Poll Interval Ms
+             * @default 1000
+             */
+            min_poll_interval_ms: number;
+        };
         /**
          * MCPServerUserCredentialListItem
          * @description One user's stored credential for an MCP server, as an admin sees it. Never carries the secret.
@@ -42875,6 +43095,7 @@ export interface components {
             };
             /** Env Vars */
             env_vars?: components["schemas"]["MCPEnvVar"][] | null;
+            events?: components["schemas"]["MCPServerEventsConfig"] | null;
             /** Extra Headers */
             extra_headers?: string[] | null;
             /** Instructions */
@@ -48620,6 +48841,16 @@ export interface components {
              */
             type: "tool_search_output";
         };
+        /** ResponsesAPIBackgroundOptions */
+        ResponsesAPIBackgroundOptions: {
+            /**
+             * Completion Window
+             * @enum {string}
+             */
+            completion_window?: "soonest" | "2h" | "8h";
+            /** Continuation Id */
+            continuation_id?: string;
+        };
         /** ResponsesAPIModeration */
         ResponsesAPIModeration: {
             /** Model */
@@ -48632,6 +48863,7 @@ export interface components {
         ResponsesAPIRequestParams: {
             /** Background */
             background?: boolean | null;
+            background_options?: components["schemas"]["ResponsesAPIBackgroundOptions"] | null;
             /** Context Management */
             context_management?: components["schemas"]["ContextManagementEntry"][] | null;
             /** Include */
@@ -53651,6 +53883,12 @@ export interface components {
             source: {
                 [key: string]: "config" | "db" | "env" | "default" | "unset";
             };
+            /**
+             * Supports Similarity Threshold
+             * @description Whether the active response cache supports similarity thresholds
+             * @default false
+             */
+            supports_similarity_threshold: boolean;
             /** Values */
             values: {
                 [key: string]: unknown;
@@ -54043,6 +54281,7 @@ export interface components {
             };
             /** Env Vars */
             env_vars?: components["schemas"]["MCPEnvVar"][] | null;
+            events?: components["schemas"]["MCPServerEventsConfig"] | null;
             /** Extra Headers */
             extra_headers?: string[] | null;
             /** Instructions */
@@ -54074,6 +54313,12 @@ export interface components {
              * @default false
              */
             per_server_oauth_discovery: boolean;
+            /**
+             * Preserve Explicit Oauth Settings
+             * @description Keep explicitly supplied OAuth settings on upstream or auth changes, even when their values match the saved settings.
+             * @default false
+             */
+            preserve_explicit_oauth_settings: boolean;
             /** Registration Url */
             registration_url?: string | null;
             /** Rpm */
@@ -56650,6 +56895,16 @@ export interface components {
             model_info?: {
                 [key: string]: unknown;
             } | null;
+            /** Oauth Client Credentials */
+            oauth_client_credentials?: boolean | null;
+            /** Oauth Client Id */
+            oauth_client_id?: string | null;
+            /** Oauth Client Secret */
+            oauth_client_secret?: string | null;
+            /** Oauth Scope */
+            oauth_scope?: string | null;
+            /** Oauth Token Url */
+            oauth_token_url?: string | null;
             /** Ocr Cost Per Credit */
             ocr_cost_per_credit?: number | null;
             /** Ocr Cost Per Page */
@@ -58890,6 +59145,7 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["TranscriptionResponse"];
                     "text/event-stream": string;
+                    "text/plain": string;
                 };
             };
             /** @description Validation Error */
@@ -70590,6 +70846,39 @@ export interface operations {
             };
         };
     };
+    connect_model_gateway_lens_admin_gateway_connect_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GatewaySetupRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GatewayStatus"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     lens_login_lens_login_get: {
         parameters: {
             query?: never;
@@ -75681,6 +75970,7 @@ export interface operations {
                 "application/json": {
                     /** Background */
                     background?: boolean | null;
+                    background_options?: components["schemas"]["ResponsesAPIBackgroundOptions"] | null;
                     /** Context Management */
                     context_management?: components["schemas"]["ContextManagementEntry"][] | null;
                     /** Include */
@@ -79578,6 +79868,7 @@ export interface operations {
                 "application/json": {
                     /** Background */
                     background?: boolean | null;
+                    background_options?: components["schemas"]["ResponsesAPIBackgroundOptions"] | null;
                     /** Context Management */
                     context_management?: components["schemas"]["ContextManagementEntry"][] | null;
                     /** Include */
@@ -87842,6 +88133,7 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["TranscriptionResponse"];
                     "text/event-stream": string;
+                    "text/plain": string;
                 };
             };
             /** @description Validation Error */
@@ -91779,6 +92071,7 @@ export interface operations {
                 "application/json": {
                     /** Background */
                     background?: boolean | null;
+                    background_options?: components["schemas"]["ResponsesAPIBackgroundOptions"] | null;
                     /** Context Management */
                     context_management?: components["schemas"]["ContextManagementEntry"][] | null;
                     /** Include */
