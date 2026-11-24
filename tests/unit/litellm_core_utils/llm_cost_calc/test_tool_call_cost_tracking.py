@@ -1280,3 +1280,52 @@ def test_per_call_web_search_path_bills_the_count_the_usage_reports(local_model_
         standard_built_in_tools_params=None,
     )
     assert cost == pytest.approx(3 * per_search)
+
+
+def _image_tool_deployment(deployment_id: str, rates: dict[str, float]) -> dict[str, object]:
+    return {
+        "model_name": "gpt-image-2",
+        "litellm_params": {"model": "openai/gpt-image-2", "api_key": "sk-test"},
+        "model_info": {"id": deployment_id, "mode": "image_generation", **rates},
+    }
+
+
+@pytest.mark.parametrize(
+    ("discounts", "billed_discount"),
+    (((0.5,), 0.5), ((0.5, 0.5), 0.5), ((0.0,), 0.0), ((0.5, 0.25), 1.0), ((0.5, None), 1.0), ((None,), 1.0)),
+    ids=(
+        "one_deployment_with_custom_rates",
+        "deployments_with_the_same_rates",
+        "zero_rated_deployment",
+        "deployments_with_different_rates_keep_list_price",
+        "custom_rates_beside_an_unpriced_deployment_keep_list_price",
+        "unpriced_deployment_keeps_list_price",
+    ),
+)
+def test_responses_image_tool_bills_the_rates_of_the_deployments_named_after_the_tool_model(
+    local_model_cost_map, discounts: tuple[float | None, ...], billed_discount: float
+):
+    listed = litellm.get_model_info("gpt-image-2", custom_llm_provider="openai")
+    rate_fields = ("input_cost_per_token", "input_cost_per_image_token", "output_cost_per_image_token")
+    router = litellm.Router(
+        model_list=[
+            _image_tool_deployment(
+                f"image-tool-deployment-{position}",
+                {} if discount is None else {field: listed[field] * discount for field in rate_fields},
+            )
+            for position, discount in enumerate(discounts)
+        ]
+    )
+    response = _openai_responses_response(
+        "gpt-5",
+        [{"type": "image_generation_call", "id": "ig_1", "status": "completed"}],
+        usage=_image_gen_token_usage(40, 300, 1000, 0),
+        tools=[{"type": "image_generation", "model": "gpt-image-2"}],
+    )
+    cost = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
+        model="gpt-5", response_object=response, usage=None, custom_llm_provider="openai"
+    )
+    list_price = _expected_image_gen_token_cost(listed, 40, 300, 1000, 0)
+    assert list_price > 0
+    assert cost == pytest.approx(list_price * billed_discount, rel=1e-9)
+    del router

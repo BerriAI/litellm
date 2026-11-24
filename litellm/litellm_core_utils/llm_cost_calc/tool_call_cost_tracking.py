@@ -30,6 +30,13 @@ from litellm.types.utils import (
     Usage,
 )
 
+_IMAGE_TOOL_RATE_FIELDS: Final = (
+    "input_cost_per_token",
+    "input_cost_per_image_token",
+    "output_cost_per_image_token",
+    "output_cost_per_token",
+)
+
 
 def _output_item_field(output_item: object, field: str) -> object:
     if isinstance(output_item, dict):
@@ -304,17 +311,44 @@ class StandardBuiltInToolCostTracking:
         except Exception as e:  # noqa: BLE001  # get_model_info raises bare Exception for unmapped models; fall back
             verbose_logger.debug("Could not resolve pricing for image tool model %s: %s", tool_model, e)
             return None
+        deployment_rates: Final = StandardBuiltInToolCostTracking._image_tool_deployment_rates(tool_model)
+
+        def rate(field: str) -> float:
+            configured: Final = deployment_rates.get(field)
+            return configured if configured is not None else cast(float, model_info.get(field) or 0)  # cast-ok: price
+
         image_gen: Final = tool_usage.image_gen
         input_details: Final = image_gen.input_tokens_details
         output_details: Final = image_gen.output_tokens_details
         token_cost: Final = (
-            (input_details.text_tokens if input_details else 0) * (model_info.get("input_cost_per_token") or 0)
-            + (input_details.image_tokens if input_details else 0) * (model_info.get("input_cost_per_image_token") or 0)
-            + (output_details.image_tokens if output_details else 0)
-            * (model_info.get("output_cost_per_image_token") or 0)
-            + (output_details.text_tokens if output_details else 0) * (model_info.get("output_cost_per_token") or 0)
+            (input_details.text_tokens if input_details else 0) * rate("input_cost_per_token")
+            + (input_details.image_tokens if input_details else 0) * rate("input_cost_per_image_token")
+            + (output_details.image_tokens if output_details else 0) * rate("output_cost_per_image_token")
+            + (output_details.text_tokens if output_details else 0) * rate("output_cost_per_token")
         )
-        return token_cost if token_cost > 0 else None
+        return token_cost if token_cost > 0 or deployment_rates else None
+
+    @staticmethod
+    def _image_tool_deployment_rates(tool_model: str) -> Mapping[str, float]:
+        """The provider runs the tool model itself, so no deployment is picked for it: the rates of the
+        deployments named after the tool model apply only when every one of them configures the same ones."""
+        from litellm.cost_calculator import _raw_cost_map_entry  # pyright: ignore[reportPrivateUsage]  # cost map row
+        from litellm.router_rust.surface.replay import live_registries
+
+        configured: Final = frozenset(
+            tuple((_raw_cost_map_entry(str(deployment_id)) or {}).get(field) for field in _IMAGE_TOOL_RATE_FIELDS)
+            for registry in live_registries()
+            for deployment in registry._core_model_list  # pyright: ignore[reportPrivateUsage]  # the live list
+            if deployment.get("model_name") == tool_model
+            and (deployment_id := _output_item_field(deployment.get("model_info"), "id")) is not None
+        )
+        if len(configured) != 1:
+            return {}
+        return {
+            field: float(value)
+            for field, value in zip(_IMAGE_TOOL_RATE_FIELDS, next(iter(configured)), strict=True)
+            if isinstance(value, int | float)
+        }
 
     @staticmethod
     def _handle_image_generation_cost(response_object: object, custom_llm_provider: str | None) -> float:
