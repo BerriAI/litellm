@@ -193,6 +193,7 @@ pub struct MessagesTransformContext {
     pub drops_unsupported_params: bool,
     pub global_drop_params: bool,
     pub claude_base_model: bool,
+    pub keeps_unsigned_thinking: bool,
 }
 impl MessagesTransformContext {
     pub fn new(capabilities: MessagesModelCapabilities, drop_params: bool) -> Self {
@@ -216,6 +217,7 @@ impl MessagesTransformContext {
             drops_unsupported_params: false,
             global_drop_params: false,
             claude_base_model: false,
+            keeps_unsigned_thinking: false,
         }
     }
 

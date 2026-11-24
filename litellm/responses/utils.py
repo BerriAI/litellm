@@ -335,7 +335,7 @@ class ResponsesAPIRequestUtils:
     @staticmethod
     def _check_valid_arg(
         supported_params: list[str] | None,
-        non_default_params: dict,
+        non_default_params: Mapping[str, object],
         drop_params: bool | None,
         custom_llm_provider: str | None,
         model: str,
@@ -363,7 +363,7 @@ class ResponsesAPIRequestUtils:
         allowed_openai_params: Sequence[str] | None = None,
         drop_params: bool | None = None,
         declared_reasoning_efforts: Collection[str] | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Get optional parameters for the responses API.
 
@@ -1738,6 +1738,7 @@ def bridge_reasoning(
     deployment_model_info: Mapping[str, object] | None,
     drop_params: bool,
     additional_drop_params: object,
+    collapses_to_effort: bool = False,
 ) -> Mapping[str, object] | RefusedReasoningFields | None:
     from litellm.utils import ProviderConfigManager
 
@@ -1764,11 +1765,39 @@ def bridge_reasoning(
         for key, value in sent.items()
         if key in _REFUSABLE_REASONING_FIELDS and key not in accepted and value is not None
     )
-    if (
-        refused
-        and not drop_params
-        and responses_config is not None
-        and responses_config.ignores_unsupported_reasoning_fields()
-    ):
+    backend_stays_silent: Final = collapses_to_effort or (
+        responses_config is not None and responses_config.ignores_unsupported_reasoning_fields()
+    )
+    if refused and not drop_params and backend_stays_silent:
         return RefusedReasoningFields(refused)
     return (accepted if drop_params else sent) or None
+
+
+def chat_reasoning_effort(
+    *,
+    requested: Mapping[str, object],
+    model: str,
+    base_model: str | None,
+    custom_llm_provider: str,
+    api_base: str | None,
+    deployment_model_info: Mapping[str, object] | None,
+    drop_params: bool,
+    additional_drop_params: object,
+) -> str | RefusedReasoningFields | None:
+    checked: Final = bridge_reasoning(
+        requested=requested,
+        effort_kept=True,
+        summary_alias=None,
+        model=model,
+        base_model=base_model,
+        custom_llm_provider=custom_llm_provider,
+        api_base=api_base,
+        deployment_model_info=deployment_model_info,
+        drop_params=drop_params,
+        additional_drop_params=additional_drop_params,
+        collapses_to_effort=True,
+    )
+    if isinstance(checked, RefusedReasoningFields):
+        return checked
+    effort: Final = None if checked is None else checked.get("effort")
+    return effort if isinstance(effort, str) else None

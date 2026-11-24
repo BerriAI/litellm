@@ -1177,6 +1177,35 @@ async fn replayed_history_is_cleaned_before_sending(
 }
 
 #[rstest]
+#[case::deepseek("deepseek")]
+#[case::minimax("minimax")]
+#[case::tencent("tencent")]
+#[tokio::test]
+async fn unsigned_thinking_is_replayed_to_an_anthropic_compatible_provider(
+    call: MessagesCall,
+    #[case] provider: &str,
+) {
+    let upstream = upstream([message_response()]).await;
+    let history = json!([{"role": "assistant", "content": [
+        {"type": "thinking", "thinking": "Read it first.", "signature": ""},
+        {"type": "text", "text": "kept"}
+    ]}]);
+
+    run_message(with_fields(
+        MessagesCall {
+            custom_llm_provider: Some(provider.into()),
+            api_key: Some("sk".into()),
+            api_base: Some(upstream.uri()),
+            ..call
+        },
+        json!({"messages": history.clone()}),
+    ))
+    .await;
+
+    assert_eq!(only_request(&upstream).await.json()["messages"], history);
+}
+
+#[rstest]
 #[case::anthropic("anthropic")]
 #[case::azure("azure_ai")]
 #[case::deepseek("deepseek")]

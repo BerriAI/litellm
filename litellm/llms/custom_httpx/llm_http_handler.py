@@ -3162,7 +3162,7 @@ class BaseLLMHTTPHandler:
         *,
         initial_response: AnthropicMessagesResponse,
         model: str,
-        messages: list[dict],
+        messages: list[dict[str, object]],
         anthropic_messages_provider_config: BaseAnthropicMessagesConfig,
         anthropic_messages_optional_request_params: dict[str, object],
         logging_obj: LiteLLMLoggingObj,
@@ -6096,7 +6096,7 @@ class BaseLLMHTTPHandler:
         file_content_request: "FileContentRequest",
         provider_config: BaseFilesConfig,
         litellm_params: dict,
-        headers: dict,
+        headers: dict[str, object],
         logging_obj: LiteLLMLoggingObj,
     ) -> "_PreparedFileContentRequest":
         url, params = provider_config.transform_file_content_request(
@@ -6119,7 +6119,7 @@ class BaseLLMHTTPHandler:
         file_content_request: "FileContentRequest",
         provider_config: BaseFilesConfig,
         litellm_params: dict,
-        headers: dict,
+        headers: dict[str, object],
         logging_obj: LiteLLMLoggingObj,
     ) -> "_PreparedFileContentRequest":
         url, params = await run_off_loop_if_aws(
@@ -6145,7 +6145,7 @@ class BaseLLMHTTPHandler:
         stream: bool,
         data: dict[str, object],
         fake_stream: bool,
-    ) -> tuple[bool, dict]:
+    ) -> tuple[bool, dict[str, object]]:
         """
         Handles preparing a request when `fake_stream` is True.
         """
@@ -6318,10 +6318,10 @@ class BaseLLMHTTPHandler:
         self,
         plan: AgenticLoopPlan,
         model: str,
-        messages: list[dict],
+        messages: list[dict[str, object]],
         anthropic_messages_optional_request_params: Mapping[str, object],
         logging_obj: "LiteLLMLoggingObj",
-        kwargs: dict,
+        kwargs: dict[str, object],
         depth: int,
         max_loops: int,
         fingerprints: Sequence[str],
@@ -6778,7 +6778,7 @@ class BaseLLMHTTPHandler:
         self,
         response: ModelResponse,
         model: str,
-        messages: list[dict],
+        messages: list[dict[str, object]],
         optional_params: dict[str, object],
         logging_obj: "LiteLLMLoggingObj",
         stream: bool,
@@ -7429,6 +7429,7 @@ class BaseLLMHTTPHandler:
         turn_admission: "ResponsesWsTurnAdmission | None" = None,
         turn_usage_recorder: "ResponsesWsTurnUsageRecorder | None" = None,
         frame_guard: "ResponsesWsFrameGuard | None" = None,
+        on_unfinished_turn: Callable[[], None] | None = None,
         **kwargs: object,
     ) -> Exception | None:
         """
@@ -7499,6 +7500,7 @@ class BaseLLMHTTPHandler:
                 turn_admission=_ws_turn_admission,
                 guardrail_callbacks=_ws_guardrail_callbacks,  # pyright: ignore[reportUnknownArgumentType]  # duck-typed callbacks from litellm.callbacks
                 frame_guard=frame_guard,
+                on_unfinished_turn=on_unfinished_turn,
                 **kwargs,
             )
             return await handler.run()
@@ -7593,6 +7595,7 @@ class BaseLLMHTTPHandler:
                     turn_admission=_ws_turn_admission,
                     turn_usage_recorder=turn_usage_recorder,
                     frame_guard=frame_guard,
+                    on_unfinished_turn=on_unfinished_turn,
                 )
                 return await streaming.bidirectional_forward()
 
@@ -13250,7 +13253,7 @@ class BaseLLMHTTPHandler:
     def _prepare_skill_multipart_request(
         self,
         request_body: dict,
-        headers: dict,
+        headers: dict[str, object],
     ) -> tuple[dict | None, list | None]:
         """
         Helper to prepare multipart/form-data request for skills API.

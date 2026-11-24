@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, Final
 
 from fastapi import HTTPException
 from pydantic import TypeAdapter
+from typing_extensions import TypedDict, Unpack
 
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.dual_cache import DualCache
@@ -53,6 +54,10 @@ def _choice_with_message(choice: object, rewrite: Callable[[object], object]) ->
     return {**mapping, "message": rewrite(mapping["message"])}
 
 
+class _CustomGuardrailOptions(TypedDict, total=False, extra_items=object):
+    """Base-class constructor options this guardrail forwards untouched to CustomGuardrail."""
+
+
 class PangeaGuardrailMissingSecrets(Exception):
     """Custom exception for missing Pangea secrets."""
 
@@ -86,7 +91,7 @@ class PangeaHandler(CustomGuardrail):
         pangea_output_recipe: str | None = None,
         api_key: str | None = None,
         api_base: str | None = None,
-        **kwargs,
+        **kwargs: Unpack[_CustomGuardrailOptions],
     ):
         """
         Initializes the PangeaHandler.

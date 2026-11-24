@@ -1682,6 +1682,300 @@ def test_the_sync_path_reports_its_edits_on_the_streamed_message_delta(
     assert message_delta["context_management"]["applied_edits"][0]["cleared_tool_uses"] == 2
 
 
+MODE_REFUSING_MODEL: Final = "gpt-6.1-standard-only"
+REFUSED_REASONING: Final = {"effort": "low", "mode": "pro"}
+
+
+async def _body_sent_upstream(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    model: str = MODE_REFUSING_MODEL,
+    upstream_url: str = "https://api.openai.com/v1/responses",
+    **request_fields: object,
+) -> Mapping[str, object]:
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-reasoning-test")
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    monkeypatch.delenv("LITELLM_REASONING_AUTO_SUMMARY", raising=False)
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+    monkeypatch.delenv("OPENAI_API_BASE", raising=False)
+    monkeypatch.setitem(
+        litellm.model_cost,
+        MODE_REFUSING_MODEL,
+        {
+            "litellm_provider": "openai",
+            "mode": "responses",
+            "supports_reasoning": True,
+            "supports_minimal_reasoning_effort": False,
+            "reasoning_modes": ["standard"],
+            "reasoning_contexts": ["auto", "current_turn"],
+            "input_cost_per_token": 0.0,
+            "output_cost_per_token": 0.0,
+        },
+    )
+    monkeypatch.setattr(
+        litellm, "open_ai_chat_completion_models", {*litellm.open_ai_chat_completion_models, MODE_REFUSING_MODEL}
+    )
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    upstream: Final = respx_mock.post(upstream_url).respond(status_code=200, json=TEXT_RESPONSE)
+    await LiteLLMMessagesToResponsesAPIHandler.async_anthropic_messages_handler(
+        max_tokens=64,
+        messages=MESSAGES,
+        model=f"openai/{model}",
+        custom_llm_provider="openai",
+        **request_fields,
+    )
+    return json.loads(upstream.calls[0].request.content)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "request_fields",
+    [
+        {"reasoning_effort": REFUSED_REASONING},
+        {"extra_body": {"reasoning": REFUSED_REASONING}},
+        {"extra_body": {"reasoning_effort": REFUSED_REASONING}},
+        {"reasoning": REFUSED_REASONING},
+    ],
+    ids=("top-level", "extra_body.reasoning", "extra_body.reasoning_effort", "sdk-merged-reasoning"),
+)
+async def test_messages_drops_a_refused_reasoning_mode_and_keeps_the_effort_under_drop_params(
+    request_fields: Mapping[str, object], respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    body: Final = await _body_sent_upstream(respx_mock, monkeypatch, drop_params=True, **request_fields)
+
+    assert body["reasoning"] == {"effort": "low"}
+    assert "reasoning_effort" not in body
+
+
+@pytest.mark.asyncio
+async def test_messages_leaves_a_refused_reasoning_mode_to_openai_without_drop_params(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    body: Final = await _body_sent_upstream(respx_mock, monkeypatch, reasoning_effort=REFUSED_REASONING)
+
+    assert body["reasoning"] == REFUSED_REASONING
+
+
+@pytest.mark.asyncio
+async def test_messages_leaves_extra_body_reasoning_to_openai_without_drop_params(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    body: Final = await _body_sent_upstream(respx_mock, monkeypatch, extra_body={"reasoning": REFUSED_REASONING})
+
+    assert body["reasoning"] == REFUSED_REASONING
+
+
+@pytest.mark.asyncio
+async def test_messages_sends_no_reasoning_for_an_object_with_no_effort_under_drop_params(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    body: Final = await _body_sent_upstream(respx_mock, monkeypatch, drop_params=True, reasoning_effort={"mode": "pro"})
+
+    assert body.get("reasoning") is None
+    assert "reasoning_effort" not in body
+
+
+@pytest.mark.asyncio
+async def test_messages_keeps_a_reasoning_mode_the_model_declares_under_drop_params(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    accepted: Final = {"effort": "low", "mode": "standard"}
+
+    body: Final = await _body_sent_upstream(respx_mock, monkeypatch, drop_params=True, reasoning_effort=accepted)
+
+    assert body["reasoning"] == accepted
+
+
+@pytest.mark.asyncio
+async def test_messages_keeps_a_reasoning_mode_the_deployment_declares_under_drop_params(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    body: Final = await _body_sent_upstream(
+        respx_mock,
+        monkeypatch,
+        drop_params=True,
+        reasoning_effort=REFUSED_REASONING,
+        model_info={"reasoning_modes": ["pro"]},
+    )
+
+    assert body["reasoning"] == REFUSED_REASONING
+
+
+@pytest.mark.asyncio
+async def test_messages_reads_the_reasoning_catalog_row_of_the_base_model(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    body: Final = await _body_sent_upstream(
+        respx_mock,
+        monkeypatch,
+        model="my-mini-alias",
+        drop_params=True,
+        reasoning_effort=REFUSED_REASONING,
+        base_model=MODE_REFUSING_MODEL,
+    )
+
+    assert body["reasoning"] == {"effort": "low"}
+
+
+@pytest.mark.asyncio
+async def test_messages_applies_additional_drop_params_to_a_reasoning_object(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    body: Final = await _body_sent_upstream(
+        respx_mock,
+        monkeypatch,
+        drop_params=True,
+        reasoning_effort={"effort": "low", "context": "current_turn"},
+        additional_drop_params=["reasoning_effort.context"],
+    )
+
+    assert body["reasoning"] == {"effort": "low"}
+
+
+@pytest.mark.asyncio
+async def test_messages_lets_extra_body_reasoning_override_a_string_effort_without_its_refused_mode(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    body: Final = await _body_sent_upstream(
+        respx_mock,
+        monkeypatch,
+        drop_params=True,
+        reasoning_effort="high",
+        extra_body={"reasoning": REFUSED_REASONING, "safety_identifier": "user-1"},
+    )
+
+    assert body["reasoning"] == {"effort": "low"}
+    assert body["safety_identifier"] == "user-1"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reasoning_key", ["reasoning", "reasoning_effort"])
+async def test_messages_keeps_an_extra_body_effort_over_the_one_thinking_translates_to_under_drop_params(
+    reasoning_key: str, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    body: Final = await _body_sent_upstream(
+        respx_mock,
+        monkeypatch,
+        drop_params=True,
+        thinking={"type": "adaptive"},
+        extra_body={reasoning_key: {"effort": "high", "mode": "pro"}},
+    )
+
+    assert body["reasoning"] == {"effort": "high"}
+    assert "reasoning_effort" not in body
+
+
+@pytest.mark.asyncio
+async def test_messages_prefers_extra_body_reasoning_over_a_reasoning_effort_object_under_drop_params(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    body: Final = await _body_sent_upstream(
+        respx_mock,
+        monkeypatch,
+        drop_params=True,
+        extra_body={"reasoning": {"effort": "high"}, "reasoning_effort": REFUSED_REASONING},
+    )
+
+    assert body["reasoning"] == {"effort": "high"}
+    assert "reasoning_effort" not in body
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("model", [MODE_REFUSING_MODEL, f"responses/{MODE_REFUSING_MODEL}"], ids=["bare", "responses-prefix"])
+@pytest.mark.parametrize(
+    "effort, expected_reasoning",
+    [("minimal", {"summary": "detailed"}), ("xhigh", {"effort": "xhigh", "summary": "detailed"})],
+    ids=["level-the-row-disables", "opt-in-level-the-row-omits"],
+)
+async def test_messages_drops_an_extra_body_effort_the_model_refuses_under_drop_params(
+    model: str,
+    effort: str,
+    expected_reasoning: dict[str, str],
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    body: Final = await _body_sent_upstream(
+        respx_mock,
+        monkeypatch,
+        model=model,
+        drop_params=True,
+        extra_body={"reasoning": {"effort": effort, "summary": "detailed", "mode": "pro"}},
+    )
+
+    assert body["reasoning"] == expected_reasoning
+
+
+@pytest.mark.asyncio
+async def test_messages_does_not_judge_reasoning_fields_for_a_compatible_backend(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    body: Final = await _body_sent_upstream(
+        respx_mock,
+        monkeypatch,
+        upstream_url="https://gateway.example/v1/responses",
+        api_base="https://gateway.example/v1",
+        drop_params=True,
+        reasoning_effort=REFUSED_REASONING,
+    )
+
+    assert body["reasoning"] == REFUSED_REASONING
+
+
+@pytest.mark.asyncio
+async def test_messages_keeps_a_reasoning_mode_the_provider_row_declares_under_drop_params(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setitem(
+        litellm.model_cost,
+        f"openai/{MODE_REFUSING_MODEL}",
+        {"litellm_provider": "openai", "mode": "responses", "reasoning_modes": ["pro"]},
+    )
+
+    body: Final = await _body_sent_upstream(
+        respx_mock, monkeypatch, drop_params=True, reasoning_effort=REFUSED_REASONING
+    )
+
+    assert body["reasoning"] == REFUSED_REASONING
+
+
+@pytest.mark.asyncio
+async def test_messages_judges_a_reasoning_mode_by_a_provider_row_outside_the_openai_catalog(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "openai/my-standard-only-finetune",
+        {
+            "litellm_provider": "openai",
+            "mode": "responses",
+            "supports_reasoning": True,
+            "reasoning_modes": ["standard"],
+        },
+    )
+
+    body: Final = await _body_sent_upstream(
+        respx_mock,
+        monkeypatch,
+        model="my-standard-only-finetune",
+        drop_params=True,
+        reasoning_effort=REFUSED_REASONING,
+    )
+
+    assert body["reasoning"] == {"effort": "low"}
+
+
+def test_build_responses_kwargs_leaves_another_providers_reasoning_object_as_sent():
+    responses_kwargs: Final = _build_responses_kwargs(
+        max_tokens=64,
+        messages=MESSAGES,
+        model="azure/gpt-5.4-mini",
+        extra_kwargs={"custom_llm_provider": "azure", "drop_params": True, "reasoning_effort": REFUSED_REASONING},
+    )
+
+    assert responses_kwargs["reasoning_effort"] == REFUSED_REASONING
+
+
 SUMMARY_REFUSAL: Final = {
     "error": {
         "message": (

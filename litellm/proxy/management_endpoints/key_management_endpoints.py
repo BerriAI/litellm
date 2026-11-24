@@ -1194,7 +1194,7 @@ def _validate_caller_can_change_key_ownership(
 
 
 def _check_allowed_routes_caller_permission(
-    allowed_routes: list | None,
+    allowed_routes: Sequence[object] | None,
     user_api_key_dict: UserAPIKeyAuth,
     *,
     allowed_routes_was_provided: bool = False,
@@ -3638,7 +3638,7 @@ async def _process_single_key_update(
     user_api_key_cache: UserApiKeyCache,
     proxy_logging_obj: ProxyLogging,
     llm_router: Router | None,
-    user_custom_key_update: Callable | None = None,
+    user_custom_key_update: Callable[..., Awaitable[Mapping[str, object]]] | None = None,
     existing_key_row: LiteLLM_VerificationToken | None = None,
     user_custom_key_policy: Callable[..., Awaitable[Mapping[str, object]]] | None = None,
 ) -> dict[str, object]:
@@ -5628,8 +5628,8 @@ async def generate_key_helper_fn(
     request_type: Literal["user", "key"],  # identifies if this request is from /user/new or /key/generate
     duration: str | None = None,
     models: list = [],
-    aliases: dict = {},
-    config: dict = {},
+    aliases: Mapping[str, object] = {},
+    config: Mapping[str, object] = {},
     spend: float = 0.0,
     key_max_budget: float | None = None,  # key_max_budget is used to Budget Per key
     key_budget_duration: str | None = None,
@@ -5648,24 +5648,24 @@ async def generate_key_helper_fn(
     user_email: str | None = None,
     user_role: str | None = None,
     max_parallel_requests: int | None = None,
-    metadata: dict | None = {},
+    metadata: Mapping[str, object] | None = {},
     tpm_limit: int | None = None,
     rpm_limit: int | None = None,
     tpd_limit: int | None = None,
     query_type: Literal["insert_data", "update_data"] = "insert_data",
-    update_key_values: dict | None = None,
+    update_key_values: Mapping[str, object] | None = None,
     key_alias: str | None = None,
     allowed_cache_controls: list | None = [],
-    permissions: dict | None = {},
+    permissions: Mapping[str, object] | None = {},
     model_max_budget: dict | None = {},
-    budget_fallbacks: dict | None = None,
-    model_rpm_limit: dict | None = None,
-    model_tpm_limit: dict | None = None,
-    mcp_rpm_limit: dict | None = None,
-    tag_rpm_limit: dict | None = None,
-    guardrails: list | None = None,
-    policies: list | None = None,
-    prompts: list | None = None,
+    budget_fallbacks: Mapping[str, object] | None = None,
+    model_rpm_limit: Mapping[str, object] | None = None,
+    model_tpm_limit: Mapping[str, object] | None = None,
+    mcp_rpm_limit: Mapping[str, int] | None = None,
+    tag_rpm_limit: Mapping[str, int] | None = None,
+    guardrails: Sequence[str] | None = None,
+    policies: Sequence[str] | None = None,
+    prompts: Sequence[str] | None = None,
     teams: list | None = None,
     organization_id: str | None = None,
     project_id: str | None = None,
@@ -6074,7 +6074,7 @@ async def delete_verification_tokens(
     user_api_key_cache: UserApiKeyCache,
     user_api_key_dict: UserAPIKeyAuth,
     litellm_changed_by: str | None = None,
-) -> tuple[dict | None, list[LiteLLM_VerificationToken]]:
+) -> tuple[dict[str, object] | None, list[LiteLLM_VerificationToken]]:
     """
     Helper that deletes the list of tokens from the database
 
@@ -6303,7 +6303,7 @@ async def delete_key_aliases(
     prisma_client: PrismaClient,
     user_api_key_dict: UserAPIKeyAuth,
     litellm_changed_by: str | None = None,
-) -> tuple[dict | None, list[LiteLLM_VerificationToken]]:
+) -> tuple[dict[str, object] | None, list[LiteLLM_VerificationToken]]:
     _keys_being_deleted: Final = await _prisma_table(VerificationTokenRepository(prisma_client)).find_many(
         where={"key_alias": {"in": key_aliases}}
     )

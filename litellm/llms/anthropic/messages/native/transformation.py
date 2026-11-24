@@ -251,7 +251,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             return system_param
         elif isinstance(system_param, list):
             # Filter list of system content blocks
-            filtered_list: Final = []
+            filtered_list: Final[list[object]] = []
             for content_block in system_param:
                 if isinstance(content_block, dict):
                     text = content_block.get("text", "")
@@ -819,6 +819,8 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
                 ),
                 model=model,
                 base_model=base_model if isinstance(base_model, str) else None,
+                custom_llm_provider=self._resolved_provider,
+                api_base=getattr(litellm_params, "api_base", None),
             ),
             max_tokens=max_tokens,
             model=model,

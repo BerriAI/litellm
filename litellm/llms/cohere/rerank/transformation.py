@@ -84,7 +84,7 @@ class CohereRerankConfig(BaseRerankConfig):
         api_key: str | None = None,
         optional_params: dict | None = None,
         litellm_params: Mapping[str, object] | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         if api_key is None:
             api_key = get_secret_str("COHERE_API_KEY") or get_secret_str("CO_API_KEY") or litellm.cohere_key
 

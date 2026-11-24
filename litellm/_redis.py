@@ -322,7 +322,7 @@ def _build_elasticache_iam_provider(redis_kwargs: Mapping[str, object]) -> Elast
 def create_gcp_iam_redis_connect_func(
     service_account: str,
     ssl_ca_certs: str | None = None,
-) -> Callable:
+) -> Callable[..., None]:
     """
     Creates a custom Redis connection function for GCP IAM authentication.
 
@@ -427,7 +427,7 @@ def create_azure_ad_redis_connect_func(
     azure_client_id: str | None = None,
     azure_tenant_id: str | None = None,
     azure_client_secret: str | None = None,
-) -> Callable:
+) -> Callable[..., None]:
     """
     Creates a custom Redis connection function for Azure AD authentication.
 

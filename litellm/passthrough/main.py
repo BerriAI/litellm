@@ -315,7 +315,7 @@ async def allm_passthrough_route(
     request_query_params: dict | None = None,
     request_headers: Mapping[str, str] | None = None,
     content: RequestContent | None = None,
-    data: dict | None = None,
+    data: Mapping[str, object] | None = None,
     files: RequestFiles | None = None,
     json: object | None = None,
     params: QueryParamTypes | None = None,
@@ -440,7 +440,7 @@ def llm_passthrough_route(
     request_query_params: dict | None = None,
     request_headers: Mapping[str, str] | None = None,
     content: RequestContent | None = None,
-    data: dict | None = None,
+    data: Mapping[str, object] | None = None,
     files: RequestFiles | None = None,
     json: object | None = None,
     params: QueryParamTypes | None = None,
@@ -563,7 +563,9 @@ def llm_passthrough_route(
         forward_headers=False,
     )
 
-    _request_data: dict | None = data if isinstance(data, dict) else (json if isinstance(json, dict) else None)
+    _request_data: dict[str, object] | None = (
+        data if isinstance(data, dict) else (json if isinstance(json, dict) else None)
+    )
     headers, signed_json_body = provider_config.sign_request(
         headers=headers,
         litellm_params={**litellm_params_dict, "guardrailConfig": guardrailConfig},
