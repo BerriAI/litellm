@@ -789,6 +789,7 @@ class RequestRateLimiterStash:
     io_reservation_released: bool = False
     tpm_limited_tags: frozenset[str] = field(default_factory=frozenset)
     socket_agent_windows: tuple[RateLimitDescriptor, ...] = ()
+    socket_turn_owner: Mapping[str, str] = field(default_factory=lambda: MappingProxyType({}))
     native_state: "NativeParallelRequestLimiterState | None" = None
     native_capacity_state: "NativeModelCapacityState | None" = None
 
@@ -1250,6 +1251,10 @@ class ParallelRequestLimiterHook(CustomLogger):
         The session's own success log still runs once at close."""
         from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 
+        connection_stash: Final = get_request_stash()
+        turn_owner: Final[Mapping[str, str]] = (
+            connection_stash.socket_turn_owner if connection_stash is not None else {}
+        )
         turn_kwargs: Final = MappingProxyType(
             {
                 "call_type": CallTypes.arealtime.value,
@@ -1265,15 +1270,16 @@ class ParallelRequestLimiterHook(CustomLogger):
                     }
                 },
                 "standard_logging_object": {
-                    "metadata": dict(
-                        LiteLLMProxyRequestSetup.get_sanitized_user_information_from_key(user_api_key_dict)
-                    )
+                    "metadata": {
+                        **LiteLLMProxyRequestSetup.get_sanitized_user_information_from_key(user_api_key_dict),
+                        **turn_owner,
+                    }
                 },
                 "combined_usage_object": usage,
             }
         )
         await self.native_companion.log_success(
-            _native_state(self, get_request_stash()),
+            _native_state(self, connection_stash),
             turn_kwargs,
             None,
             None,

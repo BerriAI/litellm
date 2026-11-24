@@ -9,6 +9,7 @@ import contextlib
 import functools
 import importlib.metadata
 import json
+import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterable, Mapping, MutableMapping, Sequence
 from dataclasses import dataclass, field
 from enum import Enum, auto
@@ -26,6 +27,7 @@ from litellm.constants import (
     BEDROCK_REALTIME_SDK_DISTRIBUTION,
     BEDROCK_REALTIME_SDK_SUPPORTED_RANGE,
     BEDROCK_REALTIME_SESSION_COMMITTED_SCOPE_KEY,
+    REALTIME_OVER_LIMIT_USAGE_WAIT_SECONDS,
     REALTIME_OVER_TOKEN_LIMIT_CLOSE_CODE,
     REALTIME_SESSION_ENDED_ABNORMALLY_KEY,
     REALTIME_SESSION_SUCCESS_LOGGED_KEY,
@@ -203,6 +205,7 @@ class _BridgeOutcome:
 class SessionEndSignals:
     input_closing: asyncio.Event = field(default_factory=asyncio.Event)
     output_failed: asyncio.Event = field(default_factory=asyncio.Event)
+    ended_over_limit: asyncio.Event = field(default_factory=asyncio.Event)
 
 
 async def _client_messages(client_ws: RealtimeClientWebSocket, initial_message: str | None) -> AsyncIterator[str]:
@@ -290,7 +293,7 @@ async def _refused_turn(turn_limits: RealtimeTurnLimits | None, client_ws: Realt
     refusal: Final = None if turn_limits is None else await turn_limits.refuse_turn()
     if refusal is None:
         return False
-    await client_ws.send_text(refusal)
+    await client_ws.send_text(refusal.event)
     return True
 
 
@@ -308,14 +311,90 @@ async def _ended_turn_over_limit(
     if turn_limits is None or provider_event.get("type") != "response.created":
         return False
     refusal: Final = await turn_limits.refusal()
-    if refusal is None:
+    if refusal is None or not refusal.over_limit:
         return False
     if not turn_limits.turn_refused:
         with contextlib.suppress(Exception):
-            await client_ws.send_text(refusal)
+            await client_ws.send_text(refusal.event)
     with contextlib.suppress(Exception):
         await client_ws.close(code=REALTIME_OVER_TOKEN_LIMIT_CLOSE_CODE, reason="session ended at its token rate limit")
     return True
+
+
+async def _next_event_before(
+    events: AsyncIterator[OpenAIRealtimeEvents], deadline: float
+) -> OpenAIRealtimeEvents | None:
+    try:
+        return await asyncio.wait_for(anext(events), max(0.0, deadline - time.monotonic()))
+    except (TimeoutError, StopAsyncIteration):
+        return None
+
+
+async def _refused_turn_usage(
+    events: AsyncIterator[OpenAIRealtimeEvents], turn_limits: RealtimeTurnLimits | None
+) -> AsyncIterator[OpenAIRealtimeEvents]:
+    deadline: Final = time.monotonic() + REALTIME_OVER_LIMIT_USAGE_WAIT_SECONDS
+    while (event := await _next_event_before(events, deadline)) is not None:
+        if turn_limits is not None:
+            await turn_limits.charge(event)
+        if _should_log_event(event):
+            yield event
+        if event.get("type") == "response.done":
+            return
+
+
+def _openai_events(
+    chunk: BedrockOutputChunk,
+    transformation_config: BedrockRealtimeConfig,
+    model: str,
+    logging_obj: LiteLLMLogging,
+    session_state: RealtimeResponseTransformInput,
+) -> Sequence[OpenAIRealtimeEvents]:
+    payload_bytes: Final = chunk.value.bytes_ if chunk.value else None
+    if not payload_bytes:
+        return ()
+    bedrock_response: Final = payload_bytes.decode("utf-8")
+    verbose_proxy_logger.debug("Bedrock Realtime: Received from Bedrock: %s", bedrock_response[:200])
+    transform_input: Final[RealtimeResponseTransformInput] = {
+        "current_output_item_id": session_state.get("current_output_item_id"),
+        "current_response_id": session_state.get("current_response_id"),
+        "current_conversation_id": session_state.get("current_conversation_id"),
+        "current_delta_chunks": session_state.get("current_delta_chunks"),
+        "current_item_chunks": session_state.get("current_item_chunks"),
+        "current_delta_type": session_state.get("current_delta_type"),
+        "session_configuration_request": session_state.get("session_configuration_request"),
+    }
+    transformed_response: Final = transformation_config.transform_realtime_response(
+        message=bedrock_response,
+        model=model,
+        logging_obj=logging_obj,
+        realtime_response_transform_input=transform_input,
+    )
+    session_state.update(
+        {
+            "current_output_item_id": transformed_response.get("current_output_item_id"),
+            "current_response_id": transformed_response.get("current_response_id"),
+            "current_conversation_id": transformed_response.get("current_conversation_id"),
+            "current_delta_chunks": transformed_response.get("current_delta_chunks"),
+            "current_item_chunks": transformed_response.get("current_item_chunks"),
+            "current_delta_type": transformed_response.get("current_delta_type"),
+            "session_configuration_request": transformed_response.get("session_configuration_request"),
+        }
+    )
+    response_value: Final = transformed_response["response"]
+    return response_value if isinstance(response_value, list) else (response_value,)
+
+
+async def _bedrock_events(
+    receiver: BedrockOutputStream,
+    transformation_config: BedrockRealtimeConfig,
+    model: str,
+    logging_obj: LiteLLMLogging,
+    session_state: RealtimeResponseTransformInput,
+) -> AsyncIterator[OpenAIRealtimeEvents]:
+    while (chunk := await receiver.receive()) is not None:
+        for event in _openai_events(chunk, transformation_config, model, logging_obj, session_state):
+            yield event
 
 
 def _parse_client_message(message: str) -> Mapping[str, JsonValue] | None:
@@ -850,6 +929,8 @@ class BedrockRealtime(BaseAWSLLM):
         bedrock_task: Final = asyncio.create_task(collect_logged_events())
 
         await asyncio.wait((client_task, bedrock_task), return_when=asyncio.FIRST_COMPLETED)
+        if signals.ended_over_limit.is_set():
+            await asyncio.wait((bedrock_task,))
         client_disconnected: Final = (
             client_task.done() and not client_task.cancelled() and client_task.exception() is None
         )
@@ -981,66 +1062,25 @@ class BedrockRealtime(BaseAWSLLM):
 
         session_guardrails: Final = guardrails if guardrails is not None else BedrockRealtimeGuardrails()
         output: Final = await bedrock_stream.await_output()
-        while True:
-            result = await output[1].receive()
-
-            if result is None:
-                if not signals.input_closing.is_set():
-                    raise _stream_ended_before_session_closed()
-                verbose_proxy_logger.debug("Bedrock Realtime: Bedrock stream ended")
-                with contextlib.suppress(Exception):
-                    await client_ws.close()
+        events: Final = _bedrock_events(output[1], transformation_config, model, logging_obj, session_state)
+        async for openai_message in events:
+            if turn_limits is not None:
+                await turn_limits.charge(openai_message)
+            if await _ended_turn_over_limit(turn_limits, openai_message, client_ws):
+                signals.ended_over_limit.set()
+                async for usage_event in _refused_turn_usage(events, turn_limits):
+                    yield usage_event
                 return
-
-            payload_bytes = result.value.bytes_ if result.value else None
-            if payload_bytes:
-                bedrock_response = payload_bytes.decode("utf-8")
-                verbose_proxy_logger.debug("Bedrock Realtime: Received from Bedrock: %s", bedrock_response[:200])
-
-                # Transform Bedrock format to OpenAI format
-                realtime_response_transform_input: RealtimeResponseTransformInput = {
-                    "current_output_item_id": session_state.get("current_output_item_id"),
-                    "current_response_id": session_state.get("current_response_id"),
-                    "current_conversation_id": session_state.get("current_conversation_id"),
-                    "current_delta_chunks": session_state.get("current_delta_chunks"),
-                    "current_item_chunks": session_state.get("current_item_chunks"),
-                    "current_delta_type": session_state.get("current_delta_type"),
-                    "session_configuration_request": session_state.get("session_configuration_request"),
-                }
-
-                transformed_response = transformation_config.transform_realtime_response(
-                    message=bedrock_response,
-                    model=model,
-                    logging_obj=logging_obj,
-                    realtime_response_transform_input=realtime_response_transform_input,
-                )
-
-                # Update session state
-                session_state.update(
-                    {
-                        "current_output_item_id": transformed_response.get("current_output_item_id"),
-                        "current_response_id": transformed_response.get("current_response_id"),
-                        "current_conversation_id": transformed_response.get("current_conversation_id"),
-                        "current_delta_chunks": transformed_response.get("current_delta_chunks"),
-                        "current_item_chunks": transformed_response.get("current_item_chunks"),
-                        "current_delta_type": transformed_response.get("current_delta_type"),
-                        "session_configuration_request": transformed_response.get("session_configuration_request"),
-                    }
-                )
-
-                # Send transformed messages to client
-                response_value = transformed_response["response"]
-                openai_messages = response_value if isinstance(response_value, list) else (response_value,)
-                for openai_message in openai_messages:
-                    if turn_limits is not None:
-                        await turn_limits.charge(openai_message)
-                    if await _ended_turn_over_limit(turn_limits, openai_message, client_ws):
-                        return
-                    if not await send_to_client(json.dumps(openai_message)):
-                        return
-                    if _should_log_event(openai_message):
-                        yield openai_message
-                    if not await session_guardrails.continues_after(
-                        openai_message, client_ws, transformation_config.client_audio_streamed
-                    ):
-                        return
+            if not await send_to_client(json.dumps(openai_message)):
+                return
+            if _should_log_event(openai_message):
+                yield openai_message
+            if not await session_guardrails.continues_after(
+                openai_message, client_ws, transformation_config.client_audio_streamed
+            ):
+                return
+        if not signals.input_closing.is_set():
+            raise _stream_ended_before_session_closed()
+        verbose_proxy_logger.debug("Bedrock Realtime: Bedrock stream ended")
+        with contextlib.suppress(Exception):
+            await client_ws.close()

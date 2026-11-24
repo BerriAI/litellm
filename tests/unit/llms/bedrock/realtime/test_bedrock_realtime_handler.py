@@ -3,7 +3,7 @@ import copy
 import json
 import sys
 import types
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from types import SimpleNamespace
@@ -360,6 +360,40 @@ class ResetOnAudioInputStream(FakeInputStream):
             await self._drained.wait()
             raise RuntimeError("bedrock input stream reset")
         self.sent.append(event)
+
+
+class SignallingInputStream(FakeInputStream):
+    def __init__(self) -> None:
+        super().__init__()
+        self.closed_event: Final = asyncio.Event()
+
+    async def close(self) -> None:
+        await super().close()
+        self.closed_event.set()
+
+
+class UsageAfterInputClosesReceiver:
+    def __init__(self, before_close: Sequence[str], after_close: Sequence[str], input_closed: asyncio.Event) -> None:
+        self._before: Final = iter(before_close)
+        self._after: Final = iter(after_close)
+        self._input_closed: Final = input_closed
+
+    async def receive(self) -> SimpleNamespace | None:
+        payload: Final = next(self._before, None) or await self._after_input_closes()
+        return None if payload is None else SimpleNamespace(value=SimpleNamespace(bytes_=payload.encode("utf-8")))
+
+    async def _after_input_closes(self) -> str | None:
+        await self._input_closed.wait()
+        return next(self._after, None)
+
+
+@dataclass(frozen=True, slots=True)
+class UsageAfterInputClosesStream:
+    input_stream: SignallingInputStream
+    receiver: UsageAfterInputClosesReceiver
+
+    async def await_output(self) -> tuple[None, UsageAfterInputClosesReceiver]:
+        return (None, self.receiver)
 
 
 class ScriptedBedrockStream:
@@ -2513,6 +2547,80 @@ class TestBedrockRealtimeTurnLimits:
         events: Final = [json.loads(message) for message in client_ws.sent_to_client]
         assert [event["error"]["type"] for event in events if event["type"] == "error"] == ["rate_limit_exceeded"]
         assert not any(event["type"].endswith(".delta") for event in events)
+        assert client_ws.close_code == 1013
+
+    @pytest.mark.asyncio
+    async def test_a_turn_bedrock_starts_over_the_limit_is_charged_when_its_usage_arrives_after_the_client_left(
+        self, stub_aws_models: None
+    ) -> None:
+        over_limit: Final = _ScriptedTurnLimiter(
+            check_error=RateLimitError(message="tpm limit reached", llm_provider="litellm_proxy", model=_NOVA_SONIC)
+        )
+        input_stream: Final = SignallingInputStream()
+        stream: Final = UsageAfterInputClosesStream(
+            input_stream,
+            UsageAfterInputClosesReceiver(
+                (json.dumps({"event": {"contentStart": {"role": "ASSISTANT", "type": "TEXT"}}}),),
+                (
+                    json.dumps({"event": {"textOutput": {"content": "Hi"}}}),
+                    json.dumps(
+                        {"event": {"usageEvent": {"totalInputTokens": 40, "totalOutputTokens": 8, "totalTokens": 48}}}
+                    ),
+                    json.dumps({"event": {"contentEnd": {"stopReason": "END_TURN"}}}),
+                ),
+                input_stream.closed_event,
+            ),
+        )
+        client_ws: Final = ConnectedClientWS([])
+
+        outcome: Final = await asyncio.wait_for(
+            BedrockRealtime()._bridge(
+                client_ws,
+                stream,
+                BedrockRealtimeConfig(),
+                _NOVA_SONIC,
+                {},
+                FakeLogging(),
+                None,
+                turn_limits=_bedrock_turn_limits(over_limit),
+            ),
+            timeout=5,
+        )
+
+        assert over_limit.charges == (48,)
+        assert "response.done" in [event["type"] for event in outcome.logged_events]
+        sent: Final = [json.loads(message)["type"] for message in client_ws.sent_to_client]
+        assert sent == ["error"]
+
+    @pytest.mark.asyncio
+    async def test_a_turn_bedrock_starts_over_the_limit_stops_waiting_for_its_usage_after_the_wait(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr("litellm.llms.bedrock.realtime.handler.REALTIME_OVER_LIMIT_USAGE_WAIT_SECONDS", 0.01)
+        over_limit: Final = _ScriptedTurnLimiter(
+            check_error=RateLimitError(message="tpm limit reached", llm_provider="litellm_proxy", model=_NOVA_SONIC)
+        )
+        stream: Final = ScriptedBedrockStream(
+            [json.dumps({"event": {"contentStart": {"role": "ASSISTANT", "type": "TEXT"}}})],
+            receiver_type=DrainedThenOpenBedrockReceiver,
+        )
+        client_ws: Final = RealtimeClientWS()
+
+        async def relay() -> None:
+            async for _ in BedrockRealtime()._forward_bedrock_to_client(
+                stream,
+                client_ws,
+                BedrockRealtimeConfig(),
+                _NOVA_SONIC,
+                FakeLogging(),
+                {},
+                signals=_closing_input(),
+                turn_limits=_bedrock_turn_limits(over_limit),
+            ):
+                pass
+
+        await asyncio.wait_for(relay(), timeout=5)
+
         assert client_ws.close_code == 1013
 
     @pytest.mark.asyncio

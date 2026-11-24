@@ -50,14 +50,22 @@ def registered_realtime_turn_limiters() -> Sequence[object]:
     return tuple(litellm.callbacks)
 
 
-def _refusal_event(error: Exception) -> str:
+@dataclass(frozen=True, slots=True)
+class TurnRefusal:
+    event: str
+    over_limit: bool
+
+
+def _refusal(error: Exception) -> TurnRefusal:
     match error:
         case RateLimitError():
-            return realtime_error_event(str(error), error_type="rate_limit_exceeded")
+            return TurnRefusal(realtime_error_event(str(error), error_type="rate_limit_exceeded"), over_limit=True)
         case ServiceUnavailableError():
-            return realtime_error_event(str(error), error_type="server_error")
+            return TurnRefusal(realtime_error_event(str(error), error_type="server_error"), over_limit=False)
         case _:
-            return realtime_error_event(TURN_LIMIT_CHECK_FAILED_MESSAGE, error_type="server_error")
+            return TurnRefusal(
+                realtime_error_event(TURN_LIMIT_CHECK_FAILED_MESSAGE, error_type="server_error"), over_limit=False
+            )
 
 
 def _reported_usage(event: Mapping[str, object]) -> Mapping[str, object] | None:
@@ -110,15 +118,13 @@ class RealtimeTurnLimits:
     def turn_refused(self) -> bool:
         return self._turn_refused
 
-    async def refuse_turn(self) -> str | None:
+    async def refuse_turn(self) -> TurnRefusal | None:
         refusal: Final = await self.refusal()
         self._turn_refused = refusal is not None
         return refusal
 
-    async def refusal(self) -> str | None:
+    async def refusal(self) -> TurnRefusal | None:
         await self._settle_uncharged()
-        if self._uncharged:
-            return realtime_error_event(TURN_LIMIT_CHECK_FAILED_MESSAGE, error_type="server_error")
         try:
             for limiter in self.limiters:
                 await limiter.enforce_token_limits_for_frame(
@@ -127,10 +133,10 @@ class RealtimeTurnLimits:
             for capacity_check in self.capacity_checks:
                 await capacity_check.enforce_token_limits_for_frame(self.user_api_key_dict, self.requested_model)
         except RateLimitError as refused:
-            return _refusal_event(refused)
+            return _refusal(refused)
         except Exception as error:  # noqa: BLE001  # a response the limits could not check must not reach the provider
             verbose_logger.exception("Realtime turn token limit check failed: %s", error)
-            return _refusal_event(error)
+            return _refusal(error)
         return None
 
     async def charge(self, event: Mapping[str, object]) -> None:

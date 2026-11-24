@@ -3034,6 +3034,55 @@ async def test_a_realtime_response_is_refused_once_its_session_turns_used_a_tpm_
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("agent_limits", "key_agent_id", "metadata_agent_id"),
+    [
+        ({"tpm_limit": _SOCKET_TURN_TPM_LIMIT}, None, "agent-rt"),
+        ({"session_tpm_limit": _SOCKET_TURN_TPM_LIMIT}, None, "agent-rt"),
+        ({"tpm_limit": _SOCKET_TURN_TPM_LIMIT}, "agent-rt", None),
+    ],
+    ids=["agent", "agent-session", "key-owned-agent"],
+)
+async def test_a_realtime_response_is_refused_once_its_session_turns_used_the_agent_tpm_window_v3(
+    agent_limits: dict[str, int], key_agent_id: str | None, metadata_agent_id: str | None
+) -> None:
+    from litellm.types.agents import AgentResponse
+
+    local_cache: Final = DualCache()
+    handler: Final = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(local_cache))
+    auth: Final = UserAPIKeyAuth(api_key=hash_token("sk-realtime-agent-turns"), agent_id=key_agent_id)
+    agent: Final = AgentResponse(
+        agent_id="agent-rt", agent_name="rt-agent", agent_card_params={"name": "RT Agent"}, **agent_limits
+    )
+
+    async def check() -> None:
+        await handler.enforce_token_limits_for_frame(auth, _REALTIME_MODEL, call_type=CallTypes.arealtime.value)
+
+    with patch(
+        "litellm.proxy.agent_endpoints.agent_registry.global_agent_registry.get_agent_by_id",
+        side_effect=lambda agent_id: agent if agent_id == "agent-rt" else None,
+    ):
+        await handler.async_pre_call_hook(
+            user_api_key_dict=auth,
+            cache=local_cache,
+            data={
+                "model": _REALTIME_MODEL,
+                "litellm_call_id": "realtime-agent-session",
+                "metadata": {"agent_id": metadata_agent_id, "session_id": "sess-rt"},
+            },
+            call_type=CallTypes.arealtime.value,
+        )
+        await handler.charge_realtime_turn_usage(auth, _REALTIME_MODEL, _realtime_turn_usage(_SOCKET_TURN_TPM_LIMIT // 2))
+        await check()
+        await handler.charge_realtime_turn_usage(auth, _REALTIME_MODEL, _realtime_turn_usage(_SOCKET_TURN_TPM_LIMIT // 2))
+
+        with pytest.raises(ProxyRateLimitError) as exc_info:
+            await check()
+
+    assert exc_info.value.status_code == 429
+
+
+@pytest.mark.asyncio
 async def test_realtime_turns_charge_the_key_model_and_tag_windows_and_keep_the_session_slot_v3(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

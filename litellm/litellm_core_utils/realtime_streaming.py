@@ -73,6 +73,7 @@ from .realtime_guardrails import (
 from .realtime_turn_limits import (
     RealtimeTurnLimiterSource,
     RealtimeTurnLimits,
+    TurnRefusal,
     realtime_response_id,
     realtime_turn_limits,
     registered_realtime_turn_limiters,
@@ -1626,8 +1627,13 @@ class RealTimeStreaming:
         refusal: Final = await self._turn_limits.refuse_turn()
         if refusal is None:
             return False
-        await self.websocket.send_text(refusal)
+        await self.websocket.send_text(refusal.event)
         return True
+
+    def _client_event_starts_response(self, client_event: Mapping[str, object]) -> bool:
+        if self.provider_config is None:
+            return client_event.get("type") == "response.create"
+        return self.provider_config.client_event_starts_response(client_event)
 
     async def _send_proxy_response_create(self, events: Sequence[str]) -> None:
         if await self._refuses_turn_over_token_limit():
@@ -1635,15 +1641,17 @@ class RealTimeStreaming:
         for event in events:
             await self._send_to_backend(event)
 
-    async def _end_session_over_token_limit(self, refusal: str) -> None:
+    async def _end_session_over_token_limit(self, refusal: TurnRefusal) -> None:
         self._ended_over_token_limit = True
-        await self.websocket.send_text(refusal)
+        await self.websocket.send_text(refusal.event)
+        await self._close_client(OVER_TOKEN_LIMIT_CLOSE)
         await self.backend_ws.close()
 
-    async def _end_session_after_refused_response(self, refusal: str, *, client_was_told: bool) -> None:
+    async def _end_session_after_refused_response(self, refusal: TurnRefusal, *, client_was_told: bool) -> None:
         self._ended_over_token_limit = True
         if not client_was_told:
-            await self.websocket.send_text(refusal)
+            await self.websocket.send_text(refusal.event)
+        await self._close_client(OVER_TOKEN_LIMIT_CLOSE)
         self._over_limit_usage_wait = asyncio.create_task(self._close_backend_after_usage_wait())
 
     async def _close_backend_after_usage_wait(self) -> None:
@@ -1690,7 +1698,9 @@ class RealTimeStreaming:
         if refusal is None:
             return False
         if await self._send_guardrail_cancel(realtime_response_id(event)):
-            await self.websocket.send_text(refusal)
+            await self.websocket.send_text(refusal.event)
+            return False
+        if not refusal.over_limit:
             return False
         await self._end_session_after_refused_response(refusal, client_was_told=self._turn_limits.turn_refused)
         return True
@@ -1702,7 +1712,7 @@ class RealTimeStreaming:
         if self._listens_only:
             return False
         refusal: Final = await self._turn_limits.refusal()
-        if refusal is None:
+        if refusal is None or not refusal.over_limit:
             return False
         await self._end_session_over_token_limit(refusal)
         return True
@@ -2440,9 +2450,11 @@ class RealTimeStreaming:
                 ## GUARDRAIL: intercept conversation.item.create for text-based injection.
                 guardrail_turn_detection_injected = False
                 msg_type: object = None
+                starts_response = False
                 try:
                     client_event = _decode_json_object(message)
                     msg_type = client_event.get("type")
+                    starts_response = self._client_event_starts_response(client_event)
                     if msg_type == "conversation.item.create":
                         self._pending_guardrail_message = None
 
@@ -2578,7 +2590,7 @@ class RealTimeStreaming:
                 if self._ended_over_token_limit:
                     continue
 
-                if msg_type == "response.create" and await self._refuses_turn_over_token_limit():
+                if starts_response and await self._refuses_turn_over_token_limit():
                     continue
 
                 ## LOGGING
@@ -2661,6 +2673,9 @@ class RealTimeStreaming:
         client_task: Final = asyncio.create_task(self.client_ack_messages())
         try:
             await asyncio.wait((forward_task, client_task), return_when=asyncio.FIRST_COMPLETED)
+            if self._ended_over_token_limit:
+                await forward_task
+                return
             client_exit: Final = client_task.result() if client_task.done() else None
             if client_exit is ClientLoopExit.RELAY_FAILED and self.logging_obj:
                 self.logging_obj.model_call_details[REALTIME_SESSION_ENDED_ABNORMALLY_KEY] = True

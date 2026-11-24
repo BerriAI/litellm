@@ -6942,7 +6942,7 @@ class _RecoveringTurnLimiter(_ScriptedTurnLimiter):
 
 
 @pytest.mark.asyncio
-async def test_a_failed_turn_charge_refuses_turns_until_a_retry_counts_it() -> None:
+async def test_a_failed_turn_charge_is_retried_before_the_next_turns_without_refusing_them() -> None:
     limiter: Final = _RecoveringTurnLimiter()
     streaming, client_ws, backend_ws = _scripted_session(
         limiter,
@@ -6954,9 +6954,12 @@ async def test_a_failed_turn_charge_refuses_turns_until_a_retry_counts_it() -> N
     await streaming.client_ack_messages()
 
     assert limiter.charges == ((_TURN_LIMITED_MODEL, 300),) * 3
-    assert [json.loads(call.args[0])["type"] for call in backend_ws.send.await_args_list] == ["response.create"]
-    errors: Final = [json.loads(call.args[0]) for call in client_ws.send_text.await_args_list]
-    assert [event["error"]["type"] for event in errors if event["type"] == "error"] == ["server_error"]
+    assert [json.loads(call.args[0])["type"] for call in backend_ws.send.await_args_list] == [
+        "response.create",
+        "response.create",
+    ]
+    sent: Final = [json.loads(call.args[0]) for call in client_ws.send_text.await_args_list]
+    assert not [event for event in sent if event["type"] == "error"]
 
 
 @dataclass(slots=True)
@@ -7134,6 +7137,96 @@ async def test_a_session_ended_over_its_limit_is_not_reported_as_a_provider_fail
     assert [event["error"]["type"] for event in sent if event["type"] == "error"] == ["rate_limit_exceeded"]
     assert client_ws.close.await_args.kwargs["code"] == 1013
     assert REALTIME_SESSION_ENDED_ABNORMALLY_KEY not in streaming.logging_obj.model_call_details
+
+
+@pytest.mark.asyncio
+async def test_a_client_that_leaves_when_its_session_ends_over_the_limit_still_has_the_refused_turn_counted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "gemini_live_defer_setup", False, raising=False)
+    limiter: Final = _over_limit_turn_limiter()
+    client_closed: Final = asyncio.Event()
+    client_left: Final = asyncio.Event()
+    usage_reported: Final = asyncio.Event()
+    frames: Final = iter((json.dumps({"setupComplete": {}}), _GEMINI_TURN_STARTED))
+
+    async def recv(*_args: object, **_kwargs: object) -> str:
+        frame: Final = next(frames, None)
+        if frame is not None:
+            return frame
+        if usage_reported.is_set():
+            raise ConnectionClosed(None, None)
+        await client_left.wait()
+        await asyncio.sleep(0.05)
+        usage_reported.set()
+        return _GEMINI_TURN_USAGE
+
+    async def receive_text() -> str:
+        await client_closed.wait()
+        client_left.set()
+        raise RuntimeError("connection closed")
+
+    backend: Final = _ClosableBackend(
+        MagicMock(send=AsyncMock(), close=AsyncMock(), recv=AsyncMock(side_effect=recv)),
+        asyncio.Event(),
+        asyncio.Event(),
+    )
+    streaming, client_ws = _gemini_turn_limited_session(limiter, backend)
+    client_ws.receive_text = AsyncMock(side_effect=receive_text)
+    client_ws.close = AsyncMock(side_effect=lambda *_args, **_kwargs: client_closed.set())
+
+    await asyncio.wait_for(streaming.bidirectional_forward(), timeout=5)
+
+    assert [charge[1] for charge in limiter.charges] == [30]
+    assert client_ws.close.await_args.kwargs["code"] == 1013
+
+
+@pytest.mark.asyncio
+async def test_a_turn_the_provider_started_while_limits_cannot_be_checked_runs_and_keeps_the_session_open(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "gemini_live_defer_setup", False, raising=False)
+    limiter: Final = _ScriptedTurnLimiter(
+        check_error=ServiceUnavailableError(message="limits unreachable", llm_provider="litellm_proxy", model="m")
+    )
+    backend: Final = _closable_backend(
+        (json.dumps({"setupComplete": {}}), _GEMINI_TURN_STARTED, _GEMINI_TURN_USAGE), stays_open_after_frames=False
+    )
+    streaming, client_ws = _gemini_turn_limited_session(limiter, backend)
+
+    close: Final = await asyncio.wait_for(streaming.backend_to_client_send_messages(), timeout=5)
+
+    sent: Final = [json.loads(call.args[0])["type"] for call in client_ws.send_text.await_args_list]
+    assert "response.done" in sent
+    assert close.code != 1013
+    assert [charge[1] for charge in limiter.charges] == [30]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("limiter", "reaches_the_provider", "client_errors"),
+    [(_ScriptedTurnLimiter(), True, []), (_over_limit_turn_limiter(), False, ["rate_limit_exceeded"])],
+    ids=["under_the_limit", "over_the_limit"],
+)
+async def test_a_gemini_text_turn_is_checked_before_it_reaches_the_provider_and_a_plain_response_create_is_not(
+    monkeypatch: pytest.MonkeyPatch,
+    limiter: _ScriptedTurnLimiter,
+    reaches_the_provider: bool,
+    client_errors: list[str],
+) -> None:
+    monkeypatch.setattr(litellm, "gemini_live_defer_setup", False, raising=False)
+    backend: Final = _closable_backend((), stays_open_after_frames=False)
+    streaming, client_ws = _gemini_turn_limited_session(
+        limiter, backend, client_frames=(_CLIENT_ITEM_CREATE, _CLIENT_RESPONSE_CREATE)
+    )
+
+    await streaming.client_ack_messages()
+
+    sent_to_provider: Final = [str(call.args[0]) for call in backend.ws.send.await_args_list]
+    assert any("clientContent" in frame for frame in sent_to_provider) is reaches_the_provider
+    assert len(limiter.checks) == 1
+    sent: Final = [json.loads(call.args[0]) for call in client_ws.send_text.await_args_list]
+    assert [event["error"]["type"] for event in sent if event["type"] == "error"] == client_errors
 
 
 @pytest.mark.asyncio
