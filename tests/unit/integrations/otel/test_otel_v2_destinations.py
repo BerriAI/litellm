@@ -41,7 +41,9 @@ from litellm.integrations.otel.model.config import (
     ExporterOwner,
     ExporterSpec,
     OpenTelemetryV2Config,
+    _cached_langfuse_destination_span_scope,
     is_otel_v2_enabled,
+    langfuse_destination_span_scope,
     parse_excluded_services,
 )
 from litellm.integrations.otel.model.destination import OtelDestination
@@ -115,6 +117,7 @@ def isolate_published_provider(monkeypatch):
 def forget_otel_v2_flag_after_each_test():
     yield
     is_otel_v2_enabled.cache_clear()
+    _cached_langfuse_destination_span_scope.cache_clear()
 
 
 def in_fresh_context(fn, *args):
@@ -3035,6 +3038,144 @@ class TestSpanScope:
 
         assert destination_for("langfuse_otel", creds).span_scope == "full"
 
+    @pytest.mark.parametrize("level", ["key", "team"])
+    @pytest.mark.parametrize("source", ["env", "callback_settings"])
+    @pytest.mark.parametrize(
+        ("default", "explicit", "expected"),
+        [("llm_only", None, "llm_only"), ("llm_only", "full", "full"), (None, None, "full")],
+    )
+    def test_proxy_destination_scope_falls_back_without_overriding_tenant_choices(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        allow_test_hosts: None,
+        level: str,
+        default: str | None,
+        explicit: str | None,
+        expected: str,
+        source: str,
+    ) -> None:
+        monkeypatch.setenv("LITELLM_OTEL_V2", "true")
+        monkeypatch.setenv("LITELLM_OTEL_LANGFUSE_SPAN_SCOPE", "llm_only")
+        monkeypatch.setattr(litellm, "callback_settings", {})
+        monkeypatch.delenv("LITELLM_OTEL_LANGFUSE_DESTINATION_SPAN_SCOPE", raising=False)
+        if default is not None:
+            monkeypatch.setenv("LITELLM_OTEL_LANGFUSE_DESTINATION_SPAN_SCOPE", default if source == "env" else "full")
+            if source == "callback_settings":
+                monkeypatch.setattr(
+                    litellm, "callback_settings", {"otel": {"langfuse_destination_span_scope": default}}
+                )
+        is_otel_v2_enabled.cache_clear()
+        metadata: Final = {
+            "logging": [
+                {
+                    "callback_name": "langfuse_otel",
+                    "callback_type": "success",
+                    "callback_vars": {
+                        "langfuse_public_key": "pk",
+                        "langfuse_secret_key": "sk",
+                        "langfuse_host": "http://x",
+                        **({"langfuse_span_scope": explicit} if explicit is not None else {}),
+                    },
+                }
+            ]
+        }
+        auth: Final = UserAPIKeyAuth(**({"metadata": metadata} if level == "key" else {"team_metadata": metadata}))
+        destinations: Final = resolve_tenant_otel_destinations(auth)
+        assert [destination.span_scope for destination in destinations] == [expected]
+
+    @pytest.mark.parametrize("otel_settings", [None, "invalid", [], 42])
+    @pytest.mark.parametrize("default", [None, "llm_only"])
+    def test_non_mapping_otel_settings_preserve_key_destination(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        allow_test_hosts: None,
+        otel_settings: object,
+        default: str | None,
+    ) -> None:
+        monkeypatch.setenv("LITELLM_OTEL_V2", "true")
+        monkeypatch.setattr(litellm, "callback_settings", {"otel": otel_settings})
+        monkeypatch.delenv("LITELLM_OTEL_LANGFUSE_DESTINATION_SPAN_SCOPE", raising=False)
+        if default is not None:
+            monkeypatch.setenv("LITELLM_OTEL_LANGFUSE_DESTINATION_SPAN_SCOPE", default)
+        is_otel_v2_enabled.cache_clear()
+        auth: Final = UserAPIKeyAuth(
+            metadata={
+                "logging": [
+                    {
+                        "callback_name": "langfuse_otel",
+                        "callback_type": "success",
+                        "callback_vars": {
+                            "langfuse_public_key": "pk",
+                            "langfuse_secret_key": "sk",
+                            "langfuse_host": "http://x",
+                        },
+                    }
+                ]
+            }
+        )
+
+        assert [destination.span_scope for destination in resolve_tenant_otel_destinations(auth)] == [default or "full"]
+
+    def test_callback_settings_destination_scope_wins_over_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("LITELLM_OTEL_LANGFUSE_DESTINATION_SPAN_SCOPE", "full")
+        assert langfuse_destination_span_scope(" LLM_ONLY\n") == "llm_only"
+
+    @pytest.mark.parametrize(
+        ("bare", "prefixed", "configured", "expected"),
+        [
+            ("llm_only", None, None, "full"),
+            ("full", "llm_only", None, "llm_only"),
+            ("full", "full", "llm_only", "llm_only"),
+            ("llm_only", "llm_only", "full", "full"),
+        ],
+    )
+    def test_only_prefixed_environment_sets_destination_scope(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        bare: str,
+        prefixed: str | None,
+        configured: str | None,
+        expected: str,
+    ) -> None:
+        monkeypatch.setenv("langfuse_destination_span_scope", bare)
+        if prefixed is None:
+            monkeypatch.delenv("LITELLM_OTEL_LANGFUSE_DESTINATION_SPAN_SCOPE", raising=False)
+        else:
+            monkeypatch.setenv("LITELLM_OTEL_LANGFUSE_DESTINATION_SPAN_SCOPE", prefixed)
+
+        assert langfuse_destination_span_scope(configured) == expected
+
+    @pytest.mark.parametrize("spelling", ["LLM_ONLY", " llm_only\n", "full"])
+    def test_destination_scope_config_normalizes_like_operator_scope(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        spelling: str,
+    ) -> None:
+        monkeypatch.setenv("LITELLM_OTEL_LANGFUSE_DESTINATION_SPAN_SCOPE", spelling)
+        assert langfuse_destination_span_scope() == spelling.strip().lower()
+
+    @pytest.mark.parametrize("invalid", ["", "everything"])
+    @pytest.mark.parametrize("source", ["env", "callback_settings"])
+    def test_invalid_destination_scope_falls_back_and_warns_once(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, invalid: str, source: str
+    ) -> None:
+        monkeypatch.setenv("LITELLM_OTEL_LANGFUSE_DESTINATION_SPAN_SCOPE", invalid if source == "env" else "full")
+        with caplog.at_level("WARNING", logger="LiteLLM"):
+            assert langfuse_destination_span_scope(invalid if source == "callback_settings" else None) == "full"
+            assert langfuse_destination_span_scope(invalid if source == "callback_settings" else None) == "full"
+        warnings: Final = [record.message for record in caplog.records if "DESTINATION_SPAN_SCOPE" in record.message]
+        assert len(warnings) == 1
+        assert repr(invalid) in warnings[0]
+        assert "'full'" in warnings[0] and "'llm_only'" in warnings[0]
+
+    def test_destination_scope_environment_is_a_process_snapshot(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("LITELLM_OTEL_LANGFUSE_DESTINATION_SPAN_SCOPE", "llm_only")
+        assert langfuse_destination_span_scope() == "llm_only"
+        monkeypatch.setenv("LITELLM_OTEL_LANGFUSE_DESTINATION_SPAN_SCOPE", "full")
+        assert langfuse_destination_span_scope() == "llm_only"
+        assert langfuse_destination_span_scope("full") == "full"
+        assert langfuse_destination_span_scope("llm_only") == "llm_only"
+
     def test_only_langfuse_honours_the_scope_var(self):
         arize = destination_for(
             "arize", {"arize_api_key": "k", "arize_space_id": "s", "langfuse_span_scope": "llm_only"}
@@ -3665,6 +3806,7 @@ class TestLangfuseDestinationFields:
         }
         assert not LANGFUSE_REQUEST_METADATA_ATTRIBUTES & received[None].keys()
 
+    @pytest.mark.parametrize("operator_keys", [False, True], ids=["no-operator-keys", "operator-keys"])
     @pytest.mark.parametrize(
         ("key_environment", "tracing_environment", "expected"),
         [
@@ -3675,14 +3817,18 @@ class TestLangfuseDestinationFields:
         ],
         ids=["key", "key-over-env", "env", "neither"],
     )
-    def test_a_langfuse_destination_names_the_environment_the_legacy_logger_wrote(
+    def test_a_langfuse_destination_names_its_own_environment_else_the_proxys(
         self,
         monkeypatch: pytest.MonkeyPatch,
         key_environment: str | None,
         tracing_environment: str | None,
         expected: Mapping[str, str],
+        operator_keys: bool,
     ) -> None:
         credential_less_proxy(monkeypatch)
+        if operator_keys:
+            monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk-operator")
+            monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk-operator")
         if tracing_environment is None:
             monkeypatch.delenv("LANGFUSE_TRACING_ENVIRONMENT", raising=False)
         else:
@@ -3698,22 +3844,54 @@ class TestLangfuseDestinationFields:
         assert destination is not None
         assert dict(destination.resource_attributes) == expected
 
-    def test_a_langfuse_destination_on_a_proxy_with_langfuse_keys_names_no_environment(
-        self, monkeypatch: pytest.MonkeyPatch
+    @pytest.mark.parametrize("tracing_environment", ["staging", None], ids=["env", "unset"])
+    def test_only_the_proxys_langfuse_exporter_names_the_proxys_environment(
+        self, monkeypatch: pytest.MonkeyPatch, tracing_environment: str | None
     ) -> None:
-        """With operator keys the older Langfuse logger never runs, so there is no environment of its to keep."""
         monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk-operator")
         monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk-operator")
+        if tracing_environment is None:
+            monkeypatch.delenv("LANGFUSE_TRACING_ENVIRONMENT", raising=False)
+        else:
+            monkeypatch.setenv("LANGFUSE_TRACING_ENVIRONMENT", tracing_environment)
+        capture: Final = _ExporterCapture()
+        for kind in ("otlp_grpc", "otlp_http", "console"):
+            monkeypatch.setitem(otel_providers._EXPORTER_FACTORIES, kind, capture.build)  # pyright: ignore[reportPrivateUsage]  # the factory table is the seam for capturing each exporter
+        collector: Final = ExporterSpec(kind="otlp_http", endpoint="http://collector:4318", headers="x-collector=1")
+        config: Final = langfuse_preset(config_overrides=OpenTelemetryV2Config(exporters=[collector]))
+        provider: Final = build_tracer_provider(config)
 
-        destination: Final = destination_for(
-            "langfuse_otel",
-            StandardCallbackDynamicParams(
-                langfuse_public_key="pk", langfuse_secret_key="sk", langfuse_environment="prod"
-            ),
-        )
+        SpanEmitter(get_tracer(provider, "litellm"), config).emit(SpanRole.LLM_CALL, _MODEL_CALL_WITHOUT_CONTENT)
+        provider.force_flush()
 
-        assert destination is not None
-        assert dict(destination.resource_attributes) == {}
+        environments: Final = {
+            headers == collector.headers: exporter.get_finished_spans()[0].resource.attributes.get(
+                "langfuse.environment"
+            )
+            for headers, exporter in capture.built
+        }
+        assert environments == {True: None, False: tracing_environment}
+        assert "langfuse.environment" not in otel_providers.build_resource(config).attributes
+
+    def test_an_environment_the_proxys_resource_already_names_wins_on_the_langfuse_exporter(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk-operator")
+        monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk-operator")
+        monkeypatch.setenv("LANGFUSE_TRACING_ENVIRONMENT", "staging")
+        monkeypatch.setenv("OTEL_RESOURCE_ATTRIBUTES", "langfuse.environment=from-resource")
+        capture: Final = _ExporterCapture()
+        monkeypatch.setitem(otel_providers._EXPORTER_FACTORIES, "otlp_http", capture.build)  # pyright: ignore[reportPrivateUsage]  # the factory table is the seam for capturing each exporter
+        config: Final = langfuse_preset()
+        provider: Final = build_tracer_provider(config)
+
+        SpanEmitter(get_tracer(provider, "litellm"), config).emit(SpanRole.LLM_CALL, _MODEL_CALL_WITHOUT_CONTENT)
+        provider.force_flush()
+
+        assert [
+            exporter.get_finished_spans()[0].resource.attributes.get("langfuse.environment")
+            for _headers, exporter in capture.built
+        ] == ["from-resource"]
 
     @pytest.mark.parametrize("operator_keys", [False, True], ids=["no-operator-keys", "operator-keys"])
     @pytest.mark.parametrize("configured", [None, "no_content", "span_only"])
@@ -3813,6 +3991,26 @@ class TestLangfuseDestinationFields:
         assert self._attributes((LANGFUSE_DEST,), len(generic), _MODEL_CALL_WITH_CONTENT) == generic, (
             "the generic attributes all survive"
         )
+
+    def test_a_span_at_its_attribute_limit_sheds_the_release_and_version_before_its_other_fields(self) -> None:
+        call: Final = replace(
+            _MODEL_CALL_WITH_CONTENT,
+            trace=TraceControls(release="rel-1", version="v-1"),
+            request_metadata=MappingProxyType({"user_api_key_alias": "prod-key"}),
+        )
+        config: Final = OpenTelemetryV2Config(mapper_names=["genai", "langfuse"])
+
+        def attributes(limit: int | None) -> dict[str, object]:
+            exporter: Final = InMemorySpanExporter()
+            provider: Final = TracerProvider(span_limits=SpanLimits(max_span_attributes=limit))
+            provider.add_span_processor(SimpleSpanProcessor(exporter))
+            SpanEmitter(get_tracer(provider, "litellm"), config).emit(SpanRole.LLM_CALL, call)
+            return dict(exporter.get_finished_spans()[0].attributes or {})
+
+        whole: Final = attributes(None)
+
+        assert LANGFUSE_REQUEST_METADATA_ATTRIBUTES & whole.keys() > {"langfuse.release", "langfuse.version"}
+        assert whole.keys() - attributes(len(whole) - 2).keys() == {"langfuse.release", "langfuse.version"}
 
     def test_a_span_at_its_attribute_limit_sheds_the_destinations_request_metadata_before_its_other_fields(
         self,
@@ -5097,7 +5295,8 @@ class TestTenantHostSsrfGuard:
 
         assert destination_for("langfuse_otel", self._langfuse("https://collector.example.com@10.0.0.5")) is None
 
-    def test_a_malformed_host_does_not_take_the_other_backends_with_it(self, monkeypatch):
+    @pytest.mark.parametrize("malformed_host", ["https://lf.corp:99999", "http://[::1"])
+    def test_a_malformed_host_does_not_take_the_other_backends_with_it(self, monkeypatch, malformed_host: str):
         """``urlparse(...).port`` raises a bare ValueError, which would escape
         ``destination_for`` and kill the whole resolution."""
         monkeypatch.setenv("LITELLM_OTEL_V2", "true")
@@ -5108,7 +5307,7 @@ class TestTenantHostSsrfGuard:
             token="hashed",
             team_metadata={
                 "logging": [
-                    {"callback_name": "langfuse_otel", "callback_vars": self._langfuse("https://lf.corp:99999")},
+                    {"callback_name": "langfuse_otel", "callback_vars": self._langfuse(malformed_host)},
                     {"callback_name": "newrelic", "callback_vars": {"newrelic_api_key": "nr"}},
                 ]
             },

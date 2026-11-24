@@ -12,6 +12,7 @@ export const emptyAccessGroupFormValues: AccessGroupCreateFormValues = {
   mcpToolPermissions: {},
   agentIds: [],
   skillNames: [],
+  vectorStoreIds: [],
 };
 
 export const buildAccessGroupCreateBody = (values: AccessGroupCreateFormValues): AccessGroupCreateBody => ({
@@ -23,4 +24,5 @@ export const buildAccessGroupCreateBody = (values: AccessGroupCreateFormValues):
     Object.keys(values.mcpToolPermissions).length > 0 && { mcp_tool_permissions: values.mcpToolPermissions }),
   ...(values.agentIds.length > 0 && { access_agent_ids: values.agentIds }),
   ...(values.skillNames.length > 0 && { access_skill_names: values.skillNames }),
+  ...(values.vectorStoreIds.length > 0 && { access_vector_store_ids: values.vectorStoreIds }),
 });

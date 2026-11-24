@@ -4,7 +4,7 @@ import json
 import os
 import time
 import weakref
-from collections.abc import Awaitable, Callable, Iterator, Mapping
+from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from datetime import datetime, timezone
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
@@ -17,16 +17,18 @@ from pydantic import BaseModel
 
 import litellm
 from litellm import Router
-from litellm.caching.caching import DualCache, InMemoryCache
 from litellm.constants import DEFAULT_AUTO_ROUTER_MAX_INPUT_CHARS, ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
 from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+from litellm.redis.stores.connection import RedisStores
+from litellm.redis.stores.router_usage import CounterIncrement, RouterUsageStore, UsageCounter
 from litellm.responses.streaming_iterator import ResponsesWsTurnAdmission, ResponsesWsTurnUsageRecorder
 from litellm.router import router_arguments
-from litellm.router_config import RouterConfig, build_router_config
+from litellm.router_config import build_router_config
 from litellm.router_python_host import PythonHost
 from litellm.router_strategy.adaptive_router.hooks import AdaptiveRouterPostCallHook
 from litellm.types.litellm_params import RoutingStrategyName
@@ -40,11 +42,9 @@ from litellm.types.utils import (
     StandardLoggingPayload,
 )
 
-
 if TYPE_CHECKING:
-    from opentelemetry.trace import Span
 
-    from tests.unit.conftest import RouterRedis
+    pass
 
 
 def create_standard_logging_payload() -> StandardLoggingPayload:
@@ -432,12 +432,12 @@ async def test_usage_based_routing_refuses_the_next_websocket_turn_before_the_fi
 ):
     router: Final = _usage_based_routing_router(monkeypatch, "ws-tpm-v2-early", tpm=30)
     routed, admit_turn, record_turn = await _websocket_turn_hooks(monkeypatch, router, "ws-tpm-v2-early")
-    await admit_turn()
+    await admit_turn({})
 
     await record_turn(_open_websocket_turn(routed, "ws-tpm-v2-early-turn").litellm_params, 35)
 
     with pytest.raises(litellm.RateLimitError, match="ws-tpm-v2-early"):
-        await admit_turn()
+        await admit_turn({})
 
 
 @pytest.mark.asyncio
@@ -448,7 +448,7 @@ async def test_websocket_turn_counted_before_its_logging_is_not_counted_again_wh
     router: Final = _usage_based_routing_router(monkeypatch, "ws-tpm-v2-once", tpm=69)
     routed, admit_turn, record_turn = await _websocket_turn_hooks(monkeypatch, router, "ws-tpm-v2-once")
     opened: Final = await _usage_now(router, "ws-tpm-v2-once")
-    await admit_turn()
+    await admit_turn({})
     first_turn: Final = _open_websocket_turn(routed, "ws-tpm-v2-once-first")
 
     await record_turn(first_turn.litellm_params, 35)
@@ -456,10 +456,10 @@ async def test_websocket_turn_counted_before_its_logging_is_not_counted_again_wh
     await _complete_35_token_turn(first_turn)
 
     assert await _usage_after(router, "ws-tpm-v2-once", opened) == (35, 1)
-    await admit_turn()
+    await admit_turn({})
     await record_turn(_open_websocket_turn(routed, "ws-tpm-v2-once-second").litellm_params, 35)
     with pytest.raises(litellm.RateLimitError, match="ws-tpm-v2-once"):
-        await admit_turn()
+        await admit_turn({})
 
 
 @pytest.mark.asyncio
@@ -475,25 +475,24 @@ async def test_usage_based_routing_counts_an_http_call_once(monkeypatch: pytest.
     await asyncio.sleep(0)
     await GLOBAL_LOGGING_WORKER.flush()
 
-    tpm_keys, _ = router.lowesttpm_logger_v2.usage_counter_keys(router.get_model_list(model_name="http-tpm-v2"))
-    assert await router.cache.async_get_cache(key=tpm_keys[0]) == response.usage.total_tokens
+    selector: Final = router.lowesttpm_logger_v2
+    tpm_counters, _ = selector.usage_counters(router.get_model_list(model_name="http-tpm-v2"))
+    assert selector.usage.get_local(tpm_counters[0]) == response.usage.total_tokens
 
 
-class _FirstTpmCountFails(DualCache):
+class _FirstTpmCountFails(RouterUsageStore):
     failed: bool = False
 
-    async def async_increment_cache_post_call(
-        self, key: str, value: float, ttl: int | None, parent_otel_span: "Span | None" = None
-    ) -> None:
-        if self.failed or ":tpm:" not in key:
-            return await super().async_increment_cache_post_call(key, value, ttl, parent_otel_span)
+    async def increment_post_call(self, increments: Sequence[CounterIncrement]) -> None:
+        if self.failed or all(increment.counter.kind != "tpm" for increment in increments):
+            return await super().increment_post_call(increments)
         self.failed = True
         raise RuntimeError("routing cache unavailable")
 
 
 class _HostWhoseFirstTpmCountFails(PythonHost):
-    def routing_cache(self, config: RouterConfig) -> DualCache:
-        return _FirstTpmCountFails(in_memory_cache=InMemoryCache())
+    def router_usage(self, redis: RedisStores) -> RouterUsageStore:
+        return _FirstTpmCountFails(redis.router_usage())
 
 
 @pytest.mark.asyncio
@@ -514,15 +513,15 @@ async def test_usage_based_routing_counts_a_websocket_turn_whose_early_count_fai
         ),
     )
     routed, admit_turn, record_turn = await _websocket_turn_hooks(monkeypatch, router, "ws-tpm-v2-count-fails")
-    await admit_turn()
+    await admit_turn({})
     turn: Final = _open_websocket_turn(routed, "ws-tpm-v2-count-fails-turn")
 
     await record_turn(turn.litellm_params, 35)
-    await admit_turn()
+    await admit_turn({})
     await _complete_35_token_turn(turn)
 
     with pytest.raises(litellm.RateLimitError, match="ws-tpm-v2-count-fails"):
-        await admit_turn()
+        await admit_turn({})
 
 
 @pytest.mark.asyncio
@@ -587,7 +586,7 @@ async def test_websocket_turn_not_attributed_to_a_deployment_does_not_throttle_t
     router: Final = _usage_based_routing_router(monkeypatch, "ws-tpm-v2-unrouted", tpm=30)
     routed, admit_turn, record_turn = await _websocket_turn_hooks(monkeypatch, router, "ws-tpm-v2-unrouted")
     opened: Final = await _usage_now(router, "ws-tpm-v2-unrouted")
-    await admit_turn()
+    await admit_turn({})
     turn: Final = _open_websocket_turn(
         {**routed, "litellm_metadata": {"model_group": "ws-tpm-v2-unrouted", **deployment_metadata}},
         "ws-tpm-v2-unrouted-turn",
@@ -595,7 +594,7 @@ async def test_websocket_turn_not_attributed_to_a_deployment_does_not_throttle_t
 
     await record_turn(turn.litellm_params, 35)
 
-    await admit_turn()
+    await admit_turn({})
     assert (await _usage_after(router, "ws-tpm-v2-unrouted", opened))[0] == 0
 
 
@@ -617,8 +616,9 @@ def _io_limited_router(kind: str, **litellm_params: object) -> Router:
     )
 
 
-def _minutes_counter_key(kind: str, minute: datetime, model: str = "openai/ws-io-unpriced") -> str:
-    return f"global_router:ws-io-dep:{model}:{kind}:{minute.strftime('%H-%M')}"
+def _minutes_count(router: Router, kind: str, minute: datetime, model: str = "openai/ws-io-unpriced") -> object:
+    usage: Final = router._core._usage  # pyright: ignore[reportPrivateUsage, reportAttributeAccessIssue]  # the store the router counts io tokens in
+    return usage.get_local(UsageCounter("global_router", "ws-io-dep", model, minute.strftime("%H-%M"), kind))
 
 
 _PROVIDER_RESPONSE: Final = {
@@ -674,7 +674,7 @@ async def test_responses_call_sends_the_provider_only_the_client_metadata_and_se
 
     assert [json.loads(call.request.read()).get("metadata") for call in provider.calls] == [client_metadata]
     assert [
-        await router.cache.async_get_cache(key=_minutes_counter_key(kind, router_minute_pinned))
+        _minutes_count(router, kind, router_minute_pinned)
         for kind in ("itpm", "otpm")
     ] == [10, 5]
 
@@ -781,7 +781,7 @@ async def test_retried_call_settles_deployment_io_tokens_to_the_successful_attem
 
     assert provider.call_count == 2
     assert [
-        await router.cache.async_get_cache(key=_minutes_counter_key(kind, router_minute_pinned, model))
+        _minutes_count(router, kind, router_minute_pinned, model)
         for kind in ("itpm", "otpm")
     ] == [10, 5]
 
@@ -1199,7 +1199,6 @@ async def test_get_model_group_io_token_usage_sums_across_deployments():
     in the model group (not just the first), reading the same per-deployment
     cache keys the pre-call reservation writes to.
     """
-    from litellm.types.router import RouterCacheEnum
     from litellm.utils import get_utc_datetime
 
     router = Router(
@@ -1226,26 +1225,14 @@ async def test_get_model_group_io_token_usage_sums_across_deployments():
     )
 
     minute = get_utc_datetime().strftime("%H-%M")
-    keys_and_values = [
-        (
-            RouterCacheEnum.ITPM.value.format(id="io-usage-dep-1", model="openai/gpt-4o-mini", current_minute=minute),
-            30,
-        ),
-        (
-            RouterCacheEnum.OTPM.value.format(id="io-usage-dep-1", model="openai/gpt-4o-mini", current_minute=minute),
-            10,
-        ),
-        (
-            RouterCacheEnum.ITPM.value.format(id="io-usage-dep-2", model="openai/gpt-4o", current_minute=minute),
-            70,
-        ),
-        (
-            RouterCacheEnum.OTPM.value.format(id="io-usage-dep-2", model="openai/gpt-4o", current_minute=minute),
-            20,
-        ),
-    ]
-    for key, value in keys_and_values:
-        await router.cache.async_increment_cache(key=key, value=value, ttl=60)
+    usage = router._core._usage  # pyright: ignore[reportPrivateUsage, reportAttributeAccessIssue]  # the store the router counts io tokens in
+    for deployment_id, model, kind, value in (
+        ("io-usage-dep-1", "openai/gpt-4o-mini", "itpm", 30),
+        ("io-usage-dep-1", "openai/gpt-4o-mini", "otpm", 10),
+        ("io-usage-dep-2", "openai/gpt-4o", "itpm", 70),
+        ("io-usage-dep-2", "openai/gpt-4o", "otpm", 20),
+    ):
+        usage.set_local(UsageCounter("global_router", deployment_id, model, minute, kind), value)
 
     current_itpm, current_otpm = await router.get_model_group_io_token_usage("opus")
 
@@ -2121,6 +2108,61 @@ def test_handle_clientside_credential_with_deployment_model_name(model_list):
         pytest.fail(f"Failed with deployment model_name: {e}")
 
     print("✓ _handle_clientside_credential test passed!")
+
+
+class _UrlRecordingClient(AsyncHTTPHandler):
+    urls: tuple[str, ...] = ()
+
+    async def post(self, url: str, *args: object, **kwargs: object) -> httpx.Response:
+        self.urls = (*self.urls, url)
+        return httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-1",
+                "object": "chat.completion",
+                "created": 0,
+                "model": "us.openai.gpt-6.1-sol",
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            },
+            request=httpx.Request("POST", url),
+        )
+
+
+@pytest.mark.parametrize(
+    "caller_params",
+    [
+        {"api_base": "https://caller.example.com/openai/v1/chat/completions"},
+        {"api_base": "https://caller.example.com"},
+        {"api_base": None},
+        {},
+    ],
+)
+@pytest.mark.asyncio
+async def test_caller_api_base_does_not_move_a_deployment_pinned_to_a_bedrock_runtime_endpoint(
+    caller_params: dict[str, str | None],
+) -> None:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "gpt",
+                "litellm_params": {
+                    "model": "bedrock/us.openai.gpt-6.1-sol",
+                    "aws_region_name": "us-east-1",
+                    "aws_access_key_id": "test-key-id",
+                    "aws_secret_access_key": "test-secret",
+                    "aws_bedrock_runtime_endpoint": "https://runtime.example.com",
+                },
+            }
+        ]
+    )
+    client: Final = _UrlRecordingClient()
+
+    await router.acompletion(
+        model="gpt", messages=[{"role": "user", "content": "hi"}], client=client, num_retries=0, **caller_params
+    )
+
+    assert client.urls == ("https://runtime.example.com/openai/v1/chat/completions",)
 
 
 def test_resolve_model_name_from_model_id():

@@ -19,11 +19,13 @@ from typing import TYPE_CHECKING, BinaryIO, Final, NoReturn, TypeAlias
 from urllib.parse import urlsplit
 
 from fastapi import HTTPException
+from pydantic import TypeAdapter
 from typing_extensions import assert_never
 
 from litellm.exceptions import GuardrailRaisedException
 from litellm.integrations.custom_guardrail import is_guardrail_intervention
 from litellm.litellm_core_utils.api_route_to_call_types import get_call_types_for_route
+from litellm.litellm_core_utils.core_helpers import SupportsGet, as_str_mapping, require_get, unpackable_mapping
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.llms.openai import BatchGuardrailRecord, BatchGuardrailReport
 from litellm.types.utils import CallTypes, CallTypesLiteral
@@ -33,11 +35,12 @@ if TYPE_CHECKING:
 
 EMPTY_MAPPING: Final[Mapping[str, object]] = MappingProxyType({})
 
+_DECODED_JSON: Final = TypeAdapter(object)
 _SCAN_WINDOW: Final = 32
 
 # Past this the rewrite rolls to disk, keeping the router's per-deployment deepcopy of the handle
 # as cheap as it is for the spooled upload this replaces.
-_REWRITE_SPOOL_BYTES: Final = 1024 * 1024
+REWRITE_SPOOL_BYTES: Final = 1024 * 1024
 
 # custom_id is caller-supplied and reaches a log line, so it is stripped of control characters
 # and capped rather than rendered as given.
@@ -183,7 +186,7 @@ class BatchScanResult:
 @dataclass(frozen=True, slots=True)
 class _ParsedRecord:
     line_number: int
-    payload: Mapping[str, object]
+    payload: object
 
 
 def _rejected(message: str) -> HTTPException:
@@ -248,7 +251,7 @@ def _naming_guardrail(exc: BaseException) -> str | None:
     named: Final = getattr(exc, "guardrail_name", None)
     if isinstance(named, str):
         return named
-    detail: Final = getattr(exc, "detail", None)
+    detail: Final = as_str_mapping(getattr(exc, "detail", None))
     enriched: Final = detail.get("guardrail_name") if isinstance(detail, dict) else None
     return enriched if isinstance(enriched, str) else None
 
@@ -277,7 +280,7 @@ def _iter_lines(source: BinaryIO) -> Iterator[tuple[int, bytes]]:
 def _iter_records(source: BinaryIO) -> Iterator[_ParsedRecord]:
     """Yield one record per line, relying on the upload validation that already ran."""
     for line_number, raw_line in _iter_lines(source):
-        yield _ParsedRecord(line_number=line_number, payload=json.loads(raw_line))
+        yield _ParsedRecord(line_number=line_number, payload=_DECODED_JSON.validate_python(json.loads(raw_line)))
 
 
 def _call_type_from_url(url: str) -> CallTypesLiteral | None:
@@ -319,7 +322,7 @@ def _scannable_call_type(url: object, body: Mapping[str, object]) -> CallTypesLi
     return from_url if from_url is not None else _call_type_from_body(body)
 
 
-def _custom_id_of(payload: Mapping[str, object]) -> str | None:
+def _custom_id_of(payload: SupportsGet) -> str | None:
     """
     The record's identifier, rendered as text.
 
@@ -364,12 +367,13 @@ async def _scan_record(
     user_api_key_dict: UserAPIKeyAuth,
     proxy_logging_obj: ProxyLogging,
 ) -> _ScanOutcome | None:
-    body: Final = record.payload.get("body")
+    payload: Final = require_get(record.payload)
+    body: Final = as_str_mapping(payload.get("body"))
     if not isinstance(body, dict):
         return UnparseableRecord(line_number=record.line_number)
 
-    custom_id: Final = _custom_id_of(record.payload)
-    url: Final = record.payload.get("url")
+    custom_id: Final = _custom_id_of(payload)
+    url: Final = payload.get("url")
     call_type: Final = _scannable_call_type(url, body)
     if call_type is None:
         return UnscannableRecord(
@@ -393,12 +397,13 @@ async def _scan_record(
     try:
         # The chain hands back the body it produced, which may be a replacement for the dict it was
         # given rather than that same dict mutated, so this is what gets compared.
-        scanned: Final[dict] = await proxy_logging_obj.pre_call_hook(  # mutable-ok: the guardrails' own dict
+        scan: Final = proxy_logging_obj.pre_call_hook(
             user_api_key_dict=user_api_key_dict,
             data=scan_input,
             call_type=call_type,
             guardrails_only=True,
         )
+        scanned: Final[dict[str, object]] = await scan  # mutable-ok: the guardrails' own dict
     except Exception as exc:
         if _is_content_block(exc):
             return RecordDropped(line_number=record.line_number, custom_id=custom_id, guardrail=_naming_guardrail(exc))
@@ -421,7 +426,7 @@ async def _scan_record(
     return _Redaction(
         line_number=record.line_number,
         custom_id=custom_id,
-        text=json.dumps({**record.payload, "body": scanned}),
+        text=json.dumps({**unpackable_mapping(payload), "body": scanned}),
     )
 
 
@@ -480,7 +485,7 @@ async def scan_batch_input_file(
     window: Final[list[_ParsedRecord]] = []  # mutable-ok: bounded read-ahead buffer
     scanned: Final[list[int]] = []  # mutable-ok: counts records the scan actually reached
     redactions: Final = tempfile.SpooledTemporaryFile(  # noqa: SIM115  # the rewrite reads this back
-        max_size=_REWRITE_SPOOL_BYTES
+        max_size=REWRITE_SPOOL_BYTES
     )
 
     async def drain() -> None:
@@ -548,7 +553,7 @@ def rewrite_batch_input_file(file_source: BinaryIO, result: BatchScanResult) -> 
     dropped: Final = frozenset(change.line_number for change in result.changes if isinstance(change, RecordDropped))
 
     output: Final = tempfile.SpooledTemporaryFile(  # noqa: SIM115  # the caller uploads this handle
-        max_size=_REWRITE_SPOOL_BYTES
+        max_size=REWRITE_SPOOL_BYTES
     )
     wrote_any = False  # rebind-ok: tracks whether a separator is needed
     try:

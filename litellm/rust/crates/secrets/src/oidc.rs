@@ -4,7 +4,7 @@ use std::{
 };
 
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
-use litellm_core_utils::settings::Lookup;
+use litellm_env::Lookup;
 use litellm_http::Client;
 use moka::future::Cache;
 use serde::Deserialize;
@@ -64,6 +64,12 @@ impl<'a> TryFrom<&'a str> for OidcReference<'a> {
     }
 }
 
+impl OidcReference<'_> {
+    fn cache_key(self) -> (OidcProvider, String) {
+        (self.provider, self.audience.to_owned())
+    }
+}
+
 #[derive(Deserialize)]
 struct OidcTokenClaims {
     exp: Option<NumericDate>,
@@ -91,7 +97,7 @@ impl NumericDate {
 pub struct OidcResolver {
     client: Client,
     google_identity_endpoint: reqwest::Url,
-    cache: Cache<String, (SecretValue, SystemTime)>,
+    cache: Cache<(OidcProvider, String), (SecretValue, SystemTime)>,
     clock: fn() -> SystemTime,
     #[cfg(feature = "azure")]
     azure_token_provider: std::sync::Arc<dyn litellm_secrets_azure::AzureTokenProvider>,
@@ -147,7 +153,15 @@ impl OidcResolver {
         reference: &str,
         environment: &(dyn Lookup + Send + Sync),
     ) -> Result<Option<SecretValue>, Error> {
-        let OidcReference { provider, audience } = reference.try_into()?;
+        self.read(reference.try_into()?, environment).await
+    }
+
+    pub(crate) async fn read(
+        &self,
+        reference: OidcReference<'_>,
+        environment: &(dyn Lookup + Send + Sync),
+    ) -> Result<Option<SecretValue>, Error> {
+        let OidcReference { provider, audience } = reference;
         match provider {
             OidcProvider::CircleCi => required_env(environment, CIRCLE_OIDC_TOKEN)
                 .map(SecretValue::new)
@@ -207,7 +221,7 @@ impl OidcResolver {
                 if let Some(value) = &token.value {
                     self.cache
                         .insert(
-                            reference.to_owned(),
+                            reference.cache_key(),
                             (value.clone(), (self.clock)() + GITHUB_TOKEN_TTL),
                         )
                         .await;
@@ -242,7 +256,7 @@ impl OidcResolver {
                 let value = SecretValue::new(token);
                 if let Some(ttl) = ttl.filter(|ttl| !ttl.is_zero()) {
                     self.cache
-                        .insert(reference.to_owned(), (value.clone(), now + ttl))
+                        .insert(reference.cache_key(), (value.clone(), now + ttl))
                         .await;
                 }
                 Ok(Some(value))
@@ -250,9 +264,9 @@ impl OidcResolver {
         }
     }
 
-    async fn cached(&self, reference: &str) -> Option<SecretValue> {
+    async fn cached(&self, reference: OidcReference<'_>) -> Option<SecretValue> {
         self.cache
-            .get(reference)
+            .get(&reference.cache_key())
             .await
             .and_then(|(value, expires)| ((self.clock)() < expires).then_some(value))
     }

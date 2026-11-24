@@ -75,6 +75,15 @@ if TYPE_CHECKING:
 
     class PrismaBatchSession(Protocol):
         @property
+        def litellm_customermembertable(self) -> PrismaBatchActions: ...
+
+        @property
+        def litellm_customerteamtable(self) -> PrismaBatchActions: ...
+
+        @property
+        def litellm_customerorganizationtable(self) -> PrismaBatchActions: ...
+
+        @property
         def litellm_agentstable(self) -> PrismaBatchActions: ...
 
         @property
@@ -266,7 +275,7 @@ class _PrismaDrainTracker:
         await self._drained.wait()
 
 
-_EngineResponseT: Final = TypeVar("_EngineResponseT")
+_EngineResponseT = TypeVar("_EngineResponseT")
 
 
 class _TrackedPrismaEngine:
@@ -447,7 +456,7 @@ class PrismaWrapper:
         self._log_prefix = f"{log_prefix} " if log_prefix else ""
 
         # Background token refresh task management
-        self._token_refresh_task: asyncio.Task | None = None
+        self._token_refresh_task: asyncio.Task[None] | None = None
         self._reconnection_lock = asyncio.Lock()
         self._last_refresh_time: datetime | None = None
         self._active_drain_tracker = self._instrument_prisma_client(original_prisma)
@@ -1281,6 +1290,7 @@ class PrismaManager:
                     from litellm_proxy_extras.utils import ProxyExtrasDBManager
 
                     ProxyExtrasDBManager.raise_if_lens_rename_pending()
+                    ProxyExtrasDBManager.raise_if_customer_member_budget_rename_pending()  # pyright: ignore[reportUnknownMemberType]  # litellm-proxy-extras is an optional install
                     PrismaManager._raise_if_partitioned_spend_logs()
                     run_prisma(
                         [

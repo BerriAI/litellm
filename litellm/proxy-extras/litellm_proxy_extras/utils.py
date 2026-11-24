@@ -42,7 +42,7 @@ if TYPE_CHECKING:
 
 class LensCheckConnect(Protocol):
     def __call__(
-        self, conninfo: str, *, connect_timeout: int, autocommit: bool
+        self, conninfo: str, *, connect_timeout: int, autocommit: bool, client_encoding: str
     ) -> "psycopg.Connection[tuple[object, ...]]": ...
 
 
@@ -93,6 +93,7 @@ class _InvalidIndex:
 MAX_MIGRATE_DEPLOY_ATTEMPTS = 4
 LIBPQ_URL_PARAMS: Final = frozenset(
     {
+        "host",
         "sslmode",
         "sslcert",
         "sslkey",
@@ -391,7 +392,7 @@ class ProxyExtrasDBManager:
             sql.Identifier("_prisma_migrations"),
         )
         try:
-            with psycopg.connect(cleaned_url, connect_timeout=10, autocommit=True) as conn:
+            with psycopg.connect(cleaned_url, connect_timeout=10, autocommit=True, client_encoding="utf8") as conn:
                 row: Final = conn.execute(psycopg.sql.SQL(query).format(ledger_table), params).fetchone()
         except (psycopg.OperationalError, psycopg.DatabaseError):
             return None
@@ -643,35 +644,64 @@ class ProxyExtrasDBManager:
                     logger.warning(f"Failed to resolve migration {migration_name}: {e.stderr}")
 
     @staticmethod
-    def raise_if_lens_rename_pending(connect: LensCheckConnect | None = None) -> None:
+    def _legacy_schema_object_exists(query: str, subject: str, connect: LensCheckConnect | None) -> bool:
         database_url: Final = os.environ.get("DATABASE_URL")
         if not database_url:
-            return
+            return False
         try:
             import psycopg
         except ImportError as exc:
-            raise RuntimeError("Install psycopg to verify Lens data safety before prisma db push.") from exc
+            raise RuntimeError(f"Install psycopg to verify {subject} data safety before prisma db push.") from exc
         open_connection: Final = connect if connect is not None else psycopg.connect
         try:
             with open_connection(
-                ProxyExtrasDBManager._strip_prisma_query_params(database_url), connect_timeout=10, autocommit=True
+                ProxyExtrasDBManager._strip_prisma_query_params(database_url),
+                connect_timeout=10,
+                autocommit=True,
+                client_encoding="utf8",
             ) as connection:
-                legacy: Final = connection.execute(
-                    "SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace "
-                    "WHERE n.nspname=%s AND c.relname IN ('LiteLLM_Engine', 'LiteLLM_EngineRun', 'LiteLLM_EngineWorker') "
-                    "LIMIT 1",
-                    (ProxyExtrasDBManager._prisma_schema_param(database_url) or "public",),
-                ).fetchone()
+                return (
+                    connection.execute(
+                        query, (ProxyExtrasDBManager._prisma_schema_param(database_url) or "public",)
+                    ).fetchone()
+                    is not None
+                )
         except psycopg.Error as exc:
             raise RuntimeError(
-                "Cannot verify Lens data safety; refusing prisma db push. "
+                f"Cannot verify {subject} data safety; refusing prisma db push. "
                 f"The database check failed: {_redact_credentials(str(exc)).strip()}"
             ) from exc
-        if legacy is not None:
+
+    @staticmethod
+    def raise_if_lens_rename_pending(connect: LensCheckConnect | None = None) -> None:
+        if ProxyExtrasDBManager._legacy_schema_object_exists(
+            "SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace "
+            "WHERE n.nspname=%s AND c.relname IN ('LiteLLM_Engine', 'LiteLLM_EngineRun', 'LiteLLM_EngineWorker') "
+            "LIMIT 1",
+            "Lens",
+            connect,
+        ):
             raise RuntimeError(
                 "Legacy Lens tables exist. prisma db push would drop saved Lens data. "
                 "Apply the shipped 20261001100000_rename_lens migration to this database schema before retrying. "
                 "Deployments using migration history can upgrade without --use_prisma_db_push instead."
+            )
+
+    @staticmethod
+    def raise_if_customer_member_budget_rename_pending(connect: LensCheckConnect | None = None) -> None:
+        if ProxyExtrasDBManager._legacy_schema_object_exists(
+            "SELECT 1 FROM pg_attribute a JOIN pg_class c ON c.oid=a.attrelid "
+            "JOIN pg_namespace n ON n.oid=c.relnamespace "
+            "WHERE n.nspname=%s AND c.relname='LiteLLM_CustomerMemberTable' "
+            "AND a.attname='budget_template_id' AND NOT a.attisdropped LIMIT 1",
+            "customer member budget",
+            connect,
+        ):
+            raise RuntimeError(
+                "LiteLLM_CustomerMemberTable still has the budget_template_id column. Syncing the schema would drop it "
+                "and treat every customer member budget override as the member's budget. Apply the shipped "
+                "20261112120000_rename_customer_member_budget_columns migration to this database schema "
+                "before retrying. Deployments with migration history upgrade without this step."
             )
 
     @staticmethod
@@ -700,7 +730,7 @@ class ProxyExtrasDBManager:
 
         cleaned_url = ProxyExtrasDBManager._strip_prisma_query_params(database_url)
         try:
-            with psycopg.connect(cleaned_url, connect_timeout=10, autocommit=True) as conn:
+            with psycopg.connect(cleaned_url, connect_timeout=10, autocommit=True, client_encoding="utf8") as conn:
                 row = conn.execute(
                     "SELECT 1 "
                     "FROM pg_partitioned_table pt "
@@ -803,7 +833,7 @@ class ProxyExtrasDBManager:
             # it, psycopg3's `with conn` calls COMMIT on clean exit — which
             # fails after `UndefinedTable` (fresh DB) leaves the transaction
             # in an aborted state.
-            with psycopg.connect(cleaned_url, connect_timeout=10, autocommit=True) as conn:
+            with psycopg.connect(cleaned_url, connect_timeout=10, autocommit=True, client_encoding="utf8") as conn:
                 try:
                     rows = conn.execute(
                         "SELECT migration_name FROM _prisma_migrations "
@@ -908,7 +938,7 @@ class ProxyExtrasDBManager:
         schema: Final = ProxyExtrasDBManager._prisma_schema_param(prisma_url) or "public"
         cleaned_url: Final = ProxyExtrasDBManager._strip_prisma_query_params(os.getenv("DIRECT_URL") or prisma_url)
         try:
-            with psycopg.connect(cleaned_url, connect_timeout=10, autocommit=True) as conn:
+            with psycopg.connect(cleaned_url, connect_timeout=10, autocommit=True, client_encoding="utf8") as conn:
                 conn.execute("SET statement_timeout = 0")
                 conn.execute(sql.SQL("SET lock_timeout = {}").format(sql.Literal(lock_timeout)))
                 found: Final = ProxyExtrasDBManager._invalid_litellm_indexes(conn, schema)
@@ -974,7 +1004,7 @@ class ProxyExtrasDBManager:
         from litellm_proxy_extras.migration_recovery import (
             baseline_current_schema,
             recover_completed_migration,
-            roll_back_failed_inert_migration,
+            roll_back_replayable_failed_migration,
         )
 
         database_url: Final = os.environ.get("DATABASE_URL")
@@ -990,9 +1020,9 @@ class ProxyExtrasDBManager:
             if not migration.is_file():
                 return False
             with migration_lock(lock_url) as coordinator:
-                return recover_completed_migration(coordinator, schema, migration) or roll_back_failed_inert_migration(
+                return recover_completed_migration(
                     coordinator, schema, migration
-                )
+                ) or roll_back_replayable_failed_migration(coordinator, schema, migration)
 
         def baseline_existing(migrations_dir: str) -> None:
             with migration_lock(lock_url) as coordinator:
@@ -1037,6 +1067,7 @@ class ProxyExtrasDBManager:
 
         if not use_migrate:
             ProxyExtrasDBManager.raise_if_lens_rename_pending()
+            ProxyExtrasDBManager.raise_if_customer_member_budget_rename_pending()
             if ProxyExtrasDBManager.spend_logs_is_partitioned():
                 raise RuntimeError(PARTITIONED_SPEND_LOGS_PUSH_ERROR)
             original_dir = os.getcwd()
@@ -1301,6 +1332,7 @@ class ProxyExtrasDBManager:
                 ProxyExtrasDBManager._strip_prisma_query_params(database_url),
                 connect_timeout=10,
                 autocommit=True,
+                client_encoding="utf8",
                 options="-c statement_timeout=5000",
             ) as conn:
                 rows: Final = conn.execute(
@@ -1479,7 +1511,7 @@ class ProxyExtrasDBManager:
         schema: Final = ProxyExtrasDBManager._prisma_schema_param(database_url) or "public"
         prisma_dir: Final = Path(ProxyExtrasDBManager._get_prisma_dir())
         try:
-            with psycopg.connect(direct_url, connect_timeout=10, autocommit=True) as connection:
+            with psycopg.connect(direct_url, connect_timeout=10, autocommit=True, client_encoding="utf8") as connection:
                 result: Final = dry_run(
                     connection,
                     schema,
@@ -1623,6 +1655,7 @@ class ProxyExtrasDBManager:
                             logger.info(
                                 "Database schema is not empty, creating baseline migration. In read-only file system, please set an environment variable `LITELLM_MIGRATION_DIR` to a writable directory to enable migrations. Learn more - https://docs.litellm.ai/docs/proxy/prod#read-only-file-system"
                             )
+                            ProxyExtrasDBManager.raise_if_customer_member_budget_rename_pending()
                             ProxyExtrasDBManager._create_baseline_migration(schema_path)
                             logger.info("Baseline migration created, resolving all migrations")
                             ProxyExtrasDBManager._resolve_all_migrations(migrations_dir, schema_path)
@@ -1715,6 +1748,7 @@ class ProxyExtrasDBManager:
                         raise RuntimeError(PARTITIONED_SPEND_LOGS_PUSH_ERROR)
                     # Use prisma db push with increased timeout
                     ProxyExtrasDBManager.raise_if_lens_rename_pending()
+                    ProxyExtrasDBManager.raise_if_customer_member_budget_rename_pending()
                     prisma_toolchain.run_prisma(
                         [_get_prisma_command(), "db", "push", "--accept-data-loss"],
                         timeout=prisma_command_timeout(),

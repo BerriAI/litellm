@@ -12,15 +12,15 @@ from litellm.litellm_core_utils.litellm_logging import (
 )
 from litellm.llms.base_llm.chat.transformation import BaseConfig
 from litellm.proxy._types import PassThroughEndpointLoggingTypedDict
-from litellm.proxy.auth.auth_utils import get_end_user_id_from_request_body
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     PassthroughStandardLoggingPayload,
 )
 from litellm.types.utils import LlmProviders, ModelResponse, TextCompletionResponse
 
 if TYPE_CHECKING:
+    from litellm.types.passthrough_endpoints.pass_through_endpoints import EndpointType
+
     from ..success_handler import PassThroughEndpointLogging
-    from ..types import EndpointType
 else:
     PassThroughEndpointLogging = Any
     EndpointType = Any
@@ -49,7 +49,7 @@ class BasePassthroughLoggingHandler(ABC):
         end_time: datetime,
         cache_hit: bool,
         request_body: dict,
-        **kwargs,
+        **kwargs: object,
     ) -> PassThroughEndpointLoggingTypedDict:
         """
         Transforms LLM response to OpenAI response, generates a standard logging object so downstream logging can be handled
@@ -90,6 +90,8 @@ class BasePassthroughLoggingHandler(ABC):
     ) -> str | None:
         request_body: Final = passthrough_logging_payload.get("request_body")
         if request_body:
+            from litellm.proxy.auth.auth_utils import get_end_user_id_from_request_body
+
             return get_end_user_id_from_request_body(request_body)
         return None
 

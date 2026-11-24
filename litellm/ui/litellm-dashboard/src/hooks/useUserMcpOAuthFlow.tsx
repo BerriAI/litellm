@@ -14,6 +14,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { v4 as uuidv4 } from "uuid";
 import {
   buildMcpOAuthAuthorizeUrl,
   exchangeMcpOAuthToken,
@@ -69,6 +70,15 @@ const getStorage = (key: string): string | null => {
   return getSecureItem(key);
 };
 
+export const pendingUserMcpOAuthServerId = (): string | null => {
+  if (typeof window === "undefined" || getStorage(RESULT_KEY) === null) return null;
+  try {
+    return (JSON.parse(getStorage(FLOW_STATE_KEY) ?? "null") as StoredFlowState | null)?.serverId ?? null;
+  } catch (_) {
+    return null;
+  }
+};
+
 const grantedScopes = (scope: unknown, requested: string[] | undefined): string[] | undefined =>
   typeof scope === "string" ? scope.split(" ").filter(Boolean) : requested;
 
@@ -112,7 +122,7 @@ export const useUserMcpOAuthFlow = ({
 
       const verifier = generateCodeVerifier();
       const challenge = await generateCodeChallenge(verifier);
-      const state = crypto.randomUUID();
+      const state = uuidv4();
       const redirectUri = buildCallbackUrl();
       const scopeString = scopes?.filter((s) => s.trim()).join(" ");
 
@@ -150,7 +160,7 @@ export const useUserMcpOAuthFlow = ({
   }, [accessToken, serverId, serverAlias, scopes, preClientId]);
 
   const resumeOAuthFlow = useCallback(async () => {
-    if (typeof window === "undefined" || processingRef.current) return;
+    if (typeof window === "undefined" || processingRef.current || !accessToken) return;
 
     const storedResult = getStorage(RESULT_KEY);
     if (!storedResult) return;

@@ -61,7 +61,9 @@ from litellm._logging import verbose_router_logger
 from litellm.caching.dual_cache import DualCache
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.constants import DEFAULT_MAX_LRU_CACHE_SIZE
+from litellm.cost_calculator import base_model_for_pricing, bedrock_profile_pricing, cost_map_key_declared_prices
 from litellm.litellm_core_utils.access_windows import access_windows_config_error
+from litellm.litellm_core_utils.aws_partition import contains_bedrock_arn
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, without
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.get_llm_provider_logic import (
@@ -113,12 +115,14 @@ from litellm.types.router import (
     CredentialLiteLLMParams,
     Deployment,
     DeploymentTypedDict,
+    DiscoveredDeploymentModelInfo,
     LiteLLM_Params,
     ModelGroupInfo,
     RouterModelGroupAliasItem,
     RoutingGroup,
     RoutingPlugin,
     TaggedPreRoutingStrategy,
+    holds_secret_pointer,
     validate_litellm_params_strictly,
 )
 from litellm.types.utils import (
@@ -127,17 +131,16 @@ from litellm.types.utils import (
     CustomPricingLiteLLMParams,
     LlmProviders,
     LlmProvidersSet,
-    is_server_derived_pricing_key,
     shared_backend_model_info,
 )
 from litellm.utils import (
     ModelInfoLookupMiss,
+    base_fields_replaced_by,
     catalog_with_runtime_registrations,
     get_potential_model_names,
     get_secret,
     lookup_model_info_for_registration,
     model_cost_registration_key,
-    model_info_with_pricing_overrides,
 )
 
 if TYPE_CHECKING:
@@ -157,6 +160,9 @@ _PTUMemo: TypeAlias = tuple[
 ]
 _MODEL_INFO_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _LITELLM_PARAMS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+_BACKEND_NEUTRAL_PARAMS: Final = frozenset(
+    {"tpm", "rpm", "max_parallel_requests", "input_cost_per_token", "output_cost_per_token"}
+)
 
 
 _CACHE_PRICING_FIELDS: Final = (
@@ -339,10 +345,11 @@ def _inherited_off_peak_base_rates(
     backend_entry: Final = _backend_cost_entry(host, backend_model, provider)
     if backend_entry is None:
         return {}
+    superseded: Final = base_fields_replaced_by(model_info)
     return {
         field: copy.deepcopy(value)
         for field, value in backend_entry.items()
-        if model_info.get(field) is None and value is not None
+        if model_info.get(field) is None and value is not None and field not in superseded
     }
 
 
@@ -404,19 +411,21 @@ def _search_tool_support(deployment: Mapping[str, object]) -> bool | None:
 
 def cost_map_backend_model(deployment: Deployment) -> str:
     """The model a deployment's prices are inherited from (``_cost_map_backend_model``)."""
-    model_info_base_model: Final = deployment.model_info.base_model
-    if isinstance(model_info_base_model, str) and model_info_base_model:
+    model_info_base_model: Final = base_model_for_pricing(deployment.model_info.base_model)
+    if model_info_base_model:
         return model_info_base_model
     params: Final = _LITELLM_PARAMS_ADAPTER.validate_python(deployment.litellm_params.model_dump(exclude_none=True))
-    params_base_model: Final = params.get("base_model")
-    if isinstance(params_base_model, str) and params_base_model:
+    params_base_model: Final = base_model_for_pricing(params.get("base_model"))
+    if params_base_model:
         return params_base_model
     model: Final = deployment.litellm_params.model
     invoked_model: Final = params.get("model_id")
     if isinstance(invoked_model, str) and invoked_model and _bedrock_profile(params, model):
         profile_model: Final = invoked_model if invoked_model.startswith("bedrock/") else f"bedrock/{invoked_model}"
-        profile_info: Final = lookup_model_info_for_registration(model=profile_model, custom_llm_provider="bedrock")
-        if not isinstance(profile_info, ModelInfoLookupMiss):
+        profile_info: Final = lookup_model_info_for_registration(
+            model=invoked_model.removeprefix("bedrock/"), custom_llm_provider="bedrock"
+        )
+        if not isinstance(profile_info, ModelInfoLookupMiss) and cost_map_key_declared_prices(profile_info["key"]):
             return profile_model
     return model
 
@@ -434,31 +443,35 @@ def deployment_model_cost_payload(host: "PythonHost", deployment: Deployment) ->
     provider: Final = deployment.model_info.pricing_provider or deployment.litellm_params.custom_llm_provider
     params: Final = _LITELLM_PARAMS_ADAPTER.validate_python(deployment.litellm_params.model_dump(exclude_none=True))
     priced: Final = {**declared, **custom_pricing}
-    profile_pricing: Final[Mapping[str, object]] = (
-        _bedrock_profile_pricing(backend_model, priced)
-        if params.get("model_id")
+    profile_backend: Final = bool(
+        params.get("model_id")
         and backend_model != deployment.litellm_params.model
         and _bedrock_profile(params, deployment.litellm_params.model)
-        else {}
+    )
+    profile_pricing: Final[Mapping[str, object]] = (
+        _bedrock_profile_pricing(backend_model, priced) if profile_backend else {}
+    )
+    rates_model: Final = (
+        deployment.litellm_params.model if profile_backend and contains_bedrock_arn(backend_model) else backend_model
     )
     with_profile: Final = {**priced, **profile_pricing}
-    off_peak: Final = {**with_profile, **_inherited_off_peak_base_rates(host, with_profile, backend_model, provider)}
+    off_peak: Final = {**with_profile, **_inherited_off_peak_base_rates(host, with_profile, rates_model, provider)}
     cached: Final = (
-        {**off_peak, **_inherited_cache_pricing(host, off_peak, backend_model, provider)}
+        {**off_peak, **_inherited_cache_pricing(host, off_peak, rates_model, provider)}
         if off_peak.get("input_cost_per_token") is not None
         else off_peak
     )
-    tiers: Final = {**cached, **_inherited_service_tier_pricing(host, cached, backend_model, provider)}
-    return {**tiers, **_inherited_tiered_output_rate(host, tiers, backend_model, provider)}
+    tiers: Final = {**cached, **_inherited_service_tier_pricing(host, cached, rates_model, provider)}
+    return {**tiers, **_inherited_tiered_output_rate(host, tiers, rates_model, provider)}
 
 
 def _bedrock_profile_pricing(backend_model: str, priced: Mapping[str, object]) -> Mapping[str, object]:
-    profile_info: Final = lookup_model_info_for_registration(model=backend_model, custom_llm_provider="bedrock")
+    profile_info: Final = lookup_model_info_for_registration(
+        model=backend_model.removeprefix("bedrock/"), custom_llm_provider="bedrock"
+    )
     if isinstance(profile_info, ModelInfoLookupMiss):
         return {}
-    explicit_info: Final = _MODEL_INFO_ADAPTER.validate_python(priced)
-    priced_info: Final = model_info_with_pricing_overrides(profile_info, explicit_info)  # pyright: ignore[reportArgumentType]  # the explicit model_info, as the core passes it
-    return {key: value for key, value in priced_info.items() if is_server_derived_pricing_key(key)}
+    return bedrock_profile_pricing(profile_info["key"], _MODEL_INFO_ADAPTER.validate_python(priced))
 
 
 def _backend_cost_map_keys(model: str, custom_llm_provider: str | None) -> tuple[str, ...]:
@@ -669,6 +682,30 @@ def _params_of(entry: Mapping[str, object]) -> Mapping[str, object]:
     return _LITELLM_PARAMS_ADAPTER.validate_python(params) if isinstance(params, dict) else {}
 
 
+def _model_info_request_headers(params: LiteLLM_Params, api_key: str | None) -> Mapping[str, str]:
+    headers: Final = TypeAdapter(Mapping[str, str]).validate_python(
+        params.get("extra_headers") or params.get("headers") or MappingProxyType({})  # pyright: ignore[reportUnknownMemberType]  # the params' untyped get
+    )
+    auth_headers: Final = MappingProxyType({"authorization": f"Bearer {api_key}"}) if api_key else MappingProxyType({})
+    return MappingProxyType(
+        {**auth_headers, **MappingProxyType({key.lower(): value for key, value in headers.items()})}
+    )
+
+
+def _backend_params(deployment: Deployment) -> Mapping[str, object]:
+    return MappingProxyType(
+        {
+            key: value
+            for key, value in deployment.litellm_params.model_dump(exclude_none=True).items()
+            if key not in _BACKEND_NEUTRAL_PARAMS
+        }
+    )
+
+
+def _same_backend(previous: Deployment, current: Deployment) -> bool:
+    return _backend_params(previous) == _backend_params(current)
+
+
 def _renamed(entry: UntypedEntry, model_name: str) -> UntypedEntry:
     return {**entry, "model_name": model_name}
 
@@ -811,6 +848,7 @@ class HostRegistry(HostModelInfo):
         self._discovered_model_info_cache: InMemoryCache = InMemoryCache(
             max_size_in_memory=1, default_ttl=2 * MODEL_INFO_REFRESH_SECONDS
         )
+        self._has_wildcard_catalog: bool = False
         # The PTU share teams and team ceilings, until the model list next changes.
         self._ptu_cache: _PTUMemo | None = None
         self._cached_get_model_group_info: Callable[[str], ModelGroupInfo | None] = lru_cache(  # pyright: ignore[reportIncompatibleMethodOverride]  # the per-router cache shadows the uncached method, as the core keeps it
@@ -869,14 +907,6 @@ class HostRegistry(HostModelInfo):
     async def _arefresh_deployment_model_info(
         self, raw_deployment: Mapping[str, object], *, client: "AsyncHTTPHandler | None"
     ) -> None:
-        from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
-        from litellm.llms.openai_like.model_info import (
-            MODEL_INFO_DISCOVERY_PROVIDERS,
-            get_openai_compatible_model_info,
-        )
-        from litellm.types.router import DiscoveredDeploymentModelInfo
-        from litellm.utils import aresolve_api_key_secret_reference
-
         deployment: Final = Deployment.model_validate(raw_deployment)
         params: Final = LiteLLM_Params.model_validate(
             MappingProxyType(
@@ -892,41 +922,120 @@ class HostRegistry(HostModelInfo):
         model, provider, dynamic_api_key, api_base = self._host.invoke("get_llm_provider")(  # pyright: ignore[reportAny]  # litellm's untyped tuple
             model=params.model, litellm_params=params
         )
-        if provider not in MODEL_INFO_DISCOVERY_PROVIDERS:
+        if params.get("use_clientside_credentials"):  # pyright: ignore[reportUnknownMemberType]  # the params' untyped get
             return
-        if api_base is None or "*" in model or params.get("use_clientside_credentials"):  # pyright: ignore[reportUnknownMemberType]  # the params' untyped get
+        discovered: Final = await (
+            self._adiscover_openrouter_model_info(
+                raw_deployment,
+                params,
+                api_key=params.api_key or dynamic_api_key,  # pyright: ignore[reportAny]  # see above
+                api_base=api_base,  # pyright: ignore[reportAny]  # see above
+                client=client,
+            )
+            if provider == LlmProviders.OPENROUTER.value
+            else self._adiscover_openai_compatible_model_info(
+                raw_deployment,
+                params,
+                model=model,  # pyright: ignore[reportAny]  # see above
+                provider=provider,  # pyright: ignore[reportAny]  # see above
+                api_key=params.api_key or dynamic_api_key,  # pyright: ignore[reportAny]  # see above
+                api_base=api_base,  # pyright: ignore[reportAny]  # see above
+                client=client,
+            )
+        )
+        model_id: Final = deployment.model_info.id
+        if model_id is None or self._core_get_model_info(model_id) is not raw_deployment:
             return
-        api_key: Final = await aresolve_api_key_secret_reference(
-            params.api_key or dynamic_api_key,  # pyright: ignore[reportAny]  # see above
-            model=model,  # pyright: ignore[reportAny]  # see above
-            llm_provider=provider,  # pyright: ignore[reportAny]  # see above
-            upstream=MappingProxyType({"api_base": params.api_base}),
+        latest: Final = discovered if discovered is not None else self._last_discovered_model_info(model_id)
+        self._discovered_model_info_cache.max_size_in_memory = max(len(self._core_model_list), 1)
+        self._discovered_model_info_cache.delete_cache(model_id)
+        if latest is not None and (latest.limits or latest.limits_by_model):
+            self._discovered_model_info_cache.set_cache(model_id, latest)
+            self._has_wildcard_catalog = self._has_wildcard_catalog or bool(latest.limits_by_model)
+
+    def _last_discovered_model_info(self, model_id: str) -> DiscoveredDeploymentModelInfo | None:
+        cached: Final[object] = self._discovered_model_info_cache.get_cache(model_id)
+        return cached if isinstance(cached, DiscoveredDeploymentModelInfo) else None
+
+    def _live_discovered_model_info(self, model_id: str) -> DiscoveredDeploymentModelInfo | None:
+        cached: Final = self._last_discovered_model_info(model_id)
+        return cached if cached is not None and cached.deployment is self._core_get_model_info(model_id) else None
+
+    async def _adiscover_openai_compatible_model_info(
+        self,
+        raw_deployment: Mapping[str, object],
+        params: LiteLLM_Params,
+        *,
+        model: str,
+        provider: str,
+        api_key: str | None,
+        api_base: str | None,
+        client: "AsyncHTTPHandler | None",
+    ) -> DiscoveredDeploymentModelInfo | None:
+        from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+        from litellm.llms.openai_like.model_info import (
+            MODEL_INFO_DISCOVERY_PROVIDERS,
+            get_openai_compatible_model_info,
         )
-        headers: Final = TypeAdapter(Mapping[str, str]).validate_python(
-            params.get("extra_headers") or params.get("headers") or MappingProxyType({})  # pyright: ignore[reportUnknownMemberType]  # see above
-        )
-        auth_headers: Final = (
-            MappingProxyType({"authorization": f"Bearer {api_key}"}) if api_key else MappingProxyType({})
+        from litellm.utils import aresolve_api_key_secret_reference
+
+        if provider not in MODEL_INFO_DISCOVERY_PROVIDERS or api_base is None or "*" in model:
+            return None
+        resolved_key: Final = await aresolve_api_key_secret_reference(
+            api_key, model=model, llm_provider=provider, upstream=MappingProxyType({"api_base": params.api_base})
         )
         limits: Final = await get_openai_compatible_model_info(
-            model=model,  # pyright: ignore[reportAny]  # see above
-            api_base=api_base,  # pyright: ignore[reportAny]  # see above
-            headers=MappingProxyType(
-                {**auth_headers, **MappingProxyType({key.lower(): value for key, value in headers.items()})}
-            ),
+            model=model,
+            api_base=api_base,
+            headers=_model_info_request_headers(params, resolved_key),
             client=client or get_async_httpx_client(llm_provider=LlmProviders.OPENAI),
             cache=self._core_cache.in_memory_cache,
         )
-        model_id: Final = deployment.model_info.id
-        if not limits or model_id is None or self._core_get_model_info(model_id) is not raw_deployment:
-            return
-        self._discovered_model_info_cache.max_size_in_memory = max(len(self._core_model_list), 1)
-        self._discovered_model_info_cache.delete_cache(model_id)
-        self._discovered_model_info_cache.set_cache(
-            model_id,
-            DiscoveredDeploymentModelInfo(deployment=raw_deployment, limits=limits),  # pyright: ignore[reportArgumentType]  # the model_list entry, as the core keeps it
+        if limits is None:
+            return None
+        return DiscoveredDeploymentModelInfo(deployment=raw_deployment, limits=limits)
+
+    async def _adiscover_openrouter_model_info(
+        self,
+        raw_deployment: Mapping[str, object],
+        params: LiteLLM_Params,
+        *,
+        api_key: str | None,
+        api_base: str | None,
+        client: "AsyncHTTPHandler | None",
+    ) -> DiscoveredDeploymentModelInfo | None:
+        from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+        from litellm.llms.openrouter.common_utils import (
+            OpenRouterModelInfo,
+            aget_openrouter_catalog_limits,
+            openrouter_catalog_limits_for_model,
         )
-        self._invalidate_model_group_info_cache()
+        from litellm.utils import aresolve_api_key_secret_reference
+
+        catalog_api_base: Final = OpenRouterModelInfo.get_api_base(api_base)
+        resolved_key: Final = await aresolve_api_key_secret_reference(
+            OpenRouterModelInfo.get_catalog_api_key(api_key, catalog_api_base),
+            model=params.model,
+            llm_provider=LlmProviders.OPENROUTER.value,
+            upstream=MappingProxyType({"api_base": params.api_base}),
+        )
+        if not resolved_key:
+            return None
+        catalog: Final = await aget_openrouter_catalog_limits(
+            api_base=catalog_api_base,
+            headers=_model_info_request_headers(params, resolved_key),
+            client=client or get_async_httpx_client(llm_provider=LlmProviders.OPENROUTER),
+            cache=self._core_cache.in_memory_cache,
+        )
+        if catalog is None:
+            return None
+        if "*" in params.model:
+            return DiscoveredDeploymentModelInfo(
+                deployment=raw_deployment, limits=MappingProxyType({}), limits_by_model=catalog
+            )
+        return DiscoveredDeploymentModelInfo(
+            deployment=raw_deployment, limits=openrouter_catalog_limits_for_model(catalog, params.model)
+        )
 
     def _deployment_tracks_usage(self, deployment_id: str, model_group: str) -> bool:
         """``_deployment_tracks_usage``: a limit on the deployment or in its merged model info, where
@@ -990,6 +1099,7 @@ class HostRegistry(HostModelInfo):
 
     def _replace_model_list(self, build: _Build) -> None:
         self._discovered_model_info_cache.flush_cache()
+        self._has_wildcard_catalog = False
         original_model_list: Final = build.raw
         if self.strategies is not None:
             self.strategies.reset()
@@ -1123,7 +1233,12 @@ class HostRegistry(HostModelInfo):
         found, written into the entry's params."""
         entry: Final = self._build_entry(build, index)
         references: Final = tuple(as_str_mapping(ref) or {} for ref in refs)
-        values: Final = tuple(get_secret(str(reference["name"])) for reference in references)
+        values: Final = tuple(
+            str(reference["name"])
+            if holds_secret_pointer(str(reference["key"]))
+            else get_secret(str(reference["name"]))
+            for reference in references
+        )
         entry.litellm_params.update(
             {str(reference["key"]): value for reference, value in zip(references, values, strict=True)}
         )
@@ -1448,7 +1563,13 @@ class HostRegistry(HostModelInfo):
                 and deployment.model_info == on_router.model_info
             ):
                 return None
+            discovered: Final = self._live_discovered_model_info(model_id)
             self._install_deployment(deployment, replace_existing=True)
+            if discovered is not None and on_router is not None and _same_backend(on_router, served):
+                self._discovered_model_info_cache.delete_cache(model_id)
+                self._discovered_model_info_cache.set_cache(
+                    model_id, dataclasses.replace(discovered, deployment=self._core_get_model_info(model_id))
+                )
             if on_router is not None:
                 withdraw_shared_capabilities(
                     self._host,
@@ -2103,7 +2224,11 @@ class HostRegistry(HostModelInfo):
         candidates: Final = team_models or global_models
         if not candidates:
             return None
-        return Deployment(**candidates[0])  # a pattern router holds stored entry dicts
+        deployment: Final = Deployment(**candidates[0])  # a pattern router holds stored entry dicts
+        live: Final = self.live_params(deployment.model_info.id)
+        if not live:
+            return deployment
+        return deployment.model_copy(update={"litellm_params": deployment.litellm_params.model_copy(update=live)})
 
     def _core_get_credential_deployment(self, model_id: str, team_id: str | None = None) -> Deployment | None:
         deployment: Final = (

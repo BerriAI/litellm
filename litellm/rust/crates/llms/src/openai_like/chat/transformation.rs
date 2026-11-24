@@ -2,16 +2,20 @@
 //! OpenAI-compatible endpoint shares. The body is already OpenAI-shaped, so
 //! parameters pass through verbatim; the port keeps Python's two deviations,
 //! the `max_completion_tokens` -> `max_tokens` rename and the usage
-//! `*_tokens` null-to-zero sanitize.
+//! `*_tokens` null-to-zero sanitize. Usage then goes through Python's `Usage` constructor.
 
 use litellm_auth::CredentialPlacement;
 use litellm_secret_value::SecretValue;
 
-use litellm_core_utils::core_helpers::unix_now;
-use litellm_llms_types::formats::chat_completions::{
-    ChatCompletionsChoice, ChatCompletionsChoiceMessage, ChatCompletionsResponse,
-    ChatCompletionsUsage, ChatMessage, PromptTokensDetails,
+use litellm_core_utils::{
+    core_helpers::unix_now, decline::Decline, prompt_templates::factory::THINKING_BLOCKS_FIELD,
 };
+use litellm_llms_types::formats::chat_completions::{
+    CacheCreationTokenDetails, ChatCompletionsChoice, ChatCompletionsChoiceMessage,
+    ChatCompletionsResponse, ChatCompletionsUsage, ChatMessage, CompletionTokensDetails,
+    PromptTokensDetails,
+};
+use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
 use crate::{
@@ -20,7 +24,8 @@ use crate::{
         auth::AuthScheme,
         chat::transformation::{
             BaseConfig, Headers, ProviderChatRequestData, ProviderChatResponseData,
-            ValidatedEnvironment,
+            ValidatedEnvironment, unsupported_message_content, unsupported_message_fields,
+            unsupported_param,
         },
     },
     openai_like::common_utils::{complete_openai_like_url, openai_compatible_provider_info},
@@ -60,6 +65,10 @@ const SUPPORTED_PARAMS: &[(&str, &str)] = &[
 /// Call configuration the caller may pass that never enters the request body.
 const CONFIG_PARAMS: &[&str] = &["custom_endpoint", "extra_headers", "max_retries"];
 
+const REASONING_FIELDS: &[&str] = &[THINKING_BLOCKS_FIELD, "reasoning_content"];
+
+const USAGE_COUNTS: [&str; 3] = ["prompt_tokens", "completion_tokens", "total_tokens"];
+
 pub struct OpenAILikeChatConfig;
 
 pub const OPENAI_LIKE_CHAT_COMPLETIONS_CONFIG: OpenAILikeChatConfig = OpenAILikeChatConfig;
@@ -71,6 +80,19 @@ impl BaseConfig for OpenAILikeChatConfig {
 
     fn supported_openai_param_mappings(&self) -> &'static [(&'static str, &'static str)] {
         SUPPORTED_PARAMS
+    }
+
+    fn unsupported_reason(
+        &self,
+        messages: &[ChatMessage],
+        optional_params: &Map<String, Value>,
+    ) -> Option<Decline> {
+        unsupported_param(SUPPORTED_PARAMS, CONFIG_PARAMS, optional_params).or_else(|| {
+            messages.iter().find_map(|message| {
+                unsupported_message_fields(message, REASONING_FIELDS)
+                    .or_else(|| unsupported_message_content(message.content.as_ref()))
+            })
+        })
     }
 
     fn get_complete_url(
@@ -107,7 +129,15 @@ impl BaseConfig for OpenAILikeChatConfig {
         let body = Map::from_iter(
             [
                 ("model".to_string(), json!(model)),
-                ("messages".to_string(), json!(messages)),
+                (
+                    "messages".to_string(),
+                    json!(
+                        messages
+                            .into_iter()
+                            .map(without_null_fields)
+                            .collect::<Vec<_>>()
+                    ),
+                ),
             ]
             .into_iter()
             .chain(params),
@@ -123,14 +153,12 @@ impl BaseConfig for OpenAILikeChatConfig {
         model: &str,
         response: ProviderChatResponseData,
     ) -> Result<ChatCompletionsResponse, Error> {
-        let mut body = response.body;
-        sanitize_usage(&mut body);
-        let body =
-            body.as_object()
-                .ok_or(Error::InvalidResponse(crate::ErrorDetail::Expected {
-                    subject: "chat response",
-                    expected: "an object",
-                }))?;
+        let Value::Object(mut body) = response.body else {
+            return Err(Error::InvalidResponse(crate::ErrorDetail::Expected {
+                subject: "chat response",
+                expected: "an object",
+            }));
+        };
 
         let choices = body
             .get("choices")
@@ -141,14 +169,10 @@ impl BaseConfig for OpenAILikeChatConfig {
             .map(|(position, choice)| normalize_choice(position, choice))
             .collect::<Result<Vec<_>, _>>()?;
 
-        let usage = body.get("usage").and_then(Value::as_object);
-        let field = |name: &str| {
-            usage
-                .and_then(|usage| usage.get(name))
-                .and_then(Value::as_u64)
-                .unwrap_or(0)
+        let usage = match body.remove("usage") {
+            Some(Value::Object(usage)) => python_usage(host_usage(sanitize_usage(usage))),
+            _ => ChatCompletionsUsage::default(),
         };
-        let details = usage.and_then(|usage| usage.get("prompt_tokens_details"));
 
         Ok(ChatCompletionsResponse {
             created: body
@@ -161,25 +185,7 @@ impl BaseConfig for OpenAILikeChatConfig {
                 .unwrap_or(model)
                 .to_string(),
             choices,
-            usage: ChatCompletionsUsage {
-                prompt_tokens: field("prompt_tokens"),
-                completion_tokens: field("completion_tokens"),
-                total_tokens: field("total_tokens"),
-                prompt_tokens_details: PromptTokensDetails {
-                    cached_tokens: details
-                        .and_then(|d| d.get("cached_tokens"))
-                        .and_then(Value::as_u64)
-                        .unwrap_or(0),
-                    cache_creation_tokens: details
-                        .and_then(|d| d.get("cache_creation_tokens"))
-                        .and_then(Value::as_u64)
-                        .unwrap_or(0),
-                    text_tokens: details
-                        .and_then(|d| d.get("text_tokens"))
-                        .and_then(Value::as_u64)
-                        .unwrap_or(0),
-                },
-            },
+            usage,
         })
     }
 
@@ -218,19 +224,200 @@ impl BaseConfig for OpenAILikeChatConfig {
     fn config_params(&self) -> &'static [&'static str] {
         CONFIG_PARAMS
     }
+
+    fn caller_config_params(&self) -> &'static [&'static str] {
+        CONFIG_PARAMS
+    }
+}
+
+fn without_null_fields(message: ChatMessage) -> ChatMessage {
+    ChatMessage {
+        extra: message
+            .extra
+            .into_iter()
+            .filter(|(_, value)| !value.is_null())
+            .collect(),
+        ..message
+    }
 }
 
 /// `OpenAILikeChatConfig._sanitize_usage_obj`: a provider that reports a null
 /// `*_tokens` entry breaks OpenAI clients, so nulls become 0. Python scrubs
-/// every top-level usage key ending in `_tokens`.
-fn sanitize_usage(body: &mut Value) {
-    if let Some(usage) = body.get_mut("usage").and_then(Value::as_object_mut) {
-        for (key, value) in usage.iter_mut() {
-            if key.ends_with("_tokens") && value.is_null() {
-                *value = json!(0);
+/// every top-level usage key ending in `_tokens`, its `Usage` reads a missing count as 0,
+/// and the proxy drops every other null from the reply.
+fn sanitize_usage(usage: Map<String, Value>) -> Map<String, Value> {
+    let missing_counts: Vec<&str> = USAGE_COUNTS
+        .into_iter()
+        .filter(|count| !usage.contains_key(*count))
+        .collect();
+    usage
+        .into_iter()
+        .filter_map(|(key, value)| match value {
+            Value::Null if key.ends_with("_tokens") => Some((key, json!(0))),
+            Value::Null => None,
+            value => Some((key, value)),
+        })
+        .chain(
+            missing_counts
+                .into_iter()
+                .map(|count| (count.to_string(), json!(0))),
+        )
+        .collect()
+}
+
+/// Keeps every field that parses on its own, reads a count sent as a numeric string or a whole
+/// float as that number, and reads a top-level count that does not parse as 0.
+fn host_usage(usage: Map<String, Value>) -> ChatCompletionsUsage {
+    let counts: Map<String, Value> = USAGE_COUNTS
+        .into_iter()
+        .map(|count| (count.to_string(), json!(token_count(usage.get(count)))))
+        .collect();
+    let parses = |fields: &Map<String, Value>| {
+        ChatCompletionsUsage::deserialize(&Value::Object(fields.clone()))
+    };
+    let normalized: Map<String, Value> = usage
+        .into_iter()
+        .filter_map(|(key, value)| match value {
+            Value::Object(details) if DETAILS.contains(&key.as_str()) => {
+                (!details.is_empty()).then(|| (key, Value::Object(readable_details(details))))
             }
-        }
+            value => Some((key, value)),
+        })
+        .chain(counts.clone())
+        .collect();
+    parses(&normalized).unwrap_or_else(|_| {
+        let readable: Map<String, Value> = normalized
+            .into_iter()
+            .filter(|(key, value)| {
+                parses(
+                    &counts
+                        .clone()
+                        .into_iter()
+                        .chain([(key.clone(), value.clone())])
+                        .collect(),
+                )
+                .is_ok()
+            })
+            .collect();
+        parses(&readable).unwrap_or_default()
+    })
+}
+
+const DETAILS: [&str; 2] = ["prompt_tokens_details", "completion_tokens_details"];
+
+/// Python drops a null detail and a `cache_type` that is not a string, and reads a `*_tokens`
+/// detail the way it reads a top-level count, where it fails on a detail that does not parse and
+/// this drops only that detail.
+fn readable_details(details: Map<String, Value>) -> Map<String, Value> {
+    details
+        .into_iter()
+        .filter_map(|(key, value)| match value {
+            Value::Null => None,
+            Value::Object(nested) if key == "cache_creation_token_details" => {
+                Some((key, Value::Object(readable_details(nested))))
+            }
+            _ if key == "cache_creation_token_details" => None,
+            value if key == "cache_type" => value.is_string().then_some((key, value)),
+            value if key.ends_with("_tokens") => {
+                whole_number(&value).map(|count| (key, json!(count)))
+            }
+            value => Some((key, value)),
+        })
+        .collect()
+}
+
+fn token_count(count: Option<&Value>) -> u64 {
+    count.and_then(whole_number).unwrap_or(0)
+}
+
+fn whole_number(count: &Value) -> Option<u64> {
+    let whole = |number: f64| (number.fract() == 0.0 && number >= 0.0).then_some(number as u64);
+    match count {
+        Value::Number(number) => number.as_u64().or_else(|| whole(number.as_f64()?)),
+        Value::String(text) => text.parse().ok().or_else(|| whole(text.parse().ok()?)),
+        _ => None,
     }
+}
+
+/// Python's `Usage` constructor: top-level cache and reasoning counts move into the details
+/// objects and the details' cache write aliases agree.
+fn python_usage(usage: ChatCompletionsUsage) -> ChatCompletionsUsage {
+    let top_level_count = |key: &str| usage.extra.get(key).and_then(Value::as_u64);
+    let reasoning_tokens = top_level_count("reasoning_tokens").filter(|tokens| *tokens > 0);
+    let cached_tokens = usage
+        .cache_read_input_tokens
+        .or(top_level_count("prompt_cache_hit_tokens"));
+    ChatCompletionsUsage {
+        completion_tokens_details: completion_details(
+            usage.completion_tokens_details,
+            reasoning_tokens,
+            usage.completion_tokens,
+        ),
+        prompt_tokens_details: prompt_details(
+            usage.prompt_tokens_details,
+            cached_tokens,
+            usage.cache_creation_input_tokens,
+        ),
+        extra: usage
+            .extra
+            .into_iter()
+            .filter(|(key, _)| key != "reasoning_tokens")
+            .collect(),
+        ..usage
+    }
+}
+
+fn completion_details(
+    details: Option<CompletionTokensDetails>,
+    reasoning_tokens: Option<u64>,
+    completion_tokens: u64,
+) -> Option<CompletionTokensDetails> {
+    let Some(reasoning_tokens) = reasoning_tokens else {
+        return details;
+    };
+    let details = details.unwrap_or_default();
+    let modality_tokens = |key: &str| details.extra.get(key).and_then(Value::as_u64).unwrap_or(0);
+    let text_tokens = completion_tokens
+        .saturating_sub(reasoning_tokens)
+        .saturating_sub(modality_tokens("image_tokens"))
+        .saturating_sub(modality_tokens("audio_tokens"));
+    Some(CompletionTokensDetails {
+        reasoning_tokens: details.reasoning_tokens.or(Some(reasoning_tokens)),
+        text_tokens: details.text_tokens.or(Some(text_tokens)),
+        ..details
+    })
+}
+
+fn prompt_details(
+    details: Option<PromptTokensDetails>,
+    cached_tokens: Option<u64>,
+    cache_creation_input_tokens: Option<u64>,
+) -> Option<PromptTokensDetails> {
+    if details.is_none() && cached_tokens.is_none() && cache_creation_input_tokens.is_none() {
+        return None;
+    }
+    let details = details.unwrap_or_default();
+    let cache_write_tokens = cache_creation_input_tokens
+        .or(details.cache_write_tokens)
+        .or(details.cache_creation_tokens)
+        .or_else(|| {
+            details
+                .extra
+                .get("cache_creation_input_tokens")
+                .and_then(Value::as_u64)
+        });
+    Some(PromptTokensDetails {
+        cached_tokens: cached_tokens.or(details.cached_tokens),
+        cache_write_tokens,
+        cache_creation_tokens: cache_write_tokens,
+        cache_creation_token_details: details.cache_creation_token_details.or_else(|| {
+            details
+                .extra
+                .get("cache_creation")
+                .and_then(|nested| CacheCreationTokenDetails::deserialize(nested).ok())
+        }),
+        ..details
+    })
 }
 
 fn normalize_choice(position: usize, choice: &Value) -> Result<ChatCompletionsChoice, Error> {
@@ -275,6 +462,8 @@ fn normalize_choice(position: usize, choice: &Value) -> Result<ChatCompletionsCh
                 .unwrap_or("assistant")
                 .to_string(),
             content: content.and_then(Value::as_str).map(str::to_string),
+            reasoning_content: None,
+            thinking_blocks: None,
         },
         finish_reason: choice
             .get("finish_reason")
@@ -290,7 +479,7 @@ mod tests {
         Error,
         base_llm::{
             auth::AuthScheme,
-            chat::transformation::{BaseConfig, ProviderChatResponseData},
+            chat::transformation::{BaseConfig, DropParams, ProviderChatResponseData},
         },
         openai_like::chat::transformation::OPENAI_LIKE_CHAT_COMPLETIONS_CONFIG,
     };
@@ -380,6 +569,20 @@ mod tests {
         );
         assert_eq!(body["max_tokens"], json!(12));
         assert!(body.get("max_completion_tokens").is_none());
+    }
+
+    #[rstest]
+    fn keeps_call_configuration_a_caller_sends() {
+        let config =
+            json!({"custom_endpoint": true, "extra_headers": {"x": "y"}, "max_retries": 2});
+        assert_eq!(
+            OPENAI_LIKE_CHAT_COMPLETIONS_CONFIG.map_openai_params(
+                "my-model",
+                params(config.clone()),
+                DropParams::Off
+            ),
+            Ok(params(config))
+        );
     }
 
     #[rstest]
@@ -528,19 +731,246 @@ mod tests {
         assert_eq!(response.usage.total_tokens, 8);
     }
 
+    fn usage_of(usage: Option<Value>) -> Value {
+        let choices =
+            json!([{"message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}]);
+        let body = match usage {
+            Some(usage) => json!({"model": "m", "choices": choices, "usage": usage}),
+            None => json!({"model": "m", "choices": choices}),
+        };
+        let response = transform_response(body).expect("response normalizes");
+        serde_json::to_value(response.usage).unwrap()
+    }
+
     #[rstest]
-    fn null_token_fields_in_usage_become_zero() {
-        // `_sanitize_usage_obj`: providers that return null token values break
-        // OpenAI clients, so the response is scrubbed at the source.
-        let response = transform_response(json!({
-            "model": "m",
-            "choices": [{"message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
-            "usage": {"prompt_tokens": 3, "completion_tokens": null, "total_tokens": null},
-        }))
-        .expect("response normalizes");
-        assert_eq!(response.usage.completion_tokens, 0);
-        assert_eq!(response.usage.total_tokens, 0);
-        assert_eq!(response.usage.prompt_tokens, 3);
+    #[case::gpt_5_4_mini_capture(json!({
+        "prompt_tokens": 5726, "completion_tokens": 4, "total_tokens": 5730,
+        "prompt_tokens_details": {"cached_tokens": 5504, "audio_tokens": 0},
+        "completion_tokens_details": {
+            "reasoning_tokens": 0, "audio_tokens": 0, "accepted_prediction_tokens": 0, "rejected_prediction_tokens": 0
+        }
+    }))]
+    #[case::no_text_tokens_reported(json!({
+        "prompt_tokens": 3, "completion_tokens": 5, "total_tokens": 8,
+        "prompt_tokens_details": {"cached_tokens": 1}
+    }))]
+    #[case::host_extension(json!({
+        "prompt_tokens": 3, "completion_tokens": 5, "total_tokens": 8,
+        "prompt_cache_miss_tokens": 2, "cost": 0.25
+    }))]
+    fn passes_the_host_usage_through_like_python(#[case] usage: Value) {
+        assert_eq!(usage_of(Some(usage.clone())), usage);
+    }
+
+    #[rstest]
+    #[case::deepseek_cache_hit(
+        json!({"prompt_tokens": 3, "completion_tokens": 5, "total_tokens": 8, "prompt_cache_hit_tokens": 1, "cost": 0.25}),
+        json!({
+            "prompt_tokens": 3, "completion_tokens": 5, "total_tokens": 8, "prompt_cache_hit_tokens": 1, "cost": 0.25,
+            "prompt_tokens_details": {"cached_tokens": 1}
+        })
+    )]
+    #[case::anthropic_cache_counts(
+        json!({"prompt_tokens": 3, "completion_tokens": 5, "total_tokens": 8, "cache_read_input_tokens": 6, "cache_creation_input_tokens": 2}),
+        json!({
+            "prompt_tokens": 3, "completion_tokens": 5, "total_tokens": 8, "cache_read_input_tokens": 6, "cache_creation_input_tokens": 2,
+            "prompt_tokens_details": {"cached_tokens": 6, "cache_write_tokens": 2, "cache_creation_tokens": 2}
+        })
+    )]
+    #[case::top_level_cache_read_wins(
+        json!({
+            "prompt_tokens": 3, "completion_tokens": 5, "total_tokens": 8, "prompt_cache_hit_tokens": 1, "cache_read_input_tokens": 6,
+            "prompt_tokens_details": {"cached_tokens": 2, "audio_tokens": 0}
+        }),
+        json!({
+            "prompt_tokens": 3, "completion_tokens": 5, "total_tokens": 8, "prompt_cache_hit_tokens": 1, "cache_read_input_tokens": 6,
+            "prompt_tokens_details": {"cached_tokens": 6, "audio_tokens": 0}
+        })
+    )]
+    #[case::top_level_reasoning(
+        json!({"prompt_tokens": 3, "completion_tokens": 5, "total_tokens": 8, "reasoning_tokens": 2}),
+        json!({
+            "prompt_tokens": 3, "completion_tokens": 5, "total_tokens": 8,
+            "completion_tokens_details": {"reasoning_tokens": 2, "text_tokens": 3}
+        })
+    )]
+    #[case::reasoning_text_leaves_out_audio(
+        json!({
+            "prompt_tokens": 3, "completion_tokens": 9, "total_tokens": 12, "reasoning_tokens": 2,
+            "completion_tokens_details": {"audio_tokens": 3, "reasoning_tokens": 4}
+        }),
+        json!({
+            "prompt_tokens": 3, "completion_tokens": 9, "total_tokens": 12,
+            "completion_tokens_details": {"audio_tokens": 3, "reasoning_tokens": 4, "text_tokens": 4}
+        })
+    )]
+    #[case::zero_reasoning(
+        json!({"prompt_tokens": 3, "completion_tokens": 5, "total_tokens": 8, "reasoning_tokens": 0}),
+        json!({"prompt_tokens": 3, "completion_tokens": 5, "total_tokens": 8})
+    )]
+    #[case::nested_cache_creation(
+        json!({"prompt_tokens": 3, "completion_tokens": 5, "total_tokens": 8, "prompt_tokens_details": {"cache_creation_tokens": 2}}),
+        json!({
+            "prompt_tokens": 3, "completion_tokens": 5, "total_tokens": 8,
+            "prompt_tokens_details": {"cache_write_tokens": 2, "cache_creation_tokens": 2}
+        })
+    )]
+    #[case::nested_anthropic_cache_creation(
+        json!({
+            "prompt_tokens": 3, "completion_tokens": 5, "total_tokens": 8,
+            "prompt_tokens_details": {
+                "cache_creation_input_tokens": 2, "cache_creation": {"ephemeral_5m_input_tokens": 1, "ephemeral_30m_input_tokens": 1}
+            }
+        }),
+        json!({
+            "prompt_tokens": 3, "completion_tokens": 5, "total_tokens": 8,
+            "prompt_tokens_details": {
+                "cache_write_tokens": 2, "cache_creation_tokens": 2,
+                "cache_creation_token_details": {"ephemeral_5m_input_tokens": 1, "ephemeral_30m_input_tokens": 1},
+                "cache_creation_input_tokens": 2, "cache_creation": {"ephemeral_5m_input_tokens": 1, "ephemeral_30m_input_tokens": 1}
+            }
+        })
+    )]
+    #[case::empty_details(
+        json!({
+            "prompt_tokens": 3, "completion_tokens": 5, "total_tokens": 8,
+            "prompt_tokens_details": {}, "completion_tokens_details": {}
+        }),
+        json!({"prompt_tokens": 3, "completion_tokens": 5, "total_tokens": 8})
+    )]
+    #[case::kimi_k3_capture(
+        json!({
+            "prompt_tokens": 105, "completion_tokens": 134, "total_tokens": 239,
+            "completion_tokens_details": {"reasoning_tokens": 121}, "prompt_tokens_details": {"cache_write_tokens": 0}
+        }),
+        json!({
+            "prompt_tokens": 105, "completion_tokens": 134, "total_tokens": 239,
+            "completion_tokens_details": {"reasoning_tokens": 121},
+            "prompt_tokens_details": {"cache_write_tokens": 0, "cache_creation_tokens": 0}
+        })
+    )]
+    #[case::fireworks_deepseek_capture(
+        json!({
+            "prompt_tokens": 50, "completion_tokens": 38, "total_tokens": 88, "prompt_tokens_details": {"cached_tokens": 0},
+            "completion_tokens_details": {
+                "accepted_prediction_tokens": null, "reasoning_tokens": 35, "rejected_prediction_tokens": null
+            }
+        }),
+        json!({
+            "prompt_tokens": 50, "completion_tokens": 38, "total_tokens": 88, "prompt_tokens_details": {"cached_tokens": 0},
+            "completion_tokens_details": {"reasoning_tokens": 35}
+        })
+    )]
+    fn maps_host_cache_and_reasoning_counts_like_python(
+        #[case] usage: Value,
+        #[case] expected: Value,
+    ) {
+        assert_eq!(usage_of(Some(usage)), expected);
+    }
+
+    #[rstest]
+    #[case::absent(None, json!({"completion_tokens": 0, "prompt_tokens": 0, "total_tokens": 0}))]
+    #[case::null(Some(Value::Null), json!({"completion_tokens": 0, "prompt_tokens": 0, "total_tokens": 0}))]
+    #[case::null_and_missing_counts(
+        Some(json!({"prompt_tokens": 3, "completion_tokens": null})),
+        json!({"completion_tokens": 0, "prompt_tokens": 3, "total_tokens": 0})
+    )]
+    fn reports_a_null_or_missing_count_as_zero_like_python(
+        #[case] usage: Option<Value>,
+        #[case] expected: Value,
+    ) {
+        assert_eq!(usage_of(usage), expected);
+    }
+
+    #[rstest]
+    #[case::count_sent_as_a_numeric_string(
+        json!({"prompt_tokens": "3", "completion_tokens": 1, "total_tokens": 4}),
+        json!({"completion_tokens": 1, "prompt_tokens": 3, "total_tokens": 4})
+    )]
+    #[case::count_sent_as_a_whole_float(
+        json!({"prompt_tokens": 3.0, "completion_tokens": "1.0", "total_tokens": 4}),
+        json!({"completion_tokens": 1, "prompt_tokens": 3, "total_tokens": 4})
+    )]
+    #[case::detail_sent_as_a_numeric_string(
+        json!({
+            "prompt_tokens": 3, "completion_tokens": 1, "total_tokens": 4,
+            "prompt_tokens_details": {"cached_tokens": "2", "cache_creation_token_details": {"ephemeral_5m_input_tokens": "4"}},
+            "completion_tokens_details": {"reasoning_tokens": 1.0}
+        }),
+        json!({
+            "completion_tokens": 1, "prompt_tokens": 3, "total_tokens": 4,
+            "prompt_tokens_details": {"cached_tokens": 2, "cache_creation_token_details": {"ephemeral_5m_input_tokens": 4}},
+            "completion_tokens_details": {"reasoning_tokens": 1}
+        })
+    )]
+    #[case::null_detail(
+        json!({"prompt_tokens": 3, "completion_tokens": 1, "total_tokens": 4, "completion_tokens_details": {"reasoning_tokens": null}}),
+        json!({"completion_tokens": 1, "prompt_tokens": 3, "total_tokens": 4, "completion_tokens_details": {}})
+    )]
+    fn reads_a_count_the_way_python_coerces_it(#[case] usage: Value, #[case] expected: Value) {
+        assert_eq!(usage_of(Some(usage)), expected);
+    }
+
+    #[rstest]
+    #[case::null_host_fields(
+        json!({"prompt_tokens": 3, "completion_tokens": 1, "total_tokens": 4, "cost": null, "server_tool_use": null}),
+        json!({"completion_tokens": 1, "prompt_tokens": 3, "total_tokens": 4})
+    )]
+    #[case::cache_type_that_is_not_a_string(
+        json!({"prompt_tokens": 3, "completion_tokens": 1, "total_tokens": 4, "prompt_tokens_details": {"cached_tokens": 1, "cache_type": 1}}),
+        json!({"completion_tokens": 1, "prompt_tokens": 3, "total_tokens": 4, "prompt_tokens_details": {"cached_tokens": 1}})
+    )]
+    #[case::cache_type_string(
+        json!({"prompt_tokens": 3, "completion_tokens": 1, "total_tokens": 4, "prompt_tokens_details": {"cached_tokens": 1, "cache_type": "ephemeral"}}),
+        json!({"completion_tokens": 1, "prompt_tokens": 3, "total_tokens": 4, "prompt_tokens_details": {"cached_tokens": 1, "cache_type": "ephemeral"}})
+    )]
+    fn drops_what_python_drops_from_host_usage(#[case] usage: Value, #[case] expected: Value) {
+        assert_eq!(usage_of(Some(usage)), expected);
+    }
+
+    #[rstest]
+    #[case::count_that_is_not_a_token_count(
+        json!({"prompt_tokens": "three", "completion_tokens": 1, "total_tokens": 4}),
+        json!({"completion_tokens": 1, "prompt_tokens": 0, "total_tokens": 4})
+    )]
+    #[case::detail_that_is_not_a_token_count(
+        json!({
+            "prompt_tokens": 3, "completion_tokens": 1, "total_tokens": 4,
+            "prompt_tokens_details": {"cached_tokens": "two", "text_tokens": 3}
+        }),
+        json!({"completion_tokens": 1, "prompt_tokens": 3, "total_tokens": 4, "prompt_tokens_details": {"text_tokens": 3}})
+    )]
+    #[case::nested_detail_that_is_not_a_token_count(
+        json!({
+            "prompt_tokens": 3, "completion_tokens": 1, "total_tokens": 4,
+            "prompt_tokens_details": {
+                "cached_tokens": 2, "cache_creation_token_details": {"ephemeral_5m_input_tokens": "x", "ephemeral_1h_input_tokens": 1}
+            }
+        }),
+        json!({
+            "completion_tokens": 1, "prompt_tokens": 3, "total_tokens": 4,
+            "prompt_tokens_details": {"cached_tokens": 2, "cache_creation_token_details": {"ephemeral_1h_input_tokens": 1}}
+        })
+    )]
+    #[case::details_that_are_not_an_object(
+        json!({"prompt_tokens": 3, "completion_tokens": 1, "total_tokens": 4, "completion_tokens_details": "none"}),
+        json!({"completion_tokens": 1, "prompt_tokens": 3, "total_tokens": 4})
+    )]
+    #[case::unreadable_top_level_field_keeps_every_other_field(
+        json!({
+            "prompt_tokens": 3, "completion_tokens": 1, "total_tokens": 4, "service_tier": 1, "cost": 0.25,
+            "cache_read_input_tokens": 2, "completion_tokens_details": {"reasoning_tokens": 1}
+        }),
+        json!({
+            "completion_tokens": 1, "prompt_tokens": 3, "total_tokens": 4, "cost": 0.25, "cache_read_input_tokens": 2,
+            "completion_tokens_details": {"reasoning_tokens": 1}, "prompt_tokens_details": {"cached_tokens": 2}
+        })
+    )]
+    fn a_usage_outside_the_contract_keeps_what_parses_instead_of_failing(
+        #[case] usage: Value,
+        #[case] expected: Value,
+    ) {
+        assert_eq!(usage_of(Some(usage)), expected);
     }
 
     #[rstest]
@@ -623,6 +1053,50 @@ mod tests {
                 }),
             ),
             None
+        );
+    }
+
+    #[rstest]
+    #[case::thinking(json!({"type": "thinking", "thinking": "t", "signature": "sig"}))]
+    #[case::redacted_thinking(json!({"type": "redacted_thinking", "data": "d"}))]
+    fn sends_a_reasoning_reply_from_another_provider_on_verbatim(#[case] block: Value) {
+        let conversation = json!([
+            {"role": "user", "content": "2+2?"},
+            {"role": "assistant", "content": "4", "reasoning_content": "t", "thinking_blocks": [block]},
+            {"role": "user", "content": "add 1"},
+        ]);
+        assert_eq!(reason(conversation.clone(), json!({})), None);
+        assert_eq!(
+            transform("my-model", conversation.clone(), json!({}))["messages"],
+            conversation
+        );
+    }
+
+    #[rstest]
+    fn drops_null_reasoning_fields_like_python() {
+        let conversation = json!([
+            {"role": "user", "content": "2+2?"},
+            {"role": "assistant", "content": "4", "reasoning_content": null, "thinking_blocks": null},
+            {"role": "user", "content": "add 1"},
+        ]);
+        assert_eq!(reason(conversation.clone(), json!({})), None);
+        assert_eq!(
+            transform("my-model", conversation, json!({}))["messages"][1],
+            json!({"role": "assistant", "content": "4"})
+        );
+    }
+
+    #[rstest]
+    fn other_unrecognized_message_fields_still_decline() {
+        assert_eq!(
+            reason(
+                json!([
+                    {"role": "user", "content": "hi"},
+                    {"role": "assistant", "content": "4", "thinking_blocks": [], "audio": {"id": "a"}},
+                ]),
+                json!({}),
+            ),
+            Some(Decline::new("unrecognized message field"))
         );
     }
 

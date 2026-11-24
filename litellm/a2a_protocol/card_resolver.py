@@ -6,7 +6,7 @@ Extends the A2A SDK's card resolver to support multiple well-known paths.
 
 from collections.abc import Mapping, Sequence
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Final, Protocol, runtime_checkable
 
 from litellm._logging import verbose_logger
 from litellm.a2a_protocol.exceptions import A2AAgentCardDiscoveryError
@@ -14,10 +14,11 @@ from litellm.constants import LOCALHOST_URL_PATTERNS
 from litellm.litellm_core_utils.core_helpers import has_attributes
 
 if TYPE_CHECKING:
+    import httpx
     from a2a.types import AgentCard
 
 # Runtime imports with availability check
-_A2ACardResolver: Any = None
+_A2ACardResolver: type[object] | None = None
 AGENT_CARD_WELL_KNOWN_PATH: str = "/.well-known/agent-card.json"
 PREV_AGENT_CARD_WELL_KNOWN_PATH: str = "/.well-known/agent.json"
 FOUNDRY_AGENT_CARD_PATH: Final = "/agentCard/v1.0"
@@ -32,6 +33,27 @@ try:
     )
 except ImportError:
     pass
+
+if TYPE_CHECKING:
+
+    class _SdkCardResolver:
+        base_url: str
+
+        def __init__(
+            self,
+            httpx_client: httpx.AsyncClient,
+            base_url: str,
+            agent_card_path: str = AGENT_CARD_WELL_KNOWN_PATH,
+        ) -> None: ...
+
+        async def get_agent_card(
+            self,
+            relative_card_path: str | None = None,
+            http_kwargs: Mapping[str, object] | None = None,
+        ) -> AgentCard: ...
+
+else:
+    _SdkCardResolver: Final = _A2ACardResolver
 
 
 @runtime_checkable
@@ -204,7 +226,7 @@ def fix_agent_card_url(agent_card: "AgentCard", base_url: str) -> "AgentCard":
     return agent_card
 
 
-class LiteLLMA2ACardResolver(_A2ACardResolver):
+class LiteLLMA2ACardResolver(_SdkCardResolver):
     """
     Custom A2A card resolver that supports multiple well-known paths.
 
@@ -213,9 +235,6 @@ class LiteLLMA2ACardResolver(_A2ACardResolver):
     - /.well-known/agent.json (previous/alternative)
     - /agentCard/v1.0
     """
-
-    if TYPE_CHECKING:
-        base_url: str
 
     async def get_agent_card(
         self,

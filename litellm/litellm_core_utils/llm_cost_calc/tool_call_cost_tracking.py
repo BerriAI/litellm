@@ -43,6 +43,10 @@ def _output_item_type(output_item: object) -> str | None:
     return item_type if isinstance(item_type, str) else None
 
 
+def _response_output_items(response_object: ResponsesAPIResponse) -> Sequence[object]:
+    return response_object.output
+
+
 def _responses_tool_usage(response_object: ResponsesAPIResponse) -> ResponsesToolUsage | None:
     top_level: Final = getattr(response_object, "tool_usage", None)
     raw: Final = (
@@ -96,7 +100,7 @@ class StandardBuiltInToolCostTracking:
         - Computer Use (Azure)
         - Code Interpreter (Azure)
         """
-        standard_built_in_tools_params = standard_built_in_tools_params or {}
+        tool_params: Final = standard_built_in_tools_params or StandardBuiltInToolsParams()
 
         google_maps_grounding_cost: Final = StandardBuiltInToolCostTracking._handle_google_maps_grounding_cost(
             model=model,
@@ -109,44 +113,40 @@ class StandardBuiltInToolCostTracking:
             custom_llm_provider=custom_llm_provider,
         )
 
-        # Handle web search
-        if StandardBuiltInToolCostTracking.response_object_includes_web_search_call(
+        has_web_search: Final = StandardBuiltInToolCostTracking.response_object_includes_web_search_call(
             response_object=response_object, usage=usage
-        ):
-            return (
-                google_maps_grounding_cost
-                + image_generation_cost
-                + StandardBuiltInToolCostTracking._handle_web_search_cost(
-                    model=model,
-                    custom_llm_provider=custom_llm_provider,
-                    usage=usage,
-                    standard_built_in_tools_params=standard_built_in_tools_params,
-                    response_object=response_object,
-                )
-            )
-
-        # Handle file search
-        if StandardBuiltInToolCostTracking.response_object_includes_file_search_call(response_object=response_object):
-            return (
-                google_maps_grounding_cost
-                + image_generation_cost
-                + StandardBuiltInToolCostTracking._handle_file_search_cost(
-                    model=model,
-                    custom_llm_provider=custom_llm_provider,
-                    standard_built_in_tools_params=standard_built_in_tools_params,
-                )
-            )
-
-        # Handle Azure assistant features
-        return (
-            google_maps_grounding_cost
-            + image_generation_cost
-            + StandardBuiltInToolCostTracking._handle_azure_assistant_costs(
+        )
+        has_file_search: Final = StandardBuiltInToolCostTracking.response_object_includes_file_search_call(
+            response_object=response_object
+        )
+        base_cost: Final = google_maps_grounding_cost + image_generation_cost
+        if not has_web_search and not has_file_search:
+            return base_cost + StandardBuiltInToolCostTracking._handle_azure_assistant_costs(
                 model=model,
                 custom_llm_provider=custom_llm_provider,
-                standard_built_in_tools_params=standard_built_in_tools_params,
+                standard_built_in_tools_params=tool_params,
             )
+        web_search_cost: Final = (
+            StandardBuiltInToolCostTracking._handle_web_search_cost(
+                model=model,
+                custom_llm_provider=custom_llm_provider,
+                usage=usage,
+                standard_built_in_tools_params=tool_params,
+                response_object=response_object,
+            )
+            if has_web_search
+            else 0.0
         )
+        file_search_cost: Final = (
+            StandardBuiltInToolCostTracking._handle_file_search_cost(
+                model=model,
+                custom_llm_provider=custom_llm_provider,
+                standard_built_in_tools_params=tool_params,
+            )
+            if has_file_search
+            else 0.0
+        )
+        return base_cost + web_search_cost + file_search_cost
 
     @staticmethod
     def _resolve_model_info(model: str, custom_llm_provider: str | None) -> tuple[ModelInfo | None, str | None]:
@@ -256,7 +256,9 @@ class StandardBuiltInToolCostTracking:
         if reported is not None:
             return reported
         count: Final = sum(
-            1 for output_item in response_object.output if _output_item_type(output_item) == "web_search_call"
+            1
+            for output_item in _response_output_items(response_object)
+            if _output_item_type(output_item) == "web_search_call"
         )
         return max(count, 1)
 
@@ -653,7 +655,9 @@ class StandardBuiltInToolCostTracking:
         Returns:
             True if the ResponsesAPIResponse includes one of the specified output types, False otherwise.
         """
-        return any(_output_item_type(output_item) == output_type for output_item in response_object.output)
+        return any(
+            _output_item_type(output_item) == output_type for output_item in _response_output_items(response_object)
+        )
 
     @staticmethod
     def _safe_get_model_info(model: str, custom_llm_provider: str | None = None) -> ModelInfo | None:
@@ -739,7 +743,7 @@ class StandardBuiltInToolCostTracking:
     def get_cost_for_vector_store(
         vector_store_usage: dict | None = None,
         provider: str | None = None,
-        model_info: dict | None = None,
+        model_info: dict[str, object] | None = None,
     ) -> float:
         """
         Calculate cost for vector store usage.

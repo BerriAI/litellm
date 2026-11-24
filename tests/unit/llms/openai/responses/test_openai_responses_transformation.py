@@ -20,6 +20,7 @@ from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfi
 from litellm.llms.bedrock.responses.transformation import BedrockOpenAIResponsesConfig
 from litellm.llms.bedrock_mantle.responses.transformation import BedrockMantleResponsesAPIConfig
 from litellm.llms.hosted_vllm.responses.transformation import HostedVLLMResponsesAPIConfig
+from litellm.llms.litellm_proxy.responses.transformation import LiteLLMProxyResponsesAPIConfig
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.llms.xai.responses.transformation import XAIResponsesAPIConfig
 from litellm.responses.litellm_completion_transformation.transformation import LiteLLMCompletionResponsesConfig
@@ -31,6 +32,7 @@ from litellm.types.llms.openai import (
     ResponseAPIUsage,
     ResponseCompletedEvent,
     ResponseInputParam,
+    ResponsesAPIOptionalRequestParams,
     ResponsesAPIResponse,
     ResponsesAPIStreamEvents,
 )
@@ -1682,16 +1684,14 @@ class TestTransformListInputItemsRequest:
         expected_params = {
             "after": "cursor_after_123",
             "before": "cursor_before_456",
-            "include": "metadata,content",  # Should be comma-separated string
+            "include[]": ["metadata", "content"],
             "limit": 50,
             "order": "asc",
         }
         assert url == expected_url
         assert params == expected_params
 
-    def test_openai_transform_list_input_items_request_include_list_formatting(self):
-        """Test that include list is properly formatted as comma-separated string"""
-        # Execute
+    def test_openai_transform_list_input_items_request_sends_include_as_a_repeated_array_param(self):
         url, params = self.openai_config.transform_list_input_items_request(
             response_id=self.response_id,
             api_base=self.api_base,
@@ -1700,8 +1700,8 @@ class TestTransformListInputItemsRequest:
             include=["metadata", "content", "annotations"],
         )
 
-        # Assert
-        assert params["include"] == "metadata,content,annotations"
+        assert params["include[]"] == ["metadata", "content", "annotations"]
+        assert "include" not in params
 
     def test_openai_transform_list_input_items_request_none_values(self):
         """Test OpenAI implementation with None values for optional parameters"""
@@ -1736,8 +1736,8 @@ class TestTransformListInputItemsRequest:
             include=[],
         )
 
-        # Assert
-        assert "include" not in params  # Empty list should not be included
+        assert "include" not in params
+        assert "include[]" not in params
 
     def test_openai_transform_compact_response_api_request_query_params_preserved(self):
         """Test compact URL construction preserves query params and appends path."""
@@ -1838,7 +1838,7 @@ class TestTransformListInputItemsRequest:
         expected_params = {
             "after": "cursor_after_123",
             "before": "cursor_before_456",
-            "include": "metadata,content",
+            "include[]": ["metadata", "content"],
             "limit": 100,
             "order": "asc",
         }
@@ -1961,7 +1961,7 @@ class TestTransformListInputItemsRequest:
             headers=self.headers,
             include=["metadata"],
         )
-        assert params["include"] == "metadata"
+        assert params["include[]"] == ["metadata"]
 
     def test_url_construction_with_different_api_bases(self):
         """Test URL construction with different API base formats"""
@@ -2536,6 +2536,43 @@ class TestResponsesSurfaceSharesTheEffortRule:
         )
         assert mapped["reasoning"] == {"summary": "auto"}
 
+    @pytest.mark.parametrize("level", ["none", "minimal", "low", "medium", "high", "xhigh", "max"])
+    def test_a_row_that_lists_its_effort_levels_forwards_only_those(self, local_model_cost_map: None, level: str):
+        model: Final = "chat-latest"
+        forwarded: Final = level in litellm.model_cost["chat-latest"]["reasoning_effort_levels"]
+        dropped: Final = OpenAIResponsesAPIConfig().map_openai_params(
+            response_api_optional_params={"reasoning": {"effort": level, "summary": "auto"}},
+            model=model,
+            drop_params=True,
+        )
+        assert dropped["reasoning"] == ({"effort": level, "summary": "auto"} if forwarded else {"summary": "auto"})
+        if forwarded:
+            return
+        with pytest.raises(litellm.UnsupportedParamsError):
+            OpenAIResponsesAPIConfig().map_openai_params(
+                response_api_optional_params={"reasoning": {"effort": level}},
+                model=model,
+                drop_params=False,
+            )
+
+    @pytest.mark.parametrize(
+        ("config", "model"),
+        [
+            (LiteLLMProxyResponsesAPIConfig, "chat-latest"),
+            (OpenAIResponsesAPIConfig, "gpt-chat-latest"),
+            (OpenAIResponsesAPIConfig, "my-gpt-chat-latest"),
+        ],
+    )
+    def test_a_chat_latest_name_openai_does_not_serve_forwards_the_effort_it_was_sent(
+        self, local_model_cost_map: None, config: type[OpenAIResponsesAPIConfig], model: str
+    ):
+        mapped: Final = config().map_openai_params(
+            response_api_optional_params={"reasoning": {"effort": "high"}},
+            model=model,
+            drop_params=False,
+        )
+        assert mapped["reasoning"] == {"effort": "high"}
+
     @pytest.mark.parametrize(
         ("declared_reasoning_efforts", "suggests_declared_levels"),
         [((), True), (None, False)],
@@ -2674,6 +2711,85 @@ class TestResponsesSurfaceSharesTheEffortRule:
             drop_params=False,
         )
         assert mapped["top_p"] == 0.9
+
+
+class TestOSeriesTemperatureMatchesChat:
+    @pytest.mark.parametrize("model", ["o1", "o3", "o3-mini", "o4-mini", "openai/o3-mini"])
+    def test_drop_params_argument_drops_only_a_non_default_temperature(
+        self, local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch, model: str
+    ) -> None:
+        monkeypatch.setattr(litellm, "drop_params", False)
+        mapped: Final = OpenAIResponsesAPIConfig().map_openai_params(
+            response_api_optional_params={"temperature": 0.5, "top_p": 0.9, "max_output_tokens": 100},
+            model=model,
+            drop_params=True,
+        )
+        assert mapped == {"top_p": 0.9, "max_output_tokens": 100}
+
+    def test_global_drop_params_drops_a_non_default_temperature(
+        self, local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(litellm, "drop_params", True)
+        mapped: Final = OpenAIResponsesAPIConfig().map_openai_params(
+            response_api_optional_params={"temperature": 0.5, "max_output_tokens": 100},
+            model="o3-mini",
+            drop_params=False,
+        )
+        assert mapped == {"max_output_tokens": 100}
+
+    @pytest.mark.parametrize(
+        "params",
+        [
+            {"temperature": 1, "max_output_tokens": 100},
+            {"temperature": None, "max_output_tokens": 100},
+            {"max_output_tokens": 100},
+        ],
+    )
+    def test_default_or_omitted_temperature_is_forwarded_as_sent(
+        self, local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch, params: ResponsesAPIOptionalRequestParams
+    ) -> None:
+        monkeypatch.setattr(litellm, "drop_params", True)
+        mapped: Final = OpenAIResponsesAPIConfig().map_openai_params(
+            response_api_optional_params=params,
+            model="o3-mini",
+            drop_params=True,
+        )
+        assert mapped == params
+
+    def test_without_drop_params_a_non_default_temperature_is_still_forwarded(
+        self, local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(litellm, "drop_params", False)
+        mapped: Final = OpenAIResponsesAPIConfig().map_openai_params(
+            response_api_optional_params={"temperature": 0.5},
+            model="o3-mini",
+            drop_params=False,
+        )
+        assert mapped == {"temperature": 0.5}
+
+    @pytest.mark.parametrize(
+        "config, model",
+        [
+            (OpenAIResponsesAPIConfig(), "gpt-4o"),
+            (OpenAIResponsesAPIConfig(), "gpt-4.1"),
+            (AzureOpenAIResponsesAPIConfig(), "o3-mini"),
+            (HostedVLLMResponsesAPIConfig(), "o3-mini"),
+        ],
+    )
+    def test_temperature_is_kept_for_non_o_series_models_and_other_providers(
+        self,
+        local_model_cost_map: None,
+        monkeypatch: pytest.MonkeyPatch,
+        config: OpenAIResponsesAPIConfig,
+        model: str,
+    ) -> None:
+        monkeypatch.setattr(litellm, "drop_params", False)
+        mapped: Final = config.map_openai_params(
+            response_api_optional_params={"temperature": 0.5},
+            model=model,
+            drop_params=True,
+        )
+        assert mapped == {"temperature": 0.5}
 
 
 class TestFlattenToolSchemaCombinatorsWiring:
@@ -4995,6 +5111,7 @@ def test_compact_request_drops_params_compact_rejects_under_drop_params(
             "store": False,
             "truncation": "auto",
             "max_output_tokens": 100,
+            "background_options": {"completion_window": "2h"},
             "tool_choice": "auto",
             "reasoning": {"effort": "low"},
             "include": ["reasoning.encrypted_content"],

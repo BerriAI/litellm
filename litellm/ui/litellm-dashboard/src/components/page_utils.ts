@@ -3,7 +3,7 @@
  */
 
 import i18n from "@/i18n/i18n";
-import { groupText, labelText, menuGroups } from "./leftnav";
+import { groupText, labelText, menuGroups } from "./LeftNav";
 import { pageDescriptions, PageMetadata } from "./page_metadata";
 import { internalUserRoles } from "@/utils/roles";
 

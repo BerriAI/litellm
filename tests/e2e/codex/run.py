@@ -1,8 +1,8 @@
 """What one `codex exec --json` run did, read from the JSONL events it printed.
 
-The event shapes are Codex's own (`codex-rs/exec/src/exec_events.rs`). We take the latest codex release > 3 days old, so an event or item
-type this module does not model is skipped, while one it does model is validated strictly and fails loudly when
-Codex changes it.
+The event shapes are Codex's own (`codex-rs/exec/src/exec_events.rs`). `package-lock.json` pins the Codex release,
+and a bump can add events, so an event or item type this module does not model is skipped, while one it does model
+is validated strictly and fails loudly when Codex changes it.
 """
 
 from __future__ import annotations
@@ -174,6 +174,7 @@ class CodexRun:
     usage: TokenUsage | None
     errors: tuple[CodexError, ...]
     stderr: str
+    web_searches: int
 
 
 def codex_run(*, exit_code: int, stdout: str, stderr: str) -> CodexRun:
@@ -198,6 +199,7 @@ def codex_run(*, exit_code: int, stdout: str, stderr: str) -> CodexRun:
         usage=usages[-1] if usages else None,
         errors=tuple(_errors(events)),
         stderr=stderr,
+        web_searches=sum(1 for item in items if item.type == "web_search"),
     )
 
 

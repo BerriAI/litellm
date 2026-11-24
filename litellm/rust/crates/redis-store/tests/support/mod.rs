@@ -13,7 +13,7 @@ use litellm_redis_client::{
 use litellm_redis_store::{
     Number, Remote, TierPolicy,
     router_cooldowns::Cooldown,
-    router_usage::{Counter, Kind},
+    router_usage::{Counter, Kind, Scope},
 };
 use litellm_redis_testing::RedisDeployment;
 
@@ -33,6 +33,21 @@ pub const USAGE_POLICY: TierPolicy = TierPolicy {
 
 pub fn connect(deployment: &RedisDeployment) -> RedisClient {
     connect_with(deployment, None, None)
+}
+
+/// A standalone client for whatever listens on `port`, such as a `TcpProxy` in front of a server.
+pub fn connect_port(port: u16) -> RedisClient {
+    client(
+        Target::Url(RedisUrl {
+            url: litellm_secret_value::SecretValue::new(format!("redis://127.0.0.1:{port}")),
+            tls: None,
+            db: None,
+            username: None,
+            password: None,
+        }),
+        None,
+        None,
+    )
 }
 
 /// `client` with `RedisCache`'s default TTL when `litellm.default_redis_ttl` is unset.
@@ -121,6 +136,14 @@ fn connect_with(
             tls: None,
         }),
     };
+    client(endpoint, breaker, events)
+}
+
+fn client(
+    endpoint: Target,
+    breaker: Option<litellm_circuit_breaker::Breaker>,
+    events: Option<Arc<dyn RedisEvents>>,
+) -> RedisClient {
     RedisClient::new(RedisConfig {
         target: endpoint,
         credentials: Credentials::NONE,
@@ -212,21 +235,49 @@ pub fn usage() -> [UsageCase; 2] {
     [
         UsageCase {
             counter: Counter {
+                scope: Scope::GlobalRouter,
                 deployment_id: "dep".to_owned(),
                 model: Some("anthropic/claude-sonnet-5-5".to_owned()),
-                minute: "12-34".to_owned(),
+                window: "12-34".to_owned(),
                 kind: Kind::Tpm,
             },
             key: "global_router:dep:anthropic/claude-sonnet-5-5:tpm:12-34",
         },
         UsageCase {
             counter: Counter {
+                scope: Scope::GlobalRouter,
                 deployment_id: "dep".to_owned(),
                 model: None,
-                minute: "09-05".to_owned(),
+                window: "09-05".to_owned(),
                 kind: Kind::Rpm,
             },
             key: "global_router:dep:None:rpm:09-05",
+        },
+    ]
+}
+
+/// main's usage-based-routing-v2 and model rate limit check keys, which carry no prefix.
+pub fn deployment_usage() -> [UsageCase; 2] {
+    [
+        UsageCase {
+            counter: Counter {
+                scope: Scope::Deployment,
+                deployment_id: "dep".to_owned(),
+                model: Some("openai/gpt-5.4-nano".to_owned()),
+                window: "12-34".to_owned(),
+                kind: Kind::Rpm,
+            },
+            key: "dep:openai/gpt-5.4-nano:rpm:12-34",
+        },
+        UsageCase {
+            counter: Counter {
+                scope: Scope::Deployment,
+                deployment_id: "dep".to_owned(),
+                model: None,
+                window: "2026-11-10".to_owned(),
+                kind: Kind::Tpd,
+            },
+            key: "dep:None:tpd:2026-11-10",
         },
     ]
 }

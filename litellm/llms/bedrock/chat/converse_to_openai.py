@@ -21,7 +21,7 @@ from litellm.types.llms.openai import (
 )
 
 JsonPath: TypeAlias = tuple[str | int, ...]
-_Node: Final = TypeVar("_Node")
+_Node = TypeVar("_Node")
 _OBJECT: Final = TypeAdapter(Mapping[str, object])
 _ITEMS: Final = TypeAdapter(Sequence[object])
 
