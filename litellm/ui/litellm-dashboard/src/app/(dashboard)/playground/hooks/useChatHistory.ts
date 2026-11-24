@@ -266,6 +266,7 @@ export function useChatHistory({ simplified }: { simplified: boolean }): UseChat
   };
 
   const handleModelChange = () => {
+    setMessageTraceId(null);
     setResponsesSessionId(null);
     setResendsHistory(false);
   };

@@ -658,6 +658,20 @@ describe("useChatHistory", () => {
       expect(result.current.responsesSessionId).toBeNull();
     });
 
+    it("starts a new trace when the model changes, so the new session's logs never join the old one", () => {
+      const { result } = renderHook(() => useChatHistory({ simplified: false }));
+
+      act(() => {
+        result.current.setMessageTraceId("trace-before-model-change");
+      });
+      act(() => {
+        result.current.handleModelChange();
+      });
+
+      expect(result.current.messageTraceId).toBeNull();
+      expect(sessionStorage.getItem("messageTraceId")).toBeNull();
+    });
+
     it.each([
       ["clearing the chat", (hook: ReturnType<typeof useChatHistory>) => hook.clearChatHistory()],
       [
