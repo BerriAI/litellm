@@ -102,11 +102,30 @@ def _difference(left: Tool, right: Tool) -> int:
     return sum(left_leaves.get(key) != right_leaves.get(key) for key in left_leaves.keys() | right_leaves.keys())
 
 
-def _kept_distance(guardrailed: Sequence[Tool], originals: Sequence[Tool], kept: int, candidate: int) -> int:
-    return _difference(guardrailed[kept], originals[candidate])
+Anchor: TypeAlias = tuple[int, int]
+OrderBreaks: TypeAlias = Callable[[int, int], int]
+Distance: TypeAlias = Callable[[int, int], tuple[int, int]]
 
 
-Distance: TypeAlias = Callable[[int, int], int]
+def _order_breaks(
+    anchors: Sequence[Anchor],
+    guardrailed_positions: Sequence[int],
+    flattened_positions: Sequence[int],
+    kept: int,
+    candidate: int,
+) -> int:
+    guardrailed_position: Final = guardrailed_positions[kept]
+    flattened_position: Final = flattened_positions[candidate]
+    return sum(
+        (anchor_guardrailed < guardrailed_position) != (anchor_flattened < flattened_position)
+        for anchor_guardrailed, anchor_flattened in anchors
+    )
+
+
+def _kept_distance(
+    guardrailed: Sequence[Tool], originals: Sequence[Tool], order_breaks: OrderBreaks, kept: int, candidate: int
+) -> tuple[int, int]:
+    return (_difference(guardrailed[kept], originals[candidate]), order_breaks(kept, candidate))
 
 
 @dataclass(frozen=True, slots=True)
@@ -197,10 +216,13 @@ def _round(
 
 
 def _content_matches(
-    originals: Sequence[Tool], guardrailed: Sequence[Tool], rebuildable: Sequence[Tool | None]
+    originals: Sequence[Tool],
+    guardrailed: Sequence[Tool],
+    rebuildable: Sequence[Tool | None],
+    order_breaks: OrderBreaks,
 ) -> tuple[_Match | None, ...] | None:
     start: Final = _Resolution(passed=tuple(range(len(guardrailed))), remaining=tuple(range(len(originals))))
-    distance: Final = partial(_kept_distance, guardrailed, originals)
+    distance: Final = partial(_kept_distance, guardrailed, originals, order_breaks)
     exact: Final = _round(originals, guardrailed, rebuildable, start, distance, with_description=True)
     if exact is None:
         return None
@@ -220,11 +242,13 @@ def _positioned_matches(
     flattened_positions: Sequence[int],
     guardrailed_positions: Sequence[int],
     rebuildable_originals: Mapping[int, Tool],
+    anchors: Sequence[Anchor],
 ) -> tuple[tuple[int, _Match], ...] | None:
     matches: Final = _content_matches(
         tuple(map(flattened.__getitem__, flattened_positions)),
         tuple(map(guardrailed.__getitem__, guardrailed_positions)),
         tuple(map(rebuildable_originals.get, flattened_positions)),
+        partial(_order_breaks, anchors, guardrailed_positions, flattened_positions),
     )
     if matches is None:
         return None
@@ -255,8 +279,13 @@ def _guardrailed_keys(
 ) -> _GuardrailedKeys | None:
     keys: Final = tuple(map(_chat_tool_key, guardrailed))
     positions: Final = _key_positions(keys)
+    anchors: Final = tuple(
+        (kept[0], flattened_positions[key][0])
+        for key, kept in positions.items()
+        if len(kept) == 1 and len(flattened_positions.get(key, ())) == 1
+    )
     realigned: Final = tuple(
-        _positioned_matches(flattened, guardrailed, flattened_positions[key], kept, rebuildable_originals)
+        _positioned_matches(flattened, guardrailed, flattened_positions[key], kept, rebuildable_originals, anchors)
         for key, kept in positions.items()
         if len(flattened_positions.get(key, ())) > 1
     )
