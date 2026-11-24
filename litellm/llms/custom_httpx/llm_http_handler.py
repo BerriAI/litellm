@@ -6540,7 +6540,7 @@ class BaseLLMHTTPHandler:
         logging_obj: "LiteLLMLoggingObj",
         stream: bool,
         custom_llm_provider: str,
-        kwargs: dict,
+        kwargs: dict[str, object],
         api_surface: str = "anthropic_messages",
         skip_chat_completion_loops: bool = False,
     ) -> Any | None:

@@ -20,18 +20,20 @@
 
 use std::time::Duration;
 
-use litellm_auth::AuthServices;
+use litellm_auth::{AuthServices, CredentialPlacement};
 use litellm_core_utils::{
     dot_notation_indexing::delete_nested_value,
     get_provider_specific_headers::get_provider_specific_headers,
 };
 use litellm_env::Lookup;
 use litellm_host::interceptors::{Interceptors, ProviderIdentity, RequestContext, WireRequest};
+use litellm_http::request::without_headers;
 use litellm_inference::context::CallContext;
 use litellm_llms::anthropic::messages::transformation::is_claude_model;
 use litellm_llms::base_llm::{
     auth::{
-        AzureAdTokenHosts, Headers, LoggedIn, ValidatedEnvironment, prepare_auth, resolve_auth,
+        AuthScheme, AzureAdTokenHosts, Headers, LoggedIn, ValidatedEnvironment, prepare_auth,
+        resolve_auth,
     },
     messages::{
         context::MessagesTransformContext,
@@ -206,6 +208,7 @@ pub(super) async fn provider_call(
         config,
         credentials,
         CallAuthInput {
+            provider,
             request: &trimmed,
             forwarded: forwarded_headers(
                 provider,
@@ -361,6 +364,7 @@ fn effective_request(
 }
 
 struct CallAuthInput<'a> {
+    provider: MessagesProvider,
     request: &'a MessagesRequest,
     forwarded: Headers,
     configured_key: Option<&'a str>,
@@ -550,6 +554,52 @@ async fn resolve_environment(
     workload_identity: Option<&dyn WorkloadIdentity>,
     env_lookup: &(dyn Fn(&str) -> Option<String> + Sync),
 ) -> Result<ValidatedEnvironment, Error> {
+    if input.provider.as_str() == "anthropic"
+        && input
+            .connection_params
+            .extra
+            .get("oauth_client_credentials")
+            == Some(&Value::Bool(true))
+    {
+        let token = match workload_identity {
+            Some(identity) => {
+                identity
+                    .client_credentials_token(
+                        input.connection_params,
+                        input.api_base,
+                        &input.request.model,
+                    )
+                    .await?
+            }
+            None => None,
+        };
+        return token
+            .map(|secret| ValidatedEnvironment {
+                headers: without_headers(
+                    input.forwarded,
+                    &[
+                        "authorization",
+                        "x-api-key",
+                        "api-key",
+                        "x-goog-api-key",
+                        "ocp-apim-subscription-key",
+                        "x-litellm-api-key",
+                        "host",
+                    ],
+                ),
+                auth: AuthScheme::Credential {
+                    placement: CredentialPlacement::Bearer,
+                    secret,
+                },
+            })
+            .ok_or_else(|| {
+                litellm_auth::Error::MissingApiKey {
+                    provider: "Anthropic OAuth client credentials",
+                    environment_variable: "oauth_client_secret",
+                }
+                .into()
+            });
+    }
     let environment = config.validate_federated_environment(
         input.forwarded,
         input.configured_key,

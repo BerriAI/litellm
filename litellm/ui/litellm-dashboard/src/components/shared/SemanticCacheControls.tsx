@@ -1,3 +1,4 @@
+import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings";
 import { useTranslation } from "react-i18next";
 import { z } from "zod";
 
@@ -63,6 +64,7 @@ export function SemanticCacheControls({
   disabled?: boolean;
 }) {
   const { t } = useTranslation();
+  const { data: settings } = useUISettings({ staleTime: 0 });
   const result = paramsSchema.safeParse(value);
   const params: CacheParams = result.success ? result.data : {};
   const update = (next: CacheParams) =>
@@ -85,23 +87,25 @@ export function SemanticCacheControls({
           <option value="false">{t("shared.semanticCaching.disabled")}</option>
         </select>
       </label>
-      <label>
-        {t("shared.semanticCaching.threshold")}
-        <input
-          className="ml-2 rounded border px-2 py-1"
-          type="number"
-          min={0}
-          max={1}
-          step="any"
-          value={params.similarity_threshold ?? ""}
-          onChange={(event) => {
-            const input = event.currentTarget;
-            if (input.validity.valid) {
-              update({ ...params, similarity_threshold: input.value === "" ? undefined : input.valueAsNumber });
-            }
-          }}
-        />
-      </label>
+      {settings?.supports_similarity_threshold === true && (
+        <label>
+          {t("shared.semanticCaching.threshold")}
+          <input
+            className="ml-2 rounded border px-2 py-1"
+            type="number"
+            min={0}
+            max={1}
+            step="any"
+            value={params.similarity_threshold ?? ""}
+            onChange={(event) => {
+              const input = event.currentTarget;
+              if (input.validity.valid) {
+                update({ ...params, similarity_threshold: input.value === "" ? undefined : input.valueAsNumber });
+              }
+            }}
+          />
+        </label>
+      )}
       <label>
         {t("shared.semanticCaching.ttl")}
         <input

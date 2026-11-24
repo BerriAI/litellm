@@ -1390,7 +1390,7 @@ class ParallelRequestLimiterHook(CustomLogger):
     @with_service_target(RATE_LIMITS_TARGET)
     async def async_logging_hook(
         self,
-        kwargs: dict,
+        kwargs: dict[str, object],
         result: object,
         call_type: str,
     ) -> tuple[dict, object]:
@@ -1477,7 +1477,6 @@ class ParallelRequestLimiterHook(CustomLogger):
         except Exception as e:  # noqa: BLE001  # a background refund has no caller to raise to, so it logs its failure
             _log_responses_websocket_release_error(e)
 
-    @with_service_target(RATE_LIMITS_TARGET)
     async def async_release_max_parallel_requests_on_disconnect(
         self,
         user_api_key_dict: UserAPIKeyAuth,
@@ -1493,6 +1492,10 @@ class ParallelRequestLimiterHook(CustomLogger):
         key object's current max_parallel_requests configuration, which can change mid-request) decides
         whether there is anything to release.
         """
+        await self.async_release_request_parallel_slot()
+
+    @with_service_target(RATE_LIMITS_TARGET)
+    async def async_release_request_parallel_slot(self) -> None:
         native_state: Final = _native_state(self, get_request_stash())
         if native_state is not None:
             await self.native_companion.release_on_disconnect(native_state)

@@ -11,11 +11,13 @@ import ast
 import hashlib
 import json
 import logging
+import math
 import time
 import traceback
 from collections.abc import Awaitable, Callable, Generator, Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from enum import Enum
+from functools import partial
 from itertools import chain
 from types import MappingProxyType
 from typing import Final, Literal, Protocol, cast
@@ -35,12 +37,12 @@ from litellm.litellm_core_utils.model_param_helper import (
     peek_reasoning_summary_aliases,
 )
 from litellm.types.caching import *
-from litellm.types.semantic_cache import semantic_cache_policy
+from litellm.types.semantic_cache import response_cache_policy_ttl, semantic_cache_policy
 from litellm.types.utils import EmbeddingResponse, Usage, is_litellm_owned_kwarg
 
 from .azure_blob_cache import AzureBlobCache
-from .base_cache import BaseCache
-from .dual_cache import DualCache  # noqa: F401  # re-exported, callers import DualCache from litellm.caching.caching
+from .base_cache import BaseCache, response_cache_entry_is_fresh
+from .dual_cache import DualCache
 from .gcs_cache import GCSCache
 from .in_memory_cache import InMemoryCache
 from .qdrant_semantic_cache import QdrantSemanticCache
@@ -853,15 +855,8 @@ class Cache:
         """
         # Check if a timestamp was stored with the cached response
         if cached_result is not None and isinstance(cached_result, dict) and "timestamp" in cached_result:
-            timestamp: Final = cached_result["timestamp"]
-            current_time: Final = time.time()
-
-            # Calculate age of the cached response
-            response_age: Final = current_time - timestamp
-
-            # Check if the cached response is older than the max-age
-            if max_age is not None and response_age > max_age:
-                return None  # Cached response is too old
+            if not response_cache_entry_is_fresh(cached_result, max_age):
+                return None
 
             # If the response is fresh, or there's no max-age requirement, return the cached response
             # cached_response is in `b{} convert it to ModelResponse
@@ -879,6 +874,34 @@ class Cache:
         return cached_result
 
     _get_cache_logic = get_cache_logic
+
+    def response_cache_max_age(self, kwargs: Mapping[str, object], *, sync: bool = False) -> float | None:
+        scoped_ttl: Final = response_cache_policy_ttl(kwargs)
+        ttl: Final = scoped_ttl if scoped_ttl is not None and not self._is_semantic_cache() else None
+        controls: Final = as_str_mapping(kwargs.get("cache")) or {}
+        fallback: Final = float("inf") if ttl is None else None
+        preferred: Final = "s-maxage" if sync else "s-max-age"
+        alternate: Final = "s-max-age" if sync else "s-maxage"
+        alternate_age: Final = controls.get(alternate, fallback)
+        preferred_age: Final = controls.get(preferred, alternate_age)
+        max_age: Final = preferred_age or alternate_age or fallback if sync and ttl is None else preferred_age
+        effective_age: Final = alternate_age if ttl is not None and max_age is None else max_age
+        request_age: Final = float(effective_age) if isinstance(effective_age, str) else effective_age
+        if not isinstance(request_age, (int, float)):
+            return ttl
+        if ttl is None:
+            return request_age
+        if isinstance(request_age, float) and math.isnan(request_age):
+            return ttl
+        return min(request_age, ttl)
+
+    def _response_cache_lookup_kwargs(
+        self, backend: BaseCache, kwargs: Mapping[str, object], max_age: float | None
+    ) -> Mapping[str, object]:
+        if not isinstance(backend, DualCache) or self._is_semantic_cache():
+            return kwargs
+        scoped_max_age: Final = max_age if response_cache_policy_ttl(kwargs) is not None else None
+        return {**kwargs, "_accept_entry": partial(response_cache_entry_is_fresh, max_age=scoped_max_age)}
 
     @staticmethod
     def _get_safe_cache_lookup_kwargs(kwargs: Mapping[str, object]) -> dict[str, object]:
@@ -909,7 +932,7 @@ class Cache:
         if "semantic-similarity" in cache_lookup_metadata:
             original_metadata["semantic-similarity"] = cache_lookup_metadata["semantic-similarity"]
 
-    def get_cache(self, dynamic_cache_object: BaseCache | None = None, **kwargs):
+    def get_cache(self, dynamic_cache_object: BaseCache | None = None, **kwargs: object):
         """
         Retrieves the cached result for the given arguments.
 
@@ -929,13 +952,12 @@ class Cache:
                 else:
                     cache_key = self.get_cache_key(**kwargs)
                 if cache_key is not None:
-                    cache_control_args: Final[DynamicCacheControl] = kwargs.get("cache", {})
-                    max_age = cache_control_args.get("s-maxage") or cache_control_args.get("s-max-age") or float("inf")
-                    cache_lookup_kwargs: Final = self._get_safe_cache_lookup_kwargs(kwargs)
-                    if dynamic_cache_object is not None:
-                        cached_result = dynamic_cache_object.get_cache(cache_key, **cache_lookup_kwargs)
-                    else:
-                        cached_result = self.cache.get_cache(cache_key, **cache_lookup_kwargs)
+                    max_age: Final = self.response_cache_max_age(kwargs, sync=True)
+                    backend: Final[BaseCache] = self.cache if dynamic_cache_object is None else dynamic_cache_object
+                    cache_lookup_kwargs: Final = self._response_cache_lookup_kwargs(
+                        backend, self._get_safe_cache_lookup_kwargs(kwargs), max_age
+                    )
+                    cached_result: Final[object] = backend.get_cache(cache_key, **cache_lookup_kwargs)
                     self._update_metadata_from_cache_lookup_kwargs(
                         original_kwargs=kwargs,
                         cache_lookup_kwargs=cache_lookup_kwargs,
@@ -945,7 +967,7 @@ class Cache:
             print_verbose(f"An exception occurred: {traceback.format_exc()}")
             return None
 
-    async def async_get_cache(self, dynamic_cache_object: BaseCache | None = None, **kwargs):
+    async def async_get_cache(self, dynamic_cache_object: BaseCache | None = None, **kwargs: object):
         """
         Async get cache implementation.
 
@@ -962,14 +984,10 @@ class Cache:
                 else:
                     cache_key = self.get_cache_key(**kwargs)
                 if cache_key is not None:
-                    cache_control_args: Final = kwargs.get("cache", {})
-                    max_age: Final = cache_control_args.get(
-                        "s-max-age", cache_control_args.get("s-maxage", float("inf"))
-                    )
-                    if dynamic_cache_object is not None:
-                        cached_result = await dynamic_cache_object.async_get_cache(cache_key, **kwargs)
-                    else:
-                        cached_result = await self.cache.async_get_cache(cache_key, **kwargs)
+                    max_age: Final = self.response_cache_max_age(kwargs)
+                    backend: Final[BaseCache] = self.cache if dynamic_cache_object is None else dynamic_cache_object
+                    cache_lookup_kwargs: Final = self._response_cache_lookup_kwargs(backend, kwargs, max_age)
+                    cached_result: Final[object] = await backend.async_get_cache(cache_key, **cache_lookup_kwargs)
                     return self.get_cache_logic(cached_result=cached_result, max_age=max_age)
         except Exception:
             print_verbose(f"An exception occurred: {traceback.format_exc()}")
@@ -998,10 +1016,16 @@ class Cache:
                         if k == "ttl":
                             kwargs["ttl"] = v
 
-                cached_data: Final = {"timestamp": time.time(), "response": result}
-                policy: Final = semantic_cache_policy(kwargs) if self._is_semantic_cache() else None
-                if policy is not None and policy.params is not None and policy.params.ttl is not None:
-                    return cache_key, cached_data, {**kwargs, "ttl": policy.params.ttl}
+                ttl: Final = response_cache_policy_ttl(kwargs)
+                cached_data: Final = {
+                    "timestamp": time.time(),
+                    "response": result,
+                    **({"response_cache_ttl": ttl} if ttl is not None and not self._is_semantic_cache() else {}),
+                }
+                if ttl is not None:
+                    if self.type == LiteLLMCacheType.LOCAL:
+                        return cache_key, cached_data, {**kwargs, "ttl": ttl, "replace_ttl": True}
+                    return cache_key, cached_data, {**kwargs, "ttl": ttl}
                 return cache_key, cached_data, kwargs
             else:
                 raise Exception("cache key is None")
@@ -1163,7 +1187,7 @@ class Cache:
         self,
         result: EmbeddingResponse,
         input: str,
-        kwargs: dict,
+        kwargs: dict[str, object],
         idx_in_result_data: int = 0,
     ) -> tuple[str, dict[str, object], dict[str, object]]:
         preset_cache_key: Final = self.get_cache_key(**{**kwargs, "input": input})
@@ -1253,23 +1277,28 @@ class Cache:
         """
         if self.max_messages is not None and _request_message_count(kwargs) > self.max_messages:
             return False
-        policy: Final = semantic_cache_policy(kwargs) if self._is_semantic_cache() else None
+        policy: Final = semantic_cache_policy(kwargs)
         if policy is not None and policy.params is not None and policy.params.enabled is False:
             return False
         if self.mode == CacheMode.default_on:
             return True
+        if policy is not None and policy.key_opted_out:
+            return False
 
         # when mode == default_off -> Cache is opt in only
-        _cache: Final = kwargs.get("cache", None)
+        _cache: Final = as_str_mapping(kwargs.get("cache"))
         verbose_logger.debug("should_use_cache: kwargs: %s; _cache: %s", kwargs, _cache)
-        if _cache and isinstance(_cache, dict):
+        if _cache is not None:
             if _cache.get("use-cache", False) is True:
                 return True
+            if _cache.get("use-cache") is False and not self._is_semantic_cache():
+                return False
         return policy is not None and policy.params is not None and policy.params.enabled is True
 
     async def batch_cache_write(self, result: object, **kwargs: object):
+        scoped_ttl: Final = response_cache_policy_ttl(kwargs)
         cache_key, cached_data, kwargs = self._add_cache_logic(result=result, **kwargs)
-        await self.cache.batch_cache_write(cache_key, cached_data, **kwargs)
+        await self.cache.batch_cache_write(cache_key, cached_data, **{**kwargs, "scoped_ttl": scoped_ttl})
 
     async def ping(self) -> object:
         cache_ping: Final = require_attributes(self.cache, _SupportsAsyncPing, "ping").ping

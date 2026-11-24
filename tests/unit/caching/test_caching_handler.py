@@ -3753,6 +3753,47 @@ async def test_async_get_cache_forgets_the_worker_copy_of_a_stored_response_with
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(("enabled", "ttl", "hit"), [(False, None, False), (True, 5, False), (True, 15, True)])
+async def test_embedding_cache_lookup_applies_scoped_policy(
+    monkeypatch: pytest.MonkeyPatch, enabled: bool, ttl: int | None, hit: bool
+) -> None:
+    from litellm.constants import SEMANTIC_CACHE_POLICY_KEY
+    from litellm.types.semantic_cache import SemanticCacheParams, SemanticCachePolicy
+
+    monkeypatch.setattr(time, "time", lambda: 100.0)
+    cache: Final = Cache(type=LiteLLMCacheType.LOCAL)
+    monkeypatch.setattr(litellm, "cache", cache)
+    handler: Final = LLMCachingHandler(original_function=aembedding, request_kwargs={}, start_time=_FIXED_START)
+    model: Final = "openai/text-embedding-3-small"
+    kwargs: Final = {"model": model, "input": ["a red bus"], "caching": True}
+    await cache.async_add_cache_pipeline(
+        EmbeddingResponse(model=model, data=[Embedding(embedding=[0.1, 0.2], index=0, object="embedding")]),
+        **kwargs,
+    )
+    monkeypatch.setattr(time, "time", lambda: 110.0)
+    logging_obj: Final = LiteLLMLogging(
+        litellm_call_id="embedding-cache-test",
+        call_type=CallTypes.aembedding.value,
+        model=model,
+        messages=[],
+        function_id="embedding-cache-test",
+        stream=False,
+        start_time=_FIXED_START,
+    )
+    policy: Final = SemanticCachePolicy(scope="team", params=SemanticCacheParams(enabled=enabled, ttl=ttl))
+    result: Final = await handler.async_get_cache(
+        model=model,
+        original_function=aembedding,
+        logging_obj=logging_obj,
+        start_time=_FIXED_START,
+        call_type=CallTypes.aembedding.value,
+        kwargs={**kwargs, "cache": {SEMANTIC_CACHE_POLICY_KEY: policy}},
+    )
+
+    assert bool(result.embedding_all_elements_cache_hit) is hit
+
+
+@pytest.mark.asyncio
 async def test_async_get_cache_partial_hit_keeps_file_block_items_uncached() -> None:
     setup_cache()
     fixed_start: Final = datetime(2026, 1, 1)

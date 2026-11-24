@@ -61,12 +61,6 @@ pub(crate) trait Endpoint: RouteAttempt {
     const PATH: &'static str;
     const ERRORS: ErrorFormat;
 
-    /// What a complete outcome counted. A stream's counts are read from its events.
-    fn counts(outcome: &Self::Outcome) -> Option<Counts> {
-        let _ = outcome;
-        None
-    }
-
     /// Those counts as Python's litellm `Usage`, `None` for a route that counts no tokens.
     fn usage(counts: Counts) -> Option<ChatCompletionsUsage> {
         let _ = counts;
