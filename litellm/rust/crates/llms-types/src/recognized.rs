@@ -59,6 +59,17 @@ where
     <Value as serde::Deserialize>::deserialize(deserializer).map(Some)
 }
 
+/// `deserialize_with` for an optional field typed after the contract ignored its key: a value that
+/// does not decode as `T` stays absent, as it did, instead of failing the whole object.
+pub fn known_or_absent<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: serde::de::DeserializeOwned,
+{
+    let value = <Value as serde::Deserialize>::deserialize(deserializer)?;
+    Ok(serde_json::from_value(value).ok())
+}
+
 /// `deserialize_with` for an optional float Python forwards as the caller sent it: an integer
 /// stays `Unrecognized` with its exact digits, as Python sends, logs and prints it, and `null`
 /// stays absent as before.

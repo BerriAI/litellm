@@ -1,6 +1,6 @@
 import { useTerminology } from "@/contexts/TerminologyContext";
 import { PageContent } from "@/components/shared/Page";
-import { PageHeader, PageHeaderTitle, PageHeaderDescription, PageHeaderControls } from "@/components/shared/PageHeader";
+import { PageHeader, PageHeaderTitle, PageHeaderDescription } from "@/components/shared/PageHeader";
 import React, { useState, useEffect } from "react";
 import { Bot, Info, Plus } from "lucide-react";
 import { useTranslation } from "react-i18next";
@@ -149,14 +149,6 @@ const AgentsPanel: React.FC<AgentsPanelProps> = ({ accessToken, userRole, teams 
           {t("agents.panel.title")}
         </PageHeaderTitle>
         <PageHeaderDescription>{term(t("agents.panel.description"))}</PageHeaderDescription>
-        {isAdmin && (
-          <PageHeaderControls>
-            <Button onClick={handleAddAgent} disabled={!accessToken}>
-              <Plus />
-              {t("agents.panel.addAgent")}
-            </Button>
-          </PageHeaderControls>
-        )}
       </PageHeader>
 
       <Alert>
@@ -164,6 +156,15 @@ const AgentsPanel: React.FC<AgentsPanelProps> = ({ accessToken, userRole, teams 
         <AlertTitle>{t("agents.panel.authAlert.title")}</AlertTitle>
         <AlertDescription>{t("agents.panel.authAlert.description")}</AlertDescription>
       </Alert>
+
+      {isAdmin && (
+        <div>
+          <Button onClick={handleAddAgent} disabled={!accessToken}>
+            <Plus />
+            {t("agents.panel.addAgent")}
+          </Button>
+        </div>
+      )}
 
       {selectedAgentId ? (
         <AgentInfoView

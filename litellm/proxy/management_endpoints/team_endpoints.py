@@ -138,6 +138,11 @@ from litellm.proxy.common_utils.cache_invalidation_pubsub import (
     evict_shared,
     publish_cache_invalidation,
 )
+from litellm.proxy.common_utils.callback_config_validation import (
+    InvalidLoggingMetadata,
+    normalize_logging_entries,
+    string_keyed,
+)
 from litellm.proxy.common_utils.callback_utils import encrypt_callback_vars
 from litellm.proxy.common_utils.json_merge_patch import apply_json_merge_patch
 from litellm.proxy.common_utils.openai_error_payload import proxy_exception_for
@@ -178,6 +183,7 @@ from litellm.proxy.management_endpoints.common_utils import (  # noqa: F401  # l
     check_passthrough_routes_caller_permission,
     check_require_trace_id_caller_permission,
     member_budget_patch,
+    semantic_cache_metadata_changed,
     set_object_metadata_field,
     team_member_has_permission,
     update_metadata_fields,
@@ -185,6 +191,7 @@ from litellm.proxy.management_endpoints.common_utils import (  # noqa: F401  # l
     user_api_key_has_admin_view,
     validate_budget_duration,
     validate_rollover_budget_patch,
+    validate_semantic_cache_metadata,
     validate_team_model_max_budget,
 )
 from litellm.proxy.management_endpoints.organization_endpoints import (
@@ -309,6 +316,12 @@ class _TeamIdKeyCount(TypedDict):
 class _TeamIdGroupRow(TypedDict):
     team_id: str
     _count: _TeamIdKeyCount
+
+
+def raise_on_invalid_team_logging_shape(metadata: object) -> None:
+    entries: Final = normalize_logging_entries(string_keyed(metadata).get("logging"))
+    if isinstance(entries, InvalidLoggingMetadata):
+        raise HTTPException(status_code=400, detail={"error": entries.message})
 
 
 def _as_object(value: object) -> object:
@@ -724,7 +737,7 @@ class TeamMemberBudgetHandler:
     SYSTEM_MANAGED_METADATA_KEYS = ("team_member_budget_id",)
 
     @staticmethod
-    def strip_system_managed_metadata_keys(metadata: dict | None) -> None:
+    def strip_system_managed_metadata_keys(metadata: dict[str, object] | None) -> None:
         """Remove server-owned metadata keys from a caller-supplied dict."""
         if not isinstance(metadata, dict):
             return
@@ -777,7 +790,7 @@ class TeamMemberBudgetHandler:
         team_member_model_max_budget: GenericBudgetConfigType | None = None,
         user_api_key_cache: UserApiKeyCache | None = None,
         explicitly_set_fields: AbstractSet[str] = frozenset(),
-    ) -> dict:
+    ) -> dict[str, object]:
         """Create team member budget table with provided limits.
 
         The team's own reset period is only inherited when the caller left the
@@ -946,7 +959,7 @@ class TeamMemberBudgetHandler:
         return updated_kv
 
     @staticmethod
-    def clean_team_member_fields(data_dict: dict) -> None:
+    def clean_team_member_fields(data_dict: dict[str, object]) -> None:
         """Remove team member fields from data dictionary"""
         data_dict.pop("team_member_budget", None)
         data_dict.pop("team_member_budget_duration", None)
@@ -961,10 +974,10 @@ class TeamMemberBudgetHandler:
     async def clear_team_member_budget_fields(
         team_table: _TeamBudgetRow,
         user_api_key_dict: "UserAPIKeyAuth",
-        updated_kv: dict,
+        updated_kv: dict[str, object],
         explicitly_set_fields: AbstractSet[str],
         user_api_key_cache: UserApiKeyCache | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         """Clear explicitly-nulled fields on the team member budget row."""
         from litellm.proxy.management_endpoints.budget_management_endpoints import (
             update_budget,
@@ -1075,7 +1088,7 @@ class TeamMemberBudgetHandler:
         # Identify members with no existing membership row.
         # members_with_roles may contain Member instances or raw dicts depending
         # on how the team was fetched/deserialized.
-        missing: Final = []
+        missing: Final[list[dict[str, object]]] = []
         for m in members_with_roles:
             user_id = m.get("user_id") if isinstance(m, dict) else m.user_id
             if user_id is not None and user_id not in existing_user_ids:
@@ -1181,8 +1194,8 @@ def _check_team_model_specific_limits(
     data: NewTeamRequest | UpdateTeamRequest,
     entity_rpm_limit: int | None,
     entity_tpm_limit: int | None,
-    entity_model_rpm_limit_dict: dict[str, int],
-    entity_model_tpm_limit_dict: dict[str, int],
+    entity_model_rpm_limit_dict: Mapping[str, int],
+    entity_model_tpm_limit_dict: Mapping[str, int],
     entity_type: str,  # "organization"
 ) -> None:
     """
@@ -1891,6 +1904,7 @@ async def new_team(
         if prisma_client is None:
             raise HTTPException(status_code=500, detail={"error": "No db connected"})
 
+        validate_semantic_cache_metadata(attribute_or_none(data, "metadata"))
         validate_required_customer_headers_metadata(
             _TEAM_METADATA_ADAPTER.validate_python(getattr(data, "metadata", None) or {})
         )
@@ -2092,6 +2106,7 @@ async def new_team(
         if isinstance(data.metadata, dict):
             TeamMemberBudgetHandler.strip_system_managed_metadata_keys(data.metadata)
 
+        raise_on_invalid_team_logging_shape(data.metadata)
         await validate_team_metadata_if_configured(
             operation="create",
             metadata=data.metadata,
@@ -2780,6 +2795,11 @@ async def update_team(
         )
 
         _existing_team_metadata: Final[object] = getattr(existing_team_row, "metadata", None)
+        requested_metadata: Final = attribute_or_none(data, "metadata")
+        if "metadata" in data.model_fields_set and semantic_cache_metadata_changed(
+            requested_metadata, _existing_team_metadata
+        ):
+            validate_semantic_cache_metadata(requested_metadata, _existing_team_metadata)
         validate_required_customer_headers_metadata(
             _TEAM_METADATA_ADAPTER.validate_python(getattr(data, "metadata", None) or {})
         )
@@ -2959,6 +2979,7 @@ async def update_team(
             TeamMemberBudgetHandler.strip_system_managed_metadata_keys(metadata_update)
 
         if "metadata" in updated_kv:
+            raise_on_invalid_team_logging_shape(updated_kv.get("metadata"))
             stored_metadata: Final[Mapping[str, JsonValue] | None] = (
                 {
                     key: value
@@ -3265,8 +3286,8 @@ def _set_budget_reset_at(
 
 
 async def handle_update_object_permission(
-    data_json: dict, existing_team_row: _ObjectPermissionRow, can_grant_apps: bool = False
-) -> dict:
+    data_json: dict[str, object], existing_team_row: _ObjectPermissionRow, can_grant_apps: bool = False
+) -> dict[str, object]:
     """
     Handle the update of object permission for a team.
 
@@ -3340,7 +3361,7 @@ def team_member_add_duplication_check(
     obvious duplicates where both user_id and user_email match exactly.
     """
 
-    invalid_team_members: Final = []
+    invalid_team_members: Final[list[Member]] = []
 
     def _check_member_duplication(member: Member):
         if member.user_id is not None:
@@ -4777,7 +4798,7 @@ async def reset_team_member_budget_fn(
 
 
 def _create_results_from_response(
-    members: list[Member],
+    members: Sequence[Member],
     response: TeamAddMemberResponse,
 ) -> list[TeamMemberAddResult]:
     """
@@ -5445,7 +5466,7 @@ def _transform_teams_to_deleted_records(
         return []
 
     deleted_at: Final = datetime.now(timezone.utc)
-    records: Final = []
+    records: Final[list[dict[str, object]]] = []
     for team in teams:
         team_payload = team.model_dump()
         deleted_record = LiteLLM_DeletedTeamTable.model_validate(
@@ -6274,7 +6295,7 @@ async def _build_team_list_where_conditions(
 
 
 async def _batch_resolve_access_group_resources(
-    all_access_group_ids: list[str],
+    all_access_group_ids: Sequence[str],
 ) -> "dict[str, prisma_models.LiteLLM_AccessGroupTable]":
     """
     Batch-fetch access groups in a single DB query and return them keyed by
@@ -6295,7 +6316,7 @@ async def _batch_resolve_access_group_resources(
 def _convert_teams_to_response_models(
     teams: Sequence,
     use_deleted_table: bool,
-    keys_count_by_team: dict[str, int] | None = None,
+    keys_count_by_team: Mapping[str, int] | None = None,
 ) -> list[TeamListItem | LiteLLM_TeamTable | LiteLLM_DeletedTeamTable]:
     """Convert raw Prisma team rows to response models."""
     team_list: Final[list[TeamListItem | LiteLLM_TeamTable | LiteLLM_DeletedTeamTable]] = []

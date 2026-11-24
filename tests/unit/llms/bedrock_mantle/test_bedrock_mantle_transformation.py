@@ -8,7 +8,8 @@ API docs: https://docs.aws.amazon.com/bedrock/latest/userguide/bedrock-mantle.ht
 import json
 import re
 import asyncio
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping
+from pathlib import Path
 from typing import Final
 from unittest.mock import Mock, patch
 
@@ -1319,3 +1320,83 @@ def test_mantle_non_mistral_models_send_tool_call_ids_as_is(monkeypatch):
 
     assert call_ids == reply_ids == list(replayed_ids)
 
+
+@pytest.fixture
+def mantle_without_usable_credentials(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    (tmp_path / "config").write_text("")
+    for name in (
+        "AWS_ACCESS_KEY_ID",
+        "AWS_SECRET_ACCESS_KEY",
+        "AWS_SESSION_TOKEN",
+        "AWS_PROFILE",
+        "BEDROCK_MANTLE_API_KEY",
+        "AWS_BEARER_TOKEN_BEDROCK",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("AWS_CONFIG_FILE", str(tmp_path / "config"))
+    monkeypatch.setenv("AWS_SHARED_CREDENTIALS_FILE", str(tmp_path / "no-credentials"))
+    monkeypatch.setenv("AWS_EC2_METADATA_DISABLED", "true")
+
+
+_MANTLE_SIGNED_CALLS: Final = (
+    pytest.param(
+        lambda: litellm.acompletion(
+            model="bedrock_mantle/openai.gpt-6-sol",
+            messages=[{"role": "user", "content": "hi"}],
+            aws_profile_name="profile-that-does-not-exist",
+            aws_region_name="us-east-1",
+        ),
+        id="chat",
+    ),
+    pytest.param(
+        lambda: litellm.aresponses(
+            model="bedrock_mantle/openai.gpt-6-sol",
+            input="hi",
+            aws_profile_name="profile-that-does-not-exist",
+            aws_region_name="us-east-1",
+        ),
+        id="responses",
+    ),
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("mantle_without_usable_credentials")
+@pytest.mark.parametrize("call", _MANTLE_SIGNED_CALLS)
+async def test_a_mantle_call_without_usable_aws_credentials_answers_401(call: Callable[[], Awaitable[object]]) -> None:
+    with pytest.raises(litellm.AuthenticationError) as excinfo:
+        await call()
+
+    from litellm.llms.bedrock_mantle.common_utils import BedrockMantleAuthError
+
+    assert excinfo.value.status_code == 401
+    assert type(excinfo.value.__context__) is BedrockMantleAuthError
+
+
+def test_a_mantle_credential_source_outage_stays_a_retryable_500(monkeypatch: pytest.MonkeyPatch) -> None:
+    from unittest.mock import MagicMock
+
+    from botocore.exceptions import CredentialRetrievalError
+
+    from litellm.litellm_core_utils.exception_mapping_utils import exception_type
+    from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+
+    monkeypatch.delenv("BEDROCK_MANTLE_API_KEY", raising=False)
+    monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
+    signer: Final = BaseAWSLLM()
+    signer.get_credentials = MagicMock(  # pyright: ignore[reportAttributeAccessIssue]  # the signer is the injected seam
+        side_effect=CredentialRetrievalError(provider="container-role", error_msg="connection refused")
+    )
+
+    with pytest.raises(ValueError, match="Bedrock Mantle auth failed") as signing:
+        BedrockMantleChatConfig(aws_signer=signer).sign_request(
+            headers={},
+            optional_params={"aws_region_name": "us-east-1"},
+            request_data={"input": "hi"},
+            api_base="https://bedrock-mantle.us-east-1.api.aws/v1/chat/completions",
+            api_key=None,
+        )
+    with pytest.raises(litellm.APIConnectionError) as mapped:
+        exception_type(model="openai.gpt-6-sol", original_exception=signing.value, custom_llm_provider="bedrock_mantle")
+
+    assert mapped.value.status_code == 500

@@ -44,6 +44,8 @@ pub struct Environment {
     pub default_max_redis_batch_cache_size: Option<u64>,
     pub litellm_rate_limit_window_size: Option<i64>,
     pub litellm_tpm_token_reservation_enabled: Option<Flag>,
+    #[serde_as(as = "UintOrUnset")]
+    pub proxy_batch_write_at: Option<u64>,
 }
 
 impl Environment {

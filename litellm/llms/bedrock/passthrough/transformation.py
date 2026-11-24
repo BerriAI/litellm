@@ -561,7 +561,7 @@ class BedrockPassthroughConfig(BaseAWSLLM, BedrockModelInfo, BedrockEventStreamD
     ) -> BedrockError:
         return BedrockError(status_code=status_code, message=error_message, headers=headers)
 
-    def is_streaming_request(self, endpoint: str, request_data: dict) -> bool:
+    def is_streaming_request(self, endpoint: str, request_data: dict[str, object]) -> bool:
         return "stream" in endpoint
 
     def logged_request(self, endpoint: str, request_data: Mapping[str, object]) -> LoggedPassthroughRequest | None:
@@ -605,8 +605,8 @@ class BedrockPassthroughConfig(BaseAWSLLM, BedrockModelInfo, BedrockEventStreamD
         api_key: str | None,
         model: str,
         endpoint: str,
-        request_query_params: dict | None,
-        litellm_params: dict,
+        request_query_params: dict[str, object] | None,
+        litellm_params: dict[str, object],
     ) -> tuple["URL", str]:
         optional_params: Final = litellm_params.copy()
         model_id: Final = optional_params.get("model_id", None)
@@ -650,7 +650,7 @@ class BedrockPassthroughConfig(BaseAWSLLM, BedrockModelInfo, BedrockEventStreamD
         request_data: dict[str, object] | None,
         api_base: str,
         model: str | None = None,
-    ) -> tuple[dict, bytes | None]:
+    ) -> tuple[dict[str, str], bytes | None]:
         action: Final = _bedrock_endpoint_action(api_base)
         body: Final[Mapping[str, object]] = request_data or {}
         optional_params: Final = litellm_params.copy()
@@ -678,7 +678,7 @@ class BedrockPassthroughConfig(BaseAWSLLM, BedrockModelInfo, BedrockEventStreamD
         model: str,
         custom_llm_provider: str,
         httpx_response: Response,
-        request_data: dict,
+        request_data: dict[str, object],
         logging_obj: Logging,
         endpoint: str,
     ) -> Optional["CostResponseTypes"]:

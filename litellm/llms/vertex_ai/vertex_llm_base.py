@@ -1322,7 +1322,7 @@ class VertexBase:
     ) -> tuple[str, str]:
         return await self._ensure_access_token_async(credentials, project_id, custom_llm_provider)
 
-    def set_headers(self, auth_header: str | None, extra_headers: dict | None) -> dict:
+    def set_headers(self, auth_header: str | None, extra_headers: Mapping[str, str] | None) -> dict[str, str]:
         headers: Final = {
             "Content-Type": "application/json",
         }
