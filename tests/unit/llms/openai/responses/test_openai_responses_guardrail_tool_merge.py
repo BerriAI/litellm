@@ -307,6 +307,42 @@ def test_editing_one_of_two_same_named_tools_and_dropping_the_other_sends_the_ed
     assert merged == ((edited, between) if kept == 0 else (between, edited))
 
 
+@pytest.mark.parametrize("kept", [0, 2], ids=["first_kept", "last_kept"])
+def test_editing_one_of_two_same_named_functions_and_dropping_the_other_sends_the_edit_in_its_own_slot(
+    kept: int,
+) -> None:
+    between: Final = _function("lookup")
+    original: Final = [_function("search", "Search the web"), between, _function("search", "Search the docs")]
+    groups: Final = _groups(original)
+    flat: Final = _flat(groups)
+    required_query: Final = {"type": "object", "required": ["query"]}
+    edited: Final = {**flat[kept], "function": {**flat[kept]["function"], "parameters": required_query}}
+
+    merged: Final = merge_guardrailed_tools(original, groups, [flat[1], edited])
+
+    sent: Final = {**original[kept], "parameters": required_query, "strict": False}
+    assert merged == ((sent, between) if kept == 0 else (between, sent))
+
+
+@pytest.mark.parametrize("edit_first", [True, False], ids=["returned_before_lookup", "returned_after_lookup"])
+def test_an_edit_equally_close_to_two_same_named_tools_keeps_its_returned_place_around_the_other_tools(
+    edit_first: bool,
+) -> None:
+    between: Final = _function("lookup")
+    original: Final = [
+        {"type": "mcp", "server_label": "docs", "server_url": "https://a.example/mcp"},
+        between,
+        {"type": "mcp", "server_label": "docs", "server_url": "https://b.example/mcp"},
+    ]
+    groups: Final = _groups(original)
+    lookup: Final = _flat(groups)[1]
+    rerouted: Final = {"type": "mcp", "server_label": "docs", "server_url": "https://gateway.example/mcp"}
+
+    merged: Final = merge_guardrailed_tools(original, groups, [rerouted, lookup] if edit_first else [lookup, rerouted])
+
+    assert merged == ((rerouted, between) if edit_first else (between, rerouted))
+
+
 def test_injected_tool_lands_after_the_request_tools_when_request_had_none():
     injected = {"type": "function", "function": {"name": "b", "description": "d", "parameters": {"type": "object"}}}
 
