@@ -71,11 +71,20 @@ from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfi
 from litellm.responses.litellm_completion_transformation.transformation import (
     LiteLLMCompletionResponsesConfig,
 )
+from litellm.responses.stream_contract import (
+    StreamContext,
+    contract_violation,
+    function_call_name,
+    repair_stream_chunk,
+    report_contract_violation,
+)
 from litellm.responses.utils import ResponseAPILoggingUtils, ResponsesAPIRequestUtils
 from litellm.types.integrations.custom_logger import converted_stream_requested
 from litellm.types.llms.openai import (
     PART_UNION_TYPES,
     ErrorEventError,
+    InputTokensDetails,
+    OutputTokensDetails,
     ResponseAPIUsage,
     ResponseIncompleteEvent,
     ResponsesAPIResponse,
@@ -454,6 +463,9 @@ class BaseResponsesAPIStreamingIterator:
         self._completed_response_cache_hit: bool | None = None
         self._persist_completed_response_before_logging = True
         self._stream_created_time: float = time.time()
+        self._last_provider_sequence_number: int | None = None
+        self._off_spec_event_types_logged: frozenset[str] = frozenset()
+        self._function_call_names: Mapping[str, str] = MappingProxyType({})
 
         # track request context for hooks
         self.litellm_metadata = litellm_metadata
@@ -476,6 +488,18 @@ class BaseResponsesAPIStreamingIterator:
             self.response.headers or {}
         )  # GUARANTEE OPENAI HEADERS IN RESPONSE
         self._raw_response_headers: Mapping[str, str] = MappingProxyType(dict(self.response.headers or {}))
+
+    def _reported_if_off_spec(self, event: ResponsesAPIStreamingResponse) -> ResponsesAPIStreamingResponse:
+        violation: Final = contract_violation(event.model_dump(mode="json", exclude_none=True, warnings=False))
+        if violation is None:
+            return event
+        report_contract_violation(
+            self.custom_llm_provider or "unknown",
+            violation,
+            log=violation.event_type not in self._off_spec_event_types_logged,
+        )
+        self._off_spec_event_types_logged = self._off_spec_event_types_logged | {violation.event_type}
+        return event
 
     def _check_max_streaming_duration(self) -> None:
         """Raise litellm.Timeout if the stream has exceeded LITELLM_MAX_STREAMING_DURATION_SECONDS."""
@@ -524,10 +548,27 @@ class BaseResponsesAPIStreamingIterator:
                         "type": ResponsesAPIStreamEvents.ERROR.value,
                     }
                 )
-                tool_input_fix: Final = _string_tool_input_fix(typed_chunk)
+                spec_chunk: Final = repair_stream_chunk(
+                    typed_chunk,
+                    StreamContext(
+                        self._last_provider_sequence_number,
+                        int(self._stream_created_time),
+                        self.request_data,
+                        self._function_call_names,
+                    ),
+                )
+                announced_function: Final = function_call_name(spec_chunk)
+                if announced_function is not None:
+                    self._function_call_names = {
+                        **self._function_call_names,
+                        announced_function[0]: announced_function[1],
+                    }
+                sequence_number: Final = spec_chunk.get("sequence_number")
+                if isinstance(sequence_number, int):
+                    self._last_provider_sequence_number = sequence_number
                 transformed_chunk: Final = self.responses_api_provider_config.transform_streaming_response(
                     model=self.model,
-                    parsed_chunk={**typed_chunk, **tool_input_fix} if tool_input_fix else typed_chunk,
+                    parsed_chunk=dict(spec_chunk),
                     logging_obj=self.logging_obj,
                 )
                 affinity_model_id: Final = ResponsesAPIRequestUtils.affinity_model_id(self.litellm_metadata)
@@ -650,9 +691,9 @@ class BaseResponsesAPIStreamingIterator:
                     else:
                         self._handle_logging_completed_response()
 
-                    return _terminal_chunk
+                    return self._reported_if_off_spec(_terminal_chunk)
 
-                return openai_responses_api_chunk
+                return self._reported_if_off_spec(openai_responses_api_chunk)
 
             return None
         except json.JSONDecodeError:
@@ -1923,28 +1964,6 @@ _CLIENT_RUN_TOOL_ARGUMENTS_DELTA_EVENTS: Final = frozenset(
 _TOOL_ARGUMENTS_DELTA_EVENTS: Final = _CLIENT_RUN_TOOL_ARGUMENTS_DELTA_EVENTS | {
     ResponsesAPIStreamEvents.MCP_CALL_ARGUMENTS_DELTA
 }
-_STRING_TOOL_INPUT_FIELD_BY_EVENT: Final[Mapping[str, str]] = MappingProxyType(
-    {
-        ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DELTA.value: "delta",
-        ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DONE.value: "arguments",
-        ResponsesAPIStreamEvents.MCP_CALL_ARGUMENTS_DELTA.value: "delta",
-        ResponsesAPIStreamEvents.MCP_CALL_ARGUMENTS_DONE.value: "arguments",
-        "response.mcp_call.arguments.delta": "delta",
-        "response.mcp_call.arguments.done": "arguments",
-        ResponsesAPIStreamEvents.CUSTOM_TOOL_CALL_INPUT_DELTA.value: "delta",
-        ResponsesAPIStreamEvents.CUSTOM_TOOL_CALL_INPUT_DONE.value: "input",
-    }
-)
-
-
-def _string_tool_input_fix(chunk: Mapping[str, object]) -> Mapping[str, str]:
-    field_name: Final = _STRING_TOOL_INPUT_FIELD_BY_EVENT.get(str(chunk.get("type")))
-    if field_name is None:
-        return {}
-    value: Final = chunk.get(field_name)
-    if isinstance(value, str):
-        return {}
-    return {field_name: "" if value is None else json.dumps(value, ensure_ascii=False)}
 
 
 def _estimate_usage_from_text(
@@ -1968,7 +1987,9 @@ def _estimate_usage_from_text(
     )
     return ResponseAPIUsage(
         input_tokens=input_tokens,
+        input_tokens_details=InputTokensDetails(cached_tokens=0),
         output_tokens=output_tokens,
+        output_tokens_details=OutputTokensDetails(reasoning_tokens=0),
         total_tokens=input_tokens + output_tokens,
     )
 

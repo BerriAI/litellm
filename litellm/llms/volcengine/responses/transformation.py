@@ -41,13 +41,6 @@ else:
 _RESPONSE_BODY: Final = TypeAdapter(dict[str, object], config=ConfigDict(strict=True))
 
 
-class _EventModelClass(Protocol):
-    @property
-    def model_fields(self) -> Mapping[str, pyd_fields.FieldInfo]: ...
-
-    def model_validate(self, obj: Mapping[str, object]) -> ResponsesAPIStreamingResponse: ...
-
-
 class _ModelFieldsCarrier(Protocol):
     @property
     def model_fields(self) -> Mapping[str, pyd_fields.FieldInfo]: ...
@@ -225,25 +218,8 @@ class VolcEngineResponsesAPIConfig(OpenAIResponsesAPIConfig):
         """
         Volcengine may omit required fields; auto-fill them using event model defaults.
         """
-        chunk = parsed_chunk
-
-        # Patch missing response.output on response.* events
-        if isinstance(chunk, dict):
-            resp: Final = chunk.get("response")
-            if isinstance(resp, dict) and "output" not in resp:
-                resp_items: Final[Mapping[str, object]] = resp
-                patched_chunk = dict(chunk)
-                patched_resp: Final = dict(resp_items)
-                patched_resp["output"] = []
-                patched_chunk["response"] = patched_resp
-                chunk = patched_chunk
-
-        event_type: Final = str(chunk.get("type")) if isinstance(chunk, dict) else None
-        event_pydantic_model: _EventModelClass = OpenAIResponsesAPIConfig.get_event_model_class(event_type=event_type)
-
-        patched_chunk = self._fill_missing_fields(chunk, event_pydantic_model)
-
-        return event_pydantic_model.model_validate(patched_chunk)
+        event_model: Final = OpenAIResponsesAPIConfig.get_event_model_class(event_type=str(parsed_chunk.get("type")))
+        return self.stream_event_or_passthrough(self._fill_missing_fields(parsed_chunk, event_model))
 
     def transform_response_api_response(
         self,

@@ -1150,35 +1150,23 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
     def transform_streaming_response(
         self,
         model: str,
-        parsed_chunk: dict,
+        parsed_chunk: dict[str, object],  # mutable-ok: overrides the base class signature
         logging_obj: LiteLLMLoggingObj,
     ) -> ResponsesAPIStreamingResponse:
         """
         Transform a parsed streaming response chunk into a ResponsesAPIStreamingResponse
         """
-        # Convert the dictionary to a properly typed ResponsesAPIStreamingResponse
         verbose_logger.debug("Raw OpenAI Chunk=%s", parsed_chunk)
-        event_type: Final = str(parsed_chunk.get("type"))
-        event_pydantic_model: Final = OpenAIResponsesAPIConfig.get_event_model_class(event_type=event_type)
-        # Some OpenAI-compatible providers send error.code: null; coalesce so validation succeeds.
-        try:
-            error_obj: Final = parsed_chunk.get("error")
-            if isinstance(error_obj, dict) and error_obj.get("code") is None:
-                parsed_chunk = dict(parsed_chunk)
-                parsed_chunk["error"] = dict(error_obj)
-                parsed_chunk["error"]["code"] = "unknown_error"
-        except Exception:
-            verbose_logger.debug("Failed to coalesce error.code in parsed_chunk")
+        return OpenAIResponsesAPIConfig.stream_event_or_passthrough(parsed_chunk)
 
+    @staticmethod
+    def stream_event_or_passthrough(chunk: Mapping[str, object]) -> ResponsesAPIStreamingResponse:
+        """Typed event for a spec-shaped chunk, else the chunk as received; the stream iterator reports the latter."""
+        event_model: Final = OpenAIResponsesAPIConfig.get_event_model_class(event_type=str(chunk.get("type")))
         try:
-            return event_pydantic_model(**parsed_chunk)
+            return event_model.model_validate(chunk)
         except ValidationError:
-            verbose_logger.debug(
-                "Pydantic validation failed for %s with chunk %s, falling back to model_construct",
-                event_pydantic_model.__name__,
-                parsed_chunk,
-            )
-            return event_pydantic_model.model_construct(**parsed_chunk)
+            return event_model.model_construct(_fields_set=None, **chunk)
 
     @staticmethod
     def parse_terminal_event_from_stream_chunks(all_chunks: Sequence[str]) -> ResponsesTerminalEvent | None:
