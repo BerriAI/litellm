@@ -1,6 +1,6 @@
 import json
 import time
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Final, Literal
 
 import anyio
@@ -45,7 +45,7 @@ def transform_mcp_tool_to_openai_tool(mcp_tool: MCPTool) -> ChatCompletionToolPa
     )
 
 
-def _normalize_mcp_input_schema(input_schema: dict) -> dict:
+def _normalize_mcp_input_schema(input_schema: Mapping[str, object]) -> dict[str, object]:
     """
     Normalize MCP input schema to ensure it's valid for OpenAI function calling.
 

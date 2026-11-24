@@ -143,7 +143,7 @@ class XAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
         response_api_optional_params: ResponsesAPIOptionalRequestParams,
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Map parameters for XAI Responses API.
 

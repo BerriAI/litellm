@@ -154,7 +154,7 @@ class PredibaseConfig(BaseConfig):
         request_data: dict,
         messages: list[AllMessageValues],
         optional_params: dict,
-        litellm_params: dict,
+        litellm_params: Mapping[str, object],
         encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
@@ -276,7 +276,7 @@ class PredibaseConfig(BaseConfig):
         messages: list[AllMessageValues],
         optional_params: Mapping[str, object],
         litellm_params: dict,
-        headers: dict,
+        headers: Mapping[str, object],
     ) -> dict[str, object]:
         custom_prompt_dict: Final = litellm_params.get("custom_prompt_dict", {})
         if model in custom_prompt_dict:
@@ -357,8 +357,8 @@ class PredibaseConfig(BaseConfig):
         headers: dict,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
     ) -> dict[str, object]:

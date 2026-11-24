@@ -7,7 +7,7 @@ import itertools
 import re
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, Literal
+from typing import TYPE_CHECKING, Final, Literal, TypeVar
 
 from pydantic import TypeAdapter
 
@@ -19,6 +19,8 @@ from litellm.types.utils import LIST_BATCHES_SUPPORTED_PROVIDERS
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging
     from litellm.types.utils import ImageResponse
+
+_ImageAnswer = TypeVar("_ImageAnswer")
 
 
 # Minimal image for health checks - base64 encoded 512x512 blue circle on a white background PNG
@@ -251,8 +253,8 @@ class HealthCheckHelpers:
 
     @staticmethod
     async def _image_generation_health_check(
-        image_request: Callable[[], Awaitable["ImageResponse"]],
-    ) -> "ImageResponse":
+        image_request: Callable[[], Awaitable[_ImageAnswer]],
+    ) -> "_ImageAnswer | ImageResponse":
         import litellm
         from litellm.llms.gemini.empty_image_response import ImageRefusalError, UnservedImageError
 
@@ -262,7 +264,9 @@ class HealthCheckHelpers:
             return litellm.ImageResponse()
 
     @staticmethod
-    async def _image_edit_health_check(edit_request: Callable[[], Awaitable["ImageResponse"]]) -> "ImageResponse":
+    async def _image_edit_health_check(
+        edit_request: Callable[[], Awaitable[_ImageAnswer]],
+    ) -> "_ImageAnswer | ImageResponse":
         import litellm
 
         try:

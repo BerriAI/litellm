@@ -511,7 +511,7 @@ class MCPClient:
         resolved_auth: httpx2.Auth | None = None,
         sampling_callback: Callable | None = None,
         elicitation_callback: "ElicitationCallback | None" = None,
-        logging_callback: Callable | None = None,
+        logging_callback: LoggingFnT | None = None,
         protocol_version: MCPUpstreamProtocol = "auto",
         skip_tool_output_validation: bool = False,
         upstream_transport: httpx2.AsyncBaseTransport | None = None,
@@ -542,7 +542,7 @@ class MCPClient:
         self._last_initialize_instructions: str | None = None
         self._sampling_callback: Callable | None = sampling_callback
         self._elicitation_callback: ElicitationCallback | None = elicitation_callback
-        self._logging_callback: Callable | None = logging_callback
+        self._logging_callback: LoggingFnT | None = logging_callback
         self._upstream_transport: httpx2.AsyncBaseTransport | None = upstream_transport
         self._session_callbacks_override: _SessionCallbackMap | None = None
         # handle the basic auth value if provided
@@ -700,7 +700,7 @@ class MCPClient:
             "WINDIR",
         }
 
-        safe_env: Final = {}
+        safe_env: Final[dict[str, str]] = {}
         for key in safe_keys:
             if key in os.environ:
                 safe_env[key] = os.environ[key]
@@ -936,9 +936,9 @@ class MCPClient:
     def _header_slot(self, default: str) -> str:
         return self._credential_slot or default
 
-    def _get_auth_headers(self) -> dict:
+    def _get_auth_headers(self) -> dict[str, str]:
         """Generate authentication headers based on auth type."""
-        headers: Final = {}
+        headers: Final[dict[str, str]] = {}
         if self._mcp_auth_value:
             if isinstance(self._mcp_auth_value, str):
                 if self.auth_type == MCPAuth.bearer_token:

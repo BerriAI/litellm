@@ -24,14 +24,15 @@ def get_fireworks_session_id(litellm_params: Mapping[str, object]) -> str | None
     pins every request to a different Fireworks node and prompt caching never hits.
     """
     params: Final = litellm_params
-    metadata: Final = params.get("metadata")
-    if isinstance(metadata, Mapping) and metadata.get(SESSION_ID_GENERATED_METADATA_KEY):
+    raw_metadata: Final = params.get("metadata")
+    metadata: Final[Mapping[object, object] | None] = raw_metadata if isinstance(raw_metadata, Mapping) else None
+    if metadata is not None and metadata.get(SESSION_ID_GENERATED_METADATA_KEY):
         return None
     for key in ("litellm_session_id", "session_id"):
         value = params.get(key)
         if value:
             return str(value)
-    if isinstance(metadata, Mapping):
+    if metadata is not None:
         value = metadata.get("session_id")
         if value:
             return str(value)
@@ -53,7 +54,8 @@ FIREWORKS_FORWARD_USER_ID_PARAM: Final = "fireworks_forward_user_id"
 
 
 def _authenticated_user_id(metadata: object) -> str | None:
-    user_id: Final = metadata.get("user_api_key_user_id") if isinstance(metadata, Mapping) else None
+    mapping: Final[Mapping[object, object] | None] = metadata if isinstance(metadata, Mapping) else None
+    user_id: Final = mapping.get("user_api_key_user_id") if mapping is not None else None
     return user_id if isinstance(user_id, str) and user_id else None
 
 

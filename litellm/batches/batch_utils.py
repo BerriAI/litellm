@@ -844,7 +844,7 @@ def _get_batch_job_usage_from_response_body(
         )
         if titan_usage is not None:
             return titan_usage
-        usage_object: Final = response_body.get("usage", None) or {}
+        usage_object: Final = response_body.get("usage", None) or dict[str, object]()
         if custom_llm_provider == "bedrock" and AmazonConverseConfig.is_converse_usage_shape(usage_object):
             return AmazonConverseConfig().usage_from_batch_output(usage_object)
         anthropic_usage: Final = AnthropicConfig().calculate_usage(
@@ -904,7 +904,7 @@ def _get_response_from_batch_job_output_file(
     _response: Final = cast(  # cast-ok: batch output response comes from provider JSON
         Mapping[str, object], batch_job_output_file.get("response", None) or {}
     )
-    _response_body: Final = _response.get("body", None) or {}
+    _response_body: Final = _response.get("body", None) or dict[str, object]()
     return cast(Mapping[str, object], _response_body)  # cast-ok: batch response body comes from provider JSON
 
 

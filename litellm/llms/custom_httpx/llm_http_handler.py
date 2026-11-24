@@ -67,6 +67,14 @@ from litellm.images.fan_out import (
     settle_image_answers,
     split_outcomes,
 )
+from litellm.images.streaming import (
+    AsyncImageStream,
+    ImageStream,
+    aimage_events_from_sse,
+    image_events_from_sse,
+    image_stream_requested,
+    is_event_stream,
+)
 from litellm.integrations.custom_logger_v2.enums import Hook
 from litellm.integrations.custom_logger_v2.legacy import Admit, hook_subscribers
 from litellm.integrations.custom_logger_v2.logger import CustomLoggerV2
@@ -87,6 +95,7 @@ from litellm.litellm_core_utils.audio_utils.subtitle_utils import (
     SUBTITLE_RESPONSE_FORMATS,
     synthesize_subtitle_document,
 )
+from litellm.litellm_core_utils.audio_utils.transcription_streaming import litellm_exception_mapper
 from litellm.litellm_core_utils.chat_completion_agentic_loop import (
     bill_first_round_on_failure,
     holds_a_call_the_choice_excludes,
@@ -7587,7 +7596,7 @@ class BaseLLMHTTPHandler:
         image: FileTypes | Sequence[FileTypes | None] | None,
         prompt: str | None,
         image_edit_provider_config: BaseImageEditConfig,
-        image_edit_optional_request_params: dict,
+        image_edit_optional_request_params: Mapping[str, Any],
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
@@ -7598,7 +7607,7 @@ class BaseLLMHTTPHandler:
         _is_async: bool = False,
         fake_stream: bool = False,
         litellm_metadata: dict[str, object] | None = None,
-    ) -> ImageResponse | Coroutine[object, object, ImageResponse]:
+    ) -> ImageResponse | ImageStream | Coroutine[object, object, ImageResponse | AsyncImageStream]:
         """
 
         Handles image edit requests.
@@ -7673,13 +7682,14 @@ class BaseLLMHTTPHandler:
         multipart: Final = image_edit_provider_config.use_multipart_form_data()
         stream_body: Final = _ascii_image_edit_stream_body(data, files)
 
-        def send() -> httpx.Response:
+        def send(stream: bool = False) -> httpx.Response:
             if stream_body is not None:
                 return sync_httpx_client.post(  # pyright: ignore[reportUnknownMemberType]  # legacy post signature has untyped parameters
                     url=api_base,
                     headers=_image_edit_stream_headers(headers, stream_body),  # pyright: ignore[reportUnknownArgumentType]  # legacy provider headers are untyped
                     content=_ImageEditContent(stream_body),
                     timeout=timeout,
+                    stream=stream,
                 )
             if multipart:
                 return sync_httpx_client.post(
@@ -7688,15 +7698,38 @@ class BaseLLMHTTPHandler:
                     data=data,
                     files=files,
                     timeout=timeout,
+                    stream=stream,
                 )
             return sync_httpx_client.post(
                 url=api_base,
                 headers=headers,
                 json=data,
                 timeout=timeout,
+                stream=stream,
             )
 
-        responses, failure = split_outcomes(run_concurrently(request_count, send))
+        def send_streamed() -> ImageStream | httpx.Response:
+            try:
+                response: Final = send(stream=True)
+            except Exception as e:  # noqa: BLE001  # provider boundary: mapped like every other image edit failure
+                raise self._handle_error(e=e, provider_config=image_edit_provider_config)
+            if not is_event_stream(response.headers):
+                _ = response.read()
+                return response
+            return ImageStream(
+                events=image_events_from_sse(response.iter_text()),
+                close=response.close,
+                headers=response.headers,
+                logging_obj=logging_obj,
+                map_exception=litellm_exception_mapper(logging_obj.model_call_details),
+            )
+
+        streamed: Final = (
+            send_streamed() if image_stream_requested(image_edit_optional_request_params.get("stream")) else None
+        )
+        if isinstance(streamed, ImageStream):
+            return streamed
+        responses, failure = split_outcomes(run_concurrently(request_count, send) if streamed is None else (streamed,))
         served, unserved = partition_outcomes(
             outcomes_of(
                 lambda response: image_edit_provider_config.transform_image_edit_response(
@@ -7720,7 +7753,7 @@ class BaseLLMHTTPHandler:
         image: FileTypes | Sequence[FileTypes | None] | None,
         prompt: str | None,
         image_edit_provider_config: BaseImageEditConfig,
-        image_edit_optional_request_params: dict,
+        image_edit_optional_request_params: Mapping[str, Any],
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
@@ -7730,7 +7763,7 @@ class BaseLLMHTTPHandler:
         client: HTTPHandler | AsyncHTTPHandler | None = None,
         fake_stream: bool = False,
         litellm_metadata: dict[str, object] | None = None,
-    ) -> ImageResponse:
+    ) -> ImageResponse | AsyncImageStream:
         """
         Async version of the image edit handler.
         Uses async HTTP client to make requests.
@@ -7789,13 +7822,14 @@ class BaseLLMHTTPHandler:
         multipart: Final = image_edit_provider_config.use_multipart_form_data()
         stream_body: Final = _ascii_image_edit_stream_body(data, files)
 
-        async def send() -> httpx.Response:
+        async def send(stream: bool = False) -> httpx.Response:
             if stream_body is not None:
                 return await async_httpx_client.post(  # pyright: ignore[reportUnknownMemberType]  # legacy post signature has untyped parameters
                     url=api_base,
                     headers=_image_edit_stream_headers(headers, stream_body),  # pyright: ignore[reportUnknownArgumentType]  # legacy provider headers are untyped
                     content=_AsyncImageEditContent(stream_body),
                     timeout=timeout,
+                    stream=stream,
                 )
             if multipart:
                 return await async_httpx_client.post(
@@ -7804,16 +7838,41 @@ class BaseLLMHTTPHandler:
                     data=data,
                     files=files,
                     timeout=timeout,
+                    stream=stream,
                 )
             return await async_httpx_client.post(
                 url=api_base,
                 headers=headers,
                 json=data,
                 timeout=timeout,
+                stream=stream,
             )
 
+        async def send_streamed() -> AsyncImageStream | httpx.Response:
+            try:
+                response: Final = await send(stream=True)
+            except Exception as e:  # noqa: BLE001  # provider boundary: mapped like every other image edit failure
+                raise self._handle_error(e=e, provider_config=image_edit_provider_config)
+            if not is_event_stream(response.headers):
+                _ = await response.aread()
+                return response
+            return AsyncImageStream(
+                events=aimage_events_from_sse(response.aiter_text()),
+                close=response.aclose,
+                headers=response.headers,
+                logging_obj=logging_obj,
+                map_exception=litellm_exception_mapper(logging_obj.model_call_details),
+            )
+
+        streamed: Final = (
+            await send_streamed() if image_stream_requested(image_edit_optional_request_params.get("stream")) else None
+        )
+        if isinstance(streamed, AsyncImageStream):
+            return streamed
         responses, failure = split_outcomes(
             await asyncio.gather(*(send() for _ in range(request_count)), return_exceptions=True)
+            if streamed is None
+            else (streamed,)
         )
         served, unserved = partition_outcomes(
             outcomes_of(

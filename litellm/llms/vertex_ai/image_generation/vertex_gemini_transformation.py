@@ -84,11 +84,11 @@ class VertexAIGeminiImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
 
     def map_openai_params(
         self,
-        non_default_params: dict,
-        optional_params: dict,
+        non_default_params: Mapping[str, object],
+        optional_params: Mapping[str, object],
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:
         requested: Final = _JSON_OBJECT.validate_python(non_default_params)
         params: Final = {key: value for key, value in requested.items() if key not in optional_params}
         image_params: Final = map_vertex_gemini_image_params(params, model, drop_params)
@@ -131,7 +131,7 @@ class VertexAIGeminiImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,
+        optional_params: Mapping[str, object],
         litellm_params: dict,
         stream: bool | None = None,
     ) -> str:
@@ -165,7 +165,7 @@ class VertexAIGeminiImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
         headers: dict,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
+        optional_params: Mapping[str, object],
         litellm_params: dict,
         api_key: str | None = None,
         api_base: str | None = None,
@@ -196,7 +196,7 @@ class VertexAIGeminiImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
         optional_params: dict,
         litellm_params: dict,
         headers: dict[str, str],
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Transform the image generation request to Gemini format
 
@@ -238,9 +238,9 @@ class VertexAIGeminiImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
         raw_response: httpx.Response,
         model_response: ImageResponse,
         logging_obj: LiteLLMLoggingObj,
-        request_data: dict,
-        optional_params: dict,
-        litellm_params: dict,
+        request_data: Mapping[str, object],
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
