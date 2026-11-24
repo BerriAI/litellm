@@ -72667,11 +72667,11 @@
         ]
     },
     "elevenlabs/scribe_v2_realtime": {
-        "input_cost_per_second": 0.000108333,
+        "input_cost_per_second": 6.1111e-05,
         "litellm_provider": "elevenlabs",
         "metadata": {
-            "calculation": "$0.39/hour = $0.0065/minute = $0.000108333 per second",
-            "original_pricing_per_hour": 0.39
+            "calculation": "$0.22/hour = $0.003667/minute = $0.000061111 per second",
+            "original_pricing_per_hour": 0.22
         },
         "mode": "audio_transcription",
         "output_cost_per_second": 0.0,
