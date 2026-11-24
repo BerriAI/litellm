@@ -21335,7 +21335,7 @@ _GENERAL_SETTINGS_CONFIG_LIST_FIELD_TYPES: Final[Mapping[str, str]] = MappingPro
         "store_model_in_db": "Boolean",
         "return_wildcard_routes": "Boolean",
         "store_prompts_in_spend_logs": "Boolean",
-        "guardrail_log_outcomes": "List",
+        "guardrail_log_skip_passed": "Boolean",
         "disable_requester_ip_address_logging": "Boolean",
         "disable_fallbacks_on_per_model_rate_limits": "Boolean",
         "maximum_spend_logs_retention_period": "String",

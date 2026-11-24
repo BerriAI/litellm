@@ -141,7 +141,7 @@ describe("LoggingSettings", () => {
     const user = userEvent.setup();
     renderWithProviders(<LoggingSettings />);
 
-    const switchElement = screen.getByRole("switch");
+    const switchElement = screen.getByRole("switch", { name: /Store Prompts/ });
     expect(switchElement).not.toBeChecked();
 
     await user.click(switchElement);
@@ -172,7 +172,7 @@ describe("LoggingSettings", () => {
 
     renderWithProviders(<LoggingSettings />);
 
-    const switchElement = screen.getByRole("switch");
+    const switchElement = screen.getByRole("switch", { name: /Store Prompts/ });
     await user.click(switchElement);
 
     const retentionInput = screen.getByPlaceholderText("e.g., 7d, 30d");
@@ -201,7 +201,7 @@ describe("LoggingSettings", () => {
 
     renderWithProviders(<LoggingSettings />);
 
-    await user.click(screen.getByRole("switch"));
+    await user.click(screen.getByRole("switch", { name: /Store Prompts/ }));
     await user.type(screen.getByPlaceholderText("e.g., 7d, 30d"), "30d");
     await user.type(screen.getByPlaceholderText("e.g., 1000"), "2000");
     await user.type(screen.getByPlaceholderText("e.g., 500"), "50");
@@ -434,7 +434,7 @@ describe("LoggingSettings", () => {
 
     renderWithProviders(<LoggingSettings />);
 
-    const switchElement = screen.getByRole("switch");
+    const switchElement = screen.getByRole("switch", { name: /Store Prompts/ });
     const retentionInput = screen.getByPlaceholderText("e.g., 7d, 30d");
 
     expect(switchElement).toBeChecked();
@@ -482,7 +482,7 @@ describe("LoggingSettings", () => {
     rerender(<LoggingSettings />);
 
     await waitFor(() => {
-      expect(screen.getByRole("switch")).toBeChecked();
+      expect(screen.getByRole("switch", { name: /Store Prompts/ })).toBeChecked();
     });
     expect(screen.getByPlaceholderText("e.g., 7d, 30d")).toHaveValue("30d");
   });
@@ -575,7 +575,7 @@ describe("LoggingSettings", () => {
 
     renderWithProviders(<LoggingSettings />);
 
-    const switchElement = screen.getByRole("switch");
+    const switchElement = screen.getByRole("switch", { name: /Store Prompts/ });
     await user.click(switchElement);
 
     const saveButton = screen.getByRole("button", { name: "Save Settings" });
@@ -608,7 +608,7 @@ describe("LoggingSettings", () => {
 
     renderWithProviders(<LoggingSettings />);
 
-    const switchElement = screen.getByRole("switch");
+    const switchElement = screen.getByRole("switch", { name: /Store Prompts/ });
     await user.click(switchElement);
     await user.click(screen.getByRole("button", { name: "Save Settings" }));
 
@@ -642,90 +642,16 @@ describe("LoggingSettings", () => {
     });
     expect(clearedFieldNames()).toContain("maximum_spend_logs_cleanup_run_budget");
   });
-  it("should save the guardrail outcomes that are checked", async () => {
-    const user = userEvent.setup();
-    renderWithProviders(<LoggingSettings />);
+  const skipPassedSwitch = () => screen.getByRole("switch", { name: /Skip Passed Guardrail Runs/ });
 
-    await user.click(screen.getByRole("checkbox", { name: "Masked" }));
-    await user.click(screen.getByRole("checkbox", { name: "Blocked" }));
-    await user.click(screen.getByRole("button", { name: "Save Settings" }));
-
-    await waitFor(() => expect(mockMutate).toHaveBeenCalledTimes(1));
-    expect(mockMutate.mock.calls[0][0]).toEqual({
-      store_prompts_in_spend_logs: false,
-      guardrail_log_outcomes: ["blocked", "masked"],
-    });
-    expect(mockDeleteField).not.toHaveBeenCalled();
-  });
-
-  it("should clear the stored guardrail outcomes when every box is unchecked", async () => {
-    const user = userEvent.setup();
-    mockDeleteField.mockImplementation((_request, options) => options?.onSettled?.());
+  const storedSkipPassed = (value: boolean, editable: boolean) =>
     mockUseProxyConfig.mockReturnValue({
       data: [
         {
-          field_name: "guardrail_log_outcomes",
-          field_type: "List",
-          field_description: "Outcomes kept",
-          field_value: ["blocked", "flagged"],
-          stored_in_db: true,
-        },
-      ],
-      isLoading: false,
-      refetch: mockRefetch,
-    } as unknown as ReturnType<typeof useProxyConfig>);
-    renderWithProviders(<LoggingSettings />);
-
-    expect(screen.getByRole("checkbox", { name: "Blocked" })).toBeChecked();
-    expect(screen.getByRole("checkbox", { name: "Flagged" })).toBeChecked();
-    expect(screen.getByRole("checkbox", { name: "Passed" })).not.toBeChecked();
-    await user.click(screen.getByRole("checkbox", { name: "Blocked" }));
-    await user.click(screen.getByRole("checkbox", { name: "Flagged" }));
-    await user.click(screen.getByRole("button", { name: "Save Settings" }));
-
-    await waitFor(() => expect(mockMutate).toHaveBeenCalledTimes(1));
-    expect(clearedFieldNames()).toEqual(["guardrail_log_outcomes"]);
-    expect(mockMutate.mock.calls[0][0]).toEqual({ store_prompts_in_spend_logs: false });
-  });
-
-  it("should clear a stored empty list of guardrail outcomes, since no box checked means every run keeps a row", async () => {
-    const user = userEvent.setup();
-    mockDeleteField.mockImplementation((_request, options) => options?.onSettled?.());
-    mockUseProxyConfig.mockReturnValue({
-      data: [
-        {
-          field_name: "guardrail_log_outcomes",
-          field_type: "List",
-          field_description: "Outcomes kept",
-          field_value: [],
-          stored_in_db: true,
-        },
-      ],
-      isLoading: false,
-      refetch: mockRefetch,
-    } as unknown as ReturnType<typeof useProxyConfig>);
-    renderWithProviders(<LoggingSettings />);
-
-    await user.click(screen.getByRole("button", { name: "Save Settings" }));
-
-    await waitFor(() => expect(mockMutate).toHaveBeenCalledTimes(1));
-    expect(clearedFieldNames()).toEqual(["guardrail_log_outcomes"]);
-    expect(mockMutate.mock.calls[0][0]).toEqual({ store_prompts_in_spend_logs: false });
-  });
-
-  it.each([
-    { editable: true, stored: ["blocked", "flagged"], case: "an unchanged stored list" },
-    { editable: false, stored: ["blocked", "flagged"], case: "a list the config file owns" },
-    { editable: false, stored: [], case: "an empty list the config file owns" },
-  ])("should neither send nor clear $case of guardrail outcomes", async ({ editable, stored }) => {
-    const user = userEvent.setup();
-    mockUseProxyConfig.mockReturnValue({
-      data: [
-        {
-          field_name: "guardrail_log_outcomes",
-          field_type: "List",
-          field_description: "Outcomes kept",
-          field_value: stored,
+          field_name: "guardrail_log_skip_passed",
+          field_type: "Boolean",
+          field_description: "Skip passed runs",
+          field_value: value,
           stored_in_db: editable,
           editable,
         },
@@ -733,10 +659,51 @@ describe("LoggingSettings", () => {
       isLoading: false,
       refetch: mockRefetch,
     } as unknown as ReturnType<typeof useProxyConfig>);
+
+  it("should save skip passed guardrail runs when the switch is turned on", async () => {
+    const user = userEvent.setup();
     renderWithProviders(<LoggingSettings />);
 
-    const disabledBoxes = screen.getAllByRole("checkbox").filter((box) => box.matches("[data-disabled]"));
-    expect(disabledBoxes).toHaveLength(editable ? 0 : 5);
+    expect(skipPassedSwitch()).not.toBeChecked();
+    await user.click(skipPassedSwitch());
+    await user.click(screen.getByRole("button", { name: "Save Settings" }));
+
+    await waitFor(() => expect(mockMutate).toHaveBeenCalledTimes(1));
+    expect(mockMutate.mock.calls[0][0]).toEqual({
+      store_prompts_in_spend_logs: false,
+      guardrail_log_skip_passed: true,
+    });
+    expect(mockDeleteField).not.toHaveBeenCalled();
+  });
+
+  it("should save false when a stored skip passed setting is turned off", async () => {
+    const user = userEvent.setup();
+    storedSkipPassed(true, true);
+    renderWithProviders(<LoggingSettings />);
+
+    expect(skipPassedSwitch()).toBeChecked();
+    await user.click(skipPassedSwitch());
+    await user.click(screen.getByRole("button", { name: "Save Settings" }));
+
+    await waitFor(() => expect(mockMutate).toHaveBeenCalledTimes(1));
+    expect(mockMutate.mock.calls[0][0]).toEqual({
+      store_prompts_in_spend_logs: false,
+      guardrail_log_skip_passed: false,
+    });
+    expect(mockDeleteField).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { editable: true, case: "an unchanged stored value" },
+    { editable: false, case: "a value the config file owns" },
+  ])("should not send $case of skip passed guardrail runs", async ({ editable }) => {
+    const user = userEvent.setup();
+    storedSkipPassed(true, editable);
+    renderWithProviders(<LoggingSettings />);
+
+    expect(skipPassedSwitch()).toBeChecked();
+    expect(skipPassedSwitch().matches("[data-disabled]")).toBe(!editable);
+    expect(screen.queryByText("Set in the config file. Change it there.") !== null).toBe(!editable);
     await user.click(screen.getByRole("button", { name: "Save Settings" }));
 
     await waitFor(() => expect(mockMutate).toHaveBeenCalledTimes(1));

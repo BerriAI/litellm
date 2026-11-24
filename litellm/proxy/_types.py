@@ -3044,11 +3044,9 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         None,
         description="If True, stores request messages and responses in spend logs. Default is False.",
     )
-    guardrail_log_outcomes: (  # mutable-ok: /config/update compares the dumped value with the config file list
-        list[Literal["passed", "masked", "blocked", "flagged", "not_run"]] | None
-    ) = Field(
-        None,
-        description="Which guardrail outcomes keep a row in the Guardrails Monitor request log. A run whose outcome is not listed writes no LiteLLM_SpendLogGuardrailIndex row; the daily guardrail counters still count every run. 'masked' is a passed run that masked at least one entity, for guardrails that report masked entity counts. Outcomes: 'passed', 'masked', 'blocked', 'flagged', 'not_run'. An empty list keeps no rows. Unset keeps a row for every run.",
+    guardrail_log_skip_passed: bool = Field(
+        False,
+        description="If True, only blocked, flagged and masked guardrail runs are saved to the Guardrails Monitor request log. If False, every run is saved. Guardrails Monitor counts always include every run. Default is False.",
     )
     redact_tokens_in_spend_logs: bool = Field(
         False,

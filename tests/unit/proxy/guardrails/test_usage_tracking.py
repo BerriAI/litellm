@@ -703,10 +703,10 @@ def _indexed(prisma: MagicMock) -> list[tuple[str, str, str | None]]:
     )
 
 
-def _log_outcomes(monkeypatch: pytest.MonkeyPatch, outcomes: object) -> None:
+def _skip_passed(monkeypatch: pytest.MonkeyPatch, value: object) -> None:
     from litellm.proxy import proxy_server
 
-    monkeypatch.setitem(proxy_server.general_settings, "guardrail_log_outcomes", outcomes)
+    monkeypatch.setitem(proxy_server.general_settings, "guardrail_log_skip_passed", value)
 
 
 _ONE_RUN_PER_OUTCOME = [
@@ -724,22 +724,22 @@ _ONE_RUN_PER_OUTCOME = [
 ]
 
 
+_EVERY_RUN = ["blocked", "flagged", "masked", "not_run", "passed", "passed-empty-counts"]
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("outcomes", "kept"),
+    ("skip_passed", "kept"),
     [
-        (["blocked", "flagged", "masked"], ["blocked", "flagged", "masked"]),
-        (["masked"], ["masked"]),
-        (["passed"], ["passed", "passed-empty-counts"]),
-        (["not_run"], ["not_run"]),
-        ([], []),
-        (["blocked", "no-such-outcome", 7], ["blocked"]),
-        (None, ["blocked", "flagged", "masked", "not_run", "passed", "passed-empty-counts"]),
-        ("blocked", ["blocked", "flagged", "masked", "not_run", "passed", "passed-empty-counts"]),
+        (True, ["blocked", "flagged", "masked"]),
+        (False, _EVERY_RUN),
+        (None, _EVERY_RUN),
+        ("true", _EVERY_RUN),
+        (1, _EVERY_RUN),
     ],
 )
-async def test_guardrail_log_outcomes_keeps_index_rows_only_for_listed_outcomes(monkeypatch, outcomes, kept):
-    _log_outcomes(monkeypatch, outcomes)
+async def test_guardrail_log_skip_passed_keeps_index_rows_only_for_runs_that_acted(monkeypatch, skip_passed, kept):
+    _skip_passed(monkeypatch, skip_passed)
     prisma = _prisma()
 
     await process_spend_logs_guardrail_usage(prisma, _ONE_RUN_PER_OUTCOME)
@@ -757,8 +757,8 @@ async def test_guardrail_log_outcomes_keeps_index_rows_only_for_listed_outcomes(
 
 
 @pytest.mark.asyncio
-async def test_guardrail_log_outcomes_keeps_the_row_when_any_run_of_the_guardrail_is_listed(monkeypatch):
-    _log_outcomes(monkeypatch, ["blocked"])
+async def test_guardrail_log_skip_passed_keeps_the_row_when_any_run_of_the_guardrail_acted(monkeypatch):
+    _skip_passed(monkeypatch, True)
     prisma = _prisma()
     logs = [
         _entries_payload(

@@ -6086,18 +6086,11 @@
           "placeholder": "e.g., 30s",
           "hint": "Postgres statement and lock timeout applied to each cleanup batch, so cleanup never monopolizes a connection (e.g., '30s'). Leave empty to use the default of 30s."
         },
-        "guardrailLogOutcomes": {
-          "label": "Guardrail Outcomes Kept in the Request Log (Optional)",
-          "hint": "A guardrail run whose outcome is not selected writes no row to the Guardrails Monitor request log. The daily guardrail counters still count every run. Masked covers guardrails that report masked entity counts.",
-          "description": "Leave every box unchecked to keep a row for every guardrail run.",
-          "configOwned": "Set in the config file. Change it there.",
-          "outcomes": {
-            "blocked": "Blocked",
-            "flagged": "Flagged",
-            "masked": "Masked",
-            "passed": "Passed",
-            "notRun": "Not run"
-          }
+        "guardrailLogSkipPassed": {
+          "label": "Skip Passed Guardrail Runs in the Request Log",
+          "hint": "On: only blocked, flagged and masked guardrail runs are saved to the Guardrails Monitor request log. Off: every run is saved. Guardrails Monitor counts always include every run.",
+          "description": "On: only blocked, flagged and masked runs are saved. Off: every run is saved.",
+          "configOwned": "Set in the config file. Change it there."
         }
       },
       "savingAriaLabel": "loading",

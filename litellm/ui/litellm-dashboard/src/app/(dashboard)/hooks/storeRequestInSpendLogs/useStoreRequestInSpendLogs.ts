@@ -10,7 +10,7 @@ export interface StoreRequestInSpendLogsParams {
   maximum_spend_logs_cleanup_max_batches?: number;
   maximum_spend_logs_cleanup_run_budget?: string;
   maximum_spend_logs_cleanup_batch_timeout?: string;
-  guardrail_log_outcomes?: string[];
+  guardrail_log_skip_passed?: boolean;
 }
 
 export interface StoreRequestInSpendLogsResponse {

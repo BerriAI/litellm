@@ -1,4 +1,4 @@
-"""`general_settings.guardrail_log_outcomes`, driven through a real proxy.
+"""`general_settings.guardrail_log_skip_passed`, driven through a real proxy.
 
 The provider is the only double, an owned wire peer. The proxy, its guardrail registry, Postgres and Redis run
 for real with two workers. Every check reads `LiteLLM_SpendLogGuardrailIndex` and `LiteLLM_DailyGuardrailMetrics`,
@@ -24,15 +24,11 @@ from integration._support.wire import Reply, Request, Wire, wire_server
 pytestmark: Final = pytest.mark.shares_worker_state
 
 AWS_KEY: Final = "AKIA" + "SYNTHETIC0000000"
-PASSES: Final = "outcomes-passes"
-MASKS: Final = "outcomes-masks"
-BLOCKS: Final = "outcomes-blocks"
-FLAGS: Final = "outcomes-flags"
-KEPT_OUTCOMES: Final = ("blocked", "flagged", "masked")
+PASSES: Final = "skip-passed-passes"
+MASKS: Final = "skip-passed-masks"
+BLOCKS: Final = "skip-passed-blocks"
+FLAGS: Final = "skip-passed-flags"
 UNSET: Final = "unset"
-EMPTY: Final = "empty"
-MISSPELLED: Final = "misspelled"
-NOT_A_LIST: Final = "not-a-list"
 CHAT: Final = "chat"
 CHAT_STREAM: Final = "chat-stream"
 MESSAGES: Final = "messages"
@@ -104,12 +100,12 @@ def _content_filter(name: str, mode: str, action: str) -> dict[str, object]:
     }
 
 
-def _config(root: Path, name: str, outcomes: object, spend_log_writer: str) -> Path:
+def _config(root: Path, name: str, skip_passed: bool | None, spend_log_writer: str) -> Path:
     config: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
     config["litellm_settings"]["cache"] = False
     config["general_settings"]["use_spend_logs_ledger"] = spend_log_writer == "rust"
-    if outcomes is not None:
-        config["general_settings"]["guardrail_log_outcomes"] = outcomes
+    if skip_passed is not None:
+        config["general_settings"]["guardrail_log_skip_passed"] = skip_passed
     config["guardrails"] = [
         _content_filter(PASSES, "pre_call", "BLOCK"),
         _content_filter(MASKS, "pre_call", "MASK"),
@@ -198,7 +194,7 @@ class Rig:
         return int(str(rows[0]["total"]))
 
 
-def _rig(root: Path, outcomes: object, spend_log_writer: str = "rust") -> Iterator[Rig]:
+def _rig(root: Path, skip_passed: bool | None, spend_log_writer: str = "rust") -> Iterator[Rig]:
     with (
         gateway_from_environment() as gateway,
         wire_server(_provider) as provider,
@@ -206,7 +202,7 @@ def _rig(root: Path, outcomes: object, spend_log_writer: str = "rust") -> Iterat
             gateway,
             root,
             {},
-            config=_config(root, "guardrail-log-outcomes.yaml", outcomes, spend_log_writer),
+            config=_config(root, "guardrail-log-skip-passed.yaml", skip_passed, spend_log_writer),
             workers=2,
         ) as owned,
         owned.gateway.scenario() as scenario,
@@ -221,31 +217,23 @@ def _rig(root: Path, outcomes: object, spend_log_writer: str = "rust") -> Iterat
 def rig(request: pytest.FixtureRequest, tmp_path_factory: pytest.TempPathFactory) -> Iterator[Rig]:
     """One proxy at a time: the owned proxies share the worker database and the guardrail ids, so two alive at
     once would move each other's counts."""
-    configured: Final[dict[str, object]] = {
-        UNSET: None,
-        EMPTY: [],
-        MISSPELLED: ["Blocked", "masked"],
-        NOT_A_LIST: "blocked",
-    }
-    outcomes: Final = configured.get(request.param, list(KEPT_OUTCOMES))
-    writer: Final = str(request.param) if request.param in ("rust", "python") else "rust"
-    yield from _rig(tmp_path_factory.mktemp("guardrail-log-outcomes"), outcomes, writer)
+    if request.param == UNSET:
+        yield from _rig(tmp_path_factory.mktemp("guardrail-log-skip-passed"), None)
+        return
+    yield from _rig(tmp_path_factory.mktemp("guardrail-log-skip-passed"), True, str(request.param))
 
 
-kept_outcomes: Final = pytest.mark.parametrize("rig", ("rust", "python"), indirect=True)
+skips_passed: Final = pytest.mark.parametrize("rig", ("rust", "python"), indirect=True)
 unset: Final = pytest.mark.parametrize("rig", (UNSET,), indirect=True)
-empty: Final = pytest.mark.parametrize("rig", (EMPTY,), indirect=True)
-misspelled: Final = pytest.mark.parametrize("rig", (MISSPELLED,), indirect=True)
-not_a_list: Final = pytest.mark.parametrize("rig", (NOT_A_LIST,), indirect=True)
 
 
-@kept_outcomes
+@skips_passed
 def test_a_passed_run_is_counted_but_writes_no_index_row(rig: Rig) -> None:
     clean: Final = tuple(f"clean prompt {index}" for index in range(3))
     assert rig.index_rows_added(PASSES, clean, (200, 200, 200), Counters(3, 3, 0, 0)) == 0
 
 
-@kept_outcomes
+@skips_passed
 def test_a_masked_run_keeps_its_index_row(rig: Rig) -> None:
     rig.provider.drain()
     texts: Final = ("clean prompt", f"the key is {AWS_KEY}")
@@ -255,13 +243,13 @@ def test_a_masked_run_keeps_its_index_row(rig: Rig) -> None:
     assert not any(AWS_KEY in body for body in forwarded), forwarded
 
 
-@kept_outcomes
+@skips_passed
 def test_a_blocked_run_keeps_its_index_row(rig: Rig) -> None:
     texts: Final = ("clean prompt", f"the key is {AWS_KEY}")
     assert rig.index_rows_added(BLOCKS, texts, (200, 400), Counters(2, 1, 1, 0)) == 1
 
 
-@kept_outcomes
+@skips_passed
 def test_a_flagged_run_keeps_its_index_row(rig: Rig) -> None:
     guardrail_id: Final = rig.guardrail_id(FLAGS)
     before: Final = rig.counters(guardrail_id)
@@ -277,7 +265,7 @@ def test_a_flagged_run_keeps_its_index_row(rig: Rig) -> None:
     assert len(rows) == 1, rows
 
 
-@kept_outcomes
+@skips_passed
 @pytest.mark.parametrize("endpoint", (CHAT_STREAM, MESSAGES, RESPONSES))
 def test_every_endpoint_drops_the_passed_run_and_keeps_the_blocked_one(rig: Rig, endpoint: str) -> None:
     clean: Final = ("clean prompt 0", "clean prompt 1")
@@ -285,34 +273,14 @@ def test_every_endpoint_drops_the_passed_run_and_keeps_the_blocked_one(rig: Rig,
     assert rig.index_rows_added(BLOCKS, (f"the key is {AWS_KEY}",), (400,), Counters(1, 0, 1, 0), endpoint) == 1
 
 
-@kept_outcomes
-def test_outcomes_set_in_the_config_file_cannot_be_changed_through_the_config_api(rig: Rig) -> None:
+@skips_passed
+def test_a_value_set_in_the_config_file_cannot_be_changed_through_the_config_api(rig: Rig) -> None:
     changed: Final = rig.proxy.request(
-        "POST", "/config/update", {"general_settings": {"guardrail_log_outcomes": ["passed"]}}
+        "POST", "/config/update", {"general_settings": {"guardrail_log_skip_passed": False}}
     )
     assert changed.status_code == 400, changed.text
-    assert "guardrail_log_outcomes" in changed.text
+    assert "guardrail_log_skip_passed" in changed.text
     assert rig.index_rows_added(PASSES, ("clean prompt",), (200,), Counters(1, 1, 0, 0)) == 0
-
-
-@empty
-def test_an_empty_list_keeps_no_index_row_and_still_counts_every_run(rig: Rig) -> None:
-    texts: Final = ("clean prompt", f"the key is {AWS_KEY}")
-    assert rig.index_rows_added(BLOCKS, texts, (200, 400), Counters(2, 1, 1, 0)) == 0
-    assert rig.index_rows_added(MASKS, texts, (200, 200), Counters(2, 2, 0, 0)) == 0
-
-
-@misspelled
-def test_a_misspelled_outcome_is_ignored_and_the_valid_one_still_applies(rig: Rig) -> None:
-    texts: Final = ("clean prompt", f"the key is {AWS_KEY}")
-    assert rig.index_rows_added(BLOCKS, texts, (200, 400), Counters(2, 1, 1, 0)) == 0
-    assert rig.index_rows_added(MASKS, texts, (200, 200), Counters(2, 2, 0, 0)) == 1
-
-
-@not_a_list
-def test_a_value_that_is_not_a_list_keeps_every_index_row(rig: Rig) -> None:
-    texts: Final = ("clean prompt", f"the key is {AWS_KEY}")
-    assert rig.index_rows_added(BLOCKS, texts, (200, 400), Counters(2, 1, 1, 0)) == 2
 
 
 def _rows_added_by_passed_runs(rig: Rig, runs: int) -> int:
@@ -327,31 +295,38 @@ def test_every_run_keeps_its_index_row_when_the_setting_is_unset(rig: Rig) -> No
 
 
 @unset
-def test_outcomes_saved_and_cleared_through_the_config_api_apply_on_every_worker(rig: Rig) -> None:
+def test_the_setting_saved_and_cleared_through_the_config_api_applies_on_every_worker(rig: Rig) -> None:
     assert _rows_added_by_passed_runs(rig, 2) == 2
 
     rejected: Final = rig.proxy.request(
-        "POST", "/config/update", {"general_settings": {"guardrail_log_outcomes": ["blocked", "no-such-outcome"]}}
+        "POST", "/config/update", {"general_settings": {"guardrail_log_skip_passed": ["blocked"]}}
     )
     assert rejected.status_code == 422, rejected.text
     saved: Final = rig.proxy.request(
-        "POST", "/config/update", {"general_settings": {"guardrail_log_outcomes": ["blocked", "masked"]}}
+        "POST", "/config/update", {"general_settings": {"guardrail_log_skip_passed": True}}
     )
     assert saved.status_code == 200, saved.text
     listed: Final = rig.proxy.request("GET", "/config/list", params={"config_type": "general_settings"})
     assert listed.status_code == 200, listed.text
     fields: Final = tuple(
-        object_value(field) for field in listed.json() if object_value(field)["field_name"] == "guardrail_log_outcomes"
+        object_value(field)
+        for field in listed.json()
+        if object_value(field)["field_name"] == "guardrail_log_skip_passed"
     )
-    assert [(field["field_type"], field["field_value"]) for field in fields] == [("List", ["blocked", "masked"])]
+    assert [(field["field_type"], field["field_value"]) for field in fields] == [("Boolean", True)]
 
     eventually(lambda: _rows_added_by_passed_runs(rig, 4), lambda added: added == 0, seconds=180)
     assert _rows_added_by_passed_runs(rig, 8) == 0
     assert rig.index_rows_added(MASKS, (f"the key is {AWS_KEY}",), (200,), Counters(1, 1, 0, 0)) == 1
 
-    cleared: Final = rig.proxy.request(
-        "POST", "/config/field/delete", {"config_type": "general_settings", "field_name": "guardrail_log_outcomes"}
+    turned_off: Final = rig.proxy.request(
+        "POST", "/config/update", {"general_settings": {"guardrail_log_skip_passed": False}}
     )
-    assert cleared.status_code == 200, cleared.text
+    assert turned_off.status_code == 200, turned_off.text
     eventually(lambda: _rows_added_by_passed_runs(rig, 4), lambda added: added == 4, seconds=180)
     assert _rows_added_by_passed_runs(rig, 8) == 8
+
+    cleared: Final = rig.proxy.request(
+        "POST", "/config/field/delete", {"config_type": "general_settings", "field_name": "guardrail_log_skip_passed"}
+    )
+    assert cleared.status_code == 200, cleared.text

@@ -15,7 +15,6 @@ import { parseErrorMessage } from "@/components/shared/errorUtils";
 import { FieldGroup } from "@/components/ui/field";
 import { FormField } from "@/components/shared/form/FormField";
 import { Button } from "@/components/ui/button";
-import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { InputGroup, InputGroupAddon, InputGroupInput } from "@/components/ui/input-group";
 import { Switch } from "@/components/ui/switch";
@@ -77,15 +76,7 @@ const OPTIONAL_FIELDS: readonly OptionalField[] = [
   },
 ];
 
-const GUARDRAIL_LOG_OUTCOMES_FIELD_NAME = GeneralSettingsFieldName.GUARDRAIL_LOG_OUTCOMES;
-
-const GUARDRAIL_LOG_OUTCOMES: readonly { readonly value: string; readonly label: ParseKeys }[] = [
-  { value: "blocked", label: "adminPanel.loggingSettings.fields.guardrailLogOutcomes.outcomes.blocked" },
-  { value: "flagged", label: "adminPanel.loggingSettings.fields.guardrailLogOutcomes.outcomes.flagged" },
-  { value: "masked", label: "adminPanel.loggingSettings.fields.guardrailLogOutcomes.outcomes.masked" },
-  { value: "passed", label: "adminPanel.loggingSettings.fields.guardrailLogOutcomes.outcomes.passed" },
-  { value: "not_run", label: "adminPanel.loggingSettings.fields.guardrailLogOutcomes.outcomes.notRun" },
-];
+const SKIP_PASSED_FIELD_NAME = "guardrail_log_skip_passed";
 
 const MINIMUM_COUNT = 1;
 
@@ -96,7 +87,7 @@ interface LoggingSettingsFormValues {
   maximum_spend_logs_cleanup_max_batches: string;
   maximum_spend_logs_cleanup_run_budget: string;
   maximum_spend_logs_cleanup_batch_timeout: string;
-  guardrail_log_outcomes: string[];
+  guardrail_log_skip_passed: boolean;
 }
 
 const duration = (value: string): string | undefined => (value.trim() === "" ? undefined : value);
@@ -117,12 +108,9 @@ const countDisplay = (raw: string): string => {
   return normalized === undefined ? "" : String(normalized);
 };
 
-const sameOutcomes = (left: readonly string[], right: readonly string[]): boolean =>
-  left.length === right.length && left.every((outcome) => right.includes(outcome));
-
 const buildUpdateParams = (
   formValues: LoggingSettingsFormValues,
-  saveOutcomes: boolean,
+  saveSkipPassed: boolean,
 ): StoreRequestInSpendLogsParams => {
   const retentionPeriod = duration(formValues.maximum_spend_logs_retention_period);
   const batchSize = count(formValues.maximum_spend_logs_cleanup_batch_size);
@@ -137,7 +125,7 @@ const buildUpdateParams = (
     ...(maxBatches !== undefined && { maximum_spend_logs_cleanup_max_batches: maxBatches }),
     ...(runBudget !== undefined && { maximum_spend_logs_cleanup_run_budget: runBudget }),
     ...(batchTimeout !== undefined && { maximum_spend_logs_cleanup_batch_timeout: batchTimeout }),
-    ...(saveOutcomes && { guardrail_log_outcomes: formValues.guardrail_log_outcomes }),
+    ...(saveSkipPassed && { guardrail_log_skip_passed: formValues.guardrail_log_skip_passed }),
   };
 };
 
@@ -149,11 +137,8 @@ const buildUpdateParams = (
 const omittedFieldNames = (
   updateParams: StoreRequestInSpendLogsParams,
   isStored: (name: GeneralSettingsFieldName) => boolean,
-  clearOutcomes: boolean,
 ): readonly GeneralSettingsFieldName[] =>
-  [...OPTIONAL_FIELDS.map((field) => field.name), ...(clearOutcomes ? [GUARDRAIL_LOG_OUTCOMES_FIELD_NAME] : [])].filter(
-    (name) => !(name in updateParams) && isStored(name),
-  );
+  OPTIONAL_FIELDS.map((field) => field.name).filter((name) => !(name in updateParams) && isStored(name));
 
 const labelWithHint = (label: string, hint: string): React.ReactNode => (
   <>
@@ -168,7 +153,7 @@ const labelWithHint = (label: string, hint: string): React.ReactNode => (
 interface LoggingSettingsFormProps {
   initialValues: LoggingSettingsFormValues;
   describeField: (name: string, fallback: string) => string;
-  outcomesEditable: boolean;
+  skipPassedEditable: boolean;
   isSaving: boolean;
   onSubmit: (formValues: LoggingSettingsFormValues) => void;
 }
@@ -176,7 +161,7 @@ interface LoggingSettingsFormProps {
 const LoggingSettingsForm: React.FC<LoggingSettingsFormProps> = ({
   initialValues,
   describeField,
-  outcomesEditable,
+  skipPassedEditable,
   isSaving,
   onSubmit,
 }) => {
@@ -240,41 +225,26 @@ const LoggingSettingsForm: React.FC<LoggingSettingsFormProps> = ({
 
           <FormField
             control={form.control}
-            name={GUARDRAIL_LOG_OUTCOMES_FIELD_NAME}
+            name={SKIP_PASSED_FIELD_NAME}
             label={labelWithHint(
-              t("adminPanel.loggingSettings.fields.guardrailLogOutcomes.label"),
-              describeField(
-                GUARDRAIL_LOG_OUTCOMES_FIELD_NAME,
-                t("adminPanel.loggingSettings.fields.guardrailLogOutcomes.hint"),
-              ),
+              t("adminPanel.loggingSettings.fields.guardrailLogSkipPassed.label"),
+              describeField(SKIP_PASSED_FIELD_NAME, t("adminPanel.loggingSettings.fields.guardrailLogSkipPassed.hint")),
             )}
             description={t(
-              outcomesEditable
-                ? "adminPanel.loggingSettings.fields.guardrailLogOutcomes.description"
-                : "adminPanel.loggingSettings.fields.guardrailLogOutcomes.configOwned",
+              skipPassedEditable
+                ? "adminPanel.loggingSettings.fields.guardrailLogSkipPassed.description"
+                : "adminPanel.loggingSettings.fields.guardrailLogSkipPassed.configOwned",
             )}
           >
-            {({ value, onChange }) => (
-              <div className="flex flex-wrap gap-x-6 gap-y-2">
-                {GUARDRAIL_LOG_OUTCOMES.map((outcome) => (
-                  <label key={outcome.value} className="flex items-center gap-2 text-sm">
-                    <Checkbox
-                      disabled={!outcomesEditable}
-                      checked={value.includes(outcome.value)}
-                      onCheckedChange={(checked) =>
-                        onChange(
-                          checked
-                            ? GUARDRAIL_LOG_OUTCOMES.map((known) => known.value).filter(
-                                (known) => known === outcome.value || value.includes(known),
-                              )
-                            : value.filter((kept) => kept !== outcome.value),
-                        )
-                      }
-                    />
-                    {t(outcome.label)}
-                  </label>
-                ))}
-              </div>
+            {({ id, value, onChange, onBlur }) => (
+              <Switch
+                id={id}
+                disabled={!skipPassedEditable}
+                checked={Boolean(value)}
+                onCheckedChange={onChange}
+                onBlur={onBlur}
+                className="w-fit"
+              />
             )}
           </FormField>
         </FieldGroup>
@@ -308,8 +278,8 @@ const LoggingSettings: React.FC = () => {
     [proxyConfigData],
   );
 
-  const outcomesEditable =
-    proxyConfigData?.find((field) => field.field_name === GUARDRAIL_LOG_OUTCOMES_FIELD_NAME)?.editable !== false;
+  const skipPassedEditable =
+    proxyConfigData?.find((field) => field.field_name === SKIP_PASSED_FIELD_NAME)?.editable !== false;
 
   const isStored = (name: GeneralSettingsFieldName) => {
     const value = storedValue(name);
@@ -326,9 +296,7 @@ const LoggingSettings: React.FC = () => {
             return [field.name, stored === null || stored === undefined ? "" : String(stored)];
           }),
         ),
-        guardrail_log_outcomes: Array.isArray(storedValue(GUARDRAIL_LOG_OUTCOMES_FIELD_NAME))
-          ? storedValue(GUARDRAIL_LOG_OUTCOMES_FIELD_NAME)
-          : [],
+        guardrail_log_skip_passed: storedValue(SKIP_PASSED_FIELD_NAME) === true,
       }) as LoggingSettingsFormValues,
     [storedValue],
   );
@@ -365,13 +333,10 @@ const LoggingSettings: React.FC = () => {
   };
 
   const handleFormSubmit = (formValues: LoggingSettingsFormValues) => {
-    // The boxes are what the admin sees, so no box checked always ends as unset, even over a stored empty
-    // list. A value the config file owns is never sent or cleared, and an unchanged selection is not re-sent.
-    const selected = formValues.guardrail_log_outcomes;
-    const clearOutcomes = outcomesEditable && selected.length === 0;
-    const saveOutcomes =
-      outcomesEditable && selected.length > 0 && !sameOutcomes(selected, initialValues.guardrail_log_outcomes);
-    const updateParams = buildUpdateParams(formValues, saveOutcomes);
+    // A value the config file owns is rejected by the proxy when it changes, so it is only sent when editable.
+    const saveSkipPassed =
+      skipPassedEditable && formValues.guardrail_log_skip_passed !== initialValues.guardrail_log_skip_passed;
+    const updateParams = buildUpdateParams(formValues, saveSkipPassed);
     const submitUpdate = () =>
       mutate(updateParams, {
         onSuccess: () => toast.success(t("adminPanel.loggingSettings.toasts.updated")),
@@ -379,7 +344,7 @@ const LoggingSettings: React.FC = () => {
           toast.fromError(t("adminPanel.loggingSettings.toasts.saveFailed", { error: parseErrorMessage(error) })),
       });
 
-    const fieldsToClear = omittedFieldNames(updateParams, isStored, clearOutcomes);
+    const fieldsToClear = omittedFieldNames(updateParams, isStored);
     if (fieldsToClear.length === 0) {
       submitUpdate();
       return;
@@ -417,7 +382,7 @@ const LoggingSettings: React.FC = () => {
             <LoggingSettingsForm
               initialValues={initialValues}
               describeField={describeField}
-              outcomesEditable={outcomesEditable}
+              skipPassedEditable={skipPassedEditable}
               isSaving={isPending || isDeletingField}
               onSubmit={handleFormSubmit}
             />
