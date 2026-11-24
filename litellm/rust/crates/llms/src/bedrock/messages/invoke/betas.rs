@@ -445,7 +445,7 @@ fn without_unsupported_server_side_fallback(
         return betas;
     }
     tracing::warn!(
-        "Dropping the {SERVER_SIDE_FALLBACK} beta for model={model} (drop_params=True): the model does not support server-side fallback and the provider answers the beta with 400 invalid beta flag."
+        "Dropping the {SERVER_SIDE_FALLBACK} beta for model={model} (drop_params=True): neither its model_info nor the model cost map lists server-side fallback support for it. Set model_info.supports_server_side_fallback: true on a deployment whose model supports it."
     );
     betas
         .into_iter()
