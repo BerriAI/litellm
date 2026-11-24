@@ -6543,6 +6543,29 @@ async def test_post_call_masking_masks_responses_text_beside_a_tool_call_with_it
 
 
 @pytest.mark.asyncio
+async def test_post_call_masking_blocks_responses_text_that_only_its_own_rescan_flags():
+    guardrail: Final = _model_armor_post_call_guardrail(mask_response_content=True)
+
+    async def redact_the_card_and_flag_the_text(json: dict[str, dict[str, str]], **kwargs: object) -> AsyncMock:
+        scanned: Final = json["modelResponseData"]["text"]
+        if "4111" in scanned:
+            return _armor_http_response(_armor_redaction(scanned.replace("4111", "[REDACTED]")))
+        return _armor_http_response(_armor_block())
+
+    with (
+        patch.object(guardrail.async_handler, "post", AsyncMock(side_effect=redact_the_card_and_flag_the_text)),
+        pytest.raises(HTTPException) as blocked,
+    ):
+        await guardrail.async_post_call_success_hook(
+            data=dict(_POST_CALL_REQUEST),
+            user_api_key_dict=UserAPIKeyAuth(),
+            response=_responses_body_with_a_card_tool_call(),
+        )
+
+    assert blocked.value.status_code == 400
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("mask_response_content", [False, True])
 async def test_post_call_blocks_a_flagged_tool_call_beside_responses_text(mask_response_content: bool):
     guardrail: Final = _model_armor_post_call_guardrail(mask_response_content=mask_response_content)

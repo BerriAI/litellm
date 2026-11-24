@@ -38,9 +38,12 @@ from litellm.proxy.guardrails.guardrail_hooks.presidio import (
     PresidioPerRequestConfig,
 )
 from litellm.proxy.guardrails.guardrail_initializers import initialize_presidio
+from litellm.proxy.policy_engine.pipeline_executor import UndeliverableStreamRewrite
 from litellm.types.guardrails import LitellmParams, Mode, PiiAction, PiiEntityType
 from litellm.types.llms.openai import (
     BaseLiteLLMOpenAIResponseObject,
+    FunctionCallArgumentsDeltaEvent,
+    OutputItemAddedEvent,
     OutputItemDoneEvent,
     OutputTextDeltaEvent,
     OutputTextDoneEvent,
@@ -7107,3 +7110,26 @@ async def test_apply_to_output_blocks_a_responses_stream_before_any_event_is_rel
     with patch.object(guardrail, "check_pii", side_effect=blocked):
         with pytest.raises(BlockedPiiEntityError):
             await _drain_output_masking(guardrail, _message_stream_events())
+
+
+@pytest.mark.asyncio
+async def test_apply_to_output_ends_a_responses_stream_cut_short_mid_tool_call_before_releasing_its_raw_arguments():
+    tool_call: Final = BaseLiteLLMOpenAIResponseObject(
+        type="function_call", id="fc_1", call_id="call_1", name="save", arguments="", status="in_progress"
+    )
+
+    async def cut_short_stream():
+        yield OutputItemAddedEvent(type=ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED, output_index=0, item=tool_call)
+        for delta in ('{"email":', '"alice@example.com"}'):
+            yield FunctionCallArgumentsDeltaEvent(
+                type=ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DELTA, item_id="fc_1", output_index=0, delta=delta
+            )
+
+    released: Final = _email_masking_guardrail().async_post_call_streaming_iterator_hook(
+        user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
+        response=cut_short_stream(),
+        request_data={"input": "hello"},
+    )
+
+    with pytest.raises(UndeliverableStreamRewrite):
+        await anext(released)

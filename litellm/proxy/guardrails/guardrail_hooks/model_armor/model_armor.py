@@ -1114,16 +1114,21 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
         if not message_text:
             return
         message_sanitized: Final = (
-            sanitized
-            if message_text == scanned
-            else self._get_sanitized_content(
-                await self.make_model_armor_request(
-                    content=message_text, source="model_response", request_data=request_data
-                )
-            )
+            sanitized if message_text == scanned else await self._rescanned_message_text(message_text, request_data)
         )
         if message_sanitized and message_sanitized != message_text:
             await self._responses_handler().spread_text_rewrite(response, message_sanitized)
+
+    async def _rescanned_message_text(self, message_text: str, request_data: Mapping[str, object]) -> str | None:
+        armor_response: Final = await self.make_model_armor_request(
+            content=message_text, source="model_response", request_data=request_data
+        )
+        if self._should_block_content(armor_response, allow_sanitization=self.mask_response_content):
+            raise HTTPException(
+                status_code=400,
+                detail=self._build_block_error_detail("Response blocked by Model Armor", armor_response),
+            )
+        return self._get_sanitized_content(armor_response)
 
     @staticmethod
     def _responses_message_text(response: ResponsesAPIResponse) -> str:
