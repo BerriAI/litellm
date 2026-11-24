@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{borrow::Cow, sync::Arc};
 
 use futures_util::future::BoxFuture;
 use litellm_callbacks::{
@@ -146,7 +146,7 @@ fn raise(error: CapacityError) -> HookOutput {
 }
 
 fn projected<T: DeserializeOwned + Default>(input: &HookInput) -> Result<T, CallbackError> {
-    match input.fields.raw(Field::DeprecatedKwargs)? {
+    match input.fields.raw(Field::DeprecatedKwargs)?.as_deref() {
         None | Some(Value::Null) => Ok(T::default()),
         Some(value) => {
             T::deserialize(value).map_err(|error| CallbackError::Failed(error.to_string()))
@@ -218,7 +218,8 @@ impl ModelCapacity {
         redis: Option<&RequestRedis>,
         facts: &Facts,
     ) -> HookOutput {
-        let Some(Value::String(model)) = input.fields.raw(Field::Model)?.cloned() else {
+        let Some(Value::String(model)) = input.fields.raw(Field::Model)?.map(Cow::into_owned)
+        else {
             return Ok(None);
         };
         let key = key_facts(input)?;

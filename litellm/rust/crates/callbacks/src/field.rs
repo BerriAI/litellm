@@ -1,6 +1,7 @@
 use std::ops::{BitOr, BitOrAssign};
 
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use serde_json::Value;
 
 #[derive(
     Clone,
@@ -25,7 +26,11 @@ pub enum FieldTier {
 
 pub trait TypedField {
     const FIELD: Field;
-    type Value: DeserializeOwned;
+    type Value: DeserializeOwned + Clone;
+
+    fn wrap(value: Self::Value) -> FieldValue;
+
+    fn view(value: &FieldValue) -> Option<&Self::Value>;
 }
 
 macro_rules! fields {
@@ -47,6 +52,28 @@ macro_rules! fields {
             }
         }
 
+        /// A field's value in the type its contract declares, held as the Rust producer built it
+        /// so a Rust reader gets it back without a JSON round trip.
+        #[derive(Clone, Debug, PartialEq)]
+        #[expect(clippy::large_enum_variant, reason = "held boxed, one allocation per typed field")]
+        pub enum FieldValue {
+            $($variant($value),)*
+        }
+
+        impl FieldValue {
+            pub const fn field(&self) -> Field {
+                match self {
+                    $(Self::$variant(_) => Field::$variant,)*
+                }
+            }
+
+            pub fn to_json(&self) -> Result<Value, serde_json::Error> {
+                match self {
+                    $(Self::$variant(value) => serde_json::to_value(value),)*
+                }
+            }
+        }
+
         pub mod typed {
             $(
                 pub struct $variant;
@@ -54,6 +81,17 @@ macro_rules! fields {
                 impl super::TypedField for $variant {
                     const FIELD: super::Field = super::Field::$variant;
                     type Value = $value;
+
+                    fn wrap(value: Self::Value) -> super::FieldValue {
+                        super::FieldValue::$variant(value)
+                    }
+
+                    fn view(value: &super::FieldValue) -> Option<&Self::Value> {
+                        match value {
+                            super::FieldValue::$variant(value) => Some(value),
+                            _ => None,
+                        }
+                    }
                 }
             )*
         }

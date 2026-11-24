@@ -1,10 +1,10 @@
-use std::{any::Any, sync::Arc};
+use std::{any::Any, borrow::Cow, sync::Arc};
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::{
-    field::{Field, FieldSet, TypedField},
+    field::{Field, FieldSet, FieldValue, TypedField},
     hook::Hook,
     payload::PayloadRef,
 };
@@ -71,14 +71,45 @@ pub enum FieldError {
         field: Field,
         source: serde_json::Error,
     },
+    #[error("{field:?} does not encode to JSON")]
+    Encode {
+        field: Field,
+        source: serde_json::Error,
+    },
     #[error("{0:?} is delivered by reference, so read it with payload()")]
     ByReference(Field),
 }
 
+/// A field's value as its producer handed it over: typed from the Rust gateway, JSON from Python
+/// and from tests. JSON is made from a typed value only when a reader asks for it.
+#[derive(Clone, Debug, PartialEq)]
+enum Slot {
+    Typed(Box<FieldValue>),
+    Json(Value),
+}
+
+impl Slot {
+    fn to_json(&self) -> Result<Cow<'_, Value>, FieldError> {
+        match self {
+            Self::Typed(value) => {
+                value
+                    .to_json()
+                    .map(Cow::Owned)
+                    .map_err(|source| FieldError::Encode {
+                        field: value.field(),
+                        source,
+                    })
+            }
+            Self::Json(value) => Ok(Cow::Borrowed(value)),
+        }
+    }
+}
+
+/// The fields one hook run reads, each held typed or as JSON as it arrived.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct FieldValues {
     declared: FieldSet,
-    values: Vec<(Field, Value)>,
+    values: Vec<(Field, Slot)>,
     payload: Option<Arc<PayloadRef>>,
 }
 
@@ -124,17 +155,25 @@ impl FieldValues {
     }
 
     pub fn insert(&mut self, field: Field, value: Value) {
+        self.place(field, Slot::Json(value));
+    }
+
+    pub fn put<F: TypedField>(&mut self, value: F::Value) {
+        self.place(F::FIELD, Slot::Typed(Box::new(F::wrap(value))));
+    }
+
+    fn place(&mut self, field: Field, slot: Slot) {
         match self
             .values
             .iter_mut()
             .find(|(present, _)| *present == field)
         {
-            Some((_, slot)) => *slot = value,
-            None => self.values.push((field, value)),
+            Some((_, held)) => *held = slot,
+            None => self.values.push((field, slot)),
         }
     }
 
-    pub fn raw(&self, field: Field) -> Result<Option<&Value>, FieldError> {
+    fn slot(&self, field: Field) -> Result<Option<&Slot>, FieldError> {
         if field.by_reference() {
             return Err(FieldError::ByReference(field));
         }
@@ -145,18 +184,34 @@ impl FieldValues {
             .values
             .iter()
             .find(|(present, _)| *present == field)
-            .map(|(_, value)| value))
+            .map(|(_, slot)| slot))
+    }
+
+    pub fn raw(&self, field: Field) -> Result<Option<Cow<'_, Value>>, FieldError> {
+        self.slot(field)?.map(Slot::to_json).transpose()
     }
 
     pub fn get<F: TypedField>(&self) -> Result<Option<F::Value>, FieldError> {
-        self.raw(F::FIELD)?
-            .map(|value| {
-                F::Value::deserialize(value).map_err(|source| FieldError::Decode {
-                    field: F::FIELD,
-                    source,
-                })
+        Ok(self.get_ref::<F>()?.map(Cow::into_owned))
+    }
+
+    /// `get` without the clone when the value arrived typed: borrowed from a typed slot, decoded
+    /// from a JSON one.
+    pub fn get_ref<F: TypedField>(&self) -> Result<Option<Cow<'_, F::Value>>, FieldError> {
+        let Some(slot) = self.slot(F::FIELD)? else {
+            return Ok(None);
+        };
+        if let Slot::Typed(value) = slot
+            && let Some(typed) = F::view(value)
+        {
+            return Ok(Some(Cow::Borrowed(typed)));
+        }
+        F::Value::deserialize(&*slot.to_json()?)
+            .map(|value| Some(Cow::Owned(value)))
+            .map_err(|source| FieldError::Decode {
+                field: F::FIELD,
+                source,
             })
-            .transpose()
     }
 }
 
@@ -228,6 +283,87 @@ mod tests {
         assert_eq!(
             values.get::<typed::Outcome>().unwrap(),
             Some(crate::record::Outcome::FallbackFailure)
+        );
+    }
+
+    fn usage() -> crate::record::Usage {
+        crate::record::Usage {
+            response: Some(crate::record::UsageRecord {
+                prompt_tokens: Some(crate::scalar::Scalar::Int(3)),
+                total_tokens: Some(crate::scalar::Scalar::Float(f64::NAN)),
+                ..crate::record::UsageRecord::default()
+            }),
+            ..crate::record::Usage::default()
+        }
+    }
+
+    fn typed_usage() -> FieldValues {
+        let mut values = FieldValues::new(FieldSet::of(&[Field::Usage]));
+        values.put::<typed::Usage>(usage());
+        values
+    }
+
+    #[rstest]
+    fn a_typed_put_is_read_back_without_a_json_round_trip() {
+        let values = typed_usage();
+        assert!(matches!(
+            values.get_ref::<typed::Usage>().unwrap(),
+            Some(Cow::Borrowed(_))
+        ));
+        let read = values.get::<typed::Usage>().unwrap().unwrap();
+        assert_eq!(
+            read.response.as_ref().unwrap().prompt_tokens,
+            Some(crate::scalar::Scalar::Int(3))
+        );
+        assert!(matches!(
+            read.response.unwrap().total_tokens,
+            Some(crate::scalar::Scalar::Float(number)) if number.is_nan()
+        ));
+    }
+
+    #[rstest]
+    fn a_typed_put_reads_raw_as_the_json_serde_would_make() {
+        assert_eq!(
+            typed_usage()
+                .raw(Field::Usage)
+                .unwrap()
+                .unwrap()
+                .into_owned(),
+            serde_json::to_value(usage()).unwrap()
+        );
+    }
+
+    #[rstest]
+    fn a_typed_put_replaces_a_json_insert_of_the_same_field() {
+        let mut values = values();
+        values.put::<typed::Model>("claude".to_owned());
+        assert_eq!(
+            values.raw(Field::Model).unwrap().unwrap().into_owned(),
+            json!("claude")
+        );
+        assert_eq!(
+            values.get::<typed::Model>().unwrap(),
+            Some("claude".to_owned())
+        );
+    }
+
+    #[rstest]
+    fn a_json_insert_still_decodes_on_get() {
+        let values = FieldValues::new(FieldSet::of(&[Field::Usage]))
+            .with(Field::Usage, json!({"response": {"prompt_tokens": 3}}));
+        assert!(matches!(
+            values.get_ref::<typed::Usage>().unwrap(),
+            Some(Cow::Owned(_))
+        ));
+        assert_eq!(
+            values
+                .get::<typed::Usage>()
+                .unwrap()
+                .unwrap()
+                .response
+                .unwrap()
+                .prompt_tokens,
+            Some(crate::scalar::Scalar::Int(3))
         );
     }
 

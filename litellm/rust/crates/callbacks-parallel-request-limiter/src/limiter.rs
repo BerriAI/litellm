@@ -1,4 +1,5 @@
 use std::{
+    borrow::Cow,
     collections::{BTreeMap, BTreeSet},
     sync::Arc,
 };
@@ -433,7 +434,10 @@ pub(crate) fn auth_members(
 /// The statuses a callback that ran earlier published, as the answer this limiter starts its own
 /// from: a member that is `None` is left out.
 pub fn prior_response(input: &HookInput) -> Result<Option<PriorResponse>, CallbackError> {
-    let Some(Value::Object(mut statuses)) = input.fields.raw(Field::RateLimitStatuses)?.cloned()
+    let Some(Value::Object(mut statuses)) = input
+        .fields
+        .raw(Field::RateLimitStatuses)?
+        .map(Cow::into_owned)
     else {
         return Ok(None);
     };
@@ -2008,8 +2012,10 @@ impl ParallelRequestLimiter {
         if statuses.is_empty() {
             return Ok(None);
         }
-        let Some(Value::Object(payload)) =
-            input.fields.raw(Field::StandardLoggingPayload)?.cloned()
+        let Some(Value::Object(payload)) = input
+            .fields
+            .raw(Field::StandardLoggingPayload)?
+            .map(Cow::into_owned)
         else {
             return Ok(None);
         };

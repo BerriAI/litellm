@@ -11,7 +11,9 @@ mod scalar;
 mod verdict;
 
 pub use callback::{Callback, CallbackError, ErasedCallback, HookOutput};
-pub use field::{BY_REFERENCE, DERIVED_ONLY, Field, FieldSet, FieldTier, TypedField, typed};
+pub use field::{
+    BY_REFERENCE, DERIVED_ONLY, Field, FieldSet, FieldTier, FieldValue, TypedField, typed,
+};
 pub use hook::{Hook, OutcomeKind};
 pub use host::{
     Host, HostCall, HostCallError, HostException, HostFault, HostReply, HostRequest, Hosted, hosted,
