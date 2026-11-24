@@ -90,6 +90,7 @@ from litellm.litellm_core_utils.initialize_dynamic_callback_params import valida
 from litellm.litellm_core_utils.internal_call_metadata import MODEL_ACCESS_GROUP_METADATA_KEY
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.litellm_logging import get_masked_values
+from litellm.litellm_core_utils.logging_utils import truncate_base64_in_messages
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.litellm_core_utils.realtime_errors import realtime_error_event
 from litellm.litellm_core_utils.redact_messages import should_redact_message_logging
@@ -1773,7 +1774,7 @@ async def pass_through_request(
         litellm_trace_id: Final[str | None] = get_chain_id_from_headers(dict(request.headers))
         logging_obj = Logging(
             model=passthrough_model,
-            messages=[{"role": "user", "content": safe_dumps(_parsed_body)}],
+            messages=[{"role": "user", "content": safe_dumps(truncate_base64_in_messages(_parsed_body))}],
             stream=False,
             call_type="pass_through_endpoint",
             start_time=start_time,
@@ -2024,7 +2025,7 @@ async def pass_through_request(
             _METADATA_ADAPTER.validate_python(kwargs["litellm_params"]),
         )
         logging_obj.pre_call(
-            input=[{"role": "user", "content": safe_dumps(_parsed_body)}],
+            input=[{"role": "user", "content": safe_dumps(truncate_base64_in_messages(_parsed_body))}],
             api_key="",
             additional_args={
                 "complete_input_dict": upstream_body,
