@@ -23,6 +23,7 @@ from fastapi import FastAPI, HTTPException, Request, Response  # noqa: E402  # o
 from fastapi.responses import StreamingResponse  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 from starlette.routing import Route  # noqa: E402
+from starlette.types import ASGIApp, Receive, Scope, Send  # noqa: E402
 import httpx  # noqa: E402
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor  # noqa: E402
 from opentelemetry.instrumentation.propagators import (  # noqa: E402
@@ -375,48 +376,50 @@ def _server_spans_by_route(exporter):
 
 
 class _OuterTracer:
-    def __init__(self, app):
-        self.app = app
-        self.paths = []
+    def __init__(self, app: ASGIApp) -> None:
+        self.app: Final = app
+        self.paths: Final[list[str]] = []
 
-    async def __call__(self, scope, receive, send):
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] == "http":
             self.paths.append(scope["path"])
         await self.app(scope, receive, send)
 
 
-class _AppWrappedByAnotherTracer(fastapi.FastAPI):
-    def build_middleware_stack(self):
+class _AppWrappedByAnotherTracer(FastAPI):
+    def build_middleware_stack(self) -> ASGIApp:
         self.outer_tracer = _OuterTracer(super().build_middleware_stack())
         return self.outer_tracer
 
 
-def _app_with_error_handler(monkeypatch, app, provider):
+def _app_with_error_handler(
+    monkeypatch: pytest.MonkeyPatch, app: FastAPI, provider: TracerProvider
+) -> tuple[TestClient, list[str]]:
     monkeypatch.setenv("LITELLM_OTEL_V2", "1")
     is_otel_v2_enabled.cache_clear()
-    handled = []
+    handled: Final[list[str]] = []
 
-    async def on_error(request, exc):
+    async def on_error(request: Request, exc: Exception) -> Response:
         handled.append(request.url.path)
-        return fastapi.Response(status_code=500)
+        return Response(status_code=500)
 
     app.add_exception_handler(Exception, on_error)
 
     @app.get("/ok")
-    async def ok():
+    async def ok() -> dict[str, bool]:
         return {"ok": True}
 
     @app.get("/crash")
-    async def crash():
+    async def crash() -> None:
         raise RuntimeError("unhandled")
 
     instrument_fastapi_app(app, tracer_provider=provider)
     return TestClient(app, raise_server_exceptions=False), handled
 
 
-def test_server_spans_survive_another_tracer_wrapping_the_middleware_stack(monkeypatch):
+def test_server_spans_survive_another_tracer_wrapping_the_middleware_stack(monkeypatch: pytest.MonkeyPatch) -> None:
     provider, exporter = _exporting_provider()
-    app = _AppWrappedByAnotherTracer()
+    app: Final = _AppWrappedByAnotherTracer()
     client, handled = _app_with_error_handler(monkeypatch, app, provider)
 
     assert client.get("/ok").status_code == 200
@@ -427,13 +430,13 @@ def test_server_spans_survive_another_tracer_wrapping_the_middleware_stack(monke
     assert handled == ["/crash"]
 
 
-def test_an_unhandled_error_is_recorded_on_the_server_span_of_an_unwrapped_app(monkeypatch):
+def test_an_unhandled_error_is_recorded_on_the_server_span_of_an_unwrapped_app(monkeypatch: pytest.MonkeyPatch) -> None:
     provider, exporter = _exporting_provider()
-    client, handled = _app_with_error_handler(monkeypatch, fastapi.FastAPI(), provider)
+    client, handled = _app_with_error_handler(monkeypatch, FastAPI(), provider)
 
     assert client.get("/crash").status_code == 500
 
-    crashed = _server_spans_by_route(exporter)["/crash"]
+    crashed: Final = _server_spans_by_route(exporter)["/crash"]
     assert [event.name for event in crashed.events] == ["exception"]
     assert handled == ["/crash"]
 
