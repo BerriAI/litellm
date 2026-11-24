@@ -481,8 +481,10 @@ mod tests {
         assert!(shape(true).is_ok());
     }
 
-    #[test]
-    fn a_non_string_user_text_is_named_before_a_non_string_system_text() {
+    #[rstest]
+    fn a_non_string_user_text_is_named_before_a_non_string_system_text(
+        #[values(false, true)] presanitized: bool,
+    ) {
         let shaped = shape_anthropic_messages_request(
             request(json!({"model": "m", "system": [
                 {"type": "text", "text": "be terse"},
@@ -493,7 +495,7 @@ mod tests {
             ]}]})),
             MessagesShapeOptions {
                 reasoning_auto_summary: false,
-                presanitized: false,
+                presanitized,
                 drops_unsupported_params: false,
             },
         );
