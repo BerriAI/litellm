@@ -11,6 +11,7 @@ from litellm.anthropic_beta_headers_manager import (
 )
 from litellm.litellm_core_utils.get_litellm_params import stored_control_options
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObject
+from litellm.litellm_core_utils.prompt_templates.factory import build_bedrock_tool_name_mapping
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm import base_model_iterator
 from litellm.llms.custom_httpx.http_handler import (
@@ -53,6 +54,7 @@ def make_sync_call(
     stream_chunk_size: int | None = None,
     timeout: float | httpx.Timeout | None = None,
     optional_params: Mapping[str, object] | None = None,
+    tool_name_mapping: Mapping[str, str] | None = None,
 ) -> tuple[base_model_iterator.MockResponseIterator | Iterator[object], httpx.Headers]:
     if client is None:
         client = get_httpx_client()  # Create a new client if none provided
@@ -82,6 +84,14 @@ def make_sync_call(
             response=response,
         )
 
+    resolved_tool_name_mapping: Final = (
+        tool_name_mapping
+        if tool_name_mapping is not None
+        else build_bedrock_tool_name_mapping(
+            tools=optional_params.get("tools") if optional_params is not None else None,
+            messages=messages,
+        )
+    )
     if fake_stream:
         model_response: Final[ModelResponse] = litellm.AmazonConverseConfig()._transform_response(
             model=model,
@@ -95,12 +105,17 @@ def make_sync_call(
             messages=messages,
             encoding=litellm.encoding,
             json_mode=json_mode,
+            tool_name_mapping=resolved_tool_name_mapping,
         )
         completion_stream: base_model_iterator.MockResponseIterator | Iterator[object] = (
             base_model_iterator.MockResponseIterator(model_response=model_response)
         )
     else:
-        decoder: Final = AWSEventStreamDecoder(model=model, json_mode=json_mode)
+        decoder: Final = AWSEventStreamDecoder(
+            model=model,
+            json_mode=json_mode,
+            tool_name_mapping=resolved_tool_name_mapping,
+        )
         completion_stream = decoder.iter_bytes(
             response.iter_bytes(chunk_size=stream_chunk_size), response_headers=response.headers
         )
@@ -172,6 +187,10 @@ class BedrockConverseLLM(BaseAWSLLM):
             },
         )
 
+        tool_name_mapping: Final = build_bedrock_tool_name_mapping(
+            tools=optional_params.get("tools"),
+            messages=messages,
+        )
         completion_stream, response_headers = await make_call(
             client=client,
             api_base=api_base,
@@ -185,6 +204,7 @@ class BedrockConverseLLM(BaseAWSLLM):
             stream_chunk_size=stream_chunk_size,
             timeout=timeout,
             optional_params=optional_params,
+            tool_name_mapping=tool_name_mapping,
         )
         streaming_response: Final = CustomStreamWrapper(
             completion_stream=completion_stream,
@@ -279,6 +299,10 @@ class BedrockConverseLLM(BaseAWSLLM):
         except httpx.TimeoutException:
             raise BedrockError(status_code=408, message="Timeout error occurred.")
 
+        tool_name_mapping: Final = build_bedrock_tool_name_mapping(
+            tools=optional_params.get("tools"),
+            messages=messages,
+        )
         transformed_response: Final = litellm.AmazonConverseConfig()._transform_response(
             model=model,
             response=response,
@@ -290,6 +314,7 @@ class BedrockConverseLLM(BaseAWSLLM):
             messages=messages,
             optional_params=optional_params,
             encoding=encoding,
+            tool_name_mapping=tool_name_mapping,
         )
         transformed_response.set_provider_response_headers(response.headers)
         return transformed_response
@@ -485,6 +510,10 @@ class BedrockConverseLLM(BaseAWSLLM):
         else:
             client = client
 
+        tool_name_mapping: Final = build_bedrock_tool_name_mapping(
+            tools=optional_params.get("tools"),
+            messages=messages,
+        )
         if stream:
             completion_stream, response_headers = make_sync_call(
                 client=(client if client is not None and isinstance(client, HTTPHandler) else None),
@@ -499,6 +528,7 @@ class BedrockConverseLLM(BaseAWSLLM):
                 stream_chunk_size=stream_chunk_size,
                 timeout=timeout,
                 optional_params=optional_params,
+                tool_name_mapping=tool_name_mapping,
             )
             streaming_response: Final = CustomStreamWrapper(
                 completion_stream=completion_stream,
@@ -542,6 +572,7 @@ class BedrockConverseLLM(BaseAWSLLM):
             messages=messages,
             optional_params=optional_params,
             encoding=encoding,
+            tool_name_mapping=tool_name_mapping,
         )
         sync_transformed_response.set_provider_response_headers(response.headers)
         return sync_transformed_response

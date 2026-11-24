@@ -1,6 +1,7 @@
 import copy
 import json
 import time
+import types
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final
 
@@ -540,6 +541,7 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
             json_mode=json_mode,
             stream_chunk_size=chunk_size,
             timeout=timeout,
+            tool_name_mapping=types.MappingProxyType({}),
         )
         streaming_response: Final = CustomStreamWrapper(
             completion_stream=completion_stream,
@@ -585,6 +587,7 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
             json_mode=json_mode,
             stream_chunk_size=chunk_size,
             timeout=timeout,
+            tool_name_mapping=types.MappingProxyType({}),
         )
         streaming_response: Final = CustomStreamWrapper(
             completion_stream=completion_stream,

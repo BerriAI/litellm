@@ -6,7 +6,9 @@ AWS credential resolution is stubbed so nothing reaches STS.
 from __future__ import annotations
 
 import asyncio
+import binascii
 import json
+import struct
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from datetime import datetime, timedelta, timezone
 from itertools import chain
@@ -1126,3 +1128,216 @@ def test_converse_fallback_on_a_full_route_url_api_base_calls_converse_on_that_h
     assert [call.request.url for call in gateway.calls] == [
         httpx.URL("https://gateway.example.com/model/us.openai.gpt-6.1-sol/converse")
     ]
+
+
+def _converse_stream_bytes(tool_name: str, tool_use_id: str = "tooluse_1") -> bytes:
+    def frame(event_type: str, body: Mapping[str, object]) -> bytes:
+        payload: Final = json.dumps(body).encode()
+        raw_headers: Final = (
+            (b":event-type", event_type),
+            (b":content-type", "application/json"),
+            (b":message-type", "event"),
+        )
+        encoded_headers: Final = b"".join(
+            bytes([len(name)]) + name + bytes([7]) + struct.pack(">H", len(val)) + val.encode()
+            for name, val in raw_headers
+        )
+        prelude: Final = struct.pack(">II", 12 + len(encoded_headers) + len(payload) + 4, len(encoded_headers))
+        body_bytes: Final = prelude + struct.pack(">I", binascii.crc32(prelude)) + encoded_headers + payload
+        return body_bytes + struct.pack(">I", binascii.crc32(body_bytes))
+
+    return b"".join(
+        (
+            frame("messageStart", {"role": "assistant"}),
+            frame(
+                "contentBlockStart",
+                {"contentBlockIndex": 0, "start": {"toolUse": {"toolUseId": tool_use_id, "name": tool_name}}},
+            ),
+            frame("contentBlockDelta", {"contentBlockIndex": 0, "delta": {"toolUse": {"input": "{}"}}}),
+            frame("contentBlockStop", {"contentBlockIndex": 0}),
+            frame("messageStop", {"stopReason": "tool_use"}),
+            frame("metadata", {"usage": {"inputTokens": 10, "outputTokens": 5, "totalTokens": 15}}),
+        )
+    )
+
+
+def _converse_tool_response_json(tool_name: str, tool_use_id: str = "tooluse_1") -> dict[str, object]:
+    return {
+        "output": {
+            "message": {
+                "role": "assistant",
+                "content": [{"toolUse": {"toolUseId": tool_use_id, "name": tool_name, "input": {}}}],
+            }
+        },
+        "stopReason": "tool_use",
+        "usage": {"inputTokens": 10, "outputTokens": 5, "totalTokens": 15},
+    }
+
+
+@pytest.mark.asyncio
+async def test_converse_does_not_leak_tool_name_mappings_across_requests(
+    local_model_cost_map,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.caching.in_memory_cache import InMemoryCache
+
+    cache: Final = InMemoryCache(max_size_in_memory=50, default_ttl=600)
+    monkeypatch.setattr(litellm, "bedrock_tool_name_mappings", cache)
+    monkeypatch.setenv("LITELLM_RUST", "0")
+    configuration.rust(False)
+
+    sent_tool_names: Final[list[str]] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        tool_spec_names = [t["toolSpec"]["name"] for t in body.get("toolConfig", {}).get("tools", []) if "toolSpec" in t]
+        sent_tool_names.extend(tool_spec_names)
+        if request.url.path.endswith("/converse-stream"):
+            return httpx.Response(
+                200,
+                content=_converse_stream_bytes("mcp__srv__get-items"),
+                headers={"content-type": "application/vnd.amazon.eventstream"},
+                request=request,
+            )
+        return httpx.Response(200, json=_converse_tool_response_json("mcp__srv__get-items"), request=request)
+
+    sync_client: Final = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(respond)))
+    async_client: Final = AsyncHTTPHandler(transport=httpx.MockTransport(respond))
+    common_kwargs: Final[dict[str, object]] = {
+        "model": "bedrock/converse/us.anthropic.claude-sonnet-4-5-v1:0",
+        "aws_access_key_id": "fake",
+        "aws_secret_access_key": "fake",
+        "aws_region_name": "us-east-1",
+    }
+
+    # Client A uses a tool name whose sanitized form collides with Client B's valid name.
+    client_a_tools: Final = [
+        {"type": "function", "function": {"name": "mcp__srv::get-items", "parameters": {"type": "object"}}},
+    ]
+    client_a_messages: Final = [{"role": "user", "content": "Run tool A"}]
+
+    res_a_sync: Final = litellm.completion(
+        client=sync_client, messages=client_a_messages, tools=client_a_tools, **common_kwargs
+    )
+    assert res_a_sync.choices[0].message.tool_calls[0].function.name == "mcp__srv::get-items"
+
+    stream_a_sync: Final = list(
+        litellm.completion(
+            client=sync_client, messages=client_a_messages, tools=client_a_tools, stream=True, **common_kwargs
+        )
+    )
+    assert (
+        litellm.stream_chunk_builder(stream_a_sync).choices[0].message.tool_calls[0].function.name
+        == "mcp__srv::get-items"
+    )
+
+    res_a_async: Final = await litellm.acompletion(
+        client=async_client, messages=client_a_messages, tools=client_a_tools, **common_kwargs
+    )
+    assert res_a_async.choices[0].message.tool_calls[0].function.name == "mcp__srv::get-items"
+
+    stream_a_async_iter: Final = await litellm.acompletion(
+        client=async_client, messages=client_a_messages, tools=client_a_tools, stream=True, **common_kwargs
+    )
+    stream_a_async: Final = [chunk async for chunk in stream_a_async_iter]
+    assert (
+        litellm.stream_chunk_builder(stream_a_async).choices[0].message.tool_calls[0].function.name
+        == "mcp__srv::get-items"
+    )
+
+    # Global cache must stay untouched by normal Converse requests.
+    assert cache.cache_dict == {}
+
+    # Client B only declares the already-valid name `mcp__srv__get-items` and must never receive Client A's `::` name.
+    client_b_tools: Final = [
+        {"type": "function", "function": {"name": "mcp__srv__get-items", "parameters": {"type": "object"}}},
+    ]
+    client_b_messages: Final = [{"role": "user", "content": "Run tool B"}]
+
+    res_b_sync: Final = litellm.completion(
+        client=sync_client, messages=client_b_messages, tools=client_b_tools, **common_kwargs
+    )
+    assert res_b_sync.choices[0].message.tool_calls[0].function.name == "mcp__srv__get-items"
+
+    stream_b_sync: Final = list(
+        litellm.completion(
+            client=sync_client, messages=client_b_messages, tools=client_b_tools, stream=True, **common_kwargs
+        )
+    )
+    assert (
+        litellm.stream_chunk_builder(stream_b_sync).choices[0].message.tool_calls[0].function.name
+        == "mcp__srv__get-items"
+    )
+
+    res_b_async: Final = await litellm.acompletion(
+        client=async_client, messages=client_b_messages, tools=client_b_tools, **common_kwargs
+    )
+    assert res_b_async.choices[0].message.tool_calls[0].function.name == "mcp__srv__get-items"
+
+    stream_b_async_iter: Final = await litellm.acompletion(
+        client=async_client, messages=client_b_messages, tools=client_b_tools, stream=True, **common_kwargs
+    )
+    stream_b_async: Final = [chunk async for chunk in stream_b_async_iter]
+    assert (
+        litellm.stream_chunk_builder(stream_b_async).choices[0].message.tool_calls[0].function.name
+        == "mcp__srv__get-items"
+    )
+
+    assert all(name == "mcp__srv__get-items" for name in sent_tool_names)
+
+
+def test_converse_does_not_rewrite_declared_tool_when_history_collides(
+    local_model_cost_map,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.caching.in_memory_cache import InMemoryCache
+
+    cache: Final = InMemoryCache(max_size_in_memory=50, default_ttl=600)
+    monkeypatch.setattr(litellm, "bedrock_tool_name_mappings", cache)
+    monkeypatch.setenv("LITELLM_RUST", "0")
+    configuration.rust(False)
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/converse-stream"):
+            return httpx.Response(
+                200,
+                content=_converse_stream_bytes("mcp__srv__get-items"),
+                headers={"content-type": "application/vnd.amazon.eventstream"},
+                request=request,
+            )
+        return httpx.Response(200, json=_converse_tool_response_json("mcp__srv__get-items"), request=request)
+
+    sync_client: Final = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(respond)))
+    tools: Final = [
+        {"type": "function", "function": {"name": "mcp__srv__get-items", "parameters": {"type": "object"}}},
+    ]
+    messages: Final = [
+        {"role": "user", "content": "Run the tool"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {"id": "call_prev", "type": "function", "function": {"name": "mcp__srv::get-items", "arguments": "{}"}}
+            ],
+        },
+        {"role": "tool", "tool_call_id": "call_prev", "content": "error: no such tool"},
+        {"role": "user", "content": "Try again with the real tool"},
+    ]
+    common_kwargs: Final[dict[str, object]] = {
+        "model": "bedrock/converse/us.anthropic.claude-sonnet-4-5-v1:0",
+        "messages": messages,
+        "tools": tools,
+        "aws_access_key_id": "fake",
+        "aws_secret_access_key": "fake",
+        "aws_region_name": "us-east-1",
+    }
+
+    sync_res: Final = litellm.completion(client=sync_client, **common_kwargs)
+    assert sync_res.choices[0].message.tool_calls[0].function.name == "mcp__srv__get-items"
+
+    stream_chunks: Final = list(litellm.completion(client=sync_client, stream=True, **common_kwargs))
+    assert (
+        litellm.stream_chunk_builder(stream_chunks).choices[0].message.tool_calls[0].function.name
+        == "mcp__srv__get-items"
+    )
+    assert cache.cache_dict == {}

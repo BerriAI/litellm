@@ -47,6 +47,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     _bedrock_converse_messages_pt,
     _bedrock_tools_pt,
     assistant_turns_as_converse_sends_them,
+    build_bedrock_tool_name_mapping,
     make_valid_bedrock_tool_name,
     user_turns_as_converse_sends_them,
 )
@@ -1064,7 +1065,12 @@ class AmazonConverseConfig(BaseConfig):
         return ToolChoiceValuesBlock(auto={})
 
     def map_tool_choice_values(
-        self, model: str, tool_choice: object, drop_params: bool
+        self,
+        model: str,
+        tool_choice: object,
+        drop_params: bool,
+        *,
+        record_global_cache: bool = True,
     ) -> ToolChoiceValuesBlock | None:
         if tool_choice == "none":
             if litellm.drop_params is True or drop_params is True:
@@ -1085,7 +1091,10 @@ class AmazonConverseConfig(BaseConfig):
                 return self._auto_tool_choice()
             # only supported for anthropic + mistral models - https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ToolChoice.html
             specific_tool: Final = SpecificToolChoiceBlock(
-                name=make_valid_bedrock_tool_name(tool_choice.get("function", {}).get("name", ""))
+                name=make_valid_bedrock_tool_name(
+                    tool_choice.get("function", {}).get("name", ""),
+                    record_global_cache=record_global_cache,
+                )
             )
             return ToolChoiceValuesBlock(tool=specific_tool)
         else:
@@ -1468,6 +1477,7 @@ class AmazonConverseConfig(BaseConfig):
                     model=model,
                     tool_choice=value,
                     drop_params=drop_params,
+                    record_global_cache=False,
                 )
                 if _tool_choice_value is not None:
                     optional_params["tool_choice"] = _tool_choice_value
@@ -2401,6 +2411,7 @@ class AmazonConverseConfig(BaseConfig):
                 model=model,
                 deployment_model=deployment_model,
                 model_info=model_info,
+                record_global_cache=False,
             )
 
             # Add computer use tools and anthropic_beta if needed (only when computer use tools are present)
@@ -2471,6 +2482,7 @@ class AmazonConverseConfig(BaseConfig):
                 model=model,
                 deployment_model=deployment_model,
                 model_info=model_info,
+                record_global_cache=False,
             )
 
         # Append pre-formatted tools (systemTool etc.) after transformation
@@ -2786,6 +2798,7 @@ class AmazonConverseConfig(BaseConfig):
                             user_continue_message=litellm_params.pop("user_continue_message", None),
                             base_model=self._deployment_base_model(_DEPLOYMENT_PARAMS.validate_python(litellm_params)),
                             drop_params=litellm.drop_params is True or litellm_params.get("drop_params") is True,
+                            record_global_cache=False,
                         ),
                         capability_model,
                     ),
@@ -2926,6 +2939,7 @@ class AmazonConverseConfig(BaseConfig):
                             user_continue_message=litellm_params.pop("user_continue_message", None),
                             base_model=self._deployment_base_model(_DEPLOYMENT_PARAMS.validate_python(litellm_params)),
                             drop_params=litellm.drop_params is True or litellm_params.get("drop_params") is True,
+                            record_global_cache=False,
                         ),
                         capability_model,
                     ),
@@ -3199,7 +3213,10 @@ class AmazonConverseConfig(BaseConfig):
         return message, returned_finish_reason
 
     def _translate_message_content(
-        self, content_blocks: list[ContentBlock]
+        self,
+        content_blocks: Sequence[ContentBlock],
+        *,
+        tool_name_mapping: Mapping[str, str] | None = None,
     ) -> tuple[
         str,
         list[ChatCompletionToolCallChunk],
@@ -3234,7 +3251,10 @@ class AmazonConverseConfig(BaseConfig):
             if "toolUse" in content:
                 ## check tool name was formatted by litellm
                 _response_tool_name = content["toolUse"]["name"]
-                response_tool_name = get_bedrock_tool_name(response_tool_name=_response_tool_name)
+                response_tool_name = get_bedrock_tool_name(
+                    response_tool_name=_response_tool_name,
+                    tool_name_mapping=tool_name_mapping,
+                )
                 _function_chunk = ChatCompletionToolCallFunctionChunk(
                     name=response_tool_name,
                     arguments=json.dumps(content["toolUse"]["input"]),
@@ -3420,6 +3440,7 @@ class AmazonConverseConfig(BaseConfig):
         messages: Sequence[object],
         encoding: object,
         json_mode: bool | None = None,
+        tool_name_mapping: Mapping[str, str] | None = None,
     ) -> ModelResponse:
         ## LOGGING
         if logging_obj is not None:
@@ -3486,13 +3507,18 @@ class AmazonConverseConfig(BaseConfig):
         reasoningContentBlocks: list[BedrockConverseReasoningContentBlock] | None = None
         citationsContentBlocks: list[CitationsContentBlock] | None = None
 
+        resolved_tool_name_mapping: Final = (
+            tool_name_mapping
+            if tool_name_mapping is not None
+            else build_bedrock_tool_name_mapping(tools=optional_params.get("tools"), messages=messages)
+        )
         if message is not None:
             (
                 content_str,
                 tools,
                 reasoningContentBlocks,
                 citationsContentBlocks,
-            ) = self._translate_message_content(message["content"])
+            ) = self._translate_message_content(message["content"], tool_name_mapping=resolved_tool_name_mapping)
 
         # Initialize provider_specific_fields if we have any special content blocks
         provider_specific_fields: Final[dict[str, object]] = {}
