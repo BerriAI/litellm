@@ -625,7 +625,7 @@ class InteractionsChatStreamingIterator:
         raw_interaction: Final = event.get("interaction")
         interaction_map: Final = raw_interaction if isinstance(raw_interaction, dict) else _EMPTY_JSON_MAP
         maybe_id: Final = interaction_map.get("id") or event.get("id")
-        if isinstance(maybe_id, str) and maybe_id and not self._hop_usages:
+        if isinstance(maybe_id, str) and maybe_id and not self._hop_usages and not self._hop_delivered:
             self._stream_id = maybe_id
 
         raw_status: Final = interaction_map.get("status") or event.get("status")

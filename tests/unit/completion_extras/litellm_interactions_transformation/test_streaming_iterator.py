@@ -415,3 +415,16 @@ def test_multisegment_late_thought_signature_deltas_backfill_matching_tool_slots
     assert isinstance(choice, Choices)
     tool_calls: Final = choice.message.tool_calls or []
     assert [tc.id for tc in tool_calls] == ["call_a__thought__SIG_SEG_A", "call_b__thought__SIG_SEG_B"]
+
+
+def test_answer_id_named_only_at_the_end_of_a_stream_does_not_rename_chunks_already_sent() -> None:
+    sse_lines: Final = (
+        'data: {"event_type": "interaction.created", "interaction": {"status": "in_progress"}}',
+        'data: {"event_type": "step.start", "index": 0, "step": {"type": "model_output", "content": [{"type": "text", "text": "Hello"}]}}',
+        'data: {"event_type": "step.delta", "index": 0, "delta": {"type": "text", "text": " world"}}',
+        'data: {"event_type": "interaction.completed", "interaction": {"id": "v1_named_late", "status": "completed", "usage": {"total_input_tokens": 1, "total_output_tokens": 2, "total_tokens": 3}}}',
+        "data: [DONE]",
+    )
+    chunks: Final = tuple(InteractionsChatStreamingIterator(model="gemini-3-flash-preview", sync_lines=iter(sse_lines)))
+    assert len(chunks) >= 3
+    assert {chunk.id for chunk in chunks} == {chunks[0].id}
