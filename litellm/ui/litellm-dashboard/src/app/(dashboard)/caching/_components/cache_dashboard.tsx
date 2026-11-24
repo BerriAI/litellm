@@ -1,5 +1,5 @@
 import { PageContent } from "@/components/shared/Page";
-import { PageHeader, PageHeaderTitle, PageHeaderDescription, PageHeaderControls } from "@/components/shared/PageHeader";
+import { PageHeader, PageHeaderTitle, PageHeaderDescription } from "@/components/shared/PageHeader";
 import type { DateRangePickerValue } from "@/components/shared/date_picker_types";
 import type { TFunction } from "i18next";
 import React, { useEffect, useState } from "react";
@@ -177,38 +177,41 @@ const CacheDashboard: React.FC<CachePageProps> = ({ accessToken, token, userRole
           {t("shell.nav.items.responseCache")}
         </PageHeaderTitle>
         <PageHeaderDescription>{t("shell.pageDescriptions.caching")}</PageHeaderDescription>
-        <PageHeaderControls className="flex-wrap">
-          <Button
-            variant="outline"
-            size="icon-sm"
-            onClick={handleRefreshClick}
-            aria-label={t("caching.dashboard.refresh")}
-          >
-            <RefreshCw />
-          </Button>
-          {lastRefreshed && (
-            <p className="text-sm text-muted-foreground">
-              {t("caching.dashboard.lastRefreshed")}
-              {lastRefreshed}
-            </p>
-          )}
-        </PageHeaderControls>
       </PageHeader>
-      <Tabs defaultValue="analytics" className="w-full gap-6">
-        <TabsList variant="line" className="h-auto max-w-full justify-start overflow-x-auto rounded-none p-0">
-          <TabsTrigger value="analytics" className="flex-none rounded-none px-4 py-2">
-            {t("caching.dashboard.tabs.analytics")}
-          </TabsTrigger>
-          <TabsTrigger value="health" className="flex-none rounded-none px-4 py-2">
-            {t("caching.dashboard.tabs.health")}
-          </TabsTrigger>
-          <TabsTrigger value="settings" className="flex-none rounded-none px-4 py-2">
-            {t("caching.dashboard.tabs.settings")}
-          </TabsTrigger>
-          <TabsTrigger value="coordination" className="flex-none rounded-none px-4 py-2">
-            {t("caching.dashboard.tabs.coordination")}
-          </TabsTrigger>
-        </TabsList>
+      <Tabs defaultValue="analytics" className="w-full gap-2">
+        <div className="flex w-full items-center justify-between gap-2 border-b">
+          <TabsList variant="line" className="h-auto min-w-0 justify-start overflow-x-auto rounded-none p-0">
+            <TabsTrigger value="analytics" className="flex-none rounded-none px-4 py-2">
+              {t("caching.dashboard.tabs.analytics")}
+            </TabsTrigger>
+            <TabsTrigger value="health" className="flex-none rounded-none px-4 py-2">
+              {t("caching.dashboard.tabs.health")}
+            </TabsTrigger>
+            <TabsTrigger value="settings" className="flex-none rounded-none px-4 py-2">
+              {t("caching.dashboard.tabs.settings")}
+            </TabsTrigger>
+            <TabsTrigger value="coordination" className="flex-none rounded-none px-4 py-2">
+              {t("caching.dashboard.tabs.coordination")}
+            </TabsTrigger>
+          </TabsList>
+
+          <div className="flex shrink-0 items-center space-x-2">
+            {lastRefreshed && (
+              <p className="text-sm text-muted-foreground">
+                {t("caching.dashboard.lastRefreshed")}
+                {lastRefreshed}
+              </p>
+            )}
+            <Button
+              variant="outline"
+              size="icon-sm"
+              onClick={handleRefreshClick}
+              aria-label={t("caching.dashboard.refresh")}
+            >
+              <RefreshCw />
+            </Button>
+          </div>
+        </div>
 
         <TabsContent value="analytics" keepMounted>
           <Card>
