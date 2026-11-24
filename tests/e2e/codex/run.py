@@ -1,8 +1,8 @@
 """What one `codex exec --json` run did, read from the JSONL events it printed.
 
-The event shapes are Codex's own (`codex-rs/exec/src/exec_events.rs`). We take the latest codex release > 3 days old, so an event or item
-type this module does not model is skipped, while one it does model is validated strictly and fails loudly when
-Codex changes it.
+The event shapes are Codex's own (`codex-rs/exec/src/exec_events.rs`). `package-lock.json` pins the Codex release,
+and a bump can add events, so an event or item type this module does not model is skipped, while one it does model
+is validated strictly and fails loudly when Codex changes it.
 """
 
 from __future__ import annotations

@@ -65,6 +65,13 @@ def _matrix(cells: MappingProxyType[tuple[str, str], Outcome]) -> Matrix:
             Passed(first_attempt_error="502; timed out"),
         ),
         ((Failed(error="401"), Passed(first_attempt_error="502")), Failed(error="401")),
+        (
+            (
+                KnownGap(reason="drops search", first_attempt_error="codex exited 101"),
+                Passed(first_attempt_error="502"),
+            ),
+            KnownGap(reason="drops search", first_attempt_error="codex exited 101; 502"),
+        ),
         ((NotTested(reason="no credentials"),), NotTested(reason="no credentials")),
         ((), NotTested()),
     ),
@@ -77,6 +84,10 @@ def test_a_cell_is_as_bad_as_its_worst_test(outcomes: tuple[Outcome, ...], expec
     ("attempts", "expected"),
     (
         ((Failed(error="502"), Passed()), Passed(first_attempt_error="502")),
+        (
+            (Failed(error="codex exited 101"), KnownGap(reason="drops search")),
+            KnownGap(reason="drops search", first_attempt_error="codex exited 101"),
+        ),
         ((Passed(), Failed(error="timed out")), Failed(error="timed out")),
         ((Passed(),), Passed()),
     ),

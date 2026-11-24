@@ -81,24 +81,32 @@ def latest_attempts(results: tuple[CellResult, ...]) -> tuple[CellResult, ...]:
 
 
 def _note_rerun(result: CellResult, first_failure: str | None) -> CellResult:
-    if first_failure is None or not isinstance(result.outcome, Passed):
+    if first_failure is None or not isinstance(result.outcome, Passed | KnownGap):
         return result
-    return result.model_copy(update={"outcome": Passed(first_attempt_error=first_failure)})
+    outcome: Final = result.outcome.model_copy(update={"first_attempt_error": first_failure})
+    return result.model_copy(update={"outcome": outcome})
 
 
 def aggregate(outcomes: tuple[Outcome, ...]) -> Outcome:
     failures: Final = tuple(outcome.error for outcome in outcomes if isinstance(outcome, Failed))
     if failures:
         return Failed(error="; ".join(failures))
+    rerun_errors: Final = "; ".join(_first_attempt_errors(outcomes)) or None
     gaps: Final = tuple(outcome for outcome in outcomes if isinstance(outcome, KnownGap))
     if gaps:
-        return gaps[0]
-    passes: Final = tuple(outcome for outcome in outcomes if isinstance(outcome, Passed))
-    if passes:
-        rerun_errors: Final = tuple(outcome.first_attempt_error for outcome in passes if outcome.first_attempt_error)
-        return Passed(first_attempt_error="; ".join(rerun_errors) or None)
+        return gaps[0].model_copy(update={"first_attempt_error": rerun_errors})
+    if any(isinstance(outcome, Passed) for outcome in outcomes):
+        return Passed(first_attempt_error=rerun_errors)
     skips: Final = tuple(outcome for outcome in outcomes if isinstance(outcome, NotTested))
     return skips[0] if skips else NotTested()
+
+
+def _first_attempt_errors(outcomes: tuple[Outcome, ...]) -> tuple[str, ...]:
+    return tuple(
+        outcome.first_attempt_error
+        for outcome in outcomes
+        if isinstance(outcome, Passed | KnownGap) and outcome.first_attempt_error
+    )
 
 
 def build_matrix(

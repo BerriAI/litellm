@@ -35,6 +35,7 @@ class Failed(_Frozen):
 class KnownGap(_Frozen):
     status: Literal["known_gap"] = "known_gap"
     reason: str = Field(min_length=1)
+    first_attempt_error: str | None = None
 
 
 class NotTested(_Frozen):
