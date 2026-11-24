@@ -1891,7 +1891,8 @@ def _counted_children(block: Mapping[str, object]) -> Sequence[object]:
         nested: Final = source.get("content") if source.get("type") == "content" else None
         return as_object_list(nested) or ()
     if isinstance(block_type, str) and "content" in _ANTHROPIC_SERVER_TOOL_FIELDS.get(block_type, ()):
-        return (content,) if isinstance(content, Mapping) else as_object_list(content) or ()
+        mapped_content: Final = as_str_mapping(content)
+        return (mapped_content,) if mapped_content is not None else as_object_list(content) or ()
     return ()
 
 

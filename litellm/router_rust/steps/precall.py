@@ -12,7 +12,7 @@ router core's ``_pre_call_checks`` helpers; it never reaches a Python router cor
 deployment records rather than a step, and those need not be in the Rust registry.
 """
 
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from functools import partial
 from itertools import accumulate, chain, groupby
@@ -438,7 +438,7 @@ class PreCallFacts:
             return _NO_PDF_PRICINGS
         shared: Final = pdf_page_pricing(self._tokenizer_model())
         overflowing: Final = (id for id in self._candidates if _overflows(self._windows.get(id), input_tokens))
-        priced: Final = (
+        priced: Final[Iterator[tuple[str, PdfDocumentPricing | None]]] = (
             (id, _own_pdf_pricing(for_requested_model(self._record(id), self._name), self._model, shared))
             for id in overflowing
         )
