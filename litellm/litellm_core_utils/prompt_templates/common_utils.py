@@ -402,6 +402,14 @@ def _content_of(message: Mapping[str, object]) -> object:
     return message.get("content")
 
 
+def _field_of(message: Mapping[str, object], key: str) -> object:
+    return message.get(key)
+
+
+def _as_dict(value: object) -> Mapping[object, object] | None:
+    return value if isinstance(value, dict) else None
+
+
 def _message_with_text_only_content_as_str(message: AllMessageValues) -> AllMessageValues:
     text: Final = _text_only_content(_content_of(message))
     if text is None:
@@ -422,7 +430,7 @@ def strip_name_from_message(message: AllMessageValues, allowed_name_roles: list[
     Removes 'name' from message
     """
     msg_copy: Final = message.copy()
-    if msg_copy.get("role") not in allowed_name_roles:
+    if _field_of(msg_copy, "role") not in allowed_name_roles:
         msg_copy.pop("name", None)
     return msg_copy
 
@@ -435,7 +443,7 @@ def strip_name_from_messages(
     """
     new_messages: Final[list[AllMessageValues]] = []
     for message in messages:
-        msg_role = message.get("role")
+        msg_role = _field_of(message, "role")
         msg_copy = message.copy()
         if msg_role not in allowed_name_roles:
             msg_copy.pop("name", None)
@@ -460,24 +468,27 @@ def extract_search_results_text(search_results: object) -> str:
     Counts every string field forwarded on Bedrock ``SearchResultBlock``:
     ``source``, ``title``, ``content[].text``, and ``citations``.
     """
-    if not isinstance(search_results, list):
+    results: Final = as_object_list(search_results)
+    if results is None:
         return ""
     texts = ""
-    for result in search_results:
-        if not isinstance(result, dict):
+    for result in results:
+        fields = _as_dict(result)
+        if fields is None:
             continue
         for key in ("source", "title"):
-            value = result.get(key)
+            value = fields.get(key)
             if isinstance(value, str):
                 texts += value
-        content = result.get("content")
-        if isinstance(content, list):
+        content = as_object_list(fields.get("content"))
+        if content is not None:
             for block in content:
-                if isinstance(block, dict):
-                    text = block.get("text")
+                block_fields = _as_dict(block)
+                if block_fields is not None:
+                    text = block_fields.get("text")
                     if isinstance(text, str):
                         texts += text
-        citations = result.get("citations")
+        citations = fields.get("citations")
         if citations is not None:
             texts += json.dumps(citations, separators=(",", ":"))
     return texts
@@ -532,9 +543,10 @@ def get_semantic_cache_prompt_from_messages(messages: Sequence[Mapping[str, obje
 def _semantic_cache_content_text(content: object) -> str:
     if isinstance(content, str):
         return content
-    if not isinstance(content, list):
+    blocks: Final = as_object_list(content)
+    if blocks is None:
         return ""
-    return "".join(_semantic_cache_block_text(block) for block in content if isinstance(block, Mapping))
+    return "".join(_semantic_cache_block_text(block) for block in map(as_str_mapping, blocks) if block is not None)
 
 
 def _semantic_cache_block_text(block: Mapping[str, object]) -> str:
@@ -546,7 +558,7 @@ def _semantic_cache_block_text(block: Mapping[str, object]) -> str:
 
 def is_non_content_values_set(message: AllMessageValues) -> bool:
     ignore_keys: Final = ["content", "role", "name"]
-    return any(message.get(key, None) is not None for key in message if key not in ignore_keys)
+    return any(_field_of(message, key) is not None for key in message if key not in ignore_keys)
 
 
 _IMAGE_CONTENT_PART_TYPES: Final = ("image_url", "input_image", "image", "computer_screenshot")
@@ -558,14 +570,14 @@ def _content_parts_contain_image(parts: Sequence[object]) -> bool:
     recursion; an Anthropic tool_result nests its image parts exactly one level down."""
     frontier = parts  # rebind-ok: depth-bounded frontier walk
     for _ in range(_IMAGE_SCAN_MAX_DEPTH):
-        if any(isinstance(part, Mapping) and part.get("type") in _IMAGE_CONTENT_PART_TYPES for part in frontier):
+        mappings = tuple(part for part in map(as_str_mapping, frontier) if part is not None)
+        if any(part.get("type") in _IMAGE_CONTENT_PART_TYPES for part in mappings):
             return True
         frontier = tuple(
             nested
-            for part in frontier
-            if isinstance(part, Mapping)
-            for content in (part.get("content"),)
-            if isinstance(content, list)
+            for part in mappings
+            for content in (as_object_list(part.get("content")),)
+            if content is not None
             for nested in content
         )
         if not frontier:
@@ -732,9 +744,9 @@ def convert_openai_message_to_only_content_messages(
     converted_messages: Final[list[dict[str, str]]] = []
     user_roles: Final = ["user", "tool", "function"]
     for message in messages:
-        if message.get("role") in user_roles:
+        if _field_of(message, "role") in user_roles:
             converted_messages.append({"role": "user", "content": convert_content_list_to_str(message)})
-        elif message.get("role") == "assistant":
+        elif _field_of(message, "role") == "assistant":
             converted_messages.append({"role": "assistant", "content": convert_content_list_to_str(message)})
     return converted_messages
 
@@ -837,11 +849,11 @@ def is_whitespace_user_message(message: object) -> bool:
 
 
 def _counts_for_alternation(message: AllMessageValues) -> bool:
-    role: Final = message.get("role")
+    role: Final = _field_of(message, "role")
     if role == "user":
         return True
     if role == "assistant":
-        return not bool(message.get("tool_calls"))
+        return not bool(_field_of(message, "tool_calls"))
     return False
 
 
@@ -879,7 +891,7 @@ def _insert_user_continue_message(
         if _counts_for_alternation(curr_message) and curr_message["role"] == "assistant":
             # Preserve old behavior for malformed adjacent assistant sequences like
             # assistant(tool_calls) -> assistant(no-tool-calls) with no tool message.
-            if i > 0 and result_messages[i - 1].get("role") == "assistant":
+            if i > 0 and _field_of(result_messages[i - 1], "role") == "assistant":
                 result_messages.insert(i, continue_message.copy())
                 i += 2
                 inserted_continue_message = True
@@ -989,15 +1001,15 @@ def _estimate_json_bytes(obj: object) -> int:
     stack: Final[list[object]] = [obj]
     while stack:
         x = stack.pop()
-        if isinstance(x, dict):
+        if (mapping := _as_dict(x)) is not None:
             total += 2  # `{}`
-            for k, v in x.items():
+            for k, v in mapping.items():
                 total += len(str(k)) + 4  # `"k":,`
                 stack.append(v)
-        elif isinstance(x, list):
+        elif (items := as_object_list(x)) is not None:
             total += 2  # `[]`
-            total += max(0, len(x) - 1)  # commas between items
-            stack.extend(x)
+            total += max(0, len(items) - 1)  # commas between items
+            stack.extend(items)
         elif isinstance(x, str):
             total += len(x) + 2
         elif isinstance(x, bool):  # bool subclasses int -- check first
@@ -1042,7 +1054,7 @@ def _ref_target_with_siblings(
 
 def unpack_defs(
     schema: dict,
-    defs: dict,
+    defs: Mapping[str, object],
     max_inlined_bytes: int | None = None,
     keep_ref_siblings: bool = False,
 ) -> None:
@@ -1188,10 +1200,11 @@ def unpack_defs(
 
 
 def _has_legacy_defs(schema: object) -> bool:
-    if not isinstance(schema, dict):
+    fields: Final = _as_dict(schema)
+    if fields is None:
         return False
-    components: Final = schema.get("components")
-    return "definitions" in schema or (isinstance(components, dict) and isinstance(components.get("schemas"), dict))
+    components: Final = _as_dict(fields.get("components"))
+    return "definitions" in fields or (components is not None and isinstance(components.get("schemas"), dict))
 
 
 # Schema-bomb budget for ``$ref`` inlining: cap the cumulative JSON-byte
@@ -1339,8 +1352,8 @@ def convert_custom_tool_format_to_responses_shape(format_obj: Mapping[str, objec
     Inverse of convert_custom_tool_format_to_chat_shape: unwrap the Chat Completions
     "grammar" object into the flat Responses API grammar shape.
     """
-    grammar: Final = format_obj.get("grammar")
-    if format_obj.get("type") != "grammar" or not isinstance(grammar, dict):
+    grammar: Final = _as_dict(format_obj.get("grammar"))
+    if format_obj.get("type") != "grammar" or grammar is None:
         return format_obj
     return {
         "type": "grammar",
@@ -1507,7 +1520,7 @@ def get_last_user_message(messages: list[AllMessageValues]) -> str | None:
     # Iterate from the end to find the last consecutive block of user messages
     user_messages: Final[list[AllMessageValues]] = []
     for message in reversed(messages):
-        if message.get("role") == "user":
+        if _field_of(message, "role") == "user":
             user_messages.append(message)
         else:
             # Stop when we hit a non-user message
@@ -1537,7 +1550,7 @@ def set_last_user_message(messages: list[AllMessageValues], content: str) -> lis
     """
     idx_to_remove: Final[list[int]] = []
     for idx, message in enumerate(reversed(messages)):
-        if message.get("role") == "user":
+        if _field_of(message, "role") == "user":
             idx_to_remove.append(idx)
         else:
             # Stop when we hit a non-user message
@@ -1570,7 +1583,7 @@ def add_system_prompt_to_messages(
     if not system_prompt:
         return list(messages)
 
-    if merge_with_first_system and messages and messages[0].get("role") == "system":
+    if merge_with_first_system and messages and _field_of(messages[0], "role") == "system":
         first: Final = dict(messages[0])
         existing_content: Final = first.get("content", "")
         merged_content: str | list[dict[str, str]]
@@ -1610,7 +1623,7 @@ def convert_prefix_message_to_non_prefix_messages(
     """
     new_messages: Final[list[AllMessageValues]] = []
     for message in messages:
-        if message.get("prefix"):
+        if _field_of(message, "prefix"):
             new_messages.append(
                 {
                     "role": "system",
@@ -1674,21 +1687,22 @@ _ToolMediaPart: TypeAlias = ChatCompletionImageObject | ChatCompletionFileObject
 
 
 def _is_tool_media_part(part: object) -> bool:
-    return isinstance(part, dict) and part.get("type") in ("image_url", "file", "input_audio")
+    fields: Final = _as_dict(part)
+    return fields is not None and fields.get("type") in ("image_url", "file", "input_audio")
 
 
 def _tool_message_carries_media(message: AllMessageValues) -> bool:
-    if message.get("role") != "tool":
+    if _field_of(message, "role") != "tool":
         return False
-    content: Final = message.get("content")
-    return isinstance(content, list) and any(_is_tool_media_part(part) for part in content)
+    content: Final = as_object_list(_content_of(message))
+    return content is not None and any(_is_tool_media_part(part) for part in content)
 
 
 def _split_media_from_tool_message(
     message: AllMessageValues,
 ) -> tuple[AllMessageValues, tuple[_ToolMediaPart, ...]]:
-    content: Final = message.get("content")
-    if not isinstance(content, list):
+    content: Final = as_object_list(_content_of(message))
+    if content is None:
         return message, ()
     media_parts: Final = tuple(
         cast(_ToolMediaPart, part)  # cast-ok: canonical media discriminator checked by _is_tool_media_part
@@ -1745,20 +1759,21 @@ def hoist_images_from_tool_messages(
     return list(
         chain.from_iterable(
             _hoist_media_in_tool_message_run(run) if is_tool_run else run
-            for is_tool_run, run in groupby(messages, key=lambda message: message.get("role") == "tool")
+            for is_tool_run, run in groupby(messages, key=lambda message: _field_of(message, "role") == "tool")
         )
     )
 
 
 def _is_tool_reference_part(part: object) -> bool:
-    return isinstance(part, dict) and part.get("type") == "tool_reference"
+    fields: Final = _as_dict(part)
+    return fields is not None and fields.get("type") == "tool_reference"
 
 
 def _tool_message_carries_tool_reference(message: AllMessageValues) -> bool:
-    if message.get("role") != "tool":
+    if _field_of(message, "role") != "tool":
         return False
-    content = message.get("content")
-    return isinstance(content, list) and any(_is_tool_reference_part(part) for part in content)
+    content = as_object_list(_content_of(message))
+    return content is not None and any(_is_tool_reference_part(part) for part in content)
 
 
 def _drop_tool_reference_parts(message: AllMessageValues) -> AllMessageValues:
@@ -1792,7 +1807,7 @@ INSTRUCTION_MESSAGE_ROLES: Final = frozenset({"system", "developer"})
 
 
 def _is_instruction_message(message: AllMessageValues) -> bool:
-    return message.get("role") in INSTRUCTION_MESSAGE_ROLES
+    return _field_of(message, "role") in INSTRUCTION_MESSAGE_ROLES
 
 
 def system_messages_first(
@@ -1813,7 +1828,7 @@ def _system_content_as_text_parts(content: object) -> tuple[object, ...]:
 def _merge_system_message_run(run: Sequence[AllMessageValues]) -> AllMessageValues:
     if len(run) == 1:
         return run[0]
-    contents: Final = tuple(content for content in (message.get("content") for message in run) if content is not None)
+    contents: Final = tuple(content for content in (_content_of(message) for message in run) if content is not None)
     if not contents:
         return run[0]
     if all(isinstance(content, str) for content in contents):
@@ -1828,7 +1843,7 @@ def merge_consecutive_system_messages(
 ) -> list[AllMessageValues]:  # mutable-ok: message pipelines type messages as mutable lists
     return [
         merged
-        for is_system_run, run in groupby(messages, key=lambda message: message.get("role") == "system")
+        for is_system_run, run in groupby(messages, key=lambda message: _field_of(message, "role") == "system")
         for merged in ((_merge_system_message_run(tuple(run)),) if is_system_run else run)
     ]
 

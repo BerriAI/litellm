@@ -206,11 +206,11 @@ class GeminiVideoConfig(BaseVideoConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, str],
         model: str,
         api_key: str | None = None,
         litellm_params: GenericLiteLLMParams | None = None,
-    ) -> dict:
+    ) -> dict[str, str]:
         """
         Validate environment and add Gemini API key to headers.
         Gemini uses x-goog-api-key header for authentication.
@@ -239,7 +239,7 @@ class GeminiVideoConfig(BaseVideoConfig):
         self,
         model: str,
         api_base: str | None,
-        litellm_params: dict,
+        litellm_params: object,
     ) -> str:
         """
         Get the complete URL for Veo video generation.
@@ -264,8 +264,8 @@ class GeminiVideoConfig(BaseVideoConfig):
         api_base: str,
         video_create_optional_request_params: dict,
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
-    ) -> tuple[dict, RequestFiles, str]:
+        headers: object,
+    ) -> tuple[dict[str, object], RequestFiles, str]:
         """
         Transform the video creation request for Veo API.
 
@@ -380,8 +380,8 @@ class GeminiVideoConfig(BaseVideoConfig):
         video_id: str,
         api_base: str,
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
-    ) -> tuple[str, dict]:
+        headers: object,
+    ) -> tuple[str, dict[str, object]]:
         """
         Transform the video status retrieve request for Veo API.
 
@@ -451,9 +451,9 @@ class GeminiVideoConfig(BaseVideoConfig):
         video_id: str,
         api_base: str,
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
+        headers: Mapping[str, object],
         variant: str | None = None,
-    ) -> tuple[str, dict]:
+    ) -> tuple[str, dict[str, object]]:
         """
         Transform the video content request for Veo API.
 
@@ -504,9 +504,9 @@ class GeminiVideoConfig(BaseVideoConfig):
         prompt: str,
         api_base: str,
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
+        headers: object,
         extra_body: Mapping[str, object] | None = None,
-    ) -> tuple[str, dict]:
+    ) -> tuple[str, dict[str, object]]:
         """
         Video remix is not supported by Veo API.
         """
@@ -527,12 +527,12 @@ class GeminiVideoConfig(BaseVideoConfig):
         self,
         api_base: str,
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
+        headers: object,
         after: str | None = None,
         limit: int | None = None,
         order: str | None = None,
         extra_query: Mapping[str, object] | None = None,
-    ) -> tuple[str, dict]:
+    ) -> tuple[str, dict[str, object]]:
         """
         Video list is not supported by Veo API.
         """
@@ -555,8 +555,8 @@ class GeminiVideoConfig(BaseVideoConfig):
         video_id: str,
         api_base: str,
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
-    ) -> tuple[str, dict]:
+        headers: object,
+    ) -> tuple[str, dict[str, object]]:
         """
         Video delete is not supported by Veo API.
         """

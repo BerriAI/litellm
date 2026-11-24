@@ -58,11 +58,11 @@ class YouComSearchConfig(BaseSearchConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, str],
         api_key: str | None = None,
         api_base: str | None = None,
         **kwargs: object,
-    ) -> dict:
+    ) -> dict[str, str]:
         """
         Set headers for the You.com Search API.
 
