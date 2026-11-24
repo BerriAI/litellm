@@ -865,7 +865,9 @@ def test_function_tools_bridge_only_when_chat_rejects_the_effective_effort(
         model=model,
         custom_llm_provider=provider,
         tools=[_FUNCTION_TOOL],
-        reasoning_effort=bridge_reasoning_effort(effort, extra_body),
+        reasoning_effort=bridge_reasoning_effort(
+            effort, extra_body, custom_llm_provider=provider, api_base="https://api.openai.com/v1"
+        ),
         api_base="https://api.openai.com/v1",
     )
     assert info.get("mode") == expected
@@ -1107,7 +1109,7 @@ def test_backend_serves_chat_completions_reads_the_shared_row(
 def test_bridge_reasoning_effort_reads_only_a_string_or_mapping_effort_nested_in_extra_body(
     extra_body: JsonValue, expected: JsonValue
 ) -> None:
-    assert bridge_reasoning_effort(None, extra_body) == expected
+    assert bridge_reasoning_effort(None, extra_body, custom_llm_provider="openai", api_base=None) == expected
 
 
 @pytest.mark.parametrize("asynchronous", [False, True])

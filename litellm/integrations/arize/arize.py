@@ -232,7 +232,7 @@ class ArizeLogger(OpenTelemetry):
         parent_otel_span: Span | None = None,
         start_time: datetime | float | None = None,
         end_time: datetime | float | None = None,
-        event_metadata: dict | None = None,
+        event_metadata: Mapping[str, object] | None = None,
     ):
         """Arize is used mainly for LLM I/O tracing, sending router+caching metrics adds bloat to arize logs"""
 
@@ -243,7 +243,7 @@ class ArizeLogger(OpenTelemetry):
         parent_otel_span: Span | None = None,
         start_time: datetime | float | None = None,
         end_time: float | datetime | None = None,
-        event_metadata: dict | None = None,
+        event_metadata: Mapping[str, object] | None = None,
     ):
         """Arize is used mainly for LLM I/O tracing, sending router+caching metrics adds bloat to arize logs"""
 
@@ -290,7 +290,7 @@ class ArizeLogger(OpenTelemetry):
 
     def construct_dynamic_otel_headers(
         self, standard_callback_dynamic_params: StandardCallbackDynamicParams
-    ) -> dict | None:
+    ) -> dict[str, object] | None:
         """
         Construct dynamic Arize headers from standard callback dynamic params
 
@@ -299,7 +299,7 @@ class ArizeLogger(OpenTelemetry):
         Returns:
             dict: A dictionary of dynamic Arize headers
         """
-        dynamic_headers: Final = {}
+        dynamic_headers: Final[dict[str, object]] = {}
 
         #########################################################
         # `arize-space-id` handling

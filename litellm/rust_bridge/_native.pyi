@@ -2171,6 +2171,7 @@ class NativeBudgets:
         /,
     ) -> Execution: ...
 
+def billable_service_tier(requested: str | None, served: str | None) -> str | None: ...
 def budget_check_decision(check: BudgetCheck) -> JsonValue: ...
 
 @final
@@ -2402,6 +2403,15 @@ class RustSpendLog:
         token_redactor: NativeTokenRedactor,
     ) -> RustSpendLog: ...
     def callback(self) -> RustHandle: ...
+    def start(
+        self,
+        hook: str,
+        fields: Mapping[str, object],
+        call: Mapping[str, object] | None,
+        host: object,
+        request: NativeRequestRedis | None,
+        /,
+    ) -> Execution: ...
 
 @final
 class NativeTokenRedactor:
@@ -2783,6 +2793,7 @@ __all__ = [
     "auth_route_matches_denied",
     "auth_route_matches_prefix",
     "auth_route_matches_wildcard",
+    "billable_service_tier",
     "budget_check_decision",
     "bundled_model_cost_map",
     "completion",

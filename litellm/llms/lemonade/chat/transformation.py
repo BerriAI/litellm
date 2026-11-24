@@ -140,7 +140,7 @@ class LemonadeChatConfig(OpenAILikeChatConfig):
         return None
 
     @staticmethod
-    def _get_provider_specific_entry(model_info: dict) -> dict:
+    def _get_provider_specific_entry(model_info: Mapping[str, object]) -> dict:
         provider_specific_entry = model_info.get("provider_specific_entry")
         if not isinstance(provider_specific_entry, dict):
             provider_specific_entry = {}
@@ -153,7 +153,7 @@ class LemonadeChatConfig(OpenAILikeChatConfig):
 
         return provider_specific_entry
 
-    def _get_context_window(self, model_info: dict) -> int | None:
+    def _get_context_window(self, model_info: Mapping[str, object]) -> int | None:
         provider_specific_entry: Final = self._get_provider_specific_entry(model_info)
         recipe_options = provider_specific_entry.get("recipe_options")
         if not isinstance(recipe_options, dict):

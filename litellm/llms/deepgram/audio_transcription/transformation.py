@@ -224,7 +224,7 @@ class DeepgramAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
 
         return url
 
-    def _format_param_value(self, value) -> str:
+    def _format_param_value(self, value: object) -> str:
         """
         Formats a parameter value for use in query string.
 
@@ -238,7 +238,7 @@ class DeepgramAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
             return str(value).lower()
         return str(value)
 
-    def _build_query_params(self, optional_params: dict, model: str) -> dict:
+    def _build_query_params(self, optional_params: dict, model: str) -> dict[str, str]:
         """
         Builds a dictionary of query parameters from optional_params.
 
@@ -249,7 +249,7 @@ class DeepgramAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         Returns:
             Dictionary of filtered and formatted query parameters
         """
-        query_params: Final = {}
+        query_params: Final[dict[str, str]] = {}
         provider_specific_params: Final = self.get_provider_specific_params(
             optional_params=optional_params,
             model=model,
@@ -272,7 +272,7 @@ class DeepgramAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         litellm_params: dict,
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, str]:
         api_key = api_key or get_secret_str("DEEPGRAM_API_KEY")
         return {
             "Authorization": f"Token {api_key}",

@@ -2646,7 +2646,7 @@ class MCPServerManager:
                 stdio_env=None,
             )
 
-            async def _noop(_session):
+            async def _noop(_session: object) -> str:
                 return "ok"
 
             await asyncio.wait_for(client.run_with_session(_noop), timeout=MCP_HEALTH_CHECK_TIMEOUT)
@@ -7033,7 +7033,7 @@ class MCPServerManager:
             managed_per_user: Final = mcp_server.is_gateway_managed_oauth2 and mcp_server.needs_user_oauth_token
             server_label: Final = mcp_server.name or mcp_server.server_name or mcp_server.alias or ""
 
-            async def _call_tool_via_client(client, params):
+            async def _call_tool_via_client(client: MCPClient, params: MCPCallToolRequestParams):
                 async with self._outbound_limit(mcp_server, persistent_session):
                     if not relays_upstream_auth and not managed_per_user:
                         return await client.call_tool(
@@ -7931,7 +7931,7 @@ class MCPServerManager:
                     stdio_env=None,
                 )
 
-                async def _noop(session):
+                async def _noop(session: object) -> str:
                     return "ok"
 
                 # Add timeout wrapper to prevent hanging

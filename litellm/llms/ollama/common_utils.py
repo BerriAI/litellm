@@ -1,6 +1,6 @@
 import base64
 import io
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from typing import Final, Protocol, overload
 
 import httpx
@@ -116,7 +116,7 @@ class OllamaModelInfo(BaseLLMModelInfo):
     """
 
     @staticmethod
-    def get_api_key(api_key=None) -> str | None:
+    def get_api_key(api_key: str | None = None) -> str | None:
         """Get API key from environment variables or litellm configuration"""
         import os
 
@@ -154,7 +154,7 @@ class OllamaModelInfo(BaseLLMModelInfo):
                 return api_base[: -len(suffix)]
         return api_base
 
-    def get_models(self, api_key=None, api_base: str | None = None) -> list[str]:
+    def get_models(self, api_key: str | None = None, api_base: str | None = None) -> list[str]:
         """
         List all models available on the Ollama server via /api/tags endpoint.
         """
@@ -313,14 +313,14 @@ class OllamaModelInfo(BaseLLMModelInfo):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: Mapping[str, object],
         model: str,
-        messages: list,
-        optional_params: dict,
-        litellm_params: dict,
-        api_key=None,
-        api_base=None,
-    ) -> dict:
+        messages: Sequence[object],
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
+        api_key: str | None = None,
+        api_base: str | None = None,
+    ) -> dict[str, object]:
         """
         No-op environment validation for Ollama.
         """
