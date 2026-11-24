@@ -23,6 +23,25 @@ export const applicationRows = (
     .sort((left, right) => left.resource.alias.localeCompare(right.resource.alias));
 };
 
+export const grantedApplicationRows = (apps: readonly App[]): ApplicationRow[] =>
+  apps
+    .flatMap((app) =>
+      app.resource_type && app.resource_id
+        ? [
+            {
+              resource: {
+                resource_type: app.resource_type,
+                resource_id: app.resource_id,
+                alias: app.alias,
+                app_id: app.app_id,
+              },
+              app,
+            },
+          ]
+        : [],
+    )
+    .sort((left, right) => left.resource.alias.localeCompare(right.resource.alias));
+
 export const applicationInitials = (label: string): string =>
   label
     .split(/\s+/)

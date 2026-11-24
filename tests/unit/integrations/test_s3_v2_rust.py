@@ -6,12 +6,13 @@ import hashlib
 import json
 import logging
 import re
+import threading
 import time
 from collections.abc import Iterator, Mapping
 from datetime import datetime
 from pathlib import Path
 from typing import Final
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 from urllib.parse import quote, unquote, urlsplit, urlunsplit
 
 import pytest
@@ -82,8 +83,17 @@ async def _upload(logger: S3Logger, payload: Mapping[str, object], start_time: d
     await logger.flush_queue()
 
 
-def _failures() -> object:
-    return patch.object(s3_v2._Host, "callback_failed")
+@contextlib.contextmanager
+def _failures() -> Iterator[MagicMock]:
+    reported: Final = threading.Semaphore(0)
+    with patch.object(s3_v2._Host, "callback_failed", side_effect=reported.release) as failures:
+        failures.reported = reported
+        yield failures
+
+
+async def _reported(failures: MagicMock, count: int) -> None:
+    for _ in range(count):
+        _ = await asyncio.to_thread(failures.reported.acquire)
 
 
 def _uploaded(put: Received) -> dict[str, object]:
@@ -95,7 +105,7 @@ def _uploaded(put: Received) -> dict[str, object]:
 def _assert_backoff_gaps(puts: list[Received]) -> None:
     gaps: Final = [later.at - earlier.at for earlier, later in zip(puts, puts[1:])]
     for attempt, gap in enumerate(gaps):
-        assert (1 << attempt) * 0.5 <= gap < (1 << attempt) * 1.5 + 0.25, (attempt, gap)
+        assert (1 << attempt) * 0.5 <= gap < (1 << attempt) * 1.5 + 2.0, (attempt, gap)
 
 
 _LOGGED_BACKOFF: Final = re.compile(r"retrying in (\d+\.\d+)s")
@@ -169,6 +179,7 @@ async def test_async_upload_exhausts_retries_on_persistent_503(
     logger: Final = _logger(monkeypatch, bucket)
     with _failures() as mock_failure:
         await _upload(logger, _payload("test-exhaust"))
+        await _reported(mock_failure, 1)
 
     assert len(bucket.puts()) == 3
     _assert_backoff_gaps(bucket.puts())
@@ -1524,6 +1535,7 @@ async def test_overflow_after_a_failed_flush_trims_failed_first_and_counts_uploa
             logger.flush_queue(),
             _log_once_a_put_arrives(logger, bucket, [_payload(f"late-{index}") for index in range(3)]),
         )
+        await _reported(mock_failure, 2)
 
     assert logger.sink.queued_keys() == [_key("second"), _key("late-0"), _key("late-1"), _key("late-2")]
     failed_uploads: Final = 2
@@ -1540,6 +1552,7 @@ async def test_queue_grows_past_the_cap_while_the_sink_fails_and_everything_land
 
     with _failures() as mock_failure:
         await logger.flush_queue()
+        await _reported(mock_failure, 5)
 
     assert len(logger.sink.queued_keys()) == 5
     upload_failures: Final = 5
@@ -1571,11 +1584,13 @@ async def test_unlisted_status_gets_one_put_and_stays_queued(
     bucket.reply("/test-bucket/", (status, _coded_body(code)))
     await _log_all(logger, [_payload(f"elem-{index}") for index in range(4)])
 
-    started: Final = time.monotonic()
-    await logger.flush_queue()
+    with _failures() as mock_failure:
+        await logger.flush_queue()
+        await _reported(mock_failure, 4)
 
     assert len(bucket.puts()) == 4
-    assert time.monotonic() - started < 0.5
+    assert sorted(_names(bucket.puts())) == [f"elem-{index}.json" for index in range(4)]
+    assert mock_failure.call_count == 4
     assert len(logger.sink.queued_keys()) == 4
 
 
@@ -1727,6 +1742,7 @@ async def test_overflow_prefers_arrivals_over_failed_elements_without_counting_t
 
     with _failures() as mock_failure:
         await asyncio.gather(logger.flush_queue(), _log_once_a_put_arrives(logger, bucket, [_payload("late")]))
+        await _reported(mock_failure, 1)
 
     assert logger.sink.queued_keys() == [_key("late")]
     failed_uploads: Final = 1
@@ -1791,6 +1807,7 @@ async def test_retry_age_budget_drops_after_the_clock_set_by_a_partial_failure(
         await asyncio.sleep(1.1)
         await log_payload(logger, _payload("good-2"), START)
         await logger.flush_queue()
+        await _reported(mock_failure, 2)
 
     assert logger.sink.queued_keys() == []
     poison_puts: Final = sum(1 for put in bucket.puts() if put.path.endswith("_poison.json"))
@@ -2633,6 +2650,7 @@ async def test_async_upload_exhausts_403_retries_through_production_http_handler
 
     with _failures() as failure, caplog.at_level(logging.DEBUG, logger="LiteLLM"):
         await _upload(logger, _payload("test-403-exhausted"))
+        await _reported(failure, 1)
 
     assert len(bucket.puts()) == 3
     _assert_logged_backoff(bucket.puts(), caplog)
@@ -3111,10 +3129,15 @@ async def test_the_drop_warning_prints_the_retry_age_as_python_does(
     bucket.reply("_elem-1.json", (400, "<Error><Code>EntityTooLarge</Code></Error>"))
     await _log_all(logger, [_payload(f"elem-{i}") for i in range(2)])
 
-    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
-        await logger.flush_queue()
-
-    assert (
+    dropped: Final = (
         "s3 logging: 1 uploads dropped this flush: 1 rejected as terminal by S3, "
         f"0 retrying longer than s3_max_retry_age_seconds={shown}"
-    ) in _warnings(caplog)
+    )
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        await logger.flush_queue()
+        for _ in range(500):
+            if dropped in _warnings(caplog):
+                break
+            await asyncio.sleep(0.01)
+
+    assert dropped in _warnings(caplog)

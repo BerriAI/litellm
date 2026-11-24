@@ -24,7 +24,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 class SlowHandler(BaseHTTPRequestHandler):
     delay_seconds: float = 35.0
 
-    def log_message(self, fmt: str, *args) -> None:  # noqa: D401
+    def log_message(self, fmt: str, *args: object) -> None:  # noqa: D401
         """Route handler logs through the logging module."""
         LOG.info("%s - %s", self.address_string(), fmt % args)
 

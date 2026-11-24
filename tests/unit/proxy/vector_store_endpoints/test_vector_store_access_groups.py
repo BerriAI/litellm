@@ -17,6 +17,7 @@ from litellm.proxy._types import UI_TEAM_ID, LiteLLM_TeamTableCachedObj, LiteLLM
 from litellm.proxy.proxy_server import app
 from litellm.proxy.utils import hash_token
 from litellm.proxy.vector_store_endpoints.utils import can_user_access_vector_store, filter_listable_vector_stores
+from litellm.redis.stores.auth_cache import AuthObject
 from litellm.types.vector_stores import LiteLLM_ManagedVectorStore
 from litellm.vector_stores.vector_store_registry import VectorStoreRegistry
 from tests._master_key import MASTER_KEY
@@ -114,10 +115,11 @@ async def test_a_dashboard_session_gets_the_group_stores_of_each_of_the_users_te
     await proxy.add_group("g2", ("store-c",), team_ids=("team-2",))
     for team_id, group in (("team-1", "g1"), ("team-2", "g2")):
         await proxy.cache.async_set_cache(
-            key=f"team_id:{team_id}", value=LiteLLM_TeamTableCachedObj(team_id=team_id, access_group_ids=[group])
+            key=AuthObject.team(team_id), value=LiteLLM_TeamTableCachedObj(team_id=team_id, access_group_ids=[group])
         )
     await proxy.cache.async_set_cache(
-        key="session-user", value=LiteLLM_UserTable(user_id="session-user", teams=["team-1", "team-2"])
+        key=AuthObject.user("session-user"),
+        value=LiteLLM_UserTable(user_id="session-user", teams=["team-1", "team-2"]),
     )
     session: Final = UserAPIKeyAuth(token=TOKEN, user_id="session-user", team_id=UI_TEAM_ID)
     stores: Final = tuple(team_owned_store(store_id) for store_id in ("store-a", "store-b", "store-c"))
@@ -275,7 +277,7 @@ async def _statuses(
     caller: Final = (await _caller(proxy, layer, how)).model_copy(
         update={"token": token, "allowed_routes": [path] if path.startswith("/vector_store/") else []}
     )
-    await proxy.cache.async_set_cache(key=token, value=caller)
+    await proxy.cache.async_set_cache(key=AuthObject.virtual_key(token), value=caller)
     monkeypatch.setattr(proxy_server, "master_key", MASTER_KEY)
     client: Final = TestClient(app, raise_server_exceptions=False)
     return [

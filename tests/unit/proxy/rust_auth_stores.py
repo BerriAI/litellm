@@ -1,13 +1,16 @@
-"""In-memory stand-ins for the Rust auth repositories, patched in through ``rust_database.repository``.
+"""In-memory stand-ins for the Rust repositories (the auth objects and the spend log window sums), patched in
+through ``rust_database.repository``.
 
 Each fake keeps separate reader and writer rows (a writer read sees ``writer`` when it is set, else ``rows``),
 logs every lookup, and raises a row that is an exception. Threads porting more auth objects add their fake as
 another field of ``RustAuthStores``.
 """
 
+import json
 from collections.abc import Callable, Iterable, Mapping, MutableMapping, Sequence
 from dataclasses import dataclass, field
-from typing import Final
+from datetime import datetime, timedelta, timezone
+from typing import Final, Literal
 
 import pytest
 from pydantic import BaseModel
@@ -18,23 +21,37 @@ from litellm.proxy._types import (
     LiteLLM_TeamMembership,
     LiteLLM_TeamTable,
     LiteLLM_VerificationTokenView,
+    UserAPIKeyAuth,
 )
 from litellm.repositories import rust_database
 from litellm.rust_bridge._native import (
+    NativeDatabaseFailure,
     RustAccessGroupRepository,
+    RustAgentIdentityRepository,
+    RustAuditLogRepository,
     RustBudgetRepository,
     RustEndUserRepository,
     RustJwtKeyMappingRepository,
+    RustKeyOwnersRepository,
     RustKeyRepository,
     RustModelAccessGroupRepository,
     RustObjectPermissionRepository,
     RustOrganizationRepository,
     RustProjectRepository,
+    RustSpendLogRepository,
     RustTagRepository,
     RustTeamMembershipRepository,
     RustTeamRepository,
     RustUserRepository,
 )
+
+
+def native_database_failure(kind: Literal["unreachable", "capacity", "other"]) -> NativeDatabaseFailure:
+    failure: Final = NativeDatabaseFailure(f"database query failed: {kind}")
+    failure.kind = kind
+    failure.unavailable = kind != "other"
+    failure.requeue_safe = False
+    return failure
 
 
 @dataclass
@@ -61,6 +78,7 @@ class JwtMapping:
     token: str
     jwt_issuer: str = ""
     is_active: bool = True
+    written_by: str | None = None
 
 
 @dataclass
@@ -90,6 +108,96 @@ class FakeJwtKeyMappingStore:
         if self.error is not None:
             raise self.error
         return [(m.jwt_issuer, m.jwt_claim_name, m.jwt_claim_value) for m in self.mappings if m.token in tokens]
+
+    async def insert(
+        self, jwt_claim_name: str, jwt_claim_value: str, token: str, *, jwt_issuer: str | None = None, written_by: str
+    ) -> tuple[bool, str | None]:
+        if self.error is not None:
+            raise self.error
+        scope: Final = (jwt_claim_name, jwt_claim_value, jwt_issuer or "")
+        holder: Final = next(
+            (m for m in self.mappings if (m.jwt_claim_name, m.jwt_claim_value, m.jwt_issuer) == scope), None
+        )
+        if holder is not None:
+            return False, holder.token if holder.is_active else None
+        self.mappings.append(JwtMapping(*scope[:2], token=token, jwt_issuer=scope[2], written_by=written_by))
+        return True, token
+
+
+AuditLogRow = tuple[str, int, str | None, str | None, str, str, str, str | None, str | None]
+_AUDIT_LOG_COLUMNS: Final = (
+    "id",
+    "updated_at",
+    "changed_by",
+    "changed_by_api_key",
+    "action",
+    "table_name",
+    "object_id",
+    "before_value",
+    "updated_values",
+)
+_EPOCH: Final = datetime(1970, 1, 1, tzinfo=timezone.utc)
+
+
+def audit_log_data(row: AuditLogRow) -> Mapping[str, object]:
+    """One row the audit log repository was handed, as the mapping Prisma's ``create`` took: columns that are None
+    left out, the time as an aware UTC datetime, and the two values as JSON text."""
+    values: Final = (row[0], _EPOCH + timedelta(microseconds=row[1]), *row[2:])
+    return {column: value for column, value in zip(_AUDIT_LOG_COLUMNS, values) if value is not None}
+
+
+@dataclass
+class FakeAuditLogStore:
+    """Audit log rows in the order they were inserted, each as ``audit_log_data`` shapes it.
+
+    A test that hands the proxy a Prisma double with an audit log table also sees each insert there, as a
+    ``create`` or a ``create_many`` with the same mapping, so that double's side effects (an error, a stall) still
+    decide how the write ends."""
+
+    rows: list[Mapping[str, object]] = field(default_factory=list)
+    error: Exception | None = None
+
+    @staticmethod
+    def _prisma_table() -> object | None:
+        from litellm.proxy import proxy_server
+
+        client: Final = proxy_server.prisma_client
+        return None if client is None else client.db.litellm_auditlog
+
+    async def insert(self, row: AuditLogRow) -> None:
+        if self.error is not None:
+            raise self.error
+        data: Final = audit_log_data(row)
+        self.rows.append(data)
+        table: Final = self._prisma_table()
+        if table is not None:
+            await table.create(data=data)
+
+    async def insert_many(self, rows: Sequence[AuditLogRow]) -> None:
+        if self.error is not None:
+            raise self.error
+        data: Final = tuple(audit_log_data(row) for row in rows)
+        self.rows.extend(data)
+        table: Final = self._prisma_table()
+        if table is not None:
+            await table.create_many(data=data)
+
+
+@dataclass
+class FakeAgentIdentityStore:
+    """``(agent_id, revision)`` of each identity that is active on an enabled, identity managed agent."""
+
+    current: set[tuple[str, str]] = field(default_factory=set)
+    error: Exception | None = None
+    recorded: list[tuple[str, str]] = field(default_factory=list)
+
+    async def record_authentication(self, agent_id: str, revision: str) -> bool:
+        if self.error is not None:
+            raise self.error
+        if (agent_id, revision) not in self.current:
+            return False
+        self.recorded.append((agent_id, revision))
+        return True
 
 
 @dataclass(frozen=True)
@@ -132,13 +240,17 @@ class FakeBudgetStore:
     """``LiteLLM_BudgetTable`` rows by ``budget_id``."""
 
     rows: dict[str, Mapping[str, object] | Exception] = field(default_factory=dict)
+    writer: dict[str, Mapping[str, object] | Exception] | None = None
     lookups: list[str] = field(default_factory=list)
 
     async def find_end_user_default_budget(self, budget_id: str) -> str | None:
         self.lookups.append(budget_id)
         return _json(self.rows.get(budget_id))
 
-    async def find_team_member_default_budget(self, budget_id: str) -> str | None:
+    async def find_team_member_default_budget(self, budget_id: str, *, use_writer: bool = False) -> str | None:
+        if use_writer and self.writer is not None:
+            self.lookups.append(budget_id)
+            return _json(self.writer.get(budget_id))
         return await self.find_end_user_default_budget(budget_id)
 
 
@@ -185,7 +297,8 @@ class FakeUserStore:
 
     A sign-in resolves to the row of its own id only: the SSO id and email fallbacks and their linking are the Rust
     repository's, tested against Postgres there. A writer read sees ``writer`` when it is set, else ``rows``; a row
-    that is an exception is raised. ``sign_ins`` logs each resolve as its arguments and whether it read the writer.
+    that is an exception is raised. ``sign_ins`` logs each resolve as its arguments and whether it read the writer,
+    and ``inserts`` each insert as its arguments.
     """
 
     rows: MutableMapping[str, Mapping[str, object] | Exception] = field(default_factory=dict)
@@ -193,6 +306,7 @@ class FakeUserStore:
     error: Exception | None = None
     sign_ins: list[tuple[Mapping[str, object], bool]] = field(default_factory=list)
     email_checks: list[tuple[str, str]] = field(default_factory=list)
+    inserts: list[Mapping[str, object]] = field(default_factory=list)
 
     def _source(self, writer: bool) -> MutableMapping[str, Mapping[str, object] | Exception]:
         return self.writer if writer and self.writer is not None else self.rows
@@ -252,6 +366,109 @@ class FakeUserStore:
         source[user_id] = {**row, "user_email": stored}
         return str(stored)
 
+    async def set_role(self, user_id: str, user_role: str) -> str | None:
+        if self.error is not None:
+            raise self.error
+        source: Final = self._source(True)
+        row: Final = source.get(user_id)
+        if isinstance(row, Exception):
+            raise row
+        if row is None:
+            return None
+        source[user_id] = {**row, "user_role": user_role}
+        return to_json({"organization_memberships": [], **row, "user_role": user_role}).decode()
+
+    async def insert(
+        self,
+        user_id: str,
+        *,
+        sso_user_id: str | None = None,
+        user_email: str | None = None,
+        links_any_user: bool,
+        user_role: str | None = None,
+        max_budget: float | None = None,
+        budget_duration: str | None = None,
+        budget_reset_at: float | None = None,
+        models: Sequence[str] | None = None,
+        budget_limits: str | None = None,
+        tpm_limit: int | None = None,
+        rpm_limit: int | None = None,
+        max_parallel_requests: int | None = None,
+        user_alias: str | None = None,
+        team_id: str | None = None,
+        organization_id: str | None = None,
+        object_permission_id: str | None = None,
+        password_reset_required: bool | None = None,
+        metadata: str | None = None,
+        allowed_cache_controls: Sequence[str] | None = None,
+        policies: Sequence[str] | None = None,
+        model_max_budget: str | None = None,
+    ) -> tuple[bool, str | None]:
+        self.inserts.append(
+            {
+                "user_id": user_id,
+                "sso_user_id": sso_user_id,
+                "user_email": user_email,
+                "links_any_user": links_any_user,
+                "user_role": user_role,
+                "max_budget": max_budget,
+                "budget_duration": budget_duration,
+                "budget_reset_at": budget_reset_at,
+                "models": models,
+                "budget_limits": budget_limits,
+                "tpm_limit": tpm_limit,
+                "rpm_limit": rpm_limit,
+                "max_parallel_requests": max_parallel_requests,
+                "user_alias": user_alias,
+                "team_id": team_id,
+                "organization_id": organization_id,
+                "object_permission_id": object_permission_id,
+                "password_reset_required": password_reset_required,
+                "metadata": metadata,
+                "allowed_cache_controls": allowed_cache_controls,
+                "policies": policies,
+                "model_max_budget": model_max_budget,
+            }
+        )
+        if self.error is not None:
+            raise self.error
+        source: Final = self._source(True)
+        existing: Final = source.get(user_id)
+        if isinstance(existing, Exception):
+            raise existing
+        if existing is not None:
+            return False, to_json({"organization_memberships": [], **existing}).decode()
+        email_is_free: Final = user_email is not None and (
+            links_any_user or not await self.email_belongs_to_another_user(user_email, user_id)
+        )
+        row: Final[Mapping[str, object]] = {
+            "user_id": user_id,
+            "sso_user_id": None if links_any_user else sso_user_id,
+            "user_email": user_email if email_is_free else None,
+            "user_role": user_role,
+            "max_budget": max_budget,
+            "budget_duration": budget_duration,
+            "budget_reset_at": None
+            if budget_reset_at is None
+            else datetime.fromtimestamp(budget_reset_at, timezone.utc),
+            "models": list(models or ()),
+            "budget_limits": None if budget_limits is None else json.loads(budget_limits),
+            "tpm_limit": tpm_limit,
+            "rpm_limit": rpm_limit,
+            "max_parallel_requests": max_parallel_requests,
+            "user_alias": user_alias,
+            "team_id": team_id,
+            "organization_id": organization_id,
+            "object_permission_id": object_permission_id,
+            "password_reset_required": password_reset_required,
+            "metadata": {} if metadata is None else json.loads(metadata),
+            "allowed_cache_controls": list(allowed_cache_controls or ()),
+            "policies": list(policies or ()),
+            "model_max_budget": {} if model_max_budget is None else json.loads(model_max_budget),
+        }
+        source[user_id] = row
+        return True, to_json({"organization_memberships": [], **row}).decode()
+
 
 def _answer(row: Mapping[str, object] | BaseModel | Exception | None, model: type) -> str | None:
     if isinstance(row, Exception):
@@ -294,16 +511,52 @@ class FakeTeamStore:
 
 @dataclass
 class FakeTeamMembershipStore:
-    """Membership rows by ``(user_id, team_id)``, shaped through ``LiteLLM_TeamMembership``."""
+    """Membership rows by ``(user_id, team_id)``, shaped through ``LiteLLM_TeamMembership``.
+
+    A member add is logged in ``adds`` as ``(user_id, team_id, budget_id)`` and ends as ``add_outcome``. An added
+    member gets a row here and is appended to ``roster_before``, the roster the team holds when the add takes its
+    lock, with ``roster_email`` as its email. The budget of its own it came with is kept in ``own_budgets`` as
+    ``(allowed_models, budget_duration, budget_reset_at, created_by, updated_by)``."""
 
     rows: dict[tuple[str, str], Mapping[str, object] | BaseModel | Exception] = field(default_factory=dict)
     writer: dict[tuple[str, str], Mapping[str, object] | BaseModel | Exception] | None = None
     lookups: list[tuple[str, str, bool]] = field(default_factory=list)
+    adds: list[tuple[str, str, str | None]] = field(default_factory=list)
+    add_outcome: Literal["added", "already_member", "team_missing", "user_missing"] = "added"
+    add_error: Exception | None = None
+    own_budgets: dict[str, tuple[Sequence[str], str | None, float | None, str, str]] = field(default_factory=dict)
+    roster_email: str | None = None
+    roster_before: Sequence[Mapping[str, object]] = ()
 
     async def find_with_budget(self, user_id: str, team_id: str, *, use_writer: bool = False) -> str | None:
         self.lookups.append((user_id, team_id, use_writer))
         source = self.writer if use_writer and self.writer is not None else self.rows
         return _answer(source.get((user_id, team_id)), LiteLLM_TeamMembership)
+
+    async def add_member(
+        self,
+        user_id: str,
+        team_id: str,
+        *,
+        budget_id: str | None = None,
+        own_budget: tuple[Sequence[str], str | None, float | None, str, str] | None = None,
+    ) -> tuple[Literal["added", "already_member", "team_missing", "user_missing"], str | None, str | None]:
+        self.adds.append((user_id, team_id, budget_id))
+        if self.add_error is not None:
+            raise self.add_error
+        if self.add_outcome != "added":
+            return self.add_outcome, None, None
+        if own_budget is not None and budget_id is not None:
+            self.own_budgets[budget_id] = own_budget
+        source: Final = self.writer if self.writer is not None else self.rows
+        row: Final = source.setdefault(
+            (user_id, team_id), {"user_id": user_id, "team_id": team_id, "budget_id": budget_id}
+        )
+        stored_roster: Final = (
+            *self.roster_before,
+            {"user_id": user_id, "user_email": self.roster_email, "role": "user"},
+        )
+        return "added", _answer(row, LiteLLM_TeamMembership), json.dumps(stored_roster)
 
 
 @dataclass
@@ -387,6 +640,23 @@ class FakeObjectPermissionStore(FakeFindStore):
         return await self._find(object_permission_id, use_writer=use_writer)
 
 
+class FakeKeyReader:
+    """The Rust key repository over the fake key rows: the row shaped into the fields of ``UserAPIKeyAuth`` the way
+    the repository shapes it, with no object permission nested. The repository's own shaping is tested in Rust
+    against Postgres, and pinned to this one in ``tests/unit/redis/stores/test_auth_cache_key.py``."""
+
+    def __init__(self, keys: FakeKeyStore) -> None:
+        self._keys: Final = keys
+
+    async def find(self, token: str, *, use_writer: bool = False) -> object:
+        row: Final = await self._keys.find(token, use_writer=use_writer)
+        if row is None:
+            return None
+        return UserAPIKeyAuth.model_validate(
+            LiteLLM_VerificationTokenView.model_validate_json(row).model_dump(exclude_none=True)
+        ).model_dump(mode="json")
+
+
 class FakeProjectStore:
     def __init__(self, rows: RustStoreRows) -> None:
         self._rows: Final = rows
@@ -413,9 +683,62 @@ class FakeTagStore:
 
 
 @dataclass
+class FakeSpendLogStore:
+    """Window sums by (owner, owner_id); every lookup is logged as (owner, owner_id, since)."""
+
+    totals: dict[tuple[str, str], float] = field(default_factory=dict)
+    error: Exception | None = None
+    lookups: list[tuple[str, str, datetime]] = field(default_factory=list)
+
+    async def _window_spend(self, owner: str, owner_id: str, since: datetime) -> float:
+        self.lookups.append((owner, owner_id, since))
+        if self.error is not None:
+            raise self.error
+        return self.totals.get((owner, owner_id), 0.0)
+
+    async def key_window_spend(self, api_key: str, since: datetime) -> float:
+        return await self._window_spend("Key", api_key, since)
+
+    async def team_window_spend(self, team_id: str, since: datetime) -> float:
+        return await self._window_spend("Team", team_id, since)
+
+    async def user_window_spend(self, user_id: str, since: datetime) -> float:
+        return await self._window_spend("User", user_id, since)
+
+
+@dataclass
+class FakeKeyOwnersStore:
+    """The auth prefetch's one-statement read: answers ``rows`` (a missing key reads as no row) and logs the ids
+    each call asked for, in ``(user, team, membership user, organization, project)`` order."""
+
+    rows: Mapping[str, object] = field(default_factory=dict)
+    lookups: list[tuple[str | None, ...]] = field(default_factory=list)
+
+    async def find(
+        self,
+        *,
+        user_id: str | None,
+        team_id: str | None,
+        membership_user_id: str | None,
+        organization_id: str | None,
+        project_id: str | None,
+    ) -> str:
+        self.lookups.append((user_id, team_id, membership_user_id, organization_id, project_id))
+        return json.dumps(
+            {
+                kind: self.rows.get(kind)
+                for kind in ("user_row", "team_row", "membership_row", "organization_row", "project_row")
+            }
+        )
+
+
+@dataclass
 class RustAuthStores:
     key: FakeKeyStore = field(default_factory=FakeKeyStore)
+    key_owners: FakeKeyOwnersStore = field(default_factory=FakeKeyOwnersStore)
     jwt_key_mapping: FakeJwtKeyMappingStore = field(default_factory=FakeJwtKeyMappingStore)
+    agent_identity: FakeAgentIdentityStore = field(default_factory=FakeAgentIdentityStore)
+    audit_log: FakeAuditLogStore = field(default_factory=FakeAuditLogStore)
     model_access_group: FakeModelAccessGroupStore = field(default_factory=FakeModelAccessGroupStore)
     budget: FakeBudgetStore = field(default_factory=FakeBudgetStore)
     end_user: FakeEndUserStore = field(default_factory=FakeEndUserStore)
@@ -427,11 +750,15 @@ class RustAuthStores:
     tag: TagRows = field(default_factory=TagRows)
     access_group: RustStoreRows = field(default_factory=RustStoreRows)
     object_permission: RustStoreRows = field(default_factory=RustStoreRows)
+    spend_log: FakeSpendLogStore = field(default_factory=FakeSpendLogStore)
 
     def by_kind(self) -> Mapping[Callable[..., object], object]:
         return {
-            RustKeyRepository: self.key,
+            RustKeyRepository: FakeKeyReader(self.key),
+            RustKeyOwnersRepository: self.key_owners,
             RustJwtKeyMappingRepository: self.jwt_key_mapping,
+            RustAgentIdentityRepository: self.agent_identity,
+            RustAuditLogRepository: self.audit_log,
             RustModelAccessGroupRepository: self.model_access_group,
             RustBudgetRepository: self.budget,
             RustEndUserRepository: self.end_user,
@@ -443,6 +770,7 @@ class RustAuthStores:
             RustTagRepository: FakeTagStore(self.tag),
             RustAccessGroupRepository: FakeAccessGroupStore(self.access_group),
             RustObjectPermissionRepository: FakeObjectPermissionStore(self.object_permission),
+            RustSpendLogRepository: self.spend_log,
         }
 
 
@@ -456,3 +784,15 @@ def install_rust_auth_stores(monkeypatch: pytest.MonkeyPatch, stores: RustAuthSt
 @pytest.fixture
 def rust_auth_stores(monkeypatch: pytest.MonkeyPatch) -> RustAuthStores:
     return install_rust_auth_stores(monkeypatch)
+
+
+@pytest.fixture(autouse=True)
+def audit_log_store(monkeypatch: pytest.MonkeyPatch) -> FakeAuditLogStore:
+    """Audit log rows are inserted through the Rust repository, which unit tests have no database for. This store
+    takes them in every test, on top of whatever else answers ``rust_database.repository``."""
+    store: Final = FakeAuditLogStore()
+    answer: Final = rust_database.repository
+    monkeypatch.setattr(
+        rust_database, "repository", lambda kind: store if kind is RustAuditLogRepository else answer(kind)
+    )
+    return store

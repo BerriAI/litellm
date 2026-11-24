@@ -29,12 +29,30 @@ _STUDIO_FLASH_IMAGE: Final = "gemini/gemini-3.1-flash-image"
 _VERTEX_FLASH: Final = "vertex_ai/gemini-3.5-flash"
 _VERTEX_PRO: Final = "vertex_ai/gemini-3.1-pro-preview"
 _STUDIO_PRO: Final = "gemini/gemini-3.1-pro-preview"
+_STUDIO_FLASH: Final = "gemini/gemini-3.5-flash"
+_VERTEX_ARGON: Final = "vertex_ai/gemini-4-argon"
+_STUDIO_ARGON: Final = "gemini/gemini-4-argon"
+_VERTEX_FLASH_2_5: Final = "vertex_ai/gemini-2.5-flash"
 _DROP_PLACEMENTS: Final[tuple[DropParams, ...]] = ("request", "deployment")
 _IMAGE_MODELS: Final = (
     ("vertex-nano", _VERTEX_NANO),
     ("vertex-flash-image", _VERTEX_FLASH_IMAGE),
     ("studio-nano", _STUDIO_NANO),
     ("studio-flash-image", _STUDIO_FLASH_IMAGE),
+)
+# Google refused logprobs on these and accepted them on _LOGPROB_ACCEPTING_MODELS in live calls on 2026-11-18. The proof
+# is in the PR that added these lists.
+_LOGPROB_REFUSING_MODELS: Final = (
+    *_IMAGE_MODELS,
+    ("vertex-flash", _VERTEX_FLASH),
+    ("studio-flash", _STUDIO_FLASH),
+    ("vertex-pro", _VERTEX_PRO),
+    ("studio-pro", _STUDIO_PRO),
+    ("vertex-argon", _VERTEX_ARGON),
+)
+_LOGPROB_ACCEPTING_MODELS: Final = (
+    ("vertex-flash-2-5", _VERTEX_FLASH_2_5),
+    ("studio-argon", _STUDIO_ARGON),
 )
 _LOGPROB_ASKS: Final[tuple[tuple[str, Mapping[str, JsonValue]], ...]] = (
     ("logprobs", {"logprobs": True}),
@@ -342,10 +360,12 @@ def test_responses_drop_params_keeps_a_refused_level_away_from_studio_flash_imag
     ("model", "fields", "placement"),
     tuple(
         _regression(f"{name}-{asked}-drop-on-{placement}", model, fields, placement)
-        for (name, model), (asked, fields), placement in product(_IMAGE_MODELS, _LOGPROB_ASKS, _DROP_PLACEMENTS)
+        for (name, model), (asked, fields), placement in product(
+            _LOGPROB_REFUSING_MODELS, _LOGPROB_ASKS, _DROP_PLACEMENTS
+        )
     ),
 )
-def test_drop_params_keeps_logprobs_away_from_image_models_that_reject_them(
+def test_drop_params_keeps_logprobs_away_from_models_that_reject_them(
     gateway: Gateway, model: str, fields: Mapping[str, JsonValue], placement: DropParams
 ) -> None:
     exchange: Final = _exchange_with_drop_params(gateway, model, fields, placement, rejects=_has_logprobs)
@@ -354,14 +374,17 @@ def test_drop_params_keeps_logprobs_away_from_image_models_that_reject_them(
 
 
 @pytest.mark.parametrize(
-    "placement",
-    tuple(_guard(f"vertex-flash-text-drop-on-{placement}", placement) for placement in _DROP_PLACEMENTS),
+    ("model", "placement"),
+    tuple(
+        _guard(f"{name}-drop-on-{placement}", model, placement)
+        for (name, model), placement in product(_LOGPROB_ACCEPTING_MODELS, _DROP_PLACEMENTS)
+    ),
 )
-def test_drop_params_leaves_logprobs_on_a_text_model_that_still_receives_them(
-    gateway: Gateway, placement: DropParams
+def test_drop_params_leaves_logprobs_on_a_model_that_accepts_them(
+    gateway: Gateway, model: str, placement: DropParams
 ) -> None:
-    exchange: Final = _exchange_with_drop_params(gateway, _VERTEX_FLASH, {"logprobs": True}, placement)
-    assert _answered_config(exchange, _VERTEX_FLASH)["responseLogprobs"] is True
+    exchange: Final = _exchange_with_drop_params(gateway, model, {"logprobs": True}, placement)
+    assert _answered_config(exchange, model)["responseLogprobs"] is True
 
 
 @pytest.mark.parametrize(
@@ -369,6 +392,9 @@ def test_drop_params_leaves_logprobs_on_a_text_model_that_still_receives_them(
     (
         _guard("vertex-nano-drop-off", _VERTEX_NANO),
         _guard("studio-nano-drop-off", _STUDIO_NANO),
+        _guard("vertex-flash-drop-off", _VERTEX_FLASH),
+        _guard("studio-flash-drop-off", _STUDIO_FLASH),
+        _guard("vertex-argon-drop-off", _VERTEX_ARGON),
     ),
 )
 def test_without_drop_params_logprobs_reach_gemini_and_its_rejection_reaches_the_caller(
@@ -384,10 +410,10 @@ def test_without_drop_params_logprobs_reach_gemini_and_its_rejection_reaches_the
     ("model", "placement"),
     tuple(
         _guard(f"{name}-allowed-params-drop-on-{placement}", model, placement)
-        for (name, model), placement in product(_IMAGE_MODELS, _DROP_PLACEMENTS)
+        for (name, model), placement in product(_LOGPROB_REFUSING_MODELS, _DROP_PLACEMENTS)
     ),
 )
-def test_allowed_openai_params_send_logprobs_to_image_models_despite_drop_params(
+def test_allowed_openai_params_send_logprobs_to_refusing_models_despite_drop_params(
     gateway: Gateway, model: str, placement: DropParams
 ) -> None:
     exchange: Final = _exchange_with_drop_params(

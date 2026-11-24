@@ -12,7 +12,17 @@ import tempfile
 import traceback
 from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
-from typing import IO, Any, BinaryIO, Final, NoReturn, Protocol, TypedDict, cast, get_args
+from typing import (
+    IO,
+    Any,
+    BinaryIO,
+    Final,
+    NoReturn,
+    Protocol,
+    TypedDict,
+    cast,
+    get_args,
+)
 
 import httpx
 from fastapi import (
@@ -37,7 +47,7 @@ from litellm.litellm_core_utils.batch_utils import rewrite_rows_naming_model, sh
 from litellm.litellm_core_utils.cloud_storage_security import (
     is_managed_cloud_storage_uri,
 )
-from litellm.litellm_core_utils.core_helpers import get_or_create_metadata_bucket, has_attributes
+from litellm.litellm_core_utils.core_helpers import get_or_create_metadata_bucket, has_attributes, int_of
 from litellm.llms.base_llm.files.litellm_db_storage_backend import LITELLM_DB_STORAGE_BACKEND_NAME
 from litellm.llms.base_llm.files.transformation import BaseFileEndpoints, FileListModelScope
 from litellm.llms.base_llm.managed_resources.isolation import build_list_page
@@ -84,13 +94,14 @@ from litellm.proxy.openai_files_endpoints.common_utils import (  # noqa: F401  #
     apply_team_provider_credentials,
     authorize_model_for_key,
     batch_row_model_for_deployment,
-    deployment_drop_params,
+    configured_drop_params,
     encode_file_id_with_model,
     extract_file_creation_params,
     get_authorized_credentials_for_model,
     handle_model_based_routing,
     is_base64_encoded_unified_file_id,
     prepare_data_with_credentials,
+    router_default_drop_params,
     validate_file_list_limit,
     validate_managed_files_requirement,
     validate_managed_id_requirement,
@@ -185,9 +196,10 @@ async def _litellm_executed_batch_input_model(
     )
 
 
-_MAX_BATCH_FILE_SIZE_MB_ADAPTER: Final = TypeAdapter(int | None)
+_MAX_BATCH_FILE_SIZE_MB_ADAPTER: Final[TypeAdapter[int | None]] = TypeAdapter(int | None)
 _LISTED_FILES_ADAPTER: Final = TypeAdapter(list[OpenAIFileObject])
 _REQUEST_BODY_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+_JSON_VALUE_ADAPTER: Final = TypeAdapter(object)
 _DECODED_BODY_STALE_HEADERS: Final = frozenset(
     {"content-encoding", "content-length", "transfer-encoding", "connection"}
 )
@@ -207,7 +219,7 @@ class UploadedFileInfo(TypedDict):
 files_config = None
 
 
-def set_files_config(config):
+def set_files_config(config: object):
     global files_config
     if config is None:
         return
@@ -380,7 +392,7 @@ def get_first_json_object(file_source: bytes | BinaryIO) -> dict | None:
         return None
 
 
-def get_model_from_json_obj(json_object: dict) -> str | None:
+def get_model_from_json_obj(json_object: Mapping[str, object]) -> str | None:
     """
     The model a record names, or None when it does not name one readably.
 
@@ -473,7 +485,7 @@ async def route_create_file(
         from litellm.proxy.proxy_server import prisma_client
 
         return await StorageBackendFileService.upload_file_to_storage_backend(
-            file_data=extract_file_data(cast(Any, _create_file_request.get("file"))),
+            file_data=extract_file_data(_create_file_request["file"]),
             target_storage=storage,
             target_model_names=(executed_model,) if executed_model is not None else target_model_names_list,
             purpose=purpose,
@@ -495,7 +507,7 @@ async def route_create_file(
         # Merge credentials into the request
         prepare_data_with_credentials(
             data=_create_file_request,
-            credentials={**credentials, **deployment_drop_params(llm_router, model, _create_file_request)},
+            credentials={**credentials, **configured_drop_params(llm_router, model, _create_file_request)},
             keep_request_buckets=True,
         )
 
@@ -588,7 +600,10 @@ async def route_create_file(
             _create_file_request.update(llm_provider_config)
         _create_file_request.pop("custom_llm_provider", None)
         # for now use custom_llm_provider=="openai" -> this will change as LiteLLM adds more providers for acreate_batch
-        response = await litellm.acreate_file(**_create_file_request, custom_llm_provider=custom_llm_provider)
+        provider_upload_request: Final = cast(  # cast-ok: files_settings and router defaults add undeclared keys
+            CreateFileRequest, {**_create_file_request, **router_default_drop_params(llm_router, _create_file_request)}
+        )
+        response = await litellm.acreate_file(**provider_upload_request, custom_llm_provider=custom_llm_provider)
 
     return response
 
@@ -919,7 +934,7 @@ async def create_file(
                 )
             expires_after = FileExpiresAfter(
                 anchor="created_at",
-                seconds=int(enforced_file_expiry["seconds"]),
+                seconds=int_of(_JSON_VALUE_ADAPTER.validate_python(enforced_file_expiry["seconds"])),
             )
 
         verbose_proxy_logger.debug("create_file expires_after: %s", expires_after)
@@ -2041,13 +2056,14 @@ async def list_files(
         elif should_route and credentials is not None:
             # Use model-based routing with credentials from config
             prepare_data_with_credentials(data=data, credentials=credentials)
-            response = await litellm.afile_list(
+            routed_listing: Final = await litellm.afile_list(
                 custom_llm_provider=credentials["custom_llm_provider"],
                 purpose=purpose,
                 **data,
             )
 
             verbose_proxy_logger.debug("Listed files using model: %s", model_used)
+            response = _as_file_list_page(routed_listing)
 
         elif target_model_names and isinstance(target_model_names, str):
             target_model_name: Final = _single_target_model_name(target_model_names)
@@ -2065,10 +2081,12 @@ async def list_files(
                 operation_context="file list",
             )
             prepare_data_with_credentials(data=data, credentials=credentials)
-            response = await litellm.afile_list(
-                custom_llm_provider=credentials["custom_llm_provider"],
-                purpose=purpose,
-                **data,
+            response = _as_file_list_page(
+                await litellm.afile_list(
+                    custom_llm_provider=credentials["custom_llm_provider"],
+                    purpose=purpose,
+                    **data,
+                )
             )
         else:
             custom_llm_provider: Final = await _requested_custom_llm_provider(request=request, provider=provider)
@@ -2092,10 +2110,12 @@ async def list_files(
                     custom_llm_provider=resolved_custom_llm_provider,
                 )
 
-                response = await litellm.afile_list(
-                    custom_llm_provider=resolved_custom_llm_provider,
-                    purpose=purpose,
-                    **data,
+                response = _as_file_list_page(
+                    await litellm.afile_list(
+                        custom_llm_provider=resolved_custom_llm_provider,
+                        purpose=purpose,
+                        **data,
+                    )
                 )
 
         if response is None:
@@ -2103,7 +2123,6 @@ async def list_files(
                 status_code=500,
                 detail="Either 'provider' or 'target_model_names' must be provided e.g. `?target_model_names=gpt-4o`",
             )
-        response = _as_file_list_page(response)  # rebind-ok: each dispatch branch above binds response
 
         ## POST CALL HOOKS ###
         _response: Final = await proxy_logging_obj.post_call_success_hook(

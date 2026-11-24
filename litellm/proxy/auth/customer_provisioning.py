@@ -7,14 +7,15 @@ app. A request that may not register runs for the customers the proxy already kn
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Final, TypeAlias
 
-from fastapi import status
+from fastapi import Request, status
 
 from litellm.proxy._types import ProxyErrorTypes, ProxyException, UserAPIKeyAuth
-from litellm.proxy.auth.app_auth import authenticated_resource_id
+from litellm.proxy.auth.app_auth import authenticated_resource_alias, authenticated_resource_id
+from litellm.proxy.auth.auth_checks import missing_required_customer_header
 from litellm.proxy.auth.customer_hierarchy_auth import (
-    CUSTOMER_MEMBER_ID_HEADER,
-    CUSTOMER_ORG_ALIAS_HEADER,
+    DEFAULT_CUSTOMER_HEADER_NAMES,
     CustomerBudgetExceededError,
+    CustomerIdentityHeaderNames,
     MemberRegistrar,
     OrganizationRegistrar,
 )
@@ -33,11 +34,23 @@ HierarchyResolver: TypeAlias = Callable[
 ]
 
 
-async def registration_refusal(prisma_client: "PrismaClient | None", authenticated: UserAPIKeyAuth) -> str | None:
+async def registration_refusal(
+    prisma_client: "PrismaClient | None",
+    authenticated: UserAPIKeyAuth,
+    request: Request | None,
+    route: str,
+) -> str | None:
     """Why this request may not register a new customer, or None when it may."""
     if prisma_client is None:
         return None
-    store: Final = AppStore(prisma_client.db)
+    from litellm.proxy.proxy_server import user_api_key_cache
+
+    missing_header: Final = await missing_required_customer_header(
+        request, route, authenticated, prisma_client, user_api_key_cache
+    )
+    if missing_header is not None:
+        return f"Missing required customer header {missing_header}."
+    store: Final = AppStore(prisma_client.db, cache=user_api_key_cache)
     definition: Final = await store.definition()
     resource_id: Final = (
         await authenticated_resource_id(store, definition.resource_type, authenticated)
@@ -45,7 +58,11 @@ async def registration_refusal(prisma_client: "PrismaClient | None", authenticat
         else None
     )
     app: Final = (
-        await store.by_resource(definition.resource_type, resource_id)
+        await store.by_resource(
+            definition.resource_type,
+            resource_id,
+            authenticated_resource_alias(definition.resource_type, resource_id, authenticated),
+        )
         if definition.resource_type is not None and resource_id is not None
         else None
     )
@@ -74,21 +91,30 @@ def gated_registrars(refusal: RegistrationRefusal) -> tuple[MemberRegistrar, Org
     return member, organization
 
 
-def unknown_customer_header(identity: CustomerRequestIdentity, hierarchy: CustomerHierarchyAuth | None) -> str | None:
+def unknown_customer_header(
+    identity: CustomerRequestIdentity,
+    hierarchy: CustomerHierarchyAuth | None,
+    *,
+    header_names: CustomerIdentityHeaderNames = DEFAULT_CUSTOMER_HEADER_NAMES,
+) -> str | None:
     """The header naming a customer the resolved hierarchy does not carry, or None when every named one is known."""
     if identity.customer_org_alias is not None and (
         hierarchy is None or hierarchy.customer_org_alias != identity.customer_org_alias
     ):
-        return CUSTOMER_ORG_ALIAS_HEADER
+        return header_names.org_alias
     if identity.customer_member_id is not None and (hierarchy is None or hierarchy.customer_member_id is None):
-        return CUSTOMER_MEMBER_ID_HEADER
+        return header_names.member_id
     return None
 
 
 async def refuse_unknown_customer(
-    identity: CustomerRequestIdentity, hierarchy: CustomerHierarchyAuth | None, refusal: RegistrationRefusal
+    identity: CustomerRequestIdentity,
+    hierarchy: CustomerHierarchyAuth | None,
+    refusal: RegistrationRefusal,
+    *,
+    header_names: CustomerIdentityHeaderNames = DEFAULT_CUSTOMER_HEADER_NAMES,
 ) -> None:
-    header: Final = unknown_customer_header(identity, hierarchy)
+    header: Final = unknown_customer_header(identity, hierarchy, header_names=header_names)
     if header is None:
         return
     reason: Final = await refusal()
@@ -103,14 +129,18 @@ async def refuse_unknown_customer(
 
 
 async def resolve_registered_customer(
-    identity: CustomerRequestIdentity, refusal: RegistrationRefusal, resolve: HierarchyResolver
+    identity: CustomerRequestIdentity,
+    refusal: RegistrationRefusal,
+    resolve: HierarchyResolver,
+    *,
+    header_names: CustomerIdentityHeaderNames = DEFAULT_CUSTOMER_HEADER_NAMES,
 ) -> CustomerHierarchyAuth | None:
     """The hierarchy ``resolve`` loads, refusing a customer this request names but may not register."""
     register_member, register_organization = gated_registrars(refusal)
     try:
         hierarchy: Final = await resolve(register_member, register_organization)
     except CustomerBudgetExceededError as error:
-        await refuse_unknown_customer(identity, error.customer_hierarchy, refusal)
+        await refuse_unknown_customer(identity, error.customer_hierarchy, refusal, header_names=header_names)
         raise
-    await refuse_unknown_customer(identity, hierarchy, refusal)
+    await refuse_unknown_customer(identity, hierarchy, refusal, header_names=header_names)
     return hierarchy

@@ -23,7 +23,7 @@ import litellm
 from litellm._logging import verbose_router_logger
 from litellm.caching.dual_cache import DualCache
 from litellm.caching.redis_cache import RedisCache
-from litellm.router import Router
+from litellm.router import Router, router_arguments
 from litellm.router_api import ChangeSet, router_init_args
 from litellm.router_core import RouterCore
 from litellm.router_strategy.budget_limiter import RouterBudgetLimiting
@@ -543,6 +543,17 @@ def test_mid_stream_fallback_continuation_accepts_a_bool_or_a_bool_string(
         _one(make_core, enable_mid_stream_fallback_continuation=given).enable_mid_stream_fallback_continuation
         is expected
     )  # pyright: ignore[reportAttributeAccessIssue]
+
+
+@pytest.mark.parametrize(
+    ("position", "name"),
+    [(57, "enable_mid_stream_fallback_continuation"), (62, "session_affinity_repin_on_failover")],
+)
+def test_a_positional_argument_binds_where_it_always_has(make_core: MakeCore, position: int, name: str) -> None:
+    defaults: Final = [parameter.default for parameter in inspect.signature(Router).parameters.values()]
+    positional: Final = [[deployment("g", "a")], *defaults[1:position], True]
+    core: Final = make_core(**router_arguments(*positional))
+    assert getattr(core, name) is True
 
 
 # --- logging level -------------------------------------------------------------------------

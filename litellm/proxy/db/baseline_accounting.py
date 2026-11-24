@@ -7,6 +7,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
 from functools import reduce
 from itertools import groupby
+from time import monotonic
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal, Protocol, cast
 
@@ -630,6 +631,7 @@ class _Scope(LiteLLMBaseModel):
 
 
 _SCOPES: Final = TypeAdapter(tuple[_Scope, ...])
+_RECOVERY_INTERVAL_SECONDS: Final = 5.0
 _CLAIM_DIRTY: Final = """
 WITH candidates AS (
     SELECT scope FROM "LiteLLM_AutoRouterBaselineComparison"
@@ -662,6 +664,12 @@ async def flush_baseline_accounting(client: PrismaClient) -> None:
     store: Final = BaselineAccountingStore.for_client(client)
     async with client.baseline_accounting_lock:
         batch: Final = tuple(client.baseline_accounting_transactions[:32])
+        now: Final = monotonic()
+        if not batch and now < client.baseline_accounting_recovery_due_at:
+            return
+        client.baseline_accounting_recovery_due_at = (  # rebind-ok: each claim delays redundant polling
+            now + _RECOVERY_INTERVAL_SECONDS
+        )
         client.baseline_accounting_transactions = client.baseline_accounting_transactions[32:]
         more_queued: Final = bool(client.baseline_accounting_transactions)
     try:
@@ -688,6 +696,8 @@ async def flush_baseline_accounting(client: PrismaClient) -> None:
 
         outcomes: Final = await asyncio.wait_for(asyncio.gather(*(project(item) for item in scopes)), timeout=5)
         if len(scopes) == 32 and "published" in outcomes:
+            async with client.baseline_accounting_lock:
+                client.baseline_accounting_recovery_due_at = 0.0  # rebind-ok: a full claim may have more work ready
             request_spend_log_flush(client)
     except Exception:  # noqa: BLE001  # durable dirty comparisons remain eligible after the retry interval
         verbose_proxy_logger.warning("Auto-router baseline projection will retry on a later spend flush")

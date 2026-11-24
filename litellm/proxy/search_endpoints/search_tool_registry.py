@@ -175,8 +175,8 @@ def _did_not_decrypt(search_tool: Mapping[str, object]) -> bool:
     )
 
 
-_DbSearchToolT: Final = TypeVar("_DbSearchToolT", bound=Mapping[str, object])
-_LoadedSearchToolT: Final = TypeVar("_LoadedSearchToolT", bound=Mapping[str, object])
+_DbSearchToolT = TypeVar("_DbSearchToolT", bound=Mapping[str, object])
+_LoadedSearchToolT = TypeVar("_LoadedSearchToolT", bound=Mapping[str, object])
 
 
 def keep_loaded_search_tools_that_do_not_decrypt(

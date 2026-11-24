@@ -225,7 +225,7 @@ def _event_types(text: str) -> tuple[str, ...]:
     return tuple(event for event, _ in sse_events(text))
 
 
-@pytest.mark.parametrize("family", ["openai", "anthropic", "agentcore"])
+@pytest.mark.parametrize("family", ["openai", "anthropic", "gemini", "agentcore"])
 def test_chat_stream_that_ends_cleanly_without_a_finish_reason_reaches_the_client_as_an_error(
     gateway: Gateway, family: Family
 ) -> None:
@@ -283,12 +283,13 @@ def test_chat_stream_from_a_mock_response_deployment_still_completes(gateway: Ga
         assert spend_row(call_id)["status"] == "success"
 
 
+@pytest.mark.parametrize("family", ["hosted_vllm", "gemini"])
 @pytest.mark.parametrize(("ending", "terminal"), [("ending-complete", True), ("ending-clean-eof", False)])
 def test_messages_over_a_chat_bridged_deployment_reports_end_turn_only_for_a_finished_stream(
-    gateway: Gateway, ending: Ending, terminal: bool
+    gateway: Gateway, family: Family, ending: Ending, terminal: bool
 ) -> None:
-    with wire_server(_upstream("hosted_vllm")) as wire, gateway.scenario() as scenario:
-        model: Final = scenario.model(model=_DEPLOYMENTS["hosted_vllm"], api_base=wire.url, api_key=_PROVIDER_KEY)
+    with wire_server(_upstream(family)) as wire, gateway.scenario() as scenario:
+        model: Final = scenario.model(model=_DEPLOYMENTS[family], api_base=wire.url, api_key=_PROVIDER_KEY)
         text, call_id = _post(
             gateway,
             "/v1/messages",
@@ -307,12 +308,13 @@ def test_messages_over_a_chat_bridged_deployment_reports_end_turn_only_for_a_fin
         assert spend_row(call_id)["status"] == ("success" if terminal else "failure")
 
 
+@pytest.mark.parametrize("family", ["anthropic", "gemini"])
 @pytest.mark.parametrize(("ending", "terminal"), [("ending-complete", True), ("ending-clean-eof", False)])
-def test_responses_over_a_chat_bridged_anthropic_deployment_completes_only_a_finished_stream(
-    gateway: Gateway, ending: Ending, terminal: bool
+def test_responses_over_a_chat_bridged_deployment_completes_only_a_finished_stream(
+    gateway: Gateway, family: Family, ending: Ending, terminal: bool
 ) -> None:
-    with wire_server(_upstream("anthropic")) as wire, gateway.scenario() as scenario:
-        model: Final = scenario.model(model=_DEPLOYMENTS["anthropic"], api_base=wire.url, api_key=_PROVIDER_KEY)
+    with wire_server(_upstream(family)) as wire, gateway.scenario() as scenario:
+        model: Final = scenario.model(model=_DEPLOYMENTS[family], api_base=wire.url, api_key=_PROVIDER_KEY)
         text, call_id = _post(gateway, "/v1/responses", {"model": model, "input": _prompt(ending)})
         types: Final = tuple(string_value(frame.get("type") or "") for frame in data_frames(text))
         assert types[:1] == ("response.created",), text
@@ -472,6 +474,17 @@ def _spend_statuses(database_url: str | None) -> Counter[tuple[str, str]]:
     return Counter((string_value(row["litellm_call_id"]), string_value(row["status"])) for row in rows)
 
 
+def _database_status_on_a_worker(gateway: Gateway) -> tuple[str, JsonValue]:
+    response: Final = gateway.request("GET", "/health/integration-database", headers={"connection": "close"})
+    body: Final = response.json()
+    return response.headers.get("x-integration-worker-pid", ""), body.get("db") if isinstance(body, dict) else None
+
+
+def _database_statuses_by_worker(gateway: Gateway) -> tuple[tuple[str, JsonValue], ...]:
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        return tuple(pool.map(lambda _: _database_status_on_a_worker(gateway), range(16)))
+
+
 def test_spend_log_outage_mid_burst_keeps_each_stream_ending_and_lands_every_row_once(
     gateway: Gateway, tmp_path: Path
 ) -> None:
@@ -512,6 +525,13 @@ def test_spend_log_outage_mid_burst_keeps_each_stream_ending_and_lands_every_row
             seconds=120,
         )
         assert landed == expected
+        eventually(
+            lambda: _database_statuses_by_worker(candidate),
+            lambda statuses: (
+                len({pid for pid, _ in statuses}) >= candidate.workers and all(db == "connected" for _, db in statuses)
+            ),
+            seconds=120,
+        )
 
 
 def _attempt(gateway: Gateway, model: str, route: Route, ending: Ending) -> tuple[bool, str] | None:

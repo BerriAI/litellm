@@ -92,9 +92,9 @@ model_list:
       vertex_project: os.environ/VERTEXAI_PROJECT
       vertex_location: global
       use_in_pass_through: true
-  - model_name: claude-sonnet-4-5-vertex
+  - model_name: claude-sonnet-4-6-vertex
     litellm_params:
-      model: vertex_ai/claude-sonnet-4-5
+      model: vertex_ai/claude-sonnet-4-6
       vertex_project: os.environ/VERTEXAI_PROJECT
       vertex_location: global
       use_in_pass_through: true

@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import AsyncIterator, Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
@@ -25,9 +25,9 @@ class BaseAnthropicMessagesConfig(ABC):
         self,
         headers: dict,
         model: str,
-        messages: list[Any],
-        optional_params: dict,
-        litellm_params: dict,
+        messages: Sequence[object],
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
     ) -> tuple[dict, str | None]:
@@ -44,9 +44,9 @@ class BaseAnthropicMessagesConfig(ABC):
 
     async def avalidate_anthropic_messages_environment(
         self,
-        headers: dict,  # mutable-ok: mirrors the sync validate_anthropic_messages_environment contract
+        headers: dict[str, object],  # mutable-ok: mirrors the sync validate_anthropic_messages_environment contract
         model: str,
-        messages: list[Any],  # mutable-ok: mirrors the sync validate_anthropic_messages_environment contract
+        messages: Sequence[object],
         optional_params: dict,  # mutable-ok: mirrors the sync validate_anthropic_messages_environment contract
         litellm_params: dict,  # mutable-ok: mirrors the sync validate_anthropic_messages_environment contract
         api_key: str | None = None,
@@ -71,8 +71,8 @@ class BaseAnthropicMessagesConfig(ABC):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         stream: bool | None = None,
     ) -> str:
         """
@@ -85,15 +85,15 @@ class BaseAnthropicMessagesConfig(ABC):
         return api_base or ""
 
     @abstractmethod
-    def get_supported_anthropic_messages_params(self, model: str) -> list:
+    def get_supported_anthropic_messages_params(self, model: str) -> list[str]:
         pass
 
     @abstractmethod
     def transform_anthropic_messages_request(
         self,
         model: str,
-        messages: list[dict],
-        anthropic_messages_optional_request_params: dict,
+        messages: list[dict[str, object]],
+        anthropic_messages_optional_request_params: dict[str, object],
         litellm_params: GenericLiteLLMParams,
         headers: dict,
     ) -> dict:
@@ -111,7 +111,7 @@ class BaseAnthropicMessagesConfig(ABC):
     def sign_request(
         self,
         headers: dict,
-        optional_params: dict,
+        optional_params: dict[str, object],
         request_data: dict,
         api_base: str,
         api_key: str | None = None,
@@ -148,6 +148,9 @@ class BaseAnthropicMessagesConfig(ABC):
     def supports_message_threads(self) -> bool:
         return False
 
+    def supports_diagnostics(self) -> bool:
+        return True
+
     def serves_api_base(self, model: str, api_base: str | None) -> bool:
         return True
 
@@ -174,9 +177,9 @@ class BaseAnthropicMessagesConfig(ABC):
         self,
         model: str,
         httpx_response: httpx.Response,
-        request_body: dict,
+        request_body: dict[str, object],
         litellm_logging_obj: LiteLLMLoggingObj,
-    ) -> AsyncIterator:
+    ) -> AsyncIterator[bytes]:
         raise NotImplementedError("Subclasses must implement this method")
 
     def get_error_class(

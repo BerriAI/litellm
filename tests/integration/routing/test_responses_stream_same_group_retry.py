@@ -14,6 +14,7 @@ from integration._support.responses_stream import (
     frame,
     healthy_stream,
     rate_limited_stream,
+    response_object,
     sse_events,
 )
 from integration._support.wire import Reply, Request, wire_server
@@ -92,7 +93,14 @@ def test_responses_stream_never_restarts_after_non_lifecycle_output(
             chunks=(
                 frame(created("resp_first")),
                 frame(output_event),
-                frame(error_event(azure_rate_limit())),
+                frame(
+                    {
+                        "type": "response.in_progress",
+                        "sequence_number": 2,
+                        "response": response_object("resp_first", "in_progress"),
+                    }
+                ),
+                frame({**error_event(azure_rate_limit()), "sequence_number": 3}),
             ),
         )
     )
@@ -118,6 +126,9 @@ def test_responses_stream_never_restarts_after_non_lifecycle_output(
         assert received[0].method == "POST" and received[0].target.startswith(AZURE_TARGET), received
         assert sum(name == "response.created" for name, _ in events) == 1, response.text
         assert output_event["type"] in [name for name, _ in events], response.text
-        assert [name for name, _ in events] == ["response.created", output_event["type"], "response.failed"], (
-            response.text
-        )
+        assert [name for name, _ in events] == [
+            "response.created",
+            output_event["type"],
+            "response.in_progress",
+            "response.failed",
+        ], response.text

@@ -22,7 +22,8 @@ from litellm.proxy.auth.auth_checks import (
     can_caller_call_search_tool,
     check_unregistered_search_fallback,
 )
-from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache, object_permission_cache_key
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+from litellm.redis.stores.auth_cache import AuthObject
 
 _DENY_ON: Final = {"search_tool_deny_by_default": True}
 _KEY: Final = ProxyErrorTypes.key_search_tool_access_denied
@@ -100,8 +101,10 @@ def cache(monkeypatch: pytest.MonkeyPatch) -> UserApiKeyCache:
 
 
 def _cache_user(cache: UserApiKeyCache, user_tools: list[str] | None) -> None:
-    cache.set_cache(key="user-1", value=LiteLLM_UserTable(user_id="user-1", object_permission_id="op-user"))
-    cache.set_cache(key=object_permission_cache_key("op-user"), value=_grant(user_tools, "op-user"))
+    cache.set_cache(
+        key=AuthObject.user("user-1"), value=LiteLLM_UserTable(user_id="user-1", object_permission_id="op-user")
+    )
+    cache.set_cache(key=AuthObject.object_permission("op-user"), value=_grant(user_tools, "op-user"))
 
 
 async def _denied_by(
@@ -240,7 +243,7 @@ async def test_search_tool_deny_by_default_reads_the_user_grant_on_every_call(ca
     caller: Final = _caller(virtual_key=False)
     _cache_user(cache, ["search-a"])
     assert await _denied_by(_DENY_ON, caller) is None
-    cache.set_cache(key=object_permission_cache_key("op-user"), value=_grant([], "op-user"))
+    cache.set_cache(key=AuthObject.object_permission("op-user"), value=_grant([], "op-user"))
     assert await _denied_by(_DENY_ON, caller) == _USER
 
 

@@ -21,7 +21,6 @@ litellm/proxy/guardrails/usage_endpoints.py guardrails_usage_detail prisma guard
 litellm/proxy/guardrails/usage_endpoints.py guardrails_usage_detail prisma guardrail_id.in `metric_ids` 2
 litellm/proxy/guardrails/usage_endpoints.py guardrails_usage_logs prisma request_id.in `request_ids` 0
 litellm/proxy/list_api/list_framework.py _render raw-sql {field}.IN `IN ({placeholders})` 0
-litellm/proxy/management_endpoints/access_group_endpoints.py _require_teams_exist prisma team_id.in `team_ids` 0
 litellm/proxy/management_endpoints/access_group_endpoints.py _teams_touching prisma team_id.in `stored_team_ids` 0
 litellm/proxy/management_endpoints/auto_router_endpoints.py _with_target_labels prisma team_id.in `list(team_ids)` 0
 litellm/proxy/management_endpoints/auto_router_endpoints.py _with_target_labels prisma token.in `list(tokens)` 0

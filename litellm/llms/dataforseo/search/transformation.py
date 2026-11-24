@@ -4,7 +4,7 @@ Calls DataForSEO SERP API to search the web.
 DataForSEO API Reference: https://docs.dataforseo.com/v3/serp/google/organic/live/advanced/?bash
 """
 
-from collections.abc import Iterable, Mapping, Sized
+from collections.abc import Iterable, Mapping, Sequence, Sized
 from typing import Final, Literal, Protocol, runtime_checkable
 
 import httpx
@@ -64,10 +64,10 @@ class DataForSEOSearchConfig(BaseSearchConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-        **kwargs,
+        **kwargs: object,
     ) -> dict:
         """
         Validate DataForSEO environment and set up authentication.
@@ -116,9 +116,9 @@ class DataForSEOSearchConfig(BaseSearchConfig):
     def get_complete_url(
         self,
         api_base: str | None,
-        optional_params: dict,
-        data: dict | list[dict] | None = None,
-        **kwargs,
+        optional_params: Mapping[str, object],
+        data: Mapping[str, object] | Sequence[Mapping[str, object]] | None = None,
+        **kwargs: object,
     ) -> str:
         """
         Get complete URL for DataForSEO SERP API endpoint.
@@ -132,8 +132,8 @@ class DataForSEOSearchConfig(BaseSearchConfig):
         query: str | list[str],
         optional_params: dict,
         api_key: str | None = None,
-        **kwargs,
-    ) -> dict | list[dict]:
+        **kwargs: object,
+    ) -> list[dict[str, object]]:
         """
         Transform Search request to DataForSEO SERP API format.
 
@@ -194,7 +194,7 @@ class DataForSEOSearchConfig(BaseSearchConfig):
         self,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
-        **kwargs,
+        **kwargs: object,
     ) -> SearchResponse:
         """
         Transform DataForSEO SERP API response to LiteLLM unified SearchResponse format.
@@ -215,7 +215,7 @@ class DataForSEOSearchConfig(BaseSearchConfig):
         response_json: Final = _DECODED_JSON.validate_python(raw_response.json())
 
         # Transform results to SearchResult objects
-        results: Final = []
+        results: Final[list[SearchResult]] = []
 
         # DataForSEO wraps results in tasks array
         if json_contains(response_json, "tasks") and _json_len(_subscript(response_json, "tasks")) > 0:

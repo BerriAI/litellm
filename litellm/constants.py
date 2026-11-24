@@ -5,6 +5,8 @@ from enum import Enum
 from types import MappingProxyType
 from typing import Final, Literal
 
+from typing_extensions import Never
+
 from litellm.litellm_core_utils.env_utils import (
     get_env_float,
     get_env_float_in_range,
@@ -25,6 +27,8 @@ MICROSOFT_365_COPILOT_DEFAULT_TOKEN_EXCHANGE_SCOPE: Final = "https://graph.micro
 RESPONSE_CACHE_EXCLUDED_PROVIDERS: Final = frozenset({"microsoft_365_copilot", "databricks_agent"})
 CLAUDE_CODE_PICKER_PATTERN: Final = re.compile(r"claude|anthropic", re.IGNORECASE)
 GATEWAY_CLIENT_HEADER: Final = "x-gateway-client"
+CONTROL_PLANE_FLEET_RECONCILE_SECONDS: Final = 5
+CONTROL_PLANE_FLEET_CONCURRENCY: Final = 4
 CLAUDE_CODE_CLIENT: Final = "claude-code"
 MICROSOFT_365_COPILOT_DEFAULT_TIME_ZONE: Final = "UTC"
 GITHUB_COPILOT_PER_USER_AUTH_TYPE: Final = "per_user_oauth"
@@ -37,6 +41,7 @@ GITHUB_COPILOT_DEVICE_FLOW_CACHE_PREFIX: Final = "github_copilot_device_flow"
 USER_PROVIDER_CREDENTIAL_CACHE_PREFIX: Final = "user_provider_credential"
 USER_PROVIDER_CREDENTIAL_NOT_CONNECTED: Final = "__not_connected__"
 SERVER_STREAMING_CLASSIFICATION_KEY: Final = "litellm_server_streaming_classification"
+USAGE_ONLY_SETTLEMENT_KEY: Final = "litellm_usage_only_settlement"
 
 
 class ServerStreamingClassification(str, Enum):
@@ -140,6 +145,7 @@ DEFAULT_SQS_FLUSH_INTERVAL_SECONDS: Final = get_env_int("DEFAULT_SQS_FLUSH_INTER
 DEFAULT_NUM_WORKERS_LITELLM_PROXY: Final = get_env_int("DEFAULT_NUM_WORKERS_LITELLM_PROXY", 1)
 GRACEFUL_SHUTDOWN_TEARDOWN_HEADROOM_SECONDS: Final = 10
 DEFAULT_MAX_REQUEST_HEADER_SIZE: Final = 16 * 1024
+DEFAULT_UVICORN_KEEPALIVE_TIMEOUT_SECONDS: Final = 95
 budget_reservation_disabled_info_emitted = False
 DYNAMIC_RATE_LIMIT_ERROR_THRESHOLD_PER_MINUTE = get_env_int("DYNAMIC_RATE_LIMIT_ERROR_THRESHOLD_PER_MINUTE", 1)
 DEFAULT_SQS_BATCH_SIZE: Final = get_env_int("DEFAULT_SQS_BATCH_SIZE", 512)
@@ -181,7 +187,6 @@ LITELLM_MAX_STREAMING_DURATION_SECONDS: Final = get_env_float_or_none("LITELLM_M
 MID_STREAM_FAILURE_LOG_WAIT_SECONDS: Final = 1.0
 
 # Maximum number of base64 characters to keep in logging payloads.
-# Data URIs exceeding this are replaced with a size placeholder.
 # Set to 0 to disable truncation.
 MAX_BASE64_LENGTH_FOR_LOGGING: Final = get_env_int("MAX_BASE64_LENGTH_FOR_LOGGING", 64)
 BASE64_TRUNCATION_OFFLOAD_THRESHOLD_CHARS: Final = 256 * 1024
@@ -311,6 +316,7 @@ MCP_STDIO_ALLOWED_COMMANDS: Final[frozenset] = frozenset(
 # MCP OAuth2 Token Exchange (OBO) Defaults
 MCP_TOKEN_EXCHANGE_CACHE_MAX_SIZE: Final = get_env_int("MCP_TOKEN_EXCHANGE_CACHE_MAX_SIZE", 500)
 
+SEMANTIC_CACHE_SCOPE_HEADER: Final = "x-litellm-cache-scope"
 LITELLM_UI_ALLOW_HEADERS: Final = [
     "x-litellm-semantic-filter",
     "x-litellm-semantic-filter-tools",
@@ -319,6 +325,7 @@ LITELLM_UI_ALLOW_HEADERS: Final = [
     "x-litellm-guardrail-scan-id",
     "x-litellm-guardrail-scan-metadata",
     "x-litellm-cache-key",
+    SEMANTIC_CACHE_SCOPE_HEADER,
 ]
 
 # Gemini model-specific minimal thinking budget constants
@@ -358,6 +365,7 @@ DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET: Final = get_env_int(
 # Provider-specific API base URLs
 XAI_API_BASE: Final = "https://api.x.ai/v1"
 PLACEHOLDER_API_KEY: Final = "fake-api-key"
+PLACEHOLDER_API_KEYS: Final = frozenset({PLACEHOLDER_API_KEY, "dummy-key"})
 OPEN_SANDBOX_API_BASE_ENV_VAR: Final = "OPEN_SANDBOX_API_BASE"
 OPEN_SANDBOX_API_KEY_ENV_VAR: Final = "OPEN_SANDBOX_API_KEY"
 OPEN_SANDBOX_DEFAULT_TEMPLATE: Final = "opensandbox/code-interpreter:v1.1.0"
@@ -433,6 +441,8 @@ REALTIME_CREDENTIAL_RESOLUTION_TIMEOUT_SECONDS: Final = get_env_float(
 BEDROCK_REALTIME_CLOSE_TIMEOUT_SECONDS: Final = get_env_float("BEDROCK_REALTIME_CLOSE_TIMEOUT_SECONDS", 5.0)
 REALTIME_LAZY_SETUP_DEADLINE_SECONDS: Final = 240.0
 REALTIME_LAZY_SETUP_CONTENT_GRACE_SECONDS: Final = 1.0
+REALTIME_OVER_LIMIT_USAGE_WAIT_SECONDS: Final = get_env_float("REALTIME_OVER_LIMIT_USAGE_WAIT_SECONDS", 30.0)
+REALTIME_OVER_TOKEN_LIMIT_CLOSE_CODE: Final = 1013
 
 # RFC 6455 caps the close frame payload at 125 bytes, 2 of which carry the status code
 WEBSOCKET_CLOSE_REASON_MAX_BYTES: Final = 123
@@ -493,6 +503,8 @@ REDIS_GATEWAY_REQUESTS_BUFFER_KEY_V2: Final = "litellm_gateway_requests_buffer_v
 REDIS_REQUEST_ERRORS_BUFFER_KEY: Final = "litellm_request_errors_buffer"
 REQUEST_ERRORS_UNKNOWN_STATUS_CODE: Final = 0
 REQUEST_ERRORS_MAX_ROWS_PER_UPSERT: Final = 1000
+TOOL_NAME_MAX_UTF8_BYTES: Final = 512
+POSTGRES_MAX_BIND_PARAMETERS: Final = 32_767
 GATEWAY_REQUESTS_MAX_ROWS_PER_UPSERT: Final = 1000
 REDIS_DAILY_SPEND_UPDATE_BUFFER_KEY: Final = "litellm_daily_spend_update_buffer"
 REDIS_DAILY_TEAM_SPEND_UPDATE_BUFFER_KEY: Final = "litellm_daily_team_spend_update_buffer"
@@ -688,6 +700,8 @@ DEFAULT_REQUEST_TIMEOUT_SECONDS: Final[float] = 6000.0
 COMPLETION_HTTP_FALLBACK_SECONDS: Final[float] = 600.0
 HTTP_HANDLER_CONNECT_TIMEOUT_SECONDS: Final[float] = 5.0
 SEMANTIC_CACHE_EMBEDDING_TIMEOUT_SECONDS: Final[float] = get_env_float("SEMANTIC_CACHE_EMBEDDING_TIMEOUT_SECONDS", 5.0)
+SEMANTIC_CACHE_PARAMS_KEY: Final = "cache_params"
+SEMANTIC_CACHE_POLICY_KEY: Final = "_semantic_cache_policy"
 _request_timeout_from_env: Final = get_env_float_or_none("REQUEST_TIMEOUT")
 request_timeout: float = (
     DEFAULT_REQUEST_TIMEOUT_SECONDS if _request_timeout_from_env is None else _request_timeout_from_env
@@ -730,9 +744,6 @@ FIREWORKS_AI_176_B_MOE: Final = get_env_int("FIREWORKS_AI_176_B_MOE", 176)
 FIREWORKS_AI_4_B: Final = get_env_int("FIREWORKS_AI_4_B", 4)
 FIREWORKS_AI_16_B: Final = get_env_int("FIREWORKS_AI_16_B", 16)
 FIREWORKS_AI_80_B: Final = get_env_int("FIREWORKS_AI_80_B", 80)
-# https://docs.fireworks.ai/guides/prompt-caching (accessed 2026-09-19): serverless cached prompt tokens
-# default to a 50% discount off the input rate
-FIREWORKS_AI_DEFAULT_CACHE_READ_RATE_RATIO: Final = 0.5
 #### Logging callback constants ####
 REDACTED_BY_LITELM_STRING: Final = "REDACTED_BY_LITELM"
 MAX_LANGFUSE_INITIALIZED_CLIENTS: Final = get_env_int("MAX_LANGFUSE_INITIALIZED_CLIENTS", 50)
@@ -761,6 +772,7 @@ LOGGING_WORKER_CONCURRENCY: Final = get_env_int("LOGGING_WORKER_CONCURRENCY", 10
 LOGGING_WORKER_MAX_QUEUE_SIZE: Final = get_env_int("LOGGING_WORKER_MAX_QUEUE_SIZE", 50_000)
 LOGGING_WORKER_MAX_TIME_PER_COROUTINE: Final = get_env_float("LOGGING_WORKER_MAX_TIME_PER_COROUTINE", 20.0)
 LOGGING_WORKER_TIMEOUT_SUMMARY_WINDOW_SECONDS: Final = 5.0
+WEBSOCKET_TURN_LOGGING_WAIT_SECONDS: Final = 5.0
 LOGGING_WORKER_CLEAR_PERCENTAGE: Final = get_env_int(
     "LOGGING_WORKER_CLEAR_PERCENTAGE", 50
 )  # Percentage of queue to clear (default: 50%)
@@ -796,6 +808,7 @@ ANTHROPIC_IMAGE_PIXELS_PER_TOKEN: Final = 750
 OPENAI_PDF_TEXT_PAGE_FRAMING_TOKENS: Final = 13
 OPENAI_CHAT_PDF_FILE_TOKENS: Final = 192
 PDF_DATA_URL_PREFIX: Final = "data:application/pdf;base64,"
+TRUNCATED_BASE64_MARKER: Final = "[base64_data truncated: "
 PDF_MAX_FORM_XOBJECT_DEPTH: Final = 32
 PDF_MAX_XOBJECT_DRAWS_PER_PAGE: Final = 10_000
 OPENAI_MODEL_NAME_MAX_DASHES: Final = 16
@@ -933,6 +946,9 @@ PROVIDERS_THAT_AUTHENTICATE_ON_PROVIDER_INFO: Final = frozenset(
     }
 )
 
+PROVIDERS_WITH_RUNTIME_MODEL_INFO_LOOKUPS: Final = frozenset({"ollama", "ollama_chat", "lemonade"})
+FAILED_MODEL_INFO_LOOKUP_RETRY_SECONDS: Final = 60
+
 SUBSCRIPTION_BACKED_PROVIDERS: Final = frozenset({"chatgpt"})
 A2A_CHAT_COMPLETION_BRIDGE_PROVIDERS: Final = frozenset({"databricks_agent"})
 A2A_COMPLETION_BRIDGE_WORKING_MESSAGE: Final = "Processing request..."
@@ -1018,6 +1034,13 @@ OPENAI_TRANSCRIPTION_PARAMS: Final = [
     "stream",
     "timestamp_granularities",
 ]
+
+GNANI_REJECTED_OPENAI_TRANSCRIPTION_PARAMS: Final = (
+    "chunking_strategy",
+    "include",
+    "known_speaker_names",
+    "known_speaker_references",
+)
 
 OPENAI_EMBEDDING_PARAMS: Final = ["dimensions", "encoding_format", "user"]
 
@@ -1123,6 +1146,7 @@ openai_compatible_endpoints: Final[list[str]] = [
     "https://api.inference.wandb.ai/v1",
     "https://api.clarifai.com/v2/ext/openai/v1",
     "https://api.libertai.io/v1",
+    "https://api.resetdata.ai/api/v1",
     "https://pinstripes.io/v1",
     "https://api.meta.ai/v1",
     "https://api.sailresearch.com/v1",
@@ -1185,6 +1209,7 @@ openai_compatible_providers: Final[list[str]] = [
     "chutes",  # Chutes - JSON-configured provider
     "parasail",  # Parasail - JSON-configured provider
     "libertai",  # LibertAI - JSON-configured provider
+    "resetdata",
     "featherless_ai",
     "nscale",
     "nebius",
@@ -1215,6 +1240,7 @@ openai_compatible_providers: Final[list[str]] = [
     "meta",  # Meta Model API (Muse Spark) - JSON-configured provider
     "cognition",
     "coralbricks",
+    "perplexity_orchestrator",
     "cortecs",
     "scx-ai",
     "prism",
@@ -1227,7 +1253,7 @@ openai_compatible_providers: Final[list[str]] = [
 
 OPENAI_AUDIO_TRANSCRIPTION_PROVIDERS: Final = frozenset({"openai"} | frozenset(openai_compatible_providers))
 
-openai_text_completion_compatible_providers: Final[list] = [  # providers that support `/v1/completions`
+openai_text_completion_compatible_providers: Final[list[str]] = [  # providers that support `/v1/completions`
     "together_ai",
     "fireworks_ai",
     "hosted_vllm",
@@ -1414,7 +1440,7 @@ nebius_models: Final[set] = set(
     ]
 )
 
-dashscope_models: Final[frozenset] = frozenset(
+dashscope_models: Final[frozenset[str]] = frozenset(
     [
         "qwen-turbo",
         "qwen-plus",
@@ -1429,9 +1455,9 @@ dashscope_models: Final[frozenset] = frozenset(
     ]
 )
 
-qwencloud_models: Final[frozenset] = frozenset(dashscope_models)
+qwencloud_models: Final[frozenset[str]] = frozenset(dashscope_models)
 
-qwen_ai_platform_models: Final[frozenset] = frozenset(dashscope_models)
+qwen_ai_platform_models: Final[frozenset[str]] = frozenset(dashscope_models)
 
 nebius_embedding_models: Final[set] = set(
     [
@@ -1726,6 +1752,7 @@ VECTOR_STORE_CALLER_METADATA_KWARG: Final = "litellm_vector_store_caller_metadat
 ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY: Final = "_litellm_router_usage_counted_tokens"
 USAGE_BASED_ROUTING_COUNTED_TOKENS_METADATA_KEY: Final = "_litellm_usage_based_routing_counted_tokens"
 INTERNAL_CALL_ORIGIN_METADATA_KEY: Final = "internal_call_origin"
+ROUTE_CALL_TYPE_METADATA_KEY: Final = "route_call_type"
 RESPONSES_WEBSOCKET_CALL_ID_METADATA_KEY: Final = "responses_websocket_call_id"
 BILLED_RETRY_ATTEMPT_METADATA_KEY: Final = "billed_retry_attempt"
 MANAGED_BACKGROUND_RESPONSE_METADATA_KEY: Final = "_managed_background_response"
@@ -1733,6 +1760,8 @@ SESSION_ID_GENERATED_METADATA_KEY: Final = "litellm_session_id_generated"
 SESSION_SPEND_TOTAL_TTL_SECONDS: Final = 3600
 SESSION_ID_OMITTED_METADATA_KEY: Final = "litellm_session_id_omitted"
 CALLER_SESSION_ID_METADATA_KEY: Final = "litellm_caller_session_id"
+SESSION_ID_INHERITED_METADATA_KEY: Final = "litellm_session_id_inherited"
+PREVIOUS_RESPONSE_IDS_METADATA_KEY: Final = "litellm_previous_response_ids"
 COMPLEXITY_ROUTER_CHILD_SESSION_ID_METADATA_KEY: Final = "_complexity_router_child_session_id"
 LITELLM_TRUNCATED_PAYLOAD_FIELD: Final = "litellm_truncated"
 LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE: Final = (
@@ -1831,6 +1860,15 @@ TRANSCRIBE_MEDIA_DOWNLOAD_CONCURRENCY: Final = 1
 TRANSCRIBE_MEDIA_FETCH_ATTEMPTS: Final = 3
 TRANSCRIBE_MEDIA_LAST_MODIFIED_TOLERANCE_SECONDS: Final = 1.0  # S3 Last-Modified carries whole seconds only
 TRANSCRIBE_MEASURABLE_MEDIA_FORMATS: Final = frozenset({"flac", "mp3", "ogg", "wav"})  # what libsndfile can read
+OPENAI_AGENTS_TURN_POLL_INITIAL_DELAY_SECONDS: Final = 5.0
+OPENAI_AGENTS_TURN_POLL_MAX_DELAY_SECONDS: Final = 60.0
+OPENAI_AGENTS_TURN_POLL_TIMEOUT_SECONDS: Final = 3600.0
+OPENAI_AGENTS_TURN_CLAIM_WINDOW_SECONDS: Final = 300.0
+OPENAI_AGENTS_TURN_CLOCK_SKEW_SECONDS: Final = 60
+OPENAI_AGENTS_TURN_CLAIMS_MAX_SIZE: Final = 10_000
+OPENAI_AGENTS_LIST_PAGE_LIMIT: Final = 100
+OPENAI_AGENTS_TURN_DRAIN_POLL_SHARE: Final = 0.75
+OPENAI_AGENTS_SETTLED_FETCH_ATTEMPTS: Final = 4
 
 BATCH_STATUS_POLL_INTERVAL_SECONDS: Final = get_env_int("BATCH_STATUS_POLL_INTERVAL_SECONDS", 3600)  # 1 hour
 BATCH_STATUS_POLL_MAX_ATTEMPTS: Final = get_env_int("BATCH_STATUS_POLL_MAX_ATTEMPTS", 24)  # for 24 hours
@@ -2169,6 +2207,7 @@ SENTRY_DENYLIST: Final = [
     "authorization",
     "api-key",
     "x-api-key",
+    "x-api-key-id",
     "x-goog-api-key",
     "ocp-apim-subscription-key",
     "x-litellm-api-key",
@@ -2267,6 +2306,62 @@ HTTP_FRAMING_HEADERS: Final[frozenset[str]] = frozenset(
     }
 )
 
+CREDENTIAL_HEADER_NAMES: Final[frozenset[str]] = frozenset(
+    {
+        "api-key",
+        "authorization",
+        "cookie",
+        "ocp-apim-subscription-key",
+        "proxy-authorization",
+        "set-cookie",
+        "x-amz-security-token",
+        "x-api-key",
+        "x-goog-api-key",
+        "x-litellm-api-key",
+        "x-mcp-auth",
+    }
+)
+
+PROVIDER_ERROR_BODY_ATTRIBUTE: Final = "provider_error_body"
+CREDENTIAL_FIELD_NAME_FRAGMENTS: Final[tuple[str, ...]] = (
+    "accesskey",
+    "accesstoken",
+    "apikey",
+    "authtoken",
+    "bearer",
+    "clientsecret",
+    "credential",
+    "idtoken",
+    "passphrase",
+    "passwd",
+    "password",
+    "privatekey",
+    "refreshtoken",
+    "secret",
+    "sessiontoken",
+    "signingkey",
+)
+CREDENTIAL_FIELD_NAME_WORDS: Final[frozenset[str]] = frozenset(
+    {"auth", "authorization", "cookie", "pass", "pwd", "session", "sig", "signature", "token"}
+)
+QUANTITY_FIELD_NAME_WORDS: Final[frozenset[str]] = frozenset(
+    {
+        "count",
+        "expires",
+        "expiry",
+        "length",
+        "limit",
+        "max",
+        "min",
+        "remaining",
+        "total",
+        "ttl",
+        "type",
+        "usage",
+        "used",
+    }
+)
+
 PROVIDER_REQUEST_ID_HEADERS: Final[tuple[str, ...]] = (
     "x-amzn-requestid",
     "x-request-id",
@@ -2361,6 +2456,9 @@ USAGE_MODEL_TOP_KEYS_MAX: Final[int] = 100
 USAGE_CACHE_LEAKAGE_KEYS_DEFAULT: Final[int] = 20
 USAGE_CACHE_LEAKAGE_KEYS_MAX: Final[int] = 100
 USAGE_EXPORT_BATCH_SIZE: Final[int] = 1000
+CALLBACK_CONFIG_METADATA_SLOTS: Final[frozenset[str]] = frozenset(
+    {"logging", "callback_settings", "secret_manager_settings"}
+)
 # Furthest back the catch-up pass looks for unpriced PTU days when a deployment
 # declares no ptu_effective_from, bounding the scan for an open-ended window.
 PTU_ROLLUP_MAX_BACKFILL_DAYS: Final[int] = 90
@@ -2408,7 +2506,7 @@ MESSAGE_THREAD_MAX_TRACKED_OWNERS: Final = 20_000
 
 # Shared read-only empty mapping, for defaulting optional Mapping parameters without
 # constructing a fresh mutable dict at each call site.
-EMPTY_MAPPING: Final = MappingProxyType({})
+EMPTY_MAPPING: Final[MappingProxyType[str, Never]] = MappingProxyType({})
 
 # API endpoint for breached password k-anonymity search
 HIBP_RANGE_API_BASE: Final = "https://api.pwnedpasswords.com/range"

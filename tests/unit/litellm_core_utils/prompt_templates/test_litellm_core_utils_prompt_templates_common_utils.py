@@ -2,8 +2,9 @@ import contextlib
 import copy
 import importlib
 import json
+import tracemalloc
 import warnings
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import Final, cast
 from unittest import mock
 
@@ -16,6 +17,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     TOOL_RESULT_MEDIA_BOUNDARY,
     TOOL_RESULT_MEDIA_PLACEHOLDER,
     add_system_prompt_to_messages,
+    defs_unpacked,
     get_content_from_model_response,
     get_semantic_cache_prompt_from_messages,
     get_str_from_messages,
@@ -23,6 +25,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     handle_messages_with_content_list_to_str_conversion,
     hoist_images_from_tool_messages,
     merge_consecutive_system_messages,
+    strip_litellm_internal_message_fields,
     strip_litellm_response_only_fields,
     system_messages_first,
 )
@@ -30,7 +33,12 @@ from litellm.litellm_core_utils.prompt_templates.json_schema_utils import (
     flatten_combinators_and_drop_non_python_regex_patterns,
 )
 from litellm.litellm_core_utils.prompt_templates.tool_call_json_repair import parse_tool_call_arguments
-from litellm.types.llms.openai import ChatCompletionAudioObject, ChatCompletionFileObject, ChatCompletionImageObject
+from litellm.types.llms.openai import (
+    AllMessageValues,
+    ChatCompletionAudioObject,
+    ChatCompletionFileObject,
+    ChatCompletionImageObject,
+)
 from litellm.types.utils import ChatCompletionMessageToolCall, Choices, Function, Message, ModelResponse
 
 _ARTIFACT_FIELD_PATTERN: Final = r'^(?!__.*__$)[^\p{Cc}\p{Cf}\p{Zl}\p{Zp}"\\./[\]]{1,200}$'
@@ -324,6 +332,140 @@ class TestUnpackLegacyDefs:
         out = unpack_legacy_defs(schema)
         assert "components" not in out
         assert out["properties"]["r0"]["properties"]["p0"] == {"type": "string"}
+
+    def test_a_defs_ref_is_inlined_from_the_legacy_block_beside_it(self):
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            unpack_legacy_defs,
+        )
+
+        address: Final = {"type": "object", "properties": {"city": {"type": "string"}}}
+        schema: Final = {
+            "type": "object",
+            "properties": {"home": {"$ref": "#/$defs/Address"}},
+            "definitions": {"Address": address},
+        }
+
+        out: Final = unpack_legacy_defs(schema)
+
+        assert out["properties"]["home"] == address
+
+    def test_a_boolean_definition_is_inlined_as_the_schema_it_means(self):
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            unpack_legacy_defs,
+        )
+
+        schema: Final = {
+            "type": "object",
+            "properties": {"anything": {"$ref": "#/definitions/Anything"}, "nothing": {"$ref": "#/definitions/Nothing"}},
+            "definitions": {"Anything": True, "Nothing": False},
+        }
+
+        out: Final = unpack_legacy_defs(schema)
+
+        assert out == {"type": "object", "properties": {"anything": {}, "nothing": {"not": {}}}}
+
+    @pytest.mark.parametrize(
+        "legacy_blocks",
+        [
+            {"definitions": 5},
+            {"definitions": {"A": {"type": "string"}}, "components": {"schemas": ["not", "a", "map"]}},
+            {"definitions": {"A": {"type": "string"}}, "components": 5},
+        ],
+        ids=["definitions_is_a_number", "components_schemas_is_a_list", "components_is_a_number"],
+    )
+    def test_a_malformed_legacy_block_is_left_for_the_provider_to_judge(self, legacy_blocks):
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            unpack_legacy_defs,
+        )
+
+        schema: Final = {"type": "object", "properties": {"a": {"$ref": "#/definitions/A"}}, **legacy_blocks}
+
+        out: Final = unpack_legacy_defs(copy.deepcopy(schema))
+
+        assert out == schema
+
+    def test_memory_stays_linear_in_schema_size_with_many_definitions(self):
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            unpack_legacy_defs,
+        )
+
+        n: Final = 2_000
+        schema: Final = {
+            "type": "object",
+            "properties": {f"f{i}": {"$ref": f"#/definitions/T{i}"} for i in range(n)},
+            "definitions": {f"T{i}": {"type": "string"} for i in range(n)},
+        }
+        schema_bytes: Final = len(json.dumps(schema))
+
+        tracemalloc.start()
+        try:
+            out: Final = unpack_legacy_defs(schema)
+            peak_bytes: Final = tracemalloc.get_traced_memory()[1]
+        finally:
+            tracemalloc.stop()
+
+        assert all(out["properties"][f"f{i}"] == {"type": "string"} for i in range(n))
+        assert peak_bytes < 50 * schema_bytes
+
+    def test_nested_definitions_shadow_outer_ones_of_the_same_name(self):
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            unpack_legacy_defs,
+        )
+
+        schema: Final = {
+            "type": "object",
+            "properties": {
+                "outer": {"$ref": "#/definitions/T"},
+                "inner": {
+                    "type": "object",
+                    "properties": {"value": {"$ref": "#/definitions/T"}},
+                    "definitions": {"T": {"type": "integer"}},
+                },
+            },
+            "definitions": {"T": {"type": "string"}},
+        }
+
+        out: Final = unpack_legacy_defs(schema)
+
+        assert out["properties"]["outer"] == {"type": "string"}
+        assert out["properties"]["inner"]["properties"]["value"] == {"type": "integer"}
+
+    def test_a_defs_block_that_is_not_a_map_is_ignored(self):
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            unpack_defs,
+        )
+
+        schema: Final = {
+            "type": "object",
+            "properties": {
+                "item": {
+                    "type": "object",
+                    "properties": {"value": {"$ref": "#/definitions/T"}},
+                    "$defs": ["not", "a", "map"],
+                }
+            },
+        }
+
+        unpack_defs(schema, {"T": {"type": "string"}})
+
+        assert schema["properties"]["item"]["properties"]["value"] == {"type": "string"}
+
+    def test_a_ref_that_is_not_a_string_is_left_as_is(self):
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            unpack_defs,
+        )
+
+        schema: Final = {
+            "type": "object",
+            "properties": {
+                "odd": {"$ref": 5},
+                "value": {"$ref": "#/definitions/T"},
+            },
+        }
+
+        unpack_defs(schema, {"T": {"type": "string"}})
+
+        assert schema["properties"] == {"odd": {"$ref": 5}, "value": {"type": "string"}}
 
 
 class TestTextCompletionPromptToMessages:
@@ -933,6 +1075,15 @@ def test_get_semantic_cache_prompt_from_messages_matches_get_str_from_messages_w
     assert get_semantic_cache_prompt_from_messages(messages) == get_str_from_messages(messages)
 
 
+def test_get_str_from_messages_keeps_the_text_a_fallback_block_carries_like_a_text_block() -> None:
+    user_turn: Final = {"role": "user", "content": "Hi"}
+    reply: Final = {"type": "text", "text": "Hello"}
+    with_fallback: Final = [user_turn, {"role": "assistant", "content": [{"type": "fallback", "text": "carried"}, reply]}]
+    with_text: Final = [user_turn, {"role": "assistant", "content": [{"type": "text", "text": "carried"}, reply]}]
+
+    assert get_str_from_messages(with_fallback) == get_str_from_messages(with_text)
+
+
 def test_strip_litellm_response_only_fields_drops_nested_tool_call_provider_fields() -> None:
     message: Final = {
         "role": "assistant",
@@ -958,6 +1109,25 @@ def test_strip_litellm_response_only_fields_drops_nested_tool_call_provider_fiel
     assert "provider_specific_fields" not in function
     assert function["name"] == "get_weather"
     assert function["arguments"] == '{"city": "Paris"}'
+
+
+@pytest.mark.parametrize("strip", [strip_litellm_response_only_fields, strip_litellm_internal_message_fields])
+def test_strip_litellm_fields_drops_generated_image_provider_fields(
+    strip: Callable[[AllMessageValues], AllMessageValues],
+) -> None:
+    image: Final = {"image_url": {"url": "data:image/png;base64,Y2F0"}, "index": 0, "type": "image_url"}
+    unsigned_image: Final = {"image_url": {"url": "data:image/png;base64,ZG9n"}, "index": 1, "type": "image_url"}
+    message: Final = cast(
+        AllMessageValues,
+        {
+            "role": "assistant",
+            "content": "Here is your cat.",
+            "images": [{**image, "provider_specific_fields": {"thought_signature": "sig-cat"}}, unsigned_image],
+            "provider_specific_fields": {"thought_signatures": ["sig-cat"]},
+        },
+    )
+
+    assert strip(message) == {"role": "assistant", "content": "Here is your cat.", "images": [image, unsigned_image]}
 
 
 @pytest.mark.parametrize("part_type", ["image_url", "input_image"])
@@ -1195,3 +1365,212 @@ def test_get_content_from_model_response_includes_server_tool_calls_before_clien
     assert get_content_from_model_response(response) == (
         "Looking it up." + server_call.model_dump_json() + client_call.model_dump_json()
     )
+
+
+def test_defs_unpacked_keeps_memory_flat_for_a_schema_with_many_unused_defs() -> None:
+    schema: Final = {
+        "type": "object",
+        "properties": {f"p{i}": {"type": "string"} for i in range(2000)},
+        "$defs": {f"D{i}": {"type": "string"} for i in range(2000)},
+    }
+    tracemalloc.start()
+    try:
+        defs_unpacked(schema)
+        peak_bytes: Final = tracemalloc.get_traced_memory()[1]
+    finally:
+        tracemalloc.stop()
+    assert peak_bytes < 10_000_000
+
+
+def test_defs_unpacked_keeps_memory_flat_when_every_property_adds_its_own_defs() -> None:
+    schema: Final = {
+        "type": "object",
+        "properties": {
+            f"p{i}": {"type": "array", "items": {"$ref": f"#/$defs/D{i}"}, "$defs": {"Local": {}}} for i in range(2000)
+        },
+        "$defs": {f"D{i}": {"type": "string"} for i in range(2000)},
+    }
+    tracemalloc.start()
+    try:
+        unpacked: Final = defs_unpacked(schema)
+        peak_bytes: Final = tracemalloc.get_traced_memory()[1]
+    finally:
+        tracemalloc.stop()
+    assert peak_bytes < 10_000_000
+    assert unpacked["properties"]["p1999"]["items"] == {"type": "string"}
+
+
+def test_defs_unpacked_resolves_each_ref_against_its_nearest_defs() -> None:
+    nested: Final = {
+        "$defs": {"Leaf": {"type": "integer"}},
+        "type": "object",
+        "properties": {"leaf": {"$ref": "#/$defs/Leaf"}},
+    }
+    schema: Final = {
+        "type": "object",
+        "properties": {"outer": {"$ref": "#/$defs/Leaf"}, "nested": nested},
+        "$defs": {"Leaf": {"type": "string"}},
+    }
+    assert defs_unpacked(schema) == {
+        "type": "object",
+        "properties": {
+            "outer": {"type": "string"},
+            "nested": {**nested, "properties": {"leaf": {"type": "integer"}}},
+        },
+    }
+
+
+def test_defs_unpacked_resolves_refs_into_both_defs_and_definitions() -> None:
+    schema: Final = {
+        "type": "object",
+        "properties": {"a": {"$ref": "#/$defs/A"}, "b": {"$ref": "#/definitions/B"}},
+        "$defs": {"A": {"type": "string"}},
+        "definitions": {"B": {"type": "integer"}},
+    }
+    assert defs_unpacked(schema) == {
+        "type": "object",
+        "properties": {"a": {"type": "string"}, "b": {"type": "integer"}},
+    }
+
+
+def test_defs_unpacked_resolves_a_name_both_blocks_define_to_its_defs_schema() -> None:
+    schema: Final = {
+        "type": "object",
+        "properties": {"a": {"$ref": "#/$defs/T"}},
+        "$defs": {"T": {"type": "string"}},
+        "definitions": {"T": {"type": "integer"}},
+    }
+    assert defs_unpacked(schema) == {"type": "object", "properties": {"a": {"type": "string"}}}
+
+
+def test_defs_unpacked_resolves_each_ref_to_the_block_it_points_at_when_both_define_a_name() -> None:
+    schema: Final = {
+        "type": "object",
+        "properties": {"a": {"$ref": "#/$defs/T"}, "b": {"$ref": "#/definitions/T"}},
+        "$defs": {"T": {"type": "string"}},
+        "definitions": {"T": {"type": "integer"}},
+    }
+    assert defs_unpacked(schema) == {
+        "type": "object",
+        "properties": {"a": {"type": "string"}, "b": {"type": "integer"}},
+    }
+
+
+def test_defs_unpacked_inlines_a_defs_entry_that_refs_the_definitions_entry_of_the_same_name() -> None:
+    schema: Final = {
+        "type": "object",
+        "properties": {"a": {"$ref": "#/$defs/T"}},
+        "$defs": {"T": {"type": "object", "properties": {"n": {"$ref": "#/definitions/T"}}}},
+        "definitions": {"T": {"type": "integer"}},
+    }
+    assert defs_unpacked(schema) == {
+        "type": "object",
+        "properties": {"a": {"type": "object", "properties": {"n": {"type": "integer"}}}},
+    }
+
+
+@pytest.mark.parametrize("block", ["$defs", "definitions"])
+def test_defs_unpacked_resolves_a_ref_target_that_is_itself_a_ref_into_its_own_defs(block: str) -> None:
+    outer: Final = {"$ref": f"#/{block}/Inner", block: {"Inner": {"type": "string"}}}
+    schema: Final = {"type": "object", "properties": {"x": {"$ref": "#/$defs/Outer"}}, "$defs": {"Outer": outer}}
+    assert defs_unpacked(schema) == {"type": "object", "properties": {"x": {"type": "string"}}}
+
+
+def test_defs_unpacked_prefers_a_ref_targets_own_def_over_an_outer_def_of_the_same_name() -> None:
+    outer: Final = {"$ref": "#/$defs/Id", "$defs": {"Id": {"type": "integer"}}}
+    schema: Final = {
+        "type": "object",
+        "properties": {"x": {"$ref": "#/$defs/Outer"}},
+        "$defs": {"Outer": outer, "Id": {"type": "string"}},
+    }
+    assert defs_unpacked(schema) == {"type": "object", "properties": {"x": {"type": "integer"}}}
+
+
+@pytest.mark.parametrize("target", [1, "string", ["a"]])
+def test_defs_unpacked_raises_attribute_error_for_a_ref_to_a_def_that_is_not_a_schema(target: object) -> None:
+    schema: Final = {"type": "object", "properties": {"x": {"$ref": "#/$defs/T"}}, "$defs": {"T": target}}
+    with pytest.raises(AttributeError):
+        defs_unpacked(schema)
+
+
+@pytest.mark.parametrize(("target", "meaning"), [(True, {}), (False, {"not": {}})])
+def test_defs_unpacked_inlines_a_boolean_def_as_the_schema_it_means(target: bool, meaning: object) -> None:
+    schema: Final = {"type": "object", "properties": {"x": {"$ref": "#/$defs/T"}}, "$defs": {"T": target}}
+    assert defs_unpacked(schema) == {"type": "object", "properties": {"x": meaning}}
+
+
+def test_defs_unpacked_inlines_a_ref_target_alone_unless_asked_to_keep_its_siblings() -> None:
+    city: Final = {"type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"]}
+    schema: Final = {
+        "type": "object",
+        "properties": {"capital": {"$ref": "#/$defs/City", "description": "The capital", "required": ["country"]}},
+        "$defs": {"City": city},
+    }
+    assert defs_unpacked(schema) == {"type": "object", "properties": {"capital": city}}
+
+
+def test_defs_unpacked_keeps_the_annotations_next_to_a_ref() -> None:
+    city: Final = {"type": "object", "properties": {"name": {"type": "string"}}, "description": "A city"}
+    schema: Final = {
+        "type": "object",
+        "properties": {"capital": {"$ref": "#/$defs/City", "description": "The capital city"}},
+        "$defs": {"City": city},
+    }
+    assert defs_unpacked(schema, keep_ref_siblings=True) == {
+        "type": "object",
+        "properties": {"capital": {**city, "description": "The capital city"}},
+    }
+
+
+def test_defs_unpacked_adds_a_required_next_to_a_ref_to_the_target_constraints() -> None:
+    city: Final = {
+        "type": "object",
+        "properties": {"name": {"type": "string"}, "country": {"type": "string"}},
+        "required": ["name"],
+    }
+    town: Final = {"type": "object", "properties": {"name": {"type": "string"}}}
+    schema: Final = {
+        "type": "object",
+        "properties": {
+            "capital": {"$ref": "#/$defs/City", "required": ["country", "name", "country"], "type": "string"},
+            "town": {"$ref": "#/$defs/Town", "required": ["name"]},
+        },
+        "$defs": {"City": city, "Town": town},
+    }
+    assert defs_unpacked(schema, keep_ref_siblings=True) == {
+        "type": "object",
+        "properties": {
+            "capital": {**city, "required": ["name", "country"]},
+            "town": {**town, "required": ["name"]},
+        },
+    }
+
+
+def test_defs_unpacked_drops_a_required_next_to_a_ref_when_either_side_is_not_a_list_of_names() -> None:
+    city: Final = {
+        "type": "object",
+        "properties": {"name": {"type": "string"}, "country": {"type": "string"}},
+        "required": ["name"],
+    }
+    town: Final = {"type": "object", "properties": {"name": {"type": "string"}}, "required": "name"}
+    schema: Final = {
+        "type": "object",
+        "properties": {
+            "capital": {"$ref": "#/$defs/City", "required": ["country", {"name": True}]},
+            "town": {"$ref": "#/$defs/Town", "required": ["name"]},
+        },
+        "$defs": {"City": city, "Town": town},
+    }
+    assert defs_unpacked(schema, keep_ref_siblings=True) == {"type": "object", "properties": {"capital": city, "town": town}}
+
+
+def test_defs_unpacked_counts_the_annotations_next_to_a_ref_against_the_inlining_budget() -> None:
+    hops: Final = 120
+    chain: Final = {f"D{i}": {"$ref": f"#/$defs/D{i + 1}"} for i in range(hops)}
+    schema: Final = {
+        "type": "object",
+        "properties": {"a": {"$ref": "#/$defs/D0", "description": "x" * 100_000}},
+        "$defs": {**chain, f"D{hops}": {"type": "string"}},
+    }
+    with pytest.raises(ValueError, match="byte budget"):
+        defs_unpacked(schema, keep_ref_siblings=True)

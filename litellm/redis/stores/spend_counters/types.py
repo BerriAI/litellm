@@ -22,6 +22,8 @@ CustomerCounterScope: TypeAlias = Literal[
     "app",
     "app_customer_org",
     "app_customer_member",
+    "app_group",
+    "app_group_customer_org",
 ]
 
 
@@ -50,6 +52,8 @@ def parse_customer_window_counter(
         "app",
         "app_customer_org",
         "app_customer_member",
+        "app_group",
+        "app_group_customer_org",
     ):
         return None
     duration, at, start = window.rpartition("@")
@@ -124,3 +128,8 @@ def committed_counter(counter_key: str) -> str:
 def is_unavailable(error: BaseException) -> bool:
     """Redis timed out or its breaker is open, the failures a post-call increment drops."""
     return isinstance(error, NativeRedisStoreError) and error.args[:1] in (("timeout",), ("breaker_open",))
+
+
+def is_rejected(error: BaseException) -> bool:
+    """Redis answered and refused the command, so it did not apply."""
+    return isinstance(error, NativeRedisStoreError) and error.args[:1] == ("rejected",)
