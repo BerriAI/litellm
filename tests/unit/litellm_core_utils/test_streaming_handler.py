@@ -11282,3 +11282,57 @@ def test_text_completion_stream_carries_the_finish_chunks_choice_fields_only_on_
         (choice.finish_reason, getattr(choice, "provider_specific_fields", None))
         for choice in chain.from_iterable(chunk.choices for chunk in emitted)
     ] == [(None, None), *([(None, None)] if final_text else []), ("stop", _UPSTREAM_REASON_FIELDS)]
+
+
+def _context_window_error() -> litellm.ContextWindowExceededError:
+    return litellm.ContextWindowExceededError(
+        message="Your input exceeds the context window of this model.",
+        model="gpt-4o",
+        llm_provider="openai",
+    )
+
+
+def _stream_that_overflows(logging_obj: Logging) -> CustomStreamWrapper:
+    def _raise_context_window(**kwargs):
+        raise _context_window_error()
+
+    return CustomStreamWrapper(
+        completion_stream=None,
+        model="gpt-4o",
+        logging_obj=logging_obj,
+        custom_llm_provider="openai",
+        make_call=_raise_context_window,
+    )
+
+
+@pytest.mark.asyncio
+async def test_context_window_error_is_terminal_without_a_router_deployment(
+    logging_obj: Logging,
+) -> None:
+    """A direct SDK call has no second deployment, so the 400 stays the answer (#15785).
+
+    Driven through `CustomStreamWrapper` on purpose: the gateway reads `litellm_params.model_info`
+    off the call, so this pins the wiring, not just the predicate.
+    """
+    response = _stream_that_overflows(logging_obj)
+
+    with pytest.raises(litellm.ContextWindowExceededError) as excinfo:
+        await response.__anext__()
+
+    assert not isinstance(excinfo.value, MidStreamFallbackError)
+
+
+@pytest.mark.asyncio
+async def test_context_window_error_reaches_fallback_with_a_router_deployment(
+    logging_obj: Logging,
+) -> None:
+    """The Router resolved a deployment, so a larger window can still be tried (#48887)."""
+    logging_obj.model_call_details["litellm_params"] = {
+        "model_info": {"id": "deployment-1", "base_model": "azure/gpt-4o"}
+    }
+    response = _stream_that_overflows(logging_obj)
+
+    with pytest.raises(MidStreamFallbackError) as excinfo:
+        await response.__anext__()
+
+    assert isinstance(excinfo.value.original_exception, litellm.ContextWindowExceededError)
