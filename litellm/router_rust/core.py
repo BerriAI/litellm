@@ -95,6 +95,7 @@ from litellm.router_api import (
 from litellm.router_attempt import for_requested_model, request_from_call
 from litellm.router_config import RouterConfig, RouterDynamicConfig, detached
 from litellm.router_python_host import PythonHost
+from litellm.router_rust.invoke.cache_controls import IGNORED_CACHE_CONTROLS_HEADER
 from litellm.router_rust.invoke.endpoints import (
     AttemptCall,
     Plan,
@@ -5771,6 +5772,9 @@ class _Driver:
         additional["x-litellm-model-group"] = name
         apply_quality_router_decision_headers(additional, kwargs)
         additional.update(complexity_router_decision_headers(kwargs))
+        ignored: Final = self._latest_call[1].ignored_cache_controls if self._latest_call is not None else ()
+        if ignored:
+            additional[IGNORED_CACHE_CONTROLS_HEADER] = ",".join(ignored)
         return response
 
     def _count_response(self, response: object, step: Mapping[str, object]) -> object:

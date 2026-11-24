@@ -34,6 +34,7 @@ from litellm.litellm_core_utils.routing_common_utils import without_router_only_
 from litellm.responses.input_items_query import INPUT_ITEMS_QUERY_KEYS
 from litellm.responses.retrieve_stream_query import without_retrieve_stream_defaults
 from litellm.router_api import RoutingContext
+from litellm.router_rust.invoke.cache_controls import ALLOWED_CACHE_CONTROLS_PARAM, model_cache_controls
 from litellm.router_rust.invoke.shaping import (
     ROUTER_CLIENTS_TARGET,
     STREAM_TIMEOUT_AWARE_GENERIC_HANDLERS,
@@ -783,6 +784,7 @@ class AttemptCall:
     group: str
     # `_embedding`'s batch-size refusal, raised by the driver in place of the host call.
     refused: Exception | None = None
+    ignored_cache_controls: tuple[str, ...] = ()
 
 
 def reports_own_success(call: AttemptCall) -> bool:
@@ -896,6 +898,36 @@ def _validate_decisions_connection(plan: Plan, data: Mapping[str, object], reque
 
 
 def attempt_call(
+    core: EndpointCore,
+    plan: Plan,
+    request: Mapping[str, object],
+    deployment: Mapping[str, object],
+    *,
+    group: str,
+    requested: str,
+    fallback_model_group: str | None = None,
+) -> AttemptCall:
+    """``_attempt_call`` with the deployment's cache controls and the request's merged per control."""
+    params: Final = as_dict(deployment.get("litellm_params"))
+    cache: Final = model_cache_controls(params, request.get("cache"))
+    if cache.controls is None and ALLOWED_CACHE_CONTROLS_PARAM not in params:
+        return _attempt_call(
+            core, plan, request, deployment, group=group, requested=requested, fallback_model_group=fallback_model_group
+        )
+    controls: Final = {} if cache.controls is None else {"cache": cache.controls}
+    call: Final = _attempt_call(
+        core,
+        plan,
+        {**request, **controls},
+        {**deployment, "litellm_params": {**without(params, ALLOWED_CACHE_CONTROLS_PARAM), **controls}},
+        group=group,
+        requested=requested,
+        fallback_model_group=fallback_model_group,
+    )
+    return dataclasses.replace(call, ignored_cache_controls=cache.ignored)
+
+
+def _attempt_call(
     core: EndpointCore,
     plan: Plan,
     request: Mapping[str, object],
