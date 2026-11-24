@@ -3084,3 +3084,66 @@ def test_a_litellm_model_name_resolves_to_the_public_names_of_the_deployments_ro
         public_model_names_of_deployments_routed_by_litellm_model(requested, _namesake_router(), team_id)
         == public_names
     )
+
+
+@pytest.mark.parametrize("team_id,allowed", [("team-1", True), ("team-2", False)])
+@pytest.mark.asyncio
+async def test_a_customer_reaches_a_litellm_model_name_only_when_every_deployment_its_key_team_routes_to_is_granted(
+    team_id: str, allowed: bool
+) -> None:
+    async def run() -> bool:
+        return await common_checks(
+            request_body={"model": "openai/cross-team-raw"},
+            team_object=LiteLLM_TeamTable(team_id=team_id, models=[]),
+            user_object=None,
+            end_user_object=LiteLLM_EndUserTable(user_id="customer", blocked=False, models=["group-a"]),
+            global_proxy_spend=None,
+            general_settings={},
+            route="/v1/chat/completions",
+            llm_router=_namesake_router(),
+            proxy_logging_obj=AsyncMock(),
+            valid_token=UserAPIKeyAuth(token="test-token", team_id=team_id, models=[]),
+            request=MagicMock(),
+        )
+
+    if allowed:
+        assert await run() is True
+        return
+    with pytest.raises(ProxyException) as denied:
+        await run()
+    assert denied.value.type == "customer_model_access_denied"
+
+
+def _aliased_namesake_router(model_group_alias: Mapping[str, str]) -> litellm.Router:
+    return litellm.Router(
+        model_list=[
+            _namesake_deployment("g1", "openai/aliased-raw", "group-a"),
+            _namesake_deployment("g2", "openai/aliased-raw"),
+        ],
+        model_group_alias=dict(model_group_alias),
+    )
+
+
+@pytest.mark.parametrize("model_group_alias", [{}, {"alias-of-g2": "g2"}])
+def test_a_model_group_alias_neither_blocks_nor_renames_the_deployments_behind_a_litellm_model_name(
+    model_group_alias: Mapping[str, str],
+) -> None:
+    router: Final = _aliased_namesake_router(model_group_alias)
+
+    assert _can_call(router, ["group-a", "g2"], "openai/aliased-raw") is True
+    assert _can_call(router, ["group-a"], "openai/aliased-raw") is False
+    assert public_model_names_of_deployments_routed_by_litellm_model("openai/aliased-raw", router, None) == ("g1", "g2")
+
+
+@pytest.mark.parametrize("requested", ["openai/cross-team-raw", ["openai/cross-team-raw"]])
+def test_a_litellm_model_name_is_judged_by_the_deployments_of_the_team_the_request_routes_under(
+    requested: str | list[str],
+) -> None:
+    with pytest.raises(ProxyException):
+        can_object_call_model(
+            model=requested,
+            llm_router=_namesake_router(),
+            models=["group-a"],
+            object_type="customer",
+            routing_team_id="team-2",
+        )

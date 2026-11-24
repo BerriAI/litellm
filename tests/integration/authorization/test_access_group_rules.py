@@ -437,3 +437,79 @@ def test_a_wildcard_route_blocks_a_litellm_model_grant_only_for_the_names_it_mat
         assert granted_served_by == ["Bearer granted-deployment"], granted_served_by
         assert admin.status_code == 200, admin.text
         assert admin_served_by == ["Bearer wildcard"], admin_served_by
+
+
+
+@pytest.mark.parametrize("key_team", ("deployment_owner", "other_team"))
+def test_a_group_restricted_customer_reaches_a_litellm_model_only_when_every_deployment_its_key_team_routes_to_is_granted(
+    gateway: Gateway, key_team: str
+) -> None:
+    with wire_server(_completion) as wire, gateway.scenario() as scenario:
+        suffix: Final = uuid.uuid4().hex
+        group: Final = f"granted-{suffix}"
+        litellm_model: Final = f"openai/customer-{suffix}"
+        owner: Final = scenario.team()
+        scenario.model(
+            model=litellm_model,
+            api_base=f"{wire.url}/v1",
+            api_key="granted-deployment",
+            model_info={"access_groups": [group]},
+        )
+        scenario.model(
+            model=litellm_model,
+            api_base=f"{wire.url}/v1",
+            api_key="ungranted-team-deployment",
+            model_info={"team_id": owner, "team_public_model_name": f"owner-{suffix}"},
+        )
+        customer: Final = f"integration-customer-{suffix}"
+        gateway.post("/customer/new", {"user_id": customer, "models": [group]})
+        scenario.cleanups.callback(gateway.post, "/customer/delete", {"user_ids": [customer]})
+        key: Final = scenario.key(team_id=owner if key_team == "deployment_owner" else scenario.team())
+        wire.drain()
+        statuses: Final = tuple(
+            gateway.request(
+                "POST",
+                "/v1/chat/completions",
+                {"model": litellm_model, "messages": [{"role": "user", "content": "customer raw name"}], "user": customer},
+                key=key,
+            )
+            for _ in range(4)
+        )
+        served_by: Final = {
+            entry.headers.get("authorization") for entry in wire.drain() if entry.target == "/v1/chat/completions"
+        }
+        if key_team == "deployment_owner":
+            assert [response.status_code for response in statuses] == [403] * 4, [r.text for r in statuses]
+            assert all("customer_model_access_denied" in response.text for response in statuses), statuses[0].text
+            assert served_by == set(), served_by
+        else:
+            assert [response.status_code for response in statuses] == [200] * 4, [r.text for r in statuses]
+            assert served_by == {"Bearer granted-deployment"}, served_by
+
+
+@pytest.mark.timeout(2 * graceful_stop_seconds() + 120)
+def test_a_model_group_alias_does_not_add_a_grant_to_reach_a_deployment_by_its_litellm_model(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    with wire_server(_completion) as wire, gateway.scenario() as scenario:
+        suffix: Final = uuid.uuid4().hex
+        group: Final = f"granted-{suffix}"
+        litellm_model: Final = f"openai/aliased-{suffix}"
+        scenario.model(
+            model=litellm_model,
+            api_base=f"{wire.url}/v1",
+            api_key="grouped-deployment",
+            model_info={"access_groups": [group]},
+        )
+        named: Final = scenario.model(model=litellm_model, api_base=f"{wire.url}/v1", api_key="named-deployment")
+        granted_key: Final = scenario.key(models=[group, named])
+        group_only_key: Final = scenario.key(models=[group])
+        config: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
+        config["router_settings"] = {**config["router_settings"], "model_group_alias": {f"alias-{suffix}": named}}
+        path: Final = tmp_path / "model_group_alias.yaml"
+        path.write_text(yaml.safe_dump(config))
+        with owned_proxy(gateway, tmp_path, {}, config=path, workers=2) as candidate:
+            statuses: Final = tuple(
+                _chat(candidate, litellm_model, key).status_code for key in (granted_key, group_only_key)
+            )
+        assert statuses == (200, 403), statuses

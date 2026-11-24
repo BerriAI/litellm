@@ -5177,9 +5177,10 @@ def deployments_routed_by_litellm_model(
     if not _routes_to_deployments_by_litellm_model(model, llm_router, team_id):
         return ()
     registry: Final = llm_router.registry()
+    stored_deployments: Final[Sequence[DeploymentTypedDict]] = registry.all()
     return tuple(
         deployment
-        for deployment in registry.deployments() or ()
+        for deployment in stored_deployments
         if deployment["litellm_params"].get("model") == model and registry.includes(deployment, team_id=team_id)
     )
 
@@ -5235,6 +5236,7 @@ def _can_object_call_model(
     key_model_aliases: Mapping[str, str] | None = None,
     object_type: Literal["user", "customer", "team", "key", "org", "project", "agent"] = "user",
     fallback_depth: int = 0,
+    routing_team_id: str | None = None,
 ) -> Literal[True]:
     """
     Checks if token can call a given model
@@ -5265,6 +5267,7 @@ def _can_object_call_model(
                 key_model_aliases=key_model_aliases,
                 object_type=object_type,
                 fallback_depth=fallback_depth + 1,
+                routing_team_id=routing_team_id,
             )
         return True
 
@@ -5321,7 +5324,11 @@ def _can_object_call_model(
     ):
         return True
     if not key_alias_applied and _every_deployment_with_litellm_model_granted(
-        model=model, llm_router=llm_router, models=models, team_model_aliases=team_model_aliases, team_id=team_id
+        model=model,
+        llm_router=llm_router,
+        models=models,
+        team_model_aliases=team_model_aliases,
+        team_id=team_id if routing_team_id is None else routing_team_id,
     ):
         return True
 
@@ -6222,6 +6229,7 @@ def _can_customer_scope_call_model(
             models=list(models),
             key_model_aliases=key_model_aliases,
             object_type="customer",
+            routing_team_id=team_id,
         )
 
     for name in (model,) if isinstance(model, str) else model:
