@@ -120,7 +120,7 @@ EXPECTED_CELLS: Final[MappingProxyType[tuple[str, str], Outcome]] = MappingProxy
     }
 )
 RECORDED_PHASES: Final = 8
-INNER_PLUGINS_OFF: Final = ("-p", "no:cacheprovider", "-p", "no:asyncio")
+INNER_PLUGINS_OFF: Final = ("-p", "no:cacheprovider", "-p", "no:asyncio", "-p", "no:pytest-retry")
 
 
 def _suite(pytester: pytest.Pytester, monkeypatch: pytest.MonkeyPatch) -> Path:

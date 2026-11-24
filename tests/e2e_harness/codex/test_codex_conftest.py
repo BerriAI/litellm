@@ -10,6 +10,7 @@ pytest_plugins = ("pytester",)
 
 E2E_DIR: Final = Path(__file__).resolve().parents[2] / "e2e"
 CODEX_CONFTEST: Final = E2E_DIR / "codex" / "conftest.py"
+E2E_PYTEST_INI: Final = E2E_DIR / "pytest.ini"
 FAILS_ONCE: Final = """
 from pathlib import Path
 
@@ -35,13 +36,12 @@ def test_a_codex_test_is_rerun_once_after_a_failed_assertion_or_a_configured_err
     monkeypatch.setenv("PYTHONPATH", str(E2E_DIR))
     (pytester.path / "suite").mkdir()
     (pytester.path / "outside").mkdir()
+    _ = (pytester.path / "pytest.ini").write_text(E2E_PYTEST_INI.read_text())
     _ = (pytester.path / "suite" / "conftest.py").write_text(CODEX_CONFTEST.read_text())
     for name, error in SUITE_FILES:
         _ = (pytester.path / name).write_text(FAILS_ONCE.format(error=error))
 
-    run: Final = pytester.runpytest_subprocess(
-        "-p", "no:cacheprovider", "-p", "no:asyncio", "--only-rerun", "status_code=5[0-9][0-9]", "-rA"
-    )
+    run: Final = pytester.runpytest_subprocess("-p", "no:cacheprovider", "-p", "no:asyncio", "-rA")
 
     run.assert_outcomes(passed=2, failed=2)
     assert run.parseoutcomes()["rerun"] == 2
