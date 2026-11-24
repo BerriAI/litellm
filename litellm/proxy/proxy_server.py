@@ -958,6 +958,7 @@ from litellm.redis.stores.connection import connect
 from litellm.redis.stores.spend_counters import (
     SPEND_COUNTERS_TARGET,
     SpendCounterStore,
+    is_rejected,
     is_unavailable,
 )
 from litellm.router import router_arguments
@@ -4117,7 +4118,7 @@ async def ensure_spend_counter_initialized(
             # DB unavailable - fall back to in-process cache (may be stale).
             base_spend: Final = await _get_source_cache_base_spend(source_cache_key=source_cache_key)
             if base_spend > 0:
-                await increment_spend_counter_cache(counter_key=counter_key, increment=base_spend)
+                await _seed_spend_counter_cache(counter_key=counter_key, spend=base_spend)
 
 
 _ensure_spend_counter_initialized: Final = ensure_spend_counter_initialized
@@ -4220,6 +4221,24 @@ async def increment_spend_counter_cache(counter_key: str, increment: float) -> f
 
 
 _increment_spend_counter_cache: Final = increment_spend_counter_cache
+
+
+@with_service_target(SPEND_COUNTERS_TARGET)
+async def _seed_spend_counter_cache(counter_key: str, spend: float) -> None:
+    try:
+        _ = await spend_counter_store.set_max(counter_key, spend)
+    except Exception as error:
+        if is_rejected(error):
+            # set_max is a Lua script; a Redis that refuses scripts still takes the plain increment.
+            await increment_spend_counter_cache(counter_key=counter_key, increment=spend)
+            return
+        # The script may have applied, so the counter is dropped everywhere, as a failed increment drops it.
+        await invalidate_spend_counter(counter_key)
+        raise
+    # The charge that follows is an INCRBYFLOAT, so the seed still ends with one: a counter that command cannot
+    # reach (a Redis Cluster slot mid-migration) fails here and is dropped on its own, as it was when the seed was
+    # that increment.
+    _ = await increment_spend_counter_cache(counter_key=counter_key, increment=0.0)
 
 
 @with_service_target(SPEND_COUNTERS_TARGET)
