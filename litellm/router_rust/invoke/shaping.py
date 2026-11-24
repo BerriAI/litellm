@@ -57,7 +57,6 @@ from litellm.router_utils.pre_call_checks.io_token_rate_limit_check import (
 from litellm.router_utils.stream_usage_injection import router_config_requests_stream_usage
 from litellm.types.litellm_params import STREAM_USAGE_INJECTED_FIELD
 from litellm.types.router import (
-    FORWARDED_CLIENT_HEADERS_KEY,
     Deployment,
     ForwardedClientHeaders,
     GenericLiteLLMParams,
@@ -542,7 +541,7 @@ def _signs_with_aws_credentials(deployment_params: Mapping[str, object]) -> bool
 
 
 def forwarded_client_headers(request: Mapping[str, object]) -> ForwardedClientHeaders | None:
-    stamp: Final = (as_str_mapping(request.get("proxy_server_request")) or {}).get(FORWARDED_CLIENT_HEADERS_KEY)
+    stamp: Final = (as_str_mapping(request.get("proxy_server_request")) or {}).get("forwarded_client_headers")
     if stamp is None:
         return None
     try:

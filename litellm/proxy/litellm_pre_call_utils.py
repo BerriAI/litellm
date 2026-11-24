@@ -459,7 +459,6 @@ from litellm.types.litellm_params import (
 )
 from litellm.types.llms.anthropic import ANTHROPIC_API_HEADERS
 from litellm.types.router import (
-    FORWARDED_CLIENT_HEADERS_KEY,
     BaggageMappedTagsStamp,
     ForwardedClientHeaders,
     holds_api_key_secret_reference,
@@ -3171,7 +3170,7 @@ async def add_litellm_data_to_request(
         forwarded_for_model_group=_forwarded_headers is not _headers_after_global_forwarding,
     )
     if _forwarded_headers_stamp is not None:
-        data["proxy_server_request"][FORWARDED_CLIENT_HEADERS_KEY] = (  # rebind-ok: data is an out-param
+        data["proxy_server_request"]["forwarded_client_headers"] = (  # rebind-ok: data is an out-param
             _forwarded_headers_stamp
         )
 

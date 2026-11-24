@@ -1592,7 +1592,7 @@ async def test_aws_fallback_drops_only_the_proxy_forwarded_headers_its_group_may
     x_app_at_fallback: str,
     expected_headers: tuple[str | None, bool, str | None],
 ) -> None:
-    from litellm.types.router import FORWARDED_CLIENT_HEADERS_KEY, ForwardedClientHeaders, ModelGroupSettings
+    from litellm.types.router import ForwardedClientHeaders, ModelGroupSettings
 
     monkeypatch.setattr(
         litellm, "model_group_settings", ModelGroupSettings(forward_client_headers_to_llm_api=forwarding_scope)
@@ -1609,7 +1609,7 @@ async def test_aws_fallback_drops_only_the_proxy_forwarded_headers_its_group_may
         messages=[{"role": "user", "content": "hi"}],
         api_key=_CALLER_ANTHROPIC_KEY,
         headers={"x-app": x_app_at_fallback, "x-api-key": _CALLER_ANTHROPIC_KEY, "x-trace": "trace-1"},
-        proxy_server_request={FORWARDED_CLIENT_HEADERS_KEY: stamp},
+        proxy_server_request={"forwarded_client_headers": stamp},
     )
 
     sent: Final = aws.calls[0].request.headers
@@ -1947,7 +1947,7 @@ async def test_iam_deployment_behind_a_custom_endpoint_still_gets_the_caller_bea
 async def test_malformed_forwarded_header_stamp_leaves_the_caller_headers_in_place(
     respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from litellm.types.router import FORWARDED_CLIENT_HEADERS_KEY, ModelGroupSettings
+    from litellm.types.router import ModelGroupSettings
 
     monkeypatch.setattr(
         litellm, "model_group_settings", ModelGroupSettings(forward_client_headers_to_llm_api=["claude"])
@@ -1961,7 +1961,7 @@ async def test_malformed_forwarded_header_stamp_leaves_the_caller_headers_in_pla
         messages=[{"role": "user", "content": "hi"}],
         api_key=_CALLER_ANTHROPIC_KEY,
         headers={"x-app": "cli"},
-        proxy_server_request={FORWARDED_CLIENT_HEADERS_KEY: {"digests": "not-a-mapping", "model_group_scoped": True}},
+        proxy_server_request={"forwarded_client_headers": {"digests": "not-a-mapping", "model_group_scoped": True}},
     )
 
     sent: Final = aws.calls[0].request.headers
@@ -2013,3 +2013,30 @@ async def test_mixed_provider_group_keeps_the_caller_key_on_its_own_aws_member_a
     assert len(sent) == 2, sent
     assert sent[0] == (True, f"Bearer {_CALLER_ANTHROPIC_KEY}")
     assert (sent[1][0], sent[1][1].startswith("AWS4-HMAC-SHA256 ")) == (False, True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_aws_without_env_bearers_or_endpoints")
+@pytest.mark.parametrize("target", ("bedrock", "bedrock_mantle"))
+async def test_default_aws_route_without_a_model_keeps_the_caller_bearer(
+    respx_mock: respx.MockRouter, target: str
+) -> None:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "default-aws",
+                "litellm_params": {"model": _AWS_FALLBACK_TARGETS[target][0], **_AWS_DEPLOYMENT_CREDENTIALS},
+            }
+        ],
+        default_fallbacks=["default-aws"],
+        num_retries=0,
+    )
+    upstream: Final = respx_mock.post(host=_AWS_FALLBACK_TARGETS[target][1]).mock(return_value=_aws_answer(target))
+
+    response: Final = await router.acompletion(
+        model=None, messages=[{"role": "user", "content": "hi"}], api_key="caller-default-bearer"
+    )
+
+    assert upstream.call_count == 1
+    assert upstream.calls[0].request.headers["authorization"] == "Bearer caller-default-bearer"
+    assert response.choices[0].message.content

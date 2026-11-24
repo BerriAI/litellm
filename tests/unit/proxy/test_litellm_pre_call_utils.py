@@ -12372,7 +12372,7 @@ async def test_add_litellm_data_to_request_stamps_only_the_client_headers_it_for
     expected_stamp: tuple[bool, frozenset[str], bool, bool] | None,
     expected_headers: dict[str, str] | None,
 ):
-    from litellm.types.router import FORWARDED_CLIENT_HEADERS_KEY, ForwardedClientHeaders, ModelGroupSettings
+    from litellm.types.router import ForwardedClientHeaders, ModelGroupSettings
 
     monkeypatch.setattr(
         litellm, "model_group_settings", ModelGroupSettings(forward_client_headers_to_llm_api=model_group_scope)
@@ -12383,7 +12383,7 @@ async def test_add_litellm_data_to_request_stamps_only_the_client_headers_it_for
         data={
             "model": "claude",
             "messages": [{"role": "user", "content": "hello"}],
-            "proxy_server_request": {FORWARDED_CLIENT_HEADERS_KEY: forged_stamp},
+            "proxy_server_request": {"forwarded_client_headers": forged_stamp},
         },
         request=_make_request_mock(
             "/v1/chat/completions",
@@ -12395,6 +12395,6 @@ async def test_add_litellm_data_to_request_stamps_only_the_client_headers_it_for
         version="test-version",
     )
 
-    stamp: Final = updated["proxy_server_request"].get(FORWARDED_CLIENT_HEADERS_KEY)
+    stamp: Final = updated["proxy_server_request"].get("forwarded_client_headers")
     assert (_forwarded_x_app_stamp(stamp), updated.get("headers")) == (expected_stamp, expected_headers)
     assert "cli-secret" not in json.dumps(stamp)

@@ -1615,7 +1615,6 @@ def server_owned_param_kind(param: str) -> str:
     return "workload identity federation or OAuth token exchange"
 
 
-FORWARDED_CLIENT_HEADERS_KEY: Final = "forwarded_client_headers"
 _FORWARDED_HEADER_DIGEST_KEY: Final = secrets.token_bytes(32)
 
 
