@@ -2200,3 +2200,40 @@ async def test_stream_recovery_from_an_external_aws_hop_of_a_mixed_group_keeps_t
     assert sent[0] == f"Bearer {_CALLER_ANTHROPIC_KEY}"
     assert (sent[1].startswith("AWS4-HMAC-SHA256 "), sent[2].startswith("AWS4-HMAC-SHA256 ")) == (True, True)
     assert json.loads(mantle.calls[2].request.content)["messages"][-1]["role"] == "assistant"
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_aws_without_env_bearers_or_endpoints")
+async def test_claude_platform_fallback_preserves_the_callers_key_and_workspace(
+    respx_mock: respx.MockRouter,
+) -> None:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "claude",
+                "litellm_params": {"model": "anthropic/claude-haiku-4-5", "api_key": "sk-ant-deployment"},
+            },
+            {
+                "model_name": "platform",
+                "litellm_params": {
+                    "model": "bedrock/claude_platform/claude-sonnet-4-6",
+                    "workspace_id": "wrkspc_test",
+                    **_AWS_DEPLOYMENT_CREDENTIALS,
+                },
+            },
+        ],
+        fallbacks=[{"claude": ["platform"]}],
+        num_retries=0,
+    )
+    respx_mock.post("https://api.anthropic.com/v1/messages").mock(return_value=_anthropic_overloaded())
+    platform: Final = respx_mock.post(host="aws-external-anthropic.us-east-1.api.aws").mock(
+        return_value=_anthropic_answer()
+    )
+
+    await router.acompletion(
+        model="claude", messages=[{"role": "user", "content": "hi"}], api_key=_CALLER_ANTHROPIC_KEY
+    )
+
+    assert platform.call_count == 1
+    assert platform.calls[0].request.headers["x-api-key"] == _CALLER_ANTHROPIC_KEY
+    assert platform.calls[0].request.headers["anthropic-workspace-id"] == "wrkspc_test"
