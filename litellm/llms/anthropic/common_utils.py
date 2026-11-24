@@ -2019,7 +2019,7 @@ def _message_without_advisor_blocks(
     positions: Final = [
         position
         for position, block in enumerate(content)
-        if message_field(block, "type") in _ADVISOR_BLOCK_TYPES or not isinstance(block, dict)
+        if not isinstance(block, dict) or ("type" in block and block["type"] in _ADVISOR_BLOCK_TYPES)
     ]
     if not positions:
         return message, 0
