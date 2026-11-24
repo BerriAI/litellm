@@ -56,9 +56,11 @@ mod _native {
     #[pymodule_export]
     use crate::callbacks_model_capacity::{NativeModelCapacity, NativeModelCapacityState};
     #[pymodule_export]
+    use crate::cost::billable_service_tier;
+    #[pymodule_export]
     use crate::cost::{
-        NativeBilledRates, NativeCallContext, NativePriced, NativePrices, NativeQuote,
-        NativeRateCard, NativeReceipt, NativeTokenUsage,
+        NativeCallContext, NativePriced, NativePrices, NativeQuote, NativeRateCard,
+        NativeTokenUsage,
     };
     #[pymodule_export]
     use crate::db::{DatabaseEndpoint, NativeDatabase, NativeDatabaseFailure};
@@ -163,6 +165,8 @@ mod _native {
     use crate::tokenizer::HuggingFaceEncoding;
     #[pymodule_export]
     use crate::tokenizer::Tokenizer;
+    #[pymodule_export]
+    use litellm_callbacks_legacy_python::{NativeBilledRates, NativeReceipt};
 
     #[pymodule_init]
     fn init(module: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -309,6 +313,7 @@ mod tests {
                 "reserve_process_for_forking",
                 "unsupported_tls_settings",
                 "NativeBudgets",
+                "billable_service_tier",
                 "budget_check_decision",
                 "NativeModelCapacity",
                 "NativeModelCapacityState",

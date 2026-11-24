@@ -1,5 +1,5 @@
 import json
-from collections.abc import AsyncIterator, Iterable, Iterator, Mapping
+from collections.abc import AsyncIterator, Iterable, Iterator, Mapping, Sequence
 from typing import TYPE_CHECKING, Final, Literal, cast
 
 import httpx
@@ -81,7 +81,7 @@ def _map_reasoning_effort(value: object) -> object:
     return effort
 
 
-def _extract_fireworks_hidden_params(payload: dict) -> dict:
+def _extract_fireworks_hidden_params(payload: dict) -> dict[str, object]:
     """
     Collect Fireworks-specific response fields (perf_metrics, prompt_token_ids,
     per-choice raw_output and token_ids) from a non-streaming completion payload
@@ -190,8 +190,8 @@ class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
 
     def __init__(
         self,
-        tools: list | None = None,
-        tool_choice: str | dict | None = None,
+        tools: Sequence[object] | None = None,
+        tool_choice: str | Mapping[str, object] | None = None,
         max_tokens: int | None = None,
         temperature: int | None = None,
         top_p: int | None = None,
@@ -228,14 +228,14 @@ class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, object],
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         api_key = self._get_api_key(api_key)
         if api_key is None:
             raise ValueError("FIREWORKS_API_KEY is not set")
@@ -330,10 +330,10 @@ class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
     def map_openai_params(
         self,
         non_default_params: dict,
-        optional_params: dict,
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:
         supported_openai_params: Final = self.get_supported_openai_params(model=model)
         is_tools_set: Final = any(param == "tools" and value is not None for param, value in non_default_params.items())
         if non_default_params.get("thinking") is not None and non_default_params.get("reasoning_effort") is not None:
@@ -378,7 +378,7 @@ class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
 
     def map_extra_body_params(
         self, optional_params: Mapping[str, object], model: str
-    ) -> dict:  # mutable-ok: http handler pops extra_body off the returned dict
+    ) -> dict[str, object]:  # mutable-ok: http handler pops extra_body off the returned dict
         extra_body: Final = optional_params.get("extra_body")
         if not isinstance(extra_body, dict):
             return dict(optional_params)
@@ -506,7 +506,7 @@ class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
         return {**tool, "function": new_function}
 
     def _transform_messages_helper(
-        self, messages: list[AllMessageValues], model: str, litellm_params: dict
+        self, messages: list[AllMessageValues], model: str, litellm_params: Mapping[str, object]
     ) -> list[AllMessageValues]:
         """
         Strip fields not permitted by FireworksAI from messages.
@@ -547,17 +547,17 @@ class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
             for message in messages
         ]
 
-    _fireworks_index_cache: tuple[ModelCostVersion, list[tuple[str, dict]]] | None = None
+    _fireworks_index_cache: tuple[ModelCostVersion, list[tuple[str, dict[str, object]]]] | None = None
 
     @classmethod
-    def _get_fireworks_index(cls) -> list[tuple[str, dict]]:
+    def _get_fireworks_index(cls) -> list[tuple[str, dict[str, object]]]:
         model_cost: Final = litellm.model_cost
         version: Final = model_cost_version()
         cached: Final = cls._fireworks_index_cache
         if cached is not None and cached[0] == version:
             return cached[1]
 
-        index: Final[list[tuple[str, dict]]] = []
+        index: Final[list[tuple[str, dict[str, object]]]] = []
         for key, model_info in (*model_cost.items(),):
             if not key.startswith("fireworks_ai/"):
                 continue
@@ -673,9 +673,9 @@ class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
         model: str,
         messages: list[AllMessageValues],
         optional_params: dict,
-        litellm_params: dict,
-        headers: dict,
-    ) -> dict:
+        litellm_params: dict[str, object],
+        headers: dict[str, object],
+    ) -> dict[str, object]:
         resolved_model: Final = resolve_fireworks_resource_name(model)
         messages = self._transform_messages_helper(
             messages=messages, model=resolved_model, litellm_params=litellm_params
@@ -742,10 +742,10 @@ class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
         raw_response: httpx.Response,
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
-        request_data: dict,
+        request_data: dict[str, object],
         messages: list[AllMessageValues],
         optional_params: dict,
-        litellm_params: dict,
+        litellm_params: dict[str, object],
         encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
@@ -864,7 +864,7 @@ class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
 
 
 class FireworksAIChatCompletionStreamingHandler(OpenAIChatCompletionStreamingHandler):
-    def chunk_parser(self, chunk: dict) -> ModelResponseStream:
+    def chunk_parser(self, chunk: dict[str, object]) -> ModelResponseStream:
         parsed: Final = super().chunk_parser(chunk)
         fireworks_fields: Final = _extract_fireworks_hidden_params(chunk)
         if fireworks_fields:

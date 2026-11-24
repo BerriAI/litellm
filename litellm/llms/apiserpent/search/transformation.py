@@ -8,6 +8,7 @@ Two endpoints under one provider, selected via the ``deep`` boolean param:
 APISerpent API Reference: https://apiserpent.com/docs
 """
 
+from collections.abc import Mapping
 from typing import Final, Literal, cast
 from urllib.parse import urlencode
 
@@ -47,7 +48,7 @@ class APISerpentSearchConfig(BaseSearchConfig):
         return "GET"
 
     @staticmethod
-    def _is_deep_search(optional_params: dict) -> bool:
+    def _is_deep_search(optional_params: Mapping[str, object]) -> bool:
         return bool(optional_params.get(DEEP_SEARCH_PARAM))
 
     def validate_environment(
@@ -55,7 +56,7 @@ class APISerpentSearchConfig(BaseSearchConfig):
         headers: dict,
         api_key: str | None = None,
         api_base: str | None = None,
-        **kwargs,
+        **kwargs: object,
     ) -> dict:
         api_key = self.resolve_server_api_key(
             caller_api_key=api_key,
@@ -75,7 +76,7 @@ class APISerpentSearchConfig(BaseSearchConfig):
         api_base: str | None,
         optional_params: dict,
         data: dict | list[dict] | None = None,
-        **kwargs,
+        **kwargs: object,
     ) -> str:
         """
         Build the search URL. APISerpent uses GET, so the transformed request is
@@ -97,7 +98,7 @@ class APISerpentSearchConfig(BaseSearchConfig):
         self,
         query: str | list[str],
         optional_params: dict,
-        **kwargs,
+        **kwargs: object,
     ) -> dict:
         """
         Transform a unified search request into APISerpent query params.
@@ -145,7 +146,7 @@ class APISerpentSearchConfig(BaseSearchConfig):
         self,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj | None,
-        **kwargs,
+        **kwargs: object,
     ) -> SearchResponse:
         """
         Transform APISerpent response to the unified SearchResponse format.

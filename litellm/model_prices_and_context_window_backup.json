@@ -1421,9 +1421,12 @@
         "supports_native_structured_output": true,
         "supports_output_config": true,
         "bedrock_output_config_effort_ceiling": "high",
+        "deprecation_date": "2027-05-23",
+        "deprecation_source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-lifecycle-legacy.html",
         "supports_parallel_tool_use_config": true,
         "prompt_cache_min_tokens": 4096,
         "source": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/index.json",
+        "successor_model": "anthropic.claude-opus-5-5",
         "token_count_model": {
             "model": "anthropic.claude-opus-4-5-20251101-v1:0",
             "litellm_provider": "bedrock"
@@ -30575,6 +30578,8 @@
         "supports_tool_choice": true
     },
     "gemini-2.5-flash": {
+        "supports_media_in_tool_response": false,
+        "supports_part_media_resolution": false,
         "cache_read_input_audio_token_cost": 1e-07,
         "cache_read_input_audio_token_cost_priority": 1.8e-07,
         "cache_read_input_token_cost": 3e-08,
@@ -32709,6 +32714,8 @@
         }
     },
     "gemini/gemini-2.5-flash": {
+        "supports_media_in_tool_response": false,
+        "supports_part_media_resolution": false,
         "cache_read_input_audio_token_cost": 1e-07,
         "cache_read_input_audio_token_cost_batches": 1e-07,
         "cache_read_input_audio_token_cost_flex": 1e-07,
@@ -53511,9 +53518,12 @@
         "supports_native_structured_output": true,
         "supports_output_config": true,
         "bedrock_output_config_effort_ceiling": "high",
+        "deprecation_date": "2027-05-23",
+        "deprecation_source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-lifecycle-legacy.html",
         "supports_parallel_tool_use_config": true,
         "prompt_cache_min_tokens": 4096,
         "source": "https://aws.amazon.com/bedrock/pricing/",
+        "successor_model": "us.anthropic.claude-opus-5-5",
         "token_count_model": {
             "model": "anthropic.claude-opus-4-5-20251101-v1:0",
             "litellm_provider": "bedrock"
@@ -53547,9 +53557,12 @@
         "supports_native_structured_output": true,
         "supports_output_config": true,
         "bedrock_output_config_effort_ceiling": "high",
+        "deprecation_date": "2027-05-23",
+        "deprecation_source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-lifecycle-legacy.html",
         "supports_parallel_tool_use_config": true,
         "prompt_cache_min_tokens": 4096,
         "source": "https://aws.amazon.com/bedrock/pricing/",
+        "successor_model": "global.anthropic.claude-opus-5-5",
         "token_count_model": {
             "model": "anthropic.claude-opus-4-5-20251101-v1:0",
             "litellm_provider": "bedrock"
@@ -53583,9 +53596,12 @@
         "supports_native_structured_output": true,
         "supports_output_config": true,
         "bedrock_output_config_effort_ceiling": "high",
+        "deprecation_date": "2027-05-23",
+        "deprecation_source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-lifecycle-legacy.html",
         "supports_parallel_tool_use_config": true,
         "prompt_cache_min_tokens": 4096,
         "source": "https://aws.amazon.com/bedrock/pricing/",
+        "successor_model": "eu.anthropic.claude-opus-5-5",
         "token_count_model": {
             "model": "anthropic.claude-opus-4-5-20251101-v1:0",
             "litellm_provider": "bedrock"
@@ -68608,6 +68624,15 @@
                 }
             },
             {
+                "name": "claude-server-side-fallback",
+                "pattern": "claude-[a-z]+-(?:4[-._](?:[5-9]|[1-9]\\d)(?!\\d)|[5-9](?!\\d)(?:[-._]\\d{1,2}(?!\\d))?)",
+                "fill_missing_for_providers": ["bedrock", "bedrock_converse", "bedrock_mantle", "databricks"],
+                "description": "Claude at version 4.5 or higher, with the same id shapes and version boundaries as claude-per-turn-control. Bedrock Invoke rejects the server-side-fallback-2026-06-01 beta on Opus 4.1 with 400 invalid beta flag and takes it on Haiku 4.5, Sonnet 4.5 and every newer Claude. On 2026-11-23 Databricks answered 200 with the beta on databricks-claude-haiku-4-5 and databricks-claude-sonnet-4-5 and 400 invalid beta flag on databricks-claude-opus-4-1. Without drop_params, Bedrock Invoke, Mantle and Databricks forward the beta on every model and the provider answers its own 400. Under drop_params they drop it where this flag is unset. A deployment overrides the flag with model_info supports_server_side_fallback.",
+                "model_info": {
+                    "supports_server_side_fallback": true
+                }
+            },
+            {
                 "name": "wandb-reasoning-baseline",
                 "pattern": "^wandb/",
                 "description": "Any Weights & Biases Inference model id, anchored to the wandb/ namespace so only that provider's ids match. W&B's serverless catalog is reasoning-first and grows faster than this registry names it, so an id the map has not described yet is treated as reasoning-capable and keeps the caller's reasoning_effort instead of dropping it or raising UnsupportedParamsError. Rules lose to exact entries, so a mapped non-reasoning model such as wandb/meta-llama/Llama-3.1-8B-Instruct is unaffected. Carries no mode and no pricing, so cost stays on the standard unpriced behavior and the deployment does not read as catalog-mapped to the router's reasoning-effort resolver.",
@@ -68630,6 +68655,16 @@
                 "description": "OpenAI reasoning families by id shape, under any provider namespace and with an optional ft: prefix: the o-series (o1, o3-pro, o4-mini), gpt-5 through gpt-9 majors including dotted minors and suffixed variants (gpt-5.5-cyber, gpt-6-astra), and the codex, deep-research and chat-latest lines when standalone or on a gpt base. gpt-5-search-api is excluded because it is a search-only surface. Every model here is a reasoning model, and the Responses API drops the caller's reasoning param for any mapped OpenAI model whose info lacks supports_reasoning, so an id the registry has not named yet keeps its reasoning settings instead of silently losing them. Rules lose to exact entries. Carries no mode and no pricing, so cost stays on the standard unpriced behavior.",
                 "model_info": {
                     "supports_reasoning": true
+                }
+            },
+            {
+                "name": "gemini-multimodal-tool-media",
+                "pattern": "^gemini/gemini-(?!.*(?:-tts|-image|-live|-audio|-embedding|-computer-use|-robotics|-transcribe|-translate))(?:[3-9]|[1-9][0-9]+)(?:\\.\\d+)?-(?:pro|flash|argon)(?:-|$)",
+                "fill_missing_for_providers": ["gemini", "vertex_ai", "vertex_ai_beta", "vertex_ai-language-models"],
+                "description": "Gemini 3 and later chat families accept per-part media resolution and nested media in tool responses.",
+                "model_info": {
+                    "supports_media_in_tool_response": true,
+                    "supports_part_media_resolution": true
                 }
             },
             {
@@ -80342,6 +80377,8 @@
         "supports_vision": true
     },
     "vertex_ai/gemini-2.0-flash": {
+        "supports_media_in_tool_response": false,
+        "supports_part_media_resolution": false,
         "deprecation_date": "2026-06-01",
         "deprecation_source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/model-versions",
         "successor_model": "vertex_ai/gemini-3.5-flash-lite",
@@ -84862,6 +84899,8 @@
         "web_search_billing_unit": "per_query"
     },
     "gemini/gemini-4-argon": {
+        "supports_media_in_tool_response": true,
+        "supports_part_media_resolution": true,
         "cache_read_input_token_cost": 1e-07,
         "cache_read_input_token_cost_batches": 5e-08,
         "cache_read_input_token_cost_flex": 5e-08,
@@ -84921,6 +84960,8 @@
         "web_search_billing_unit": "per_query"
     },
     "vertex_ai/gemini-4-argon": {
+        "supports_media_in_tool_response": true,
+        "supports_part_media_resolution": true,
         "cache_read_input_token_cost": 1e-07,
         "cache_read_input_token_cost_batches": 5e-08,
         "cache_read_input_token_cost_priority": 1.8e-07,
@@ -103274,13 +103315,13 @@
     },
     "fal_ai/blackforestlabs/flux-3-max/image-to-video": {
         "litellm_provider": "fal_ai",
-        "metadata": {"comment":"per second of generated video by resolution; output_cost_per_second is the default resolution 720p rate"},
+        "metadata": {"comment":"per second of generated video by resolution; output_cost_per_second is the default resolution 720p rate; promotional 35% off rate through 2026-12-07 (UTC) per the page; the regular rates of $0.17 (720p), $0.29 (1080p), $0.40 (2K) and $0.80 (4K) per second apply from 2026-12-08 (ruling fal-ai-promotional-rates-apply-until-promotion-ends, 2026-11-10)"},
         "mode": "video_generation",
-        "output_cost_per_second": 0.17,
-        "output_cost_per_second_1080p": 0.29,
-        "output_cost_per_second_2k": 0.4,
-        "output_cost_per_second_4k": 0.8,
-        "output_cost_per_second_720p": 0.17,
+        "output_cost_per_second": 0.1105,
+        "output_cost_per_second_1080p": 0.1885,
+        "output_cost_per_second_2k": 0.26,
+        "output_cost_per_second_4k": 0.52,
+        "output_cost_per_second_720p": 0.1105,
         "source": "https://fal.ai/models/blackforestlabs/flux-3-max/image-to-video",
         "supported_endpoints": [
             "/v1/videos"
@@ -103295,13 +103336,13 @@
     },
     "fal_ai/blackforestlabs/flux-3-max/text-to-video": {
         "litellm_provider": "fal_ai",
-        "metadata": {"comment":"per second of generated video by resolution; output_cost_per_second is the default resolution 720p rate"},
+        "metadata": {"comment":"per second of generated video by resolution; output_cost_per_second is the default resolution 720p rate; promotional 35% off rate through 2026-12-07 (UTC) per the page; the regular rates of $0.17 (720p), $0.29 (1080p), $0.40 (2K) and $0.80 (4K) per second apply from 2026-12-08 (ruling fal-ai-promotional-rates-apply-until-promotion-ends, 2026-11-10)"},
         "mode": "video_generation",
-        "output_cost_per_second": 0.17,
-        "output_cost_per_second_1080p": 0.29,
-        "output_cost_per_second_2k": 0.4,
-        "output_cost_per_second_4k": 0.8,
-        "output_cost_per_second_720p": 0.17,
+        "output_cost_per_second": 0.1105,
+        "output_cost_per_second_1080p": 0.1885,
+        "output_cost_per_second_2k": 0.26,
+        "output_cost_per_second_4k": 0.52,
+        "output_cost_per_second_720p": 0.1105,
         "source": "https://fal.ai/models/blackforestlabs/flux-3-max/text-to-video",
         "supported_endpoints": [
             "/v1/videos"
@@ -103315,13 +103356,13 @@
     },
     "fal_ai/blackforestlabs/flux-3-max/keyframes-to-video": {
         "litellm_provider": "fal_ai",
-        "metadata": {"comment":"per second of generated video by resolution; output_cost_per_second is the default resolution 720p rate"},
+        "metadata": {"comment":"per second of generated video by resolution; output_cost_per_second is the default resolution 720p rate; promotional 35% off rate through 2026-12-07 (UTC) per the page; the regular rates of $0.17 (720p), $0.29 (1080p), $0.40 (2K) and $0.80 (4K) per second apply from 2026-12-08 (ruling fal-ai-promotional-rates-apply-until-promotion-ends, 2026-11-10)"},
         "mode": "video_generation",
-        "output_cost_per_second": 0.17,
-        "output_cost_per_second_1080p": 0.29,
-        "output_cost_per_second_2k": 0.4,
-        "output_cost_per_second_4k": 0.8,
-        "output_cost_per_second_720p": 0.17,
+        "output_cost_per_second": 0.1105,
+        "output_cost_per_second_1080p": 0.1885,
+        "output_cost_per_second_2k": 0.26,
+        "output_cost_per_second_4k": 0.52,
+        "output_cost_per_second_720p": 0.1105,
         "source": "https://fal.ai/models/blackforestlabs/flux-3-max/keyframes-to-video",
         "supported_endpoints": [
             "/v1/videos"
@@ -110325,14 +110366,13 @@
         "supports_vision": true
     },
     "together_ai/Qwen/Qwen4-Max": {
-        "cache_read_input_token_cost": 5.25e-08,
-        "comment": "These are Together's promotional rates, valid until 2026-11-23. Update on 2026-11-24 when the promotion ends. List rates per 1M tokens on https://www.together.ai/pricing are $1.50 input, $0.075 cached input and $4.50 output.",
-        "input_cost_per_token": 1.05e-06,
+        "cache_read_input_token_cost": 7.5e-08,
+        "input_cost_per_token": 1.5e-06,
         "litellm_provider": "together_ai",
         "max_input_tokens": 1000000,
         "max_output_tokens": 1000000,
         "mode": "chat",
-        "output_cost_per_token": 3.15e-06,
+        "output_cost_per_token": 4.5e-06,
         "source": "https://api.together.ai/v1/models",
         "supports_function_calling": true,
         "supports_prompt_caching": true,
@@ -126132,6 +126172,17 @@
         "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "fal_ai/recraft/vectorize/pro": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.04,
+        "source": "https://fal.ai/models/recraft/vectorize/pro",
+        "supported_endpoints": [
+            "/v1/images/edits",
+            "/v1/images/generations"
+        ],
         "supports_vision": true
     }
 }

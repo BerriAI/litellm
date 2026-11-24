@@ -316,7 +316,7 @@ from litellm.types.utils import (
     TextCompletionResponse as _TextCompletionResponse,
 )
 
-_CALL_TYPE_ENUM_MAP: Final[dict] = {ct.value: ct for ct in CallTypes}
+_CALL_TYPE_ENUM_MAP: Final[Mapping[str, CallTypes]] = {ct.value: ct for ct in CallTypes}
 _BACKFILL_MODES: Final[frozenset[str]] = frozenset({"chat", "responses"})
 
 # +-----------------------------------------------+
@@ -643,7 +643,7 @@ _OPAQUE_VALUE: Final = TypeAdapter(object)
 
 ############################################################
 def print_verbose(
-    print_statement,
+    print_statement: object,
     logger_only: bool = False,
     log_level: Literal["DEBUG", "INFO", "ERROR"] = "DEBUG",
 ):
@@ -836,7 +836,7 @@ def get_applied_guardrails(kwargs: dict[str, object]) -> list[str]:
     """
 
     request_guardrails: Final = get_request_guardrails(kwargs)
-    applied_guardrails: Final = []
+    applied_guardrails: Final[list[str]] = []
     CustomGuardrail: Final = _get_cached_custom_guardrail()
     for callback in litellm.callbacks:
         if callback is not None and isinstance(callback, CustomGuardrail):
@@ -1277,6 +1277,10 @@ def _is_streaming_response_for_correlation(result: object) -> bool:
 def _returns_requested_stream(kwargs: dict[str, object], call_type: CallTypes | str, result: object) -> bool:
     if call_type in (CallTypes.transcription, CallTypes.atranscription):
         return isinstance(result, (openai.Stream, openai.AsyncStream))
+    if call_type in _IMAGE_STREAMING_CALL_TYPES:
+        from litellm.images.streaming import AsyncImageStream, ImageStream
+
+        return isinstance(result, (ImageStream, AsyncImageStream))
     return _is_streaming_request(kwargs=kwargs, call_type=call_type)
 
 
@@ -2003,7 +2007,7 @@ def split_dynamic_success_callbacks(
     )
 
 
-def check_coroutine(value) -> bool:
+def check_coroutine(value: object) -> bool:
     get_coroutine_checker: Final = litellm_utils.get_coroutine_checker
     return get_coroutine_checker().is_async_callable(value)
 
@@ -2275,11 +2279,11 @@ async def _post_deployment_failure(
 
 
 def post_call_processing(
-    original_response,
+    original_response: object,
     model,
     optional_params: dict | None,
     original_function,
-    rules_obj,
+    rules_obj: Rules,
 ):
     try:
         if original_response is None:
@@ -3108,7 +3112,7 @@ def client(original_function):
 
 
 def _is_async_request(
-    kwargs: dict | None,
+    kwargs: Mapping[str, object] | None,
     is_pass_through: bool = False,
 ) -> bool:
     """
@@ -3167,7 +3171,18 @@ _NEVER_STREAMING_CALL_TYPES: Final = _SPEECH_CALL_TYPES | frozenset(
     }
 )
 
-_RESULT_DECIDES_STREAMING_CALL_TYPES: Final = frozenset({"get_responses", "aget_responses"})
+_IMAGE_STREAMING_CALL_TYPES: Final = frozenset(
+    {
+        CallTypes.image_generation.value,
+        CallTypes.aimage_generation.value,
+        CallTypes.image_edit.value,
+        CallTypes.aimage_edit.value,
+    }
+)
+
+_RESULT_DECIDES_STREAMING_CALL_TYPES: Final = (
+    frozenset({"get_responses", "aget_responses"}) | _IMAGE_STREAMING_CALL_TYPES
+)
 
 
 def _is_streaming_request(
@@ -3482,7 +3497,7 @@ def _retry_huggingface_tokenizer_load(
         outcomes.end_retry(key)
 
 
-def encode(model="", text="", custom_tokenizer: dict | None = None):
+def encode(model: str = "", text: str = "", custom_tokenizer: dict | None = None):
     """
     Encodes the given text using the specified model.
 
@@ -3505,7 +3520,7 @@ def encode(model="", text="", custom_tokenizer: dict | None = None):
 
 
 def decode(
-    model="",
+    model: str = "",
     tokens: Sequence[int] = (),
     custom_tokenizer: dict | None = None,
     skip_special_tokens: bool = True,
@@ -3528,7 +3543,7 @@ def decode(
     return tokenizer_json["tokenizer"].decode(tokens)
 
 
-def create_pretrained_tokenizer(identifier: str, revision="main", auth_token: str | None = None):
+def create_pretrained_tokenizer(identifier: str, revision: str = "main", auth_token: str | None = None):
     """
     Creates a tokenizer from an existing file on a HuggingFace repository to be used with `token_counter`.
 
@@ -3561,7 +3576,7 @@ def create_tokenizer(json: str):
 
 
 def token_counter(
-    model="",
+    model: str = "",
     custom_tokenizer: dict | SelectTokenizerResponse | None = None,
     text: str | list[str] | None = None,
     messages: Sequence | None = None,
@@ -4258,7 +4273,7 @@ def update_dictionary(existing_dict: dict[str, object], new_dict: Mapping[str, o
 _update_dictionary = update_dictionary
 
 
-def _convert_stringified_numbers(value):
+def _convert_stringified_numbers(value: object):
     """Convert stringified numbers (including scientific notation) to appropriate numeric types."""
     if isinstance(value, str):
         try:
@@ -4811,7 +4826,7 @@ def register_model(
     return model_cost
 
 
-def _should_drop_param(k, additional_drop_params) -> bool:
+def _should_drop_param(k: object, additional_drop_params: object) -> bool:
     if isinstance(additional_drop_params, (list, tuple)) and k in additional_drop_params:
         return True  # allow user to drop specific params for a model - e.g. vllm - logit bias
 
@@ -4826,8 +4841,10 @@ def _bedrock_route_for_request(
     return bedrock_route_for_request(model, passed_params, additional_drop_params)
 
 
-def _get_non_default_params(passed_params: dict, default_params: dict, additional_drop_params: list | None) -> dict:
-    non_default_params: Final = {}
+def _get_non_default_params(
+    passed_params: Mapping[str, object], default_params: Mapping[str, object], additional_drop_params: object
+) -> dict:
+    non_default_params: Final[dict[str, object]] = {}
     for k, v in passed_params.items():
         if (
             k in default_params
@@ -5130,7 +5147,7 @@ def get_optional_params_embeddings(
     user: str | None = None,
     encoding_format: str | None = None,
     dimensions: int | None = None,
-    custom_llm_provider="",
+    custom_llm_provider: str = "",
     drop_params: bool | None = None,
     additional_drop_params: list[str] | None = None,
     allowed_openai_params: list[str] | None = None,
@@ -5577,11 +5594,13 @@ def remove_json_schema_refs(schema: _SchemaT, max_depth: int = 10) -> _SchemaT:
 _remove_json_schema_refs = remove_json_schema_refs
 
 
-def _remove_unsupported_params(non_default_params: dict, supported_openai_params: list[str] | None) -> dict:
+def _remove_unsupported_params(
+    non_default_params: dict[str, object], supported_openai_params: list[str] | None
+) -> dict:
     """
     Remove unsupported params from non_default_params
     """
-    remove_keys: Final = []
+    remove_keys: Final[list[str]] = []
     if supported_openai_params is None:
         return {}  # no supported params, so no optional openai params to send
     for param in non_default_params:
@@ -5620,7 +5639,7 @@ class PreProcessNonDefaultParams:
         special_params: Mapping[str, object],
         custom_llm_provider: object,
         additional_drop_params: object,
-        default_param_values: dict,
+        default_param_values: Mapping[str, object],
         additional_endpoint_specific_params: list[str],
     ) -> dict:
         for k, v in special_params.items():
@@ -5940,9 +5959,13 @@ def is_known_non_reasoning_model(model: str, custom_llm_provider: str | None) ->
     return info.get("supports_reasoning") is False or info["key"] in GetModelCostMap.loaded_model_cost_map()
 
 
-def has_catalog_entry(model: str, custom_llm_provider: str | None) -> bool:
+def catalog_entry(model: str, custom_llm_provider: str | None) -> Mapping[str, object] | None:
     info: Final = lookup_catalog_model_info(model, custom_llm_provider)
-    return not isinstance(info, ModelInfoLookupMiss) and info["key"] in GetModelCostMap.loaded_model_cost_map()
+    return None if isinstance(info, ModelInfoLookupMiss) else GetModelCostMap.loaded_model_cost_map().get(info["key"])
+
+
+def has_catalog_entry(model: str, custom_llm_provider: str | None) -> bool:
+    return catalog_entry(model, custom_llm_provider) is not None
 
 
 def _dropped_reasoning_warning(model: str, custom_llm_provider: str | None) -> str:
@@ -5966,38 +5989,38 @@ def get_optional_params(
     # use the openai defaults
     # https://platform.openai.com/docs/api-reference/chat/create
     model: str,
-    functions=None,
-    function_call=None,
-    temperature=None,
-    top_p=None,
-    n=None,
-    stream=False,
-    stream_options=None,
-    stop=None,
-    max_tokens=None,
-    max_completion_tokens=None,
-    modalities=None,
-    prediction=None,
-    audio=None,
-    presence_penalty=None,
-    frequency_penalty=None,
-    logit_bias=None,
-    user=None,
-    custom_llm_provider="",
-    response_format=None,
-    seed=None,
-    tools=None,
-    tool_choice=None,
-    max_retries=None,
-    logprobs=None,
-    top_logprobs=None,
-    extra_headers=None,
-    api_version=None,
-    parallel_tool_calls=None,
-    drop_params=None,
+    functions: object = None,
+    function_call: object = None,
+    temperature: object = None,
+    top_p: object = None,
+    n: object = None,
+    stream: object = False,
+    stream_options: object = None,
+    stop: object = None,
+    max_tokens: object = None,
+    max_completion_tokens: object = None,
+    modalities: object = None,
+    prediction: object = None,
+    audio: object = None,
+    presence_penalty: object = None,
+    frequency_penalty: object = None,
+    logit_bias: object = None,
+    user: object = None,
+    custom_llm_provider: str = "",
+    response_format: object = None,
+    seed: object = None,
+    tools: object = None,
+    tool_choice: object = None,
+    max_retries: object = None,
+    logprobs: object = None,
+    top_logprobs: object = None,
+    extra_headers: object = None,
+    api_version: object = None,
+    parallel_tool_calls: object = None,
+    drop_params: object = None,
     allowed_openai_params: list[str] | None = None,
-    reasoning_effort=None,
-    verbosity=None,
+    reasoning_effort: object = None,
+    verbosity: object = None,
     additional_drop_params: list[str] | None = None,
     messages: list[AllMessageValues] | None = None,
     thinking: AnthropicThinkingParam | None = None,
@@ -6624,6 +6647,17 @@ EXTRA_BODY_ROUTING_KEYS: Final = frozenset({"model"})
 LITELLM_ONLY_PARAMS: Final = frozenset(("cache_control_injection_points",))
 
 
+VECTOR_STORE_ROUTING_PARAMS: Final = frozenset(("vector_store_id", "vector_store_ids"))
+
+
+def vector_store_params_withheld_from(custom_llm_provider: str) -> frozenset[str]:
+    if custom_llm_provider == "litellm_proxy":
+        return frozenset()
+    if ProviderConfigManager.get_custom_llm_handler(custom_llm_provider) is not None:
+        return frozenset()
+    return VECTOR_STORE_ROUTING_PARAMS
+
+
 def header_auth_params(custom_llm_provider: str) -> frozenset[str]:
     if custom_llm_provider != "azure_ai":
         return frozenset()
@@ -6651,11 +6685,16 @@ def add_provider_specific_params_to_optional_params(
         "bigmodel",
         *litellm.openai_compatible_providers,
     ] or JSONProviderRegistry.exists(custom_llm_provider)
+    vector_store_params_withheld: Final = vector_store_params_withheld_from(custom_llm_provider)
     if calls_through_openai_sdk:
         # for openai, azure we should pass the extra/passed params within `extra_body` https://github.com/openai/openai-python/blob/ac33853ba10d13ac149b1fa3ca6dba7d613065c9/src/openai/resources/models.py#L46
         if _should_drop_param(k="extra_body", additional_drop_params=additional_drop_params) is False:
             extra_body: Final = dict(passed_params.pop("extra_body", None) or {})
-            withheld_params: Final = frozenset[str]() if custom_llm_provider == "litellm_proxy" else LITELLM_ONLY_PARAMS
+            withheld_params: Final = (
+                frozenset[str]()
+                if custom_llm_provider == "litellm_proxy"
+                else LITELLM_ONLY_PARAMS | vector_store_params_withheld
+            )
             for k in passed_params:
                 if k not in openai_params and k not in withheld_params and passed_params[k] is not None:
                     extra_body[k] = passed_params[k]
@@ -6677,7 +6716,7 @@ def add_provider_specific_params_to_optional_params(
             )
     else:
         for k in passed_params:
-            if k not in openai_params and passed_params[k] is not None:
+            if k not in openai_params and k not in vector_store_params_withheld and passed_params[k] is not None:
                 if _should_drop_param(k=k, additional_drop_params=additional_drop_params):
                     continue
                 optional_params[k] = passed_params[k]
@@ -6729,7 +6768,7 @@ def provider_rejectable_params(passed_params: Mapping[str, object]) -> frozenset
     return frozenset(get_non_default_params(params)) - PROVIDER_UNVALIDATED_PARAMS
 
 
-def get_non_default_params(passed_params: dict) -> dict:
+def get_non_default_params(passed_params: Mapping[str, object]) -> dict:
     # filter out those parameters that were passed with non-default values
     non_default_params: Final = {
         k: v
@@ -7088,7 +7127,7 @@ def get_max_tokens(model: str) -> int | None:
         8192
     """
 
-    def _get_max_position_embeddings(model_name):
+    def _get_max_position_embeddings(model_name: str):
         # Construct the URL for the config.json file
         config_url: Final = f"https://huggingface.co/{model_name}/raw/main/config.json"
         try:
@@ -7127,7 +7166,7 @@ def get_max_tokens(model: str) -> int | None:
         )
 
 
-def _strip_stable_vertex_version(model_name) -> str:
+def _strip_stable_vertex_version(model_name: str) -> str:
     return re.sub(r"-\d+$", "", model_name)
 
 
@@ -7138,7 +7177,7 @@ def _strip_dated_snapshot_suffix(model_name: str) -> str:
     return _DATED_SNAPSHOT_SUFFIX.sub("", model_name)
 
 
-def _get_base_bedrock_model(model_name) -> str:
+def _get_base_bedrock_model(model_name: str) -> str:
     """
     Get the base model from the given model name.
 
@@ -7984,6 +8023,7 @@ def get_model_info_helper(
                 thinking_on_by_default=_model_info.get("thinking_on_by_default", None),
                 supports_tool_search=_model_info.get("supports_tool_search", None),
                 supports_per_turn_control=_model_info.get("supports_per_turn_control", None),
+                supports_server_side_fallback=_model_info.get("supports_server_side_fallback", None),
                 supports_mid_conversation_system=_model_info.get("supports_mid_conversation_system", None),
                 supports_anthropic_thinking_payload=_model_info.get("supports_anthropic_thinking_payload", None),
                 supports_anthropic_compaction=_model_info.get("supports_anthropic_compaction", None),
@@ -8302,7 +8342,7 @@ def function_to_dict(input_function) -> dict:
     return result
 
 
-def modify_url(original_url, new_path):
+def modify_url(original_url: httpx.URL | str, new_path: str):
     url: Final = httpx.URL(original_url)
     modified_url: Final = url.copy_with(path=new_path)
     return str(modified_url)
@@ -9607,7 +9647,7 @@ def _debug_params_repr(params: Mapping[str, object]) -> str:
     return "{" + ", ".join(f"{key!r}: {_debug_arg_repr(value)}" for key, value in params.items()) + "}"
 
 
-def print_args_passed_to_litellm(original_function, args, kwargs):
+def print_args_passed_to_litellm(original_function, args: Sequence[object], kwargs: Mapping[str, object]):
     if not is_debugging_on():
         return
     try:
@@ -9718,7 +9758,7 @@ class ModelResponseIterator:
 
 
 class ModelResponseListIterator:
-    def __init__(self, model_responses, delay: float | None = None):
+    def __init__(self, model_responses: Sequence[object], delay: float | None = None):
         self.model_responses = model_responses
         self.index = 0
         self.delay = delay
@@ -10149,7 +10189,7 @@ def validate_chat_completion_tool_choice(
     )
 
 
-def validate_openai_optional_params(stop: str | list[str] | None = None, **kwargs) -> str | list[str] | None:
+def validate_openai_optional_params(stop: str | list[str] | None = None, **kwargs: object) -> str | list[str] | None:
     """
     Validates and fixes OpenAI optional parameters.
 

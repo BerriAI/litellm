@@ -677,7 +677,7 @@ class OpenTelemetryV2(CustomLogger):
         parent_otel_span: Span | None = None,
         start_time: datetime | float | None = None,
         end_time: datetime | float | None = None,
-        event_metadata: dict | None = None,
+        event_metadata: Mapping[str, object] | None = None,
     ) -> None:
         self._emit_service(
             payload,
@@ -695,7 +695,7 @@ class OpenTelemetryV2(CustomLogger):
         parent_otel_span: Span | None = None,
         start_time: datetime | float | None = None,
         end_time: datetime | float | None = None,
-        event_metadata: dict | None = None,
+        event_metadata: Mapping[str, object] | None = None,
     ) -> None:
         self._emit_service(
             payload,
@@ -713,7 +713,7 @@ class OpenTelemetryV2(CustomLogger):
         parent_otel_span: Span | None,
         start_time: datetime | float | None,
         end_time: datetime | float | None,
-        event_metadata: dict | None,
+        event_metadata: Mapping[str, object] | None,
         error_override: str | None,
     ) -> Span | None:
         data = ServiceSpanData.from_payload(payload, event_metadata=event_metadata)
@@ -842,9 +842,9 @@ class OpenTelemetryV2(CustomLogger):
         self,
         user_api_key_dict: "UserAPIKeyAuth",
         cache: "DualCache",
-        data: dict,
+        data: dict[str, object],
         call_type: "CallTypesLiteral",
-    ) -> dict:
+    ) -> dict[str, object]:
         self.seed_request_identity(
             user_api_key_dict,
             model=model_from_request_data(data),
@@ -882,7 +882,7 @@ class OpenTelemetryV2(CustomLogger):
 
     async def async_post_call_failure_hook(
         self,
-        request_data: dict,
+        request_data: Mapping[str, object],
         original_exception: Exception,
         user_api_key_dict: "UserAPIKeyAuth",
         traceback_str: "str | None" = None,

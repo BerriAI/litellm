@@ -519,8 +519,8 @@ async def _scan_one_table(
     prisma_client: object,
     location: str,
     db_attr: str,
-    json_columns: tuple,
-    scalar_columns: tuple,
+    json_columns: tuple[str, ...],
+    scalar_columns: tuple[str, ...],
 ) -> LocationReport:
     report: Final = LocationReport(location=location)
     table: Final[TableActions[object] | None] = getattr(prisma_client.db, db_attr, None)

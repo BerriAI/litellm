@@ -42,7 +42,7 @@ class NvidiaNimConfig(OpenAIGPTConfig, MapsAllowedOpenAIParams):
     The class `NvidiaNimConfig` provides configuration for the Nvidia NIM's Chat Completions API interface. Below are the parameters:
     """
 
-    def get_supported_openai_params(self, model: str) -> list:
+    def get_supported_openai_params(self, model: str) -> list[str]:
         """
         Get the supported OpenAI params for the given model
 
@@ -122,7 +122,7 @@ class NvidiaNimConfig(OpenAIGPTConfig, MapsAllowedOpenAIParams):
 
     def map_openai_params(
         self,
-        non_default_params: dict[str, object],  # mutable-ok: get_optional_params passes its own dicts
+        non_default_params: Mapping[str, object],
         optional_params: dict[str, object],  # mutable-ok: filled in place for get_optional_params
         model: str,
         drop_params: bool,
@@ -131,7 +131,7 @@ class NvidiaNimConfig(OpenAIGPTConfig, MapsAllowedOpenAIParams):
 
     def map_openai_params_allowing(
         self,
-        non_default_params: dict[str, object],  # mutable-ok: same caller dicts map_openai_params takes
+        non_default_params: Mapping[str, object],
         optional_params: dict[str, object],  # mutable-ok: filled in place like map_openai_params
         model: str,
         drop_params: bool,

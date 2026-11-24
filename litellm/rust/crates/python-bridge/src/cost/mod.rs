@@ -4,8 +4,7 @@
 mod query;
 
 pub(crate) use query::{
-    NativeBilledRates, NativeRateCard, NativeReceipt, adjust, adjustment_config, bound, price,
-    rates,
+    NativeRateCard, RoutePricing, adjust, adjustment_config, bound, price, rates,
 };
 
 use std::time::Duration;
@@ -32,6 +31,16 @@ use serde_json::Value;
 
 /// One row's prices and uplifts. A key whose value JSON cannot hold or the catalog cannot read is left out, as a
 /// price main could not parse was. A row the catalog checks would reject is still priced, see `billed_prices`
+/// The service tier a call bills, from the tier it asked for and the tier the provider reports serving it at
+#[pyfunction]
+#[pyo3(signature = (requested, served))]
+pub(crate) fn billable_service_tier(
+    requested: Option<&str>,
+    served: Option<&str>,
+) -> Option<String> {
+    litellm_inference_messages::billable_tier(requested, served)
+}
+
 #[pyclass(frozen, name = "NativePrices", module = "litellm.rust_bridge._native")]
 pub(crate) struct NativePrices {
     prices: BilledPrices,

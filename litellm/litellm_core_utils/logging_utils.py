@@ -130,7 +130,7 @@ def _truncate_base64_in_value(
 
 def truncate_base64_in_messages(
     messages: str | list | dict | None,
-) -> str | list | dict | None:
+) -> str | list[object] | dict[str, object] | None:
     """
     Return a copy of *messages* with long base64 data-URI payloads replaced
     by human-readable size placeholders.
@@ -176,7 +176,7 @@ def _is_few_plain_strings(leaves: tuple[str, ...]) -> bool:
 
 async def truncate_base64_in_messages_async(
     messages: str | list | dict | None,  # mutable-ok: same contract as truncate_base64_in_messages
-) -> str | list | dict | None:  # mutable-ok: same contract as truncate_base64_in_messages
+) -> str | list[object] | dict[str, object] | None:  # mutable-ok: same contract as truncate_base64_in_messages
     """
     Same result as truncate_base64_in_messages, but payloads whose string content
     reaches BASE64_TRUNCATION_OFFLOAD_THRESHOLD_CHARS are copied in a worker thread,

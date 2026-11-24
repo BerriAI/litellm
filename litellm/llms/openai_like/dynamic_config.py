@@ -302,8 +302,8 @@ def create_config_class(provider: SimpleProviderConfig):
             api_base: str | None,
             api_key: str | None,
             model: str,
-            optional_params: dict,
-            litellm_params: dict,
+            optional_params: Mapping[str, object],
+            litellm_params: Mapping[str, object],
             stream: bool | None = None,
         ) -> str:
             """Build complete URL for the API endpoint"""
@@ -361,7 +361,7 @@ def create_config_class(provider: SimpleProviderConfig):
 
         def map_openai_params(
             self,
-            non_default_params: dict,
+            non_default_params: Mapping[str, object],
             optional_params: dict,
             model: str,
             drop_params: bool,
@@ -485,7 +485,7 @@ def create_responses_config_class(provider: SimpleProviderConfig) -> "type[OpenA
         def get_complete_url(
             self,
             api_base: str | None,
-            litellm_params: dict,
+            litellm_params: Mapping[str, object],
         ) -> str:
             resolved_base: Final = (
                 api_base
