@@ -15,7 +15,7 @@ import numpy as np
 import pytest
 import respx
 from httpx import Headers
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, TypeAdapter
 
 import litellm
 from litellm.llms.anthropic.messages.native import handler as python_messages
@@ -11452,8 +11452,15 @@ def _two_replayed_turns(first: object, second: object) -> list[dict[str, object]
     ]
 
 
-def _replayed_signatures(converted: dict) -> list[object]:
-    return [block.get("signature") for block in converted["messages"][1]["content"] if block["type"] == "thinking"]
+_CONTENT_BLOCKS: Final = TypeAdapter(tuple[Mapping[str, object], ...])
+
+
+def _replayed_blocks(converted: Mapping[str, object]) -> tuple[Mapping[str, object], ...]:
+    return _CONTENT_BLOCKS.validate_python(_CONTENT_BLOCKS.validate_python(converted["messages"])[1]["content"])
+
+
+def _replayed_signatures(converted: Mapping[str, object]) -> list[object]:
+    return [block.get("signature") for block in _replayed_blocks(converted) if block["type"] == "thinking"]
 
 
 _MALFORMED_THINKING_BLOCKS: Final = (
@@ -11554,7 +11561,7 @@ def _replayed_tool_turn(assistant_fields: dict[str, object]) -> list[dict[str, o
     ]
 
 
-def _dropped_request(messages: list[dict[str, object]]) -> dict:
+def _dropped_request(messages: list[dict[str, object]]) -> Mapping[str, object]:
     return AnthropicConfig().transform_request(
         model=UNFLAGGED_CLAUDE,
         messages=messages,
@@ -11609,7 +11616,7 @@ def test_chat_transform_request_keeps_thinking_when_cleanup_leaves_inline_thinki
     )
 
     assert converted["thinking"] == _ENABLED_THINKING
-    assert inline_block["type"] in [block["type"] for block in converted["messages"][1]["content"]]
+    assert inline_block["type"] in [block["type"] for block in _replayed_blocks(converted)]
 
 
 def test_chat_transform_request_keeps_thinking_when_cleanup_leaves_no_tool_turn(
@@ -11988,15 +11995,19 @@ def test_chat_transform_request_fetches_once_when_another_field_is_the_real_caus
 
 
 @pytest.mark.parametrize(
-    "content",
-    [pytest.param("Hello", id="string_content"), pytest.param([{"type": "text", "text": "Hello"}], id="list_content")],
+    ("content", "block", "got"),
+    [
+        pytest.param("Hello", {"type": 5}, "int", id="number_type_string_content"),
+        pytest.param([{"type": "text", "text": "Hello"}], {"type": 5}, "int", id="number_type_list_content"),
+        pytest.param("Hello", {"thinking": "x", "signature": "sig"}, "NoneType", id="missing_type_string_content"),
+    ],
 )
 def test_chat_transform_request_names_a_thinking_block_whose_type_is_not_a_string(
-    local_model_cost_map, content: object
+    local_model_cost_map, content: object, block: Mapping[str, object], got: str
 ):
     messages: Final = [
         {"role": "user", "content": "Hi"},
-        {"role": "assistant", "content": content, "thinking_blocks": [{"type": 5}]},
+        {"role": "assistant", "content": content, "thinking_blocks": [block]},
         {"role": "user", "content": "Go on"},
     ]
 
@@ -12004,7 +12015,7 @@ def test_chat_transform_request_names_a_thinking_block_whose_type_is_not_a_strin
         _chat_request(AnthropicConfig(), UNFLAGGED_CLAUDE, messages)
 
     assert raised.value.status_code == 400
-    assert raised.value.message == "Invalid type for 'messages[1].thinking_blocks[0].type': expected a string, got int"
+    assert raised.value.message == f"Invalid type for 'messages[1].thinking_blocks[0].type': expected a string, got {got}"
 
     dropped: Final = AnthropicConfig().transform_request(
         model=UNFLAGGED_CLAUDE,

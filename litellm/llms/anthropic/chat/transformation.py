@@ -344,10 +344,10 @@ def _is_non_list_thinking_blocks(value: object) -> bool:
 def _thinking_block_fault(field: str, block: object) -> tuple[str, object, str] | None:
     if not isinstance(block, Mapping):
         return (field, block, "an object")
-    fields: Final = cast(Mapping[str, object], block)  # cast-ok: isinstance proved a mapping
-    if "type" not in fields or isinstance(fields["type"], str):
+    block_type: Final = cast(Mapping[str, object], block).get("type")  # cast-ok: isinstance proved a mapping
+    if isinstance(block_type, str):
         return None
-    return (f"{field}.type", fields["type"], "a string")
+    return (f"{field}.type", block_type, "a string")
 
 
 def _thinking_blocks_faults(index: int, thinking_blocks: object) -> tuple[tuple[str, object, str], ...]:
@@ -423,8 +423,7 @@ def _with_repeatable_thinking_blocks(
 def _is_unreadable_content_block(block: object) -> bool:
     if not isinstance(block, Mapping):
         return not callable(getattr(block, "get", None))
-    fields: Final = cast(Mapping[str, object], block)  # cast-ok: isinstance proved a mapping
-    return "type" in fields and not isinstance(fields["type"], str)
+    return not isinstance(cast(Mapping[str, object], block).get("type"), str)  # cast-ok: isinstance proved a mapping
 
 
 def _has_unreadable_content_block(messages: Sequence[object]) -> bool:
