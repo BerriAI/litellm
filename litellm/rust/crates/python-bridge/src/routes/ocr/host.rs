@@ -100,6 +100,7 @@ fn is_settings_error(py: Python<'_>, error: &PyErr) -> bool {
 impl PythonBinding for OcrPythonHost {
     type Protocol = Ocr;
     type Failure = PyErr;
+    type Decoded = OcrCall;
 
     fn decode_request(
         &mut self,

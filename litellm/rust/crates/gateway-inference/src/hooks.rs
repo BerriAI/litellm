@@ -14,7 +14,7 @@ use litellm_llms_types::formats::chat_completions::ChatCompletionsUsage;
 use serde_json::{Map, Value};
 
 use crate::{
-    Ended, Gateway, Host,
+    Ended, Gateway, Host, record,
     serve::Endpoint,
     stream_event::Counts,
     stream_outcome::{self, Outcome},
@@ -127,14 +127,13 @@ impl Told {
     }
 }
 
-/// Serves one call of the `call_type` route with the host's hooks around it: `serve` runs on the
+/// Serves one call with the host's hooks around it: `serve` runs on the
 /// body the pre-call hook left, a complete answer is logged off the request, as the proxy logs
 /// it after it went out, and a call that ends on an error, a refusal by that hook included,
 /// tells the hooks it failed.
 pub(crate) async fn around<H, F, Fut>(
     gateway: &Gateway<H>,
     identity: &Authenticated<H::Rows>,
-    call_type: CallType,
     body: Map<String, Value>,
     serve: F,
 ) -> Result<Response, Ended>
@@ -143,7 +142,7 @@ where
     F: FnOnce(Arc<H::Hooks>, Map<String, Value>) -> Fut,
     Fut: Future<Output = Result<Answer, Ended>>,
 {
-    let hooks = Arc::new(gateway.host.hooks(identity, call_type));
+    let hooks = Arc::new(gateway.host.hooks(identity));
     let served = match hooks.pre_call(body).await {
         Ok(body) => serve(hooks.clone(), body).await,
         Err(ended) => Err(ended.into()),
@@ -151,7 +150,7 @@ where
     match served {
         Ok(Answer { response, complete }) => {
             if let Some(served) = complete {
-                tokio::spawn(async move { hooks.succeeded(served).await });
+                record::spawn_in_call(async move { hooks.succeeded(served).await });
             }
             Ok(response)
         }

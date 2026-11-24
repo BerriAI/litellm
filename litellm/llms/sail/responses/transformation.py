@@ -21,10 +21,10 @@ class SailResponsesAPIConfig(create_responses_config_class(sail_provider_config(
         self,
         model: str,
         input: str | ResponseInputParam,
-        response_api_optional_request_params: dict,  # mutable-ok: signature fixed by the base interface
+        response_api_optional_request_params: dict[str, object],  # mutable-ok: signature fixed by the base interface
         litellm_params: GenericLiteLLMParams,
-        headers: dict,  # mutable-ok: signature fixed by the base interface
-    ) -> dict:  # mutable-ok: return type fixed by the base interface
+        headers: dict[str, object],  # mutable-ok: signature fixed by the base interface
+    ) -> dict[str, object]:  # mutable-ok: return type fixed by the base interface
         request: Final[Mapping[str, object]] = super().transform_responses_api_request(
             model=model,
             input=input,

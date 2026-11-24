@@ -296,7 +296,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         )
         return usage_dict
 
-    def validate_environment(self, headers: dict, model: str, api_key: str | None = None) -> dict:
+    def validate_environment(self, headers: dict[str, str], model: str, api_key: str | None = None) -> dict[str, str]:
         return headers
 
     def get_complete_url(self, api_base: str | None, model: str, api_key: str | None = None) -> str:
@@ -504,7 +504,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         return BidiGenerateContentRealtimeInputConfig(automaticActivityDetection=transformed_audio_activity_config)
 
     @staticmethod
-    def _extract_turn_detection(session: dict[str, object]) -> dict | None:
+    def _extract_turn_detection(session: dict[str, object]) -> dict[str, object] | None:
         """Extract turn_detection from a session.update payload.
 
         Handles both the flat beta shape (``session.turn_detection``) and the
@@ -1231,7 +1231,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         returned_items.append(response_output_item_done)
         return returned_items
 
-    def _consume_usage_metadata_for_response_done(self, frame: dict[str, object]) -> dict | None:
+    def _consume_usage_metadata_for_response_done(self, frame: dict[str, object]) -> dict[str, object] | None:
         """Pop usageMetadata from the frame (authoritative) or drain the pending buffer.
 
         Uses pop so a frame with both ``toolCall`` and ``turnComplete`` can't

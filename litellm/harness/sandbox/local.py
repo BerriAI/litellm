@@ -136,7 +136,9 @@ class LocalSandbox:
     """Sandbox backed by the local filesystem and asyncio subprocesses."""
 
     def __init__(self, path: str | os.PathLike[str]) -> None:
-        resolved = os.path.realpath(os.path.abspath(os.fspath(path)))
+        raw_path: Final = os.fspath(path)
+        absolute: Final = os.path.abspath(raw_path)
+        resolved: Final = os.path.realpath(absolute)
         if not os.path.isdir(resolved):
             raise SandboxError(f"sandbox path does not exist or is not a directory: {resolved}")
         self.workdir: str = resolved

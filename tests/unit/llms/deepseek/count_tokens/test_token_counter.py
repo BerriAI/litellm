@@ -225,6 +225,24 @@ async def test_count_sends_a_history_that_echoes_a_fallback_block_as_the_history
 
 
 @pytest.mark.asyncio
+async def test_messages_count_sends_the_effort_messages_inference_sends() -> None:
+    options: Final[dict[str, JsonValue]] = {"output_config": {"effort": "max"}}
+    sent_by_inference: Final = DeepSeekAnthropicMessagesConfig().transform_anthropic_messages_request(
+        model="deepseek-v4-pro",
+        messages=[dict(message) for message in _WEATHER_IN_SF],
+        anthropic_messages_optional_request_params={**options, "max_tokens": 4096},
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    _, route = await _count(httpx.Response(200, json={"input_tokens": 91}), count_options=options)
+
+    sent: Final = json.loads(route.calls.last.request.content)
+    assert sent.get("output_config") == sent_by_inference.get("output_config") == {"effort": "max"}
+    assert sent.get("thinking") == sent_by_inference.get("thinking")
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("status_code", (404, 405))
 async def test_a_missing_count_route_leaves_the_count_to_the_estimate(status_code: int) -> None:
     result, route = await _count(httpx.Response(status_code, text="no such route"))

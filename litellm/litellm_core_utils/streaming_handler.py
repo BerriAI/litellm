@@ -36,6 +36,7 @@ from litellm.litellm_core_utils.core_helpers import (
     as_str_mapping,
     attribute_or_none,
     chunk_usage,
+    concatenated,
     decoded_json_object,
     has_attributes,
     json_contains,
@@ -857,7 +858,7 @@ class CustomStreamWrapper:
                 llm_provider="",
             )
 
-    def check_special_tokens(self, chunk: str, finish_reason: str | None):
+    def check_special_tokens(self, chunk: object, finish_reason: str | None):
         """
         Output parse <s> / </s> special tokens for sagemaker + hf streaming.
         """
@@ -867,14 +868,14 @@ class CustomStreamWrapper:
 
         if finish_reason:
             for token in self.special_tokens:
-                if token in chunk:
-                    chunk = chunk.replace(token, "")
+                if json_contains(chunk, token):
+                    chunk = require_attributes(chunk, _Replaceable, "replace").replace(token, "")
             return hold, chunk
 
         if self.sent_first_chunk is True:
             return hold, chunk
 
-        curr_chunk = self.holding_chunk + chunk
+        curr_chunk = concatenated(self.holding_chunk, chunk)
         curr_chunk = curr_chunk.strip()
 
         for token in self.special_tokens:
@@ -1394,7 +1395,7 @@ class CustomStreamWrapper:
 
     def return_processed_chunk_logic(  # noqa: C901
         self,
-        completion_obj: dict[str, Any],
+        completion_obj: dict[str, object],
         model_response: ModelResponseStream,
         response_obj: Mapping[str, Any],
         plain_delta_created: bool = False,

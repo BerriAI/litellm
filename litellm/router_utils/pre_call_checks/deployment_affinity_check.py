@@ -203,7 +203,7 @@ class DeploymentAffinityCheck(CustomLogger):
         return remainder
 
     @staticmethod
-    def _get_model_map_key_from_deployment(deployment: dict) -> str | None:
+    def _get_model_map_key_from_deployment(deployment: Mapping[str, object]) -> str | None:
         """
         Derive a stable model-map key from a router deployment dict.
 
@@ -238,7 +238,7 @@ class DeploymentAffinityCheck(CustomLogger):
 
     @staticmethod
     def _get_stable_model_map_key_from_deployments(
-        healthy_deployments: list[dict],
+        healthy_deployments: Sequence[Mapping[str, object]],
     ) -> str | None:
         """
         Only use model-map key scoping when it is stable across the deployment set.
