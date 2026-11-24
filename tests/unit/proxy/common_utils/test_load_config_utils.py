@@ -453,6 +453,25 @@ class TestBucketConfigIncludes:
         ]
 
 
+def test_parsed_config_detaches_yaml_anchors() -> None:
+    from litellm.proxy.common_utils.load_config_utils import _parsed_config
+
+    parsed = _parsed_config(
+        "config.yaml",
+        (
+            "model_list:\n"
+            "  - model_name: sonnet\n"
+            "    model_info: &shared\n"
+            "      mode: chat\n"
+            "  - model_name: opus\n"
+            "    model_info: *shared\n"
+        ),
+    )
+    assert isinstance(parsed, dict)
+    assert parsed["model_list"][0]["model_info"] == {"mode": "chat"}
+    assert parsed["model_list"][0]["model_info"] is not parsed["model_list"][1]["model_info"]
+
+
 class TestGCSConfigBucketClient:
     @pytest.mark.asyncio
     async def test_reading_a_config_from_gcs_does_not_need_an_enterprise_license(self, monkeypatch):

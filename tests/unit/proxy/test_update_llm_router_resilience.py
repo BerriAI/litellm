@@ -293,6 +293,25 @@ class TestDeleteDeploymentKeepsPluginConfigModels:
         pin_complexity_router_model_id(entry)
         assert "model_info" not in entry
 
+    def test_pin_does_not_leak_id_across_shared_model_info_dicts(self):
+        from litellm.proxy.proxy_server import pin_complexity_router_model_id
+
+        shared_info = {"mode": "chat"}
+        entry_a = self._raw_model_entry()
+        entry_a["model_info"] = shared_info
+        entry_b = {
+            "model_name": "other-router",
+            "litellm_params": {
+                "model": "auto_router/other_router",
+                "complexity_router_config": {"tiers": {"SIMPLE": "claude-haiku-4"}},
+            },
+            "model_info": shared_info,
+        }
+        pin_complexity_router_model_id(entry_a)
+        pin_complexity_router_model_id(entry_b)
+        assert "id" not in shared_info
+        assert entry_a["model_info"]["id"] != entry_b["model_info"]["id"]
+
 
 class TestDeleteDeploymentKeepsConfigModelsOnEmptyConfigRead:
     """Regression: a config read that succeeds but returns no model_list (e.g. a
