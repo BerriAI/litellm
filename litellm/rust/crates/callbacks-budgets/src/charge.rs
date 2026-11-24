@@ -25,6 +25,7 @@ use futures_util::future::join_all;
 use litellm_callbacks::{BudgetReservation, Host, HostCall, HostCallError};
 use litellm_redis_store::{
     ErrorKind, Number, RequestRedis, Send,
+    auth_cache::AuthObject,
     spend_counters::{LostSeed, Reading, SpendCounter, SpendCounters},
 };
 use serde::{Deserialize, Serialize};
@@ -39,7 +40,7 @@ use crate::{
 };
 
 /// One charged request's counter inputs, as the cost callback has them after the spend write.
-#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct CounterStep {
     pub token: Option<String>,
@@ -52,7 +53,10 @@ pub struct CounterStep {
     pub model_access_groups: Option<Vec<Option<String>>>,
     pub response_cost: Option<f64>,
     /// The entity counters whose committed twin exists for this charge.
-    #[serde(deserialize_with = "counters::counter_keys")]
+    #[serde(
+        deserialize_with = "counters::counter_keys",
+        serialize_with = "counters::counter_keys_text"
+    )]
     pub committed_tracked: Vec<SpendCounter>,
     pub customer_windows: Vec<CustomerWindow>,
     /// The customer hierarchy counters the request was admitted under, each seeded from its
@@ -145,7 +149,7 @@ impl HostCall for StoredSpend {
 /// is cached, `0.0` when none is.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 struct CachedSpend {
-    sources: Vec<Vec<String>>,
+    sources: Vec<Vec<AuthObject>>,
 }
 
 impl HostCall for CachedSpend {
@@ -181,7 +185,7 @@ enum Unit {
     /// A lifetime counter, seeded from its row or, without one, from the auth cache.
     Counter {
         counter: SpendCounter,
-        sources: Vec<String>,
+        sources: Vec<AuthObject>,
     },
     /// A budget window, seeded from its window spend. A strict (customer) window is skipped when
     /// only this pod's memory could answer for it.
@@ -1001,7 +1005,7 @@ async fn charge_from_cached_spend(
                 .map(|(index, spend)| async move {
                     let counter = units[*index].warmed();
                     if spend > 0.0 {
-                        increment_one(store, counter, spend).await?;
+                        raise_to_cached_spend(store, counter, spend).await?;
                     }
                     Ok::<(), Failure>(())
                 });
@@ -1017,6 +1021,29 @@ async fn charge_from_cached_spend(
             for index in &fallback {
                 warmed[*index] = Some(Warmed::Failed(failure.clone()));
             }
+        }
+    }
+}
+
+/// `_seed_spend_counter_cache`: raise a cold counter to the auth cache's spend and never past it,
+/// so charges and pods that all found it cold leave that spend in it once. A Redis that refuses
+/// the script takes the increment; any other failure may or may not have landed, so the counter is
+/// dropped everywhere, as a failed increment drops it. The seed still ends with the charge's own
+/// `INCRBYFLOAT`, of nothing: a counter that command cannot reach (a Redis Cluster slot
+/// mid-migration) fails here and is dropped on its own, as it was when the seed was that increment.
+async fn raise_to_cached_spend(
+    store: &SpendCounters,
+    counter: &SpendCounter,
+    spend: f64,
+) -> Result<(), Failure> {
+    match store.set_max(counter, Number::Float(spend)).await {
+        Ok(_) => increment_one(store, counter, 0.0).await,
+        Err(error) if error.kind() == ErrorKind::Rejected => {
+            increment_one(store, counter, spend).await
+        }
+        Err(error) => {
+            store.invalidate(std::slice::from_ref(counter)).await;
+            Err(store_failure(error))
         }
     }
 }

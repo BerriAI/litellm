@@ -1,5 +1,6 @@
 pub(crate) mod active_teams;
 pub(crate) mod auth_cache;
+pub(crate) mod cache_invalidation;
 pub(crate) mod deployment_health;
 mod policy;
 pub(crate) mod rate_limits;
@@ -9,7 +10,7 @@ pub(crate) mod router_session_pins;
 pub(crate) mod router_usage;
 pub(crate) mod sensitive_route_pins;
 pub(crate) mod spend_counters;
-mod value;
+pub(crate) mod value;
 
 use value::PyValue;
 

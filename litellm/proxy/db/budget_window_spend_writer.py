@@ -521,7 +521,8 @@ async def commit_window_spend_updates(
                 zip(ordered, seed_bases),
                 key=lambda item: (
                     capture_spend
-                    and item[0]["entity_type"] in ("app", "app_customer_org", "app_customer_member")
+                    and item[0]["entity_type"]
+                    in ("app", "app_customer_org", "app_customer_member", "app_group", "app_group_customer_org")
                     and item[0]["spend"] > 0
                 ),
             )

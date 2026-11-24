@@ -14,8 +14,8 @@ Anthropic Files API endpoints:
 
 import calendar
 import time
-from collections.abc import Iterable, Mapping
-from typing import Final, cast
+from collections.abc import Iterable, Mapping, Sequence
+from typing import TYPE_CHECKING, Final, cast
 
 import httpx
 from openai.types.file_deleted import FileDeleted
@@ -45,6 +45,10 @@ from ..common_utils import (
     merge_anthropic_beta_headers,
     without_caller_credential_headers,
 )
+
+if TYPE_CHECKING:
+    from litellm.types.llms.openai import AllMessageValues
+
 
 ANTHROPIC_FILES_API_BASE: Final = "https://api.anthropic.com"
 ANTHROPIC_FILES_BETA_HEADER: Final = "files-api-2025-04-14"
@@ -77,8 +81,8 @@ class AnthropicFilesConfig(BaseFilesConfig):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         stream: bool | None = None,
     ) -> str:
         api_base = AnthropicModelInfo.get_api_base(api_base) or ANTHROPIC_FILES_API_BASE
@@ -88,7 +92,7 @@ class AnthropicFilesConfig(BaseFilesConfig):
         self,
         error_message: str,
         status_code: int,
-        headers: dict | httpx.Headers,
+        headers: dict[str, object] | httpx.Headers,
     ) -> BaseLLMException:
         return AnthropicError(
             status_code=status_code,
@@ -100,9 +104,9 @@ class AnthropicFilesConfig(BaseFilesConfig):
         self,
         headers: dict,
         model: str,
-        messages: list,
-        optional_params: dict,
-        litellm_params: dict,
+        messages: Sequence[object],
+        optional_params: Mapping[str, object],
+        litellm_params: dict[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
     ) -> dict:
@@ -116,9 +120,9 @@ class AnthropicFilesConfig(BaseFilesConfig):
         self,
         headers: dict,  # mutable-ok: mirrors the sync validate_environment contract this overrides
         model: str,
-        messages: list,  # mutable-ok: mirrors the sync validate_environment contract this overrides
-        optional_params: dict,  # mutable-ok: mirrors the sync validate_environment contract this overrides
-        litellm_params: dict,  # mutable-ok: mirrors the sync validate_environment contract this overrides
+        messages: "list[AllMessageValues]",  # mutable-ok: mirrors the sync validate_environment contract this overrides
+        optional_params: dict[str, object],  # mutable-ok: mirrors the sync validate_environment contract this overrides
+        litellm_params: dict[str, object],  # mutable-ok: mirrors the sync validate_environment contract this overrides
         api_key: str | None = None,
         api_base: str | None = None,
     ) -> dict:  # mutable-ok: mirrors the sync validate_environment contract this overrides
@@ -160,8 +164,8 @@ class AnthropicFilesConfig(BaseFilesConfig):
 
     def map_openai_params(
         self,
-        non_default_params: dict,
-        optional_params: dict,
+        non_default_params: Mapping[str, object],
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
     ) -> dict:
@@ -171,9 +175,9 @@ class AnthropicFilesConfig(BaseFilesConfig):
         self,
         model: str,
         create_file_data: CreateFileRequest,
-        optional_params: dict,
-        litellm_params: dict,
-    ) -> dict:
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
+    ) -> dict[str, object]:
         """
         Transform to multipart form data for Anthropic file upload.
 
@@ -202,7 +206,7 @@ class AnthropicFilesConfig(BaseFilesConfig):
         model: str | None,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
-        litellm_params: dict,
+        litellm_params: Mapping[str, object],
     ) -> OpenAIFileObject:
         """
         Transform Anthropic file response to OpenAI format.
@@ -223,9 +227,9 @@ class AnthropicFilesConfig(BaseFilesConfig):
     def transform_retrieve_file_request(
         self,
         file_id: str,
-        optional_params: dict,
+        optional_params: Mapping[str, object],
         litellm_params: dict,
-    ) -> tuple[str, dict]:
+    ) -> tuple[str, dict[str, str]]:
         api_base: Final = AnthropicModelInfo.get_api_base(litellm_params.get("api_base")) or ANTHROPIC_FILES_API_BASE
         encoded_file_id: Final = encode_url_path_segment(file_id, field_name="file_id")
         return join_api_base(api_base, f"v1/files/{encoded_file_id}"), {}
@@ -234,7 +238,7 @@ class AnthropicFilesConfig(BaseFilesConfig):
         self,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
-        litellm_params: dict,
+        litellm_params: Mapping[str, object],
     ) -> OpenAIFileObject:
         response_json: Final = _JSON_OBJECT.validate_python(raw_response.json())
         return self._parse_anthropic_file(response_json)
@@ -242,9 +246,9 @@ class AnthropicFilesConfig(BaseFilesConfig):
     def transform_delete_file_request(
         self,
         file_id: str,
-        optional_params: dict,
+        optional_params: Mapping[str, object],
         litellm_params: dict,
-    ) -> tuple[str, dict]:
+    ) -> tuple[str, dict[str, str]]:
         api_base: Final = AnthropicModelInfo.get_api_base(litellm_params.get("api_base")) or ANTHROPIC_FILES_API_BASE
         encoded_file_id: Final = encode_url_path_segment(file_id, field_name="file_id")
         return join_api_base(api_base, f"v1/files/{encoded_file_id}"), {}
@@ -253,7 +257,7 @@ class AnthropicFilesConfig(BaseFilesConfig):
         self,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
-        litellm_params: dict,
+        litellm_params: Mapping[str, object],
     ) -> FileDeleted:
         response_json: Final = _JSON_OBJECT.validate_python(raw_response.json())
         file_id: Final = response_json.get("id", "")
@@ -262,9 +266,9 @@ class AnthropicFilesConfig(BaseFilesConfig):
     def transform_list_files_request(
         self,
         purpose: str | None,
-        optional_params: dict,
+        optional_params: Mapping[str, object],
         litellm_params: dict,
-    ) -> tuple[str, dict]:
+    ) -> tuple[str, dict[str, str]]:
         api_base: Final = AnthropicModelInfo.get_api_base(litellm_params.get("api_base")) or ANTHROPIC_FILES_API_BASE
         url: Final = join_api_base(api_base, "v1/files")
         params: Final[dict[str, str]] = {}
@@ -276,7 +280,7 @@ class AnthropicFilesConfig(BaseFilesConfig):
         self,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
-        litellm_params: dict,
+        litellm_params: Mapping[str, object],
     ) -> list[OpenAIFileObject]:
         """
         Anthropic list response:
@@ -294,9 +298,9 @@ class AnthropicFilesConfig(BaseFilesConfig):
     def transform_file_content_request(
         self,
         file_content_request: FileContentRequest,
-        optional_params: dict,
+        optional_params: Mapping[str, object],
         litellm_params: dict,
-    ) -> tuple[str, dict]:
+    ) -> tuple[str, dict[str, str]]:
         file_id: Final = file_content_request.get("file_id")
         api_base: Final = AnthropicModelInfo.get_api_base(litellm_params.get("api_base")) or ANTHROPIC_FILES_API_BASE
         encoded_file_id: Final = encode_url_path_segment(file_id, field_name="file_id")
@@ -308,7 +312,7 @@ class AnthropicFilesConfig(BaseFilesConfig):
         self,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
-        litellm_params: dict,
+        litellm_params: Mapping[str, object],
     ) -> HttpxBinaryResponseContent:
         return HttpxBinaryResponseContent(response=raw_response)
 

@@ -142,7 +142,7 @@ class Result:
     files: list[FileChange]  # mutable-ok: public Result field; users index/iterate it as a list
     events: list[Event]  # mutable-ok: public Result field; users index/iterate it as a list
     usage: Usage
-    cost: float
+    cost: float | None
     stop_reason: StopReason
     session_id: str
 
@@ -156,7 +156,7 @@ class Done:
         return self.result.usage
 
     @property
-    def cost(self) -> float:
+    def cost(self) -> float | None:
         return self.result.cost
 
     @property

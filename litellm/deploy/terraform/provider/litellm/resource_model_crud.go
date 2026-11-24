@@ -190,17 +190,12 @@ func createOrUpdateModel(d *schema.ResourceData, m interface{}, isUpdate bool) e
 		return fmt.Errorf("invalid type assertion for client")
 	}
 
-	// Construct the model name in the format "custom_llm_provider/base_model"
 	customLLMProvider := d.Get("custom_llm_provider").(string)
 	baseModel := d.Get("base_model").(string)
-	modelName := fmt.Sprintf("%s/%s", customLLMProvider, baseModel)
 
-	// Pricing base_model, decoupled from routing. When pricing_base_model is
-	// set it feeds model_info.base_model (the cost-lookup key) WITHOUT changing
-	// the routing string above; otherwise base_model drives pricing as before.
-	pricingBaseModel := baseModel
-	if v, ok := d.GetOk("pricing_base_model"); ok && v.(string) != "" {
-		pricingBaseModel = v.(string)
+	pricingBaseModel := d.Get("pricing_base_model").(string)
+	if pricingBaseModel == "" && (!isUpdate || d.HasChanges("base_model", "pricing_base_model")) {
+		pricingBaseModel = baseModel
 	}
 
 	// Generate a UUID for new models
@@ -221,8 +216,10 @@ func createOrUpdateModel(d *schema.ResourceData, m interface{}, isUpdate bool) e
 	// Build the base litellm_params as a map to allow for additional parameters
 	litellmParams := map[string]interface{}{
 		"custom_llm_provider":                customLLMProvider,
-		"model":                              modelName,
 		"merge_reasoning_content_in_choices": d.Get("merge_reasoning_content_in_choices").(bool),
+	}
+	if !isUpdate || d.HasChanges("custom_llm_provider", "base_model", "additional_litellm_params.model") {
+		litellmParams["model"] = customLLMProvider + "/" + baseModel
 	}
 
 	// Add optional parameters only if they have values
@@ -302,6 +299,13 @@ func createOrUpdateModel(d *schema.ResourceData, m interface{}, isUpdate bool) e
 				return err
 			}
 			litellmParams[key] = dropParams
+		}
+	}
+	if model, supplied := litellmParams["model"]; supplied {
+		name, ok := model.(string)
+		_, suffix, prefixed := strings.Cut(name, "/")
+		if !ok || strings.TrimSpace(name) == "" || (prefixed && strings.TrimSpace(suffix) == "") {
+			return fmt.Errorf("litellm_params.model must have a non-empty model name")
 		}
 	}
 
@@ -400,20 +404,24 @@ func resourceLiteLLMModelRead(d *schema.ResourceData, m interface{}) error {
 
 	// Update the state with values from the response or fall back to the data passed in during creation
 	d.Set("model_name", GetStringValue(modelResp.ModelName, d.Get("model_name").(string)))
-	d.Set("custom_llm_provider", GetStringValue(modelResp.LiteLLMParams.CustomLLMProvider, d.Get("custom_llm_provider").(string)))
+	provider := GetStringValue(modelResp.LiteLLMParams.CustomLLMProvider, d.Get("custom_llm_provider").(string))
+	additionalParams := d.Get("additional_litellm_params").(map[string]interface{})
+	_, hasModelOverride := additionalParams["model"]
+	if model := modelResp.LiteLLMParams.Model; model != "" {
+		if prefix, _, found := strings.Cut(model, "/"); provider == "" && found {
+			provider = prefix
+		}
+		if !hasModelOverride {
+			d.Set("base_model", strings.TrimPrefix(model, provider+"/"))
+		}
+	}
+	d.Set("custom_llm_provider", provider)
 	d.Set("tpm", GetIntValue(modelResp.LiteLLMParams.TPM, d.Get("tpm").(int)))
 	d.Set("rpm", GetIntValue(modelResp.LiteLLMParams.RPM, d.Get("rpm").(int)))
 	d.Set("model_api_base", GetStringValue(modelResp.LiteLLMParams.APIBase, d.Get("model_api_base").(string)))
 	d.Set("api_version", GetStringValue(modelResp.LiteLLMParams.APIVersion, d.Get("api_version").(string)))
-	// base_model / pricing_base_model read-back. When pricing_base_model is
-	// configured, model_info.base_model holds the PRICING key, so recover the
-	// routing base_model from state (not returned by the API) and read
-	// pricing_base_model from model_info.
 	if pbm, ok := d.GetOk("pricing_base_model"); ok && pbm.(string) != "" {
-		d.Set("base_model", d.Get("base_model").(string))
 		d.Set("pricing_base_model", GetStringValue(modelResp.ModelInfo.BaseModel, pbm.(string)))
-	} else {
-		d.Set("base_model", GetStringValue(modelResp.ModelInfo.BaseModel, d.Get("base_model").(string)))
 	}
 	d.Set("tier", GetStringValue(modelResp.ModelInfo.Tier, d.Get("tier").(string)))
 	d.Set("mode", GetStringValue(modelResp.ModelInfo.Mode, d.Get("mode").(string)))

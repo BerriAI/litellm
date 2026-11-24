@@ -26,6 +26,7 @@ from litellm.constants import (
     MAX_SPEND_LOG_MODEL_NAME_LENGTH,
     REDACTED_BY_LITELM_STRING,
     SESSION_ID_GENERATED_METADATA_KEY,
+    SESSION_ID_INHERITED_METADATA_KEY,
     SESSION_ID_OMITTED_METADATA_KEY,
     UNKNOWN_MODEL_SPEND_LOG_MODEL,
 )
@@ -143,6 +144,9 @@ def test_spend_log_keeps_subscription_usage_from_standard_logging(call_type: str
 @pytest.mark.parametrize("failed", (False, True))
 def test_spend_log_retains_resolved_customer_identity(bucket: str, call_type: str, failed: bool) -> None:
     hierarchy: Final = CustomerHierarchyAuth(
+        app_id="app-1",
+        app_group_id="app-group-1",
+        app_alias="App display",
         customer_org_id="customer-org-1",
         customer_org_alias="Customer org display",
         customer_team_id="customer-team-1",
@@ -166,6 +170,9 @@ def test_spend_log_retains_resolved_customer_identity(bucket: str, call_type: st
     )
     stored: Final = TypeAdapter(Mapping[str, object]).validate_json(payload["metadata"])
     expected: Final = {
+        "user_api_key_app_id": "app-1",
+        "user_api_key_app_group_id": "app-group-1",
+        "user_api_key_app_alias": "App display",
         "user_api_key_customer_org_id": "customer-org-1",
         "user_api_key_customer_org_alias": "Customer org display",
         "user_api_key_customer_team_id": "customer-team-1",
@@ -653,7 +660,11 @@ _TRACE_ONLY_STANDARD_LOGGING: Final = cast(
 def _trace_only_session_id(omit_when_missing: bool) -> str | None:
     """get_litellm_params copies metadata.trace_id into litellm_session_id, so every field echoes the trace id."""
     return _get_session_id_for_spend_log(
-        kwargs={"litellm_trace_id": "trace-abc", "litellm_session_id": "trace-abc"},
+        kwargs={
+            "litellm_trace_id": "trace-abc",
+            "litellm_session_id": "trace-abc",
+            "litellm_params": {"litellm_session_id": "trace-abc", "metadata": {"trace_id": "trace-abc"}},
+        },
         metadata={"trace_id": "trace-abc"},
         standard_logging_payload=_TRACE_ONLY_STANDARD_LOGGING,
         omit_when_missing=omit_when_missing,
@@ -679,6 +690,26 @@ def test_omit_records_metadata_session_id():
         omit_when_missing=True,
     )
     assert session_id == "chain-1"
+
+
+@pytest.mark.parametrize(
+    ("request_metadata", "expected"),
+    [
+        ({SESSION_ID_INHERITED_METADATA_KEY: True}, "parent-session"),
+        ({}, None),
+    ],
+    ids=["proxy-sub-call", "caller-request"],
+)
+def test_omit_records_a_sent_session_only_for_a_sub_call_inheriting_it(
+    request_metadata: dict[str, object], expected: str | None
+):
+    session_id: Final = _get_session_id_for_spend_log(
+        kwargs={"litellm_params": {"litellm_session_id": "parent-session", "metadata": request_metadata}},
+        metadata={},
+        standard_logging_payload=None,
+        omit_when_missing=True,
+    )
+    assert session_id == expected
 
 
 def test_legacy_policy_keeps_trace_id_fallback():
@@ -7814,6 +7845,7 @@ def test_spend_logs_payload(model_id: str | None):
         "user_api_key_customer_member_alias",
         "user_api_key_app_id",
         "user_api_key_app_alias",
+        "user_api_key_app_group_id",
     }
 
     assert "metadata" in payload

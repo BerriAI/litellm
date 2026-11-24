@@ -26,6 +26,7 @@ litellm-python-compat.workspace = true
 litellm-router-types.workspace = true
 litellm-model-catalog.workspace = true
 litellm-tracing.workspace = true
+tracing.workspace = true
 base64.workspace = true
 bytes.workspace = true
 crc32fast = "1.5"
@@ -43,6 +44,7 @@ time.workspace = true
 tokio = { workspace = true, features = ["sync"] }
 tokio-util = { version = "0.7", features = ["codec"] }
 url.workspace = true
+uuid.workspace = true
 
 [dev-dependencies]
 litellm-auth-gcp = { workspace = true, features = ["test-support"] }

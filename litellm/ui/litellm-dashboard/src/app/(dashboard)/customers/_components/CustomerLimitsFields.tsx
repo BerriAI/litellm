@@ -5,7 +5,7 @@ import CustomerBudgetCompactFields from "./CustomerBudgetCompactFields";
 import type { BudgetFields } from "./customerBudgetForm";
 import { rateFields } from "./CustomerRateLimits";
 import { Select, SelectContent, SelectItem, SelectSeparator, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { customerBudgetPeriod } from "./customerBudgetUsage";
+import { customerBudgetLimitLabel } from "./customerBudgetUsage";
 import type { Organization } from "./customerHierarchyForms";
 import type { CustomerOrganizationFields } from "./customerOrganizationForm";
 
@@ -58,12 +58,8 @@ export function CustomerBudgetSourceSelect({
     ];
     const spendSummary = spendLimits.map((limit) => {
       const amount = t("format.number", { val: limit.max_budget, ...currencyOptions });
-      const period = customerBudgetPeriod(limit.budget_duration ?? null);
-      if (period === "monthly") return t("customerPortal.createDialog.profileMonthlyBudget", { amount });
-      if (period === "yearly") return t("customerPortal.createDialog.profileYearlyBudget", { amount });
-      return limit.budget_duration
-        ? t("customerPortal.createDialog.profilePeriodBudget", { amount, duration: limit.budget_duration })
-        : amount;
+      const label = customerBudgetLimitLabel(amount, limit.budget_duration ?? null, t);
+      return limit.budget_duration ? label : `${label} · ${t("customerPortal.analytics.noAutomaticReset")}`;
     });
     const rateSummary = rateFields.map((field) =>
       group[`${field}_limit`] == null

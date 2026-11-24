@@ -25,7 +25,7 @@ class AzureAIRerankConfig(CohereRerankConfig):
         self,
         api_base: str | None,
         model: str,
-        optional_params: dict | None = None,
+        optional_params: Mapping[str, object] | None = None,
     ) -> str:
         if api_base is None:
             raise ValueError(
@@ -65,7 +65,7 @@ class AzureAIRerankConfig(CohereRerankConfig):
         headers: dict,
         model: str,
         api_key: str | None = None,
-        optional_params: dict | None = None,
+        optional_params: Mapping[str, object] | None = None,
         litellm_params: Mapping[str, object] | None = None,
     ) -> dict:
         if api_key is None:
@@ -91,7 +91,7 @@ class AzureAIRerankConfig(CohereRerankConfig):
         model_response: RerankResponse,
         logging_obj: LiteLLMLoggingObj,
         api_key: str | None = None,
-        request_data: dict = {},
+        request_data: dict[str, object] = {},
         optional_params: dict = {},
         litellm_params: dict = {},
     ) -> RerankResponse:
