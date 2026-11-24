@@ -1613,8 +1613,11 @@ def test_refused_request_keeps_the_prompt_out_of_the_generation_model_parameters
         attributes: Final = spans[0].attributes
         assert _attribute(attributes, "langfuse.observation.level") == "ERROR"
         assert canary not in str(_attribute(attributes, "langfuse.observation.model.parameters"))
-        if rejection != "rate_limited" and endpoint in ("/v1/chat/completions", "/v1/messages"):
-            assert canary in str(_attribute(attributes, "langfuse.observation.input"))
+        prompt_is_logged_as_input: Final = rejection != "rate_limited" and endpoint in (
+            "/v1/chat/completions",
+            "/v1/messages",
+        )
+        assert (canary in str(_attribute(attributes, "langfuse.observation.input"))) == prompt_is_logged_as_input
 
 
 @pytest.mark.parametrize(("endpoint", "kind", "expected_target"), _AUDIT_ENDPOINTS[:2])
