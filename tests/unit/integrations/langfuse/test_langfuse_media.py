@@ -5,7 +5,7 @@ import json
 import logging
 import threading
 from base64 import b64encode
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from time import monotonic, sleep
 from typing import Final
 
@@ -284,6 +284,22 @@ def test_a_refused_upload_is_reported_to_langfuse_by_status_only_and_logged(capl
     assert b"internal-service-body" not in requests[-1].content
     assert "the media storage refused it with HTTP 403" in caplog.text
     assert uploader.failed_uploads == 1
+
+
+def test_the_storage_response_body_is_never_read():
+    requests: list[httpx.Request] = []
+
+    class _Unreadable(httpx.SyncByteStream):
+        def __iter__(self) -> Iterator[bytes]:
+            raise AssertionError("the storage response body was read")
+
+    uploader = _uploader(_langfuse(requests, storage=(httpx.Response(200, stream=_Unreadable()),)))
+
+    uploader.submit((_upload(),))
+
+    assert uploader.drain(5_000) is True
+    assert uploader.failed_uploads == 0
+    assert json.loads(requests[-1].content)["uploadHttpStatus"] == 200
 
 
 def test_a_storage_redirect_is_not_followed():

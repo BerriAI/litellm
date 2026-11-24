@@ -333,10 +333,18 @@ class MediaUploader:
         return self._put_once(url, headers, media)
 
     def _put_once(self, url: str, headers: Mapping[str, str], media: Media) -> httpx.Response | None:
+        """The response is closed with its body unread: only its status is used, and a storage URL may answer with
+        a body of any size."""
         try:
-            return self._client.put(
-                url, content=media.content, headers=dict(headers), timeout=self._timeout, follow_redirects=False
-            )
+            with self._client.stream(
+                "PUT",
+                url,
+                content=media.content,
+                headers=dict(headers),
+                timeout=self._timeout,
+                follow_redirects=False,
+            ) as response:
+                return response
         except httpx.TransportError as error:
             verbose_logger.warning("Langfuse media %s upload raised %s", media.media_id, error)
             return None
