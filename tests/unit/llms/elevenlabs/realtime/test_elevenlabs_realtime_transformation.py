@@ -141,6 +141,17 @@ def test_invalid_language_is_rejected(language: str):
         _config(_session_update(language=language))
 
 
+def test_a_session_update_naming_a_proxy_alias_is_refused_with_the_model_to_send_unless_drop_params_drops_it():
+    update: Final = _session_update(model="captions")
+
+    rejected: Final = parse_session_update(update, NO_OPTIONS, SCRIBE_REALTIME_MODEL)
+    kept: Final = _config(update, drop_params=True)
+
+    assert isinstance(rejected, SessionUpdateRejected)
+    assert f"send {SCRIBE_REALTIME_MODEL}" in rejected.reason
+    assert kept.model == SCRIBE_REALTIME_MODEL
+
+
 @pytest.mark.parametrize(
     ("update", "message"),
     [
@@ -762,7 +773,10 @@ async def test_clear_discards_the_uncommitted_turn_and_bills_its_audio_with_the_
     ]
 
     assert [json.loads(message)["commit"] for message in cleared] == [True]
-    assert discarded == []
+    assert [(event["type"], event.get("item_id")) for event in discarded] == [
+        ("input_audio_buffer.speech_stopped", abandoned[0]["item_id"]),
+        ("input_audio_buffer.cleared", None),
+    ]
     assert kept[0]["item_id"] != abandoned[0]["item_id"]
     assert [event.get("delta") for event in kept if "delta" in event] == ["Hello", " there."]
     assert (kept[-1]["transcript"], kept[-1]["usage"]) == ("Hello there.", {"type": "duration", "seconds": 1.5})
@@ -784,7 +798,7 @@ async def test_two_clears_before_their_transcripts_arrive_discard_both_and_keep_
     kept: Final = _response(config, _frame("committed_transcript", text="Hello."))
 
     assert (len(first), len(second)) == (1, 1)
-    assert discarded == []
+    assert [event["type"] for event in discarded] == ["input_audio_buffer.cleared", "input_audio_buffer.cleared"]
     assert kept[-1]["transcript"] == "Hello."
 
 
@@ -798,7 +812,7 @@ async def test_a_clear_after_a_commit_discards_only_the_cleared_audio_transcript
     cleared: Final = _response(config, _frame("committed_transcript", text="Cleared."))
 
     assert committed[-1]["transcript"] == "Kept."
-    assert cleared == []
+    assert [event["type"] for event in cleared] == ["input_audio_buffer.cleared"]
 
 
 def test_a_realtime_model_the_cost_map_lists_streams_under_its_own_id(monkeypatch: pytest.MonkeyPatch):
