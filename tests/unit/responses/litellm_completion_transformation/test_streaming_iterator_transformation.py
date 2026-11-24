@@ -1398,6 +1398,37 @@ def _with_reasoning(chunk: ModelResponseStream, reasoning: str) -> ModelResponse
     )
 
 
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.parametrize("with_tool", [True, False])
+@pytest.mark.asyncio
+async def test_tool_preamble_is_commentary_in_streamed_item_and_snapshot(
+    sync_mode: bool, with_tool: bool
+) -> None:
+    iterator: Final = _build_iterator(
+        (_chunk("Checking arithmetic."), _tool_call_chunk(finish_reason="tool_calls"))
+        if with_tool
+        else (_chunk("391", finish_reason="stop"),)
+    )
+    events: Final = await _collect_events(iterator, sync_mode)
+    wire: Final = tuple(
+        event.model_dump(mode="json", exclude_none=True, exclude_unset=True) for event in events
+    )
+    done: Final = tuple(
+        event["item"]
+        for event in wire
+        if event["type"] == "response.output_item.done" and event["item"]["type"] == "message"
+    )
+    snapshots: Final = tuple(
+        item for item in wire[-1]["response"]["output"] if item["type"] == "message"
+    )
+    expected_phase: Final = "commentary" if with_tool else None
+    expected_text: Final = "Checking arithmetic." if with_tool else "391"
+
+    assert len(done) == len(snapshots) == 1
+    assert done[0].get("phase") == snapshots[0].get("phase") == expected_phase
+    assert done[0]["content"][0]["text"] == snapshots[0]["content"][0]["text"] == expected_text
+
+
 def _with_citation(chunk: ModelResponseStream) -> ModelResponseStream:
     choice: Final = chunk.choices[0]
     annotations: Final = _annotation_only_chunk().choices[0].delta.annotations

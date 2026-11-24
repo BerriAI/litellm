@@ -1182,6 +1182,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                     "type": "message",
                     "role": "assistant",
                     "content": [*text_parts, *refusal_parts],
+                    **({"phase": "commentary"} if message.tool_calls else {}),
                 }
             ),
         )

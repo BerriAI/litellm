@@ -4215,6 +4215,7 @@ class LiteLLMCompletionResponsesConfig:
                         status=LiteLLMCompletionResponsesConfig._responses_status_for_choice(choice),
                         role=choice.message.role,
                         content=list(content),
+                        **({"phase": "commentary"} if choice.message.tool_calls else {}),
                     )
                 )
         return message_output_items
