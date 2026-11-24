@@ -1,13 +1,15 @@
 //! `enable_pre_call_checks` (`_pre_call_checks`): before a pick, drop the deployments whose
 //! context window the prompt exceeds, those outside the request's `allowed_model_region`, and
 //! those that cannot take a requested param, then decide which error a group with nothing left
-//! raises. The facts that need live model data (the prompt's token count, each deployment's
-//! context window, which params it takes) come from [`RouterHost::pre_call_facts`]; every decision is
-//! made here.
+//! raises. Each stage is its own module. The facts that need live model data (the prompt's token
+//! count, each deployment's context window, which params it takes) come from
+//! [`RouterHost::pre_call_facts`]; every decision is made here.
 //!
 //! [`RouterHost::pre_call_facts`]: crate::host::RouterHost::pre_call_facts
 
 mod context_window;
+mod params;
+mod region;
 
 use std::{collections::BTreeMap, sync::Arc};
 
@@ -57,15 +59,6 @@ impl PreCallFacts {
     }
 }
 
-/// `is_region_allowed`: the deployment's `region_name` equals the allowed region.
-fn outside_region(deployment: &Deployment, facts: &PreCallFacts) -> bool {
-    facts
-        .allowed_model_region
-        .as_ref()
-        .filter(|allowed| !allowed.is_null())
-        .is_some_and(|allowed| deployment.raw_params.get("region_name") != Some(allowed))
-}
-
 /// `_pre_call_checks` over `candidates`; `pool` is the group's deployments before health filters
 /// (`request_deployments`), which decide whether nothing left is an unsupported-params error.
 pub fn filter(
@@ -82,43 +75,25 @@ pub fn filter(
         .map(|deployment| context_window::overflow(deployment, facts))
         .collect();
     let context_window_error = overflows.iter().any(Option::is_some);
-    let mut invalid: Vec<bool> = candidates
+    let dropped: Vec<bool> = candidates
         .iter()
         .zip(&overflows)
-        .map(|(deployment, overflow)| overflow.is_some() || outside_region(deployment, facts))
+        .map(|(deployment, overflow)| overflow.is_some() || region::outside(deployment, facts))
         .collect();
-    let params_checked = !facts.requested_params.is_empty();
-    let param_candidates: Vec<usize> = (0..candidates.len()).filter(|i| !invalid[*i]).collect();
-    let lacking: Vec<bool> = param_candidates
+    let left: Vec<&Deployment> = candidates
         .iter()
-        .map(|i| params_checked && facts.of(&candidates[*i]).lacks_params)
+        .zip(&dropped)
+        .filter(|(_, dropped)| !**dropped)
+        .map(|(deployment, _)| &**deployment)
         .collect();
-    let none_takes = !lacking.is_empty() && lacking.iter().all(|lacks| *lacks);
-    let failing: Vec<bool> = if none_takes {
-        param_candidates
-            .iter()
-            .map(|i| params_checked && facts.of(&candidates[*i]).rejects_params)
-            .collect()
-    } else {
-        lacking
-    };
-    for (index, fails) in param_candidates.iter().zip(failing) {
-        if fails {
-            invalid[*index] = true;
-        }
-    }
-    let excluded = invalid.iter().filter(|x| **x).count();
-    if excluded == candidates.len() {
-        if !context_window_error
-            && !pool.is_empty()
-            && pool
-                .iter()
-                .all(|d| params_checked && facts.of(d).rejects_params)
-        {
-            return Err(Error::UnsupportedParams {
-                model: model.to_owned(),
-                params: facts.requested_params.clone(),
-            });
+    let mut failing = params::failing(&left, facts).into_iter();
+    let kept: Vec<bool> = dropped
+        .iter()
+        .map(|dropped| !dropped && failing.next() == Some(false))
+        .collect();
+    if !kept.contains(&true) {
+        if !context_window_error && let Some(error) = params::unsupported(model, pool, facts) {
+            return Err(error);
         }
         if context_window_error {
             return Err(context_window::exceeded(model, overflows.iter().flatten()));
@@ -126,8 +101,8 @@ pub fn filter(
     }
     Ok(candidates
         .into_iter()
-        .zip(invalid)
-        .filter_map(|(deployment, invalid)| (!invalid).then_some(deployment))
+        .zip(kept)
+        .filter_map(|(deployment, kept)| kept.then_some(deployment))
         .collect())
 }
 
@@ -221,9 +196,10 @@ mod tests {
     }
 
     #[rstest]
-    #[case::in_region("eu", 1)]
-    #[case::out_of_region("ap", 0)]
-    fn the_allowed_region_keeps_only_its_deployments(#[case] region: &str, #[case] kept: usize) {
+    #[case::in_region(json!("eu"), &["eu"])]
+    #[case::out_of_region(json!("ap"), &[])]
+    #[case::null_region(Value::Null, &["eu", "none"])]
+    fn the_allowed_region_keeps_only_its_deployments(#[case] region: Value, #[case] kept: &[&str]) {
         let eu = deployment(
             "eu",
             json!({"model": "openai/a", "region_name": "eu"}),
@@ -231,10 +207,36 @@ mod tests {
         );
         let none = deployment("none", json!({"model": "openai/a"}), json!({}));
         let mut found = facts(&[]);
-        found.allowed_model_region = Some(json!(region));
+        found.allowed_model_region = Some(region);
+        let left = filter("g", vec![eu, none], &[], &found).unwrap();
+        assert_eq!(left.iter().map(|d| d.id.as_str()).collect::<Vec<_>>(), kept);
+    }
+
+    #[rstest]
+    fn params_are_checked_only_on_deployments_inside_the_region() {
+        let eu = deployment(
+            "eu",
+            json!({"model": "openai/old", "region_name": "eu"}),
+            json!({}),
+        );
+        let ap = deployment(
+            "ap",
+            json!({"model": "openai/new", "region_name": "ap"}),
+            json!({}),
+        );
+        let mut found = facts(&[(
+            "eu",
+            DeploymentFacts {
+                lacks_params: true,
+                ..DeploymentFacts::default()
+            },
+        )]);
+        found.requested_params = vec!["response_format".to_owned()];
+        found.allowed_model_region = Some(json!("eu"));
+        let kept = filter("g", vec![eu, ap], &[], &found).unwrap();
         assert_eq!(
-            filter("g", vec![eu, none], &[], &found).unwrap().len(),
-            kept
+            kept.iter().map(|d| d.id.as_str()).collect::<Vec<_>>(),
+            ["eu"]
         );
     }
 
