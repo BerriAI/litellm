@@ -13,6 +13,7 @@ import litellm
 from litellm import Router
 from litellm.llms.milvus.vector_stores.transformation import MilvusVectorStoreConfig
 from litellm.types.utils import EmbeddingResponse
+from litellm.types.vector_stores import VectorStoreConnectionFailure, VectorStoreConnectionSuccess
 from litellm.vector_stores import asearch as vector_store_asearch
 from litellm.vector_stores import search as vector_store_search
 
@@ -90,9 +91,7 @@ ALIAS_EMBEDDING_RESPONSE = EmbeddingResponse(
 )
 OPENAI_EMBEDDINGS_URL = "https://api.openai.com/v1/embeddings"
 MILVUS_SEARCH_URL = "https://milvus.example/v2/vectordb/entities/search"
-ZILLIZ_SEARCH_URL = (
-    "https://in03-test.serverless.aws-eu-central-1.cloud.zilliz.com/v2/vectordb/entities/search"
-)
+ZILLIZ_SEARCH_URL = "https://in03-test.serverless.aws-eu-central-1.cloud.zilliz.com/v2/vectordb/entities/search"
 ALIAS_SEARCH_KWARGS = {
     "query": "what is machine learning?",
     "vector_store_id": "book_2",
@@ -243,6 +242,65 @@ class TestMilvusVectorStore:
             assert result["content"][0]["text"] == expected["text"]  # type: ignore
             assert result["attributes"]["book_id"] == expected["book_id"]  # type: ignore
             assert "book_intro_text" not in result["attributes"]  # type: ignore
+
+    @pytest.mark.asyncio
+    async def test_connection_describes_the_collection(
+        self,
+        respx_mock: respx.MockRouter,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+        route = respx_mock.post("https://8.8.8.8/v2/vectordb/collections/describe").mock(
+            return_value=httpx.Response(200, json={"code": 0, "data": {"collectionName": "books"}})
+        )
+        result = await MilvusVectorStoreConfig().test_connection(
+            vector_store_id="books",
+            litellm_params={
+                "api_base": "https://8.8.8.8/",
+                "api_key": "user:password",
+                "milvus_db_name": "tenant_a",
+            },
+        )
+
+        assert isinstance(result, VectorStoreConnectionSuccess)
+        request = route.calls.last.request
+        assert request.headers["authorization"] == "Bearer user:password"
+        assert request.headers["host"] == "8.8.8.8"
+        assert json.loads(request.read()) == {"collectionName": "books", "dbName": "tenant_a"}
+
+    @pytest.mark.asyncio
+    async def test_connection_returns_a_milvus_error_response(
+        self,
+        respx_mock: respx.MockRouter,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+        respx_mock.post("https://8.8.8.8/v2/vectordb/collections/describe").mock(
+            return_value=httpx.Response(200, json={"code": 100, "message": "collection not found"})
+        )
+
+        result = await MilvusVectorStoreConfig().test_connection(
+            vector_store_id="missing",
+            litellm_params={
+                "api_base": "https://8.8.8.8",
+                "api_key": "user:password",
+            },
+        )
+
+        assert result == VectorStoreConnectionFailure(message="collection not found")
+
+    @pytest.mark.asyncio
+    async def test_connection_rejects_a_private_destination(self):
+        result = await MilvusVectorStoreConfig().test_connection(
+            vector_store_id="books",
+            litellm_params={
+                "api_base": "http://169.254.169.254",
+                "api_key": "user:password",
+            },
+        )
+
+        assert isinstance(result, VectorStoreConnectionFailure)
+        assert "blocked address" in result.message
 
     def test_user_supplied_db_and_partition_are_dropped(self, respx_mock: respx.MockRouter):
         """User-supplied dbName / partitionNames must not be forwarded to Milvus."""

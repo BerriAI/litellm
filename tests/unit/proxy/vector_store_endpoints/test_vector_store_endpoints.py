@@ -3,7 +3,9 @@ from datetime import datetime, timezone
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
+import respx
 from fastapi import HTTPException, Request
 
 import litellm
@@ -25,6 +27,7 @@ from litellm.proxy.vector_store_endpoints.endpoints import (
 )
 from litellm.proxy.vector_store_endpoints.management_endpoints import (
     _check_vector_store_access,
+    _resolve_vector_store_connection_params,
     create_vector_store_in_db,
     new_vector_store,
 )
@@ -37,7 +40,7 @@ from litellm.proxy.vector_store_files_endpoints.endpoints import (
     _update_request_data_with_model_routing_hint,
 )
 from litellm.types.router import DeploymentTypedDict
-from litellm.types.utils import EmbeddingResponse, LlmProviders
+from litellm.types.utils import CredentialItem, EmbeddingResponse, LlmProviders
 from litellm.types.vector_stores import IndexCreateRequest, IndexListResponse
 from litellm.vector_stores.main import _direct_vector_store_embedding_executor
 from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stubs
@@ -2361,6 +2364,163 @@ async def test_new_vector_store_auto_resolves_from_router():
     assert "router-resolved-api-key" not in _serialize_litellm_params(
         response_vs.get("litellm_params")
     )
+
+
+
+@pytest.mark.asyncio
+async def test_new_milvus_vector_store_rejects_a_failed_connection_before_database_write(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from litellm.types.vector_stores import LiteLLM_ManagedVectorStore
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    vector_store: LiteLLM_ManagedVectorStore = {
+        "vector_store_id": "missing-collection",
+        "custom_llm_provider": "milvus",
+        "litellm_params": {
+            "api_base": "https://8.8.8.8",
+            "api_key": "invalid-key",
+        },
+    }
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_managedvectorstorestable.create = AsyncMock()
+
+    with (
+        patch.object(litellm, "vector_store_registry", None),
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client),
+        respx.mock(
+            base_url="https://8.8.8.8",
+            assert_all_called=True,
+        ) as milvus_api,
+    ):
+        milvus_api.post("/v2/vectordb/collections/describe").mock(
+            return_value=httpx.Response(
+                200, json={"code": 1800, "message": "authentication failed"}
+            )
+        )
+        with pytest.raises(HTTPException) as exc_info:
+            await new_vector_store(
+                vector_store=vector_store,
+                user_api_key_dict=UserAPIKeyAuth(
+                    user_id="admin",
+                    user_role=LitellmUserRoles.PROXY_ADMIN,
+                ),
+            )
+
+    assert exc_info.value.status_code == 400
+    assert (
+        exc_info.value.detail
+        == "Unable to connect to milvus vector store: authentication failed"
+    )
+    mock_prisma_client.db.litellm_managedvectorstorestable.create.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_update_milvus_vector_store_preserves_the_existing_api_key(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from litellm.proxy.vector_store_endpoints.management_endpoints import (
+        update_vector_store,
+    )
+    from litellm.types.vector_stores import VectorStoreUpdateRequest
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    stored_row = MagicMock()
+    stored_row.model_dump.return_value = {
+        "vector_store_id": "books",
+        "custom_llm_provider": "Milvus",
+        "team_id": "team-a",
+        "litellm_params": json.dumps(
+            {
+                "api_base": "https://8.8.8.8",
+                "api_key": "existing-secret",
+                "litellm_embedding_model": "text-embedding-3-small",
+            }
+        ),
+    }
+    updated_row = MagicMock()
+    updated_row.model_dump.return_value = stored_row.model_dump.return_value
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_managedvectorstorestable.find_unique = AsyncMock(
+        return_value=stored_row
+    )
+    mock_prisma_client.db.litellm_managedvectorstorestable.update = AsyncMock(
+        return_value=updated_row
+    )
+
+    with (
+        patch.object(litellm, "vector_store_registry", None),
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client),
+        respx.mock(base_url="https://8.8.4.4", assert_all_called=True) as milvus_api,
+    ):
+        describe_route = milvus_api.post("/v2/vectordb/collections/describe").mock(
+            return_value=httpx.Response(
+                200, json={"code": 0, "data": {"collectionName": "books"}}
+            )
+        )
+        await update_vector_store(
+            data=VectorStoreUpdateRequest(
+                vector_store_id="books",
+                litellm_params={"api_base": "https://8.8.4.4"},
+            ),
+            user_api_key_dict=UserAPIKeyAuth(
+                user_id="owner",
+                team_id="team-a",
+                user_role=LitellmUserRoles.PROXY_ADMIN,
+            ),
+        )
+
+    written = (
+        mock_prisma_client.db.litellm_managedvectorstorestable.update.await_args.kwargs[
+            "data"
+        ]
+    )
+    written_params = json.loads(written["litellm_params"])
+    assert written_params["api_base"] == "https://8.8.4.4"
+    assert written_params["api_key"] == "existing-secret"
+    assert written_params["litellm_embedding_model"] == "text-embedding-3-small"
+    assert describe_route.call_count == 1
+    assert (
+        describe_route.calls.last.request.headers["authorization"]
+        == "Bearer existing-secret"
+    )
+    assert json.loads(describe_route.calls.last.request.read()) == {
+        "collectionName": "books"
+    }
+
+
+def test_named_credential_overrides_inline_vector_store_connection_params(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(
+        litellm,
+        "credential_list",
+        [
+            CredentialItem(
+                credential_name="milvus-prod",
+                credential_info={},
+                credential_values={
+                    "api_base": "https://8.8.4.4",
+                    "api_key": "credential-secret",
+                },
+            )
+        ],
+    )
+
+    resolved = _resolve_vector_store_connection_params(
+        litellm_params={
+            "api_base": "https://8.8.8.8",
+            "api_key": "inline-secret",
+            "litellm_embedding_model": "text-embedding-3-small",
+        },
+        litellm_credential_name="milvus-prod",
+    )
+
+    assert resolved == {
+        "api_base": "https://8.8.4.4",
+        "api_key": "credential-secret",
+        "litellm_embedding_model": "text-embedding-3-small",
+    }
 
 
 def _stub_user_api_key(

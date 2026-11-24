@@ -1150,6 +1150,7 @@
         "credentialsHint": "Either select existing credentials OR enter provider credentials below",
         "credentials": "Existing Credentials",
         "credentialsPlaceholder": "Select or search for existing credentials",
+        "apiKeyPlaceholder": "Leave blank to keep the current API key",
         "or": "OR",
         "metadata": "Metadata",
         "metadataHint": "JSON metadata for the vector store",

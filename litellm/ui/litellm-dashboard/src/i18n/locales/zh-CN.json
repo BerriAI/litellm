@@ -1086,6 +1086,7 @@
         "credentialsHint": "选择现有凭据，或在下方输入提供商凭据",
         "credentials": "现有凭据",
         "credentialsPlaceholder": "选择或搜索现有凭据",
+        "apiKeyPlaceholder": "API 密钥",
         "or": "或",
         "metadata": "元数据",
         "metadataHint": "向量存储的 JSON 元数据",

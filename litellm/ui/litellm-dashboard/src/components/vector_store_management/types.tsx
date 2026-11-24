@@ -18,7 +18,8 @@ export interface VectorStore {
   vector_store_name?: string;
   vector_store_description?: string;
   vector_store_metadata?: VectorStoreMetadata;
-  litellm_credential_name?: string;
+  litellm_credential_name?: string | null;
+  litellm_params?: Record<string, unknown> | string;
   created_at: string;
   updated_at: string;
   created_by?: string;
@@ -44,6 +45,8 @@ export interface VectorStoreUpdateRequest {
   vector_store_name?: string;
   vector_store_description?: string;
   vector_store_metadata?: Record<string, any>;
+  litellm_credential_name?: string | null;
+  litellm_params?: Record<string, unknown>;
 }
 
 export interface VectorStoreDeleteRequest {

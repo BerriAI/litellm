@@ -6,16 +6,22 @@ from typing import TYPE_CHECKING, Any, Final
 import httpx
 from pydantic import TypeAdapter
 
-from litellm.litellm_core_utils.url_utils import join_api_base
+from litellm.litellm_core_utils.url_utils import join_api_base, validate_url
 from litellm.llms.base_llm.vector_store.transformation import (
     BaseQueryEmbeddingVectorStoreConfig,
     VectorStoreEmbeddingExecutor,
+)
+from litellm.llms.custom_httpx.http_handler import (
+    get_async_httpx_client,  # pyright: ignore[reportUnknownVariableType]  # shared factory accepts legacy untyped parameters
 )
 from litellm.llms.openai.common_utils import decoded_json_object
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.vector_stores import (
     BaseVectorStoreAuthCredentials,
+    VectorStoreConnectionFailure,
+    VectorStoreConnectionResult,
+    VectorStoreConnectionSuccess,
     VectorStoreCreateOptionalRequestParams,
     VectorStoreCreateResponse,
     VectorStoreIndexEndpoints,
@@ -57,21 +63,23 @@ class MilvusVectorStoreConfig(BaseQueryEmbeddingVectorStoreConfig):
     def __init__(self):
         super().__init__()
 
-    def validate_environment(self, headers: dict, litellm_params: GenericLiteLLMParams | None) -> dict:
-        api_key: str | None = None
-        if litellm_params is not None:
-            api_key = litellm_params.api_key or get_secret_str("MILVUS_API_KEY")
+    def validate_environment(
+        self,
+        headers: dict[str, str],
+        litellm_params: GenericLiteLLMParams | None,
+    ) -> dict[str, str]:
+        api_key: Final = (
+            litellm_params.api_key or get_secret_str("MILVUS_API_KEY") if litellm_params is not None else None
+        )
 
         if not api_key:
             raise ValueError(
                 "MILVUS_API_KEY is not set. Either set it in the litellm_params or set the MILVUS_API_KEY environment variable."
             )
 
-        headers.update({"Authorization": f"Bearer {api_key}"})
+        return {**headers, "Authorization": f"Bearer {api_key}"}
 
-        return headers
-
-    def get_auth_credentials(self, litellm_params: dict) -> BaseVectorStoreAuthCredentials:
+    def get_auth_credentials(self, litellm_params: Mapping[str, object]) -> BaseVectorStoreAuthCredentials:
         api_key: Final = litellm_params.get("api_key")
         if not api_key:
             raise ValueError(
@@ -96,6 +104,43 @@ class MilvusVectorStoreConfig(BaseQueryEmbeddingVectorStoreConfig):
             ],
         }
 
+    async def test_connection(
+        self,
+        vector_store_id: str,
+        litellm_params: Mapping[str, object],
+    ) -> VectorStoreConnectionResult:
+        try:
+            typed_params: Final = GenericLiteLLMParams(**litellm_params)
+            api_base: Final = self.get_complete_url(typed_params.api_base, litellm_params)
+            request_url, host_header = validate_url(join_api_base(api_base, "v2/vectordb/collections/describe"))
+            headers: Final = {
+                **self.validate_environment(
+                    {"Content-Type": "application/json"},
+                    typed_params,
+                ),
+                "Host": host_header,
+            }
+            db_name: Final = litellm_params.get("milvus_db_name")
+            body: Final[dict[str, object]] = {  # mutable-ok: shared HTTP handler requires a dict JSON body
+                "collectionName": vector_store_id,
+                **({"dbName": db_name} if db_name else {}),
+            }
+            response: Final = await get_async_httpx_client(
+                llm_provider="milvus",
+                params={"timeout": 10.0},
+            ).post(  # pyright: ignore[reportUnknownMemberType]  # shared HTTP handler uses legacy bare dict parameters
+                request_url,
+                headers=headers,
+                json=body,
+            )
+            response_json: Final = decoded_json_object(_DECODED_JSON.validate_python(response.json()))
+            if response_json.get("code") != 0:
+                message: Final = response_json.get("message") or f"Milvus returned code {response_json.get('code')}"
+                return VectorStoreConnectionFailure(message=str(message))
+            return VectorStoreConnectionSuccess()
+        except Exception as exc:  # noqa: BLE001  # connection probes return every configuration, transport, and provider failure as data
+            return VectorStoreConnectionFailure(message=str(exc))
+
     def map_openai_params(self, non_default_params: dict, optional_params: dict, drop_params: bool) -> dict:
         for param, value in non_default_params.items():
             if param in MILVUS_OPTIONAL_PARAMS:
@@ -105,7 +150,7 @@ class MilvusVectorStoreConfig(BaseQueryEmbeddingVectorStoreConfig):
     def get_complete_url(
         self,
         api_base: str | None,
-        litellm_params: dict,
+        litellm_params: Mapping[str, object],
     ) -> str:
         """
         Get the base endpoint for Milvus API

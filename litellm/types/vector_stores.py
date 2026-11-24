@@ -67,6 +67,21 @@ class VectorStoreUpdateRequest(LiteLLMBaseModel):
     vector_store_name: str | None = None
     vector_store_description: str | None = None
     vector_store_metadata: dict | None = None
+    litellm_credential_name: str | None = None
+    litellm_params: Mapping[str, object] | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class VectorStoreConnectionSuccess:
+    pass
+
+
+@dataclass(frozen=True, slots=True)
+class VectorStoreConnectionFailure:
+    message: str
+
+
+VectorStoreConnectionResult: TypeAlias = VectorStoreConnectionSuccess | VectorStoreConnectionFailure
 
 
 class VectorStoreDeleteRequest(LiteLLMBaseModel):
