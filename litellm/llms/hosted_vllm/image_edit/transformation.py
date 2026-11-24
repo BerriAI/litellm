@@ -4,7 +4,7 @@ from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.openai.image_edit.transformation import OpenAIImageEditConfig
 from litellm.secret_managers.main import get_secret_str
 
-PARAMS_VLLM_OMNI_DOES_NOT_ACCEPT: Final = frozenset({"mask", "quality", "input_fidelity"})
+PARAMS_VLLM_OMNI_DOES_NOT_ACCEPT: Final = frozenset({"mask", "markup", "quality", "input_fidelity"})
 
 
 class HostedVLLMImageEditConfig(OpenAIImageEditConfig):
