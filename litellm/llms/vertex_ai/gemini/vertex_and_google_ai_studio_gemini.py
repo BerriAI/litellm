@@ -964,7 +964,7 @@ def _forced_function_names(name: str, tools: JsonValue) -> tuple[str, ...]:
 
 def _function_names_forced_by(tool_choice: object, tools: JsonValue) -> frozenset[str]:
     match tool_choice:
-        case "required":
+        case "required" | "validated":
             return frozenset(chain.from_iterable(_names_each_tool_declares(_listed(tools))))
         case {"function": {"name": str() as name}}:
             return frozenset(_forced_function_names(name, tools))
@@ -1274,6 +1274,8 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             return ToolConfig(functionCallingConfig=FunctionCallingConfig(mode="ANY"))
         elif tool_choice == "auto":
             return ToolConfig(functionCallingConfig=FunctionCallingConfig(mode="AUTO"))
+        elif tool_choice == "validated":
+            return ToolConfig(functionCallingConfig=FunctionCallingConfig(mode="VALIDATED"))
         elif isinstance(tool_choice, dict):
             # only supported for anthropic + mistral models - https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ToolChoice.html
             name: Final = tool_choice.get("function", {}).get("name", "")
@@ -1288,11 +1290,12 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 message=f"VertexAI can't force tool_choice '{name}', since none of that namespace's members can be sent to Gemini as a function. Name one of its functions instead, or set `litellm.drop_params = True` to drop tool_choice.",
                 status_code=400,
             )
-        else:
-            raise litellm.utils.UnsupportedParamsError(
-                message=f"VertexAI doesn't support tool_choice={tool_choice}. Supported tool_choice values=['auto', 'required', json object]. To drop it from the call, set `litellm.drop_params = True.",
-                status_code=400,
-            )
+        if drops_unsupported_params(drop_params):
+            return None
+        raise litellm.utils.UnsupportedParamsError(
+            message=f"VertexAI doesn't support tool_choice={tool_choice}. Supported tool_choice values=['auto', 'none', 'required', 'validated', json object]. To drop it from the call, set `litellm.drop_params = True`.",
+            status_code=400,
+        )
 
     def _map_web_search_options(self, value: dict[str, object]) -> Tools:
         """

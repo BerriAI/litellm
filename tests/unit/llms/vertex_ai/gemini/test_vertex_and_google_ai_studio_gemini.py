@@ -3842,6 +3842,7 @@ _ROOT_ONE_OF: Final = {"oneOf": [_LOOKUP_BY_A, _LOOKUP_BY_B]}
         ),
         (_ROOT_ONE_OF, {"type": "function", "function": {"name": "weather"}}, "parametersJsonSchema"),
         (_ROOT_ONE_OF, "auto", "parametersJsonSchema"),
+        (_ROOT_ONE_OF, "validated", "parameters"),
         (
             {"allOf": [{"type": "object", "properties": _LOOKUP_PROPERTIES}, {"required": ["b"]}]},
             "required",
@@ -3855,6 +3856,7 @@ _ROOT_ONE_OF: Final = {"oneOf": [_LOOKUP_BY_A, _LOOKUP_BY_B]}
         "required-root-properties-beside-union",
         "named-other-tool",
         "auto",
+        "validated",
         "required-root-all-of",
     ],
 )
@@ -7342,15 +7344,18 @@ def test_gemini_3_keeps_search_tools_next_to_function_tools(
     assert "Dropping search tools" not in caplog.text
 
 
+@pytest.mark.parametrize("tool_choice", ["auto", "validated"])
 @pytest.mark.parametrize("route", ["vertex", "studio"])
-def test_gemini_3_adds_the_server_side_flag_next_to_an_auto_tool_choice(route: Literal["vertex", "studio"]) -> None:
+def test_gemini_3_adds_the_server_side_flag_next_to_a_tool_choice_that_allows_text(
+    route: Literal["vertex", "studio"], tool_choice: str
+) -> None:
     function_only: Final = _mapped_request_body(
-        route, "gemini-3-flash-preview", {"tools": [_EXEC_TOOL], "tool_choice": "auto"}
+        route, "gemini-3-flash-preview", {"tools": [_EXEC_TOOL], "tool_choice": tool_choice}
     )
     mixed: Final = _mapped_request_body(
         route,
         "gemini-3-flash-preview",
-        {"tools": [_EXEC_TOOL], "web_search_options": {}, "tool_choice": "auto"},
+        {"tools": [_EXEC_TOOL], "web_search_options": {}, "tool_choice": tool_choice},
     )
 
     assert _tool_keys(mixed) == {"function_declarations", "googleSearch"}
@@ -7383,6 +7388,57 @@ def test_gemini_3_drops_search_next_to_functions_when_tool_choice_pins_the_funct
     assert _tool_keys(mixed) == {"function_declarations"}
     assert mixed.get("toolConfig") == function_only.get("toolConfig")
     assert "Dropping search tools" in caplog.text
+
+
+@pytest.mark.parametrize(("tool_choice", "mode"), [("validated", "VALIDATED"), ("required", "ANY")])
+@pytest.mark.parametrize("model", ["gemini-2.5-flash", "gemini-3-flash-preview"])
+@pytest.mark.parametrize("route", ["vertex", "studio"])
+def test_gemini_sends_a_tool_choice_string_as_its_function_calling_mode(
+    route: Literal["vertex", "studio"], model: str, tool_choice: str, mode: str
+) -> None:
+    body: Final = _completion_request_body(route, model, {"tools": [_EXEC_TOOL], "tool_choice": tool_choice})
+
+    assert body.get("toolConfig") == {"functionCallingConfig": {"mode": mode}}
+    assert _tool_keys(body) == {"function_declarations"}
+
+
+@pytest.mark.parametrize("tool_choice", ["any", "VALIDATED"])
+@pytest.mark.parametrize("route", ["vertex", "studio"])
+def test_gemini_answers_400_for_a_tool_choice_string_it_has_no_mode_for_without_drop_params(
+    monkeypatch: pytest.MonkeyPatch, route: Literal["vertex", "studio"], tool_choice: str
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+
+    with pytest.raises(litellm.UnsupportedParamsError) as raised:
+        _completion_request_body(route, "gemini-3-flash-preview", {"tools": [_EXEC_TOOL], "tool_choice": tool_choice})
+
+    assert raised.value.status_code == 400
+    assert f"tool_choice={tool_choice}" in str(raised.value)
+    assert "'validated'" in str(raised.value)
+
+
+@pytest.mark.parametrize(
+    ("request_drop_params", "global_drop_params"), [(True, False), (None, True)], ids=["request", "global"]
+)
+@pytest.mark.parametrize("tool_choice", ["any", "VALIDATED"])
+@pytest.mark.parametrize("route", ["vertex", "studio"])
+def test_gemini_drops_a_tool_choice_string_it_has_no_mode_for_under_drop_params(
+    monkeypatch: pytest.MonkeyPatch,
+    route: Literal["vertex", "studio"],
+    tool_choice: str,
+    request_drop_params: bool | None,
+    global_drop_params: bool,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", global_drop_params)
+
+    body: Final = _completion_request_body(
+        route,
+        "gemini-3-flash-preview",
+        {"tools": [_EXEC_TOOL], "tool_choice": tool_choice, "drop_params": request_drop_params},
+    )
+
+    assert "toolConfig" not in body
+    assert _tool_keys(body) == {"function_declarations"}
 
 
 @pytest.mark.parametrize("route", ["vertex", "studio"])

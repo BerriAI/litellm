@@ -193,7 +193,7 @@ class Retrieval(TypedDict):
 
 
 class FunctionCallingConfig(TypedDict, total=False):
-    mode: Literal["ANY", "AUTO", "NONE"]
+    mode: Literal["ANY", "AUTO", "NONE", "VALIDATED"]
     allowed_function_names: list[str]
 
 
