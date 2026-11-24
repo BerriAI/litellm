@@ -50,6 +50,7 @@ litellm-starlette = { path = "crates/starlette" }
 litellm-auth = { path = "crates/auth" }
 litellm-auth-types = { path = "crates/auth-types" }
 litellm-secret-value = { path = "crates/secret-value" }
+litellm-at-rest = { path = "crates/at-rest" }
 litellm-auth-aws = { path = "crates/auth-aws" }
 litellm-auth-azure = { path = "crates/auth-azure" }
 litellm-auth-gcp = { path = "crates/auth-gcp" }
