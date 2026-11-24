@@ -7,8 +7,10 @@ from fastapi import HTTPException
 from starlette.requests import Request
 
 from litellm.integrations.lens.proxy.buffering import BufferBudget
+from litellm.integrations.lens.proxy.model_gateway import GatewaySetupRequest
 from litellm.integrations.lens.proxy.pages import (
     allow_page,
+    connect_model_gateway,
     dashboard_session,
     lens_ui_asset,
     page_auth,
@@ -201,6 +203,45 @@ async def _signed_in(request: Request) -> UserAPIKeyAuth | None:
 
 async def _signed_out(request: Request) -> UserAPIKeyAuth | None:
     return None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "configured_url",
+    (
+        None,
+        "not-a-url",
+        "https://[broken",
+        "https://user@gateway.test",
+        "http://bad host",
+        "https://gateway.test:99999",
+    ),
+)
+async def test_connect_requires_a_configured_gateway_url(
+    monkeypatch: pytest.MonkeyPatch, configured_url: str | None
+) -> None:
+    if configured_url is None:
+        monkeypatch.delenv("PROXY_BASE_URL", raising=False)
+    else:
+        monkeypatch.setenv("PROXY_BASE_URL", configured_url)
+    monkeypatch.setenv("LITELLM_LENS_URL", "http://lens.test")
+    monkeypatch.setenv("LITELLM_LENS_SERVICE_TOKEN", SECRET)
+    monkeypatch.setenv("LENS_GATEWAY_SECRET", SECRET)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+
+    async def admin_key(**_headers: object) -> UserAPIKeyAuth:
+        return UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN)
+
+    async def log_teams(_auth: UserAPIKeyAuth) -> tuple[str, ...]:
+        return ()
+
+    monkeypatch.setattr("litellm.integrations.lens.proxy.pages.user_api_key_auth", admin_key)
+    request: Final = _request("POST", {"host": "request-host.test", "authorization": "Bearer fixture"})
+    with pytest.raises(HTTPException) as error:
+        await connect_model_gateway(request, GatewaySetupRequest(), log_teams)
+
+    assert error.value.status_code == 503
+    assert "PROXY_BASE_URL" in error.value.detail
 
 
 @pytest.mark.asyncio

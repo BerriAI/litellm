@@ -13,6 +13,7 @@ from urllib.parse import quote
 
 import httpx
 from fastapi import APIRouter, HTTPException, Request, Response
+from pydantic import AnyHttpUrl
 from starlette.responses import JSONResponse, RedirectResponse
 
 from litellm.integrations.lens.proxy.adapter import (
@@ -280,7 +281,7 @@ async def connect_model_gateway(
 
     Requires a proxy administrator. Existing Lens model settings are preserved.
     """
-    from litellm.proxy.mcp_server.oauth_utils import get_request_base_url  # noqa: PLC0415  # proxy startup cycle
+    from litellm.proxy.mcp_server.oauth_utils import configured_proxy_base_url  # noqa: PLC0415  # proxy startup cycle
 
     auth: Final = await page_auth(request)
     if auth.user_role != LitellmUserRoles.PROXY_ADMIN:
@@ -288,8 +289,14 @@ async def connect_model_gateway(
     connection: Final = Connection.from_env()
     if connection is None:
         raise HTTPException(503, SetupFailure.UNAVAILABLE.value)
+    try:
+        gateway_url: Final = AnyHttpUrl(configured_proxy_base_url() or "")
+    except ValueError:
+        raise HTTPException(503, SetupFailure.GATEWAY_URL.value) from None
+    if gateway_url.username is not None or gateway_url.password is not None:
+        raise HTTPException(503, SetupFailure.GATEWAY_URL.value)
     result: Final = await setup(
-        connection, await delegated_identity(auth, log_team_lookup), get_request_base_url(request), auth
+        connection, await delegated_identity(auth, log_team_lookup), str(gateway_url).rstrip("/"), auth
     )
     if isinstance(result, SetupFailure):
         raise HTTPException(503, result.value)

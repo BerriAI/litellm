@@ -1,11 +1,13 @@
 import json
+from types import SimpleNamespace
 from typing import Final
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import jwt
 import pytest
-from pydantic import TypeAdapter
+from pydantic import BaseModel, TypeAdapter
+from starlette.exceptions import HTTPException
 
 from litellm.integrations.lens.proxy.adapter import Connection, Identity
 from litellm.integrations.lens.proxy.model_gateway import (
@@ -177,29 +179,73 @@ async def test_a_lens_only_admin_key_cannot_provision_model_access() -> None:
 
 
 @pytest.mark.asyncio
+async def test_setup_reuses_a_key_committed_by_another_worker_during_lookup(monkeypatch: pytest.MonkeyPatch) -> None:
+    auth: Final = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
+    database: Final = MagicMock()
+    transaction: Final = database.tx.return_value.__aenter__.return_value
+    transaction.litellm_verificationtoken.find_unique = AsyncMock(return_value=None)
+    transaction.litellm_deletedverificationtoken.find_many = AsyncMock(return_value=[])
+    transaction.litellm_verificationtoken.find_many = AsyncMock(return_value=[object()])
+
+    async def committed_snapshot(_query: str, _token: str, _alias: str, *, model: type[BaseModel]) -> BaseModel:
+        return model.model_validate({"state": "active"})
+
+    transaction.query_first = committed_snapshot
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", database)
+
+    def transport(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            return httpx.Response(200, json=EMPTY.model_dump())
+        assert json.loads(request.content)["api_key"] == model_key(CONNECTION)
+        return httpx.Response(200, json=CONNECTED.model_dump())
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(transport)) as client:
+        monkeypatch.setattr(
+            "litellm.integrations.lens.remote.get_async_httpx_client",
+            lambda *_args, **_kwargs: SimpleNamespace(client=client),
+        )
+        assert await setup(CONNECTION, ADMIN, "https://gateway.test", auth) == CONNECTED
+
+
+@pytest.mark.asyncio
 async def test_a_retired_model_key_is_never_reissued_on_reconnection() -> None:
-    active: Final = AsyncMock(return_value=False)
-    retired: Final = AsyncMock(return_value=True)
+    from litellm.integrations.lens.proxy.model_gateway import _ModelKeyState
+
+    lookup: Final = AsyncMock(return_value=_ModelKeyState.RETIRED)
     generate: Final = AsyncMock()
     key: Final = model_key(CONNECTION)
-    assert not await ensure_model_key(key, active, retired, generate)
+    assert not await ensure_model_key(key, lookup, generate)
     generate.assert_not_awaited()
 
 
 @pytest.mark.asyncio
 async def test_retries_reuse_an_active_key_without_creating_another() -> None:
-    active: Final = AsyncMock(return_value=True)
-    retired: Final = AsyncMock(return_value=False)
+    from litellm.integrations.lens.proxy.model_gateway import _ModelKeyState
+
+    lookup: Final = AsyncMock(return_value=_ModelKeyState.ACTIVE)
     generate: Final = AsyncMock()
-    assert await ensure_model_key(model_key(CONNECTION), active, retired, generate)
+    assert await ensure_model_key(model_key(CONNECTION), lookup, generate)
     generate.assert_not_awaited()
 
 
 @pytest.mark.asyncio
 async def test_first_provisioning_creates_the_restricted_key() -> None:
-    active: Final = AsyncMock(return_value=False)
-    retired: Final = AsyncMock(return_value=False)
+    from litellm.integrations.lens.proxy.model_gateway import _ModelKeyState
+
+    lookup: Final = AsyncMock(return_value=_ModelKeyState.MISSING)
     generate: Final = AsyncMock()
     key: Final = model_key(CONNECTION)
-    assert await ensure_model_key(key, active, retired, generate)
+    assert await ensure_model_key(key, lookup, generate)
     generate.assert_awaited_once_with(key_request(key))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("retired", (True, False))
+async def test_a_persistence_conflict_retries_only_with_an_active_key(retired: bool) -> None:
+    from litellm.integrations.lens.proxy.model_gateway import _ModelKeyState
+
+    lookup: Final = AsyncMock(
+        side_effect=(_ModelKeyState.MISSING, _ModelKeyState.RETIRED if retired else _ModelKeyState.ACTIVE)
+    )
+    generate: Final = AsyncMock(side_effect=HTTPException(409))
+    assert await ensure_model_key(model_key(CONNECTION), lookup, generate) is not retired
