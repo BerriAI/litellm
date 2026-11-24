@@ -101,6 +101,14 @@ class _ChatTargetReasoning:
     summary: str | None = None
 
 
+def _model_info_with_request_base_model(kwargs: Mapping[str, object]) -> Mapping[str, object] | None:
+    model_info: Final = as_str_mapping(kwargs.get("model_info"))
+    base_model: Final = kwargs.get("base_model")
+    if not isinstance(base_model, str) or not base_model:
+        return model_info
+    return {**(model_info or {}), "base_model": base_model}
+
+
 def _provider_error_code(body: object) -> str | None:
     mapping: Final = as_str_mapping(body)
     if mapping is None:
@@ -644,7 +652,6 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         from litellm.responses.bridge_check import (
             chat_target_accepts_reasoning_summary,
             responses_api_bridge_check,
-            str_keyed_mapping,
         )
 
         if requested_summary is not None and chat_target_accepts_reasoning_summary(local_model, resolved_provider):
@@ -655,6 +662,8 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         web_search_options: Final = completion_kwargs.get("web_search_options")
         tools: Final = completion_kwargs.get("tools")
         client_summary: Final = thinking.get("summary")
+        deployment_model_info: Final = _model_info_with_request_base_model(completion_kwargs)
+        declared_base_model: Final = None if deployment_model_info is None else deployment_model_info.get("base_model")
         model_info, _ = responses_api_bridge_check(
             model=local_model,
             custom_llm_provider=resolved_provider,
@@ -664,7 +673,8 @@ class LiteLLMMessagesToCompletionTransformationHandler:
             tools=cast("list[dict[str, object]]", tools) if isinstance(tools, list) else None,
             reasoning_effort=effort if client_summary is None else {"effort": effort, "summary": client_summary},
             api_base=resolved_api_base,
-            deployment_model_info=str_keyed_mapping(completion_kwargs.get("model_info")),
+            deployment_model_info=deployment_model_info,
+            base_model=declared_base_model if isinstance(declared_base_model, str) else None,
         )
         return None if model_info.get("mode") == "responses" else _ChatTargetReasoning(effort=effort)
 
@@ -821,6 +831,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         base_model: Final = provider_kwargs.get("base_model")
         custom_llm_provider: Final = provider_kwargs.get("custom_llm_provider")
         target_provider: Final = custom_llm_provider if isinstance(custom_llm_provider, str) else None
+        api_base: Final = provider_kwargs.get("api_base")
         drop_params: Final = drops_unsupported_params(provider_kwargs.get("drop_params"))
         strips_mcp_servers: Final = target_provider in ROUTES_WITHOUT_MCP_SERVERS
         request_tools: Final = (
@@ -838,7 +849,11 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         request_data: Final[dict[str, object]] = {
             "model": model,
             "messages": strip_unsignable_thinking_blocks_for_claude(
-                messages, model, base_model if isinstance(base_model, str) else None
+                messages,
+                model,
+                base_model if isinstance(base_model, str) else None,
+                custom_llm_provider=target_provider,
+                api_base=api_base if isinstance(api_base, str) else None,
             ),
             "max_tokens": max_tokens,
         }
@@ -874,7 +889,6 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         if "output_config" in extra_kwargs:
             request_data["output_config"] = extra_kwargs["output_config"]
 
-        api_base: Final = extra_kwargs.get("api_base")
         (
             openai_request,
             tool_name_mapping,
@@ -882,7 +896,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
             request_data,
             custom_llm_provider=target_provider,
             api_base=api_base if isinstance(api_base, str) else None,
-            deployment_model_info=as_str_mapping(provider_kwargs.get("model_info")),
+            deployment_model_info=_model_info_with_request_base_model(provider_kwargs),
             reasoning_summary=peek_reasoning_summary_aliases(provider_kwargs),
             drop_params=drop_params,
             translate_bare_output_effort=extra_kwargs.get("reasoning_effort") is None,

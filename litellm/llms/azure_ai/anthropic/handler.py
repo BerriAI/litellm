@@ -17,6 +17,7 @@ from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
 )
+from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponse
 from litellm.utils import CustomStreamWrapper
 
@@ -38,7 +39,7 @@ class AzureAnthropicChatCompletion(AnthropicChatCompletion):
     def completion(
         self,
         model: str,
-        messages: list,
+        messages: list[AllMessageValues],
         api_base: str,
         custom_llm_provider: str,
         custom_prompt_dict: dict,

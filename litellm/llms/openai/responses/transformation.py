@@ -44,6 +44,7 @@ from litellm.llms.base_llm.chat.transformation import BaseLLMException, RelayOnl
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.llms.openai.chat.gpt_reasoning_transformation import (
     is_gpt_reasoning_series_name,
+    is_openai_chat_latest_model,
     refused_reasoning_effort_warning,
     unsupported_reasoning_effort_message,
 )
@@ -434,7 +435,8 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         The same row the chat gate reads, so a level the row refuses is refused on both wires
         and a new model needs its row, not code. This surface stays opt-out for every level,
         xhigh included, since it never refused a level the row omits; max is the exception, a
-        level the row cannot gate because the same model takes it here and refuses it on chat.
+        level no flag can gate because the same model takes it here and refuses it on chat, so only
+        a row that lists its reasoning_effort_levels refuses it.
         Azure overrides this so a bare deployment name reads the azure/ entry.
         """
         from litellm.llms.openai.chat.gpt_reasoning_transformation import OpenAIGPT5Config
@@ -583,7 +585,9 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
                 )
 
         lookup_name: Final = self._model_map_lookup_name(model)
-        if self._is_gpt_5_model(model=lookup_name):
+        if self._is_gpt_5_model(model=lookup_name) or (
+            self.custom_llm_provider == LlmProviders.OPENAI and is_openai_chat_latest_model(lookup_name)
+        ):
             reasoning: Final = params.get("reasoning") or {}
             requested_effort: Final = reasoning.get("effort") if isinstance(reasoning, dict) else None
             if (
@@ -1132,7 +1136,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
     def get_complete_url(
         self,
         api_base: str | None,
-        litellm_params: dict,
+        litellm_params: dict[str, object],
     ) -> str:
         """
         Get the endpoint for OpenAI responses API

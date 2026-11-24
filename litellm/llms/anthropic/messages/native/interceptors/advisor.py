@@ -61,7 +61,7 @@ class AdvisorOrchestrationHandler(MessagesInterceptor):
         self,
         *,
         model: str,
-        messages: list[dict],
+        messages: Sequence[Mapping[str, object]],
         tools: list[dict] | None,
         stream: bool | None,
         max_tokens: int,
@@ -95,7 +95,7 @@ class AdvisorOrchestrationHandler(MessagesInterceptor):
         ]
 
         # Strip prior advisor blocks from history, preserving advice text as context.
-        current_messages: list[dict] = strip_advisor_blocks_from_messages(
+        current_messages: list[dict[str, object]] = strip_advisor_blocks_from_messages(
             [dict(m) for m in messages], replace_with_text=True
         )
 
@@ -269,7 +269,7 @@ def _make_synthetic_advisor_tool() -> dict[str, object]:
     }
 
 
-def _find_advisor_tool_use(response: object) -> dict | None:
+def _find_advisor_tool_use(response: object) -> dict[object, object] | None:
     """Return the first tool_use block with name='advisor', or None."""
     content: Final = response.get("content") if isinstance(response, dict) else []
     if not isinstance(content, list):
@@ -293,10 +293,10 @@ _PROVIDER_SPECIFIC_KEYS: Final = frozenset({"provider_specific_fields"})
 
 
 def _build_advisor_context(
-    messages: list[dict],
+    messages: list[dict[str, object]],
     executor_response: object,
     advisor_use_block: dict,
-) -> list[dict]:
+) -> list[dict[str, object]]:
     """
     Build the message list for the advisor sub-call.
 
@@ -329,11 +329,11 @@ def _build_advisor_context(
 
 
 def _inject_advisor_turn(
-    messages: list[dict],
+    messages: list[dict[str, object]],
     executor_response: object,
-    advisor_use_block: Mapping[str, object],
+    advisor_use_block: Mapping[object, object],
     advisor_text: str,
-) -> list[dict]:
+) -> list[dict[str, object]]:
     """
     Append the executor's response (as an assistant turn) and the advisor
     result (as a user tool_result turn) so the executor can continue.
@@ -357,10 +357,10 @@ def _inject_advisor_turn(
 
 
 def _inject_max_uses_error(
-    messages: list[dict],
+    messages: list[dict[str, object]],
     executor_response: object,
-    advisor_use_block: Mapping[str, object],
-) -> list[dict]:
+    advisor_use_block: Mapping[object, object],
+) -> list[dict[str, object]]:
     """
     Inject a max_uses_exceeded error tool_result so the executor continues
     without further advisor calls (mirrors Anthropic's server-side behaviour).
@@ -404,12 +404,12 @@ def _resolve_advisor_router(advisor_model: str) -> "Router | None":
 
 async def _call_messages_handler(
     model: str,
-    messages: list[dict],
-    tools: list[dict] | None,
+    messages: Sequence[Mapping[str, object]],
+    tools: Sequence[Mapping[str, object]] | None,
     stream: bool,
     max_tokens: int,
     custom_llm_provider: str | None,
-    **kwargs,
+    **kwargs: object,
 ) -> Any:
     """
     Call anthropic_messages() — the public async /messages entry point — for

@@ -82,7 +82,7 @@ class NvidiaNimRerankConfig(BaseRerankConfig):
         self,
         api_base: str | None,
         model: str,
-        optional_params: dict | None = None,
+        optional_params: Mapping[str, object] | None = None,
     ) -> str:
         """
         Construct the Nvidia NIM rerank URL.
@@ -164,7 +164,7 @@ class NvidiaNimRerankConfig(BaseRerankConfig):
         api_key: str | None = None,
         optional_params: Mapping[str, object] | None = None,
         litellm_params: Mapping[str, object] | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Validate that the Nvidia NIM API key is present.
         """

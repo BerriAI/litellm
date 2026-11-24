@@ -1686,7 +1686,7 @@ def _get_deployment_default_limit(model_name: str, field: str) -> int | None:
     deployments: Final = llm_router.registry().deployments(model_name)
     if not deployments:
         return None
-    limits: Final = []
+    limits: Final[list[int]] = []
     for deployment in deployments:
         raw = deployment.get("litellm_params", {}).get(field)
         if raw is not None:
@@ -1794,7 +1794,7 @@ ESTIMATED_OUTPUT_TOKENS_METADATA_FIELDS: Final = frozenset(
     {ESTIMATED_OUTPUT_TOKENS_FIELD, ESTIMATED_OUTPUT_TOKENS_PER_MODEL_FIELD}
 )
 
-_ESTIMATED_OUTPUT_TOKENS_ADAPTER: Final = TypeAdapter(PositiveInt)
+_ESTIMATED_OUTPUT_TOKENS_ADAPTER: Final[TypeAdapter[int]] = TypeAdapter(PositiveInt)
 _ESTIMATED_OUTPUT_TOKENS_PER_MODEL_ADAPTER: Final = TypeAdapter(Mapping[str, PositiveInt])
 
 

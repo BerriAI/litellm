@@ -199,6 +199,7 @@ from litellm.litellm_core_utils.prompt_templates.tpm_media_utils import (
 from litellm.litellm_core_utils.prompt_templates.tpm_media_utils import (
     split_media_for_tpm as split_media_for_tpm,  # noqa: PLC0414  # public compatibility re-export
 )
+from litellm.types.llms.anthropic import ANTHROPIC_UNRENDERED_BLOCK_TYPES
 from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionAssistantMessage,
@@ -481,6 +482,17 @@ def extract_search_results_text(search_results: object) -> str:
         if citations is not None:
             texts += json.dumps(citations, separators=(",", ":"))
     return texts
+
+
+def is_unrendered_block(block: object) -> bool:
+    fields: Final = as_str_mapping(block)
+    block_type: Final = None if fields is None else fields.get("type")
+    return isinstance(block_type, str) and block_type in ANTHROPIC_UNRENDERED_BLOCK_TYPES
+
+
+def is_unrendered_block_without_text(block: object) -> bool:
+    fields: Final = as_str_mapping(block)
+    return fields is not None and is_unrendered_block(fields) and "text" not in fields
 
 
 def convert_content_list_to_str(
@@ -1272,7 +1284,7 @@ def unpack_legacy_defs(
     return schema
 
 
-def sanitize_input_schema_for_anthropic(input_schema: dict) -> "AnthropicInputSchema":
+def sanitize_input_schema_for_anthropic(input_schema: Mapping[str, object]) -> "AnthropicInputSchema":
     """Coerce an arbitrary tool input_schema into the shape Anthropic accepts.
 
     Anthropic requires ``type == "object"``, only recognises ``$defs`` (legacy
@@ -1858,8 +1870,8 @@ def is_present_non_string(value: object) -> bool:
     return value is not None and not isinstance(value, str)
 
 
-def invalid_type_message(field_path: str, value: object) -> str:
-    return f"Invalid type for '{field_path}': expected a string, got {type(value).__name__}"
+def invalid_type_message(field_path: str, value: object, expected: str = "a string") -> str:
+    return f"Invalid type for '{field_path}': expected {expected}, got {type(value).__name__}"
 
 
 def is_unhashable_value_behind(error: TypeError, value: object) -> bool:

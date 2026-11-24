@@ -131,7 +131,7 @@ class VertexAIGeminiImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
         api_key: str | None,
         model: str,
         optional_params: Mapping[str, object],
-        litellm_params: dict,
+        litellm_params: dict[str, object],
         stream: bool | None = None,
     ) -> str:
         """
@@ -165,7 +165,7 @@ class VertexAIGeminiImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
         model: str,
         messages: list[AllMessageValues],
         optional_params: Mapping[str, object],
-        litellm_params: dict,
+        litellm_params: dict[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
     ) -> dict:
@@ -193,7 +193,7 @@ class VertexAIGeminiImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
         model: str,
         prompt: str,
         optional_params: dict,
-        litellm_params: dict,
+        litellm_params: dict[str, object],
         headers: dict[str, str],
     ) -> dict[str, object]:
         """

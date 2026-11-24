@@ -459,7 +459,7 @@ def extract_parameters(operation: _OpenAPIOperation) -> tuple[Sequence[str], Seq
 def build_input_schema(operation: _OpenAPIOperation) -> dict[str, object]:
     """Build MCP input schema from OpenAPI operation."""
     properties: Final = {}
-    required: Final = []
+    required: Final[list[str]] = []
 
     # Process parameters
     if "parameters" in operation:
@@ -531,7 +531,7 @@ def _upstream_client() -> AsyncHTTPHandler:
 
 
 def _merge_openapi_tool_request_headers(
-    static_headers: dict[str, str],
+    static_headers: Mapping[str, str],
 ) -> dict[str, str]:
     """Merge static closure headers with per-request ContextVar overrides.
 
@@ -737,7 +737,7 @@ def create_tool_function(
 def register_tools_from_openapi(spec: _OpenAPISpec, base_url: str) -> None:
     """Register MCP tools from OpenAPI specification."""
     paths: Final = spec.get("paths", {})
-    used_names: Final = set()
+    used_names: Final[set[str]] = set()
 
     for path, path_item in paths.items():
         for method in ("get", "post", "put", "delete", "patch"):
