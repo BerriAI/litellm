@@ -368,7 +368,7 @@ class Cache:
         valkey_semantic_cache_embedding_model: str = "text-embedding-ada-002",
         valkey_semantic_cache_index_name: str | None = None,
         redis_flush_size: int | None = None,
-        redis_startup_nodes: list | None = None,
+        redis_startup_nodes: Sequence[object] | None = None,
         disk_cache_dir: str | None = None,
         qdrant_api_base: str | None = None,
         qdrant_api_key: str | None = None,
@@ -826,7 +826,7 @@ class Cache:
         verbose_logger.debug("Final hashed key: %s", hash_hex)
         return hash_hex
 
-    def generate_streaming_content(self, content):
+    def generate_streaming_content(self, content: str):
         chunk_size: Final = 5  # Adjust the chunk size as needed
         for i in range(0, len(content), chunk_size):
             yield {
@@ -1193,7 +1193,9 @@ class Cache:
         )
         return preset_cache_key, cached_data, kwargs
 
-    async def async_add_cache_pipeline(self, result, dynamic_cache_object: BaseCache | None = None, **kwargs):
+    async def async_add_cache_pipeline(
+        self, result: EmbeddingResponse, dynamic_cache_object: BaseCache | None = None, **kwargs: object
+    ):
         """
         Async implementation of add_cache for Embedding calls
 
