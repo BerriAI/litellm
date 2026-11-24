@@ -230,7 +230,7 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
         self,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict[str, object],
+        optional_params: dict,
         litellm_params: dict,
         headers: dict,
     ) -> dict:
@@ -252,7 +252,7 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
             for k, v in copy.deepcopy(optional_params).items()
             if k not in self.aws_authentication_params and k not in MCP_HANDLER_KWARG_NAMES
         }
-        request_data: dict[str, object] = {}
+        request_data: dict = {}
         if provider == "cohere":
             if model.startswith("cohere.command-r"):
                 ## LOAD CONFIG
@@ -605,11 +605,7 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
         return False
 
     def convert_messages_to_prompt(
-        self,
-        model: str,
-        messages,
-        provider: object,
-        custom_prompt_dict: Mapping[str, Mapping[str, object]],
+        self, model: str, messages, provider: object, custom_prompt_dict
     ) -> tuple[str, list | None]:
         # handle anthropic prompts and amazon titan prompts
         prompt = ""
