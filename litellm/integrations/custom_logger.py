@@ -390,7 +390,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
 
     async def async_post_call_streaming_deployment_hook(
         self,
-        request_data: dict,
+        request_data: dict[str, object],
         response_chunk: object,
         call_type: CallTypes | None,
     ) -> object | None:
@@ -486,7 +486,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
 
     async def async_post_call_response_headers_hook(
         self,
-        data: dict,
+        data: dict[str, object],
         user_api_key_dict: UserAPIKeyAuth,
         response: object,
         request_headers: dict[str, str] | None = None,
@@ -514,7 +514,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
 
     async def async_post_call_failure_hook(
         self,
-        request_data: dict,
+        request_data: dict[str, object],
         original_exception: Exception,
         user_api_key_dict: UserAPIKeyAuth,
         traceback_str: str | None = None,
@@ -535,7 +535,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
 
     async def async_post_call_success_hook(
         self,
-        data: dict,
+        data: dict[str, object],
         user_api_key_dict: UserAPIKeyAuth,
         response: LLMResponseTypes,
     ) -> Any:
@@ -553,7 +553,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
 
     async def async_moderation_hook(
         self,
-        data: dict,
+        data: dict[str, object],
         user_api_key_dict: UserAPIKeyAuth,
         call_type: CallTypesLiteral,
     ) -> object:
@@ -570,7 +570,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         self,
         user_api_key_dict: UserAPIKeyAuth,
         response: Any,
-        request_data: dict,
+        request_data: dict[str, object],
     ) -> AsyncGenerator[object, None]:
         async for item in response:
             yield item

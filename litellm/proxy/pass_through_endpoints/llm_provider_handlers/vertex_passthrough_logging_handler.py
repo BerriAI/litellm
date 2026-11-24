@@ -171,7 +171,7 @@ class VertexPassthroughLoggingHandler:
         start_time: datetime,
         end_time: datetime,
         cache_hit: bool,
-        request_body: dict | None = None,
+        request_body: dict[str, object] | None = None,
         **kwargs: object,
     ) -> PassThroughEndpointLoggingTypedDict:
         vertex_location: Final = get_vertex_location_from_url(url_route)

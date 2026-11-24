@@ -3777,7 +3777,7 @@ async def _lookup_end_user_and_apply_budget(
 async def enforce_key_and_fallback_model_access(
     *,
     valid_token: UserAPIKeyAuth,
-    request_data: dict,
+    request_data: dict[str, object],
     route: str,
     request: Request | None,
     llm_model_list: Sequence[object] | None,

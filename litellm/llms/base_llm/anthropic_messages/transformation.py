@@ -177,7 +177,7 @@ class BaseAnthropicMessagesConfig(ABC):
         self,
         model: str,
         httpx_response: httpx.Response,
-        request_body: dict,
+        request_body: dict[str, object],
         litellm_logging_obj: LiteLLMLoggingObj,
     ) -> AsyncIterator[bytes]:
         raise NotImplementedError("Subclasses must implement this method")
