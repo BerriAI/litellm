@@ -955,7 +955,7 @@ def cost_per_token(
         return 0.0, 0.0
 
 
-def get_replicate_completion_pricing(completion_response: dict, total_time=0.0):
+def get_replicate_completion_pricing(completion_response: dict, total_time: float = 0.0):
     # see https://replicate.com/pricing
     # for all litellm currently supported LLMs, almost all requests go to a100_80gb
     a100_80gb_price_per_second_public: Final = (
@@ -1609,7 +1609,7 @@ def _store_cost_breakdown_in_logging_obj(
     completion_tokens_cost_usd_dollar: float | None,
     cost_for_built_in_tools_cost_usd_dollar: float | None,
     total_cost_usd_dollar: float,
-    additional_costs: dict | None = None,
+    additional_costs: dict[str, float] | None = None,
     original_cost: float | None = None,
     discount_percent: float | None = None,
     discount_amount: float | None = None,

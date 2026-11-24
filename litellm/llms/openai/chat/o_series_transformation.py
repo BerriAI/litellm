@@ -71,7 +71,7 @@ class OpenAIOSeriesConfig(OpenAIGPTConfig):
         all_openai_params.extend(o_series_only_param)
 
         try:
-            model, custom_llm_provider, api_base, api_key = get_llm_provider(model=model)
+            model, custom_llm_provider, _, _ = get_llm_provider(model=model)
         except Exception:
             verbose_logger.debug(
                 "Unable to infer model provider for model=%s, defaulting to openai for o1 supported param check", model

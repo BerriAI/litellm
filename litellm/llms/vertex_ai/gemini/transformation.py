@@ -1128,7 +1128,7 @@ def gemini_convert_messages_with_history(
     last_message_with_tool_calls = None
 
     msg_i = 0
-    tool_call_responses = []
+    tool_call_responses: list[PartType] = []
     vertex_credentials = None
     request_settings: Final = cast(Mapping[str, object], litellm_params or {})  # cast-ok: untyped shared signature
     drop_params: Final = drops_unsupported_params(request_settings.get("drop_params"))
@@ -1662,7 +1662,7 @@ def sync_transform_request_body(
     model: str,
     client: HTTPHandler | None,
     timeout: float | httpx.Timeout | None,
-    extra_headers: dict | None,
+    extra_headers: Mapping[str, str] | None,
     optional_params: dict,
     logging_obj: LiteLLMLoggingObj,
     custom_llm_provider: Literal["vertex_ai", "vertex_ai_beta", "gemini"],
@@ -1802,7 +1802,7 @@ async def async_transform_request_body(
     model: str,
     client: AsyncHTTPHandler | None,
     timeout: float | httpx.Timeout | None,
-    extra_headers: dict | None,
+    extra_headers: Mapping[str, str] | None,
     optional_params: dict,
     logging_obj: LiteLLMLoggingObj,
     custom_llm_provider: Literal["vertex_ai", "vertex_ai_beta", "gemini"],

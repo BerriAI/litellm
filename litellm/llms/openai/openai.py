@@ -136,7 +136,7 @@ class MistralEmbeddingConfig:
             "encoding_format",
         ]
 
-    def map_openai_params(self, non_default_params: dict, optional_params: dict):
+    def map_openai_params(self, non_default_params: Mapping[str, object], optional_params: dict):
         for param, value in non_default_params.items():
             if param == "encoding_format":
                 optional_params["encoding_format"] = value
@@ -261,7 +261,9 @@ class OpenAIConfig(BaseConfig):
             return OpenAIUnknownModelConfig()
         return litellm.openAIGPTConfig
 
-    def _map_openai_params(self, non_default_params: dict, optional_params: dict, model: str) -> dict:
+    def _map_openai_params(
+        self, non_default_params: Mapping[str, object], optional_params: dict[str, object], model: str
+    ) -> dict[str, object]:
         supported_openai_params: Final = self.get_supported_openai_params(model)
         for param, value in non_default_params.items():
             if param in supported_openai_params:
@@ -504,7 +506,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         workload_identity_config: Final = resolve_openai_workload_identity_config(
             api_key=api_key, api_base=api_base, litellm_params=litellm_params
         )
-        client_initialization_params: Final[dict] = locals()
+        client_initialization_params: Final[dict[str, object]] = locals()
         if client is None:
             if not isinstance(max_retries, int):
                 raise OpenAIError(

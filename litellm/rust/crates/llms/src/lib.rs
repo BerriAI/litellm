@@ -10,6 +10,7 @@ pub mod edenai;
 mod error;
 pub mod minimax;
 pub mod mistral;
+pub mod nace;
 pub mod openai;
 pub mod openai_like;
 pub mod openrouter;

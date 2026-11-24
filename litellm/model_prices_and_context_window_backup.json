@@ -14192,7 +14192,7 @@
         "supports_tool_choice": true
     },
     "azure_ai/cohere-rerank-v4.0-pro": {
-        "deprecation_date": "2027-09-13",
+        "deprecation_date": "2027-09-14",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/concepts/model-lifecycle-retirement",
         "successor_model": "azure_ai/cohere-rerank-v5-pro",
         "input_cost_per_query": 0.0025,
@@ -14205,7 +14205,7 @@
         "source": "https://techcommunity.microsoft.com/blog/azure-ai-foundry-blog/introducing-cohere-rerank-4-0-in-microsoft-foundry/4477076"
     },
     "azure_ai/cohere-rerank-v4.0-fast": {
-        "deprecation_date": "2027-09-13",
+        "deprecation_date": "2027-09-14",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/concepts/model-lifecycle-retirement",
         "successor_model": "azure_ai/cohere-rerank-v5-fast",
         "input_cost_per_query": 0.002,
@@ -14218,7 +14218,7 @@
         "source": "https://techcommunity.microsoft.com/blog/azure-ai-foundry-blog/introducing-cohere-rerank-4-0-in-microsoft-foundry/4477076"
     },
     "azure_ai/deepseek-v3.2": {
-        "deprecation_date": "2027-11-01",
+        "deprecation_date": "2027-11-02",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/concepts/model-lifecycle-retirement",
         "successor_model": "azure_ai/deepseek-v4.1-flash",
         "input_cost_per_token": 5.8e-07,
@@ -14255,7 +14255,7 @@
     },
     "azure_ai/deepseek-v4-pro": {
         "successor_model": "azure_ai/deepseek-v4.1-flash-1017",
-        "deprecation_date": "2028-02-20",
+        "deprecation_date": "2028-02-22",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/concepts/model-lifecycle-retirement",
         "input_cost_per_token": 1.74e-06,
         "litellm_provider": "azure_ai",
@@ -14280,7 +14280,7 @@
         "alias_of": "azure_ai/deepseek-v4-pro"
     },
     "azure_ai/deepseek-v4-flash": {
-        "deprecation_date": "2028-02-20",
+        "deprecation_date": "2028-02-22",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/concepts/model-lifecycle-retirement",
         "successor_model": "azure_ai/DeepSeek-V4-Flash-0731",
         "input_cost_per_token": 1.9e-07,
@@ -44389,6 +44389,44 @@
             "comment": "V2 async task API, fast tier. Pay-as-you-go list price $0.05/s at 480P and $0.08/s at 768P; no 2K. Plus $0.074 per input image beyond the first 2. Audio input is free. Reference video input is rejected, since MiniMax bills its duration only after the create call."
         }
     },
+    "minimax/MiniMax-H3-Image": {
+        "litellm_provider": "minimax",
+        "mode": "image_generation",
+        "source": "https://platform.minimax.io/docs/guides/image-generation",
+        "input_cost_per_token": 2.3e-06,
+        "input_cost_per_image_token": 1.5e-06,
+        "output_cost_per_image_token": 3.8e-06,
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "image"
+        ],
+        "supported_endpoints": [
+            "/v1/images/generations",
+            "/v1/images/edits"
+        ]
+    },
+    "minimax/MiniMax-H3-Image-Highspeed": {
+        "litellm_provider": "minimax",
+        "mode": "image_generation",
+        "source": "https://platform.minimax.io/docs/guides/image-generation",
+        "input_cost_per_token": 2.3e-06,
+        "input_cost_per_image_token": 3e-06,
+        "output_cost_per_image_token": 7.6e-06,
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "image"
+        ],
+        "supported_endpoints": [
+            "/v1/images/generations",
+            "/v1/images/edits"
+        ]
+    },
     "mistral.devstral-2-123b": {
         "successor_model": "mistral/mistral-medium-3-5",
         "deprecation_date": "2027-03-30",
@@ -49411,6 +49449,7 @@
     "perplexity/perplexity/deepseek-v4-pro-0813": {
         "litellm_provider": "perplexity",
         "mode": "responses",
+        "supports_function_calling": true,
         "input_cost_per_token": 1.32e-06,
         "output_cost_per_token": 3.96e-06,
         "cache_read_input_token_cost": 4.4e-08,
@@ -75953,6 +75992,7 @@
     "perplexity/openai/gpt-5-nano": {
         "litellm_provider": "perplexity",
         "mode": "responses",
+        "supports_function_calling": true,
         "input_cost_per_token": 5e-08,
         "output_cost_per_token": 4e-07,
         "cache_read_input_token_cost": 5e-09,
@@ -75961,6 +76001,7 @@
     "perplexity/openai/gpt-5.3-codex": {
         "litellm_provider": "perplexity",
         "mode": "responses",
+        "supports_function_calling": true,
         "input_cost_per_token": 3.5e-06,
         "output_cost_per_token": 2.8e-05,
         "cache_read_input_token_cost": 3.5e-07,
@@ -76013,6 +76054,7 @@
     "perplexity/google/gemini-4-argon": {
         "litellm_provider": "perplexity",
         "mode": "responses",
+        "supports_function_calling": true,
         "input_cost_per_token": 2e-06,
         "output_cost_per_token": 1e-05,
         "cache_read_input_token_cost": 1e-07,
@@ -76021,6 +76063,7 @@
     "perplexity/google/gemini-4-hydrogen": {
         "litellm_provider": "perplexity",
         "mode": "responses",
+        "supports_function_calling": true,
         "input_cost_per_token": 1.5e-06,
         "output_cost_per_token": 7.5e-06,
         "cache_read_input_token_cost": 7.5e-08,
@@ -76029,6 +76072,7 @@
     "perplexity/google/gemini-4-carbon": {
         "litellm_provider": "perplexity",
         "mode": "responses",
+        "supports_function_calling": true,
         "input_cost_per_token": 2e-06,
         "output_cost_per_token": 1e-05,
         "cache_read_input_token_cost": 1e-07,
@@ -76166,6 +76210,7 @@
     "perplexity/perplexity/nemotron-3.5-super-120b-a12b": {
         "litellm_provider": "perplexity",
         "mode": "responses",
+        "supports_function_calling": true,
         "input_cost_per_token": 2e-07,
         "output_cost_per_token": 5e-07,
         "cache_read_input_token_cost": 4e-08,
@@ -79340,6 +79385,33 @@
         "source": "https://console.nace.ai/docs/drex/guides/drex-max",
         "supports_vision": true
     },
+    "nace/parse-high": {
+        "litellm_provider": "nace",
+        "mode": "ocr",
+        "ocr_cost_per_page": 0.007,
+        "source": "https://console.nace.ai/docs/perception/pricing",
+        "supported_endpoints": [
+            "/v1/ocr"
+        ]
+    },
+    "nace/parse-low": {
+        "litellm_provider": "nace",
+        "mode": "ocr",
+        "ocr_cost_per_page": 0.0035,
+        "source": "https://console.nace.ai/docs/perception/pricing",
+        "supported_endpoints": [
+            "/v1/ocr"
+        ]
+    },
+    "nace/parse-medium": {
+        "litellm_provider": "nace",
+        "mode": "ocr",
+        "ocr_cost_per_page": 0.005,
+        "source": "https://console.nace.ai/docs/perception/pricing",
+        "supported_endpoints": [
+            "/v1/ocr"
+        ]
+    },
     "typesafe/jev-1.13.0": {
         "input_cost_per_token": 4.2e-08,
         "litellm_provider": "typesafe",
@@ -81456,6 +81528,7 @@
     "perplexity/anthropic/claude-fable-5-2": {
         "litellm_provider": "perplexity",
         "mode": "responses",
+        "supports_function_calling": true,
         "input_cost_per_token": 8e-06,
         "output_cost_per_token": 4e-05,
         "cache_read_input_token_cost": 2e-07,
@@ -81464,6 +81537,7 @@
     "perplexity/anthropic/claude-fable-5-1": {
         "litellm_provider": "perplexity",
         "mode": "responses",
+        "supports_function_calling": true,
         "input_cost_per_token": 1e-05,
         "output_cost_per_token": 5e-05,
         "cache_read_input_token_cost": 2.5e-07,
@@ -81472,6 +81546,7 @@
     "perplexity/anthropic/claude-opus-5-5": {
         "litellm_provider": "perplexity",
         "mode": "responses",
+        "supports_function_calling": true,
         "input_cost_per_token": 4e-06,
         "output_cost_per_token": 2e-05,
         "cache_read_input_token_cost": 2e-07,
@@ -81480,6 +81555,7 @@
     "perplexity/openai/gpt-6.1-terra": {
         "litellm_provider": "perplexity",
         "mode": "responses",
+        "supports_function_calling": true,
         "input_cost_per_token": 0.000001,
         "output_cost_per_token": 0.000005,
         "cache_read_input_token_cost": 5e-8,
@@ -81493,6 +81569,7 @@
     "perplexity/openai/gpt-6.2-astra": {
         "litellm_provider": "perplexity",
         "mode": "responses",
+        "supports_function_calling": true,
         "input_cost_per_token": 0.000008,
         "output_cost_per_token": 0.00004,
         "cache_read_input_token_cost": 4e-7,
@@ -81506,6 +81583,7 @@
     "perplexity/openai/gpt-6.2-sol": {
         "litellm_provider": "perplexity",
         "mode": "responses",
+        "supports_function_calling": true,
         "input_cost_per_token": 0.000002,
         "output_cost_per_token": 0.00001,
         "cache_read_input_token_cost": 1e-7,
@@ -81519,6 +81597,7 @@
     "perplexity/openai/gpt-6.1-sol": {
         "litellm_provider": "perplexity",
         "mode": "responses",
+        "supports_function_calling": true,
         "input_cost_per_token": 2e-06,
         "output_cost_per_token": 1e-05,
         "cache_read_input_token_cost": 1e-07,
@@ -81530,6 +81609,7 @@
     "perplexity/openai/gpt-6-sol": {
         "litellm_provider": "perplexity",
         "mode": "responses",
+        "supports_function_calling": true,
         "input_cost_per_token": 2e-06,
         "output_cost_per_token": 1e-05,
         "cache_read_input_token_cost": 2e-07,
@@ -81541,6 +81621,7 @@
     "perplexity/openai/gpt-6-astra": {
         "litellm_provider": "perplexity",
         "mode": "responses",
+        "supports_function_calling": true,
         "input_cost_per_token": 1e-05,
         "output_cost_per_token": 5e-05,
         "cache_read_input_token_cost": 1e-06,
@@ -81553,6 +81634,7 @@
     "perplexity/openai/gpt-6-luna": {
         "litellm_provider": "perplexity",
         "mode": "responses",
+        "supports_function_calling": true,
         "input_cost_per_token": 1e-07,
         "output_cost_per_token": 5e-07,
         "cache_read_input_token_cost": 1e-08,
@@ -81564,6 +81646,7 @@
     "perplexity/google/gemini-3.8-flash": {
         "litellm_provider": "perplexity",
         "mode": "responses",
+        "supports_function_calling": true,
         "supports_sampling_params": false,
         "input_cost_per_token": 7.5e-07,
         "output_cost_per_token": 3.75e-06,
@@ -81573,6 +81656,7 @@
     "perplexity/xai/grok-4.7": {
         "litellm_provider": "perplexity",
         "mode": "responses",
+        "supports_function_calling": true,
         "input_cost_per_token": 2e-06,
         "output_cost_per_token": 6e-06,
         "cache_read_input_token_cost": 5e-07,
@@ -109649,8 +109733,8 @@
         "deprecation_date": "2027-11-04",
         "input_cost_per_token": 2.3e-06,
         "litellm_provider": "azure_ai",
-        "max_input_tokens": 1048576,
-        "max_output_tokens": 1048576,
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 262144,
         "mode": "chat",
         "output_cost_per_token": 1.15e-05,
         "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",

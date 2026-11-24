@@ -466,14 +466,14 @@ class AzureAIStudioConfig(OpenAIConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, str],
         model: str,
         messages: list[AllMessageValues],
         optional_params: Mapping[str, object],
-        litellm_params: dict,
+        litellm_params: Mapping[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, str]:
         if api_key:
             if api_base and self._should_use_api_key_header(api_base):
                 headers["api-key"] = api_key
@@ -694,7 +694,7 @@ class AzureAIStudioConfig(OpenAIConfig):
         self,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
+        optional_params: dict[str, object],
         litellm_params: dict,
         headers: dict,
     ) -> dict[str, object]:
@@ -722,10 +722,10 @@ class AzureAIStudioConfig(OpenAIConfig):
         raw_response: Response,
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
-        request_data: dict,
+        request_data: dict[str, object],
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
@@ -760,7 +760,7 @@ class AzureAIStudioConfig(OpenAIConfig):
         )
 
     def should_retry_llm_api_inside_llm_translation_on_http_error(
-        self, e: httpx.HTTPStatusError, litellm_params: dict
+        self, e: httpx.HTTPStatusError, litellm_params: dict[str, object]
     ) -> bool:
         should_drop_params: Final = litellm_params.get("drop_params") or litellm.drop_params
         error_text: Final = e.response.text
@@ -782,7 +782,7 @@ class AzureAIStudioConfig(OpenAIConfig):
         return 2
 
     def transform_request_on_unprocessable_entity_error(
-        self, e: httpx.HTTPStatusError, request_data: dict
+        self, e: httpx.HTTPStatusError, request_data: dict[str, object]
     ) -> dict[str, object]:
         error_text: Final = e.response.text
         _messages: Final = cast(list[AllMessageValues] | None, request_data.get("messages"))

@@ -1409,7 +1409,7 @@ async def exchange_token_with_server(
                 status_code=400,
                 detail="refresh_token is required for refresh_token grant",
             )
-        token_data: dict = {
+        token_data: dict[str, str | None] = {
             "grant_type": "refresh_token",
             "refresh_token": upstream_refresh_token,
             **token_request.body,
@@ -3027,7 +3027,7 @@ async def _build_oauth_protected_resource_response(
     request: Request,
     mcp_server_name: str | None,
     use_standard_pattern: bool,
-) -> dict:
+) -> Mapping[str, object]:
     """
     Build OAuth protected resource response with the appropriate URL pattern.
 
@@ -3170,7 +3170,7 @@ def _obo_protected_resource_response(mcp_server: MCPServer | None, resource_url:
     }
 
 
-def _jwt_auth_issuers() -> list:
+def _jwt_auth_issuers() -> list[object]:
     """The OAuth issuer identifier(s) LiteLLM's JWT auth trusts, for the OBO PRM authorization_servers.
 
     In token_exchange the IdP that issues the subject JWT is the same one LiteLLM validates it
@@ -3181,7 +3181,7 @@ def _jwt_auth_issuers() -> list:
 
     from litellm.proxy.proxy_server import general_settings  # noqa: PLC0415
 
-    issuers: Final[list] = []
+    issuers: Final[list[object]] = []
     env_issuer: Final = os.getenv("JWT_ISSUER")
     if env_issuer:
         issuers.append(env_issuer)
@@ -3357,7 +3357,7 @@ def _build_oauth_authorization_server_response(
     mcp_server_name: str | None,
     *,
     issuer_path: str | None = None,
-) -> dict:
+) -> dict[str, object]:
     """Build OAuth authorization server metadata response (gateway-as-AS shape)."""
     request_base_url: Final = get_request_base_url(request)
     client_ip: Final = IPAddressUtils.get_mcp_client_ip(request)
