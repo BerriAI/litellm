@@ -967,21 +967,27 @@ def test_streamed_image_blocked_by_a_post_call_guardrail_never_reaches_the_clien
 
 
 class _ImageReplacingLogger(CustomLogger):
+    def __init__(self, returns_dict: bool) -> None:
+        super().__init__()
+        self.returns_dict: Final = returns_dict
+
     async def async_post_call_success_hook(
         self, data: dict[str, object], user_api_key_dict: UserAPIKeyAuth, response: object
     ) -> object:
         assert isinstance(response, ImageResponse)
-        return ImageResponse(
+        replaced: Final = ImageResponse(
             created=response.created, data=[ImageObject(b64_json="UkVQTEFDRUQ=")], usage=response.usage
         )
+        return replaced.model_dump() if self.returns_dict else replaced
 
 
+@pytest.mark.parametrize("returns_dict", [False, True], ids=["image_response", "dict"])
 @pytest.mark.parametrize("kind", ["generation", "edit"])
 def test_streamed_image_replaced_by_a_post_call_hook_is_the_one_the_client_gets(
-    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter, kind: str
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter, kind: str, returns_dict: bool
 ) -> None:
     prefix: Final = _STREAM_ROUTES[kind][1]
-    monkeypatch.setattr(litellm, "callbacks", [_ImageReplacingLogger()])
+    monkeypatch.setattr(litellm, "callbacks", [_ImageReplacingLogger(returns_dict)])
     with _streaming_image_client(monkeypatch, respx_mock, kind) as client:
         response: Final = _streamed_image_request(client, kind)
 
@@ -1019,9 +1025,23 @@ def test_streamed_image_request_answered_with_json_gets_every_image_as_a_complet
     assert events[-1][1]["usage"]["total_tokens"] == _STREAMED_USAGE["total_tokens"]
 
 
-def test_image_generation_streamed_through_extra_body_is_answered_with_the_provider_events(
+class _StreamFlagRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.stream_flags: Queue[object] = Queue()
+
+    async def async_post_call_success_hook(
+        self, data: dict[str, object], user_api_key_dict: UserAPIKeyAuth, response: object
+    ) -> object:
+        self.stream_flags.put(data.get("stream"))
+        return response
+
+
+def test_image_generation_streamed_through_extra_body_is_answered_and_checked_as_a_stream(
     monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
 ) -> None:
+    recorder: Final = _StreamFlagRecorder()
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
     with _streaming_image_client(monkeypatch, respx_mock, "generation") as client:
         response: Final = client.post(
             "/v1/images/generations",
@@ -1033,3 +1053,4 @@ def test_image_generation_streamed_through_extra_body_is_answered_with_the_provi
     events: Final = _sse_events(response.text)
     assert [name for name, _ in events] == ["image_generation.partial_image", "image_generation.completed"]
     assert events[-1][1]["b64_json"] == _STREAMED_IMAGE
+    assert recorder.stream_flags.get_nowait() is True

@@ -1,6 +1,6 @@
 import asyncio
 import io
-from collections.abc import AsyncGenerator, Awaitable, Callable, Sequence
+from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping, Sequence
 from datetime import datetime
 from functools import partial
 from itertools import chain
@@ -19,6 +19,7 @@ from litellm.images.streaming import (
     AsyncImageStream,
     completed_image_events,
     image_event_sse_frame,
+    image_generation_stream_requested,
     image_response_from_completed_event,
     image_stream_requested,
     is_completed_image_event,
@@ -71,6 +72,10 @@ def _post_call_success_hook_of(proxy_logging: _PostCallSuccessHook) -> Callable[
     return proxy_logging.post_call_success_hook
 
 
+def _generation_streams(request_data: Mapping[str, object]) -> bool:
+    return image_generation_stream_requested(request_data.get("stream"), request_data.get("extra_body"))
+
+
 async def image_event_sse_stream(
     response: ImageResponse | AsyncImageStream,
     user_api_key_dict: UserAPIKeyAuth,
@@ -90,7 +95,13 @@ async def image_event_sse_stream(
         checked: Final = await _post_call_success_hook_of(proxy_logging_obj)(
             data=request_data, user_api_key_dict=user_api_key_dict, response=image_response
         )
-        served: Final = checked if isinstance(checked, ImageResponse) else image_response
+        served: Final = (
+            checked
+            if isinstance(checked, ImageResponse)
+            else image_response
+            if checked is None
+            else ImageResponse.model_validate(checked)
+        )
         if provider_frame is not None and served.model_dump() == unchecked:
             return (provider_frame,)
         return tuple(
@@ -201,7 +212,9 @@ async def image_generation(
         if isinstance(model, str):
             reject_url_valued_destination("model", model)
 
-        streams: Final = image_stream_requested(data.get("stream"))
+        streams: Final = _generation_streams(data)
+        if streams:
+            data["stream"] = True
         data["model"] = resolve_inference_model(
             data.get("model"), general_settings, user_model, model, kind="image_generation"
         )
