@@ -42,7 +42,7 @@ from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import LLMResponseTypes
 
 if TYPE_CHECKING:
-    from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
+    from litellm.types.proxy.guardrails.guardrail_hooks.pillar import PillarGuardrailConfigModel
 
 MAX_PILLAR_HEADER_VALUE_BYTES: Final = 8 * 1024
 
@@ -325,7 +325,7 @@ class PillarGuardrail(CustomGuardrail):
         self,
         user_api_key_dict: UserAPIKeyAuth,
         cache: DualCache,
-        data: dict,
+        data: dict[str, object],
         call_type: Literal[
             "completion",
             "text_completion",
@@ -338,7 +338,7 @@ class PillarGuardrail(CustomGuardrail):
             "mcp_call",
             "anthropic_messages",
         ],
-    ) -> Exception | str | dict | None:
+    ) -> Exception | str | dict[str, object] | None:
         """
         Pre-call hook to scan the request for security threats before sending to LLM.
 
@@ -370,7 +370,7 @@ class PillarGuardrail(CustomGuardrail):
     @log_guardrail_information
     async def async_moderation_hook(
         self,
-        data: dict,
+        data: dict[str, object],
         user_api_key_dict: UserAPIKeyAuth,
         call_type: Literal[
             "completion",
@@ -382,7 +382,7 @@ class PillarGuardrail(CustomGuardrail):
             "mcp_call",
             "anthropic_messages",
         ],
-    ) -> Exception | str | dict | None:
+    ) -> Exception | str | dict[str, object] | None:
         """
         During-call hook to scan the request in parallel with LLM processing.
 
@@ -466,7 +466,9 @@ class PillarGuardrail(CustomGuardrail):
     # CORE LOGIC METHOD
     # =========================================================================
 
-    async def run_pillar_guardrail(self, data: dict, user_api_key_dict: UserAPIKeyAuth) -> dict:
+    async def run_pillar_guardrail(
+        self, data: dict[str, object], user_api_key_dict: UserAPIKeyAuth
+    ) -> dict[str, object]:
         """
         Core method to run the Pillar guardrail scan.
 
@@ -512,7 +514,7 @@ class PillarGuardrail(CustomGuardrail):
     # PRIVATE HELPER METHODS (In logical order of usage)
     # =========================================================================
 
-    def _handle_api_error(self, error: Exception, data: dict) -> dict:
+    def _handle_api_error(self, error: Exception, data: dict[str, object]) -> dict[str, object]:
         """
         Handle API errors based on fallback_on_error configuration.
 
@@ -850,7 +852,7 @@ class PillarGuardrail(CustomGuardrail):
     # =========================================================================
 
     @staticmethod
-    def get_config_model() -> type["GuardrailConfigModel"] | None:
+    def get_config_model() -> type["PillarGuardrailConfigModel"] | None:
         """
         Get the configuration model for this guardrail.
 

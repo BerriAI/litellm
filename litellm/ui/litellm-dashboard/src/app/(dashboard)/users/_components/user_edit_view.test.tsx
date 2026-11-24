@@ -98,9 +98,9 @@ describe("UserEditView", () => {
 
     await user.click(screen.getByRole("combobox", { name: /Global Proxy Role/i }));
 
-    expect(screen.getByRole("option", { name: "Proxy Admin Viewer" })).toBeInTheDocument();
-    expect(screen.getByRole("option", { name: "Internal User Viewer" })).toBeInTheDocument();
-    expect(screen.getByRole("option", { name: "Custom Role" })).toBeInTheDocument();
+    expect(await screen.findByRole("option", { name: "Proxy Admin Viewer" })).toBeInTheDocument();
+    expect(await screen.findByRole("option", { name: "Internal User Viewer" })).toBeInTheDocument();
+    expect(await screen.findByRole("option", { name: "Custom Role" })).toBeInTheDocument();
   });
 
   it("should display user ID field when not in bulk edit mode", async () => {
@@ -343,6 +343,35 @@ describe("UserEditView", () => {
     expect(callArgs.max_budget).toBe(100.5);
     expect(callArgs.budget_duration).toBe("30d");
     expect(callArgs.metadata).toEqual(MOCK_USER_DATA.user_info.metadata);
+  });
+
+  it("submits a semantic cache TTL alongside existing user metadata", async () => {
+    const onSubmit = vi.fn();
+    renderWithProviders(<UserEditView {...defaultProps} onSubmit={onSubmit} />);
+
+    fireEvent.change(screen.getByLabelText("TTL in seconds"), { target: { value: "37" } });
+    await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    expect(onSubmit.mock.calls[0][0].metadata).toEqual({
+      ...MOCK_USER_DATA.user_info.metadata,
+      cache_params: { ttl: 37 },
+    });
+  });
+
+  it("submits a semantic cache clear when it was the only user metadata", async () => {
+    const onSubmit = vi.fn();
+    const userData = {
+      ...MOCK_USER_DATA,
+      user_info: { ...MOCK_USER_DATA.user_info, metadata: { cache_params: { enabled: false } } },
+    };
+    renderWithProviders(<UserEditView {...defaultProps} userData={userData} onSubmit={onSubmit} />);
+
+    fireEvent.change(screen.getByLabelText("Cache mode"), { target: { value: "" } });
+    await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    expect(onSubmit.mock.calls[0][0].metadata).toEqual({ cache_params: null });
   });
 
   it("uses No change for an unset reset period in bulk edit", async () => {

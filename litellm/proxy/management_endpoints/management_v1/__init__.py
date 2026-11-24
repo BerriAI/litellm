@@ -5,6 +5,7 @@ from typing import Final
 from fastapi import APIRouter
 
 from litellm.proxy.management.users.endpoints import router as current_user_router
+from litellm.proxy.management_endpoints.management_v1.app_groups import router as app_groups_router
 from litellm.proxy.management_endpoints.management_v1.apps import router as apps_router
 from litellm.proxy.management_endpoints.management_v1.budgets import (
     router as budgets_router,
@@ -30,6 +31,7 @@ from litellm.proxy.management_endpoints.management_v1.users import (
 
 router: Final = APIRouter()
 router.include_router(apps_router)
+router.include_router(app_groups_router)
 router.include_router(budgets_router)
 router.include_router(customers_router)
 router.include_router(customer_budget_increase_requests_router)

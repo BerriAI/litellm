@@ -22,11 +22,44 @@ from litellm.integrations.SlackAlerting.slack_alerting import DeploymentMetrics,
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy._types import CallInfo, Litellm_EntityType
 from litellm.router import Router
+from litellm.types.router import ModelInfo as RouterModelInfo
 from litellm.types.integrations.slack_alerting import AlertQueueItem, AlertType, SlackAlertingCacheKeys
 from litellm.utils import get_api_base
 from datetime import timedelta
 from typing import Optional
 from litellm.proxy._types import WebhookEvent
+from litellm.integrations.lens.proxy.model_gateway import key_request
+from litellm.types.integrations.slack_alerting import VirtualKeyEvent
+from litellm.litellm_core_utils.core_helpers import attribute_or_none
+
+
+@pytest.mark.asyncio
+async def test_key_creation_alert_redacts_the_credential_and_preserves_the_request(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("SLACK_WEBHOOK_URL", "https://hooks.slack.com/services/T0/B0/X0")
+    alerts: Final = SlackAlerting(
+        alerting=["slack"], alert_types=[AlertType.new_virtual_key_created], internal_usage_cache=DualCache()
+    )
+    alerts.periodic_started = True
+    secret: Final = "sk-lens-" + "a" * 64
+    request: Final = key_request(secret)
+    await alerts.send_virtual_key_event_slack(
+        VirtualKeyEvent(
+            created_by_user_id="gateway-admin",
+            created_by_user_role="proxy_admin",
+            created_by_key_alias=None,
+            request_kwargs={"data": request},
+        ),
+        AlertType.new_virtual_key_created,
+        "New Virtual Key Created",
+    )
+    queue: Final = TypeAdapter(list[AlertQueueItem]).validate_python(attribute_or_none(alerts, "log_queue"))
+    message: Final = queue[0]["payload"]["text"]
+    assert secret not in message
+    assert request.key_alias is not None and request.key_alias in message
+    assert "gateway-admin" in message
+    assert request.key == secret
 
 
 class TestSlackAlerting(unittest.TestCase):
@@ -1265,3 +1298,27 @@ async def test_soft_budget_alerts_webhook(entity_info):
         assert logged_webhook_event.user_email == entity_info.user_email
         assert logged_webhook_event.key_alias == entity_info.key_alias
         assert logged_webhook_event.event_group == entity_info.event_group
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("profile_row", ({"litellm_provider": "bedrock"}, None), ids=("unpriced_row", "no_row"))
+async def test_model_added_alert_shows_served_prices_for_an_unpriced_bedrock_arn_base_model(
+    monkeypatch: pytest.MonkeyPatch, profile_row: dict[str, str] | None
+) -> None:
+    served: Final = "bedrock/anthropic.slack-alert-served-test"
+    profile: Final = "bedrock/arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/slack-alert-test"
+    monkeypatch.setattr(
+        litellm,
+        "model_cost",
+        {
+            **litellm.model_cost,
+            served: {"litellm_provider": "bedrock", "mode": "chat", "input_cost_per_token": 0.03},
+            **({profile: profile_row} if profile_row is not None else {}),
+        },
+    )
+    monkeypatch.setenv("SLACK_WEBHOOK_URL", "https://hooks.slack.com/services/T0/B0/X0")
+    slack_alerting: Final = _slack_alerting_with_env_resolution()
+    await slack_alerting.model_added_alert("by-model-id", served, RouterModelInfo(base_model=profile))
+    message: Final = slack_alerting.log_queue[0]["payload"]["text"]
+    assert f"Base Model: `{profile}`" in message
+    assert "input_cost_per_token: 0.03000000" in message

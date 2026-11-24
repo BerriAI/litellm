@@ -4,6 +4,7 @@ import React from "react";
 import { useTranslation } from "react-i18next";
 import { usePathname, useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
+import { navMenuButtonClassName } from "@/components/shared/sidebarStyles";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -11,10 +12,11 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Check, ChevronDown, ChevronsUpDown } from "lucide-react";
+import { SidebarMenuButton } from "@/components/ui/sidebar";
 import BetaBadge from "@/components/BetaBadge";
 import { BUILT_IN_MODES, usePluginMode } from "@/contexts/PluginModeContext";
 import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings";
-import { uiHref } from "@/utils/uiHref";
+import { routeSegmentForPathname, uiHref } from "@/utils/uiHref";
 import { cn } from "@/lib/cva.config";
 import i18n from "@/i18n/i18n";
 import { productNames } from "@/i18n/untranslated/productNames";
@@ -26,9 +28,7 @@ const MOYAI = "moyai";
 const LENS = "lens";
 
 function isWorkspaceRoute(pathname: string, workspace: string): boolean {
-  const routes = [uiHref(workspace)];
-  if (process.env.NODE_ENV === "development") routes.push(`/ui/${workspace}`);
-  return routes.some((route) => pathname === route || pathname.startsWith(`${route}/`));
+  return routeSegmentForPathname(pathname) === workspace;
 }
 
 function routeWorkspaceLabel(pathname: string): string | undefined {
@@ -53,6 +53,63 @@ interface ViewSwitcherProps {
 
 const pluginLabel = (mode: string, plugins: readonly { name: string; display_name: string }[], portalLabel: string) =>
   mode === CUSTOMER_PORTAL ? portalLabel : plugins.find((p) => p.name === mode)?.display_name;
+
+function WorkspaceSwitcherTrigger({
+  activeLabel,
+  className,
+  collapsed,
+  compactLens,
+  showPortalBadge,
+}: {
+  activeLabel: string;
+  className?: string;
+  collapsed: boolean;
+  compactLens: boolean;
+  showPortalBadge: boolean;
+}) {
+  const { t } = useTranslation();
+  const triggerLabel = t("shell.viewSwitcher.trigger", { workspace: activeLabel });
+  return (
+    <DropdownMenuTrigger
+      aria-label={triggerLabel}
+      render={
+        compactLens ? (
+          <SidebarMenuButton type="button" title={triggerLabel} className={navMenuButtonClassName} />
+        ) : (
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            title={collapsed ? triggerLabel : undefined}
+            className={cn(
+              "max-w-[220px] gap-1.5 px-3 dark:bg-transparent",
+              className,
+              collapsed &&
+                "mx-auto flex size-9 justify-center gap-0 border-sidebar-border p-0 text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
+            )}
+          />
+        )
+      }
+    >
+      {collapsed ? (
+        <ChevronDown aria-hidden className={compactLens ? undefined : "size-4 text-muted-foreground"} />
+      ) : (
+        <>
+          <span data-slot="workspace-label" className="truncate">
+            {activeLabel}
+            {showPortalBadge && (
+              <>
+                {" "}
+                <BetaBadge />
+              </>
+            )}
+          </span>
+          <ChevronsUpDown data-slot="workspace-chevron" className="size-3.5 flex-none text-muted-foreground" />
+        </>
+      )}
+    </DropdownMenuTrigger>
+  );
+}
 
 export default function ViewSwitcher({ className, contentClassName, collapsed = false }: ViewSwitcherProps) {
   const { t } = useTranslation();
@@ -178,40 +235,13 @@ export default function ViewSwitcher({ className, contentClassName, collapsed = 
 
   return (
     <DropdownMenu>
-      <DropdownMenuTrigger
-        aria-label={t("shell.viewSwitcher.trigger", { workspace: activeLabel })}
-        render={
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            title={collapsed ? t("shell.viewSwitcher.trigger", { workspace: activeLabel }) : undefined}
-            className={cn(
-              "max-w-[220px] gap-1.5 px-3 dark:bg-transparent",
-              className,
-              collapsed &&
-                "mx-auto flex size-9 justify-center gap-0 border-sidebar-border p-0 text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
-            )}
-          />
-        }
-      >
-        {collapsed ? (
-          <ChevronDown className="size-4 text-muted-foreground" />
-        ) : (
-          <>
-            <span data-slot="workspace-label" className="truncate">
-              {activeLabel}
-              {isGatewayModeActive && mode === CUSTOMER_PORTAL && (
-                <>
-                  {" "}
-                  <BetaBadge />
-                </>
-              )}
-            </span>
-            <ChevronsUpDown data-slot="workspace-chevron" className="size-3.5 flex-none text-muted-foreground" />
-          </>
-        )}
-      </DropdownMenuTrigger>
+      <WorkspaceSwitcherTrigger
+        activeLabel={activeLabel}
+        className={className}
+        collapsed={collapsed}
+        compactLens={collapsed && isLensRoute}
+        showPortalBadge={isGatewayModeActive && mode === CUSTOMER_PORTAL}
+      />
       <DropdownMenuContent className={cn("w-auto", contentClassName)}>
         {items.map((item) => (
           <DropdownMenuItem key={item.key} disabled={item.disabled} onClick={item.onClick} className="w-full">
