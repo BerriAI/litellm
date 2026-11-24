@@ -1,3 +1,10 @@
+def _declares_rpm(deployments: object) -> bool:
+    """Check if any deployment declares an RPM rate limit."""
+    return isinstance(deployments, list) and any(
+        isinstance(d, dict) and (d.get("litellm_params") or {}).get("rpm") is not None
+        for d in deployments
+    )
+
 """
 The Router's entry points and the typed views they return.
 
@@ -37,7 +44,7 @@ import hashlib
 import inspect
 import json
 import warnings
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from collections.abc import Set as AbstractSet
 from dataclasses import dataclass, field
 from types import MappingProxyType
@@ -244,6 +251,7 @@ ROUTER_INIT_ARGS: Final[tuple[str, ...]] = (
     "client_ttl",
     "polling_interval",
     "default_priority",
+    "dynamic_queue",
     "num_retries",
     "max_fallbacks",
     "timeout",
@@ -291,6 +299,7 @@ ROUTER_INIT_ARGS: Final[tuple[str, ...]] = (
     "fallback_rate_limit_check",
     "auto_router_capability_limit",
     "session_affinity_repin_on_failover",
+    "enable_cross_model_group_collision_check",
 )
 
 
@@ -440,7 +449,7 @@ class _RegistryHost(Protocol):
         id: str | None = None,
     ) -> "ModelMapInfo": ...
 
-    def _core_get_discovered_model_info(self, model_id: str | None) -> Mapping[str, int]: ...
+    def _core_get_discovered_model_info(self, model_id: str | None, model: str | None = None) -> Mapping[str, int]: ...
 
     def _core_get_model_list(
         self, model_name: str | None = None, team_id: str | None = None
@@ -552,7 +561,9 @@ class _RegistryHost(Protocol):
 
     def _core_get_configured_token_limits(self, model_name: str) -> tuple[int | None, int | None]: ...
 
-    def _core_get_model_listing_info(self, model_name: str) -> "DeploymentModelListingInfo | None": ...
+    def _core_get_model_listing_info(
+        self, model_name: str, team_id: str | None = None
+    ) -> "DeploymentModelListingInfo | None": ...
 
     def get_routing_group(self, model_name: str) -> "RoutingGroup | None": ...
 
@@ -639,9 +650,12 @@ class RouterRegistry:
             deployment=deployment, received_model_name=received_model_name, id=id
         )
 
-    def discovered_model_info(self, id: str | None) -> Mapping[str, int]:
-        """Limits discovered from the provider for a deployment (was ``get_discovered_model_info``)."""
-        return self._router._core_get_discovered_model_info(id)
+    def discovered_model_info(self, id: str | None, model: str | None = None) -> Mapping[str, int]:
+        """Limits discovered from the provider for a deployment (was ``get_discovered_model_info``).
+
+        ``model`` is the concrete model a wildcard deployment serves, which selects its row in the catalog.
+        """
+        return self._router._core_get_discovered_model_info(id, model)
 
     def zero_cost(self) -> Mapping[str, bool] | None:
         """The per-deployment zero-cost lookup the auth checks read (was ``_zero_cost_cache``)."""
@@ -1271,7 +1285,7 @@ class RouterRegistry:
         if field == "token_limits":
             return r._core_get_configured_token_limits(name)
         if field == "listing_info":
-            return r._core_get_model_listing_info(name)
+            return r._core_get_model_listing_info(name, team_id=team_id)
         raise ValueError(f"unknown group field {field!r}")
 
     def routing_groups(self) -> "dict[str, RoutingGroup]":  # mutable-ok: the routing_groups attribute, the live dict
@@ -1454,6 +1468,16 @@ _COPIED_SETTING_FIELDS: Final = (
 )
 
 
+class _SettingsHost(Protocol):
+    def _core_get_settings(self) -> Mapping[str, object]: ...
+
+    def _core_get_allowed_fails_from_policy(self, exception: Exception) -> int | None: ...
+
+    def _core_get_available_guardrail(self, name: str) -> "GuardrailTypedDict": ...
+
+    def _core_deployment_call_timeout(self, litellm_params: Mapping[str, object]) -> object: ...
+
+
 @dataclass(frozen=True)
 class RouterSettings:
     """
@@ -1496,7 +1520,7 @@ class RouterSettings:
     search_tools: "list[SearchToolTypedDict]" = None  # pyright: ignore[reportAssignmentType]  # unset only when built directly (see above)  # mutable-ok: the router's live list
     guardrail_list: "list[GuardrailTypedDict]" = None  # pyright: ignore[reportAssignmentType]  # unset only when built directly (see above)  # mutable-ok: the router's live list
     cache_responses: bool | None = None
-    _router: "Router | None" = field(default=None, repr=False, compare=False)
+    _router: _SettingsHost | None = field(default=None, repr=False, compare=False)
     _unset: frozenset[str] = field(default=frozenset(), repr=False, compare=False)
 
     def __post_init__(self) -> None:
@@ -1513,7 +1537,7 @@ class RouterSettings:
         # Each value is the Router's own ``_core_<field>`` attribute, typed as the field (or None when unset).
         return cls(**values, _router=router, _unset=unset)  # pyright: ignore[reportArgumentType]  # see above
 
-    def _owner(self, member: str) -> "Router":
+    def _owner(self, member: str) -> _SettingsHost:
         if self._router is None:
             raise AttributeError(f"'NoneType' object has no attribute {member!r}")
         return self._router
@@ -1540,56 +1564,8 @@ class RouterSettings:
         return self._owner("_core_deployment_call_timeout")._core_deployment_call_timeout(litellm_params)
 
 
-class _HealthHost(Protocol):
-    """The router members ``RouterHealth`` reads, typed as the view hands them on."""
-
-    @property
-    def _core_cache(self) -> "DualCache": ...
-
-    @property
-    def _core_cooldown_cache(self) -> "CooldownCache": ...
-
-    @property
-    def _core_session_pins(self) -> "RouterSessionPinStore": ...
-
-    @property
-    def _core_health_state_cache(self) -> "DeploymentHealthCache": ...
-
-    @property
-    def _core_deployment_latency_map(self) -> "UntypedDict": ...
-
-    @property
-    def _core_ctx(self) -> "RoutingContext": ...
-
-    @property
-    def _core_cooldown_time(self) -> float | None: ...
-
-    def _core_get_fully_blocked_model_names(self) -> "ModelNameSet": ...
-
-    async def _core_async_get_fully_unhealthy_model_names(self) -> "ModelNameSet": ...
-
-    async def _core_get_model_group_usage(self, model_group: str) -> tuple[int | None, int | None]: ...
-
-    async def _core_get_remaining_model_group_usage(self, model_group: str) -> Mapping[str, int]: ...
-
-    def _core_team_ptu_ceiling(self, team_id: str, model_group: str) -> "PTUTeamCeiling | None": ...
-
-    def _core_split_request_priority(
-        self, model: str, kwargs: Mapping[str, object]
-    ) -> tuple[int | None, Mapping[str, object]]: ...
-
-    def priority_header_update(
-        self, model: str, kwargs: Mapping[str, object], header: str | None
-    ) -> Mapping[str, int | str]: ...
-
-
-class RouterHealth:
+class RouterHealth(Protocol):
     """Cooldowns, blocked deployments, health checks and usage (``health()``)."""
-
-    __slots__ = ("_router",)
-
-    def __init__(self, router: _HealthHost) -> None:
-        self._router = router
 
     @property
     def store(self) -> "DualCache":
@@ -1598,29 +1574,29 @@ class RouterHealth:
         in-memory plus the router's Redis when configured. Read and write it with the router's own
         key names. Replaces the ``cache`` attribute.
         """
-        return self._router._core_cache
+        ...
 
     @property
     def cooldowns(self) -> "CooldownCache":
         """The cooldown store (was ``cooldown_cache``)."""
-        return self._router._core_cooldown_cache
+        ...
 
     @property
     def session_pins(self) -> "RouterSessionPinStore":
         """The session affinity pins deployment affinity and the complexity router claim and read."""
-        return self._router._core_session_pins
+        ...
 
     @property
     def health_checks(self) -> "DeploymentHealthCache":
         """Background health check results (was ``health_state_cache``)."""
-        return self._router._core_health_state_cache
+        ...
 
     @property
     def latency(
         self,
     ) -> "UntypedDict":  # a mutable list/dict, as before: the deployment_latency_map attribute's type, the live dict
         """Latency samples by deployment (was ``deployment_latency_map``)."""
-        return self._router._core_deployment_latency_map
+        ...
 
     @staticmethod
     def is_blocked(deployment: "Deployment") -> bool:
@@ -1638,11 +1614,11 @@ class RouterHealth:
 
     def fully_blocked_model_names(self) -> set[str]:  # mutable-ok: the core's type, a fresh set
         """Groups whose every deployment is paused (was ``get_fully_blocked_model_names``)."""
-        return self._router._core_get_fully_blocked_model_names()
+        ...
 
     async def fully_unhealthy_model_names(self) -> set[str]:  # mutable-ok: the core's type, a fresh set
         """Groups whose every deployment failed its health check (was ``async_get_fully_unhealthy_model_names``)."""
-        return await self._router._core_async_get_fully_unhealthy_model_names()
+        ...
 
     @overload
     async def usage(
@@ -1661,27 +1637,19 @@ class RouterHealth:
         tpm/rpm usage of a group this minute (``current``, was ``get_model_group_usage``) or what is
         left of its limits (``remaining``, was ``get_remaining_model_group_usage``).
         """
-        if kind == "current":
-            return await self._router._core_get_model_group_usage(model_group=model_group)
-        if kind == "remaining":
-            return await self._router._core_get_remaining_model_group_usage(model_group=model_group)
-        raise ValueError(f"unknown usage kind {kind!r}")
+        ...
 
     def team_ptu_ceiling(self, team_id: str, model_group: str) -> "PTUTeamCeiling | None":
         """A team's PTU share ceiling on a group (was ``team_ptu_ceiling``)."""
-        return self._router._core_team_ptu_ceiling(team_id, model_group)
+        ...
 
     def split_priority(self, model: str, kwargs: Mapping[str, object]) -> tuple[int | None, Mapping[str, object]]:
         """The request priority and the kwargs without it (was ``split_request_priority``)."""
-        return self._router._core_split_request_priority(model, kwargs)
+        ...
 
     def failures_this_minute(self, deployment_id: str) -> int:
         """Failures counted against a deployment this minute (was ``get_deployment_failures_for_current_minute``)."""
-        from litellm.router_utils.router_callbacks.track_deployment_metrics import (
-            get_deployment_failures_for_current_minute,
-        )
-
-        return get_deployment_failures_for_current_minute(self._router._core_ctx, deployment_id)
+        ...
 
     def record_failure(self, deployment_id: str, exception: Exception, exception_status: str | int) -> bool:
         """
@@ -1689,26 +1657,13 @@ class RouterHealth:
         fails (was ``increment_deployment_failures_for_current_minute`` then ``set_cooldown_deployments``).
         Returns whether the deployment was cooled down.
         """
-        from litellm.router_utils.cooldown_handlers import set_cooldown_deployments
-        from litellm.router_utils.router_callbacks.track_deployment_metrics import (
-            increment_deployment_failures_for_current_minute,
-        )
-
-        ctx: Final = self._router._core_ctx
-        increment_deployment_failures_for_current_minute(ctx, deployment_id)
-        return set_cooldown_deployments(
-            ctx,
-            original_exception=exception,
-            exception_status=exception_status,
-            deployment=deployment_id,
-            time_to_cooldown=self._router._core_cooldown_time,
-        )
+        ...
 
     def priority_header_fields(
         self, model: str, kwargs: Mapping[str, object], header: str | None
     ) -> Mapping[str, int | str]:
         """The request fields a priority header sets (was ``priority_header_update``)."""
-        return self._router.priority_header_update(model=model, kwargs=kwargs, header=header)
+        ...
 
 
 @dataclass
@@ -1750,7 +1705,23 @@ class RoutingObservers:
     slack_alerting_logger: "SlackAlerting | None" = None
 
 
-def apply_changes(router: "Router", changes: ChangeSet) -> ApplyResult:
+class _ChangeHost(Protocol):
+    @property
+    def _registry_version(self) -> int: ...
+
+    @property
+    def _core_update_settings(self) -> Callable[..., None]: ...
+
+    def _core_upsert_deployment(self, deployment: "Deployment") -> "Deployment | None": ...
+
+    def _core_delete_deployment(self, id: str) -> "Deployment | None": ...
+
+    def _core_update_redis_cache(self, cache: "RedisCache") -> None: ...
+
+    async def _core_arefresh_model_info(self, client: "AsyncHTTPHandler | None") -> None: ...
+
+
+def apply_changes(router: _ChangeHost, changes: ChangeSet) -> ApplyResult:
     if changes.refresh_model_info:
         raise TypeError("ChangeSet(refresh_model_info=True) needs aapply()")
     unknown: Final = sorted(set(changes.assign) - {*SETTING_FIELDS, *PLAIN_SETTING_ATTRIBUTES, *ASSIGNABLE_ALIASES})
@@ -1771,7 +1742,7 @@ def apply_changes(router: "Router", changes: ChangeSet) -> ApplyResult:
     return ApplyResult(version=router._registry_version, upserted=upserted, deleted=deleted)
 
 
-async def aapply_changes(router: "Router", changes: ChangeSet) -> ApplyResult:
+async def aapply_changes(router: _ChangeHost, changes: ChangeSet) -> ApplyResult:
     refresh: Final = changes.refresh_model_info
     result: Final = apply_changes(
         router,
@@ -1857,7 +1828,7 @@ class RoutingContext:
         return self._router is router or router.__dict__.get("_core") is self._router
 
     @property
-    def explicit_allowed_fails(self) -> int | None:
+    def explicit_allowed_fails(self) -> object:
         """``allowed_fails`` as the caller passed it, ``None`` when it came from the global default."""
         return self._router.explicit_allowed_fails
 
@@ -1867,7 +1838,7 @@ class RoutingContext:
         request_kwargs: dict[str, object] | None = None,  # mutable-ok: the selection cores take a dict
         *,
         kind: SelectKind = "pick",
-        messages: list[dict[str, str]] | None = None,  # mutable-ok: the selection cores take a list
+        messages: Sequence[Mapping[str, object]] | None = None,
         input: str | list[object] | None = None,  # mutable-ok: the selection cores take a list
         specific_deployment: bool | None = False,
         parent_otel_span: "Span | None" = None,
@@ -1984,10 +1955,14 @@ class RoutingContext:
     ) -> None:
         return self._router._update_kwargs_before_fallbacks(model, kwargs, metadata_variable_name)
 
-    def arm_cooldown_prefetch(self) -> None:
+    def arm_cooldown_prefetch(self, model: str | None = None) -> None:
+        """Every deployment's cooldowns, or only those a request for ``model`` may route to without a team (auth
+        arms this before it knows the caller's team)."""
         from litellm.router_utils.routing_read_batch import RoutingPrefetch
 
-        RoutingPrefetch.arm_cooldowns(self)
+        RoutingPrefetch.arm_cooldowns(
+            self, None if model is None else self.registry().names(model, kind="route_candidates")
+        )
 
     def arm_read_prefetch(
         self,
