@@ -498,6 +498,67 @@ class TestVideoGeneration:
         )
         assert abs(cost - 0.8) < 0.001
 
+    def test_completion_cost_video_generation_bills_a_video_input_at_the_lower_rate(self):
+        """A task that carried a video input is billed at provider_specific_entry.video_input_rates."""
+        from litellm.cost_calculator import completion_cost
+
+        mock_response = MagicMock()
+        mock_response.usage = {
+            "duration_seconds": 10.0,
+            "video_resolution": "720p",
+            "has_video_input": True,
+        }
+        type(mock_response)._hidden_params = {}
+
+        mock_logging_obj = MagicMock()
+        mock_logging_obj.litellm_params = {
+            "metadata": {
+                "model_info": {
+                    "output_cost_per_second": 0.2,
+                    "output_cost_per_second_720p": 0.2,
+                    "provider_specific_entry": {"video_input_rates": {"720p": 0.12}},
+                }
+            }
+        }
+
+        cost = completion_cost(
+            completion_response=mock_response,
+            model="volcengine/doubao-seedance-2-5-260628",
+            call_type="create_video",
+            custom_llm_provider="volcengine",
+            custom_pricing=True,
+            litellm_logging_obj=mock_logging_obj,
+        )
+        assert abs(cost - 1.2) < 0.001
+
+    def test_completion_cost_video_extension_uses_video_calculator(self):
+        """video_extension is billed on the same per-second video path as create_video."""
+        from litellm.cost_calculator import completion_cost
+
+        mock_response = MagicMock()
+        mock_response.usage = MagicMock()
+        mock_response.usage.duration_seconds = 10.0
+        type(mock_response)._hidden_params = {}
+
+        mock_logging_obj = MagicMock()
+        mock_logging_obj.litellm_params = {
+            "metadata": {
+                "model_info": {
+                    "output_cost_per_video_per_second": 0.05,
+                }
+            }
+        }
+
+        cost = completion_cost(
+            completion_response=mock_response,
+            model="vertex_ai/veo-3.1-generate-001",
+            call_type="video_extension",
+            custom_llm_provider="vertex_ai",
+            custom_pricing=True,
+            litellm_logging_obj=mock_logging_obj,
+        )
+        assert cost == 0.5
+
     def test_completion_cost_video_edit_uses_video_calculator(self):
         """video_edit is charged via the same video cost path as create_video."""
         from litellm.cost_calculator import completion_cost

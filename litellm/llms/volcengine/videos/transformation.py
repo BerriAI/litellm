@@ -2,7 +2,7 @@ import json
 from collections.abc import Mapping, Sequence
 from math import log
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, TypeVar
+from typing import TYPE_CHECKING, Final, TypeVar, cast
 
 import httpx
 from httpx._types import RequestFiles
@@ -165,12 +165,18 @@ _CREATE_HANDLED_KEYS: Final = frozenset(
     }
 )
 
-_VIDEO_INPUT_UNSUPPORTED: Final = (
-    "{operation} is not supported through litellm: Ark bills a task with a video input at a different rate per "
-    "token, and litellm bills the video when the task is created, before that cost is known"
-)
 _INPUT_VIDEO_ROLE: Final = "reference_video"
 _INPUT_VIDEO_TYPE: Final = "video_url"
+_EDIT_TASK_TYPE: Final = "edit"
+_BILLING_SECONDS_HEADER: Final = "x-litellm-billing-seconds"
+_BILLING_RESOLUTION_HEADER: Final = "x-litellm-billing-resolution"
+_FRAME_ROLES: Final = frozenset({"first_frame", "last_frame"})
+_SEEDANCE_2_5_MARKER: Final = "seedance-2-5"
+_ADAPTIVE_RATIO: Final = "adaptive"
+_EXTENSION_TASK_TYPE: Final = "extend"
+_OMNI_TASK_TYPE_FIELD: Final = "omni_reference_task_type"
+_VOLCENGINE_MIN_EXTENSION_SECONDS: Final = 4
+_VOLCENGINE_MAX_EXTENSION_SECONDS: Final = 30
 
 _RATIO_SET: Final = ("16:9", "9:16", "4:3", "3:4", "1:1", "21:9")
 _RESOLUTION_SHORTEST_SIDE: Final = MappingProxyType({"480p": 480, "720p": 720, "1080p": 1080, "4k": 2160})
@@ -350,6 +356,74 @@ def _pricing_model(model: str, litellm_params: GenericLiteLLMParams) -> str:
     return base_model if isinstance(base_model, str) and base_model else model
 
 
+def _video_request_model(litellm_params: GenericLiteLLMParams, extra_body: Mapping[str, object] | None) -> str:
+    """The edit and extension routes reach Ark's create endpoint, which needs the model, but the request transforms
+    are not handed it the way the create path is."""
+    configured: Final = extra_body.get("model") if extra_body is not None else None
+    raw: Final = configured or getattr(litellm_params, "model", None)
+    if not isinstance(raw, str) or not raw:
+        raise _unsupported("", "Ark video edit and extension need the model, pass model or extra_body.model")
+    return raw.removeprefix("volcengine/")
+
+
+def _source_video_url(video_id: str, model: str) -> str:
+    """Ark takes the source video as a URL, so a source given as an Ark task id cannot be resolved here: the task
+    query is a GET and litellm's edit prefetch only POSTs."""
+    if video_id.startswith(("http://", "https://", "data:")):
+        return video_id
+    raise _unsupported(
+        model, "Ark video edit and extension take the source video as a URL, not a task id, pass the video URL"
+    )
+
+
+def _billing_tier(source: Mapping[str, object], model: str, *, required: bool) -> str | None:
+    """The output resolution tier, read from extra_body.resolution or derived from extra_body.size. An edit keeps
+    the source video's resolution, so the create-time bill needs it, and Ark only reports it when the task runs."""
+    resolution: Final = source.get("resolution")
+    listed: Final = resolution.strip().lower() if isinstance(resolution, str) and resolution.strip() else None
+    size: Final = source.get("size")
+    derived: Final = _resolution_from_size(size) if isinstance(size, str) else None
+    tier: Final = listed or derived
+    if tier is not None and tier in _RESOLUTION_SHORTEST_SIDE:
+        return tier
+    if required:
+        raise _droppable(
+            model,
+            "Ark edits keep the source video's resolution, pass extra_body.resolution or size so the edit can be "
+            f"priced at one of {', '.join(_RESOLUTION_SHORTEST_SIDE)}",
+        )
+    return None
+
+
+def _create_time_fields(extra_body: Mapping[str, object] | None, pinned: frozenset[str]) -> Mapping[str, object]:
+    """The Ark create fields a caller can still set on an edit or extension, minus the ones the route pins."""
+    source: Final = extra_body or _EMPTY_PARAMS
+    return MappingProxyType(
+        {key: source[key] for key in _CREATE_PASSTHROUGH_KEYS if key not in pinned and source.get(key) is not None}
+    )
+
+
+def _edit_billing(extra_body: Mapping[str, object] | None, model: str) -> tuple[int, str]:
+    """An edit keeps the source video's length and resolution, so the create-time bill needs both from the caller:
+    Ark only reports them when the task runs, after litellm has already charged it."""
+    source: Final = extra_body or _EMPTY_PARAMS
+    seconds: Final = _duration_param(source.get("seconds"))
+    if seconds is None or not (_VOLCENGINE_MIN_EXTENSION_SECONDS <= seconds <= _VOLCENGINE_MAX_EXTENSION_SECONDS):
+        raise _droppable(
+            model,
+            "Ark edits keep the source video's length, pass extra_body.seconds with its whole seconds "
+            f"({_VOLCENGINE_MIN_EXTENSION_SECONDS} to {_VOLCENGINE_MAX_EXTENSION_SECONDS}) so the edit can be priced",
+        )
+    tier: Final = _billing_tier(source, model, required=True)
+    assert tier is not None
+    return seconds, tier
+
+
+def _request_header(raw_response: httpx.Response, name: str) -> str | None:
+    value: object = cast(object, raw_response.request.headers.get(name))
+    return value if isinstance(value, str) else None
+
+
 def _priced_tiers(model: str) -> tuple[str, ...] | None:
     """A tier the model has no price for is one Ark does not offer it at, and litellm would bill it at the base rate.
     A model with no tier price listed, missing from the cost map or registered unpriced by the router, has nothing
@@ -395,8 +469,22 @@ def _size_from_geometry(resolution: str | None, ratio: str | None, model: str | 
     return f"{-(-shortest_side * ratio_width // shortest_ratio_side)}x{-(-shortest_side * ratio_height // shortest_ratio_side)}"
 
 
-def _is_input_video(item: _ContentItem) -> bool:
-    return item.type == _INPUT_VIDEO_TYPE or item.role == _INPUT_VIDEO_ROLE
+def _is_input_video(item: Mapping[str, object]) -> bool:
+    return item.get("type") == _INPUT_VIDEO_TYPE or item.get("role") == _INPUT_VIDEO_ROLE
+
+
+def _carries_video_input(content: object) -> bool:
+    """Ark bills a task that carries a video at its lower per-token rate, and the create response has to say so
+    since the create call is the only billed one."""
+    try:
+        return any(_is_input_video(item) for item in _CONTENT_ITEMS_ADAPTER.validate_python(content))
+    except ValidationError:
+        return False
+
+
+def _frame_roles(content: Sequence[Mapping[str, object]]) -> frozenset[str]:
+    roles: Final = (item.get("role") for item in content)
+    return frozenset(role for role in roles if isinstance(role, str) and role in _FRAME_ROLES)
 
 
 def _supplied_items(supplied: object, model: str, drop_params: bool) -> tuple[Mapping[str, object], ...]:
@@ -413,9 +501,7 @@ def _supplied_items(supplied: object, model: str, drop_params: bool) -> tuple[Ma
             "A text item in content is not supported, put the text in prompt since it is the only text input "
             "guardrails scan before the request reaches Ark",
         )
-    if any(_is_input_video(entry) for entry in entries) and not drop_params:
-        raise _droppable(model, _VIDEO_INPUT_UNSUPPORTED.format(operation="Video input (a reference_video item)"))
-    kept: Final = (item for item, entry in zip(items, entries) if entry.type != "text" and not _is_input_video(entry))
+    kept: Final = (item for item, entry in zip(items, entries) if entry.type != "text")
     return tuple(MappingProxyType(item) for item in kept)
 
 
@@ -452,7 +538,7 @@ def _seconds_label(seconds: object) -> str | None:
 
 def _requested_usage(request_data: Mapping[str, object]) -> Mapping[str, object]:
     """The create call is the only billed one and Ark's create response carries no usage, so the requested duration
-    and tier are what the video bills at."""
+    and tier are what the video bills at, plus the lower per-token rate Ark charges when it has a video input."""
     duration: Final = _duration_param(request_data.get("duration"))
     resolution: Final = request_data.get("resolution")
     return MappingProxyType(
@@ -461,10 +547,26 @@ def _requested_usage(request_data: Mapping[str, object]) -> Mapping[str, object]
             for key, value in (
                 ("duration_seconds", float(duration) if duration is not None and duration > 0 else None),
                 ("video_resolution", resolution.strip().lower() if isinstance(resolution, str) else None),
+                ("has_video_input", True if _carries_video_input(request_data.get("content")) else None),
             )
             if value is not None
         }
     )
+
+
+def _logged_request_body(logging_obj: object) -> Mapping[str, object]:
+    """The edit and extension responses have no request data of their own, and the create-time bill needs the body
+    that was sent, which the logging object keeps from its pre-call."""
+    try:
+        details: Final = _FIELDS_ADAPTER.validate_python(getattr(logging_obj, "model_call_details", None))
+        additional: Final = _FIELDS_ADAPTER.validate_python(details.get("additional_args"))
+        return _FIELDS_ADAPTER.validate_python(additional.get("complete_input_dict"))
+    except ValidationError:
+        return _EMPTY_PARAMS
+
+
+def _is_seedance_2_5(model: str) -> bool:
+    return _SEEDANCE_2_5_MARKER in model.lower()
 
 
 def _task_usage(task: _Task) -> Mapping[str, object]:
@@ -682,6 +784,20 @@ class VolcEngineVideoConfig(BaseVideoConfig):
         malformed: Final = _malformed_fields(requested_fields)
         if malformed and not drop_params:
             raise _droppable(model, "; ".join(f"invalid {field}: {message}" for field, message in malformed))
+        frames_are_adaptive: Final = bool(_frame_roles(content)) and _is_seedance_2_5(
+            _pricing_model(model, litellm_params)
+        )
+        requested_ratio: Final = requested_fields.get("ratio")
+        if (
+            frames_are_adaptive
+            and isinstance(requested_ratio, str)
+            and requested_ratio.strip().lower() != _ADAPTIVE_RATIO
+            and not drop_params
+        ):
+            raise _droppable(
+                model,
+                f"A first or last frame task on {model} keeps its ratio at adaptive, got {requested_ratio!r}",
+            )
         resolution: Final = requested_fields.get("resolution")
         priced_tiers: Final = _priced_tiers(_pricing_model(model, litellm_params))
         drops_resolution: Final = (
@@ -708,28 +824,28 @@ class VolcEngineVideoConfig(BaseVideoConfig):
             "content": [dict(item) for item in content],
             **default_tier,
             **kept_fields,
+            **({"ratio": _ADAPTIVE_RATIO} if frames_are_adaptive else {}),
             "duration": duration,
         }
         return request_data, (), f"{api_base}{VOLCENGINE_VIDEO_TASKS_PATH}"
 
-    def transform_video_create_response(
+    def _queued_response(
         self,
-        model: str,
+        model: str | None,
         raw_response: httpx.Response,
         logging_obj: "Logging",
-        custom_llm_provider: str | None = None,
-        request_data: dict[str, object] | None = None,  # mutable-ok: BaseVideoConfig contract
+        custom_llm_provider: str | None,
+        request_data: Mapping[str, object],
     ) -> VideoObject:
         task: Final = _parse(_TASK_CREATE_ADAPTER, raw_response)
         if not task.id:
             message: Final = task.error.message if task.error is not None and task.error.message else "no task id"
             raise _video_error(raw_response, 400, f"Volcengine did not return a video task id: {message}")
-        requested: Final = request_data or _EMPTY_PARAMS
-        usage: Final = _requested_usage(requested)
+        usage: Final = _requested_usage(request_data)
         seconds: Final = usage.get("duration_seconds")
         requested_model, served_model = routed_video_models(logging_obj) or (model, None)
-        resolution: Final = requested.get("resolution")
-        ratio: Final = requested.get("ratio")
+        resolution: Final = request_data.get("resolution")
+        ratio: Final = request_data.get("ratio")
         return VideoObject(
             id=encode_video_id_with_provider(task.id, custom_llm_provider, requested_model, served_model)
             if custom_llm_provider
@@ -742,6 +858,18 @@ class VolcEngineVideoConfig(BaseVideoConfig):
                 resolution if isinstance(resolution, str) else None, ratio if isinstance(ratio, str) else None, model
             ),
             usage=dict(usage) if usage else None,
+        )
+
+    def transform_video_create_response(
+        self,
+        model: str,
+        raw_response: httpx.Response,
+        logging_obj: "Logging",
+        custom_llm_provider: str | None = None,
+        request_data: dict[str, object] | None = None,  # mutable-ok: BaseVideoConfig contract
+    ) -> VideoObject:
+        return self._queued_response(
+            model, raw_response, logging_obj, custom_llm_provider, request_data or _EMPTY_PARAMS
         )
 
     @staticmethod
@@ -818,7 +946,7 @@ class VolcEngineVideoConfig(BaseVideoConfig):
         headers: dict[str, str],  # mutable-ok: BaseVideoConfig contract
         extra_body: dict[str, object] | None = None,  # mutable-ok: BaseVideoConfig contract
     ) -> tuple[str, dict[str, object]]:  # mutable-ok: BaseVideoConfig contract
-        raise _unsupported("", _VIDEO_INPUT_UNSUPPORTED.format(operation="Video remix"))
+        raise _unsupported("", "Ark has no video remix operation, use video edit or video extension instead")
 
     def transform_video_remix_response(
         self,
@@ -839,7 +967,56 @@ class VolcEngineVideoConfig(BaseVideoConfig):
         extra_body: dict[str, object] | None = None,  # mutable-ok: BaseVideoConfig contract
         prefetched_source_data: dict[str, object] | None = None,  # mutable-ok: BaseVideoConfig contract
     ) -> tuple[str, Mapping[str, object], RequestFiles | None]:
-        raise _unsupported("", _VIDEO_INPUT_UNSUPPORTED.format(operation="Video edit"))
+        """An Ark edit is a create call that references the source video and lets Ark keep its length and ratio.
+        The caller states that length and resolution tier so the create-time bill is known, and the values travel
+        as request headers Ark ignores rather than as body fields."""
+        model: Final = _video_request_model(litellm_params, extra_body)
+        seconds, tier = _edit_billing(extra_body, model)
+        headers[_BILLING_SECONDS_HEADER] = str(seconds)
+        headers[_BILLING_RESOLUTION_HEADER] = tier
+        pinned: Final = frozenset({"ratio", "duration", "resolution", _OMNI_TASK_TYPE_FIELD})
+        requested_fields: Final = _create_time_fields(extra_body, pinned)
+        malformed: Final = _malformed_fields(requested_fields)
+        if malformed and not _drops_params(litellm_params):
+            raise _droppable(model, "; ".join(f"invalid {field}: {message}" for field, message in malformed))
+        request_data: Final[dict[str, object]] = {  # mutable-ok: request body dict, JSON-serialized by the handler
+            "model": model,
+            "content": [
+                {"type": "text", "text": prompt},
+                {
+                    "type": _INPUT_VIDEO_TYPE,
+                    "video_url": {"url": _source_video_url(video_id, model)},
+                    "role": _INPUT_VIDEO_ROLE,
+                },
+            ],
+            **requested_fields,
+            "ratio": _ADAPTIVE_RATIO,
+            "duration": -1,
+            _OMNI_TASK_TYPE_FIELD: _EDIT_TASK_TYPE,
+        }
+        return f"{api_base}{VOLCENGINE_VIDEO_TASKS_PATH}", request_data, None
+
+    def transform_video_edit_response(
+        self,
+        raw_response: httpx.Response,
+        logging_obj: "Logging",
+        custom_llm_provider: str | None = None,
+        request_data: dict | None = None,  # pyright: ignore[reportMissingTypeArgument, reportUnknownParameterType]  # matches the base signature
+    ) -> VideoObject:
+        requested: Final = {
+            "duration": _duration_param(_request_header(raw_response, _BILLING_SECONDS_HEADER)) or -1,
+            "resolution": _request_header(raw_response, _BILLING_RESOLUTION_HEADER),
+            "content": [{"type": _INPUT_VIDEO_TYPE, "role": _INPUT_VIDEO_ROLE}],
+        }
+        routed: Final = routed_video_models(logging_obj)
+        requested_model: Final = routed[0] if routed is not None else _logged_request_body(logging_obj).get("model")
+        return self._queued_response(
+            requested_model if isinstance(requested_model, str) else None,
+            raw_response,
+            logging_obj,
+            custom_llm_provider,
+            requested,
+        )
 
     def transform_video_extension_request(
         self,
@@ -851,7 +1028,62 @@ class VolcEngineVideoConfig(BaseVideoConfig):
         headers: dict[str, str],  # mutable-ok: BaseVideoConfig contract
         extra_body: dict[str, object] | None = None,  # mutable-ok: BaseVideoConfig contract
     ) -> tuple[str, dict[str, object]]:  # mutable-ok: BaseVideoConfig contract
-        raise _unsupported("", _VIDEO_INPUT_UNSUPPORTED.format(operation="Video extension"))
+        """An Ark extension is a create call that references the source video, keeps its ratio, and asks for the
+        total output length. It is billed at that length, since the create call is the only one litellm bills."""
+        model: Final = _video_request_model(litellm_params, extra_body)
+        duration: Final = _duration_param(seconds)
+        if duration is None or not (_VOLCENGINE_MIN_EXTENSION_SECONDS <= duration <= _VOLCENGINE_MAX_EXTENSION_SECONDS):
+            raise _droppable(
+                model,
+                f"seconds must be a whole number of seconds from {_VOLCENGINE_MIN_EXTENSION_SECONDS} to "
+                f"{_VOLCENGINE_MAX_EXTENSION_SECONDS} for an Ark extension, got {seconds!r}",
+            )
+        tier: Final = (
+            _billing_tier(extra_body or _EMPTY_PARAMS, model, required=False) or VOLCENGINE_VIDEO_DEFAULT_RESOLUTION
+        )
+        priced_tiers: Final = _priced_tiers(_pricing_model(model, litellm_params))
+        if priced_tiers is not None and tier not in priced_tiers:
+            raise _droppable(model, f"{model} is not offered at resolution {tier!r}, only at {', '.join(priced_tiers)}")
+        pinned: Final = frozenset({"ratio", "duration", "resolution", _OMNI_TASK_TYPE_FIELD})
+        requested_fields: Final = _create_time_fields(extra_body, pinned)
+        malformed: Final = _malformed_fields(requested_fields)
+        if malformed and not _drops_params(litellm_params):
+            raise _droppable(model, "; ".join(f"invalid {field}: {message}" for field, message in malformed))
+        request_data: Final[dict[str, object]] = {  # mutable-ok: request body dict, JSON-serialized by the handler
+            "model": model,
+            "content": [
+                {"type": "text", "text": prompt},
+                {
+                    "type": _INPUT_VIDEO_TYPE,
+                    "video_url": {"url": _source_video_url(video_id, model)},
+                    "role": _INPUT_VIDEO_ROLE,
+                },
+            ],
+            **requested_fields,
+            "ratio": _ADAPTIVE_RATIO,
+            "resolution": tier,
+            "duration": duration,
+            _OMNI_TASK_TYPE_FIELD: _EXTENSION_TASK_TYPE,
+        }
+        return f"{api_base}{VOLCENGINE_VIDEO_TASKS_PATH}", request_data
+
+    def transform_video_extension_response(
+        self,
+        raw_response: httpx.Response,
+        logging_obj: "Logging",
+        custom_llm_provider: str | None = None,
+    ) -> VideoObject:
+        routed: Final = routed_video_models(logging_obj)
+        requested: Final = _logged_request_body(logging_obj)
+        requested_model: Final = requested.get("model")
+        served_model: Final = routed[0] if routed is not None else requested_model
+        return self._queued_response(
+            served_model if isinstance(served_model, str) else None,
+            raw_response,
+            logging_obj,
+            custom_llm_provider,
+            requested,
+        )
 
     def transform_video_list_request(
         self,
