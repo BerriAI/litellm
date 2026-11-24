@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 from typing import Final
 
@@ -15,6 +16,9 @@ model_list:
   - model_name: backup
     litellm_params:
       model: anthropic/claude-sonnet-4-5
+      api_key: os.environ/ANTHROPIC_API_KEY
+    model_info:
+      max_output_tokens: 8192
 litellm_settings:
   drop_params: true
   fallbacks: [{"chat": ["backup"]}]
@@ -23,7 +27,7 @@ general_settings:
 router_settings:
   routing_strategy: simple-shuffle
 """
-ENVIRON: Final = {"OPENAI_API_KEY": "sk-test", "LITELLM_MASTER_KEY": "sk-test"}
+ENVIRON: Final = {"OPENAI_API_KEY": "sk-test", "ANTHROPIC_API_KEY": "sk-test", "LITELLM_MASTER_KEY": "sk-test"}
 
 
 def _lint(tmp_path: Path, text: str, environ: dict[str, str] | None = None) -> list[str]:
@@ -48,7 +52,7 @@ def test_valid_config_has_no_findings(tmp_path: Path) -> None:
             [
                 "config.yaml:7: error: model_list[1]: missing model_name",
                 'config.yaml:7: warning: model_list[1].model_nme: unknown key, did you mean "model_name"?',
-                'config.yaml:12: warning: litellm_settings.fallbacks[0]: model group "backup" is not in model_list',
+                'config.yaml:15: warning: litellm_settings.fallbacks[0]: model group "backup" is not in model_list',
             ],
         ),
         (
@@ -62,35 +66,35 @@ def test_valid_config_has_no_findings(tmp_path: Path) -> None:
         (
             "drop_params: true",
             "drop_parms: true",
-            ['config.yaml:11: warning: litellm_settings.drop_parms: unknown key, did you mean "drop_params"?'],
+            ['config.yaml:14: warning: litellm_settings.drop_parms: unknown key, did you mean "drop_params"?'],
         ),
         (
             "general_settings:",
             "general_setings:",
-            ['config.yaml:13: warning: general_setings: unknown key, did you mean "general_settings"?'],
+            ['config.yaml:16: warning: general_setings: unknown key, did you mean "general_settings"?'],
         ),
         (
             "master_key: os.environ/LITELLM_MASTER_KEY",
             "master_kee: os.environ/LITELLM_MASTER_KEY",
-            ['config.yaml:14: warning: general_settings.master_kee: unknown key, did you mean "master_key"?'],
+            ['config.yaml:17: warning: general_settings.master_kee: unknown key, did you mean "master_key"?'],
         ),
         (
             '[{"chat": ["backup"]}]',
             '[{"chat": ["missing"]}]',
-            ['config.yaml:12: warning: litellm_settings.fallbacks[0]: model group "missing" is not in model_list'],
+            ['config.yaml:15: warning: litellm_settings.fallbacks[0]: model group "missing" is not in model_list'],
         ),
         (
             "routing_strategy: simple-shuffle",
             "routing_strategy: simple-shufle",
             [
-                "config.yaml:16: error: router_settings.routing_strategy: "
+                "config.yaml:19: error: router_settings.routing_strategy: "
                 'unknown strategy "simple-shufle", did you mean "simple-shuffle"?'
             ],
         ),
         (
             "  drop_params: true",
             "  drop_params: true\n  drop_params: false",
-            ["config.yaml:12: error: litellm_settings.drop_params: duplicate key, only the last value is used"],
+            ["config.yaml:15: error: litellm_settings.drop_params: duplicate key, only the last value is used"],
         ),
     ],
 )
@@ -102,15 +106,15 @@ def test_one_mistake_is_reported_at_its_line(tmp_path: Path, old: str, new: str,
 def test_malformed_yaml_is_one_error_with_a_line(tmp_path: Path) -> None:
     findings: Final = _lint(tmp_path, VALID.replace("litellm_settings:", "model_list: [\nlitellm_settings:"))
     assert len(findings) == 1
-    assert findings[0].startswith("config.yaml:12: error: <root>: invalid YAML: "), findings[0]
+    assert findings[0].startswith("config.yaml:15: error: <root>: invalid YAML: "), findings[0]
 
 
 def test_unset_environment_variable_is_reported_unless_declared_in_config(tmp_path: Path) -> None:
-    assert _lint(tmp_path, VALID, {"LITELLM_MASTER_KEY": "sk-test"}) == [
+    assert _lint(tmp_path, VALID, {"LITELLM_MASTER_KEY": "sk-test", "ANTHROPIC_API_KEY": "sk-test"}) == [
         "config.yaml:5: warning: model_list[0].litellm_params.api_key: environment variable OPENAI_API_KEY is not set"
     ]
     declared: Final = VALID + "environment_variables:\n  OPENAI_API_KEY: sk-test\n"
-    assert _lint(tmp_path, declared, {"LITELLM_MASTER_KEY": "sk-test"}) == []
+    assert _lint(tmp_path, declared, {"LITELLM_MASTER_KEY": "sk-test", "ANTHROPIC_API_KEY": "sk-test"}) == []
 
 
 def test_fallback_to_model_defined_in_included_file_is_accepted(tmp_path: Path) -> None:
@@ -147,14 +151,14 @@ def test_exit_code_fails_on_errors_and_on_warnings_only_when_strict(
 def test_litellm_setting_under_general_settings_is_reported(tmp_path: Path) -> None:
     text: Final = VALID.replace("general_settings:\n", "general_settings:\n  drop_params: true\n")
     assert _lint(tmp_path, text) == [
-        "config.yaml:14: warning: general_settings.drop_params: "
+        "config.yaml:17: warning: general_settings.drop_params: "
         "not read from general_settings, move it to litellm_settings"
     ]
 
 
 def test_fallback_targets_that_are_not_a_list_are_an_error(tmp_path: Path) -> None:
     assert _lint(tmp_path, VALID.replace('["backup"]', "backup")) == [
-        'config.yaml:12: error: litellm_settings.fallbacks[0]: fallbacks for "chat" must be a list of model groups, '
+        'config.yaml:15: error: litellm_settings.fallbacks[0]: fallbacks for "chat" must be a list of model groups, '
         "like {chat: [backup]}"
     ]
 
@@ -165,7 +169,7 @@ def test_mistake_in_included_file_is_reported_at_the_include_line(tmp_path: Path
         "router_settings:\n  routing_strategy: simple-shuffle\n", "include:\n  - settings.yaml\n"
     )
     assert _lint(tmp_path, text) == [
-        'config.yaml:15: warning: router_settings.num_retrys: unknown key, did you mean "num_retries"? '
+        'config.yaml:18: warning: router_settings.num_retrys: unknown key, did you mean "num_retries"? '
         "(in an included file)"
     ]
 
@@ -176,9 +180,9 @@ def test_duplicate_key_in_included_file_is_reported_beside_its_other_mistakes(tm
         "litellm_settings:\n  set_verbose: true\n  set_verbose: false\n  drop_parms: true\n", encoding="utf-8"
     )
     assert _lint(tmp_path, VALID + "include:\n  - settings.yaml\n") == [
-        f"config.yaml:17: error: include: {included}:3: duplicate key litellm_settings.set_verbose, "
+        f"config.yaml:20: error: include: {included}:3: duplicate key litellm_settings.set_verbose, "
         "only the last value is used",
-        'config.yaml:17: warning: litellm_settings.drop_parms: unknown key, did you mean "drop_params"? '
+        'config.yaml:20: warning: litellm_settings.drop_parms: unknown key, did you mean "drop_params"? '
         "(in an included file)",
     ]
 
@@ -204,7 +208,7 @@ def test_null_fallback_settings_are_treated_as_unset(tmp_path: Path) -> None:
 def test_mistake_in_included_section_that_replaces_a_root_section_is_attributed_to_the_include(tmp_path: Path) -> None:
     (tmp_path / "settings.yaml").write_text("router_settings:\n  routing_strategy: simple-shufle\n", encoding="utf-8")
     assert _lint(tmp_path, VALID + "include:\n  - settings.yaml\n") == [
-        'config.yaml:17: error: router_settings.routing_strategy: unknown strategy "simple-shufle", '
+        'config.yaml:20: error: router_settings.routing_strategy: unknown strategy "simple-shufle", '
         'did you mean "simple-shuffle"? (in an included file)'
     ]
 
@@ -213,4 +217,142 @@ def test_included_model_list_that_is_not_a_list_is_attributed_to_the_include(tmp
     (tmp_path / "models.yaml").write_text("model_list:\n  model_name: extra\n", encoding="utf-8")
     assert _lint(
         tmp_path, VALID.replace('  fallbacks: [{"chat": ["backup"]}]\n', "") + "include:\n  - models.yaml\n"
-    ) == ["config.yaml:16: error: model_list: must be a list of model entries (in an included file)"]
+    ) == ["config.yaml:19: error: model_list: must be a list of model entries (in an included file)"]
+
+
+def _model_entry(litellm_params: str, model_info: str = "") -> str:
+    return f"model_list:\n  - model_name: chat\n    litellm_params: {litellm_params}\n" + (
+        f"    model_info: {model_info}\n" if model_info else ""
+    )
+
+
+@pytest.mark.parametrize(
+    ("model_info", "expected"),
+    [
+        (
+            "{max_output_tokns: 100}",
+            [
+                'config.yaml:4: warning: model_list[0].model_info.max_output_tokns: unknown key, did you mean "max_output_tokens"?'
+            ],
+        ),
+        (
+            "{input_cost_per_token: abc}",
+            [
+                "config.yaml:4: warning: model_list[0].model_info.input_cost_per_token: "
+                "unexpected value: Input should be a valid number, unable to parse string as a number"
+            ],
+        ),
+        (
+            "{max_output_tokens: lots}",
+            [
+                "config.yaml:4: warning: model_list[0].model_info.max_output_tokens: "
+                "unexpected value: expected a number, got 'lots'"
+            ],
+        ),
+        (
+            "{cache_creation_input_token_cost_above_1hr: -1}",
+            [
+                "config.yaml:4: warning: model_list[0].model_info.cache_creation_input_token_cost_above_1hr: "
+                "unexpected value: must not be negative, got -1"
+            ],
+        ),
+        ("[max_output_tokens]", ["config.yaml:4: error: model_list[0].model_info: must be a mapping"]),
+        ("{my_team_label: blue, max_output_tokens: 100, input_cost_per_token: os.environ/OPENAI_API_KEY}", []),
+    ],
+)
+def test_model_info_mistake_is_reported(tmp_path: Path, model_info: str, expected: list[str]) -> None:
+    assert _lint(tmp_path, _model_entry("{model: openai/gpt-5, api_key: sk-test}", model_info)) == expected
+
+
+@pytest.mark.parametrize(
+    ("model_info", "expected"),
+    [
+        (
+            "",
+            [
+                "config.yaml:2: warning: model_list[0]: azure/my-deployment is not in LiteLLM's model cost map, "
+                "so cost tracking and token limits need model_info.base_model or model_info.input_cost_per_token, "
+                "model_info.output_cost_per_token, model_info.max_input_tokens, model_info.max_output_tokens"
+            ],
+        ),
+        (
+            "{input_cost_per_token: 0.1, max_input_tokens: 1000}",
+            [
+                "config.yaml:4: warning: model_list[0].model_info: azure/my-deployment is not in LiteLLM's model cost "
+                "map, so cost tracking and token limits need model_info.base_model or "
+                "model_info.output_cost_per_token, model_info.max_output_tokens"
+            ],
+        ),
+        ("{base_model: azure/gpt-4o}", []),
+        (
+            "{input_cost_per_token: 0.1, output_cost_per_token: 0.2, max_input_tokens: 1000, max_output_tokens: 100}",
+            [],
+        ),
+    ],
+)
+def test_model_missing_from_cost_map_needs_its_price_and_limits(
+    tmp_path: Path, model_info: str, expected: list[str]
+) -> None:
+    params: Final = "{model: azure/my-deployment, api_key: k, api_base: https://example.com, api_version: v}"
+    assert _lint(tmp_path, _model_entry(params, model_info)) == expected
+
+
+def test_wildcard_model_is_not_checked_against_the_cost_map(tmp_path: Path) -> None:
+    assert _lint(tmp_path, _model_entry('{model: "openai/*"}')) == []
+
+
+@pytest.mark.parametrize(
+    ("litellm_params", "environ", "expected"),
+    [
+        (
+            "{model: vertex_ai/gemini-2.5-pro, vertex_project: demo}",
+            {},
+            [
+                "config.yaml:3: warning: model_list[0].litellm_params: vertex_ai/gemini-2.5-pro needs "
+                "VERTEXAI_LOCATION in the environment or litellm_params.vertex_location"
+            ],
+        ),
+        ("{model: vertex_ai/gemini-2.5-pro, vertex_project: demo, vertex_location: us-central1}", {}, []),
+        (
+            "{model: vertex_ai/gemini-2.5-pro}",
+            {"VERTEXAI_PROJECT": "demo", "VERTEXAI_LOCATION": "us-central1"},
+            [],
+        ),
+        (
+            "{model: azure/gpt-4o, api_base: https://example.com, api_version: v}",
+            {},
+            [
+                "config.yaml:3: warning: model_list[0].litellm_params: azure/gpt-4o needs "
+                "AZURE_API_KEY in the environment or litellm_params.api_key"
+            ],
+        ),
+        ("{model: azure/gpt-4o, api_base: https://example.com, api_version: v, azure_ad_token: t}", {}, []),
+        (
+            "{model: bedrock/anthropic.claude-sonnet-4-5-20250929-v1:0, aws_access_key_id: id}",
+            {},
+            [
+                "config.yaml:3: warning: model_list[0].litellm_params: "
+                "bedrock/anthropic.claude-sonnet-4-5-20250929-v1:0 needs "
+                "AWS_SECRET_ACCESS_KEY in the environment or litellm_params.aws_secret_access_key"
+            ],
+        ),
+        ("{model: bedrock/anthropic.claude-sonnet-4-5-20250929-v1:0, aws_role_name: role}", {}, []),
+    ],
+)
+def test_provider_setting_missing_from_params_and_environment_is_reported(
+    tmp_path: Path, litellm_params: str, environ: dict[str, str], expected: list[str]
+) -> None:
+    assert _lint(tmp_path, _model_entry(litellm_params), environ) == expected
+
+
+def test_provider_key_declared_under_environment_variables_is_accepted(tmp_path: Path) -> None:
+    text: Final = _model_entry("{model: openai/gpt-5}") + "environment_variables:\n  OPENAI_API_KEY: sk-test\n"
+    assert _lint(tmp_path, text, {}) == []
+
+
+def test_linting_leaves_the_process_environment_unchanged(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LINT_CONFIG_SENTINEL", "kept")
+    monkeypatch.delenv("LITELLM_MASTER_KEY", raising=False)
+    _lint(tmp_path, VALID)
+    assert os.environ["LINT_CONFIG_SENTINEL"] == "kept"
+    assert "LITELLM_MASTER_KEY" not in os.environ

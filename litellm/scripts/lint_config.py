@@ -20,6 +20,7 @@ from functools import cache
 from pathlib import Path
 from types import MappingProxyType
 from typing import Final, Literal, TypeAlias, get_args
+from unittest.mock import patch
 
 import yaml
 from pydantic import BaseModel, TypeAdapter, ValidationError
@@ -202,7 +203,94 @@ def _env_findings(config: Mapping[str, object], environ: Mapping[str, str]) -> I
             yield Finding("warning", path, f"environment variable {name} is not set")
 
 
-def _model_list_findings(model_list: object) -> Iterator[Finding]:
+_ALTERNATIVE_AUTH: Final = re.compile(r"role|profile|token|credentials")
+_SECRET_NAME: Final = re.compile(r"KEY|SECRET|TOKEN")
+_UNMAPPED_MODEL_KEYS: Final = ("input_cost_per_token", "output_cost_per_token", "max_input_tokens", "max_output_tokens")
+
+
+@cache
+def _model_info_types() -> Mapping[str, frozenset[type]]:
+    import litellm
+    from litellm.types.router import ModelInfo as RouterModelInfo
+    from litellm.types.utils import ModelInfo
+
+    entries: Final = [entry for name, entry in litellm.model_cost.items() if name != "sample_spec"]
+    names: Final = (
+        frozenset(itertools.chain.from_iterable(entries))
+        | frozenset(ModelInfo.__annotations__)
+        | frozenset(RouterModelInfo.model_fields)
+    )
+    return MappingProxyType(
+        {name: frozenset(type(entry[name]) for entry in entries if entry.get(name) is not None) for name in names}
+    )
+
+
+def _model_info_findings(model: str, model_info: Mapping[str, object], path: PathKey) -> Iterator[Finding]:
+    import litellm
+    from litellm.types.router import ModelInfo as RouterModelInfo
+
+    info_path: Final = (*path, "model_info")
+    types: Final = _model_info_types()
+    yield from _unknown_keys(model_info, info_path, frozenset(types), only_typos=True)
+    yield from _type_findings(RouterModelInfo, model_info, info_path)
+    for key, value in model_info.items():
+        seen = types.get(key, frozenset())
+        if not seen or not seen <= {int, float} or value is None:
+            continue
+        if isinstance(value, str) and value.startswith(_ENV_PREFIX):
+            continue
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            if key not in RouterModelInfo.model_fields:
+                yield Finding("warning", (*info_path, key), f"unexpected value: expected a number, got {value!r}")
+        elif value < 0:
+            yield Finding("warning", (*info_path, key), f"unexpected value: must not be negative, got {value!r}")
+    base_model: Final = model_info.get("base_model")
+    lookup: Final = base_model if isinstance(base_model, str) and base_model else model
+    if "*" in lookup:
+        return
+    try:
+        litellm.get_model_info(model=lookup)
+    except Exception:  # noqa: BLE001  # get_model_info raises a bare Exception for unmapped models
+        missing = [key for key in _UNMAPPED_MODEL_KEYS if model_info.get(key) is None]
+        if missing:
+            yield Finding(
+                "warning",
+                info_path if model_info else path,
+                f"{lookup} is not in LiteLLM's model cost map, so cost tracking and token limits need "
+                f"model_info.base_model or model_info.{', model_info.'.join(missing)}",
+            )
+
+
+def _credential_findings(
+    model: str, params: Mapping[str, object], path: PathKey, environ: Mapping[str, str]
+) -> Iterator[Finding]:
+    import litellm
+    from litellm.types.router import GenericLiteLLMParams
+
+    def given(name: str) -> str | None:
+        return None if params.get(name) is None else str(params[name])
+
+    with patch.dict(os.environ, environ, clear=True):
+        try:
+            missing = litellm.validate_environment(
+                model=model, api_key=given("api_key"), api_base=given("api_base"), api_version=given("api_version")
+            )["missing_keys"]
+        except Exception:  # noqa: BLE001  # an unrecognized provider has no known requirements
+            return
+    provider: Final = {name.partition("_")[0].lower().removesuffix("ai") for name in missing}
+    fields: Final = [name for name in GenericLiteLLMParams.model_fields if name.partition("_")[0] in provider | {"api"}]
+    set_params: Final = {key for key, value in params.items() if value is not None}
+    has_other_auth: Final = any(_ALTERNATIVE_AUTH.search(key) for key in set_params.intersection(fields))
+    for name in missing:
+        setting = name.lower().partition("_")[2]
+        names = [field for field in fields if setting in (field, field.partition("_")[2])]
+        if set_params.intersection(names) or (has_other_auth and _SECRET_NAME.search(name)):
+            continue
+        hint = f" or litellm_params.{names[0]}" if names else ""
+        yield Finding("warning", path, f"{model} needs {name} in the environment{hint}")
+
+
+def _model_list_findings(model_list: object, environ: Mapping[str, str]) -> Iterator[Finding]:
     import litellm
     from litellm.types.router import GenericLiteLLMParams
 
@@ -233,6 +321,16 @@ def _model_list_findings(model_list: object) -> Iterator[Finding]:
         model = params.get("model")
         if not isinstance(model, str) or not model:
             yield Finding("error", (*path, "litellm_params"), "missing model")
+            continue
+        yield from _credential_findings(model, params, (*path, "litellm_params"), environ)
+        if entry.get("model_info") is None:
+            model_info: Mapping[str, object] = {}
+        elif (parsed_info := _mapping(entry["model_info"])) is None:
+            yield Finding("error", (*path, "model_info"), "must be a mapping")
+            continue
+        else:
+            model_info = parsed_info
+        yield from _model_info_findings(model, model_info, path)
 
 
 def _model_names(config: Mapping[str, object]) -> frozenset[str]:
@@ -325,7 +423,8 @@ def _section_findings(config: Mapping[str, object], known_models: frozenset[str]
 def lint_config(config: Mapping[str, object], environ: Mapping[str, str]) -> Iterator[Finding]:
     yield from _unknown_keys(config, (), _known_top_level_keys())
     if config.get("model_list") is not None:
-        yield from _model_list_findings(config["model_list"])
+        declared: Final = _mapping(config.get("environment_variables")) or {}
+        yield from _model_list_findings(config["model_list"], {**dict.fromkeys(declared, ""), **environ})
     yield from _section_findings(config, _model_names(config))
     yield from _env_findings(config, environ)
 
