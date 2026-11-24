@@ -51,13 +51,13 @@ class OpenAIOSeriesConfig(OpenAIGPTConfig):
         """
         return messages
 
-    def get_supported_openai_params(self, model: str) -> list:
+    def get_supported_openai_params(self, model: str) -> list[str]:
         """
         Get the supported OpenAI params for the given model
 
         """
 
-        all_openai_params: Final = super().get_supported_openai_params(model=model)
+        all_openai_params: Final[list[str]] = super().get_supported_openai_params(model=model)
         non_supported_params: Final = [
             "logprobs",
             "top_p",
@@ -71,7 +71,7 @@ class OpenAIOSeriesConfig(OpenAIGPTConfig):
         all_openai_params.extend(o_series_only_param)
 
         try:
-            model, custom_llm_provider, api_base, api_key = get_llm_provider(model=model)
+            model, custom_llm_provider, _, _ = get_llm_provider(model=model)
         except Exception:
             verbose_logger.debug(
                 "Unable to infer model provider for model=%s, defaulting to openai for o1 supported param check", model
@@ -99,7 +99,7 @@ class OpenAIOSeriesConfig(OpenAIGPTConfig):
     def map_openai_params(
         self,
         non_default_params: dict,
-        optional_params: dict,
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
     ):

@@ -1,4 +1,5 @@
 import re
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final
 
 from litellm.litellm_core_utils.url_utils import ensure_api_route
@@ -32,11 +33,11 @@ class SnowflakeBaseConfig:
 
     def map_openai_params(
         self,
-        non_default_params: dict,
-        optional_params: dict,
+        non_default_params: Mapping[str, object],
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         If any supported_openai_params are in non_default_params, add them to optional_params, so they are used in API call
 
@@ -70,14 +71,14 @@ class SnowflakeBaseConfig:
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, object],
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Return headers to use for Snowflake completion request
 

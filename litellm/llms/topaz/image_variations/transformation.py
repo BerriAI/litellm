@@ -36,8 +36,8 @@ class TopazImageVariationConfig(TopazModelInfo, BaseImageVariationConfig):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         stream: bool | None = None,
     ) -> str:
         return join_api_base(api_base or "https://api.topazlabs.com", "image/v1/enhance")
@@ -100,7 +100,7 @@ class TopazImageVariationConfig(TopazModelInfo, BaseImageVariationConfig):
         model: str | None,
         image: FileTypes,
         optional_params: dict,
-        headers: dict,
+        headers: Mapping[str, object],
     ) -> HttpHandlerRequestFields:
         request_params: Final = HttpHandlerRequestFields(
             files={"image": self.prepare_file_tuple(image)},
@@ -135,10 +135,10 @@ class TopazImageVariationConfig(TopazModelInfo, BaseImageVariationConfig):
         raw_response: ClientResponse,
         model_response: ImageResponse,
         logging_obj: LiteLLMLoggingObj,
-        request_data: dict,
+        request_data: Mapping[str, object],
         image: FileTypes,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         encoding: "Tokenizer | None",
         api_key: str | None = None,
     ) -> ImageResponse:
@@ -154,10 +154,10 @@ class TopazImageVariationConfig(TopazModelInfo, BaseImageVariationConfig):
         raw_response: Response,
         model_response: ImageResponse,
         logging_obj: LiteLLMLoggingObj,
-        request_data: dict,
+        request_data: Mapping[str, object],
         image: FileTypes,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         encoding: "Tokenizer | None",
         api_key: str | None = None,
     ) -> ImageResponse:
@@ -167,7 +167,9 @@ class TopazImageVariationConfig(TopazModelInfo, BaseImageVariationConfig):
 
         return self._common_transform_response_image_variation(image_content, response_ms)
 
-    def get_error_class(self, error_message: str, status_code: int, headers: dict | Headers) -> BaseLLMException:
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: dict[str, object] | Headers
+    ) -> BaseLLMException:
         return TopazException(
             status_code=status_code,
             message=error_message,

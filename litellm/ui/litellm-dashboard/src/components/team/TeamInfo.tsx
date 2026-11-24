@@ -94,6 +94,7 @@ import MetadataKeyValueFields, {
   metadataPairsToObject,
 } from "../common_components/MetadataKeyValueFields";
 import { useTeamMetadataSchema } from "@/app/(dashboard)/hooks/teams/useTeamMetadataSchema";
+import { SemanticCacheControls } from "@/components/shared/SemanticCacheControls";
 import ModelAliasManager from "../common_components/ModelAliasManager";
 import AgentSelector from "../agent_management/AgentSelector";
 import DeleteResourceModal from "../common_components/DeleteResourceModal";
@@ -383,6 +384,7 @@ export interface TeamInfoProps {
   userModels: string[];
   editTeam: boolean;
   premiumUser?: boolean;
+  framed?: boolean;
 }
 
 const SUPPRESSED_BY_DESCRIPTION = "";
@@ -649,8 +651,10 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   editTeam,
   premiumUser = false,
   onUpdate,
+  framed = false,
 }) => {
   const { t } = useTranslation();
+  const rootClassName = framed ? undefined : "p-4";
   const teamUpdateSchema = useMemo(
     () =>
       buildTeamUpdateFieldsSchema(t).superRefine((values, ctx) => {
@@ -1393,11 +1397,11 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   };
 
   if (loading) {
-    return <div className="p-4">{t("teams.teamInfo.loading")}</div>;
+    return <div className={rootClassName}>{t("teams.teamInfo.loading")}</div>;
   }
 
   if (!teamData?.team_info) {
-    return <div className="p-4">{t("teams.teamInfo.notFound")}</div>;
+    return <div className={rootClassName}>{t("teams.teamInfo.notFound")}</div>;
   }
 
   const { team_info: info } = teamData;
@@ -2221,6 +2225,19 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                     {({ ref, value, ...field }) => <NumericalInput {...field} ref={ref} value={value ?? ""} step={1} />}
                   </FormField>
 
+                  <FormField control={form.control} name="metadata">
+                    {({ value, onChange }) => (
+                      <SemanticCacheControls
+                        value={metadataPairsToObject(value).cache_params}
+                        onChange={(params) =>
+                          onChange([
+                            ...(value ?? []).filter(({ key }) => key !== "cache_params"),
+                            ...(params ? [{ key: "cache_params", value: JSON.stringify(params) }] : []),
+                          ])
+                        }
+                      />
+                    )}
+                  </FormField>
                   <Field>
                     <FieldLabel>{t("teams.teamInfo.editForm.metadata")}</FieldLabel>
                     <FormField control={form.control} name="metadata">
@@ -2945,7 +2962,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   ].filter((tab) => visibleTabs.includes(tab.key));
 
   return (
-    <div className="p-4">
+    <div className={rootClassName}>
       <div className="flex justify-between items-center mb-6">
         <div>
           <Button variant="ghost" onClick={onClose} className="mb-4">

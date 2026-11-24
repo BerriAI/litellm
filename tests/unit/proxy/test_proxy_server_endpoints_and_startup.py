@@ -716,7 +716,7 @@ def _dashboard_session_cookie(monkeypatch, session_key: str) -> str:
     )
 
 
-def _stored_session_key(monkeypatch, session_key_expires: datetime | None) -> str:
+def _stored_session_key(monkeypatch, session_key_expires: datetime | None, key_user_id: str = "u-1") -> str:
     from litellm.proxy._types import UserAPIKeyAuth, hash_token
 
     session_key: Final = "sk-ui-session-key"
@@ -724,7 +724,7 @@ def _stored_session_key(monkeypatch, session_key_expires: datetime | None) -> st
     async def stored_key(hashed_token: str, *args: object, **kwargs: object) -> UserAPIKeyAuth:
         if session_key_expires is None or hashed_token != hash_token(session_key):
             raise ValueError("key not found")
-        return UserAPIKeyAuth(user_id="u-1", expires=session_key_expires)
+        return UserAPIKeyAuth(user_id=key_user_id, expires=session_key_expires)
 
     monkeypatch.setattr("litellm.proxy.auth.auth_checks.get_key_object", stored_key)
     return session_key
@@ -795,6 +795,29 @@ def test_sso_key_generate_without_sso_sends_an_unexpired_cookie_with_a_dead_sess
     )
     assert cleared_token_paths == ["/", "/ui"], set_cookies
     assert any(cookie.startswith("litellm_cp_return_to=return_to.") for cookie in set_cookies), set_cookies
+
+
+def test_sso_key_generate_without_sso_keeps_the_cookie_of_a_live_session_key_owned_by_another_user_id(
+    client_no_auth, monkeypatch
+):
+    _without_sso(monkeypatch)
+    session: Final = _dashboard_session_cookie(
+        monkeypatch, _stored_session_key(monkeypatch, _LIVE, key_user_id="proxy-admin-id")
+    )
+    client_no_auth.cookies.clear()
+
+    response = client_no_auth.get(
+        "/sso/key/generate",
+        params={"return_to": "/mcp/authorize?client_id=abc"},
+        headers={"cookie": f"token={session}"},
+        follow_redirects=False,
+    )
+    client_no_auth.cookies.clear()
+
+    assert response.status_code == 303
+    assert response.headers["location"].endswith("/ui/login")
+    set_cookies: Final = response.headers.get_list("set-cookie")
+    assert [cookie.split("=")[0] for cookie in set_cookies] == ["litellm_cp_return_to"], set_cookies
 
 
 def test_restructure_ui_html_files_handles_nested_routes(tmp_path):

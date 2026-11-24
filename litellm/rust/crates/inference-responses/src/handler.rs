@@ -37,6 +37,7 @@ pub(super) async fn execute(
             AuthScheme::Credential { secret, .. } => Some(secret.clone()),
             _ => None,
         },
+        host_transport: false,
     };
     let body = config.transform_responses_api_request(
         &identity.model,

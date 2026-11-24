@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import copy
+import inspect
 import json
 import time
 import traceback
@@ -65,6 +66,7 @@ from litellm.litellm_core_utils.llm_response_utils.get_headers import provider_r
 from litellm.litellm_core_utils.llm_response_utils.response_metadata import (
     update_response_metadata,
 )
+from litellm.litellm_core_utils.socket_logging import track_socket_logging
 from litellm.litellm_core_utils.thread_pool_executor import executor
 from litellm.llms.azure_ai.common_utils import AZURE_MODEL_ROUTER_SELECTED_MODEL_KEY
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
@@ -75,6 +77,7 @@ from litellm.responses.utils import ResponseAPILoggingUtils, ResponsesAPIRequest
 from litellm.types.integrations.custom_logger import converted_stream_requested
 from litellm.types.llms.openai import (
     PART_UNION_TYPES,
+    ErrorEventError,
     ResponseAPIUsage,
     ResponseIncompleteEvent,
     ResponsesAPIResponse,
@@ -94,6 +97,7 @@ if TYPE_CHECKING:
         ResponsesBackendWebSocket,
         ResponsesClientWebSocket,
         ResponsesWebSocketRequestDefaults,
+        ResponsesWsQuotaRefund,
     )
     from litellm.types.router import LiteLLM_Params
 
@@ -105,7 +109,7 @@ class ProjectQuotaCallback(Protocol):
         requested_model: str | None,
         estimated_input_tokens: int,
         estimated_output_tokens: int,
-    ) -> None: ...
+    ) -> ResponsesWsQuotaRefund | None: ...
 
 
 class TokenLimitCallback(Protocol):
@@ -248,7 +252,7 @@ async def _finish_even_if_cancelled(work: Awaitable[None]) -> None:
 def spawn_logging_task(
     running_loop: asyncio.AbstractEventLoop, coroutine: Coroutine[object, object, object], *, task_name: str
 ) -> asyncio.Task[object]:
-    task: Final = running_loop.create_task(coroutine)
+    task: Final = running_loop.create_task(track_socket_logging(coroutine))
     _PENDING_LOGGING_TASKS.add(task)
     task.add_done_callback(_PENDING_LOGGING_TASKS.discard)
     task.add_done_callback(lambda done: _log_background_task_failure(done, task_name=task_name))
@@ -337,6 +341,12 @@ def stream_error_status_and_message(error_obj: object) -> tuple[int, str]:
     return _status_code_for_error_fields(error_type, error_code), message
 
 
+def _provider_error_fields(error_obj: object) -> Mapping[str, object]:
+    if isinstance(error_obj, ErrorEventError):
+        return error_obj.model_dump(exclude_none=True)
+    return error_obj if _is_json_object(error_obj) else {}
+
+
 def map_stream_error_to_exception(
     error_obj: object,
     model: str,
@@ -348,11 +358,11 @@ def map_stream_error_to_exception(
 
     error_message, error_type, error_code = _error_event_fields(error_obj)
     status_code: Final = _status_code_for_error_fields(error_type, error_code)
-    error_body: Final = {"message": error_message, "type": error_type, "code": error_code}
+    error_fields: Final = {"message": error_message, "type": error_type, "code": error_code}
     provider_exception: Final = BaseLLMException(
         status_code=status_code,
-        message=f"Error code: {status_code} - {json.dumps({'error': error_body})}",
-        body=error_body,
+        message=f"Error code: {status_code} - {json.dumps({'error': error_fields})}",
+        body={**_provider_error_fields(error_obj), **error_fields},
         headers=headers,
     )
     return _mapped_exception(provider_exception, model, custom_llm_provider, logging_obj)
@@ -387,7 +397,11 @@ def _error_event_error_object(event: object) -> object:
     nested_error: Final = _event_field(event, "error")
     if nested_error is not None:
         return nested_error
-    return {field: value for field in ("message", "code") if _is_error_field_value(value := _event_field(event, field))}
+    return {
+        field: value
+        for field in ("message", "code", "param")
+        if _is_error_field_value(value := _event_field(event, field))
+    }
 
 
 def _mid_stream_fallback_eligible(mapped_exception: Exception) -> bool:
@@ -513,9 +527,10 @@ class BaseResponsesAPIStreamingIterator:
                         "type": ResponsesAPIStreamEvents.ERROR.value,
                     }
                 )
+                tool_input_fix: Final = _string_tool_input_fix(typed_chunk)
                 transformed_chunk: Final = self.responses_api_provider_config.transform_streaming_response(
                     model=self.model,
-                    parsed_chunk=typed_chunk,
+                    parsed_chunk={**typed_chunk, **tool_input_fix} if tool_input_fix else typed_chunk,
                     logging_obj=self.logging_obj,
                 )
                 affinity_model_id: Final = ResponsesAPIRequestUtils.affinity_model_id(self.litellm_metadata)
@@ -1911,6 +1926,28 @@ _CLIENT_RUN_TOOL_ARGUMENTS_DELTA_EVENTS: Final = frozenset(
 _TOOL_ARGUMENTS_DELTA_EVENTS: Final = _CLIENT_RUN_TOOL_ARGUMENTS_DELTA_EVENTS | {
     ResponsesAPIStreamEvents.MCP_CALL_ARGUMENTS_DELTA
 }
+_STRING_TOOL_INPUT_FIELD_BY_EVENT: Final[Mapping[str, str]] = MappingProxyType(
+    {
+        ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DELTA.value: "delta",
+        ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DONE.value: "arguments",
+        ResponsesAPIStreamEvents.MCP_CALL_ARGUMENTS_DELTA.value: "delta",
+        ResponsesAPIStreamEvents.MCP_CALL_ARGUMENTS_DONE.value: "arguments",
+        "response.mcp_call.arguments.delta": "delta",
+        "response.mcp_call.arguments.done": "arguments",
+        ResponsesAPIStreamEvents.CUSTOM_TOOL_CALL_INPUT_DELTA.value: "delta",
+        ResponsesAPIStreamEvents.CUSTOM_TOOL_CALL_INPUT_DONE.value: "input",
+    }
+)
+
+
+def _string_tool_input_fix(chunk: Mapping[str, object]) -> Mapping[str, str]:
+    field_name: Final = _STRING_TOOL_INPUT_FIELD_BY_EVENT.get(str(chunk.get("type")))
+    if field_name is None:
+        return {}
+    value: Final = chunk.get(field_name)
+    if isinstance(value, str):
+        return {}
+    return {field_name: "" if value is None else json.dumps(value, ensure_ascii=False)}
 
 
 def _estimate_usage_from_text(
@@ -2202,18 +2239,27 @@ _FRAME_NO_MAX_OUTPUT_TOKENS_FLOOR: Final = 1024
 _FRAME_CHARS_PER_TOKEN_ESTIMATE: Final = 4
 
 
-def _extract_frame_quota_estimate_inputs(msg_obj: Mapping[str, object]) -> tuple[int, int | None]:
-    """Extract a rough input-token count and any explicit max_output_tokens
-    from a ``response.create`` frame, handling both wire shapes:
-      flat:   {"type": "response.create", "input": ..., "max_output_tokens": ...}
-      nested: {"type": "response.create", "response": {"input": ..., "max_output_tokens": ...}}
+def is_warmup_response_create(raw_message: str) -> bool:
+    frame: Final = _json_object_or_none(raw_message)
+    return frame is not None and _response_create_params(frame).get("generate") is False
+
+
+def _response_create_params(msg_obj: Mapping[str, object]) -> Mapping[str, object]:
+    """The request params of a ``response.create`` frame, in either wire shape:
+    flat:   {"type": "response.create", "input": ..., "max_output_tokens": ...}
+    nested: {"type": "response.create", "response": {"input": ..., "max_output_tokens": ...}}
     """
     nested: Final = msg_obj.get("response")
-    params: Final[Mapping[str, object]] = (
+    return (
         nested
         if _is_json_object(nested) and nested
         else MappingProxyType({k: v for k, v in msg_obj.items() if k != "type"})
     )
+
+
+def _extract_frame_quota_estimate_inputs(msg_obj: Mapping[str, object]) -> tuple[int, int | None]:
+    """Extract a rough input-token count and any explicit max_output_tokens from a ``response.create`` frame."""
+    params: Final = _response_create_params(msg_obj)
     text_parts: Final[list[str]] = []  # mutable-ok: local accumulator built in one pass, not shared
     pending: Final[list[object]] = [  # mutable-ok: explicit worklist avoids recursion
         params.get("input"),
@@ -2242,29 +2288,42 @@ async def _enforce_frame_project_quota(
     user_api_key_dict: UserAPIKeyAuth | None,
     model: str | None,
     raw_message: str,
-) -> None:
+) -> tuple[ResponsesWsQuotaRefund, ...]:
     """Charge one response.create frame's estimated tokens against every
     registered project ITPM/OTPM quota callback, in isolation from PII
     masking / logging so a malformed frame still reaches those callbacks."""
     if not quota_callbacks:
-        return
+        return ()
     try:
         msg_obj: Final = _load_json_value(raw_message)
     except (json.JSONDecodeError, TypeError):
-        return
+        return ()
     if not _is_json_object(msg_obj) or msg_obj.get("type") != "response.create":
-        return
+        return ()
     estimated_input_tokens, explicit_max_output_tokens = _extract_frame_quota_estimate_inputs(msg_obj)
     estimated_output_tokens: Final = (
         explicit_max_output_tokens if explicit_max_output_tokens is not None else _FRAME_NO_MAX_OUTPUT_TOKENS_FLOOR
     )
-    for callback in quota_callbacks:
-        await callback.enforce_project_io_token_quota_for_frame(
-            user_api_key_dict=user_api_key_dict,
-            requested_model=model,
-            estimated_input_tokens=estimated_input_tokens,
-            estimated_output_tokens=estimated_output_tokens,
-        )
+    refunds: Final = tuple(
+        [
+            await callback.enforce_project_io_token_quota_for_frame(
+                user_api_key_dict=user_api_key_dict,
+                requested_model=model,
+                estimated_input_tokens=estimated_input_tokens,
+                estimated_output_tokens=estimated_output_tokens,
+            )
+            for callback in quota_callbacks
+        ]
+    )
+    return tuple(refund for refund in refunds if inspect.iscoroutinefunction(refund))
+
+
+async def _refund_frame_quota(refunds: Sequence[ResponsesWsQuotaRefund]) -> None:
+    for refund in refunds:
+        try:
+            await refund()
+        except Exception as e:  # noqa: BLE001  # a failed refund must not end the client's socket
+            verbose_logger.exception("Responses WS project quota refund failed: %s", e)
 
 
 @dataclass(frozen=True, slots=True)
@@ -2277,7 +2336,7 @@ class _RefusedTurn:
     rejection: Exception
 
 
-ResponsesWsTurnAdmission: TypeAlias = Callable[[], Awaitable[Mapping[str, object]]]
+ResponsesWsTurnAdmission: TypeAlias = Callable[[Mapping[str, object]], Awaitable[Mapping[str, object]]]
 
 
 def with_token_limit_checks(
@@ -2289,12 +2348,12 @@ def with_token_limit_checks(
     if not token_limit_callbacks or user_api_key_dict is None:
         return turn_admission
 
-    async def admit() -> Mapping[str, object]:
+    async def admit(turn_params: Mapping[str, object]) -> Mapping[str, object]:
         for callback in token_limit_callbacks:
             await callback.enforce_token_limits_for_frame(
                 user_api_key_dict=user_api_key_dict, requested_model=requested_model
             )
-        return MappingProxyType({}) if turn_admission is None else await turn_admission()
+        return MappingProxyType({}) if turn_admission is None else await turn_admission(turn_params)
 
     return admit
 
@@ -2306,7 +2365,7 @@ async def _admit_frame_turn(
     if turn_admission is None or frame is None or frame.get("type") != "response.create":
         return _AdmittedTurn()
     try:
-        return _AdmittedTurn(await turn_admission())
+        return _AdmittedTurn(await turn_admission(_response_create_params(frame)))
     except RateLimitError as refusal:
         return _RefusedTurn(refusal)
     except Exception as e:
@@ -2464,13 +2523,19 @@ def _frame_rejection_event(rejection: Exception) -> str:
 
 
 async def _reject_guarded_turn(
-    websocket: ResponsesClientWebSocket, guarded: GuardedResponsesWsFrame, rejection: Exception
+    websocket: ResponsesClientWebSocket,
+    guarded: GuardedResponsesWsFrame,
+    rejection: Exception,
+    quota_refunds: Sequence[ResponsesWsQuotaRefund],
 ) -> None:
-    """Bills the refused turn as its own failed request, then answers it on the open socket."""
-    if guarded.bill_refusal is not None:
-        await guarded.bill_refusal(rejection)
-    with contextlib.suppress(Exception):
-        await websocket.send_text(_turn_rejection_frame(rejection))
+    """Bills the refused turn as its own failed request, answers it on the open socket, then returns its charge."""
+    try:
+        if guarded.bill_refusal is not None:
+            await guarded.bill_refusal(rejection)
+        with contextlib.suppress(Exception):
+            await websocket.send_text(_turn_rejection_frame(rejection))
+    finally:
+        await _refund_frame_quota(quota_refunds)
 
 
 _RESPONSES_WS_TERMINAL_EVENT_TYPES: Final = _HISTORY_TERMINAL_EVENT_TYPES | _RESPONSES_WS_FAILURE_EVENT_TYPES
@@ -2651,9 +2716,11 @@ class ResponsesWebSocketStreaming:
         turn_admission: ResponsesWsTurnAdmission | None = None,
         turn_usage_recorder: ResponsesWsTurnUsageRecorder | None = None,
         frame_guard: ResponsesWsFrameGuard | None = None,
+        on_unfinished_turn: Callable[[], None] | None = None,
     ):
         self.websocket = websocket
         self.backend_ws = backend_ws
+        self.on_unfinished_turn: Callable[[], None] | None = on_unfinished_turn
         self.logging_obj = logging_obj
         self.user_api_key_dict = user_api_key_dict
         self.frame_guard: ResponsesWsFrameGuard | None = frame_guard
@@ -2733,12 +2800,15 @@ class ResponsesWebSocketStreaming:
             return None
 
     async def _forward_guarded_frame(
-        self, message: str, turn_admission: ResponsesWsTurnAdmission | None = None
+        self,
+        message: str,
+        turn_admission: ResponsesWsTurnAdmission | None = None,
+        quota_refunds: Sequence[ResponsesWsQuotaRefund] = (),
     ) -> None:
         guarded: Final = await self._guard_frame(message)
         if guarded is None:
             return
-        admitted: Final = await self._admit_or_reject_turn(guarded, message, turn_admission)
+        admitted: Final = await self._admit_or_reject_turn(guarded, message, turn_admission, quota_refunds)
         if admitted is None:
             return
         if guarded.pii_tokens:
@@ -2789,6 +2859,8 @@ class ResponsesWebSocketStreaming:
     def _log_open_turns(self) -> None:
         open_turns: Final = self._open_turns
         self._open_turns = ()
+        if open_turns and self.on_unfinished_turn is not None:
+            self.on_unfinished_turn()
         for turn in open_turns:
             if turn.events:
                 self._log_turn(turn)
@@ -3149,24 +3221,27 @@ class ResponsesWebSocketStreaming:
 
         return json.dumps(evt_obj) if modified else response_str
 
-    async def _enforce_or_reject_frame(self, message: str) -> bool:
-        """Run the per-frame project quota check.
+    async def _enforce_or_reject_frame(self, message: str) -> tuple[ResponsesWsQuotaRefund, ...] | None:
+        """Run the per-frame project quota check and return the charge's refunds.
 
-        On rejection, sends an ``error`` event to the client and reports that
-        the frame must be dropped instead of forwarded, so the connection
+        On rejection, sends an ``error`` event to the client and returns None
+        so the frame is dropped instead of forwarded, and the connection
         stays open for the client to retry once the window resets.
         """
         try:
-            await _enforce_frame_project_quota(
+            return await _enforce_frame_project_quota(
                 self.quota_callbacks, self.user_api_key_dict, self.authorized_model, message
             )
         except RateLimitError as e:
             await self._send_turn_refusal(e)
-            return False
-        return True
+            return None
 
     async def _admit_or_reject_turn(
-        self, guarded: GuardedResponsesWsFrame, message: str, turn_admission: ResponsesWsTurnAdmission | None
+        self,
+        guarded: GuardedResponsesWsFrame,
+        message: str,
+        turn_admission: ResponsesWsTurnAdmission | None,
+        quota_refunds: Sequence[ResponsesWsQuotaRefund],
     ) -> _AdmittedTurn | None:
         verdict: Final = await _admit_frame_turn(turn_admission, message)
         match verdict:
@@ -3175,7 +3250,7 @@ class ResponsesWebSocketStreaming:
             case _RefusedTurn(rejection=rejection):
                 if self._failure is None:
                     self._failure = rejection
-                await _reject_guarded_turn(self.websocket, guarded, rejection)
+                await _reject_guarded_turn(self.websocket, guarded, rejection, quota_refunds)
                 return None
 
     async def _send_turn_refusal(self, refusal: RateLimitError) -> None:
@@ -3187,14 +3262,14 @@ class ResponsesWebSocketStreaming:
     async def client_to_backend(self) -> None:
         """Forward response.create events from client to backend."""
         try:
-            if self.first_message is not None and await self._enforce_or_reject_frame(self.first_message):
+            if self.first_message is not None and await self._enforce_or_reject_frame(self.first_message) is not None:
                 await self._forward_guarded_frame(self.first_message)
 
             while True:
                 message = await self.websocket.receive_text()
-                if not await self._enforce_or_reject_frame(message):
+                if (quota_refunds := await self._enforce_or_reject_frame(message)) is None:
                     continue
-                await self._forward_guarded_frame(message, self.turn_admission)
+                await self._forward_guarded_frame(message, self.turn_admission, quota_refunds)
 
         except Exception as e:
             verbose_logger.debug("Responses WS client_to_backend ended: %s", e)
@@ -3274,11 +3349,13 @@ class ManagedResponsesWebSocketHandler:
         turn_admission: ResponsesWsTurnAdmission | None = None,
         frame_guard: ResponsesWsFrameGuard | None = None,
         guardrail_callbacks: Sequence[PresidioGuardrailCallback] | None = None,
+        on_unfinished_turn: Callable[[], None] | None = None,
         **kwargs: object,
     ) -> None:
         self.websocket = websocket
         self.model = model
         self.frame_guard = frame_guard
+        self.on_unfinished_turn: Callable[[], None] | None = on_unfinished_turn
         self.guardrail_callbacks: tuple[PresidioGuardrailCallback, ...] = tuple(guardrail_callbacks or ())
         self._pii_tokens: Mapping[str, str] = {}
         self.logging_obj = logging_obj
@@ -3647,26 +3724,35 @@ class ManagedResponsesWebSocketHandler:
         event dict, or ``None``.
         """
         terminal_event: object = None
-        stream_response: Final = await litellm.aresponses(model=model, **call_kwargs)
-        async for chunk in cast(AsyncIterable[object], stream_response):  # cast-ok: aresponses returns an async stream
-            if chunk is None:
-                continue
-            # Read type from the object before serializing to avoid double JSON parse
-            chunk_type = getattr(chunk, "type", None) or (chunk.get("type") if isinstance(chunk, dict) else None)
-            serialized = self._serialize_chunk(chunk)
-            if serialized is None:
-                continue
-            if chunk_type in _HISTORY_TERMINAL_EVENT_TYPES and terminal_event is None:
+        try:
+            stream_response: Final = await litellm.aresponses(model=model, **call_kwargs)
+            async for chunk in cast(AsyncIterable[object], stream_response):  # cast-ok: aresponses returns a stream
+                if chunk is None:
+                    continue
+                # Read type from the object before serializing to avoid double JSON parse
+                chunk_type = getattr(chunk, "type", None) or (chunk.get("type") if _is_json_object(chunk) else None)
+                serialized = self._serialize_chunk(chunk)
+                if serialized is None:
+                    continue
+                if chunk_type in _HISTORY_TERMINAL_EVENT_TYPES and terminal_event is None:
+                    try:
+                        terminal_event = _load_json_value(serialized)
+                    except Exception:
+                        pass
                 try:
-                    terminal_event = _load_json_value(serialized)
-                except Exception:
-                    pass
-            try:
-                await self.websocket.send_text(self._unmask_for_client(serialized))
-            except Exception as send_exc:
-                verbose_logger.debug("ManagedResponsesWS: error sending chunk to client: %s", send_exc)
-                return terminal_event  # Client disconnected
+                    await self.websocket.send_text(self._unmask_for_client(serialized))
+                except Exception as send_exc:
+                    verbose_logger.debug("ManagedResponsesWS: error sending chunk to client: %s", send_exc)
+                    self._report_unfinished_turn(terminal_event)
+                    return terminal_event  # Client disconnected
+        except asyncio.CancelledError:
+            self._report_unfinished_turn(terminal_event)
+            raise
         return terminal_event
+
+    def _report_unfinished_turn(self, terminal_event: object) -> None:
+        if terminal_event is None and self.on_unfinished_turn is not None:
+            self.on_unfinished_turn()
 
     def _unmask_for_client(self, serialized: str) -> str:
         """The provider and the turn history keep Presidio's tokens, the client gets the original text back."""
@@ -3745,7 +3831,7 @@ class ManagedResponsesWebSocketHandler:
             return
 
         try:
-            await _enforce_frame_project_quota(
+            quota_refunds: Final = await _enforce_frame_project_quota(
                 self.quota_callbacks, self.user_api_key_dict, self.model_group or self.model, raw_message
             )
         except RateLimitError as e:
@@ -3758,7 +3844,7 @@ class ManagedResponsesWebSocketHandler:
         if isinstance(verdict, _RefusedTurn):
             if self._failure is None:
                 self._failure = verdict.rejection
-            await _reject_guarded_turn(self.websocket, guarded, verdict.rejection)
+            await _reject_guarded_turn(self.websocket, guarded, verdict.rejection, quota_refunds)
             return
         if guarded.pii_tokens:
             self._pii_tokens = {**self._pii_tokens, **guarded.pii_tokens}

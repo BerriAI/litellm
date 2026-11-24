@@ -12,7 +12,7 @@ from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-    from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
+    from litellm.types.proxy.guardrails.guardrail_hooks.model_armor import ModelArmorGuardrailConfigModel
 
 import json
 
@@ -660,7 +660,7 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
             detail={"error": f"Model Armor could not scan an attachment and blocked the request: {reason}"},
         )
 
-    async def _scan_request_files(self, messages: Sequence[AllMessageValues], data: dict) -> None:
+    async def _scan_request_files(self, messages: Sequence[AllMessageValues], data: dict[str, object]) -> None:
         """Submit inline document/file attachments to Model Armor and block on any findings.
 
         Each attachment is sent through the byte API and a MATCH_FOUND raises a 400 before the
@@ -1497,7 +1497,7 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
         return {**inputs, "texts": [rewrites.get(text, text) for text in inputs.get("texts") or ()]}
 
     @staticmethod
-    def get_config_model() -> type["GuardrailConfigModel"] | None:
+    def get_config_model() -> type["ModelArmorGuardrailConfigModel"] | None:
         """
         Get the config model for the Model Armor guardrail.
         """

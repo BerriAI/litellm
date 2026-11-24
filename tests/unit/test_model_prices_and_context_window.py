@@ -12,8 +12,10 @@ import pytest
 from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter
 
 import litellm
+from litellm.cost_calculator import completion_cost
 from litellm.litellm_core_utils.fallback_generalizations import match_capability_generalizations
 from litellm.litellm_core_utils.reasoning_effort_capability import resolve_supported_reasoning_efforts
+from litellm.llms.base_llm.ocr.transformation import OCRPage, OCRResponse, OCRUsageInfo
 from litellm.llms.bedrock.common_utils import BedrockModelInfo
 from litellm.llms.openai.chat.gpt_reasoning_transformation import is_gpt_reasoning_series_name
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
@@ -1264,8 +1266,25 @@ def test_drex_max_metadata_supports_decisions_and_input_billing(local_model_cost
     assert litellm.supports_vision("nace/drex-max-v1.1") is True
 
 
+@pytest.mark.parametrize("effort", ("low", "medium", "high"))
+def test_nace_parse_bills_each_processed_page_at_its_effort_row_price(local_model_cost_map: None, effort: str) -> None:
+    model: Final = f"nace/parse-{effort}"
+    row: Final = litellm.model_cost[model]
+    assert (row["litellm_provider"], row["mode"], row["supported_endpoints"]) == ("nace", "ocr", ["/v1/ocr"])
+    response: Final = OCRResponse(
+        pages=[OCRPage(index=0, markdown="page")],
+        model=f"parse-{effort}",
+        usage_info=OCRUsageInfo(pages_processed=3),
+    )
+    cost: Final = completion_cost(
+        completion_response=response, model=model, custom_llm_provider="nace", call_type="ocr"
+    )
+    assert cost == pytest.approx(3 * row["ocr_cost_per_page"])
+    assert cost > 0
+
+
 def test_nace_backup_rows_match_the_main_catalog() -> None:
-    assert {"nace/drex-max", "nace/drex-max-v1.1"} <= _nace_rows(PRICES_PATH).keys()
+    assert {"nace/drex-max", "nace/drex-max-v1.1", "nace/parse-low"} <= _nace_rows(PRICES_PATH).keys()
     assert _nace_rows(BACKUP_PRICES_PATH) == _nace_rows(PRICES_PATH)
 
 

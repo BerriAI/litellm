@@ -42,7 +42,7 @@ if TYPE_CHECKING:
 
 class LensCheckConnect(Protocol):
     def __call__(
-        self, conninfo: str, *, connect_timeout: int, autocommit: bool
+        self, conninfo: str, *, connect_timeout: int, autocommit: bool, client_encoding: str
     ) -> "psycopg.Connection[tuple[object, ...]]": ...
 
 
@@ -392,7 +392,7 @@ class ProxyExtrasDBManager:
             sql.Identifier("_prisma_migrations"),
         )
         try:
-            with psycopg.connect(cleaned_url, connect_timeout=10, autocommit=True) as conn:
+            with psycopg.connect(cleaned_url, connect_timeout=10, autocommit=True, client_encoding="utf8") as conn:
                 row: Final = conn.execute(psycopg.sql.SQL(query).format(ledger_table), params).fetchone()
         except (psycopg.OperationalError, psycopg.DatabaseError):
             return None
@@ -655,7 +655,10 @@ class ProxyExtrasDBManager:
         open_connection: Final = connect if connect is not None else psycopg.connect
         try:
             with open_connection(
-                ProxyExtrasDBManager._strip_prisma_query_params(database_url), connect_timeout=10, autocommit=True
+                ProxyExtrasDBManager._strip_prisma_query_params(database_url),
+                connect_timeout=10,
+                autocommit=True,
+                client_encoding="utf8",
             ) as connection:
                 return (
                     connection.execute(
@@ -727,7 +730,7 @@ class ProxyExtrasDBManager:
 
         cleaned_url = ProxyExtrasDBManager._strip_prisma_query_params(database_url)
         try:
-            with psycopg.connect(cleaned_url, connect_timeout=10, autocommit=True) as conn:
+            with psycopg.connect(cleaned_url, connect_timeout=10, autocommit=True, client_encoding="utf8") as conn:
                 row = conn.execute(
                     "SELECT 1 "
                     "FROM pg_partitioned_table pt "
@@ -830,7 +833,7 @@ class ProxyExtrasDBManager:
             # it, psycopg3's `with conn` calls COMMIT on clean exit — which
             # fails after `UndefinedTable` (fresh DB) leaves the transaction
             # in an aborted state.
-            with psycopg.connect(cleaned_url, connect_timeout=10, autocommit=True) as conn:
+            with psycopg.connect(cleaned_url, connect_timeout=10, autocommit=True, client_encoding="utf8") as conn:
                 try:
                     rows = conn.execute(
                         "SELECT migration_name FROM _prisma_migrations "
@@ -935,7 +938,7 @@ class ProxyExtrasDBManager:
         schema: Final = ProxyExtrasDBManager._prisma_schema_param(prisma_url) or "public"
         cleaned_url: Final = ProxyExtrasDBManager._strip_prisma_query_params(os.getenv("DIRECT_URL") or prisma_url)
         try:
-            with psycopg.connect(cleaned_url, connect_timeout=10, autocommit=True) as conn:
+            with psycopg.connect(cleaned_url, connect_timeout=10, autocommit=True, client_encoding="utf8") as conn:
                 conn.execute("SET statement_timeout = 0")
                 conn.execute(sql.SQL("SET lock_timeout = {}").format(sql.Literal(lock_timeout)))
                 found: Final = ProxyExtrasDBManager._invalid_litellm_indexes(conn, schema)
@@ -1329,6 +1332,7 @@ class ProxyExtrasDBManager:
                 ProxyExtrasDBManager._strip_prisma_query_params(database_url),
                 connect_timeout=10,
                 autocommit=True,
+                client_encoding="utf8",
                 options="-c statement_timeout=5000",
             ) as conn:
                 rows: Final = conn.execute(
@@ -1507,7 +1511,7 @@ class ProxyExtrasDBManager:
         schema: Final = ProxyExtrasDBManager._prisma_schema_param(database_url) or "public"
         prisma_dir: Final = Path(ProxyExtrasDBManager._get_prisma_dir())
         try:
-            with psycopg.connect(direct_url, connect_timeout=10, autocommit=True) as connection:
+            with psycopg.connect(direct_url, connect_timeout=10, autocommit=True, client_encoding="utf8") as connection:
                 result: Final = dry_run(
                     connection,
                     schema,

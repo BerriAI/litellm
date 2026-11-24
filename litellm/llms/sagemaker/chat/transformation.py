@@ -46,19 +46,21 @@ class SagemakerChatConfig(OpenAIGPTConfig, BaseAWSLLM):
         OpenAIGPTConfig.__init__(self, **kwargs)
         BaseAWSLLM.__init__(self, **kwargs)
 
-    def get_error_class(self, error_message: str, status_code: int, headers: dict | Headers) -> BaseLLMException:
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: dict[str, object] | Headers
+    ) -> BaseLLMException:
         return SagemakerError(status_code=status_code, message=error_message, headers=headers)
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[object, object],
         model: str,
         messages: list[AllMessageValues],
         optional_params: Mapping[str, object],
         litellm_params: Mapping[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[object, object]:
         inference_component_name: Final = optional_params.get("model_id")
         if not isinstance(inference_component_name, str):
             return headers
@@ -75,7 +77,7 @@ class SagemakerChatConfig(OpenAIGPTConfig, BaseAWSLLM):
         messages: list[AllMessageValues],  # mutable-ok: matches the base chat transform signature
         optional_params: dict,  # mutable-ok: matches the base chat transform signature
         litellm_params: dict,  # mutable-ok: matches the base chat transform signature
-        headers: dict,  # mutable-ok: matches the base chat transform signature
+        headers: dict[str, object],  # mutable-ok: matches the base chat transform signature
     ) -> dict[str, object]:  # mutable-ok: the handler sends this body straight to httpx
         request: Final[dict[str, object]] = super().transform_request(  # mutable-ok: base transform returns a dict
             model=model,
@@ -96,7 +98,7 @@ class SagemakerChatConfig(OpenAIGPTConfig, BaseAWSLLM):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,
+        optional_params: dict[str, object],
         litellm_params: Mapping[str, object],
         stream: bool | None = None,
     ) -> str:
@@ -119,15 +121,15 @@ class SagemakerChatConfig(OpenAIGPTConfig, BaseAWSLLM):
 
     def sign_request(
         self,
-        headers: dict,
-        optional_params: dict,
-        request_data: dict,
+        headers: dict[str, object],
+        optional_params: dict[str, object],
+        request_data: dict[str, object],
         api_base: str,
         api_key: str | None = None,
         model: str | None = None,
         stream: bool | None = None,
         fake_stream: bool | None = None,
-    ) -> tuple[dict, bytes | None]:
+    ) -> tuple[dict[str, object], bytes | None]:
         return self._sign_request(
             service_name="sagemaker",
             headers=headers,
@@ -154,8 +156,8 @@ class SagemakerChatConfig(OpenAIGPTConfig, BaseAWSLLM):
         custom_llm_provider: str,
         logging_obj: LiteLLMLoggingObj,
         api_base: str,
-        headers: dict,
-        data: dict,
+        headers: dict[str, object],
+        data: dict[str, object],
         messages: Sequence[object],
         client: HTTPHandler | AsyncHTTPHandler | None = None,
         json_mode: bool | None = None,
@@ -201,8 +203,8 @@ class SagemakerChatConfig(OpenAIGPTConfig, BaseAWSLLM):
         custom_llm_provider: str,
         logging_obj: LiteLLMLoggingObj,
         api_base: str,
-        headers: dict,
-        data: dict,
+        headers: dict[str, object],
+        data: dict[str, object],
         messages: Sequence[object],
         client: HTTPHandler | AsyncHTTPHandler | None = None,
         json_mode: bool | None = None,

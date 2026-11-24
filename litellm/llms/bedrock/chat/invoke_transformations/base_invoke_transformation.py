@@ -199,7 +199,7 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
 
     def sign_request(
         self,
-        headers: dict,
+        headers: dict[str, object],
         optional_params: dict,
         request_data: dict,
         api_base: str,
@@ -232,7 +232,7 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        headers: dict,
+        headers: dict[str, object],
     ) -> dict:
         ## SETUP ##
         stream: Final = optional_params.pop("stream", None)
@@ -504,7 +504,9 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
             headers, (*guardrail_headers, *service_tier_headers), metadata_headers, owned_names
         )
 
-    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: dict[str, object] | httpx.Headers
+    ) -> BaseLLMException:
         return BedrockError(status_code=status_code, message=error_message, headers=headers)
 
     @track_llm_api_timing()
@@ -514,7 +516,7 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
         custom_llm_provider: str,
         logging_obj: LiteLLMLoggingObj,
         api_base: str,
-        headers: dict,
+        headers: dict[str, object],
         data: dict,
         messages: list,
         client: AsyncHTTPHandler | None = None,
@@ -555,7 +557,7 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
         custom_llm_provider: str,
         logging_obj: LiteLLMLoggingObj,
         api_base: str,
-        headers: dict,
+        headers: dict[str, object],
         data: dict,
         messages: list,
         client: HTTPHandler | AsyncHTTPHandler | None = None,

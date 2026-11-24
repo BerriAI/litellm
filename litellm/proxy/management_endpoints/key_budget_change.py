@@ -43,7 +43,7 @@ SELF_SERVE_BUDGET_POLICY_SETTING: Final = "self_serve_budget_policy"
 SelfServeBudgetPolicy: TypeAlias = Literal["disabled", "lower_only", "ceiling"]
 
 _STORED_WINDOWS: Final = TypeAdapter(list[BudgetLimitEntry])
-_POLICY: Final = TypeAdapter(SelfServeBudgetPolicy)
+_POLICY: Final[TypeAdapter[SelfServeBudgetPolicy]] = TypeAdapter(SelfServeBudgetPolicy)
 
 
 def resolve_self_serve_budget_policy(general_settings: Mapping[str, object]) -> SelfServeBudgetPolicy:

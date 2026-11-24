@@ -9,10 +9,10 @@ use std::{
 
 use litellm_router_core::{
     Attempt, AttemptError, AttemptFailure, CallbackFiltered, Deployment, Error, FailureKind,
-    FailureReport, Health, HealthState, HostStep, InMemoryRouterCache, Op, Outcomes, PreRoute,
-    PreRouted, Router, RouterCache, RouterConfig, RouterDynamicConfig, RouterEvent, RouterHost,
-    RouterRequest, RouterResponse, RoutingContext, SeededRandomness, SelectStage, Served,
-    SuccessReport, UsageCounts, UsageWindow,
+    FailureReport, Health, HealthState, HostStep, InMemoryRouterCache, LimitCounter, Op, Outcomes,
+    PreRoute, PreRouted, Router, RouterCache, RouterConfig, RouterDynamicConfig, RouterEvent,
+    RouterHost, RouterRequest, RouterResponse, RoutingContext, SeededRandomness, SelectStage,
+    Served, SuccessReport, UsageCounts, UsageWindow,
     call::{StreamOrigin, Unanswered},
     fallback::Fallbacks,
     health::CooldownValue,
@@ -199,6 +199,30 @@ impl RouterCache for RecordingCache {
     async fn count_failure(&self, id: &str) -> Result<(), litellm_cache::Error> {
         self.inner.count_failure(id).await
     }
+
+    async fn limit_usage(
+        &self,
+        counter: &LimitCounter,
+        limit: f64,
+    ) -> Result<Option<f64>, litellm_cache::Error> {
+        self.inner.limit_usage(counter, limit).await
+    }
+
+    async fn add_limit_usage(
+        &self,
+        counter: &LimitCounter,
+        amount: i64,
+        ttl: Duration,
+    ) -> Result<Option<f64>, litellm_cache::Error> {
+        self.inner.add_limit_usage(counter, amount, ttl).await
+    }
+
+    async fn add_limit_usages(
+        &self,
+        increments: &[(LimitCounter, i64, Duration)],
+    ) -> Result<Option<Vec<f64>>, litellm_cache::Error> {
+        self.inner.add_limit_usages(increments).await
+    }
 }
 
 /// The host error behind a scripted failure: the deployment it was raised on.
@@ -340,7 +364,7 @@ impl Hosted {
         self.router.healthy(&*self.host, op, request).await
     }
 
-    fn health(&self) -> Health<&RecordingCache> {
+    fn health(&self) -> Health<'_, RecordingCache> {
         self.router.health(self.host.cache())
     }
 

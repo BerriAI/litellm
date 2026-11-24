@@ -1,6 +1,7 @@
 import asyncio
 import json
 from datetime import datetime
+from itertools import chain
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
@@ -2633,6 +2634,49 @@ class TestRecordPartialUsageForFailure:
         assert usage.prompt_tokens == 52
         assert logging_obj.model_call_details["response_cost"] == 0.0
 
+    @pytest.mark.parametrize("events_before_failure", [1, 3], ids=["after-message-start", "after-content"])
+    def test_upstream_error_frame_stashes_the_same_usage_as_a_dropped_connection(self, events_before_failure: int):
+        received: Final = self._interrupted_chunks()[:events_before_failure]
+        error_frame: Final = self._sse(
+            "error", {"type": "error", "error": {"type": "api_error", "message": "upstream"}}
+        )
+        dropped: Final = self._make_logging_obj()
+        errored: Final = self._make_logging_obj()
+
+        for logging_obj, chunks in ((dropped, received), (errored, [*received, error_frame])):
+            AnthropicPassthroughLoggingHandler.record_partial_usage_for_failure(
+                litellm_logging_obj=logging_obj,
+                request_body={"model": "claude-sonnet-5", "stream": True},
+                all_chunks=chunks,
+            )
+
+        assert (
+            errored.model_call_details["combined_usage_object"] == dropped.model_call_details["combined_usage_object"]
+        )
+        assert errored.model_call_details["response_cost"] == dropped.model_call_details["response_cost"]
+
+    @pytest.mark.parametrize("events_before_failure", [1, 3], ids=["after-message-start", "after-content"])
+    def test_upstream_error_frame_split_into_lines_logs_the_same_usage_as_a_dropped_connection(
+        self, events_before_failure: int
+    ):
+        received: Final = self._interrupted_chunks()[:events_before_failure]
+        error_frame: Final = self._sse(
+            "error", {"type": "error", "error": {"type": "api_error", "message": "upstream"}}
+        )
+        dropped, errored = (
+            AnthropicPassthroughLoggingHandler._build_streaming_response_for_logging(
+                litellm_logging_obj=self._make_logging_obj(),
+                request_body={"model": "claude-sonnet-5", "stream": True},
+                all_chunks=[line for line in chain.from_iterable(chunk.splitlines() for chunk in chunks) if line],
+                model="claude-sonnet-5",
+            )
+            for chunks in (received, [*received, error_frame])
+        )
+
+        assert dropped is not None
+        assert errored is not None
+        assert errored.usage == dropped.usage
+
     def test_leaves_logging_obj_untouched_when_nothing_streamed(self):
         logging_obj = self._make_logging_obj()
 
@@ -2728,7 +2772,6 @@ def test_streamed_messages_are_logged_when_an_undecodable_data_line_surrounds_th
     assert handled["kwargs"]["response_cost"] > 0
 
 
-
 def test_stream_was_interrupted_reads_a_message_delta_whose_json_holds_unicode_line_separators() -> None:
     message_delta: Final = {
         "type": "message_delta",
@@ -2754,6 +2797,7 @@ def test_extract_model_reads_a_message_start_whose_json_holds_unicode_line_separ
     chunk: Final = f"event: message_start\ndata: {json.dumps(message_start, ensure_ascii=False)}\n\n"
 
     assert AnthropicPassthroughLoggingHandler._extract_model_from_anthropic_chunks([chunk]) == "claude-sonnet-5"
+
 
 @pytest.mark.asyncio
 async def test_anthropic_passthrough_handler(mock_httpx_response, mock_response, mock_logging_obj):
@@ -3345,3 +3389,30 @@ def test_a_stream_naming_a_dated_snapshot_is_billed_at_the_resolved_deployment_p
 
     assert result["result"].usage.prompt_tokens > 0
     assert result["kwargs"]["response_cost"] == pytest.approx(_deployment_price_of(result["result"].usage))
+
+
+def test_a_stream_the_rust_route_priced_is_billed_at_that_price_without_pricing_it_again(
+    monkeypatch: pytest.MonkeyPatch, all_chunks: list[str]
+) -> None:
+    logging_obj: Final = _deployment_priced_logging_obj(monkeypatch, stream=True)
+    logging_obj.optional_params = {}
+    logging_obj.record_route_cost(0.0421)
+
+    def repriced(*_args: object, **_kwargs: object) -> float:
+        raise AssertionError("a route-priced stream was priced again")
+
+    monkeypatch.setattr(litellm, "completion_cost", repriced)
+    monkeypatch.setattr(litellm, "response_cost_calculator", repriced)
+    result: Final = AnthropicPassthroughLoggingHandler.handle_logging_anthropic_collected_chunks(  # pyright: ignore[reportUnknownMemberType]  # the handler leaves its passthrough logging object untyped
+        litellm_logging_obj=logging_obj,
+        passthrough_success_handler_obj=MagicMock(),
+        url_route="/v1/messages",
+        request_body={"model": "claude-sonnet-4-5", "stream": True, "messages": []},
+        endpoint_type=MagicMock(),
+        start_time=datetime(2025, 1, 1),
+        all_chunks=all_chunks,
+        end_time=datetime(2025, 1, 1),
+    )
+
+    assert result["kwargs"]["response_cost"] == 0.0421, result["kwargs"]
+    assert logging_obj.model_call_details["response_cost"] == 0.0421
