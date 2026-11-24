@@ -189,6 +189,17 @@ def _flush_unmaskable_buffer(all_chunks: list[ModelResponseStream]) -> Iterator[
     yield from all_chunks
 
 
+def _is_responses_event(chunk: object) -> bool:
+    event_type: Final = attribute_or_none(chunk, "type")
+    return isinstance(event_type, str) and event_type.startswith("response.")
+
+
+async def _prepended(first: object, rest: AsyncIterator[object]) -> AsyncGenerator[object, None]:
+    yield first
+    async for item in rest:
+        yield item
+
+
 _JSON_TOKEN: Final = re.compile(
     r'"(?P<string>[^"\\]*(?:\\.[^"\\]*)*)(?:"|\\?\Z)|(?P<scalar>[^\s\ufeff,:\[\]{}"]+)', re.DOTALL
 )
@@ -1309,7 +1320,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         text: str,
         output_parse_pii: bool,
         presidio_config: PresidioPerRequestConfig | None,
-        request_data: dict,
+        request_data: dict[str, object],
     ) -> str:
         """
         Calls Presidio Analyze + Anonymize endpoints for PII Analysis + Masking
@@ -1655,7 +1666,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
     async def _process_anthropic_response_for_pii(
         self,
         response: dict,
-        request_data: dict,
+        request_data: dict[str, object],
         mode: Literal["mask", "unmask"],
     ) -> dict:
         """
@@ -1721,7 +1732,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
     async def _process_response_for_pii(
         self,
         response: ModelResponse,
-        request_data: dict,
+        request_data: dict[str, object],
         mode: Literal["mask", "unmask"],
     ) -> ModelResponse:
         """
@@ -1750,6 +1761,10 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                     item["text"] = await pii_processed_text(text_value)
 
             await self._process_server_tool_calls_for_pii(message, pii_processed_arguments)
+
+            refusal = attribute_or_none(message, "refusal")
+            if isinstance(refusal, str) and refusal:
+                message.refusal = await pii_processed_text(refusal)
 
             # 2. Process tool calls
             for tool_call in attribute_items(message, "tool_calls"):
@@ -1832,6 +1847,15 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         try:
             stream: Final = _coalesce_first_sse_frame(response.__aiter__())
             async for chunk in stream:
+                whole_stream_masking = (
+                    None
+                    if all_chunks or passthrough_due_to_unknown_stream_shape
+                    else self._whole_stream_masking(chunk, stream, request_data)
+                )
+                if whole_stream_masking is not None:
+                    for masked_chunk in await whole_stream_masking:
+                        yield masked_chunk
+                    return
                 if isinstance(chunk, ModelResponseStream):
                     if passthrough_due_to_unknown_stream_shape:
                         yield chunk
@@ -1840,20 +1864,8 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                 elif isinstance(chunk, _SsePreface):
                     yield chunk.raw
                 elif isinstance(chunk, bytes):
-                    first_frame_is_anthropic = (
-                        not passthrough_due_to_unknown_stream_shape
-                        and not all_chunks
-                        and self._is_anthropic_first_frame(chunk)
-                    )
-                    if not first_frame_is_anthropic:
-                        passthrough_due_to_unknown_stream_shape = (
-                            passthrough_due_to_unknown_stream_shape or not all_chunks
-                        )
-                        yield chunk
-                        continue
-                    for masked_chunk in await self._mask_anthropic_sse_stream(chunk, stream, request_data):
-                        yield masked_chunk
-                    return
+                    passthrough_due_to_unknown_stream_shape = passthrough_due_to_unknown_stream_shape or not all_chunks
+                    yield chunk
                 else:
                     for buffered_chunk in _flush_unmaskable_buffer(all_chunks):
                         yield buffered_chunk
@@ -1863,7 +1875,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             if passthrough_due_to_unknown_stream_shape:
                 verbose_proxy_logger.warning(
                     "Presidio apply_to_output: streaming response was not a parsed chat completion stream "
-                    "(raw non-Anthropic SSE passthrough or /v1/responses events). "
+                    "(raw non-Anthropic SSE passthrough or a mixed stream). "
                     "Output PII masking was skipped for this response."
                 )
                 return
@@ -1885,6 +1897,20 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             for chunk in all_chunks:
                 yield chunk
 
+    def _whole_stream_masking(
+        self,
+        first_item: object,
+        rest: AsyncIterator[object],
+        request_data: dict[str, object],  # mutable-ok: the per-request state dict every guardrail hook shares
+    ) -> Awaitable[tuple[object, ...]] | None:
+        if isinstance(first_item, bytes):
+            if not self._is_anthropic_first_frame(first_item):
+                return None
+            return self._mask_anthropic_sse_stream(first_item, rest, request_data)
+        if not _is_responses_event(first_item):
+            return None
+        return self._mask_responses_stream(first_item, rest, request_data)
+
     def _is_anthropic_first_frame(self, chunk: bytes) -> bool:
         if is_anthropic_sse_stream((chunk,)):
             return True
@@ -1898,6 +1924,18 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             message="Presidio could not read the upstream stream; cannot verify PII when PII protection is configured",
             should_wrap_with_default_message=False,
         )
+
+    async def _mask_responses_stream(
+        self,
+        first_event: object,
+        rest: AsyncIterator[object],
+        request_data: dict[str, object],  # mutable-ok: the per-request state dict every guardrail hook shares
+    ) -> tuple[object, ...]:
+        from litellm.llms.openai.responses.guardrail_translation.handler import (
+            rewrite_buffered_responses_stream,
+        )
+
+        return await rewrite_buffered_responses_stream(_prepended(first_event, rest), self, request_data)
 
     async def _mask_anthropic_sse_stream(
         self, first_chunk: bytes, rest: AsyncIterator[object], request_data: dict[str, object]
@@ -2000,7 +2038,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         from litellm.types.utils import ModelResponse
 
         metadata: Final = (request_data.get("metadata") or {}) if request_data else {}
-        pii_tokens: Final[dict[str, str]] = metadata.get("pii_tokens", {})
+        pii_tokens: Final = cast("dict[str, str]", metadata.get("pii_tokens", {}))  # cast-ok: this hook's map
 
         remaining_chunks: list[ModelResponseStream] = []
         saw_non_chat_chunk = False

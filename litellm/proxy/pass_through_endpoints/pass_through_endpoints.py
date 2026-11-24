@@ -2930,7 +2930,7 @@ def create_websocket_passthrough_route(
     async def websocket_endpoint_func(
         websocket: WebSocket,
         user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth_websocket),
-        **kwargs,  # For additional query parameters
+        **kwargs: object,  # For additional query parameters
     ):
         """
         WebSocket passthrough endpoint function.

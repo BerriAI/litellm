@@ -595,6 +595,29 @@ def test_cache_key_tells_apart_requests_that_ask_for_token_ids_through_extra_bod
     assert cache.get_cache_key(**request, extra_body={"continuation_token": "abc"}) != plain_key
 
 
+@pytest.mark.parametrize(
+    "audio_format_ask",
+    [
+        {"responseFormat": {"audio": {"mimeType": "AUDIO_WAV"}}},
+        {"generationConfig": {"responseFormat": {"audio": {"mimeType": "AUDIO_WAV"}}}},
+        {"generation_config": {"response_format": {"audio": {"mime_type": "AUDIO_WAV"}}}},
+        {"extra_body": {"generationConfig": {"responseFormat": {"audio": {"mimeType": "AUDIO_WAV"}}}}},
+        {"extra_body": {"generation_config": {"response_format": {"audio": {"mime_type": "AUDIO_WAV"}}}}},
+    ],
+    ids=["responseFormat", "generationConfig", "generation_config", "extra_body-camelCase", "extra_body-snake_case"],
+)
+def test_cache_key_tells_apart_requests_that_name_a_gemini_audio_format(audio_format_ask: dict[str, object]) -> None:
+    cache: Final = Cache(type=LiteLLMCacheType.LOCAL)
+    request: Final = {
+        "model": "gemini/gemini-3.8-flash-tts",
+        "messages": [{"role": "user", "content": "Say hello"}],
+        "modalities": ["audio"],
+        "audio": {"voice": "Kore"},
+    }
+
+    assert cache.get_cache_key(**request, **audio_format_ask) != cache.get_cache_key(**request)
+
+
 _EXTRA_BODY_REQUEST: Final = MappingProxyType(
     {"model": "hosted_vllm/qwen3", "messages": [{"role": "user", "content": "extra-body"}]}
 )

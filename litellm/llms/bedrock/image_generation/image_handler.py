@@ -82,7 +82,7 @@ class BedrockImageGeneration(BaseAWSLLM):
         model: str,
         prompt: str,
         model_response: ImageResponse,
-        optional_params: dict,
+        optional_params: dict[str, object],
         logging_obj: LitellmLogging,
         timeout: float | httpx.Timeout | None,
         aimg_generation: bool = False,

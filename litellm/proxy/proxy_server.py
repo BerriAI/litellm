@@ -4803,23 +4803,26 @@ async def _run_background_health_check():
         cycle_id = f"bg-{background_health_check_cycle_seq}"
         cycle_start_time = time.monotonic()
 
-        # make 1 deep copy of llm_model_list on every health check iteration
-        _llm_model_list = copy.deepcopy(llm_model_list) or []
-        model_count_total = len(_llm_model_list)
-
-        # filter out models that have disabled background health checks
-        _llm_model_list = [
-            m for m in _llm_model_list if not m.get("model_info", {}).get("disable_background_health_check", False)
-        ]
+        deployments = as_object_list(copy.deepcopy(llm_model_list)) or ()
+        model_count_total = len(deployments)
+        probe_candidates = tuple(
+            deployment for entry in deployments if (deployment := as_str_mapping(entry)) is not None
+        )
         scoped_model_groups = (
             llm_router.settings().background_health_check_model_groups if llm_router is not None else None
         )
         wildcard_children, wildcard_child_ids = _public_wildcard_children(
             litellm.public_model_groups, llm_router, prisma_client is not None, scoped_model_groups
         )
+        skip_blocked = str(general_settings_view().get("health_check_skip_blocked_background_models")).lower() == "true"
+        scoped_deployments = filter_deployments_to_model_groups(probe_candidates, scoped_model_groups)
         _llm_model_list = [
-            *filter_deployments_to_model_groups(_llm_model_list, scoped_model_groups),
-            *wildcard_children,
+            deployment
+            for deployment in (*scoped_deployments, *wildcard_children)
+            if not (info := as_str_mapping(deployment.get("model_info")) or {}).get(
+                "disable_background_health_check", False
+            )
+            and (not skip_blocked or info.get("blocked") is not True)
         ]
         if scoped_model_groups is not None and not _llm_model_list:
             verbose_proxy_logger.warning(
@@ -9975,7 +9978,7 @@ def data_generator(response):
             yield f"data: {json.dumps(chunk)}\n\n"
 
 
-async def async_assistants_data_generator(response, user_api_key_dict: UserAPIKeyAuth, request_data: dict):
+async def async_assistants_data_generator(response, user_api_key_dict: UserAPIKeyAuth, request_data: dict[str, object]):
     verbose_proxy_logger.debug("inside generator")
     try:
         time.time()
@@ -10026,7 +10029,7 @@ async def async_assistants_data_generator(response, user_api_key_dict: UserAPIKe
         yield f"data: {error_returned}\n\n"
 
 
-def _get_client_requested_model_for_streaming(request_data: dict) -> str:
+def _get_client_requested_model_for_streaming(request_data: dict[str, object]) -> str:
     """
     Prefer the original client-requested model (pre-alias mapping) when available.
 
@@ -10368,7 +10371,7 @@ async def _apply_streaming_chunk_hooks(
     *,
     chunk: Any,
     user_api_key_dict: UserAPIKeyAuth,
-    request_data: dict,
+    request_data: dict[str, object],
     str_so_far: str,
 ) -> tuple[object, str]:
     chunk = await proxy_logging_obj.async_post_call_streaming_hook(
@@ -10649,7 +10652,7 @@ def openai_sse_error_frame(client_error: Exception) -> str:
 async def async_data_generator(
     response,
     user_api_key_dict: UserAPIKeyAuth,
-    request_data: dict,
+    request_data: dict[str, object],
     request: Request | None = None,
     *,
     responses_stream_errors: bool = False,
@@ -10941,7 +10944,7 @@ async def async_data_generator(
 def select_data_generator(
     response,
     user_api_key_dict: UserAPIKeyAuth,
-    request_data: dict,
+    request_data: dict[str, object],
     request: Request | None = None,
     *,
     responses_stream_errors: bool = False,
@@ -13656,7 +13659,7 @@ async def moderations(
     """
     global proxy_logging_obj
     litellm_call_id: Final = resolve_litellm_call_id(request.headers.get("x-litellm-call-id"))
-    data: dict = {"litellm_call_id": litellm_call_id}
+    data: dict[str, object] = {"litellm_call_id": litellm_call_id}
     try:
         # Use orjson to parse JSON data, orjson speeds up requests significantly
         body: Final = await request.body()
@@ -14003,7 +14006,7 @@ async def audio_transcriptions(
     """
     global proxy_logging_obj
     litellm_call_id: Final = resolve_litellm_call_id(request.headers.get("x-litellm-call-id"))
-    data: dict = {"litellm_call_id": litellm_call_id}
+    data: dict[str, object] = {"litellm_call_id": litellm_call_id}
     try:
         # Use orjson to parse JSON data, orjson speeds up requests significantly
         form_data: Final = await get_form_data(request)
@@ -14657,7 +14660,7 @@ async def get_assistants(
     API Reference docs - https://platform.openai.com/docs/api-reference/assistants/listAssistants
     """
     global proxy_logging_obj
-    data: dict = {}
+    data: dict[str, object] = {}
     try:
         # Use orjson to parse JSON data, orjson speeds up requests significantly
         await request.body()
@@ -14809,7 +14812,7 @@ async def delete_assistant(
     API Reference docs - https://platform.openai.com/docs/api-reference/assistants/createAssistant
     """
     global proxy_logging_obj
-    data: dict = {}
+    data: dict[str, object] = {}
     try:
         # Use orjson to parse JSON data, orjson speeds up requests significantly
 
@@ -14885,7 +14888,7 @@ async def create_threads(
     API Reference - https://platform.openai.com/docs/api-reference/threads/createThread
     """
     global proxy_logging_obj
-    data: dict = {}
+    data: dict[str, object] = {}
     try:
         # Use orjson to parse JSON data, orjson speeds up requests significantly
         await request.body()
@@ -14961,7 +14964,7 @@ async def get_thread(
     API Reference - https://platform.openai.com/docs/api-reference/threads/getThread
     """
     global proxy_logging_obj
-    data: dict = {}
+    data: dict[str, object] = {}
     try:
         # Include original request and headers in the data
         data = await add_litellm_data_to_request(
@@ -15034,7 +15037,7 @@ async def add_messages(
     API Reference - https://platform.openai.com/docs/api-reference/messages/createMessage
     """
     global proxy_logging_obj
-    data: dict = {}
+    data: dict[str, object] = {}
     try:
         # Use orjson to parse JSON data, orjson speeds up requests significantly
         body: Final = await request.body()
@@ -15111,7 +15114,7 @@ async def get_messages(
     API Reference - https://platform.openai.com/docs/api-reference/messages/listMessages
     """
     global proxy_logging_obj
-    data: dict = {}
+    data: dict[str, object] = {}
     try:
         # Include original request and headers in the data
         data = await add_litellm_data_to_request(
@@ -15184,7 +15187,7 @@ async def run_thread(
     API Reference: https://platform.openai.com/docs/api-reference/runs/createRun
     """
     global proxy_logging_obj
-    data: dict = {}
+    data: dict[str, object] = {}
     try:
         body: Final = await request.body()
         data = orjson.loads(body)

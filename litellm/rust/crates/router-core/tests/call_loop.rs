@@ -3909,6 +3909,53 @@ async fn a_chat_call_keeps_an_unhealthy_azure_chat_deployment_as_it_would_alone(
 }
 
 #[rstest]
+#[case::never_probed(None)]
+#[case::last_failure_gone_stale(Some((false, 3600.0)))]
+#[case::last_probe_healthy(Some((true, 0.0)))]
+#[tokio::test]
+async fn health_check_routing_falls_back_to_the_unhealthy_deployments_beside_a_paused_one(
+    #[case] paused_probe: Option<(bool, f64)>,
+) {
+    let config: RouterConfig = serde_json::from_value(json!({
+        "model_list": [
+            {"model_name": "primary", "litellm_params": {"model": "openai/a"}, "model_info": {"id": "a1"}},
+            {"model_name": "primary", "litellm_params": {"model": "openai/p"}, "model_info": {"id": "p2", "blocked": true}},
+        ],
+        "enable_health_check_routing": true,
+    }))
+    .unwrap();
+    let host = Arc::new(ScriptedHost::default());
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs_f64();
+    let active = HealthState {
+        is_healthy: false,
+        timestamp: now,
+    };
+    host.cache.inner.set_health_states(
+        std::iter::once(("a1".to_owned(), active))
+            .chain(paused_probe.map(|(is_healthy, age)| {
+                (
+                    "p2".to_owned(),
+                    HealthState {
+                        is_healthy,
+                        timestamp: now - age,
+                    },
+                )
+            }))
+            .collect(),
+    );
+    let picked = router(config, json!({}), host)
+        .select(&Op::from("acompletion"), &request())
+        .await;
+    assert!(
+        matches!(&picked, Ok(deployment) if deployment.id == "a1"),
+        "{picked:?}"
+    );
+}
+
+#[rstest]
 #[case::beside_a_batch_only_one(json!([
     {"model_name": "primary", "litellm_params": {"model": "azure/chat"}, "model_info": {"id": "c1", "mode": "chat"}},
     {"model_name": "primary", "litellm_params": {"model": "azure/batch"}, "model_info": {"id": "b2", "mode": "batch"}},

@@ -161,7 +161,7 @@ def _refused_on_otel_v2(params: StandardCallbackDynamicParams) -> bool:
 
 
 class LangfuseOtelLogger(OpenTelemetry):
-    def __init__(self, config: OpenTelemetryConfig | None = None, *args, **kwargs):
+    def __init__(self, config: OpenTelemetryConfig | None = None, *args: object, **kwargs):
         # Prevent LangfuseOtelLogger from modifying global environment variables by constructing config manually
         # and passing it to the parent OpenTelemetry class
         if config is None:

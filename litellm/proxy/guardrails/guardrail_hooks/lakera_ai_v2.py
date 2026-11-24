@@ -381,7 +381,7 @@ class LakeraAIGuardrail(CustomGuardrail):
     async def call_v2_guard(
         self,
         messages: Sequence[AllMessageValues],
-        request_data: dict,
+        request_data: dict[str, object],
         event_type: GuardrailEventHooks,
     ) -> tuple[LakeraAIResponse, dict[str, int]]:
         """
@@ -533,7 +533,7 @@ class LakeraAIGuardrail(CustomGuardrail):
         self,
         user_api_key_dict: UserAPIKeyAuth,
         cache: litellm.DualCache,
-        data: dict,
+        data: dict[str, object],
         call_type: CallTypesLiteral,
     ) -> Exception | str | dict | None:
         from litellm.proxy.common_utils.callback_utils import (
@@ -672,7 +672,7 @@ class LakeraAIGuardrail(CustomGuardrail):
 
     async def async_moderation_hook(
         self,
-        data: dict,
+        data: dict[str, object],
         user_api_key_dict: UserAPIKeyAuth,
         call_type: CallTypesLiteral,
     ):

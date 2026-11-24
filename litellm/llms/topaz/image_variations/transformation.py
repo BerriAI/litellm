@@ -45,7 +45,7 @@ class TopazImageVariationConfig(TopazModelInfo, BaseImageVariationConfig):
     def map_openai_params(
         self,
         non_default_params: dict,
-        optional_params: dict,
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
     ) -> dict:
@@ -99,7 +99,7 @@ class TopazImageVariationConfig(TopazModelInfo, BaseImageVariationConfig):
         self,
         model: str | None,
         image: FileTypes,
-        optional_params: dict,
+        optional_params: dict[str, object],
         headers: Mapping[str, object],
     ) -> HttpHandlerRequestFields:
         request_params: Final = HttpHandlerRequestFields(
