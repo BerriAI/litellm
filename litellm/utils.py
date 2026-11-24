@@ -8274,19 +8274,24 @@ def function_to_dict(input_function) -> dict:
     dictionnary
         A dictionnary to add to the list passed to `functions` parameter of `litellm.completion`
     """
-    # Get function name and docstring
-    try:
-        import inspect
-        from ast import literal_eval
+    if not callable(input_function):
+        raise TypeError(f"Expected a callable function, got {type(input_function).__name__}")
 
-        from numpydoc.docscrape import NumpyDocString
-    except Exception as e:
-        raise e
+    import inspect
+    from ast import literal_eval
 
     name: Final = input_function.__name__
-    docstring: Final = inspect.getdoc(input_function)
-    numpydoc: Final = NumpyDocString(docstring)
-    description: Final = "\n".join([s.strip() for s in numpydoc["Summary"]])
+    docstring: Final = inspect.getdoc(input_function) or ""
+
+    try:
+        from numpydoc.docscrape import NumpyDocString
+
+        numpydoc: Any = NumpyDocString(docstring)
+        description: Final = "\n".join([s.strip() for s in numpydoc["Summary"]])
+        numpydoc_params = numpydoc["Parameters"]
+    except ImportError:
+        numpydoc_params = []
+        description = docstring.strip().split("\n\n")[0].strip() if docstring else ""
 
     # Get function parameters and their types from annotations and docstring
     parameters: Final = {}
@@ -8302,7 +8307,7 @@ def function_to_dict(input_function) -> dict:
         param_enum = None
 
         # Try to extract param description from docstring using numpydoc
-        for param_data in numpydoc["Parameters"]:
+        for param_data in numpydoc_params:
             if param_data.name == param_name:
                 if hasattr(param_data, "type"):
                     # replace type from docstring rather than annotation
