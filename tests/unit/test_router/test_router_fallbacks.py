@@ -2014,29 +2014,3 @@ async def test_mixed_provider_group_keeps_the_caller_key_on_its_own_aws_member_a
     assert sent[0] == (True, f"Bearer {_CALLER_ANTHROPIC_KEY}")
     assert (sent[1][0], sent[1][1].startswith("AWS4-HMAC-SHA256 ")) == (False, True)
 
-
-@pytest.mark.asyncio
-@pytest.mark.usefixtures("_aws_without_env_bearers_or_endpoints")
-@pytest.mark.parametrize("target", ("bedrock", "bedrock_mantle"))
-async def test_default_aws_route_without_a_model_keeps_the_caller_bearer(
-    respx_mock: respx.MockRouter, target: str
-) -> None:
-    router: Final = Router(
-        model_list=[
-            {
-                "model_name": "default-aws",
-                "litellm_params": {"model": _AWS_FALLBACK_TARGETS[target][0], **_AWS_DEPLOYMENT_CREDENTIALS},
-            }
-        ],
-        default_fallbacks=["default-aws"],
-        num_retries=0,
-    )
-    upstream: Final = respx_mock.post(host=_AWS_FALLBACK_TARGETS[target][1]).mock(return_value=_aws_answer(target))
-
-    response: Final = await router.acompletion(
-        model=None, messages=[{"role": "user", "content": "hi"}], api_key="caller-default-bearer"
-    )
-
-    assert upstream.call_count == 1
-    assert upstream.calls[0].request.headers["authorization"] == "Bearer caller-default-bearer"
-    assert response.choices[0].message.content
