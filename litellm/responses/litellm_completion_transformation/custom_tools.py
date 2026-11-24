@@ -125,8 +125,10 @@ def unwrap_custom_tool_arguments(arguments: str) -> str:
     The bridge converts custom tools to function tools with schema
     ``{"properties": {"content": {"type": "string"}}}``, so the model returns
     arguments like ``{"content": "*** Begin Patch\\n..."}``. This function
-    extracts just the content string. If the arguments are not valid JSON or do
-    not contain a ``content`` key, the original string is returned unchanged.
+    extracts just the content string. Also accept a sole string-valued ``input``
+    field, matching the Responses custom-tool field name some models use instead.
+    Otherwise preserve the original string. The advertised schema and existing
+    ``content`` handling are unchanged.
     """
     if not arguments:
         return ""
@@ -136,6 +138,8 @@ def unwrap_custom_tool_arguments(arguments: str) -> str:
         parsed: Final = as_str_mapping(_DECODED_JSON.validate_python(json.loads(arguments)))
         if parsed is not None and "content" in parsed:
             return str(parsed["content"])
+        if parsed is not None and len(parsed) == 1 and isinstance(arg := parsed.get("input"), str):
+            return arg
     except (json.JSONDecodeError, TypeError, ValueError):
         pass
     return arguments

@@ -109,6 +109,28 @@ class TestCustomToolUtilities:
         unwrapped = unwrap_custom_tool_arguments(wrapped)
         assert unwrapped == wrapped
 
+    @pytest.mark.parametrize("text", ["", "line 1\nline 2", 'quoted "text" and \\ slash', "caf\u00e9"])
+    def test_unwrap_custom_tool_arguments_accepts_single_string_input(self, text: str) -> None:
+        assert unwrap_custom_tool_arguments(json.dumps({"input": text})) == text
+
+    @pytest.mark.parametrize(
+        "wrapped",
+        [
+            '{"input": null}',
+            '{"input": 12}',
+            '{"input": true}',
+            '{"input": []}',
+            '{"input": {"text": "patch"}}',
+            '{"input": "patch", "other": "value"}',
+            '{"input": "unterminated}',
+        ],
+    )
+    def test_unwrap_custom_tool_arguments_preserves_invalid_or_ambiguous_input(self, wrapped: str) -> None:
+        assert unwrap_custom_tool_arguments(wrapped) == wrapped
+
+    def test_unwrap_custom_tool_arguments_prefers_content_over_input(self) -> None:
+        assert unwrap_custom_tool_arguments('{"content": "canonical", "input": "alias"}') == "canonical"
+
     def test_build_tool_call_item_kwargs_custom_completed(self):
         """A completed custom tool call unwraps the content into `input`."""
         wrapped = json.dumps({"content": "patch body"})
