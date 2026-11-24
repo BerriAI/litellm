@@ -5,6 +5,8 @@ from typing import TYPE_CHECKING, Final, cast
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm.constants import OPENAI_CHAT_COMPLETION_PARAMS
+from litellm.litellm_core_utils.audio_utils.utils import speech_media_type_from_audio_bytes
+from litellm.types.files import FILE_MIME_TYPES, FileType
 
 if TYPE_CHECKING:
     from litellm import Logging as LiteLLMLoggingObj
@@ -151,7 +153,10 @@ class SpeechToCompletionBridgeTransformationHandler:
     def _gemini_tts_response_body(self, decoded_audio: bytes, response_format: str | None) -> tuple[bytes, str]:
         if response_format == GEMINI_TTS_RAW_RESPONSE_FORMAT:
             return decoded_audio, "audio/pcm"
-        return self._convert_pcm16_to_wav(decoded_audio), "audio/wav"
+        wav_media_type: Final = FILE_MIME_TYPES[FileType.WAV]
+        if speech_media_type_from_audio_bytes(decoded_audio) == wav_media_type:
+            return decoded_audio, wav_media_type
+        return self._convert_pcm16_to_wav(decoded_audio), wav_media_type
 
     def transform_response(
         self, model_response: "ModelResponse", response_format: str | None

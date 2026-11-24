@@ -4413,6 +4413,9 @@
         "max_tokens": 128000,
         "mode": "chat",
         "output_cost_per_token": 3e-05,
+        "reasoning_effort_levels": [
+            "medium"
+        ],
         "source": "https://azure.microsoft.com/en-us/pricing/details/cognitive-services/openai-service/",
         "supported_endpoints": [
             "/v1/chat/completions",
@@ -45004,6 +45007,8 @@
         "supports_pdf_input": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
+        "supports_minimal_reasoning_effort": false,
+        "supports_none_reasoning_effort": false,
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_vision": true,
@@ -45115,6 +45120,8 @@
         "supports_pdf_input": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
+        "supports_minimal_reasoning_effort": false,
+        "supports_none_reasoning_effort": false,
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_vision": true,

@@ -549,12 +549,13 @@ def test_build_responses_kwargs_drops_a_bare_client_none_on_o3_only_under_drop_p
     )
 
     o3_row: Final = litellm.model_cost["o3"]
-    unconfirmed_none: Final = (
-        model_reasoning_efforts("o3", "openai") is None
-        and o3_row.get("supports_reasoning") is True
-        and o3_row.get("supports_none_reasoning_effort") is not True
+    o3_levels: Final = model_reasoning_efforts("o3", "openai")
+    refuses_none: Final = (
+        "none" not in o3_levels
+        if o3_levels is not None
+        else o3_row.get("supports_reasoning") is True and o3_row.get("supports_none_reasoning_effort") is not True
     )
-    assert responses_kwargs.get("reasoning") == (None if drop_params and unconfirmed_none else {"effort": "none"})
+    assert responses_kwargs.get("reasoning") == (None if drop_params and refuses_none else {"effort": "none"})
 
 
 def test_build_responses_kwargs_keeps_a_pinned_effort_out_when_drop_params_drops_the_client_effort() -> None:
