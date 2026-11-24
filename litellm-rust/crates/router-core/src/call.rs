@@ -1425,16 +1425,23 @@ impl Core {
         };
         match routed {
             PreRouted::Model(name) => {
-                snapshot.missing_routing_group(request, &name)?;
-                let mut candidates = self
-                    .candidates(snapshot, op, request, &name, inputs)
-                    .await?;
-                candidates.served_as = served_as;
-                if candidates.healthy.is_empty() {
-                    return Err(candidates.none_healthy(&snapshot.registry).into());
+                match self.resolved(snapshot, op, request, &name, inputs).await {
+                    Ok((deployment, candidates)) => Ok((
+                        deployment,
+                        Candidates {
+                            served_as,
+                            ..candidates
+                        },
+                    )),
+                    // Whatever fails once the hook rerouted the pick, the failure names the
+                    // group it was routed to and the group it is served for
+                    // (`record_pre_routing_selection` runs before the group is resolved).
+                    Err(error) => Err(Failed {
+                        routed: (name != target.group).then_some(name),
+                        served_as,
+                        ..error.into()
+                    }),
                 }
-                let deployment = self.pick(snapshot, op, request, &candidates).await?;
-                Ok((deployment, candidates))
             }
             // A custom strategy's pick is served as is, for the requested name.
             PreRouted::Bound { .. } => unreachable!("mapped to a model above"),
@@ -1451,6 +1458,24 @@ impl Core {
                 Ok((deployment, candidates))
             }
         }
+    }
+
+    /// The pick among the deployments of `name`.
+    async fn resolved(
+        &self,
+        snapshot: &RouterStateSnapshot,
+        op: &Op,
+        request: &Arc<RouterRequest>,
+        name: &str,
+        inputs: &SelectInputs,
+    ) -> Result<(Arc<crate::registry::Deployment>, Candidates), Error> {
+        snapshot.missing_routing_group(request, name)?;
+        let candidates = self.candidates(snapshot, op, request, name, inputs).await?;
+        if candidates.healthy.is_empty() {
+            return Err(candidates.none_healthy(&snapshot.registry));
+        }
+        let deployment = self.pick(snapshot, op, request, &candidates).await?;
+        Ok((deployment, candidates))
     }
 
     /// An attempt on a name that is no model group: the host serves it under that name, with no
