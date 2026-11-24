@@ -1146,7 +1146,7 @@ async def test_handle_existing_user_by_email_roster_add_already_member_repairs_u
     tx_context.__aexit__ = AsyncMock(return_value=False)
     mock_prisma_client.tx = mocker.MagicMock(return_value=tx_context)
     user_api_key_cache = UserApiKeyCache()
-    await user_api_key_cache.async_set_cache(key="uid", value={"user_id": "uid", "teams": []})
+    await user_api_key_cache.async_set_cache(key=AuthObject.user("uid"), value={"user_id": "uid", "teams": []})
     mocker.patch(  # test-quality-ok: the repair reads the proxy's process-wide cache, not an injected one
         "litellm.proxy.proxy_server.user_api_key_cache",
         user_api_key_cache,
@@ -1194,7 +1194,7 @@ async def test_handle_existing_user_by_email_roster_add_already_member_repairs_u
         )
     else:
         tx.litellm_usertable.update_many.assert_not_awaited()
-    assert (await user_api_key_cache.async_get_cache(key="uid") is None) is repaired
+    assert (await user_api_key_cache.async_get_cache(key=AuthObject.user("uid")) is None) is repaired
     update_calls = mock_prisma_client.db.litellm_usertable.update.call_args_list
     assert len(update_calls) == 1
 

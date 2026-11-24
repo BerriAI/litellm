@@ -795,7 +795,9 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         if not _has_advisor and not continues_message_thread(
             anthropic_messages_optional_request_params.get("thread")  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # the request params arrive as a bare dict
         ):
-            messages = strip_advisor_blocks_from_messages(messages)
+            messages = strip_advisor_blocks_from_messages(
+                messages, drop_params=getattr(litellm_params, "drop_params", None)
+            )
 
         gated: Final = (
             strip_beta_gated_native_request(
