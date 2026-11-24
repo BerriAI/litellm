@@ -1523,3 +1523,51 @@ async def test_a_delegated_response_is_charged_at_the_regional_price_of_its_sess
     )
 
     assert await _spend(limiter, f"virtual_key_spend:{KEY_HASH}:{model}:1d") == pytest.approx(regional_cost), model
+
+
+def _router_with_team_public_name() -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": f"model_name_{TEAM_ID}_public",
+                "litellm_params": {"model": RAW_MODEL, "api_key": "sk-test"},
+                "model_info": {"team_id": TEAM_ID, "team_public_model_name": PUBLIC_NAME},
+            }
+        ]
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("router", [_router_with_public_name, _router_with_team_public_name])
+@pytest.mark.parametrize("requested", [PUBLIC_NAME, RAW_MODEL])
+async def test_a_key_entry_on_a_public_name_replaces_the_team_entry_for_requests_by_its_litellm_model(
+    monkeypatch: pytest.MonkeyPatch, router: Callable[[], Router], requested: str
+):
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", router())
+    cache: Final = DualCache()
+    limiter: Final = _family_limiter(groups_by_model={}, dual_cache=cache)
+    team_model_max_budget: Final = {PUBLIC_NAME: FAMILY_CAP}
+    key_model_max_budget: Final = {PUBLIC_NAME: ROOMY_CAP}
+    team_spend_key: Final = model_budget_spend_cache_key(
+        entity_type=Litellm_EntityType.TEAM, entity_id=TEAM_ID, budget_model=PUBLIC_NAME, budget_duration="1d"
+    )
+
+    for _ in range(2):
+        await _spend_on_team_key(
+            limiter,
+            model=requested,
+            key_model_max_budget=key_model_max_budget,
+            team_model_max_budget=team_model_max_budget,
+        )
+    assert await cache.async_get_cache(team_spend_key, local_only=True) is None
+
+    await _spend_on_team_key(
+        limiter, model=PUBLIC_NAME, key_model_max_budget={}, team_model_max_budget=team_model_max_budget
+    )
+    assert await cache.async_get_cache(team_spend_key, local_only=True) == pytest.approx(CHAT_COST)
+    assert await limiter.is_team_within_model_budget(
+        team_id=TEAM_ID,
+        team_model_max_budget=team_model_max_budget,
+        key_model_max_budget=key_model_max_budget,
+        model=requested,
+    )

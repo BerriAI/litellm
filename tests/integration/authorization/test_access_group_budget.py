@@ -569,3 +569,45 @@ def test_a_litellm_model_request_served_by_a_team_deployment_charges_another_nam
         assert refused.status_code == 422, refused.text
         assert _Error.model_validate_json(refused.content).error.type == "budget_exceeded", refused.text
         assert _provider_calls(wire) == (), f"A refused request reached the provider: {refused.text}"
+
+
+@pytest.mark.timeout(120)
+def test_a_key_entry_on_the_public_name_replaces_the_team_entry_for_requests_by_the_litellm_model(
+    gateway: Gateway,
+) -> None:
+    litellm_model: Final = f"openai/raw-{uuid.uuid4().hex}"
+
+    def chat(key: str) -> httpx.Response:
+        return gateway.request(
+            "POST",
+            "/v1/chat/completions",
+            {"model": litellm_model, "messages": [{"role": "user", "content": uuid.uuid4().hex}]},
+            key=key,
+        )
+
+    with wire_server(_billed) as wire, gateway.scenario() as scenario:
+        public_name: Final = scenario.model(
+            model=litellm_model,
+            api_base=f"{wire.url}/v1",
+            input_cost_per_token=_INPUT_RATE,
+            output_cost_per_token=_OUTPUT_RATE,
+        )
+        team_id: Final = scenario.team(
+            model_max_budget={public_name: {"max_budget": _MAX_BUDGET, "budget_duration": "30d"}}
+        )
+        key: Final = scenario.key(
+            team_id=team_id,
+            model_max_budget={public_name: {"max_budget": 100 * _MAX_BUDGET, "budget_duration": "30d"}},
+        )
+        served: Final = chat(key)
+        assert served.status_code == 200, served.text
+        spent: Final = eventually(
+            lambda: _model_budget_spend(gateway, key, public_name),
+            lambda value: value > 0,
+            seconds=60,
+            return_last_on_timeout=True,
+        )
+        assert spent > 0, f"the key's {public_name} entry was not charged"
+        again: Final = chat(key)
+        assert again.status_code == 200, again.text
+        assert len(_provider_calls(wire)) == 2

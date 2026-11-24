@@ -532,9 +532,12 @@ def _usable_entry(entry: str, raw_budget_config: object) -> ResolvedModelBudget 
 
 
 def team_model_budget_entries(
-    model: str, team_model_max_budget: Mapping[str, object], key_model_max_budget: Mapping[str, object] | None
+    model: str,
+    team_model_max_budget: Mapping[str, object],
+    key_model_max_budget: Mapping[str, object] | None,
+    team_id: str | None,
 ) -> Mapping[str, object]:
-    models: Final = expand_model_latest_alias(model)
+    models: Final = _budgeted_models(model, team_id)
     if len(models) == 1:
         return _single_team_model_budget_entries(model, team_model_max_budget, key_model_max_budget)
     entries: Final = tuple(
@@ -888,6 +891,7 @@ def _entity_budgets_for(
     request_budgets: _EntityBudgets,
     team_model_max_budget: object,
     key_model_max_budget: object,
+    team_id: str | None,
 ) -> _EntityBudgets:
     """The request's entity budgets as they apply to `budget_model`, whose team entries differ per model."""
     team_budgets: Final = as_str_mapping(team_model_max_budget)
@@ -897,6 +901,7 @@ def _entity_budgets_for(
         model=budget_model,
         team_model_max_budget=team_budgets,
         key_model_max_budget=as_str_mapping(key_model_max_budget),
+        team_id=team_id,
     )
     return tuple(
         (entity_type, entity_id, team_budget if entity_type is Litellm_EntityType.TEAM else budget)
@@ -1119,7 +1124,10 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
             entity_id=team_id,
             team_id=team_id,
             model_max_budget=team_model_budget_entries(
-                model=model, team_model_max_budget=team_model_max_budget, key_model_max_budget=key_model_max_budget
+                model=model,
+                team_model_max_budget=team_model_max_budget,
+                key_model_max_budget=key_model_max_budget,
+                team_id=team_id,
             ),
             model=model,
             exceeded_message=f"LiteLLM Team: {team_id}, exceeded budget for model={model}",
@@ -1351,6 +1359,7 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
                         key_model_max_budget=(
                             key_model_max_budget if isinstance(key_model_max_budget, Mapping) else None
                         ),
+                        team_id=team_member_team_id,
                     )
                     if isinstance(team_model_max_budget, Mapping)
                     else team_model_max_budget
@@ -1383,6 +1392,7 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
                 entity_budgets,  # pyright: ignore[reportUnknownArgumentType]  # callback metadata is partially untyped
                 team_model_max_budget,
                 key_model_max_budget,  # pyright: ignore[reportUnknownArgumentType]  # callback metadata is partially untyped
+                team_member_team_id,
             )
 
         delegated_costs: Final = _live_delegated_costs(
