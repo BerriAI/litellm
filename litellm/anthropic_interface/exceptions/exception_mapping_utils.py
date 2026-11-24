@@ -5,6 +5,7 @@ Similar to litellm/litellm_core_utils/exception_mapping_utils.py but for Anthrop
 """
 
 import json
+from collections.abc import Mapping
 from typing import Final
 
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
@@ -195,8 +196,16 @@ class AnthropicErrorSseFrame(str):
         return body
 
 
-def anthropic_error_sse_frame(status_code: int, raw_message: str) -> AnthropicErrorSseFrame:
-    return AnthropicErrorSseFrame(
-        status_code,
-        AnthropicExceptionMapping.transform_to_anthropic_error(status_code=status_code, raw_message=raw_message),
+def anthropic_error_sse_frame(
+    status_code: int,
+    raw_message: str,
+    provider_specific_fields: Mapping[str, object] | None = None,
+) -> AnthropicErrorSseFrame:
+    response: Final = AnthropicExceptionMapping.transform_to_anthropic_error(
+        status_code=status_code, raw_message=raw_message
     )
+    if not provider_specific_fields:
+        return AnthropicErrorSseFrame(status_code, response)
+    detail: Final[AnthropicErrorDetail] = {**response["error"], "provider_specific_fields": provider_specific_fields}
+    with_fields: Final[AnthropicErrorResponse] = {**response, "error": detail}
+    return AnthropicErrorSseFrame(status_code, with_fields)
