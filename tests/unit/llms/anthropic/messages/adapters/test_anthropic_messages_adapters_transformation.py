@@ -833,6 +833,43 @@ def test_encrypted_reasoning_is_kept_when_a_custom_foundry_name_base_model_route
 
 
 @pytest.mark.parametrize(
+    "base_model_source",
+    [
+        {"model_info": {"base_model": "azure_ai/gpt-5.6-terra"}},
+        {"base_model": "azure_ai/gpt-5.6-terra"},
+        {"model_info": {"base_model": "azure_ai/Phi-4"}, "base_model": "azure_ai/gpt-5.6-terra"},
+        {"model_info": {"base_model": "azure_ai/gpt-5.6-terra"}, "base_model": ""},
+    ],
+    ids=["model_info", "litellm_params", "litellm_params_over_model_info", "empty_litellm_params"],
+)
+def test_a_custom_foundry_name_keeps_replayed_reasoning_and_its_summary_wherever_its_base_model_is_set(
+    base_model_source: Mapping[str, object],
+) -> None:
+    from litellm.llms.anthropic.messages.adapters.handler import (
+        LiteLLMMessagesToCompletionTransformationHandler,
+    )
+
+    tools: Final = [{"name": "get_weather", "input_schema": {"type": "object", "properties": {}}}]
+    request: Final = _replayed_reasoning_request(tools)
+    completion_kwargs, _mapping = LiteLLMMessagesToCompletionTransformationHandler._prepare_completion_kwargs(
+        max_tokens=64,
+        messages=cast(list[dict[str, object]], request["messages"]),
+        model="azure_ai/qa-prod-reasoner",
+        thinking={"type": "enabled", "budget_tokens": 2048, "summary": "auto"},
+        tools=tools,
+        extra_kwargs={
+            "custom_llm_provider": "azure_ai",
+            "api_base": "https://myproject.services.ai.azure.com",
+            **base_model_source,
+        },
+    )
+
+    assistant: Final = cast(list[Mapping[str, object]], completion_kwargs["messages"])[1]
+    assert assistant.get("thinking_blocks")
+    assert cast(Mapping[str, object], completion_kwargs["reasoning_effort"]).get("summary") == "auto"
+
+
+@pytest.mark.parametrize(
     ("deployment_params", "kept"),
     [
         pytest.param({"reasoning_summary": "auto"}, True, id="deployment_summary_bridges_to_responses"),

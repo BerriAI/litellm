@@ -368,7 +368,8 @@ class AzureAIStudioConfig(OpenAIConfig):
         raise UnsupportedParamsError(
             message=f"azure_ai/{model} goes to the Responses API because its base_model {base_model} is a "
             f"gpt-5 model, and the Responses API has no `{param}` field. "
-            "To drop it, set `litellm.drop_params=True` or pass `drop_params=True`.",
+            "To drop it, set `litellm.drop_params=True`, pass `drop_params=True`, or for proxy: "
+            "`litellm_settings: drop_params: true`.",
             model=model,
             llm_provider="azure_ai",
         )

@@ -2691,9 +2691,9 @@ _FOUNDRY_REQUEST_PARAMS: Final = (
 )
 
 
-def _foundry_optional_params(
+def _foundry_outcome(
     model: str, base_model: str | None, request_params: MappingProxyType[str, object], drop_params: bool
-) -> dict[str, object] | None:
+) -> dict[str, object] | str:
     try:
         return litellm.get_optional_params(
             model=model,
@@ -2702,8 +2702,15 @@ def _foundry_optional_params(
             drop_params=drop_params,
             **request_params,
         )
-    except litellm.UnsupportedParamsError:
-        return None
+    except litellm.UnsupportedParamsError as refusal:
+        return refusal.message
+
+
+def _foundry_optional_params(
+    model: str, base_model: str | None, request_params: MappingProxyType[str, object], drop_params: bool
+) -> dict[str, object] | None:
+    outcome: Final = _foundry_outcome(model, base_model, request_params, drop_params)
+    return outcome if isinstance(outcome, dict) else None
 
 
 @pytest.mark.parametrize(
@@ -2716,6 +2723,19 @@ def test_a_custom_named_foundry_deployment_answers_like_the_deployment_its_base_
 ) -> None:
     assert _foundry_optional_params("prod-deployment", base_model, request_params, drop_params) == (
         _foundry_optional_params(base_model.rsplit("/", 1)[-1], None, request_params, drop_params)
+    )
+
+
+@pytest.mark.parametrize("deployment", ["gpt-5.6-qa-name", "prod-gpt-chat-latest"])
+@pytest.mark.parametrize("base_model", ["azure_ai/gpt-5.5", "azure_ai/gpt-chat-latest"])
+@pytest.mark.parametrize("drop_params", [False, True])
+def test_a_foundry_deployment_named_after_a_gpt_5_model_takes_reasoning_effort_by_its_own_name(
+    local_model_cost_map: None, deployment: str, base_model: str, drop_params: bool
+) -> None:
+    request_params: Final = MappingProxyType({"max_tokens": 50, "reasoning_effort": "high"})
+
+    assert _foundry_outcome(deployment, base_model, request_params, drop_params) == (
+        _foundry_outcome(deployment, None, request_params, drop_params)
     )
 
 
