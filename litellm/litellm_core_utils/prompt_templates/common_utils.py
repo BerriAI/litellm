@@ -1287,6 +1287,12 @@ def inline_refs_outside_root_defs(
     return ({**inlined, "$defs": root_defs} if root_defs else inlined), inlined_bytes
 
 
+def inline_refs_and_drop_defs(schema: Mapping[str, object], max_inlined_bytes: int) -> tuple[Mapping[str, object], int]:
+    body: Final = {key: value for key, value in schema.items() if key not in _NON_BODY_KEYS}
+    inlined_bytes: Final = unpack_defs(body, dict(_local_defs(schema)), max_inlined_bytes=max_inlined_bytes)
+    return {key: value for key, value in body.items() if key != "$defs"}, inlined_bytes
+
+
 def sanitize_input_schema_for_anthropic(input_schema: dict) -> "AnthropicInputSchema":
     """Coerce an arbitrary tool input_schema into the shape Anthropic accepts.
 

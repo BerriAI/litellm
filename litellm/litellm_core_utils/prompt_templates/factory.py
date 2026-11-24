@@ -80,6 +80,7 @@ from .common_utils import (
     convert_content_list_to_str,
     has_blank_redacted_data,
     infer_content_type_from_url_and_content,
+    inline_refs_and_drop_defs,
     inline_refs_outside_root_defs,
     is_encrypted_reasoning_block,
     is_non_content_values_set,
@@ -87,7 +88,6 @@ from .common_utils import (
     native_redacted_thinking_data,
     parse_tool_call_arguments,
     salvage_concatenated_tool_arguments,
-    unpack_defs,
 )
 from .image_handling import convert_url_to_base64, is_pdf_media_type
 from .json_schema_utils import schema_with_root_ref_resolved, schema_without_unreferenced_defs
@@ -241,6 +241,7 @@ def _handle_ollama_system_message(messages: list, prompt: str, msg_i: int) -> tu
 
 _OLLAMA_USER_ROLES: Final = frozenset({"user", "tool", "function"})
 _DECODED_JSON: Final = TypeAdapter(object)
+_TOOL_SCHEMA: Final = TypeAdapter(dict[str, object])
 
 
 def _ollama_bad_message(model: str, message: AllMessageValues, msg_i: int, detail: str) -> "litellm.BadRequestError":
@@ -6579,21 +6580,16 @@ def _bedrock_tools_pt(
             description = name
 
         remaining_inline_bytes = DEFS_MAX_INLINED_BYTES - inlined_bytes
+        tool_schema = _TOOL_SCHEMA.validate_python(parameters)
         try:
-            if resolves_schema_defs and (defs_keeping_schema := schema_with_root_ref_resolved(parameters)) is not None:
+            if resolves_schema_defs and (defs_keeping_schema := schema_with_root_ref_resolved(tool_schema)) is not None:
                 inlined, tool_inlined_bytes = inline_refs_outside_root_defs(
                     schema_without_unreferenced_defs(defs_keeping_schema), remaining_inline_bytes
                 )
                 parameters = dict(schema_without_unreferenced_defs(inlined))
             else:
-                defs = parameters.pop("$defs", {})
-                defs_copy = defs if isinstance(defs, dict) else {}
-                # Expand $ref references in parameters using the definitions
-                # Note: We don't pre-flatten defs as that causes exponential memory growth
-                # with circular references (see issue #19098). unpack_defs handles nested
-                # refs recursively and correctly detects/skips circular references.
-                tool_inlined_bytes = unpack_defs(parameters, defs_copy, max_inlined_bytes=remaining_inline_bytes)
-                parameters.pop("$defs", None)
+                inlined, tool_inlined_bytes = inline_refs_and_drop_defs(tool_schema, remaining_inline_bytes)
+                parameters = dict(inlined)
         except DefsInliningBudgetExceededError as e:
             raise litellm.ContextWindowExceededError(
                 message=f"Inlining the $ref definitions of tool '{raw_name}' copies more than "

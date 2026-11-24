@@ -3450,6 +3450,23 @@ def test_bedrock_tools_pt_spends_no_inlining_budget_on_unused_claude_defs() -> N
     assert sent == {"type": "object", "properties": {"a": {"type": "string"}}, "required": ["a"]}
 
 
+@pytest.mark.parametrize("model", ["us.anthropic.claude-sonnet-5-5", "us.amazon.nova-2-lite-v1:0"])
+def test_bedrock_tools_pt_spends_no_inlining_budget_on_unused_legacy_definitions(model: str) -> None:
+    big: Final = {"type": "string", "description": "x" * 1_000_000}
+    unused: Final = {f"Unused{i}": {"$ref": "#/definitions/Big"} for i in range(11)}
+    parameters: Final = {
+        "type": "object",
+        "properties": {"a": {"type": "string"}},
+        "required": ["a"],
+        "definitions": {"Big": big, **unused},
+    }
+    tools: Final = [{"type": "function", "function": {"name": "t", "parameters": parameters}}]
+
+    sent: Final = _bedrock_tools_pt(tools, model=model)[0]["toolSpec"]["inputSchema"]["json"]
+
+    assert sent == {"type": "object", "properties": {"a": {"type": "string"}}, "required": ["a"]}
+
+
 def test_bedrock_tools_pt_resolves_a_root_ref_targets_refs_to_its_own_defs_for_claude() -> None:
     zip_only: Final = {"type": "object", "properties": {"zip": {"type": "string"}}, "required": ["zip"]}
     request: Final = {
