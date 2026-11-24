@@ -24,10 +24,10 @@ from fastapi.testclient import TestClient
 
 import litellm
 from litellm.caching.llm_caching_handler import LLMClientCache
+from litellm.litellm_core_utils.model_cost_table import publish
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy import proxy_server
 from litellm.proxy._types import LiteLLM_ProxyModelTable, UserAPIKeyAuth
-from litellm.litellm_core_utils.model_cost_table import publish
 
 from .conftest import normalize, route_entry_points_to_stubs  # type: ignore[import-not-found]
 
@@ -164,6 +164,141 @@ async def test_upstream_limits_reach_model_info_routes(
             assert group_response.status_code == 200, group_response.text
             assert group_response.json()["data"][0]["max_input_tokens"] == 4096
     publish(litellm.model_cost)
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+async def test_selected_upstream_metadata_follows_deployment_and_refresh(
+    client: TestClient,
+    auth_as: Callable[[], AbstractContextManager[object]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    deployments: Final = (
+        (
+            "selected",
+            {
+                "upstream_model_info_fields": [
+                    "name",
+                    "description",
+                    "meta.hints.effort",
+                    "meta.*",
+                    "meta",
+                    "access_groups",
+                ]
+            },
+        ),
+        (
+            "configured",
+            {
+                "upstream_model_info_fields": ["description", "meta.hints.effort", "meta.hints.samples"],
+                "description": "",
+                "meta": {},
+                "max_output_tokens": 512,
+            },
+        ),
+        ("default", {}),
+        ("samples", {"upstream_model_info_fields": ["meta.hints.samples"]}),
+    )
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": name,
+                "litellm_params": {
+                    "model": "openai/local-card",
+                    "api_base": "https://backend.test/v1",
+                    "api_key": "local-key",
+                },
+                "model_info": {"id": name, **configured},
+            }
+            for name, configured in deployments
+        ]
+    )
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(proxy_server, "llm_model_list", router.get_model_list())
+    monkeypatch.setattr(proxy_server, "user_model", None)
+
+    initial: Final = httpx.Response(
+        200,
+        json={
+            "data": [
+                {
+                    "id": "local-card",
+                    "context_length": 4096,
+                    "name": "Upstream name",
+                    "description": "Upstream description",
+                    "meta": {"hints": {"effort": "high", "samples": 0}, "internal": "do not publish"},
+                    "access_groups": ["upstream-group"],
+                }
+            ]
+        },
+    )
+    updated: Final = httpx.Response(
+        200,
+        json={
+            "data": [
+                {
+                    "id": "local-card",
+                    "name": 999,
+                    "meta": {"hints": {"effort": "low"}},
+                }
+            ]
+        },
+    )
+    expected: Final = {
+        "selected": {
+            "name": "Upstream name",
+            "description": "Upstream description",
+            "meta": {"hints": {"effort": "high"}},
+        },
+        "configured": {"description": "", "meta": {}},
+        "default": {},
+        "samples": {"meta": {"hints": {"samples": 0}}},
+    }
+
+    def displayed_info(path: str, deployment_id: str | None = None) -> dict[str, dict[str, object]]:
+        with auth_as():
+            response: Final = client.get(path, params={"litellm_model_id": deployment_id} if deployment_id else None)
+        assert response.status_code == 200, response.text
+        rows: Final = response.json()["data"]
+        for row in rows:
+            info: Final = row["model_info"]
+            assert info["max_input_tokens"] == 4096
+            assert info["max_output_tokens"] == (512 if row["model_name"] == "configured" else 4096)
+        return {
+            row["model_name"]: {
+                field: row["model_info"][field]
+                for field in ("name", "description", "meta", "access_groups")
+                if field in row["model_info"]
+            }
+            for row in rows
+        }
+
+    responder: Final = MagicMock(return_value=initial)
+    handler: Final = AsyncHTTPHandler()
+    await handler.client.aclose()
+    async with httpx.AsyncClient(transport=httpx.MockTransport(responder)) as upstream:
+        handler.client = upstream
+        await router.arefresh_model_info(client=handler)
+        assert displayed_info("/v1/model/info") == expected
+        assert displayed_info("/model/info", "selected") == {"selected": expected["selected"]}
+
+        responder.return_value = httpx.Response(503)
+        router.cache.in_memory_cache.flush_cache()
+        await router.arefresh_model_info(client=handler)
+        assert displayed_info("/v1/model/info") == expected
+
+        responder.return_value = updated
+        router.cache.in_memory_cache.flush_cache()
+        await router.arefresh_model_info(client=handler)
+        assert displayed_info("/v1/model/info") == {
+            **expected,
+            "selected": {"meta": {"hints": {"effort": "low"}}},
+            "samples": {},
+        }
+
+        responder.return_value = httpx.Response(200, json={"data": [{"id": "other-card", "name": "Other model"}]})
+        router.cache.in_memory_cache.flush_cache()
+        await router.arefresh_model_info(client=handler)
+        assert displayed_info("/v1/model/info") == {**expected, "selected": {}, "samples": {}}
 
 
 # ---------------------------------------------------------------------------

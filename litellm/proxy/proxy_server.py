@@ -17259,6 +17259,8 @@ def _enrich_model_info_with_litellm_data(
     debug: bool = False,
     llm_router: Router | None = None,
     caller_aliases: CallerAliases = GLOBAL_ALIASES_ONLY,
+    *,
+    include_upstream_metadata: bool = False,
 ) -> dict[str, object]:
     """
     Enrich a model dictionary with litellm model info (pricing, context window, etc.)
@@ -17269,6 +17271,7 @@ def _enrich_model_info_with_litellm_data(
         debug: Whether to include debug information like openai_client
         llm_router: Optional router instance for debug info
         caller_aliases: The caller's alias maps, applied before deciding which model a wildcard row prices as
+        include_upstream_metadata: Include the model card fields selected by this deployment.
 
     Returns:
         Enriched model dictionary with sensitive info removed
@@ -17314,10 +17317,14 @@ def _enrich_model_info_with_litellm_data(
         )
     )
     model_info_reader: Final = require_attributes(model_info_value, _SupportsGet, "get")
+    discovery_id: Final = _discovered_info_lookup_id(model_info_reader) if llm_router is not None else None
     discovered_model_info: Final = (
-        llm_router.registry().discovered_model_info(_discovered_info_lookup_id(model_info_reader))
-        if llm_router is not None
-        else MappingProxyType({})
+        llm_router.registry().discovered_model_info(discovery_id) if llm_router is not None else MappingProxyType({})
+    )
+    upstream_metadata: Final = (
+        llm_router.registry().discovered_model_metadata(discovery_id)
+        if include_upstream_metadata and llm_router is not None and discovery_id is not None
+        else _EMPTY_MAPPING
     )
     unpriced: Final = cost_map_omits_token_price(model_info_reader.get("id"), litellm_model_info.get("key"))
     model_info: Final = _model_info_mapping(model_info_value)
@@ -17336,6 +17343,7 @@ def _enrich_model_info_with_litellm_data(
             for k, v in MappingProxyType({**litellm_model_info, **discovered_model_info}).items()
             if k not in stamped_model_info or (stamped_model_info[k] is None and k in discovered_model_info)
         },
+        **{key: value for key, value in upstream_metadata.items() if stamped_model_info.get(key) is None},
     }
     native_output_info: Final = {
         **merged_model_info,
@@ -18958,7 +18966,9 @@ def _translate_model_name_for_response(model: dict) -> dict[str, object]:
 
 def _get_proxy_model_info(model: dict, caller_aliases: CallerAliases = GLOBAL_ALIASES_ONLY) -> dict:
     return _translate_model_name_for_response(
-        _enrich_model_info_with_litellm_data(model=model, llm_router=llm_router, caller_aliases=caller_aliases)
+        _enrich_model_info_with_litellm_data(
+            model=model, llm_router=llm_router, caller_aliases=caller_aliases, include_upstream_metadata=True
+        )
     )
 
 
@@ -19189,7 +19199,9 @@ async def model_info_v1(
     caller_aliases: Final = await request_caller_aliases(user_api_key_dict)
     all_models = [
         _translate_model_name_for_response(
-            _enrich_model_info_with_litellm_data(model=model, llm_router=llm_router, caller_aliases=caller_aliases)
+            _enrich_model_info_with_litellm_data(
+                model=model, llm_router=llm_router, caller_aliases=caller_aliases, include_upstream_metadata=True
+            )
         )
         for model in all_models
     ]
