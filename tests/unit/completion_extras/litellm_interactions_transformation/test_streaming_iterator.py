@@ -428,3 +428,15 @@ def test_answer_id_named_only_at_the_end_of_a_stream_does_not_rename_chunks_alre
     chunks: Final = tuple(InteractionsChatStreamingIterator(model="gemini-3-flash-preview", sync_lines=iter(sse_lines)))
     assert len(chunks) >= 3
     assert {chunk.id for chunk in chunks} == {chunks[0].id}
+
+
+def test_stream_blocked_for_recitation_ends_with_a_content_filter_finish_after_the_text_already_sent() -> None:
+    sse_lines: Final = (
+        'data: {"event_type": "interaction.created", "interaction": {"status": "in_progress"}}',
+        'data: {"event_type": "step.start", "index": 0, "step": {"type": "model_output"}}',
+        'data: {"event_type": "step.delta", "index": 0, "delta": {"type": "text", "text": "In my younger"}}',
+        'data: {"error": {"message": "Request blocked due to copyright/recitation content.", "code": "recitation"}, "event_type": "error"}',
+    )
+    chunks: Final = tuple(InteractionsChatStreamingIterator(model="gemini-3-flash-preview", sync_lines=iter(sse_lines)))
+    assert "".join(chunk.choices[0].delta.content or "" for chunk in chunks) == "In my younger"
+    assert [chunk.choices[0].finish_reason for chunk in chunks][-1] == "content_filter"

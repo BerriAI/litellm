@@ -405,3 +405,44 @@ async def test_connect_error_and_non_raising_4xx_response_map_cleanly_sync_and_a
     assert getattr(async_400_exc.value, "model", None) == "gemini-3-flash-preview"
     assert getattr(async_400_exc.value, "llm_provider", None) == "gemini"
     assert "Invalid generation_config" in _logged_original_response(async_raw_log)
+
+
+_RECITATION_BLOCK: Final = {
+    "error": {
+        "message": "Request blocked due to copyright/recitation content. Please modify your input and retry.",
+        "code": "recitation",
+    }
+}
+
+
+@pytest.mark.asyncio
+async def test_answer_blocked_for_recitation_comes_back_as_a_content_filter_finish_sync_and_async() -> None:
+    def blocked(_req: httpx.Request) -> httpx.Response:
+        return httpx.Response(400, json=_RECITATION_BLOCK)
+
+    bridge: Final = InteractionsToCompletionBridgeHandler()
+    with httpx.Client(transport=httpx.MockTransport(blocked)) as sync_client:
+        sync_answer: Final = bridge.completion(
+            model="gemini-3-flash-preview",
+            messages=[{"role": "user", "content": "recite it"}],
+            model_response=ModelResponse(id="fallback"),
+            logging_obj=_logging_stub("gemini-3-flash-preview"),
+            api_key="test-gemini-key",
+            client=sync_client,
+            custom_llm_provider="gemini",
+        )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(blocked)) as async_client:
+        async_answer: Final = await bridge.acompletion(
+            model="gemini-3-flash-preview",
+            messages=[{"role": "user", "content": "recite it"}],
+            model_response=ModelResponse(id="fallback"),
+            logging_obj=_logging_stub("gemini-3-flash-preview"),
+            api_key="test-gemini-key",
+            client=async_client,
+            custom_llm_provider="gemini",
+        )
+
+    for answer in (sync_answer, async_answer):
+        assert isinstance(answer, ModelResponse)
+        assert answer.choices[0].finish_reason == "content_filter"
+        assert answer.choices[0].message.content is None

@@ -135,6 +135,15 @@ def _arguments_delta_piece(delta_map: JsonMapping) -> str:
     return next((piece for piece in candidates if piece is not None), "")
 
 
+RECITATION_ERROR_CODE: Final = "recitation"
+
+
+def _error_code_of(event: JsonMapping) -> str | None:
+    raw_err: Final = event.get("error")
+    code: Final = raw_err.get("code") if isinstance(raw_err, dict) else None
+    return code if isinstance(code, str) else None
+
+
 def extract_stream_error_code_and_message(
     event: JsonMapping,
     interaction_map: JsonMapping,
@@ -780,6 +789,9 @@ class InteractionsChatStreamingIterator:
                 self._deliver(self._handle_step_delta(event))
             case "interaction.completed" | "interaction.complete":
                 self._buffer.extend(self._handle_completed(event))
+            case "error" if _error_code_of(event) == RECITATION_ERROR_CODE:
+                self._buffer.append(self._final_chunk("content_filter", None))
+                self._done = True
             case "error" | "interaction.failed" | "interaction.cancelled":
                 failed_inter: Final = event.get("interaction")
                 self._raise_stream_failure(

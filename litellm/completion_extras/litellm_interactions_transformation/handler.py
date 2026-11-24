@@ -38,7 +38,7 @@ from litellm.llms.vertex_ai.common_utils import VertexAIError
 from litellm.llms.vertex_ai.gemini.long_decode import with_initial_prompt_tokens
 from litellm.llms.vertex_ai.gemini.transformation import text_chat_model_max_output_tokens
 from litellm.types.router import GenericLiteLLMParams
-from litellm.types.utils import LlmProviders, ModelResponse, Usage
+from litellm.types.utils import Choices, LlmProviders, Message, ModelResponse, Usage
 
 from .continuation import (
     JsonMapping,
@@ -54,6 +54,7 @@ from .continuation import (
 from .request_transformation import MediaFetcher, transform_chat_to_interactions_request
 from .response_transformation import transform_interactions_response_to_chat_response
 from .streaming_iterator import (
+    RECITATION_ERROR_CODE,
     InteractionsChatStreamingIterator,
     build_stream_exception,
     extract_stream_error_code_and_message,
@@ -477,6 +478,27 @@ def _interaction_of(response: httpx.Response) -> JsonMapping:
     return parsed if isinstance(parsed, dict) else MappingProxyType({})
 
 
+def _is_recitation_block(error_body: str) -> bool:
+    try:
+        parsed: Final = _JSON_VALUE.validate_json(error_body)
+    except ValueError:
+        return False
+    error: Final = parsed.get("error") if isinstance(parsed, dict) else None
+    return isinstance(error, dict) and error.get("code") == RECITATION_ERROR_CODE
+
+
+def _recitation_block_response(model: str, model_response: ModelResponse) -> ModelResponse:
+    blocked: Final = transform_interactions_response_to_chat_response(
+        raw_response={"steps": []},
+        model=model,
+        model_response=model_response,
+    )
+    blocked.choices = [
+        Choices(finish_reason="content_filter", index=0, message=Message(role="assistant", content=None))
+    ]
+    return blocked
+
+
 _FAILED_STATUSES: Final = frozenset({"failed", "cancelled"})
 
 
@@ -696,6 +718,8 @@ class InteractionsToCompletionBridgeHandler:
             if isinstance(exc, httpx.HTTPStatusError):
                 with contextlib.suppress(httpx.HTTPError):
                     exc.response.read()
+                if not wire.is_stream and _is_recitation_block(_safe_response_text(exc.response)):
+                    return _recitation_block_response(model, model_response)
             _handle_httpx_error(
                 exc=exc,
                 model=model,
@@ -717,6 +741,8 @@ class InteractionsToCompletionBridgeHandler:
                 original_response=error_body,
                 additional_args={"complete_input_dict": wire.body},
             )
+            if not wire.is_stream and _is_recitation_block(error_body):
+                return _recitation_block_response(model, model_response)
             provider_err: Final = _build_provider_http_error(
                 custom_llm_provider,
                 raw_response.status_code,
@@ -863,6 +889,8 @@ class InteractionsToCompletionBridgeHandler:
             if isinstance(exc, httpx.HTTPStatusError):
                 with contextlib.suppress(httpx.HTTPError):
                     await exc.response.aread()
+                if not wire.is_stream and _is_recitation_block(_safe_response_text(exc.response)):
+                    return _recitation_block_response(model, model_response)
             _handle_httpx_error(
                 exc=exc,
                 model=model,
@@ -884,6 +912,8 @@ class InteractionsToCompletionBridgeHandler:
                 original_response=error_body,
                 additional_args={"complete_input_dict": wire.body},
             )
+            if not wire.is_stream and _is_recitation_block(error_body):
+                return _recitation_block_response(model, model_response)
             provider_err: Final = _build_provider_http_error(
                 custom_llm_provider,
                 raw_response.status_code,
