@@ -1119,6 +1119,19 @@ def _configured_default_allowed_routes() -> tuple[str, ...] | None:
     return string_routes if len(string_routes) == len(routes) else None
 
 
+_TEAM_SERVICE_ACCOUNT_DEFAULT_EXTRA_ROUTES: Final = frozenset(
+    {
+        "/key/spend/report",
+        "/key/info",
+        "/key/health",
+        "/model/info",
+        "/v1/model/info",
+        "/v2/model/info",
+        "/model_group/info",
+    }
+)
+
+
 def _default_allowed_routes_for(request: GenerateKeyRequest, key_routes: object) -> tuple[str, ...] | None:
     configured_routes: Final = _configured_default_allowed_routes()
     if configured_routes is None:
@@ -1128,7 +1141,15 @@ def _default_allowed_routes_for(request: GenerateKeyRequest, key_routes: object)
     match request.key_type:
         case LiteLLMKeyType.LLM_API:
             llm_api_routes: Final = _KEY_TYPE_PRESET_ROUTES[LiteLLMKeyType.LLM_API]
-            return configured_routes if all(route in configured_routes for route in llm_api_routes) else None
+            if not all(route in configured_routes for route in llm_api_routes):
+                return None
+            if _creates_team_service_account(request):
+                return tuple(
+                    route
+                    for route in configured_routes
+                    if route in llm_api_routes or route in _TEAM_SERVICE_ACCOUNT_DEFAULT_EXTRA_ROUTES
+                )
+            return configured_routes
         case _:
             return None
 
@@ -8717,14 +8738,16 @@ async def _can_user_query_key_info(
             or user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value
         )
         or (user_api_key_dict.impersonated_by is None and user_api_key_dict.api_key == key)
-        or (key_info.user_id and key_info.user_id == user_api_key_dict.user_id)
-        or await TeamMemberPermissionChecks.user_belongs_to_keys_team(
-            user_api_key_dict=user_api_key_dict,
-            existing_key_row=key_info,
-        )
     ):
         return True
-    return False
+    if user_api_key_dict.is_team_service_account:
+        return False
+    if key_info.user_id and key_info.user_id == user_api_key_dict.user_id:
+        return True
+    return await TeamMemberPermissionChecks.user_belongs_to_keys_team(
+        user_api_key_dict=user_api_key_dict,
+        existing_key_row=key_info,
+    )
 
 
 async def test_key_logging(

@@ -26,6 +26,7 @@ from litellm.proxy._types import (
     GenerateKeyRequest,
     GenerateKeyResponse,
     KeyManagementRoutes,
+    KeyRequest,
     LiteLLM_BudgetTable,
     LiteLLM_ObjectPermissionBase,
     LiteLLM_OrganizationTable,
@@ -93,6 +94,7 @@ from litellm.proxy.management_endpoints.key_management_endpoints import (
     generate_key_helper_fn,
     generate_service_account_key_fn,
     info_key_fn,
+    info_key_fn_v2,
     key_aliases,
     key_generation_check,
     list_key_helper,
@@ -223,6 +225,45 @@ async def test_key_info_access_by_owner_requires_a_real_shared_owner(
         await _can_user_query_key_info(user_api_key_dict=auth, key=other_key.token, key_info=other_key)
         is expected
     ), f"caller user_id={caller_user_id!r} reading key owned by {owner_user_id!r}"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("caller_user_id", "own_key", "expected"),
+    [(None, True, True), (None, False, False), ("member", False, True)],
+    ids=["service-account-own-key", "service-account-other-key", "user-other-key"],
+)
+async def test_key_info_same_team_visibility(
+    monkeypatch: pytest.MonkeyPatch, caller_user_id: str | None, own_key: bool, expected: bool
+) -> None:
+    team: Final = LiteLLM_TeamTableCachedObj(team_id="team-a", members_with_roles=[Member(user_id="member", role="user")])
+    monkeypatch.setattr(
+        "litellm.proxy.management_helpers.team_member_permission_checks.get_team_object", AsyncMock(return_value=team)
+    )
+    caller: Final = UserAPIKeyAuth(
+        api_key="caller-key", team_id=team.team_id, user_id=caller_user_id, metadata={"service_account_id": "sa-1"}
+    )
+    target: Final = LiteLLM_VerificationToken(token="caller-key" if own_key else "other-key", team_id=team.team_id)
+
+    assert await _can_user_query_key_info(user_api_key_dict=caller, key=target.token, key_info=target) is expected
+
+
+@pytest.mark.asyncio
+async def test_info_key_fn_v2_returns_only_the_calling_service_account_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    team: Final = LiteLLM_TeamTableCachedObj(team_id="team-a")
+    monkeypatch.setattr(
+        "litellm.proxy.management_helpers.team_member_permission_checks.get_team_object", AsyncMock(return_value=team)
+    )
+    caller: Final = UserAPIKeyAuth(api_key="caller-key", team_id=team.team_id, metadata={"service_account_id": "sa-1"})
+    own: Final = LiteLLM_VerificationToken(token="caller-key", team_id=team.team_id, key_alias="own")
+    other: Final = LiteLLM_VerificationToken(token="other-key", team_id=team.team_id, key_alias="other")
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.prisma_client", SimpleNamespace(get_data=AsyncMock(return_value=[own, other]))
+    )
+
+    response: Final = await info_key_fn_v2(data=KeyRequest(keys=["caller-key", "other-key"]), user_api_key_dict=caller)
+
+    assert [row["key_alias"] for row in response["info"]] == ["own"]
 
 
 @pytest.mark.asyncio
@@ -20748,6 +20789,24 @@ async def test_default_key_generate_params_allowed_routes_keeps_explicit_value(m
     assert key_row["allowed_routes"] == ["info_routes"]
 
 
+_BROAD_DEFAULT_KEY_ROUTES: Final = (
+    "/key/info",
+    "llm_api_routes",
+    "management_routes",
+    "/key/generate",
+    "/user/*",
+    "/key/*",
+    "info_routes",
+    "/v2/key/info",
+    "/key/spend/report",
+    "/key/health",
+    "/model/info",
+    "/v1/model/info",
+    "/v2/model/info",
+    "/model_group/info",
+)
+
+
 @pytest.mark.asyncio
 async def test_default_key_generate_params_allowed_routes_extends_key_type_preset_it_covers(
     monkeypatch: pytest.MonkeyPatch,
@@ -20757,7 +20816,7 @@ async def test_default_key_generate_params_allowed_routes_extends_key_type_prese
     monkeypatch.setattr(
         litellm,
         "default_key_generate_params",
-        {"allowed_routes": ["llm_api_routes", "/key/spend/report"]},
+        {"allowed_routes": list(_BROAD_DEFAULT_KEY_ROUTES)},
     )
     mock_insert_data: Final = _wire_key_generation_prisma(monkeypatch)
 
@@ -20772,7 +20831,7 @@ async def test_default_key_generate_params_allowed_routes_extends_key_type_prese
     )
 
     key_call: Final = next(c for c in mock_insert_data.call_args_list if c.kwargs["table_name"] == "key")
-    assert key_call.kwargs["data"]["allowed_routes"] == ["llm_api_routes", "/key/spend/report"]
+    assert key_call.kwargs["data"]["allowed_routes"] == list(_BROAD_DEFAULT_KEY_ROUTES)
 
 
 @pytest.mark.asyncio
@@ -20825,7 +20884,19 @@ def test_effective_key_for_generate_shows_default_allowed_routes_to_the_policy(
     ("key_type", "expected_routes"),
     [
         (None, []),
-        (LiteLLMKeyType.LLM_API, ["llm_api_routes", "/key/spend/report", "/key/info"]),
+        (
+            LiteLLMKeyType.LLM_API,
+            [
+                "/key/info",
+                "llm_api_routes",
+                "/key/spend/report",
+                "/key/health",
+                "/model/info",
+                "/v1/model/info",
+                "/v2/model/info",
+                "/model_group/info",
+            ],
+        ),
         (LiteLLMKeyType.DEFAULT, []),
         (LiteLLMKeyType.MANAGEMENT, ["management_routes"]),
         (LiteLLMKeyType.READ_ONLY, ["info_routes"]),
@@ -20840,7 +20911,7 @@ async def test_default_key_generate_params_allowed_routes_for_team_service_accou
     monkeypatch.setattr(
         litellm,
         "default_key_generate_params",
-        {"allowed_routes": ["llm_api_routes", "/key/spend/report", "/key/info"]},
+        {"allowed_routes": list(_BROAD_DEFAULT_KEY_ROUTES)},
     )
     mock_insert_data: Final = _wire_key_generation_prisma(monkeypatch)
 
