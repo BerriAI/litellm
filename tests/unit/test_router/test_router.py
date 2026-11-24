@@ -4489,6 +4489,29 @@ def test_an_alias_of_gemini_openai_and_claude_keeps_every_deployment_whose_own_p
     assert _kept_models(router, messages=_PDF_FILE_PROMPT) == [_GEMINI_MODELS[0], "openai/gpt-6.1-sol"]
 
 
+async def test_a_pdf_repricing_failure_keeps_the_shared_count(monkeypatch: pytest.MonkeyPatch):
+    from litellm.router_rust.steps import precall
+
+    router: Final = _window_router(_between_pdf_prices(), _GEMINI_MODELS[0], "openai/gpt-6.1-sol")
+    attempts: Final[list[PdfDocumentPricing]] = []  # mutable-ok: records each repricing the router attempts
+
+    def failing_repricing(_model: str, _messages: object, pdf_pricing: PdfDocumentPricing) -> int:
+        attempts.append(pdf_pricing)
+        raise ValueError("unreadable PDF")
+
+    monkeypatch.setattr(precall, "inline_pdf_token_delta", failing_repricing)
+
+    with pytest.raises(litellm.ContextWindowExceededError, match=f"Got={_page_priced_pdf_tokens()}") as sync_error:
+        _kept_models(router, messages=_PDF_FILE_PROMPT)
+    sync_attempts: Final = len(attempts)
+    with pytest.raises(litellm.ContextWindowExceededError, match=f"Got={_page_priced_pdf_tokens()}") as async_error:
+        await router.acompletion(model="docs", messages=_PDF_FILE_PROMPT)
+
+    assert sync_attempts >= 1 and len(attempts) > sync_attempts
+    assert str(sync_error.value).count(f"Got={_page_priced_pdf_tokens()}") == 2
+    assert str(async_error.value).count(f"Got={_page_priced_pdf_tokens()}") == 2
+
+
 @pytest.mark.parametrize("wrapped", [False, True])
 @pytest.mark.parametrize("replaced", ["litellm", "core"])
 async def test_a_custom_token_counter_stays_authoritative_for_a_pdf_request(

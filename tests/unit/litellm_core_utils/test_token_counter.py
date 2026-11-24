@@ -3455,6 +3455,58 @@ def test_repricing_inline_pdfs_for_openai_moves_each_occurrence_by_its_page_pric
     assert inline_pdf_token_delta("", twice, "openai") == 2 * (13 - 2 * 1534)
 
 
+def _web_fetch_of(document: Mapping[str, object]) -> dict[str, object]:
+    return {
+        "type": "web_fetch_tool_result",
+        "tool_use_id": "srvtoolu_1",
+        "content": {"type": "web_fetch_result", "url": "https://example.invalid/report.pdf", "content": document},
+    }
+
+
+def _web_fetch_document(document: Mapping[str, object]) -> dict[str, object]:
+    return {"type": "web_fetch_tool_result", "tool_use_id": "srvtoolu_1", "content": document}
+
+
+@pytest.mark.parametrize("wrap", [_web_fetch_of, _web_fetch_document], ids=["web_fetch_result", "document_content"])
+@pytest.mark.parametrize("pdf_pricing", ["single_image", "openai"])
+def test_repricing_a_pdf_a_server_tool_returned_moves_only_the_pdf(
+    wrap: Callable[[Mapping[str, object]], dict[str, object]], pdf_pricing: PdfDocumentPricing
+):
+    def returning(document: Mapping[str, object]) -> list[dict[str, object]]:
+        return [{"role": "user", "content": [{"type": "text", "text": "the fetched report"}, wrap(document)]}]
+
+    def plain(document: Mapping[str, object]) -> list[dict[str, object]]:
+        return [{"role": "user", "content": [document]}]
+
+    def page_price(messages: Callable[[Mapping[str, object]], list[dict[str, object]]]) -> int:
+        return token_counter_new(model="", messages=messages(_document(_THREE_PAGE_PDF))) - token_counter_new(
+            model="", messages=messages(_document(_pdf_base64(())))
+        )
+
+    assert page_price(returning) == page_price(plain) > 0
+    assert token_counter_new(model="", messages=returning(_document(_THREE_PAGE_PDF))) > token_counter_new(
+        model="", messages=plain(_document(_THREE_PAGE_PDF))
+    )
+    assert inline_pdf_token_delta("", returning(_document(_THREE_PAGE_PDF)), pdf_pricing) == (
+        inline_pdf_token_delta("", plain(_document(_THREE_PAGE_PDF)), pdf_pricing)
+    )
+    assert inline_pdf_token_delta("", plain(_document(_THREE_PAGE_PDF)), pdf_pricing) < 0
+
+
+def test_repricing_pdfs_listed_in_a_server_tool_result_matches_sending_them_as_images():
+    def mcp_result(*content: object) -> list[dict[str, object]]:
+        listed: Final = {"type": "mcp_tool_result", "tool_use_id": "mcptoolu_1", "content": list(content)}
+        return [{"role": "user", "content": [listed]}]
+
+    note: Final = {"type": "text", "text": "two reports"}
+    pdfs: Final = mcp_result(_document(_THREE_PAGE_PDF), note, _document(_OTHER_PDF))
+    images: Final = mcp_result(_image(_THREE_PAGE_PDF), note, _image(_OTHER_PDF))
+
+    assert token_counter_new(model="", messages=pdfs) + inline_pdf_token_delta(
+        "", pdfs, "single_image"
+    ) == token_counter_new(model="", messages=images)
+
+
 def test_repricing_reads_a_pdf_inside_its_own_tool_result_once():
     content: Final[list[object]] = [_document(_THREE_PAGE_PDF)]  # mutable-ok: closed into a cycle below
     looped: Final = {"type": "tool_result", "tool_use_id": "t1", "content": content}
