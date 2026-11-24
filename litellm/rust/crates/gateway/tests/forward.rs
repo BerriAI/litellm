@@ -251,6 +251,7 @@ async fn holding_keys(python: SocketAddr, config: &str, keys: Option<AuthStore>)
         &config,
         &Environment::default(),
         &state,
+        litellm_gateway::StoredConfig::Unused,
     ));
     let native = middleware::global(
         litellm_gateway::router(state, &config),

@@ -10,6 +10,7 @@ pub mod middleware;
 mod redis;
 mod resources;
 mod state;
+mod stored;
 #[cfg(test)]
 mod test_support;
 pub use admit::{Admit, Reason, Refused};
@@ -22,6 +23,7 @@ pub use error::Error;
 pub use redis::RedisClients;
 pub use resources::Resources;
 pub use state::AppState;
+pub use stored::{Loaded, StoredConfig};
 
 /// The gateway served through the native host.
 pub type Gateway = litellm_gateway_inference::Gateway<host::NativeHost>;
@@ -41,14 +43,17 @@ use litellm_model_catalog::{BUNDLED_REGISTRY, Catalog};
 use litellm_redis_store::{Remote, active_teams::ActiveTeams};
 use litellm_secrets::{OidcResolver, SecretManagerState, SecretResolver};
 
-/// The config at `path`, its `os.environ/` references read from the process environment.
-pub async fn load_config(path: impl AsRef<Path>) -> Result<Config, Error> {
+/// The config at `path`, its `os.environ/` references read from the process environment, with
+/// the config the proxy stores in its database layered in when `store_model_in_db` is on.
+pub async fn load_config(path: impl AsRef<Path>) -> Result<Loaded, Error> {
     let pool = HttpClientPool::new(Arc::new(PublicDnsResolver));
     let lookup = |name: &str| std::env::var(name).ok();
     let settings = HttpSettings::from_layers([HttpSettingsLayer::from_environment(&lookup)]);
     let client = pool.client(&Resolution::from(&settings).config, ClientVariant::Provider)?;
-    let secrets = environment_secrets(Arc::new(ProcessEnvironment), client);
-    Ok(litellm_config_load::load(path, secrets).await?)
+    Box::pin(stored::load(path.as_ref(), || {
+        environment_secrets(Arc::new(ProcessEnvironment), client.clone())
+    }))
+    .await
 }
 
 pub(crate) fn environment_secrets(

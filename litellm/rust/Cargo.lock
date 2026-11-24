@@ -4192,12 +4192,14 @@ name = "litellm-gateway"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "chrono",
  "envy",
  "flate2",
  "futures-util",
  "http-body-util",
  "hyper-util",
  "jiff",
+ "litellm-at-rest",
  "litellm-auth-store",
  "litellm-callbacks",
  "litellm-callbacks-model-capacity",

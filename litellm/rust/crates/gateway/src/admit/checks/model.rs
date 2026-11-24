@@ -25,8 +25,10 @@ const MESSAGES_PROVIDERS: [LlmProviders; 2] = [LlmProviders::Anthropic, LlmProvi
 const HONORED_EXTRA_PARAMS: [&str; 1] = ["weight"];
 
 /// The `model_info` keys the router reads as Python's does. `access_groups` only decides which
-/// models a caller other than the master key may call.
-const HONORED_MODEL_INFO: [&str; 2] = ["id", "access_groups"];
+/// models a caller other than the master key may call. `db_model` only marks a model the database
+/// stores, and `blocked`, which boot copies from its row, is honored while it is `false`.
+const HONORED_MODEL_INFO: [&str; 4] = ["id", "access_groups", "db_model", "blocked"];
+const BLOCKED: &str = "blocked";
 
 pub(super) fn model(admit: &Admit, fields: &Map<String, Value>) -> Option<Reason> {
     let model = fields.get("model").and_then(Value::as_str)?;
@@ -217,6 +219,10 @@ fn deployment(model: &Model) -> Vec<Box<str>> {
             &HONORED_MODEL_INFO,
         ))
         .chain((*blocked == Some(true)).then(|| "model_list.blocked".into()))
+        .chain(
+            (model_info.get(BLOCKED) == Some(&litellm_config::Value::Bool(true)))
+                .then(|| "model_list.model_info.blocked".into()),
+        )
         .chain(unknown("model_list.", additional_fields))
         .collect()
 }

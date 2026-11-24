@@ -21,7 +21,7 @@ use litellm_router_core::{Router, registry::DeploymentFilter};
 use serde_json::{Map, Value};
 
 use crate::{
-    AppState, Gateway,
+    AppState, Gateway, StoredConfig,
     callbacks::parallel_request_limiter,
     host::{self, NativeRows},
 };
@@ -52,6 +52,9 @@ pub enum Refused {
     #[error("the gateway does not serve this model the way the proxy does")]
     #[strum(serialize = "model")]
     Model,
+    #[error("the gateway has not loaded the config the proxy stores in its database yet")]
+    #[strum(serialize = "db_config_not_loaded")]
+    DbConfigNotLoaded,
 }
 
 /// One deployment the router holds: its model group and its provider, or the provider's name when
@@ -67,9 +70,8 @@ pub struct Admit {
     config: Config,
     /// The variables only the environment holds, as `main` read them.
     environment: Environment,
-    /// The variable that has the proxy serve models and settings from its database on top of the
-    /// config. `general_settings.store_model_in_db` is a setting of the config itself.
-    stored_models: Option<Box<str>>,
+    /// Whether `config` holds the config the proxy stores in its database.
+    stored: StoredConfig,
     /// Each deployment the router built from `config`, since only the router knows which provider
     /// serves each one.
     deployed: Vec<Deployed>,
@@ -84,8 +86,6 @@ pub struct Admit {
     /// `None` leaves every caller with a model list to Python.
     inference: Option<Arc<Gateway>>,
 }
-
-const STORE_MODEL_IN_DB: &str = "STORE_MODEL_IN_DB";
 
 fn refused(request: Parts, body: Body, reason: Reason) -> (Box<Request>, Reason) {
     tracing::debug!(why = %reason.why, over = %reason.over, "admit refused a request over this");
@@ -108,8 +108,14 @@ fn token_estimate(
 
 impl Admit {
     /// By the `config` the native app `state` is built from, with its environment under it as
-    /// `load_config` leaves it, and the `environment` `main` read.
-    pub fn new(config: &Config, environment: &Environment, state: &AppState) -> Self {
+    /// `load_config` leaves it, the `environment` `main` read, and whether `config` holds the
+    /// config the proxy stores in its database.
+    pub fn new(
+        config: &Config,
+        environment: &Environment,
+        state: &AppState,
+        stored: StoredConfig,
+    ) -> Self {
         let deployments = state
             .inference
             .router
@@ -141,10 +147,7 @@ impl Admit {
             .collect();
         Self {
             environment: environment.clone(),
-            stored_models: state
-                .environment
-                .get(STORE_MODEL_IN_DB)
-                .map(|_| STORE_MODEL_IN_DB.into()),
+            stored,
             auth: state.auth(config),
             aliased,
             inference: Some(state.inference.clone()),
@@ -163,7 +166,7 @@ impl Admit {
             auth: host::auth::auth(config, None),
             config: config.clone(),
             environment: Environment::default(),
-            stored_models: None,
+            stored: StoredConfig::Unused,
             deployed,
             aliased: Vec::new(),
             inference: None,

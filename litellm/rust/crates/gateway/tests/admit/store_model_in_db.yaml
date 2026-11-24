@@ -1,13 +1,32 @@
-# STORE_MODEL_IN_DB makes the proxy serve models and settings from its database on top of the
-# YAML, which the gateway does not read.
+# With STORE_MODEL_IN_DB on the proxy serves models and settings from its database on top of the
+# YAML. Boot layers them into this config, models included, so a stored model is served natively
+# like one in the file. Every other kind of stored object the proxy loads is left out here.
+stored: loaded
 config:
   model_list:
     - model_name: claude
       litellm_params:
         model: anthropic/claude-haiku-5-5
         api_key: provider-key
+    - model_name: stored
+      litellm_params:
+        model: anthropic/claude-haiku-5-5
+        api_key: provider-key
+      model_info:
+        id: 6f1c2a9e-stored
+        db_model: true
+        blocked: false
+    - model_name: stored-blocked
+      litellm_params:
+        model: anthropic/claude-haiku-5-5
+        api_key: provider-key
+      model_info:
+        id: 0b7d41aa-stored
+        db_model: true
+        blocked: true
   general_settings:
     master_key: gateway-key
+    supported_db_objects: [models]
   environment_variables:
     STORE_MODEL_IN_DB: "True"
 
@@ -15,6 +34,14 @@ requests:
   - name: plain
     headers: {authorization: Bearer gateway-key}
     body: {model: claude, max_tokens: 16, messages: []}
+    expect: rust
+  - name: stored_model
+    headers: {authorization: Bearer gateway-key}
+    body: {model: stored, max_tokens: 16, messages: []}
+    expect: rust
+  - name: stored_model_blocked
+    headers: {authorization: Bearer gateway-key}
+    body: {model: stored-blocked, max_tokens: 16, messages: []}
     expect: python
-    reason: settings
-    over: STORE_MODEL_IN_DB
+    reason: model
+    over: model_list.model_info.blocked

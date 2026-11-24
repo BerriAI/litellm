@@ -1192,7 +1192,7 @@ async fn forwarded_body(deployment_params: &str, client_params: Value) -> Value 
         upstream.uri()
     ))
     .unwrap();
-    let config = litellm_gateway::load_config(&path).await.unwrap();
+    let config = litellm_gateway::load_config(&path).await.unwrap().config;
     let mut body = json!({
         "model": "public-model",
         "max_tokens": 8,

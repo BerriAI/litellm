@@ -7,12 +7,18 @@ use litellm_callbacks_model_capacity::NAME as MODEL_CAPACITY;
 use litellm_config::{
     Config, Environment, GeneralSettings, LiteLlmSettings, PriorityReservationSettings,
     RouterSettings, Value,
+    db::switches::{DbObject, SupportedDbObjects},
 };
 
 use super::{
     Admit, Reason, Refused,
     fields::{IsSet, other, unknown},
 };
+use crate::StoredConfig;
+
+const STORE_MODEL_IN_DB: &str = "store_model_in_db";
+/// The `general_settings` keys the config types do not name that the native app honors.
+const HONORED_GENERAL_SETTINGS: [&str; 1] = ["supported_db_objects"];
 
 /// The `litellm_settings` keys a variable can fill, as `Config::with_environment` layers them.
 const LAYERED: [&str; 12] = [
@@ -31,13 +37,59 @@ const LAYERED: [&str; 12] = [
 ];
 
 pub(super) fn settings(admit: &Admit, _: &Parts) -> Option<Reason> {
-    admit
-        .stored_models
-        .iter()
-        .cloned()
-        .chain(unhonored(&admit.config, &admit.environment))
+    if admit.stored == StoredConfig::Unread {
+        return Some(Reason::new(Refused::DbConfigNotLoaded, STORE_MODEL_IN_DB));
+    }
+    unhonored(&admit.config, &admit.environment)
+        .chain(stored_objects(admit))
         .next()
         .map(|over| Reason::new(Refused::Settings, over))
+}
+
+/// Whether the Python proxy loads `object` from its database, with `store_model_in_db` on, into
+/// something a request the native app serves reaches, while the native app does not read it.
+fn not_read_natively(object: DbObject) -> bool {
+    match object {
+        DbObject::Guardrails
+        | DbObject::Policies
+        | DbObject::Tools
+        | DbObject::AnthropicBetaHeaders
+        | DbObject::CacheSettings
+        | DbObject::SemanticFilterSettings
+        | DbObject::WebsearchInterceptionSettings
+        | DbObject::ConfigOverrides
+        | DbObject::ModelCostMap => true,
+        DbObject::Models
+        | DbObject::Mcp
+        | DbObject::VectorStores
+        | DbObject::VectorStoreIndexes
+        | DbObject::Agents
+        | DbObject::PassThroughEndpoints
+        | DbObject::Prompts
+        | DbObject::SearchTools
+        | DbObject::SsoSettings => false,
+    }
+}
+
+/// Each kind of stored object the proxy loads beside the stored config that the native app does
+/// not read, unless `general_settings.supported_db_objects` leaves it out. The native app cannot
+/// tell whether the database holds one, so it serves nothing while one may be loaded.
+fn stored_objects(admit: &Admit) -> impl Iterator<Item = Box<str>> + '_ {
+    let supported = SupportedDbObjects::of(&admit.config.general_settings);
+    <DbObject as strum::VariantArray>::VARIANTS
+        .iter()
+        .filter(move |object| {
+            admit.stored == StoredConfig::Loaded
+                && not_read_natively(**object)
+                && supported.loads(**object)
+        })
+        .map(|object| {
+            format!(
+                "general_settings.supported_db_objects.{}",
+                <&str>::from(*object)
+            )
+            .into()
+        })
 }
 
 /// The setting Python reads only where it sends a Messages request on.
@@ -133,8 +185,10 @@ fn variables(environment: &Environment) -> impl Iterator<Item = Box<str>> + use<
 }
 
 /// The database settings are read as the proxy reads them, and what the proxy holds in its
-/// database beyond keys is not checked. `STORE_MODEL_IN_DB` is `Admit::stored_models`. The JWT settings shape only a caller whose token is a JWT, and the public routes
-/// only one who sends no key.
+/// database beyond keys is not checked here. `store_model_in_db` and `supported_db_objects` are
+/// honored, since boot layers the stored config in, and [`settings`] checks what it could not
+/// load. The JWT settings shape only a caller whose token is a JWT, and the public routes only one
+/// who sends no key.
 fn general(config: &Config) -> impl Iterator<Item = Box<str>> + '_ {
     let GeneralSettings {
         master_key: _,
@@ -170,7 +224,7 @@ fn general(config: &Config) -> impl Iterator<Item = Box<str>> + '_ {
         global_max_parallel_requests,
         max_response_size_mb,
         background_health_checks,
-        store_model_in_db,
+        store_model_in_db: _,
         forward_client_headers_to_llm_api,
         cancel_on_disconnect,
         infer_model_from_keys,
@@ -223,14 +277,17 @@ fn general(config: &Config) -> impl Iterator<Item = Box<str>> + '_ {
         ],
         on: [
             background_health_checks,
-            store_model_in_db,
             forward_client_headers_to_llm_api,
             cancel_on_disconnect,
             infer_model_from_keys,
             dangerously_permit_weak_or_unset_master_key,
         ]
     )
-    .chain(unknown("general_settings.", additional_fields))
+    .chain(other(
+        "general_settings.",
+        additional_fields.keys(),
+        &HONORED_GENERAL_SETTINGS,
+    ))
     .map(|key| spelled(config, key))
 }
 
@@ -383,7 +440,7 @@ fn sections(config: &Config) -> impl Iterator<Item = Box<str>> + '_ {
         assistant_settings,
         default_vertex_config,
         mcp_servers,
-        credential_list,
+        credential_list: _,
         guardrails,
         prompts,
         sandbox_tools,
@@ -406,7 +463,6 @@ fn sections(config: &Config) -> impl Iterator<Item = Box<str>> + '_ {
             assistant_settings,
             default_vertex_config,
             mcp_servers,
-            credential_list,
             guardrails,
             prompts,
             sandbox_tools,
