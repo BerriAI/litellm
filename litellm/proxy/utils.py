@@ -4166,7 +4166,7 @@ class ProxyLogging:
 
     async def during_call_hook(
         self,
-        data: dict,
+        data: dict[str, object],
         user_api_key_dict: UserAPIKeyAuth | None,
         call_type: CallTypesLiteral,
         guardrails_only: bool = False,
@@ -4824,7 +4824,7 @@ class ProxyLogging:
 
     async def post_call_success_hook(
         self,
-        data: dict,
+        data: dict[str, object],
         response: LLMResponseTypes,
         user_api_key_dict: UserAPIKeyAuth,
     ):
@@ -5093,7 +5093,7 @@ class ProxyLogging:
 
     async def post_call_response_headers_hook(
         self,
-        data: dict,
+        data: dict[str, object],
         user_api_key_dict: UserAPIKeyAuth,
         response: object,
         request_headers: dict[str, str] | None = None,
@@ -5229,7 +5229,7 @@ class ProxyLogging:
 
     async def async_post_call_streaming_hook(
         self,
-        data: dict,
+        data: dict[str, object],
         response: object,
         user_api_key_dict: UserAPIKeyAuth,
         str_so_far: str | None = None,
@@ -10787,6 +10787,7 @@ def create_model_info_response(
     fallback_type: str | None = None,
     llm_router: Optional["Router"] = None,
     get_model_info: Callable[[str], ModelInfo] = litellm.get_model_info,
+    team_id: str | None = None,
 ) -> ModelInfoResponse:
     """
     Create a standardized OpenAI-compatible model object.
@@ -10810,7 +10811,9 @@ def create_model_info_response(
     lookup_model: Final = alias_target if alias_target is not None else model_id
 
     listing_info: Final = (
-        llm_router.registry().group(lookup_model, field="listing_info") if llm_router is not None else None
+        llm_router.registry().group(lookup_model, field="listing_info", team_id=team_id)
+        if llm_router is not None
+        else None
     )
 
     # One entry per distinct model behind the listed name; (None,) when the router knows

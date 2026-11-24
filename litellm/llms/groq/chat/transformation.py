@@ -99,7 +99,7 @@ class GroqChatConfig(OpenAILikeChatConfig):
             json_mode=json_mode,
         )
 
-    def get_supported_openai_params(self, model: str) -> list:
+    def get_supported_openai_params(self, model: str) -> list[str]:
         base_params: Final = super().get_supported_openai_params(model)
         try:
             base_params.remove("max_retries")

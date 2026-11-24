@@ -57,7 +57,7 @@ _REDIS_INSTALL_HINT: Final = (
 _SEARCH_ONLY_MESSAGE: Final = "Valkey vector store is search-only; create indexes with FT.CREATE directly"
 
 
-def _import_sync_redis() -> "type[Redis]":
+def _import_sync_redis() -> "type[Redis[bytes]]":
     try:
         from redis import Redis as SyncRedisClient
     except ImportError as e:
@@ -65,7 +65,7 @@ def _import_sync_redis() -> "type[Redis]":
     return SyncRedisClient
 
 
-def _import_async_redis() -> "type[AsyncRedis]":
+def _import_async_redis() -> "type[AsyncRedis[bytes]]":
     try:
         from redis.asyncio import Redis as AsyncRedisClient
     except ImportError as e:
@@ -154,8 +154,8 @@ class _ValkeySearchParams(LiteLLMBaseModel):
 class ValkeyVectorStoreConfig(BaseDirectVectorStoreConfig):
     def __init__(
         self,
-        sync_client: "Redis | None" = None,
-        async_client: "AsyncRedis | None" = None,
+        sync_client: "Redis[bytes] | Redis[str] | None" = None,
+        async_client: "AsyncRedis[bytes] | AsyncRedis[str] | None" = None,
         embedding_fn: Callable[..., EmbeddingResponse] | None = None,
         aembedding_fn: Callable[..., Awaitable[EmbeddingResponse]] | None = None,
     ) -> None:

@@ -40,7 +40,7 @@ _BACKFILL_VALUE: Final = TypeAdapter(object)
 
 
 class LimitedSizeOrderedDict(OrderedDict):
-    def __init__(self, *args, max_size: int = 100, **kwargs):
+    def __init__(self, *args: object, max_size: int = 100, **kwargs):
         super().__init__(*args, **kwargs)
         self.max_size = max_size
 
@@ -459,7 +459,7 @@ class DualCache(BaseCache):
             with_traceback=True,
         )
 
-    async def async_set_cache(self, key, value: object, local_only: bool = False, **kwargs: object):
+    async def async_set_cache(self, key: str, value: object, local_only: bool = False, **kwargs: object):
         print_verbose("async set cache: cache key: %s; local_only: %s; value: %s", key, local_only, value)
         try:
             if self.in_memory_cache is not None:

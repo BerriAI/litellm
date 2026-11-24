@@ -207,7 +207,7 @@ class MistralTextToSpeechConfig(BaseTextToSpeechConfig):
         self,
         error_message: str,
         status_code: int,
-        headers: dict | httpx.Headers,  # mutable-ok: BaseLLMException takes a plain dict or httpx.Headers
+        headers: dict[str, object] | httpx.Headers,  # mutable-ok: BaseLLMException takes a plain dict or httpx.Headers
     ) -> BaseLLMException:
         return MistralTextToSpeechException(
             message=error_message,

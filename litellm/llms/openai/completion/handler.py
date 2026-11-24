@@ -40,7 +40,7 @@ class OpenAITextCompletion(BaseLLM):
         timeout: float,
         custom_llm_provider: str,
         logging_obj: LiteLLMLoggingObj,
-        optional_params: dict,
+        optional_params: dict[str, object],
         print_verbose: Callable[..., object] | None = None,
         api_base: str | None = None,
         acompletion: bool = False,

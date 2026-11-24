@@ -1604,6 +1604,9 @@ class LLMCachingHandler:
             stream=request_kwargs.get("stream", False),
             custom_llm_provider=custom_llm_provider,
         )
+        from litellm.utils import call_headers
+
+        logging_obj.record_call_credential(request_kwargs.get("api_key"), call_headers(request_kwargs))
 
         logging_obj.caching_details = CachingDetails(
             cache_hit=True,

@@ -210,7 +210,7 @@ impl<'a, H: RouterHost> Call<'a, H> {
         }
     }
 
-    pub(crate) fn health(&self) -> Health<&'a H::Cache> {
+    pub(crate) fn health(&self) -> Health<'a, H::Cache> {
         Health::new(self.host.cache(), self.core.clock.clone())
     }
 
@@ -465,7 +465,7 @@ impl Router {
     }
 
     /// The routing state `cache` holds, read and written by this router's clock.
-    pub fn health<'a, C: RouterCache>(&self, cache: &'a C) -> Health<&'a C> {
+    pub fn health<'a, C: RouterCache>(&self, cache: &'a C) -> Health<'a, C> {
         Health::new(cache, self.core.clock.clone())
     }
 

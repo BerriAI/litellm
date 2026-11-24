@@ -286,7 +286,7 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
     def get_websocket_url(
         self,
         api_base: str | None,
-        litellm_params: dict,
+        litellm_params: dict[str, object],
     ) -> str:
         """
         Azure Responses WebSocket endpoint is at /openai/v1/responses with no

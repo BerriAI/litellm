@@ -50,7 +50,9 @@ from .redis_semantic_cache import RedisSemanticCache
 from .s3_cache import S3Cache
 
 RESPONSE_CACHE_TARGET: Final = "llm_response"
-_ALWAYS_KEYED_PROVIDER_PARAMS: Final = frozenset({"continuation_token", "return_token_ids"})
+_ALWAYS_KEYED_PROVIDER_PARAMS: Final = frozenset(
+    {"continuation_token", "return_token_ids", "responseFormat", "generationConfig", "generation_config"}
+)
 _DECODED_LITERAL: Final = TypeAdapter(object)
 _REDIS_STARTUP_NODES_ADAPTER: Final = TypeAdapter(
     list[dict[str, object]], config=ConfigDict(strict=True, hide_input_in_errors=True)
@@ -685,8 +687,8 @@ class Cache:
     def _get_param_value(
         self,
         param: str,
-        kwargs: dict,
-    ) -> str | None:
+        kwargs: dict[str, object],
+    ) -> object:
         """
         Get the value for the given param from kwargs
         """
@@ -1161,7 +1163,7 @@ class Cache:
         self,
         result: EmbeddingResponse,
         input: str,
-        kwargs: dict,
+        kwargs: dict[str, object],
         idx_in_result_data: int = 0,
     ) -> tuple[str, dict[str, object], dict[str, object]]:
         preset_cache_key: Final = self.get_cache_key(**{**kwargs, "input": input})

@@ -290,7 +290,7 @@ class XecGuardGuardrail(CustomGuardrail):
 
     def logging_hook(
         self,
-        kwargs: dict,
+        kwargs: dict[str, object],
         result: object,
         call_type: str,
     ) -> tuple[dict, object]:

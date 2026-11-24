@@ -280,7 +280,10 @@ from litellm.types.videos.main import VideoObject
 from litellm.types.videos.utils import POLLED_VIDEO_STATUS_KWARG
 from litellm.utils import (
     get_base_model_from_metadata,
+    get_model_info_for_call,
+    model_info_lookup_api_key,
     print_verbose,
+    sent_bearer_credential,
 )
 
 from ..integrations.argilla import ArgillaLogger
@@ -446,6 +449,7 @@ _CLIENT_DISCONNECTED_ERROR_INFORMATION: Final[StandardLoggingPayloadErrorInforma
     "error_class": "ClientDisconnected",
 }
 _METADATA_MAPPING: Final = TypeAdapter(Mapping[str, object])
+_REQUEST_MAPPING: Final = TypeAdapter(Mapping[str, object])
 _RESPONSE_MAPPING: Final = TypeAdapter(Mapping[str, object])
 _MODEL_INFO_CUSTOM_PRICING_KEYS: Final[frozenset[str]] = _CUSTOM_PRICING_KEYS | DEPLOYMENT_SCOPED_PRICING_FIELDS
 _UNSERIALIZABLE_METADATA_KEYS: Final[frozenset[str]] = frozenset(
@@ -1271,6 +1275,8 @@ class Logging(LiteLLMLoggingBaseClass):
         # Passthrough endpoint guardrails config for field targeting
         self.passthrough_guardrails_config: dict[str, object] | None = None
 
+        self.model_info_api_key: str | None = None
+
         self.model_call_details: dict[str, Any] = {
             "litellm_trace_id": self.litellm_trace_id,
             "litellm_call_id": litellm_call_id,
@@ -2059,7 +2065,7 @@ class Logging(LiteLLMLoggingBaseClass):
             return custom_logger
         return None
 
-    def _get_raw_request_body(self, data: dict | str | None) -> dict:
+    def _get_raw_request_body(self, data: dict[str, object] | str | None) -> dict:
         if data is None:
             return {"error": "Received empty dictionary for raw request body"}
         if isinstance(data, str):
@@ -2071,6 +2077,16 @@ class Logging(LiteLLMLoggingBaseClass):
 
     def _get_masked_api_base(self, api_base: str | None) -> str:
         return str(mask_api_base_credentials(api_base or ""))
+
+    def record_call_credential(self, api_key: object, headers: object) -> None:
+        provider: Final = self.model_call_details.get("custom_llm_provider")
+        self.model_info_api_key = model_info_lookup_api_key(
+            self.model, provider if isinstance(provider, str) else None, sent_bearer_credential(headers, api_key)
+        )
+
+    def record_call_target(self, api_base: str | None, api_key: object, headers: object) -> None:
+        self.record_call_credential(api_key, headers)
+        self.model_call_details["litellm_params"]["api_base"] = self._get_masked_api_base(api_base)
 
     def _pre_call(self, input: object, api_key: object, model: object = None, additional_args={}):
         """
@@ -2091,8 +2107,12 @@ class Logging(LiteLLMLoggingBaseClass):
             )
         if model:  # if model name was changes pre-call, overwrite the initial model call name with the new one
             self.model_call_details["model"] = model
-        self.model_call_details["litellm_params"]["api_base"] = self._get_masked_api_base(
-            additional_args.get("api_base", "")
+        request: Final = _REQUEST_MAPPING.validate_python(additional_args)
+        api_base: Final = request.get("api_base")
+        self.record_call_target(
+            str(api_base) if api_base else None,
+            api_key if isinstance(api_key, str) else None,
+            request.get("headers"),
         )
 
     def pre_call(self, input, api_key: object, model: object = None, additional_args={}):
@@ -3047,6 +3067,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 model=self.model or "",
                 logging_obj=self,
                 raw_response=httpx.Response(status_code=200, headers={}),
+                keeps_requested_audio_format=True,
             )
         except Exception as e:  # noqa: BLE001 - cost normalization must never break the response path
             verbose_logger.debug("generate_content response cost normalization failed: %s", e)
@@ -6615,6 +6636,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 status_code=200,
                 headers={},
             ),
+            keeps_requested_audio_format=True,
         )
         return result
 
@@ -8150,7 +8172,7 @@ class StandardLoggingPayloadSetup:
         mcp_tool_call_metadata: StandardLoggingMCPToolCall | None = None,
         vector_store_request_metadata: list[StandardLoggingVectorStoreRequest] | None = None,
         usage_object: dict | None = None,
-        proxy_server_request: dict | None = None,
+        proxy_server_request: Mapping[str, object] | None = None,
         start_time: dt_object | None = None,
         response_id: str | None = None,
         custom_llm_provider: str | None = None,
@@ -8343,6 +8365,7 @@ class StandardLoggingPayloadSetup:
         init_response_obj: object,
         api_base: str | None = None,
         router_model_id: str | None = None,
+        api_key: str | None = None,
         custom_model_info: ModelInfo | None = None,
     ) -> StandardLoggingModelInformation:
         model_cost_name: Final = select_model_name_for_cost_calc(
@@ -8368,10 +8391,11 @@ class StandardLoggingPayloadSetup:
             model_cost_information = StandardLoggingModelInformation(model_map_key="", model_map_value=None)
         else:
             try:
-                _model_cost_information: Final = litellm.get_model_info(
+                _model_cost_information: Final = get_model_info_for_call(
                     model=pricing_model_name or model_cost_name,
                     custom_llm_provider=custom_llm_provider,
                     api_base=api_base,
+                    api_key=api_key,
                 )
                 model_cost_information = StandardLoggingModelInformation(
                     model_map_key=model_cost_name,
@@ -9140,6 +9164,7 @@ def get_standard_logging_object_payload(
             init_response_obj=init_response_obj,
             api_base=litellm_params.get("api_base"),
             router_model_id=logging_obj.get_router_model_id(),
+            api_key=logging_obj.model_info_api_key,
             custom_model_info=logging_obj.custom_model_info if custom_pricing else None,
         )
 

@@ -28,7 +28,7 @@ from litellm.types.utils import GenericGuardrailAPIInputs
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-    from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
+    from litellm.types.proxy.guardrails.guardrail_hooks.prompt_security import PromptSecurityGuardrailConfigModel
 
 
 _SANITIZE_FILE_FAIL_OPEN_TIMEOUT_SECONDS: Final = 30.0
@@ -176,7 +176,7 @@ class PromptSecurityGuardrail(CustomGuardrail):
     async def apply_guardrail(
         self,
         inputs: GenericGuardrailAPIInputs,
-        request_data: dict,
+        request_data: dict[str, object],
         input_type: Literal["request", "response"],
         logging_obj: Optional["LiteLLMLoggingObj"] = None,
     ) -> GenericGuardrailAPIInputs:
@@ -247,8 +247,8 @@ class PromptSecurityGuardrail(CustomGuardrail):
         inputs: GenericGuardrailAPIInputs,
         texts: list[str],
         images: list[str],
-        structured_messages: list,
-        request_data: dict,
+        structured_messages: Sequence[AllMessageValues],
+        request_data: object,
         user_api_key_alias: str | None,
     ) -> GenericGuardrailAPIInputs:
         """Handle request-side guardrail checks."""
@@ -740,7 +740,7 @@ class PromptSecurityGuardrail(CustomGuardrail):
 
         return processed_messages
 
-    def filter_messages_by_role(self, messages: list) -> list:
+    def filter_messages_by_role(self, messages: Sequence[Mapping[str, object]]) -> Sequence[Mapping[str, object]]:
         """Filter messages to only include standard OpenAI/Anthropic roles.
 
         Behavior depends on check_tool_results flag:
@@ -749,7 +749,7 @@ class PromptSecurityGuardrail(CustomGuardrail):
 
         This allows checking tool results for indirect prompt injection when enabled.
         """
-        filtered_messages: Final = []
+        filtered_messages: Final[list[Mapping[str, object]]] = []
         transformed_count = 0
         filtered_count = 0
 
@@ -831,7 +831,7 @@ class PromptSecurityGuardrail(CustomGuardrail):
         )
 
     @staticmethod
-    def get_config_model() -> type["GuardrailConfigModel"] | None:
+    def get_config_model() -> type["PromptSecurityGuardrailConfigModel"] | None:
         from litellm.types.proxy.guardrails.guardrail_hooks.prompt_security import (
             PromptSecurityGuardrailConfigModel,
         )
