@@ -3662,6 +3662,13 @@ def durable_model_cost_registration(key: str) -> Mapping[str, object] | None:
     return _runtime_registered_model_cost.get(key)
 
 
+def catalog_row_with_runtime_registrations(key: str) -> Mapping[str, object] | None:
+    """The loaded catalog row plus ``register_model`` calls, without what routers register for their deployments."""
+    loaded: Final = GetModelCostMap.loaded_model_cost_map().get(key)
+    registered: Final = durable_model_cost_registration(key)
+    return loaded if registered is None else {**(loaded or {}), **registered}
+
+
 def runtime_model_cost_registrations(
     model: str, custom_llm_provider: str
 ) -> tuple[tuple[str, Mapping[str, object]], ...]:
@@ -5068,7 +5075,8 @@ def get_optional_params(
         else get_supported_openai_params(model=model, custom_llm_provider=custom_llm_provider, base_model=base_model)
     )
     if supported_params is None:
-        supported_params = get_supported_openai_params(model=model, custom_llm_provider="openai")
+        fallback_config: Final = litellm.OpenAIConfig().config_for_openai_compatible_provider(model=model)
+        supported_params = fallback_config.get_supported_openai_params(model=model)
 
     supported_params = supported_params or []
     supported_params.extend(allowed_openai_param_names(allowed_openai_params))
@@ -9430,7 +9438,7 @@ class ProviderConfigManager:
 
             if litellm.openaiOSeriesConfig.is_model_o_series_model(model=model):
                 return litellm.openaiOSeriesConfig
-            if litellm.OpenAIGPT5Config.is_model_gpt_5_model(model=model):
+            if litellm.OpenAIGPT5Config.is_openai_gpt_5_model(model=model):
                 return litellm.OpenAIGPT5Config()
             if not OpenAIGPTConfig.is_openai_catalog_model(model):
                 return OpenAIUnknownModelConfig()

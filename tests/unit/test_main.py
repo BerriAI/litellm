@@ -53,6 +53,7 @@ from litellm.types.prompts.init_prompts import PromptSpec
 from litellm.types.utils import (
     ChoiceLogprobs,
     Delta,
+    ModelResponse,
     ModelResponseStream,
     StandardCallbackDynamicParams,
     StreamingChoices,
@@ -2350,6 +2351,185 @@ def test_responses_api_bridge_check_azure_ai_without_foundry_responses_route_sta
 
     assert model == model_name
     assert model_info.get("mode") != "responses"
+
+
+@pytest.mark.parametrize(
+    "model_name, base_model, reasoning_effort, bridges",
+    [
+        pytest.param("qa-prod-reasoner", "azure_ai/gpt-5.6-sol", "high", True, id="custom-name-gpt-5.6-base"),
+        pytest.param("qa-prod-reasoner", "gpt-5.6-sol", "high", True, id="custom-name-unprefixed-base"),
+        pytest.param("qa-prod-reasoner", "azure_ai/gpt-5.6-sol", None, False, id="custom-name-unset-effort"),
+        pytest.param("qa-prod-reasoner", "azure_ai/gpt-5.5", "high", False, id="custom-name-gpt-5.5-base"),
+        pytest.param("qa-prod-reasoner", None, "high", False, id="custom-name-no-base"),
+        pytest.param("Phi-4", "azure_ai/gpt-5.6-sol", "high", False, id="known-name-keeps-own"),
+        pytest.param("gpt-5.6-qa-name", "azure_ai/gpt-5.5", "high", True, id="gpt-5.6-name-keeps-own-with-older-base"),
+    ],
+)
+def test_responses_api_bridge_check_azure_ai_custom_name_routes_by_gpt_5_base_model(
+    model_name, base_model, reasoning_effort, bridges
+):
+    from litellm.main import responses_api_bridge_check
+
+    model_info, model = responses_api_bridge_check(
+        model=model_name,
+        custom_llm_provider="azure_ai",
+        tools=_FOUNDRY_FUNCTION_TOOL,
+        reasoning_effort=reasoning_effort,
+        api_base=_FOUNDRY_API_BASE,
+        base_model=base_model,
+    )
+
+    assert model == model_name
+    assert (model_info.get("mode") == "responses") is bridges
+
+
+def test_completion_bridges_azure_ai_custom_name_with_gpt_5_6_base_model_to_responses(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    responses_route: Final = respx_mock.post(f"{_FOUNDRY_API_BASE}/openai/v1/responses").respond(
+        json=_FOUNDRY_RESPONSES_FUNCTION_CALL_BODY
+    )
+
+    response: Final = litellm.completion(
+        model="azure_ai/qa-prod-reasoner",
+        messages=[{"role": "user", "content": "What is the weather in Paris? Use the tool."}],
+        tools=_FOUNDRY_FUNCTION_TOOL,
+        reasoning_effort="high",
+        max_tokens=200,
+        api_base=_FOUNDRY_API_BASE,
+        api_key="fake-foundry-key",
+        model_info={"base_model": "azure_ai/gpt-5.6-sol"},
+    )
+
+    assert [str(call.request.url) for call in respx_mock.calls] == [f"{_FOUNDRY_API_BASE}/openai/v1/responses"]
+    request_body: Final = json.loads(responses_route.calls[0].request.content)
+    assert request_body["model"] == "qa-prod-reasoner"
+    assert request_body["reasoning"]["effort"] == "high"
+    assert response.choices[0].message.tool_calls[0].function.name == "get_weather"
+
+
+def _bridged_foundry_completion(**request_params: object) -> ModelResponse:
+    response: Final = litellm.completion(
+        model="azure_ai/qa-prod-reasoner",
+        messages=[{"role": "user", "content": "What is the weather in Paris? Use the tool."}],
+        tools=_FOUNDRY_FUNCTION_TOOL,
+        reasoning_effort="high",
+        api_base=_FOUNDRY_API_BASE,
+        api_key="fake-foundry-key",
+        **request_params,
+    )
+    assert isinstance(response, ModelResponse)
+    return response
+
+
+@pytest.mark.parametrize(
+    "base_model_source",
+    [{"model_info": {"base_model": "azure_ai/gpt-5.6-sol"}}, {"base_model": "azure_ai/gpt-5.6-sol"}],
+    ids=["model_info", "litellm_params"],
+)
+@pytest.mark.parametrize(("param", "value"), [("n", 2), ("seed", 7), ("seed", 0)])
+def test_completion_refuses_a_param_responses_lacks_when_a_gpt_5_base_model_bridges_a_custom_foundry_name(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    base_model_source: Mapping[str, object],
+    param: str,
+    value: int,
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    responses_route: Final = respx_mock.post(f"{_FOUNDRY_API_BASE}/openai/v1/responses").respond(
+        json=_FOUNDRY_RESPONSES_FUNCTION_CALL_BODY
+    )
+
+    with pytest.raises(litellm.UnsupportedParamsError, match=f"`{param}`") as refusal:
+        _bridged_foundry_completion(**base_model_source, **{param: value})
+
+    assert "litellm_settings: drop_params: true" in str(refusal.value)
+    assert responses_route.call_count == 0
+
+
+def test_completion_sends_n_of_1_when_a_gpt_5_base_model_bridges_a_custom_foundry_name(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    responses_route: Final = respx_mock.post(f"{_FOUNDRY_API_BASE}/openai/v1/responses").respond(
+        json=_FOUNDRY_RESPONSES_FUNCTION_CALL_BODY
+    )
+
+    response: Final = _bridged_foundry_completion(model_info={"base_model": "azure_ai/gpt-5.6-sol"}, n=1)
+
+    assert responses_route.call_count == 1
+    assert response.choices[0].message.tool_calls[0].function.name == "get_weather"
+
+
+def _responses_prefixed_foundry_request_body(respx_mock: respx.MockRouter, **request_params: object) -> object:
+    responses_route: Final = respx_mock.post(f"{_FOUNDRY_API_BASE}/openai/v1/responses").respond(
+        json=_FOUNDRY_RESPONSES_FUNCTION_CALL_BODY
+    )
+    litellm.completion(
+        model="azure_ai/responses/qa-prod-reasoner",
+        messages=[{"role": "user", "content": "What is the weather in Paris?"}],
+        api_base=_FOUNDRY_API_BASE,
+        api_key="fake-foundry-key",
+        **request_params,
+    )
+    return json.loads(responses_route.calls[-1].request.content)
+
+
+@pytest.mark.parametrize(("param", "value"), [("n", 2), ("seed", 7)])
+def test_a_gpt_5_base_model_leaves_n_and_seed_alone_on_a_foundry_name_already_routed_to_responses(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, param: str, value: int
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+
+    with_base_model: Final = _responses_prefixed_foundry_request_body(
+        respx_mock, model_info={"base_model": "azure_ai/gpt-5.6-sol"}, **{param: value}
+    )
+
+    assert with_base_model == _responses_prefixed_foundry_request_body(respx_mock, **{param: value})
+
+
+def test_completion_drops_n_and_seed_under_drop_params_when_a_gpt_5_base_model_bridges_a_custom_foundry_name(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    responses_route: Final = respx_mock.post(f"{_FOUNDRY_API_BASE}/openai/v1/responses").respond(
+        json=_FOUNDRY_RESPONSES_FUNCTION_CALL_BODY
+    )
+
+    response: Final = _bridged_foundry_completion(
+        model_info={"base_model": "azure_ai/gpt-5.6-sol"}, n=2, seed=7, drop_params=True
+    )
+
+    request_body: Final = json.loads(responses_route.calls[0].request.content)
+    assert "n" not in request_body
+    assert "seed" not in request_body
+    assert response.choices[0].message.tool_calls[0].function.name == "get_weather"
+
+
+@pytest.mark.parametrize(("param", "value"), [("n", 2), ("seed", 7)])
+def test_completion_keeps_main_handling_when_the_route_not_the_gpt_5_base_model_chose_responses(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, param: str, value: int
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    responses_route: Final = respx_mock.post(f"{_FOUNDRY_API_BASE}/openai/v1/responses").respond(
+        json=_FOUNDRY_RESPONSES_FUNCTION_CALL_BODY
+    )
+
+    response: Final = litellm.completion(
+        model="azure_ai/responses/qa-prod-reasoner",
+        messages=[{"role": "user", "content": "What is the weather in Paris? Use the tool."}],
+        tools=_FOUNDRY_FUNCTION_TOOL,
+        reasoning_effort="high",
+        api_base=_FOUNDRY_API_BASE,
+        api_key="fake-foundry-key",
+        model_info={"base_model": "azure_ai/gpt-5.6-sol"},
+        **{param: value},
+    )
+
+    assert responses_route.call_count == 1
+    assert json.loads(responses_route.calls[0].request.content)["model"] == "qa-prod-reasoner"
+    assert response.choices[0].message.tool_calls[0].function.name == "get_weather"
 
 
 def test_responses_api_bridge_check_older_gpt_5_tools_without_reasoning_stays_chat():

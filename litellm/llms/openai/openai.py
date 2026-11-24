@@ -51,7 +51,7 @@ from litellm.utils import (
 
 from ...types.llms.openai import *
 from ..base import BaseLLM
-from .chat.gpt_5_transformation import OpenAIGPT5Config
+from .chat.gpt_5_transformation import OpenAIGPT5Config, is_chat_latest_name
 from .chat.gpt_transformation import OpenAIGPTConfig, OpenAIUnknownModelConfig
 from .chat.o_series_transformation import OpenAIOSeriesConfig
 from .common_utils import (
@@ -184,7 +184,7 @@ class OpenAIConfig(BaseConfig):
     def get_config(cls):
         return super().get_config()
 
-    def get_supported_openai_params(self, model: str) -> list:
+    def get_supported_openai_params(self, model: str) -> list[str]:
         """
         This function returns the list
         of supported openai parameters for a given OpenAI Model
@@ -201,12 +201,22 @@ class OpenAIConfig(BaseConfig):
         """
         if openaiOSeriesConfig.is_model_o_series_model(model=model):
             return openaiOSeriesConfig.get_supported_openai_params(model=model)
-        elif openAIGPT5Config.is_model_gpt_5_model(model=model):
+        elif self._routes_to_gpt_5_config(model):
             return openAIGPT5Config.get_supported_openai_params(model=model)
         elif litellm.openAIGPTAudioConfig.is_model_gpt_audio_model(model=model):
             return litellm.openAIGPTAudioConfig.get_supported_openai_params(model=model)
         else:
             return self._gpt_config_for_model(model).get_supported_openai_params(model=model)
+
+    def config_for_openai_compatible_provider(self, model: str) -> "OpenAIConfig | OpenAIGPTConfig":
+        if is_chat_latest_name(model):
+            return self._gpt_config_for_model(model)
+        return self
+
+    def _routes_to_gpt_5_config(self, model: str) -> bool:
+        if type(self) is OpenAIConfig:
+            return openAIGPT5Config.is_openai_gpt_5_model(model)
+        return not is_chat_latest_name(model) and openAIGPT5Config.is_model_gpt_5_model(model=model)
 
     def _gpt_config_for_model(self, model: str) -> OpenAIGPTConfig:
         if type(self) is OpenAIConfig and not OpenAIGPTConfig.is_openai_catalog_model(model):
@@ -250,7 +260,7 @@ class OpenAIConfig(BaseConfig):
                 declared_reasoning_efforts=declared_reasoning_efforts,
                 allowed_openai_params=allowed_openai_params,
             )
-        elif openAIGPT5Config.is_model_gpt_5_model(model=model):
+        elif self._routes_to_gpt_5_config(model):
             return openAIGPT5Config.map_openai_params(
                 non_default_params=non_default_params,
                 optional_params=optional_params,

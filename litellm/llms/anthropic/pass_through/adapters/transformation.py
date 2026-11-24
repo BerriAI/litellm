@@ -238,6 +238,7 @@ class ChatRouteInputs:
     api_base: str | None = None
     thinking: Mapping[str, object] | None = None
     reasoning_summary: object | None = None
+    base_model: str | None = None
 
 
 _NO_ROUTE_INPUTS: Final = ChatRouteInputs()
@@ -283,6 +284,7 @@ def _keeps_encrypted_reasoning_for_responses(
         reasoning_effort=route.reasoning_effort,
         reasoning_summary=route.reasoning_summary,
         api_base=route.api_base,
+        base_model=route.base_model,
     )
 
 
@@ -350,6 +352,7 @@ class AnthropicAdapter:
         api_base: str | None = None,
         deployment_model_info: Mapping[str, object] | None = None,
         reasoning_summary: object | None = None,
+        base_model: str | None = None,
         drop_params: bool = True,
         translate_bare_output_effort: bool = False,
     ) -> tuple[ChatCompletionRequest | None, dict[str, str]]:
@@ -388,6 +391,7 @@ class AnthropicAdapter:
             api_base=api_base,
             deployment_model_info=deployment_model_info,
             reasoning_summary=reasoning_summary,
+            base_model=base_model,
             drop_params=drop_params,
             translate_bare_output_effort=translate_bare_output_effort,
         )
@@ -1379,6 +1383,7 @@ class LiteLLMAnthropicMessagesAdapter:
         api_base: str | None = None,
         reasoning_summary: object | None = None,
         preserve_midturn_system: bool = False,
+        base_model: str | None = None,
         deployment_model_info: Mapping[str, object] | None = None,
         drop_params: bool = True,
         translate_bare_output_effort: bool = False,
@@ -1439,6 +1444,7 @@ class LiteLLMAnthropicMessagesAdapter:
                 api_base=api_base,
                 thinking=anthropic_message_request.get("thinking"),
                 reasoning_summary=reasoning_summary,
+                base_model=base_model,
             ),
         )
         ## ADD SYSTEM MESSAGE TO MESSAGES
