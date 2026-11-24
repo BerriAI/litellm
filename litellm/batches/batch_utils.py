@@ -201,6 +201,7 @@ class _BatchOutputLineStats:
     reasoning_tokens: int
     model: str | None
     usage: Usage | None
+    provider_failed: bool = False
 
 
 def _classify_output_line_stats(
@@ -214,13 +215,28 @@ def _classify_output_line_stats(
     a second read of a potentially huge output file. A line the provider reported as
     failed yields ``PROVIDER_FAILED``; a successful line litellm could not price
     yields ``UNCOSTABLE`` and still counts as a successful request billed at $0, so
-    the counts stay reconcilable with the provider's own ``request_counts``."""
+    the counts stay reconcilable with the provider's own ``request_counts``. A failed
+    line that still reports usage was billed by the provider, so it is priced and
+    counted as failed."""
     for entry in entries:
-        if not _batch_response_was_successful(entry, custom_llm_provider):
-            yield _LineOutcome.PROVIDER_FAILED
+        if _batch_response_was_successful(entry, custom_llm_provider):
+            stats = _safe_output_line_stats(entry, custom_llm_provider, model_name, model_info, vertex_location)
+            yield stats if stats is not None else _LineOutcome.UNCOSTABLE
             continue
-        stats = _safe_output_line_stats(entry, custom_llm_provider, model_name, model_info, vertex_location)
-        yield stats if stats is not None else _LineOutcome.UNCOSTABLE
+        billed = (
+            _safe_output_line_stats(entry, custom_llm_provider, model_name, model_info, vertex_location)
+            if _failed_line_reports_usage(entry, custom_llm_provider)
+            else None
+        )
+        yield _LineOutcome.PROVIDER_FAILED if billed is None else dataclasses_replace(billed, provider_failed=True)
+
+
+def _failed_line_reports_usage(entry: Mapping[str, object], custom_llm_provider: str) -> bool:
+    if custom_llm_provider in ("anthropic", "bedrock"):
+        return False
+    envelope: Final = entry.get("response")
+    body: Final = envelope.get("body") if isinstance(envelope, Mapping) else None
+    return isinstance(body, Mapping) and isinstance(body.get("usage"), Mapping)
 
 
 def _safe_output_line_stats(
@@ -391,7 +407,12 @@ def _aggregate_batch_cost_usage_models(
         _classify_output_line_stats(entries, custom_llm_provider, model_name, model_info, vertex_location)
     )
     line_stats: Final = tuple(result for result in all_results if isinstance(result, _BatchOutputLineStats))
-    failed_requests: Final = sum(1 for result in all_results if result is _LineOutcome.PROVIDER_FAILED)
+    failed_requests: Final = sum(
+        1
+        for result in all_results
+        if result is _LineOutcome.PROVIDER_FAILED
+        or (isinstance(result, _BatchOutputLineStats) and result.provider_failed)
+    )
     successful_requests: Final = len(all_results) - failed_requests
 
     cache_token_params: Final = {

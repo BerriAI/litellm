@@ -588,8 +588,10 @@ class TestVertexBatchOutputTransformation:
         assert result["error"]["code"] == "vertex_ai_error"
         assert result["custom_id"] == "request-error"
 
-    def test_malformed_rows_without_output_become_error_rows_and_other_rows_stay_responses(self, config):
-        def row(custom_id: str, candidate: dict) -> dict:
+    def test_malformed_rows_without_output_become_billed_error_rows_and_other_rows_stay_responses(self, config):
+        usage_metadata: Final = {"promptTokenCount": 9, "candidatesTokenCount": 4, "totalTokenCount": 13}
+
+        def row(custom_id: str, candidate: Mapping[str, object]) -> Mapping[str, object]:
             return {
                 "status": "",
                 "processed_time": "2026-11-23T18:13:16.826+00:00",
@@ -600,29 +602,34 @@ class TestVertexBatchOutputTransformation:
                 "response": {
                     "candidates": [candidate],
                     "modelVersion": "gemini-3.8-flash",
-                    "usageMetadata": {"promptTokenCount": 9, "candidatesTokenCount": 4, "totalTokenCount": 13},
+                    "usageMetadata": usage_metadata,
                 },
             }
 
-        text_parts = {"role": "model", "parts": [{"text": "Paris is 12C."}]}
-        rows = [
+        text_parts: Final = {"role": "model", "parts": [{"text": "Paris is 12C."}]}
+        rows: Final = (
             row("call", {"content": {"role": "model", "parts": []}, "finishReason": "MALFORMED_FUNCTION_CALL"}),
             row("response", {"finishReason": "MALFORMED_RESPONSE"}),
             row("call-with-text", {"content": text_parts, "finishReason": "MALFORMED_FUNCTION_CALL"}),
             row("stop", {"content": text_parts, "finishReason": "STOP"}),
-        ]
+        )
 
-        transformed = config._try_transform_vertex_batch_output_to_openai(
+        transformed: Final = config._try_transform_vertex_batch_output_to_openai(
             "\n".join(json.dumps(r) for r in rows).encode("utf-8")
         )
-        results = {r["custom_id"]: r for r in map(json.loads, transformed.decode("utf-8").splitlines())}
+        results: Final = {r["custom_id"]: r for r in map(json.loads, transformed.decode("utf-8").splitlines())}
 
         for custom_id, native_reason in (("call", "MALFORMED_FUNCTION_CALL"), ("response", "MALFORMED_RESPONSE")):
-            assert results[custom_id]["response"] is None
-            assert results[custom_id]["error"]["code"] == "vertex_ai_error"
-            assert native_reason in results[custom_id]["error"]["message"]
+            failed: Final = results[custom_id]
+            assert failed["error"] is None
+            assert failed["response"]["status_code"] == 500
+            assert failed["response"]["body"]["error"]["code"] == "vertex_ai_error"
+            assert native_reason in failed["response"]["body"]["error"]["message"]
+            assert failed["response"]["body"]["usage"]["total_tokens"] == usage_metadata["totalTokenCount"]
+            assert "choices" not in failed["response"]["body"]
         for custom_id in ("call-with-text", "stop"):
             assert results[custom_id]["error"] is None
+            assert results[custom_id]["response"]["status_code"] == 200
             assert results[custom_id]["response"]["body"]["choices"][0]["message"]["content"] == "Paris is 12C."
 
     def test_transform_exception_path_sets_response_null(self, config):

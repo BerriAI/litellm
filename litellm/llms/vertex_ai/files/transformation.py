@@ -465,6 +465,25 @@ def _openai_batch_output_row(
     }
 
 
+def _openai_batch_http_error_row(
+    custom_id: str, response: Mapping[str, object], error: _OpenAIBatchOutputError
+) -> _OpenAIBatchOutputRow:
+    """
+    A row for a request the provider ran and billed but that failed, in OpenAI's shape for an HTTP error:
+    `response.status_code` 500 with the error and the billed `usage` in `response.body`, and `error` null.
+    """
+    return {
+        "id": f"batch_req_{uuid.uuid4()}",
+        "custom_id": custom_id,
+        "response": {
+            "status_code": 500,
+            "request_id": response.get("id", ""),
+            "body": {"error": error, "model": response.get("model"), "usage": response.get("usage")},
+        },
+        "error": None,
+    }
+
+
 def _vertex_anthropic_batch_output_row_to_openai(
     custom_id: str,
     response: object,
@@ -2017,15 +2036,13 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
             )
 
             malformed: Final = malformed_without_output_message(transformed_response)
-            if malformed is not None:
-                return _openai_batch_output_row(
-                    custom_id=custom_id, error_code="vertex_ai_error", error_message=malformed
-                )
-
-            # Convert ModelResponse to dict
             response_dict: Final = transformed_response.model_dump()
-
-            # Return in OpenAI batch format
+            if malformed is not None:
+                return _openai_batch_http_error_row(
+                    custom_id=custom_id,
+                    response=response_dict,
+                    error={"code": "vertex_ai_error", "message": malformed},
+                )
             return _openai_batch_output_row(custom_id=custom_id, body=response_dict)
 
         except Exception as e:
