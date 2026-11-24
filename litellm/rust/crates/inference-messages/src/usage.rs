@@ -5,9 +5,11 @@
 
 use litellm_cost::call::{InferenceGeo, Speed};
 use litellm_cost::query::{CacheReads, CacheWrites, Modalities, TokenUsage, WebSearchUse};
-use litellm_llms_types::formats::messages::{
-    CacheCreationUsage, MessagesUsage, Speed as WireSpeed, UsageIteration,
+use litellm_llms_types::{
+    formats::messages::{CacheCreationUsage, MessagesUsage, Speed as WireSpeed, UsageIteration},
+    recognized::Recognized,
 };
+use serde_json::Value;
 
 /// A call's billed quantities and the service tier the provider says it served
 #[derive(Clone, Debug, PartialEq)]
@@ -56,9 +58,10 @@ pub(crate) fn metered(usage: &MessagesUsage, context: UsageContext) -> Option<Me
         counts.cache_creation,
         cache_creation_details(usage, iterations),
     );
-    let speed = match usage.speed {
-        Some(served) => served == WireSpeed::Fast,
-        None => context.requested_fast,
+    let speed = match &usage.speed {
+        Some(Recognized::Known(served)) => *served == WireSpeed::Fast,
+        Some(Recognized::Unrecognized(Value::String(_))) => false,
+        Some(Recognized::Unrecognized(_)) | None => context.requested_fast,
     };
     Some(Metered {
         usage: TokenUsage {
@@ -238,6 +241,8 @@ mod tests {
     #[case::served_fast(json!("fast"), false, true)]
     #[case::served_standard_overrides_a_fast_request(json!("standard"), true, false)]
     #[case::requested_fast_when_the_usage_is_silent(json!(null), true, true)]
+    #[case::a_speed_it_does_not_know_is_served_standard(json!("turbo"), true, false)]
+    #[case::a_speed_that_is_not_text_falls_back_to_the_request(json!(1), true, true)]
     fn the_served_speed_wins_over_the_requested_one(
         #[case] served: serde_json::Value,
         #[case] requested_fast: bool,

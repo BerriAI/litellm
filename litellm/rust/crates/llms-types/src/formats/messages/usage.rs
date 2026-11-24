@@ -49,7 +49,7 @@ pub struct MessagesUsage {
     pub output_tokens_details: Option<MessagesOutputTokensDetails>,
     pub service_tier: Option<String>,
     pub inference_geo: Option<String>,
-    pub speed: Option<super::Speed>,
+    pub speed: Option<Recognized<super::Speed>>,
     pub iterations: Option<Vec<UsageIteration>>,
     #[serde(flatten)]
     pub extra: Map<String, Value>,

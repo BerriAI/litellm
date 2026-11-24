@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::{borrow::Cow, time::Duration};
 
 use bytes::Bytes;
 use litellm_host::call::CallOutput;
@@ -7,7 +7,7 @@ use litellm_llms::{
     base_llm::messages::context::{MessagesModelCapabilities, MessagesShapeOptions},
 };
 use litellm_llms_types::{
-    formats::messages::{MessagesRequest, MessagesResponse},
+    formats::messages::{MessagesRequest, MessagesResponse, MessagesUsage},
     headers::ProviderSpecificHeaders,
 };
 use litellm_router_types::LitellmParams;
@@ -55,6 +55,18 @@ pub type MessagesCallResponse =
 pub enum MessagesBody {
     Message(Box<MessagesResponse>),
     Unchecked(Map<String, Value>),
+}
+
+impl MessagesBody {
+    /// The body's `usage`, when it reads as one.
+    pub fn usage(&self) -> Option<Cow<'_, MessagesUsage>> {
+        match self {
+            Self::Message(message) => message.usage.as_ref()?.read().map(Cow::Borrowed),
+            Self::Unchecked(fields) => MessagesUsage::deserialize(fields.get("usage")?)
+                .ok()
+                .map(Cow::Owned),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]

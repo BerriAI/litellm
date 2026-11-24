@@ -1,5 +1,7 @@
 use serde_json::{Map, Value};
 
+use crate::{as_sent::AsSent, formats::messages::MessagesUsage};
+
 #[macro_rules_attribute::apply(crate::wire_type)]
 pub struct MessagesResponse {
     pub id: String,
@@ -10,13 +12,13 @@ pub struct MessagesResponse {
     pub content: Vec<Value>,
     pub stop_reason: Option<String>,
     pub stop_sequence: Option<String>,
-    /// `Some(Value::Null)` when the provider sent an explicit `null`, which Python keeps.
+    /// What the provider sent, explicit `null` included, which Python keeps.
     #[serde(
         default,
-        deserialize_with = "present_value",
+        deserialize_with = "crate::as_sent::present",
         skip_serializing_if = "Option::is_none"
     )]
-    pub usage: Option<Value>,
+    pub usage: Option<AsSent<MessagesUsage>>,
     #[serde(
         default,
         deserialize_with = "present_value",
@@ -53,7 +55,7 @@ mod tests {
             content: vec![],
             stop_reason: stop_reason.map(str::to_string),
             stop_sequence: stop_sequence.map(str::to_string),
-            usage,
+            usage: usage.map(AsSent::new),
             container,
             extra: Map::new(),
         }
@@ -95,6 +97,21 @@ mod tests {
             "content": [], "stop_reason": null, "stop_sequence": null,
             "usage": null, "container": null});
         let parsed: MessagesResponse = serde_json::from_value(body.clone()).expect("parses");
+        assert_eq!(serde_json::to_value(parsed).expect("serializable"), body);
+    }
+
+    #[rstest]
+    #[case::a_usage(json!({"input_tokens": 7, "server_tool_use": null}), Some(7))]
+    #[case::a_usage_that_does_not_read(json!("seven"), None)]
+    fn usage_reads_typed_and_writes_back_as_sent(
+        #[case] usage: Value,
+        #[case] input_tokens: Option<u64>,
+    ) {
+        let body = json!({"id": "msg_1", "type": "message", "role": "assistant", "model": "m",
+            "content": [], "stop_reason": null, "stop_sequence": null, "usage": usage});
+        let parsed: MessagesResponse = serde_json::from_value(body.clone()).expect("parses");
+        let read = parsed.usage.as_ref().and_then(AsSent::read);
+        assert_eq!(read.and_then(|usage| usage.input_tokens), input_tokens);
         assert_eq!(serde_json::to_value(parsed).expect("serializable"), body);
     }
 

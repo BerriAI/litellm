@@ -135,7 +135,7 @@ pub(super) fn assert_text(message: &MessagesResponse) {
         message
             .usage
             .as_ref()
-            .and_then(|usage| usage["output_tokens"].as_u64())
+            .and_then(|usage| usage.read()?.output_tokens)
             .is_some_and(|count| count > 0)
     );
 }
