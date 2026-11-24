@@ -154,7 +154,9 @@ pub(super) const MANAGED_GENERAL_SETTINGS: &[&str] = &[
 ];
 
 /// The `general_settings` keys the proxy reads from the `LiteLLM_UISettings` table instead of the
-/// `general_settings` row: `_UI_SETTINGS_FIELDS` in `litellm/proxy/config_resolvers/settings_rules.py`.
+/// `general_settings` row: `_UI_SETTINGS_FIELDS` in `litellm/proxy/config_resolvers/settings_rules.py`,
+/// which equals `_RUNTIME_GENERAL_SETTINGS_FLAGS`, the keys `apply_runtime_general_settings_flags`
+/// copies from that table.
 pub(super) const UI_SETTINGS: &[&str] = &[
     "allow_agents_for_team_admins",
     "allow_public_health_readiness_details",

@@ -23,4 +23,5 @@
 ## Database settings
 
 - `db::settings::overlay` layers the `LiteLLM_Config` settings rows over the config document after includes and before `os.environ/` resolution. It takes rows the caller already decrypted and does no I/O. Stored `environment_variables` go into the document's own `environment_variables`, never the process environment
-- `generated/db_settings.json` is script output pinning the overlay and its key tables against the Python proxy. Regenerate it with `scripts/generate_db_settings_fixtures.py` when the proxy's merge rules or `ConfigGeneralSettings` change, never by hand
+- The `LiteLLM_UISettings` row goes in as `UiSettings`, built from the column's JSON text with `UiSettings::from_json`. Its runtime flags fill `general_settings` under the file, the way `sync_ui_settings_to_general_settings` does
+- `generated/db_settings.json` is script output pinning the overlay and its key tables against the Python proxy. Regenerate it with `scripts/generate_db_settings_fixtures.py` when the proxy's merge rules or `ConfigGeneralSettings` change, never by hand. `test_rust_gateway_copy_of_db_settings_keys_matches_python` in `tests/unit/proxy/test_proxy_server.py` fails when a Python key list drifts from its tables
