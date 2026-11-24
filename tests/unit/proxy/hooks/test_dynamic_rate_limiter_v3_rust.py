@@ -1934,6 +1934,55 @@ async def test_an_embedding_the_provider_reports_as_zero_tokens_keeps_its_reserv
 
 
 @pytest.mark.asyncio
+async def test_an_embedding_the_provider_reports_as_zero_tokens_counts_its_estimate_toward_saturation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy.hooks.parallel_request_limiter_v3 import request_token_estimate
+
+    monkeypatch.setenv("LITELLM_LICENSE", "test-license-key")
+    monkeypatch.setattr(litellm, "priority_reservation", {"dev": 0.1, "prod": 0.9})
+    model: Final = "media-embedding"
+    handler: Final = DynamicRateLimitHandler(internal_usage_cache=DualCache())
+    handler.update_variables(
+        llm_router=Router(
+            model_list=[
+                {
+                    "model_name": model,
+                    "litellm_params": {"model": "gpt-3.5-turbo", "api_key": "k", "api_base": "b", "tpm": 1000},
+                }
+            ]
+        )
+    )
+    redis: Final = handler.saturation_redis()
+    body: Final = {"model": model, "input": "word " * 30}
+
+    await handler.async_log_success_event(
+        kwargs={
+            "call_type": "aembedding",
+            "litellm_params": {"metadata": {"model_group": model}, "proxy_server_request": {"body": body}},
+            "standard_logging_object": {
+                "metadata": {"user_api_key_auth_metadata": {"priority": "dev"}},
+                "model_group": model,
+            },
+        },
+        response_obj=litellm.EmbeddingResponse(usage=litellm.Usage(prompt_tokens=0, completion_tokens=0, total_tokens=0)),
+        start_time=None,
+        end_time=None,
+    )
+
+    estimate: Final = request_token_estimate(
+        data=body, model=model, min_configured_tpm_limit=0, call_type="aembedding", team_id=None
+    )
+    assert estimate > 0
+    assert sorted(redis.increments()) == sorted(
+        [
+            (counter_key(RateLimitScope("model_saturation_check", model).counter("tokens")), estimate),
+            (counter_key(RateLimitScope("priority_model", f"{model}:dev").counter("tokens")), estimate),
+        ]
+    )
+
+
+@pytest.mark.asyncio
 async def test_a_null_auth_metadata_still_settles_the_teams_tokens(monkeypatch: pytest.MonkeyPatch):
     handler = _borrowing_handler(monkeypatch, borrows=True)
     await _check(handler, _team_key(), saturation=0.5)

@@ -133,19 +133,21 @@ pub struct GroupInfo {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Charge {
     Reported(i64),
-    Reservation,
+    Estimated(i64),
 }
 
 impl Charge {
     pub fn against(self, reserved: i64) -> i64 {
         match self {
             Self::Reported(tokens) => tokens,
-            Self::Reservation => reserved,
+            Self::Estimated(_) => reserved,
         }
     }
 
-    pub fn reported(self) -> i64 {
-        self.against(0)
+    pub fn tokens(self) -> i64 {
+        match self {
+            Self::Reported(tokens) | Self::Estimated(tokens) => tokens,
+        }
     }
 }
 
@@ -507,16 +509,14 @@ impl UsageTokens {
             .map(Self::of)
     }
 
-    pub fn charge(
+    pub fn settles_at_estimate(
         usage: Option<&Self>,
         rate_limit_type: TokenRateLimitType,
         embedding: bool,
-    ) -> Charge {
-        let reported_nothing = Self::settled(usage, TokenRateLimitType::Total) == 0;
-        if embedding && reported_nothing && rate_limit_type != TokenRateLimitType::Output {
-            return Charge::Reservation;
-        }
-        Charge::Reported(Self::settled(usage, rate_limit_type))
+    ) -> bool {
+        let reported_nothing = Self::settled(usage, TokenRateLimitType::Total) == 0
+            && Self::settled(usage, TokenRateLimitType::Input) == 0;
+        embedding && reported_nothing && rate_limit_type != TokenRateLimitType::Output
     }
 
     pub fn settled(usage: Option<&Self>, rate_limit_type: TokenRateLimitType) -> i64 {
@@ -540,6 +540,33 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    #[rstest]
+    #[case::no_usage(None, TokenRateLimitType::Total, true, true)]
+    #[case::zero_usage(Some((0, 0, 0)), TokenRateLimitType::Input, true, true)]
+    #[case::reported_tokens(Some((7, 0, 7)), TokenRateLimitType::Total, true, false)]
+    #[case::prompt_without_total(Some((7, 0, 0)), TokenRateLimitType::Total, true, false)]
+    #[case::output_limit(None, TokenRateLimitType::Output, true, false)]
+    #[case::chat(None, TokenRateLimitType::Total, false, false)]
+    fn only_an_embedding_reporting_no_tokens_settles_at_its_estimate_under_a_total_or_input_limit(
+        #[case] usage: Option<(i64, i64, i64)>,
+        #[case] rate_limit_type: TokenRateLimitType,
+        #[case] embedding: bool,
+        #[case] expected: bool,
+    ) {
+        let usage = usage.map(
+            |(prompt_tokens, completion_tokens, total_tokens)| UsageTokens {
+                prompt_tokens,
+                completion_tokens,
+                total_tokens,
+                cached_tokens: 0,
+            },
+        );
+        assert_eq!(
+            UsageTokens::settles_at_estimate(usage.as_ref(), rate_limit_type, embedding),
+            expected
+        );
+    }
 
     fn identity(members: Value) -> KeyIdentity {
         serde_json::from_value(members).unwrap()

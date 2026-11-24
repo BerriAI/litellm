@@ -662,6 +662,19 @@ impl Engine {
         )
     }
 
+    pub async fn settled_estimate(
+        &self,
+        model: &str,
+        call_type: Option<&str>,
+    ) -> Result<i64, CapacityError> {
+        Ok(
+            match self.host.estimate_tokens(0, model, call_type).await? {
+                Estimate::Tokens(tokens) => tokens.max(0),
+                Estimate::NoBody | Estimate::Failed => 0,
+            },
+        )
+    }
+
     /// One estimate for every borrower that holds tokens, sized with the output cap of the tightest TPM share,
     /// since that is the cap the admitted request is sent with.
     async fn tightest_token_reservation(
@@ -1249,7 +1262,7 @@ impl Engine {
         redis: Option<&RequestRedis>,
     ) -> Result<(), CapacityError> {
         let ttl = settings.window_size;
-        let total_tokens = charge.reported();
+        let total_tokens = charge.tokens();
         let group = settlement.model_group;
         let (team_tokens, served) = match stash {
             None => (Vec::new(), Holds::default()),
@@ -2110,6 +2123,70 @@ mod tests {
         assert_eq!(
             class_share_refusal_holder(&settings, &key),
             ("Customer member", "member-a".to_owned())
+        );
+    }
+
+    fn refund(descriptor: Option<&Descriptor>, amount: i64) -> ReservationOp {
+        ReservationOp::Increment {
+            counter: descriptor.unwrap().counter(CounterKind::Tokens),
+            amount,
+            ttl: Some(60),
+        }
+    }
+
+    #[rstest]
+    fn an_estimated_charge_keeps_each_borrowers_reservation_where_a_reported_zero_refunds_it(
+        #[values(BorrowerKind::Team, BorrowerKind::Key, BorrowerKind::CustomerOrg)]
+        kind: BorrowerKind,
+    ) {
+        let share = borrower(kind, Some(100), Some(2.0));
+        let mut stash = Stash::default();
+        *stash.share_mut(kind) = ShareState {
+            limit: Some(share.share.clone()),
+            reserved_tokens: 30,
+            cap: share.ceiling.clone(),
+            cap_reserved_tokens: 30,
+            ..ShareState::default()
+        };
+        let none = Holds::default();
+        assert_eq!(
+            borrowing_settlement(&stash, &none, Charge::Estimated(500), 60),
+            vec![]
+        );
+        assert_eq!(
+            borrowing_settlement(&stash, &none, Charge::Reported(0), 60),
+            vec![
+                refund(Some(&share.share), -30),
+                refund(share.ceiling.as_ref(), -30)
+            ]
+        );
+    }
+
+    #[rstest]
+    fn an_estimated_charge_keeps_the_fallback_targets_hold_where_a_reported_zero_refunds_it() {
+        let share = borrower(BorrowerKind::Team, Some(100), Some(2.0));
+        let hold = Hold {
+            descriptor: Some(share.share.clone()),
+            reserved_tokens: 30,
+            cap: share.ceiling.clone(),
+            cap_reserved_tokens: 30,
+            ..Hold::empty()
+        };
+        let state = ShareState {
+            fallback_holds: vec![("fallback".into(), Arc::new(hold))],
+            ..ShareState::default()
+        };
+        let served = state.hold("fallback");
+        assert_eq!(
+            team_settlement(&state, served.as_deref(), Charge::Estimated(500), 60),
+            vec![]
+        );
+        assert_eq!(
+            team_settlement(&state, served.as_deref(), Charge::Reported(0), 60),
+            vec![
+                refund(Some(&share.share), -30),
+                refund(share.ceiling.as_ref(), -30)
+            ]
         );
     }
 

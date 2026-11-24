@@ -15,7 +15,7 @@ use crate::{
     capacity::{Engine, Frame, PreCall, Request, SaturationFallback, Settlement},
     error::CapacityError,
     host::{CapacityHost, CounterStore, Facts},
-    model::{KeyFacts, KeyGaps, LoggedGroup, UsageTokens},
+    model::{Charge, KeyFacts, KeyGaps, LoggedGroup, UsageTokens},
     refusal::{reraise, unverifiable},
     state::SharedStash,
 };
@@ -313,15 +313,13 @@ impl ModelCapacity {
             }
             Outcome::Success => {
                 let used = UsageTokens::delivered(usage.as_ref());
-                let embedding = input.call.as_ref().is_some_and(|call| {
-                    EMBEDDING_CALL_TYPES.contains(&call.kind.call_type.as_str())
-                });
+                let call_type = input.call.as_ref().map(|call| call.kind.call_type.as_str());
                 if let Err(error) = self
                     .success(
                         &gaps,
                         group,
                         identity.as_ref(),
-                        (used, embedding),
+                        (used, call_type),
                         stash,
                         host,
                     )
@@ -341,7 +339,7 @@ impl ModelCapacity {
         gaps: &AttemptGaps,
         group: Result<Option<LoggedGroup>, String>,
         identity: Option<&LoggedKeyIdentity>,
-        (used, embedding): (Option<UsageTokens>, bool),
+        (used, call_type): (Option<UsageTokens>, Option<&str>),
         stash: Option<SharedStash>,
         host: Host<'_>,
     ) -> Result<(), String> {
@@ -355,7 +353,25 @@ impl ModelCapacity {
             .facts
             .settings()
             .map_err(|error| error.python_message())?;
-        let charge = UsageTokens::charge(used.as_ref(), settings.rate_limit_type, embedding);
+        let embedding =
+            call_type.is_some_and(|call_type| EMBEDDING_CALL_TYPES.contains(&call_type));
+        let charge =
+            if UsageTokens::settles_at_estimate(used.as_ref(), settings.rate_limit_type, embedding)
+            {
+                Charge::Estimated(match group.as_ref().filter(|group| group.truthy) {
+                    Some(group) => self
+                        .engine
+                        .settled_estimate(&group.text, call_type)
+                        .await
+                        .map_err(|error| error.python_message())?,
+                    None => 0,
+                })
+            } else {
+                Charge::Reported(UsageTokens::settled(
+                    used.as_ref(),
+                    settings.rate_limit_type,
+                ))
+            };
         let settlement = team.settlement(group.as_ref(), gaps);
         self.engine
             .settle_success(

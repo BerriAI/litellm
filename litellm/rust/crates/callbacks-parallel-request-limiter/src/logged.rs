@@ -472,8 +472,9 @@ impl LoggedCall {
     ) -> SuccessFacts {
         let usage = self.success_usage();
         let total_tokens = reported_tokens(usage, kind);
-        let embedding_reported_no_tokens =
-            self.embedding() && reported_tokens(usage, TokenRateLimitType::Total) == 0;
+        let embedding_reported_no_tokens = self.embedding()
+            && reported_tokens(usage, TokenRateLimitType::Total) == 0
+            && reported_tokens(usage, TokenRateLimitType::Input) == 0;
         let settled = match usage {
             Some(usage) => reconciled(source(usage)),
             None => self.response.reconciled(),

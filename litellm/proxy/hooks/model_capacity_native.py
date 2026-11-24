@@ -176,6 +176,14 @@ def _live() -> LiveRequest:
     return live
 
 
+def _client_request_body(logged_kwargs: Mapping[str, object] | None) -> Mapping[str, object] | None:
+    litellm_params: Final = as_str_mapping(None if logged_kwargs is None else logged_kwargs.get("litellm_params"))
+    proxy_request: Final = as_str_mapping(
+        None if litellm_params is None else litellm_params.get("proxy_server_request")
+    )
+    return None if proxy_request is None else as_str_mapping(proxy_request.get("body"))
+
+
 def auth_from_request(data: object) -> UserAPIKeyAuth | None:
     request: Final = as_str_mapping(data)
     if request is None:
@@ -429,7 +437,7 @@ class CapacityHost:
     @_host_call
     async def estimate_tokens(self, args: Mapping[str, object]) -> object:
         live: Final = _live()
-        data: Final = live.data
+        data: Final = live.data or _client_request_body(live.kwargs)
         if not data:
             return {"kind": "no_body"}
         model: Final = str(args["model"])
