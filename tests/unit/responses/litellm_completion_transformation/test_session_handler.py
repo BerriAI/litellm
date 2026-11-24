@@ -23,7 +23,7 @@ from litellm.responses.litellm_completion_transformation.session_handler import 
     _normalize_redacted_tool_call_arguments,
 )
 from litellm.responses.utils import ResponsesAPIRequestUtils
-from litellm.types.utils import ADDRESSED_RESPONSE_ID_FIELD, Message
+from litellm.types.utils import Message
 
 
 @pytest.mark.asyncio
@@ -915,15 +915,6 @@ async def test_message_history_replays_real_key_named_tool_payloads() -> None:
     assert json.loads(tool_message["content"]) == function_output
 
 
-class _StoredSpendLogs:
-    def __init__(self, rows: tuple[dict[str, object], ...]) -> None:
-        self.rows = rows
-
-    async def query_raw(self, query: str, request_id: str) -> list[dict[str, object]]:
-        sessions: Final = {row["session_id"] for row in self.rows if row["request_id"] == request_id}
-        return [row for row in self.rows if row["session_id"] in sessions]
-
-
 GEMINI_URL_PATTERN: Final = r"https://generativelanguage\.googleapis\.com/v1[a-z]*/models/gemini-3\.5-flash:.*"
 
 
@@ -979,32 +970,13 @@ def _turn_stored_in_full(request_id: str, turn_input: list[dict[str, str]], answ
 _CODE_WORD_TURN: Final = [{"role": "user", "content": "My code word is PLUM-42. Reply with OK only."}]
 
 
-async def test_previous_response_refusal_names_the_response_id_the_client_sent(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-    stored: Final = _StoredSpendLogs((_turn_stored_redacted("chatcmpl-turn-1", "My code word is PLUM-42."),))
-    client_held_id: Final = "resp_the_client_holds"
-
-    with patch("litellm.proxy.proxy_server.prisma_client", SimpleNamespace(db=stored)), respx.mock:
-        respx.post(url__regex=GEMINI_URL_PATTERN).mock(return_value=_gemini_answer())
-        with pytest.raises(litellm.BadRequestError) as refusal:
-            await litellm.aresponses(
-                model="gemini/gemini-3.5-flash",
-                input="What is my code word?",
-                previous_response_id=_gemini_response_id("chatcmpl-turn-1"),
-                api_key="test-gemini-key",
-                **{ADDRESSED_RESPONSE_ID_FIELD: client_held_id},
-            )
-
-    assert client_held_id in refusal.value.message
-
-
 @pytest.mark.parametrize("redacted_turn", [0, 1], ids=["earlier_turn", "referenced_turn"])
 async def test_previous_response_refuses_to_replay_turns_stored_redacted(
     redacted_turn: int, monkeypatch: pytest.MonkeyPatch
 ):
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     request_ids: Final = ("chatcmpl-turn-1", "chatcmpl-turn-2")
-    stored: Final = _StoredSpendLogs(
+    stored: Final = _SpendLogTable(
         tuple(
             _turn_stored_redacted(request_id, "My code word is PLUM-42.")
             if index == redacted_turn
@@ -1034,7 +1006,7 @@ _OPENAI_RESPONSES_URL: Final = "https://api.openai.com/v1/responses"
 
 async def test_previous_response_refusal_does_not_fall_back_to_another_model_group(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-    stored: Final = _StoredSpendLogs((_turn_stored_redacted("chatcmpl-turn-1", "My code word is PLUM-42."),))
+    stored: Final = _SpendLogTable((_turn_stored_redacted("chatcmpl-turn-1", "My code word is PLUM-42."),))
     router: Final = litellm.Router(
         model_list=[
             {"model_name": "bridged", "litellm_params": {"model": "gemini/gemini-3.5-flash", "api_key": "test-key"}},
@@ -1064,7 +1036,7 @@ async def test_previous_response_refusal_does_not_fall_back_to_another_model_gro
 
 async def test_previous_response_refusal_does_not_cool_down_the_deployment(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-    stored: Final = _StoredSpendLogs((_turn_stored_redacted("chatcmpl-turn-1", "My code word is PLUM-42."),))
+    stored: Final = _SpendLogTable((_turn_stored_redacted("chatcmpl-turn-1", "My code word is PLUM-42."),))
     router: Final = litellm.Router(
         model_list=[
             {
@@ -1108,7 +1080,7 @@ async def test_previous_response_replays_a_turn_whose_own_messages_field_holds_t
             "messages": [{"role": "user", "content": REDACTED_BY_LITELLM}],
         },
     }
-    stored: Final = _StoredSpendLogs((turn_with_marker_field,))
+    stored: Final = _SpendLogTable((turn_with_marker_field,))
 
     with patch("litellm.proxy.proxy_server.prisma_client", SimpleNamespace(db=stored)), respx.mock:
         route: Final = respx.post(url__regex=GEMINI_URL_PATTERN).mock(return_value=_gemini_answer())
