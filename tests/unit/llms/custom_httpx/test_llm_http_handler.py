@@ -12,7 +12,6 @@ from datetime import datetime
 from itertools import chain
 from types import MappingProxyType
 from typing import Final, Literal
-from urllib.parse import urlsplit
 from unittest.mock import AsyncMock, Mock, patch
 
 import httpcore
@@ -8000,25 +7999,21 @@ def test_handle_error_keeps_the_status_a_provider_config_remapped():
     assert caught.value.response.status_code == 400
     assert caught.value.response.content == wire_body
 
+
 _CALL_ID_LIMIT: Final = 64
 _OVERLONG_FUNCTION_ID: Final = "call_" + "f" * 80
 _OVERLONG_CUSTOM_ID: Final = "call_" + "c" * 80
 _OPENAI_BASE: Final = "https://api.openai.com/v1"
 _CUSTOM_BASE: Final = "https://llm.example.test/v1"
 _BRIDGED_MODEL: Final = "openai/responses/gpt-6.2-sol"
-_CALL_ID_LIMITED_BASES: Final = (
+_SHORT_FUNCTION_ID: Final = "call_" + "f" * 59
+_SHORT_CUSTOM_ID: Final = "call_" + "c" * 59
+_DESTINATION_BASES: Final = (
     "https://api.openai.com/v1",
-    "https://us.api.openai.com/v1",
     "https://example.openai.azure.com/openai/v1",
-    "https://example.services.ai.azure.com/openai/v1",
-    "https://bedrock-mantle.us-east-1.api.aws/v1",
-)
-_UNRESTRICTED_BASES: Final = (
+    "https://openrouter.ai/api/v1",
+    "http://127.0.0.1:4770/v1",
     "https://llm.example.test/v1",
-    "https://api.openai.com.example.test/v1",
-    "https://example.cognitiveservices.azure.com/openai/v1",
-    "https://openai.azure.com.example.test/v1",
-    "https://bedrock-mantle.us-east-1.api.aws.example.test/v1",
 )
 
 
@@ -8078,8 +8073,8 @@ def _dispatched_input(input_items: list[dict[str, object]], api_base: str, *, br
     return sent_input
 
 
-@pytest.mark.parametrize("api_base", _CALL_ID_LIMITED_BASES)
-def test_a_bridged_dispatch_bounds_overlong_call_ids_for_hosts_known_to_limit_them(api_base: str) -> None:
+@pytest.mark.parametrize("api_base", _DESTINATION_BASES)
+def test_a_bridged_dispatch_bounds_overlong_call_ids_whatever_the_destination(api_base: str) -> None:
     original: Final = _overlong_tool_history()
     snapshot: Final = json.loads(json.dumps(original))
 
@@ -8093,13 +8088,9 @@ def test_a_bridged_dispatch_bounds_overlong_call_ids_for_hosts_known_to_limit_th
     assert original == snapshot, "the caller's input must not be mutated"
 
 
-@pytest.mark.parametrize("api_base", _UNRESTRICTED_BASES)
-def test_a_bridged_dispatch_keeps_overlong_call_ids_for_hosts_not_known_to_limit_them(api_base: str) -> None:
-    assert _dispatched_input(_overlong_tool_history(), api_base, bridged=True) == _overlong_tool_history()
-
-
-def test_a_native_responses_dispatch_keeps_overlong_call_ids_on_a_limited_host() -> None:
-    assert _dispatched_input(_overlong_tool_history(), _OPENAI_BASE, bridged=False) == _overlong_tool_history()
+@pytest.mark.parametrize("api_base", [_OPENAI_BASE, _CUSTOM_BASE])
+def test_a_native_responses_dispatch_keeps_overlong_call_ids(api_base: str) -> None:
+    assert _dispatched_input(_overlong_tool_history(), api_base, bridged=False) == _overlong_tool_history()
 
 
 @pytest.mark.parametrize(("length", "bounded"), [(64, False), (65, True)])
@@ -8140,26 +8131,20 @@ def test_a_bridged_dispatch_keeps_overlong_ids_sharing_a_prefix_distinct_and_pai
     assert sent == list(chain.from_iterable(_tool_items(call_id) for call_id in bounded)), sent
 
 
-def _chat_tool_turn() -> list[dict[str, object]]:
+def _chat_tool_turn(
+    function_id: str = _OVERLONG_FUNCTION_ID, custom_id: str = _OVERLONG_CUSTOM_ID
+) -> list[dict[str, object]]:
     return [
         {"role": "user", "content": "Weather, then patch."},
         {
             "role": "assistant",
             "tool_calls": [
-                {
-                    "id": _OVERLONG_FUNCTION_ID,
-                    "type": "function",
-                    "function": {"name": "get_weather", "arguments": "{}"},
-                },
-                {
-                    "id": _OVERLONG_CUSTOM_ID,
-                    "type": "custom",
-                    "custom": {"name": "apply_patch", "input": "*** Begin Patch"},
-                },
+                {"id": function_id, "type": "function", "function": {"name": "get_weather", "arguments": "{}"}},
+                {"id": custom_id, "type": "custom", "custom": {"name": "apply_patch", "input": "*** Begin Patch"}},
             ],
         },
-        {"role": "tool", "tool_call_id": _OVERLONG_FUNCTION_ID, "content": "sunny"},
-        {"role": "tool", "tool_call_id": _OVERLONG_CUSTOM_ID, "content": "applied"},
+        {"role": "tool", "tool_call_id": function_id, "content": "sunny"},
+        {"role": "tool", "tool_call_id": custom_id, "content": "applied"},
     ]
 
 
@@ -8249,28 +8234,24 @@ def _assert_bounded_and_paired(sent: list[tuple[object, object]]) -> None:
     assert isinstance(custom_id, str) and len(custom_id) <= _CALL_ID_LIMIT and custom_id != function_id, sent
 
 
-_RAW_BRIDGED_IDS: Final = [
-    ("function_call", _OVERLONG_FUNCTION_ID),
-    ("custom_tool_call", _OVERLONG_CUSTOM_ID),
-    ("function_call_output", _OVERLONG_FUNCTION_ID),
-    ("custom_tool_call_output", _OVERLONG_CUSTOM_ID),
-]
+def _without_call_id(item: Mapping[str, object]) -> Mapping[str, object]:
+    return {key: value for key, value in item.items() if key != "call_id"}
 
 
-def _assert_raw(sent: list[tuple[object, object]]) -> None:
-    assert sent == _RAW_BRIDGED_IDS, sent
+def _input_without_call_ids(request: httpx.Request) -> list[Mapping[str, object]]:
+    return [_without_call_id(item) for item in json.loads(request.content)["input"]]
 
 
 @pytest.fixture
 def no_ambient_openai_base(monkeypatch: pytest.MonkeyPatch) -> pytest.MonkeyPatch:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     monkeypatch.setattr(litellm, "api_base", None)
-    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
-    monkeypatch.delenv("OPENAI_API_BASE", raising=False)
+    for name in ("OPENAI_BASE_URL", "OPENAI_API_BASE", "OPENROUTER_API_BASE", "LITELLM_PROXY_API_BASE"):
+        monkeypatch.delenv(name, raising=False)
     return monkeypatch
 
 
-def test_a_sync_bridged_chat_completion_bounds_ids_for_openai_and_keeps_them_for_a_custom_host(
+def test_a_sync_bridged_chat_completion_bounds_ids_the_same_way_for_openai_and_a_custom_host(
     respx_mock: respx.MockRouter, no_ambient_openai_base: pytest.MonkeyPatch
 ) -> None:
     official: Final = respx_mock.route(host="api.openai.com").mock(return_value=_upstream_answer(False))
@@ -8280,10 +8261,10 @@ def test_a_sync_bridged_chat_completion_bounds_ids_for_openai_and_keeps_them_for
 
     assert answers == ["Done.", "Done."]
     _assert_bounded_and_paired(_sent_tool_call_ids(official.calls.last.request))
-    _assert_raw(_sent_tool_call_ids(custom.calls.last.request))
+    assert _sent_tool_call_ids(custom.calls.last.request) == _sent_tool_call_ids(official.calls.last.request)
 
 
-def test_a_sync_streamed_bridged_chat_completion_bounds_ids_for_openai_and_keeps_them_for_a_custom_host(
+def test_a_sync_streamed_bridged_chat_completion_bounds_ids_the_same_way_for_openai_and_a_custom_host(
     respx_mock: respx.MockRouter, no_ambient_openai_base: pytest.MonkeyPatch
 ) -> None:
     official: Final = respx_mock.route(host="api.openai.com").mock(return_value=_upstream_answer(True))
@@ -8293,7 +8274,7 @@ def test_a_sync_streamed_bridged_chat_completion_bounds_ids_for_openai_and_keeps
 
     assert texts == ["Done.", "Done."]
     _assert_bounded_and_paired(_sent_tool_call_ids(official.calls.last.request))
-    _assert_raw(_sent_tool_call_ids(custom.calls.last.request))
+    assert _sent_tool_call_ids(custom.calls.last.request) == _sent_tool_call_ids(official.calls.last.request)
 
 
 async def _async_answer(api_base: str, stream: bool) -> str:
@@ -8308,7 +8289,7 @@ async def _async_answer(api_base: str, stream: bool) -> str:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("stream", [False, True], ids=["json", "stream"])
-async def test_an_async_bridged_chat_completion_bounds_ids_for_openai_and_keeps_them_for_a_custom_host(
+async def test_an_async_bridged_chat_completion_bounds_ids_the_same_way_for_openai_and_a_custom_host(
     stream: bool, respx_mock: respx.MockRouter, no_ambient_openai_base: pytest.MonkeyPatch
 ) -> None:
     official: Final = respx_mock.route(host="api.openai.com").mock(return_value=_upstream_answer(stream))
@@ -8318,7 +8299,7 @@ async def test_an_async_bridged_chat_completion_bounds_ids_for_openai_and_keeps_
 
     assert answers == ("Done.", "Done.")
     _assert_bounded_and_paired(_sent_tool_call_ids(official.calls.last.request))
-    _assert_raw(_sent_tool_call_ids(custom.calls.last.request))
+    assert _sent_tool_call_ids(custom.calls.last.request) == _sent_tool_call_ids(official.calls.last.request)
 
 
 def _completion_with_endpoint_set_by(mechanism: str, base: str, monkeypatch: pytest.MonkeyPatch) -> object:
@@ -8344,23 +8325,14 @@ def _completion_with_endpoint_set_by(mechanism: str, base: str, monkeypatch: pyt
 @pytest.mark.parametrize(
     "mechanism", ["base_url", "litellm.api_base", "OPENAI_BASE_URL", "OPENAI_API_BASE", "openai_client"]
 )
-@pytest.mark.parametrize(
-    ("base", "host", "expect"),
-    [(_OPENAI_BASE, "api.openai.com", _assert_bounded_and_paired), (_CUSTOM_BASE, "llm.example.test", _assert_raw)],
-    ids=["openai", "custom"],
-)
-def test_the_endpoint_a_bridged_chat_completion_reaches_decides_the_call_ids_sent(
-    mechanism: str,
-    base: str,
-    host: str,
-    expect: Callable[[list[tuple[object, object]]], None],
-    respx_mock: respx.MockRouter,
-    no_ambient_openai_base: pytest.MonkeyPatch,
+@pytest.mark.parametrize(("base", "host"), [(_OPENAI_BASE, "api.openai.com"), (_CUSTOM_BASE, "llm.example.test")])
+def test_every_way_of_setting_the_endpoint_still_bounds_bridged_call_ids(
+    mechanism: str, base: str, host: str, respx_mock: respx.MockRouter, no_ambient_openai_base: pytest.MonkeyPatch
 ) -> None:
     upstream: Final = respx_mock.route(host=host).mock(return_value=_upstream_answer(False))
 
     assert _answer_text(_completion_with_endpoint_set_by(mechanism, base, no_ambient_openai_base)) == "Done."
-    expect(_sent_tool_call_ids(upstream.calls.last.request))
+    _assert_bounded_and_paired(_sent_tool_call_ids(upstream.calls.last.request))
 
 
 class _ResponsesApiBaseOverride(CustomLogger):
@@ -8376,33 +8348,141 @@ class _ResponsesApiBaseOverride(CustomLogger):
         return {**kwargs, "api_base": self.api_base}
 
 
-@pytest.mark.parametrize(
-    ("requested_base", "hooked_base", "expect"),
-    [(_OPENAI_BASE, _CUSTOM_BASE, _assert_raw), (_CUSTOM_BASE, _OPENAI_BASE, _assert_bounded_and_paired)],
-    ids=["openai-rerouted-to-custom", "custom-rerouted-to-openai"],
-)
 @pytest.mark.parametrize("mode", ["sync", "async"])
-def test_a_deployment_hook_that_reroutes_the_bridged_call_decides_the_call_ids_sent(
-    requested_base: str,
-    hooked_base: str,
-    expect: Callable[[list[tuple[object, object]]], None],
-    mode: str,
-    respx_mock: respx.MockRouter,
-    no_ambient_openai_base: pytest.MonkeyPatch,
+def test_a_deployment_hook_that_reroutes_a_bridged_call_still_gets_bounded_call_ids(
+    mode: str, respx_mock: respx.MockRouter, no_ambient_openai_base: pytest.MonkeyPatch
 ) -> None:
-    no_ambient_openai_base.setattr(litellm, "callbacks", [_ResponsesApiBaseOverride(hooked_base)])
-    upstream: Final = respx_mock.route(host=urlsplit(hooked_base).hostname).mock(return_value=_upstream_answer(False))
+    no_ambient_openai_base.setattr(litellm, "callbacks", [_ResponsesApiBaseOverride(_CUSTOM_BASE)])
+    upstream: Final = respx_mock.route(host="llm.example.test").mock(return_value=_upstream_answer(False))
     request: Final = {
         "model": _BRIDGED_MODEL,
         "messages": _chat_tool_turn(),
-        "api_base": requested_base,
+        "api_base": _OPENAI_BASE,
         "api_key": "sk-test",
     }
 
     response: Final = litellm.completion(**request) if mode == "sync" else asyncio.run(litellm.acompletion(**request))
 
     assert _answer_text(response) == "Done."
-    expect(_sent_tool_call_ids(upstream.calls.last.request))
+    _assert_bounded_and_paired(_sent_tool_call_ids(upstream.calls.last.request))
+
+
+@pytest.mark.parametrize("mode", ["sync", "async"])
+def test_a_deployment_hook_that_reroutes_a_native_responses_call_keeps_its_call_ids(
+    mode: str, respx_mock: respx.MockRouter, no_ambient_openai_base: pytest.MonkeyPatch
+) -> None:
+    no_ambient_openai_base.setattr(litellm, "callbacks", [_ResponsesApiBaseOverride(_CUSTOM_BASE)])
+    upstream: Final = respx_mock.route(host="llm.example.test").mock(return_value=_upstream_answer(False))
+    request: Final = {
+        "model": "openai/gpt-6.2-sol",
+        "input": _overlong_tool_history(),
+        "api_base": _OPENAI_BASE,
+        "api_key": "sk-test",
+    }
+
+    response: Final = litellm.responses(**request) if mode == "sync" else asyncio.run(litellm.aresponses(**request))
+
+    assert isinstance(response, ResponsesAPIResponse), response
+    assert _sent_tool_call_ids(upstream.calls.last.request) == [
+        (item["type"], item["call_id"]) for item in _overlong_tool_history()
+    ]
+
+
+def test_an_ordinary_chat_completion_keeps_overlong_tool_call_ids(
+    respx_mock: respx.MockRouter, no_ambient_openai_base: pytest.MonkeyPatch
+) -> None:
+    upstream: Final = respx_mock.post(f"{_OPENAI_BASE}/chat/completions").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-ordinary",
+                "object": "chat.completion",
+                "created": 0,
+                "model": "gpt-6.2-sol",
+                "choices": [
+                    {"index": 0, "message": {"role": "assistant", "content": "Done."}, "finish_reason": "stop"}
+                ],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            },
+        )
+    )
+
+    response: Final = litellm.completion(
+        model="openai/gpt-6.2-sol", messages=_chat_tool_turn(), api_base=_OPENAI_BASE, api_key="sk-test"
+    )
+
+    assert _answer_text(response) == "Done."
+    sent_messages: Final = json.loads(upstream.calls.last.request.content)["messages"]
+    assert [call["id"] for call in sent_messages[1]["tool_calls"]] == [_OVERLONG_FUNCTION_ID, _OVERLONG_CUSTOM_ID]
+    assert [message["tool_call_id"] for message in sent_messages[2:]] == [_OVERLONG_FUNCTION_ID, _OVERLONG_CUSTOM_ID]
+
+
+_BRIDGED_PROVIDER_ROUTES: Final = (
+    pytest.param("openrouter/responses/openai/gpt-6.2-sol", None, "openrouter.ai", id="openrouter-openai"),
+    pytest.param("openrouter/responses/anthropic/claude-sonnet-5.5", None, "openrouter.ai", id="openrouter-claude"),
+    pytest.param("openrouter/responses/x-ai/grok-4.7", None, "openrouter.ai", id="openrouter-xai"),
+    pytest.param("litellm_proxy/responses/inner-openai", "http://127.0.0.1:4770", "127.0.0.1", id="nested-proxy"),
+)
+
+
+def _assert_only_overlong_call_ids_changed(upstream: respx.Route) -> None:
+    long_request, short_request = (call.request for call in upstream.calls)
+    _assert_bounded_and_paired(_sent_tool_call_ids(long_request))
+    assert _sent_tool_call_ids(short_request) == [
+        ("function_call", _SHORT_FUNCTION_ID),
+        ("custom_tool_call", _SHORT_CUSTOM_ID),
+        ("function_call_output", _SHORT_FUNCTION_ID),
+        ("custom_tool_call_output", _SHORT_CUSTOM_ID),
+    ], "a 64-char id is sent unchanged"
+    assert _input_without_call_ids(long_request) == _input_without_call_ids(short_request)
+
+
+def _route_conversations() -> tuple[list[dict[str, object]], ...]:
+    return (_chat_tool_turn(), _chat_tool_turn(_SHORT_FUNCTION_ID, _SHORT_CUSTOM_ID))
+
+
+@pytest.mark.parametrize(("model", "api_base", "host"), _BRIDGED_PROVIDER_ROUTES)
+def test_a_bridged_provider_route_changes_only_overlong_call_ids(
+    model: str,
+    api_base: str | None,
+    host: str,
+    respx_mock: respx.MockRouter,
+    no_ambient_openai_base: pytest.MonkeyPatch,
+) -> None:
+    upstream: Final = respx_mock.route(host=host).mock(return_value=_upstream_answer(False))
+
+    answers: Final = [
+        _answer_text(litellm.completion(model=model, messages=messages, api_base=api_base, api_key="sk-test"))
+        for messages in _route_conversations()
+    ]
+
+    assert answers == ["Done.", "Done."]
+    _assert_only_overlong_call_ids_changed(upstream)
+
+
+async def _streamed_route_answer(model: str, api_base: str | None, messages: list[dict[str, object]]) -> str:
+    response: Final = await litellm.acompletion(
+        model=model, messages=messages, api_base=api_base, api_key="sk-test", stream=True
+    )
+    assert isinstance(response, CustomStreamWrapper), response
+    return _streamed_text([chunk async for chunk in response])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("model", "api_base", "host"), _BRIDGED_PROVIDER_ROUTES)
+async def test_an_async_streamed_bridged_provider_route_changes_only_overlong_call_ids(
+    model: str,
+    api_base: str | None,
+    host: str,
+    respx_mock: respx.MockRouter,
+    no_ambient_openai_base: pytest.MonkeyPatch,
+) -> None:
+    upstream: Final = respx_mock.route(host=host).mock(return_value=_upstream_answer(True))
+
+    answers: Final = [await _streamed_route_answer(model, api_base, messages) for messages in _route_conversations()]
+
+    assert answers == ["Done.", "Done."]
+    _assert_only_overlong_call_ids_changed(upstream)
 
 
 def test_a_native_responses_call_sends_overlong_call_ids_unchanged(

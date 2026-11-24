@@ -8,7 +8,6 @@ from collections.abc import AsyncIterator, Callable, Iterable, Iterator, Mapping
 from itertools import accumulate, chain, count
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypedDict, TypeVar, Union, cast
-from urllib.parse import urlsplit
 
 from openai.types.chat import ChatCompletion
 from openai.types.responses import Response
@@ -939,23 +938,6 @@ _CALL_ID_LIMITED_ITEM_TYPES: Final = frozenset(
 _MAX_CALL_ID_LENGTH: Final = 64
 
 
-def _url_hostname(url: str) -> str:
-    try:
-        return urlsplit(url).hostname or ""
-    except ValueError:
-        return ""
-
-
-def _limits_call_id_length(url: str) -> bool:
-    from litellm.llms.azure_ai.common_utils import is_azure_openai_v1_host
-    from litellm.llms.bedrock_mantle.common_utils import MANTLE_HOST_RE
-    from litellm.llms.openai.common_utils import is_openai_backed_api_base
-
-    return bool(_url_hostname(url)) and (
-        is_openai_backed_api_base(url) or MANTLE_HOST_RE.match(url) is not None or is_azure_openai_v1_host(url)
-    )
-
-
 def _call_id(item: object) -> str | None:
     match item:
         case {"call_id": str() as call_id}:
@@ -1002,12 +984,12 @@ def _with_replaced_call_id(item: object, replacements: Mapping[str, str]) -> obj
     return {**fields, "call_id": replacements[call_id]}
 
 
-def bounded_call_id_fields(request: Mapping[str, object], url: str) -> Mapping[str, object]:
+def bounded_call_id_fields(request: Mapping[str, object]) -> Mapping[str, object]:
     items: Final = as_object_list(request.get("input"))
     if items is None:
         return MappingProxyType({})
     overlong: Final = tuple(sorted({call_id for call_id in map(_overlong_tool_call_id, items) if call_id is not None}))
-    if not overlong or not _limits_call_id_length(url):
+    if not overlong:
         return MappingProxyType({})
     replacements: Final = _call_id_replacements(items, overlong)
     return MappingProxyType({"input": [_with_replaced_call_id(item, replacements) for item in items]})

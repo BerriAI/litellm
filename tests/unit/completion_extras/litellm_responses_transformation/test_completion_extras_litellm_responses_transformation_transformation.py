@@ -7789,7 +7789,7 @@ def test_transform_request_leaves_overlong_tool_call_ids_for_the_dispatch_to_bou
         ("custom_tool_call", custom_id),
         ("function_call_output", function_id),
         ("custom_tool_call_output", custom_id),
-    ], "the final URL is only known at dispatch, so the bridge request keeps the caller's ids"
+    ], "ids are bounded at dispatch, after deployment hooks, so the bridge request keeps the caller's ids"
 
 
 def test_shared_chat_to_responses_converter_keeps_overlong_ids_for_its_other_callers() -> None:
@@ -7805,9 +7805,6 @@ def test_shared_chat_to_responses_converter_keeps_overlong_ids_for_its_other_cal
         ("function_call_output", call_id),
         ("custom_tool_call_output", call_id + "_custom"),
     ]
-
-
-_OPENAI_RESPONSES_URL: Final = "https://api.openai.com/v1/responses"
 
 
 @pytest.mark.parametrize(
@@ -7827,43 +7824,7 @@ def test_bounded_call_id_fields_leaves_requests_without_an_overlong_tool_call_id
 ) -> None:
     from litellm.completion_extras.litellm_responses_transformation.transformation import bounded_call_id_fields
 
-    assert bounded_call_id_fields(request_body, _OPENAI_RESPONSES_URL) == {}
-
-
-@pytest.mark.parametrize("url", ["https://[::1/v1/responses", "not a url", ""])
-def test_bounded_call_id_fields_leaves_a_request_to_an_unclassifiable_url_alone(url: str) -> None:
-    from litellm.completion_extras.litellm_responses_transformation.transformation import bounded_call_id_fields
-
-    request_body: Final = {"input": [{"type": "function_call", "call_id": "call_" + "a" * 80, "name": "f"}]}
-
-    assert bounded_call_id_fields(request_body, url) == {}
-
-
-@pytest.mark.parametrize(
-    ("url", "bounded"),
-    [
-        pytest.param("https://Example.OpenAI.Azure.com:443/openai/v1/responses", True, id="mixed-case-host-with-port"),
-        pytest.param(
-            "https://example.services.ai.azure.com/openai/deployments/d/responses?api-version=2025-04-01-preview",
-            True,
-            id="deployment-path-with-query",
-        ),
-        pytest.param("https://openai.azure.com/openai/v1/responses", False, id="bare-azure-apex"),
-        pytest.param(
-            "https://example.openai.azure.com.example.test/openai/v1/responses", False, id="look-alike-suffix"
-        ),
-    ],
-)
-def test_bounded_call_id_fields_classifies_azure_hosts_by_hostname_alone(url: str, bounded: bool) -> None:
-    from litellm.completion_extras.litellm_responses_transformation.transformation import bounded_call_id_fields
-
-    long_id: Final = "call_" + "z" * 80
-    items: Final = list(_function_pair(long_id))
-    sent: Final = bounded_call_id_fields({"input": items}, url).get("input", items)
-
-    assert isinstance(sent, list), sent
-    assert sent[0]["call_id"] == sent[1]["call_id"], sent
-    assert (sent[0]["call_id"] != long_id) is bounded, sent
+    assert bounded_call_id_fields(request_body) == {}
 
 
 def _function_pair(call_id: str) -> tuple[dict[str, object], dict[str, object]]:
@@ -7876,7 +7837,7 @@ def _function_pair(call_id: str) -> tuple[dict[str, object], dict[str, object]]:
 def _sent_call_ids(request_body: Mapping[str, object]) -> list[object]:
     from litellm.completion_extras.litellm_responses_transformation.transformation import bounded_call_id_fields
 
-    sent: Final = bounded_call_id_fields(request_body, _OPENAI_RESPONSES_URL)["input"]
+    sent: Final = bounded_call_id_fields(request_body)["input"]
     assert isinstance(sent, list), sent
     return [item["call_id"] for item in sent]
 

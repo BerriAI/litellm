@@ -797,16 +797,14 @@ def _has_v2_deployment_hook() -> bool:
     )
 
 
-def _bridged_chat_request_fields(
-    data: Mapping[str, object], api_base: str, logging_obj: LiteLLMLoggingObj
-) -> Mapping[str, object]:
+def _bridged_chat_request_fields(data: Mapping[str, object], logging_obj: LiteLLMLoggingObj) -> Mapping[str, object]:
     from litellm.litellm_core_utils.litellm_logging import BridgedChatRequest
 
     if not isinstance(getattr(logging_obj, "bridged_chat_request", None), BridgedChatRequest):
         return MappingProxyType({})
     from litellm.completion_extras.litellm_responses_transformation.transformation import bounded_call_id_fields
 
-    return bounded_call_id_fields(data, api_base)
+    return bounded_call_id_fields(data)
 
 
 def _mask_presigned_request_headers(transformed_request: bytes | str | dict) -> bytes | str | dict:
@@ -3349,7 +3347,7 @@ class BaseLLMHTTPHandler:
                     extra_body=extra_body, request=data, model=model, litellm_params=litellm_params
                 )
             )
-        data.update(_bridged_chat_request_fields(data, api_base, logging_obj))
+        data.update(_bridged_chat_request_fields(data, logging_obj))
         stream = bool(stream or data.get("stream"))
 
         # Preserve the OpenAI-style request context (not sent to the provider) for streaming
@@ -3557,7 +3555,7 @@ class BaseLLMHTTPHandler:
                     extra_body=extra_body, request=data, model=model, litellm_params=litellm_params
                 )
             )
-        data.update(_bridged_chat_request_fields(data, api_base, logging_obj))
+        data.update(_bridged_chat_request_fields(data, logging_obj))
         stream = bool(stream or data.get("stream"))
 
         # Preserve the OpenAI-style request context (not sent to the provider) for streaming
