@@ -3579,6 +3579,24 @@ async def test_anthropic_count_tokens_on_a_claude_deployment_drops_a_non_string_
     assert sent == _CLEAN_PROMPT
 
 
+@pytest.mark.asyncio
+async def test_anthropic_count_tokens_on_a_claude_deployment_sends_the_messages_inference_sends(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.llms.anthropic.pass_through.messages.utils import normalize_native_messages
+
+    history: Final[list[dict[str, JsonValue]]] = [
+        {"role": "user", "content": "run the build"},
+        {"role": "assistant", "content": [{"type": "tool_use", "id": "functions.Bash:0", "name": "Bash", "input": {}}]},
+        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "functions.Bash:0", "content": "ok"}]},
+    ]
+
+    sent: Final = await _messages_sent_to_anthropic_count(monkeypatch, {"messages": history}, {})
+
+    assert sent == normalize_native_messages(history)
+    assert sent != history
+
+
 _EMPTIED_MESSAGES_ERROR: Final = "messages: no message has content left after dropping empty or non-string text blocks"
 
 

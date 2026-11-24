@@ -850,3 +850,30 @@ def test_sync_messages_create_answers_the_same_400_for_a_non_string_user_text_or
     assert rejected.value.message.partition("\n\n")[0] == error
     assert rejected.value.llm_provider == "anthropic"
     assert upstream.call_count == 0
+
+
+@pytest.mark.asyncio
+async def test_native_messages_strip_empty_blocks_beside_a_non_string_tool_result_text(
+    respx_mock: respx.MockRouter,
+) -> None:
+    route: Final = respx_mock.post(url__regex=_ANTHROPIC_URL).mock(
+        return_value=httpx.Response(200, json=_anthropic_body())
+    )
+    tool_use: Final = {"type": "tool_use", "id": "toolu_1", "name": "Bash", "input": {}}
+    tool_result: Final = {"type": "tool_result", "tool_use_id": "toolu_1", "content": [{"type": "text", "text": None}]}
+
+    await _router(_ALIAS, _ANTHROPIC_MODEL).aanthropic_messages(
+        model=_ALIAS,
+        max_tokens=64,
+        messages=[
+            {"role": "user", "content": _PROMPT},
+            {"role": "assistant", "content": [{"type": "text", "text": ""}, tool_use]},
+            {"role": "user", "content": [tool_result, {"type": "text", "text": " "}]},
+        ],
+    )
+
+    assert json.loads(route.calls.last.request.read())["messages"] == [
+        {"role": "user", "content": _PROMPT},
+        {"role": "assistant", "content": [tool_use]},
+        {"role": "user", "content": [tool_result]},
+    ]
