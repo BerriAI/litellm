@@ -132,30 +132,28 @@ def is_claude_model_target(custom_llm_provider: str | None, model: str) -> bool:
     return "claude" in model.lower() and custom_llm_provider in _CLAUDE_MODEL_PROVIDERS
 
 
-_CLAUDE_SIGNATURE_CHECKING_DOMAINS: Final = (
-    "anthropic.com",
-    "services.ai.azure.com",
-    "openai.azure.com",
-    "cognitiveservices.azure.com",
+_UNSIGNED_THINKING_DOMAINS: Final = (
+    "deepseek.com",
+    "minimax.io",
+    "minimaxi.com",
+    "tencentcloudmaas.com",
+    "z.ai",
+    "bigmodel.cn",
 )
 
+_UNSIGNED_THINKING_PROVIDERS: Final = frozenset({"deepseek", "minimax", "tencent", "zai", "bigmodel"})
 
-def checks_claude_signatures(api_base: str) -> bool:
+
+def replays_unsigned_thinking(api_base: str) -> bool:
     host: Final = urlparse(api_base if "://" in api_base else f"https://{api_base}").hostname or ""
-    return any(host == domain or host.endswith(f".{domain}") for domain in _CLAUDE_SIGNATURE_CHECKING_DOMAINS)
-
-
-_CLAUDE_SIGNATURE_CHECKING_PROVIDERS: Final = frozenset(
-    {"azure_ai", "vertex_ai", "bedrock", "bedrock_mantle", "databricks", "github_copilot"}
-)
+    return any(host == domain or host.endswith(f".{domain}") for domain in _UNSIGNED_THINKING_DOMAINS)
 
 
 def verifies_claude_thinking_signatures(custom_llm_provider: str | None, model: str, api_base: str | None) -> bool:
-    if "claude" not in model.lower():
+    if "claude" not in model.lower() or custom_llm_provider in _UNSIGNED_THINKING_PROVIDERS:
         return False
-    if custom_llm_provider == "anthropic":
-        return checks_claude_signatures(AnthropicModelInfo.get_api_base(api_base) or "https://api.anthropic.com")
-    return custom_llm_provider in _CLAUDE_SIGNATURE_CHECKING_PROVIDERS
+    upstream: Final = AnthropicModelInfo.get_api_base(api_base) if custom_llm_provider == "anthropic" else api_base
+    return upstream is None or not replays_unsigned_thinking(upstream)
 
 
 def is_anthropic_messages_url(url: str) -> bool:
@@ -1941,17 +1939,17 @@ def _without_unsignable_thinking(
 def strip_unsignable_thinking_blocks_for_claude(
     messages: list[dict[str, object]],  # mutable-ok: AnthropicMessagesRequest.messages is typed list[dict]
     model: str,
-    base_model: str | None,
+    base_model: str | None = None,
     *,
-    custom_llm_provider: str | None,
-    api_base: str | None,
+    custom_llm_provider: str | None = None,
+    api_base: str | None = None,
 ) -> list[dict[str, object]]:  # mutable-ok: AnthropicMessagesRequest.messages is typed list[dict]
     """
     Drop thinking blocks Claude cannot verify (no signature, or another provider's
     encrypted reasoning) before /v1/messages sends the request to a Claude model on
     the native or chat adapter route, since Claude answers 400 to them, a pending
-    tool turn included. Other targets (DeepSeek, MiniMax, GLM), and a Claude name on
-    a host that does not check Claude signatures, need their unsigned reasoning replayed.
+    tool turn included. Other targets (DeepSeek, MiniMax, GLM), and a Claude name
+    served by one of their Anthropic-compatible hosts, need their unsigned reasoning replayed.
     """
     if not any(
         verifies_claude_thinking_signatures(custom_llm_provider, name, api_base) for name in (model, base_model or "")

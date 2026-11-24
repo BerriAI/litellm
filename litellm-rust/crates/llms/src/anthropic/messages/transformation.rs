@@ -31,7 +31,14 @@ use crate::{
 
 const FIRST_VERSION_WITHOUT_SAMPLING_PARAMS: &str = "2026-10-21";
 const ANTHROPIC_API_HOST: &str = "api.anthropic.com";
-const ANTHROPIC_DOMAIN: &str = "anthropic.com";
+const UNSIGNED_THINKING_HOST_SUFFIXES: [&str; 6] = [
+    "deepseek.com",
+    "minimax.io",
+    "minimaxi.com",
+    "tencentcloudmaas.com",
+    "z.ai",
+    "bigmodel.cn",
+];
 const FOUNDRY_HOST_SUFFIXES: [&str; 3] = [
     "services.ai.azure.com",
     "openai.azure.com",
@@ -67,10 +74,8 @@ impl BaseMessagesConfig for AnthropicMessagesConfig {
         api_base: Option<&str>,
         env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> bool {
-        url::Url::parse(&complete_anthropic_url(api_base, env_lookup)).is_ok_and(|url| {
-            url.host_str()
-                .is_some_and(|host| is_anthropic_host(host) || is_foundry_host(host))
-        })
+        !url::Url::parse(&complete_anthropic_url(api_base, env_lookup))
+            .is_ok_and(|url| url.host_str().is_some_and(replays_unsigned_thinking))
     }
 
     fn transform_anthropic_messages_request(
@@ -370,8 +375,10 @@ fn is_foundry_host(host: &str) -> bool {
         .any(|suffix| host == *suffix || host.ends_with(&format!(".{suffix}")))
 }
 
-fn is_anthropic_host(host: &str) -> bool {
-    host == ANTHROPIC_DOMAIN || host.ends_with(&format!(".{ANTHROPIC_DOMAIN}"))
+fn replays_unsigned_thinking(host: &str) -> bool {
+    UNSIGNED_THINKING_HOST_SUFFIXES
+        .iter()
+        .any(|suffix| host == *suffix || host.ends_with(&format!(".{suffix}")))
 }
 
 fn serves_anthropic_api_versions(url: &str) -> bool {
@@ -770,6 +777,22 @@ mod tests {
                 false
             ),
             Ok(body(json!({"messages": tool_turn(None)})))
+        );
+    }
+
+    #[rstest]
+    #[case::anthropic("https://api.anthropic.com", true)]
+    #[case::gateway("https://llm-gateway.example.com/anthropic", true)]
+    #[case::foundry("https://example.services.ai.azure.com/anthropic", true)]
+    #[case::deepseek("https://api.deepseek.com/anthropic", false)]
+    #[case::z_ai("https://api.z.ai/api/anthropic", false)]
+    fn only_an_anthropic_compatible_host_gets_unsigned_thinking_back(
+        #[case] api_base: &str,
+        #[case] checks: bool,
+    ) {
+        assert_eq!(
+            ANTHROPIC_MESSAGES_CONFIG.checks_claude_signatures(Some(api_base), &|_| None),
+            checks
         );
     }
 

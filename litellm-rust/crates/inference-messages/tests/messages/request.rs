@@ -297,7 +297,6 @@ async fn unsigned_thinking_is_dropped_for_an_alias_whose_base_model_names_claude
     ]);
 
     run_message(MessagesCall {
-        custom_llm_provider: Some("azure_ai".into()),
         api_key: Some("sk".into()),
         api_base: Some(upstream.uri()),
         shaping: MessagesShaping {
@@ -719,12 +718,11 @@ async fn replayed_history_is_cleaned_before_sending(
 }
 
 #[rstest]
-#[case::anthropic_compatible_host("anthropic")]
 #[case::deepseek("deepseek")]
 #[case::minimax("minimax")]
 #[case::tencent("tencent")]
 #[tokio::test]
-async fn unsigned_thinking_is_replayed_to_a_host_that_does_not_check_claude_signatures(
+async fn unsigned_thinking_is_replayed_to_an_anthropic_compatible_provider(
     call: MessagesCall,
     #[case] provider: &str,
 ) {
