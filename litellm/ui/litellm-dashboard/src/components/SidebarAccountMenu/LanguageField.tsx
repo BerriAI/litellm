@@ -5,9 +5,9 @@ import { Trans, useTranslation } from "react-i18next";
 import BetaBadge from "@/components/BetaBadge";
 import { Field, FieldDescription, FieldLabel } from "@/components/ui/field";
 import { Select, SelectContent, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { DEFAULT_LANGUAGE } from "@/i18n/defaultLanguage";
 import {
   browserLanguageStore,
-  DEFAULT_LANGUAGE,
   englishName,
   LanguageStore,
   Locales,

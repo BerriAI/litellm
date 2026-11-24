@@ -12,7 +12,7 @@ import time
 import weakref
 from collections.abc import Callable, Mapping
 from datetime import datetime
-from typing import Final, Optional
+from typing import Final, Literal, Optional
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import httpx
@@ -28,6 +28,8 @@ from litellm.litellm_core_utils.core_helpers import UPSTREAM_USAGE_COST, billed_
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
+from litellm.llms.bigmodel.responses.transformation import BigModelResponsesAPIConfig
+from litellm.llms.volcengine.responses.transformation import VolcEngineResponsesAPIConfig
 from litellm.responses.streaming_iterator import (
     CachedResponsesAPIStreamingIterator,
     MockResponsesAPIStreamingIterator,
@@ -38,6 +40,7 @@ from litellm.responses.streaming_iterator import (
 from litellm.types.llms.openai import (
     ResponseAPIUsage,
     ResponseCompletedEvent,
+    ResponseIncompleteEvent,
     ResponsesAPIResponse,
     ResponsesAPIStreamEvents,
     ResponsesAPIStreamingResponse,
@@ -749,6 +752,92 @@ async def test_output_item_added_without_an_item_streams_through_under_affinity(
     added: Final = await iterator.__anext__()
 
     assert (added.type, added.output_index, added.item) == (ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED, 0, None)
+
+
+def _faked_reasoning_stream(
+    response: Mapping[str, object], litellm_metadata: dict[str, object]
+) -> MockResponsesAPIStreamingIterator:
+    return MockResponsesAPIStreamingIterator(
+        response=httpx.Response(200, json=response),
+        model="gpt-5-mini",
+        responses_api_provider_config=OpenAIResponsesAPIConfig(),
+        logging_obj=_logging_obj_stub(),
+        litellm_metadata=litellm_metadata,
+        custom_llm_provider="openai",
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "affinity, origin",
+    [(True, "dep-1"), (False, None)],
+    ids=["affinity-on", "affinity-off"],
+)
+async def test_faked_stream_carries_the_reasoning_and_response_ids_a_real_stream_carries(
+    affinity: bool, origin: str | None
+):
+    iterator: Final = _faked_reasoning_stream(
+        _reasoning_response_body("completed", [_STREAMED_REASONING_ITEM, _STREAMED_MESSAGE_ITEM]),
+        {"encrypted_content_affinity_enabled": affinity, "model_info": {"id": "dep-1"}},
+    )
+
+    events: Final = [event async for event in iterator]
+
+    item_records: Final = [
+        _item_record(event.item)
+        for event in events
+        if event.type in (ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED, ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE)
+    ]
+    completed: Final = next(
+        event.response for event in events if event.type == ResponsesAPIStreamEvents.RESPONSE_COMPLETED
+    )
+    output_records: Final = [_item_record(item) for item in completed.output]
+    summary_item_ids: Final = {
+        event.item_id for event in events if event.type == ResponsesAPIStreamEvents.REASONING_SUMMARY_TEXT_DELTA
+    }
+    expected_reasoning_id: Final = (
+        _REASONING_ITEM_ID
+        if origin is None
+        else ResponsesAPIRequestUtils._build_encrypted_item_id(origin, _REASONING_ITEM_ID)
+    )
+    assert {
+        record["id"] for record in [*item_records, *output_records] if record["type"] == "reasoning"
+    } | summary_item_ids == {expected_reasoning_id}
+
+    done_reasoning: Final = next(record for record in reversed(item_records) if record["type"] == "reasoning")
+    completed_reasoning: Final = next(record for record in output_records if record["type"] == "reasoning")
+    assert [
+        ResponsesAPIRequestUtils.unwrap_encrypted_content_with_model_id(str(record["encrypted_content"]))
+        for record in (done_reasoning, completed_reasoning)
+    ] == [(origin, "ciphertext"), (origin, "ciphertext")]
+
+    response_ids: Final = {event.response.id for event in events if getattr(event, "response", None) is not None}
+    assert [ResponsesAPIRequestUtils.decode_responses_api_response_id(response_id) for response_id in response_ids] == [
+        {"custom_llm_provider": "openai", "model_id": "dep-1", "response_id": "resp_affinity"}
+    ]
+
+
+@pytest.mark.asyncio
+async def test_faked_stream_of_an_already_encoded_response_keeps_its_ids():
+    litellm_metadata: Final[dict[str, object]] = {
+        "encrypted_content_affinity_enabled": True,
+        "model_info": {"id": "dep-1"},
+    }
+    encoded: Final = ResponsesAPIRequestUtils.update_responses_api_response_id_with_model_id(
+        responses_api_response=ResponsesAPIResponse.model_validate(
+            _reasoning_response_body("completed", [_STREAMED_REASONING_ITEM, _STREAMED_MESSAGE_ITEM])
+        ),
+        custom_llm_provider="openai",
+        litellm_metadata=litellm_metadata,
+    )
+
+    events: Final = [event async for event in _faked_reasoning_stream(encoded.model_dump(), litellm_metadata)]
+
+    completed: Final = next(
+        event.response for event in events if event.type == ResponsesAPIStreamEvents.RESPONSE_COMPLETED
+    )
+    assert completed.id == encoded.id
+    assert [_item_record(item) for item in completed.output] == [_item_record(item) for item in encoded.output]
 
 
 @pytest.mark.parametrize("trailing_error", _TRAILING_ERRORS, ids=type)
@@ -1828,11 +1917,6 @@ def setup_and_teardown():
     This fixture reloads litellm before every function. To speed up testing by removing callbacks being chained.
     """
     importlib.reload(litellm)
-    try:
-        if hasattr(litellm, "proxy") and hasattr(litellm.proxy, "proxy_server"):
-            importlib.reload(litellm.proxy.proxy_server)
-    except Exception:
-        pass
     loop = asyncio.get_event_loop_policy().new_event_loop()
     asyncio.set_event_loop(loop)
     yield
@@ -1853,6 +1937,9 @@ class _FakeLoggingObj:
         self.model_call_details = {"litellm_params": {}}
         self.success_logged = threading.Event()
         self.failure_logged = threading.Event()
+
+    def post_call(self, *, original_response: str, additional_args: Mapping[str, object]) -> None:
+        pass
 
     # Signature alignment with Logging handlers
     async def dispatch_success_handlers(self, *args, **kwargs):
@@ -2432,6 +2519,43 @@ async def test_responses_streaming_completed_event_persists_async_cache():
 
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
+@pytest.mark.asyncio
+async def test_responses_streaming_incomplete_event_from_the_provider_is_not_cached(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    logging_obj: Final = _FakeLoggingObj()
+    cache: Final = SimpleNamespace(add_cache=MagicMock(), async_add_cache=AsyncMock())
+    monkeypatch.setattr(litellm, "cache", cache)
+    request_kwargs: Final = {"model": "test-model", "input": "hello", "stream": True}
+    logging_obj.llm_caching_handler = SimpleNamespace(
+        request_kwargs=request_kwargs,
+        preset_cache_key="responses-stream-cache-key",
+        original_function=litellm.aresponses,
+        _should_store_result_in_cache=lambda original_function, kwargs: True,
+    )
+    iterator: Final = ResponsesAPIStreamingIterator(
+        response=httpx.Response(200),
+        model="test-model",
+        responses_api_provider_config=SimpleNamespace(),
+        logging_obj=logging_obj,
+        request_data=request_kwargs,
+        call_type=CallTypes.aresponses.value,
+    )
+    iterator.completed_response = ResponseIncompleteEvent(
+        type=ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE,
+        response=_make_completed_response().response.model_copy(update={"status": "incomplete"}),
+    )
+
+    existing_tasks: Final = asyncio.all_tasks()
+    iterator._handle_logging_completed_response()
+    await _await_tasks_spawned_since(existing_tasks)
+
+    assert logging_obj.success_logged.wait(timeout=5)
+    cache.async_add_cache.assert_not_called()
+    cache.add_cache.assert_not_called()
+
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 def test_responses_streaming_completed_event_persists_sync_cache():
     logging_obj = _FakeLoggingObj()
     original_cache = litellm.cache
@@ -2914,6 +3038,88 @@ def _answer_with_text_and_tool_call() -> ResponsesAPIResponse:
     )
 
 
+@pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", ("completed", "incomplete"))
+@pytest.mark.parametrize("cached", (False, True))
+@pytest.mark.parametrize("sync", (False, True))
+@pytest.mark.parametrize("empty_output", (False, True))
+async def test_synthetic_stream_preserves_terminal_status_and_success_callbacks(
+    status: Literal["completed", "incomplete"],
+    cached: bool,
+    sync: bool,
+    empty_output: bool,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
+    from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+
+    original: Final = _answer_with_text_and_tool_call()
+    transformed: Final = ResponsesAPIResponse.model_validate(
+        {
+            **original.model_dump(),
+            "status": status,
+            "incomplete_details": {"reason": "max_output_tokens"} if status == "incomplete" else None,
+            "output": [] if empty_output else original.output,
+            "usage": {
+                "input_tokens": 13,
+                "input_tokens_details": {"cached_tokens": 3},
+                "output_tokens": 32,
+                "output_tokens_details": {"reasoning_tokens": 16},
+                "total_tokens": 45,
+            },
+        }
+    )
+    logging_obj: Final = _FakeLoggingObj()
+    cache: Final = SimpleNamespace(add_cache=MagicMock(), async_add_cache=AsyncMock())
+    monkeypatch.setattr(litellm, "cache", cache)
+    logging_obj.llm_caching_handler = SimpleNamespace(
+        request_kwargs={"model": transformed.model, "input": "hello", "stream": True},
+        preset_cache_key="synthetic-terminal-cache",
+        original_function=litellm.aresponses,
+        _should_store_result_in_cache=lambda original_function, kwargs: True,
+    )
+    iterator: Final = (
+        CachedResponsesAPIStreamingIterator(response=transformed, logging_obj=logging_obj)
+        if cached
+        else MockResponsesAPIStreamingIterator(
+            response=httpx.Response(200, json=transformed.model_dump()),
+            model=transformed.model,
+            responses_api_provider_config=OpenAIResponsesAPIConfig(),
+            logging_obj=logging_obj,
+        )
+    )
+    existing_tasks: Final = asyncio.all_tasks()
+    events: Final = tuple(iterator) if sync else tuple([event async for event in iterator])
+    await _await_tasks_spawned_since(existing_tasks)
+
+    assert logging_obj.success_logged.wait(timeout=5)
+    assert tuple(event.type for event in events if event.type in ("response.completed", "response.incomplete")) == (
+        f"response.{status}",
+    )
+    expected: Final = (
+        transformed
+        if cached
+        else ResponsesAPIRequestUtils.update_responses_api_response_id_with_model_id(
+            responses_api_response=transformed.model_copy(), custom_llm_provider=None
+        )
+    ).model_dump()
+    assert events[-1].response.model_dump() == expected
+    downstream_response: Final = ProxyBaseLLMRequestProcessing.extract_completed_responses_response(iterator)
+    assert isinstance(downstream_response, ResponsesAPIResponse)
+    assert downstream_response.model_dump() == expected
+    assert "".join(event.delta for event in events if event.type == "response.output_text.delta") == (
+        "" if empty_output else "Checking the weather."
+    )
+    assert logging_obj.success_calls == logging_obj.async_success_calls == 1
+    assert logging_obj.failure_calls == logging_obj.async_failure_calls == 0
+    assert logging_obj.last_success_kwargs["cache_hit"] is (True if cached else None)
+    assert logging_obj.last_async_success_kwargs["cache_hit"] is (True if cached else None)
+    expected_cache_writes: Final = int(not cached and not empty_output)
+    assert cache.add_cache.call_count == (expected_cache_writes if sync else 0)
+    assert cache.async_add_cache.call_count == (0 if sync else expected_cache_writes)
+
+
 def test_faked_stream_bridged_to_chat_sends_tool_arguments_once():
     from litellm.completion_extras.litellm_responses_transformation.transformation import (
         OpenAiResponsesToChatCompletionStreamIterator,
@@ -3317,3 +3523,88 @@ def test_synthetic_stream_serializes_every_event_position_from_zero(output: list
 
     payloads: Final = tuple(json.loads(event.model_dump_json()) for event in events)
     assert [payload.get("sequence_number") for payload in payloads] == list(range(len(payloads)))
+
+
+_TOOL_INPUT_EVENTS: Final = (
+    ("response.function_call_arguments.delta", "delta"),
+    ("response.function_call_arguments.done", "arguments"),
+    ("response.mcp_call_arguments.delta", "delta"),
+    ("response.mcp_call_arguments.done", "arguments"),
+    ("response.mcp_call.arguments.delta", "delta"),
+    ("response.mcp_call.arguments.done", "arguments"),
+    ("response.custom_tool_call_input.delta", "delta"),
+    ("response.custom_tool_call_input.done", "input"),
+)
+_PROVIDER_STREAM_READERS: Final = (
+    pytest.param(OpenAIResponsesAPIConfig, id="openai_and_its_subclasses"),
+    pytest.param(BigModelResponsesAPIConfig, id="bigmodel"),
+    pytest.param(VolcEngineResponsesAPIConfig, id="volcengine"),
+)
+
+
+def _streamed_event_fields(
+    provider_config: type[OpenAIResponsesAPIConfig], event: Mapping[str, object]
+) -> Mapping[str, object]:
+    iterator: Final = ResponsesAPIStreamingIterator(
+        response=httpx.Response(200),
+        model="test-model",
+        responses_api_provider_config=provider_config(),
+        logging_obj=_FakeLoggingObj(),
+        litellm_metadata={},
+        request_data={},
+        call_type=CallTypes.responses.value,
+    )
+    streamed: Final = iterator._process_chunk(
+        json.dumps({"item_id": "call_1", "output_index": 0, "sequence_number": 1, **event})
+    )
+    assert streamed is not None
+    return json.loads(streamed.model_dump_json(exclude_none=True))
+
+
+@pytest.mark.parametrize("provider_config", _PROVIDER_STREAM_READERS)
+@pytest.mark.parametrize(("event_type", "field"), _TOOL_INPUT_EVENTS)
+@pytest.mark.parametrize("value", [42, {"q": "雪"}, [1, "a"], True])
+def test_streamed_tool_input_that_is_not_a_string_reaches_the_client_as_its_json_text(
+    provider_config: type[OpenAIResponsesAPIConfig], event_type: str, field: str, value: object
+):
+    fields: Final = _streamed_event_fields(provider_config, {"type": event_type, field: value})
+
+    assert fields["type"] == event_type
+    assert isinstance(fields[field], str)
+    assert json.loads(fields[field]) == value
+    assert "\\u" not in fields[field]
+
+
+@pytest.mark.parametrize("provider_config", _PROVIDER_STREAM_READERS)
+@pytest.mark.parametrize(("event_type", "field"), _TOOL_INPUT_EVENTS)
+def test_streamed_tool_input_sent_as_null_reaches_the_client_as_an_empty_string(
+    provider_config: type[OpenAIResponsesAPIConfig], event_type: str, field: str
+):
+    assert _streamed_event_fields(provider_config, {"type": event_type, field: None})[field] == ""
+
+
+@pytest.mark.parametrize(("event_type", "field"), _TOOL_INPUT_EVENTS)
+def test_streamed_tool_input_on_an_event_the_provider_reader_cannot_validate_still_reaches_the_client_as_a_string(
+    event_type: str, field: str
+):
+    fields: Final = _streamed_event_fields(
+        OpenAIResponsesAPIConfig, {"type": event_type, field: {"q": 1}, "output_index": "not-an-int"}
+    )
+
+    assert json.loads(fields[field]) == {"q": 1}
+
+
+@pytest.mark.parametrize("provider_config", _PROVIDER_STREAM_READERS)
+@pytest.mark.parametrize(("event_type", "field"), _TOOL_INPUT_EVENTS)
+def test_streamed_tool_input_that_is_already_a_string_reaches_the_client_unchanged(
+    provider_config: type[OpenAIResponsesAPIConfig], event_type: str, field: str
+):
+    assert _streamed_event_fields(provider_config, {"type": event_type, field: '{"ci'})[field] == '{"ci'
+
+
+def test_streamed_delta_on_an_event_that_is_not_tool_input_is_left_as_sent():
+    fields: Final = _streamed_event_fields(
+        OpenAIResponsesAPIConfig, {"type": "response.some_provider_event", "delta": {"q": 1}}
+    )
+
+    assert fields["delta"] == {"q": 1}

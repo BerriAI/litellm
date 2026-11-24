@@ -3,6 +3,7 @@ models and KWARG_ARTIFACTS into all_litellm_params."""
 
 from collections.abc import Callable, Iterator, Mapping, MutableMapping, Sequence
 from dataclasses import dataclass, field, fields, is_dataclass
+from enum import Enum
 from itertools import chain
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Annotated, Final, Literal, TypeAlias
@@ -14,6 +15,7 @@ if TYPE_CHECKING:
     import httpx
     from aiohttp import ClientSession
     from openai import AsyncAzureOpenAI, AsyncOpenAI, AzureOpenAI, OpenAI
+    from opentelemetry.trace import Span
 
     from litellm.litellm_core_utils.litellm_logging import Logging
     from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
@@ -57,6 +59,39 @@ TRUSTED_CALLBACK_VARS_FIELD: Final = "litellm_trusted_callback_vars"
 ADDRESSED_RESPONSE_ID_FIELD: Final = "_litellm_addressed_response_id"
 ADDRESSED_COMPARISON_RESPONSE_ID_FIELD: Final = "_litellm_addressed_comparison_response_id"
 STREAM_USAGE_INJECTED_FIELD: Final = "_litellm_stream_usage_injected"
+PROMPT_MANAGEMENT_APPLIED_FIELD: Final = "_litellm_prompt_management_applied"
+
+
+class PromptManagement(Enum):
+    APPLIED = "applied"
+    TEMPLATE_APPLIED = "template_applied"
+
+
+PROMPT_MANAGEMENT_APPLIED: Final[Mapping[str, PromptManagement]] = MappingProxyType(
+    {PROMPT_MANAGEMENT_APPLIED_FIELD: PromptManagement.APPLIED}
+)
+PROMPT_TEMPLATE_APPLIED: Final[Mapping[str, PromptManagement]] = MappingProxyType(
+    {PROMPT_MANAGEMENT_APPLIED_FIELD: PromptManagement.TEMPLATE_APPLIED}
+)
+
+
+def prompt_management_applied(request_kwargs: Mapping[str, object]) -> bool:
+    return request_kwargs.get(PROMPT_MANAGEMENT_APPLIED_FIELD) is PromptManagement.APPLIED
+
+
+def prompt_template_applied(request_kwargs: Mapping[str, object]) -> bool:
+    return request_kwargs.get(PROMPT_MANAGEMENT_APPLIED_FIELD) is PromptManagement.TEMPLATE_APPLIED
+
+
+def params_the_prompt_hook_changed(
+    params_the_hook_saw: Mapping[str, object], params_it_returned: Mapping[str, object]
+) -> Mapping[str, object]:
+    return {
+        key: value
+        for key, value in params_it_returned.items()
+        if key not in params_the_hook_saw or params_the_hook_saw[key] is not value
+    }
+
 
 WIRE_NAME: Final = "wire_name"
 
@@ -310,6 +345,10 @@ def _int_from_decimal_string(value: object) -> object:
     return value
 
 
+def _bool_from_true_false_string(value: object) -> object:
+    return value == "true" if value in ("true", "false") else value
+
+
 @pydantic_dataclass(frozen=True, slots=True, kw_only=True)
 class ControlOptions:
     stream_chunk_size: (
@@ -320,6 +359,7 @@ class ControlOptions:
         ]
         | None
     ) = None
+    fake_stream: Annotated[bool, BeforeValidator(_bool_from_true_false_string), Field(strict=True)] | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -355,7 +395,18 @@ class CallState:
     preset_cache_key: str | None = None
     cache_key: str | None = None
     stream_response: "Mapping[str, ModelResponse] | None" = None
+    parent_otel_span: "Span | None" = None
     context_compaction_state: "CompactionState | None" = field(default=None, metadata=wire("_context_compaction_state"))
+    prompt_management_applied: PromptManagement | None = field(
+        default=None, metadata=wire(PROMPT_MANAGEMENT_APPLIED_FIELD)
+    )
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class McpHandlerState:
+    recursion_guard: bool | None = field(default=None, metadata=wire("_skip_mcp_handler"))
+    skip_mcp_handler: bool | None = None
+    mcp_handler_context: Mapping[str, object] | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -438,6 +489,7 @@ class EntrypointState:
 class InternalState:
     call: CallState
     agentic_loop: AgenticLoopState
+    mcp_handler: McpHandlerState
     router: RouterState
     proxy: ProxyRequestState
     entrypoint: EntrypointState
@@ -465,3 +517,4 @@ def owned_wire_names(root: type) -> tuple[str, ...]:
 OWNED_KWARG_NAMES: Final = tuple(chain.from_iterable(owned_wire_names(root) for root in LITELLM_OWNED_ROOTS))
 AGENTIC_LOOP_KWARG_NAMES: Final = (*wire_names(AgenticLoopState), *wire_names(AgenticLoopOptions))
 BEDROCK_BATCH_KWARG_NAMES: Final = wire_names(BedrockBatchConnection)
+MCP_HANDLER_KWARG_NAMES: Final = frozenset(wire_names(McpHandlerState))

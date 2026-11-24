@@ -4,6 +4,7 @@ import json
 import socket
 import struct
 import zlib
+from collections.abc import Iterator
 from types import MappingProxyType
 from typing import Final, Literal
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -27,10 +28,12 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.llms.base import HiddenParams
 from litellm.types.utils import (
     LIST_BATCHES_SUPPORTED_PROVIDERS,
+    AdminApiKeySecretReference,
     TextChoices,
     TextCompletionResponse,
     Usage,
 )
+from tests.test_litellm_rust.support.recording_server import RecordingServer, ResponseSpec, recording_service
 
 
 def _png_chunks(png: bytes, offset: int = 8) -> tuple[tuple[bytes, bytes], ...]:
@@ -853,71 +856,66 @@ def test_default_health_check_mode_falls_back_to_cost_map_then_chat(
     )
 
 
+_MANTLE_CLAUDE_REPLY: Final = MappingProxyType(
+    {
+        "id": "msg_health",
+        "type": "message",
+        "role": "assistant",
+        "model": "anthropic.claude-haiku-4-5",
+        "content": [{"type": "text", "text": "pong"}],
+        "stop_reason": "end_turn",
+        "stop_sequence": None,
+        "usage": {"input_tokens": 3, "output_tokens": 1},
+    }
+)
+
+
+@pytest.fixture
+def mantle_server() -> Iterator[RecordingServer]:
+    """Bedrock Mantle /v1/messages runs in Rust, so the probe is answered by a local server instead of respx."""
+    with recording_service() as server:
+        server.default_response = ResponseSpec(body=dict(_MANTLE_CLAUDE_REPLY))
+        yield server
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("mode_kwargs", [{}, {"mode": None}], ids=["omitted", "explicit_none"])
 async def test_ahealth_check_probes_mantle_claude_through_messages_without_mode(
-    monkeypatch: pytest.MonkeyPatch,
-    respx_mock: respx.MockRouter,
+    mantle_server: RecordingServer,
     mode_kwargs: dict[str, None],
 ) -> None:
-    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-    litellm.in_memory_llm_clients_cache.flush_cache()
-    upstream: Final = respx_mock.post("https://bedrock-mantle.us-east-2.api.aws/anthropic/v1/messages").respond(
-        json={
-            "id": "msg_health",
-            "type": "message",
-            "role": "assistant",
-            "model": "anthropic.claude-haiku-4-5",
-            "content": [{"type": "text", "text": "pong"}],
-            "stop_reason": "end_turn",
-            "stop_sequence": None,
-            "usage": {"input_tokens": 3, "output_tokens": 1},
-        }
-    )
-
     result: Final = await ahealth_check(
         {
             "model": "bedrock_mantle/anthropic.claude-haiku-4-5",
             "api_key": "test-bearer",
             "aws_region_name": "us-east-2",
+            "api_base": mantle_server.base_url,
         },
         prompt="test from litellm",
         **mode_kwargs,
     )
 
     assert "error" not in result, result
-    assert upstream.call_count == 1
-    sent: Final = json.loads(upstream.calls.last.request.content)
-    assert sent["model"] == "anthropic.claude-haiku-4-5"
-    assert sent["max_tokens"] == 16
-    assert sent["messages"] == [{"role": "user", "content": "test from litellm"}]
+    assert len(mantle_server.requests) == 1
+    sent: Final = mantle_server.requests[0]
+    assert sent.path == "/anthropic/v1/messages"
+    assert sent.headers["authorization"] == "Bearer test-bearer"
+    assert isinstance(sent.body, dict)
+    assert sent.body["model"] == "anthropic.claude-haiku-4-5"
+    assert sent.body["max_tokens"] == 16
+    assert sent.body["messages"] == [{"role": "user", "content": "test from litellm"}]
 
 
 @pytest.mark.asyncio
 async def test_ahealth_check_anthropic_messages_mode_keeps_caller_supplied_messages(
-    monkeypatch: pytest.MonkeyPatch,
-    respx_mock: respx.MockRouter,
+    mantle_server: RecordingServer,
 ) -> None:
-    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-    litellm.in_memory_llm_clients_cache.flush_cache()
-    upstream: Final = respx_mock.post("https://bedrock-mantle.us-east-2.api.aws/anthropic/v1/messages").respond(
-        json={
-            "id": "msg_health",
-            "type": "message",
-            "role": "assistant",
-            "model": "anthropic.claude-haiku-4-5",
-            "content": [{"type": "text", "text": "pong"}],
-            "stop_reason": "end_turn",
-            "stop_sequence": None,
-            "usage": {"input_tokens": 3, "output_tokens": 1},
-        }
-    )
-
     result: Final = await ahealth_check(
         {
             "model": "bedrock_mantle/anthropic.claude-haiku-4-5",
             "api_key": "test-bearer",
             "aws_region_name": "us-east-2",
+            "api_base": mantle_server.base_url,
             "messages": [{"role": "user", "content": "operator probe"}],
             "max_tokens": 4,
         },
@@ -926,9 +924,11 @@ async def test_ahealth_check_anthropic_messages_mode_keeps_caller_supplied_messa
     )
 
     assert "error" not in result, result
-    sent: Final = json.loads(upstream.calls.last.request.content)
-    assert sent["max_tokens"] == 4
-    assert sent["messages"] == [{"role": "user", "content": "operator probe"}]
+    sent: Final = mantle_server.requests[0]
+    assert sent.path == "/anthropic/v1/messages"
+    assert isinstance(sent.body, dict)
+    assert sent.body["max_tokens"] == 4
+    assert sent.body["messages"] == [{"role": "user", "content": "operator probe"}]
 
 
 @pytest.mark.asyncio
@@ -1888,6 +1888,60 @@ async def test_ahealth_check_probes_extraction_models_through_the_extraction_api
     sent: Final = json.loads(upstream.calls[0].request.content)
     assert sent["state"] == "health check"
     assert sent["fields"]["reachable"]["type"] == "text"
+
+
+
+@pytest.mark.parametrize(
+    ("mode", "model", "upstream_url", "answer"),
+    (
+        (
+            "decisions",
+            "perplexity/pplx-decider-v1-27b",
+            "https://api.perplexity.ai/v1/decisions",
+            {
+                "model": "perplexity/pplx-decider-v1-27b",
+                "answers": {"reachable": {"type": "noul", "noul": 1.0}},
+                "usage": {"input_tokens": 12, "output_tokens": 1},
+            },
+        ),
+        (
+            "extraction",
+            "cloudflare/clairic",
+            "https://api.cloudflare.com/client/v4/accounts/acct-1/ai/run/@cf/cloudflare/clairic",
+            {
+                "result": {
+                    "model": "clairic",
+                    "answers": {"reachable": {"type": "text", "value": "health"}},
+                    "truncated": False,
+                    "usage": {"input_tokens": 20, "output_tokens": 0},
+                },
+                "success": True,
+                "errors": [],
+                "messages": [],
+            },
+        ),
+    ),
+)
+async def test_ahealth_check_sends_the_secret_an_admin_oidc_reference_points_to(
+    mode: str,
+    model: str,
+    upstream_url: str,
+    answer: dict[str, object],
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    monkeypatch.setenv("CLOUDFLARE_ACCOUNT_ID", "acct-1")
+    monkeypatch.delenv("CLOUDFLARE_API_BASE", raising=False)
+    monkeypatch.setenv("QA_HEALTH_OIDC_KEY", "resolved-health-key")
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    upstream: Final = respx_mock.post(upstream_url).respond(json=answer)
+    reference: Final = AdminApiKeySecretReference("oidc/env/QA_HEALTH_OIDC_KEY", frozenset())
+
+    result: Final = await ahealth_check({"model": model, "api_key": reference}, mode=mode)
+
+    assert "error" not in result, result
+    assert upstream.calls[0].request.headers["authorization"] == "Bearer resolved-health-key"
 
 
 VERTEX_AUTHORIZED_USER: Final = json.dumps(

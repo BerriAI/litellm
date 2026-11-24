@@ -13,6 +13,7 @@ from .payload import (
     as_object,
     collect,
     collect_entry,
+    collect_json_input,
     collect_json_leaves,
     collect_text_parts,
     is_container,
@@ -105,6 +106,9 @@ def collect_content(container: MutableRequest, slots: SlotSink) -> None:
             collect(part, "text", slots)
             if part.get("type") == "tool_use":
                 collect_json_leaves(part.get("input"), slots, strict=True)
+            if part.get("type") == "input_json":
+                collect(part, "data", slots)
+                collect_json_input(part.get("data"), slots)
             source = as_object(part.get("source")) if part.get("type") == "document" else None
             if source is not None:
                 collect(part, "title", slots)

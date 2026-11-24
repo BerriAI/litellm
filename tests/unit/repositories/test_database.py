@@ -29,7 +29,9 @@ def static_password(monkeypatch: pytest.MonkeyPatch) -> None:
 @pytest.mark.usefixtures("static_password")
 async def test_closing_the_database_closes_prisma() -> None:
     aclose: Final = AsyncMock()
-    database: Final = await Database.open(_prisma(aclose), WRITER_URL, None, NATIVE_CONNECTIONS)
+    database: Final = await Database.open(
+        _prisma(aclose), WRITER_URL, None, writer_connections=NATIVE_CONNECTIONS, reader_connections=NATIVE_CONNECTIONS
+    )
 
     aclose.assert_not_awaited()
     await database.aclose()
@@ -44,7 +46,9 @@ def _task_names(database: Database) -> tuple[str, ...]:
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("static_password")
 async def test_static_password_runs_no_background_task() -> None:
-    database: Final = await Database.open(_prisma(), WRITER_URL, READER_URL, NATIVE_CONNECTIONS)
+    database: Final = await Database.open(
+        _prisma(), WRITER_URL, READER_URL, writer_connections=NATIVE_CONNECTIONS, reader_connections=NATIVE_CONNECTIONS
+    )
 
     assert _task_names(database) == ()
     await database.aclose()
@@ -55,7 +59,9 @@ async def test_closing_the_database_stops_both_token_refreshes(monkeypatch: pyte
     monkeypatch.setenv("IAM_TOKEN_DB_AUTH", "true")
     monkeypatch.delenv("AZURE_POSTGRESQL_AUTH", raising=False)
     monkeypatch.delenv(PGBOUNCER_POOLED_ENV_VAR, raising=False)
-    database: Final = await Database.open(_prisma(), WRITER_URL, READER_URL, NATIVE_CONNECTIONS)
+    database: Final = await Database.open(
+        _prisma(), WRITER_URL, READER_URL, writer_connections=NATIVE_CONNECTIONS, reader_connections=NATIVE_CONNECTIONS
+    )
     assert _task_names(database) == ("keep_token_fresh", "keep_token_fresh")
 
     await database.aclose()
@@ -65,11 +71,32 @@ async def test_closing_the_database_stops_both_token_refreshes(monkeypatch: pyte
 
 
 @pytest.mark.asyncio
+async def test_a_reader_with_no_native_share_gets_no_pool_and_no_token_refresh(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("IAM_TOKEN_DB_AUTH", "true")
+    monkeypatch.delenv("AZURE_POSTGRESQL_AUTH", raising=False)
+    monkeypatch.delenv(PGBOUNCER_POOLED_ENV_VAR, raising=False)
+    database: Final = await Database.open(
+        _prisma(), WRITER_URL, READER_URL, writer_connections=NATIVE_CONNECTIONS, reader_connections=0
+    )
+
+    assert _task_names(database) == ("keep_token_fresh",)
+    await database.aclose()
+
+
+@pytest.mark.asyncio
 async def test_rejected_native_settings_still_close_prisma() -> None:
     aclose: Final = AsyncMock()
 
     with pytest.raises(ValueError, match="must name a host and a user"):
-        await Database.open(_prisma(aclose), "postgresql://db.invalid/proxy", None, NATIVE_CONNECTIONS)
+        await Database.open(
+            _prisma(aclose),
+            "postgresql://db.invalid/proxy",
+            None,
+            writer_connections=NATIVE_CONNECTIONS,
+            reader_connections=NATIVE_CONNECTIONS,
+        )
 
     aclose.assert_awaited_once()
 
@@ -80,7 +107,13 @@ async def test_rejected_reader_settings_still_close_prisma() -> None:
     aclose: Final = AsyncMock()
 
     with pytest.raises(ValueError, match="must name a host and a user"):
-        await Database.open(_prisma(aclose), WRITER_URL, "postgresql://replica.invalid/proxy", NATIVE_CONNECTIONS)
+        await Database.open(
+            _prisma(aclose),
+            WRITER_URL,
+            "postgresql://replica.invalid/proxy",
+            writer_connections=NATIVE_CONNECTIONS,
+            reader_connections=NATIVE_CONNECTIONS,
+        )
 
     aclose.assert_awaited_once()
 
@@ -91,7 +124,11 @@ async def test_zero_native_connections_open_no_native_pool(monkeypatch: pytest.M
     aclose: Final = AsyncMock()
 
     database: Final = await Database.open(
-        _prisma(aclose), "postgresql://db.invalid/proxy", "postgresql://replica.invalid/proxy", 0
+        _prisma(aclose),
+        "postgresql://db.invalid/proxy",
+        "postgresql://replica.invalid/proxy",
+        writer_connections=0,
+        reader_connections=0,
     )
 
     assert (database.native, database.tasks) == (None, ())
@@ -104,7 +141,11 @@ async def test_zero_native_connections_open_no_native_pool(monkeypatch: pytest.M
 async def test_an_unreachable_native_pool_is_reported_without_failing_boot(caplog: pytest.LogCaptureFixture) -> None:
     with caplog.at_level(logging.WARNING, logger=verbose_proxy_logger.name):
         database: Final = await Database.open(
-            _prisma(), "postgresql://litellm:secret@127.0.0.1:1/proxy?pool_timeout=1", None, NATIVE_CONNECTIONS
+            _prisma(),
+            "postgresql://litellm:secret@127.0.0.1:1/proxy?pool_timeout=1",
+            None,
+            writer_connections=NATIVE_CONNECTIONS,
+            reader_connections=NATIVE_CONNECTIONS,
         )
         await asyncio.wait_for(database.boot_probe, timeout=10)
         await database.aclose()

@@ -60,7 +60,7 @@ class GigaChatPassthroughConfig(BasePassthroughConfig):
         litellm_params: Mapping[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:  # mutable-ok: base class contract returns dict for httpx
+    ) -> dict[str, object]:  # mutable-ok: base class contract returns dict for httpx
         """
         Set up headers with OAuth token.
         """
@@ -81,7 +81,10 @@ class GigaChatPassthroughConfig(BasePassthroughConfig):
         logging_obj: LiteLLMLoggingObj,
         endpoint: str,
     ) -> CostResponseTypes | None:
-        from litellm import encoding
+        if TYPE_CHECKING:
+            from litellm.main import encoding
+        else:
+            from litellm import encoding
         from litellm.types.utils import LlmProviders, ModelResponse
         from litellm.utils import ProviderConfigManager
 

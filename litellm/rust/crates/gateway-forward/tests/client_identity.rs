@@ -6,9 +6,9 @@ use std::sync::{
 };
 
 use axum::{body::Body, http::StatusCode, response::Response};
-use litellm_gateway_forward::{Forward, PEER_HEADER};
+use litellm_gateway_forward::PEER_HEADER;
 use rstest::rstest;
-use support::{DRAIN, Gateway, Raw, UVICORN_KEEPALIVE, raw_upstream, recording, within};
+use support::{Gateway, Raw, UVICORN_KEEPALIVE, raw_upstream, recording, serve_on, within};
 use tokio::net::{TcpListener, TcpStream};
 
 fn ok() -> Response {
@@ -122,13 +122,9 @@ async fn ipv6_listeners_report_the_peer_bracketed_with_its_port(
     #[case] peer_ip: &str,
 ) {
     let (upstream, mut received) = recording(ok).await;
-    let forward = Forward::new(
-        &format!("http://{upstream}").parse().unwrap(),
-        UVICORN_KEEPALIVE,
-    );
     let public = TcpListener::bind(bind).await.unwrap();
     let port = public.local_addr().unwrap().port();
-    tokio::spawn(forward.serve(public, std::future::pending(), DRAIN));
+    serve_on(public, upstream, UVICORN_KEEPALIVE, std::future::pending());
     let mut raw = Raw::new(
         TcpStream::connect(format!("{connect}:{port}"))
             .await

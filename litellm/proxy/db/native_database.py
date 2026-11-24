@@ -1,9 +1,11 @@
-"""Settings for the native (SQLx) pool, resolved from the same URL Prisma connects with.
+"""What the Python host adds to the native (SQLx) pool.
 
-``DATABASE_URL`` is final once ``db_url_settings`` and the CLI have assembled it: token
-minted, libpq TLS translated to Prisma's dialect, timeouts in ``options``, pool params
-added. Reading that URL keeps one resolver for both pools instead of a second pass over
-the ``DATABASE_*`` env vars.
+The pool's endpoint is resolved in Rust, by ``DatabaseEndpoint.resolve``, from the same URL
+Prisma connects with. ``DATABASE_URL`` is final once ``db_url_settings`` and the CLI have
+assembled it: token minted, libpq TLS translated to Prisma's dialect, timeouts in ``options``,
+pool params added. The Rust gateway reads that URL with the same code, so no endpoint rule
+lives here. This module keeps what only this host does: the PKCS#12 client identity and the
+token refresh loop.
 
 Credentials follow the host. Each process runs one token refresh loop, owned by whatever
 hosts it, and feeds every client in that process: here the worker's loop re-mints Prisma's
@@ -16,25 +18,22 @@ loop calls it.
 """
 
 import asyncio
-import shlex
-import struct
 import urllib.parse
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import MappingProxyType
-from typing import Final, Protocol
+from typing import TYPE_CHECKING, Final, Protocol
 
 from cryptography.hazmat.primitives.serialization import Encoding, NoEncryption, PrivateFormat, pkcs12
 
+from litellm._internal_context import current_request_parent_otel_span
 from litellm._logging import verbose_proxy_logger
 from litellm._service_logger import ServiceTypes
 from litellm.proxy.db.db_span import db_event_metadata
-from litellm.proxy.db.db_url_settings import NATIVE_APPLICATION_NAME, PRISMA_APPLICATION_NAME
-from litellm.proxy.db.pgbouncer import database_url_is_pooled, fold_libpq_option_tokens, libpq_option_setting
+from litellm.proxy.db.pgbouncer import database_url_is_pooled
 from litellm.proxy.db.token_auth import (
-    DEFAULT_POSTGRES_PORT,
     DatabaseTokenAuth,
     IAMEndpoint,
     mint_database_token,
@@ -42,76 +41,25 @@ from litellm.proxy.db.token_auth import (
     parse_iam_endpoint_from_url,
     resolve_database_token_auth,
 )
-from litellm.rust_bridge.database import (
-    NativeClientIdentity,
-    NativeDatabaseEndpoint,
-    NativePoolLimits,
-    SslMode,
-)
+from litellm.rust_bridge.database import NativeClientIdentity
+
+if TYPE_CHECKING:
+    from opentelemetry.trace import Span
 
 TOKEN_REFRESH_BUFFER_SECONDS: Final = 180.0
 TOKEN_FALLBACK_REFRESH_SECONDS: Final = 600.0
 TOKEN_RETRY_SECONDS: Final = 30.0
-PRISMA_DEFAULT_SCHEMA: Final = "public"
-PRISMA_DEFAULT_POOL_TIMEOUT_SECONDS: Final = 10.0
-PRISMA_DEFAULT_STATEMENT_CACHE_SIZE: Final = 100
-TLS_PROBE_TIMEOUT_SECONDS: Final = 5.0
-_POSTGRES_SSL_REQUEST: Final = struct.pack("!ii", 8, 80877103)
 
 
-@dataclass(frozen=True, slots=True)
-class NativeEndpointSettings:
-    endpoint: NativeDatabaseEndpoint
-    ignored_options: tuple[str, ...]
+def client_identity(url: str, read_file: Callable[[Path], bytes] = Path.read_bytes) -> NativeClientIdentity | None:
+    """Prisma's ``sslidentity`` / ``sslpassword``, a PKCS#12 client certificate, as the PEM the native pool takes.
 
-
-def _params(url: str) -> Mapping[str, str]:
-    return MappingProxyType(dict(urllib.parse.parse_qsl(urllib.parse.urlsplit(url).query)))
-
-
-def needs_tls_probe(url: str) -> bool:
-    """Prisma's ``sslmode=prefer`` with ``sslaccept=strict`` verifies TLS when the server offers it
-    and falls back to plaintext when it does not; SQLx has no verified-or-plaintext mode, so the
-    caller asks the server once and pins the answer."""
-    params: Final = _params(url)
-    return params.get("sslmode", "prefer") == "prefer" and params.get("sslaccept") == "strict" and "host" not in params
-
-
-async def server_offers_tls(url: str, timeout: float = TLS_PROBE_TIMEOUT_SECONDS) -> bool:
-    """Whether the server answers a Postgres ``SSLRequest`` with ``S``; an unreachable server counts as offering it."""
-    parsed: Final = urllib.parse.urlsplit(url)
-    try:
-        reader, writer = await asyncio.wait_for(
-            asyncio.open_connection(parsed.hostname, parsed.port or int(DEFAULT_POSTGRES_PORT)), timeout
-        )
-    except (OSError, asyncio.TimeoutError):
-        return True
-    try:
-        writer.write(_POSTGRES_SSL_REQUEST)
-        await writer.drain()
-        answer: Final = await asyncio.wait_for(reader.read(1), timeout)
-    except (OSError, asyncio.TimeoutError):
-        return True
-    finally:
-        writer.close()
-    return answer != b"N"
-
-
-def _tls(params: Mapping[str, str], tls_offered: bool) -> tuple[SslMode, str | None]:
-    sslmode: Final = params.get("sslmode", "prefer")
-    strict: Final = params.get("sslaccept") == "strict"
-    if sslmode == "disable" or (sslmode == "prefer" and strict and not tls_offered):
-        return "disable", None
-    if strict:
-        return "verify-full", params.get("sslcert")
-    return ("require" if sslmode == "require" else "prefer"), None
-
-
-def _client_identity(
-    params: Mapping[str, str], ssl_mode: SslMode, read_file: Callable[[Path], bytes]
-) -> NativeClientIdentity | None:
+    Rust decides the endpoint's TLS, so the file is read whenever the URL names it without
+    ``sslmode=disable``, and the pool drops the identity when a ``prefer`` server refuses TLS.
+    """
+    params: Final = MappingProxyType(dict(urllib.parse.parse_qsl(urllib.parse.urlsplit(url).query)))
     identity_path: Final = params.get("sslidentity")
-    if identity_path is None or ssl_mode == "disable":
+    if identity_path is None or params.get("sslmode") == "disable":
         return None
     password: Final = params.get("sslpassword")
     key, cert, chain = pkcs12.load_key_and_certificates(
@@ -123,93 +71,6 @@ def _client_identity(
         cert_pem=b"".join(c.public_bytes(Encoding.PEM) for c in (cert, *chain)).decode(),
         key_pem=key.private_bytes(Encoding.PEM, PrivateFormat.PKCS8, NoEncryption()).decode(),
     )
-
-
-def _session_options(params: Mapping[str, str]) -> tuple[tuple[tuple[str, str], ...], tuple[str, ...]]:
-    raw: Final = params.get("options", "")
-    try:
-        tokens: Final[Sequence[str]] = fold_libpq_option_tokens(tuple(shlex.split(raw)))
-    except ValueError:
-        return (), (raw,)
-    readable: Final = tuple((token, libpq_option_setting(token)) for token in tokens)
-    schema: Final = params.get("schema", PRISMA_DEFAULT_SCHEMA)
-    search_path: Final = () if schema == PRISMA_DEFAULT_SCHEMA else (("search_path", f'"{schema}"'),)
-    settings: Final = tuple(
-        (name, value) for name, _, value in (setting.partition("=") for _, setting in readable if setting is not None)
-    )
-    return (*search_path, *settings), tuple(token for token, setting in readable if setting is None)
-
-
-def _seconds(params: Mapping[str, str], key: str, default: float | None = None) -> float | None:
-    value: Final = params.get(key)
-    if value is None:
-        return default
-    return None if float(value) == 0 else float(value)
-
-
-def _statement_cache_capacity(params: Mapping[str, str]) -> int:
-    if params.get("pgbouncer") == "true":
-        return 0
-    return int(params.get("statement_cache_size", PRISMA_DEFAULT_STATEMENT_CACHE_SIZE))
-
-
-def _application_name(params: Mapping[str, str]) -> str:
-    configured: Final = params.get("application_name", PRISMA_APPLICATION_NAME)
-    return NATIVE_APPLICATION_NAME if configured == PRISMA_APPLICATION_NAME else configured
-
-
-def native_endpoint(
-    url: str,
-    *,
-    tls_offered: bool,
-    max_connections: int,
-    read_file: Callable[[Path], bytes] = Path.read_bytes,
-) -> NativeEndpointSettings:
-    """The native pool's endpoint for the Prisma URL ``url``, read the way Prisma reads it.
-
-    ``host`` is Prisma's Unix socket directory. The pool takes ``max_connections``, the
-    Rust share of the budget (``connection_budget``), and tags its connections
-    ``NATIVE_APPLICATION_NAME``. An unset ``pool_timeout`` takes Prisma's default and
-    0 waits forever.
-    ``sslidentity`` / ``sslpassword`` are a PKCS#12 client certificate, handed over as PEM.
-    ``options`` tokens that are not ``-c name=value`` settings cannot be sent by SQLx and
-    come back in ``ignored_options`` instead of failing boot.
-    """
-    parsed: Final = urllib.parse.urlsplit(url)
-    params: Final = _params(url)
-    socket: Final = params.get("host")
-    if not (parsed.hostname or socket) or not parsed.username:
-        raise ValueError("DATABASE_URL must name a host and a user for the native pool")
-    ssl_mode, ssl_root_cert = _tls(params, tls_offered)
-    options, ignored = _session_options(params)
-    return NativeEndpointSettings(
-        endpoint=NativeDatabaseEndpoint(
-            host=parsed.hostname or "localhost",
-            port=parsed.port or int(DEFAULT_POSTGRES_PORT),
-            socket=socket,
-            username=urllib.parse.unquote(parsed.username),
-            password=urllib.parse.unquote(parsed.password) if parsed.password else None,
-            database=urllib.parse.unquote(parsed.path.lstrip("/")) or "postgres",
-            ssl_mode=ssl_mode,
-            ssl_root_cert=ssl_root_cert,
-            ssl_client=_client_identity(params, ssl_mode, read_file),
-            application_name=_application_name(params),
-            options=options,
-            statement_cache_capacity=_statement_cache_capacity(params),
-            pool=NativePoolLimits(
-                max_connections=max_connections,
-                acquire_timeout_seconds=_seconds(params, "pool_timeout", PRISMA_DEFAULT_POOL_TIMEOUT_SECONDS),
-                idle_timeout_seconds=_seconds(params, "max_idle_connection_lifetime"),
-                socket_timeout_seconds=_seconds(params, "socket_timeout"),
-            ),
-        ),
-        ignored_options=ignored,
-    )
-
-
-async def resolve_native_endpoint(url: str, max_connections: int) -> NativeEndpointSettings:
-    tls_offered: Final = await server_offers_tls(url) if needs_tls_probe(url) else True
-    return native_endpoint(url, tls_offered=tls_offered, max_connections=max_connections)
 
 
 @dataclass(frozen=True, slots=True)
@@ -297,7 +158,7 @@ class DatabaseServiceHooks(Protocol):
         service: ServiceTypes,
         call_type: str,
         duration: float,
-        parent_otel_span: None = None,
+        parent_otel_span: "Span | None" = None,
         start_time: datetime | None = None,
         end_time: datetime | None = None,
         event_metadata: dict[str, str] | None = None,  # mutable-ok: matches the ServiceLogging hook signature
@@ -309,7 +170,7 @@ class DatabaseServiceHooks(Protocol):
         duration: float,
         error: Exception,
         call_type: str,
-        parent_otel_span: None = None,
+        parent_otel_span: "Span | None" = None,
         start_time: datetime | None = None,
         end_time: datetime | None = None,
         event_metadata: dict[str, str] | None = None,  # mutable-ok: matches the ServiceLogging hook signature
@@ -325,7 +186,9 @@ class ServiceLoggingEvents:
     """Turns native round trips into the ``ServiceTypes.DB`` events ``db_span`` emits.
 
     Rust calls ``record`` from its own threads once per round trip, so the hook is
-    handed to the proxy's event loop rather than awaited here.
+    handed to the proxy's event loop rather than awaited here. A read a request made
+    is recorded inside that request's ``contextvars`` context, so its event parents
+    under the request span.
     """
 
     loop: asyncio.AbstractEventLoop
@@ -343,12 +206,13 @@ class ServiceLoggingEvents:
         service_logging: Final = self.service_logging()
         if service_logging is None:
             return
+        parent_otel_span: Final = current_request_parent_otel_span()
         start_time: Final = datetime.fromtimestamp(started_at, tz=timezone.utc).astimezone().replace(tzinfo=None)
         hook: Final = (
             service_logging.async_service_success_hook(
                 service=ServiceTypes.DB,
                 call_type=call_type,
-                parent_otel_span=None,
+                parent_otel_span=parent_otel_span,
                 duration=duration_seconds,
                 start_time=start_time,
                 end_time=start_time + timedelta(seconds=duration_seconds),
@@ -359,7 +223,7 @@ class ServiceLoggingEvents:
                 error=NativeDatabaseError(failure),
                 service=ServiceTypes.DB,
                 call_type=call_type,
-                parent_otel_span=None,
+                parent_otel_span=parent_otel_span,
                 duration=duration_seconds,
                 start_time=start_time,
                 end_time=start_time + timedelta(seconds=duration_seconds),

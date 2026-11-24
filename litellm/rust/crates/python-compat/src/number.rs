@@ -1,9 +1,15 @@
+//! Python number semantics: `int()` and `float()` parsing of text, Neumaier-compensated float
+//! sums, and the float and duration forms the proxy reads from settings.
+
 use std::{str::FromStr, time::Duration};
 
 use num_bigint::BigInt;
 use serde::{Deserialize, Serialize, Serializer};
 
-use crate::{format::fixed, repr::float_repr};
+use crate::{
+    format::fixed,
+    repr::{float_repr, str_repr},
+};
 
 /// `int(text)` in base 10, or `None` where Python raises `ValueError`.
 pub fn int(text: &str) -> Option<BigInt> {
@@ -43,6 +49,100 @@ pub fn hex_int(text: &str) -> Option<BigInt> {
 /// `float(text)`, or `None` where Python raises `ValueError`.
 pub fn float(text: &str) -> Option<f64> {
     parse(text)
+}
+
+/// `sum(values)` over floats: CPython 3.12+ adds them with Neumaier compensation, so the
+/// result can differ from a plain left fold in the last bit.
+pub fn sum(values: impl IntoIterator<Item = f64>) -> f64 {
+    let mut total = 0.0_f64;
+    let mut compensation = 0.0_f64;
+    for value in values {
+        let next = total + value;
+        if total.abs() >= value.abs() {
+            compensation += (total - next) + value;
+        } else {
+            compensation += (value - next) + total;
+        }
+        total = next;
+    }
+    if compensation != 0.0 && compensation.is_finite() {
+        total += compensation;
+    }
+    total
+}
+
+/// Why [`int_of`] or [`float_of`] refused a value. Messages are CPython's, except
+/// [`ConversionError::TooBig`], where Python would build a big int instead.
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum ConversionError {
+    /// `ValueError` from `int(text)`; holds the text's `repr`.
+    #[error("invalid literal for int() with base 10: {0}")]
+    IntLiteral(String),
+    /// `ValueError` from `float(text)`; holds the text's `repr`.
+    #[error("could not convert string to float: {0}")]
+    FloatLiteral(String),
+    /// `ValueError` from `int(nan)`.
+    #[error("cannot convert float NaN to integer")]
+    NotANumber,
+    /// `OverflowError` from `int(inf)`.
+    #[error("cannot convert float infinity to integer")]
+    Infinite,
+    /// An integer outside `i64`; holds its `str`.
+    #[error("{0} does not fit in a 64-bit int")]
+    TooBig(String),
+    /// `TypeError` from `int(value)`; holds the value's type name.
+    #[error("int() argument must be a string, a bytes-like object or a real number, not '{0}'")]
+    IntType(&'static str),
+    /// `TypeError` from `float(value)`; holds the value's type name.
+    #[error("float() argument must be a string or a real number, not '{0}'")]
+    FloatType(&'static str),
+}
+
+/// `int(value)` of a float as an `i64`: truncated toward zero, refusing NaN and infinity.
+pub fn float_to_int(value: f64) -> Result<i64, ConversionError> {
+    if value.is_nan() {
+        return Err(ConversionError::NotANumber);
+    }
+    if value.is_infinite() {
+        return Err(ConversionError::Infinite);
+    }
+    let truncated = value.trunc();
+    if !(-9.223_372_036_854_776e18..9.223_372_036_854_776e18).contains(&truncated) {
+        return Err(ConversionError::TooBig(float_repr(value)));
+    }
+    #[allow(clippy::cast_possible_truncation)]
+    Ok(truncated as i64)
+}
+
+/// `int(value)` of what `json.loads` returns, as an `i64`.
+pub fn int_of(value: &serde_json::Value) -> Result<i64, ConversionError> {
+    match value {
+        serde_json::Value::Number(number) => match number.as_i64() {
+            Some(int) => Ok(int),
+            None => match number.as_u64() {
+                Some(big) => Err(ConversionError::TooBig(big.to_string())),
+                None => float_to_int(number.as_f64().unwrap_or(f64::NAN)),
+            },
+        },
+        serde_json::Value::Bool(flag) => Ok(i64::from(*flag)),
+        serde_json::Value::String(text) => {
+            let parsed = int(text).ok_or_else(|| ConversionError::IntLiteral(str_repr(text)))?;
+            i64::try_from(&parsed).map_err(|_| ConversionError::TooBig(parsed.to_string()))
+        }
+        other => Err(ConversionError::IntType(crate::json::type_name(other))),
+    }
+}
+
+/// `float(value)` of what `json.loads` returns.
+pub fn float_of(value: &serde_json::Value) -> Result<f64, ConversionError> {
+    match value {
+        serde_json::Value::Number(number) => Ok(number.as_f64().unwrap_or(f64::NAN)),
+        serde_json::Value::Bool(flag) => Ok(f64::from(u8::from(*flag))),
+        serde_json::Value::String(text) => {
+            float(text).ok_or_else(|| ConversionError::FloatLiteral(str_repr(text)))
+        }
+        other => Err(ConversionError::FloatType(crate::json::type_name(other))),
+    }
 }
 
 /// Why [`seconds`] refused a value, as `int(value)` would. Messages are CPython's.
