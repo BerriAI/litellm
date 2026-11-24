@@ -50,6 +50,7 @@ class _ModelProfile:
     reference_key: str
     reference_as_list: bool
     default_duration: str | None = None
+    duration_suffix: str = ""
 
 
 _SEEDANCE_PROFILE: Final[_ModelProfile] = _ModelProfile(
@@ -92,6 +93,7 @@ _LUMA_RAY_PROFILE: Final[_ModelProfile] = _ModelProfile(
     integer_duration=False,
     reference_key="image_url",
     reference_as_list=False,
+    duration_suffix="s",  # https://fal.ai/models/luma/agent/ray/v3.2/text-to-video/api accepts "5s" | "10s"
 )
 _SEEDANCE_REFERENCE_PROFILE: Final[_ModelProfile] = replace(
     _SEEDANCE_PROFILE,
@@ -125,8 +127,10 @@ def _duration_value(value: object) -> str | None:
         return value
     if isinstance(value, bool) or not isinstance(value, (int, float, str)):
         return None
+    # Some fal endpoints (Luma Ray) spell durations with a seconds suffix, e.g. "5s".
+    numeric: Final[int | float | str] = value.strip().removesuffix("s") if isinstance(value, str) else value
     try:
-        return str(int(float(value)))
+        return str(int(float(numeric)))
     except (TypeError, ValueError):
         return None
 
@@ -401,7 +405,9 @@ class FalAIVideoConfig(BaseVideoConfig):
             raise ValueError("fal.ai seconds must be a numeric value")
         if duration == "auto":
             return MappingProxyType({}) if profile.integer_duration else MappingProxyType({"duration": duration})
-        return MappingProxyType({"duration": int(duration) if profile.integer_duration else duration})
+        if profile.integer_duration:
+            return MappingProxyType({"duration": int(duration)})
+        return MappingProxyType({"duration": f"{duration}{profile.duration_suffix}"})
 
     def validate_environment(
         self,
