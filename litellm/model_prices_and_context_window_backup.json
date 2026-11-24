@@ -68498,19 +68498,16 @@
         "supports_audio_input": true
     },
     "elevenlabs/scribe_v2_realtime/keyterms": {
-        "input_cost_per_second": 2.2222e-05,
+        "input_cost_per_second": 1.3889e-05,
         "litellm_provider": "elevenlabs",
         "metadata": {
-            "calculation": "$0.08/hour = $0.000022222 per second",
+            "calculation": "$0.05/hour = $0.000013889 per second",
             "note": "Keyterm prompting add-on for Scribe v2 Realtime, billed on top of the base rate",
-            "original_pricing_per_hour": 0.08
+            "original_pricing_per_hour": 0.05
         },
         "mode": "audio_transcription",
         "output_cost_per_second": 0.0,
-        "source": "https://elevenlabs.io/pricing/api",
-        "supported_endpoints": [
-            "/v1/realtime"
-        ]
+        "source": "https://elevenlabs.io/pricing/api"
     },
     "scaleway/glm-5.2": {
         "input_cost_per_token": 1.8e-06,

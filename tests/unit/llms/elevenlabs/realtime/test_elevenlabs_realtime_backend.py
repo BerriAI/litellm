@@ -14,7 +14,10 @@ from litellm.types.llms.elevenlabs import ElevenLabsRealtimeConfigure
 
 URL: Final = "wss://api.elevenlabs.io/v1/speech-to-text/realtime"
 HEADERS: Final = {"xi-api-key": "secret"}
-CONFIGURE: Final = ElevenLabsRealtimeConfigure(query="model_id=scribe_v2_realtime&audio_format=pcm_24000").model_dump_json()
+CONFIGURE: Final = ElevenLabsRealtimeConfigure(
+    query="model_id=scribe_v2_realtime&audio_format=pcm_24000", sample_rate=24000
+).model_dump_json()
+KEEPALIVE: Final = '{"message_type":"input_audio_chunk","audio_base_64":"","commit":false,"sample_rate":24000}'
 
 
 class FakeUpstream:
@@ -252,3 +255,59 @@ async def test_close_after_connection_failure_does_not_raise():
         await backend.recv()
     assert closed.value.rcvd is not None
     assert closed.value.rcvd.code == 1011
+
+
+async def test_an_idle_session_sends_empty_audio_so_elevenlabs_keeps_it_open_without_billing_audio():
+    upstream: Final = FakeUpstream()
+    durations: Final[list[float]] = []
+    backend: Final = ElevenLabsRealtimeBackend(
+        URL, HEADERS, connect=RecordingConnect(upstream), on_audio_sent=durations.append, keepalive_seconds=0.02
+    )
+    await backend.send(CONFIGURE)
+    await asyncio.sleep(0.2)
+    await backend.close()
+
+    assert len(upstream.sent) >= 2
+    assert set(upstream.sent) == {KEEPALIVE}
+    assert durations == []
+
+
+async def test_client_audio_holds_off_the_keepalive():
+    upstream: Final = FakeUpstream()
+    backend: Final = ElevenLabsRealtimeBackend(URL, HEADERS, connect=RecordingConnect(upstream), keepalive_seconds=0.3)
+    chunk: Final = '{"message_type":"input_audio_chunk","audio_base_64":"AAAA","commit":false,"sample_rate":24000}'
+    await backend.send(CONFIGURE)
+    for _ in range(15):
+        await backend.send(chunk)
+        await asyncio.sleep(0.03)
+    await backend.close()
+
+    assert KEEPALIVE not in upstream.sent
+
+
+async def test_closing_the_session_stops_the_keepalive():
+    upstream: Final = FakeUpstream()
+    backend: Final = ElevenLabsRealtimeBackend(URL, HEADERS, connect=RecordingConnect(upstream), keepalive_seconds=0.02)
+    await backend.send(CONFIGURE)
+    await asyncio.sleep(0.1)
+    await backend.close()
+    sent_at_close: Final = len(upstream.sent)
+    await asyncio.sleep(0.1)
+
+    assert sent_at_close > 0
+    assert len(upstream.sent) == sent_at_close
+
+
+async def test_the_keepalive_stops_quietly_once_elevenlabs_closed_the_connection():
+    class ClosedUpstream(FakeUpstream):
+        async def send(self, message: str | bytes) -> None:
+            await super().send(message)
+            raise ConnectionClosedOK(rcvd=Close(1000, ""), sent=None)
+
+    upstream: Final = ClosedUpstream()
+    backend: Final = ElevenLabsRealtimeBackend(URL, HEADERS, connect=RecordingConnect(upstream), keepalive_seconds=0.02)
+    await backend.send(CONFIGURE)
+    await asyncio.sleep(0.2)
+
+    assert upstream.sent == [KEEPALIVE]
+    await backend.close()
