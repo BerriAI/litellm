@@ -1357,12 +1357,6 @@ UpstreamRequestFilter: TypeAlias = Callable[
 ]
 
 
-def _with_body_profile_id(body: Mapping[str, object] | None, profile_id: str) -> Mapping[str, object] | None:
-    if body is None or _BODY_PROFILE_ID_FIELD not in body:
-        return body
-    return {**body, _BODY_PROFILE_ID_FIELD: profile_id}
-
-
 def _with_pinned_profile_id_where_taken_or_sent(
     pinned_profile_id: str | None,
     caller_credentials: Mapping[str, str],
@@ -1370,19 +1364,25 @@ def _with_pinned_profile_id_where_taken_or_sent(
     headers: Mapping[str, str],
     body: Mapping[str, object] | None,
 ) -> UpstreamRequest:
-    sends_profile_id: Final = any(name.lower() == ANTHROPIC_USER_PROFILE_ID_HEADER for name in headers) or (
-        body is not None and _BODY_PROFILE_ID_FIELD in body
+    model: Final = None if body is None else body.get("model")
+    sends_mantle_profile_id: Final = (
+        body is not None
+        and _BODY_PROFILE_ID_FIELD in body
+        and isinstance(model, str)
+        and supports_anthropic_user_profile_id(model, litellm.LlmProviders.BEDROCK_MANTLE.value)
+    )
+    sends_profile_id: Final = (
+        any(name.lower() == ANTHROPIC_USER_PROFILE_ID_HEADER for name in headers) or sends_mantle_profile_id
     )
     sends_caller_credential: Final = any(
         caller_credentials.get(name.lower()) == value for name, value in headers.items()
     )
-    model: Final = None if body is None else body.get("model")
     takes_profile_id: Final = isinstance(model, str) and supports_anthropic_user_profile_id(model, custom_llm_provider)
     if pinned_profile_id is None or sends_caller_credential or not (sends_profile_id or takes_profile_id):
         return headers, body
     return (
         override_headers(headers, {ANTHROPIC_USER_PROFILE_ID_HEADER: pinned_profile_id}),
-        _with_body_profile_id(body, pinned_profile_id),
+        {**body, _BODY_PROFILE_ID_FIELD: pinned_profile_id} if body is not None and sends_mantle_profile_id else body,
     )
 
 

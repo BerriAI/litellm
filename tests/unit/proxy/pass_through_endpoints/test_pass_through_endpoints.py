@@ -6825,8 +6825,16 @@ _MANTLE_CLAUDE: Final = "anthropic.claude-opus-5-5"
             _SERVER_MANTLE_KEY,
             {},
             {"model": "claude-unlisted-deployment", "user_profile_id": "uprof_caller"},
-            "uprof_key",
-            id="sent-body-id-gets-the-pin-for-an-unmapped-model",
+            "uprof_caller",
+            id="unmapped-model-keeps-its-body-id",
+        ),
+        pytest.param(
+            _PINNED_KEY_METADATA,
+            _SERVER_MANTLE_KEY,
+            {},
+            {"user_profile_id": "own-api-user-42"},
+            "own-api-user-42",
+            id="non-claude-api-keeps-its-own-user-profile-id",
         ),
         pytest.param(
             _PINNED_KEY_METADATA,
