@@ -1454,6 +1454,19 @@ def test_normalize_rejects_excessive_zip_metadata_budget():
         plugin_archive.normalize_archive(oversized_metadata, strip_top_level=False)
 
 
+def test_normalize_rejects_understated_eocd_entry_count():
+    files = {".claude-plugin/plugin.json": b"{}"} | {
+        f"extra/f{index}": b"" for index in range(plugin_archive.MAX_ARCHIVE_TOTAL_ENTRIES)
+    }
+    forged = bytearray(_zip_bytes(files))
+    eocd_offset = forged.rfind(b"PK\x05\x06")
+    struct.pack_into("<HH", forged, eocd_offset + 8, 1, 1)
+
+    assert plugin_archive._within_archive_metadata_budget(bytes(forged))
+    with pytest.raises(plugin_archive.ArchiveBuildError, match="metadata safety"):
+        plugin_archive.normalize_archive(bytes(forged), strip_top_level=False)
+
+
 @pytest.mark.asyncio
 async def test_build_archive_verifies_declared_sha256(monkeypatch):
     monkeypatch.setattr(plugin_archive, "build_archive", _REAL_BUILD_ARCHIVE)
@@ -1726,9 +1739,7 @@ async def test_archive_refetch_failure_is_reported_as_a_bad_gateway(archive_dir,
         request=RegisterPluginRequest(name="s3-skill", source=_ARCHIVE_SOURCE), user_api_key_dict=_USER
     )
     (archive_dir / "s3-skill.zip").unlink()
-    monkeypatch.setattr(
-        plugin_archive, "build_archive", AsyncMock(side_effect=plugin_archive.ArchiveBuildError("upstream is gone"))
-    )
+    monkeypatch.setattr(plugin_archive, "build_archive", AsyncMock(side_effect=plugin_archive.ArchiveBuildError("upstream is gone")))
 
     with pytest.raises(HTTPException) as exc:
         await get_plugin_archive("s3-skill", request=_marketplace_request())

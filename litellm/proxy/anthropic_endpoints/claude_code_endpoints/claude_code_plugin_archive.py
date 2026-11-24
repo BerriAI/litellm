@@ -261,6 +261,9 @@ def normalize_archive(data: bytes, *, strip_top_level: bool, subdir: str | None 
     except zipfile.BadZipFile as e:
         raise ArchiveBuildError("the plugin source is not a valid ZIP archive") from e
     with archive:
+        # The end-of-directory count is attacker-controlled, so bound what was actually parsed.
+        if len(archive.filelist) > MAX_ARCHIVE_TOTAL_ENTRIES:
+            raise ArchiveBuildError("the plugin source exceeds ZIP metadata safety limits")
         entries: Final = MappingProxyType({info.filename: info for info in archive.infolist() if not info.is_dir()})
         selected: Final = _locate_plugin(entries, strip_top_level=strip_top_level, subdir=subdir)
         try:
@@ -335,7 +338,7 @@ async def _build_external_archive(source: Mapping[str, str]) -> BuiltArchive:
     expected: Final = source.get("sha256")
     if expected and sha256_hex(raw).lower() != expected.lower():
         raise ArchiveBuildError("the downloaded archive does not match the sha256 in the plugin source")
-    data: Final = normalize_archive(raw, strip_top_level=False)
+    data: Final = await asyncio.to_thread(normalize_archive, raw, strip_top_level=False)
     return BuiltArchive(data, sha256_hex(data), None)
 
 
@@ -346,7 +349,8 @@ async def _build_github_archive(source: Mapping[str, str], pinned_ref: str | Non
         raise ArchiveBuildError(f"{ref!r} is not a valid git ref")
     commit: Final = await _resolve_commit(repo, ref)
     codeload: Final = await _get(f"https://codeload.github.com/{repo}/zip/{commit}", _github_headers())
-    data: Final = normalize_archive(
+    data: Final = await asyncio.to_thread(
+        normalize_archive,
         codeload,
         strip_top_level=True,
         subdir=source.get("path") if source.get("source") == "git-subdir" else None,
