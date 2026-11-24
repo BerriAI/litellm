@@ -424,7 +424,7 @@ class LowestLatencyLoggingHandler(CustomLogger):
         model_group: str,
         healthy_deployments: list,
         messages: list[dict[str, str]] | None = None,
-        input: str | list[str] | None = None,
+        input: str | list | None = None,
         request_kwargs: dict | None = None,
         request_count_dict: dict | None = None,
     ):
@@ -557,7 +557,7 @@ class LowestLatencyLoggingHandler(CustomLogger):
         model_group: str,
         healthy_deployments: list,
         messages: list[dict[str, str]] | None = None,
-        input: str | list[str] | None = None,
+        input: str | list | None = None,
         request_kwargs: dict | None = None,
     ):
         # get list of potential deployments
@@ -583,7 +583,7 @@ class LowestLatencyLoggingHandler(CustomLogger):
         model_group: str,
         healthy_deployments: list,
         messages: list[dict[str, str]] | None = None,
-        input: str | list[str] | None = None,
+        input: str | list | None = None,
         request_kwargs: dict | None = None,
     ):
         """
