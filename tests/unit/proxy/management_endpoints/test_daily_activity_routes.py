@@ -19,8 +19,8 @@ from litellm import constants
 from litellm.llms.azure.ptu_capacity import AZURE_PTU_CAPACITY
 from litellm.proxy._types import LiteLLM_TeamTable, LiteLLM_UserTable, LitellmUserRoles, Member, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.csv_export import csv_cell
 from litellm.proxy.management_endpoints.daily_activity_routes import (
-    _csv_cell,
     get_daily_activity_llm_router,
     get_daily_activity_prisma_client,
     get_daily_activity_repository,
@@ -1773,7 +1773,7 @@ def test_exclusion_filters_apply_after_entity_scope(
 
 def test_csv_formula_escaping_covers_all_supported_leading_characters() -> None:
     dangerous_values: Final = ("=sum", "+sum", "-sum", "@sum", "\tsum", "\rsum")
-    assert tuple(_csv_cell(value) for value in dangerous_values) == tuple(f"'{value}" for value in dangerous_values)
+    assert tuple(csv_cell(value) for value in dangerous_values) == tuple(f"'{value}" for value in dangerous_values)
 
 
 def test_user_cache_leakage_route_returns_cache_keys_and_metadata(

@@ -144,7 +144,7 @@ class AimGuardrail(CustomGuardrail):
             raise AimGuardrailMissingSecrets(msg)
         self.api_base = api_base or os.environ.get("AIM_API_BASE") or "https://api.aim.security"
         self.ws_api_base = self.api_base.replace("http://", "ws://").replace("https://", "wss://")
-        self.dlp_entities: list[dict] = []
+        self.dlp_entities: list[dict[str, object]] = []
         self._max_dlp_entities = 100
         super().__init__(**kwargs)
 
@@ -152,7 +152,7 @@ class AimGuardrail(CustomGuardrail):
         self,
         user_api_key_dict: UserAPIKeyAuth,
         cache: DualCache,
-        data: dict,
+        data: dict[str, object],
         call_type: CallTypesLiteral,
     ) -> Exception | str | dict | None:
         verbose_proxy_logger.debug("Inside AIM Pre-Call Hook")
@@ -166,7 +166,7 @@ class AimGuardrail(CustomGuardrail):
 
     async def async_moderation_hook(
         self,
-        data: dict,
+        data: dict[str, object],
         user_api_key_dict: UserAPIKeyAuth,
         call_type: CallTypesLiteral,
     ) -> Exception | str | dict | None:
@@ -211,7 +211,7 @@ class AimGuardrail(CustomGuardrail):
         return data
 
     @staticmethod
-    def _build_aim_inspection_messages(data: dict) -> list[dict[str, str]]:
+    def _build_aim_inspection_messages(data: dict[str, object]) -> list[dict[str, str]]:
         """AIM validates against the OpenAI chat schema. Bare ``role: "tool"``
         without ``tool_call_id`` and bare ``role: "function"`` without ``name``
         are rejected; the flatten drops those fields, so any role outside
@@ -238,7 +238,7 @@ class AimGuardrail(CustomGuardrail):
         )
         raise self._rejection(str(detection_message), openai_code="content_policy_violation")
 
-    def _anonymize_request(self, res: SupportsGet, data: dict) -> dict:
+    def _anonymize_request(self, res: SupportsGet, data: dict[str, object]) -> dict[str, object]:
         verbose_proxy_logger.info("Aim: anonymize action")
         redacted_chat: Final = res.get("redacted_chat")
         if not redacted_chat:
@@ -377,7 +377,7 @@ class AimGuardrail(CustomGuardrail):
 
     async def async_post_call_success_hook(
         self,
-        data: dict,
+        data: dict[str, object],
         user_api_key_dict: UserAPIKeyAuth,
         response: LLMResponseTypes,
     ) -> LLMResponseTypes:
@@ -466,7 +466,7 @@ class AimGuardrail(CustomGuardrail):
         await websocket.send(json.dumps({"done": True}))
 
     @staticmethod
-    def get_config_model() -> type["GuardrailConfigModel"] | None:
+    def get_config_model() -> type["GuardrailConfigModel[BaseModel]"] | None:
         from litellm.types.proxy.guardrails.guardrail_hooks.aim import (
             AimGuardrailConfigModel,
         )

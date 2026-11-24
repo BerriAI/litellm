@@ -9,7 +9,7 @@ LAR-1 metadata passed via request_kwargs["metadata"]["lar1"]
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Final
 
 from pydantic import ValidationError
@@ -94,9 +94,9 @@ class LAR1RoutingStrategy(CustomRoutingStrategyBase):
         self,
         model: str,
         messages: list[dict[str, str]] | None = None,
-        input: str | list | None = None,
+        input: str | list[object] | None = None,
         specific_deployment: bool | None = False,
-        request_kwargs: dict | None = None,
+        request_kwargs: dict[str, object] | None = None,
     ):
         if request_kwargs is None:
             request_kwargs = {}
@@ -160,7 +160,7 @@ class LAR1RoutingStrategy(CustomRoutingStrategyBase):
     def _select_deployment(
         self,
         target_type: str,
-        deployments: list[dict],
+        deployments: Sequence[object],
     ) -> tuple[dict | None, bool]:
         if not deployments:
             return None, False
@@ -178,7 +178,7 @@ class LAR1RoutingStrategy(CustomRoutingStrategyBase):
 
         return None, False
 
-    def get_available_deployment(self, *args, **kwargs):
+    def get_available_deployment(self, *args: object, **kwargs: object) -> None:
         raise NotImplementedError(
             "LAR-1 routing only supports async routing. Enable async_only_mode on the router or use acompletion."
         )

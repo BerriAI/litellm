@@ -914,7 +914,7 @@ async fn a_customer_counter_that_cannot_be_seeded_fails_the_step_with_the_rest()
         Some(CounterError::Store(_))
     ));
     assert!(!outcome.finalized);
-    assert_eq!(outcome.stamps, [None]);
+    assert_eq!(outcome.stamps, [Some(-3.0)]);
     assert!(snapshot(&store).is_empty());
 }
 

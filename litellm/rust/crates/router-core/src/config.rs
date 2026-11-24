@@ -10,6 +10,7 @@ use serde_json::{Map, Value};
 
 use crate::{
     error::{AttemptError, ConfigError},
+    pre_call_checks::PreCallChecks,
     registry::DeploymentSpec,
 };
 
@@ -184,6 +185,9 @@ pub struct RouterConfig {
     /// (`async_callback_filter_deployments`).
     pub callback_filters: bool,
     pub enable_health_check_routing: bool,
+    /// The `optional_pre_call_checks` the core runs itself. A host that runs Python's checks
+    /// leaves it empty, so no check runs twice.
+    pub pre_call_checks: PreCallChecks,
     /// How old (seconds) a background health check result may be and still count
     /// (`health_check_staleness_threshold`, else the default interval times its multiplier).
     pub health_check_staleness_threshold: Option<f64>,
@@ -280,19 +284,8 @@ impl RouterConfig {
     ) -> Result<(Self, RouterDynamicConfig), ConfigError> {
         let object = |map: &Option<Map<String, Value>>| map.clone().map(Value::Object);
         let config = Self {
-            routing_strategy: settings
-                .routing_strategy
-                .as_deref()
-                .and_then(|name| name.parse().ok())
-                .unwrap_or_default(),
-            routing_groups: decoded(
-                "routing_groups",
-                settings
-                    .routing_groups
-                    .clone()
-                    .map(|groups| Value::Array(groups.into_iter().map(Value::Object).collect())),
-            )?
-            .unwrap_or_default(),
+            routing_strategy: settings.routing_strategy.clone().unwrap_or_default(),
+            routing_groups: settings.routing_groups.clone().unwrap_or_default(),
             cooldown_time: settings.cooldown_time,
             disable_cooldowns: settings.disable_cooldowns.unwrap_or(false),
             allowed_fails_policy: decoded(
@@ -310,6 +303,12 @@ impl RouterConfig {
             request_timeout: settings.request_timeout,
             enable_pre_call_checks: settings.enable_pre_call_checks.unwrap_or(false),
             enable_health_check_routing: settings.enable_health_check_routing.unwrap_or(false),
+            pre_call_checks: PreCallChecks::of(
+                settings
+                    .optional_pre_call_checks
+                    .as_deref()
+                    .unwrap_or_default(),
+            ),
             enable_weighted_failover: settings.enable_weighted_failover.unwrap_or(false),
             enable_cross_model_group_collision_check: settings
                 .enable_cross_model_group_collision_check

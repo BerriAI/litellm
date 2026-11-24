@@ -1,71 +1,42 @@
-use litellm_gateway_auth::AuthenticatedRequest;
-use std::sync::Arc;
-
-use axum::{Extension, Json, extract::State, http::HeaderMap, response::IntoResponse};
+use axum::{
+    Json,
+    http::HeaderMap,
+    response::{IntoResponse, Response},
+};
 use litellm_inference_ocr::{
     OcrRoute,
     types::{LiteLLMOcrRequest, OcrConnectionInputs, OcrDocumentInput},
 };
 use litellm_llms::base_llm::ocr::transformation::decode_request_value;
 use litellm_llms_types::formats::ocr::OcrDocument;
-use litellm_router_core::{Attempt, Op, Served};
+use litellm_router_core::{Attempt, Op};
 use serde_json::{Map, Value};
 
 use crate::{
-    Ended, Error, Gateway,
-    headers::Routing,
-    request::{self, InferenceBody, Upload},
-    routing::{self, Host, RouteAttempt},
+    Error,
+    error::ErrorFormat,
+    hooks::CallType,
+    model_restamp::ReportedModel,
+    request::{InferenceBody, Upload},
+    routing::{self, Host, Prompt, RouteAttempt},
+    serve::{self, Call, Endpoint},
+    stream_event::Counts,
 };
 
-pub(crate) async fn create<H: Host>(
-    State(gateway): State<Arc<Gateway<H>>>,
-    identity: AuthenticatedRequest,
-    headers: HeaderMap,
-    body: InferenceBody,
-) -> Result<impl IntoResponse, Ended> {
-    handle(&gateway, &identity, &headers, body)
-        .await
-        .map(|(routing, body)| (routing, Json(body)))
-}
-
-async fn handle<H: Host>(
-    gateway: &Gateway<H>,
-    identity: &AuthenticatedRequest,
-    headers: &HeaderMap,
-    InferenceBody {
-        fields: body,
-        upload,
-    }: InferenceBody,
-) -> Result<(Extension<Routing>, Value), Ended> {
-    let header_format = headers
-        .get("x-req-format")
-        .and_then(|value| value.to_str().ok())
-        .map(str::to_owned);
-    let model = request::model(&body)?.to_owned();
-    let document = body.get("document").cloned().unwrap_or_default();
-    let format = body
-        .get("req_format")
-        .filter(|value| !value.is_null())
-        .cloned()
-        .or_else(|| header_format.map(Value::String));
-    let format = format.map(|value| match value {
-        Value::String(value) => Value::String(value.trim().to_ascii_lowercase()),
-        value => value,
-    });
-    let options = body
-        .into_iter()
-        .filter(|(name, _)| !matches!(name.as_str(), "model" | "document" | "req_format"))
-        .chain(format.map(|value| ("req_format".into(), value)))
-        .collect();
-    let attempt = OcrAttempt {
-        route: &gateway.ocr,
-        upload,
-        document,
-        options,
+pub(crate) async fn create<H: Host>(call: Call<H>, body: Result<InferenceBody, Error>) -> Response {
+    let (body, upload) = match body {
+        Ok(InferenceBody { fields, upload }) => (Ok(fields), upload),
+        Err(error) => (Err(error), None),
     };
-    let routed = routing::call(gateway, identity, Op::OCR, "/ocr", &model, &attempt).await?;
-    Ok((Extension(Routing::served(&routed)), routed.output.response))
+    serve::run(&call, body, |body| {
+        Ok(OcrAttempt::new(
+            &call.gateway.ocr,
+            &call.headers,
+            upload,
+            body,
+        ))
+    })
+    .await
 }
 
 struct OcrAttempt<'a> {
@@ -75,10 +46,60 @@ struct OcrAttempt<'a> {
     options: Map<String, Value>,
 }
 
+impl<'a> OcrAttempt<'a> {
+    fn new(
+        route: &'a OcrRoute,
+        headers: &HeaderMap,
+        upload: Option<Upload>,
+        body: Map<String, Value>,
+    ) -> Self {
+        let header_format = headers
+            .get("x-req-format")
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_owned);
+        let document = body.get("document").cloned().unwrap_or_default();
+        let format = body
+            .get("req_format")
+            .filter(|value| !value.is_null())
+            .cloned()
+            .or_else(|| header_format.map(Value::String));
+        let format = format.map(|value| match value {
+            Value::String(value) => Value::String(value.trim().to_ascii_lowercase()),
+            value => value,
+        });
+        let options = body
+            .into_iter()
+            .filter(|(name, _)| !matches!(name.as_str(), "model" | "document" | "req_format"))
+            .chain(format.map(|value| ("req_format".into(), value)))
+            .collect();
+        Self {
+            route,
+            upload,
+            document,
+            options,
+        }
+    }
+}
+
+impl Endpoint for OcrAttempt<'_> {
+    const CALL_TYPE: CallType = CallType::Aocr;
+    const OP: Op = Op::OCR;
+    const PATH: &'static str = "/ocr";
+    const ERRORS: ErrorFormat = ErrorFormat::OpenAi;
+
+    fn render(outcome: Value, _reported: ReportedModel<'_>) -> Result<Response, Error> {
+        Ok(Json(outcome).into_response())
+    }
+}
+
 impl RouteAttempt for OcrAttempt<'_> {
     type Outcome = Value;
 
-    async fn run(&self, attempt: &Attempt) -> Result<Served<Value>, Error> {
+    fn prompt(&self) -> Option<Prompt<'_>> {
+        None
+    }
+
+    async fn run(&self, attempt: &Attempt) -> Result<Value, Error> {
         let deployment = &attempt.deployment;
         let document = match &self.upload {
             Some(upload) => OcrDocumentInput::Bytes {
@@ -101,11 +122,14 @@ impl RouteAttempt for OcrAttempt<'_> {
             },
         )?;
         let response = self.route.execute(call, &(), None).await?;
-        let body = match response.provider_native_response {
+        Ok(match response.provider_native_response {
             Some(native) => Value::Object(native),
             None => response.into_json(),
-        };
-        let total_tokens = routing::total_tokens(body.get("usage"));
-        Ok(Served::new(body, total_tokens))
+        })
+    }
+
+    /// Nothing: Python's router reads no `usage` off an OCR response.
+    fn counts(_outcome: &Value) -> Option<Counts> {
+        None
     }
 }

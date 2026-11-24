@@ -1,10 +1,12 @@
 import asyncio
+from collections.abc import AsyncIterator
 from types import SimpleNamespace
 from typing import Final, cast
 
 import pytest
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
+from starlette.types import Message, Receive, Scope, Send
 
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -533,3 +535,31 @@ def test_unauthenticated_app_read_does_not_open_the_store(path: str) -> None:
     response: Final = TestClient(app).get(path)
 
     assert (response.status_code, opened) == (401, []), response.text
+
+
+def test_app_changes_finish_the_transaction_before_reporting_success() -> None:
+    events: Final[list[str]] = []  # mutable-ok: records transaction and response ordering
+    store: Final = AppStore(AppDatabase(), NOW)
+
+    async def transactional_store() -> AsyncIterator[AppStore]:
+        yield store
+        events.append("committed and cache invalidated")
+
+    app: Final = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin"
+    )
+    app.dependency_overrides[get_app_store] = transactional_store
+
+    async def observe(scope: Scope, receive: Receive, send: Send) -> None:
+        async def send_response(message: Message) -> None:
+            if message["type"] == "http.response.start":
+                events.append("response")
+            await send(message)
+
+        await app(scope, receive, send_response)
+
+    response: Final = TestClient(observe).put("/management/v1/apps/definition", json={"resource_type": "team"})
+    assert response.status_code == 200, response.text
+    assert events == ["committed and cache invalidated", "response"]

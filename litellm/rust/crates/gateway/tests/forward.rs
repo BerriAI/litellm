@@ -1,3 +1,5 @@
+mod keys;
+
 use std::{fmt, io::Write, net::SocketAddr, sync::Arc, time::Duration};
 
 use axum::{
@@ -11,6 +13,7 @@ use flate2::{Compression, write::GzEncoder};
 use http_body_util::BodyExt;
 use hyper_util::{client::legacy::Client, rt::TokioExecutor};
 use litellm_config::{Config, Environment};
+use litellm_gateway::host::auth::AuthStore;
 use litellm_gateway::middleware;
 use litellm_gateway_forward::ANSWERED_BY_HEADER;
 use litellm_license::Entitlements;
@@ -67,6 +70,21 @@ async fn python() -> (SocketAddr, mpsc::UnboundedReceiver<Received>) {
 /// admitting every request or refusing every one.
 async fn gateway(python: SocketAddr, admits: bool, root_path: &str) -> SocketAddr {
     let config = Config::from_yaml("model_list: []").unwrap();
+    let litellm_gateway::Inference {
+        gateway: inference,
+        key_limiter,
+    } = litellm_gateway::build_inference(
+        &config,
+        &Environment::default(),
+        &litellm_gateway::Resources::build(&config).unwrap(),
+        litellm_gateway_inference::RoutingCache::new(
+            None,
+            litellm_gateway_inference::RouterTiers::default(),
+        ),
+        &litellm_gateway::RedisClients::default(),
+    )
+    .await
+    .unwrap();
     let native = middleware::root_path::layer(middleware::root_path::Settings::from_environment(
         &Environment {
             server_root_path: root_path.into(),
@@ -76,22 +94,22 @@ async fn gateway(python: SocketAddr, admits: bool, root_path: &str) -> SocketAdd
     .layer(middleware::global(
         litellm_gateway::router(
             litellm_gateway::AppState {
-                inference: litellm_gateway::build_inference(
-                    &config,
-                    &litellm_gateway::Resources::build(&config).unwrap(),
-                )
-                .await
-                .unwrap(),
+                key_limiter,
+                inference,
                 redis: litellm_gateway::RedisClients::default(),
                 database: None,
+                keys: None,
                 entitlements: Arc::new(Entitlements::Community),
                 environment: Arc::new(litellm_env::ProcessEnvironment),
+                gateway_requests: None,
+                gateway_requests_flush: None,
             },
             &config,
         ),
         &middleware::Settings::default(),
         Arc::new(Entitlements::Community),
         &middleware::InFlight::new(),
+        None,
     ));
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
@@ -214,19 +232,35 @@ async fn an_admitted_request_gets_the_native_404_when_no_route_takes_it() {
 const MASTER_KEY: &str = "Bearer gateway-key";
 
 /// The native gateway built from `config` the way `main` builds it in front of `python`, with the
-/// real `Admit`.
+/// real `Admit` and no variable in its environment.
 async fn configured_gateway(python: SocketAddr, config: &str) -> SocketAddr {
+    holding_keys(python, config, None).await
+}
+
+/// [`configured_gateway`] whose database holds `keys`.
+async fn holding_keys(python: SocketAddr, config: &str, keys: Option<AuthStore>) -> SocketAddr {
     litellm_gateway::install_crypto_provider();
     let config = Config::from_yaml(config).unwrap();
-    let state = litellm_gateway::AppState::build(&config, &Environment::default())
+    let resources =
+        litellm_gateway::Resources::over(&config, Arc::new(|_: &str| None::<String>)).unwrap();
+    let state = litellm_gateway::AppState::over(&config, &Environment::default(), &resources)
         .await
         .unwrap();
-    let admit = litellm_gateway::Admit::new(&config);
+    let state = litellm_gateway::AppState {
+        keys: keys.map(Arc::new).or(state.keys.clone()),
+        ..state
+    };
+    let admit = Arc::new(litellm_gateway::Admit::new(
+        &config,
+        &Environment::default(),
+        &state,
+    ));
     let native = middleware::global(
         litellm_gateway::router(state, &config),
         &middleware::Settings::default(),
         Arc::new(Entitlements::Community),
         &middleware::InFlight::new(),
+        None,
     );
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
@@ -236,19 +270,37 @@ async fn configured_gateway(python: SocketAddr, config: &str) -> SocketAddr {
         Duration::from_secs(5),
         Duration::from_secs(1),
         native,
-        move |request: Request| admit.clone().admit(request),
+        move |request: Request| {
+            let admit = admit.clone();
+            async move {
+                admit
+                    .admit(request)
+                    .await
+                    .map_err(|(request, reason)| (request, reason.why))
+            }
+        },
         std::future::pending(),
     ));
     address
 }
 
+const CLAUDE: &str =
+    r#"{"model":"claude","max_tokens":8,"messages":[{"role":"user","content":"hi"}]}"#;
+
 async fn post_as(gateway: SocketAddr, path: &str, authorization: &str) -> Response {
+    post(gateway, path, authorization, CLAUDE).await
+}
+
+async fn post(
+    gateway: SocketAddr,
+    path: &str,
+    authorization: &str,
+    body: &'static str,
+) -> Response {
     let request = Request::post(format!("http://{gateway}{path}"))
         .header(header::CONTENT_TYPE, "application/json")
         .header(header::AUTHORIZATION, authorization)
-        .body(Body::from(
-            r#"{"model":"claude","max_tokens":8,"messages":[{"role":"user","content":"hi"}]}"#,
-        ))
+        .body(Body::from(body))
         .unwrap();
     let response = tokio::time::timeout(
         Duration::from_secs(5),
@@ -277,10 +329,11 @@ async fn provider() -> wiremock::MockServer {
     provider
 }
 
-fn serving(provider: &wiremock::MockServer) -> String {
+/// `claude` on the provider, and `gpt` on a provider the native route is not compared on.
+fn serving(provider: &wiremock::MockServer, settings: &str) -> String {
     format!(
-        "model_list:\n  - model_name: claude\n    litellm_params:\n      model: anthropic/claude-haiku-5-5\n      api_base: {}\n      api_key: provider-key\n    model_info:\n      id: claude-a\ngeneral_settings:\n  master_key: gateway-key\n",
-        provider.uri()
+        "model_list:\n  - model_name: claude\n    litellm_params:\n      model: anthropic/claude-haiku-5-5\n      api_base: {base}\n      api_key: provider-key\n    model_info:\n      id: claude-a\n  - model_name: gpt\n    litellm_params:\n      model: openai/gpt-5.5\n      api_base: {base}\n      api_key: provider-key\n    model_info:\n      id: gpt-a\ngeneral_settings:\n  master_key: gateway-key\n{settings}",
+        base = provider.uri()
     )
 }
 
@@ -289,7 +342,7 @@ fn serving(provider: &wiremock::MockServer) -> String {
 async fn a_master_key_callers_messages_request_is_answered_natively() {
     let (python, mut received) = python().await;
     let provider = provider().await;
-    let gateway = configured_gateway(python, &serving(&provider)).await;
+    let gateway = configured_gateway(python, &serving(&provider, "")).await;
 
     let response = post_as(gateway, "/v1/messages", MASTER_KEY).await;
 
@@ -307,23 +360,90 @@ async fn a_master_key_callers_messages_request_is_answered_natively() {
     assert!(received.try_recv().is_err());
 }
 
+const REACHING_ONLY_GPT: &str = "router_settings:\n  model_group_affinity_config:\n    gpt: [deployment_affinity]\n  routing_groups:\n    - group_name: pool\n      models: [gpt]\n      routing_strategy: least-busy\n";
+
+/// The native router is built from the settings as written, and asks its host for no step on a
+/// call a host-only setting does not reach.
 #[rstest]
-#[case::another_route("/v1/chat/completions", MASTER_KEY, "python; reason=route")]
-#[case::another_caller("/v1/messages", "Bearer sk-virtual", "python; reason=credential")]
 #[tokio::test]
-async fn python_answers_another_route_and_another_caller(
+async fn a_group_no_host_only_router_setting_reaches_is_answered_natively() {
+    let (python, mut received) = python().await;
+    let provider = provider().await;
+    let gateway = configured_gateway(python, &serving(&provider, REACHING_ONLY_GPT)).await;
+
+    let response = post_as(gateway, "/v1/messages", MASTER_KEY).await;
+
+    assert_eq!(
+        (
+            response.status(),
+            response.headers()[ANSWERED_BY_HEADER].to_str().unwrap(),
+        ),
+        (StatusCode::OK, "rust")
+    );
+    assert!(received.try_recv().is_err());
+}
+
+const WITH_A_PROXY_PARAM: &str = r#"{"model":"claude","max_tokens":8,"user":"end-user","messages":[{"role":"user","content":"hi"}]}"#;
+const GPT: &str = r#"{"model":"gpt","max_tokens":8,"messages":[{"role":"user","content":"hi"}]}"#;
+const NOPE: &str = r#"{"model":"nope","max_tokens":8,"messages":[{"role":"user","content":"hi"}]}"#;
+
+#[rstest]
+#[case::another_route("", "/v1/chat/completions", MASTER_KEY, CLAUDE, "python; reason=route")]
+#[case::another_caller(
+    "",
+    "/v1/messages",
+    "Bearer sk-virtual",
+    CLAUDE,
+    "python; reason=credential"
+)]
+#[case::a_setting_only_python_honors(
+    "litellm_settings:\n  callbacks: [prometheus]\n",
+    "/v1/messages",
+    MASTER_KEY,
+    CLAUDE,
+    "python; reason=settings"
+)]
+#[case::a_param_only_python_reads(
+    "",
+    "/v1/messages",
+    MASTER_KEY,
+    WITH_A_PROXY_PARAM,
+    "python; reason=body"
+)]
+#[case::a_group_of_a_provider_off_the_list(
+    "",
+    "/v1/messages",
+    MASTER_KEY,
+    GPT,
+    "python; reason=model"
+)]
+#[case::a_model_the_config_does_not_name(
+    "",
+    "/v1/messages",
+    MASTER_KEY,
+    NOPE,
+    "python; reason=model"
+)]
+#[tokio::test]
+async fn python_answers_what_the_native_app_would_not_answer_the_same(
+    #[case] settings: &str,
     #[case] path: &str,
     #[case] authorization: &str,
+    #[case] body: &'static str,
     #[case] answered_by: &str,
 ) {
     let (python, mut received) = python().await;
     let provider = provider().await;
-    let gateway = configured_gateway(python, &serving(&provider)).await;
+    let gateway = configured_gateway(python, &serving(&provider, settings)).await;
 
-    let response = post_as(gateway, path, authorization).await;
+    let response = post(gateway, path, authorization, body).await;
 
     assert_eq!(response.headers()[ANSWERED_BY_HEADER], answered_by);
-    assert_eq!(received.recv().await.unwrap().path, path);
+    let received = received.recv().await.unwrap();
+    assert_eq!(
+        (received.path.as_str(), &received.body[..]),
+        (path, body.as_bytes())
+    );
     assert!(provider.received_requests().await.unwrap().is_empty());
 }
 
@@ -429,8 +549,6 @@ async fn milestone_call(
     Some(("claude", "1")),
     r#""model":"claude-down""#
 )]
-#[case::unknown_model("nope", false, 400, None, r#""type":"invalid_request_error""#)]
-#[case::streamed_unknown_model("nope", true, 400, None, r#""type":"invalid_request_error""#)]
 #[tokio::test]
 async fn the_milestone_config_is_answered_natively(
     #[case] model: &str,
@@ -488,4 +606,26 @@ async fn the_milestone_shuffle_follows_the_deployments_weights() {
         (250..=350).contains(&by_the_heavier),
         "claude-a holds 3 of the 4 parts of the weight and answered {by_the_heavier} of 400"
     );
+}
+
+#[rstest]
+#[tokio::test(flavor = "multi_thread")]
+async fn an_admitted_virtual_key_is_looked_up_once() {
+    let (python, mut received) = python().await;
+    let provider = provider().await;
+    let held = keys::Held::holding("sk-virtual", serde_json::json!({})).await;
+    let keys = AuthStore::new(keys::memory_cache(), held.database());
+    let gateway = holding_keys(python, &serving(&provider, ""), Some(keys)).await;
+
+    let response = post_as(gateway, "/v1/messages", "Bearer sk-virtual").await;
+
+    assert_eq!(
+        (
+            response.status(),
+            response.headers()[ANSWERED_BY_HEADER].to_str().unwrap()
+        ),
+        (StatusCode::OK, "rust")
+    );
+    assert_eq!(held.key_reads(), 1);
+    assert!(received.try_recv().is_err());
 }

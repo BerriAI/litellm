@@ -1,3 +1,4 @@
+import type { BudgetGroupCatalogScope } from "./CustomerBudgetCatalog";
 import { useTranslation } from "react-i18next";
 import { v4 as uuidv4 } from "uuid";
 import { defaultCustomerCapPolicy, type CustomerBudgetGroupFields } from "./customerOrganizationForm";
@@ -17,7 +18,7 @@ export default function CustomerBudgetGroupsEditor({
   onChange: (groups: CustomerBudgetGroupFields[], defaultGroupId: string) => void;
   disabled?: boolean;
   memberGroups?: boolean;
-  scope?: "organization" | "app" | "overall-app" | "app-member";
+  scope?: BudgetGroupCatalogScope;
 }) {
   const { t } = useTranslation();
   const globalGroupKey = (
@@ -25,6 +26,7 @@ export default function CustomerBudgetGroupsEditor({
       app: "customerPortal.appOrganizationGroups",
       "app-member": "customerPortal.appMemberGroups",
       "overall-app": "customerPortal.overallAppGroups",
+      "app-group": "customerPortal.appGroupBudgetGroups",
       organization: "customerPortal.organizationGroups",
     } as const
   )[scope];

@@ -44,7 +44,10 @@ pub struct Routing {
 
 #[derive(Clone, Debug)]
 struct Served {
+    /// The name the call ran under, an alias as the client wrote it (`x-litellm-model-group`).
     model_group: String,
+    /// The group that name resolves to, which the router counts usage under.
+    counted_group: String,
     attempted_retries: u32,
     attempted_fallbacks: u32,
     max_retries: Option<u32>,
@@ -56,11 +59,18 @@ impl Routing {
             deployment_id: routed.deployment_id.clone(),
             served: Some(Served {
                 model_group: routed.name.clone(),
+                counted_group: routed.model_group.clone(),
                 attempted_retries: routed.attempted_retries,
                 attempted_fallbacks: routed.attempted_fallbacks,
                 max_retries: routed.max_retries,
             }),
         }
+    }
+
+    /// The model group that served the call, an alias resolved, `None` for a call that ended on
+    /// a failed attempt.
+    pub(crate) fn counted_group(&self) -> Option<&str> {
+        Some(&self.served.as_ref()?.counted_group)
     }
 
     /// For a call that ended on a failed attempt on `deployment_id`.

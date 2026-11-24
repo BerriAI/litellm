@@ -783,7 +783,7 @@ class TestLensRenamePendingCheck:
 
         monkeypatch.setenv("DATABASE_URL", self._DATABASE_URL)
 
-        def refuse(conninfo: str, *, connect_timeout: int, autocommit: bool) -> NoReturn:
+        def refuse(conninfo: str, *, connect_timeout: int, autocommit: bool, client_encoding: str) -> NoReturn:
             raise psycopg.OperationalError("FATAL:  sorry, too many clients already")
 
         with pytest.raises(RuntimeError) as err:
@@ -800,7 +800,9 @@ class TestLensRenamePendingCheck:
         with pytest.raises(psycopg.Error) as libpq:
             psycopg.connect(database_url, connect_timeout=10, autocommit=True)
 
-        def raise_libpq_error(conninfo: str, *, connect_timeout: int, autocommit: bool) -> NoReturn:
+        def raise_libpq_error(
+            conninfo: str, *, connect_timeout: int, autocommit: bool, client_encoding: str
+        ) -> NoReturn:
             raise libpq.value
 
         with pytest.raises(RuntimeError) as err:
@@ -812,7 +814,9 @@ class TestLensRenamePendingCheck:
         monkeypatch.setenv("DATABASE_URL", self._DATABASE_URL)
         executed: Final[list[tuple[str, tuple[str]]]] = []
 
-        def legacy_tables_present(conninfo: str, *, connect_timeout: int, autocommit: bool) -> _FakePsycopgConn:
+        def legacy_tables_present(
+            conninfo: str, *, connect_timeout: int, autocommit: bool, client_encoding: str
+        ) -> _FakePsycopgConn:
             return _FakePsycopgConn(executed)
 
         with pytest.raises(RuntimeError) as err:
@@ -828,7 +832,9 @@ class TestCustomerMemberBudgetRenamePendingCheck:
         monkeypatch.setenv("DATABASE_URL", self._DATABASE_URL)
         executed: Final[list[tuple[str, tuple[str]]]] = []
 
-        def legacy_column_present(conninfo: str, *, connect_timeout: int, autocommit: bool) -> _FakePsycopgConn:
+        def legacy_column_present(
+            conninfo: str, *, connect_timeout: int, autocommit: bool, client_encoding: str
+        ) -> _FakePsycopgConn:
             return _FakePsycopgConn(executed)
 
         with pytest.raises(RuntimeError) as err:
@@ -841,7 +847,7 @@ class TestCustomerMemberBudgetRenamePendingCheck:
 
         monkeypatch.setenv("DATABASE_URL", self._DATABASE_URL)
 
-        def refuse(conninfo: str, *, connect_timeout: int, autocommit: bool) -> NoReturn:
+        def refuse(conninfo: str, *, connect_timeout: int, autocommit: bool, client_encoding: str) -> NoReturn:
             raise psycopg.OperationalError("FATAL:  sorry, too many clients already")
 
         with pytest.raises(RuntimeError) as err:
@@ -1525,7 +1531,7 @@ def test_migration_completion_requires_a_matching_successful_script(steps, logs,
     from litellm_proxy_extras.migration_recovery import MigrationProgress
 
     progress = MigrationProgress(hashlib.sha256(b"CREATE TABLE item (id int);").hexdigest(), steps, logs)
-    assert progress.confirms_completion(script) is expected
+    assert progress.confirms_completion(frozenset({hashlib.sha256(script).hexdigest()})) is expected
 
 
 def test_prisma_lock_waiting_has_its_own_deadline():
@@ -1945,7 +1951,7 @@ class TestV1MigrationFailuresLogAtError:
                 return (1,) if member_budget_rename_pending else None
 
         monkeypatch.setattr(
-            "psycopg.connect", lambda conninfo, *, connect_timeout, autocommit: _MemberColumnCheck()
+            "psycopg.connect", lambda conninfo, *, connect_timeout, autocommit, client_encoding: _MemberColumnCheck()
         )
         calls: Final[list[list[str]]] = []
         killed_pids: Final[list[int]] = []

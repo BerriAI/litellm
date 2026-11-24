@@ -82,8 +82,11 @@ async def test_post_call_cold_counters_seed_from_the_mget_miss_without_a_second_
         await ps.increment_spend_counters(token="hashed", team_id="team", user_id=None, response_cost=0.5)
         reported: Final = await calls.reported(3)
 
-    seeds: Final = [command[:3] for command in _round_trip_commands(redis) if command[0] == "SET"]
-    assert reported == ("MGET", "SET", "pipeline")
+    commands: Final = _round_trip_commands(redis)
+    seeds: Final = [command[:3] for command in commands if command[0] == "SET"]
+    assert Counter[str](reported) == Counter[str]({"MGET": 1, "SET": 1, "pipeline": 1})
+    assert [command[0] for command in commands[:2]] == ["MGET", "SET"]
+    assert Counter[str](command[0] for command in commands)["MGET"] == 1
     assert seeds == [("SET", "spend:team:team", "4.0")]
     assert redis.values["spend:key:hashed"] == 1.5
     assert redis.values["spend:team:team"] == 4.5

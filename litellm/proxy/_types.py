@@ -43,7 +43,7 @@ from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
     validate_langfuse_span_scope_value,
     validate_no_callback_env_reference,
 )
-from litellm.models.budget import BudgetLimitList, BudgetLimits
+from litellm.models.budget import BudgetLimitList, BudgetLimits, BudgetRolloverCap
 from litellm.proxy.auth.access_group_rules import AccessGroupRule, _validate_rules
 from litellm.proxy.mcp_server.stdio_gate import MCP_STDIO_DISABLED_MESSAGE, is_mcp_stdio_enabled
 from litellm.types.agents import (
@@ -77,7 +77,7 @@ from litellm.types.mcp import (
     MCPUpstreamProtocol,
     validate_mcp_protocol_transport,
 )
-from litellm.types.mcp_server.mcp_server_manager import MCPInfo
+from litellm.types.mcp_server.mcp_server_manager import MCPEventCallbackBase, MCPInfo, MCPServerEventsConfig
 from litellm.types.proxy.agent_identity import ManagedAgentContext
 from litellm.types.proxy.auth.special_headers import (
     SpecialHeaders as SpecialHeaders,  # noqa: PLC0414  # public re-export
@@ -95,6 +95,7 @@ from litellm.types.proxy.carried_budget_state import (
     UserBudgetSnapshot as UserBudgetSnapshot,  # noqa: PLC0414  # public re-export
 )
 from litellm.types.proxy.control_plane_endpoints import WorkerRegistryEntry
+from litellm.types.proxy.ldap_sync import LDAPSyncSettings
 from litellm.types.proxy.request_tag_mappings import RequestTagMapping
 from litellm.types.proxy.skill_scanning import SkillScannerConfig
 from litellm.types.proxy.spend_capture_rate import SpendCaptureRateCheckSettings
@@ -338,6 +339,9 @@ class LiteLLMRoutes(enum.Enum):
         "/live/sessions",
         "/v1/live/sessions",
         "/openai/v1/live/sessions",
+        "/live/sessions/{session_id}/attach",
+        "/v1/live/sessions/{session_id}/attach",
+        "/openai/v1/live/sessions/{session_id}/attach",
         "/realtime?{model}",
         "/v1/realtime?{model}",
         "/openai/v1/realtime?{model}",
@@ -457,6 +461,7 @@ class LiteLLMRoutes(enum.Enum):
         "/v1/traces/query",
         "/v1/traces/query/help",
         "/v1/traces/{trace_id}",
+        "/v1/traces/{trace_id}/conversation",
         "/v1/traces/{trace_id}/spans/{span_id}",
         "/v1/traces/{trace_id}/spans/{span_id}/error",
     )
@@ -469,6 +474,7 @@ class LiteLLMRoutes(enum.Enum):
         "/skill-hub/skills/{name}/archive",
         "/skill-hub/skills/{name}/content",
         "/skill-hub/skills/{plugin_name}/downloads",
+        "/skill-hub/skills/{name}/downloads/export",
         "/skill-hub/skills/{name}/versions",
         "/skill-hub/skills/{name}/versions/{version_id}",
         "/skill-hub/skills/{name}/versions/{version_id}/archive",
@@ -1508,6 +1514,7 @@ class NewMCPServerRequest(LiteLLMPydanticObjectBase):
     timeout: float | None = None
     max_concurrent_requests: int | None = None
     rpm: int | None = Field(default=None, ge=0)
+    events: MCPServerEventsConfig | None = None
     # BYOM submission fields — set by the endpoint, not by the caller.
     # Any caller-provided values are silently overridden before persistence.
     approval_status: str | None = Field(
@@ -1569,6 +1576,14 @@ class NewMCPServerRequest(LiteLLMPydanticObjectBase):
 
 class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
     server_id: str
+    preserve_explicit_oauth_settings: bool = Field(
+        default=False,
+        exclude=True,
+        description=(
+            "Keep explicitly supplied OAuth settings on upstream or auth changes, "
+            "even when their values match the saved settings."
+        ),
+    )
     server_name: str | None = None
     alias: str | None = None
     description: str | None = None
@@ -1616,6 +1631,7 @@ class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
     timeout: float | None = None
     max_concurrent_requests: int | None = None
     rpm: int | None = Field(default=None, ge=0)
+    events: MCPServerEventsConfig | None = None
 
     @model_validator(mode="after")
     def validate_protocol_transport(self) -> "UpdateMCPServerRequest":
@@ -1801,6 +1817,7 @@ from litellm.types.proxy.management_endpoints.user_requests import (  # noqa: E4
 
 class NewUserResponse(GenerateKeyResponse):
     max_budget: float | None = None
+    rollover_max_budget: float | None = Field(default=None, exclude_if=lambda value: value is None)
     user_email: str | None = None
     user_role: (
         Literal[
@@ -1884,6 +1901,14 @@ class BudgetNewRequest(LiteLLMPydanticObjectBase):
         default=None,
         description="Datetime when the budget is reset",
     )
+
+
+class TeamMemberBudgetWrite(BudgetNewRequest):
+    model_config = ConfigDict(frozen=True)
+
+    tpm_limit: int | None = None
+    rpm_limit: int | None = None
+    rollover_max_budget: BudgetRolloverCap | None = None
 
 
 class BudgetWriteRequest(BudgetNewRequest):
@@ -2052,6 +2077,7 @@ class NewTeamRequest(TeamBase):
     team_member_tpm_limit: int | None = None  # allow user to set TPM limit for all team members
     team_member_key_duration: str | None = None  # e.g. "1d", "1w", "1m"
     team_member_budget_duration: str | None = None  # e.g. "30d", "1mo"
+    team_member_rollover_max_budget: BudgetRolloverCap | None = None
     team_member_model_max_budget: GenericBudgetConfigType | None = None
     allowed_vector_store_indexes: list[AllowedVectorStoreIndexItem] | None = None
     enforced_batch_output_expires_after: dict | None = None
@@ -2112,6 +2138,7 @@ class UpdateTeamRequest(LiteLLMPydanticObjectBase):
     require_trace_id: bool | None = None
     team_member_budget: float | None = None
     team_member_budget_duration: str | None = None
+    team_member_rollover_max_budget: BudgetRolloverCap | None = None
     team_member_model_max_budget: GenericBudgetConfigType | None = None
     team_member_rpm_limit: int | None = None
     team_member_tpm_limit: int | None = None
@@ -2558,7 +2585,9 @@ class ScheduledJobStaggerSettings(LiteLLMPydanticObjectBase):
     )
 
 
-SPEND_LOGS_METADATA_ALWAYS_KEPT_FIELDS: Final = frozenset({"status", "cold_storage_object_key"})
+SPEND_LOGS_METADATA_ALWAYS_KEPT_FIELDS: Final = frozenset(
+    {"status", "cold_storage_object_key", "litellm_previous_response_ids"}
+)
 
 
 def _known_spend_logs_metadata_field(name: str) -> str:
@@ -2605,6 +2634,11 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     Documents all the fields supported by `general_settings` in config.yaml
     """
 
+    ldap_sync: LDAPSyncSettings | None = Field(
+        None,
+        description="Periodically synchronize LDAP groups to teams and existing users' memberships. Requires Redis.",
+    )
+
     access_group_rules: tuple[AccessGroupRule, ...] | None = None
 
     @field_validator("access_group_rules", mode="before")
@@ -2615,6 +2649,11 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     use_spend_logs_ledger: bool = Field(
         True,
         description="Apply request accounting from stored SpendLogs deliveries. Set to false to roll back to the previous in-memory and Redis spend queues.",
+    )
+
+    meter_webrtc_calls: bool = Field(
+        True,
+        description="Bill Realtime and GPT-Live WebRTC calls by joining each call from the proxy over a WebSocket to the provider, and answer 503 when the proxy cannot join. Set to false when the proxy cannot open that WebSocket. Calls then start without it and are not billed or counted against budgets.",
     )
 
     reject_unregistered_guardrails: bool = Field(
@@ -2854,6 +2893,14 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         description=(
             "When true, deployments with model_info.disable_background_health_check "
             "are skipped for on-demand GET /health as well as the background health loop."
+        ),
+    )
+    health_check_skip_blocked_background_models: bool = Field(
+        False,
+        description=(
+            "When true, deployments with model_info.blocked set to true are skipped by background health checks. "
+            "With background checks enabled, GET /health reads cached results and can return 503 for a skipped "
+            "deployment because there is no healthy result. On-demand checks and Test Connection are unaffected."
         ),
     )
     background_health_check_model_groups: tuple[str, ...] | None = Field(
@@ -3173,6 +3220,28 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         None,
         description="MCP client applications admitted by the gateway, each an {alias, value} pair where alias is the name shown in the dashboard and logs and value is the identity that must match exactly. When set, every MCP request must carry a client identity equal to one of the values: a JWT caller is identified by the claim named in litellm_jwtauth.mcp_client_id_jwt_field, any other caller by the header named in mcp_client_id_header. A request with no resolvable identity, or an unlisted one, is rejected with 403. Unset means every client is admitted.",
     )
+    mcp_events_enabled: bool = Field(
+        default=False,
+        description="Serve the MCP Events extension (io.modelcontextprotocol/events) on /mcp for 2026-07-28 clients. "
+        "Each upstream server also needs events.enabled. Off by default.",
+    )
+    mcp_events_public_base_url: MCPEventCallbackBase | None = Field(
+        None,
+        description="Public https base URL of this proxy that upstream MCP servers can reach, used to build the "
+        "callback URL for webhook event subscriptions. Webhook delivery is unavailable while unset.",
+    )
+    mcp_event_max_subscriptions_per_key: int | None = Field(
+        None, ge=1, description="Webhook event subscriptions one caller may hold. Defaults to 50."
+    )
+    mcp_event_max_streams_per_caller: int | None = Field(
+        None, ge=1, description="Concurrent events/stream requests one caller may hold on a replica. Defaults to 50."
+    )
+    mcp_event_max_streams: int | None = Field(
+        None, ge=1, description="Concurrent events/stream requests one replica serves. Defaults to 512."
+    )
+    mcp_event_max_events_per_minute: int | None = Field(
+        None, ge=1, description="Events delivered to one caller per minute before events are dropped. Defaults to 600."
+    )
     mcp_require_explicit_server_scope: bool = Field(
         default=False,
         description="Require aggregate MCP requests to include x-mcp-servers unless a toolset or gateway OAuth session already scopes the server. Off by default.",
@@ -3416,6 +3485,9 @@ class UserInfoV2Response(LiteLLMPydanticObjectBase):
     user_role: str | None = None
     spend: float = 0.0
     max_budget: float | None = None
+    rollover_max_budget: float | None = Field(default=None, exclude_if=lambda value: value is None)
+    rollover_credit: float | None = Field(default=None, exclude_if=lambda value: value is None)
+    effective_max_budget: float | None = Field(default=None, exclude_if=lambda value: value is None)
     tpm_limit: int | None = None
     rpm_limit: int | None = None
     models: list[str] = []
@@ -3637,6 +3709,7 @@ class LiteLLM_ProjectTableCachedObj(LiteLLM_ProjectTable):
 class LiteLLM_UserTableFiltered(LiteLLMBaseModel):  # done to avoid exposing sensitive data
     user_id: str
     user_email: str | None = None
+    user_alias: str | None = None
 
 
 from litellm.models.access_group import (  # noqa: E402
@@ -3975,6 +4048,7 @@ class SpendLogsRouterMetadata(TypedDict):
 class SpendLogsMetadata(TypedDict):
     user_api_key_customer_org_id: ReadOnly[NotRequired[str | None]]
     user_api_key_app_id: ReadOnly[NotRequired[str | None]]
+    user_api_key_app_group_id: ReadOnly[NotRequired[str | None]]
     user_api_key_app_alias: ReadOnly[NotRequired[str | None]]
     user_api_key_customer_org_alias: ReadOnly[NotRequired[str | None]]
     user_api_key_customer_team_id: ReadOnly[NotRequired[str | None]]
@@ -4006,6 +4080,8 @@ class SpendLogsMetadata(TypedDict):
     requester_ip_address: str | None
     user_agent: ReadOnly[str | None]
     litellm_call_id: str | None
+    litellm_previous_response_ids: ReadOnly[NotRequired[Sequence[str] | None]]
+    """Spend log request ids of the bridged /v1/responses turns this turn continues, root first."""
     applied_guardrails: list[str] | None
     mcp_tool_call_metadata: StandardLoggingMCPToolCall | None
     vector_store_request_metadata: list[StandardLoggingVectorStoreRequest] | None
@@ -4114,7 +4190,7 @@ class ProxyException(Exception):
         code: int | str | None = None,  # maps to status code
         headers: dict[str, str] | None = None,
         openai_code: str | None = None,  # maps to 'code'  in openai
-        provider_specific_fields: dict | None = None,
+        provider_specific_fields: dict[str, object] | None = None,
     ):
         self.message = str(message)
         super().__init__(self.message)
@@ -4421,7 +4497,7 @@ class MemberAddRequest(LiteLLMPydanticObjectBase):
         description="Member object or list of member objects to add. Each member must include either user_id or user_email, and a role"
     )
 
-    def __init__(self, **data):
+    def __init__(self, **data: object):
         member_data: Final = data.get("member")
         if isinstance(member_data, list):
             # If member is a list of dictionaries, convert each dictionary to a Member object
@@ -4440,7 +4516,7 @@ class MemberAddRequest(LiteLLMPydanticObjectBase):
 class OrgMemberAddRequest(LiteLLMPydanticObjectBase):
     member: list[OrgMember] | OrgMember
 
-    def __init__(self, **data):
+    def __init__(self, **data: object):
         member_data: Final = data.get("member")
         if isinstance(member_data, list):
             # If member is a list of dictionaries, convert each dictionary to a Member object
@@ -4682,6 +4758,7 @@ TeamMemberBudgetSource: TypeAlias = Literal["team_default", "custom", "none"]
 
 class TeamInfoMembership(LiteLLM_TeamMembership):
     budget_source: TeamMemberBudgetSource
+    effective_max_budget: float | None = Field(default=None, exclude_if=lambda value: value is None)
 
 
 class TeamInfoResponseObject(TypedDict):
@@ -5568,6 +5645,7 @@ class DailyAgentSpendTransaction(BaseDailySpendTransaction):
 
 
 class DailyCustomerMemberSpendTransaction(BaseDailySpendTransaction):
+    app_group_id: ReadOnly[NotRequired[str]]
     app_id: ReadOnly[NotRequired[str]]
     customer_member_id: ReadOnly[str]
     customer_team_id: ReadOnly[str]
@@ -5593,6 +5671,8 @@ class DBSpendUpdateTransactions(TypedDict):
     customer_org_list_transactions: ReadOnly[dict[str, float] | None]  # mutable-ok: aggregated like siblings
     customer_team_list_transactions: ReadOnly[dict[str, float] | None]  # mutable-ok: aggregated like siblings
     customer_member_list_transactions: ReadOnly[dict[str, float] | None]  # mutable-ok: aggregated like siblings
+    app_group_list_transactions: ReadOnly[NotRequired[dict[str, float] | None]]  # mutable-ok: rollups
+    app_group_customer_org_list_transactions: ReadOnly[NotRequired[dict[str, float] | None]]  # mutable-ok: rollups
     app_list_transactions: ReadOnly[NotRequired[dict[str, float] | None]]  # mutable-ok: rollups
     app_customer_org_list_transactions: ReadOnly[NotRequired[dict[str, float] | None]]  # mutable-ok: rollups
     app_customer_member_list_transactions: ReadOnly[NotRequired[dict[str, float] | None]]  # mutable-ok: rollups

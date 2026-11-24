@@ -40,7 +40,7 @@ use crate::{
 };
 
 /// One charged request's counter inputs, as the cost callback has them after the spend write.
-#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct CounterStep {
     pub token: Option<String>,
@@ -53,7 +53,10 @@ pub struct CounterStep {
     pub model_access_groups: Option<Vec<Option<String>>>,
     pub response_cost: Option<f64>,
     /// The entity counters whose committed twin exists for this charge.
-    #[serde(deserialize_with = "counters::counter_keys")]
+    #[serde(
+        deserialize_with = "counters::counter_keys",
+        serialize_with = "counters::counter_keys_text"
+    )]
     pub committed_tracked: Vec<SpendCounter>,
     pub customer_windows: Vec<CustomerWindow>,
     /// The customer hierarchy counters the request was admitted under, each seeded from its

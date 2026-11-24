@@ -50,10 +50,10 @@ v1.100.x worker with a database idled at 886 MB RSS where v1.101.0rc1 idled at
 544 MB on the same database (1.3 GB against 560 MB at the pod level, under a
 2 GiB limit): the generated Prisma client at prisma-client-py's default recursive
 type depth, 91k TypedDict classes that v1.101.0 cut to 19k with
-recursive_type_depth = -1. The budget starts at the rc1 reading plus headroom and
-E2E_MEMORY_IDLE_RSS_BUDGET_MB overrides it; a later session on the same stack (the
-changed-files workflow's repeat passes, a developer's local loop) measures a proxy
-already warmed by traffic, which that headroom also has to cover.
+recursive_type_depth = -1. The default budget includes headroom above recent
+scheduled main readings and E2E_MEMORY_IDLE_RSS_BUDGET_MB overrides it. A later
+session on the same stack (the changed-files workflow's repeat passes, a
+developer's local loop) measures a proxy already warmed by traffic.
 """
 
 from __future__ import annotations

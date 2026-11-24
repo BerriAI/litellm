@@ -2,7 +2,7 @@
 Host-side facts for the Rust core's ``enable_pre_call_checks`` filter.
 
 The Rust core decides which deployments the pre-call checks drop and which error a group with
-nothing left raises (``router-core/src/precall.rs``). What needs live Python objects is answered
+nothing left raises (``router-core/src/precall/mod.rs``). What needs live Python objects is answered
 here, on a ``pre_call`` select step: the prompt's token count (messages, Responses input and
 instructions, tools and an Anthropic ``system`` block), each deployment's context window from
 its router model info, and which requested params each deployment takes. Ported from the Python
@@ -462,7 +462,7 @@ def pre_call_checks(
     skip_inline_token_count: bool = False,
     request_deployments: Sequence[Mapping[str, object]] | None = None,
 ) -> Sequence[Mapping[str, object]]:
-    """``_pre_call_checks`` over the given deployments, as ``router-core/src/precall.rs`` decides it."""
+    """``_pre_call_checks`` over the given deployments, as ``router-core/src/precall/mod.rs`` decides it."""
     import litellm.exceptions as litellm_exceptions
 
     pool: Final = (
