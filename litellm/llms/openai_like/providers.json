@@ -392,5 +392,13 @@
       "/v1/chat/completions",
       "/v1/completions"
     ]
+  },
+  "architect": {
+    "base_url": "https://router.inference.ai.exchange/v1",
+    "api_key_env": "ARCHITECT_API_KEY",
+    "api_base_env": "ARCHITECT_API_BASE",
+    "provider_info": {
+      "supports_function_calling": true
+    }
   }
 }
