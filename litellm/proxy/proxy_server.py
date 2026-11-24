@@ -10327,9 +10327,11 @@ def _with_null_choice_fields(
 
 def _json_bytes(payload: Mapping[str, object]) -> bytes:
     try:
-        return to_json(payload)
+        return to_json(payload, inf_nan_mode="null")
     except PydanticSerializationError:
-        return json.dumps(payload, ensure_ascii=True, separators=(",", ":")).encode()
+        return json.dumps(
+            to_jsonable_python(payload, inf_nan_mode="null"), ensure_ascii=True, separators=(",", ":")
+        ).encode()
 
 
 def _null_chat_choice_fields(choice: StreamingChoices) -> Mapping[str, None]:

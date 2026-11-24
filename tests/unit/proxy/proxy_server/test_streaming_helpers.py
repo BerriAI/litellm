@@ -1018,6 +1018,32 @@ def test_serialize_streaming_chunk_sends_a_null_finish_reason_on_every_choice() 
     ]
 
 
+def _reject_json_constant(constant: str) -> None:
+    raise AssertionError(f"chunk is not strict JSON, it holds {constant}")
+
+
+@pytest.mark.parametrize("content", [pytest.param("hi", id="utf8"), pytest.param("\ud800", id="lone-surrogate")])
+@pytest.mark.parametrize("logprob", [float("-inf"), float("inf"), float("nan")], ids=["-inf", "inf", "nan"])
+def test_serialize_streaming_chunk_sends_a_non_finite_number_as_null(content: str, logprob: float) -> None:
+    chunk: Final = ModelResponseStream(
+        id="chatcmpl-logprobs",
+        choices=[
+            StreamingChoices(
+                index=0,
+                delta=Delta(content=content),
+                logprobs={"content": [{"token": "hi", "logprob": logprob, "bytes": None, "top_logprobs": []}]},
+            )
+        ],
+        created=0,
+        model="gpt-4",
+        object="chat.completion.chunk",
+    )
+
+    choice: Final = json.loads(_serialize_streaming_chunk(chunk), parse_constant=_reject_json_constant)["choices"][0]
+
+    assert (choice["logprobs"]["content"][0]["logprob"], choice["finish_reason"]) == (None, None)
+
+
 def test_serialize_streaming_chunk_sends_no_finish_reason_on_a_choiceless_usage_chunk() -> None:
     chunk: Final = ModelResponseStream(
         id="chatcmpl-usage",
