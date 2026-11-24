@@ -3,6 +3,7 @@ import json
 import struct
 from collections.abc import Mapping
 from typing import Final
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
@@ -149,3 +150,26 @@ def _events(config: GnaniRealtimeConfig, payload: Mapping[str, object]) -> tuple
         },
     )["response"]
     return tuple(result) if isinstance(result, list) else (result,)
+
+
+@pytest.mark.asyncio
+async def test_forwarded_pcm_duration_is_reported_once_across_transcripts_and_disconnect() -> None:
+    config: Final = GnaniRealtimeConfig()
+    inner: Final = Mock(send=AsyncMock(side_effect=(None, None, None, None, ConnectionError("closed"))))
+    backend: Final = config.wrap_backend(inner)
+    await backend.send(bytes(1024))
+    await backend.send('{"type":"commit"}')
+    _, first = _events(config, {"type": "transcript", "text": "first"})
+    assert _usage(first) == {"type": "duration", "seconds": 0.032}
+    await backend.send(bytes(2048))
+    _, second = _events(config, {"type": "transcript", "text": "second"})
+    assert _usage(second) == {"type": "duration", "seconds": 0.064}
+    await backend.send(bytes(1024))
+    with pytest.raises(ConnectionError):
+        await backend.send(bytes(2048))
+    assert config.unbilled_usage_on_session_close("prisma-v3.0") == {"type": "duration", "seconds": 0.032}
+    assert config.unbilled_usage_on_session_close("prisma-v3.0") is None
+
+
+def _usage(event: Mapping[str, object]) -> object:
+    return event.get("usage")

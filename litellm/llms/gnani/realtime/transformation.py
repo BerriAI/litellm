@@ -1,5 +1,6 @@
 import json
 from collections.abc import Mapping
+from types import TracebackType
 from typing import Final, Literal
 from urllib.parse import urlsplit, urlunsplit
 
@@ -12,6 +13,7 @@ from litellm.llms.base_llm.realtime.transcription_protocol import (
     RealtimeTranscriptionProtocolError,
     completed_event,
     decode_pcm16_append,
+    duration_usage,
     error_event,
     json_object,
     new_event_id,
@@ -19,7 +21,7 @@ from litellm.llms.base_llm.realtime.transcription_protocol import (
     transcription_session,
     transcription_session_created_event,
 )
-from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig
+from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig, RealtimeBackend
 from litellm.llms.gnani.common_utils import normalize_language
 from litellm.llms.gnani.realtime.audio import WIRE_RATE, GnaniAudioStream
 from litellm.secret_managers.main import get_secret_str
@@ -30,7 +32,11 @@ from litellm.types.llms.openai import (
     OpenAIRealtimeInputAudioTranscriptionCompleted,
     OpenAIRealtimeTranscriptionSessionUpdated,
 )
-from litellm.types.realtime import RealtimeResponseTransformInput, RealtimeResponseTypedDict
+from litellm.types.realtime import (
+    RealtimeInputAudioTranscriptionUsage,
+    RealtimeResponseTransformInput,
+    RealtimeResponseTypedDict,
+)
 
 _MANAGED_HEADERS: Final = frozenset(
     ("x-api-key-id", "authorization", "model", "x-model", "x-sample-rate", "language_code", "lang_code")
@@ -71,8 +77,36 @@ def _language(value: str) -> str:
     return normalize_language(hint)
 
 
+class _MeteredBackend:
+    def __init__(self, backend: RealtimeBackend) -> None:
+        self._backend: Final = backend
+        self.recv: Final = backend.recv
+        self.close: Final = backend.close
+        self._unreported_bytes: int = 0
+
+    async def __aenter__(self) -> "_MeteredBackend":
+        await self._backend.__aenter__()
+        return self
+
+    async def __aexit__(
+        self, exc_type: type[BaseException] | None, exc_value: BaseException | None, traceback: TracebackType | None
+    ) -> None:
+        await self._backend.__aexit__(exc_type, exc_value, traceback)
+
+    async def send(self, message: str | bytes) -> None:
+        await self._backend.send(message)
+        if isinstance(message, bytes):
+            self._unreported_bytes += len(message)
+
+    def take_usage(self) -> RealtimeInputAudioTranscriptionUsage | None:
+        pending: Final = self._unreported_bytes
+        self._unreported_bytes = 0
+        return duration_usage(pending / (2 * WIRE_RATE)) if pending else None
+
+
 class GnaniRealtimeConfig(BaseRealtimeConfig):
     def __init__(self) -> None:
+        self._backend: _MeteredBackend | None = None
         self._audio: Final = GnaniAudioStream()
         self._language: str = _DEFAULT_LANGUAGE
         self._session_id: str = new_event_id()
@@ -135,6 +169,16 @@ class GnaniRealtimeConfig(BaseRealtimeConfig):
             self._audio.set_rate(24_000 if fmt.rate is None else fmt.rate)
         return json.dumps({"type": "update_settings", **({"language_code": language} if language else {})})
 
+    def wrap_backend(self, backend: RealtimeBackend) -> RealtimeBackend:
+        self._backend = _MeteredBackend(backend)
+        return self._backend
+
+    def _take_usage(self) -> RealtimeInputAudioTranscriptionUsage | None:
+        return self._backend.take_usage() if self._backend is not None else None
+
+    def unbilled_usage_on_session_close(self, model: str) -> RealtimeInputAudioTranscriptionUsage | None:
+        return self._take_usage()
+
     async def pace_backend_send(self, message: bytes) -> None:
         await self._audio.pace()
 
@@ -185,7 +229,7 @@ class GnaniRealtimeConfig(BaseRealtimeConfig):
             "previous_item_id": self._previous_item,
         }
         self._previous_item = item
-        transcript: Final = completed_event(item, event.text, None)
+        transcript: Final = completed_event(item, event.text, self._take_usage())
         if event.detected_language_code is None:
             return committed, transcript
         detected: Final[_Transcript] = {**transcript, "detected_language_code": event.detected_language_code}
