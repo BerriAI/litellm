@@ -1,4 +1,5 @@
 import json
+import logging
 from typing import Final
 from unittest.mock import MagicMock, patch
 
@@ -14,9 +15,11 @@ from litellm.utils import (
     get_requester_metadata,
     validate_openai_optional_params,
 )
+from litellm.exceptions import UnsupportedParamsError
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.prompt_templates.factory import map_system_message_pt
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
+from litellm.llms.custom_llm import CustomLLM
 
 
 COHERE_CHAT_RESPONSE: Final = {
@@ -125,6 +128,65 @@ def test_get_optional_params_with_allowed_openai_params():
     assert optional_params["tools"] == tools
     assert optional_params["response_format"] == response_format
     assert optional_params["reasoning_effort"] == reasoning_effort
+
+
+@pytest.mark.parametrize(
+    "allowlist",
+    ["user", "seed, user", "seed user", '["user"]', {"user": True}],
+    ids=["bare-string", "comma-separated", "space-separated", "json-list-string", "dict"],
+)
+def test_get_optional_params_reads_param_names_from_a_string_or_dict_allowlist(
+    monkeypatch: pytest.MonkeyPatch, allowlist: str | dict[str, bool]
+):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    optional_params: Final = get_optional_params(
+        model="cf/llama-3.1-70b-instruct",
+        custom_llm_provider="cloudflare",
+        allowed_openai_params=allowlist,
+        user="end-user-1",
+    )
+
+    assert optional_params["user"] == "end-user-1"
+
+
+def test_get_optional_params_an_allowlist_that_is_no_string_mapping_or_sequence_allowlists_nothing(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    optional_params: Final = get_optional_params(
+        model="cf/llama-3.1-70b-instruct",
+        custom_llm_provider="cloudflare",
+        allowed_openai_params=5,
+        user="end-user-1",
+    )
+
+    assert "user" not in optional_params
+
+
+@pytest.mark.parametrize(
+    "allowlist",
+    [
+        ["dimensions"],
+        "dimensions",
+        "dimensions,user",
+        "dimensions encoding_format",
+        '["dimensions"]',
+        {"dimensions": True},
+    ],
+    ids=["list", "bare-string", "comma-separated", "space-separated", "json-list-string", "dict"],
+)
+def test_get_optional_params_embeddings_keeps_dimensions_the_allowlist_names(
+    allowlist: list[str] | str | dict[str, bool],
+):
+    optional_params: Final = get_optional_params_embeddings(
+        model="text-embedding-ada-002",
+        custom_llm_provider="openai",
+        dimensions=256,
+        allowed_openai_params=allowlist,
+        drop_params=False,
+    )
+
+    assert optional_params["dimensions"] == 256
 
 
 def test_allowed_openai_params_does_not_forward_unset_params():
@@ -266,6 +328,63 @@ def test_bedrock_optional_params_embeddings_dimension(model, expected_dimensions
 
     if dimensions_kwarg is not None:
         assert dimensions_kwarg in optional_params
+
+
+NOVA_EMBEDDING_MODELS: Final = (
+    "amazon.nova-2-multimodal-embeddings-v1:0",
+    "async_invoke/amazon.nova-2-multimodal-embeddings-v1:0",
+)
+
+
+@pytest.mark.parametrize("model", NOVA_EMBEDDING_MODELS)
+@pytest.mark.parametrize("drop_params", [False, True])
+@pytest.mark.parametrize(
+    ("encoding_format", "expected_params"),
+    [
+        ("float", {"embedding_dimension": 256}),
+        ("base64", {"embedding_dimension": 256, "encoding_format": "base64"}),
+    ],
+)
+def test_bedrock_nova_embeddings_accept_the_encoding_formats_openai_serves(
+    model: str, drop_params: bool, encoding_format: str, expected_params: dict[str, object]
+) -> None:
+    optional_params: Final = get_optional_params_embeddings(
+        model=model,
+        encoding_format=encoding_format,
+        dimensions=256,
+        custom_llm_provider="bedrock",
+        drop_params=drop_params,
+    )
+
+    assert optional_params == expected_params
+
+
+NOVA_UNSERVABLE_ENCODING_FORMATS: Final = ("int8", ["float"])
+
+
+@pytest.mark.parametrize("model", NOVA_EMBEDDING_MODELS)
+@pytest.mark.parametrize("encoding_format", NOVA_UNSERVABLE_ENCODING_FORMATS)
+def test_bedrock_nova_embeddings_reject_an_encoding_format_nova_cannot_produce(
+    model: str, encoding_format: str
+) -> None:
+    with pytest.raises(UnsupportedParamsError, match="encoding_format"):
+        get_optional_params_embeddings(model=model, encoding_format=encoding_format, custom_llm_provider="bedrock")
+
+
+@pytest.mark.parametrize("model", NOVA_EMBEDDING_MODELS)
+@pytest.mark.parametrize("encoding_format", NOVA_UNSERVABLE_ENCODING_FORMATS)
+def test_bedrock_nova_embeddings_drop_an_encoding_format_nova_cannot_produce_under_drop_params(
+    model: str, encoding_format: str
+) -> None:
+    optional_params: Final = get_optional_params_embeddings(
+        model=model,
+        encoding_format=encoding_format,
+        dimensions=256,
+        custom_llm_provider="bedrock",
+        drop_params=True,
+    )
+
+    assert optional_params == {"embedding_dimension": 256}
 
 
 def test_google_ai_studio_optional_params_embeddings():
@@ -485,30 +604,20 @@ def test_azure_tool_choice(api_version):
         )
 
 
-@pytest.mark.parametrize(
-    "model, provider, should_drop",
-    [("command-r", "cohere", True), ("gpt-3.5-turbo", "openai", False)],
-)
-def test_drop_params_parallel_tool_calls(model, provider, should_drop):
+def test_drop_params_keeps_parallel_tool_calls_the_provider_supports():
     """
     https://github.com/BerriAI/litellm/issues/4584
     """
     response = litellm.utils.get_optional_params(
-        model=model,
-        custom_llm_provider=provider,
+        model="gpt-3.5-turbo",
+        custom_llm_provider="openai",
         response_format={"type": "json"},
         parallel_tool_calls=True,
         drop_params=True,
     )
 
-    print(response)
-
-    if should_drop:
-        assert "response_format" not in response
-        assert "parallel_tool_calls" not in response
-    else:
-        assert "response_format" in response
-        assert "parallel_tool_calls" in response
+    assert "response_format" in response
+    assert "parallel_tool_calls" in response
 
 
 def test_dynamic_drop_additional_params_stream_options():
@@ -1672,6 +1781,45 @@ def test_optional_params_with_additional_drop_params():
     assert "red" not in optional_params["extra_body"]
 
 
+@pytest.mark.parametrize(
+    ("custom_llm_provider", "model"),
+    [
+        ("openai", "text-embedding-3-small"),
+        ("azure_ai", "embed-v-4-0"),
+        ("nvidia_nim", "nvidia/nv-embed-v1"),
+        ("cohere", "embed-v4.0"),
+        ("mistral", "mistral-embed"),
+        ("jina_ai", "jina-embeddings-v3"),
+        ("vertex_ai", "text-embedding-005"),
+        ("gemini", "gemini-embedding-001"),
+        ("bedrock", "cohere.embed-english-v3"),
+        ("bedrock", "unmapped-embedding-model"),
+        ("voyage", "voyage-3"),
+        ("infinity", "BAAI/bge-small-en-v1.5"),
+        ("ollama", "nomic-embed-text"),
+    ],
+)
+def test_embedding_additional_drop_params_removes_provider_specific_params(custom_llm_provider: str, model: str):
+    without_extras: Final = get_optional_params_embeddings(model=model, custom_llm_provider=custom_llm_provider)
+    forwarded: Final = get_optional_params_embeddings(
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+        input_type="search_query",
+        truncate="END",
+    )
+    assert forwarded != without_extras, f"{custom_llm_provider} never forwards the extras, so the case proves nothing"
+
+    dropped: Final = get_optional_params_embeddings(
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+        input_type="search_query",
+        truncate="END",
+        additional_drop_params=["input_type", "truncate"],
+    )
+
+    assert dropped == without_extras
+
+
 def test_azure_ai_cohere_embed_input_type_param():
     optional_params = get_optional_params_embeddings(
         model="embed-v-4-0",
@@ -1878,19 +2026,19 @@ def test_store_param_passed_through_openai_azure():
     assert optional_params_false["store"] is False
 
 
-def test_cohere_drop_params_removes_unsupported_response_format(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_cohere_drop_params_removes_unsupported_param(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(litellm, "drop_params", False)
     params: Final = get_optional_params(
         model="command-r-plus-08-2024",
         custom_llm_provider="cohere",
-        response_format={"type": "json_object"},
+        parallel_tool_calls=True,
         drop_params=True,
     )
-    assert "response_format" not in params
+    assert "parallel_tool_calls" not in params
 
 
 @pytest.mark.parametrize("drop_params", [False, None])
-def test_cohere_drop_params_rejects_unsupported_response_format(
+def test_cohere_drop_params_rejects_unsupported_param(
     drop_params: bool | None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(litellm, "drop_params", False)
@@ -1898,13 +2046,13 @@ def test_cohere_drop_params_rejects_unsupported_response_format(
         get_optional_params(
             model="command-r-plus-08-2024",
             custom_llm_provider="cohere",
-            response_format={"type": "json_object"},
+            parallel_tool_calls=True,
             drop_params=drop_params,
         )
 
 
 @pytest.mark.respx(assert_all_called=True)
-def test_cohere_completion_drops_response_format_from_request(
+def test_cohere_completion_sends_json_object_response_format(
     respx_mock: respx.MockRouter,
 ) -> None:
     route: Final = respx_mock.post("https://api.cohere.com/v2/chat")
@@ -1914,13 +2062,16 @@ def test_cohere_completion_drops_response_format_from_request(
         model="cohere/command-r-plus-08-2024",
         messages=[{"role": "user", "content": "hello"}],
         response_format={"type": "json_object"},
-        drop_params=True,
         api_key="test-api-key",
         client=HTTPHandler(),
     )
 
     request_body: Final = json.loads(route.calls[0].request.content)
-    assert request_body == {"model": "command-r-plus-08-2024", "messages": [{"role": "user", "content": "hello"}]}
+    assert request_body == {
+        "model": "command-r-plus-08-2024",
+        "messages": [{"role": "user", "content": "hello"}],
+        "response_format": {"type": "json_object"},
+    }
 
 
 @pytest.mark.respx(assert_all_called=True)
@@ -2097,3 +2248,171 @@ def test_supports_system_message_merges_system_prompt_into_user_message() -> Non
     ]
 
     assert map_system_message_pt(messages=messages) == [{"role": "user", "content": "Listen here! Hello there!"}]
+
+
+def test_dropping_an_unsupported_reasoning_effort_logs_one_warning(
+    local_model_cost_map: None, caplog: pytest.LogCaptureFixture
+) -> None:
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        optional_params: Final = get_optional_params(
+            model="terra-ptu", custom_llm_provider="azure", reasoning_effort="none", drop_params=True
+        )
+
+    assert "reasoning_effort" not in optional_params
+    drop_warnings: Final = [
+        record.getMessage() for record in caplog.records if "Dropping reasoning_effort" in record.getMessage()
+    ]
+    assert len(drop_warnings) == 1
+    assert all(fragment in drop_warnings[0] for fragment in ("'none'", "terra-ptu", "model_info.base_model"))
+
+
+@pytest.mark.parametrize("provider", ["ollama", "ollama_chat", "lemonade", "huggingface"])
+def test_dropping_thinking_for_an_unmapped_local_model_sends_no_request(
+    local_model_cost_map: None, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch, provider: str
+) -> None:
+    outbound: Final = respx.MockRouter(assert_all_mocked=False)
+    monkeypatch.setattr(
+        litellm, "module_level_client", HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(outbound.handler)))
+    )
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        optional_params: Final = get_optional_params(
+            model="unmapped-local-model", custom_llm_provider=provider, thinking={"type": "disabled"}, drop_params=True
+        )
+
+    assert "thinking" not in optional_params
+    assert len([record for record in caplog.records if "Dropping thinking" in record.getMessage()]) == 1
+    assert not outbound.calls
+
+
+def test_dropping_an_unsupported_thinking_logs_one_warning(
+    local_model_cost_map: None, caplog: pytest.LogCaptureFixture
+) -> None:
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        optional_params: Final = get_optional_params(
+            model="terra-ptu", custom_llm_provider="azure", thinking={"type": "disabled"}, drop_params=True
+        )
+
+    assert "thinking" not in optional_params
+    drop_warnings: Final = [
+        record.getMessage() for record in caplog.records if "Dropping thinking" in record.getMessage()
+    ]
+    assert len(drop_warnings) == 1
+    assert all(fragment in drop_warnings[0] for fragment in ("'disabled'", "terra-ptu", "model_info.base_model"))
+
+
+@pytest.mark.parametrize(
+    ("reasoning_kwargs", "warns"),
+    [
+        ({"reasoning_effort": "none"}, False),
+        ({"thinking": {"type": "disabled"}}, False),
+        ({"reasoning_effort": "high"}, True),
+        ({"thinking": {"type": "enabled", "budget_tokens": 1024}}, True),
+    ],
+)
+def test_reasoning_drop_warns_unless_a_mapped_non_reasoning_model_was_asked_for_none(
+    local_model_cost_map: None,
+    caplog: pytest.LogCaptureFixture,
+    reasoning_kwargs: dict[str, object],
+    warns: bool,
+) -> None:
+    litellm.register_model(
+        {
+            "azure/plain-chat-test-deployment": {
+                "litellm_provider": "azure",
+                "mode": "chat",
+                "max_tokens": 1024,
+                "input_cost_per_token": 0.0,
+                "output_cost_per_token": 0.0,
+                "supports_reasoning": False,
+            }
+        }
+    )
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        optional_params: Final = get_optional_params(
+            model="plain-chat-test-deployment", custom_llm_provider="azure", drop_params=True, **reasoning_kwargs
+        )
+
+    assert not set(reasoning_kwargs) & set(optional_params)
+    assert any("Dropping" in record.getMessage() for record in caplog.records) is warns
+
+
+@pytest.mark.parametrize("reasoning_kwargs", [{"reasoning_effort": "none"}, {"thinking": {"type": "disabled"}}])
+def test_turning_reasoning_off_warns_when_only_custom_pricing_describes_the_model(
+    local_model_cost_map: None, caplog: pytest.LogCaptureFixture, reasoning_kwargs: dict[str, object]
+) -> None:
+    litellm.register_model(
+        {
+            "azure/pricing-only-test-deployment": {
+                "litellm_provider": "azure",
+                "mode": "chat",
+                "input_cost_per_token": 0.000001,
+                "output_cost_per_token": 0.000002,
+            }
+        }
+    )
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        optional_params: Final = get_optional_params(
+            model="pricing-only-test-deployment", custom_llm_provider="azure", drop_params=True, **reasoning_kwargs
+        )
+
+    assert not set(reasoning_kwargs) & set(optional_params)
+    drop_warnings: Final = [record.getMessage() for record in caplog.records if "Dropping" in record.getMessage()]
+    assert len(drop_warnings) == 1
+    assert all(fragment in drop_warnings[0] for fragment in ("pricing-only-test-deployment", "model_info.base_model"))
+
+
+def test_dropping_reasoning_for_a_catalog_reasoning_model_does_not_suggest_base_model(
+    local_model_cost_map: None, caplog: pytest.LogCaptureFixture
+) -> None:
+    assert litellm.model_cost["azure/gpt-5.6-sol"].get("supports_reasoning") is True
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        optional_params: Final = get_optional_params(
+            model="gpt-5.6-sol", custom_llm_provider="azure", thinking={"type": "disabled"}, drop_params=True
+        )
+
+    assert "thinking" not in optional_params
+    drop_warnings: Final = [
+        record.getMessage() for record in caplog.records if "Dropping thinking" in record.getMessage()
+    ]
+    assert len(drop_warnings) == 1
+    assert "model_info.base_model" not in drop_warnings[0]
+
+
+def test_turning_reasoning_off_for_a_catalog_non_reasoning_model_drops_it_silently(
+    local_model_cost_map: None, caplog: pytest.LogCaptureFixture
+) -> None:
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        optional_params: Final = get_optional_params(
+            model="gpt-4o", custom_llm_provider="azure", reasoning_effort="none", drop_params=True
+        )
+
+    assert "reasoning_effort" not in optional_params
+    assert not [record for record in caplog.records if "Dropping" in record.getMessage()]
+
+
+@pytest.fixture
+def custom_provider_named(monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest) -> str:
+    monkeypatch.setattr(litellm, "custom_provider_map", [{"provider": request.param, "custom_handler": CustomLLM()}])
+    monkeypatch.setattr(litellm, "_custom_providers", [*litellm._custom_providers])
+    monkeypatch.setattr(litellm, "provider_list", [*litellm.provider_list])
+    litellm.utils.custom_llm_setup()
+    return request.param
+
+
+@pytest.mark.parametrize("custom_provider_named", ["studio"], indirect=True)
+def test_image_params_pass_through_unmapped_for_a_custom_provider(custom_provider_named: str) -> None:
+    assert get_optional_params_image_gen(
+        model="flare-1", custom_llm_provider=custom_provider_named, n=2, size="1024x1536", quality="low", user="u-1"
+    ) == {"n": 2, "size": "1024x1536", "quality": "low", "user": "u-1"}
+
+
+@pytest.mark.parametrize("custom_provider_named", ["vertex_ai"], indirect=True)
+def test_image_params_keep_the_builtin_mapping_when_a_custom_provider_reuses_its_name(
+    custom_provider_named: str,
+) -> None:
+    assert get_optional_params_image_gen(
+        model="imagegeneration", custom_llm_provider=custom_provider_named, n=2, size="1024x1024"
+    ) == {"sampleCount": 2, "aspectRatio": "1:1"}

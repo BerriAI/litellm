@@ -235,13 +235,9 @@ def test_in_memory_cache_eviction_order():
 
     # Add items with different TTLs
     now = time.time()
-    in_memory_cache.set_cache(
-        key="early_expire", value="value_1", ttl=100
-    )  # expires in 100 seconds
+    in_memory_cache.set_cache(key="early_expire", value="value_1", ttl=100)  # expires in 100 seconds
     time.sleep(0.01)
-    in_memory_cache.set_cache(
-        key="late_expire", value="value_2", ttl=200
-    )  # expires in 200 seconds
+    in_memory_cache.set_cache(key="late_expire", value="value_2", ttl=200)  # expires in 200 seconds
 
     # Verify TTL order
     early_ttl = in_memory_cache.ttl_dict["early_expire"]
@@ -379,3 +375,77 @@ def test_in_memory_cache_injected_clock_controls_expiry_and_eviction() -> None:
     assert cache.get_cache("second") is None
     assert cache.get_cache("third") == "replacement"
     assert cache.get_cache("fourth") == "new"
+
+
+@pytest.mark.asyncio
+async def test_async_increment_pipeline_keeps_each_key_for_its_own_ttl() -> None:
+    now: Final = {"t": 1_000.0}
+    cache: Final = InMemoryCache(default_ttl=600, clock=lambda: now["t"])
+
+    await cache.async_increment_pipeline(
+        increment_list=[
+            {"key": "minute", "increment_value": 1, "ttl": 60},
+            {"key": "day", "increment_value": 1, "ttl": 86400},
+        ]
+    )
+    now["t"] += 601
+
+    assert cache.get_cache("minute") is None
+    assert cache.get_cache("day") == 1
+
+
+@pytest.mark.parametrize(("ttl", "error"), [("abc", ValueError), ([1], TypeError)])
+@pytest.mark.parametrize("replace_live_entry", [False, True])
+def test_set_cache_with_unusable_ttl_still_raises_after_storing_the_value(
+    ttl: object, error: type[Exception], replace_live_entry: bool
+) -> None:
+    now: Final = {"t": 1_000.0}
+    cache: Final = InMemoryCache(clock=lambda: now["t"])
+    if replace_live_entry:
+        cache.set_cache("entry", "first", ttl=60)
+
+    with pytest.raises(error):
+        cache.set_cache("entry", "second", ttl=ttl, replace_ttl=replace_live_entry)
+
+    now["t"] += 59
+    assert cache.get_cache("entry") == "second"
+    now["t"] += 2
+    assert cache.get_cache("entry") == (None if replace_live_entry else "second")
+
+
+@pytest.mark.parametrize("ttls", [(1e30,), (100, 200)])
+def test_repeated_ttl_replacement_behind_an_earlier_entry_keeps_heap_bounded(ttls: tuple[float, ...]) -> None:
+    cache: Final = InMemoryCache(max_size_in_memory=10, clock=lambda: 1_000_000.0)
+    cache.set_cache("expires_first", "pin", ttl=5)
+
+    for i in range(1_000):
+        cache.set_cache("hot_key", f"value_{i}", ttl=ttls[i % len(ttls)], replace_ttl=True)
+
+    assert cache.get_cache("expires_first") == "pin"
+    assert cache.get_cache("hot_key") == "value_999"
+    assert len(cache.expiration_heap) <= 2 * cache.max_size_in_memory + 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("write", ["increment_cache", "async_increment", "async_set_cache_sadd", "set_cache"])
+async def test_counter_writes_keep_the_live_window_expiry(write: str) -> None:
+    now: Final = {"t": 1_000.0}
+    cache: Final = InMemoryCache(clock=lambda: now["t"])
+
+    async def write_once() -> None:
+        if write == "increment_cache":
+            cache.increment_cache("window", 1, ttl=60)
+        elif write == "async_increment":
+            await cache.async_increment("window", 1, ttl=60)
+        elif write == "async_set_cache_sadd":
+            await cache.async_set_cache_sadd("window", [now["t"]], ttl=60)
+        else:
+            cache.set_cache("window", now["t"], ttl=60)
+
+    await write_once()
+    now["t"] += 30
+    await write_once()
+    now["t"] += 29
+    assert cache.get_cache("window") is not None
+    now["t"] += 2
+    assert cache.get_cache("window") is None

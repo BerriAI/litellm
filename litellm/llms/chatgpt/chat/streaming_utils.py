@@ -7,6 +7,9 @@ Normalizes non-spec-compliant tool_call chunks from the ChatGPT backend API.
 from collections.abc import Awaitable
 from typing import Final, Protocol
 
+from pydantic import TypeAdapter
+
+from litellm.litellm_core_utils.core_helpers import require_attributes
 from litellm.types.utils import (
     ChatCompletionDeltaCustomToolCall,
     ChatCompletionDeltaToolCall,
@@ -21,6 +24,23 @@ class ChatGPTChunkStream(Protocol):
     def __next__(self) -> ModelResponseStream: ...
 
     def __anext__(self) -> Awaitable[ModelResponseStream]: ...
+
+
+class _SyncChunkStream(Protocol):
+    def __next__(self) -> ModelResponseStream: ...
+
+
+class _AsyncChunkStream(Protocol):
+    def __anext__(self) -> Awaitable[ModelResponseStream]: ...
+
+
+_DELEGATED_ATTRIBUTE: Final = TypeAdapter(object)
+
+
+def _next_chunk(stream: object) -> ModelResponseStream:
+    if any("__next__" in vars(klass) for klass in type(stream).__mro__):
+        return next(require_attributes(stream, _SyncChunkStream, "__next__"))
+    return next(stream)  # pyright: ignore[reportUnknownVariableType, reportArgumentType]  # raises its own TypeError
 
 
 def _first_choice_delta(chunk: ModelResponseStream) -> Delta | None:
@@ -40,14 +60,14 @@ class ChatGPTToolCallNormalizer:
     chunks to the consumer.
     """
 
-    def __init__(self, stream: ChatGPTChunkStream):
+    def __init__(self, stream: object):
         self._stream: Final = stream
         self._seen_ids: dict[str, int] = {}  # tool_call_id -> assigned_index
         self._next_index: int = 0
         self._last_id: str | None = None  # tracks which tool call the next delta belongs to
 
     def __getattr__(self, name: str) -> object:
-        return getattr(self._stream, name)
+        return _DELEGATED_ATTRIBUTE.validate_python(getattr(self._stream, name))
 
     def __iter__(self) -> "ChatGPTToolCallNormalizer":
         return self
@@ -57,14 +77,14 @@ class ChatGPTToolCallNormalizer:
 
     def __next__(self) -> ModelResponseStream:
         while True:
-            chunk = next(self._stream)
+            chunk = _next_chunk(self._stream)
             result = self._normalize(chunk)
             if result is not None:
                 return result
 
     async def __anext__(self) -> ModelResponseStream:
         while True:
-            chunk = await self._stream.__anext__()
+            chunk = await require_attributes(self._stream, _AsyncChunkStream, "__anext__").__anext__()
             result = self._normalize(chunk)
             if result is not None:
                 return result

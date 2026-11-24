@@ -35,8 +35,8 @@ from typing import Final
 import pytest
 
 import litellm
-from litellm.llms.azure.chat.gpt_5_transformation import AzureOpenAIGPT5Config
-from litellm.llms.openai.chat.gpt_5_transformation import OpenAIGPT5Config
+from litellm.llms.azure.chat.gpt_reasoning_transformation import AzureOpenAIGPT5Config
+from litellm.llms.openai.chat.gpt_reasoning_transformation import OpenAIGPT5Config
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 
 # ---------------------------------------------------------------------------
@@ -70,6 +70,13 @@ GPT5_MODELS = [
     "gpt-5-nano",
     "gpt-5-mini",
     "gpt-5-codex",
+    "chat-latest",
+    "openai/chat-latest",
+    "gpt-chat-latest",
+    "azure/chat-latest",
+    "azure/us/gpt-chat-latest",
+    "azure_ai/gpt-chat-latest",
+    "gpt-chat-latest-gs",
 ]
 
 # Models that must NOT be classified as GPT-5 (regular chat path)
@@ -169,6 +176,8 @@ GPT5_PRE_5_4_MODELS = [
     "gpt-5.3",
     "gpt-5.3-chat",
     "gpt-4o",
+    "chat-latest",
+    "gpt-chat-latest",
 ]
 
 

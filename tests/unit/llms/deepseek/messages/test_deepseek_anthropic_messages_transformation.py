@@ -1,12 +1,21 @@
+from collections.abc import Mapping
+from typing import Final
+
+import pytest
+from pydantic import TypeAdapter
+
 import litellm
-from litellm.llms.anthropic.pass_through.messages.transformation import (
+from litellm.llms.anthropic.common_utils import AnthropicError
+from litellm.llms.anthropic.messages.native.transformation import (
     AnthropicMessagesConfig,
 )
 from litellm.llms.deepseek.messages.transformation import (
     DeepSeekAnthropicMessagesConfig,
 )
 from litellm.types.router import GenericLiteLLMParams
-from litellm.utils import ProviderConfigManager
+from litellm.utils import ModelInfoLookupMiss, ProviderConfigManager, lookup_catalog_model_info
+
+_FIELDS: Final = TypeAdapter(dict[str, object])
 
 
 def test_deepseek_provider_uses_anthropic_messages_config():
@@ -120,7 +129,8 @@ def test_deepseek_anthropic_messages_headers_use_deepseek_key():
     assert headers["content-type"] == "application/json"
 
 
-def test_deepseek_anthropic_messages_preserves_thinking_and_sanitizes_custom_tools():
+@pytest.mark.parametrize("model", ["deepseek-v4-pro", "deepseek-chat"])
+def test_deepseek_anthropic_messages_preserves_thinking_and_sanitizes_custom_tools(model: str) -> None:
     config = DeepSeekAnthropicMessagesConfig()
     messages = [
         {
@@ -156,7 +166,7 @@ def test_deepseek_anthropic_messages_preserves_thinking_and_sanitizes_custom_too
     ]
 
     request = config.transform_anthropic_messages_request(
-        model="deepseek-v4-pro",
+        model=model,
         messages=messages,
         anthropic_messages_optional_request_params={
             "max_tokens": 100,
@@ -187,3 +197,234 @@ def test_deepseek_anthropic_messages_preserves_thinking_and_sanitizes_custom_too
         "input_schema": {"type": "object"},
     }
     assert request["tools"][1]["type"] == "web_search_20260209"
+
+
+def _deepseek_messages_request(
+    optional_params: Mapping[str, object], drop_params: bool | None = None, model: str = "deepseek-v4-pro"
+) -> Mapping[str, object]:
+    return DeepSeekAnthropicMessagesConfig().transform_anthropic_messages_request(
+        model=model,
+        messages=[{"role": "user", "content": "Hi"}],
+        anthropic_messages_optional_request_params={"max_tokens": 32000, **optional_params},
+        litellm_params=GenericLiteLLMParams(drop_params=drop_params),
+        headers={},
+    )
+
+
+@pytest.mark.parametrize("effort", ["max", "low", "none", "ultra"])
+def test_deepseek_anthropic_messages_forwards_effort_as_sent(effort: str) -> None:
+    request: Final = _deepseek_messages_request({"output_config": {"effort": effort}})
+
+    assert request["output_config"] == {"effort": effort}
+    assert "thinking" not in request
+
+
+def test_deepseek_anthropic_messages_forwards_adaptive_thinking_with_effort() -> None:
+    request: Final = _deepseek_messages_request({"thinking": {"type": "adaptive"}, "output_config": {"effort": "max"}})
+
+    assert request["thinking"] == {"type": "adaptive"}
+    assert request["output_config"] == {"effort": "max"}
+
+
+def test_deepseek_anthropic_messages_keeps_temperature_with_effort_none() -> None:
+    request: Final = _deepseek_messages_request({"output_config": {"effort": "none"}, "temperature": 0})
+
+    assert request["output_config"] == {"effort": "none"}
+    assert request["temperature"] == 0
+
+
+@pytest.mark.parametrize("effort", ["max", "none"])
+def test_deepseek_anthropic_messages_sends_reasoning_effort_as_output_config_effort(effort: str) -> None:
+    request: Final = _deepseek_messages_request({"reasoning_effort": effort})
+
+    assert request["output_config"] == {"effort": effort}
+    assert "reasoning_effort" not in request
+    assert "thinking" not in request
+
+
+def test_deepseek_anthropic_messages_prefers_output_config_effort_over_reasoning_effort() -> None:
+    request: Final = _deepseek_messages_request({"output_config": {"effort": "low"}, "reasoning_effort": "max"})
+
+    assert request["output_config"] == {"effort": "low"}
+    assert "reasoning_effort" not in request
+
+
+@pytest.mark.parametrize(
+    ("optional_params", "field"),
+    [
+        ({"output_config": {"effort": "turbo"}}, "output_config.effort"),
+        ({"reasoning_effort": "turbo"}, "reasoning_effort"),
+        ({"output_config": {"effort": "high"}, "reasoning_effort": "turbo"}, "reasoning_effort"),
+    ],
+)
+def test_deepseek_anthropic_messages_rejects_unknown_effort_with_400(
+    optional_params: Mapping[str, object], field: str
+) -> None:
+    with pytest.raises(AnthropicError) as error:
+        _deepseek_messages_request(optional_params)
+
+    assert error.value.status_code == 400
+    assert f"Invalid {field}: 'turbo'" in error.value.message
+
+
+@pytest.mark.parametrize(
+    "optional_params",
+    [{"output_config": {"effort": "turbo"}}, {"reasoning_effort": "turbo"}],
+)
+def test_deepseek_anthropic_messages_drops_unknown_effort_under_drop_params(
+    optional_params: Mapping[str, object],
+) -> None:
+    request: Final = _deepseek_messages_request(optional_params, drop_params=True)
+
+    assert "output_config" not in request
+    assert "reasoning_effort" not in request
+
+
+def test_deepseek_anthropic_messages_keeps_other_output_config_fields_when_dropping_effort() -> None:
+    output_format: Final = {"type": "json_schema", "schema": {"type": "object"}}
+    request: Final = _deepseek_messages_request(
+        {"output_config": {"effort": "turbo", "format": output_format}}, drop_params=True
+    )
+
+    assert request["output_config"] == {"format": output_format}
+
+
+def test_deepseek_anthropic_messages_adds_reasoning_effort_beside_other_output_config_fields() -> None:
+    output_format: Final = {"type": "json_schema", "schema": {"type": "object"}}
+    request: Final = _deepseek_messages_request({"output_config": {"format": output_format}, "reasoning_effort": "max"})
+
+    assert request["output_config"] == {"format": output_format, "effort": "max"}
+
+
+def test_deepseek_anthropic_messages_falls_back_to_reasoning_effort_when_dropping_unknown_effort() -> None:
+    request: Final = _deepseek_messages_request(
+        {"output_config": {"effort": "turbo"}, "reasoning_effort": "low"}, drop_params=True
+    )
+
+    assert request["output_config"] == {"effort": "low"}
+
+
+@pytest.mark.parametrize("thinking", [{"type": "enabled", "budget_tokens": 1024}, {"type": "adaptive"}])
+def test_deepseek_anthropic_messages_reasoning_effort_none_clears_thinking(thinking: Mapping[str, object]) -> None:
+    request: Final = _deepseek_messages_request({"thinking": thinking, "reasoning_effort": "none"})
+
+    assert request["output_config"] == {"effort": "none"}
+    assert "thinking" not in request
+
+
+def test_deepseek_anthropic_messages_keeps_thinking_with_output_config_effort_none() -> None:
+    thinking: Final = {"type": "enabled", "budget_tokens": 1024}
+    request: Final = _deepseek_messages_request(
+        {"thinking": thinking, "output_config": {"effort": "none"}, "reasoning_effort": "none"}
+    )
+
+    assert request["output_config"] == {"effort": "none"}
+    assert request["thinking"] == thinking
+
+
+def test_deepseek_anthropic_messages_drops_unknown_reasoning_effort_but_keeps_output_config_effort() -> None:
+    request: Final = _deepseek_messages_request(
+        {"output_config": {"effort": "high"}, "reasoning_effort": "turbo"}, drop_params=True
+    )
+
+    assert request["output_config"] == {"effort": "high"}
+    assert "reasoning_effort" not in request
+
+
+def test_deepseek_anthropic_messages_forwards_non_object_output_config_unchanged() -> None:
+    request: Final = _deepseek_messages_request({"output_config": "high", "reasoning_effort": "max"})
+
+    assert request["output_config"] == "high"
+    assert "reasoning_effort" not in request
+
+
+def test_deepseek_anthropic_messages_drops_adaptive_thinking_for_model_without_reasoning() -> None:
+    model: Final = "deepseek-chat"
+    assert not litellm.supports_reasoning(model=model, custom_llm_provider="deepseek")
+
+    request: Final = _deepseek_messages_request(
+        {"thinking": {"type": "adaptive"}, "output_config": {"effort": "max"}}, model=model
+    )
+
+    assert "thinking" not in request
+    assert "output_config" not in request
+
+
+def test_deepseek_anthropic_messages_maps_reasoning_effort_to_thinking_for_model_without_reasoning() -> None:
+    model: Final = "deepseek-chat"
+    assert not litellm.supports_reasoning(model=model, custom_llm_provider="deepseek")
+
+    request: Final = _deepseek_messages_request({"reasoning_effort": "high"}, model=model)
+
+    assert _FIELDS.validate_python(request["thinking"])["type"] == "enabled"
+    assert "reasoning_effort" not in request
+    assert "output_config" not in request
+
+
+def test_deepseek_anthropic_messages_drops_unknown_effort_for_model_without_reasoning() -> None:
+    model: Final = "deepseek-chat"
+    assert not litellm.supports_reasoning(model=model, custom_llm_provider="deepseek")
+
+    request: Final = _deepseek_messages_request({"output_config": {"effort": "turbo"}}, model=model)
+
+    assert "output_config" not in request
+
+
+def test_deepseek_anthropic_messages_drops_temperature_under_thinking_for_model_without_reasoning() -> None:
+    model: Final = "deepseek-chat"
+    assert not litellm.supports_reasoning(model=model, custom_llm_provider="deepseek")
+
+    request: Final = _deepseek_messages_request(
+        {"temperature": 0, "thinking": {"type": "enabled", "budget_tokens": 1024}}, model=model
+    )
+
+    assert "temperature" not in request
+
+
+def test_deepseek_anthropic_messages_forwards_thinking_for_model_missing_from_cost_map() -> None:
+    model: Final = "deepseek-v99-not-in-cost-map"
+    assert isinstance(lookup_catalog_model_info(model, "deepseek"), ModelInfoLookupMiss)
+
+    request: Final = _deepseek_messages_request(
+        {"thinking": {"type": "adaptive"}, "output_config": {"effort": "none"}}, model=model
+    )
+
+    assert request["thinking"] == {"type": "adaptive"}
+    assert request["output_config"] == {"effort": "none"}
+
+
+def _register_deepseek_deployment(model: str, model_info: Mapping[str, object]) -> None:
+    litellm.Router(
+        model_list=[
+            {
+                "model_name": "deepseek-unlisted",
+                "litellm_params": {"model": f"deepseek/{model}", "api_key": "sk-test"},
+                "model_info": dict(model_info),
+            }
+        ]
+    )
+
+
+def test_deepseek_anthropic_messages_forwards_thinking_for_unlisted_model_served_by_a_router_deployment() -> None:
+    model: Final = "deepseek-v99-not-in-cost-map"
+    _register_deepseek_deployment(model, {})
+
+    request: Final = _deepseek_messages_request(
+        {"thinking": {"type": "adaptive"}, "output_config": {"effort": "max"}, "temperature": 0}, model=model
+    )
+
+    assert request["thinking"] == {"type": "adaptive"}
+    assert request["output_config"] == {"effort": "max"}
+    assert request["temperature"] == 0
+
+
+def test_deepseek_anthropic_messages_keeps_base_handling_for_deployment_declared_without_reasoning() -> None:
+    model: Final = "deepseek-v99-not-in-cost-map"
+    _register_deepseek_deployment(model, {"supports_reasoning": False})
+
+    request: Final = _deepseek_messages_request(
+        {"thinking": {"type": "adaptive"}, "output_config": {"effort": "max"}}, model=model
+    )
+
+    assert "thinking" not in request
+    assert "output_config" not in request

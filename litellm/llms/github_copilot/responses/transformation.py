@@ -9,6 +9,7 @@ https://github.com/caozhiyuan/copilot-api
 """
 
 import os
+from collections.abc import Mapping
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -16,11 +17,14 @@ from typing import (
     cast,  # noqa: TID251  # narrows untyped request dicts at the session boundary
 )
 
+from pydantic import TypeAdapter
+
 import litellm
 from litellm._logging import verbose_logger
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
 from litellm.exceptions import AuthenticationError
 from litellm.litellm_core_utils.url_utils import join_api_base
+from litellm.llms.base_llm.responses.transformation import STANDARD_MODE_REASONING_FIELD_VALUES, ReasoningFieldValues
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.types.llms.openai import (
     ResponseInputParam,
@@ -34,7 +38,7 @@ from litellm.utils import cached_get_model_info_helper
 from ..authenticator import Authenticator
 from ..common_utils import (
     DEFAULT_GITHUB_COPILOT_API_BASE,
-    GetAPIKeyError,
+    GetAccessTokenError,
     get_copilot_default_headers,
     pin_session_authorization,
 )
@@ -46,6 +50,9 @@ if TYPE_CHECKING:
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+_OBJECT_LIST: Final = TypeAdapter(list[object])
+_OBJECT_MAPPING: Final = TypeAdapter(Mapping[object, object])
 
 
 def github_copilot_supports_responses_api(model: str) -> bool:
@@ -111,7 +118,7 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
         """Return the GitHub Copilot provider identifier."""
         return LlmProviders.GITHUB_COPILOT
 
-    def get_supported_openai_params(self, model: str) -> list:
+    def get_supported_openai_params(self, model: str) -> list[str]:
         """
         Get supported parameters for GitHub Copilot Responses API.
 
@@ -124,7 +131,7 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
         response_api_optional_params: ResponsesAPIOptionalRequestParams,
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Map parameters for GitHub Copilot Responses API.
 
@@ -146,7 +153,7 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
             logging_obj=logging_obj,
         )
 
-    def _normalize_stream_item_id(self, parsed_chunk: dict) -> dict:
+    def _normalize_stream_item_id(self, parsed_chunk: dict[str, object]) -> dict[str, object]:
         """Rewrite streamed item ids to one stable id per output_index.
 
         GitHub Copilot tags each event of a single output item with a different
@@ -190,10 +197,10 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: Mapping[str, object],
         model: str,
         litellm_params: GenericLiteLLMParams | None,
-    ) -> dict:
+    ) -> dict[str, str]:
         """
         Validate environment and set up headers for GitHub Copilot API.
 
@@ -229,7 +236,7 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
                 "dict[str, str]", {**copilot_headers, **headers}
             )
             if user_session is not None:
-                pin_session_authorization(merged_headers, user_session.token)
+                pin_session_authorization(merged_headers, user_session.token, user_session.integration_id)
 
             # Analyze input to determine additional headers
             input_param: Final = self._get_input_from_params(litellm_params)
@@ -249,7 +256,7 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
 
             return merged_headers
 
-        except GetAPIKeyError as e:
+        except GetAccessTokenError as e:
             raise AuthenticationError(
                 model=model,
                 llm_provider="github_copilot",
@@ -259,7 +266,7 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
     def get_complete_url(
         self,
         api_base: str | None,
-        litellm_params: dict,
+        litellm_params: Mapping[str, object],
     ) -> str:
         """
         Get the complete URL for GitHub Copilot Responses API endpoint.
@@ -387,7 +394,9 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
         """
         return self._contains_vision_content(input_param)
 
-    def _contains_vision_content(self, value: Any, depth: int = 0, max_depth: int = DEFAULT_MAX_RECURSE_DEPTH) -> bool:
+    def _contains_vision_content(
+        self, value: object, depth: int = 0, max_depth: int = DEFAULT_MAX_RECURSE_DEPTH
+    ) -> bool:
         """
         Recursively check if a value contains vision content.
 
@@ -404,24 +413,36 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
 
         # Check arrays
         if isinstance(value, list):
-            return any(self._contains_vision_content(item, depth=depth + 1, max_depth=max_depth) for item in value)
+            items: Final = _OBJECT_LIST.validate_python(value)
+            return any(self._contains_vision_content(item, depth=depth + 1, max_depth=max_depth) for item in items)
 
         # Only check dict/object types
         if not isinstance(value, dict):
             return False
 
+        fields: Final = _OBJECT_MAPPING.validate_python(value)
+
         # Check if this item is an input_image
-        item_type: Final = value.get("type")
+        item_type: Final = fields.get("type")
         if isinstance(item_type, str) and item_type.lower() == "input_image":
             return True
 
         # Check content field recursively
-        if "content" in value and isinstance(value["content"], list):
-            return any(
-                self._contains_vision_content(item, depth=depth + 1, max_depth=max_depth) for item in value["content"]
-            )
+        if "content" in fields:
+            content: Final = fields["content"]
+            if isinstance(content, list):
+                content_items: Final = _OBJECT_LIST.validate_python(content)
+                return any(
+                    self._contains_vision_content(item, depth=depth + 1, max_depth=max_depth) for item in content_items
+                )
 
         return False
+
+    def reasoning_field_values(self) -> ReasoningFieldValues:
+        return STANDARD_MODE_REASONING_FIELD_VALUES
+
+    def ignores_unsupported_reasoning_fields(self) -> bool:
+        return True
 
     def supports_native_websocket(self) -> bool:
         """GitHub Copilot does not support native WebSocket for Responses API"""

@@ -9,7 +9,7 @@ import httpx
 import pytest
 import yaml
 from integration._support.client import JSON_OBJECT, Gateway, eventually, object_value, string_value, until_asserted
-from integration._support.database import read_rows, scratch_database
+from integration._support.database import read_rows, scratch_database, write_rows
 from integration._support.process import owned_proxy
 from integration._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue, TypeAdapter
@@ -109,6 +109,10 @@ def _deployment(
     }
 
 
+def _session_total_recorded(response: httpx.Response) -> bool:
+    return response.status_code == 200 and JSON_OBJECT.validate_json(response.content).get("total_spend") is not None
+
+
 def _session_response(
     gateway: Gateway,
     key: str,
@@ -126,7 +130,7 @@ def _session_response(
                 params={"session_id": session_id},
                 key=key,
             ),
-            lambda response: response.status_code == 200,
+            _session_total_recorded,
             seconds=seconds,
             return_last_on_timeout=return_last_on_timeout,
         )
@@ -149,7 +153,7 @@ def _session_response(
 
     response_state: Final = eventually(
         read_response_state,
-        lambda state: state[0].status_code == 200 or state[1],
+        lambda state: _session_total_recorded(state[0]) or (state[1] and state[0].status_code != 200),
         seconds=seconds,
         return_last_on_timeout=return_last_on_timeout,
     )
@@ -211,6 +215,7 @@ def _session_contract(session_id: str, router_name: str) -> dict[str, object]:
         "turns": 1,
         "last_model": "openai/integration-simple",
         "spend": pytest.approx(0.000015),
+        "total_spend": pytest.approx(0.000015),
         "savings_estimated_turns": 1,
         "savings_estimated_actual_spend": pytest.approx(0.000015),
         "saved_spend": pytest.approx(0.000135),
@@ -336,6 +341,7 @@ def test_auto_router_session_tracks_key_scoped_spend_and_bounds_long_session_ids
                     "turns": 1,
                     "last_model": "openai/integration-simple",
                     "spend": pytest.approx(0.000015),
+                    "total_spend": pytest.approx(0.000015),
                     "savings_estimated_turns": 1,
                     "savings_estimated_actual_spend": pytest.approx(0.000015),
                     "saved_spend": pytest.approx(0.000135),
@@ -404,6 +410,7 @@ def test_auto_router_session_tracks_key_scoped_spend_and_bounds_long_session_ids
                         "turns": 2,
                         "last_model": "openai/integration-medium",
                         "spend": pytest.approx(0.000045),
+                        "total_spend": pytest.approx(0.000045),
                         "savings_estimated_turns": 2,
                         "savings_estimated_actual_spend": pytest.approx(0.000045),
                         "saved_spend": pytest.approx(0.000255),
@@ -586,6 +593,7 @@ def test_auto_router_session_tracks_key_scoped_spend_and_bounds_long_session_ids
                     "turns": 1,
                     "last_model": "openai/integration-simple",
                     "spend": pytest.approx(0.000015),
+                    "total_spend": pytest.approx(0.000015),
                     "savings_estimated_turns": 1,
                     "savings_estimated_actual_spend": pytest.approx(0.000015),
                     "saved_spend": pytest.approx(0.000135),
@@ -639,3 +647,25 @@ def test_auto_router_session_tracks_key_scoped_spend_and_bounds_long_session_ids
         ), response.text
         assert tuple(request for request in complex_tier.drain() if request.method == "POST") == (), response.text
         assert tuple(request for request in baseline.drain() if request.method == "POST") == (), response.text
+
+
+@pytest.mark.parametrize("api_key,expected", [("unattributed", 2.0), ("raw:unattributed", 4.0)])
+def test_benchmarks_preserve_literal_key_identity(gateway: Gateway, api_key: str, expected: float) -> None:
+    user_id: Final = f"benchmark-key-{uuid.uuid4().hex}"
+    for key, savings in (("", 3.0), ("unattributed", 2.0), ("raw:unattributed", 4.0)):
+        write_rows(
+            'INSERT INTO "LiteLLM_DailyUserSpend" '
+            "(id, user_id, date, api_key, model, autorouter_savings_spend, updated_at) "
+            "VALUES (%s, %s, '2026-09-09', %s, 'model', %s, now())",
+            (str(uuid.uuid4()), user_id, key, str(savings)),
+        )
+    try:
+        response: Final = gateway.request(
+            "GET",
+            "/auto_router/benchmarks",
+            params={"start_date": "2026-09-09", "end_date": "2026-09-09", "user_id": user_id, "api_key": api_key},
+        )
+        assert response.status_code == 200, response.text
+        assert object_value(object_value(response.json())["totals"])["saved_spend"] == expected
+    finally:
+        write_rows('DELETE FROM "LiteLLM_DailyUserSpend" WHERE user_id = %s', (user_id,))

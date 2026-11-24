@@ -6,14 +6,113 @@ in-flight work is done (bounded by GRACEFUL_SHUTDOWN_TIMEOUT) rather than
 sleeping for a fixed worst-case duration.
 """
 
+import asyncio
+import signal
 import time
+from typing import Final, Literal
+from unittest.mock import AsyncMock
 
 import pytest
+from uvicorn import Config
 
 from litellm.proxy.shutdown.graceful_shutdown_manager import (
     DEFAULT_GRACEFUL_SHUTDOWN_TIMEOUT,
     GracefulShutdownManager,
 )
+from litellm.proxy.shutdown.recycling_uvicorn_server import DEFAULT_RECYCLE_DRAIN_TIMEOUT, RecyclingUvicornServer
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("outcome", "signal_timeout", "recycle_timeout"),
+    [
+        ("finish", 0, DEFAULT_RECYCLE_DRAIN_TIMEOUT),
+        ("finish", DEFAULT_RECYCLE_DRAIN_TIMEOUT, 0),
+        ("signal before drain", 0, DEFAULT_RECYCLE_DRAIN_TIMEOUT),
+        ("signal during drain", 0, DEFAULT_RECYCLE_DRAIN_TIMEOUT),
+        ("recycle deadline", 0, 0),
+    ],
+)
+async def test_recycling_drains_in_flight_tasks_until_the_recycle_or_signal_deadline(
+    outcome: Literal["finish", "signal before drain", "signal during drain", "recycle deadline"],
+    signal_timeout: int,
+    recycle_timeout: int,
+) -> None:
+    draining: Final = asyncio.Event()
+    release_request: Final = asyncio.Event()
+
+    class ObservedServer(RecyclingUvicornServer):
+        async def _wait_tasks_to_complete(self) -> None:
+            draining.set()
+            await super()._wait_tasks_to_complete()
+
+    server: Final = ObservedServer(
+        Config("unused:app", limit_max_requests=1, timeout_graceful_shutdown=signal_timeout),
+        recycle_drain_timeout=recycle_timeout,
+    )
+    server.servers = []
+    server.lifespan = AsyncMock()
+    server.server_state.total_requests = 1
+
+    async def respond() -> None:
+        await release_request.wait()
+
+    request: Final = asyncio.create_task(respond())
+    server.server_state.tasks.add(request)
+    request.add_done_callback(server.server_state.tasks.discard)
+
+    if outcome == "signal before drain":
+        server.handle_exit(signal.SIGTERM, None)
+    shutdown: Final = asyncio.create_task(server.shutdown())
+    drain_started: Final = asyncio.create_task(draining.wait())
+    try:
+        if outcome in ("finish", "signal during drain"):
+            await asyncio.wait((shutdown, drain_started), timeout=5, return_when=asyncio.FIRST_COMPLETED)
+            assert draining.is_set() and not request.done()
+            if outcome == "finish":
+                release_request.set()
+            else:
+                server.handle_exit(signal.SIGTERM, None)
+        await asyncio.wait_for(shutdown, timeout=5)
+        (result,) = await asyncio.gather(request, return_exceptions=True)
+        if outcome == "finish":
+            assert result is None
+        else:
+            assert isinstance(result, asyncio.CancelledError)
+    finally:
+        request.cancel()
+        drain_started.cancel()
+        shutdown.cancel()
+        await asyncio.gather(request, drain_started, shutdown, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_recycling_keeps_notifying_the_worker_supervisor_until_requests_finish() -> None:
+    notified: Final = asyncio.Event()
+    server: Final = RecyclingUvicornServer(
+        Config(
+            "unused:app",
+            limit_max_requests=1,
+            timeout_graceful_shutdown=0,
+            callback_notify=AsyncMock(side_effect=notified.set),
+        )
+    )
+    server.servers = []
+    server.lifespan = AsyncMock()
+    server.server_state.total_requests = 1
+
+    async def respond() -> None:
+        await notified.wait()
+
+    request: Final = asyncio.create_task(respond())
+    server.server_state.tasks.add(request)
+    request.add_done_callback(server.server_state.tasks.discard)
+    try:
+        await asyncio.wait_for(server.shutdown(), timeout=5)
+        assert await request is None
+    finally:
+        request.cancel()
+        await asyncio.gather(request, return_exceptions=True)
 
 
 @pytest.fixture(autouse=True)
@@ -85,9 +184,7 @@ def test_timeout_falls_back_on_garbage(monkeypatch):
 @pytest.mark.asyncio
 async def test_returns_immediately_when_already_drained():
     start = time.monotonic()
-    drained = await GracefulShutdownManager.wait_for_drain(
-        timeout=10, count_fn=lambda: 0
-    )
+    drained = await GracefulShutdownManager.wait_for_drain(timeout=10, count_fn=lambda: 0)
     assert drained == 0
     assert time.monotonic() - start < 0.5
 
@@ -95,18 +192,14 @@ async def test_returns_immediately_when_already_drained():
 @pytest.mark.asyncio
 async def test_waits_until_counter_reaches_zero_then_returns_drained_count():
     count_fn = _counter_that_drains_after(calls_before_zero=3)
-    drained = await GracefulShutdownManager.wait_for_drain(
-        timeout=10, count_fn=count_fn
-    )
+    drained = await GracefulShutdownManager.wait_for_drain(timeout=10, count_fn=count_fn)
     assert drained == 3
 
 
 @pytest.mark.asyncio
 async def test_times_out_when_counter_never_drains():
     start = time.monotonic()
-    drained = await GracefulShutdownManager.wait_for_drain(
-        timeout=0.3, count_fn=lambda: 2
-    )
+    drained = await GracefulShutdownManager.wait_for_drain(timeout=0.3, count_fn=lambda: 2)
     elapsed = time.monotonic() - start
     assert 0.3 <= elapsed < 2.0
     assert drained == 0
@@ -115,9 +208,7 @@ async def test_times_out_when_counter_never_drains():
 @pytest.mark.asyncio
 async def test_zero_timeout_does_not_block():
     start = time.monotonic()
-    drained = await GracefulShutdownManager.wait_for_drain(
-        timeout=0, count_fn=lambda: 5
-    )
+    drained = await GracefulShutdownManager.wait_for_drain(timeout=0, count_fn=lambda: 5)
     assert time.monotonic() - start < 0.2
     assert drained == 5
 
@@ -127,9 +218,7 @@ async def test_exclude_self_treats_one_inflight_as_drained():
     """The /health/drain request counts itself, so a steady count of 1 must be
     treated as fully drained rather than timing out."""
     start = time.monotonic()
-    drained = await GracefulShutdownManager.wait_for_drain(
-        timeout=5, exclude_self=True, count_fn=lambda: 1
-    )
+    drained = await GracefulShutdownManager.wait_for_drain(timeout=5, exclude_self=True, count_fn=lambda: 1)
     assert time.monotonic() - start < 0.5
     assert drained == 0
 
@@ -163,9 +252,7 @@ async def test_second_drain_is_a_noop_so_window_is_not_doubled():
     await GracefulShutdownManager.wait_for_drain(timeout=0.2, count_fn=lambda: 1)
 
     start = time.monotonic()
-    drained = await GracefulShutdownManager.wait_for_drain(
-        timeout=5, count_fn=lambda: 1
-    )
+    drained = await GracefulShutdownManager.wait_for_drain(timeout=5, count_fn=lambda: 1)
     assert time.monotonic() - start < 0.1
     assert drained == 0
 
@@ -179,3 +266,107 @@ async def test_emits_periodic_drain_waiting_log_while_waiting():
         timeout=10, count_fn=count_fn, poll_interval=0, log_interval=0
     )
     assert drained == 3
+
+
+@pytest.mark.parametrize("elapsed, cap, expected", [(4, None, 26), (25, 2, 2), (29, 5, 1), (31, None, 0)])
+def test_remaining_budget_includes_time_before_lifespan(
+    monkeypatch: pytest.MonkeyPatch, elapsed: float, cap: float | None, expected: float
+) -> None:
+    monkeypatch.setenv("GRACEFUL_SHUTDOWN_TIMEOUT", "30")
+    GracefulShutdownManager.start_shutdown(clock=lambda: 100.0)
+    GracefulShutdownManager.start_shutdown(clock=lambda: 100.0 + elapsed)
+    assert GracefulShutdownManager.remaining(cap, clock=lambda: 100.0 + elapsed) == expected
+
+
+def test_remaining_budget_before_shutdown(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("GRACEFUL_SHUTDOWN_TIMEOUT", "30")
+    assert GracefulShutdownManager.remaining(clock=lambda: 100.0) == 30.0
+    assert GracefulShutdownManager.remaining(-1, clock=lambda: 100.0) == 0.0
+
+
+@pytest.mark.parametrize("prestop", [False, True])
+def test_sigterm_stamps_before_chaining_and_restores_server_handler(
+    monkeypatch: pytest.MonkeyPatch, prestop: bool
+) -> None:
+    import signal
+    from queue import SimpleQueue
+    from types import FrameType
+    from typing import Final
+
+    monkeypatch.setenv("GRACEFUL_SHUTDOWN_TIMEOUT", "30")
+    calls: Final[SimpleQueue[float]] = SimpleQueue()
+
+    def server_handler(signum: int, frame: FrameType | None) -> None:
+        assert signum == signal.SIGTERM
+        calls.put(GracefulShutdownManager.remaining(clock=lambda: 105.0))
+
+    original: Final = signal.signal(signal.SIGTERM, server_handler)
+    try:
+        if prestop:
+            GracefulShutdownManager.start_shutdown(clock=lambda: 95.0)
+        with GracefulShutdownManager.capture_sigterm(clock=lambda: 100.0):
+            installed: Final = signal.getsignal(signal.SIGTERM)
+            with GracefulShutdownManager.capture_sigterm(clock=lambda: 102.0):
+                assert signal.getsignal(signal.SIGTERM) is installed
+                signal.raise_signal(signal.SIGTERM)
+                signal.raise_signal(signal.SIGTERM)
+            assert calls.get_nowait() == (20.0 if prestop else 25.0)
+            assert calls.get_nowait() == (20.0 if prestop else 25.0)
+            assert calls.empty()
+        assert signal.getsignal(signal.SIGTERM) is server_handler
+    finally:
+        signal.signal(signal.SIGTERM, original)
+
+
+def test_sigterm_capture_preserves_a_replacement_handler() -> None:
+    import signal
+    from types import FrameType
+    from typing import Final
+
+    def server_handler(signum: int, frame: FrameType | None) -> None:
+        pass
+
+    original: Final = signal.signal(signal.SIGTERM, server_handler)
+    try:
+        with GracefulShutdownManager.capture_sigterm():
+            signal.signal(signal.SIGTERM, signal.SIG_IGN)
+        assert signal.getsignal(signal.SIGTERM) is signal.SIG_IGN
+    finally:
+        signal.signal(signal.SIGTERM, original)
+
+
+@pytest.mark.parametrize("handler", ["SIG_DFL", "SIG_IGN"])
+def test_sigterm_capture_preserves_default_and_ignored_dispositions(handler: str) -> None:
+    import signal
+    from typing import Final
+
+    disposition: Final = signal.SIG_DFL if handler == "SIG_DFL" else signal.SIG_IGN
+    original: Final = signal.signal(signal.SIGTERM, disposition)
+    try:
+        with GracefulShutdownManager.capture_sigterm():
+            assert signal.getsignal(signal.SIGTERM) is disposition
+    finally:
+        signal.signal(signal.SIGTERM, original)
+
+
+def test_sigterm_capture_in_worker_thread_leaves_signal_ownership_unchanged() -> None:
+    import signal
+    from concurrent.futures import ThreadPoolExecutor
+    from typing import Final
+
+    original: Final = signal.getsignal(signal.SIGTERM)
+
+    def run_lifespan() -> None:
+        with GracefulShutdownManager.capture_sigterm():
+            assert signal.getsignal(signal.SIGTERM) is original
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        executor.submit(run_lifespan).result()
+    assert signal.getsignal(signal.SIGTERM) is original
+
+
+@pytest.mark.asyncio
+async def test_lifespan_request_drain_does_not_restart_an_exhausted_budget(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("GRACEFUL_SHUTDOWN_TIMEOUT", "30")
+    GracefulShutdownManager.start_shutdown(clock=lambda: 100.0)
+    assert await GracefulShutdownManager.wait_for_drain(count_fn=lambda: 2, clock=lambda: 130.0) == 2

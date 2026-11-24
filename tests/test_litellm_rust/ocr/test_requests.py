@@ -3,9 +3,12 @@ from typing import Final
 
 import pytest
 
+import litellm
+from litellm.types.utils import admin_api_key_secret_reference
 from tests.test_litellm_rust.ocr.data import (
     OCR_DOCUMENT,
     OCR_RESPONSE,
+    call,
     call_aocr,
     call_ocr,
 )
@@ -43,6 +46,43 @@ async def test_ocr_contract_native_format_supported(
     assert response.get_provider_native_response() == payload
     assert len(server.requests) == 1
     assert_served_natively(server, response)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+async def test_ocr_contract_nace_parses_a_public_link_into_pages(
+    server: RecordingServer,
+    asynchronous: bool,
+) -> None:
+    source: Final = {"type": "url", "url": "https://docs.example/report.pdf", "file_name": "report.pdf"}
+    server.expected_requests = 2
+    server.default_response = ResponseSpec(
+        body={
+            "job_id": "job-1",
+            "status": "succeeded",
+            "source": source,
+            "units": 2,
+            "result": {
+                "document": {"markdown": "--- Page 1 ---\none\n\n--- Page 2 ---\ntwo", "page_count": 2, "blocks": []},
+                "disclosures": [],
+            },
+        }
+    )
+    response: Final = await call(
+        server,
+        asynchronous,
+        model="nace/parse-medium",
+        document={"type": "document_url", "document_url": source["url"]},
+        num_retries=0,
+    )
+    assert [page.markdown for page in response.pages] == ["one", "two"]
+    assert response.usage_info is not None and response.usage_info.pages_processed == 2
+    sent: Final = server.requests[0]
+    assert sent.path.startswith("/v1/documents/parse?wait_seconds=")
+    assert sent.headers["authorization"] == "Bearer test-key"
+    assert sent.body == {"source": source, "parse_mode": "medium", "output": {"include_page_markers": True}}
+    assert (server.requests[1].method, server.requests[1].path) == ("DELETE", "/v1/documents/jobs/job-1")
+    assert_served_natively(server, count=2)
 
 
 @pytest.mark.asyncio
@@ -102,3 +142,48 @@ def test_native_ocr_encodes_python_file_input_and_drops_unknown_arguments(server
         "model": "mistral-ocr-latest",
         "document": {"type": "image_url", "image_url": "data:image/png;base64,YWJj"},
     }
+
+
+@pytest.mark.parametrize(
+    "drop_params,global_drop_params",
+    [(True, False), (" TRUE ", False), (None, True), (False, True)],
+    ids=["per_call", "per_call_spelled", "global", "global_wins"],
+)
+def test_azure_document_intelligence_drop_params_drops_an_unsupported_output_content_format(
+    server: RecordingServer,
+    monkeypatch: pytest.MonkeyPatch,
+    drop_params: object,
+    global_drop_params: bool,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", global_drop_params)
+    server.default_response = ResponseSpec(
+        body={"status": "succeeded", "analyzeResult": {"pages": [{"pageNumber": 1, "lines": [{"content": "hello"}]}]}}
+    )
+
+    response: Final = call_ocr(
+        server,
+        model="azure_ai/doc-intelligence/prebuilt-layout",
+        outputContentFormat="html",
+        drop_params=drop_params,
+    )
+
+    assert_served_natively(server, response)
+    assert response.pages[0].markdown == "hello"
+    assert "outputContentFormat" not in server.requests[0].path
+    assert "drop_params" not in server.requests[0].path
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+async def test_ocr_sends_the_token_behind_an_admin_oidc_env_api_key(
+    server: RecordingServer, asynchronous: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("MISTRAL_SA_TOKEN", "env-token")
+    reference: Final = admin_api_key_secret_reference(
+        {"api_key": "oidc/env/MISTRAL_SA_TOKEN", "api_base": server.base_url}
+    )["api_key"]
+
+    response: Final = await call(server, asynchronous, api_key=reference)
+
+    assert server.requests[0].headers["authorization"] == "Bearer env-token"
+    assert_served_natively(server, response)

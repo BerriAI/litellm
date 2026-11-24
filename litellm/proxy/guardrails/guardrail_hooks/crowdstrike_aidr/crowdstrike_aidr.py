@@ -5,7 +5,7 @@ from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Annotated, Final, Literal, NamedTuple, Optional, cast
 
 from fastapi import HTTPException
-from pydantic import ConfigDict, Field, ValidationError
+from pydantic import ConfigDict, Field, TypeAdapter, ValidationError
 from typing_extensions import override
 
 from litellm._logging import verbose_proxy_logger
@@ -35,7 +35,9 @@ from litellm.types.utils import GenericGuardrailAPIInputs
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-    from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
+    from litellm.types.proxy.guardrails.guardrail_hooks.crowdstrike_aidr import CrowdStrikeAIDRGuardrailConfigModel
+
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class CrowdStrikeAIDRGuardrailMissingSecrets(Exception):
@@ -362,7 +364,7 @@ class CrowdStrikeAIDRHandler(CustomGuardrail):
         assert response is not None
         response.raise_for_status()
 
-        response_body: Final[object] = response.json()
+        response_body: Final = _DECODED_JSON.validate_python(response.json())
         raw_result: Final[object] = response_body.get("result") if isinstance(response_body, dict) else None
         blocked_signal: Final[object] = raw_result.get("blocked") if isinstance(raw_result, dict) else None
 
@@ -496,7 +498,7 @@ class CrowdStrikeAIDRHandler(CustomGuardrail):
     async def apply_guardrail(
         self,
         inputs: GenericGuardrailAPIInputs,
-        request_data: dict,
+        request_data: dict[str, object],
         input_type: Literal["request", "response"],
         logging_obj: Optional["LiteLLMLoggingObj"] = None,
     ) -> GenericGuardrailAPIInputs:
@@ -578,7 +580,7 @@ class CrowdStrikeAIDRHandler(CustomGuardrail):
 
     @override
     @staticmethod
-    def get_config_model() -> type["GuardrailConfigModel"] | None:
+    def get_config_model() -> type["CrowdStrikeAIDRGuardrailConfigModel"] | None:
         from litellm.types.proxy.guardrails.guardrail_hooks.crowdstrike_aidr import (
             CrowdStrikeAIDRGuardrailConfigModel,
         )

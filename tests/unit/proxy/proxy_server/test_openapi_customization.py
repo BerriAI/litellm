@@ -34,8 +34,9 @@ from litellm.proxy.proxy_server import (
     custom_openapi,
     ensure_unique_openapi_operation_ids,
     get_openapi_schema,
-    mount_swagger_ui,
 )
+from litellm.proxy.swagger_reference import mount_swagger_ui
+from tests.unit.litellm_core_utils.attribute_forwarder import AttributeForwarder
 
 from .conftest import normalize
 
@@ -207,6 +208,17 @@ def test_inject_websocket_stubs_into_openapi_schema_adds_stub():
         "responses": {"101": {"description": "WebSocket Protocol Switched"}},
         "tags": ["WebSocket"],
     }
+
+
+def test_inject_websocket_stubs_into_openapi_schema_documents_query_params_that_forward_their_fields():
+    query_param: Final = AttributeForwarder(SimpleNamespace(name="session_id", required=True))
+    route: Final = SimpleNamespace(path="/ws/chat", name="ws_chat", dependant=SimpleNamespace(query_params=[query_param]))
+
+    result: Final = _inject_websocket_stubs_into_openapi_schema({"paths": {}}, [route])
+
+    assert result["paths"]["/ws/chat"]["get"]["parameters"] == [
+        {"name": "session_id", "in": "query", "required": True, "schema": {"type": "string"}}
+    ]
 
 
 def test_inject_websocket_stubs_into_openapi_schema_does_not_overwrite_existing_get():
@@ -389,54 +401,34 @@ def test_custom_openapi_missing_app_attribute_raises_error(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_mount_swagger_ui_mounts_static_route(monkeypatch):
-    """mount_swagger_ui mutates the global app — patch the module's `app` to a
-    fresh FastAPI() so we don't pollute the session app's mount table."""
-    import litellm.proxy.proxy_server as ps
+def test_mount_swagger_ui_mounts_static_route():
     from fastapi import applications as fa_applications
 
-    fresh_app = FastAPI()
-    monkeypatch.setattr(ps, "app", fresh_app, raising=True)
+    fresh_app = FastAPI(docs_url=None)
     original_get_swagger = fa_applications.get_swagger_ui_html
 
-    try:
-        mount_swagger_ui()
-    finally:
-        # Restore the swagger monkey-patch so other tests are unaffected.
-        fa_applications.get_swagger_ui_html = original_get_swagger
+    mount_swagger_ui(fresh_app, "/swagger")
 
     mount_names = [getattr(r, "name", None) for r in fresh_app.routes]
     observed = {
         "swagger_mounted": "swagger" in mount_names,
-        "patched_get_swagger": (
-            fa_applications.get_swagger_ui_html is original_get_swagger
-        ),
+        "fastapi_renderer_unchanged": fa_applications.get_swagger_ui_html is original_get_swagger,
         "route_count_positive": len(fresh_app.routes) > 0,
     }
     assert normalize(observed) == {
         "swagger_mounted": True,
-        "patched_get_swagger": True,
+        "fastapi_renderer_unchanged": True,
         "route_count_positive": True,
     }
 
 
 def test_mount_swagger_ui_missing_directory_raises_error(monkeypatch, tmp_path):
     """If the swagger directory is missing, StaticFiles raises RuntimeError."""
-    import litellm.proxy.proxy_server as ps
-    from fastapi import applications as fa_applications
+    from litellm.proxy import swagger_reference
 
-    fresh_app = FastAPI()
-    monkeypatch.setattr(ps, "app", fresh_app, raising=True)
-    monkeypatch.setattr(
-        ps, "current_dir", str(tmp_path / "does_not_exist"), raising=True
-    )
-    original_get_swagger = fa_applications.get_swagger_ui_html
-
-    try:
-        with pytest.raises(RuntimeError):
-            mount_swagger_ui()
-    finally:
-        fa_applications.get_swagger_ui_html = original_get_swagger
+    monkeypatch.setattr(swagger_reference, "SWAGGER_ASSET_DIR", tmp_path / "does_not_exist")
+    with pytest.raises(RuntimeError):
+        mount_swagger_ui(FastAPI(docs_url=None), "/swagger")
 
 
 # ---------------------------------------------------------------------------

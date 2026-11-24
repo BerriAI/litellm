@@ -1,6 +1,6 @@
 from collections.abc import Sequence
 from enum import Enum
-from typing import Any, Final, Literal, Optional, Union
+from typing import Final, Literal, Optional, Union
 
 from typing_extensions import ReadOnly, TypedDict
 
@@ -13,7 +13,6 @@ class LiteLLMCacheType(str, Enum):
     REDIS_SEMANTIC = "redis-semantic"
     VALKEY_SEMANTIC = "valkey-semantic"
     S3 = "s3"
-    DISK = "disk"
     QDRANT_SEMANTIC = "qdrant-semantic"
     AZURE_BLOB = "azure-blob"
     GCS = "gcs"
@@ -85,7 +84,7 @@ class RedisPipelineRpushOperation(TypedDict):
     """
 
     key: str
-    values: Sequence[Any]
+    values: ReadOnly[Sequence[str]]
 
 
 class RedisPipelineLpopOperation(TypedDict):

@@ -1,11 +1,20 @@
+import json
+import queue
+import threading
+from collections.abc import AsyncIterator, Iterator
+from dataclasses import dataclass, field
 from typing import Final, Literal, TypeAlias
 
 import httpx
 import openai
 import pytest
 import respx
+from pydantic import TypeAdapter
 
 import litellm
+from litellm.integrations.custom_logger import CustomLogger
+from litellm.responses.streaming_iterator import ResponsesAPIStreamingIterator, SyncResponsesAPIStreamingIterator
+from litellm.types.llms.openai import ResponsesAPIResponse
 from tests.unit.proxy.conftest import httpx_transport
 
 pytestmark: Final = pytest.mark.usefixtures(httpx_transport.__name__)
@@ -40,6 +49,12 @@ async def _invoke_cancel_response(sync_mode: bool, call_kwargs: dict[str, object
     if sync_mode:
         return litellm.cancel_responses(**call_kwargs)
     return await litellm.acancel_responses(**call_kwargs)
+
+
+async def _invoke_get_response(sync_mode: bool, call_kwargs: dict[str, object]) -> object:
+    if sync_mode:
+        return litellm.get_responses(**call_kwargs)
+    return await litellm.aget_responses(**call_kwargs)
 
 
 @pytest.mark.parametrize(
@@ -102,8 +117,733 @@ async def test_cancel_responses_404_surfaces_openai_api_error_with_exact_url(
         }
         with pytest.raises(openai.APIError) as exc_info:
             await _invoke_cancel_response(sync_mode, call_kwargs)
-        requests: Final = tuple(route.calls)
+        requests: Final[tuple[respx.models.Call, ...]] = tuple(route.calls)
 
     assert exc_info.value.status_code == 404
     assert len(requests) == 1
     assert str(requests[0].request.url) == expected_url
+
+
+StreamProvider: TypeAlias = Literal["openai", "azure", "azure_ai"]
+_STORED_RESPONSE_ID: Final = "resp_background"
+_STREAM_HEADERS: Final = {"content-type": "text/event-stream"}
+
+
+def _stored_response(status: str) -> dict[str, object]:
+    return {
+        "id": _STORED_RESPONSE_ID,
+        "object": "response",
+        "created_at": 1761600000,
+        "status": status,
+        "background": True,
+        "model": "gpt-5.5",
+        "output": [],
+        "usage": {"input_tokens": 12, "output_tokens": 3, "total_tokens": 15},
+    }
+
+
+def _sse(event: dict[str, object]) -> bytes:
+    return f"event: {event['type']}\ndata: {json.dumps(event)}\n\n".encode()
+
+
+def _delta_event(sequence_number: int) -> dict[str, object]:
+    return {
+        "type": "response.output_text.delta",
+        "sequence_number": sequence_number,
+        "item_id": "msg_1",
+        "output_index": 0,
+        "content_index": 0,
+        "delta": "hi",
+        "logprobs": [],
+    }
+
+
+def _replay_body(*events: dict[str, object]) -> bytes:
+    return b"".join(_sse(event) for event in events)
+
+
+_REPLAY_AFTER_3: Final = _replay_body(
+    _delta_event(4),
+    {"type": "response.completed", "sequence_number": 5, "response": _stored_response("completed")},
+)
+
+
+def _retrieve_route(mock_router: respx.MockRouter, provider: StreamProvider) -> respx.Route:
+    match provider:
+        case "openai":
+            return mock_router.get(f"https://api.openai.com/v1/responses/{_STORED_RESPONSE_ID}")
+        case "azure":
+            return mock_router.get(f"https://example-resource.openai.azure.com/openai/responses/{_STORED_RESPONSE_ID}")
+        case "azure_ai":
+            return mock_router.get(
+                f"https://example-resource.services.ai.azure.com/openai/v1/responses/{_STORED_RESPONSE_ID}"
+            )
+
+
+def _retrieve_kwargs(provider: StreamProvider) -> dict[str, object]:
+    match provider:
+        case "openai":
+            return {"custom_llm_provider": "openai", "api_key": "sk-test", "api_base": "https://api.openai.com/v1"}
+        case "azure":
+            return {
+                "custom_llm_provider": "azure",
+                "api_key": "sk-test",
+                "api_base": "https://example-resource.openai.azure.com",
+                "api_version": "2025-03-01-preview",
+            }
+        case "azure_ai":
+            return {
+                "custom_llm_provider": "azure_ai",
+                "api_key": "sk-test",
+                "api_base": "https://example-resource.services.ai.azure.com",
+            }
+
+
+async def _retrieve(sync_mode: bool, **kwargs: object) -> object:
+    if sync_mode:
+        return litellm.get_responses(response_id=_STORED_RESPONSE_ID, **kwargs)
+    return await litellm.aget_responses(response_id=_STORED_RESPONSE_ID, **kwargs)
+
+
+async def _event_types(stream: object) -> tuple[str, ...]:
+    if isinstance(stream, SyncResponsesAPIStreamingIterator):
+        return tuple(event.type for event in stream)
+    assert isinstance(stream, ResponsesAPIStreamingIterator)
+    return tuple([event.type async for event in stream])
+
+
+@pytest.mark.parametrize("sync_mode", (True, False))
+@pytest.mark.parametrize("provider", ("openai", "azure", "azure_ai"))
+@pytest.mark.parametrize(
+    ("resume_kwargs", "expected_query"),
+    (
+        ({"stream": True, "starting_after": 3}, {"stream": "true", "starting_after": "3"}),
+        ({"stream": True, "starting_after": 0}, {"stream": "true", "starting_after": "0"}),
+        ({"stream": True}, {"stream": "true"}),
+        ({"extra_query": {"stream": "true", "starting_after": "3"}}, {"stream": "true", "starting_after": "3"}),
+        (
+            {"stream": True, "starting_after": 1, "extra_query": {"starting_after": 3, "include[]": "usage"}},
+            {"stream": "true", "starting_after": "3", "include[]": "usage"},
+        ),
+        (
+            {"stream": True, "extra_query": {"include": "usage", "limit": "1", "api-version": "2020-01-01"}},
+            {"stream": "true", "include": "usage"},
+        ),
+    ),
+)
+@pytest.mark.asyncio
+async def test_streamed_retrieve_replays_the_stored_events_after_the_cursor(
+    provider: StreamProvider,
+    sync_mode: bool,
+    resume_kwargs: dict[str, object],
+    expected_query: dict[str, str],
+) -> None:
+    with respx.mock() as mock_router:
+        route: Final = _retrieve_route(mock_router, provider).mock(
+            return_value=httpx.Response(200, headers=_STREAM_HEADERS, content=_REPLAY_AFTER_3)
+        )
+        stream: Final = await _retrieve(sync_mode, **_retrieve_kwargs(provider), **resume_kwargs)
+        event_types: Final = await _event_types(stream)
+        (call,) = route.calls
+
+    sent_query: Final = dict(call.request.url.params)
+    api_version: Final = {"api-version": "2025-03-01-preview"} if provider == "azure" else {}
+    assert sent_query == {**expected_query, **api_version}
+    assert event_types == ("response.output_text.delta", "response.completed")
+
+
+@pytest.mark.parametrize("sync_mode", (True, False))
+@pytest.mark.parametrize("starting_after", (3, -1, "abc"))
+@pytest.mark.asyncio
+async def test_retrieve_without_stream_still_returns_the_response_object(
+    sync_mode: bool, starting_after: object
+) -> None:
+    with respx.mock() as mock_router:
+        route: Final = _retrieve_route(mock_router, "openai").mock(
+            return_value=httpx.Response(200, json=_stored_response("completed"))
+        )
+        retrieved: Final = await _retrieve(sync_mode, starting_after=starting_after, **_retrieve_kwargs("openai"))
+        (call,) = route.calls
+
+    assert isinstance(retrieved, ResponsesAPIResponse)
+    assert retrieved.status == "completed"
+    assert dict(call.request.url.params) == {}
+
+
+@pytest.mark.parametrize("sync_mode", (True, False))
+@pytest.mark.asyncio
+async def test_a_streamed_retrieve_answered_with_json_returns_the_response_object(sync_mode: bool) -> None:
+    with respx.mock() as mock_router:
+        route: Final = _retrieve_route(mock_router, "openai").mock(
+            return_value=httpx.Response(200, json=_stored_response("completed"))
+        )
+        retrieved: Final = await _retrieve(sync_mode, stream=True, starting_after=3, **_retrieve_kwargs("openai"))
+        (call,) = route.calls
+
+    assert isinstance(retrieved, ResponsesAPIResponse)
+    assert retrieved.status == "completed"
+    assert dict(call.request.url.params) == {"stream": "true", "starting_after": "3"}
+
+
+@pytest.mark.parametrize("sync_mode", (True, False))
+@pytest.mark.asyncio
+async def test_resuming_at_the_end_of_a_finished_stream_ends_without_events(sync_mode: bool) -> None:
+    with respx.mock() as mock_router:
+        _retrieve_route(mock_router, "openai").mock(return_value=httpx.Response(200, headers=_STREAM_HEADERS))
+        stream: Final = await _retrieve(sync_mode, stream=True, starting_after=5, **_retrieve_kwargs("openai"))
+        event_types: Final = await _event_types(stream)
+
+    assert event_types == ()
+
+
+@pytest.mark.parametrize("sync_mode", (True, False))
+@pytest.mark.asyncio
+async def test_resumed_stream_cut_before_its_terminal_event_raises(sync_mode: bool) -> None:
+    with respx.mock() as mock_router:
+        _retrieve_route(mock_router, "openai").mock(
+            return_value=httpx.Response(200, headers=_STREAM_HEADERS, content=_replay_body(_delta_event(4)))
+        )
+        stream: Final = await _retrieve(sync_mode, stream=True, starting_after=3, **_retrieve_kwargs("openai"))
+        with pytest.raises(litellm.APIConnectionError, match="before any terminal event"):
+            await _event_types(stream)
+
+
+@pytest.mark.parametrize("sync_mode", (True, False))
+@pytest.mark.asyncio
+async def test_a_resumed_stream_relays_the_stored_response_without_inventing_usage(sync_mode: bool) -> None:
+    stored_without_usage: Final = {key: value for key, value in _stored_response("completed").items() if key != "usage"}
+    with respx.mock() as mock_router:
+        _retrieve_route(mock_router, "openai").mock(
+            return_value=httpx.Response(
+                200,
+                headers=_STREAM_HEADERS,
+                content=_replay_body(
+                    _delta_event(4),
+                    {"type": "response.completed", "sequence_number": 5, "response": stored_without_usage},
+                ),
+            )
+        )
+        stream: Final = await _retrieve(sync_mode, stream=True, starting_after=3, **_retrieve_kwargs("openai"))
+        if isinstance(stream, SyncResponsesAPIStreamingIterator):
+            events: Final = tuple(stream)
+        else:
+            assert isinstance(stream, ResponsesAPIStreamingIterator)
+            events = tuple([event async for event in stream])
+
+    completed: Final = events[-1]
+    assert completed.type == "response.completed"
+    assert completed.response.usage is None
+
+
+@dataclass(frozen=True, slots=True)
+class _ClosableReplay(httpx.SyncByteStream, httpx.AsyncByteStream):
+    body: bytes
+    closed: threading.Event = field(default_factory=threading.Event)
+
+    def __iter__(self) -> Iterator[bytes]:
+        yield self.body
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        yield self.body
+
+    def close(self) -> None:
+        self.closed.set()
+
+    async def aclose(self) -> None:
+        self.closed.set()
+
+
+@pytest.mark.parametrize("sync_mode", (True, False))
+@pytest.mark.asyncio
+async def test_closing_a_resumed_stream_early_releases_the_upstream_connection(sync_mode: bool) -> None:
+    upstream: Final = _ClosableReplay(_REPLAY_AFTER_3)
+    with respx.mock() as mock_router:
+        _retrieve_route(mock_router, "openai").mock(
+            return_value=httpx.Response(200, headers=_STREAM_HEADERS, stream=upstream)
+        )
+        stream: Final = await _retrieve(sync_mode, stream=True, starting_after=3, **_retrieve_kwargs("openai"))
+        if isinstance(stream, SyncResponsesAPIStreamingIterator):
+            first_sync: Final = next(stream)
+            stream.close()
+            first_type: Final = first_sync.type
+        else:
+            assert isinstance(stream, ResponsesAPIStreamingIterator)
+            first_async: Final = await anext(stream)
+            await stream.aclose()
+            first_type = first_async.type
+
+    assert first_type == "response.output_text.delta"
+    assert upstream.closed.is_set()
+
+
+@pytest.mark.parametrize("sync_mode", (True, False))
+@pytest.mark.asyncio
+async def test_a_rejected_resume_keeps_the_provider_error(sync_mode: bool) -> None:
+    error_message: Final = "Response cannot be streamed, it is more than 5 minutes old."
+    with respx.mock() as mock_router:
+        route: Final = _retrieve_route(mock_router, "openai").mock(
+            return_value=httpx.Response(
+                400, json={"error": {"message": error_message, "type": "invalid_request_error", "param": None}}
+            )
+        )
+        with pytest.raises(openai.BadRequestError, match=error_message) as exc_info:
+            await _retrieve(sync_mode, stream=True, starting_after=3, **_retrieve_kwargs("openai"))
+        (call,) = route.calls
+
+    assert exc_info.value.status_code == 400
+    assert dict(call.request.url.params) == {"stream": "true", "starting_after": "3"}
+
+
+@pytest.mark.parametrize("sync_mode", (True, False))
+@pytest.mark.asyncio
+async def test_a_resume_that_times_out_raises_a_timeout(sync_mode: bool) -> None:
+    with respx.mock() as mock_router:
+        route: Final = _retrieve_route(mock_router, "openai").mock(side_effect=httpx.ReadTimeout("slow"))
+        with pytest.raises(litellm.Timeout):
+            await _retrieve(sync_mode, stream=True, timeout=1.0, **_retrieve_kwargs("openai"))
+        (call,) = route.calls
+
+    assert dict(call.request.url.params) == {"stream": "true"}
+
+
+@pytest.mark.parametrize(
+    "resume_kwargs",
+    (
+        {"stream": "maybe"},
+        {"stream": True, "starting_after": -1},
+        {"extra_query": {"stream": "true", "starting_after": "abc"}},
+        {"extra_query": {"stream": "1"}},
+        {"extra_query": {"stream": "true", "starting_after": "9" * 5000}},
+    ),
+)
+@pytest.mark.parametrize("sync_mode", (True, False))
+@pytest.mark.asyncio
+async def test_a_malformed_resume_query_is_rejected_before_any_upstream_call(
+    sync_mode: bool, resume_kwargs: dict[str, object]
+) -> None:
+    with respx.mock(assert_all_called=False) as mock_router:
+        route: Final = _retrieve_route(mock_router, "openai")
+        with pytest.raises(litellm.BadRequestError) as exc_info:
+            await _retrieve(sync_mode, **_retrieve_kwargs("openai"), **resume_kwargs)
+
+    assert exc_info.value.status_code == 400
+    assert route.call_count == 0
+
+
+@pytest.mark.parametrize(
+    ("resume_kwargs", "expected_query"),
+    (
+        ({"stream": "maybe", "starting_after": 3}, {}),
+        ({"extra_query": {"stream": "1"}}, {}),
+        ({"stream": True, "starting_after": -1}, {"stream": "true"}),
+        ({"extra_query": {"stream": "true", "starting_after": "abc"}}, {"stream": "true"}),
+        ({"extra_query": {"stream": "true", "starting_after": "9" * 5000}}, {"stream": "true"}),
+    ),
+)
+@pytest.mark.parametrize("sync_mode", (True, False))
+@pytest.mark.asyncio
+async def test_a_malformed_resume_query_is_dropped_under_drop_params(
+    sync_mode: bool, resume_kwargs: dict[str, object], expected_query: dict[str, str]
+) -> None:
+    upstream: Final = (
+        httpx.Response(200, headers=_STREAM_HEADERS, content=_REPLAY_AFTER_3)
+        if expected_query
+        else httpx.Response(200, json=_stored_response("completed"))
+    )
+    with respx.mock() as mock_router:
+        route: Final = _retrieve_route(mock_router, "openai").mock(return_value=upstream)
+        retrieved: Final = await _retrieve(sync_mode, drop_params=True, **_retrieve_kwargs("openai"), **resume_kwargs)
+        streamed_types: Final = None if isinstance(retrieved, ResponsesAPIResponse) else await _event_types(retrieved)
+        (call,) = route.calls
+
+    assert dict(call.request.url.params) == expected_query
+    assert (streamed_types is not None) == bool(expected_query)
+
+
+_UNSUPPORTED_PROVIDERS: Final = ("xai", "manus", "volcengine")
+
+
+def _unsupported_provider_kwargs(provider: str) -> dict[str, object]:
+    return {
+        "custom_llm_provider": provider,
+        "api_key": f"{provider}-test",
+        "api_base": f"https://{provider}.example/v1",
+    }
+
+
+def _unsupported_provider_route(mock_router: respx.MockRouter, provider: str) -> respx.Route:
+    return mock_router.get(url__regex=rf"^https://{provider}\.example/.*/responses/{_STORED_RESPONSE_ID}$")
+
+
+@pytest.mark.parametrize("sync_mode", (True, False))
+@pytest.mark.parametrize("provider", _UNSUPPORTED_PROVIDERS)
+@pytest.mark.asyncio
+async def test_streamed_retrieve_on_an_unsupported_provider_is_a_400_without_drop_params(
+    sync_mode: bool, provider: str
+) -> None:
+    with respx.mock(assert_all_called=False) as mock_router:
+        route: Final = _unsupported_provider_route(mock_router, provider)
+        with pytest.raises(litellm.UnsupportedParamsError) as exc_info:
+            await _retrieve(sync_mode, stream=True, starting_after=3, **_unsupported_provider_kwargs(provider))
+
+    assert exc_info.value.status_code == 400
+    assert route.call_count == 0
+
+
+@pytest.mark.parametrize("sync_mode", (True, False))
+@pytest.mark.parametrize("provider", _UNSUPPORTED_PROVIDERS)
+@pytest.mark.asyncio
+async def test_streamed_retrieve_on_an_unsupported_provider_drops_the_stream_under_drop_params(
+    sync_mode: bool, provider: str
+) -> None:
+    with respx.mock() as mock_router:
+        route: Final = _unsupported_provider_route(mock_router, provider).mock(
+            return_value=httpx.Response(200, json=_stored_response("completed"))
+        )
+        retrieved: Final = await _retrieve(
+            sync_mode, stream=True, starting_after=3, drop_params=True, **_unsupported_provider_kwargs(provider)
+        )
+        (call,) = route.calls
+
+    assert isinstance(retrieved, ResponsesAPIResponse)
+    assert dict(call.request.url.params) == {}
+
+
+@pytest.mark.asyncio
+async def test_a_routed_resume_requested_in_extra_query_gets_the_deployment_stream_timeout() -> None:
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "background-model",
+                "litellm_params": {
+                    "model": "openai/gpt-5.5",
+                    "api_key": "sk-test",
+                    "api_base": "https://api.openai.com/v1",
+                    "timeout": 2,
+                    "stream_timeout": 60,
+                },
+            }
+        ]
+    )
+    with respx.mock() as mock_router:
+        route: Final = _retrieve_route(mock_router, "openai").mock(
+            return_value=httpx.Response(200, headers=_STREAM_HEADERS, content=_REPLAY_AFTER_3)
+        )
+        stream: Final = await router.aget_responses(
+            model="background-model",
+            response_id=_STORED_RESPONSE_ID,
+            extra_query={"stream": "true", "starting_after": "3"},
+        )
+        event_types: Final = await _event_types(stream)
+        (call,) = route.calls
+
+    assert event_types == ("response.output_text.delta", "response.completed")
+    assert call.request.extensions["timeout"]["read"] == 60
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("deployment_stream", "router_defaults"),
+    [({"stream": True}, None), ({}, {"stream": True})],
+    ids=["deployment_forces_stream", "router_default_forces_stream"],
+)
+async def test_a_routed_plain_retrieve_where_config_forces_stream_answers_the_response_object(
+    deployment_stream: dict[str, bool], router_defaults: dict[str, bool] | None
+) -> None:
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "background-model",
+                "litellm_params": {
+                    "model": "openai/gpt-5.5",
+                    "api_key": "sk-test",
+                    "api_base": "https://api.openai.com/v1",
+                    **deployment_stream,
+                },
+            }
+        ],
+        default_litellm_params=router_defaults,
+    )
+    with respx.mock() as mock_router:
+        route: Final = _retrieve_route(mock_router, "openai").mock(
+            return_value=httpx.Response(200, json=_stored_response("completed"))
+        )
+        retrieved: Final = await router.aget_responses(model="background-model", response_id=_STORED_RESPONSE_ID)
+        (call,) = route.calls
+
+    assert isinstance(retrieved, ResponsesAPIResponse)
+    assert dict(call.request.url.params) == {}
+
+
+@pytest.mark.asyncio
+async def test_a_routed_create_on_a_deployment_that_forces_stream_still_streams() -> None:
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "background-model",
+                "litellm_params": {
+                    "model": "openai/gpt-5.5",
+                    "api_key": "sk-test",
+                    "api_base": "https://api.openai.com/v1",
+                    "stream": True,
+                },
+            }
+        ]
+    )
+    with respx.mock() as mock_router:
+        route: Final = mock_router.post("https://api.openai.com/v1/responses").mock(
+            return_value=httpx.Response(200, headers=_STREAM_HEADERS, content=_REPLAY_AFTER_3)
+        )
+        stream: Final = await router.aresponses(model="background-model", input="hi", background=True)
+        event_types: Final = await _event_types(stream)
+        (call,) = route.calls
+
+    assert event_types == ("response.output_text.delta", "response.completed")
+    assert json.loads(call.request.content)["stream"] is True
+
+
+class _SuccessLog(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.logged: queue.Queue[object] = queue.Queue()
+
+    def log_success_event(self, kwargs: object, response_obj: object, start_time: object, end_time: object) -> None:
+        self.logged.put(response_obj)
+
+
+def test_a_sync_streamed_retrieve_logs_success_with_the_finished_response(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    success_log: Final = _SuccessLog()
+    monkeypatch.setattr(litellm, "callbacks", [success_log])
+    with respx.mock() as mock_router:
+        _retrieve_route(mock_router, "openai").mock(
+            return_value=httpx.Response(200, headers=_STREAM_HEADERS, content=_REPLAY_AFTER_3)
+        )
+        stream: Final = litellm.get_responses(
+            response_id=_STORED_RESPONSE_ID, stream=True, starting_after=3, **_retrieve_kwargs("openai")
+        )
+        assert isinstance(stream, SyncResponsesAPIStreamingIterator)
+        consumed: Final = tuple(stream)
+
+    logged: Final = success_log.logged.get(timeout=10)
+
+    assert len(consumed) == 2
+    assert isinstance(logged, ResponsesAPIResponse)
+    assert logged.status == "completed"
+
+
+@pytest.mark.parametrize("sync_mode", (True, False))
+@pytest.mark.asyncio
+async def test_cancel_responses_reply_carries_the_id_retrieve_gives_for_the_same_run(sync_mode: bool) -> None:
+    upstream_id: Final = "resp_upstream123"
+    reply: Final = {
+        "id": upstream_id,
+        "object": "response",
+        "created_at": 0,
+        "status": "cancelled",
+        "model": "gpt-6.1-terra",
+        "output": [],
+    }
+    call_kwargs: Final = {
+        "custom_llm_provider": "openai",
+        "api_key": "sk-test",
+        "response_id": upstream_id,
+        "litellm_metadata": {"model_info": {"id": "deployment-1"}},
+    }
+
+    with respx.mock() as mock_router:
+        mock_router.post(f"https://api.openai.com/v1/responses/{upstream_id}/cancel").mock(
+            return_value=httpx.Response(status_code=200, json=reply)
+        )
+        mock_router.get(f"https://api.openai.com/v1/responses/{upstream_id}").mock(
+            return_value=httpx.Response(status_code=200, json=reply)
+        )
+        cancelled: Final = await _invoke_cancel_response(sync_mode, call_kwargs)
+        retrieved: Final = await _invoke_get_response(sync_mode, call_kwargs)
+
+    assert isinstance(cancelled, ResponsesAPIResponse)
+    assert isinstance(retrieved, ResponsesAPIResponse)
+    assert cancelled.id == retrieved.id
+    assert cancelled.id != upstream_id
+
+
+LoggedOperation: TypeAlias = Literal["create", "compact", "get", "delete", "list_input_items", "cancel"]
+_LOGGED_CALL_ID: Final = "provider-label-call"
+_SYNTHETIC_MODEL: Final = "provider-label-model"
+_SYNTHETIC_API_KEY: Final = "sk-test"
+_LITELLM_PARAMS: Final = TypeAdapter(dict[str, object])
+
+
+@dataclass(frozen=True, slots=True)
+class _ProviderEndpoint:
+    provider: str
+    api_base: str
+    responses_url: str
+    compact_url: str
+    api_version: str | None = None
+
+    @property
+    def model(self) -> str:
+        return f"{self.provider}/{_SYNTHETIC_MODEL}"
+
+
+_OPENAI_ENDPOINT: Final = _ProviderEndpoint(
+    provider="openai",
+    api_base="https://api.openai.com/v1",
+    responses_url="https://api.openai.com/v1/responses",
+    compact_url="https://api.openai.com/v1/responses/compact",
+)
+_AZURE_ENDPOINT: Final = _ProviderEndpoint(
+    provider="azure",
+    api_base="https://example-resource.openai.azure.com",
+    responses_url="https://example-resource.openai.azure.com/openai/responses",
+    compact_url="https://example-resource.openai.azure.com/openai/v1/responses/compact",
+    api_version="2025-03-01-preview",
+)
+_LOGGED_PROVIDER_CASES: Final[tuple[tuple[LoggedOperation, _ProviderEndpoint], ...]] = (
+    ("create", _OPENAI_ENDPOINT),
+    ("create", _AZURE_ENDPOINT),
+    ("compact", _OPENAI_ENDPOINT),
+    ("compact", _AZURE_ENDPOINT),
+    ("get", _OPENAI_ENDPOINT),
+    ("get", _AZURE_ENDPOINT),
+    ("delete", _OPENAI_ENDPOINT),
+    ("delete", _AZURE_ENDPOINT),
+    ("list_input_items", _OPENAI_ENDPOINT),
+    ("list_input_items", _AZURE_ENDPOINT),
+    ("cancel", _OPENAI_ENDPOINT),
+    ("cancel", _AZURE_ENDPOINT),
+)
+
+
+class _LoggedLitellmParams(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()  # pyright: ignore[reportUnknownMemberType]  # SDK kwargs are untyped
+        self.logged: queue.Queue[object] = queue.Queue()
+
+    def log_success_event(
+        self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        if kwargs.get("litellm_call_id") == _LOGGED_CALL_ID:
+            self.logged.put(kwargs.get("litellm_params"))
+
+    def logged_provider(self) -> object:
+        return _LITELLM_PARAMS.validate_python(self.logged.get(timeout=10)).get("custom_llm_provider")
+
+
+def _mock_response_lifecycle(mock_router: respx.MockRouter, endpoint: _ProviderEndpoint) -> None:
+    stored_url: Final = f"{endpoint.responses_url}/{_STORED_RESPONSE_ID}"
+    stored: Final = {**_stored_response("completed"), "model": _SYNTHETIC_MODEL}
+    deleted: Final = {"id": _STORED_RESPONSE_ID, "object": "response", "deleted": True}
+    mock_router.post(url__startswith=f"{stored_url}/cancel").mock(return_value=httpx.Response(200, json=stored))
+    mock_router.get(url__startswith=f"{stored_url}/input_items").mock(
+        return_value=httpx.Response(200, json={"object": "list", "data": []})
+    )
+    mock_router.post(url__startswith=endpoint.compact_url).mock(return_value=httpx.Response(200, json=stored))
+    mock_router.post(url__startswith=endpoint.responses_url).mock(return_value=httpx.Response(200, json=stored))
+    mock_router.delete(url__startswith=stored_url).mock(return_value=httpx.Response(200, json=deleted))
+    mock_router.get(url__startswith=stored_url).mock(return_value=httpx.Response(200, json=stored))
+
+
+def _encoded_response_id(endpoint: _ProviderEndpoint) -> str:
+    created: Final = litellm.responses(
+        model=endpoint.model,
+        input="hello",
+        api_key=_SYNTHETIC_API_KEY,
+        api_base=endpoint.api_base,
+        api_version=endpoint.api_version,
+    )
+    assert isinstance(created, ResponsesAPIResponse)
+    return created.id
+
+
+def _run_logged_operation(operation: LoggedOperation, endpoint: _ProviderEndpoint, encoded_id: str) -> None:
+    match operation:
+        case "create":
+            litellm.responses(
+                model=endpoint.model,
+                input="hello",
+                litellm_call_id=_LOGGED_CALL_ID,
+                api_key=_SYNTHETIC_API_KEY,
+                api_base=endpoint.api_base,
+                api_version=endpoint.api_version,
+            )
+        case "compact":
+            litellm.compact_responses(  # pyright: ignore[reportUnknownMemberType]  # SDK kwargs are untyped
+                model=endpoint.model,
+                input="hello",
+                litellm_call_id=_LOGGED_CALL_ID,
+                api_key=_SYNTHETIC_API_KEY,
+                api_base=endpoint.api_base,
+                api_version=endpoint.api_version,
+            )
+        case "get":
+            litellm.get_responses(  # pyright: ignore[reportUnknownMemberType]  # SDK kwargs are untyped
+                response_id=encoded_id,
+                litellm_call_id=_LOGGED_CALL_ID,
+                api_key=_SYNTHETIC_API_KEY,
+                api_base=endpoint.api_base,
+                api_version=endpoint.api_version,
+            )
+        case "delete":
+            litellm.delete_responses(  # pyright: ignore[reportUnknownMemberType]  # SDK kwargs are untyped
+                response_id=encoded_id,
+                litellm_call_id=_LOGGED_CALL_ID,
+                api_key=_SYNTHETIC_API_KEY,
+                api_base=endpoint.api_base,
+                api_version=endpoint.api_version,
+            )
+        case "list_input_items":
+            litellm.list_input_items(  # pyright: ignore[reportUnknownMemberType]  # SDK kwargs are untyped
+                response_id=encoded_id,
+                litellm_call_id=_LOGGED_CALL_ID,
+                api_key=_SYNTHETIC_API_KEY,
+                api_base=endpoint.api_base,
+                api_version=endpoint.api_version,
+            )
+        case "cancel":
+            litellm.cancel_responses(  # pyright: ignore[reportUnknownMemberType]  # SDK kwargs are untyped
+                response_id=encoded_id,
+                litellm_call_id=_LOGGED_CALL_ID,
+                api_key=_SYNTHETIC_API_KEY,
+                api_base=endpoint.api_base,
+                api_version=endpoint.api_version,
+            )
+
+
+@pytest.mark.parametrize(
+    ("operation", "endpoint"),
+    _LOGGED_PROVIDER_CASES,
+    ids=tuple(f"{operation}-{endpoint.provider}" for operation, endpoint in _LOGGED_PROVIDER_CASES),
+)
+def test_a_response_operation_logs_the_provider_it_inferred_or_decoded(
+    monkeypatch: pytest.MonkeyPatch, operation: LoggedOperation, endpoint: _ProviderEndpoint
+) -> None:
+    provider_log: Final = _LoggedLitellmParams()
+    with respx.mock(assert_all_called=False) as mock_router:
+        _mock_response_lifecycle(mock_router, endpoint)
+        encoded_id: Final = _encoded_response_id(endpoint)
+        monkeypatch.setattr(litellm, "callbacks", [provider_log])
+        _run_logged_operation(operation, endpoint, encoded_id)
+
+    assert provider_log.logged_provider() == endpoint.provider
+
+
+def test_a_stale_explicit_provider_logs_the_provider_decoded_from_the_response_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider_log: Final = _LoggedLitellmParams()
+    with respx.mock(assert_all_called=False) as mock_router:
+        _mock_response_lifecycle(mock_router, _OPENAI_ENDPOINT)
+        encoded_id: Final = _encoded_response_id(_OPENAI_ENDPOINT)
+        monkeypatch.setattr(litellm, "callbacks", [provider_log])
+        litellm.get_responses(  # pyright: ignore[reportUnknownMemberType]  # SDK kwargs are untyped
+            response_id=encoded_id,
+            custom_llm_provider=_AZURE_ENDPOINT.provider,
+            litellm_call_id=_LOGGED_CALL_ID,
+            api_key=_SYNTHETIC_API_KEY,
+            api_base=_OPENAI_ENDPOINT.api_base,
+        )
+
+    assert provider_log.logged_provider() == _OPENAI_ENDPOINT.provider

@@ -18,6 +18,7 @@ def initialize_bedrock(litellm_params: LitellmParams, guardrail: Guardrail):
         event_hook=litellm_params.mode,
         guardrailIdentifier=litellm_params.guardrailIdentifier,
         guardrailVersion=litellm_params.guardrailVersion,
+        outputScope=litellm_params.outputScope,
         checks=litellm_params.checks if isinstance(litellm_params.checks, BedrockChecksConfigModel) else None,
         content_filter_threshold=litellm_params.content_filter_threshold,
         prompt_attack_threshold=litellm_params.prompt_attack_threshold,
@@ -46,6 +47,7 @@ def initialize_bedrock(litellm_params: LitellmParams, guardrail: Guardrail):
         streaming_sampling_rate=streaming_params.streaming_sampling_rate,
         streaming_end_of_stream_only=streaming_params.streaming_end_of_stream_only,
         streaming_buffer_release_on_scan=streaming_params.streaming_buffer_release_on_scan,
+        streaming_scan_in_background=streaming_params.streaming_scan_in_background,
         timeout=litellm_params.timeout,
     )
     litellm.logging_callback_manager.add_litellm_callback(_bedrock_callback)
@@ -142,6 +144,11 @@ def initialize_presidio(litellm_params: LitellmParams, guardrail: Guardrail) -> 
     filter_scope: Final = explicit_filter_scope or ("input" if _is_mcp_only_mode(litellm_params.mode) else "both")
     run_input: Final = filter_scope in ("input", "both")
     run_output: Final = filter_scope in ("output", "both")
+    asks_to_scan_output: Final = run_output and (
+        explicit_filter_scope is not None
+        or GuardrailEventHooks.post_call.value in configured_event_hooks(litellm_params.mode)
+    )
+    mask_tool_calls: Final = asks_to_scan_output and bool(litellm_params.pii_entities_config)
 
     def _make_presidio_callback(**overrides) -> CustomGuardrail:
         params: Final = dict(
@@ -162,10 +169,11 @@ def initialize_presidio(litellm_params: LitellmParams, guardrail: Guardrail) -> 
             _callback_role="scan",
         )
         params.update(overrides)
-        # Passed outside the heterogeneous params dict so the argument keeps
-        # its precise int | None type.
+        # Passed outside the heterogeneous params dict so each argument keeps
+        # its precise type.
         callback: Final = OPTIONAL_PresidioPIIMasking(
             presidio_analyze_chunk_size_bytes=litellm_params.presidio_analyze_chunk_size_bytes,
+            mask_tool_calls=mask_tool_calls,
             **params,
         )
         litellm.logging_callback_manager.add_litellm_callback(callback)
@@ -196,7 +204,7 @@ def initialize_presidio(litellm_params: LitellmParams, guardrail: Guardrail) -> 
     )
 
 
-def initialize_hide_secrets(litellm_params: LitellmParams, guardrail: Guardrail):
+def initialize_hide_secrets(litellm_params: LitellmParams, guardrail: Guardrail) -> CustomGuardrail:
     try:
         from litellm_enterprise.enterprise_callbacks.secret_detection import (
             _ENTERPRISE_SecretDetection,
@@ -263,7 +271,7 @@ def initialize_lasso(
     return _lasso_callback
 
 
-def initialize_panw_prisma_airs(litellm_params, guardrail):
+def initialize_panw_prisma_airs(litellm_params, guardrail: Guardrail):
     from litellm.proxy.guardrails.guardrail_hooks.panw_prisma_airs import (
         PanwPrismaAirsHandler,
     )
@@ -282,6 +290,7 @@ def initialize_panw_prisma_airs(litellm_params, guardrail):
         mask_on_block=getattr(litellm_params, "mask_on_block", False),
         mask_request_content=getattr(litellm_params, "mask_request_content", False),
         mask_response_content=getattr(litellm_params, "mask_response_content", False),
+        include_masked_response_on_block=getattr(litellm_params, "include_masked_response_on_block", False),  # pyright: ignore[reportUnknownArgumentType]  # litellm_params is untyped in this function; pydantic extras require getattr
         app_name=getattr(litellm_params, "app_name", None),
         fallback_on_error=getattr(litellm_params, "fallback_on_error", "block"),
         # `timeout` is now declared on BaseLitellmParams (Optional[float] = None),

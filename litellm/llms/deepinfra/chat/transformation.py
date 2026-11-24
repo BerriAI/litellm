@@ -1,5 +1,5 @@
 import json
-from collections.abc import Coroutine, Mapping
+from collections.abc import Coroutine, Mapping, Sequence
 from typing import Final, Literal, cast, overload
 
 import litellm
@@ -21,34 +21,34 @@ class DeepInfraConfig(OpenAIGPTConfig):
         return "deepinfra"
 
     frequency_penalty: int | None = None
-    function_call: str | dict | None = None
-    functions: list | None = None
-    logit_bias: dict | None = None
+    function_call: str | dict[str, object] | None = None
+    functions: list[object] | None = None
+    logit_bias: dict[str, object] | None = None
     max_tokens: int | None = None
     n: int | None = None
     presence_penalty: int | None = None
-    stop: str | list | None = None
+    stop: str | list[object] | None = None
     temperature: int | None = None
     top_p: int | None = None
-    response_format: dict | None = None
-    tools: list | None = None
-    tool_choice: str | dict | None = None
+    response_format: dict[str, object] | None = None
+    tools: list[object] | None = None
+    tool_choice: str | dict[str, object] | None = None
 
     def __init__(
         self,
         frequency_penalty: int | None = None,
-        function_call: str | dict | None = None,
-        functions: list | None = None,
-        logit_bias: dict | None = None,
+        function_call: str | Mapping[str, object] | None = None,
+        functions: Sequence[object] | None = None,
+        logit_bias: Mapping[str, object] | None = None,
         max_tokens: int | None = None,
         n: int | None = None,
         presence_penalty: int | None = None,
-        stop: str | list | None = None,
+        stop: str | Sequence[object] | None = None,
         temperature: int | None = None,
         top_p: int | None = None,
-        response_format: dict | None = None,
-        tools: list | None = None,
-        tool_choice: str | dict | None = None,
+        response_format: Mapping[str, object] | None = None,
+        tools: Sequence[object] | None = None,
+        tool_choice: str | Mapping[str, object] | None = None,
     ) -> None:
         locals_: Final[Mapping[str, object]] = dict(locals())
         for key, value in locals_.items():
@@ -87,11 +87,11 @@ class DeepInfraConfig(OpenAIGPTConfig):
 
     def map_openai_params(
         self,
-        non_default_params: dict,
-        optional_params: dict,
+        non_default_params: Mapping[str, object],
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:
         supported_openai_params: Final = self.get_supported_openai_params(model=model)
         for param, value in non_default_params.items():
             if (
@@ -130,7 +130,8 @@ class DeepInfraConfig(OpenAIGPTConfig):
         - Input:  {"role": "tool", "content": [{"type": "text", "text": "result"}]}
         - Output: {"role": "tool", "content": "[{\"type\": \"text\", \"text\": \"result\"}]"}
         """
-        for message in messages:
+        copied_messages: Final = [message.copy() for message in messages]
+        for message in copied_messages:
             if message.get("role") == "tool":
                 content = message.get("content")
 
@@ -149,7 +150,7 @@ class DeepInfraConfig(OpenAIGPTConfig):
                         # For complex content, serialize the entire array as JSON string
                         message["content"] = json.dumps(content)
 
-        return messages
+        return copied_messages
 
     @overload
     def _transform_messages(

@@ -1,16 +1,18 @@
+from collections.abc import Sequence
 from typing import Literal
 
-from typing_extensions import Required, TypedDict
+from pydantic import AliasPath, BaseModel, ConfigDict, Field
+from typing_extensions import ReadOnly, Required, TypedDict
 
 
 class CallObject(TypedDict):
-    name: str
-    parameters: dict
+    name: ReadOnly[str]
+    parameters: ReadOnly[object]
 
 
 class ToolResultObject(TypedDict):
-    call: CallObject
-    outputs: list[dict]
+    call: ReadOnly[CallObject]
+    outputs: ReadOnly[Sequence[object]]
 
 
 class ChatHistoryToolResult(TypedDict, total=False):
@@ -98,3 +100,15 @@ class CohereV2ChatResponse(TypedDict):
     message: CohereV2ChatResponseMessage
     usage: CohereV2ChatResponseUsage
     logprobs: CohereV2ChatResponseLogProbs
+
+
+class CohereV2StreamedToolCall(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    id: str | None = Field(default=None, validation_alias=AliasPath("delta", "message", "tool_calls", "id"))
+    name: str | None = Field(
+        default=None, validation_alias=AliasPath("delta", "message", "tool_calls", "function", "name")
+    )
+    arguments: str = Field(
+        default="", validation_alias=AliasPath("delta", "message", "tool_calls", "function", "arguments")
+    )

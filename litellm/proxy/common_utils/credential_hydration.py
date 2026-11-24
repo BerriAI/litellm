@@ -12,10 +12,10 @@ from types import MappingProxyType
 from typing import Final, cast  # noqa: TID251  # narrows untyped credential values at the decrypt boundary
 
 import litellm
+from litellm.litellm_core_utils.clientside_credential_handler import clientside_credential_keys
 from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper
 from litellm.proxy.utils import PrismaClient
 from litellm.repositories.credentials_repository import CredentialsRepository
-from litellm.router_utils.clientside_credential_handler import clientside_credential_keys
 from litellm.types.router import (
     GenericLiteLLMParams,
     server_owned_wif_fields_present,

@@ -3,7 +3,7 @@ import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Any, Final
+from typing import Final, Protocol
 
 import httpx
 
@@ -25,7 +25,7 @@ def init_rds_client(
     aws_web_identity_token: str | None = None,
     timeout: float | httpx.Timeout | None = None,
     aws_session_token: str | None = None,
-):
+) -> "_RdsAuthTokenClient":
     from litellm.secret_managers.main import get_secret
 
     # check for custom AWS_REGION_NAME and use it if not passed to init_bedrock_client
@@ -223,11 +223,15 @@ def rds_region_from_hostname(db_host: str) -> str | None:
     return match.group("region").lower()
 
 
+class _RdsAuthTokenClient(Protocol):
+    def generate_db_auth_token(self, *, DBHostname: str, Port: str, DBUsername: str, Region: str | None) -> str: ...
+
+
 def generate_iam_auth_token(
     db_host: str,
     db_port: str,
     db_user: str,
-    client: Any | None = None,
+    client: _RdsAuthTokenClient | None = None,
     *,
     region: str | None = None,
 ) -> str:

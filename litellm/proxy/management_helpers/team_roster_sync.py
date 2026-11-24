@@ -1,6 +1,7 @@
 import asyncio
 import json
 from collections.abc import Mapping, Sequence
+from copy import deepcopy
 from dataclasses import dataclass
 from datetime import timedelta
 from types import MappingProxyType
@@ -9,14 +10,15 @@ from typing import TYPE_CHECKING, Final
 from pydantic import TypeAdapter
 from typing_extensions import ReadOnly, TypedDict, assert_never
 
+import litellm
 from litellm._uuid import uuid
-from litellm.proxy._types import LiteLLM_TeamTable, Member, UserAPIKeyAuth
+from litellm.proxy._types import LiteLLM_TeamTable, Member, NewTeamRequest, UserAPIKeyAuth
 from litellm.proxy.auth.auth_checks import (
     await_inflight_team_membership_load,
     delete_cache_team_object,
     get_jwt_key_mapping_cache_keys_for_tokens,
 )
-from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
+from litellm.proxy.common_utils.cache_invalidation_pubsub import (
     broadcast_evictions,
     evict_local,
     evict_shared,
@@ -38,8 +40,11 @@ from litellm.proxy.management_helpers.access_group_team_sync import (
     TEAM_ADVISORY_LOCK_SQL,
     USER_ROWS_LOCK_SQL,
 )
+from litellm.proxy.management_helpers.utils import reject_budget_windows
 from litellm.proxy.utils import PrismaClient, ProxyLogging
 from litellm.repositories.chunked_in import delete_many_in, find_many_in, update_many_in
+from litellm.repositories.team_repository import TeamRepository
+from litellm.types.proxy.management_endpoints.ui_sso import DefaultTeamSSOParams
 
 if TYPE_CHECKING:
     from prisma import Prisma
@@ -49,6 +54,43 @@ if TYPE_CHECKING:
 
 ROSTER_TX_TIMEOUT: Final = timedelta(seconds=60)
 _JSON_OBJECT: Final = TypeAdapter(dict[str, object])
+_TEAM_DEFAULTS: Final[TypeAdapter[DefaultTeamSSOParams | Mapping[str, object] | None]] = TypeAdapter(
+    DefaultTeamSSOParams | dict[str, object] | None
+)
+
+
+def new_team_request_with_defaults(
+    team_id: str,
+    team_alias: str | None,
+    members_with_roles: Sequence[Member],
+    metadata: Mapping[str, object] | None = None,
+) -> NewTeamRequest:
+    configured: Final = litellm.default_team_params
+    default_params: Final = (
+        _JSON_OBJECT.validate_python(configured)
+        if isinstance(configured, dict)
+        else _TEAM_DEFAULTS.validate_python(configured)
+    )
+    defaults: Final = _JSON_OBJECT.validate_python(
+        default_params.model_dump(exclude_none=True)
+        if isinstance(default_params, DefaultTeamSSOParams)
+        else deepcopy(default_params)
+        if default_params is not None
+        else {}
+    )
+    default_metadata: Final = defaults.get("metadata")
+    return NewTeamRequest.model_validate(
+        {
+            **defaults,
+            "team_id": team_id,
+            "team_alias": team_alias,
+            "members_with_roles": members_with_roles,
+            "metadata": {
+                **(_JSON_OBJECT.validate_python(default_metadata) if isinstance(default_metadata, dict) else {}),
+                **(metadata or {}),
+            },
+        }
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -144,7 +186,7 @@ def _changes_nothing(plan: RosterPlan) -> bool:
 
 
 async def _unchanged_roster(prisma_client: PrismaClient, team_id: str) -> RosterSync | TeamGone:
-    team_row: Final = await prisma_client.writer_db.litellm_teamtable.find_unique(where={"team_id": team_id})
+    team_row: Final = await TeamRepository(prisma_client, use_writer=True).table.find_unique(where={"team_id": team_id})
     if team_row is None:
         return TeamGone(team_id=team_id)
     team: Final = LiteLLM_TeamTable.model_validate(team_row.model_dump())
@@ -195,6 +237,8 @@ async def _member_budget_ids(
     if default_budget_id is None:
         return MappingProxyType({})
     default_budget: Final = await _budget_tx_db(tx).find_unique(where={"budget_id": default_budget_id})
+    if default_budget is not None:
+        reject_budget_windows(default_budget.model_dump())
     return MappingProxyType(dict.fromkeys(user_ids, default_budget_id if default_budget is not None else None))
 
 

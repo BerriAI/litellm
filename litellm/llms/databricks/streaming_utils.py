@@ -1,6 +1,9 @@
 import json
 from typing import Final
 
+import httpx
+from pydantic import ConfigDict, TypeAdapter
+
 import litellm
 from litellm import verbose_logger
 from litellm.types.llms.openai import (
@@ -21,6 +24,9 @@ def _usage_block(usage: Usage) -> ChatCompletionUsageBlock:
             usage.completion_tokens_details.model_dump() if usage.completion_tokens_details else None
         ),
     )
+
+
+_JSON_CHUNK: Final = TypeAdapter(dict[str, object], config=ConfigDict(strict=True))
 
 
 class ModelResponseIterator:
@@ -99,7 +105,7 @@ class ModelResponseIterator:
             self.response_iterator = self.streaming_response
         chunk: Final = self._next_sse_data()
         try:
-            json_chunk: Final = json.loads(chunk)
+            json_chunk: Final = _JSON_CHUNK.validate_python(json.loads(chunk))
             return self.chunk_parser(chunk=json_chunk)
         except ValueError as e:
             verbose_logger.debug(
@@ -126,7 +132,7 @@ class ModelResponseIterator:
         if chunk == "[DONE]":
             raise StopAsyncIteration
         try:
-            json_chunk: Final = json.loads(chunk)
+            json_chunk: Final = _JSON_CHUNK.validate_python(json.loads(chunk))
             return self.chunk_parser(chunk=json_chunk)
         except ValueError as e:
             verbose_logger.debug(
@@ -139,6 +145,8 @@ class ModelResponseIterator:
             async for raw_chunk in self.async_response_iterator:
                 if sse_data := _sse_data(raw_chunk):
                     return sse_data
+        except httpx.TimeoutException:
+            raise
         except Exception as e:
             raise RuntimeError(f"Error receiving chunk from stream: {e}")
         raise StopAsyncIteration

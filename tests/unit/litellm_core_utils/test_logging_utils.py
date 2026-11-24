@@ -3,7 +3,10 @@ Tests for litellm.litellm_core_utils.logging_utils — base64 truncation helpers
 """
 
 import asyncio, datetime, importlib, litellm, os, pytest_asyncio
+import sys
 import threading
+from itertools import chain
+from types import FrameType
 from unittest.mock import MagicMock
 
 import pytest
@@ -17,7 +20,7 @@ from litellm.litellm_core_utils.logging_utils import (
     truncate_base64_in_messages,
     truncate_base64_in_messages_async,
 )
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable, Coroutine, Sequence
 from datetime import datetime as datetime_assemble_streaming
 from litellm import(
     Choices,
@@ -26,10 +29,18 @@ from litellm import(
     TextChoices,
     TextCompletionResponse,
 )
-from litellm.constants import LOGGING_WORKER_MAX_TIME_PER_COROUTINE
+from litellm.constants import BASE64_TRUNCATION_OFFLOAD_THRESHOLD_CHARS, LOGGING_WORKER_MAX_TIME_PER_COROUTINE
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+from litellm.types.llms.anthropic import (
+    AnthropicContentParamSource,
+    AnthropicMessagesDocumentParam,
+    AnthropicMessagesImageParam,
+    AnthropicMessagesTextParam,
+    AnthropicMessagesUserMessageParam,
+)
+from litellm.types.llms.openai import AllMessageValues
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
-from typing import Final
+from typing import Final, Literal
 
 
 class TestSetDurationInModelCallDetails:
@@ -99,8 +110,8 @@ class TestTruncateBase64InString:
     @pytest.mark.parametrize(
         "text",
         [
-            'data: {"choices": [{"delta": {"content": "hi"}}]}\n\n' * 50_000,
-            "data:" * 200_000,
+            'data: {"choices": [{"delta": {"content": "hi"}}]}\n\n' * 50_000 + ";base64,",
+            "data:" * 200_000 + ";base64,",
         ],
         ids=["sse_lines", "whitespace_free_prefixes"],
     )
@@ -209,6 +220,64 @@ class TestTruncateBase64InMessages:
         result = truncate_base64_in_messages(messages)
         assert result[0]["content"][0]["image_url"]["url"] == f"data:image/png;base64,{short}"
 
+    @pytest.mark.parametrize(
+        ("block_type", "media_type"), [("image", "image/png"), ("document", "application/pdf")]
+    )
+    def test_anthropic_base64_source_data_is_replaced_by_a_size_placeholder(
+        self, block_type: Literal["image", "document"], media_type: str
+    ):
+        payload: Final = "M" * 4_000
+        messages: Final = _anthropic_source_messages(payload, block_type, media_type)
+
+        result: Final = truncate_base64_in_messages(messages)
+
+        assert result[0]["content"][1] == {
+            "type": block_type,
+            "source": {
+                "type": "base64",
+                "media_type": media_type,
+                "data": f"[base64_data truncated: {format_base64_size(len(payload))}]",
+            },
+        }
+        assert messages[0]["content"][1]["source"]["data"] == payload
+
+    def test_short_anthropic_base64_source_data_is_kept(self):
+        messages: Final = _anthropic_source_messages("AAAA", "image", "image/png")
+
+        assert truncate_base64_in_messages(messages) == messages
+
+    def test_data_outside_a_base64_source_is_kept(self):
+        messages: Final = [{"role": "user", "content": [{"type": "json", "data": "N" * 4_000}]}]
+
+        assert truncate_base64_in_messages(messages) == messages
+
+    def test_data_uri_string_directly_inside_a_list_is_truncated(self):
+        payload: Final = "Q" * 4_000
+        messages: Final = [{"role": "user", "content": ["describe", f"data:image/png;base64,{payload}"]}]
+
+        result: Final = truncate_base64_in_messages(messages)
+
+        assert result[0]["content"] == [
+            "describe",
+            f"data:image/png;base64,[base64_data truncated: {format_base64_size(len(payload))}]",
+        ]
+
+
+def _anthropic_source_messages(
+    payload: str, block_type: Literal["image", "document"], media_type: str
+) -> list[AnthropicMessagesUserMessageParam]:
+    source: Final = AnthropicContentParamSource(type="base64", media_type=media_type, data=payload)
+    block: Final = (
+        AnthropicMessagesImageParam(type="image", source=source)
+        if block_type == "image"
+        else AnthropicMessagesDocumentParam(type="document", source=source)
+    )
+    return [
+        AnthropicMessagesUserMessageParam(
+            role="user", content=[AnthropicMessagesTextParam(type="text", text="describe"), block]
+        )
+    ]
+
 
 # ---------------------------------------------------------------------------
 # truncate_base64_in_messages_async
@@ -241,6 +310,49 @@ def scan_threads(monkeypatch):
     return threads
 
 
+def _run_without_yielding(coroutine: Coroutine[object, object, object]) -> object:
+    try:
+        coroutine.send(None)
+    except StopIteration as finished:
+        return finished.value
+    coroutine.close()
+    raise AssertionError("the coroutine yielded to the event loop")
+
+
+def _regex_calls_while(run: Callable[[], object]) -> tuple[object, tuple[str, ...]]:
+    calls: Final[list[str]] = []  # mutable-ok: sys.setprofile reports each call to a callback that has to record it
+    previous: Final = sys.getprofile()
+
+    def record(frame: FrameType, event: str, arg: object) -> None:
+        name: Final = getattr(arg, "__qualname__", "")
+        if event == "c_call" and name.startswith("Pattern."):
+            calls.append(name)
+
+    sys.setprofile(record)
+    try:
+        result: Final = run()
+    finally:
+        sys.setprofile(previous)
+    return result, tuple(calls)
+
+
+def _tool_result_messages(tool_output: str) -> list[AllMessageValues]:  # mutable-ok: the truncator only walks lists
+    return [
+        {"role": "user", "content": "Summarize the rows the tool returned."},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {"id": "call_1", "type": "function", "function": {"name": "dump_rows", "arguments": "{}"}}
+            ],
+        },
+        {"role": "tool", "tool_call_id": "call_1", "content": tool_output},
+    ]
+
+
+_PLAIN_TOOL_OUTPUT_CHARS: Final = 400 * 1024
+
+
 class TestTruncateBase64InMessagesAsync:
     @pytest.mark.asyncio
     async def test_large_payload_is_scanned_off_the_event_loop(self, monkeypatch, scan_threads):
@@ -267,6 +379,94 @@ class TestTruncateBase64InMessagesAsync:
         assert result == truncate_base64_in_messages(messages)
         assert scan_threads
         assert set(scan_threads) == {threading.get_ident()}
+
+    @pytest.mark.parametrize(
+        "row",
+        [
+            '{"id": 7, "name": "widget", "status": "ok"}\n',
+            "data: {\"choices\": [{\"delta\": {\"content\": \"hi\"}}]}\n\n",
+            "const total = rows.map((r) => r.price).reduce((a, b) => a + b, 0);\n",
+            'data: {"choices": [{"delta": {"content": "a; b"}}]}\n\n',
+            "Content-Type: text/plain;base64,aGVsbG8=\n",
+        ],
+        ids=["json_rows", "sse_lines", "code_with_semicolons", "sse_lines_with_semicolons", "base64_marker_without_data"],
+    )
+    def test_tool_message_without_data_uri_is_copied_without_a_regex_scan(self, row: str):
+        tool_output: Final = (row * (_PLAIN_TOOL_OUTPUT_CHARS // len(row) + 1))[:_PLAIN_TOOL_OUTPUT_CHARS]
+        messages: Final = _tool_result_messages(tool_output)
+
+        result, regex_calls = _regex_calls_while(lambda: truncate_base64_in_messages(messages))
+
+        assert result == messages
+        assert result is not messages
+        assert regex_calls == ()
+
+    def test_small_data_uri_is_truncated_inline_with_a_regex_scan(self):
+        payload: Final = "L" * 2_000
+        messages: Final = _image_messages(payload)
+
+        result, regex_calls = _regex_calls_while(
+            lambda: _run_without_yielding(truncate_base64_in_messages_async(messages))
+        )
+
+        assert regex_calls
+        assert payload not in result[0]["content"][1]["image_url"]["url"]
+        assert "base64_data truncated" in result[0]["content"][1]["image_url"]["url"]
+
+    def test_large_plain_text_is_copied_inline_without_rescanning_or_a_thread_hop(
+        self, monkeypatch: pytest.MonkeyPatch, scan_threads: Sequence[int]
+    ):
+        monkeypatch.setattr(logging_utils, "BASE64_TRUNCATION_OFFLOAD_THRESHOLD_CHARS", 1_000)
+        messages: Final = _tool_result_messages("plain tool output\n" * 100)
+
+        result: Final = _run_without_yielding(truncate_base64_in_messages_async(messages))
+
+        assert result == messages
+        assert result is not messages
+        assert scan_threads == []
+
+    def test_large_anthropic_base64_source_is_truncated_on_the_inline_copy(self):
+        payload: Final = "O" * BASE64_TRUNCATION_OFFLOAD_THRESHOLD_CHARS
+        messages: Final = _anthropic_source_messages(payload, "image", "image/png")
+
+        result: Final = _run_without_yielding(truncate_base64_in_messages_async(messages))
+
+        assert result == truncate_base64_in_messages(messages)
+        assert result[0]["content"][1]["source"]["data"] == (
+            f"[base64_data truncated: {format_base64_size(len(payload))}]"
+        )
+
+    @pytest.mark.asyncio
+    async def test_long_plain_text_history_is_copied_off_the_event_loop(
+        self, monkeypatch: pytest.MonkeyPatch, scan_threads: Sequence[int]
+    ):
+        monkeypatch.setattr(logging_utils, "BASE64_TRUNCATION_OFFLOAD_THRESHOLD_CHARS", 1_000)
+        monkeypatch.setattr(logging_utils, "BASE64_TRUNCATION_OFFLOAD_THRESHOLD_STRINGS", 10)
+        messages: Final = list(chain.from_iterable(_tool_result_messages(f"rows {turn}\n" * 100) for turn in range(5)))
+
+        result: Final = await truncate_base64_in_messages_async(messages)
+        offload_threads: Final = tuple(scan_threads)
+
+        assert result == messages
+        assert result is not messages
+        assert offload_threads
+        assert threading.get_ident() not in offload_threads
+
+    @pytest.mark.asyncio
+    async def test_plain_text_over_the_inline_limit_is_copied_off_the_event_loop(
+        self, monkeypatch: pytest.MonkeyPatch, scan_threads: Sequence[int]
+    ):
+        monkeypatch.setattr(logging_utils, "BASE64_TRUNCATION_OFFLOAD_THRESHOLD_CHARS", 1_000)
+        monkeypatch.setattr(logging_utils, "BASE64_TRUNCATION_INLINE_COPY_MAX_CHARS", 10_000)
+        messages: Final = _tool_result_messages('data: {"choices": [{"delta": {"content": "a; b"}}]}\n\n' * 400)
+
+        result: Final = await truncate_base64_in_messages_async(messages)
+        offload_threads: Final = tuple(scan_threads)
+
+        assert result == messages
+        assert result is not messages
+        assert offload_threads
+        assert threading.get_ident() not in offload_threads
 
     @pytest.mark.asyncio
     async def test_none_and_disabled_truncation_short_circuit(self, monkeypatch, scan_threads):

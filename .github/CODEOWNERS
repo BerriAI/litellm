@@ -1,4 +1,8 @@
-/model_prices_and_context_window.json @mateo-berri @ryan-crabbe-berri @kerry-berri
-/litellm/model_prices_and_context_window_backup.json @mateo-berri @ryan-crabbe-berri @kerry-berri
-/helm/ @yassin-berriai
-/terraform/ @yassin-berriai
+/model_prices_and_context_window.json @mateo-berri @ryan-crabbe-berri @kerry-berri @joshua-berri
+/litellm/model_prices_and_context_window_backup.json @mateo-berri @ryan-crabbe-berri @kerry-berri @joshua-berri
+/litellm/scripts/ci_cd/cost_map_pins.json @mateo-berri @ryan-crabbe-berri @kerry-berri @joshua-berri
+/litellm/deploy/helm/ @yassin-berriai
+/litellm/deploy/terraform/ @yassin-berriai
+/.github/workflows/zizmor.yml @yuneng-berri
+/litellm/proxy/spend_tracking/legacy_spend_counters.py @narmstrong-berri
+/litellm/proxy/spend_tracking/legacy_spend_log_rows.py @narmstrong-berri

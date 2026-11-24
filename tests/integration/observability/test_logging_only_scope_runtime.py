@@ -842,12 +842,15 @@ def test_logging_only_scope_respects_guardrail_selection_level(
                 api_base=f"{upstream_handle.api_base()}/v1",
                 api_key="synthetic-provider-key",
             )
-            key: Final = (
-                scenario.key(metadata={"guardrails": [identity]}) if selection == "virtual-key" else gateway.key
-            )
             with wire_server(policy) as guardrail:
                 config: Final = _configuration(tmp_path, identity, guardrail.url, scope, default_on=False)
-                with owned_proxy(gateway, tmp_path, {}, config=config, workers=1) as candidate:
+                with (
+                    owned_proxy(gateway, tmp_path, {}, config=config, workers=1) as candidate,
+                    candidate.scenario() as owned,
+                ):
+                    key: Final = (
+                        owned.key(metadata={"guardrails": [identity]}) if selection == "virtual-key" else gateway.key
+                    )
                     request_body: Final[dict[str, JsonValue]] = {
                         "model": model,
                         "messages": [{"role": "user", "content": prompt}],
@@ -1098,7 +1101,7 @@ def test_X2_scope_patch_toggles_during_concurrent_requests_keep_one_scan_per_res
         with wire_server(policy) as edge:
             config: Final = _empty_proxy_configuration(tmp_path, identity)
             with (
-                _database_guardrail(identity, edge.url, "output", mode="logging_only"),
+                _database_guardrail(gateway, identity, edge.url, "output", mode="logging_only"),
                 owned_proxy(gateway, tmp_path, {}, config=config, workers=1) as candidate,
             ):
                 guardrails: Final = candidate.get("/v2/guardrails/list")["guardrails"]

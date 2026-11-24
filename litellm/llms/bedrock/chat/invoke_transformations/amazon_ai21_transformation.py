@@ -1,5 +1,5 @@
 import types
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Final
 
 from litellm.llms.base_llm.chat.transformation import BaseConfig
@@ -42,10 +42,10 @@ class AmazonAI21Config(AmazonInvokeConfig, BaseConfig):
         maxTokens: int | None = None,
         temperature: float | None = None,
         topP: float | None = None,
-        stopSequences: list | None = None,
-        frequencePenalty: dict | None = None,
-        presencePenalty: dict | None = None,
-        countPenalty: dict | None = None,
+        stopSequences: Sequence[object] | None = None,
+        frequencePenalty: Mapping[str, object] | None = None,
+        presencePenalty: Mapping[str, object] | None = None,
+        countPenalty: Mapping[str, object] | None = None,
     ) -> None:
         locals_: Final[Mapping[str, object]] = dict(locals())
         for key, value in locals_.items():
@@ -56,9 +56,10 @@ class AmazonAI21Config(AmazonInvokeConfig, BaseConfig):
 
     @classmethod
     def get_config(cls):
+        class_attributes: Final[Mapping[str, object]] = types.MappingProxyType(cls.__dict__)
         return {
             k: v
-            for k, v in cls.__dict__.items()
+            for k, v in class_attributes.items()
             if not k.startswith("__")
             and not k.startswith("_abc")
             and not isinstance(
@@ -73,7 +74,7 @@ class AmazonAI21Config(AmazonInvokeConfig, BaseConfig):
             and v is not None
         }
 
-    def get_supported_openai_params(self, model: str) -> list:
+    def get_supported_openai_params(self, model: str) -> list[str]:
         return [
             "max_tokens",
             "temperature",
@@ -83,8 +84,8 @@ class AmazonAI21Config(AmazonInvokeConfig, BaseConfig):
 
     def map_openai_params(
         self,
-        non_default_params: dict,
-        optional_params: dict,
+        non_default_params: Mapping[str, object],
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
     ) -> dict:

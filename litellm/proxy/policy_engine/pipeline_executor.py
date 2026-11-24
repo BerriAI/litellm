@@ -11,7 +11,7 @@ from collections.abc import Callable, Mapping, Sequence
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal, TypeVar, cast
 
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -20,7 +20,7 @@ from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     ModifyResponseException,
 )
-from litellm.integrations.custom_logger import CustomLogger
+from litellm.integrations.custom_logger import CustomLogger, subclass_overrides_hook
 from litellm.litellm_core_utils.core_helpers import (
     get_metadata_variable_name_from_kwargs,
     get_or_create_metadata_bucket,
@@ -51,6 +51,8 @@ try:
     from fastapi.exceptions import HTTPException
 except ImportError:
     HTTPException = None
+
+_LEGACY_HOOK_REPLACEMENT: Final = TypeAdapter(object)
 
 
 class UndeliverableStreamRewrite(Exception):
@@ -96,15 +98,11 @@ def _count_change(sent: tuple[object, ...] | None, returned: tuple[object, ...] 
     return (len(sent), len(returned))
 
 
-def _tool_call_mismatch_reason(
-    sent: tuple[tuple[object, object], ...] | None, returned: tuple[tuple[object, object], ...] | None
-) -> str | None:
-    if sent == returned:
-        return None
+def _tool_call_count_mismatch_reason(sent: Sequence[object] | None, returned: Sequence[object] | None) -> str | None:
     sent_count: Final = len(sent or ())
     returned_count: Final = len(returned or ())
     if sent_count == returned_count:
-        return "the legacy hook changed a tool call's name or arguments, which this path cannot write back"
+        return None
     return f"the legacy hook returned {returned_count} tool calls for a stream that carried {sent_count}"
 
 
@@ -124,15 +122,23 @@ class _StreamRewriteObserver(CustomGuardrail):
     buffered chunks (``delivers_ended_stream_rewrites``); rewrites on any other translation or
     on a stream the client already received live, and a rewrite that drops or adds a tool
     call on any translation, are discarded by the executor, which releases the original chunks.
+    With ``keeps_tool_calls`` the translation gets the tool calls back as it sent them.
     The inner guardrail's ``apply_guardrail`` already records the guardrail information
     and span, so the observer's stays out of ``log_guardrail_information``."""
 
-    def __init__(self, inner: CustomGuardrail) -> None:
+    def __init__(self, inner: CustomGuardrail, *, keeps_tool_calls: bool = False) -> None:
         super().__init__(guardrail_name=inner.guardrail_name)
         self.inner: Final = inner
+        self.keeps_tool_calls: Final = keeps_tool_calls
         self.rewrote_texts = False
         self.rewrote_tool_calls = False
         self.tool_call_count_change: tuple[int, int] | None = None
+
+    def scans_all_response_texts_in_one_call(self) -> bool:
+        return self.inner.scans_all_response_texts_in_one_call()
+
+    def scans_each_text_separately(self) -> bool:
+        return self.inner.scans_each_text_separately()
 
     def structured_messages_cover_full_request(self) -> bool:
         return self.inner.structured_messages_cover_full_request()
@@ -141,14 +147,18 @@ class _StreamRewriteObserver(CustomGuardrail):
     async def apply_guardrail(
         self,
         inputs: GenericGuardrailAPIInputs,
-        request_data: dict,  # mutable-ok: matches CustomGuardrail.apply_guardrail
+        request_data: dict[str, object],  # mutable-ok: matches CustomGuardrail.apply_guardrail
         input_type: Literal["request", "response"],
         logging_obj: "LiteLLMLoggingObj | None" = None,
     ) -> GenericGuardrailAPIInputs:
         sent_texts: Final = _text_snapshot(inputs.get("texts"))
         sent_tool_shapes: Final = _tool_call_shapes(inputs.get("tool_calls"))
-        outputs: Final = await self.inner.apply_guardrail(
+        kept_tool_calls: Final = copy.deepcopy(inputs.get("tool_calls")) if self.keeps_tool_calls else None
+        guarded: Final = await self.inner.apply_guardrail(
             inputs=inputs, request_data=request_data, input_type=input_type, logging_obj=logging_obj
+        )
+        outputs: Final[GenericGuardrailAPIInputs] = (
+            guarded if kept_tool_calls is None else {**guarded, "tool_calls": kept_tool_calls}
         )
         returned_tool_shapes: Final = _tool_call_shapes(outputs.get("tool_calls"))
         self.rewrote_texts = self.rewrote_texts or _rewrote(sent_texts, _text_snapshot(outputs.get("texts")))
@@ -157,6 +167,9 @@ class _StreamRewriteObserver(CustomGuardrail):
             sent_tool_shapes, returned_tool_shapes
         )
         return outputs
+
+    def rewrote_every_tool_call_in_place(self) -> bool:
+        return self.rewrote_tool_calls and self.tool_call_count_change is None
 
     def discard_reason(self, rewrite_undeliverable_reason: str | None) -> str | None:
         if self.tool_call_count_change is not None:
@@ -183,11 +196,14 @@ class _ScannedTextRecorder(CustomGuardrail):
         super().__init__(guardrail_name=guardrail_name)
         self.inputs: GenericGuardrailAPIInputs | None = None
 
+    def scans_all_response_texts_in_one_call(self) -> bool:
+        return True
+
     @_logged_by_inner_guardrail
     async def apply_guardrail(
         self,
         inputs: GenericGuardrailAPIInputs,
-        request_data: dict,  # mutable-ok: matches CustomGuardrail.apply_guardrail
+        request_data: dict[str, object],  # mutable-ok: matches CustomGuardrail.apply_guardrail
         input_type: Literal["request", "response"],
         logging_obj: "LiteLLMLoggingObj | None" = None,
     ) -> GenericGuardrailAPIInputs:
@@ -203,11 +219,10 @@ class _LegacyHookStreamAdapter(CustomGuardrail):
     non-streaming hooks, an exception it raises ends the stream through the executor's
     fail/error classification, and the response it hands back, or the one it changed in place
     and returned ``None`` for, is re-scanned by the same translation so its texts reach the
-    client through the translation's ended-stream write-back. A
-    replacement whose scanned texts do not line up with the originals, or whose tool calls
-    differ from them, is undeliverable, so the executor releases the original chunks. A stream
-    that carried no text to scan, such as a tool-only Anthropic message, stays deliverable as
-    long as the hook left the tool calls alone."""
+    client through the translation's ended-stream write-back. Tool calls the hook rewrote go to the translation's
+    tool-call write-back like a unified guardrail's. A replacement whose scanned texts or tool
+    calls do not line up with the originals by count is undeliverable, so the executor releases
+    the original chunks."""
 
     def __init__(
         self,
@@ -220,6 +235,9 @@ class _LegacyHookStreamAdapter(CustomGuardrail):
         self.endpoint_translation: Final = endpoint_translation
         self.user_api_key_dict: Final = user_api_key_dict
 
+    def scans_all_response_texts_in_one_call(self) -> bool:
+        return True
+
     def structured_messages_cover_full_request(self) -> bool:
         return self.inner.structured_messages_cover_full_request()
 
@@ -227,15 +245,17 @@ class _LegacyHookStreamAdapter(CustomGuardrail):
     async def apply_guardrail(
         self,
         inputs: GenericGuardrailAPIInputs,
-        request_data: dict,  # mutable-ok: matches CustomGuardrail.apply_guardrail
+        request_data: dict[str, object],  # mutable-ok: matches CustomGuardrail.apply_guardrail
         input_type: Literal["request", "response"],
         logging_obj: "LiteLLMLoggingObj | None" = None,
     ) -> GenericGuardrailAPIInputs:
         hooked: Final = self.endpoint_translation.post_call_hook_response(request_data.get("response"))
-        replacement: Final = await self.inner.async_post_call_success_hook(
-            data=request_data,
-            user_api_key_dict=self.user_api_key_dict,
-            response=hooked,
+        replacement: Final = _LEGACY_HOOK_REPLACEMENT.validate_python(
+            await self.inner.async_post_call_success_hook(
+                data=request_data,
+                user_api_key_dict=self.user_api_key_dict,
+                response=hooked,
+            )
         )
         rewrite: Final = hooked if replacement is None else replacement
         if rewrite is None:
@@ -254,14 +274,19 @@ class _LegacyHookStreamAdapter(CustomGuardrail):
                 guardrail_name,
                 f"the legacy hook returned {returned_text_count} texts for a stream that carried {sent_text_count}",
             )
-        tool_call_mismatch: Final = _tool_call_mismatch_reason(
-            _tool_call_shapes(inputs.get("tool_calls")), _tool_call_shapes(rescanned.get("tool_calls"))
+        sent_tool_calls: Final = inputs.get("tool_calls")
+        rewritten_tool_calls: Final = rescanned.get("tool_calls")
+        tool_call_count_mismatch: Final = _tool_call_count_mismatch_reason(sent_tool_calls, rewritten_tool_calls)
+        if tool_call_count_mismatch is not None:
+            raise UndeliverableStreamRewrite(guardrail_name, tool_call_count_mismatch)
+        texts_update: Final[GenericGuardrailAPIInputs] = {"texts": rewritten} if rewritten else {}
+        tool_calls_update: Final[GenericGuardrailAPIInputs] = (
+            {"tool_calls": rewritten_tool_calls}
+            if rewritten_tool_calls is not None
+            and _rewrote(_tool_call_shapes(sent_tool_calls), _tool_call_shapes(rewritten_tool_calls))
+            else {}
         )
-        if tool_call_mismatch is not None:
-            raise UndeliverableStreamRewrite(guardrail_name, tool_call_mismatch)
-        if not rewritten:
-            return inputs
-        rewritten_inputs: Final[GenericGuardrailAPIInputs] = {**inputs, "texts": rewritten}
+        rewritten_inputs: Final[GenericGuardrailAPIInputs] = {**inputs, **texts_update, **tool_calls_update}
         return rewritten_inputs
 
     async def _rescan(
@@ -305,7 +330,7 @@ def _prepare_hook_input(
     step: PipelineStep,
     callback: CustomGuardrail,
     data: dict,  # mutable-ok: same request-payload shape the hooks mutate
-    raw_request_snapshot: dict | None,  # mutable-ok: same request-payload shape as data
+    raw_request_snapshot: dict[str, object] | None,  # mutable-ok: same request-payload shape as data
 ) -> tuple[dict[str, object], bool]:  # mutable-ok: returns that same request-payload dict
     """Inject the step's guardrail name into metadata so should_run_guardrail() allows it,
     and pick the payload the step scans: a scan_raw_request step evaluates the pristine
@@ -325,6 +350,48 @@ def _prepare_hook_input(
     return hook_input, scans_raw_request
 
 
+async def _run_pre_call_hook(
+    target: CustomLogger,
+    callback: CustomGuardrail,
+    data: dict[str, object],  # mutable-ok: the request payload the run is recorded on
+    hook_input: dict[str, object],  # mutable-ok: same request-payload shape the hooks mutate
+    user_api_key_dict: "UserAPIKeyAuth",
+    call_type: str,
+) -> dict[str, object] | None:
+    try:
+        response: Final = await target.async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict,
+            cache=None,
+            data=hook_input,
+            call_type=call_type,
+        )
+    except Exception:
+        callback.mark_pre_call_hook_ran(data, raised=True)
+        raise
+    callback.mark_pre_call_hook_ran(data)
+    if not isinstance(response, dict):
+        return None
+    payload: Final = cast(dict[str, object], response)  # cast-ok: a pre_call hook returns the request payload
+    callback.mark_pre_call_hook_ran(payload)
+    return payload
+
+
+def _name_step_that_ran(
+    request_data: dict[str, object],  # mutable-ok: the request payload the step's name is recorded on
+    metadata_key: Literal["metadata", "litellm_metadata"],
+    guardrail_name: str,
+) -> None:
+    """Name a step that ran in the applied guardrails of the metadata bucket the pipeline's request started with."""
+    existing: Final = request_data.get(metadata_key)
+    bucket: Final[dict[str, object]] = (  # mutable-ok: the request's own metadata bucket, written in place
+        cast("dict[str, object]", existing)  # cast-ok: metadata buckets are str-keyed
+        if isinstance(existing, dict)
+        else {}
+    )
+    request_data[metadata_key] = bucket  # rebind-ok: the step's name is recorded on the request payload
+    add_guardrail_to_applied_guardrails_header(request_data={metadata_key: bucket}, guardrail_name=guardrail_name)
+
+
 def _release_original_chunks(
     guardrail_name: str,
     reason: str,
@@ -335,6 +402,15 @@ def _release_original_chunks(
     verbose_proxy_logger.warning(
         "Pipeline: guardrail '%s' rewrote the streamed response but the rewrite could not be written back to "
         "the stream: %s. The whole rewrite, text rewrites included, was discarded and the original stream released",
+        guardrail_name,
+        reason,
+    )
+
+
+def _log_discarded_tool_call_rewrites(guardrail_name: str, reason: str) -> None:
+    verbose_proxy_logger.warning(
+        "Pipeline: guardrail '%s' rewrote tool calls of the streamed response but they could not be written back to "
+        "the stream: %s. Those rewrites were discarded, and its text rewrites, if any, were delivered",
         guardrail_name,
         reason,
     )
@@ -351,7 +427,7 @@ class PipelineExecutor:
         user_api_key_dict: "UserAPIKeyAuth",
         call_type: str,
         policy_name: str,
-        raw_request_snapshot: dict | None = None,  # mutable-ok: same request-payload shape as data
+        raw_request_snapshot: dict[str, object] | None = None,  # mutable-ok: same request-payload shape as data
         streaming_chunks: list[object] | None = None,  # mutable-ok: shared buffered-stream chunks, read per step
         endpoint_translation: "BaseTranslation | None" = None,
         stream_already_sent: bool = False,
@@ -385,6 +461,9 @@ class PipelineExecutor:
             PipelineExecutionResult with terminal action and step results
         """
         step_results: Final[list[PipelineStepResult]] = []
+        metadata_key: Final = get_metadata_variable_name_from_kwargs(
+            cast(Mapping[str, object], data)  # cast-ok: the request payload is str-keyed
+        )
         working_data = data.copy()
         if "metadata" in working_data:
             working_data["metadata"] = working_data["metadata"].copy()
@@ -403,6 +482,7 @@ class PipelineExecutor:
                 data=working_data,
                 user_api_key_dict=user_api_key_dict,
                 call_type=call_type,
+                metadata_key=metadata_key,
                 raw_request_snapshot=raw_request_snapshot,
                 streaming_chunks=streaming_chunks,
                 endpoint_translation=endpoint_translation,
@@ -476,6 +556,7 @@ class PipelineExecutor:
         user_api_key_dict: "UserAPIKeyAuth",
         litellm_logging_obj: "LiteLLMLoggingObj | None",
         stream_already_sent: bool,
+        metadata_key: Literal["metadata", "litellm_metadata"],
     ) -> None:
         """Run one streaming post_call step through the endpoint translation, delivering
         text and tool-call rewrites on translations that support ended-stream write-back. A
@@ -485,8 +566,10 @@ class PipelineExecutor:
         live, one that drops or adds a tool call, or one the translation or adapter refused with
         ``UndeliverableStreamRewrite``) is
         discarded: the buffered chunks go back to the originals and the step passes, so the
-        client gets the stream the merge base sent, and the guardrail stays out of the
-        applied-guardrails header since its output never reached the client. The response an
+        client gets the stream the merge base sent. When the refused rewrite changed tool calls, the
+        guardrail runs again on the originals with its tool call rewrites left out, so its text
+        rewrites still reach the client. The guardrail is named in the
+        applied-guardrails header either way, since it ran. The response an
         earlier step's translation stored under ``request_data["response"]`` is dropped first,
         so this step's hook sees the stream as the steps before it left it."""
         scanner: Final = (
@@ -494,39 +577,48 @@ class PipelineExecutor:
             if PipelineExecutor.supports_unified_execution(callback)
             else _LegacyHookStreamAdapter(callback, endpoint_translation, user_api_key_dict)
         )
-        observer: Final = _StreamRewriteObserver(scanner)
         rewrite_undeliverable_reason: Final = _rewrite_undeliverable_reason(
             type(endpoint_translation).delivers_ended_stream_rewrites, stream_already_sent
         )
         originals: Final = copy.deepcopy(streaming_chunks)
-        hook_input.pop("response", None)
+
+        async def undeliverable_reason(observer: _StreamRewriteObserver) -> str | None:
+            hook_input.pop("response", None)
+            try:
+                if rewrite_undeliverable_reason is None:
+                    await endpoint_translation.process_output_streaming_response(
+                        responses_so_far=streaming_chunks,
+                        guardrail_to_apply=observer,
+                        litellm_logging_obj=litellm_logging_obj,
+                        user_api_key_dict=user_api_key_dict,
+                        request_data=hook_input,
+                        deliver_ended_stream_rewrites=True,
+                    )
+                else:
+                    await endpoint_translation.process_output_streaming_response(
+                        responses_so_far=streaming_chunks,
+                        guardrail_to_apply=observer,
+                        litellm_logging_obj=litellm_logging_obj,
+                        user_api_key_dict=user_api_key_dict,
+                        request_data=hook_input,
+                    )
+            except UndeliverableStreamRewrite as undeliverable:
+                return undeliverable.reason
+            return observer.discard_reason(rewrite_undeliverable_reason)
+
         try:
-            if rewrite_undeliverable_reason is None:
-                await endpoint_translation.process_output_streaming_response(
-                    responses_so_far=streaming_chunks,
-                    guardrail_to_apply=observer,
-                    litellm_logging_obj=litellm_logging_obj,
-                    user_api_key_dict=user_api_key_dict,
-                    request_data=hook_input,
-                    deliver_ended_stream_rewrites=True,
-                )
-            else:
-                await endpoint_translation.process_output_streaming_response(
-                    responses_so_far=streaming_chunks,
-                    guardrail_to_apply=observer,
-                    litellm_logging_obj=litellm_logging_obj,
-                    user_api_key_dict=user_api_key_dict,
-                    request_data=hook_input,
-                )
-        except UndeliverableStreamRewrite as undeliverable:
-            _release_original_chunks(step.guardrail, undeliverable.reason, streaming_chunks, originals)
-            return
-        discard_reason: Final = observer.discard_reason(rewrite_undeliverable_reason)
-        if discard_reason is not None:
-            _release_original_chunks(step.guardrail, discard_reason, streaming_chunks, originals)
-            return
-        if not callback.records_own_guardrail_information:
-            add_guardrail_to_applied_guardrails_header(request_data=hook_input, guardrail_name=step.guardrail)
+            observer: Final = _StreamRewriteObserver(scanner)
+            reason: Final = await undeliverable_reason(observer)
+            if reason is None:
+                return
+            if rewrite_undeliverable_reason is None and observer.rewrote_every_tool_call_in_place():
+                streaming_chunks[:] = copy.deepcopy(originals)  # rebind-ok: the caller's buffer is the client's stream
+                if await undeliverable_reason(_StreamRewriteObserver(scanner, keeps_tool_calls=True)) is None:
+                    _log_discarded_tool_call_rewrites(step.guardrail, reason)
+                    return
+            _release_original_chunks(step.guardrail, reason, streaming_chunks, originals)
+        finally:
+            _name_step_that_ran(hook_input, metadata_key, step.guardrail)
 
     @staticmethod
     async def _run_step(
@@ -535,13 +627,14 @@ class PipelineExecutor:
         data: dict,
         user_api_key_dict: "UserAPIKeyAuth",
         call_type: str,
-        raw_request_snapshot: dict | None = None,  # mutable-ok: same request-payload shape as data
+        metadata_key: Literal["metadata", "litellm_metadata"],
+        raw_request_snapshot: dict[str, object] | None = None,  # mutable-ok: same request-payload shape as data
         streaming_chunks: list[object] | None = None,  # mutable-ok: shared buffered-stream chunks, read per step
         endpoint_translation: "BaseTranslation | None" = None,
         stream_already_sent: bool = False,
     ) -> tuple[
         Literal["pass", "fail", "error", "skip"],
-        dict | None,
+        dict[str, object] | None,
         str | None,
         Exception | None,
     ]:
@@ -578,16 +671,7 @@ class PipelineExecutor:
 
         try:
             if mode == "pre_call":
-                response = await target.async_pre_call_hook(
-                    user_api_key_dict=user_api_key_dict,
-                    cache=None,
-                    data=hook_input,
-                    call_type=call_type,
-                )
-                if isinstance(callback, CustomGuardrail):
-                    callback.mark_pre_call_hook_ran(data)
-                    if isinstance(response, dict):
-                        callback.mark_pre_call_hook_ran(response)
+                response = await _run_pre_call_hook(target, callback, data, hook_input, user_api_key_dict, call_type)
             elif mode == "post_call" and streaming_chunks is not None:
                 if endpoint_translation is None:
                     return (
@@ -605,9 +689,15 @@ class PipelineExecutor:
                     user_api_key_dict=user_api_key_dict,
                     litellm_logging_obj=data.get("litellm_logging_obj"),
                     stream_already_sent=stream_already_sent,
+                    metadata_key=metadata_key,
                 )
                 response = None
             elif mode == "post_call":
+                _name_step_that_ran(
+                    cast(dict[str, object], data),  # cast-ok: the request payload is str-keyed
+                    metadata_key,
+                    step.guardrail,
+                )
                 response = await target.async_post_call_success_hook(
                     user_api_key_dict=user_api_key_dict,
                     data=data,
@@ -651,7 +741,10 @@ class PipelineExecutor:
     @staticmethod
     def supports_unified_execution(callback: CustomGuardrail) -> bool:
         """Whether this guardrail runs through the unified apply_guardrail path."""
-        return "apply_guardrail" in type(callback).__dict__ and not callback.use_native_lifecycle_hooks
+        return (
+            subclass_overrides_hook(type(callback), "apply_guardrail", CustomGuardrail)
+            and not callback.use_native_lifecycle_hooks
+        )
 
     @staticmethod
     def supports_streaming_execution(callback: CustomGuardrail) -> bool:
@@ -678,8 +771,8 @@ class PipelineExecutor:
 
 def _allow_result(
     step_results: Sequence[PipelineStepResult],
-    working_data: dict,  # mutable-ok: same request-payload shape as execute_steps' data
-    request_data: dict,  # mutable-ok: same request-payload shape as execute_steps' data
+    working_data: dict[str, object],  # mutable-ok: same request-payload shape as execute_steps' data
+    request_data: dict[str, object],  # mutable-ok: same request-payload shape as execute_steps' data
 ) -> PipelineExecutionResult:
     """Build the terminal-allow result, propagating pipeline modifications without the per-step guardrail override."""
     restored: Final = _restore_request_guardrails(working_data, request_data)
@@ -691,9 +784,9 @@ def _allow_result(
 
 
 def _restore_request_guardrails(
-    working_data: dict,  # mutable-ok: same request-payload shape as execute_steps' data
-    request_data: dict,  # mutable-ok: same request-payload shape as execute_steps' data
-) -> dict:  # mutable-ok: merged back into the request dict, which downstream code mutates
+    working_data: dict[str, object],  # mutable-ok: same request-payload shape as execute_steps' data
+    request_data: dict[str, object],  # mutable-ok: same request-payload shape as execute_steps' data
+) -> dict[str, object]:  # mutable-ok: merged back into the request dict, which downstream code mutates
     """
     Restore the request's own metadata["guardrails"] activation list.
 

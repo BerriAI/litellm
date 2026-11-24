@@ -2,6 +2,7 @@
 
 import asyncio
 import importlib
+import inspect
 import os
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from datetime import datetime, timezone
@@ -10,6 +11,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal, Optional, Protocol, TypeAlias, TypeVar, cast
 
 from pydantic import BaseModel, TypeAdapter, ValidationError
+from typing_extensions import TypedDict
 
 import litellm
 from litellm import Router
@@ -17,6 +19,8 @@ from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH, GUARDRAIL_ROTATION_ATTEMPTS
 from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, keyword_arguments, subscript
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.llms.base_llm.guardrail_translation.utils import (
     effective_scan_only_tool_results_for_guardrail,
@@ -25,6 +29,7 @@ from litellm.llms.base_llm.guardrail_translation.utils import (
 from litellm.proxy.auth.master_key_boot_check import SALT_KEY_ENV_VAR
 from litellm.proxy.common_utils.callback_utils import CALLBACK_VAR_ENCRYPTED_PREFIX, is_sensitive_callback_key
 from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper, encrypt_value_helper
+from litellm.proxy.common_utils.fips import fips_mode_active
 from litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails import (
     BedrockGuardrail,
 )
@@ -74,6 +79,54 @@ if TYPE_CHECKING:
     from prisma import models as prisma_models
 
 
+class CustomGuardrailPathError(Exception):
+    """Deliberately not a ValueError or TypeError: a config-file guardrail path that names an instance instead of a
+    class must stop startup instead of being skipped by init_guardrails_v2."""
+
+
+def _class_path(instance_path: str, cls: type) -> str:
+    entry_module: Final = instance_path.rsplit(".", 1)[0]
+    module: Final = entry_module if entry_module.endswith(f"/{cls.__module__}") else cls.__module__
+    return f"{module}.{cls.__name__}"
+
+
+def _constructor_note(cls: type) -> str:
+    try:
+        inspect.signature(cls).bind_partial(guardrail_name="", event_hook=None, default_on=False)
+    except TypeError:
+        return (
+            f" {cls.__name__}.__init__ does not accept them, so give it **kwargs and pass those to "
+            "super().__init__, or the proxy will skip the guardrail."
+        )
+    return ""
+
+
+def _guardrail_path_error(
+    guardrail_name: str, guardrail_path: str, resolved: object
+) -> CustomGuardrailPathError | None:
+    if callable(resolved):
+        return None
+    if isinstance(resolved, CustomGuardrail):
+        return CustomGuardrailPathError(
+            f"Guardrail '{guardrail_name}' sets guardrail: {guardrail_path}, which is a {type(resolved).__name__} "
+            "instance, but the proxy builds each guardrail itself and needs the class. Point it at the class, e.g. "
+            f"`guardrail: {_class_path(guardrail_path, type(resolved))}`. The proxy calls it with guardrail_name, "
+            "event_hook, default_on, and this guardrail's other litellm_params as keyword arguments, so set any "
+            f"constructor arguments under litellm_params.{_constructor_note(type(resolved))}"
+        )
+    if isinstance(resolved, CustomLogger):
+        return CustomGuardrailPathError(
+            f"Guardrail '{guardrail_name}' sets guardrail: {guardrail_path}, which is a {type(resolved).__name__} "
+            "instance. It is a CustomLogger but not a CustomGuardrail, so it does not work as a guardrail. "
+            f"To run it on every request, list `{guardrail_path}` under litellm_settings.callbacks instead. "
+            "To run it as a guardrail, subclass CustomGuardrail and point guardrail: at that class."
+        )
+    return CustomGuardrailPathError(
+        f"Guardrail '{guardrail_name}' sets guardrail: {guardrail_path}, which is a {type(resolved).__name__} "
+        "value, but the proxy builds each guardrail itself and needs a CustomGuardrail class."
+    )
+
+
 class _GuardrailRowLike(Protocol):
     @property
     def guardrail_id(self) -> str: ...
@@ -100,6 +153,20 @@ def _as_json_object(value: object) -> dict[str, object] | None:
 
 def _as_json_array(value: object) -> list[object] | None:
     return _JSON_ARRAY.validate_python(value) if isinstance(value, list) else None
+
+
+class _CategoryThresholdFields(TypedDict, total=False, extra_items=object):
+    pass
+
+
+def _extra_param_items(litellm_params: LitellmParams) -> Iterable[tuple[str, object]]:
+    return (
+        litellm_params.model_dump(exclude_none=True).items()
+        if hasattr(litellm_params, "model_dump")
+        else iter(litellm_params)
+        if litellm_params
+        else ()
+    )
 
 
 def contains_encrypted_marker(value: object, depth: int = 0) -> bool:
@@ -133,7 +200,9 @@ def _encrypted_param(key: str, value: object, new_encryption_key: str | None, de
         return value
     try:
         return CALLBACK_VAR_ENCRYPTED_PREFIX + encrypt_value_helper(value, new_encryption_key=new_encryption_key)
-    except Exception:  # noqa: BLE001  # no salt key or master key configured: store the value as written
+    except Exception:  # no salt key or master key configured: store the value as written
+        if fips_mode_active():
+            raise
         return value
 
 
@@ -208,7 +277,9 @@ async def _rotate_guardrail_row(
     return await _rotate_guardrail_row(prisma_client, latest_row, encryption_key, attempts_left - 1)
 
 
-guardrail_initializer_registry: Final = {
+guardrail_initializer_registry: Final[
+    dict[str, Callable[..., CustomGuardrail | Sequence[CustomGuardrail] | None] | None]
+] = {
     SupportedGuardrailIntegrations.BEDROCK.value: initialize_bedrock,
     SupportedGuardrailIntegrations.LAKERA.value: initialize_lakera,
     SupportedGuardrailIntegrations.LAKERA_V2.value: initialize_lakera_v2,
@@ -233,7 +304,7 @@ guardrail_class_registry: Final[dict[str, type[CustomGuardrail]]] = {
 }
 
 
-def get_guardrail_initializer_from_hooks():
+def get_guardrail_initializer_from_hooks() -> dict[str, Callable[..., CustomGuardrail] | None]:
     """
     Get guardrail initializers by discovering them from the guardrail_hooks directory structure.
 
@@ -243,7 +314,7 @@ def get_guardrail_initializer_from_hooks():
     Returns:
         Dict[str, Callable]: A dictionary mapping guardrail types to their initializer functions
     """
-    discovered_initializers: Final = {}
+    discovered_initializers: Final[dict[str, Callable[..., CustomGuardrail] | None]] = {}
 
     try:
         # Get the path to the guardrail_hooks directory
@@ -311,7 +382,7 @@ def get_guardrail_initializer_from_hooks():
     return discovered_initializers
 
 
-def get_guardrail_class_from_hooks():
+def get_guardrail_class_from_hooks() -> dict[str, type[CustomGuardrail]]:
     """
     Get guardrail classes by discovering them from the guardrail_hooks directory structure.
     """
@@ -324,7 +395,7 @@ def get_guardrail_class_from_hooks():
     Returns:
         Dict[str, Callable]: A dictionary mapping guardrail types to their initializer functions
     """
-    discovered_classes: Final = {}
+    discovered_classes: Final[dict[str, type[CustomGuardrail]]] = {}
 
     try:
         # Get the path to the guardrail_hooks directory
@@ -634,6 +705,9 @@ def _configure_callback_scoping(
         )
     logging_only_scope: Final = None if logging_only_scope_error is not None else litellm_params.logging_only_scope
     custom_guardrail_callback.logging_only_scope = logging_only_scope
+    custom_guardrail_callback.mcp_block_behavior = (  # rebind-ok: initialize provider-independent callback configuration
+        litellm_params.mcp_block_behavior
+    )
     custom_guardrail_callback.logging_only_continue_on_input_failure = (
         logging_only_continue_error is None
         and logging_only_scope is None
@@ -643,8 +717,28 @@ def _configure_callback_scoping(
         "skip_system_message_in_guardrail",
         "skip_tool_message_in_guardrail",
         "scan_only_tool_results",
+        "scan_tool_descriptions_as_text",
+        "scan_tool_calls_as_text",
     ):
         setattr(custom_guardrail_callback, scoping_param, getattr(litellm_params, scoping_param, None))
+    if (
+        litellm_params.scan_tool_descriptions_as_text is True
+        and not custom_guardrail_callback.supports_scan_tool_descriptions_as_text()
+    ):
+        raise ValueError(
+            f"Guardrail {guardrail_name}: scan_tool_descriptions_as_text is only supported by the "
+            "panw_prisma_airs, presidio and bedrock guardrails, and on bedrock not with mode during_call or "
+            "experimental_use_latest_role_message_only. Remove it from this guardrail."
+        )
+    if (
+        litellm_params.scan_tool_calls_as_text is True
+        and not custom_guardrail_callback.supports_scan_tool_calls_as_text()
+    ):
+        raise ValueError(
+            f"Guardrail {guardrail_name}: scan_tool_calls_as_text is only supported by the bedrock "
+            "guardrail, and not with mode during_call or experimental_use_latest_role_message_only. "
+            "Remove it from this guardrail."
+        )
     scan_only_tool_results_enabled: Final = effective_scan_only_tool_results_for_guardrail(custom_guardrail_callback)
     if scan_only_tool_results_enabled and not custom_guardrail_callback.supports_scan_only_tool_results():
         raise ValueError(
@@ -664,6 +758,24 @@ def _configure_callback_scoping(
 
 
 _ParamsT = TypeVar("_ParamsT", bound=BaseModel)
+
+
+SECRET_REFERENCE_PARAMS: Final = ("api_key", "api_base")
+
+
+def resolve_secret_reference(value: str | None) -> str | None:
+    return str(get_secret(value)) if value and value.startswith("os.environ/") else value
+
+
+def _with_resolved_secret_references(params: Mapping[str, object]) -> Mapping[str, object]:
+    return {
+        **params,
+        **{
+            key: resolve_secret_reference(value)
+            for key in SECRET_REFERENCE_PARAMS
+            if isinstance(value := params.get(key), str)
+        },
+    }
 
 
 def parse_tolerant_litellm_params(
@@ -762,14 +874,15 @@ class InMemoryGuardrailHandler:
             litellm_params = litellm_params_data
 
         if "category_thresholds" in litellm_params_data and litellm_params_data["category_thresholds"]:
-            lakera_category_thresholds: Final = LakeraCategoryThresholds(**litellm_params_data["category_thresholds"])
+            lakera_category_thresholds: Final = LakeraCategoryThresholds(
+                **_CategoryThresholdFields(
+                    **keyword_arguments(subscript(litellm_params_data, "category_thresholds"), LakeraCategoryThresholds)
+                )
+            )
             litellm_params.category_thresholds = lakera_category_thresholds
 
-        if litellm_params.api_key and litellm_params.api_key.startswith("os.environ/"):
-            litellm_params.api_key = str(get_secret(litellm_params.api_key))
-
-        if litellm_params.api_base and litellm_params.api_base.startswith("os.environ/"):
-            litellm_params.api_base = str(get_secret(litellm_params.api_base))
+        litellm_params.api_key = resolve_secret_reference(litellm_params.api_key)
+        litellm_params.api_base = resolve_secret_reference(litellm_params.api_base)
 
         guardrail_type: Final = litellm_params.guardrail
 
@@ -819,7 +932,9 @@ class InMemoryGuardrailHandler:
         config_file_path: str | None,
         llm_router: Optional["Router"],
     ) -> GuardrailCallbacks:
-        initializer: Final = guardrail_initializer_registry.get(guardrail_type)
+        initializer: Final[Callable[..., CustomGuardrail | Sequence[CustomGuardrail] | None] | None] = (
+            guardrail_initializer_registry.get(guardrail_type)
+        )
         if initializer:
             import inspect
 
@@ -858,7 +973,8 @@ class InMemoryGuardrailHandler:
         params: Final = guardrail.get("litellm_params")
         if not isinstance(params, (dict, LitellmParams)):
             return
-        litellm_params: Final = LitellmParams(**params) if isinstance(params, dict) else params
+        params_mapping: Final = as_str_mapping(params)
+        litellm_params: Final = LitellmParams(**params_mapping) if params_mapping is not None else params
         guardrail_name: Final = guardrail.get("guardrail_name", "Unknown")
         for custom_guardrail_callback in self._tracked_callbacks(guardrail_id):
             for error in (
@@ -891,6 +1007,9 @@ class InMemoryGuardrailHandler:
         _guardrail_class: Final[Callable[..., CustomGuardrail]] = get_instance_fn(
             guardrail_type, config_file_path=config_file_path
         )
+        path_error: Final = _guardrail_path_error(guardrail["guardrail_name"], guardrail_type, _guardrail_class)
+        if path_error is not None:
+            raise path_error
 
         mode: Final = litellm_params.mode
         if mode is None:
@@ -904,13 +1023,7 @@ class InMemoryGuardrailHandler:
         # This matches the behavior of other guardrail initializers (e.g., initialize_lakera)
         # and aligns with the documented behavior for custom guardrails
         excluded_extra_param_keys: Final = frozenset(("guardrail", "mode", "default_on", "stream_scope"))
-        extra_params_items: Final = (
-            litellm_params.model_dump(exclude_none=True).items()
-            if hasattr(litellm_params, "model_dump")
-            else iter(litellm_params)
-            if litellm_params
-            else ()
-        )
+        extra_params_items: Final = _extra_param_items(litellm_params)
         extra_params: Final = MappingProxyType(
             {key: value for key, value in extra_params_items if key not in excluded_extra_param_keys}
         )
@@ -1050,7 +1163,9 @@ class InMemoryGuardrailHandler:
             return params.model_dump()
         if isinstance(params, dict):
             try:
-                return parse_tolerant_litellm_params(with_tolerated_stream_scope(params), guardrail_name).model_dump()
+                return _with_resolved_secret_references(
+                    parse_tolerant_litellm_params(with_tolerated_stream_scope(params), guardrail_name).model_dump()
+                )
             except ValidationError as e:
                 verbose_proxy_logger.warning(
                     "Could not normalize guardrail litellm_params for comparison; treating the guardrail as changed. Error: %s",

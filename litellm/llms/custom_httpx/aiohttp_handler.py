@@ -1,5 +1,5 @@
 import ssl
-from collections.abc import AsyncIterable, Callable, Iterable
+from collections.abc import AsyncIterable, Callable, Iterable, Mapping
 from typing import TYPE_CHECKING, Any, Final, cast
 
 import aiohttp
@@ -14,6 +14,7 @@ from litellm.llms.base_llm.chat.transformation import BaseConfig
 from litellm.llms.base_llm.image_variations.transformation import (
     BaseImageVariationConfig,
 )
+from litellm.llms.custom_httpx.aiohttp_pool_diagnostics import build_pool_wait_trace_config
 from litellm.llms.custom_httpx.aiohttp_transport import LiteLLMAiohttpTransport
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
@@ -21,6 +22,7 @@ from litellm.llms.custom_httpx.http_handler import (
     get_httpx_client,
     get_ssl_configuration,
 )
+from litellm.llms.custom_httpx.sse_lines import iter_sse_lines
 from litellm.types.llms.openai import FileTypes
 from litellm.types.utils import HttpHandlerRequestFields, ImageResponse, LlmProviders
 from litellm.utils import CustomStreamWrapper, ModelResponse, ProviderConfigManager
@@ -89,7 +91,7 @@ class BaseLLMAIOHTTPHandler:
         if self.transport is None:
             connector: Final = self._get_connector()
             if connector:
-                return aiohttp.ClientSession(connector=connector)
+                return aiohttp.ClientSession(connector=connector, trace_configs=[build_pool_wait_trace_config()])
 
         transport: Final = self.transport or self._get_or_create_transport()
         if transport is not None and hasattr(transport, "_get_valid_client_session"):
@@ -98,7 +100,7 @@ class BaseLLMAIOHTTPHandler:
             except RuntimeError:
                 pass
 
-        return aiohttp.ClientSession()
+        return aiohttp.ClientSession(trace_configs=[build_pool_wait_trace_config()])
 
     def _get_async_client_session(self, dynamic_client_session: ClientSession | None = None) -> ClientSession:
         if dynamic_client_session:
@@ -161,8 +163,8 @@ class BaseLLMAIOHTTPHandler:
         async_client_session: ClientSession | None,
         provider_config: BaseConfig,
         api_base: str,
-        headers: dict,
-        data: dict | None,
+        headers: Mapping[str, str],
+        data: dict[str, object] | None,
         timeout: float | httpx.Timeout,
         litellm_params: dict,
         form_data: FormData | None = None,
@@ -206,7 +208,7 @@ class BaseLLMAIOHTTPHandler:
         provider_config: BaseConfig,
         api_base: str,
         headers: dict,
-        data: dict,
+        data: dict[str, object],
         timeout: float | httpx.Timeout | None,
         litellm_params: dict,
         stream: bool = False,
@@ -258,7 +260,7 @@ class BaseLLMAIOHTTPHandler:
         custom_llm_provider: str,
         provider_config: BaseConfig,
         api_base: str,
-        headers: dict,
+        headers: Mapping[str, str],
         data: dict,
         timeout: float | httpx.Timeout,
         model: str,
@@ -302,7 +304,7 @@ class BaseLLMAIOHTTPHandler:
         api_base: str,
         custom_llm_provider: str,
         model_response: ModelResponse,
-        encoding,
+        encoding: "Tokenizer | None",
         logging_obj: LiteLLMLoggingObj,
         optional_params: dict,
         timeout: float | httpx.Timeout,
@@ -431,11 +433,11 @@ class BaseLLMAIOHTTPHandler:
         self,
         provider_config: BaseConfig,
         api_base: str,
-        headers: dict,
-        data: dict,
+        headers: dict[str, object],
+        data: dict[str, object],
         model: str,
         messages: list,
-        logging_obj,
+        logging_obj: LiteLLMLoggingObj,
         litellm_params: dict,
         timeout: float | httpx.Timeout,
         fake_stream: bool = False,
@@ -466,7 +468,7 @@ class BaseLLMAIOHTTPHandler:
             )
         else:
             completion_stream = provider_config.get_model_response_iterator(
-                streaming_response=response.iter_lines(), sync_stream=True
+                streaming_response=iter_sse_lines(response.iter_text()), sync_stream=True
             )
 
         # LOGGING
@@ -484,7 +486,7 @@ class BaseLLMAIOHTTPHandler:
         client: ClientSession | None,
         provider_config: BaseImageVariationConfig,
         api_base: str,
-        headers: dict,
+        headers: Mapping[str, str],
         data: HttpHandlerRequestFields,
         timeout: float,
         litellm_params: dict,
@@ -552,19 +554,16 @@ class BaseLLMAIOHTTPHandler:
         logging_obj: LiteLLMLoggingObj,
         optional_params: dict,
         litellm_params: dict,
-        print_verbose: Callable | None = None,
+        print_verbose: Callable[..., object] | None = None,
         api_base: str | None = None,
         aimage_variation: bool = False,
-        logger_fn=None,
+        logger_fn: object = None,
         client=None,
         organization: str | None = None,
-        headers: dict | None = None,
+        headers: dict[str, object] | None = None,
     ) -> ImageResponse:
-        if model is None:
-            raise ValueError("model is required for non-openai image variations")
-
         provider_config: Final = ProviderConfigManager.get_provider_image_variation_config(
-            model=model,  # openai defaults to dall-e-2
+            model=model or "",
             provider=LlmProviders(custom_llm_provider),
         )
 

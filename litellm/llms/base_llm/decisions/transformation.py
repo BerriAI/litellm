@@ -1,17 +1,19 @@
 import json
 from abc import ABC
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from itertools import chain
 from types import MappingProxyType
 from typing import Final
 
 import httpx
-from pydantic import TypeAdapter, ValidationError
+from pydantic import BaseModel, TypeAdapter, ValidationError
 from pydantic_core import ErrorDetails
 from typing_extensions import assert_never
 
 import litellm
+from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
+from litellm.litellm_core_utils.prompt_templates.prompt_cache_breakpoint_utils import prompt_cache_breakpoint_for_wire
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.secret_managers.main import get_secret_str
@@ -50,7 +52,9 @@ from litellm.types.decisions import (
     DecisionsUsage,
     NoulAnswer,
     NoulQuestion,
+    OpenAIDecisionContentPart,
     OpenAIDecisionInputImage,
+    OpenAIDecisionInputJSON,
     OpenAIDecisionInputMessage,
     OpenAIDecisionInputText,
     ScoreAnswer,
@@ -59,6 +63,7 @@ from litellm.types.decisions import (
     systemone_choice_key,
 )
 from litellm.types.utils import is_decisions_model_mode
+from litellm.utils import get_model_info_helper
 
 _PAYLOAD_ADAPTER: Final[TypeAdapter[object]] = TypeAdapter(object)
 _SYSTEMONE_RESPONSE_ADAPTER: Final[TypeAdapter[DecisionsResponse]] = TypeAdapter(DecisionsResponse)
@@ -148,17 +153,25 @@ def image_param(decision_input: DecisionsIRState | DecisionsIRMessages) -> str |
             assert_never(decision_input)
 
 
-def _kept_part(part: OpenAIDecisionInputText | OpenAIDecisionInputImage, keep: Callable[[str], bool]) -> bool:
-    return isinstance(part, OpenAIDecisionInputText) or keep(part.image_url)
-
-
-def _message_with_images_where(
-    message: OpenAIDecisionInputMessage, keep: Callable[[str], bool]
+def _message_with_parts_where(
+    message: OpenAIDecisionInputMessage, keep: Callable[[OpenAIDecisionContentPart], bool]
 ) -> OpenAIDecisionInputMessage | None:
     if isinstance(message.content, str):
         return message
-    kept_parts: Final = tuple(part for part in message.content if _kept_part(part, keep))
+    kept_parts: Final = tuple(filter(keep, message.content))
     return message.model_copy(update={"content": kept_parts}) if kept_parts else None
+
+
+def _messages_with_parts_where(
+    decision_input: DecisionsIRMessages, keep: Callable[[OpenAIDecisionContentPart], bool]
+) -> DecisionsIRMessages:
+    return DecisionsIRMessages(
+        messages=tuple(
+            kept
+            for message in decision_input.messages
+            if (kept := _message_with_parts_where(message, keep)) is not None
+        )
+    )
 
 
 def with_images_where(
@@ -168,15 +181,31 @@ def with_images_where(
         case DecisionsIRState():
             return replace(decision_input, images=tuple(image for image in decision_input.images if keep(image)))
         case DecisionsIRMessages():
-            return DecisionsIRMessages(
-                messages=tuple(
-                    kept
-                    for message in decision_input.messages
-                    if (kept := _message_with_images_where(message, keep)) is not None
-                )
+            return _messages_with_parts_where(
+                decision_input, lambda part: not isinstance(part, OpenAIDecisionInputImage) or keep(part.image_url)
             )
         case _:
             assert_never(decision_input)
+
+
+def _is_json_part(part: OpenAIDecisionContentPart) -> bool:
+    return isinstance(part, OpenAIDecisionInputJSON)
+
+
+def _has_json_part(message: OpenAIDecisionInputMessage) -> bool:
+    return not isinstance(message.content, str) and any(map(_is_json_part, message.content))
+
+
+def has_json_input(decision_input: DecisionsIRState | DecisionsIRMessages) -> bool:
+    return isinstance(decision_input, DecisionsIRMessages) and any(map(_has_json_part, decision_input.messages))
+
+
+def without_json_input(
+    decision_input: DecisionsIRState | DecisionsIRMessages,
+) -> DecisionsIRState | DecisionsIRMessages:
+    if isinstance(decision_input, DecisionsIRState):
+        return decision_input
+    return _messages_with_parts_where(decision_input, lambda part: not _is_json_part(part))
 
 
 def remote_image_urls(decision_input: DecisionsIRState | DecisionsIRMessages) -> tuple[str, ...]:
@@ -193,9 +222,7 @@ def _inlined_image(image: DecisionsImage, data_urls: Mapping[str, str]) -> Decis
     return data_urls.get(image, image) if isinstance(image, str) else image
 
 
-def _inlined_part(
-    part: OpenAIDecisionInputText | OpenAIDecisionInputImage, data_urls: Mapping[str, str]
-) -> OpenAIDecisionInputText | OpenAIDecisionInputImage:
+def _inlined_part(part: OpenAIDecisionContentPart, data_urls: Mapping[str, str]) -> OpenAIDecisionContentPart:
     if isinstance(part, OpenAIDecisionInputImage) and part.image_url in data_urls:
         return part.model_copy(update={"image_url": data_urls[part.image_url]})
     return part
@@ -221,6 +248,93 @@ def with_inlined_images(
             )
         case _:
             assert_never(decision_input)
+
+
+def _message_without_breakpoints(message: OpenAIDecisionInputMessage) -> OpenAIDecisionInputMessage:
+    if isinstance(message.content, str):
+        return message
+    return message.model_copy(
+        update={"content": tuple(part.model_copy(update={"prompt_cache_breakpoint": None}) for part in message.content)}
+    )
+
+
+def without_prompt_cache_breakpoints(
+    decision_input: DecisionsIRState | DecisionsIRMessages,
+) -> DecisionsIRState | DecisionsIRMessages:
+    match decision_input:
+        case DecisionsIRState():
+            return decision_input
+        case DecisionsIRMessages():
+            return DecisionsIRMessages(
+                messages=tuple(_message_without_breakpoints(message) for message in decision_input.messages)
+            )
+        case _:
+            assert_never(decision_input)
+
+
+_RAW_ENTRIES_ADAPTER: Final[TypeAdapter[tuple[object, ...]]] = TypeAdapter(tuple[object, ...])
+_RAW_FIELDS_ADAPTER: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
+
+
+def _raw_entries(value: object) -> tuple[object, ...] | None:
+    try:
+        return _RAW_ENTRIES_ADAPTER.validate_python(value)
+    except ValidationError:
+        return None
+
+
+def _raw_fields(value: object) -> Mapping[str, object] | None:
+    if isinstance(value, BaseModel):
+        return value.model_dump(exclude_none=True)
+    try:
+        return _RAW_FIELDS_ADAPTER.validate_python(value)
+    except ValidationError:
+        return None
+
+
+def _raw_part_without_breakpoint(part: object) -> object:
+    fields: Final = _raw_fields(part)
+    if fields is None:
+        return part
+    return {key: value for key, value in fields.items() if key != "prompt_cache_breakpoint"}
+
+
+def _raw_part_with_readable_breakpoint(part: object) -> object:
+    fields: Final = _raw_fields(part)
+    marker: Final = None if fields is None else fields.get("prompt_cache_breakpoint")
+    if fields is None or marker is None:
+        return part
+    without_breakpoint: Final = {key: value for key, value in fields.items() if key != "prompt_cache_breakpoint"}
+    if fields.get("type") == "input_json":
+        return without_breakpoint
+    marker_fields: Final = _raw_fields(marker)
+    readable: Final = prompt_cache_breakpoint_for_wire(
+        marker if marker_fields is None else marker_fields, drop_params=True
+    )
+    return without_breakpoint if readable is None else {**without_breakpoint, "prompt_cache_breakpoint": readable}
+
+
+def _raw_message_with_parts(message: object, raw_part: Callable[[object], object]) -> object:
+    fields: Final = _raw_fields(message)
+    parts: Final = None if fields is None else _raw_entries(fields.get("content"))
+    if fields is None or parts is None:
+        return message
+    return {**fields, "content": tuple(map(raw_part, parts))}
+
+
+def _raw_input_with_parts(decision_input: object, raw_part: Callable[[object], object]) -> object:
+    messages: Final = _raw_entries(decision_input)
+    if messages is None:
+        return decision_input
+    return tuple(_raw_message_with_parts(message, raw_part) for message in messages)
+
+
+def without_raw_prompt_cache_breakpoints(decision_input: object) -> object:
+    return _raw_input_with_parts(decision_input, _raw_part_without_breakpoint)
+
+
+def with_readable_raw_prompt_cache_breakpoints(decision_input: object) -> object:
+    return _raw_input_with_parts(decision_input, _raw_part_with_readable_breakpoint)
 
 
 def _message_texts(message: OpenAIDecisionInputMessage) -> tuple[str, ...]:
@@ -297,13 +411,7 @@ def _systemone_question(question: DecisionsIRQuestion) -> Mapping[str, object]:
             assert_never(question)
 
 
-def ir_to_systemone_request(
-    model: str, request: DecisionsIRRequest, *, supports_audio: bool = False, supports_video: bool = False
-) -> Mapping[str, object] | UnsupportedDecisionsRequest:
-    if request.audio and not supports_audio:
-        return UnsupportedDecisionsRequest(reason="audio input is not supported by this Decisions model")
-    if request.videos and not supports_video:
-        return UnsupportedDecisionsRequest(reason="video input is not supported by this Decisions model")
+def ir_to_systemone_request(model: str, request: DecisionsIRRequest) -> Mapping[str, object]:
     state: Final = _systemone_state(request.input)
     keyed_questions: Final = zip(systemone_keys(request.questions), request.questions, strict=True)
     images: Final = input_images(request.input)
@@ -351,9 +459,10 @@ def _ir_score_answer(question: DecisionsIRScoreQuestion, answer: ScoreAnswer) ->
             DecisionsIRScoreProbability(
                 value=index,
                 label=answer.legend.get(str(index), level.label),
-                probability=answer.probabilities.get(str(index), 0.0),
+                probability=answer.probabilities[str(index)],
             )
             for index, level in enumerate(question.levels)
+            if str(index) in answer.probabilities
         ),
         extra=MappingProxyType(answer.model_extra or {}),
     )
@@ -376,12 +485,14 @@ def _ir_answer(question: DecisionsIRQuestion, answer: DecisionAnswer | None) -> 
 
 
 def systemone_response_to_ir(response: DecisionsResponse, request: DecisionsIRRequest) -> DecisionsIRResponse:
-    usage: Final = response.usage or DecisionsUsage()
+    usage: Final = response.usage
     keyed_questions: Final = zip(systemone_keys(request.questions), request.questions, strict=True)
     return DecisionsIRResponse(
         model=response.model,
         answers=tuple(_ir_answer(question, response.answers.get(key)) for key, question in keyed_questions),
-        usage=DecisionsIRUsage(
+        usage=None
+        if usage is None
+        else DecisionsIRUsage(
             input_tokens=usage.input_tokens,
             output_tokens=usage.output_tokens,
             cached_tokens=usage.cached_tokens,
@@ -431,6 +542,10 @@ def _validation_summary(error: ValidationError) -> str:
 
 class DecisionsResponseValidationError(BaseLLMException):
     pass
+
+
+def _lacks_confidence(answer: DecisionsIRAnswer) -> bool:
+    return isinstance(answer, (DecisionsIRChoiceAnswer, DecisionsIRScoreAnswer)) and answer.confidence is None
 
 
 def parse_systemone_response(payload: object, request: DecisionsIRRequest) -> DecisionsIRResponse:
@@ -485,7 +600,9 @@ def ir_to_systemone_response(response: DecisionsIRResponse, request: DecisionsIR
             **response.extra,
             "model": response.model,
             "answers": {key: answer for key, answer in keyed_answers if answer is not None},
-            "usage": DecisionsUsage.model_validate(
+            "usage": None
+            if response.usage is None
+            else DecisionsUsage.model_validate(
                 {
                     **response.usage.extra,
                     "input_tokens": response.usage.input_tokens,
@@ -498,12 +615,39 @@ def ir_to_systemone_response(response: DecisionsIRResponse, request: DecisionsIR
     )
 
 
+def catalog_mode(model: str, custom_llm_provider: str) -> str | None:
+    try:
+        key: Final = get_model_info_helper(model=model, custom_llm_provider=custom_llm_provider, catalog_only=True)[
+            "key"
+        ]
+    except Exception:  # noqa: BLE001  # the lookup raises bare Exception for an unmapped model, which the catalog does not list
+        return None
+    entry: Final = GetModelCostMap.loaded_model_cost_map().get(key)
+    mode: Final = entry.get("mode") if entry is not None else None
+    return mode if isinstance(mode, str) else None
+
+
 def _is_decisions_model(model: str, custom_llm_provider: str) -> bool:
     try:
-        model_mode: Final = litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider).get("mode")
-    except Exception:  # noqa: BLE001  # get_model_info raises bare Exception for an unmapped model, which has no mode
+        model_mode: Final = get_model_info_helper(
+            model=model, custom_llm_provider=custom_llm_provider, catalog_only=True
+        ).get("mode")
+    except Exception:  # noqa: BLE001  # the lookup raises bare Exception for an unmapped model, which has no mode
         return False
     return is_decisions_model_mode(model_mode)
+
+
+def usage_reported_cost(response: DecisionsIRResponse) -> float | None:
+    cost: Final = response.usage.extra.get("cost") if response.usage is not None else None
+    if not isinstance(cost, (int, float)):
+        return None
+    return float(cost)
+
+
+@dataclass(frozen=True, slots=True)
+class DecisionsInputLimits:
+    max_request_tokens: int | None = None
+    max_question_tokens: int | None = None
 
 
 class BaseDecisionsConfig(ABC):
@@ -512,12 +656,17 @@ class BaseDecisionsConfig(ABC):
     api_base_env: tuple[str, ...] = ()
     api_key_required: bool = True
     supports_safety_identifier: bool = False
+    supports_prompt_cache: bool = False
+    supports_developer_and_system_messages: bool = False
     supports_images: bool = False
+    supports_json_input: bool = False
     max_images: int | None = None
     max_image_bytes: int | None = None
     max_total_image_bytes: int | None = None
     image_media_types: frozenset[str] | None = None
     inlines_remote_images: bool = False
+    openai_evidence_fields: frozenset[str] = frozenset()
+    confidence_optional: bool = False
     health_check_questions: Mapping[str, Mapping[str, object]] = MappingProxyType(
         {"reachable": MappingProxyType({"type": "noul", "instructions": "Is the service reachable?"})}
     )
@@ -528,8 +677,27 @@ class BaseDecisionsConfig(ABC):
     def provider_reported_cost(self, response: DecisionsIRResponse) -> float | None:
         return None
 
+    def systemone_config(self) -> "BaseDecisionsConfig":
+        return self
+
+    def get_input_limits(
+        self, model: str, custom_llm_provider: str, headers: Mapping[str, str]
+    ) -> DecisionsInputLimits:
+        try:
+            limit: Final = litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider).get(
+                "max_input_tokens"
+            )
+        except Exception:  # noqa: BLE001  # get_model_info raises bare Exception for an unmapped model
+            return DecisionsInputLimits()
+        return DecisionsInputLimits(
+            max_request_tokens=limit if isinstance(limit, int) and not isinstance(limit, bool) and limit > 0 else None
+        )
+
     def missing_api_base_message(self, custom_llm_provider: str) -> str:
         return f"api_base is required for Decisions provider '{custom_llm_provider}'"
+
+    def missing_api_key_message(self, custom_llm_provider: str) -> str:
+        return f"Missing API key for Decisions provider '{custom_llm_provider}'"
 
     def resolve_api_base(self, api_base: str | None) -> str | None:
         return api_base or self._first_secret(self.api_base_env) or self.get_default_api_base()
@@ -537,7 +705,11 @@ class BaseDecisionsConfig(ABC):
     def resolve_api_key(self, api_key: str | None) -> str | None:
         return api_key or self._first_secret(self.api_key_env)
 
+    def validate_client_connection(self, api_base: str | None, api_key: str | None) -> None:
+        return
+
     def resolve_connection(self, api_base: str | None, api_key: str | None) -> tuple[str | None, str | None]:
+        self.validate_client_connection(api_base, api_key)
         return self.resolve_api_base(api_base), self.resolve_api_key(api_key)
 
     def resolve_credential(
@@ -616,12 +788,16 @@ class BaseDecisionsConfig(ABC):
             model=model, custom_llm_provider=custom_llm_provider
         )
 
-    def supports_audio_input(self, model: str, custom_llm_provider: str) -> bool:
+    def supports_audio_input(self, model: str, custom_llm_provider: str, deployment_flag: bool | None) -> bool:
+        if deployment_flag is not None:
+            return deployment_flag
         return _is_decisions_model(model, custom_llm_provider) and litellm.supports_audio_input(
             model=model, custom_llm_provider=custom_llm_provider
         )
 
-    def supports_video_input(self, model: str, custom_llm_provider: str) -> bool:
+    def supports_video_input(self, model: str, custom_llm_provider: str, deployment_flag: bool | None) -> bool:
+        if deployment_flag is not None:
+            return deployment_flag
         return _is_decisions_model(model, custom_llm_provider) and litellm.supports_video_input(
             model=model, custom_llm_provider=custom_llm_provider
         )
@@ -632,12 +808,7 @@ class BaseDecisionsConfig(ABC):
         request: DecisionsIRRequest,
         custom_llm_provider: str,
     ) -> Mapping[str, object] | UnsupportedDecisionsRequest:
-        return ir_to_systemone_request(
-            self.request_model(model),
-            request,
-            supports_audio=self.supports_audio_input(model, custom_llm_provider),
-            supports_video=self.supports_video_input(model, custom_llm_provider),
-        )
+        return ir_to_systemone_request(self.request_model(model), request)
 
     def unwrap_response(self, payload: object) -> object:
         return payload
@@ -652,15 +823,22 @@ class BaseDecisionsConfig(ABC):
         raw_response: httpx.Response,
         request: DecisionsIRRequest,
     ) -> DecisionsIRResponse:
-        payload: Final[object] = _PAYLOAD_ADAPTER.validate_json(raw_response.content)
         try:
-            return self.parse_response(payload, request)
+            payload: Final[object] = _PAYLOAD_ADAPTER.validate_json(raw_response.content)
+            response: Final = self.parse_response(payload, request)
         except ValidationError as error:
             raise DecisionsResponseValidationError(
                 status_code=500,
                 message=f"Decisions provider '{custom_llm_provider}' returned an unexpected response: "
                 f"{error.title} {_validation_summary(error)}",
             ) from error
+        if not self.confidence_optional and any(_lacks_confidence(answer) for answer in response.answers):
+            raise DecisionsResponseValidationError(
+                status_code=500,
+                message=f"Decisions provider '{custom_llm_provider}' returned an unexpected response: "
+                "a choice or score answer has no confidence",
+            )
+        return response
 
     def get_error_class(
         self,

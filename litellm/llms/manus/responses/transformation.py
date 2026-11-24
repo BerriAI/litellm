@@ -1,4 +1,5 @@
 import uuid
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
@@ -77,7 +78,9 @@ class ManusResponsesAPIConfig(OpenAIResponsesAPIConfig):
         # If no slash, assume the model name itself is the agent profile
         return model
 
-    def validate_environment(self, headers: dict, model: str, litellm_params: GenericLiteLLMParams | None) -> dict:
+    def validate_environment(
+        self, headers: dict[str, object], model: str, litellm_params: GenericLiteLLMParams | None
+    ) -> dict[str, object]:
         """
         Validate environment and set up headers for Manus API.
 
@@ -104,7 +107,7 @@ class ManusResponsesAPIConfig(OpenAIResponsesAPIConfig):
     def get_complete_url(
         self,
         api_base: str | None,
-        litellm_params: dict,
+        litellm_params: Mapping[str, object],
     ) -> str:
         """
         Get the complete URL for Manus Responses API endpoint.
@@ -128,7 +131,7 @@ class ManusResponsesAPIConfig(OpenAIResponsesAPIConfig):
         input: str | ResponseInputParam,
         response_api_optional_request_params: dict,
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
+        headers: dict[str, object],
     ) -> dict:
         """
         Transform the request for Manus API.
@@ -240,8 +243,8 @@ class ManusResponsesAPIConfig(OpenAIResponsesAPIConfig):
         response_id: str,
         api_base: str,
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
-    ) -> tuple[str, dict]:
+        headers: Mapping[str, object],
+    ) -> tuple[str, dict[str, str]]:
         """
         Transform the get response API request into a URL and data.
 
@@ -252,7 +255,7 @@ class ManusResponsesAPIConfig(OpenAIResponsesAPIConfig):
         """
         encoded_response_id: Final = encode_url_path_segment(response_id, field_name="response_id")
         url: Final = f"{api_base}/{encoded_response_id}"
-        data: Final[dict] = {}
+        data: Final[dict[str, str]] = {}
         return url, data
 
     def transform_get_response_api_response(

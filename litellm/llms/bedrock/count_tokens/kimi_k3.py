@@ -27,11 +27,12 @@ from typing_extensions import Self
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.offline_mode import is_offline_mode
 from litellm.litellm_core_utils.prompt_templates.factory import (
     chat_completion_tools_for,
     is_flat_responses_tool,
 )
-from litellm.llms.anthropic.pass_through.adapters.transformation import LiteLLMAnthropicMessagesAdapter
+from litellm.llms.anthropic.messages.adapters.transformation import LiteLLMAnthropicMessagesAdapter
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolParam
 
 KIMI_K3_REPO: Final = "moonshotai/Kimi-K3"
@@ -67,12 +68,14 @@ class KimiK3TokenizerSource:
 def _hugging_face_ranks_path() -> str:
     import huggingface_hub
 
-    return huggingface_hub.hf_hub_download(
-        repo_id=KIMI_K3_REPO,
-        filename=KIMI_K3_RANKS_FILE,
-        revision=KIMI_K3_REVISION,
-        local_files_only=litellm.disable_hf_tokenizer_download is True,
-    )
+    if litellm.disable_hf_tokenizer_download is True or is_offline_mode():
+        cached: Final = huggingface_hub.try_to_load_from_cache(
+            repo_id=KIMI_K3_REPO, filename=KIMI_K3_RANKS_FILE, revision=KIMI_K3_REVISION
+        )
+        if not isinstance(cached, str):
+            raise FileNotFoundError(f"{KIMI_K3_RANKS_FILE} is not in the Hugging Face cache")
+        return cached
+    return huggingface_hub.hf_hub_download(repo_id=KIMI_K3_REPO, filename=KIMI_K3_RANKS_FILE, revision=KIMI_K3_REVISION)
 
 
 HUGGING_FACE_SOURCE: Final = KimiK3TokenizerSource(ranks_path=_hugging_face_ranks_path, sha256=KIMI_K3_RANKS_SHA256)
@@ -243,6 +246,10 @@ class _ToolSpecBlock(_Converse):
 class _ToolConfig(BaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore")
     tools: tuple[_ToolSpecBlock | _CachePoint, ...]
+    tool_choice: Mapping[str, JsonValue] | None = Field(default=None, alias="toolChoice")
+
+    def forces_a_tool(self) -> bool:
+        return self.tool_choice is not None and not self.tool_choice.keys().isdisjoint({"any", "tool"})
 
 
 _Message: TypeAlias = Annotated[_UserMessage | _AssistantMessage, Field(discriminator="role")]
@@ -298,6 +305,12 @@ def _close(tag: str) -> _Segments:
 
 def _message(attrs: Iterable[tuple[str, str]], body: Iterable[_Segment]) -> _Segments:
     return (*_open("message", attrs), *body, *_close("message"), _Control.END_OF_MSG)
+
+
+_FORCED_TOOL_CHOICE: Final = _message(
+    (("role", "system"), ("type", "tool-choice")),
+    ("The system is invoked with `tool_choice=required`.\nYou MUST call tools in the next message.",),
+)
 
 
 def _tool_declare(specs: Sequence[_ToolSpec]) -> _Segments:
@@ -410,10 +423,12 @@ def _rendered(request: _ConverseRequest) -> _Segments:
     turns: Final = chain.from_iterable(
         _turn(previous, message) for previous, message in zip((None, *request.messages), request.messages, strict=False)
     )
+    forces_a_tool: Final = request.tool_config is not None and request.tool_config.forces_a_tool()
     return (
         *(_tool_declare(specs) if specs else ()),
         *(_message((("role", "system"),), (system,)) if system else ()),
         *turns,
+        *(_FORCED_TOOL_CHOICE if forces_a_tool else ()),
         *_open("message", (("role", "assistant"),)),
         *_open("think"),
     )
@@ -447,19 +462,29 @@ def _as_converse_input(tool: ChatCompletionToolParam) -> tuple[Mapping[str, obje
 
 
 def _converse_request(
-    model: str, messages: Sequence[AllMessageValues], tools: Sequence[ChatCompletionToolParam] | None
+    model: str,
+    messages: Sequence[AllMessageValues],
+    tools: Sequence[ChatCompletionToolParam] | None,
+    tool_choice: str | Mapping[str, object] | None,
 ) -> _ConverseRequest | None:
     if not all(_text_only(message) for message in messages):
         return None
     try:
-        chat_tools: Final = tuple(
-            chat_tool for tool in tools or () for chat_tool in _as_converse_input(tool)
-        )  # comprehension-ok: flattens each tool's translation
+        config: Final = litellm.AmazonConverseConfig()
+        chat_tools: Final = tuple(chain.from_iterable(_as_converse_input(tool) for tool in tools or ()))
+        choice: Final = (
+            config.map_tool_choice_values(model, tool_choice, drop_params=True)
+            if chat_tools and tool_choice is not None
+            else None
+        )
         return _ConverseRequest.model_validate(
-            litellm.AmazonConverseConfig().transform_request(
+            config.transform_request(
                 model=model,
                 messages=copy.deepcopy(list(messages)),
-                optional_params={"tools": copy.deepcopy(list(chat_tools))} if chat_tools else {},
+                optional_params={
+                    **({"tools": copy.deepcopy(list(chat_tools))} if chat_tools else {}),
+                    **({"tool_choice": choice} if choice is not None else {}),
+                },
                 litellm_params={},
                 headers={},
             )
@@ -473,8 +498,9 @@ def kimi_k3_tokens(
     model: str,
     messages: Sequence[AllMessageValues],
     tools: Sequence[ChatCompletionToolParam] | None,
+    tool_choice: str | Mapping[str, object] | None = None,
 ) -> int | None:
-    request: Final = _converse_request(model, messages, tools)
+    request: Final = _converse_request(model, messages, tools, tool_choice)
     if request is None:
         return None
     return sum(
@@ -492,6 +518,8 @@ def kimi_k3_anthropic_tokens(encoding: tiktoken.Encoding, model: str, fields: Ma
     except Exception:  # noqa: BLE001  # a request the adapter cannot translate falls back to the estimate
         return None
     match translated:
+        case {"tools": tools, "tool_choice": tool_choice}:
+            return kimi_k3_tokens(encoding, model, translated["messages"], tools, tool_choice)
         case {"tools": tools}:
             return kimi_k3_tokens(encoding, model, translated["messages"], tools)
         case _:

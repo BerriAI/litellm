@@ -9,8 +9,9 @@ Usage:
 """
 
 import asyncio
-from collections.abc import AsyncIterable, Iterable
-from typing import Final
+import os
+from collections.abc import AsyncIterable, Iterable, Mapping
+from typing import TYPE_CHECKING, Final
 
 from litellm._logging import verbose_logger
 from litellm.integrations.mock_client_factory import (
@@ -18,6 +19,11 @@ from litellm.integrations.mock_client_factory import (
     MockResponse,
     create_mock_client_factory,
 )
+
+if TYPE_CHECKING:
+    import httpx
+
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 
 # Use factory for POST handler
 _config: Final = MockClientConfig(
@@ -40,10 +46,16 @@ _mocks_initialized = False
 
 # Default mock latency in seconds (simulates network round-trip)
 # Typical GCS API calls take 100-300ms for uploads, 50-150ms for GET/DELETE
-_MOCK_LATENCY_SECONDS: Final = float(__import__("os").getenv("GCS_MOCK_LATENCY_MS", "150")) / 1000.0
+_MOCK_LATENCY_SECONDS: Final = float(os.getenv("GCS_MOCK_LATENCY_MS", "150")) / 1000.0
 
 
-async def _mock_async_handler_get(self, url, params=None, headers=None, follow_redirects=None):
+async def _mock_async_handler_get(
+    self: "AsyncHTTPHandler",
+    url,
+    params: dict[object, object] | None = None,
+    headers: dict[object, object] | None = None,
+    follow_redirects: bool | None = None,
+) -> "MockResponse | httpx.Response":
     """Monkey-patched AsyncHTTPHandler.get that intercepts GCS calls."""
     # Only mock GCS API calls
     if isinstance(url, str) and "storage.googleapis.com" in url:
@@ -51,7 +63,7 @@ async def _mock_async_handler_get(self, url, params=None, headers=None, follow_r
         await asyncio.sleep(_MOCK_LATENCY_SECONDS)
         # Return a minimal but valid StandardLoggingPayload JSON string as bytes
         # This matches what GCS returns when downloading with ?alt=media
-        mock_payload: Final = {
+        mock_payload: Final[dict[str, object]] = {
             "id": "mock-request-id",
             "trace_id": "mock-trace-id",
             "call_type": "completion",
@@ -106,16 +118,16 @@ async def _mock_async_handler_get(self, url, params=None, headers=None, follow_r
 
 
 async def _mock_async_handler_delete(
-    self,
+    self: "AsyncHTTPHandler",
     url,
-    data=None,
-    json=None,
-    params=None,
-    headers=None,
-    timeout=None,
-    stream=False,
+    data: Mapping[str, object] | str | bytes | None = None,
+    json: dict[str, object] | None = None,
+    params: dict[object, object] | None = None,
+    headers: dict[object, object] | None = None,
+    timeout: "float | httpx.Timeout | None" = None,
+    stream: bool = False,
     content: str | bytes | Iterable[bytes] | AsyncIterable[bytes] | None = None,
-):
+) -> "MockResponse | httpx.Response":
     """Monkey-patched AsyncHTTPHandler.delete that intercepts GCS calls."""
     # Only mock GCS API calls
     if isinstance(url, str) and "storage.googleapis.com" in url:
@@ -143,7 +155,7 @@ async def _mock_async_handler_delete(
     raise RuntimeError("Original AsyncHTTPHandler.delete not available")
 
 
-def create_mock_gcs_client():
+def create_mock_gcs_client() -> None:
     """
     Monkey-patch AsyncHTTPHandler methods to intercept GCS calls.
 
@@ -182,7 +194,7 @@ def create_mock_gcs_client():
     _mocks_initialized = True
 
 
-def mock_vertex_auth_methods():
+def mock_vertex_auth_methods() -> None:
     """
     Monkey-patch Vertex AI auth methods to return fake tokens.
     This prevents auth failures when GCS_MOCK is enabled.
@@ -201,28 +213,32 @@ def mock_vertex_auth_methods():
         setattr(VertexBase, "_original_ensure_access_token", VertexBase._ensure_access_token)
         setattr(VertexBase, "_original_get_token_and_url", VertexBase._get_token_and_url)
 
-        async def _mock_ensure_access_token_async(self, credentials, project_id, custom_llm_provider):
+        async def _mock_ensure_access_token_async(
+            self: VertexBase, credentials: object, project_id: object, custom_llm_provider: object
+        ) -> tuple[str, str]:
             """Mock async auth method - returns fake token."""
             verbose_logger.debug("[GCS MOCK] Vertex AI auth: _ensure_access_token_async called")
             return ("mock-gcs-token", "mock-project-id")
 
-        def _mock_ensure_access_token(self, credentials, project_id, custom_llm_provider):
+        def _mock_ensure_access_token(
+            self: VertexBase, credentials: object, project_id: object, custom_llm_provider: object
+        ) -> tuple[str, str]:
             """Mock sync auth method - returns fake token."""
             verbose_logger.debug("[GCS MOCK] Vertex AI auth: _ensure_access_token called")
             return ("mock-gcs-token", "mock-project-id")
 
         def _mock_get_token_and_url(
-            self,
-            model,
-            auth_header,
-            vertex_credentials,
-            vertex_project,
-            vertex_location,
-            gemini_api_key,
-            stream,
-            custom_llm_provider,
-            api_base,
-        ):
+            self: VertexBase,
+            model: object,
+            auth_header: object,
+            vertex_credentials: object,
+            vertex_project: object,
+            vertex_location: object,
+            gemini_api_key: object,
+            stream: object,
+            custom_llm_provider: object,
+            api_base: object,
+        ) -> tuple[str, str]:
             """Mock get_token_and_url - returns fake token."""
             verbose_logger.debug("[GCS MOCK] Vertex AI auth: _get_token_and_url called")
             return ("mock-gcs-token", "https://storage.googleapis.com")

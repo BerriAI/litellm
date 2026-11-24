@@ -5,15 +5,23 @@ Tests the end-to-end flow of websearch_interception callback with
 litellm.acompletion() for transparent server-side web search execution.
 """
 
-from unittest.mock import MagicMock
+import datetime
+import json
+from typing import Final
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+import respx
 
 import litellm
 from litellm.integrations.websearch_interception.handler import (
     WebSearchInterceptionLogger,
 )
-from litellm.types.utils import LlmProviders, ModelResponse
+from litellm.integrations.websearch_interception.tools import get_litellm_web_search_tool_openai
+from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.types.utils import CallTypes, LlmProviders, ModelResponse
+
+from .conftest import FINAL_ANSWER, offered_tool_names, request_bodies
 
 
 @pytest.fixture
@@ -378,7 +386,6 @@ async def test_execute_chat_completion_agentic_loop_strips_tool_choice():
     optional_params into the follow-up params without explicit removal causes the
     model to call the search tool again instead of synthesizing an answer.
     """
-    from unittest.mock import patch
 
     websearch_logger = WebSearchInterceptionLogger(enabled_providers=[LlmProviders.OPENAI])
 
@@ -419,6 +426,323 @@ async def test_execute_chat_completion_agentic_loop_strips_tool_choice():
     )
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["auto", "required"])
+async def test_execute_chat_completion_agentic_loop_keeps_an_allowed_tools_choice_without_forcing_another_call(
+    mode: str,
+    perplexity_search: respx.Route,
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "test-openai-key")
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    followup: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").respond(
+        json={
+            "id": "followup",
+            "object": "chat.completion",
+            "created": 0,
+            "model": "gpt-4o",
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": "done"}, "finish_reason": "stop"}],
+        }
+    )
+    tool_choice: Final = {
+        "type": "allowed_tools",
+        "allowed_tools": {
+            "mode": mode,
+            "tools": [{"type": "function", "function": {"name": "litellm_web_search"}}],
+        },
+    }
+
+    await WebSearchInterceptionLogger(enabled_providers=[LlmProviders.OPENAI])._execute_chat_completion_agentic_loop(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": "What is Bitcoin price?"}],
+        tool_calls=[{"id": "call_1", "name": "litellm_web_search", "input": {"query": "bitcoin price"}}],
+        optional_params={
+            "tools": [
+                {"type": "function", "function": {"name": "litellm_web_search"}},
+                {"type": "function", "function": {"name": "get_time"}},
+            ],
+            "tool_choice": tool_choice,
+        },
+        logging_obj=MagicMock(),
+        stream=False,
+        kwargs={},
+    )
+
+    assert perplexity_search.call_count == 1
+    assert json.loads(followup.calls.last.request.content)["tool_choice"] == {
+        "type": "allowed_tools",
+        "allowed_tools": {"mode": "auto", "tools": [{"type": "function", "function": {"name": "litellm_web_search"}}]},
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("tool_choice", "followup_tool_choice"),
+    [
+        (
+            {
+                "type": "allowed_tools",
+                "allowed_tools": {"mode": "required", "tools": [{"type": "function", "function": {"name": "get_time"}}]},
+            },
+            {
+                "type": "allowed_tools",
+                "allowed_tools": {"mode": "auto", "tools": [{"type": "function", "function": {"name": "get_time"}}]},
+            },
+        ),
+        ({"type": "function", "function": {"name": "litellm_web_search"}}, None),
+        ("required", None),
+    ],
+)
+async def test_chat_followup_plan_keeps_only_an_allowed_tools_choice(
+    tool_choice: object, followup_tool_choice: object, perplexity_search: respx.Route
+) -> None:
+    plan: Final = await WebSearchInterceptionLogger().async_build_chat_completion_agentic_loop_plan(
+        tools={
+            "tool_calls": [{"id": "call_abc", "name": "litellm_web_search", "input": {"query": "latest ai news"}}],
+            "tool_type": "websearch",
+            "provider": "openai",
+            "response_format": "openai",
+        },
+        model="gpt-4o",
+        messages=[{"role": "user", "content": "What's the latest AI news?"}],
+        response=MagicMock(),
+        optional_params={"tool_choice": tool_choice, "max_tokens": 512},
+        logging_obj=None,
+        stream=False,
+        kwargs={"custom_llm_provider": "openai"},
+    )
+
+    assert plan.request_patch is not None
+    assert plan.request_patch.optional_params.get("tool_choice") == followup_tool_choice
+
+
 if __name__ == "__main__":
     # Run with: pytest test_websearch_chat_completion.py -v -s
     pytest.main([__file__, "-v", "-s"])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "requested_model,handler_model,custom_llm_provider",
+    [
+        ("openrouter/openrouter/free", "openrouter/free", "openrouter"),
+        ("bedrock/converse_like/my-endpoint-model", "my-endpoint-model", "bedrock"),
+    ],
+)
+async def test_chat_followup_reuses_the_model_the_caller_requested(
+    requested_model: str, handler_model: str, custom_llm_provider: str, perplexity_search: respx.Route
+) -> None:
+    """The provider handler sees the model after its routing prefixes are stripped, which
+    re-qualifying with the provider alone cannot restore."""
+    logging_obj: Final = Logging(
+        model=requested_model,
+        messages=[],
+        stream=False,
+        call_type=CallTypes.completion.value,
+        start_time=datetime.datetime(2026, 1, 1, tzinfo=datetime.timezone.utc),
+        litellm_call_id="call-chat-followup",
+        function_id="fn-chat-followup",
+    )
+    litellm.completion(
+        model=requested_model,
+        messages=[{"role": "user", "content": "What's the latest AI news?"}],
+        mock_response="searching",
+        litellm_logging_obj=logging_obj,
+    )
+    logger: Final = WebSearchInterceptionLogger()
+
+    plan: Final = await logger.async_build_chat_completion_agentic_loop_plan(
+        tools={
+            "tool_calls": [{"id": "call_abc", "name": "litellm_web_search", "input": {"query": "latest ai news"}}],
+            "tool_type": "websearch",
+            "provider": custom_llm_provider,
+            "response_format": "openai",
+        },
+        model=handler_model,
+        messages=[{"role": "user", "content": "What's the latest AI news?"}],
+        response=MagicMock(),
+        optional_params={},
+        logging_obj=logging_obj,
+        stream=False,
+        kwargs={"custom_llm_provider": custom_llm_provider},
+    )
+
+    assert plan.request_patch is not None
+    assert plan.request_patch.model == requested_model
+    assert perplexity_search.call_count == 1
+
+
+WEATHER_FUNCTION_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "get_weather",
+        "description": "Get the current weather for a city",
+        "parameters": {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]},
+    },
+}
+SEARCH_TOOL_NAME = "litellm_web_search"
+NEWS_QUESTION = [{"role": "user", "content": "What's the latest AI news?"}]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("feature_max_loops", "deployment_max_loops", "searches"),
+    [(None, 4, 4), (4, None, 3), (1, None, 3)],
+    ids=["deployment cap above the default", "feature cap above the default", "feature cap below the default"],
+)
+async def test_anthropic_chat_turn_stops_at_the_deployment_cap_with_the_model_answer(
+    feature_max_loops: int | None,
+    deployment_max_loops: int | None,
+    searches: int,
+    monkeypatch: pytest.MonkeyPatch,
+    anthropic_model: respx.Route,
+    perplexity_search: respx.Route,
+):
+    monkeypatch.setattr(
+        litellm,
+        "callbacks",
+        [WebSearchInterceptionLogger(enabled_providers=["anthropic"], max_agentic_loops=feature_max_loops)],
+    )
+
+    response = await litellm.acompletion(
+        model="anthropic/claude-sonnet-5-5",
+        messages=NEWS_QUESTION,
+        tools=[get_litellm_web_search_tool_openai(), WEATHER_FUNCTION_TOOL],
+        max_agentic_loops=deployment_max_loops,
+    )
+
+    assert response.choices[0].message.content == FINAL_ANSWER
+    assert not response.choices[0].message.tool_calls
+    assert [offered_tool_names(body) for body in request_bodies(anthropic_model)] == [
+        *[[SEARCH_TOOL_NAME, "get_weather"]] * (searches + 1),
+        ["get_weather"],
+    ]
+    assert perplexity_search.call_count == searches
+
+
+@pytest.mark.asyncio
+async def test_anthropic_chat_last_follow_up_blocks_tool_calls_when_search_was_the_only_tool(
+    monkeypatch, anthropic_model, perplexity_search
+):
+    """Claude can call a tool it saw earlier in the history even when the request offers none, so the call is blocked."""
+    monkeypatch.setattr(
+        litellm, "callbacks", [WebSearchInterceptionLogger(enabled_providers=["anthropic"])]
+    )
+
+    response = await litellm.acompletion(
+        max_agentic_loops=1,
+        model="anthropic/claude-sonnet-5-5",
+        messages=NEWS_QUESTION,
+        tools=[get_litellm_web_search_tool_openai()],
+    )
+
+    last_request = request_bodies(anthropic_model)[-1]
+    assert response.choices[0].message.content == FINAL_ANSWER
+    assert SEARCH_TOOL_NAME not in offered_tool_names(last_request)
+    assert last_request["tool_choice"] == {"type": "none"}
+
+
+@pytest.mark.asyncio
+async def test_openai_chat_turn_at_the_cap_ends_with_the_model_answer(
+    monkeypatch, openai_chat_model, perplexity_search
+):
+    """reasoning_effort none keeps the request on /v1/chat/completions, where the loop runs inside the OpenAI handler."""
+    monkeypatch.setattr(
+        litellm, "callbacks", [WebSearchInterceptionLogger(enabled_providers=["openai"])]
+    )
+
+    response = await litellm.acompletion(
+        max_agentic_loops=2,
+        model="openai/gpt-5.6",
+        messages=NEWS_QUESTION,
+        tools=[get_litellm_web_search_tool_openai(), WEATHER_FUNCTION_TOOL],
+        reasoning_effort="none",
+        api_key="test-openai-key-capped-chat",
+    )
+
+    assert response.choices[0].message.content == FINAL_ANSWER
+    assert [offered_tool_names(body) for body in request_bodies(openai_chat_model)] == [
+        *[[SEARCH_TOOL_NAME, "get_weather"]] * 3,
+        ["get_weather"],
+    ]
+    assert perplexity_search.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_openai_chat_bridged_to_responses_at_the_cap_ends_with_the_model_answer(
+    monkeypatch, openai_responses_model, perplexity_search
+):
+    monkeypatch.setattr(
+        litellm, "callbacks", [WebSearchInterceptionLogger(enabled_providers=["openai"])]
+    )
+
+    response = await litellm.acompletion(
+        max_agentic_loops=2,
+        model="openai/gpt-5.6",
+        messages=NEWS_QUESTION,
+        tools=[get_litellm_web_search_tool_openai(), WEATHER_FUNCTION_TOOL],
+        api_key="test-openai-key-bridged-chat",
+    )
+
+    assert response.choices[0].message.content == FINAL_ANSWER
+    assert [offered_tool_names(body) for body in request_bodies(openai_responses_model)] == [
+        *[[SEARCH_TOOL_NAME, "get_weather"]] * 3,
+        ["get_weather"],
+    ]
+    assert perplexity_search.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_openai_chat_last_follow_up_sends_no_tools_when_search_was_the_only_one(
+    monkeypatch, openai_chat_model, perplexity_search
+):
+    monkeypatch.setattr(
+        litellm, "callbacks", [WebSearchInterceptionLogger(enabled_providers=["openai"])]
+    )
+
+    response = await litellm.acompletion(
+        max_agentic_loops=1,
+        model="openai/gpt-5.6",
+        messages=NEWS_QUESTION,
+        tools=[get_litellm_web_search_tool_openai()],
+        tool_choice="required",
+        reasoning_effort="none",
+        api_key="test-openai-key-search-only-chat",
+    )
+
+    last_request = request_bodies(openai_chat_model)[-1]
+    assert response.choices[0].message.content == FINAL_ANSWER
+    assert "tools" not in last_request
+    assert "tool_choice" not in last_request
+    assert len(request_bodies(openai_chat_model)) == 3
+
+
+@pytest.mark.asyncio
+async def test_a_search_call_without_a_query_runs_no_search_and_says_so(perplexity_search):
+    plan = await WebSearchInterceptionLogger().async_build_chat_completion_agentic_loop_plan(
+        tools={
+            "tool_calls": [
+                {"id": "call_with_query", "name": SEARCH_TOOL_NAME, "input": {"query": "latest ai news"}},
+                {"id": "call_without_query", "name": SEARCH_TOOL_NAME, "input": {}},
+            ],
+            "response_format": "openai",
+        },
+        model="gpt-5.6",
+        messages=NEWS_QUESTION,
+        response=MagicMock(),
+        optional_params={},
+        logging_obj=None,
+        stream=False,
+        kwargs={"custom_llm_provider": "openai"},
+    )
+
+    assert plan.request_patch is not None
+    tool_results = {
+        message["tool_call_id"]: message["content"]
+        for message in plan.request_patch.messages
+        if message.get("role") == "tool"
+    }
+    assert tool_results["call_without_query"] == "No search query provided"
+    assert "AI news" in tool_results["call_with_query"]
+    assert perplexity_search.call_count == 1

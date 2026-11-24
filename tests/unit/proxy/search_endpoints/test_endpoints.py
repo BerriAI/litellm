@@ -22,6 +22,7 @@ from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.route_llm_request import ProxyMissingRequiredParamError
 from litellm.proxy.search_endpoints.endpoints import router, search
+from litellm.redis.stores.auth_cache import AuthObject
 
 TAVILY_SEARCH_URL: Final = "https://api.tavily.com/search"
 TAVILY_RESULT: Final = {"title": "LiteLLM", "url": "https://docs.litellm.ai", "content": "LLM gateway"}
@@ -86,7 +87,7 @@ def _cache_team(cache: UserApiKeyCache, search_tools: list[str]) -> None:
         object_permission_id="op-team",
         object_permission=LiteLLM_ObjectPermissionTable(object_permission_id="op-team", search_tools=search_tools),
     )
-    cache.set_cache(key="team_id:team-1", value=team)
+    cache.set_cache(AuthObject.team("team-1"), team)
 
 
 @pytest.mark.parametrize(
@@ -142,6 +143,7 @@ def test_direct_search_body_tool_name_is_denied_under_search_tool_deny_by_defaul
 def _json_request(body: dict[str, object]) -> MagicMock:
     request = MagicMock()
     request.body = AsyncMock(return_value=orjson.dumps(body))
+    request.headers = {}
     return request
 
 
@@ -283,3 +285,12 @@ def test_direct_search_authorizes_the_requested_tool_over_completion_model(
 
     assert response.status_code == expected_status, response.text
     assert tavily.call_count == (1 if expected_status == 200 else 0)
+
+
+def test_list_search_tools_reads_the_router_search_tools(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(proxy_server, "llm_router", _search_router())
+
+    response: Final = _client(UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)).get("/search/tools")
+
+    assert response.status_code == 200
+    assert response.json()["data"] == [{"search_tool_name": "search-a", "search_provider": "tavily"}]

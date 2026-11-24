@@ -20,7 +20,10 @@ import json
 from collections.abc import Awaitable, Callable
 from typing import Final
 
+from pydantic import TypeAdapter
+
 from litellm import verbose_logger
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, decoded_json_object, require_attributes
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.gemini.realtime.transformation import GeminiRealtimeConfig
 from litellm.llms.vertex_ai.audio_transcription.realtime_transformation import (
@@ -29,6 +32,8 @@ from litellm.llms.vertex_ai.audio_transcription.realtime_transformation import (
 )
 from litellm.llms.vertex_ai.common_utils import get_vertex_base_url
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
+
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class VertexAIRealtimeConfig(GeminiRealtimeConfig):
@@ -39,8 +44,8 @@ class VertexAIRealtimeConfig(GeminiRealtimeConfig):
     (they require async I/O) and injected at construction time.
     """
 
-    def __init__(self, access_token: str, project: str, location: str) -> None:
-        super().__init__()
+    def __init__(self, access_token: str, project: str, location: str, drop_params: bool = False) -> None:
+        super().__init__(drop_params=drop_params)
         self._access_token = access_token
         self._project = project
         self._location = location
@@ -50,6 +55,12 @@ class VertexAIRealtimeConfig(GeminiRealtimeConfig):
 
     def _rejects_vad_tuning_with_detection_off(self) -> bool:
         return False
+
+    def _rejects_undocumented_voices(self, model: str) -> bool:
+        return True
+
+    def _supports_avatars(self) -> bool:
+        return True
 
     # ------------------------------------------------------------------
     # URL
@@ -81,10 +92,10 @@ class VertexAIRealtimeConfig(GeminiRealtimeConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, str],
         model: str,  # noqa: ARG002
         api_key: str | None = None,  # noqa: ARG002
-    ) -> dict:
+    ) -> dict[str, str]:
         """
         Return headers with a Bearer token for Vertex AI.
 
@@ -154,7 +165,7 @@ class VertexAIRealtimeConfig(GeminiRealtimeConfig):
         """Return the fully-qualified Vertex AI model resource path."""
         return f"projects/{self._project}/locations/{self._location}/publishers/google/models/{model}"
 
-    def _build_vertex_ai_setup_config(self, model: str, session_params: dict) -> dict:
+    def _build_vertex_ai_setup_config(self, model: str, session_params: dict[str, object]) -> dict[str, object]:
         """Build Vertex AI setup configuration with proper model path and defaults."""
         # Normalize GA-remapped fields (``output_modalities``, nested
         # ``audio.input.transcription``, ``audio.input.turn_detection``) back to
@@ -163,7 +174,7 @@ class VertexAIRealtimeConfig(GeminiRealtimeConfig):
         # settings would be silently dropped because ``map_openai_params`` only
         # recognises the flat OpenAI-beta key names.
         session_params = self._normalize_session_payload_for_mapping(session_params)
-        setup_config: Final = self.map_openai_params(optional_params={}, non_default_params=session_params)
+        setup_config: Final = self.map_openai_params(optional_params={}, non_default_params=session_params, model=model)
 
         # Use full Vertex AI model path
         setup_config["model"] = self._vertex_model_path(model)
@@ -177,15 +188,16 @@ class VertexAIRealtimeConfig(GeminiRealtimeConfig):
         # ``silence_duration_ms``). ``map_automatic_turn_detection`` sets
         # ``disabled=True`` whenever ``create_response`` is absent or
         # ``False``. Force ``disabled=False`` only when the client did
-        # not explicitly request ``create_response: False`` — that path
+        # not explicitly request ``create_response: False`` or
+        # ``turn_detection: null`` — the first of those paths
         # is how transcription guardrails suppress automatic responses,
         # and overriding it here would silently bypass the guardrail.
         # Vertex Live has no "VAD on, no auto-response" mode, so callers
         # that need that behaviour must accept that VAD is off.
         client_turn_detection: Final = session_params.get("turn_detection")
         client_disabled_auto_response: Final = (
-            isinstance(client_turn_detection, dict) and client_turn_detection.get("create_response") is False
-        )
+            "turn_detection" in session_params and client_turn_detection is None
+        ) or (isinstance(client_turn_detection, dict) and client_turn_detection.get("create_response") is False)
         realtime_input_config: Final = setup_config.setdefault("realtimeInputConfig", {})
         automatic_detection: Final = realtime_input_config.setdefault("automaticActivityDetection", {})
         if not client_disabled_auto_response:
@@ -212,12 +224,16 @@ class VertexAIRealtimeConfig(GeminiRealtimeConfig):
         documents ``setup`` as the first-and-only client message, and a second
         ``setup`` closes the connection with a 1007 policy error.
         """
-        json_message: Final = json.loads(message)
-        msg_type: Final = json_message.get("type")
+        fields: Final = decoded_json_object(_DECODED_JSON.validate_python(json.loads(message)))
+        msg_type: Final = fields.get("type")
 
         if msg_type == "session.update":
+            session: Final = fields.get("session")
+            session_params: Final = dict(as_str_mapping(session) or {})
             if session_configuration_request is None:
-                setup_config: Final = self._build_vertex_ai_setup_config(model, json_message.get("session") or {})
+                setup_config: Final = self._build_vertex_ai_setup_config(
+                    model, require_attributes(session or {}, dict[str, object], "items")
+                )
                 gemini_setup_msg: Final = json.dumps({"setup": setup_config})
 
                 verbose_logger.debug("Vertex AI Realtime: Sending initial setup with tools to backend")
@@ -228,7 +244,7 @@ class VertexAIRealtimeConfig(GeminiRealtimeConfig):
             # silencing the audio-transcription guardrail's create_response
             # disable, surface a warning so operators know the model will
             # auto-respond before the guardrail can gate it on Vertex AI.
-            client_turn_detection = GeminiRealtimeConfig._extract_turn_detection(json_message.get("session") or {})
+            client_turn_detection: Final = GeminiRealtimeConfig._extract_turn_detection(session_params)
             if isinstance(client_turn_detection, dict) and client_turn_detection.get("create_response") is False:
                 verbose_logger.warning(
                     "Vertex AI Realtime: Dropping subsequent session.update "
@@ -261,4 +277,5 @@ def vertex_realtime_config(
         access_token=access_token,
         project=project,
         location=VertexBase.get_vertex_region(vertex_region=location, model=model),
+        drop_params=drop_params,
     )

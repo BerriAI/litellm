@@ -2,9 +2,14 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from importlib import import_module
 import sys
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+
+from litellm.constants import SEMANTIC_CACHE_POLICY_KEY
+from litellm.types.semantic_cache import SemanticCacheParams, SemanticCachePolicy
+from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stubs
 
 
 @contextmanager
@@ -99,6 +104,77 @@ def test_redis_semantic_cache_get_cache(monkeypatch):
                 vector=[0.1, 0.2, 0.3],
                 filter_expression="cache-key-filter",
             )
+
+
+@pytest.mark.parametrize(("threshold", "expected"), [(0.6, {"id": "cached"}), (1.0, None)])
+async def test_redis_semantic_lookup_honors_request_cutoff(threshold: float, expected: object):
+    from litellm.caching.redis_semantic_cache import RedisSemanticCache
+
+    global_distance = 0.2 if threshold == 1.0 else 0.1
+
+    async def search(distance_threshold: float | None = None, **kwargs: object) -> list[dict[str, object]]:
+        if (distance_threshold or global_distance) < 0.15:
+            return []
+        return [
+            {
+                "prompt": "Previous request",
+                "response": '{"id": "cached"}',
+                "vector_distance": 0.15,
+                RedisSemanticCache.CACHE_KEY_FIELD_NAME: "key",
+            }
+        ]
+
+    client = MagicMock()
+    client.acheck = search
+    with _fake_redisvl_modules(MagicMock(return_value=client), MagicMock()):
+        cache = RedisSemanticCache(redis_url="redis://localhost:6379", similarity_threshold=1 - global_distance)
+        cache._get_async_embedding = AsyncMock(return_value=[1.0, 0.0])
+        with patch.object(cache, "_get_cache_key_filter_expression", return_value=None):
+            result = await cache.async_get_cache(
+                "key",
+                messages=[{"role": "user", "content": "Similar request"}],
+                cache={
+                    SEMANTIC_CACHE_POLICY_KEY: SemanticCachePolicy(
+                        scope="key", params=SemanticCacheParams(similarity_threshold=threshold)
+                    )
+                },
+            )
+
+    assert result == expected
+
+
+@pytest.mark.parametrize(("enabled", "stored_ttls"), [(True, [30]), (False, [])])
+async def test_redis_semantic_write_honors_request_policy(enabled: bool, stored_ttls: list[int]):
+    from litellm.caching.caching import Cache
+    from litellm.types.caching import LiteLLMCacheType
+
+    written_ttls: list[int] = []
+
+    async def store(prompt: str, response: str, *, ttl: int, **options: object) -> None:
+        written_ttls.append(ttl)
+
+    redis = MagicMock(astore=store)
+    cache = Cache(
+        type=LiteLLMCacheType.REDIS_SEMANTIC,
+        similarity_threshold=0.8,
+        redis_url="redis://localhost:6379",
+        ttl=900,
+    )
+    with (
+        _fake_redisvl_modules(MagicMock(return_value=redis), MagicMock()),
+        patch.object(cache.cache, "_get_async_embedding", new=AsyncMock(return_value=[1.0, 0.0])),
+    ):
+        await cache.async_add_cache(
+            {"id": "response"},
+            messages=[{"role": "user", "content": "Write this response"}],
+            cache={
+                SEMANTIC_CACHE_POLICY_KEY: SemanticCachePolicy(
+                    scope="key", params=SemanticCacheParams(enabled=enabled, ttl=30)
+                )
+            },
+        )
+
+    assert written_ttls == stored_ttls
 
 
 def test_redis_semantic_cache_rejects_unscoped_cache_hit(monkeypatch):
@@ -296,6 +372,28 @@ def test_redis_semantic_cache_matches_bytes_cache_key():
         cache_hit={RedisSemanticCache.CACHE_KEY_FIELD_NAME: b"test_key"},
         key="test_key",
     )
+
+
+_STORED_RESPONSE: Final = {"content": "Paris", "finish_reason": None, "cached": True}
+
+
+@pytest.mark.parametrize(
+    ("cached_response", "expected"),
+    [
+        (str(_STORED_RESPONSE), _STORED_RESPONSE),
+        (str(_STORED_RESPONSE).encode("utf-8"), _STORED_RESPONSE),
+        ("{'content': 'Paris'", None),
+    ],
+    ids=["python_repr", "python_repr_bytes", "unparseable"],
+)
+def test_redis_semantic_cache_reads_back_a_value_stored_as_its_python_repr(
+    cached_response: str | bytes, expected: dict[str, object] | None
+):
+    from litellm.caching.redis_semantic_cache import RedisSemanticCache
+
+    redis_semantic_cache = RedisSemanticCache.__new__(RedisSemanticCache)
+
+    assert redis_semantic_cache._get_cache_logic(cached_response) == expected
 
 
 def test_redis_semantic_cache_rejects_pre_isolation_unscoped_hit():
@@ -842,7 +940,7 @@ def test_redis_get_embedding_routes_through_router(monkeypatch):
     cache = RedisSemanticCache.__new__(RedisSemanticCache)
     cache.embedding_model = "sem-embed"
 
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.get_configured_token_limits.return_value = (None, None)
     router.embedding = MagicMock(return_value={"data": [{"embedding": [0.5, 0.6]}]})
     fake_proxy = types.ModuleType("litellm.proxy.proxy_server")
@@ -1085,7 +1183,7 @@ async def test_redis_async_embedding_forwards_full_metadata(monkeypatch):
     cache = RedisSemanticCache.__new__(RedisSemanticCache)
     cache.embedding_model = "sem-embed"
 
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.get_configured_token_limits.return_value = (None, None)
     router.aembedding = AsyncMock(return_value={"data": [{"embedding": [0.1, 0.2]}]})
     fake_proxy = types.ModuleType("litellm.proxy.proxy_server")
@@ -1128,7 +1226,7 @@ def test_redis_get_embedding_truncates_to_deployment_max_input_tokens(monkeypatc
     cache = RedisSemanticCache.__new__(RedisSemanticCache)
     cache.embedding_model = "sem-embed"
 
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.get_configured_token_limits.return_value = (5, None)
     router.embedding = MagicMock(return_value={"data": [{"embedding": [0.5, 0.6]}]})
     _proxy_with_router(monkeypatch, router, "sem-embed")
@@ -1149,7 +1247,7 @@ async def test_redis_async_embedding_explicit_limit_beats_deployment_limit(monke
     cache.embedding_model = "sem-embed"
     cache.embedding_max_input_tokens = 3
 
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.get_configured_token_limits.return_value = (8191, None)
     router.aembedding = AsyncMock(return_value={"data": [{"embedding": [0.1, 0.2]}]})
     _proxy_with_router(monkeypatch, router, "sem-embed")
@@ -1270,7 +1368,7 @@ def test_redis_sync_embedding_call_is_bounded(monkeypatch):
     cache.embedding_model = "sem-embed"
     cache.embedding_timeout = 1.5
 
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.get_configured_token_limits.return_value = (None, None)
     router.embedding = MagicMock(return_value={"data": [{"embedding": [0.5, 0.6]}]})
     monkeypatch.setitem(
@@ -1293,7 +1391,7 @@ async def test_redis_async_embedding_call_is_bounded(monkeypatch):
     cache.embedding_model = "sem-embed"
     cache.embedding_timeout = 1.5
 
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.get_configured_token_limits.return_value = (None, None)
     router.aembedding = AsyncMock(return_value={"data": [{"embedding": [0.5, 0.6]}]})
     monkeypatch.setitem(
@@ -1322,7 +1420,7 @@ async def test_redis_async_embedding_gives_up_on_unresponsive_endpoint(monkeypat
         await asyncio.sleep(3)
         return {"data": [{"embedding": [0.1, 0.2]}]}
 
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.get_configured_token_limits.return_value = (None, None)
     router.aembedding = never_responds
     monkeypatch.setitem(
@@ -1355,7 +1453,7 @@ async def test_redis_async_get_cache_fails_open_when_embedding_hangs(monkeypatch
         await asyncio.sleep(3)
         return {"data": [{"embedding": [0.1, 0.2]}]}
 
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.get_configured_token_limits.return_value = (None, None)
     router.aembedding = never_responds
     monkeypatch.setitem(
@@ -1405,10 +1503,10 @@ def test_redis_semantic_cache_defaults_embedding_timeout():
 
 @pytest.mark.asyncio
 async def test_redis_async_embedding_truncates_off_the_event_loop(monkeypatch):
-    from tests.large_text import text
     from tests.unit.litellm_core_utils.event_loop_lag import (
         assert_loop_stayed_free,
         timed_with_loop_lags,
+        uncounted_text,
         warm_tokenizer,
     )
 
@@ -1420,12 +1518,12 @@ async def test_redis_async_embedding_truncates_off_the_event_loop(monkeypatch):
     cache.embedding_max_input_tokens = 5
     cache.embedding_timeout = 5
 
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.get_configured_token_limits.return_value = (8191, None)
     router.aembedding = AsyncMock(return_value={"data": [{"embedding": [0.1, 0.2]}]})
     _proxy_with_router(monkeypatch, router, "sem-embed")
 
-    embedding, took, lags = await timed_with_loop_lags(lambda: cache._get_async_embedding(text * 100))
+    embedding, took, lags = await timed_with_loop_lags(lambda: cache._get_async_embedding(uncounted_text()))
 
     assert embedding == [0.1, 0.2]
     assert _token_count("sem-embed", router.aembedding.call_args.kwargs["input"]) == 5

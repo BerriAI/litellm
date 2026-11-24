@@ -39,9 +39,10 @@ class AmazonTitanV2Config:
 
     @classmethod
     def get_config(cls):
+        class_attributes: Final[Mapping[str, object]] = types.MappingProxyType(cls.__dict__)
         return {
             k: v
-            for k, v in cls.__dict__.items()
+            for k, v in class_attributes.items()
             if not k.startswith("__")
             and not isinstance(
                 v,
@@ -58,7 +59,9 @@ class AmazonTitanV2Config:
     def get_supported_openai_params(self) -> list[str]:
         return ["dimensions", "encoding_format"]
 
-    def map_openai_params(self, non_default_params: dict, optional_params: dict) -> dict:
+    def map_openai_params(
+        self, non_default_params: Mapping[str, object], optional_params: dict[str, object]
+    ) -> dict[str, object]:
         for k, v in non_default_params.items():
             if k == "dimensions":
                 optional_params["dimensions"] = v

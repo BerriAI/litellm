@@ -1,4 +1,4 @@
-from typing import Any, Final
+from typing import Final
 
 from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig
 
@@ -8,7 +8,7 @@ def get_optional_rerank_params(
     model: str,
     drop_params: bool,
     query: str,
-    documents: list[str | dict[str, Any]],
+    documents: list[str | dict[str, object]],
     custom_llm_provider: str | None = None,
     top_n: int | None = None,
     rank_fields: list[str] | None = None,
@@ -16,7 +16,7 @@ def get_optional_rerank_params(
     max_chunks_per_doc: int | None = None,
     max_tokens_per_doc: int | None = None,
     instruction: str | None = None,
-    non_default_params: dict | None = None,
+    non_default_params: dict[str, object] | None = None,
 ) -> dict:
     all_non_default_params: Final = non_default_params or {}
     if query is not None:

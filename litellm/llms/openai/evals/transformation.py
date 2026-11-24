@@ -6,6 +6,7 @@ from collections.abc import Mapping
 from typing import Final
 
 import httpx
+from pydantic import TypeAdapter
 
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.url_utils import encode_url_path_segment, join_api_base
@@ -32,9 +33,11 @@ from litellm.types.llms.openai_evals import (
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
 
+_DECODED_JSON: Final = TypeAdapter(object)
 
-def _parsed_response_json(raw_response: httpx.Response) -> Mapping[str, object]:
-    return raw_response.json()
+
+def _parsed_response_json(raw_response: httpx.Response) -> object:
+    return _DECODED_JSON.validate_python(raw_response.json())
 
 
 class OpenAIEvalsConfig(BaseEvalsAPIConfig):
@@ -44,7 +47,9 @@ class OpenAIEvalsConfig(BaseEvalsAPIConfig):
     def custom_llm_provider(self) -> LlmProviders:
         return LlmProviders.OPENAI
 
-    def validate_environment(self, headers: dict, litellm_params: GenericLiteLLMParams | None) -> dict:
+    def validate_environment(
+        self, headers: dict[str, object], litellm_params: GenericLiteLLMParams | None
+    ) -> dict[str, object]:
         params: Final = litellm_params or GenericLiteLLMParams()
         bearer_token: Final = resolve_openai_bearer_token(
             api_key=params.api_key, api_base=params.api_base, litellm_params=params.model_dump(exclude_none=True)
@@ -74,8 +79,8 @@ class OpenAIEvalsConfig(BaseEvalsAPIConfig):
         self,
         create_request: CreateEvalRequest,
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
-    ) -> dict:
+        headers: Mapping[str, object],
+    ) -> dict[str, object]:
         """Transform create eval request for OpenAI"""
         verbose_logger.debug("Transforming create eval request: %s", create_request)
 
@@ -99,8 +104,8 @@ class OpenAIEvalsConfig(BaseEvalsAPIConfig):
         self,
         list_params: ListEvalsParams,
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
-    ) -> tuple[str, dict]:
+        headers: Mapping[str, object],
+    ) -> tuple[str, dict[str, object]]:
         """Transform list evals request for OpenAI"""
         api_base = "https://api.openai.com"
         if litellm_params and litellm_params.api_base:
@@ -144,8 +149,8 @@ class OpenAIEvalsConfig(BaseEvalsAPIConfig):
         eval_id: str,
         api_base: str,
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
-    ) -> tuple[str, dict]:
+        headers: dict[str, object],
+    ) -> tuple[str, dict[str, object]]:
         """Transform get eval request for OpenAI"""
         url: Final = self.get_complete_url(api_base=api_base, endpoint="evals", eval_id=eval_id)
 
@@ -170,8 +175,8 @@ class OpenAIEvalsConfig(BaseEvalsAPIConfig):
         update_request: UpdateEvalRequest,
         api_base: str,
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
-    ) -> tuple[str, dict, dict]:
+        headers: dict[str, object],
+    ) -> tuple[str, dict[str, object], dict[str, object]]:
         """Transform update eval request for OpenAI"""
         url: Final = self.get_complete_url(api_base=api_base, endpoint="evals", eval_id=eval_id)
 
@@ -198,8 +203,8 @@ class OpenAIEvalsConfig(BaseEvalsAPIConfig):
         eval_id: str,
         api_base: str,
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
-    ) -> tuple[str, dict]:
+        headers: dict[str, object],
+    ) -> tuple[str, dict[str, object]]:
         """Transform delete eval request for OpenAI"""
         url: Final = self.get_complete_url(api_base=api_base, endpoint="evals", eval_id=eval_id)
 
@@ -223,8 +228,8 @@ class OpenAIEvalsConfig(BaseEvalsAPIConfig):
         eval_id: str,
         api_base: str,
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
-    ) -> tuple[str, dict, dict]:
+        headers: dict[str, object],
+    ) -> tuple[str, dict[str, object], dict[str, object]]:
         """Transform cancel eval request for OpenAI"""
         url: Final = join_api_base(
             self.get_complete_url(api_base=api_base, endpoint="evals", eval_id=eval_id), "cancel"
@@ -254,8 +259,8 @@ class OpenAIEvalsConfig(BaseEvalsAPIConfig):
         eval_id: str,
         create_request: CreateRunRequest,
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
-    ) -> tuple[str, dict]:
+        headers: Mapping[str, object],
+    ) -> tuple[str, dict[str, object]]:
         """Transform create run request for OpenAI"""
         api_base = "https://api.openai.com"
         if litellm_params and litellm_params.api_base:
@@ -287,8 +292,8 @@ class OpenAIEvalsConfig(BaseEvalsAPIConfig):
         eval_id: str,
         list_params: ListRunsParams,
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
-    ) -> tuple[str, dict]:
+        headers: Mapping[str, object],
+    ) -> tuple[str, dict[str, object]]:
         """Transform list runs request for OpenAI"""
         api_base = "https://api.openai.com"
         if litellm_params and litellm_params.api_base:
@@ -332,8 +337,8 @@ class OpenAIEvalsConfig(BaseEvalsAPIConfig):
         run_id: str,
         api_base: str,
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
-    ) -> tuple[str, dict]:
+        headers: dict[str, object],
+    ) -> tuple[str, dict[str, object]]:
         """Transform get run request for OpenAI"""
         encoded_eval_id: Final = encode_url_path_segment(eval_id, field_name="eval_id")
         encoded_run_id: Final = encode_url_path_segment(run_id, field_name="run_id")
@@ -360,8 +365,8 @@ class OpenAIEvalsConfig(BaseEvalsAPIConfig):
         run_id: str,
         api_base: str,
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
-    ) -> tuple[str, dict, dict]:
+        headers: dict[str, object],
+    ) -> tuple[str, dict[str, object], dict[str, object]]:
         """Transform cancel run request for OpenAI"""
         encoded_eval_id: Final = encode_url_path_segment(eval_id, field_name="eval_id")
         encoded_run_id: Final = encode_url_path_segment(run_id, field_name="run_id")
@@ -391,8 +396,8 @@ class OpenAIEvalsConfig(BaseEvalsAPIConfig):
         run_id: str,
         api_base: str,
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
-    ) -> tuple[str, dict, dict]:
+        headers: dict[str, object],
+    ) -> tuple[str, dict[str, object], dict[str, object]]:
         """Transform delete run request for OpenAI"""
         encoded_eval_id: Final = encode_url_path_segment(eval_id, field_name="eval_id")
         encoded_run_id: Final = encode_url_path_segment(run_id, field_name="run_id")

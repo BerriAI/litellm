@@ -2,9 +2,12 @@
 Transformation for Calling Google models in their native format.
 """
 
+from collections.abc import Mapping
 from typing import Final, Literal
 
 from litellm.llms.gemini.google_genai.transformation import GoogleGenAIConfig
+from litellm.llms.vertex_ai.common_utils import vertex_top_level_request_fields
+from litellm.llms.vertex_ai.request_labels import without_caller_labels_header
 from litellm.types.router import GenericLiteLLMParams
 
 
@@ -25,7 +28,7 @@ class VertexAIGoogleGenAIConfig(GoogleGenAIConfig):
         api_key: str | None,
         headers: dict | None,
         model: str,
-        litellm_params: GenericLiteLLMParams | dict | None,
+        litellm_params: GenericLiteLLMParams | Mapping[str, object] | None,
     ) -> dict:
         default_headers: Final = {
             "Content-Type": "application/json",
@@ -38,6 +41,16 @@ class VertexAIGoogleGenAIConfig(GoogleGenAIConfig):
 
         return default_headers
 
+    def transform_top_level_request_fields(
+        self,
+        request_fields: Mapping[str, object] | None,
+        litellm_params: GenericLiteLLMParams,
+    ) -> Mapping[str, object] | None:
+        return vertex_top_level_request_fields(request_fields, litellm_params)
+
+    def transform_caller_headers(self, headers: Mapping[str, object]) -> Mapping[str, object]:
+        return without_caller_labels_header(headers)
+
     def _camel_to_snake(self, camel_str: str) -> str:
         """Convert camelCase to snake_case"""
         import re
@@ -46,9 +59,9 @@ class VertexAIGoogleGenAIConfig(GoogleGenAIConfig):
 
     def map_generate_content_optional_params(
         self,
-        generate_content_config_dict,
+        generate_content_config_dict: Mapping[str, object],
         model: str,
-    ):
+    ) -> dict[str, object]:
         """
         Map Google GenAI parameters to provider-specific format.
 
@@ -60,7 +73,7 @@ class VertexAIGoogleGenAIConfig(GoogleGenAIConfig):
             Mapped parameters for the provider
         """
 
-        _generate_content_config_dict: Final[dict] = {}
+        _generate_content_config_dict: Final[dict[str, object]] = {}
 
         for param, value in generate_content_config_dict.items():
             camel_case_key = self._camel_to_snake(param)
@@ -72,9 +85,9 @@ class VertexAIGoogleGenAIConfig(GoogleGenAIConfig):
         model: str,
         contents: object,
         tools: object | None,
-        generate_content_config_dict: dict,
+        generate_content_config_dict: dict[str, object],
         system_instruction: object | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Transform the generate content request for Vertex AI.
         Since Vertex AI natively supports Google GenAI format, we can pass most fields directly.

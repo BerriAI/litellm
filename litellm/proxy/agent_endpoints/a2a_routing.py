@@ -18,6 +18,7 @@ from litellm.a2a_protocol.litellm_completion_bridge.handler import (
     bridge_model_name,
 )
 from litellm.constants import A2A_CHAT_COMPLETION_BRIDGE_PROVIDERS
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, callable_of
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.agent_endpoints.databricks_oauth import (
     resolve_databricks_backend_auth,
@@ -27,6 +28,7 @@ from litellm.types.agents import AgentResponse
 
 _HEADERS: Final = TypeAdapter(Mapping[str, str])
 _OBJECT_MAPPING: Final = TypeAdapter(Mapping[str, object])
+_ROUTE_ENDPOINT: Final = TypeAdapter(object)
 _AGENT_PINNED_KWARGS: Final = ("api_base", "api_key")
 _AGENT_LAYERED_KWARGS: Final = ("custom_inputs", "extra_body")
 _CLIENT_TARGET_KWARGS: Final = ("api_base", "base_url")
@@ -107,7 +109,14 @@ def _bridge_request_data(
         if key in data and key in agent_kwargs
     }
     return _with_headers(
-        {**agent_kwargs, **data, **layered, **pinned, "model": bridge_model_name(litellm_params)},
+        {
+            **agent_kwargs,
+            **data,
+            **layered,
+            **pinned,
+            "model": bridge_model_name(litellm_params),
+            "custom_llm_provider": agent_kwargs.get("custom_llm_provider"),
+        },
         extra_headers,
     )
 
@@ -173,13 +182,14 @@ async def route_a2a_agent_request(
         return _call_route(route_type, _bridge_agent_request(data, agent, bridge_auth.litellm_params))
 
     # Get API base URL from agent config
-    if not agent.agent_card_params or "url" not in agent.agent_card_params:
+    card_params: Final = as_str_mapping(agent.agent_card_params)
+    if not card_params or "url" not in card_params:
         verbose_proxy_logger.error("[A2A] Agent '%s' has no URL configured", agent_name)
         route_name = ROUTE_ENDPOINT_MAPPING.get(route_type, route_type)
         raise ProxyModelNotFoundError(route=route_name, model_name=model_name, retryable_with_model_read_through=False)
 
     # Inject API base and route to litellm
-    data["api_base"] = agent.agent_card_params["url"]
+    data["api_base"] = card_params["url"]
     verbose_proxy_logger.debug("[A2A] Routing %s to %s", model_name, data["api_base"])
 
     return _call_route(route_type, data)
@@ -197,4 +207,5 @@ def _bridge_agent_request(
 
 
 def _call_route(route_type: str, request_data: Mapping[str, object]) -> object:
-    return getattr(litellm, route_type)(**request_data)
+    endpoint: Final = _ROUTE_ENDPOINT.validate_python(getattr(litellm, route_type))
+    return callable_of(endpoint)(**request_data)

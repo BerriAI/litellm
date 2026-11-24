@@ -63,6 +63,7 @@ _INVALID_ASSERTION_AADSTS_PREFIX: Final = "50027"
 _AADSTS_CODES_ADAPTER: Final = TypeAdapter(tuple[int, ...])
 _MCP_CALL_TYPES: Final[tuple[str, ...]] = ("mcp_call", "call_mcp_tool")
 _TOOL_INPUT_SCHEMA_ADAPTER: Final = TypeAdapter(dict[str, object])
+_DECODED_JSON: Final = TypeAdapter(object)
 _OBO_CACHE_MAX_ENTRIES: Final = 1000
 _DEFAULT_TOKEN_TTL_SECONDS: Final = 3599.0
 _TOKEN_EXPIRY_SLACK_SECONDS: Final = 60.0
@@ -101,6 +102,14 @@ class _DefenderResult(TypedDict, total=False):
     status: ReadOnly[str]
     verdict: ReadOnly[str | None]
     message: ReadOnly[str | None]
+
+
+def _as_mapping(value: object) -> Mapping[object, object] | None:
+    """Return ``value`` when it is a mapping, else ``None``."""
+    if not isinstance(value, Mapping):
+        return None
+    mapping: Final[Mapping[object, object]] = value
+    return mapping
 
 
 class _EvaluateResponse(TypedDict, total=False):
@@ -212,7 +221,7 @@ class Agent365Guardrail(CustomGuardrail):
         cache: "DualCache",
         data: dict,  # mutable-ok: hook contract; guardrail logging appends into the request metadata in place
         call_type: str,
-    ) -> Exception | str | dict | None:  # mutable-ok: CustomGuardrail.async_pre_call_hook contract
+    ) -> Exception | str | dict[str, object] | None:  # mutable-ok: CustomGuardrail.async_pre_call_hook contract
         if call_type not in _MCP_CALL_TYPES:
             return data
         if "mcp_tool_name" not in data:
@@ -294,12 +303,12 @@ class Agent365Guardrail(CustomGuardrail):
 
     def _handle_evaluate_error(
         self,
-        data: dict,  # mutable-ok: guardrail logging appends into the request metadata in place
+        data: dict[str, object],  # mutable-ok: guardrail logging appends into the request metadata in place
         tool_name: str,
         assertion: str,
         response: httpx.Response,
         latency_ms: float,
-    ) -> dict | None:  # mutable-ok: returns the request data dict per hook contract on fail_open
+    ) -> dict[str, object] | None:  # mutable-ok: returns the request data dict per hook contract on fail_open
         if response.status_code in (408, 429):
             self._handle_throttled(
                 data=data,
@@ -337,13 +346,13 @@ class Agent365Guardrail(CustomGuardrail):
 
     def _enforce_verdict(
         self,
-        data: dict,  # mutable-ok: guardrail logging appends into the request metadata in place
+        data: dict[str, object],  # mutable-ok: guardrail logging appends into the request metadata in place
         tool_name: str,
         response: httpx.Response,
         latency_ms: float,
-    ) -> dict:  # mutable-ok: returns the request data dict per hook contract
+    ) -> dict[str, object]:  # mutable-ok: returns the request data dict per hook contract
         try:
-            parsed_verdict: Final = response.json()
+            parsed_verdict: Final = _DECODED_JSON.validate_python(response.json())
         except ValueError:
             return self._handle_unavailable(
                 data=data,
@@ -434,17 +443,22 @@ class Agent365Guardrail(CustomGuardrail):
         logging_obj: Final = raw_logging_obj if isinstance(raw_logging_obj, LiteLLMLoggingObj) else None
         if logging_obj is not None:
             tool_call_metadata: Final = logging_obj.model_call_details.get("mcp_tool_call_metadata")
+            tool_call_mapping: Final = _as_mapping(tool_call_metadata)
             session_from_logging: Final = (
-                tool_call_metadata.get("mcp_session_id") if isinstance(tool_call_metadata, Mapping) else None
+                tool_call_mapping.get("mcp_session_id") if tool_call_mapping is not None else None
             )
             if isinstance(session_from_logging, str) and session_from_logging:
                 return session_from_logging
         metadata: Final = next(
-            (m for m in (data.get("metadata"), data.get("litellm_metadata")) if isinstance(m, Mapping)),
+            (
+                m
+                for m in (_as_mapping(data.get("metadata")), _as_mapping(data.get("litellm_metadata")))
+                if m is not None
+            ),
             None,
         )
-        headers: Final = metadata.get("headers") if isinstance(metadata, Mapping) else None
-        if isinstance(headers, Mapping):
+        headers: Final = _as_mapping(metadata.get("headers")) if metadata is not None else None
+        if headers is not None:
             session_id: Final = next(
                 (value for name, value in headers.items() if str(name).lower() == MCP_SESSION_ID_HEADER),
                 None,
@@ -486,7 +500,7 @@ class Agent365Guardrail(CustomGuardrail):
                 response=response,
             )
         try:
-            parsed_body: Final = response.json()
+            parsed_body: Final = _DECODED_JSON.validate_python(response.json())
         except ValueError as exc:
             raise Agent365MalformedResponseError("the Entra token endpoint returned a non-JSON body") from exc
         if not isinstance(parsed_body, dict):
@@ -533,7 +547,7 @@ class Agent365Guardrail(CustomGuardrail):
 
     def _handle_caller_fault(
         self,
-        data: dict,  # mutable-ok: guardrail logging appends into the request metadata in place
+        data: dict[str, object],  # mutable-ok: guardrail logging appends into the request metadata in place
         tool_name: str,
         status_code: int,
         reason: str,
@@ -556,7 +570,7 @@ class Agent365Guardrail(CustomGuardrail):
 
     def _handle_throttled(
         self,
-        data: dict,  # mutable-ok: guardrail logging appends into the request metadata in place
+        data: dict[str, object],  # mutable-ok: guardrail logging appends into the request metadata in place
         tool_name: str,
         reason: str,
         latency_ms: float | None,
@@ -585,13 +599,13 @@ class Agent365Guardrail(CustomGuardrail):
 
     def _handle_unavailable(
         self,
-        data: dict,  # mutable-ok: guardrail logging appends into the request metadata in place
+        data: dict[str, object],  # mutable-ok: guardrail logging appends into the request metadata in place
         tool_name: str,
         reason: str,
         defender_status: str | None = None,
         correlation_id: str | None = None,
         latency_ms: float | None = None,
-    ) -> dict:  # mutable-ok: returns the request data dict per hook contract
+    ) -> dict[str, object]:  # mutable-ok: returns the request data dict per hook contract
         if self.unreachable_fallback == "fail_open":
             verbose_proxy_logger.error(
                 "Agent 365 guardrail (%s): %s; unreachable_fallback='fail_open', allowing tool call '%s' unscanned",

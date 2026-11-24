@@ -50,11 +50,10 @@ def reset_blog_posts_cache():
     GetBlogPosts._last_fetch_time = 0.0
 
 
-def test_load_local_blog_posts_returns_posts_without_tags():
+def test_load_local_blog_posts_returns_posts():
     posts = GetBlogPosts.load_local_blog_posts()
     assert len(posts) > 0
     assert all(isinstance(post, BlogPost) for post in posts)
-    assert posts[0].tags == ()
 
 
 def test_parse_rss_to_posts():
@@ -190,8 +189,9 @@ def test_get_blog_posts_ttl_expired_refetches():
     assert len(posts) == 2
 
 
-def test_get_blog_posts_local_env_var_skips_remote(monkeypatch):
-    monkeypatch.setenv("LITELLM_LOCAL_BLOG_POSTS", "true")
+@pytest.mark.parametrize("flag", ["LITELLM_LOCAL_BLOG_POSTS", "LITELLM_OFFLINE_MODE"])
+def test_get_blog_posts_local_env_var_skips_remote(monkeypatch, flag):
+    monkeypatch.setenv(flag, "true")
     with patch("litellm.litellm_core_utils.get_blog_posts.httpx.get") as mock_get:
         posts = get_blog_posts(url=litellm.blog_posts_url)
     mock_get.assert_not_called()

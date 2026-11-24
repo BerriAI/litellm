@@ -3,9 +3,10 @@
 
 import os
 from datetime import datetime
-from typing import Final
+from typing import Final, Protocol
 
 import httpx
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm import verbose_logger
@@ -22,6 +23,18 @@ from litellm.llms.custom_httpx.http_handler import (
 from litellm.utils import print_verbose
 
 API_BASE: Final = "https://api.braintrustdata.com/v1"
+
+
+class _BraintrustProjectBody(TypedDict):
+    id: ReadOnly[str]
+
+
+class _BraintrustProjectResponse(Protocol):
+    def json(self) -> _BraintrustProjectBody: ...
+
+
+def _project_id(response: _BraintrustProjectResponse) -> str:
+    return response.json()["id"]
 
 
 def get_utc_datetime():
@@ -59,7 +72,7 @@ class BraintrustLogger(CustomLogger):
 
         in the environment
         """
-        missing_keys: Final = []
+        missing_keys: Final[list[str]] = []
         if api_key is None and os.getenv("BRAINTRUST_API_KEY", None) is None:
             missing_keys.append("BRAINTRUST_API_KEY")
 
@@ -80,8 +93,7 @@ class BraintrustLogger(CustomLogger):
                 headers=self.headers,
                 json={"name": project_name},
             )
-            project_dict: Final = response.json()
-            project_id: Final = project_dict["id"]
+            project_id: Final = _project_id(response)
             self._project_id_cache[project_name] = project_id
             return project_id
         except httpx.HTTPStatusError as e:
@@ -100,8 +112,7 @@ class BraintrustLogger(CustomLogger):
                 headers=self.headers,
                 json={"name": project_name},
             )
-            project_dict: Final = response.json()
-            project_id: Final = project_dict["id"]
+            project_id: Final = _project_id(response)
             self._project_id_cache[project_name] = project_id
             return project_id
         except httpx.HTTPStatusError as e:
@@ -112,20 +123,16 @@ class BraintrustLogger(CustomLogger):
             f"{self.api_base}/project", headers=self.headers, json={"name": "litellm"}
         )
 
-        project_dict: Final = project.json()
-
-        self.default_project_id = project_dict["id"]
+        self.default_project_id = _project_id(project)
 
     def create_sync_default_project_and_experiment(self):
         project: Final = self.global_braintrust_sync_http_handler.post(
             f"{self.api_base}/project", headers=self.headers, json={"name": "litellm"}
         )
 
-        project_dict: Final = project.json()
+        self.default_project_id = _project_id(project)
 
-        self.default_project_id = project_dict["id"]
-
-    def log_success_event(self, kwargs, response_obj, start_time, end_time):
+    def log_success_event(self, kwargs, response_obj: object, start_time: datetime, end_time: datetime):
         verbose_logger.debug("REACHES BRAINTRUST SUCCESS")
         try:
             litellm_call_id: Final = kwargs.get("litellm_call_id")
@@ -161,7 +168,7 @@ class BraintrustLogger(CustomLogger):
                     self.create_sync_default_project_and_experiment()
                 project_id = self.default_project_id
 
-            tags: Final = []
+            tags: Final[list[str]] = []
 
             if isinstance(dynamic_metadata, dict):
                 for key, value in dynamic_metadata.items():
@@ -180,7 +187,7 @@ class BraintrustLogger(CustomLogger):
 
             cost: Final = kwargs.get("response_cost", None)
 
-            metrics: dict | None = None
+            metrics: dict[str, object] | None = None
             usage_obj: Final = getattr(response_obj, "usage", None)
             if usage_obj and isinstance(usage_obj, litellm.Usage):
                 litellm.utils.get_logging_id(start_time, response_obj)
@@ -251,7 +258,7 @@ class BraintrustLogger(CustomLogger):
         except Exception as e:
             raise e  # don't use verbose_logger.exception, if exception is raised
 
-    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+    async def async_log_success_event(self, kwargs, response_obj: object, start_time: datetime, end_time: datetime):
         verbose_logger.debug("REACHES BRAINTRUST SUCCESS")
         try:
             litellm_call_id: Final = kwargs.get("litellm_call_id")
@@ -265,7 +272,7 @@ class BraintrustLogger(CustomLogger):
                 output = None
             elif response_obj is not None and isinstance(response_obj, litellm.ModelResponse):
                 output = response_obj.choices[0].message.json()
-                choices = response_obj["choices"]
+                choices = response_obj.choices
             elif response_obj is not None and isinstance(response_obj, litellm.TextCompletionResponse):
                 output = response_obj.choices[0].text
                 choices = response_obj.choices
@@ -286,7 +293,7 @@ class BraintrustLogger(CustomLogger):
                     await self.create_default_project_and_experiment()
                 project_id = self.default_project_id
 
-            tags: Final = []
+            tags: Final[list[str]] = []
 
             if isinstance(dynamic_metadata, dict):
                 for key, value in dynamic_metadata.items():
@@ -305,7 +312,7 @@ class BraintrustLogger(CustomLogger):
 
             cost: Final = kwargs.get("response_cost", None)
 
-            metrics: dict | None = None
+            metrics: dict[str, object] | None = None
             usage_obj: Final = getattr(response_obj, "usage", None)
             if usage_obj and isinstance(usage_obj, litellm.Usage):
                 litellm.utils.get_logging_id(start_time, response_obj)
@@ -358,10 +365,7 @@ class BraintrustLogger(CustomLogger):
                 if value:
                     request_data[key] = value
 
-            if choices is not None:
-                request_data["output"] = [choice.dict() for choice in choices]
-            else:
-                request_data["output"] = output
+            request_data["output"] = [choice.dict() for choice in choices]
 
             if metrics is not None:
                 request_data["metrics"] = metrics
@@ -379,5 +383,5 @@ class BraintrustLogger(CustomLogger):
         except Exception as e:
             raise e  # don't use verbose_logger.exception, if exception is raised
 
-    def log_failure_event(self, kwargs, response_obj, start_time, end_time):
+    def log_failure_event(self, kwargs: object, response_obj: object, start_time: object, end_time: object):
         return super().log_failure_event(kwargs, response_obj, start_time, end_time)

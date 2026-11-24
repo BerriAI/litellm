@@ -9,7 +9,16 @@ from litellm.litellm_core_utils.served_output_texts import (
     served_output_texts,
     served_stream_output_texts,
 )
-from litellm.types.utils import Choices, Delta, Message, ModelResponse, ModelResponseStream, StreamingChoices
+from litellm.types.utils import (
+    Choices,
+    Delta,
+    Message,
+    ModelResponse,
+    ModelResponseStream,
+    StreamingChoices,
+    TextChoices,
+    TextCompletionResponse,
+)
 
 RAW = "Card: 4111 1111 1111 1111"
 MASKED = "Card: <CREDIT_CARD>"
@@ -83,6 +92,30 @@ def test_served_stream_output_texts_keeps_every_choice_index_when_chunks_carry_o
     assert served_stream_output_texts(chunks) == ("first choice", MASKED)
 
 
+def _text_completion_chunk(text: str | None, index: int = 0) -> TextCompletionResponse:
+    return TextCompletionResponse(object="text_completion", choices=[TextChoices(index=index, text=text)])
+
+
+def test_served_stream_output_texts_joins_text_completion_chunks_per_choice():
+    chunks = [
+        _text_completion_chunk("Card: ", 0),
+        _text_completion_chunk("second", 1),
+        _text_completion_chunk("<CREDIT_CARD>", 0),
+        _text_completion_chunk(None, 1),
+        TextCompletionResponse(object="text_completion", choices=[]),
+    ]
+    assert served_stream_output_texts(chunks) == (MASKED, "second")
+
+
+def test_overlay_replaces_text_completion_choice_text_with_served_text():
+    logged = {"id": "x", "object": "text_completion", "choices": [{"index": 0, "text": RAW}, {"index": 1, "text": RAW}]}
+    assert overlay_served_output_texts(logged, (MASKED,)) == {
+        "id": "x",
+        "object": "text_completion",
+        "choices": [{"index": 0, "text": MASKED}, {"index": 1, "text": RAW}],
+    }
+
+
 @pytest.mark.parametrize("content", (None, "", "first"))
 def test_null_choice_index_joins_choice_zero_without_changing_other_choices(content: str | None) -> None:
     chunks: Final = (
@@ -122,6 +155,55 @@ def test_overlay_replaces_logged_choice_text_with_served_text():
     assert isinstance(overlaid, dict)
     assert overlaid["id"] == "x"
     assert _choice_texts(logged) == (RAW, RAW)
+
+
+RAW_TOKEN_IDS: Final = [7, 8, 9]
+RAW_LOGPROBS: Final = {"content": [{"token": RAW, "logprob": -0.1, "bytes": None, "top_logprobs": []}]}
+
+
+def _choice_token_ids(choice: dict[str, object]) -> tuple[object, object, object]:
+    message: Final = choice.get("message")
+    message_fields: Final = message.get("provider_specific_fields") if isinstance(message, dict) else None
+    choice_fields: Final = choice.get("provider_specific_fields")
+    return (
+        choice.get("token_ids"),
+        choice_fields.get("token_ids") if isinstance(choice_fields, dict) else None,
+        message_fields.get("token_ids") if isinstance(message_fields, dict) else None,
+    )
+
+
+@pytest.mark.parametrize(
+    "logged_choice",
+    (
+        {
+            "index": 0,
+            "provider_specific_fields": {"token_ids": RAW_TOKEN_IDS},
+            "message": {"content": RAW},
+            "logprobs": RAW_LOGPROBS,
+        },
+        {
+            "index": 0,
+            "message": {"content": RAW, "provider_specific_fields": {"token_ids": RAW_TOKEN_IDS}},
+            "logprobs": RAW_LOGPROBS,
+        },
+        {"index": 0, "text": RAW, "token_ids": RAW_TOKEN_IDS, "logprobs": RAW_LOGPROBS},
+    ),
+    ids=("chat-choice-fields", "chat-message-fields", "text-completion"),
+)
+@pytest.mark.parametrize(
+    ("served", "keeps_token_data"),
+    ((MASKED, False), (RAW, True), (f"{RAW} (verified)", True), (f"Note: {RAW}", False)),
+    ids=("rewritten", "unchanged", "appended", "prepended"),
+)
+def test_overlay_drops_logged_token_data_only_when_it_rewrites_the_choice_text(
+    logged_choice: dict[str, object], served: str, keeps_token_data: bool
+) -> None:
+    overlaid: Final = overlay_served_output_texts({"id": "x", "choices": [logged_choice]}, (served,))
+    assert isinstance(overlaid, dict)
+    choices: Final = overlaid["choices"]
+    assert isinstance(choices, list)
+    assert (RAW_TOKEN_IDS in _choice_token_ids(choices[0])) is keeps_token_data
+    assert (choices[0].get("logprobs") == RAW_LOGPROBS) is keeps_token_data
 
 
 def test_overlay_leaves_unreadable_inputs_untouched():

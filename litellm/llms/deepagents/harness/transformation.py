@@ -11,10 +11,12 @@ from __future__ import annotations
 
 import itertools
 import json
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Protocol
+
+from pydantic import TypeAdapter
 
 from litellm.harness.options import DeepAgentsOptions
 from litellm.harness.types import (
@@ -41,6 +43,7 @@ DEEPAGENTS_DEFAULT_RECURSION_LIMIT: Final = 1000
 _MODEL_NODE: Final = "model"
 # Only these graph nodes produce new messages; middleware hooks may re-emit history.
 _EVENT_NODES: Final = frozenset({"model", "tools"})
+_TOOL_CALLS: Final = TypeAdapter(Iterable[Mapping[str, object]])
 
 NORMALIZED_TO_NATIVE: Final[Mapping[str, str]] = MappingProxyType(
     {
@@ -126,6 +129,18 @@ def recursion_limit(ctx: SessionContext) -> int:
     return DEEPAGENTS_DEFAULT_RECURSION_LIMIT
 
 
+def _dict_or_none(value: object) -> Mapping[object, object] | None:
+    return value if isinstance(value, dict) else None
+
+
+def _list_or_none(value: object) -> Sequence[object] | None:
+    return value if isinstance(value, list) else None
+
+
+def _mapping_or_none(value: object) -> Mapping[object, object] | None:
+    return value if isinstance(value, Mapping) else None
+
+
 def content_text(content: object) -> str:
     """Plain text of a LangChain message content (str or content blocks)."""
     if isinstance(content, str):
@@ -138,22 +153,25 @@ def content_text(content: object) -> str:
 
 
 def _is_text_block(block: object) -> bool:
-    return isinstance(block, str) or (isinstance(block, dict) and block.get("type") == "text")
+    if isinstance(block, str):
+        return True
+    fields: Final = _dict_or_none(block)
+    return fields is not None and fields.get("type") == "text"
 
 
 def reasoning_text(message: object) -> str:
     """Reasoning deltas from additional_kwargs or reasoning/thinking content blocks."""
-    extra = getattr(message, "additional_kwargs", None) or MappingProxyType({})
+    extra = getattr(message, "additional_kwargs", None) or MappingProxyType[str, object]({})
     reasoning = extra.get("reasoning_content")
     if isinstance(reasoning, str) and reasoning:
         return reasoning
-    content = getattr(message, "content", None)
-    if not isinstance(content, list):
+    blocks: Final = _list_or_none(getattr(message, "content", None))
+    if blocks is None:
         return ""
     return "".join(
-        str(block.get("reasoning") or block.get("thinking") or "")
-        for block in content
-        if isinstance(block, dict) and block.get("type") in ("reasoning", "thinking")
+        str(fields.get("reasoning") or fields.get("thinking") or "")
+        for fields in (_dict_or_none(block) for block in blocks)
+        if fields is not None and fields.get("type") in ("reasoning", "thinking")
     )
 
 
@@ -187,10 +205,13 @@ def tool_call_event(call: Mapping[str, object]) -> ToolCall:
 
 def _node_messages(update: Mapping[object, object]) -> Iterator[object]:
     for node, delta in update.items():
-        if node not in _EVENT_NODES or not isinstance(delta, Mapping):
+        if node not in _EVENT_NODES:
             continue
-        messages = delta.get("messages")
-        if isinstance(messages, list):
+        fields = _mapping_or_none(delta)
+        if fields is None:
+            continue
+        messages = _list_or_none(fields.get("messages"))
+        if messages is not None:
             yield from messages
 
 
@@ -198,17 +219,18 @@ def update_events(
     update: object, skip_tools: frozenset[str]
 ) -> list[Event]:  # mutable-ok: returns a list; existing callers/tests compare it to list literals
     """ToolCall / ToolResult events from one `updates` stream chunk (node -> state delta)."""
-    if not isinstance(update, Mapping):
+    nodes: Final = _mapping_or_none(update)
+    if nodes is None:
         return []  # mutable-ok: returns a list; existing callers/tests compare it to list literals
     return list(  # mutable-ok: returns a list; existing callers/tests compare it to list literals
-        itertools.chain.from_iterable(_message_events(message, skip_tools) for message in _node_messages(update))
+        itertools.chain.from_iterable(_message_events(message, skip_tools) for message in _node_messages(nodes))
     )
 
 
 def _message_events(message: object, skip_tools: frozenset[str]) -> tuple[Event, ...]:
     kind = getattr(message, "type", None)
     if kind == "ai":
-        calls = getattr(message, "tool_calls", None) or ()
+        calls: Final = _TOOL_CALLS.validate_python(getattr(message, "tool_calls", None) or ())
         return tuple(tool_call_event(call) for call in calls if call.get("name") not in skip_tools)
     if kind == "tool" and getattr(message, "name", None) not in skip_tools:
         status: Final[object] = getattr(message, "status", None)
@@ -230,9 +252,10 @@ class InterruptLike(Protocol):
 def interrupts_in(
     update: object,
 ) -> list[InterruptLike]:  # mutable-ok: returns a list; existing callers/tests compare it to list literals
-    if not isinstance(update, Mapping):
+    nodes: Final = _mapping_or_none(update)
+    if nodes is None:
         return []  # mutable-ok: returns a list; existing callers/tests compare it to list literals
-    found = update.get("__interrupt__")
+    found = nodes.get("__interrupt__")
     items = tuple(found) if isinstance(found, (list, tuple)) else ()
     return list(items)  # mutable-ok: list return; callers/tests compare to lists
 
@@ -259,10 +282,11 @@ def approval_requests(
     interrupt_value: object,
 ) -> list[Mapping[str, Any]]:  # mutable-ok: returns a list; existing callers/tests compare it to list literals
     """action_requests of a HumanInTheLoopMiddleware interrupt payload."""
-    if not isinstance(interrupt_value, Mapping):
+    payload: Final = _mapping_or_none(interrupt_value)
+    if payload is None:
         return []  # mutable-ok: returns a list; existing callers/tests compare it to list literals
-    requests = interrupt_value.get("action_requests")
-    kept = tuple(r for r in requests if isinstance(r, Mapping)) if isinstance(requests, list) else ()
+    requests: Final = _list_or_none(payload.get("action_requests"))
+    kept = tuple(r for r in requests if isinstance(r, Mapping)) if requests is not None else ()
     return list(kept)  # mutable-ok: list return; callers/tests compare to lists
 
 

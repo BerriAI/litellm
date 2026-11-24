@@ -4,9 +4,10 @@ from typing import Annotated, Final, Literal, TypeAlias
 
 from fastapi import APIRouter, Depends, Request, Response
 from fastapi.responses import ORJSONResponse  # pyright: ignore[reportDeprecated]  # required endpoint contract
-from pydantic import TypeAdapter, ValidationError
+from pydantic import JsonValue, TypeAdapter, ValidationError
 
 from litellm.exceptions import BadRequestError
+from litellm.llms.base_llm.decisions.transformation import without_raw_prompt_cache_breakpoints
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth, user_api_key_auth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.common_utils.custom_openapi_spec import inline_request_body
@@ -21,7 +22,7 @@ from litellm.types.decisions import (
 from litellm.types.extraction import ExtractionRequest, ExtractionRequestBody, ExtractionResponse
 
 router: Final = APIRouter()
-_REQUEST_DATA_ADAPTER: Final[TypeAdapter[dict[str, object]]] = TypeAdapter(dict[str, object])
+_REQUEST_DATA_ADAPTER: Final[TypeAdapter[dict[str, JsonValue]]] = TypeAdapter(dict[str, JsonValue])
 _DECISIONS_REQUEST_BODY_ADAPTER: Final[TypeAdapter[DecisionsRequestBody]] = TypeAdapter(DecisionsRequestBody)
 _OPENAI_DECISION_REQUEST_BODY_ADAPTER: Final[TypeAdapter[OpenAIDecisionRequestBody]] = TypeAdapter(
     OpenAIDecisionRequestBody
@@ -113,25 +114,70 @@ async def _invalid_request(
     )
 
 
-_FIELDS_CHECKED_AFTER_ROUTING: Final = frozenset({"safety_identifier", "images", "assets", "audio", "videos"})
+_FIELDS_CHECKED_AFTER_ROUTING: Final = frozenset(
+    {"safety_identifier", "prompt_cache_key", "prompt_cache_options", "images", "assets", "audio", "videos"}
+)
 
 
 def _fields_checked_before_routing(data: Mapping[str, object], route_type: _RouteType) -> Mapping[str, object]:
     if route_type == "aextraction":
         return data
-    return MappingProxyType({key: value for key, value in data.items() if key not in _FIELDS_CHECKED_AFTER_ROUTING})
+    return MappingProxyType(
+        {
+            key: without_raw_prompt_cache_breakpoints(value) if key == "input" else value
+            for key, value in data.items()
+            if key not in _FIELDS_CHECKED_AFTER_ROUTING
+        }
+    )
 
 
-_DEPLOYMENT_ONLY_FIELDS: Final = frozenset({"model_info"})
+_DEPLOYMENT_ONLY_FIELDS: Final = frozenset({"model_info", "use_litellm_proxy"})
+_FALLBACK_FIELDS: Final = frozenset({"fallbacks", "context_window_fallbacks", "content_policy_fallbacks"})
 
 
-async def _request_data(request: Request, user_api_key_dict: UserAPIKeyAuth, api_name: _ApiName) -> dict[str, object]:
+def _without_deployment_only_fields(params: Mapping[str, JsonValue]) -> Mapping[str, JsonValue]:
+    return {
+        key: _routing_value_without_deployment_only_fields(key, value)
+        for key, value in params.items()
+        if key not in _DEPLOYMENT_ONLY_FIELDS
+    }
+
+
+def _routing_value_without_deployment_only_fields(key: str, value: JsonValue) -> JsonValue:
+    if key in _FALLBACK_FIELDS:
+        return _fallback_entries_without_deployment_only_fields(value)
+    if key == "router_settings_override" and isinstance(value, dict):
+        return dict(_without_deployment_only_fields(value))
+    return value
+
+
+def _fallback_entries_without_deployment_only_fields(entries: JsonValue) -> JsonValue:
+    if not isinstance(entries, list):
+        return entries
+    return [_fallback_entry_without_deployment_only_fields(entry) for entry in entries]
+
+
+def _fallback_entry_without_deployment_only_fields(entry: JsonValue) -> JsonValue:
+    if not isinstance(entry, dict):
+        return entry
+    if isinstance(entry.get("model"), str):
+        return dict(_without_deployment_only_fields(entry))
+    return {
+        group: _fallback_entries_without_deployment_only_fields(targets)
+        for group, targets in entry.items()
+        if group not in _DEPLOYMENT_ONLY_FIELDS
+    }
+
+
+async def _request_data(
+    request: Request, user_api_key_dict: UserAPIKeyAuth, api_name: _ApiName
+) -> Mapping[str, JsonValue]:
     body: Final = await request.body()
     try:
         data: Final = _REQUEST_DATA_ADAPTER.validate_json(body)
     except ValidationError as error:
         raise await _invalid_request(raw_data={}, error=error, user_api_key_dict=user_api_key_dict, api_name=api_name)
-    return {key: value for key, value in data.items() if key not in _DEPLOYMENT_ONLY_FIELDS}
+    return _without_deployment_only_fields(data)
 
 
 async def _process_decisions(
@@ -175,7 +221,7 @@ async def _process_decisions(
     user_model: Final = _OPTIONAL_STRING_ADAPTER.validate_python(proxy_user_model)
     user_temperature: Final = _OPTIONAL_FLOAT_ADAPTER.validate_python(proxy_user_temperature)
     takes_generation_settings: Final = route_type != "aextraction"
-    processor: Final = ProxyBaseLLMRequestProcessing(data=data)
+    processor: Final = ProxyBaseLLMRequestProcessing(data=dict(data))
     try:
         return await processor.base_process_llm_request(
             request=request,
@@ -228,7 +274,7 @@ async def systemone(
     user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
 ):
     """
-    Judge a `state` against 1 to 128 named `questions` and get one calibrated answer per question name.
+    Judge a `state` against one or more named `questions` and get one calibrated answer per question name.
 
     Question types are `noul` (probability the answer is yes), `choice` (one label out of `criteria`, with
     `confidence` and `probabilities`), `score` (an index into the `criteria` levels, with `confidence`,

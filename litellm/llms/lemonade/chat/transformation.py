@@ -2,8 +2,8 @@
 Translate from OpenAI's `/v1/chat/completions` to Lemonade's `/v1/chat/completions`
 """
 
-from collections.abc import Iterable, Mapping
-from typing import TYPE_CHECKING, Any, Final, Protocol
+from collections.abc import Iterable, Mapping, Sequence
+from typing import TYPE_CHECKING, Final, Protocol
 from urllib.parse import quote
 
 import httpx
@@ -12,6 +12,7 @@ from pydantic import ConfigDict, TypeAdapter
 import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.model_cost_table import FailedLookup
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import (
@@ -27,6 +28,7 @@ if TYPE_CHECKING:
 _JSON_DICT: Final = TypeAdapter(dict[str, object], config=ConfigDict(hide_input_in_errors=True))
 _JSON_OBJECTS: Final = TypeAdapter(Iterable[Mapping[str, object]], config=ConfigDict(hide_input_in_errors=True))
 _STR: Final = TypeAdapter(str)
+_OPAQUE_VALUE: Final = TypeAdapter(object)
 
 
 class _JsonResponse(Protocol):
@@ -57,18 +59,18 @@ class LemonadeChatConfig(OpenAILikeChatConfig):
     def __init__(
         self,
         repeat_penalty: float | None = None,
-        functions: list | None = None,
-        logit_bias: dict | None = None,
+        functions: Sequence[object] | None = None,
+        logit_bias: Mapping[str, object] | None = None,
         max_completion_tokens: int | None = None,
         max_tokens: int | None = None,
         n: int | None = None,
         presence_penalty: int | None = None,
-        stop: str | list | None = None,
+        stop: str | Sequence[object] | None = None,
         temperature: int | None = None,
         top_p: int | None = None,
         top_k: int | None = None,
-        response_format: dict | None = None,
-        tools: list | None = None,
+        response_format: Mapping[str, object] | None = None,
+        tools: Sequence[object] | None = None,
     ) -> None:
         locals_: Final[Mapping[str, object]] = dict(locals())
         for key, value in locals_.items():
@@ -123,7 +125,7 @@ class LemonadeChatConfig(OpenAILikeChatConfig):
         return ["lemonade/" + _STR.validate_python(model["id"]) for model in model_list]
 
     @staticmethod
-    def _get_positive_int(value: Any) -> int | None:
+    def _get_positive_int(value: object) -> int | None:
         if isinstance(value, bool):
             return None
         if isinstance(value, int) and value > 0:
@@ -138,7 +140,7 @@ class LemonadeChatConfig(OpenAILikeChatConfig):
         return None
 
     @staticmethod
-    def _get_provider_specific_entry(model_info: dict) -> dict:
+    def _get_provider_specific_entry(model_info: Mapping[str, object]) -> dict:
         provider_specific_entry = model_info.get("provider_specific_entry")
         if not isinstance(provider_specific_entry, dict):
             provider_specific_entry = {}
@@ -151,7 +153,7 @@ class LemonadeChatConfig(OpenAILikeChatConfig):
 
         return provider_specific_entry
 
-    def _get_context_window(self, model_info: dict) -> int | None:
+    def _get_context_window(self, model_info: Mapping[str, object]) -> int | None:
         provider_specific_entry: Final = self._get_provider_specific_entry(model_info)
         recipe_options = provider_specific_entry.get("recipe_options")
         if not isinstance(recipe_options, dict):
@@ -163,12 +165,12 @@ class LemonadeChatConfig(OpenAILikeChatConfig):
             provider_specific_entry.get("context_window"),
             provider_specific_entry.get("max_context_window"),
         ):
-            parsed = self._get_positive_int(value)
+            parsed = self._get_positive_int(_OPAQUE_VALUE.validate_python(value))
             if parsed is not None:
                 return parsed
         return None
 
-    def _get_default_model_info(self, model: str) -> dict:
+    def _get_default_model_info(self, model: str) -> dict[str, object]:
         return {
             "key": "lemonade/" + model,
             "litellm_provider": "lemonade",
@@ -186,22 +188,32 @@ class LemonadeChatConfig(OpenAILikeChatConfig):
         api_base: str | None = None,
         api_key: str | None = None,
     ) -> dict[str, object]:
+        looked_up: Final = self.look_up_model_info(model=model, api_base=api_base, api_key=api_key)
+        return dict(looked_up.value if isinstance(looked_up, FailedLookup) else looked_up)
+
+    def look_up_model_info(
+        self,
+        model: str,
+        api_base: str | None = None,
+        api_key: str | None = None,
+    ) -> Mapping[str, object] | FailedLookup[Mapping[str, object]]:
         if model.startswith("lemonade/"):
             model = model.split("/", 1)[1]
 
         api_base, api_key = self._get_openai_compatible_provider_info(api_base=api_base, api_key=api_key)
+        server_api_base: Final = str(api_base).rstrip("/").removesuffix("/chat/completions")
         encoded_model: Final = quote(model, safe="")
 
         try:
             response: Final = litellm.module_level_client.get(
-                url=join_api_base(str(api_base), f"models/{encoded_model}"),
+                url=join_api_base(server_api_base, f"models/{encoded_model}"),
                 headers=self._get_auth_headers(api_key),
             )
             response.raise_for_status()
             model_info: Final = _json_body(response)
         except Exception:
             verbose_logger.debug("LemonadeError: Could not get model info.")
-            return self._get_default_model_info(model)
+            return FailedLookup(self._get_default_model_info(model))
 
         model_info_fields: Final = _JSON_DICT.validate_python(model_info)
         max_input_tokens: Final = self._get_context_window(model_info_fields)
@@ -239,7 +251,7 @@ class LemonadeChatConfig(OpenAILikeChatConfig):
     ) -> tuple[str | None, str | None]:
         return self._get_openai_compatible_provider_info(api_base, api_key)
 
-    def _get_auth_headers(self, api_key: str | None) -> dict:
+    def _get_auth_headers(self, api_key: str | None) -> dict[str, str]:
         if api_key is None or api_key == self._DEFAULT_API_KEY:
             return {}
         return {"Authorization": f"Bearer {api_key}"}
@@ -250,10 +262,10 @@ class LemonadeChatConfig(OpenAILikeChatConfig):
         raw_response: httpx.Response,
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
-        request_data: dict,
+        request_data: dict[str, object],
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,

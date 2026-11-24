@@ -12,10 +12,11 @@ from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.proxy_server import app
 from litellm.proxy.ui_crud_endpoints.latest_release_endpoints import (
+    CHANGELOG_FEED_URL,
+    CHANGELOG_URL,
     LATEST_RELEASE_CACHE_KEY,
     LATEST_RELEASE_CACHE_TTL_SECONDS,
     LATEST_RELEASE_UNAVAILABLE_CACHE_TTL_SECONDS,
-    LATEST_RELEASE_URL,
     RELEASE_BY_TAG_URL,
     LatestReleaseInfo,
     LatestReleaseUnavailable,
@@ -49,37 +50,68 @@ SAMPLE_RELEASE: Final = {
     "html_url": "https://github.com/BerriAI/litellm/releases/tag/v1.102.0",
     "body": SAMPLE_BODY,
 }
+
+
+def _changelog_page(folder: str) -> str:
+    return f"{CHANGELOG_URL}{folder}/{folder.removeprefix('v').replace('.', '-')}"
+
+
+def _feed(*folders: str) -> httpx.Response:
+    items: Final = "".join(
+        f"<item><title>{folder}</title><link>{_changelog_page(folder)}</link></item>" for folder in folders
+    )
+    return httpx.Response(200, content=f'<?xml version="1.0"?><rss><channel>{items}</channel></rss>'.encode())
+
+
 EXPECTED_INFO: Final = {
     "version": "1.102.0",
     "new_features": 2,
     "bug_fixes": 2,
     "other_updates": 4,
-    "release_url": SAMPLE_RELEASE["html_url"],
+    "release_url": _changelog_page("v1.102.0"),
 }
-
-
-class _RecordingClient:
-    def __init__(self, outcomes: list[httpx.Response | Exception]) -> None:
-        self._outcomes = outcomes
-        self.calls: list[tuple[str, float | None]] = []
-
-    async def get(self, url: str, *, timeout: float | None = None) -> httpx.Response:
-        self.calls.append((url, timeout))
-        outcome = self._outcomes[min(len(self.calls) - 1, len(self._outcomes) - 1)]
-        if isinstance(outcome, Exception):
-            raise outcome
-        return outcome
 
 
 def _github_response(status: int = 200, payload: object = SAMPLE_RELEASE) -> httpx.Response:
     return httpx.Response(status, content=json.dumps(payload).encode())
 
 
+def _tag_url(tag: str) -> str:
+    return RELEASE_BY_TAG_URL.format(tag=tag)
+
+
+class _ByUrl:
+    """Answers each URL from a fixed map; unknown URLs are 404, like a tag with no release."""
+
+    def __init__(self, routes: dict[str, httpx.Response | Exception]) -> None:
+        self._routes = routes
+        self.calls: list[tuple[str, float | None]] = []
+
+    async def get(self, url: str, *, timeout: float | None = None) -> httpx.Response:
+        self.calls.append((url, timeout))
+        outcome = self._routes.get(url, httpx.Response(404, content=b"{}"))
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+    @property
+    def urls(self) -> list[str]:
+        return [url for url, _ in self.calls]
+
+
+def _minor_release_routes(**overrides: httpx.Response | Exception) -> dict[str, httpx.Response | Exception]:
+    return {CHANGELOG_FEED_URL: _feed("v1.102.0"), _tag_url("v1.102.0"): _github_response(), **overrides}
+
+
+def _minor_release(**overrides: httpx.Response | Exception) -> _ByUrl:
+    return _ByUrl(_minor_release_routes(**overrides))
+
+
 def _fresh_cache() -> InMemoryCache:
     return InMemoryCache(max_size_in_memory=1, default_ttl=LATEST_RELEASE_CACHE_TTL_SECONDS)
 
 
-def _override_dependencies(client: _RecordingClient, cache: InMemoryCache, role: LitellmUserRoles) -> None:
+def _override_dependencies(client: _ByUrl, cache: InMemoryCache, role: LitellmUserRoles) -> None:
     async def auth() -> UserAPIKeyAuth:
         return UserAPIKeyAuth(api_key="sk-test", user_id="test-user", user_role=role)
 
@@ -87,6 +119,53 @@ def _override_dependencies(client: _RecordingClient, cache: InMemoryCache, role:
     app.dependency_overrides[_default_client] = lambda: client
     app.dependency_overrides[_default_cache] = lambda: cache
     app.dependency_overrides[_default_fetch_lock] = lambda: asyncio.Lock()
+
+
+class _AsgiGet:
+    """One GET sent straight to the ASGI app, so the response body is readable while the app call is still running."""
+
+    def __init__(self, path: str) -> None:
+        self._chunks: list[bytes] = []
+        self._sent = asyncio.Event()
+        self.task = asyncio.create_task(
+            app(
+                {
+                    "type": "http",
+                    "asgi": {"version": "3.0"},
+                    "http_version": "1.1",
+                    "method": "GET",
+                    "scheme": "http",
+                    "path": path,
+                    "raw_path": path.encode(),
+                    "query_string": b"",
+                    "headers": [(b"host", b"proxy")],
+                    "client": ("127.0.0.1", 1),
+                    "server": ("proxy", 80),
+                },
+                self._receive,
+                self._send,
+            )
+        )
+
+    async def _receive(self) -> dict[str, object]:
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    async def _send(self, message: dict[str, object]) -> None:
+        if message["type"] != "http.response.body":
+            return
+        body = message.get("body", b"")
+        assert isinstance(body, bytes)
+        self._chunks.append(body)
+        if not message.get("more_body", False):
+            self._sent.set()
+
+    @property
+    def finished(self) -> bool:
+        return self.task.done()
+
+    async def body(self) -> bytes:
+        await self._sent.wait()
+        return b"".join(self._chunks)
 
 
 @pytest.fixture
@@ -120,6 +199,18 @@ class TestCountReleaseBullets:
             == 0
         )
 
+    def test_buckets_area_labelled_bullets_by_their_leading_verb(self):
+        counts = count_release_bullets(
+            "### Changes\n\n"
+            "- **OpenAI:** Fixed empty `api_key` sending the admin key (#1)\n"
+            "- **AWS Bedrock:** fixed Converse `service_tier` (#2)\n"
+            "- **MCP:** Added per-server timeouts (#3)\n"
+            "- **Routing and fallbacks:** Changed the default cooldown (#4)\n"
+            "- **UI:** Moved the upgrade notice into the bell (#5)\n"
+            "- plain dash line that is not a change entry\n"
+        )
+        assert (counts["new_features"], counts["bug_fixes"], counts["other_updates"]) == (1, 2, 2)
+
     def test_empty_body_yields_zero_counts(self):
         counts = count_release_bullets("")
         assert (counts["new_features"], counts["bug_fixes"], counts["other_updates"]) == (0, 0, 0)
@@ -127,35 +218,68 @@ class TestCountReleaseBullets:
 
 class TestGetLatestReleaseInfo:
     @pytest.mark.asyncio
-    async def test_fetches_and_parses_github_release(self):
-        client = _RecordingClient([_github_response()])
+    async def test_announces_the_changelog_release_and_links_its_changelog_page(self):
+        client = _minor_release()
         result = await get_latest_release_info(client=client, cache=_fresh_cache(), fetch_lock=asyncio.Lock())
         assert isinstance(result, LatestReleaseInfo)
         assert result.model_dump() == EXPECTED_INFO
-        assert client.calls == [(LATEST_RELEASE_URL, 5)]
+        assert client.calls == [(CHANGELOG_FEED_URL, 5), (_tag_url("v1.102.0"), 5)]
+
+    @pytest.mark.asyncio
+    async def test_github_release_missing_from_the_changelog_is_not_announced(self):
+        automated: Final = _github_response(payload=_release("v1.103.0", "* feat(proxy): automated release\n"))
+        result = await _info(_minor_release(**{_tag_url("v1.103.0"): automated}))
+        assert isinstance(result, LatestReleaseInfo)
+        assert result.model_dump() == EXPECTED_INFO
+
+    @pytest.mark.asyncio
+    async def test_highest_stable_version_wins_regardless_of_feed_order(self):
+        client = _minor_release(**{CHANGELOG_FEED_URL: _feed("v1.101.6", "v1.103.0rc1", "v1.102.0", "v1.100.9")})
+        result = await _info(client)
+        assert isinstance(result, LatestReleaseInfo)
+        assert result.model_dump() == EXPECTED_INFO
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "feed",
+        [
+            httpx.Response(503, content=_feed("v1.102.0").content),
+            httpx.Response(200, content=b"<html>not a feed"),
+            _feed("v1.103.0rc1", "v1.103.0-dev.1"),
+            httpx.Response(
+                200,
+                content=f"<rss><channel><item><link>https://example.com/?{_changelog_page('v9.0.0')}</link>"
+                "</item><item><link>https://example.com/release_notes/v9.0.0/x</link></item></channel></rss>".encode(),
+            ),
+        ],
+        ids=["server_error", "not_xml", "only_prereleases", "foreign_links"],
+    )
+    async def test_bad_changelog_feeds_are_unavailable(self, feed: httpx.Response):
+        client = _minor_release(**{CHANGELOG_FEED_URL: feed})
+        result = await _info(client)
+        assert isinstance(result, LatestReleaseUnavailable)
+        assert client.urls == [CHANGELOG_FEED_URL]
 
     @pytest.mark.asyncio
     async def test_second_call_within_ttl_does_not_refetch(self):
-        client = _RecordingClient([_github_response()])
+        client = _minor_release()
         cache = _fresh_cache()
         fetch_lock = asyncio.Lock()
         first = await get_latest_release_info(client=client, cache=cache, fetch_lock=fetch_lock)
         second = await get_latest_release_info(client=client, cache=cache, fetch_lock=fetch_lock)
         assert first == second
-        assert len(client.calls) == 1
+        assert len(client.calls) == 2
 
     @pytest.mark.asyncio
     async def test_success_is_cached_for_the_full_ttl(self):
         cache = _fresh_cache()
-        await get_latest_release_info(
-            client=_RecordingClient([_github_response()]), cache=cache, fetch_lock=asyncio.Lock()
-        )
+        await get_latest_release_info(client=_minor_release(), cache=cache, fetch_lock=asyncio.Lock())
         remaining = await cache.async_get_ttl(LATEST_RELEASE_CACHE_KEY) - time.time()
         assert LATEST_RELEASE_CACHE_TTL_SECONDS - 5 < remaining <= LATEST_RELEASE_CACHE_TTL_SECONDS
 
     @pytest.mark.asyncio
     async def test_failure_is_cached_briefly_so_github_is_not_hammered(self):
-        client = _RecordingClient([httpx.ConnectError("boom")])
+        client = _ByUrl({CHANGELOG_FEED_URL: httpx.ConnectError("boom")})
         cache = _fresh_cache()
         fetch_lock = asyncio.Lock()
         first = await get_latest_release_info(client=client, cache=cache, fetch_lock=fetch_lock)
@@ -172,30 +296,29 @@ class TestGetLatestReleaseInfo:
     @pytest.mark.parametrize(
         "response",
         [
+            _github_response(status=404, payload={"message": "Not Found"}),
             _github_response(status=403, payload={"message": "rate limited"}),
             _github_response(status=500, payload={}),
             _github_response(payload={"tag_name": "v1.0.0"}),
             httpx.Response(200, content=b"not json"),
+            httpx.ConnectError("boom"),
         ],
-        ids=["rate_limited", "server_error", "missing_fields", "not_json"],
+        ids=["no_release_for_tag", "rate_limited", "server_error", "missing_fields", "not_json", "unreachable"],
     )
-    async def test_bad_github_responses_are_unavailable(self, response: httpx.Response):
-        result = await get_latest_release_info(
-            client=_RecordingClient([response]), cache=_fresh_cache(), fetch_lock=asyncio.Lock()
-        )
+    async def test_bad_github_responses_are_unavailable(self, response: httpx.Response | Exception):
+        result = await _info(_minor_release(**{_tag_url("v1.102.0"): response}))
         assert isinstance(result, LatestReleaseUnavailable)
 
     @pytest.mark.asyncio
     async def test_concurrent_misses_share_one_fetch(self):
         event = asyncio.Event()
 
-        class _BlockingClient(_RecordingClient):
+        class _BlockingClient(_ByUrl):
             async def get(self, url: str, *, timeout: float | None = None) -> httpx.Response:
-                self.calls.append((url, timeout))
                 await event.wait()
-                return _github_response()
+                return await super().get(url, timeout=timeout)
 
-        client = _BlockingClient([])
+        client = _BlockingClient(_minor_release_routes())
         cache = _fresh_cache()
         fetch_lock = asyncio.Lock()
         tasks = [
@@ -208,19 +331,19 @@ class TestGetLatestReleaseInfo:
         results = await asyncio.gather(*tasks)
         expected: Final = LatestReleaseInfo.model_validate(EXPECTED_INFO)
         assert results == [expected] * 5
-        assert len(client.calls) == 1
+        assert len(client.calls) == 2
 
     @pytest.mark.asyncio
     async def test_failure_under_lock_is_also_coalesced(self):
         event = asyncio.Event()
 
-        class _FailingBlockingClient(_RecordingClient):
+        class _FailingBlockingClient(_ByUrl):
             async def get(self, url: str, *, timeout: float | None = None) -> httpx.Response:
                 self.calls.append((url, timeout))
                 await event.wait()
                 raise httpx.ConnectError("boom")
 
-        client = _FailingBlockingClient([])
+        client = _FailingBlockingClient({})
         cache = _fresh_cache()
         fetch_lock = asyncio.Lock()
         tasks = [
@@ -245,40 +368,23 @@ def _release(tag: str, body: str | None, *, prerelease: bool = False) -> dict[st
     }
 
 
-def _tag_url(tag: str) -> str:
-    return RELEASE_BY_TAG_URL.format(tag=tag)
-
-
-class _GitHubByUrl:
-    """Answers each GitHub URL from a fixed map; unknown URLs are 404, like a tag with no release."""
-
-    def __init__(self, routes: dict[str, httpx.Response | Exception]) -> None:
-        self._routes = routes
-        self.urls: list[str] = []
-
-    async def get(self, url: str, *, timeout: float | None = None) -> httpx.Response:
-        self.urls.append(url)
-        outcome = self._routes.get(url, httpx.Response(404, content=b"{}"))
-        if isinstance(outcome, Exception):
-            raise outcome
-        return outcome
-
-
 PATCH_RELEASE: Final = _release("v1.102.2", "* fix(proxy): second backport by @k in https://x/pull/10\n")
 FIRST_PATCH: Final = _release("v1.102.1", "* fix(proxy): first backport by @k in https://x/pull/9\n")
 
 
-def _minor_line(**overrides: httpx.Response | Exception) -> dict[str, httpx.Response | Exception]:
-    routes: dict[str, httpx.Response | Exception] = {
-        LATEST_RELEASE_URL: _github_response(payload=PATCH_RELEASE),
-        _tag_url("v1.102.0"): _github_response(payload=SAMPLE_RELEASE),
-        _tag_url("v1.102.1"): _github_response(payload=FIRST_PATCH),
-    }
-    routes.update({_tag_url(tag): outcome for tag, outcome in overrides.items()})
-    return routes
+def _minor_line(**overrides: httpx.Response | Exception) -> _ByUrl:
+    return _ByUrl(
+        {
+            CHANGELOG_FEED_URL: _feed("v1.102.2", "v1.101.6"),
+            _tag_url("v1.102.2"): _github_response(payload=PATCH_RELEASE),
+            _tag_url("v1.102.0"): _github_response(payload=SAMPLE_RELEASE),
+            _tag_url("v1.102.1"): _github_response(payload=FIRST_PATCH),
+            **{_tag_url(tag): outcome for tag, outcome in overrides.items()},
+        }
+    )
 
 
-async def _info(client: _GitHubByUrl) -> LatestReleaseInfo | LatestReleaseUnavailable:
+async def _info(client: _ByUrl) -> LatestReleaseInfo | LatestReleaseUnavailable:
     return await get_latest_release_info(client=client, cache=_fresh_cache(), fetch_lock=asyncio.Lock())
 
 
@@ -289,7 +395,7 @@ class TestPatchReleaseAggregatesMinorLine:
 
     @pytest.mark.asyncio
     async def test_patch_release_counts_include_every_earlier_patch_on_its_line(self):
-        client = _GitHubByUrl(_minor_line())
+        client = _minor_line()
         result = await _info(client)
         assert isinstance(result, LatestReleaseInfo)
         assert result.model_dump() == {
@@ -297,23 +403,11 @@ class TestPatchReleaseAggregatesMinorLine:
             "new_features": 2,
             "bug_fixes": 4,
             "other_updates": 4,
-            "release_url": PATCH_RELEASE["html_url"],
+            "release_url": _changelog_page("v1.102.2"),
         }
-        assert sorted(client.urls) == sorted([LATEST_RELEASE_URL, _tag_url("v1.102.0"), _tag_url("v1.102.1")])
-
-    @pytest.mark.asyncio
-    async def test_minor_release_makes_a_single_request(self):
-        client = _RecordingClient([_github_response()])
-        await get_latest_release_info(client=client, cache=_fresh_cache(), fetch_lock=asyncio.Lock())
-        assert client.calls == [(LATEST_RELEASE_URL, 5)]
-
-    @pytest.mark.asyncio
-    async def test_non_semver_latest_tag_counts_only_its_own_notes(self):
-        client = _GitHubByUrl({LATEST_RELEASE_URL: _github_response(payload=_release("v1.102.1-hotfix", "* fix: x\n"))})
-        result = await _info(client)
-        assert isinstance(result, LatestReleaseInfo)
-        assert (result.new_features, result.bug_fixes, result.other_updates) == (0, 1, 0)
-        assert client.urls == [LATEST_RELEASE_URL]
+        assert sorted(client.urls) == sorted(
+            [CHANGELOG_FEED_URL, _tag_url("v1.102.2"), _tag_url("v1.102.0"), _tag_url("v1.102.1")]
+        )
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
@@ -326,15 +420,13 @@ class TestPatchReleaseAggregatesMinorLine:
         ids=["never_published", "prerelease", "null_body"],
     )
     async def test_missing_prerelease_or_empty_patch_adds_nothing(self, skipped: httpx.Response):
-        result = await _info(_GitHubByUrl(_minor_line(**{"v1.102.1": skipped})))
+        result = await _info(_minor_line(**{"v1.102.1": skipped}))
         assert isinstance(result, LatestReleaseInfo)
         assert (result.new_features, result.bug_fixes, result.other_updates) == (2, 3, 4)
 
     @pytest.mark.asyncio
     async def test_latest_release_with_null_body_still_counts_its_line(self):
-        routes = _minor_line()
-        routes[LATEST_RELEASE_URL] = _github_response(payload=_release("v1.102.2", None))
-        result = await _info(_GitHubByUrl(routes))
+        result = await _info(_minor_line(**{"v1.102.2": _github_response(payload=_release("v1.102.2", None))}))
         assert isinstance(result, LatestReleaseInfo)
         assert (result.new_features, result.bug_fixes, result.other_updates) == (2, 3, 4)
 
@@ -349,31 +441,96 @@ class TestPatchReleaseAggregatesMinorLine:
         ids=["unreachable", "rate_limited", "not_json"],
     )
     async def test_earlier_patch_failure_is_unavailable(self, outcome: httpx.Response | Exception):
-        result = await _info(_GitHubByUrl(_minor_line(**{"v1.102.0": outcome})))
+        result = await _info(_minor_line(**{"v1.102.0": outcome}))
         assert isinstance(result, LatestReleaseUnavailable)
 
 
 class TestLatestReleaseInfoEndpoint:
-    def test_returns_release_stats_for_authenticated_user(self, http_client):
-        _override_dependencies(_RecordingClient([_github_response()]), _fresh_cache(), LitellmUserRoles.INTERNAL_USER)
-        response = http_client.get("/get/latest_release_info")
-        assert response.status_code == 200
-        assert response.json() == EXPECTED_INFO
+    def test_first_request_returns_null_and_the_next_returns_the_fetched_release(self, http_client):
+        _override_dependencies(_minor_release(), _fresh_cache(), LitellmUserRoles.INTERNAL_USER)
+        first = http_client.get("/get/latest_release_info")
+        assert (first.status_code, first.json()) == (202, None)
+        second = http_client.get("/get/latest_release_info")
+        assert (second.status_code, second.json()) == (200, EXPECTED_INFO)
 
-    def test_returns_null_when_github_is_unreachable(self, http_client):
+    @pytest.mark.asyncio
+    async def test_responds_while_the_changelog_fetch_is_still_hanging(self):
+        release = asyncio.Event()
+
+        class _HangingClient(_ByUrl):
+            async def get(self, url: str, *, timeout: float | None = None) -> httpx.Response:
+                self.calls.append((url, timeout))
+                await release.wait()
+                raise httpx.ConnectTimeout("blackholed")
+
+        client: Final = _HangingClient({})
+        _override_dependencies(client, _fresh_cache(), LitellmUserRoles.PROXY_ADMIN)
+        lock: Final = asyncio.Lock()
+        app.dependency_overrides[_default_fetch_lock] = lambda: lock
+        try:
+            requests: Final = [_AsgiGet("/get/latest_release_info") for _ in range(3)]
+            bodies: Final = [await asyncio.wait_for(request.body(), timeout=5) for request in requests]
+            still_fetching: Final = [request for request in requests if not request.finished]
+            release.set()
+            await asyncio.gather(*(request.task for request in requests))
+        finally:
+            release.set()
+            for dependency in (user_api_key_auth, _default_client, _default_cache, _default_fetch_lock):
+                app.dependency_overrides.pop(dependency, None)
+        assert bodies == [b"null", b"null", b"null"]
+        assert len(still_fetching) == 1, "exactly one request should still be running the hanging fetch"
+        assert client.urls == [CHANGELOG_FEED_URL]
+
+    def test_responds_502_once_the_changelog_fetch_has_failed(self, http_client):
+        client: Final = _ByUrl({CHANGELOG_FEED_URL: httpx.ConnectError("boom")})
+        _override_dependencies(client, _fresh_cache(), LitellmUserRoles.PROXY_ADMIN)
+        first: Final = http_client.get("/get/latest_release_info")
+        assert (first.status_code, first.json()) == (202, None)
+        later: Final = [http_client.get("/get/latest_release_info") for _ in range(2)]
+        assert [response.status_code for response in later] == [502, 502]
+        assert later[0].json() == {"detail": "Latest release info unavailable"}
+        assert len(client.calls) == 1
+
+    def test_release_with_no_countable_notes_is_still_announced_with_zero_counts(self, http_client):
+        uncountable: Final = _github_response(payload=_release("v1.102.0", "## Changes\n\n1. Reworked the router\n"))
         _override_dependencies(
-            _RecordingClient([httpx.ConnectError("boom")]), _fresh_cache(), LitellmUserRoles.PROXY_ADMIN
+            _minor_release(**{_tag_url("v1.102.0"): uncountable}), _fresh_cache(), LitellmUserRoles.PROXY_ADMIN
         )
+        http_client.get("/get/latest_release_info")
+        response: Final = http_client.get("/get/latest_release_info")
+        assert (response.status_code, response.json()) == (
+            200,
+            {**EXPECTED_INFO, "new_features": 0, "bug_fixes": 0, "other_updates": 0},
+        )
+
+    @pytest.mark.parametrize("name", ["LITELLM_DISABLE_LATEST_RELEASE_CHECK", "LITELLM_OFFLINE_MODE"])
+    @pytest.mark.parametrize(
+        ("flag", "expected_body", "expected_urls"),
+        [
+            ("true", None, []),
+            (" TRUE ", None, []),
+            ("false", EXPECTED_INFO, [CHANGELOG_FEED_URL, _tag_url("v1.102.0")]),
+        ],
+    )
+    def test_disable_flag_skips_every_outbound_request(
+        self, http_client, monkeypatch, name, flag, expected_body, expected_urls
+    ):
+        monkeypatch.setenv(name, flag)
+        client = _minor_release()
+        _override_dependencies(client, _fresh_cache(), LitellmUserRoles.PROXY_ADMIN)
+        first = http_client.get("/get/latest_release_info")
+        assert first.status_code == (200 if expected_body is None else 202)
         response = http_client.get("/get/latest_release_info")
         assert response.status_code == 200
-        assert response.json() is None
+        assert response.json() == expected_body
+        assert client.urls == expected_urls
 
     def test_repeated_requests_reuse_cache(self, http_client):
-        client = _RecordingClient([_github_response()])
+        client = _minor_release()
         _override_dependencies(client, _fresh_cache(), LitellmUserRoles.PROXY_ADMIN)
-        assert http_client.get("/get/latest_release_info").json() == EXPECTED_INFO
-        assert http_client.get("/get/latest_release_info").json() == EXPECTED_INFO
-        assert len(client.calls) == 1
+        bodies = [http_client.get("/get/latest_release_info").json() for _ in range(3)]
+        assert bodies == [None, EXPECTED_INFO, EXPECTED_INFO]
+        assert len(client.calls) == 2
 
     def test_rejects_unauthenticated_requests(self, monkeypatch):
         monkeypatch.setattr("litellm.proxy.proxy_server.master_key", MASTER_KEY)

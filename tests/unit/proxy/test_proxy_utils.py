@@ -9,10 +9,12 @@ from fastapi import HTTPException, Request
 from starlette.datastructures import State
 
 from litellm.integrations.custom_guardrail import CustomGuardrail
-from litellm.proxy.utils import get_docs_url, get_openapi_url, get_redoc_url
+from litellm.proxy.utils import get_docs_url, get_openapi_url
 from litellm.types.guardrails import GuardrailEventHooks
 
 from unittest.mock import AsyncMock, MagicMock, patch
+
+from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stubs
 
 import litellm
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
@@ -751,33 +753,6 @@ async def test_prepare_key_update_data():
     data = UpdateKeyRequest(key="test_key", duration="-1")
     updated_data = await prepare_key_update_data(data, existing_key_row)
     assert updated_data["expires"] is None
-
-
-@pytest.mark.parametrize(
-    "env_vars, expected_url",
-    [
-        ({}, "/redoc"),  # default case
-        ({"REDOC_URL": "/custom-redoc"}, "/custom-redoc"),  # custom URL
-        (
-            {"REDOC_URL": "https://example.com/redoc"},
-            "https://example.com/redoc",
-        ),  # full URL
-        ({"NO_REDOC": "True"}, None),  # Redoc disabled
-    ],
-)
-def test_get_redoc_url(env_vars: dict[str, str], expected_url: str | None) -> None:
-    original_url: Final = get_redoc_url()
-    with pytest.MonkeyPatch.context() as environment:
-        for key in ("REDOC_URL", "NO_REDOC"):
-            environment.delenv(key, raising=False)
-
-        for key, value in env_vars.items():
-            environment.setenv(key, value)
-
-        result: Final = get_redoc_url()
-        assert result == expected_url
-
-    assert get_redoc_url() == original_url
 
 
 @pytest.mark.parametrize(
@@ -1816,21 +1791,11 @@ async def test_get_user_info_for_proxy_admin(mock_team_data, mock_key_data):
 
 
 def test_custom_openid_response():
-    from litellm.caching import DualCache
     from litellm.proxy._types import LiteLLM_JWTAuth
-    from litellm.proxy.management_endpoints.ui_sso import (
-        JWTHandler,
-        generic_response_convertor,
-    )
+    from litellm.proxy.auth.jwt import ClaimReading
+    from litellm.proxy.management_endpoints.ui_sso import generic_response_convertor
 
-    jwt_handler = JWTHandler()
-    jwt_handler.update_environment(
-        prisma_client={},
-        user_api_key_cache=DualCache(),
-        litellm_jwtauth=LiteLLM_JWTAuth(
-            team_ids_jwt_field="department",
-        ),
-    )
+    jwt_handler = ClaimReading(LiteLLM_JWTAuth(team_ids_jwt_field="department"))
     response = {
         "sub": "3f196e06-7484-451e-be5a-ea6c6bb86c5b",
         "email_verified": True,
@@ -1928,7 +1893,7 @@ def test_update_key_budget_with_temp_budget_increase():
 
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.proxy.auth.user_api_key_auth import (
-        _update_key_budget_with_temp_budget_increase,
+        update_key_budget_with_temp_budget_increase,
     )
 
     expiry = datetime.now() + timedelta(days=1)
@@ -1942,7 +1907,7 @@ def test_update_key_budget_with_temp_budget_increase():
             "temp_budget_expiry": expiry_in_isoformat,
         },
     )
-    result = _update_key_budget_with_temp_budget_increase(valid_token)
+    result = update_key_budget_with_temp_budget_increase(valid_token)
     assert result.max_budget == 200
     assert result is not valid_token
     assert valid_token.max_budget == 100
@@ -2476,9 +2441,9 @@ def test_team_alias_stale_bypass_disabled_by_default(monkeypatch):
     # Reset module-level cache to ensure test isolation
     pre_call_utils._ENABLE_TEAM_STALE_ALIAS_BYPASS = None
 
-    class _MockRouter:
-        model_name_to_deployment_indices = {"model_name_team-1_legacy-uuid": [0]}
-        team_model_to_deployment_indices = {("team-1", "gpt-4o"): [1]}
+    mock_router = route_entry_points_to_stubs(MagicMock())
+    mock_router.model_name_to_deployment_indices = {"model_name_team-1_legacy-uuid": [0]}
+    mock_router.team_model_to_deployment_indices = {("team-1", "gpt-4o"): [1]}
 
     test_data = {"model": "gpt-4o"}
     user_api_key_dict = UserAPIKeyAuth(
@@ -2487,7 +2452,7 @@ def test_team_alias_stale_bypass_disabled_by_default(monkeypatch):
         team_model_aliases={"gpt-4o": "model_name_team-1_legacy-uuid"},
     )
 
-    with patch("litellm.proxy.proxy_server.llm_router", _MockRouter()):
+    with patch("litellm.proxy.proxy_server.llm_router", mock_router):
         _update_model_if_team_alias_exists(
             data=test_data, user_api_key_dict=user_api_key_dict
         )
@@ -2502,9 +2467,9 @@ def test_team_alias_stale_bypass_enabled_by_flag(monkeypatch):
     # Reset module-level cache to ensure test isolation
     pre_call_utils._ENABLE_TEAM_STALE_ALIAS_BYPASS = None
 
-    class _MockRouter:
-        model_name_to_deployment_indices = {"model_name_team-1_legacy-uuid": [0]}
-        team_model_to_deployment_indices = {("team-1", "gpt-4o"): [1]}
+    mock_router = route_entry_points_to_stubs(MagicMock())
+    mock_router.model_name_to_deployment_indices = {"model_name_team-1_legacy-uuid": [0]}
+    mock_router.team_model_to_deployment_indices = {("team-1", "gpt-4o"): [1]}
 
     test_data = {"model": "gpt-4o"}
     user_api_key_dict = UserAPIKeyAuth(
@@ -2514,7 +2479,7 @@ def test_team_alias_stale_bypass_enabled_by_flag(monkeypatch):
     )
     monkeypatch.setenv("LITELLM_ENABLE_TEAM_STALE_ALIAS_BYPASS", "true")
 
-    with patch("litellm.proxy.proxy_server.llm_router", _MockRouter()):
+    with patch("litellm.proxy.proxy_server.llm_router", mock_router):
         _update_model_if_team_alias_exists(
             data=test_data, user_api_key_dict=user_api_key_dict
         )
@@ -2655,12 +2620,12 @@ async def test_post_call_failure_hook_auth_error_key_info_route():
 
     from fastapi import HTTPException
 
-    from litellm.caching.caching import DualCache
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
     from litellm.proxy._types import ProxyErrorTypes
     from litellm.proxy.utils import ProxyLogging
 
     # Setup
-    cache = DualCache()
+    cache = UserApiKeyCache()
     proxy_logging = ProxyLogging(user_api_key_cache=cache)
 
     # Mock the _handle_logging_proxy_only_error method
@@ -2709,12 +2674,12 @@ async def test_post_call_failure_hook_auth_error_llm_api_route():
 
     from fastapi import HTTPException
 
-    from litellm.caching.caching import DualCache
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
     from litellm.proxy._types import ProxyErrorTypes
     from litellm.proxy.utils import ProxyLogging
 
     # Setup
-    cache = DualCache()
+    cache = UserApiKeyCache()
     proxy_logging = ProxyLogging(user_api_key_cache=cache)
 
     # Mock the _handle_logging_proxy_only_error method
@@ -2834,11 +2799,11 @@ async def test_handle_logging_proxy_only_error_syncs_normalized_call_type(
 ):
     from fastapi import HTTPException
 
-    from litellm.caching.caching import DualCache
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
     from litellm.litellm_core_utils.litellm_logging import Logging
     from litellm.proxy.utils import ProxyLogging
 
-    cache = DualCache()
+    cache = UserApiKeyCache()
     proxy_logging = ProxyLogging(user_api_key_cache=cache)
     captured_logging_obj = {}
     original_function_setup = litellm.utils.function_setup
@@ -2884,12 +2849,12 @@ async def test_during_call_hook_parallel_execution():
     Test that multiple guardrails in during_call_hook are executed in parallel.
     Each guardrail blocks until all of them have started, so sequential execution times out.
     """
-    from litellm.caching.caching import DualCache
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
     from litellm.integrations.custom_guardrail import CustomGuardrail
     from litellm.proxy.utils import ProxyLogging
     from litellm.types.guardrails import GuardrailEventHooks
 
-    cache = DualCache()
+    cache = UserApiKeyCache()
     proxy_logging = ProxyLogging(user_api_key_cache=cache)
     execution_order = []
     guardrail_count: Final = 3
@@ -2942,12 +2907,12 @@ async def test_during_call_hook_parallel_execution_with_error():
     """
     Test that exceptions from guardrails are properly raised in parallel execution.
     """
-    from litellm.caching.caching import DualCache
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
     from litellm.integrations.custom_guardrail import CustomGuardrail
     from litellm.proxy.utils import ProxyLogging
     from litellm.types.guardrails import GuardrailEventHooks
 
-    cache = DualCache()
+    cache = UserApiKeyCache()
     proxy_logging = ProxyLogging(user_api_key_cache=cache)
 
     class FailingGuardrail(CustomGuardrail):
@@ -3011,10 +2976,10 @@ class _PreCallGuardrail(CustomGuardrail):
 @pytest.mark.asyncio
 async def test_pre_call_hook_runs_opted_in_guardrails_in_parallel():
     """run_in_parallel pre_call guardrails execute concurrently (all start before any ends)."""
-    from litellm.caching.caching import DualCache
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
     from litellm.proxy.utils import ProxyLogging
 
-    proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
+    proxy_logging = ProxyLogging(user_api_key_cache=UserApiKeyCache())
     execution_order = []
     original_callbacks = litellm.callbacks.copy() if litellm.callbacks else []
 
@@ -3040,10 +3005,10 @@ async def test_pre_call_hook_runs_opted_in_guardrails_in_parallel():
 @pytest.mark.asyncio
 async def test_pre_call_hook_runs_default_guardrails_sequentially():
     """Guardrails without run_in_parallel keep the sequential, one-at-a-time behavior."""
-    from litellm.caching.caching import DualCache
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
     from litellm.proxy.utils import ProxyLogging
 
-    proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
+    proxy_logging = ProxyLogging(user_api_key_cache=UserApiKeyCache())
     execution_order = []
     original_callbacks = litellm.callbacks.copy() if litellm.callbacks else []
 
@@ -3069,10 +3034,10 @@ async def test_pre_call_hook_runs_default_guardrails_sequentially():
 @pytest.mark.asyncio
 async def test_pre_call_hook_sequential_mutations_precede_parallel_batch():
     """Sequential (mutating) guardrails run before the parallel batch, which sees their changes."""
-    from litellm.caching.caching import DualCache
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
     from litellm.proxy.utils import ProxyLogging
 
-    proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
+    proxy_logging = ProxyLogging(user_api_key_cache=UserApiKeyCache())
     execution_order = []
     original_callbacks = litellm.callbacks.copy() if litellm.callbacks else []
 
@@ -3108,10 +3073,10 @@ async def test_pre_call_hook_sequential_mutations_precede_parallel_batch():
 @pytest.mark.asyncio
 async def test_pre_call_hook_parallel_guardrail_blocks_request():
     """A raising parallel guardrail blocks the request before it reaches the LLM."""
-    from litellm.caching.caching import DualCache
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
     from litellm.proxy.utils import ProxyLogging
 
-    proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
+    proxy_logging = ProxyLogging(user_api_key_cache=UserApiKeyCache())
     original_callbacks = litellm.callbacks.copy() if litellm.callbacks else []
 
     class BlockingGuardrail(CustomGuardrail):
@@ -3145,10 +3110,10 @@ async def test_pre_call_hook_parallel_guardrail_blocks_request():
 @pytest.mark.asyncio
 async def test_pre_call_hook_parallel_guardrail_skipped_when_should_not_run():
     """A parallel guardrail that should_run_guardrail rejects is never invoked."""
-    from litellm.caching.caching import DualCache
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
     from litellm.proxy.utils import ProxyLogging
 
-    proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
+    proxy_logging = ProxyLogging(user_api_key_cache=UserApiKeyCache())
     execution_order = []
     original_callbacks = litellm.callbacks.copy() if litellm.callbacks else []
 
@@ -3173,11 +3138,11 @@ async def test_pre_call_hook_parallel_guardrail_skipped_when_should_not_run():
 @pytest.mark.asyncio
 async def test_pre_call_hook_parallel_block_wins_over_reroute():
     """A slower block must win over a faster reroute so crafted input cannot bypass a block."""
-    from litellm.caching.caching import DualCache
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
     from litellm.exceptions import SensitiveDataRouteException
     from litellm.proxy.utils import ProxyLogging
 
-    proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
+    proxy_logging = ProxyLogging(user_api_key_cache=UserApiKeyCache())
     original_callbacks = litellm.callbacks.copy() if litellm.callbacks else []
 
     class FastRerouteGuardrail(CustomGuardrail):
@@ -3224,10 +3189,10 @@ async def test_pre_call_hook_parallel_block_wins_over_reroute():
 @pytest.mark.asyncio
 async def test_pre_call_hook_parallel_awaits_all_when_one_blocks():
     """A block must not orphan sibling guardrails; every parallel guardrail runs to completion."""
-    from litellm.caching.caching import DualCache
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
     from litellm.proxy.utils import ProxyLogging
 
-    proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
+    proxy_logging = ProxyLogging(user_api_key_cache=UserApiKeyCache())
     original_callbacks = litellm.callbacks.copy() if litellm.callbacks else []
     completed = []
 
@@ -3298,10 +3263,10 @@ class _PostCallGuardrail(CustomGuardrail):
 @pytest.mark.asyncio
 async def test_post_call_hook_runs_opted_in_guardrails_in_parallel():
     """run_in_parallel post_call guardrails execute concurrently (all start before any ends)."""
-    from litellm.caching.caching import DualCache
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
     from litellm.proxy.utils import ProxyLogging
 
-    proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
+    proxy_logging = ProxyLogging(user_api_key_cache=UserApiKeyCache())
     execution_order = []
     original_callbacks = litellm.callbacks.copy() if litellm.callbacks else []
 
@@ -3326,10 +3291,10 @@ async def test_post_call_hook_runs_opted_in_guardrails_in_parallel():
 @pytest.mark.asyncio
 async def test_post_call_hook_runs_default_guardrails_sequentially():
     """post_call guardrails without run_in_parallel keep the sequential behavior."""
-    from litellm.caching.caching import DualCache
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
     from litellm.proxy.utils import ProxyLogging
 
-    proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
+    proxy_logging = ProxyLogging(user_api_key_cache=UserApiKeyCache())
     execution_order = []
     original_callbacks = litellm.callbacks.copy() if litellm.callbacks else []
 
@@ -3355,10 +3320,10 @@ async def test_post_call_hook_runs_default_guardrails_sequentially():
 @pytest.mark.asyncio
 async def test_post_call_hook_parallel_guardrail_blocks_response():
     """A raising parallel post_call guardrail blocks the response before it reaches the client."""
-    from litellm.caching.caching import DualCache
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
     from litellm.proxy.utils import ProxyLogging
 
-    proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
+    proxy_logging = ProxyLogging(user_api_key_cache=UserApiKeyCache())
     original_callbacks = litellm.callbacks.copy() if litellm.callbacks else []
 
     class BlockingPostCallGuardrail(CustomGuardrail):
@@ -3392,10 +3357,10 @@ async def test_post_call_hook_parallel_guardrail_blocks_response():
 @pytest.mark.asyncio
 async def test_post_call_hook_parallel_awaits_all_when_one_blocks():
     """A blocking post_call guardrail must not orphan its siblings; all run to completion."""
-    from litellm.caching.caching import DualCache
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
     from litellm.proxy.utils import ProxyLogging
 
-    proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
+    proxy_logging = ProxyLogging(user_api_key_cache=UserApiKeyCache())
     original_callbacks = litellm.callbacks.copy() if litellm.callbacks else []
     completed = []
 
@@ -3445,7 +3410,7 @@ async def test_handle_logging_proxy_only_error_preserves_pass_through_call_type(
     """Ensure _handle_logging_proxy_only_error does not overwrite call_type
     when the logging object is already marked as pass_through_endpoint.
     """
-    from litellm.caching.caching import DualCache
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
     from litellm.litellm_core_utils.litellm_logging import Logging
     from litellm.proxy.utils import ProxyLogging
     from litellm.types.utils import CallTypes
@@ -3466,7 +3431,7 @@ async def test_handle_logging_proxy_only_error_preserves_pass_through_call_type(
         "model": "claude-3-5-sonnet",
     }
 
-    cache = DualCache()
+    cache = UserApiKeyCache()
     proxy_logging = ProxyLogging(user_api_key_cache=cache)
 
     with patch.object(logging_obj, "async_failure_handler", new_callable=AsyncMock):
@@ -3487,7 +3452,7 @@ async def test_litellm_logging_obj_excluded_from_optional_params():
     """Ensure litellm_logging_obj is excluded from _optional_params to prevent
     circular references in model_call_details.
     """
-    from litellm.caching.caching import DualCache
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
     from litellm.litellm_core_utils.litellm_logging import Logging
     from litellm.proxy.utils import ProxyLogging
 
@@ -3507,7 +3472,7 @@ async def test_litellm_logging_obj_excluded_from_optional_params():
         "model": "claude-3-5-sonnet",
     }
 
-    cache = DualCache()
+    cache = UserApiKeyCache()
     proxy_logging = ProxyLogging(user_api_key_cache=cache)
 
     with patch.object(logging_obj, "async_failure_handler", new_callable=AsyncMock):
@@ -3531,7 +3496,7 @@ async def test_handle_logging_proxy_only_error_skips_handlers_for_pass_through()
 
     Regression test for duplicate Datadog/Arize logs on pass-through failures.
     """
-    from litellm.caching.caching import DualCache
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
     from litellm.litellm_core_utils.litellm_logging import Logging
     from litellm.proxy.utils import ProxyLogging
     from litellm.types.utils import CallTypes
@@ -3546,7 +3511,7 @@ async def test_handle_logging_proxy_only_error_skips_handlers_for_pass_through()
         function_id="test-function-id",
     )
 
-    cache = DualCache()
+    cache = UserApiKeyCache()
     proxy_logging = ProxyLogging(user_api_key_cache=cache)
 
     request_data = {
@@ -3714,3 +3679,183 @@ async def test_evict_config_param_clears_the_local_layer_and_survives_a_redis_ou
     await evict_config_param("router_settings", cache=cache)
 
     assert await cache.in_memory_cache.async_get_cache(_config_cache_key("router_settings")) is None
+
+
+@pytest.mark.asyncio
+async def test_query_raw_within_statement_timeout_has_postgres_cancel_the_read_at_30s() -> None:
+    from datetime import timedelta
+
+    from litellm.proxy.utils import query_raw_within_statement_timeout
+    from tests.unit.proxy.db.fake_prisma_engine import statement_timeout_reads
+
+    prisma: Final = MagicMock()
+    transaction: Final = statement_timeout_reads(prisma, AsyncMock(return_value=[{"spend": 1.5}]))
+
+    rows: Final = await query_raw_within_statement_timeout(
+        prisma, 'SELECT spend FROM "LiteLLM_SpendLogs" WHERE "user" = $1', "u1"
+    )
+
+    assert rows == [{"spend": 1.5}]
+    assert transaction.statements == ("SET LOCAL statement_timeout = 30000",)
+    transaction.query_raw.assert_awaited_once_with('SELECT spend FROM "LiteLLM_SpendLogs" WHERE "user" = $1', "u1")
+    assert prisma.read_db.tx.call_args.kwargs["timeout"] > timedelta(seconds=30), "Prisma must outlive the Postgres cancel"
+
+
+@pytest.mark.asyncio
+async def test_query_raw_within_statement_timeout_reports_a_cancelled_read_as_503() -> None:
+    from litellm.proxy.utils import query_raw_within_statement_timeout
+    from tests.unit.proxy.db.fake_prisma_engine import statement_timeout_error, statement_timeout_reads
+
+    prisma: Final = MagicMock()
+    statement_timeout_reads(prisma, AsyncMock(side_effect=statement_timeout_error()))
+
+    with pytest.raises(HTTPException) as exc_info:
+        await query_raw_within_statement_timeout(prisma, "SELECT 1", what="Spend per user")
+
+    assert exc_info.value.status_code == 503
+    assert exc_info.value.detail == {"error": "Spend per user took longer than 30s. Pick a shorter date range"}
+
+
+@pytest.mark.asyncio
+async def test_query_raw_within_statement_timeout_leaves_other_database_errors_alone() -> None:
+    from prisma.errors import DataError
+
+    from litellm.proxy.utils import query_raw_within_statement_timeout
+    from tests.unit.proxy.db.fake_prisma_engine import statement_timeout_reads
+
+    prisma: Final = MagicMock()
+    failure: Final = DataError(data={"user_facing_error": {"is_panic": False, "message": "relation does not exist"}})
+    statement_timeout_reads(prisma, AsyncMock(side_effect=failure))
+
+    with pytest.raises(DataError) as exc_info:
+        await query_raw_within_statement_timeout(prisma, "SELECT 1")
+
+    assert exc_info.value is failure
+
+
+@pytest.mark.asyncio
+async def test_stream_ends_without_waiting_for_served_output_and_logging_still_sees_it(monkeypatch):
+    from litellm.caching.caching import DualCache
+    from litellm.integrations.custom_logger import CustomLogger
+    from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.litellm_core_utils.served_output_texts import SERVED_OUTPUT_TEXTS_KEY
+    from litellm.litellm_core_utils.token_counter import _count_offload_limiter_for_this_loop
+    from litellm.proxy.utils import ProxyLogging
+
+    class PassThroughIterator(CustomLogger):
+        async def async_post_call_streaming_iterator_hook(self, user_api_key_dict, response, request_data):
+            async for chunk in response:
+                yield chunk
+
+    monkeypatch.setattr(litellm, "callbacks", [PassThroughIterator()])
+    logging_obj: Final = Logging(
+        model="claude-sonnet-4-5",
+        messages=[],
+        stream=True,
+        call_type="anthropic_messages",
+        start_time=datetime.now(),
+        litellm_call_id="served-output-close",
+        function_id="served-output-close",
+    )
+    served_texts_seen_by_logging: Final = asyncio.get_running_loop().create_future()
+
+    async def deferred_logging() -> None:
+        served_texts_seen_by_logging.set_result(logging_obj.model_call_details.get(SERVED_OUTPUT_TEXTS_KEY))
+
+    logging_obj._on_deferred_stream_complete = deferred_logging
+    logging_obj._deferred_stream_complete_args = ()
+    events: Final = _anthropic_thinking_sse(50)
+
+    async def upstream():
+        for event in events:
+            yield event
+
+    async def drain() -> list[object]:
+        return [
+            chunk
+            async for chunk in ProxyLogging(user_api_key_cache=DualCache()).async_post_call_streaming_iterator_hook(
+                response=upstream(),
+                user_api_key_dict=UserAPIKeyAuth(api_key="sk-1", request_route="/v1/messages"),
+                request_data={"model": "claude-sonnet-4-5", "litellm_logging_obj": logging_obj},
+            )
+        ]
+
+    offload_limiter: Final = _count_offload_limiter_for_this_loop()
+    holders: Final = tuple(object() for _ in range(int(offload_limiter.total_tokens)))
+    for holder in holders:
+        await offload_limiter.acquire_on_behalf_of(holder)
+
+    served: Final = await asyncio.wait_for(drain(), timeout=5)
+    for holder in holders:
+        offload_limiter.release_on_behalf_of(holder)
+
+    assert served == events
+    assert await asyncio.wait_for(served_texts_seen_by_logging, timeout=5) == ("final answer",)
+
+
+@pytest.mark.asyncio
+async def test_streams_wait_for_their_served_output_once_background_rebuilds_hit_the_cap(monkeypatch):
+    from litellm.caching.caching import DualCache
+    from litellm.integrations.custom_logger import CustomLogger
+    from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.litellm_core_utils.served_output_texts import SERVED_OUTPUT_TEXTS_KEY
+    from litellm.litellm_core_utils.token_counter import _count_offload_limiter_for_this_loop
+    from litellm.proxy.utils import _MAX_BACKGROUND_SERVED_OUTPUT_REBUILDS, ProxyLogging
+
+    class PassThroughIterator(CustomLogger):
+        async def async_post_call_streaming_iterator_hook(self, user_api_key_dict, response, request_data):
+            async for chunk in response:
+                yield chunk
+
+    monkeypatch.setattr(litellm, "callbacks", [PassThroughIterator()])
+    proxy_logging: Final = ProxyLogging(user_api_key_cache=DualCache())
+    events: Final = _anthropic_thinking_sse(1)
+    logging_objs: Final = tuple(
+        Logging(
+            model="claude-sonnet-4-5",
+            messages=[],
+            stream=True,
+            call_type="anthropic_messages",
+            start_time=datetime.now(),
+            litellm_call_id=f"served-output-cap-{index}",
+            function_id=f"served-output-cap-{index}",
+        )
+        for index in range(_MAX_BACKGROUND_SERVED_OUTPUT_REBUILDS + 1)
+    )
+
+    async def upstream():
+        for event in events:
+            yield event
+
+    async def drain(logging_obj: Logging) -> list[object]:
+        return [
+            chunk
+            async for chunk in proxy_logging.async_post_call_streaming_iterator_hook(
+                response=upstream(),
+                user_api_key_dict=UserAPIKeyAuth(api_key="sk-1", request_route="/v1/messages"),
+                request_data={"model": "claude-sonnet-4-5", "litellm_logging_obj": logging_obj},
+            )
+        ]
+
+    offload_limiter: Final = _count_offload_limiter_for_this_loop()
+    holders: Final = tuple(object() for _ in range(int(offload_limiter.total_tokens)))
+    for holder in holders:
+        await offload_limiter.acquire_on_behalf_of(holder)
+
+    for logging_obj in logging_objs[:-1]:
+        assert await asyncio.wait_for(drain(logging_obj), timeout=5) == events
+    over_cap: Final = asyncio.ensure_future(drain(logging_objs[-1]))
+    await asyncio.sleep(0.2)
+    over_cap_waited: Final = not over_cap.done()
+
+    for holder in holders:
+        offload_limiter.release_on_behalf_of(holder)
+
+    assert over_cap_waited
+    assert await asyncio.wait_for(over_cap, timeout=5) == events
+
+    async def every_stream_recorded() -> None:
+        while any(SERVED_OUTPUT_TEXTS_KEY not in obj.model_call_details for obj in logging_objs):
+            await asyncio.sleep(0.01)
+
+    await asyncio.wait_for(every_stream_recorded(), timeout=10)

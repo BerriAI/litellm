@@ -5,8 +5,8 @@ Based on OpenAI-compatible API interface implementation
 Documentation: [CometAPI Documentation Link]
 """
 
-from collections.abc import AsyncIterator, Iterator
-from typing import Any, Final
+from collections.abc import AsyncIterator, Iterator, Mapping
+from typing import Final
 
 import httpx
 
@@ -30,8 +30,8 @@ class CometAPIConfig(OpenAIGPTConfig):
 
     def map_openai_params(
         self,
-        non_default_params: dict,
-        optional_params: dict,
+        non_default_params: dict[str, object],
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
     ) -> dict:
@@ -70,8 +70,8 @@ class CometAPIConfig(OpenAIGPTConfig):
         model: str,
         messages: list[AllMessageValues],
         optional_params: dict,
-        litellm_params: dict,
-        headers: dict,
+        litellm_params: dict[str, object],
+        headers: dict[str, object],
     ) -> dict:
         """
         Transform the overall request to be sent to the API.
@@ -89,8 +89,8 @@ class CometAPIConfig(OpenAIGPTConfig):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         stream: bool | None = None,
     ) -> str:
         """
@@ -122,7 +122,9 @@ class CometAPIConfig(OpenAIGPTConfig):
             return join_api_base(api_base, f"v1/{endpoint}")
         return join_api_base(api_base, endpoint)
 
-    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: dict[str, object] | httpx.Headers
+    ) -> BaseLLMException:
         """
         Return CometAPI-specific error class
         """
@@ -137,7 +139,7 @@ class CometAPIConfig(OpenAIGPTConfig):
         streaming_response: Iterator[str] | AsyncIterator[str] | ModelResponse,
         sync_stream: bool,
         json_mode: bool | None = False,
-    ) -> Any:
+    ) -> "CometAPIChatCompletionStreamingHandler":
         """
         Get model response iterator for streaming responses
         """

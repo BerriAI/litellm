@@ -1,12 +1,12 @@
 from dataclasses import replace
 from typing import Final
+from unittest.mock import ANY
 
 from integration._support.client import list_value, object_value
 from integration.translation.case import (
     SSEFrame,
     StreamingTranslationTestCase,
 )
-from integration.translation.chat_completions.cross_model.contracts import followup_request
 from integration.translation.chat_completions.bases.openai import (
     GPT_5_4_MINI_TEST_CASE,
     GPT_5_6_LUNA_TEST_CASE,
@@ -18,10 +18,11 @@ from integration.translation.chat_completions.bases.openai import (
     GPT_6_LUNA_TEST_CASE,
     GPT_6_SOL_TEST_CASE,
 )
+from integration.translation.chat_completions.cross_model.contracts import followup_request, without_replay_record
 from integration.translation.chat_completions.templates import (
     CODING_AGENT_REQUEST,
-    coding_agent_stream_message,
     CODING_AGENT_RESPONSE,
+    coding_agent_stream_message,
 )
 from integration.translation.templates.openai import (
     OPENAI_CHAT_AGENT_REQUEST,
@@ -559,7 +560,7 @@ GPT_5_4_MINI_AGENT_FOLLOWUP_TEST_CASE: Final = replace(
     GPT_5_4_MINI_TEST_CASE,
     scenario="agent_followup",
     litellm_request=followup_request(
-        GPT_5_4_MINI_TEST_CASE.litellm_request, GPT_5_4_MINI_TEST_CASE.expected_litellm_response
+        GPT_5_4_MINI_TEST_CASE.litellm_request, without_replay_record(GPT_5_4_MINI_TEST_CASE.expected_litellm_response)
     ),
     expected_provider_endpoint="/responses",
     expected_provider_request={
@@ -570,6 +571,7 @@ GPT_5_4_MINI_AGENT_FOLLOWUP_TEST_CASE: Final = replace(
             {
                 "type": "message",
                 "role": "assistant",
+                "phase": "commentary",
                 "content": [
                     {
                         "type": "output_text",
@@ -679,6 +681,7 @@ GPT_5_4_MINI_AGENT_FOLLOWUP_TEST_CASE: Final = replace(
                     "caller in `src/worker.py` (`remaining = retries_remaining(3, attempts)`), and "
                     "`tests/test_retry.py` failed with `assert 4 == 2` for `retries_remaining(3, 1)`.",
                     "role": "assistant",
+                    "provider_specific_fields": {"phase": "final_answer", "openai_responses_replay": ANY},
                 },
             }
         ],
@@ -1310,6 +1313,7 @@ GPT_5_6_LUNA_AGENT_TEST_CASE: Final = replace(
                         }
                     ],
                     "content": None,
+                    "provider_specific_fields": {"openai_responses_replay": ANY},
                 },
             }
         ],
@@ -1343,7 +1347,8 @@ GPT_5_6_LUNA_AGENT_FOLLOWUP_TEST_CASE: Final = replace(
     GPT_5_6_LUNA_AGENT_TEST_CASE,
     scenario="agent_followup",
     litellm_request=followup_request(
-        GPT_5_6_LUNA_AGENT_TEST_CASE.litellm_request, GPT_5_6_LUNA_AGENT_TEST_CASE.expected_litellm_response
+        GPT_5_6_LUNA_AGENT_TEST_CASE.litellm_request,
+        without_replay_record(GPT_5_6_LUNA_AGENT_TEST_CASE.expected_litellm_response),
     ),
     expected_provider_endpoint="/responses",
     expected_provider_request={
@@ -1456,6 +1461,7 @@ GPT_5_6_LUNA_AGENT_FOLLOWUP_TEST_CASE: Final = replace(
                     "of 2 and potentially negative values are not clamped. It is called by "
                     "`src/worker.py:12`, and `tests/test_retry.py::test_retries_remaining` failed.",
                     "role": "assistant",
+                    "provider_specific_fields": {"phase": "final_answer", "openai_responses_replay": ANY},
                 },
             }
         ],
@@ -1819,6 +1825,7 @@ GPT_5_6_SOL_AGENT_TEST_CASE: Final = replace(
                         },
                     ],
                     "content": None,
+                    "provider_specific_fields": {"openai_responses_replay": ANY},
                 },
             }
         ],
@@ -1852,7 +1859,8 @@ GPT_5_6_SOL_AGENT_FOLLOWUP_TEST_CASE: Final = replace(
     GPT_5_6_SOL_AGENT_TEST_CASE,
     scenario="agent_followup",
     litellm_request=followup_request(
-        GPT_5_6_SOL_AGENT_TEST_CASE.litellm_request, GPT_5_6_SOL_AGENT_TEST_CASE.expected_litellm_response
+        GPT_5_6_SOL_AGENT_TEST_CASE.litellm_request,
+        without_replay_record(GPT_5_6_SOL_AGENT_TEST_CASE.expected_litellm_response),
     ),
     expected_provider_endpoint="/responses",
     expected_provider_request={
@@ -1961,6 +1969,7 @@ GPT_5_6_SOL_AGENT_FOLLOWUP_TEST_CASE: Final = replace(
                     "`tests/test_retry.py` failed because `retries_remaining(3, 1)` returned `4` "
                     "instead of `2`.",
                     "role": "assistant",
+                    "provider_specific_fields": {"phase": "final_answer", "openai_responses_replay": ANY},
                 },
             }
         ],
@@ -2278,6 +2287,7 @@ GPT_5_6_TERRA_AGENT_TEST_CASE: Final = replace(
                         },
                     ],
                     "content": None,
+                    "provider_specific_fields": {"openai_responses_replay": ANY},
                 },
             }
         ],
@@ -2311,7 +2321,8 @@ GPT_5_6_TERRA_AGENT_FOLLOWUP_TEST_CASE: Final = replace(
     GPT_5_6_TERRA_AGENT_TEST_CASE,
     scenario="agent_followup",
     litellm_request=followup_request(
-        GPT_5_6_TERRA_AGENT_TEST_CASE.litellm_request, GPT_5_6_TERRA_AGENT_TEST_CASE.expected_litellm_response
+        GPT_5_6_TERRA_AGENT_TEST_CASE.litellm_request,
+        without_replay_record(GPT_5_6_TERRA_AGENT_TEST_CASE.expected_litellm_response),
     ),
     expected_provider_endpoint="/responses",
     expected_provider_request={
@@ -2420,6 +2431,7 @@ GPT_5_6_TERRA_AGENT_FOLLOWUP_TEST_CASE: Final = replace(
                     "`tests/test_retry.py` fails because `retries_remaining(3, 1)` returns `4` instead "
                     "of `2`.",
                     "role": "assistant",
+                    "provider_specific_fields": {"phase": "final_answer", "openai_responses_replay": ANY},
                 },
             }
         ],
@@ -2737,6 +2749,7 @@ GPT_6_ASTRA_AGENT_TEST_CASE: Final = replace(
                         },
                     ],
                     "content": None,
+                    "provider_specific_fields": {"openai_responses_replay": ANY},
                 },
             }
         ],
@@ -2769,7 +2782,8 @@ GPT_6_ASTRA_AGENT_FOLLOWUP_TEST_CASE: Final = replace(
     GPT_6_ASTRA_AGENT_TEST_CASE,
     scenario="agent_followup",
     litellm_request=followup_request(
-        GPT_6_ASTRA_AGENT_TEST_CASE.litellm_request, GPT_6_ASTRA_AGENT_TEST_CASE.expected_litellm_response
+        GPT_6_ASTRA_AGENT_TEST_CASE.litellm_request,
+        without_replay_record(GPT_6_ASTRA_AGENT_TEST_CASE.expected_litellm_response),
     ),
     expected_provider_endpoint="/responses",
     expected_provider_request={
@@ -2878,6 +2892,7 @@ GPT_6_ASTRA_AGENT_FOLLOWUP_TEST_CASE: Final = replace(
                     "and `tests/test_retry.py::test_retries_remaining` failed because it returned 4 "
                     "instead of 2.",
                     "role": "assistant",
+                    "provider_specific_fields": {"phase": "final_answer", "openai_responses_replay": ANY},
                 },
             }
         ],
@@ -3194,6 +3209,7 @@ GPT_6_LUNA_AGENT_TEST_CASE: Final = replace(
                         },
                     ],
                     "content": None,
+                    "provider_specific_fields": {"openai_responses_replay": ANY},
                 },
             }
         ],
@@ -3227,7 +3243,8 @@ GPT_6_LUNA_AGENT_FOLLOWUP_TEST_CASE: Final = replace(
     GPT_6_LUNA_AGENT_TEST_CASE,
     scenario="agent_followup",
     litellm_request=followup_request(
-        GPT_6_LUNA_AGENT_TEST_CASE.litellm_request, GPT_6_LUNA_AGENT_TEST_CASE.expected_litellm_response
+        GPT_6_LUNA_AGENT_TEST_CASE.litellm_request,
+        without_replay_record(GPT_6_LUNA_AGENT_TEST_CASE.expected_litellm_response),
     ),
     expected_provider_endpoint="/responses",
     expected_provider_request={
@@ -3336,6 +3353,7 @@ GPT_6_LUNA_AGENT_FOLLOWUP_TEST_CASE: Final = replace(
                     "`tests/test_retry.py` failed because `retries_remaining(3, 1)` returned 4 instead "
                     "of 2.",
                     "role": "assistant",
+                    "provider_specific_fields": {"phase": "final_answer", "openai_responses_replay": ANY},
                 },
             }
         ],
@@ -3587,7 +3605,7 @@ GPT_6_SOL_AGENT_FOLLOWUP_TEST_CASE: Final = replace(
     GPT_6_SOL_TEST_CASE,
     scenario="agent_followup",
     litellm_request=followup_request(
-        GPT_6_SOL_TEST_CASE.litellm_request, GPT_6_SOL_TEST_CASE.expected_litellm_response
+        GPT_6_SOL_TEST_CASE.litellm_request, without_replay_record(GPT_6_SOL_TEST_CASE.expected_litellm_response)
     ),
     expected_provider_endpoint="/responses",
     expected_provider_request={
@@ -3694,6 +3712,7 @@ GPT_6_SOL_AGENT_FOLLOWUP_TEST_CASE: Final = replace(
                     "clamping the result at zero; `src/worker.py` calls it. `tests/test_retry.py` "
                     "failed because `retries_remaining(3, 1)` returned 4 instead of 2.",
                     "role": "assistant",
+                    "provider_specific_fields": {"phase": "final_answer", "openai_responses_replay": ANY},
                 },
             }
         ],
@@ -4007,6 +4026,7 @@ GPT_6_1_SOL_AGENT_TEST_CASE: Final = replace(
                         },
                     ],
                     "content": None,
+                    "provider_specific_fields": {"openai_responses_replay": ANY},
                 },
             }
         ],
@@ -4039,7 +4059,8 @@ GPT_6_1_SOL_AGENT_FOLLOWUP_TEST_CASE: Final = replace(
     GPT_6_1_SOL_AGENT_TEST_CASE,
     scenario="agent_followup",
     litellm_request=followup_request(
-        GPT_6_1_SOL_AGENT_TEST_CASE.litellm_request, GPT_6_1_SOL_AGENT_TEST_CASE.expected_litellm_response
+        GPT_6_1_SOL_AGENT_TEST_CASE.litellm_request,
+        without_replay_record(GPT_6_1_SOL_AGENT_TEST_CASE.expected_litellm_response),
     ),
     expected_provider_endpoint="/responses",
     expected_provider_request={
@@ -4148,6 +4169,7 @@ GPT_6_1_SOL_AGENT_FOLLOWUP_TEST_CASE: Final = replace(
                     "`src/worker.py:12`. `tests/test_retry.py::test_retries_remaining` failed because "
                     "it returned 4 instead of 2; no files were changed.",
                     "role": "assistant",
+                    "provider_specific_fields": {"phase": "final_answer", "openai_responses_replay": ANY},
                 },
             }
         ],

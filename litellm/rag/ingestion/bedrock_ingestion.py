@@ -14,14 +14,20 @@ from __future__ import annotations
 import asyncio
 import json
 import uuid
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, ClassVar, Final
 
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.aws_partition import get_aws_arn_prefix
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+from litellm.llms.bedrock.web_identity_session_policy import (
+    BEDROCK_KNOWLEDGE_BASE_INGESTION_SESSION_POLICY,
+    WebIdentitySessionPolicy,
+)
 from litellm.rag.ingestion.base_ingestion import BaseRAGIngestion, RAGIngestBadRequestError
 
 if TYPE_CHECKING:
+    from boto3 import Session as Boto3Session
+
     from litellm import Router
     from litellm.types.rag import RAGIngestOptions
 
@@ -85,6 +91,8 @@ class BedrockRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
     - aws_web_identity_token, aws_sts_endpoint, aws_external_id
     """
 
+    _web_identity_session_policy: ClassVar[WebIdentitySessionPolicy] = BEDROCK_KNOWLEDGE_BASE_INGESTION_SESSION_POLICY
+
     def __init__(
         self,
         ingest_options: RAGIngestOptions,
@@ -99,18 +107,18 @@ class BedrockRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
         )
 
         # Optional config
-        self._data_source_id = self.vector_store_config.get("data_source_id")
-        self._s3_bucket = self.vector_store_config.get("s3_bucket")
+        self._data_source_id: Final[str | None] = self.vector_store_config.get("data_source_id")
+        self._s3_bucket: Final[str | None] = self.vector_store_config.get("s3_bucket")
         self._s3_prefix: str | None = (
             str(self.vector_store_config.get("s3_prefix")) if self.vector_store_config.get("s3_prefix") else None
         )
         self.embedding_model = self.vector_store_config.get("embedding_model") or "amazon.titan-embed-text-v2:0"
 
-        self.wait_for_ingestion = self.vector_store_config.get("wait_for_ingestion", False)
+        self.wait_for_ingestion: object = self.vector_store_config.get("wait_for_ingestion", False)
         self.ingestion_timeout: int = _get_int(self.vector_store_config.get("ingestion_timeout"), 300)
 
         # Get AWS region using BaseAWSLLM method
-        _aws_region: Final = self.vector_store_config.get("aws_region_name")
+        _aws_region: Final[object] = self.vector_store_config.get("aws_region_name")
         self.aws_region_name = self.get_aws_region_name_for_non_llm_api_calls(
             aws_region_name=str(_aws_region) if _aws_region else None
         )
@@ -196,7 +204,7 @@ class BedrockRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
         kb_name: Final = self.ingest_name or f"litellm-kb-{unique_id}"
 
         # Get AWS account ID and caller ARN (for data access policy)
-        sts: Final = self._get_boto3_client("sts")
+        sts: Final = self._get_boto3_session().client("sts")
         caller_identity: Final = sts.get_caller_identity()
         account_id: Final = caller_identity["Account"]
         caller_arn: Final = caller_identity["Arn"]
@@ -515,7 +523,7 @@ class BedrockRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
 
     async def _create_knowledge_base(self, kb_name: str, role_arn: str, collection_arn: str) -> str:
         """Create Bedrock Knowledge Base."""
-        bedrock_agent: Final = self._get_boto3_client("bedrock-agent")
+        bedrock_agent: Final = self._get_boto3_session().client("bedrock-agent")
 
         verbose_logger.debug("Creating Knowledge Base: %s", kb_name)
 
@@ -584,8 +592,8 @@ class BedrockRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
         verbose_logger.info("Created Data Source: %s", ds_id)
         return ds_id
 
-    def _get_boto3_client(self, service_name: str):
-        """Get a boto3 client for the specified service using BaseAWSLLM auth."""
+    def _get_boto3_session(self) -> Boto3Session:
+        """Get a boto3 session using BaseAWSLLM auth."""
         try:
             import boto3
         except ImportError:
@@ -613,7 +621,11 @@ class BedrockRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
             region_name=self.aws_region_name,
         )
 
-        return session.client(service_name)
+        return session
+
+    def _get_boto3_client(self, service_name: str):
+        """Get a boto3 client for the specified service using BaseAWSLLM auth."""
+        return self._get_boto3_session().client(service_name)
 
     async def embed(
         self,

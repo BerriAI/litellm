@@ -62,7 +62,7 @@ button {{ flex: 1; padding: 10px; border-radius: 6px; font-size: 15px; cursor: p
 <p>Approving issues it a personal credential that expires within {CLI_JWT_EXPIRATION_HOURS} hours. <code>lite logout</code> stops it from being renewed. Only approve if you started this sign-in yourself.</p>
 <form method="post" action="{escape(complete_url)}">
 <input type="hidden" name="flow" value="{escape(flow_handle)}">
-{_team_field(teams)}
+{team_select_field(teams)}
 <div class="actions">
 <button type="submit" name="decision" value="deny" class="deny">Deny</button>
 <button type="submit" name="decision" value="approve" class="approve">Approve</button>
@@ -74,7 +74,7 @@ button {{ flex: 1; padding: 10px; border-radius: 6px; font-size: 15px; cursor: p
 """
 
 
-def _team_field(teams: Sequence[tuple[str, str]]) -> str:
+def team_select_field(teams: Sequence[tuple[str, str]], *, require_choice: bool = False) -> str:
     if not teams:
         return ""
     if len(teams) == 1:
@@ -83,9 +83,12 @@ def _team_field(teams: Sequence[tuple[str, str]]) -> str:
             f'<input type="hidden" name="team_id" value="{escape(team_id)}">'
             f"<p>Requests are attributed to team <strong>{escape(team_label)}</strong>.</p>"
         )
+    placeholder: Final = '<option value="" disabled selected>Choose a team</option>' if require_choice else ""
     options: Final = "".join(
         f'<option value="{escape(team_id)}">{escape(team_label)}</option>' for team_id, team_label in teams
     )
+    required: Final = " required" if require_choice else ""
     return (
-        f'<label for="team_id">Attribute requests to team</label><select id="team_id" name="team_id">{options}</select>'
+        '<label for="team_id">Attribute requests to team</label>'
+        f'<select id="team_id" name="team_id"{required}>{placeholder}{options}</select>'
     )

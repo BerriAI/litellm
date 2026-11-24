@@ -3,6 +3,7 @@ Transformation logic for Amazon Titan Image Generation.
 """
 
 import types
+from collections.abc import Mapping
 from typing import Final
 
 from openai.types.image import Image
@@ -35,16 +36,17 @@ class AmazonTitanImageGenerationConfig:
         width: int | None = None,
         height: int | None = None,
     ) -> None:
-        locals_: Final = locals().copy()
+        locals_: Final[Mapping[str, object]] = types.MappingProxyType(locals().copy())
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
 
     @classmethod
     def get_config(cls):
+        class_attributes: Final[Mapping[str, object]] = types.MappingProxyType(cls.__dict__)
         return {
             k: v
-            for k, v in cls.__dict__.items()
+            for k, v in class_attributes.items()
             if not k.startswith("__")
             and not isinstance(
                 v,
@@ -78,14 +80,14 @@ class AmazonTitanImageGenerationConfig:
         return cls._is_titan_model(model)
 
     @classmethod
-    def get_supported_openai_params(cls, model: str | None = None) -> list:
+    def get_supported_openai_params(cls, model: str | None = None) -> list[str]:
         return ["size", "n", "quality"]
 
     @classmethod
     def map_openai_params(
         cls,
         non_default_params: dict,
-        optional_params: dict,
+        optional_params: dict[str, object],
     ):
         image_generation_config: Final[dict[str, object]] = {}
         for k, v in non_default_params.items():
@@ -147,7 +149,7 @@ class AmazonTitanImageGenerationConfig:
         model: str,
         image_response: ImageResponse,
         size: str | None = None,
-        optional_params: dict | None = None,
+        optional_params: Mapping[str, object] | None = None,
     ) -> float:
         model_info: Final = get_model_info(model=model)
         output_cost_per_image: Final = model_info.get("output_cost_per_image") or 0.0

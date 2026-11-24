@@ -9,11 +9,14 @@ from typing import Final, TypedDict
 from typing_extensions import ReadOnly
 
 import litellm
+from litellm.litellm_core_utils.reasoning_effort_utils import warn_dropped_reasoning
 from litellm.litellm_core_utils.url_utils import ensure_api_route, join_api_base
 from litellm.secret_managers.main import get_secret_str
 from litellm.utils import supports_reasoning
 
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
+
+_ADAPTIVE_BUDGET_REASON: Final = "it is not an integer, so litellm sends adaptive thinking with no budget."
 
 
 class ThinkingPayload(TypedDict, total=False):
@@ -35,7 +38,7 @@ class ThinkingExtraBody(TypedDict, total=False):
 
 
 class TencentChatConfig(OpenAIGPTConfig):
-    def get_supported_openai_params(self, model: str) -> list:
+    def get_supported_openai_params(self, model: str) -> list[str]:
         params: Final = super().get_supported_openai_params(model)
         if supports_reasoning(model, custom_llm_provider="tencent"):
             params.extend(["thinking", "reasoning_effort"])
@@ -43,8 +46,8 @@ class TencentChatConfig(OpenAIGPTConfig):
 
     def map_openai_params(
         self,
-        non_default_params: dict,
-        optional_params: dict,
+        non_default_params: dict[str, object],
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
     ) -> dict:
@@ -102,6 +105,10 @@ class TencentChatConfig(OpenAIGPTConfig):
         if isinstance(budget, int):
             coerced_with_budget: Final[ThinkingPayload] = {"type": "adaptive", "budget_tokens": budget}
             return coerced_with_budget
+        if budget is not None:
+            warn_dropped_reasoning(
+                "thinking.budget_tokens", budget, model, _ADAPTIVE_BUDGET_REASON, drop_params_gated=False
+            )
         coerced: Final[ThinkingPayload] = {"type": "adaptive"}
         return coerced
 
@@ -126,8 +133,8 @@ class TencentChatConfig(OpenAIGPTConfig):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         stream: bool | None = None,
     ) -> str:
         if not api_base:

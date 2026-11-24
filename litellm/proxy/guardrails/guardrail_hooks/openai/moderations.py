@@ -8,6 +8,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal, Optional
 
 from fastapi import HTTPException
+from pydantic import TypeAdapter
 
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_guardrail import (
@@ -38,7 +39,11 @@ from .base import OpenAIGuardrailBase
 
 if TYPE_CHECKING:
     from litellm.types.llms.openai import OpenAIModerationResponse
-    from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
+    from litellm.types.proxy.guardrails.guardrail_hooks.openai.openai_moderation import (
+        OpenAIModerationGuardrailConfigModel,
+    )
+
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 def _config_secret(value: object) -> object:
@@ -151,7 +156,9 @@ class OpenAIModerationGuardrail(OpenAIGuardrailBase, CustomGuardrail):
             timeout=self.timeout,
         )
 
-        verbose_proxy_logger.debug("OpenAI Moderation guard response: %s", response.json())
+        verbose_proxy_logger.debug(
+            "OpenAI Moderation guard response: %s", _DECODED_JSON.validate_python(response.json())
+        )
 
         if response.status_code != 200:
             raise HTTPException(
@@ -164,7 +171,7 @@ class OpenAIModerationGuardrail(OpenAIGuardrailBase, CustomGuardrail):
 
         from litellm.types.llms.openai import OpenAIModerationResponse
 
-        return OpenAIModerationResponse(**response.json())
+        return OpenAIModerationResponse.model_validate(response.json())
 
     def _check_moderation_result(self, moderation_response: "OpenAIModerationResponse") -> None:
         """
@@ -271,14 +278,14 @@ class OpenAIModerationGuardrail(OpenAIGuardrailBase, CustomGuardrail):
 
     def _process_response(
         self,
-        response: dict | None,
+        response: dict[str, object] | None,
         request_data: dict,
         start_time: float | None = None,
         end_time: float | None = None,
         duration: float | None = None,
         event_type: GuardrailEventHooks | None = None,
-        original_inputs: dict | None = None,
-    ):
+        original_inputs: Mapping[str, object] | None = None,
+    ) -> dict[str, object] | None:
         """
         Override to log the full OpenAI Moderation API response instead of
         the decorator's simplified "allow"/"mask" string.
@@ -373,7 +380,7 @@ class OpenAIModerationGuardrail(OpenAIGuardrailBase, CustomGuardrail):
         return GuardrailTracingDetail(violation_categories=violation_categories)
 
     @staticmethod
-    def get_config_model() -> type["GuardrailConfigModel"] | None:
+    def get_config_model() -> type["OpenAIModerationGuardrailConfigModel"] | None:
         """
         Get the config model for the OpenAI Moderation guardrail.
         """

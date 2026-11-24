@@ -5,16 +5,14 @@ Model Serving, unified: POST {workspace}/serving-endpoints/responses with the en
 Databricks Apps: POST {app}/responses
 """
 
-import hashlib
 from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
-from typing import TYPE_CHECKING, Final, Protocol
+from typing import TYPE_CHECKING, Final
 from urllib.parse import quote, urlsplit
 
 import httpx
 from pydantic import BaseModel, ConfigDict, StrictStr, TypeAdapter, ValidationError
 
 import litellm
-from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     convert_content_list_to_str,
 )
@@ -41,20 +39,6 @@ _ENDPOINT_URL_SUFFIXES: Final = (_INVOCATIONS_SUFFIX, _APP_RESPONSES_SUFFIX)
 _SERVING_ENDPOINTS_SEGMENT: Final = "/serving-endpoints/"
 _UNIFIED_RESPONSES_SUFFIX: Final = "/serving-endpoints/responses"
 _APP_HOST_SUFFIX: Final = ".databricksapps.com"
-_TOKEN_EXPIRY_BUFFER_SECONDS: Final = 60
-
-
-class _TokenCache(Protocol):
-    def get_cache(self, key: str) -> object: ...
-
-    def set_cache(self, key: str, value: str, *, ttl: int) -> None: ...
-
-
-def _new_token_cache() -> _TokenCache:
-    return InMemoryCache(max_size_in_memory=64)
-
-
-_ENV_M2M_TOKENS: Final = _new_token_cache()
 _INPUT_ROLES: Final = frozenset({"system", "developer", "user", "assistant"})
 _BODY_PARAMS: Final = (
     "max_output_tokens",
@@ -220,20 +204,7 @@ def _env_oauth_m2m_token(api_base: str | None) -> str | None:
                 "set DATABRICKS_HOST to the workspace URL (a Databricks App URL is not a workspace)"
             ),
         )
-    return _cached_m2m_token(workspace, client_id, client_secret)
-
-
-def _cached_m2m_token(workspace: str, client_id: str, client_secret: str) -> str:
-    secret_digest: Final = hashlib.sha256(client_secret.encode()).hexdigest()[:16]
-    cache_key: Final = f"{workspace}|{client_id}|{secret_digest}"
-    cached: Final[object] = _ENV_M2M_TOKENS.get_cache(cache_key)
-    if isinstance(cached, str):
-        return cached
-    token: Final = DatabricksBase().get_oauth_m2m_token_and_lifetime(workspace, client_id, client_secret)
-    ttl: Final = token.expires_in - _TOKEN_EXPIRY_BUFFER_SECONDS
-    if ttl > 0:
-        _ENV_M2M_TOKENS.set_cache(cache_key, token.access_token, ttl=ttl)
-    return token.access_token
+    return DatabricksBase().get_cached_oauth_m2m_token(workspace, client_id, client_secret)
 
 
 def _resolved_env_reference(value: str | None) -> str | None:

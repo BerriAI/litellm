@@ -14,6 +14,7 @@ from .common_utils import (
 )
 
 if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging
     from litellm.llms.anthropic.chat.handler import ModelResponseIterator
 
 
@@ -29,16 +30,19 @@ class BedrockClaudePlatformConfig(BedrockClaudePlatformMixin, AnthropicConfig):
     def should_strip_billing_metadata(self) -> bool:
         return True
 
+    def runs_hosted_mcp(self) -> bool:
+        return True
+
     def validate_environment(
         self,
-        headers: dict,
+        headers: Mapping[str, str],
         model: str,
         messages: list[AllMessageValues],
         optional_params: dict,
-        litellm_params: dict,
+        litellm_params: Mapping[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, str]:
         workspace_id: Final = self._get_workspace_id(optional_params, litellm_params)
         if workspace_id is None:
             raise litellm.AuthenticationError(
@@ -71,6 +75,7 @@ class BedrockClaudePlatformConfig(BedrockClaudePlatformMixin, AnthropicConfig):
             ),
             code_execution_tool_used=self.is_code_execution_tool_used(tools=optional_params.get("tools")),
             container_with_skills_used=self.is_container_with_skills_used(optional_params=optional_params),
+            thinking=optional_params.get("thinking"),  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # optional_params is the base config's bare dict
         )
         anthropic_headers["anthropic-workspace-id"] = workspace_id
         return {**headers, **anthropic_headers}
@@ -110,6 +115,7 @@ class BedrockClaudePlatformConfig(BedrockClaudePlatformMixin, AnthropicConfig):
         sync_stream: bool,
         json_mode: bool | None,
         optional_params: Mapping[str, object],
+        logging_obj: "Logging | None" = None,
     ) -> "ModelResponseIterator":
         from litellm.llms.anthropic.chat.handler import ModelResponseIterator
 

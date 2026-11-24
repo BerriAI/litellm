@@ -34,6 +34,7 @@ fallback path (unknown model, missing model) for every limiter.
 
 import sys
 from datetime import datetime
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -43,14 +44,13 @@ import litellm
 from litellm.caching.caching import DualCache
 from litellm.exceptions import RateLimitError
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
+from litellm.proxy.hooks import batch_rate_limiter
 from litellm.proxy.hooks.batch_rate_limiter import (
     BatchFileUsage,
     PROXY_BatchRateLimiter,
 )
 from litellm.proxy.hooks.dynamic_rate_limiter import PROXY_DynamicRateLimitHandler
-from litellm.proxy.hooks.dynamic_rate_limiter_v3 import (
-    PROXY_DynamicRateLimitHandlerV3,
-)
 from litellm.proxy.hooks.max_budget_per_session_limiter import (
     PROXY_MaxBudgetPerSessionHandler,
 )
@@ -58,17 +58,12 @@ from litellm.proxy.hooks.max_iterations_limiter import PROXY_MaxIterationsHandle
 from litellm.proxy.hooks.parallel_request_limiter import (
     PROXY_MaxParallelRequestsHandler,
 )
-from litellm.proxy.hooks.parallel_request_limiter_v3 import (
-    PROXY_MaxParallelRequestsHandler_v3,
-)
-from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 from litellm.proxy.hooks.rate_limiter_utils import (
     PROXY_LLM_PROVIDER_FALLBACK,
     resolve_llm_provider_for_rate_limit,
 )
 from litellm.proxy.utils import InternalUsageCache
 from litellm.types.agents import AgentResponse
-
 
 # ---------------------------------------------------------------------------
 # Helper class itself
@@ -120,6 +115,11 @@ class TestProxyRateLimitErrorClass:
         )
         assert e.llm_provider == PROXY_LLM_PROVIDER_FALLBACK
         assert e.model == ""
+
+
+def _router_serving(model_list: list) -> SimpleNamespace:
+    """A router whose registry().all() is ``model_list``, the live model list the resolver reads."""
+    return SimpleNamespace(registry=lambda: SimpleNamespace(all=lambda: model_list))
 
 
 class TestResolveLLMProviderForRateLimit:
@@ -202,7 +202,7 @@ class TestResolveLLMProviderForRateLimit:
 
         with patch(
             "litellm.proxy.proxy_server.llm_router",
-            _FakeRouter(),
+            _router_serving(_FakeRouter.model_list),
         ):
             resolved_model, provider = resolve_llm_provider_for_rate_limit("tpm-locked")
         assert provider == "openai", (
@@ -240,7 +240,7 @@ class TestResolveLLMProviderForRateLimit:
 
         with patch(
             "litellm.proxy.proxy_server.llm_router",
-            _FakeRouter(),
+            _router_serving(_FakeRouter.model_list),
         ):
             _, provider = resolve_llm_provider_for_rate_limit("claude-pool")
         assert provider == "anthropic"
@@ -262,7 +262,7 @@ class TestResolveLLMProviderForRateLimit:
 
         with patch(
             "litellm.proxy.proxy_server.llm_router",
-            _FakeRouter(),
+            _router_serving(_FakeRouter.model_list),
         ):
             resolved_model, provider = resolve_llm_provider_for_rate_limit("not-an-alias")
         assert provider == PROXY_LLM_PROVIDER_FALLBACK
@@ -288,7 +288,7 @@ class TestResolveLLMProviderForRateLimit:
 
         with patch(
             "litellm.proxy.proxy_server.llm_router",
-            _FakeRouter(),
+            _router_serving(_FakeRouter.model_list),
         ):
             resolved_model, provider = resolve_llm_provider_for_rate_limit("broken")
         assert provider == PROXY_LLM_PROVIDER_FALLBACK
@@ -478,84 +478,6 @@ async def test_parallel_request_limiter_v1_missing_model_falls_back():
 # ---------------------------------------------------------------------------
 
 
-def _v3_over_limit_response(rate_limit_type: str = "requests") -> dict:
-    return {
-        "overall_code": "OVER_LIMIT",
-        "statuses": [
-            {
-                "code": "OVER_LIMIT",
-                "descriptor_key": "key",
-                "current_limit": 1,
-                "limit_remaining": -1,
-                "rate_limit_type": rate_limit_type,
-            }
-        ],
-    }
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "model, expected_provider",
-    [
-        ("gpt-4o-mini", "openai"),
-        ("anthropic/claude-3-5-sonnet", "anthropic"),
-    ],
-)
-async def test_parallel_request_limiter_v3_populates_provider(model, expected_provider):
-    handler = PROXY_MaxParallelRequestsHandler_v3(internal_usage_cache=InternalUsageCache(DualCache()))
-
-    descriptors = [{"key": "key", "value": "v", "rate_limit": {"requests_per_unit": 1}}]
-    over = _v3_over_limit_response()
-
-    with pytest.raises(HTTPException) as exc_info:
-        handler._handle_rate_limit_error(
-            response=over,
-            descriptors=descriptors,
-            requested_model=model,
-        )
-
-    exc = exc_info.value
-    assert exc.status_code == 429
-    assert isinstance(exc, RateLimitError)
-    assert exc.llm_provider == expected_provider
-    # v3 may strip the "anthropic/" prefix in the resolved model — accept
-    # either; we only care that the provider field is correct and the model
-    # is non-empty.
-    assert exc.model
-
-
-@pytest.mark.asyncio
-async def test_parallel_request_limiter_v3_unknown_model_falls_back():
-    handler = PROXY_MaxParallelRequestsHandler_v3(internal_usage_cache=InternalUsageCache(DualCache()))
-    descriptors = [{"key": "key", "value": "v", "rate_limit": {"requests_per_unit": 1}}]
-
-    with pytest.raises(HTTPException) as exc_info:
-        handler._handle_rate_limit_error(
-            response=_v3_over_limit_response(),
-            descriptors=descriptors,
-            requested_model="totally-bogus",
-        )
-
-    assert exc_info.value.llm_provider == PROXY_LLM_PROVIDER_FALLBACK
-    assert exc_info.value.model == "totally-bogus"
-
-
-@pytest.mark.asyncio
-async def test_parallel_request_limiter_v3_missing_model_falls_back():
-    handler = PROXY_MaxParallelRequestsHandler_v3(internal_usage_cache=InternalUsageCache(DualCache()))
-    descriptors = [{"key": "key", "value": "v", "rate_limit": {"requests_per_unit": 1}}]
-
-    with pytest.raises(HTTPException) as exc_info:
-        handler._handle_rate_limit_error(
-            response=_v3_over_limit_response(),
-            descriptors=descriptors,
-            requested_model=None,
-        )
-
-    assert exc_info.value.llm_provider == PROXY_LLM_PROVIDER_FALLBACK
-    assert exc_info.value.model == ""
-
-
 # ---------------------------------------------------------------------------
 # dynamic_rate_limiter v1
 # ---------------------------------------------------------------------------
@@ -626,112 +548,6 @@ async def test_dynamic_rate_limiter_v1_unknown_model_falls_back():
 
 
 # ---------------------------------------------------------------------------
-# dynamic_rate_limiter v3 — exercise just the raise path via the helper, not
-# the full Redis/Lua stack.
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_dynamic_rate_limiter_v3_model_capacity_path_populates_provider():
-    """
-    The v3 dynamic limiter has three raise sites: model_saturation_check,
-    priority_model, and the fail-closed unknown-descriptor branch. We patch
-    the atomic increment to short-circuit straight into the model_saturation
-    path — that's the most common production trip — and confirm the
-    raised exception carries provider info.
-    """
-    from litellm.types.router import ModelGroupInfo
-
-    handler = PROXY_DynamicRateLimitHandlerV3(internal_usage_cache=DualCache())
-    handler.v3_limiter.atomic_check_and_increment_by_n = AsyncMock(
-        return_value={
-            "overall_code": "OVER_LIMIT",
-            "statuses": [
-                {
-                    "code": "OVER_LIMIT",
-                    "descriptor_key": "model_saturation_check",
-                    "current_limit": 100,
-                    "limit_remaining": 0,
-                    "rate_limit_type": "requests",
-                }
-            ],
-        }
-    )
-    handler._create_priority_based_descriptors = MagicMock(return_value=[])
-    handler._create_model_tracking_descriptor = MagicMock(
-        return_value={
-            "key": "model_saturation_check",
-            "value": "gpt-4o-mini",
-            "rate_limit": {"requests_per_unit": 100},
-        }
-    )
-
-    user_api_key_dict = UserAPIKeyAuth(api_key="sk-dyn-v3")
-    user_api_key_dict.metadata = {}
-    model_info = ModelGroupInfo(model_group="gpt-4o-mini", providers=["openai"])
-
-    with pytest.raises(HTTPException) as exc_info:
-        await handler._check_rate_limits(
-            model="gpt-4o-mini",
-            model_group_info=model_info,
-            user_api_key_dict=user_api_key_dict,
-            priority="default",
-            saturation=1.0,
-        )
-
-    exc = exc_info.value
-    assert exc.status_code == 429
-    assert isinstance(exc, RateLimitError)
-    assert exc.llm_provider == "openai"
-    assert exc.model == "gpt-4o-mini"
-
-
-@pytest.mark.asyncio
-async def test_dynamic_rate_limiter_v3_unknown_descriptor_path_populates_provider():
-    """Fail-closed unknown-descriptor branch must still attribute provider."""
-    from litellm.types.router import ModelGroupInfo
-
-    handler = PROXY_DynamicRateLimitHandlerV3(internal_usage_cache=DualCache())
-    handler.v3_limiter.atomic_check_and_increment_by_n = AsyncMock(
-        return_value={
-            "overall_code": "OVER_LIMIT",
-            "statuses": [
-                {
-                    "code": "OVER_LIMIT",
-                    "descriptor_key": "something_we_dont_handle",
-                    "current_limit": 1,
-                    "limit_remaining": 0,
-                    "rate_limit_type": "requests",
-                }
-            ],
-        }
-    )
-    handler._create_priority_based_descriptors = MagicMock(return_value=[])
-    handler._create_model_tracking_descriptor = MagicMock(
-        return_value={
-            "key": "model_saturation_check",
-            "value": "gpt-4o-mini",
-            "rate_limit": {"requests_per_unit": 1},
-        }
-    )
-
-    user_api_key_dict = UserAPIKeyAuth(api_key="sk-dyn-v3-unknown")
-    user_api_key_dict.metadata = {}
-    model_info = ModelGroupInfo(model_group="gpt-4o-mini", providers=["openai"])
-
-    with pytest.raises(HTTPException) as exc_info:
-        await handler._check_rate_limits(
-            model="gpt-4o-mini",
-            model_group_info=model_info,
-            user_api_key_dict=user_api_key_dict,
-            priority="default",
-            saturation=1.0,
-        )
-
-    assert exc_info.value.llm_provider == "openai"
-
-
-# ---------------------------------------------------------------------------
 # batch_rate_limiter
 # ---------------------------------------------------------------------------
 
@@ -752,7 +568,7 @@ def _batch_over_limit_response() -> dict:
 
 
 @pytest.mark.asyncio
-async def test_batch_rate_limiter_populates_provider():
+async def test_batch_rate_limiter_populates_provider(monkeypatch: pytest.MonkeyPatch):
     """
     batch_rate_limiter trips when the file's request/token count exceeds the
     remaining window. The raise must thread `data["model"]` through the
@@ -760,10 +576,14 @@ async def test_batch_rate_limiter_populates_provider():
     """
     parallel_limiter = MagicMock()
     parallel_limiter.window_size = 60
-    parallel_limiter.create_rate_limit_descriptors = MagicMock(
-        return_value=[{"key": "key", "value": "v", "rate_limit": {"requests_per_unit": 10}}]
+    monkeypatch.setattr(
+        batch_rate_limiter,
+        "batch_rate_limit_descriptors",
+        AsyncMock(return_value=[{"key": "key", "value": "v", "rate_limit": {"requests_per_unit": 10}}]),
     )
-    parallel_limiter.atomic_check_and_increment_by_n = AsyncMock(return_value=_batch_over_limit_response())
+    monkeypatch.setattr(
+        batch_rate_limiter, "atomic_check_and_increment_by_n", AsyncMock(return_value=_batch_over_limit_response())
+    )
 
     handler = PROXY_BatchRateLimiter(
         internal_usage_cache=InternalUsageCache(DualCache()),
@@ -785,13 +605,17 @@ async def test_batch_rate_limiter_populates_provider():
 
 
 @pytest.mark.asyncio
-async def test_batch_rate_limiter_unknown_model_falls_back():
+async def test_batch_rate_limiter_unknown_model_falls_back(monkeypatch: pytest.MonkeyPatch):
     parallel_limiter = MagicMock()
     parallel_limiter.window_size = 60
-    parallel_limiter.create_rate_limit_descriptors = MagicMock(
-        return_value=[{"key": "key", "value": "v", "rate_limit": {"requests_per_unit": 10}}]
+    monkeypatch.setattr(
+        batch_rate_limiter,
+        "batch_rate_limit_descriptors",
+        AsyncMock(return_value=[{"key": "key", "value": "v", "rate_limit": {"requests_per_unit": 10}}]),
     )
-    parallel_limiter.atomic_check_and_increment_by_n = AsyncMock(return_value=_batch_over_limit_response())
+    monkeypatch.setattr(
+        batch_rate_limiter, "atomic_check_and_increment_by_n", AsyncMock(return_value=_batch_over_limit_response())
+    )
 
     handler = PROXY_BatchRateLimiter(
         internal_usage_cache=InternalUsageCache(DualCache()),

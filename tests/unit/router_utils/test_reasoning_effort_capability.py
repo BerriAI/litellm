@@ -7,8 +7,7 @@ import pytest
 
 import litellm
 from litellm._logging import JsonFormatter, verbose_logger
-from litellm.router_utils.reasoning_effort_capability import (
-    REASONING_EFFORT_STRENGTH_ORDER,
+from litellm.litellm_core_utils.reasoning_effort_capability import (
     RequestedReasoningEffort,
     deployment_is_catalog_mapped,
     intersect_supported_reasoning_efforts,
@@ -17,6 +16,7 @@ from litellm.router_utils.reasoning_effort_capability import (
     resolve_supported_reasoning_efforts,
     thinking_budget_effort,
 )
+from litellm.litellm_core_utils.reasoning_effort_strength import REASONING_EFFORT_STRENGTH_ORDER
 
 
 class TestDeploymentIsCatalogMapped:
@@ -54,9 +54,9 @@ class TestProvenanceSeparatesUnknownFromNonReasoning:
 
 class TestResolveSupportedReasoningEfforts:
     def test_a_reasoning_model_with_no_flags_at_all_resolves_to_unknown(self):
-        # 689 of the map's 854 reasoning entries carry no effort flag, and the o-series, xai and
-        # bedrock nova entries among them accept neither none nor minimal, so composing a set out of
-        # the opt-out defaults alone would advertise levels those providers reject.
+        # Most of the map's reasoning entries carry no effort flag, and the o1, o3-mini, o4-mini, xai
+        # and bedrock nova entries among them accept neither none nor minimal, so composing a set out
+        # of the opt-out defaults alone would advertise levels those providers reject.
         assert resolve_supported_reasoning_efforts({"supports_reasoning": True}, deployment_is_mapped=True) is None
 
     def test_explicit_false_removes_an_opt_out_level(self):
@@ -160,12 +160,12 @@ class TestNoneLevelPolarity:
 
     def test_none_stays_opt_out_on_an_azure_model_outside_the_gpt_5_family(self):
         """AzureOpenAIGPT5Config is selected by is_model_gpt_5_model, so an azure o-series or
-        anthropic deployment never reaches the gate that refuses none and must keep the level."""
+        anthropic deployment never reaches the gate that refuses none unless its row turns none off."""
         resolved = resolve_supported_reasoning_efforts(
             {
                 "supports_reasoning": True,
                 "litellm_provider": "azure",
-                "key": "azure/o3",
+                "key": "azure/o-series-deployment",
                 "supports_max_reasoning_effort": True,
             },
             deployment_is_mapped=True,
@@ -203,7 +203,7 @@ class TestNoneLevelPolarity:
     def test_azure_advertisement_matches_the_azure_request_gate(self, model_key):
         """AzureOpenAIGPT5Config raises UnsupportedParamsError on reasoning_effort='none' for models
         it does not flag, so advertising the level there would offer routing a 400."""
-        from litellm.llms.azure.chat.gpt_5_transformation import AzureOpenAIGPT5Config
+        from litellm.llms.azure.chat.gpt_reasoning_transformation import AzureOpenAIGPT5Config
         from litellm.utils import get_model_info_helper
 
         model_info = dict(get_model_info_helper(model=model_key.split("/", 1)[1], custom_llm_provider="azure"))
@@ -322,7 +322,6 @@ class TestDeclaredEffortList:
 
 
 KIMI_K3_PASSTHROUGH_KEYS = (
-    "azure_ai/FW-Kimi-K3",
     "moonshot/kimi-k3",
     "together_ai/moonshotai/Kimi-K3",
     "fireworks_ai/kimi-k3",
@@ -344,6 +343,21 @@ class TestKimiK3AdvertisesItsDocumentedLevels:
         entry = dict(litellm.model_cost[model_key], key=model_key)
 
         assert resolve_supported_reasoning_efforts(entry, deployment_is_mapped=True) == ("low", "high", "max")
+
+    def test_the_foundry_entry_advertises_every_level_foundry_takes(self, local_model_cost_map):
+        """Foundry's Kimi K3 answered 200 for every level from none to max on a live deployment,
+        checked on 2026-11-14 for PR #51747, so its row declares all seven."""
+        entry = dict(litellm.model_cost["azure_ai/FW-Kimi-K3"], key="azure_ai/FW-Kimi-K3")
+
+        assert resolve_supported_reasoning_efforts(entry, deployment_is_mapped=True) == (
+            "none",
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max",
+        )
 
     def test_the_perplexity_entry_advertises_the_wider_set_it_maps_down(self, local_model_cost_map):
         """Perplexity's Agent API takes a six-value enum and maps it down internally, so this
@@ -626,8 +640,9 @@ class TestResolveDeploymentReasoningEffort:
         _sent("turbo\nforged line", drop_params=True)
 
         assert [record.getMessage() for record in caplog.records] == [
-            "reasoning_effort unrecognized sent as None (rounding up) to deployment deployment-1, "
-            "model group kimi-k3, model hosted_vllm/my-kimi"
+            "Dropping reasoning level unrecognized (drop_params=True) for deployment deployment-1, model group "
+            "kimi-k3, model hosted_vllm/my-kimi because its model_info.reasoning_effort_levels does not list that "
+            "level. List every level the deployment supports."
         ]
 
     def test_line_breaks_in_logged_names_cannot_forge_a_log_line(self, caplog: pytest.LogCaptureFixture) -> None:
@@ -668,6 +683,27 @@ class TestResolveDeploymentReasoningEffort:
             "reasoning_effort_sent": "high",
             "reasoning_effort_rounding": "up",
         }
+
+    def test_only_a_dropped_level_logs_a_warning(self, caplog: pytest.LogCaptureFixture) -> None:
+        verbose_logger.addHandler(caplog.handler)
+        verbose_logger.propagate = False
+        verbose_logger.setLevel(logging.INFO)
+        declared: Final = {"reasoning_effort_levels": ["low", "high"]}
+
+        _sent("none", declared, drop_params=True)
+        _sent("medium")
+        _sent("default", declared, drop_params=True)
+        _sent("default", declared)
+
+        assert [record.levelno for record in caplog.records] == [
+            logging.WARNING,
+            logging.INFO,
+            logging.INFO,
+            logging.INFO,
+        ]
+        dropped: Final = caplog.records[0].getMessage()
+        assert "Dropping reasoning level none" in dropped
+        assert "model_info.reasoning_effort_levels" in dropped
 
 
 class TestAzureGpt6SolAndLunaAdvertiseTheOpenAiLevels:

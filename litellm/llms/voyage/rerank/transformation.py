@@ -29,6 +29,7 @@ _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_i
 _JSON_OBJECTS: Final = TypeAdapter(Iterable[Mapping[str, object]], config=ConfigDict(hide_input_in_errors=True))
 _OPTIONAL_INT: Final[TypeAdapter[int | None]] = TypeAdapter(int | None)
 _STR: Final = TypeAdapter(str)
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class VoyageRerankConfig(BaseRerankConfig):
@@ -42,12 +43,12 @@ class VoyageRerankConfig(BaseRerankConfig):
         super().__init__()
         self._api_key: str | None = None
 
-    def get_supported_cohere_rerank_params(self, model: str) -> list:
+    def get_supported_cohere_rerank_params(self, model: str) -> list[str]:
         return ["query", "documents", "top_n", "return_documents"]
 
     def map_cohere_rerank_params(
         self,
-        non_default_params: dict,
+        non_default_params: Mapping[str, object],
         model: str,
         drop_params: bool,
         query: str,
@@ -59,7 +60,7 @@ class VoyageRerankConfig(BaseRerankConfig):
         max_chunks_per_doc: int | None = None,
         max_tokens_per_doc: int | None = None,
         instruction: str | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         # Voyage AI uses 'top_k' instead of 'top_n'
         optional_params: Final[dict[str, object]] = {"query": query, "documents": documents}
         if top_n is not None:
@@ -74,7 +75,7 @@ class VoyageRerankConfig(BaseRerankConfig):
         self,
         api_base: str | None,
         model: str,
-        optional_params: dict | None = None,
+        optional_params: Mapping[str, object] | None = None,
     ) -> str:
         if api_base is None:
             return f"{get_default_base_url(self._api_key)}/rerank"
@@ -89,10 +90,10 @@ class VoyageRerankConfig(BaseRerankConfig):
     def transform_rerank_request(
         self,
         model: str,
-        optional_rerank_params: dict,
-        headers: dict,
-        litellm_params: dict | None = None,
-    ) -> dict:
+        optional_rerank_params: Mapping[str, object],
+        headers: Mapping[str, object],
+        litellm_params: Mapping[str, object] | None = None,
+    ) -> dict[str, object]:
         return {"model": model, **optional_rerank_params}
 
     def transform_rerank_response(
@@ -102,9 +103,9 @@ class VoyageRerankConfig(BaseRerankConfig):
         model_response: RerankResponse,
         logging_obj: LiteLLMLoggingObj,
         api_key: str | None = None,
-        request_data: dict = {},
-        optional_params: dict = {},
-        litellm_params: dict = {},
+        request_data: Mapping[str, object] = {},
+        optional_params: Mapping[str, object] = {},
+        litellm_params: Mapping[str, object] = {},
     ) -> RerankResponse:
         if raw_response.status_code != 200:
             raise VoyageError(message=raw_response.text, status_code=raw_response.status_code)
@@ -112,7 +113,7 @@ class VoyageRerankConfig(BaseRerankConfig):
         logging_obj.post_call(original_response=raw_response.text)
 
         try:
-            _json_response: Final = raw_response.json()
+            _json_response: Final = _DECODED_JSON.validate_python(raw_response.json())
         except Exception:
             raise VoyageError(
                 message=f"Failed to parse response: {raw_response.text}",
@@ -153,12 +154,12 @@ class VoyageRerankConfig(BaseRerankConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: Mapping[str, object],
         model: str,
         api_key: str | None = None,
-        optional_params: dict | None = None,
+        optional_params: Mapping[str, object] | None = None,
         litellm_params: Mapping[str, object] | None = None,
-    ) -> dict:
+    ) -> dict[str, str]:
         resolved_api_key: Final = get_voyage_api_key(api_key)
         if resolved_api_key is None:
             raise ValueError("Voyage AI API key is required. Set via `api_key` parameter or `VOYAGE_API_KEY` env var.")

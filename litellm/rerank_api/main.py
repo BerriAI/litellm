@@ -1,6 +1,6 @@
 import asyncio
 import contextvars
-from collections.abc import Awaitable
+from collections.abc import Awaitable, Coroutine, Mapping
 from functools import partial
 from typing import Final, Literal
 
@@ -18,6 +18,12 @@ from litellm.secret_managers.main import get_secret, get_secret_str
 from litellm.types.rerank import RerankResponse
 from litellm.types.router import *
 from litellm.utils import ProviderConfigManager, client, exception_type
+
+_PROVIDERS_RESOLVING_THEIR_OWN_RERANK_BASE: Final = (
+    litellm.LlmProviders.DASHSCOPE,
+    litellm.LlmProviders.QWENCLOUD,
+    litellm.LlmProviders.QWEN_AI_PLATFORM,
+)
 
 ####### ENVIRONMENT VARIABLES ###################
 # Initialize any necessary instances or variables here
@@ -43,6 +49,13 @@ async def arerank(
 ) -> RerankResponse | Awaitable[RerankResponse]:
     """
     Async: Reranks a list of documents based on their relevance to the query
+
+    The returned response carries this call's cost in ``response._hidden_params.get("response_cost")``,
+    which may be None when the cost is unavailable. Success callbacks receive the same value in
+    ``kwargs["response_cost"]``. They run in the background and may still be pending when this coroutine
+    returns, so a ledger or exporter written from a callback may be incomplete at that point. A caller
+    that needs that write done must wait for an acknowledgment from its own callback.
+    ``CustomLogger.log_post_api_call`` is not a final-cost hook.
     """
     _custom_llm_provider: str | None = None
     try:
@@ -76,7 +89,7 @@ async def arerank(
         func_with_context: Final = partial(ctx.run, func)
         init_response: Final = await loop.run_in_executor(None, func_with_context)
 
-        if asyncio.iscoroutine(init_response):
+        if isinstance(init_response, Coroutine):
             response = await init_response
         else:
             response = init_response
@@ -118,13 +131,20 @@ def rerank(
 ) -> RerankResponse | Awaitable[RerankResponse]:
     """
     Reranks a list of documents based on their relevance to the query
+
+    The returned response carries this call's cost in ``response._hidden_params.get("response_cost")``,
+    which may be None when the cost is unavailable. Success callbacks receive the same value in
+    ``kwargs["response_cost"]``. They run on a background logging thread and may still be pending when
+    this function returns, so a ledger or exporter written from a callback may be incomplete at that point.
+    A caller that needs that write done must wait for an acknowledgment from its own callback.
+    ``CustomLogger.log_post_api_call`` is not a final-cost hook.
     """
     # `instruction` is read from kwargs rather than declared as a named param.
     # The router forwards rerank calls via an untyped `**kwargs` unpack, and a
     # typed named param there would trip the basedpyright budget gate without
     # adding real safety; it stays typed downstream via get_optional_rerank_params.
     instruction: Final[str | None] = kwargs.get("instruction", None)
-    headers: Final[dict | None] = kwargs.get("headers")
+    headers: Final[Mapping[str, object] | None] = kwargs.get("headers")
     litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
     litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id", None)
     proxy_server_request: Final = kwargs.get("proxy_server_request", None)
@@ -161,7 +181,7 @@ def rerank(
             present_version_params=present_version_params,
         )
 
-        optional_rerank_params: Final[dict] = get_optional_rerank_params(
+        optional_rerank_params: Final[dict[str, object]] = get_optional_rerank_params(
             rerank_provider_config=rerank_provider_config,
             model=model,
             drop_params=kwargs.get("drop_params") or litellm.drop_params or False,
@@ -182,14 +202,16 @@ def rerank(
 
         model_response: Final = RerankResponse()
 
-        rerank_litellm_params: Final = {
-            "litellm_call_id": litellm_call_id,
-            "proxy_server_request": proxy_server_request,
-            "model_info": model_info,
-            "preset_cache_key": None,
-            "stream_response": {},
-            **optional_params.model_dump(exclude_unset=True),
-        }
+        rerank_litellm_params: Final = dict[str, object](
+            {
+                "litellm_call_id": litellm_call_id,
+                "proxy_server_request": proxy_server_request,
+                "model_info": model_info,
+                "preset_cache_key": None,
+                "stream_response": {},
+                **optional_params.model_dump(exclude_unset=True),
+            }
+        )
 
         litellm_logging_obj.update_from_kwargs(
             kwargs=kwargs,
@@ -543,7 +565,11 @@ def rerank(
                 logging_obj=litellm_logging_obj,
                 timeout=optional_params.timeout,
                 api_key=dynamic_api_key or optional_params.api_key,
-                api_base=dynamic_api_base or optional_params.api_base,
+                api_base=(
+                    optional_params.api_base or dynamic_api_base
+                    if _custom_llm_provider in _PROVIDERS_RESOLVING_THEIR_OWN_RERANK_BASE
+                    else dynamic_api_base or optional_params.api_base
+                ),
                 _is_async=_is_async,
                 headers=headers or litellm.headers or {},
                 client=client,

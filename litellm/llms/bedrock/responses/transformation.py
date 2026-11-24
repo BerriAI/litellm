@@ -52,9 +52,14 @@ from litellm.llms.base_llm.responses.codex_compat import drop_unsupported_tools,
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.bedrock.common_utils import (
     BEDROCK_CHAT_COMPLETIONS_ROUTE_PREFIX,
+    BEDROCK_RUNTIME_OPENAI_CHAT_ROUTE_SUFFIXES,
+    BEDROCK_RUNTIME_OPENAI_RESPONSES_ROUTE_SUFFIXES,
+    DROP_DISABLED_REASONING_EFFORT_WARNING,
     BedrockError,
+    bedrock_model_encrypts_agent_messages,
     bedrock_reasoning_effort_disabled,
     bedrock_supports_openai_responses,
+    strip_bedrock_runtime_route_suffix,
 )
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.secret_managers.main import get_secret_str
@@ -64,9 +69,8 @@ from litellm.types.utils import LlmProviders
 
 BEDROCK_RUNTIME_OPENAI_RESPONSES_PATH: Final = "/openai/v1/responses"
 BEDROCK_RUNTIME_OPENAI_BASE_SUFFIXES: Final = (
-    "/openai/v1/responses",
-    "/v1/responses",
-    "/responses",
+    *BEDROCK_RUNTIME_OPENAI_CHAT_ROUTE_SUFFIXES,
+    *BEDROCK_RUNTIME_OPENAI_RESPONSES_ROUTE_SUFFIXES,
     "/openai/v1",
     "/v1",
 )
@@ -173,7 +177,7 @@ def _without_disabled_reasoning_effort(
             ),
             status_code=400,
         )
-    verbose_logger.debug("Dropping unsupported `reasoning.effort=%s` for Bedrock model=%s.", effort, model)
+    verbose_logger.warning(DROP_DISABLED_REASONING_EFFORT_WARNING, "reasoning.effort", effort, model)
     rest: Final = {key: value for key, value in reasoning.items() if key != "effort"}
     without_reasoning: Final = {key: value for key, value in params.items() if key != "reasoning"}
     return {**without_reasoning, "reasoning": rest} if rest else without_reasoning
@@ -186,10 +190,12 @@ class BedrockOpenAIResponsesConfig(BaseAWSLLM, OpenAIResponsesAPIConfig):
         self,
         fetch_image: "Callable[[str], str]" = convert_url_to_base64,
         async_fetch_image: "Callable[[str], Awaitable[str]]" = async_convert_url_to_base64,
+        encrypted_agent_messages: bool = False,
     ) -> None:
         super().__init__()
         self.fetch_image = fetch_image
         self.async_fetch_image = async_fetch_image
+        self.encrypted_agent_messages = encrypted_agent_messages
 
     @classmethod
     def for_model(cls, model: str | None) -> "BedrockOpenAIResponsesConfig | None":
@@ -206,7 +212,7 @@ class BedrockOpenAIResponsesConfig(BaseAWSLLM, OpenAIResponsesAPIConfig):
             _without_chat_completions_route(model), litellm.model_cost
         ):
             return None
-        return cls()
+        return cls(encrypted_agent_messages=bedrock_model_encrypts_agent_messages(model))
 
     @property
     def custom_llm_provider(self) -> LlmProviders:
@@ -225,31 +231,27 @@ class BedrockOpenAIResponsesConfig(BaseAWSLLM, OpenAIResponsesAPIConfig):
     ) -> str:
         region: Final = self._get_aws_region_name(optional_params=litellm_params, model=None)
         configured_endpoint: Final = litellm_params.get("aws_bedrock_runtime_endpoint")
-        override: Final = (
-            api_base
-            or (f"{configured_endpoint}" if configured_endpoint else None)
-            or get_secret_str("AWS_BEDROCK_RUNTIME_ENDPOINT")
-        )
-        # Partition-aware: bedrock-runtime is amazonaws.com.cn in China, and other
-        # suffixes in GovCloud/ISO, so defer to the shared endpoint builder.
         host: Final = (
-            override or self._select_default_endpoint_url(endpoint_type="runtime", aws_region_name=region)
-        ).rstrip("/")
-        base: Final = next(
-            (host[: -len(suffix)] for suffix in BEDROCK_RUNTIME_OPENAI_BASE_SUFFIXES if host.endswith(suffix)),
-            host,
+            (configured_endpoint if isinstance(configured_endpoint, str) else None)
+            or api_base
+            or get_secret_str("AWS_BEDROCK_RUNTIME_ENDPOINT")
+            or self._select_default_endpoint_url(endpoint_type="runtime", aws_region_name=region)
         )
+        base: Final = strip_bedrock_runtime_route_suffix(host, BEDROCK_RUNTIME_OPENAI_BASE_SUFFIXES)
         return join_api_base(base, BEDROCK_RUNTIME_OPENAI_RESPONSES_PATH)
 
     def supports_native_file_search(self) -> bool:
         return False
 
+    def supports_encrypted_agent_messages(self) -> bool:
+        return self.encrypted_agent_messages
+
     def validate_environment(
         self,
-        headers: dict,  # mutable-ok: signature fixed by the BaseResponsesAPIConfig override contract
+        headers: dict[str, object],  # mutable-ok: signature fixed by the BaseResponsesAPIConfig override contract
         model: str,
         litellm_params: GenericLiteLLMParams | None,
-    ) -> dict:  # mutable-ok: signature fixed by the BaseResponsesAPIConfig override contract
+    ) -> dict[str, object]:  # mutable-ok: signature fixed by the BaseResponsesAPIConfig override contract
         api_key: Final = litellm_params.api_key if litellm_params is not None else None
         bearer: Final = resolve_bedrock_bearer_token(api_key)
         if not bearer:
@@ -258,7 +260,7 @@ class BedrockOpenAIResponsesConfig(BaseAWSLLM, OpenAIResponsesAPIConfig):
 
     def sign_request(
         self,
-        headers: dict,  # mutable-ok: signature fixed by the BaseResponsesAPIConfig override contract
+        headers: dict[str, object],  # mutable-ok: signature fixed by the BaseResponsesAPIConfig override contract
         optional_params: dict,  # mutable-ok: same
         request_data: dict,  # mutable-ok: same
         api_base: str,
@@ -266,7 +268,7 @@ class BedrockOpenAIResponsesConfig(BaseAWSLLM, OpenAIResponsesAPIConfig):
         model: str | None = None,
         stream: bool | None = None,
         fake_stream: bool | None = None,
-    ) -> "tuple[dict, bytes | None]":  # mutable-ok: signature fixed by the override contract
+    ) -> "tuple[dict[str, object], bytes | None]":  # mutable-ok: signature fixed by the override contract
         if resolve_bedrock_bearer_token(api_key):
             # Bedrock API keys are Bearer credentials; SigV4 on top would be wrong.
             return headers, None
@@ -286,7 +288,7 @@ class BedrockOpenAIResponsesConfig(BaseAWSLLM, OpenAIResponsesAPIConfig):
         response_api_optional_params: ResponsesAPIOptionalRequestParams,
         model: str,
         drop_params: bool,
-    ) -> dict:  # mutable-ok: signature fixed by the override contract
+    ) -> dict[str, object]:  # mutable-ok: signature fixed by the override contract
         mapped: Final = super().map_openai_params(
             response_api_optional_params=response_api_optional_params, model=model, drop_params=drop_params
         )
@@ -318,10 +320,10 @@ class BedrockOpenAIResponsesConfig(BaseAWSLLM, OpenAIResponsesAPIConfig):
         self,
         model: str,
         input: "str | ResponseInputParam",
-        response_api_optional_request_params: dict,  # mutable-ok: signature fixed by the override contract
+        response_api_optional_request_params: dict[str, object],  # mutable-ok: signature fixed by the override contract
         litellm_params: GenericLiteLLMParams,
         headers: dict,  # mutable-ok: same
-    ) -> dict:  # mutable-ok: same
+    ) -> dict[str, object]:  # mutable-ok: same
         inlined: Final = MappingProxyType({url: self.fetch_image(url) for url in collect_remote_image_urls(input)})
         return self._transform_inlined_request(
             model=model,
@@ -335,10 +337,10 @@ class BedrockOpenAIResponsesConfig(BaseAWSLLM, OpenAIResponsesAPIConfig):
         self,
         model: str,
         input: "str | ResponseInputParam",
-        response_api_optional_request_params: dict,  # mutable-ok: signature fixed by the override contract
+        response_api_optional_request_params: dict[str, object],  # mutable-ok: signature fixed by the override contract
         litellm_params: GenericLiteLLMParams,
-        headers: dict,  # mutable-ok: same
-    ) -> dict:  # mutable-ok: same
+        headers: dict[str, object],  # mutable-ok: same
+    ) -> dict[str, object]:  # mutable-ok: same
         remote_urls: Final = collect_remote_image_urls(input)
         data_uris: Final = await asyncio.gather(*(self.async_fetch_image(url) for url in remote_urls))
         return self._transform_inlined_request(
@@ -353,11 +355,13 @@ class BedrockOpenAIResponsesConfig(BaseAWSLLM, OpenAIResponsesAPIConfig):
         self,
         model: str,
         input: "str | ResponseInputParam",
-        response_api_optional_request_params: dict,  # mutable-ok: signature fixed by the override contract
+        response_api_optional_request_params: dict[str, object],  # mutable-ok: signature fixed by the override contract
         litellm_params: GenericLiteLLMParams,
         headers: dict,  # mutable-ok: same
-    ) -> dict:  # mutable-ok: same
-        normalized_input, rewritten_types = normalize_codex_input_items(input)
+    ) -> dict[str, object]:  # mutable-ok: same
+        normalized_input, rewritten_types = normalize_codex_input_items(
+            input, keep_encrypted_agent_messages=self.supports_encrypted_agent_messages()
+        )
         if rewritten_types:
             verbose_logger.warning(
                 "Bedrock Runtime Responses API: rewrote Codex input item type(s) %s that the endpoint rejects.",

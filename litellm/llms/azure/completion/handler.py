@@ -1,13 +1,14 @@
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import Final
 
 import httpx
-from openai import AsyncAzureOpenAI, AzureOpenAI
+from openai import AsyncAzureOpenAI, AsyncOpenAI, AzureOpenAI, OpenAI
 
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.prompt_templates.factory import prompt_factory
 from litellm.utils import CustomStreamWrapper, ModelResponse, TextCompletionResponse
 
+from ...openai.common_utils import upstream_error_response
 from ...openai.completion.transformation import OpenAITextCompletionConfig
 from ..common_utils import AzureOpenAIError, BaseAzureLLM
 
@@ -18,7 +19,7 @@ class AzureTextCompletion(BaseAzureLLM):
     def __init__(self) -> None:
         super().__init__()
 
-    def validate_environment(self, api_key, azure_ad_token):
+    def validate_environment(self, api_key: str | None, azure_ad_token: str | None) -> dict[str, str]:
         headers: Final = {
             "content-type": "application/json",
         }
@@ -39,14 +40,14 @@ class AzureTextCompletion(BaseAzureLLM):
         api_type: str,
         azure_ad_token: str | None,
         azure_ad_token_provider: Callable | None,
-        print_verbose: Callable,
-        timeout,
+        print_verbose: object,
+        timeout: float | httpx.Timeout | None,
         logging_obj: LiteLLMLoggingObj,
         optional_params,
         litellm_params: dict[str, object],
-        logger_fn,
+        logger_fn: object,
         acompletion: bool = False,
-        headers: dict | None = None,
+        headers: Mapping[str, object] | None = None,
         client=None,
     ):
         try:
@@ -183,7 +184,12 @@ class AzureTextCompletion(BaseAzureLLM):
             error_response: Final[object] = getattr(e, "response", None)
             if error_headers is None and error_response:
                 error_headers = getattr(error_response, "headers", None)
-            raise AzureOpenAIError(status_code=status_code, message=str(e), headers=error_headers)
+            raise AzureOpenAIError(
+                status_code=status_code,
+                message=str(e),
+                headers=error_headers,
+                response=upstream_error_response(e),
+            )
 
     async def acompletion(
         self,
@@ -197,8 +203,8 @@ class AzureTextCompletion(BaseAzureLLM):
         logging_obj: LiteLLMLoggingObj,
         max_retries: int,
         azure_ad_token: str | None = None,
-        client=None,  # this is the AsyncAzureOpenAI
-        litellm_params: dict = {},
+        client: AzureOpenAI | AsyncAzureOpenAI | OpenAI | AsyncOpenAI | None = None,  # this is the AsyncAzureOpenAI
+        litellm_params: dict[str, object] = {},
     ):
         response = None
         try:
@@ -244,7 +250,12 @@ class AzureTextCompletion(BaseAzureLLM):
             error_response: Final[object] = getattr(e, "response", None)
             if error_headers is None and error_response:
                 error_headers = getattr(error_response, "headers", None)
-            raise AzureOpenAIError(status_code=status_code, message=str(e), headers=error_headers)
+            raise AzureOpenAIError(
+                status_code=status_code,
+                message=str(e),
+                headers=error_headers,
+                response=upstream_error_response(e),
+            )
 
     def streaming(
         self,
@@ -256,8 +267,8 @@ class AzureTextCompletion(BaseAzureLLM):
         model: str,
         timeout: float | httpx.Timeout | None,
         azure_ad_token: str | None = None,
-        client=None,
-        litellm_params: dict = {},
+        client: AzureOpenAI | AsyncAzureOpenAI | OpenAI | AsyncOpenAI | None = None,
+        litellm_params: dict[str, object] = {},
     ):
         max_retries: Final = data.pop("max_retries", 2)
         if not isinstance(max_retries, int):
@@ -309,8 +320,8 @@ class AzureTextCompletion(BaseAzureLLM):
         model: str,
         timeout: float | httpx.Timeout | None,
         azure_ad_token: str | None = None,
-        client=None,
-        litellm_params: dict = {},
+        client: AzureOpenAI | AsyncAzureOpenAI | OpenAI | AsyncOpenAI | None = None,
+        litellm_params: dict[str, object] = {},
     ):
         try:
             # init AzureOpenAI Client
@@ -355,4 +366,9 @@ class AzureTextCompletion(BaseAzureLLM):
             error_response: Final[object] = getattr(e, "response", None)
             if error_headers is None and error_response:
                 error_headers = getattr(error_response, "headers", None)
-            raise AzureOpenAIError(status_code=status_code, message=str(e), headers=error_headers)
+            raise AzureOpenAIError(
+                status_code=status_code,
+                message=str(e),
+                headers=error_headers,
+                response=upstream_error_response(e),
+            )

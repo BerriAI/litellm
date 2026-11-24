@@ -1,4 +1,5 @@
-from typing import Any, Final
+from collections.abc import Mapping
+from typing import Final
 
 from litellm.litellm_core_utils.url_utils import ensure_api_route
 from litellm.llms.cohere.rerank.transformation import CohereRerankConfig
@@ -17,13 +18,13 @@ class CohereRerankV2Config(CohereRerankConfig):
         self,
         api_base: str | None,
         model: str,
-        optional_params: dict | None = None,
+        optional_params: Mapping[str, object] | None = None,
     ) -> str:
         if api_base:
             return ensure_api_route(api_base, "v2/rerank")
         return "https://api.cohere.ai/v2/rerank"
 
-    def get_supported_cohere_rerank_params(self, model: str) -> list:
+    def get_supported_cohere_rerank_params(self, model: str) -> list[str]:
         return [
             "query",
             "documents",
@@ -35,11 +36,11 @@ class CohereRerankV2Config(CohereRerankConfig):
 
     def map_cohere_rerank_params(
         self,
-        non_default_params: dict | None,
+        non_default_params: Mapping[str, object] | None,
         model: str,
         drop_params: bool,
         query: str,
-        documents: list[str | dict[str, Any]],
+        documents: list[str | dict[str, object]],
         custom_llm_provider: str | None = None,
         top_n: int | None = None,
         rank_fields: list[str] | None = None,
@@ -47,7 +48,7 @@ class CohereRerankV2Config(CohereRerankConfig):
         max_chunks_per_doc: int | None = None,
         max_tokens_per_doc: int | None = None,
         instruction: str | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Map Cohere rerank params
 
@@ -68,9 +69,9 @@ class CohereRerankV2Config(CohereRerankConfig):
         self,
         model: str,
         optional_rerank_params: dict,
-        headers: dict,
-        litellm_params: dict | None = None,
-    ) -> dict:
+        headers: Mapping[str, object],
+        litellm_params: Mapping[str, object] | None = None,
+    ) -> dict[str, object]:
         if "query" not in optional_rerank_params:
             raise ValueError("query is required for Cohere rerank")
         if "documents" not in optional_rerank_params:

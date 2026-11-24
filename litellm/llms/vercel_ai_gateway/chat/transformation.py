@@ -6,9 +6,11 @@ Calls done in OpenAI/openai.py as Vercel AI Gateway is openai-compatible.
 Docs: https://vercel.com/docs/ai-gateway
 """
 
+from collections.abc import Sequence
 from typing import Final
 
 import httpx
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm.litellm_core_utils.url_utils import join_api_base
@@ -18,6 +20,14 @@ from litellm.types.llms.openai import AllMessageValues
 
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 from ..common_utils import VercelAIGatewayException
+
+
+class _VercelAIGatewayModel(TypedDict):
+    id: ReadOnly[str]
+
+
+class _VercelAIGatewayModelList(TypedDict):
+    data: ReadOnly[Sequence[_VercelAIGatewayModel]]
 
 
 class VercelAIGatewayConfig(OpenAIGPTConfig):
@@ -70,7 +80,7 @@ class VercelAIGatewayConfig(OpenAIGPTConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        headers: dict,
+        headers: dict[str, object],
     ) -> dict:
         """
         Transform the overall request to be sent to the API.
@@ -80,7 +90,9 @@ class VercelAIGatewayConfig(OpenAIGPTConfig):
         """
         return super().transform_request(model, messages, optional_params, litellm_params, headers)
 
-    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: dict[str, object] | httpx.Headers
+    ) -> BaseLLMException:
         return VercelAIGatewayException(
             message=error_message,
             status_code=status_code,
@@ -99,5 +111,5 @@ class VercelAIGatewayConfig(OpenAIGPTConfig):
         if response.status_code != 200:
             raise Exception(f"Failed to get models: {response.text}")
 
-        models: Final = response.json()["data"]
-        return [model["id"] for model in models]
+        models: Final[_VercelAIGatewayModelList] = response.json()
+        return [model["id"] for model in models["data"]]

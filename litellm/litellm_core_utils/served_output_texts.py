@@ -3,13 +3,14 @@ post-call guardrail rewrote rather than the provider response the proxy assemble
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
+from itertools import chain
 from typing import Final, Literal
 
-from pydantic import BaseModel, Field, TypeAdapter, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 
 from litellm.types.llms.base import LiteLLMBaseModel
-from litellm.types.utils import ModelResponse, ModelResponseStream
+from litellm.types.utils import ModelResponse, ModelResponseStream, TextCompletionResponse
 
 SERVED_OUTPUT_TEXTS_KEY: Final = "served_output_texts"
 
@@ -42,6 +43,19 @@ class _ResponsesResponse(LiteLLMBaseModel):
 
 class _ChatChoices(LiteLLMBaseModel):
     choices: list[object]
+
+
+class _TextCompletionChoice(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    index: int | None = None
+    text: str | None = None
+
+
+class _TextCompletionChunk(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    choices: tuple[_TextCompletionChoice, ...]
 
 
 def _as_json_object(response: object) -> dict[str, object] | None:
@@ -108,9 +122,14 @@ def served_output_texts(response: object) -> ServedTexts | None:
 
 
 def served_stream_output_texts(chunks: Sequence[object]) -> ServedTexts | None:
-    if chunks and all(isinstance(chunk, ModelResponseStream) for chunk in chunks):
-        return _chat_stream_texts(tuple(chunk for chunk in chunks if isinstance(chunk, ModelResponseStream)))
-    from litellm.llms.anthropic.pass_through.stream_assembly import (
+    chat_chunks: Final = tuple(chunk for chunk in chunks if isinstance(chunk, ModelResponseStream))
+    if chunks and len(chat_chunks) == len(chunks):
+        return _indexed_texts_by_choice(tuple(chain.from_iterable(_chat_chunk_texts(chunk) for chunk in chat_chunks)))
+    if chunks and all(isinstance(chunk, TextCompletionResponse) for chunk in chunks):
+        return _indexed_texts_by_choice(
+            tuple(chain.from_iterable(_text_completion_chunk_texts(chunk) for chunk in chunks))
+        )
+    from litellm.llms.anthropic.messages.stream_assembly import (
         assemble_anthropic_sse_stream,
         is_anthropic_sse_stream,
     )
@@ -121,19 +140,26 @@ def served_stream_output_texts(chunks: Sequence[object]) -> ServedTexts | None:
     return _chat_texts(assembled) if assembled is not None else None
 
 
-def _chat_stream_choice_text(chunks: Sequence[ModelResponseStream], index: int) -> str | None:
-    contents: Final = tuple(
-        content
-        for chunk in chunks
+def _chat_chunk_texts(chunk: ModelResponseStream) -> tuple[tuple[int, str | None], ...]:
+    return tuple(
+        (choice.index or 0, content if isinstance(content := choice.delta.content, str) else None)
         for choice in chunk.choices
-        if (choice.index or 0) == index and isinstance(content := choice.delta.content, str)
     )
-    return "".join(contents) if contents else None
 
 
-def _chat_stream_texts(chunks: Sequence[ModelResponseStream]) -> ServedTexts | None:
-    choice_count: Final = max(((choice.index or 0) + 1 for chunk in chunks for choice in chunk.choices), default=0)
-    texts: Final = tuple(_chat_stream_choice_text(chunks, index) for index in range(choice_count))
+def _text_completion_chunk_texts(chunk: object) -> tuple[tuple[int, str | None], ...]:
+    parsed: Final = _TextCompletionChunk.model_validate(_as_json_object(chunk))
+    return tuple((choice.index or 0, choice.text) for choice in parsed.choices)
+
+
+def _joined_choice_text(indexed_texts: Sequence[tuple[int, str | None]], index: int) -> str | None:
+    texts: Final = tuple(text for text_index, text in indexed_texts if text_index == index and text is not None)
+    return "".join(texts) if texts else None
+
+
+def _indexed_texts_by_choice(indexed_texts: Sequence[tuple[int, str | None]]) -> ServedTexts | None:
+    choice_count: Final = max((index + 1 for index, _ in indexed_texts), default=0)
+    texts: Final = tuple(_joined_choice_text(indexed_texts, index) for index in range(choice_count))
     return texts if any(text is not None for text in texts) else None
 
 
@@ -165,11 +191,38 @@ def overlay_served_output_texts(
     }
 
 
+def _without_token_data(holder: Mapping[str, object]) -> Mapping[str, object]:
+    fields: Final = _as_json_object(holder.get("provider_specific_fields"))
+    dropped: Final = {
+        **holder,
+        **{key: None for key in ("token_ids", "logprobs") if holder.get(key) is not None},
+    }
+    if fields is None or fields.get("token_ids") is None:
+        return dropped
+    return {**dropped, "provider_specific_fields": {**fields, "token_ids": None}}
+
+
+def keeps_original_output(original: object, served: object) -> bool:
+    return original == served or (isinstance(original, str) and isinstance(served, str) and served.startswith(original))
+
+
 def _choice_with_text(choice: object, text: str | None) -> object:
     choice_obj: Final = _as_json_object(choice)
     if choice_obj is None or text is None:
         return choice
     message: Final = _as_json_object(choice_obj.get("message"))
-    if message is None or message.get("content") == text:
-        return choice
-    return {**choice_obj, "message": {**message, "content": text}}
+    if message is not None:
+        if message.get("content") == text:
+            return choice
+        served_message: Final = {**message, "content": text}
+        if keeps_original_output(message.get("content"), text):
+            return {**choice_obj, "message": served_message}
+        return _without_token_data({**choice_obj, "message": _without_token_data(served_message)})
+    if isinstance(choice_obj.get("text"), str):
+        if choice_obj.get("text") == text:
+            return choice
+        served_choice: Final = {**choice_obj, "text": text}
+        return (
+            served_choice if keeps_original_output(choice_obj.get("text"), text) else _without_token_data(served_choice)
+        )
+    return choice

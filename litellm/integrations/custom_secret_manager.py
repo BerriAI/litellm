@@ -37,7 +37,6 @@ Usage:
 """
 
 from abc import abstractmethod
-from typing import Any
 
 import httpx
 
@@ -88,7 +87,7 @@ class CustomSecretManager(BaseSecretManager):
     def __init__(
         self,
         secret_manager_name: str | None = None,
-        **kwargs,
+        **kwargs: object,
     ):
         """
         Initialize the CustomSecretManager.
@@ -128,7 +127,7 @@ class CustomSecretManager(BaseSecretManager):
     def sync_read_secret(
         self,
         secret_name: str,
-        optional_params: dict | None = None,
+        optional_params: dict[str, object] | None = None,
         timeout: float | httpx.Timeout | None = None,
     ) -> str | None:
         """
@@ -153,8 +152,8 @@ class CustomSecretManager(BaseSecretManager):
         description: str | None = None,
         optional_params: dict | None = None,
         timeout: float | httpx.Timeout | None = None,
-        tags: dict | list | None = None,
-    ) -> dict[str, Any]:
+        tags: dict[str, object] | list[object] | None = None,
+    ) -> dict[str, object]:
         """
         Asynchronously write a secret to your custom secret manager.
 

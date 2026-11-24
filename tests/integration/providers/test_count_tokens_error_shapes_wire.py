@@ -1,13 +1,17 @@
 import json
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
+from types import MappingProxyType
 from typing import Final
 
 import anthropic
 import openai
 import pytest
+from integration._support.bedrock_discovery import aws_environment_names
 from integration._support.client import Gateway, gateway_from_environment
+from integration._support.ports import allocate_port
 from integration._support.process import OwnedProxy, graceful_stop_seconds, owned_proxy_process
 from integration._support.wire import Reply, Request, wire_server
+from litellm.types.llms.anthropic import ANTHROPIC_OAUTH_BETA_HEADER
 from pydantic import JsonValue, TypeAdapter
 
 pytestmark: Final = pytest.mark.timeout(2 * graceful_stop_seconds() + 120)
@@ -26,6 +30,16 @@ _PROVIDER_KEY_VARIABLES: Final = (
     "AZURE_TENANT_ID",
     "OPENAI_API_KEY",
 )
+_ENVIRONMENT_KEYS: Final = MappingProxyType(
+    {
+        "ANTHROPIC_API_KEY": "synthetic-anthropic-env-key",
+        "AZURE_API_KEY": "synthetic-azure-env-key",
+        "OPENAI_API_KEY": "synthetic-openai-env-key",
+    }
+)
+_SUBSCRIPTION_TOKEN: Final = "sk-ant-oat01-synthetic-subscription-token"
+
+_MISSING_AWS_CREDENTIALS: Final = "No usable AWS credentials are set, so Bedrock can't count tokens"
 
 
 @pytest.fixture(scope="module")
@@ -44,14 +58,14 @@ def keyless_proxy(tmp_path_factory: pytest.TempPathFactory) -> Iterator[OwnedPro
 
 
 @pytest.fixture(scope="module")
-def azure_environment_key_proxy(tmp_path_factory: pytest.TempPathFactory) -> Iterator[OwnedProxy]:
+def environment_key_proxy(tmp_path_factory: pytest.TempPathFactory) -> Iterator[OwnedProxy]:
     with (
         gateway_from_environment() as gateway,
         owned_proxy_process(
             gateway,
-            tmp_path_factory.mktemp("count-tokens-azure-environment-key"),
-            {"AZURE_API_KEY": "synthetic-azure-env-key"},
-            remove_environment=tuple(name for name in _PROVIDER_KEY_VARIABLES if name != "AZURE_API_KEY"),
+            tmp_path_factory.mktemp("count-tokens-environment-keys"),
+            _ENVIRONMENT_KEYS,
+            remove_environment=tuple(name for name in _PROVIDER_KEY_VARIABLES if name not in _ENVIRONMENT_KEYS),
             workers=1,
         ) as owned,
     ):
@@ -66,6 +80,94 @@ def _anthropic(gateway: Gateway) -> anthropic.Anthropic:
 
 def _never_called(request: Request) -> Reply:
     raise AssertionError(f"count reached the provider without a key: {request.target}")
+
+
+@pytest.mark.parametrize("nested", (False, True), ids=("user-content", "tool-result"))
+def test_local_messages_count_accepts_search_result_text(gateway: Gateway, nested: bool) -> None:
+    search: Final[JsonValue] = {
+        "type": "search_result",
+        "source": "https://example.invalid/notes",
+        "title": "Project notes",
+        "content": [{"type": "text", "text": "The code word is 7f3a."}],
+        "citations": {"enabled": True},
+    }
+    content: Final = [{"type": "tool_result", "tool_use_id": "toolu_1", "content": [search]}] if nested else [search]
+    text: Final[list[JsonValue]] = [
+        {"type": "text", "text": "https://example.invalid/notes"},
+        {"type": "text", "text": "Project notes"},
+        {"type": "text", "text": "The code word is 7f3a."},
+    ]
+    equivalent: Final = [{"type": "tool_result", "tool_use_id": "toolu_1", "content": text}] if nested else text
+    with gateway.scenario() as scenario:
+        model: Final = scenario.model(model="hosted_vllm/zai-org/GLM-5.3", api_base="http://127.0.0.1:9/v1")
+        counted: Final = gateway.request(
+            "POST", "/v1/messages/count_tokens", {"model": model, "messages": [{"role": "user", "content": content}]}
+        )
+        control: Final = gateway.request(
+            "POST", "/v1/messages/count_tokens", {"model": model, "messages": [{"role": "user", "content": equivalent}]}
+        )
+        assert counted.status_code == control.status_code == 200, (counted.text, control.text)
+        tokens: Final = _JSON_OBJECT.validate_json(counted.content)["input_tokens"]
+        assert tokens == _JSON_OBJECT.validate_json(control.content)["input_tokens"], (counted.text, control.text)
+
+
+@pytest.mark.parametrize("nested", (False, True), ids=("user-content", "tool-result"))
+@pytest.mark.parametrize(
+    ("block", "status", "error_type", "message"),
+    (
+        ({"type": "future_block", "future_block": {"value": "ignore me"}}, 400, "invalid_request_error", "future_block"),
+        ({"type": "image"}, 500, "api_error", "source"),
+        (
+            {"type": "web_search_tool_result", "tool_use_id": "srv_1", "content": [{"url": "https://example.invalid"}]},
+            400,
+            "invalid_request_error",
+            "content",
+        ),
+        (
+            {"type": "code_execution_tool_result", "tool_use_id": "srv_1", "content": {"type": "future_result"}},
+            400,
+            "invalid_request_error",
+            "future_result",
+        ),
+    ),
+    ids=("unknown-block", "unrelated-counting-error", "server-result-without-type", "unknown-server-result-type"),
+)
+def test_local_messages_count_classifies_only_unsupported_content_as_an_invalid_request(
+    gateway: Gateway, nested: bool, block: JsonValue, status: int, error_type: str, message: str
+) -> None:
+    content: Final = [{"type": "tool_result", "tool_use_id": "toolu_1", "content": [block]}] if nested else [block]
+    with gateway.scenario() as scenario:
+        model: Final = scenario.model(model="hosted_vllm/zai-org/GLM-5.3", api_base="http://127.0.0.1:9/v1")
+        response: Final = gateway.request(
+            "POST", "/v1/messages/count_tokens", {"model": model, "messages": [{"role": "user", "content": content}]}
+        )
+        assert response.status_code == status, response.text
+        payload: Final = _JSON_OBJECT.validate_json(response.content)
+        error: Final = payload["error"]
+        assert payload["type"] == "error" and isinstance(error, dict), payload
+        assert error["type"] == error_type and message in str(error["message"]), payload
+
+
+@pytest.mark.parametrize(
+    ("deployment", "call_endpoint"),
+    (("mistral/mistral-small-latest", False), ("hosted_vllm/zai-org/GLM-5.3", True)),
+    ids=("local", "call-endpoint-without-a-provider-counter"),
+)
+def test_utils_token_counter_answers_400_naming_a_block_the_local_counter_cannot_read(
+    gateway: Gateway, deployment: str, call_endpoint: bool
+) -> None:
+    content: Final[list[JsonValue]] = [{"type": "future_block", "future_block": {"value": "ignore me"}}]
+    with gateway.scenario() as scenario:
+        model: Final = scenario.model(model=deployment, api_base="http://127.0.0.1:9/v1")
+        response: Final = gateway.request(
+            "POST",
+            f"/utils/token_counter?call_endpoint={str(call_endpoint).lower()}",
+            {"model": model, "messages": [{"role": "user", "content": content}]},
+        )
+        assert response.status_code == 400, response.text
+        error: Final = _JSON_OBJECT.validate_json(response.content)["error"]
+        assert isinstance(error, dict), response.text
+        assert error["type"] == "invalid_request_error" and "future_block" in str(error["message"]), response.text
 
 
 @pytest.mark.parametrize(
@@ -93,9 +195,9 @@ def test_anthropic_count_without_a_provider_credential_is_an_anthropic_401(
 
 
 def test_azure_ai_anthropic_count_sends_the_azure_environment_key_as_x_api_key(
-    azure_environment_key_proxy: OwnedProxy,
+    environment_key_proxy: OwnedProxy,
 ) -> None:
-    gateway: Final = azure_environment_key_proxy.gateway
+    gateway: Final = environment_key_proxy.gateway
 
     def count(request: Request) -> Reply:
         assert request.headers.get("x-api-key") == "synthetic-azure-env-key", request.headers
@@ -203,3 +305,231 @@ def test_google_count_tokens_errors_use_the_google_envelope(keyless_proxy: Owned
         assert _JSON_OBJECT.validate_json(malformed.content) == {
             "error": {"code": 400, "message": "Invalid Google countTokens request body", "status": "INVALID_ARGUMENT"}
         }
+
+
+def _counted(tokens: int) -> Reply:
+    return Reply(body=json.dumps({"object": "response.input_tokens", "input_tokens": tokens}).encode())
+
+
+def _anthropic_count(model: str) -> tuple[str, dict[str, JsonValue]]:
+    return "/v1/messages/count_tokens", {"model": model, "messages": _MESSAGES}
+
+
+def _responses_count(model: str) -> tuple[str, dict[str, JsonValue]]:
+    return "/v1/responses/input_tokens", {"model": model, "input": "Count this synthetic request."}
+
+
+@pytest.mark.parametrize(
+    ("provider_model", "base_path", "count_request", "header", "credential"),
+    (
+        ("anthropic/claude-sonnet-5-5", "", _anthropic_count, "x-api-key", "synthetic-anthropic-env-key"),
+        ("openai/gpt-4o-mini", "/v1", _responses_count, "authorization", "Bearer synthetic-openai-env-key"),
+    ),
+    ids=("anthropic", "openai"),
+)
+def test_count_uses_a_provider_key_set_only_in_the_proxy_environment(
+    environment_key_proxy: OwnedProxy,
+    provider_model: str,
+    base_path: str,
+    count_request: Callable[[str], tuple[str, dict[str, JsonValue]]],
+    header: str,
+    credential: str,
+) -> None:
+    gateway: Final = environment_key_proxy.gateway
+    with wire_server(lambda _request: _counted(47)) as wire, gateway.scenario() as scenario:
+        model: Final = scenario.model(
+            model=provider_model, api_base=f"{wire.url}{base_path}", api_key=None, num_retries=0
+        )
+        path, body = count_request(model)
+        counted: Final = gateway.request("POST", path, body)
+        assert counted.status_code == 200, counted.text
+        assert _JSON_OBJECT.validate_json(counted.content)["input_tokens"] == 47, counted.text
+        received: Final = wire.drain()
+        assert [request.headers.get(header) for request in received] == [credential], received
+
+
+def _google_count(model: str) -> tuple[str, dict[str, JsonValue]]:
+    return f"/v1beta/models/{model}:countTokens", {
+        "contents": [{"role": "user", "parts": [{"text": "Count this synthetic request."}]}]
+    }
+
+
+def _utils_count(model: str) -> tuple[str, dict[str, JsonValue]]:
+    return "/utils/token_counter?call_endpoint=true", {"model": model, "messages": _MESSAGES}
+
+
+@pytest.mark.parametrize(
+    ("count_request", "google_status"),
+    ((_google_count, "UNAUTHENTICATED"), (_utils_count, None)),
+    ids=("google", "utils"),
+)
+def test_count_entrypoints_report_a_missing_provider_key_in_their_own_shape(
+    keyless_proxy: OwnedProxy,
+    count_request: Callable[[str], tuple[str, dict[str, JsonValue]]],
+    google_status: str | None,
+) -> None:
+    gateway: Final = keyless_proxy.gateway
+    with wire_server(_never_called) as wire, gateway.scenario() as scenario:
+        model: Final = scenario.model(
+            model="anthropic/claude-sonnet-5-5", api_base=wire.url, api_key=None, num_retries=0
+        )
+        path, body = count_request(model)
+        rejected: Final = gateway.request("POST", path, body)
+        assert rejected.status_code == 401, rejected.text
+        error: Final = _JSON_OBJECT.validate_json(rejected.content)["error"]
+        assert isinstance(error, dict), rejected.text
+        assert f"No Anthropic API key is set for model {model}" in str(error["message"]), rejected.text
+        if google_status is not None:
+            assert (error["code"], error["status"]) == (401, google_status), rejected.text
+        assert wire.drain() == ()
+
+
+def test_anthropic_count_uses_the_callers_subscription_token_when_the_deployment_has_no_key(
+    keyless_proxy: OwnedProxy,
+) -> None:
+    gateway: Final = keyless_proxy.gateway
+    with wire_server(lambda _request: _counted(41)) as wire, gateway.scenario() as scenario:
+        model: Final = scenario.model(
+            model="anthropic/claude-sonnet-5-5", api_base=wire.url, api_key=None, num_retries=0
+        )
+        counted: Final = gateway.request(
+            "POST",
+            "/v1/messages/count_tokens",
+            {"model": model, "messages": _MESSAGES},
+            headers={"Authorization": f"Bearer {_SUBSCRIPTION_TOKEN}", "x-litellm-api-key": f"Bearer {gateway.key}"},
+        )
+        assert counted.status_code == 200, counted.text
+        assert _JSON_OBJECT.validate_json(counted.content)["input_tokens"] == 41, counted.text
+        (received,) = wire.drain()
+        assert received.headers.get("authorization") == f"Bearer {_SUBSCRIPTION_TOKEN}", received.headers
+        assert "x-api-key" not in received.headers, received.headers
+        assert ANTHROPIC_OAUTH_BETA_HEADER in received.headers.get("anthropic-beta", ""), received.headers
+
+
+def test_anthropic_count_keeps_the_deployments_key_over_the_callers_subscription_token(
+    keyless_proxy: OwnedProxy,
+) -> None:
+    gateway: Final = keyless_proxy.gateway
+    with wire_server(lambda _request: _counted(43)) as wire, gateway.scenario() as scenario:
+        model: Final = scenario.model(
+            model="anthropic/claude-sonnet-5-5", api_base=wire.url, api_key="synthetic-deployment-key", num_retries=0
+        )
+        counted: Final = gateway.request(
+            "POST",
+            "/v1/messages/count_tokens",
+            {"model": model, "messages": _MESSAGES},
+            headers={"Authorization": f"Bearer {_SUBSCRIPTION_TOKEN}", "x-litellm-api-key": f"Bearer {gateway.key}"},
+        )
+        assert counted.status_code == 200, counted.text
+        (received,) = wire.drain()
+        assert received.headers.get("x-api-key") == "synthetic-deployment-key", received.headers
+        assert _SUBSCRIPTION_TOKEN not in json.dumps(dict(received.headers)), received.headers
+
+
+@pytest.fixture(scope="module")
+def bedrock_mantle_port() -> int:
+    return allocate_port()
+
+
+@pytest.fixture(scope="module")
+def credentialless_bedrock_proxy(
+    tmp_path_factory: pytest.TempPathFactory, bedrock_mantle_port: int
+) -> Iterator[OwnedProxy]:
+    directory: Final = tmp_path_factory.mktemp("count-tokens-no-aws-credentials")
+    empty: Final = directory / "empty-aws-config"
+    empty.write_text("")
+    with (
+        gateway_from_environment() as gateway,
+        owned_proxy_process(
+            gateway,
+            directory,
+            {
+                "AWS_CONFIG_FILE": str(empty),
+                "AWS_SHARED_CREDENTIALS_FILE": str(empty),
+                "AWS_EC2_METADATA_DISABLED": "true",
+                "BEDROCK_MANTLE_API_BASE": f"http://127.0.0.1:{bedrock_mantle_port}",
+            },
+            remove_environment=(*aws_environment_names(), "BEDROCK_MANTLE_API_KEY"),
+            workers=1,
+        ) as owned,
+    ):
+        yield owned
+
+
+@pytest.mark.parametrize(
+    ("token_count_model", "credentials"),
+    (
+        ({"model": "us.anthropic.claude-opus-5-5", "litellm_provider": "bedrock_mantle", "region": "us-east-1"}, {}),
+        ({}, {}),
+        (
+            {"model": "us.anthropic.claude-opus-5-5", "litellm_provider": "bedrock_mantle", "region": "us-east-1"},
+            {"aws_profile_name": "litellm-qa-missing-profile"},
+        ),
+    ),
+    ids=("mantle-count-model", "bedrock-runtime", "unknown-profile"),
+)
+def test_bedrock_count_without_aws_credentials_is_a_401_naming_the_missing_credentials(
+    credentialless_bedrock_proxy: OwnedProxy,
+    bedrock_mantle_port: int,
+    token_count_model: dict[str, JsonValue],
+    credentials: dict[str, JsonValue],
+) -> None:
+    gateway: Final = credentialless_bedrock_proxy.gateway
+    with (
+        wire_server(_never_called) as runtime,
+        wire_server(_never_called, port=bedrock_mantle_port) as mantle,
+        gateway.scenario() as scenario,
+    ):
+        model: Final = scenario.model(
+            model_info={"token_count_model": token_count_model},
+            model="bedrock/us.anthropic.claude-sonnet-5-5",
+            aws_region_name="us-east-1",
+            api_base=runtime.url,
+            api_key=None,
+            num_retries=0,
+            **credentials,
+        )
+        with pytest.raises(anthropic.AuthenticationError) as raised:
+            _anthropic(gateway).messages.count_tokens(model=model, messages=_MESSAGES)
+        anthropic_error: Final = _JSON_OBJECT.validate_python(raised.value.body)["error"]
+        path, body = _utils_count(model)
+        counted: Final = gateway.request("POST", path, body)
+        utils_error: Final = _JSON_OBJECT.validate_json(counted.content)["error"]
+        assert isinstance(anthropic_error, dict), raised.value.body
+        assert isinstance(utils_error, dict), counted.text
+        assert anthropic_error["type"] == "authentication_error", raised.value.body
+        assert (counted.status_code, utils_error["type"]) == (401, "token_counting_error"), counted.text
+        for message in (str(anthropic_error["message"]), str(utils_error["message"])):
+            assert message.startswith(_MISSING_AWS_CREDENTIALS), message
+            assert "token_count_model" not in message, message
+        assert runtime.drain() == mantle.drain() == ()
+
+
+@pytest.mark.parametrize(
+    "credentials",
+    ({}, {"aws_profile_name": "litellm-qa-missing-profile"}),
+    ids=("none", "unknown-profile"),
+)
+def test_bedrock_passthrough_count_without_aws_credentials_is_a_401_naming_the_missing_credentials(
+    credentialless_bedrock_proxy: OwnedProxy, bedrock_mantle_port: int, credentials: dict[str, JsonValue]
+) -> None:
+    gateway: Final = credentialless_bedrock_proxy.gateway
+    with (
+        wire_server(_never_called) as runtime,
+        wire_server(_never_called, port=bedrock_mantle_port) as mantle,
+        gateway.scenario() as scenario,
+    ):
+        model: Final = scenario.model(
+            model="bedrock/us.anthropic.claude-sonnet-5-5",
+            aws_region_name="us-east-1",
+            api_base=runtime.url,
+            api_key=None,
+            num_retries=0,
+            **credentials,
+        )
+        response: Final = gateway.request(
+            "POST", "/bedrock/v1/messages/count_tokens", {"model": model, "messages": _MESSAGES}
+        )
+        assert response.status_code == 401, response.text
+        assert _MISSING_AWS_CREDENTIALS in response.text, response.text
+        assert runtime.drain() == mantle.drain() == ()

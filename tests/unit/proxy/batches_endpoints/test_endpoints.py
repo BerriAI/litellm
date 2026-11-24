@@ -36,8 +36,9 @@ from contextlib import ExitStack
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from collections.abc import Callable
 from typing import Any, Dict, Final, Optional
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import DEFAULT, AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
@@ -84,6 +85,12 @@ CREDS: Dict[str, Dict[str, str]] = {
         "api_key": "sk-vllm",
         "api_base": "http://vllm.test/v1",
         "model": "hosted_vllm/qwen",
+    },
+    "bedrock-batch": {
+        "custom_llm_provider": "bedrock",
+        "model": "bedrock/us.amazon.nova-lite-v1:0",
+        "s3_bucket_name": "model-bucket",
+        "s3_output_bucket_name": "model-bucket",
     },
 }
 
@@ -180,6 +187,21 @@ def _creds_lookup(*, model_id: str, team_id: str | None = None) -> dict[str, str
     return dict(CREDS[model_id]) if model_id in CREDS else None
 
 
+def _registry_creds_lookup(id: str, *, form: str, team_id: str | None = None) -> dict[str, str] | None:
+    return _creds_lookup(model_id=id, team_id=team_id)
+
+
+def _route_credentials(by_form: dict[str, MagicMock]) -> MagicMock:
+    """registry().credentials, sending each form to its own mock so call counts stay per form;
+    a form without one returns a plain mock, as an unmocked router method did."""
+
+    def call(id: str, *, form: str = "params", **kwargs: Any) -> object:
+        target = by_form.get(form)
+        return DEFAULT if target is None else target(id, form=form, **kwargs)
+
+    return MagicMock(side_effect=call)
+
+
 @pytest.fixture
 def harness(monkeypatch: pytest.MonkeyPatch):
     """Seam harness. Patches only true I/O boundaries; pure encode/decode/merge
@@ -195,6 +217,14 @@ def harness(monkeypatch: pytest.MonkeyPatch):
     router.model_group_alias = {}
     router.get_model_access_groups = MagicMock(return_value={})
     router.resolve_model_name_from_model_id = MagicMock(side_effect=lambda model_id: model_id)
+    registry = router.registry.return_value
+    registry.aliases = MagicMock(return_value={})
+    registry.access_groups = MagicMock(return_value={})
+    registry.resolve = MagicMock(side_effect=lambda name, **_: name)
+    registry.all = MagicMock(return_value=[])
+    registry.deployments = MagicMock(return_value=[])
+    creds_resolver = MagicMock(side_effect=_registry_creds_lookup)
+    registry.credentials = _route_credentials({"with_provider": creds_resolver})
     router.model_list = []
     router.acreate_batch = AsyncMock(return_value=make_batch())
     router.get_deployment_credentials_with_provider = MagicMock(side_effect=_creds_lookup)
@@ -248,7 +278,7 @@ def harness(monkeypatch: pytest.MonkeyPatch):
             litellm_acreate=litellm_acreate,
             router=router,
             logging=logging,
-            creds_resolver=router.get_deployment_credentials_with_provider,
+            creds_resolver=creds_resolver,
             upstream_files_route=upstream_files_route,
         )
         yield h
@@ -317,7 +347,7 @@ async def test_create__model_encoded_file_id(harness):
     harness.router_acreate.assert_not_called()
 
     # 2. CREDENTIALS - resolved for the model decoded FROM the file id.
-    harness.creds_resolver.assert_called_once_with(model_id="azure/gpt-4o")
+    harness.creds_resolver.assert_called_once_with("azure/gpt-4o", form="with_provider")
 
     # 3. SEAM PAYLOAD - exact, whole dict. A new forwarded key breaks this.
     assert harness.acreate_kwargs() == {
@@ -373,7 +403,7 @@ async def test_create__model_encoded_file_id__resolver_gets_decoded_model(harnes
 
     await call_create(harness)
 
-    harness.creds_resolver.assert_called_once_with(model_id="azure/gpt-4o")
+    harness.creds_resolver.assert_called_once_with("azure/gpt-4o", form="with_provider")
 
 
 # =========================================================================== #
@@ -397,11 +427,86 @@ async def test_create__model_from_body(harness):
 
     assert harness.litellm_acreate.call_count == 1
     harness.router_acreate.assert_not_called()
-    harness.creds_resolver.assert_called_once_with(model_id="vertex-model")
+    harness.creds_resolver.assert_called_once_with("vertex-model", form="with_provider")
     payload = harness.acreate_kwargs()
     assert payload["custom_llm_provider"] == "vertex_ai"
     assert payload["input_file_id"] == "file-plain"
     assert resp.id == encode_file_id_with_model("batch-provider-id", "vertex-model", id_type="batch")
+
+
+_TEAM_A_KEY: Final = UserAPIKeyAuth(
+    api_key="sk-team-a", team_id="team-a", team_metadata={"allowed_s3_buckets": ["team-a-bucket"]}
+)
+
+
+def _batch_body_with_output_bucket(bucket: str) -> dict[str, object]:
+    return {
+        "input_file_id": "file-plain",
+        "endpoint": "/v1/chat/completions",
+        "completion_window": "24h",
+        "model": "vertex-model",
+        "s3_output_bucket_name": bucket,
+    }
+
+
+@pytest.mark.asyncio
+async def test_create__output_bucket_on_the_team_allowlist_reaches_the_provider(harness):
+    set_body(harness, _batch_body_with_output_bucket("team-a-bucket"))
+
+    await call_create(harness, user=_TEAM_A_KEY)
+
+    assert harness.acreate_kwargs()["s3_output_bucket_name"] == "team-a-bucket"
+
+
+@pytest.mark.asyncio
+async def test_create__team_with_an_allowlist_and_no_request_bucket_leaves_the_bucket_to_the_model(harness):
+    set_body(
+        harness,
+        {
+            "input_file_id": "file-plain",
+            "endpoint": "/v1/chat/completions",
+            "completion_window": "24h",
+            "model": "vertex-model",
+        },
+    )
+
+    await call_create(harness, user=_TEAM_A_KEY)
+
+    assert "s3_output_bucket_name" not in harness.acreate_kwargs()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("request_bucket,expected_bucket", [("team-a-bucket", "team-a-bucket"), (None, "model-bucket")])
+@pytest.mark.parametrize(
+    "routing",
+    [
+        {"input_file_id": "file-plain", "model": "bedrock-batch"},
+        {"input_file_id": encode_file_id_with_model("file-plain", "bedrock-batch")},
+    ],
+    ids=["model_in_body", "model_encoded_file_id"],
+)
+async def test_create__model_routed_batch_keeps_the_team_bucket_over_the_deployment_bucket(
+    harness, routing: dict[str, str], request_bucket: str | None, expected_bucket: str
+):
+    body: Final = {"endpoint": "/v1/chat/completions", "completion_window": "24h", **routing}
+    set_body(harness, body if request_bucket is None else {**body, "s3_output_bucket_name": request_bucket})
+
+    await call_create(harness, user=_TEAM_A_KEY)
+
+    assert harness.acreate_kwargs()["s3_output_bucket_name"] == expected_bucket
+
+
+@pytest.mark.asyncio
+async def test_create__output_bucket_off_the_team_allowlist_is_rejected_before_the_provider(harness):
+    set_body(harness, _batch_body_with_output_bucket("team-b-bucket"))
+
+    with pytest.raises(ProxyException) as rejection:
+        await call_create(harness, user=_TEAM_A_KEY)
+
+    assert str(rejection.value.code) == "401"
+    assert "s3_output_bucket_name is not allowed in request body" in rejection.value.message
+    harness.litellm_acreate.assert_not_called()
+    harness.router_acreate.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -417,7 +522,7 @@ async def test_create__model_from_header(harness):
 
     await call_create(harness, headers={"x-litellm-model": "vertex-model"})
 
-    harness.creds_resolver.assert_called_once_with(model_id="vertex-model")
+    harness.creds_resolver.assert_called_once_with("vertex-model", form="with_provider")
     harness.router_acreate.assert_not_called()
 
 
@@ -434,7 +539,7 @@ async def test_create__model_from_query(harness):
 
     await call_create(harness, query={"model": "vertex-model"})
 
-    harness.creds_resolver.assert_called_once_with(model_id="vertex-model")
+    harness.creds_resolver.assert_called_once_with("vertex-model", form="with_provider")
     harness.router_acreate.assert_not_called()
 
 
@@ -457,7 +562,7 @@ async def test_create__body_model_beats_header_and_query(harness):
         query={"model": "vertex-model"},
     )
 
-    harness.creds_resolver.assert_called_once_with(model_id="azure/gpt-4o")
+    harness.creds_resolver.assert_called_once_with("azure/gpt-4o", form="with_provider")
 
 
 # =========================================================================== #
@@ -851,7 +956,7 @@ async def test_create__unified_executed_provider_runs_inside_litellm(harness, ex
 
     harness.router_acreate.assert_not_called()
     harness.litellm_acreate.assert_not_called()
-    harness.creds_resolver.assert_called_once_with(model_id="my-vllm", team_id="team-vllm")
+    harness.creds_resolver.assert_called_once_with("my-vllm", form="with_provider", team_id="team-vllm")
     factory.assert_called_once_with(harness.router, harness.logging)
     runner.create.assert_awaited_once()
     create_kwargs = runner.create.call_args.kwargs
@@ -917,7 +1022,7 @@ async def test_create__unified_provider_model_never_touches_executed_runner(harn
 
     factory.assert_not_called()
     runner.create.assert_not_called()
-    harness.creds_resolver.assert_called_once_with(model_id="azure/gpt-4o", team_id=None)
+    harness.creds_resolver.assert_called_once_with("azure/gpt-4o", form="with_provider", team_id=None)
     assert harness.router_kwargs()["model"] == "azure/gpt-4o"
 
 
@@ -1014,7 +1119,7 @@ async def test_create__model_encoded_beats_unified(harness):
 
     assert harness.litellm_acreate.call_count == 1
     harness.router_acreate.assert_not_called()
-    harness.creds_resolver.assert_called_once_with(model_id="azure/gpt-4o")
+    harness.creds_resolver.assert_called_once_with("azure/gpt-4o", form="with_provider")
 
 
 # =========================================================================== #
@@ -1060,7 +1165,7 @@ async def test_create__model_encoded_beats_loadbalancing(harness):
 
     assert harness.litellm_acreate.call_count == 1
     harness.router_acreate.assert_not_called()
-    harness.creds_resolver.assert_called_once_with(model_id="azure/gpt-4o")
+    harness.creds_resolver.assert_called_once_with("azure/gpt-4o", form="with_provider")
 
 
 @pytest.mark.asyncio
@@ -1454,10 +1559,20 @@ def retrieve_harness():
     router.model_group_alias = {}
     router.get_model_access_groups = MagicMock(return_value={})
     router.resolve_model_name_from_model_id = MagicMock(side_effect=lambda model_id: model_id)
+    registry = router.registry.return_value
+    registry.aliases = MagicMock(return_value={})
+    registry.access_groups = MagicMock(return_value={})
+    registry.resolve = MagicMock(side_effect=lambda name, **_: name)
+    registry.all = MagicMock(return_value=[])
+    registry.deployments = MagicMock(return_value=[])
+    creds_resolver = MagicMock(side_effect=_registry_creds_lookup)
     router.model_list = []
     router.aretrieve_batch = AsyncMock(return_value=make_batch())
     router.get_deployment_credentials_with_provider = MagicMock(side_effect=_creds_lookup)
     router.get_credential_deployment = MagicMock(return_value=None)
+    registry.credentials = _route_credentials(
+        {"with_provider": creds_resolver, "deployment": router.get_credential_deployment}
+    )
 
     pre_call = AsyncMock(side_effect=lambda **kw: (data_holder["data"], MagicMock()))
     get_headers = MagicMock(return_value={})
@@ -1513,7 +1628,7 @@ def retrieve_harness():
             litellm_aretrieve=litellm_aretrieve,
             router=router,
             logging=logging,
-            creds_resolver=router.get_deployment_credentials_with_provider,
+            creds_resolver=creds_resolver,
             get_batch_from_db=get_batch_from_db,
             update_batch_in_db=update_batch_in_db,
             ensure_managed_files=ensure_managed_files,
@@ -1557,7 +1672,7 @@ async def test_retrieve__model_encoded_id(retrieve_harness):
     retrieve_harness.router_aretrieve.assert_not_called()
 
     # 2. CREDENTIALS - resolved for the model decoded FROM the batch id.
-    retrieve_harness.creds_resolver.assert_called_once_with(model_id="azure/gpt-4o")
+    retrieve_harness.creds_resolver.assert_called_once_with("azure/gpt-4o", form="with_provider")
 
     # 3. SEAM PAYLOAD - exact, whole dict forwarded to the provider call.
     #    Note `model` is the DECODED model, not the deployment from creds: the
@@ -1597,7 +1712,7 @@ async def test_retrieve__model_encoded_id__stamps_deployment_model_info_for_cost
 
     await call_retrieve(retrieve_harness, AZURE_BATCH_ID)
 
-    retrieve_harness.router.get_credential_deployment.assert_called_once_with(model_id="azure/gpt-4o")
+    retrieve_harness.router.get_credential_deployment.assert_called_once_with("azure/gpt-4o", form="deployment")
     litellm_metadata = retrieve_harness.aretrieve_kwargs()["litellm_metadata"]
     assert litellm_metadata["model_info"]["id"] == "dep-123"
     assert litellm_metadata["user_api_key_alias"] == "qa-key"
@@ -1673,7 +1788,7 @@ async def test_retrieve__model_encoded_beats_loadbalancing(retrieve_harness):
 
     assert retrieve_harness.litellm_aretrieve.call_count == 1
     retrieve_harness.router_aretrieve.assert_not_called()
-    retrieve_harness.creds_resolver.assert_called_once_with(model_id="azure/gpt-4o")
+    retrieve_harness.creds_resolver.assert_called_once_with("azure/gpt-4o", form="with_provider")
 
 
 # --------------------------------------------------------------------------- #
@@ -1691,11 +1806,6 @@ async def test_retrieve__unified_batch_id_routes_to_router(retrieve_harness):
     # DISPATCH - router fired, direct litellm did not.
     assert retrieve_harness.router_aretrieve.call_count == 1
     retrieve_harness.litellm_aretrieve.assert_not_called()
-
-    # Credentials are resolved for the deployment behind the unified id so the batch's
-    # output file can be read for cost accounting. This id resolves to nothing here, and
-    # the retrieve must still serve the batch rather than fail on the lookup.
-    retrieve_harness.creds_resolver.assert_called_once_with(model_id="gpt-4o-mini")
 
     # router receives the (still-encoded) batch id verbatim - this layer does
     # not decode it for the unified path.
@@ -1878,6 +1988,71 @@ async def test_retrieve__db_non_terminal_state_syncs_with_provider(retrieve_harn
     assert retrieve_harness.update_batch_in_db.call_count == 1
 
 
+def _hook_rewriting_the_batch_id_to(batch_id: str) -> Callable[..., LiteLLMBatch]:
+    def hook(*, response: LiteLLMBatch, **_: object) -> LiteLLMBatch:
+        response.id = batch_id
+        return response
+
+    return hook
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("provider_endpoint", ["/v1/chat/completions", ""])
+async def test_retrieve__provider_sync_keeps_the_endpoint_the_batch_was_created_for(
+    retrieve_harness: RetrieveHarness, provider_endpoint: str
+) -> None:
+    stored: Final = make_batch(id="batch-unified-blob", status="validating").model_copy(update={"endpoint": "/v1/embeddings"})
+    provider_batch: Final = make_batch(id="batch-raw-xyz", status="in_progress").model_copy(
+        update={"endpoint": provider_endpoint}
+    )
+    retrieve_harness.get_batch_from_db.return_value = (MagicMock(status="validating"), stored)
+    retrieve_harness.router.aretrieve_batch.return_value = provider_batch
+    retrieve_harness.logging.post_call_success_hook.side_effect = _hook_rewriting_the_batch_id_to("batch-unified-blob")
+
+    with patch.object(endpoints, "is_base64_encoded_unified_file_id", return_value=UNIFIED_BATCH_ID):
+        resp: Final = await call_retrieve(retrieve_harness, "batch-unified-blob")
+
+    assert (resp.endpoint, resp.status) == ("/v1/embeddings", "in_progress")
+    assert retrieve_harness.update_batch_in_db.call_args.kwargs["response"].endpoint == "/v1/embeddings"
+    assert retrieve_harness.logging.post_call_success_hook.call_args.kwargs["response"].endpoint == "/v1/embeddings"
+    assert (provider_batch.id, provider_batch.endpoint) == ("batch-unified-blob", "/v1/embeddings")
+    assert resp._hidden_params["unified_batch_id"] == UNIFIED_BATCH_ID
+
+
+@pytest.mark.asyncio
+async def test_retrieve__a_saved_batch_without_an_endpoint_keeps_the_providers(retrieve_harness: RetrieveHarness) -> None:
+    stored: Final = make_batch(id="batch-unified-blob", status="validating").model_copy(update={"endpoint": ""})
+    provider_batch: Final = make_batch(id="batch-raw-xyz", status="in_progress")
+    retrieve_harness.get_batch_from_db.return_value = (MagicMock(status="validating"), stored)
+    retrieve_harness.router.aretrieve_batch.return_value = provider_batch
+
+    with patch.object(endpoints, "is_base64_encoded_unified_file_id", return_value=UNIFIED_BATCH_ID):
+        resp: Final = await call_retrieve(retrieve_harness, "batch-unified-blob")
+
+    assert resp.endpoint == "/v1/chat/completions"
+    assert retrieve_harness.update_batch_in_db.call_args.kwargs["response"].endpoint == "/v1/chat/completions"
+
+
+@pytest.mark.asyncio
+async def test_retrieve__an_embeddings_endpoint_from_the_provider_corrects_a_saved_chat_endpoint(
+    retrieve_harness: RetrieveHarness,
+) -> None:
+    stored: Final = make_batch(id="batch-unified-blob", status="validating").model_copy(
+        update={"endpoint": "/v1/chat/completions"}
+    )
+    provider_batch: Final = make_batch(id="batch-raw-xyz", status="in_progress").model_copy(
+        update={"endpoint": "/v1/embeddings"}
+    )
+    retrieve_harness.get_batch_from_db.return_value = (MagicMock(status="validating"), stored)
+    retrieve_harness.router.aretrieve_batch.return_value = provider_batch
+
+    with patch.object(endpoints, "is_base64_encoded_unified_file_id", return_value=UNIFIED_BATCH_ID):
+        resp: Final = await call_retrieve(retrieve_harness, "batch-unified-blob")
+
+    assert resp.endpoint == "/v1/embeddings"
+    assert retrieve_harness.update_batch_in_db.call_args.kwargs["response"].endpoint == "/v1/embeddings"
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("status", ["validating", "in_progress", "finalizing", "cancelling"])
 async def test_retrieve__executed_batch_served_from_db_in_every_status(retrieve_harness, status):
@@ -2037,6 +2212,14 @@ def list_harness():
     router.model_group_alias = {}
     router.get_model_access_groups = MagicMock(return_value={})
     router.resolve_model_name_from_model_id = MagicMock(side_effect=lambda model_id: model_id)
+    registry = router.registry.return_value
+    registry.aliases = MagicMock(return_value={})
+    registry.access_groups = MagicMock(return_value={})
+    registry.resolve = MagicMock(side_effect=lambda name, **_: name)
+    registry.all = MagicMock(return_value=[])
+    registry.deployments = MagicMock(return_value=[])
+    creds_resolver = MagicMock(side_effect=_registry_creds_lookup)
+    registry.credentials = _route_credentials({"with_provider": creds_resolver})
     router.model_list = []
     router.alist_batches = AsyncMock(return_value=FakeListPage([]))
     router.get_deployment_credentials_with_provider = MagicMock(side_effect=_creds_lookup)
@@ -2089,7 +2272,7 @@ def list_harness():
             litellm_alist=litellm_alist,
             router=router,
             logging=logging,
-            creds_resolver=router.get_deployment_credentials_with_provider,
+            creds_resolver=creds_resolver,
         )
 
 
@@ -2237,7 +2420,7 @@ async def test_list__model_from_body_routes_and_encodes(list_harness):
 
     assert list_harness.litellm_alist.call_count == 1
     list_harness.router_alist.assert_not_called()
-    list_harness.creds_resolver.assert_called_once_with(model_id="azure/gpt-4o")
+    list_harness.creds_resolver.assert_called_once_with("azure/gpt-4o", form="with_provider")
     assert resp.data[0].id == encode_file_id_with_model("batch-1", "azure/gpt-4o", id_type="batch")
     assert resp.data[1].id == encode_file_id_with_model("batch-2", "azure/gpt-4o", id_type="batch")
 
@@ -2455,6 +2638,14 @@ def cancel_harness():
     router.model_group_alias = {}
     router.get_model_access_groups = MagicMock(return_value={})
     router.resolve_model_name_from_model_id = MagicMock(side_effect=lambda model_id: model_id)
+    registry = router.registry.return_value
+    registry.aliases = MagicMock(return_value={})
+    registry.access_groups = MagicMock(return_value={})
+    registry.resolve = MagicMock(side_effect=lambda name, **_: name)
+    registry.all = MagicMock(return_value=[])
+    registry.deployments = MagicMock(return_value=[])
+    creds_resolver = MagicMock(side_effect=_registry_creds_lookup)
+    registry.credentials = _route_credentials({"with_provider": creds_resolver})
     router.model_list = []
     router.acancel_batch = AsyncMock(return_value=make_batch())
     router.get_deployment_credentials_with_provider = MagicMock(side_effect=_creds_lookup)
@@ -2512,7 +2703,7 @@ def cancel_harness():
             litellm_acancel=litellm_acancel,
             router=router,
             logging=logging,
-            creds_resolver=router.get_deployment_credentials_with_provider,
+            creds_resolver=creds_resolver,
             update_batch_in_db=update_batch_in_db,
         )
 
@@ -2551,7 +2742,7 @@ async def test_cancel__model_encoded_id(cancel_harness):
     cancel_harness.router_acancel.assert_not_called()
 
     # CREDENTIALS - resolved for the model decoded from the batch id.
-    cancel_harness.creds_resolver.assert_called_once_with(model_id="azure/gpt-4o")
+    cancel_harness.creds_resolver.assert_called_once_with("azure/gpt-4o", form="with_provider")
 
     # SEAM PAYLOAD - exact dict. NOTE current behavior: `model` is the
     # DEPLOYMENT name from creds, NOT the decoded model (cancel, unlike
@@ -2589,7 +2780,7 @@ async def test_cancel__model_encoded_beats_unified(cancel_harness):
 
     assert cancel_harness.litellm_acancel.call_count == 1
     cancel_harness.router_acancel.assert_not_called()
-    cancel_harness.creds_resolver.assert_called_once_with(model_id="azure/gpt-4o")
+    cancel_harness.creds_resolver.assert_called_once_with("azure/gpt-4o", form="with_provider")
 
 
 # --------------------------------------------------------------------------- #
@@ -2630,6 +2821,30 @@ async def test_cancel__db_write_receives_caller_auth(cancel_harness):
         await call_cancel(cancel_harness, "batch-unified-blob", user=caller)
 
     assert cancel_harness.update_batch_in_db.call_args.kwargs["user_api_key_dict"] is caller
+
+
+@pytest.mark.asyncio
+async def test_cancel__keeps_the_endpoint_the_batch_was_created_for(cancel_harness: CancelHarness) -> None:
+    stored: Final = make_batch(id="batch-unified-blob", status="in_progress").model_copy(update={"endpoint": "/v1/embeddings"})
+    stored_row: Final = MagicMock(status="in_progress", file_object=stored.model_dump(mode="json"))
+    prisma_client: Final = AsyncMock()
+    prisma_client.db.litellm_managedobjecttable.find_first.return_value = stored_row
+    provider_batch: Final = make_batch(id="batch-raw-xyz", status="cancelling")
+    cancel_harness.router.acancel_batch.return_value = provider_batch
+    cancel_harness.logging.post_call_success_hook.side_effect = _hook_rewriting_the_batch_id_to("batch-unified-blob")
+    cancel_harness.logging.get_proxy_hook.return_value = object()
+
+    with (
+        patch.object(endpoints, "is_base64_encoded_unified_file_id", return_value=UNIFIED_BATCH_ID),
+        patch.object(proxy_server, "prisma_client", prisma_client),
+    ):
+        resp: Final = await call_cancel(cancel_harness, "batch-unified-blob")
+
+    assert (resp.endpoint, resp.status) == ("/v1/embeddings", "cancelling")
+    written: Final = cancel_harness.update_batch_in_db.call_args.kwargs
+    assert (written["response"].endpoint, written["db_batch_object"]) == ("/v1/embeddings", stored_row)
+    assert cancel_harness.logging.post_call_success_hook.call_args.kwargs["response"].endpoint == "/v1/embeddings"
+    assert (provider_batch.id, provider_batch.endpoint) == ("batch-unified-blob", "/v1/embeddings")
 
 
 @pytest.mark.asyncio
@@ -3258,7 +3473,7 @@ async def test_create__header_model_allows_key_with_model_grant(harness):
 
     await call_create(harness, user=_key_restricted_to("vertex-model"), headers={"x-litellm-model": "vertex-model"})
 
-    harness.creds_resolver.assert_called_once_with(model_id="vertex-model")
+    harness.creds_resolver.assert_called_once_with("vertex-model", form="with_provider")
     assert harness.acreate_kwargs()["custom_llm_provider"] == "vertex_ai"
 
 
@@ -3365,6 +3580,10 @@ def _route_unified_batch_to_team_deployment(
 ) -> None:
     target: Final = deployment or _team_scoped_deployment()
     harness.router.resolve_model_name_from_model_id = MagicMock(return_value=target.model_name)
+    harness.router.registry.return_value.resolve = MagicMock(return_value=target.model_name)
+    harness.router.registry.return_value.deployments = MagicMock(
+        side_effect=lambda *_, source="group", **__: target if source == "first_in_group" else DEFAULT
+    )
     harness.router.get_deployment_by_model_group_name = MagicMock(return_value=target)
 
 

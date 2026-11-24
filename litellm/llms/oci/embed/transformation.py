@@ -56,6 +56,7 @@ else:
     LiteLLMLoggingObj = Any
 
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
+_DECODED_JSON: Final = TypeAdapter(object)
 
 # OCI sends up to 96 texts per embedText request (Cohere limit).
 OCI_EMBED_BATCH_LIMIT: Final = 96
@@ -101,11 +102,11 @@ class OCIEmbedConfig(BaseEmbeddingConfig):
 
     def map_openai_params(
         self,
-        non_default_params: dict,
-        optional_params: dict,
+        non_default_params: Mapping[str, object],
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool = False,
-    ) -> dict:
+    ) -> dict[str, object]:
         for key, value in non_default_params.items():
             if key == "dimensions":
                 # OCI API uses outputDimensions (cohere.embed-v4.0+)
@@ -114,14 +115,14 @@ class OCIEmbedConfig(BaseEmbeddingConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, str],
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, str]:
         if optional_params.get("oci_signer") is None:
             creds: Final = resolve_oci_credentials(optional_params)
             missing: Final = [
@@ -152,8 +153,8 @@ class OCIEmbedConfig(BaseEmbeddingConfig):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         stream: bool | None = None,
     ) -> str:
         base: Final = get_oci_base_url(optional_params, api_base or litellm.api_base)
@@ -161,15 +162,15 @@ class OCIEmbedConfig(BaseEmbeddingConfig):
 
     def sign_request(
         self,
-        headers: dict,
-        optional_params: dict,
-        request_data: dict,
+        headers: dict[str, str],
+        optional_params: dict[str, object],
+        request_data: Mapping[str, object],
         api_base: str,
         api_key: str | None = None,
         model: str | None = None,
         stream: bool | None = None,
         fake_stream: bool | None = None,
-    ) -> tuple[dict, bytes]:
+    ) -> tuple[dict[str, str], bytes]:
         return sign_oci_request(
             headers=headers,
             optional_params=optional_params,
@@ -186,8 +187,8 @@ class OCIEmbedConfig(BaseEmbeddingConfig):
         model: str,
         input: AllEmbeddingInputValues,
         optional_params: dict,
-        headers: dict,
-    ) -> dict:
+        headers: Mapping[str, object],
+    ) -> dict[str, object]:
         creds: Final = resolve_oci_credentials(optional_params)
         compartment_id: Final = creds["oci_compartment_id"]
         if not compartment_id:
@@ -261,9 +262,9 @@ class OCIEmbedConfig(BaseEmbeddingConfig):
         model_response: EmbeddingResponse,
         logging_obj: LiteLLMLoggingObj,
         api_key: str | None,
-        request_data: dict,
-        optional_params: dict,
-        litellm_params: dict,
+        request_data: Mapping[str, object],
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
     ) -> EmbeddingResponse:
         if raw_response.status_code != 200:
             raise OCIError(
@@ -272,7 +273,7 @@ class OCIEmbedConfig(BaseEmbeddingConfig):
             )
 
         try:
-            json_response: Final = raw_response.json()
+            json_response: Final = _DECODED_JSON.validate_python(raw_response.json())
         except Exception as e:
             raise OCIError(
                 status_code=raw_response.status_code,
@@ -318,7 +319,7 @@ class OCIEmbedConfig(BaseEmbeddingConfig):
         self,
         error_message: str,
         status_code: int,
-        headers: dict | httpx.Headers,
+        headers: Mapping[str, object] | httpx.Headers,
     ) -> BaseLLMException:
         return OCIError(status_code=status_code, message=error_message)
 
