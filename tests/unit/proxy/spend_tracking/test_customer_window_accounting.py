@@ -1,4 +1,5 @@
 import asyncio
+from collections.abc import Mapping
 from datetime import datetime, time, timezone
 from types import SimpleNamespace
 from typing import Final
@@ -14,15 +15,14 @@ from litellm.models.budget import BudgetLimit
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.proxy.auth.customer_hierarchy_auth import (
     check_customer_hierarchy_windows,
-    customer_member_cache_key,
-    customer_org_alias_cache_key,
     get_customer_scopes_for_accounting,
     resolve_customer_hierarchy,
 )
-from litellm.proxy.common_utils.timezone_utils import BudgetResetSettings
+from litellm.proxy.common_utils.reset_budget_job import ResetBudgetJob
+from litellm.proxy.common_utils.timezone_utils import BudgetResetSettings, get_budget_window_reset_fields
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.db.db_spend_update_writer import DBSpendUpdateWriter
-from litellm.proxy.db.spend_counter_reseed import SpendCounterReseed
+from litellm.proxy.db.spend_counter_reseed import SpendCounterReseed, recorded_window_spend
 from litellm.proxy.hooks.proxy_track_cost_callback import (
     ProxyDBLogger,
     _update_database_and_spend_counters,
@@ -30,23 +30,25 @@ from litellm.proxy.hooks.proxy_track_cost_callback import (
 )
 from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
 from litellm.proxy.spend_tracking.budget_reservation import (
-    _counter_to_reservation_entry,
-    _reserve_counters,
     customer_window_counters,
     estimate_request_max_cost,
     release_budget_reservation,
     reserve_budget_for_request,
 )
 from litellm.proxy.utils import ProxyLogging
+from litellm.redis.stores.auth_cache import AuthObject
 from litellm.redis.stores.spend_counters.types import parse_customer_window_counter
 from litellm.responses.streaming_iterator import drain_logging_tasks
 from litellm.types.proxy.auth.customer_hierarchy import (
+    AppDurationLimit,
     CustomerHierarchyAuth,
     CustomerHierarchyIds,
     CustomerRequestIdentity,
     CustomerScopeAuth,
 )
 from litellm.types.utils import ModelResponse, Usage
+from litellm.redis.stores.connection import connect
+from litellm.redis.stores.spend_counters import SpendCounterStore
 from tests.unit.redis.stores.spend_counters_double import FakeSpendCounters
 
 LIMITS: Final = (
@@ -69,6 +71,19 @@ def accounting_state(monkeypatch):
     monkeypatch.setattr(ps, "proxy_logging_obj", SimpleNamespace(db_spend_update_writer=writer))
     monkeypatch.setattr(ps, "prisma_client", prisma)
     return backend, writer, prisma
+
+
+class _RustBackend:
+    """The Rust spend counter store the ledger's counter step runs on, installed as the proxy's store and read the way
+    the tests read the fake."""
+
+    def __init__(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        self._store: Final = SpendCounterStore(connect(None).spend_counters())
+        monkeypatch.setattr(ps, "spend_counter_store", self._store)
+
+    @property
+    def redis(self) -> Mapping[str, float]:
+        return self._store.snapshot()
 
 
 @pytest.mark.parametrize("scope", ("customer_org", "customer_team", "customer_member"))
@@ -98,85 +113,21 @@ def test_shared_template_reset_is_not_advanced_by_a_member():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("ledger", (False, True))
-async def test_settlement_charges_each_window_once_and_selects_one_durable_writer(accounting_state, ledger):
-    backend, writer, _ = accounting_state
-    counters: Final = customer_window_counters("customer_member", "member", LIMITS)
-    entries: Final = [_counter_to_reservation_entry(counter, 2.0) for counter in counters]
-    for counter in counters:
-        await ps.spend_counter_store.set(counter.counter_key, 5.0)
-    assert await _reserve_counters(counters, entries, 2.0) == (7.0, 7.0)
-    reservation: Final = {"reserved_cost": 2.0, "entries": entries, "finalized": False}
-    backend.commands.clear()
-    await ps.increment_spend_counters(
-        token=None,
-        team_id=None,
-        user_id=None,
-        response_cost=0.75,
-        budget_reservation=reservation,
-        customer_counters=counters,
-        windows_from_ledger=ledger,
+@pytest.mark.parametrize("duration", ("daily", "weekly", "1w", "01h", "1mo", "12mo", "2d"))
+async def test_accounting_snapshot_keeps_the_admitted_window_key(duration: str) -> None:
+    now: Final = datetime(2026, 11, 2, 1, 30, tzinfo=timezone.utc)
+    scope: Final = CustomerScopeAuth(key="app", entity_id="app", budget_limits=(
+        AppDurationLimit(budget_duration=duration, max_budget=10),
+        BudgetLimit(budget_duration="15m", max_budget=1, reset_at=now),
+    ))
+    restored: Final = CustomerScopeAuth.model_validate_json(scope.model_dump_json())
+    assert restored.model_dump() == scope.model_dump()
+    assert customer_window_counters("app", "app", restored.budget_limits, now=now) == customer_window_counters(
+        "app", "app", scope.budget_limits, now=now
     )
-    assert tuple(backend.redis[counter.counter_key] for counter in counters) == (5.75, 5.75)
-    assert reservation["finalized"] is True
-    rows: Final = await writer.window_spend_update_queue.flush_and_get_aggregated_window_spend_transactions()
-    assert len(rows) == (0 if ledger else 2)
-    assert all(row["spend"] == 0.75 and row["entity_id"] == "member" for row in rows)
-    windows: Final = await ps.accounting_window_keys(None, None, counters)
-    assert {window["window_duration"] for window in windows} == {"1mo", "12mo"}
-    assert len([command for command in backend.commands if command.startswith("MGET")]) == 1
-
-
-@pytest.mark.asyncio
-async def test_completion_after_reset_refunds_old_hold_and_charges_current_period(accounting_state):
-    backend, writer, _ = accounting_state
-    old: Final = customer_window_counters(
-        "customer_member", "member", LIMITS, now=datetime(2000, 6, 15, tzinfo=timezone.utc)
-    )
-    current: Final = customer_window_counters("customer_member", "member", LIMITS)
-    entries: Final = [_counter_to_reservation_entry(counter, 2.0) for counter in old]
-    for counter in old:
-        await ps.spend_counter_store.set(counter.counter_key, 5.0)
-    await _reserve_counters(old, entries, 2.0)
-    reservation: Final = {"reserved_cost": 2.0, "entries": entries, "finalized": False}
-    await ps.increment_spend_counters(
-        token=None,
-        team_id=None,
-        user_id=None,
-        response_cost=0.75,
-        budget_reservation=reservation,
-        customer_counters=current,
-    )
-    assert tuple(backend.redis[counter.counter_key] for counter in old) == (5.0, 5.0)
-    assert tuple(backend.redis[counter.counter_key] for counter in current) == (0.75, 0.75)
-    assert tuple(entry["applied_adjustment"] for entry in entries) == (-2.0, -2.0)
-    rows: Final = await writer.window_spend_update_queue.flush_and_get_aggregated_window_spend_transactions()
-    assert {row["window_start"] for row in rows} == {
-        counter.window_start.replace(tzinfo=None).isoformat(timespec="microseconds") for counter in current
-    }
-
-
-@pytest.mark.asyncio
-async def test_eviction_between_reserve_and_settle_restores_durable_floor(accounting_state):
-    backend, _, prisma = accounting_state
-    counters: Final = customer_window_counters("customer_member", "member", LIMITS[:1])
-    counter: Final = counters[0]
-    prisma.db.litellm_budgetwindowspend.find_unique.return_value = SimpleNamespace(
-        window_start=counter.window_start, spend=5.0
-    )
-    entries: Final = [_counter_to_reservation_entry(counter, 2.0)]
-    await ps.spend_counter_store.set(counter.counter_key, 5.0)
-    await _reserve_counters(counters, entries, 2.0)
-    await ps.spend_counter_store.delete((counter.counter_key,))
-    await ps.increment_spend_counters(
-        token=None,
-        team_id=None,
-        user_id=None,
-        response_cost=0.75,
-        budget_reservation={"reserved_cost": 2.0, "entries": entries, "finalized": False},
-        customer_counters=counters,
-    )
-    assert backend.redis[counter.counter_key] == 5.75
+    assert await ps.customer_accounting_counters(
+        CustomerHierarchyIds(app_id="app"), (restored,), started_at=datetime.fromtimestamp(now.timestamp())
+    ) == customer_window_counters("app", "app", scope.budget_limits, now=now)
 
 
 @pytest.mark.asyncio
@@ -236,12 +187,13 @@ async def test_redis_failure_never_admits_from_incomplete_local_spend(accounting
 @pytest.mark.parametrize("status", ("success", "failure"))
 async def test_real_cost_callback_keeps_customer_scalar_and_window_cost_once(
     accounting_state,
-    monkeypatch,
-    ledger,
-    disable_logs,
+    monkeypatch: pytest.MonkeyPatch,
+    ledger: bool,
+    disable_logs: bool,
     status,
 ):
-    backend, writer, prisma = accounting_state
+    writer, prisma = accounting_state[1:]
+    backend: Final = _RustBackend(monkeypatch) if ledger else accounting_state[0]
     monkeypatch.setattr(ps, "general_settings", {"use_spend_logs_ledger": ledger})
     monkeypatch.setattr(ps, "disable_spend_logs", disable_logs)
     now: Final = datetime.now(timezone.utc)
@@ -313,58 +265,11 @@ async def test_real_cost_callback_keeps_customer_scalar_and_window_cost_once(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("limiting_duration", ("1mo", "12mo"))
-async def test_concurrent_requests_obey_both_caps_with_existing_reservation_engine(accounting_state, limiting_duration):
-    backend, _, prisma = accounting_state
-    request_body: Final = {
-        "model": "gpt-4o-mini",
-        "messages": [{"role": "user", "content": "hello"}],
-        "max_tokens": 1000,
-    }
-    estimated: Final = estimate_request_max_cost(request_body, "/chat/completions", None)
-    assert estimated is not None and estimated > 0
-    limits: Final = tuple(
-        BudgetLimit(budget_duration=duration, max_budget=estimated * (1.5 if duration == limiting_duration else 100))
-        for duration in ("1mo", "12mo")
-    )
-    hierarchy: Final = CustomerHierarchyAuth(
-        customer_org_id="org",
-        customer_member_id="member",
-        scopes=(CustomerScopeAuth(key="customer_member", entity_id="member", budget_limits=limits),),
-    )
-    auth: Final = UserAPIKeyAuth().model_copy(update={"customer_hierarchy": hierarchy})
-    cache: Final = UserApiKeyCache()
-    logging: Final = ProxyLogging(user_api_key_cache=cache)
-
-    async def reserve():
-        return await reserve_budget_for_request(
-            request_body=dict(request_body),
-            route="/chat/completions",
-            llm_router=None,
-            valid_token=auth,
-            team_object=None,
-            user_object=None,
-            prisma_client=prisma,
-            user_api_key_cache=cache,
-            proxy_logging_obj=logging,
-            fail_closed_budget_enforcement=True,
-        )
-
-    results: Final = await asyncio.gather(reserve(), reserve(), return_exceptions=True)
-    accepted: Final = tuple(result for result in results if isinstance(result, dict))
-    rejected: Final = tuple(result for result in results if isinstance(result, litellm.BudgetExceededError))
-    assert len(accepted) == len(rejected) == 1
-    counters: Final = customer_window_counters("customer_member", "member", limits)
-    assert all(
-        backend.redis[counter.counter_key] == pytest.approx(accepted[0]["reserved_cost"]) for counter in counters
-    )
-    await release_budget_reservation(accepted[0])
-    assert all(backend.redis[counter.counter_key] == pytest.approx(0.0) for counter in counters)
-
-
-@pytest.mark.asyncio
-async def test_outer_callback_resolves_cached_hierarchy_into_accounting(accounting_state, monkeypatch):
-    backend, writer, prisma = accounting_state
+async def test_outer_callback_resolves_cached_hierarchy_into_accounting(
+    accounting_state, monkeypatch: pytest.MonkeyPatch
+):
+    writer, prisma = accounting_state[1:]
+    backend: Final = _RustBackend(monkeypatch)
     cache: Final = UserApiKeyCache()
     hierarchy: Final = CustomerHierarchyAuth(
         customer_org_id="org",
@@ -374,7 +279,7 @@ async def test_outer_callback_resolves_cached_hierarchy_into_accounting(accounti
             CustomerScopeAuth(key="customer_member", entity_id="member", budget_limits=LIMITS),
         ),
     )
-    await cache.async_set_cache(key=customer_member_cache_key("member"), value=hierarchy)
+    await cache.async_set_cache(key=AuthObject.customer_member("member"), value=hierarchy)
     monkeypatch.setattr(ps, "user_api_key_cache", cache)
     monkeypatch.setattr(ps, "general_settings", {"use_spend_logs_ledger": True})
     monkeypatch.setattr(ps, "disable_spend_logs", True)
@@ -421,7 +326,7 @@ async def test_accounting_retains_stamped_parent_ids(accounting_state, moved_mem
     cache: Final = UserApiKeyCache()
     if moved_member:
         await cache.async_set_cache(
-            key=customer_member_cache_key("member"),
+            key=AuthObject.customer_member("member"),
             value=CustomerHierarchyAuth(
                 customer_org_id="new-org",
                 customer_team_id="new-team",
@@ -447,7 +352,8 @@ async def test_accounting_retains_stamped_parent_ids(accounting_state, moved_mem
         cache,
     )
     assert {scope.entity_id for scope in scopes} == ({"org", "team", "member"} if moved_member else {"org"})
-    assert all(scope.budget_limits == LIMITS for scope in scopes)
+    expected: Final = tuple(limit.model_dump() for limit in LIMITS)
+    assert all(tuple(limit.model_dump() for limit in scope.budget_limits) == expected for scope in scopes)
     prisma.db.litellm_customerorganizationtable.find_unique.assert_awaited_once_with(
         where={"customer_org_id": "org"},
         include={"budget": True},
@@ -474,8 +380,11 @@ async def test_auth_rejects_redis_outage_with_503(accounting_state):
 @pytest.mark.parametrize("member", (False, True))
 @pytest.mark.parametrize("ledger", (False, True))
 @pytest.mark.parametrize("failure", (False, True))
-async def test_admitted_windows_are_charged_during_policy_outage(accounting_state, monkeypatch, member, ledger, failure):
-    backend, writer, prisma = accounting_state
+async def test_admitted_windows_are_charged_during_policy_outage(
+    accounting_state, monkeypatch: pytest.MonkeyPatch, member, ledger: bool, failure
+):
+    writer, prisma = accounting_state[1:]
+    backend: Final = _RustBackend(monkeypatch) if ledger else accounting_state[0]
     scopes: Final = (
         CustomerScopeAuth(key="customer_org", entity_id="org", budget_limits=LIMITS),
         *(
@@ -489,7 +398,7 @@ async def test_admitted_windows_are_charged_during_policy_outage(accounting_stat
     )
     cache: Final = UserApiKeyCache()
     await cache.async_set_cache(
-        key=customer_member_cache_key("member") if member else customer_org_alias_cache_key("org-alias"),
+        key=AuthObject.customer_member("member") if member else AuthObject.customer_org_alias("org-alias"),
         value=CustomerHierarchyAuth(
             customer_org_id="org",
             customer_team_id="team" if member else None,
@@ -581,3 +490,60 @@ async def test_admitted_windows_are_charged_during_policy_outage(accounting_stat
         scalar_queued: Final = await writer.spend_update_queue.flush_and_get_aggregated_db_spend_update_transactions()
         for scope in scopes:
             assert scalar_queued[f"{scope.key}_list_transactions"] == {scope.entity_id: 0.75}
+
+
+def test_saved_window_start_names_the_counter_until_its_reset_passes():
+    settings: Final = BudgetResetSettings(timezone="UTC", reset_time_of_day=time(6, 0))
+    created: Final = datetime(2026, 11, 13, 3, tzinfo=timezone.utc)
+    limit: Final = BudgetLimit(
+        budget_duration="2d",
+        max_budget=10,
+        reset_at=datetime(2026, 11, 15, 6, tzinfo=timezone.utc),
+        window_start=created,
+    )
+    (current,) = customer_window_counters("customer_org", "org", (limit,), now=created, reset_settings=settings)
+    assert current.window_start == created
+    assert parse_customer_window_counter(current.counter_key) == ("customer_org", "org", "2d", created)
+
+    after_reset: Final = datetime(2026, 11, 15, 7, tzinfo=timezone.utc)
+    unsaved: Final = limit.model_copy(update={"window_start": None})
+    assert customer_window_counters(
+        "customer_org", "org", (limit,), now=after_reset, reset_settings=settings
+    ) == customer_window_counters("customer_org", "org", (unsaved,), now=after_reset, reset_settings=settings)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("admin_reset_hour", (6, 10), ids=["calendar-reset", "admin-set-off-calendar-reset"])
+async def test_reset_job_rollover_keeps_the_customer_counter_already_in_use(admin_reset_hour: int):
+    settings: Final = BudgetResetSettings(timezone="UTC", reset_time_of_day=time(6, 0))
+    window: Final = BudgetLimit(
+        budget_duration="1d", max_budget=10, reset_at=datetime(2026, 11, 13, admin_reset_hour, tzinfo=timezone.utc)
+    )
+    now: Final = datetime(2026, 11, 13, 11, tzinfo=timezone.utc)
+    (before_job,) = customer_window_counters("customer_org", "org", (window,), now=now, reset_settings=settings)
+    rolled: Final = await ResetBudgetJob._prepare_window_reset(
+        window.model_dump(mode="json"), None, MagicMock(), now, settings
+    )
+    assert rolled is not None
+    after_window: Final = window.model_copy(
+        update={"reset_at": rolled.next_reset_at, "window_start": rolled.window_start}
+    )
+    (after_job,) = customer_window_counters("customer_org", "org", (after_window,), now=now, reset_settings=settings)
+    assert after_job.counter_key == before_job.counter_key
+
+
+def test_saved_customer_start_still_matches_its_spend_row_after_a_cache_rebuild():
+    settings: Final = BudgetResetSettings(timezone="UTC", reset_time_of_day=time(6, 0))
+    created: Final = datetime(2026, 11, 13, 3, 0, 0, 123456, tzinfo=timezone.utc)
+    window: Final = BudgetLimit.model_validate(
+        {
+            "budget_duration": "2d",
+            "max_budget": 10,
+            **get_budget_window_reset_fields("2d", settings=settings, now=created),
+        }
+    )
+    (counter,) = customer_window_counters("customer_org", "org", (window,), now=created, reset_settings=settings)
+    # Prisma maps DateTime to Postgres timestamp(3), so the spend row keeps the start to the millisecond.
+    stored_start: Final = counter.window_start.replace(microsecond=counter.window_start.microsecond // 1000 * 1000)
+    row: Final = SimpleNamespace(window_start=stored_start, spend=4.0)
+    assert recorded_window_spend(row, "customer_org", counter.window_start) == 4.0

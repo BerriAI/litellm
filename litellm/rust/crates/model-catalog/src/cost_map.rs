@@ -79,7 +79,7 @@ impl CostMap {
             .value
             .check_size(BUNDLED.base.catalog.model_count(), limits)?;
         for problem in loaded.errors.iter().filter(|error| error.is_alias()) {
-            litellm_tracing::warn!(
+            tracing::warn!(
                 "LiteLLM: model cost map alias problem: {}",
                 litellm_error::Report::new(problem)
             );

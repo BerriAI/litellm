@@ -6,7 +6,9 @@
 
 use std::sync::Arc;
 
-use crate::{config::RoutingStrategy, error::Error, host::RouterRequest, registry::Deployment};
+use litellm_router_types::RoutingStrategy;
+
+use crate::{error::Error, host::RouterRequest, registry::Deployment};
 
 /// Whether the router's own strategy has an async selector: the others pick on the sync path
 /// even for async callers (`_async_get_available_deployment`).

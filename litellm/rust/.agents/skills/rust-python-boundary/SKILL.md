@@ -11,7 +11,7 @@ Python-shaped input becomes typed Rust in exactly two crates. Every crate past t
 
 ## The two boundaries
 
-- `crates/config` reads config.yaml, which is Python-shaped: `os.environ/` references, scalars that Helm or the environment turned into text, raw kwargs maps. It also owns the environment layering and `get_secret` fallbacks Python applies while it loads that config. It has no Python runtime, so it reproduces Python value semantics with `litellm-python-compat`
+- `crates/config` reads config.yaml, which is Python-shaped: scalars that Helm or the environment turned into text, raw kwargs maps. It also owns the environment layering and `get_secret` fallbacks Python applies while it loads that config. It has no Python runtime, so it reproduces Python value semantics with `litellm-python-compat`. `os.environ/` references are already resolved by `crates/config-load`, which reads the files and hands `Config::from_value` the resolved document
 - `crates/python-bridge` receives live Python objects, such as `RedisCache.redis_kwargs`. It reads them through PyO3 with the real protocol (`is_truthy()`, `str()`, `extract`), so it never imitates Python
 - Both produce the same typed input, defined in the data crate the consumer already depends on (`redis-types` for Redis), so a downstream crate cannot tell which host it runs under
 
@@ -26,6 +26,16 @@ Reading a value the way Python itself reads it. This lives only at the two bound
 A boundary knows which surface a value came from. `general_settings.coordination_redis` is a pydantic model and `cache_params` goes through `_str_to_bool`, so the boundary applies that surface's rule exactly instead of refusing the text two surfaces disagree on
 
 Each typed field keeps where its value came from (the key, `REDIS_<KWARG>` or the fallback name), so an error or warning downstream still names it
+
+## Flags
+
+A flag a user writes in config.yaml or in an environment variable is read by one rule, whichever Python helper the proxy uses for that key. The proxy has a helper per key and they disagree on the same word, so copying each one makes the same text mean different things in different keys
+
+- The rule is `lax_bool`: `true`, `1`, `yes`, `on`, `t` and `y` are on and their opposites are off, in any case once stripped. A word that is no flag leaves the flag unset, never on
+- Use `lenient::LaxBool` on an `Option<bool>` field for config.yaml, and `flags::lax_bool` on a variable's text
+- The flag leaves the boundary as a `bool`. Do not hand a consumer `Spelled<bool>` text to read again
+- Where this differs from what the proxy does for a key, list it as a deliberate difference next to the code, as `crates/config/src/layer.rs` does
+- A per-helper reader such as `redis_str_to_bool` is only for a crate that stands in for a Python library and has to keep that library's rule
 
 ## What stays downstream
 
@@ -46,7 +56,7 @@ The rule is about where config and kwargs get coerced, not about who may depend 
 
 ## Existing code
 
-Some code still coerces Python-shaped values past the boundary, for example the `REDIS_*` merge in `gateway/src/redis/layers.rs` and the flag and number readers in `redis-resolve/src/options.rs`. Do not add more. When you change one, move the coercion to its boundary instead of extending it in place
+Some code still coerces Python-shaped values past the boundary, for example the `REDIS_*` merge in `redis-resolve/src/layers.rs` and the flag and number readers in `redis-resolve/src/options.rs`. Some flags are still read by a per-helper rule or carried downstream as `Spelled<bool>`. Do not add more. When you change one, move the coercion to its boundary instead of extending it in place
 
 ## Tests
 

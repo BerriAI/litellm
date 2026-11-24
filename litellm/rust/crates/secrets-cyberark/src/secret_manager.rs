@@ -5,10 +5,11 @@ mod write;
 use std::{sync::Arc, time::Duration};
 
 use base64::{Engine, engine::general_purpose::STANDARD};
-use litellm_core_utils::settings::Lookup;
+use litellm_env::Lookup;
 use litellm_http::{
     Client, ClientIdentity, ClientVariant, HttpClientConfig, HttpClientPool, TlsSource, Verify,
 };
+use litellm_python_compat::flags::str_to_bool;
 use litellm_secret_value::SecretValue;
 use litellm_secrets_types::{
     BaseSecretManager, CyberarkOperationContext, RotationError, SecretCache, SecretDeleter,

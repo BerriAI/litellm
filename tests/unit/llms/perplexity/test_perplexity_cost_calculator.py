@@ -93,6 +93,45 @@ class TestPerplexityCostCalculator:
             assert math.isclose(prompt_cost, expected_prompt_cost, rel_tol=1e-6)
             assert math.isclose(completion_cost, expected_completion_cost, rel_tol=1e-6)
 
+    @pytest.mark.parametrize(
+        ("cache_read_rate", "expected_cached_rate"),
+        [
+            pytest.param(1e-07, 1e-07, id="cache_read_rate_set"),
+            pytest.param(0.0, 0.0, id="cache_read_rate_zero"),
+            pytest.param(None, 1e-06, id="no_cache_read_rate_keeps_input_rate"),
+        ],
+    )
+    def test_fallback_bills_cached_prompt_tokens_at_the_cache_read_rate(
+        self, monkeypatch: pytest.MonkeyPatch, cache_read_rate: float | None, expected_cached_rate: float
+    ):
+        """
+        Regression: with no usage.cost in the response, cached prompt tokens were billed at
+        input_cost_per_token and the model's cache_read_input_token_cost was never read.
+        """
+        model: Final = "sonar-cached-prompt-test"
+        monkeypatch.setitem(
+            litellm.model_cost,
+            f"perplexity/{model}",
+            {
+                "litellm_provider": "perplexity",
+                "mode": "chat",
+                "input_cost_per_token": 1e-06,
+                "output_cost_per_token": 5e-06,
+                **({} if cache_read_rate is None else {"cache_read_input_token_cost": cache_read_rate}),
+            },
+        )
+        usage: Final = Usage(
+            prompt_tokens=1000,
+            completion_tokens=10,
+            total_tokens=1010,
+            prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=900),
+        )
+
+        prompt_cost, completion_cost = perplexity_cost_per_token(model=model, usage=usage)
+
+        assert math.isclose(prompt_cost, 100 * 1e-06 + 900 * expected_cached_rate, rel_tol=1e-10)
+        assert math.isclose(completion_cost, 10 * 5e-06, rel_tol=1e-10)
+
     def test_uses_perplexity_provided_cost_when_available(self):
         """
         Test that when Perplexity provides pre-calculated cost in usage.cost.total_cost,
@@ -248,6 +287,47 @@ class TestPerplexityCostCalculator:
 
         assert math.isclose(peak_prompt_cost, 1000 * 1e-06, rel_tol=1e-10)
         assert math.isclose(peak_completion_cost, 200 * 1e-06, rel_tol=1e-10)
+
+    @pytest.mark.parametrize(
+        ("off_peak_cache_read_rate", "expected_cached_rate"),
+        [
+            pytest.param(1e-08, 1e-08, id="off_peak_cache_read_rate_set"),
+            pytest.param(None, 1e-07, id="no_cache_read_rate_keeps_off_peak_input_rate"),
+        ],
+    )
+    def test_off_peak_cache_read_rate_applies_without_a_standard_cache_read_rate(
+        self, off_peak_cache_read_rate: float | None, expected_cached_rate: float
+    ):
+        """A model whose only cache read rate lives in off_peak_pricing bills cached prompt tokens
+        at it inside the window, and at the off-peak input rate when the block has none either."""
+        self._register_off_peak_model(
+            {
+                "hours_utc": self.OFF_PEAK_WINDOW,
+                "input_cost_per_token": 1e-07,
+                "output_cost_per_token": 2e-07,
+                **(
+                    {}
+                    if off_peak_cache_read_rate is None
+                    else {"cache_read_input_token_cost": off_peak_cache_read_rate}
+                ),
+            }
+        )
+        usage: Final = Usage(
+            prompt_tokens=1000,
+            completion_tokens=200,
+            total_tokens=1200,
+            prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=900),
+        )
+
+        prompt_cost, _ = perplexity_cost_per_token(
+            model=self.OFF_PEAK_MODEL, usage=usage, current_time=self.INSIDE_WINDOW
+        )
+        peak_prompt_cost, _ = perplexity_cost_per_token(
+            model=self.OFF_PEAK_MODEL, usage=usage, current_time=self.OUTSIDE_WINDOW
+        )
+
+        assert math.isclose(prompt_cost, 100 * 1e-07 + 900 * expected_cached_rate, rel_tol=1e-10)
+        assert math.isclose(peak_prompt_cost, 1000 * 1e-06, rel_tol=1e-10)
 
     def test_off_peak_rates_leave_citation_search_and_reasoning_fees_alone(self):
         """Inside the window only the plain input and output rates change: citation tokens, the

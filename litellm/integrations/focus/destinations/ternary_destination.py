@@ -81,7 +81,7 @@ class FocusTernaryDestination(FocusDestination):
         self,
         *,
         prefix: str,
-        config: dict[str, str] | None = None,  # mutable-ok: FocusDestination(config) factory contract
+        config: Mapping[str, str | None] | None = None,
     ) -> None:
         resolved_config: Final = config or {}
         api_key: Final = resolved_config.get("api_key")

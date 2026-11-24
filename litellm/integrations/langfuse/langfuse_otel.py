@@ -154,8 +154,14 @@ def _a_destination_carries_the_trace() -> bool:
     return ExporterOwner.LANGFUSE_OTEL in destination_backends()
 
 
+def _refused_on_otel_v2(params: StandardCallbackDynamicParams) -> bool:
+    from litellm.integrations.otel.presets.destinations import langfuse_tenant_host_refused_by_otel_v2
+
+    return langfuse_tenant_host_refused_by_otel_v2(params)
+
+
 class LangfuseOtelLogger(OpenTelemetry):
-    def __init__(self, config=None, *args, **kwargs):
+    def __init__(self, config: OpenTelemetryConfig | None = None, *args, **kwargs):
         # Prevent LangfuseOtelLogger from modifying global environment variables by constructing config manually
         # and passing it to the parent OpenTelemetry class
         if config is None:
@@ -163,7 +169,7 @@ class LangfuseOtelLogger(OpenTelemetry):
         super().__init__(config=config, *args, **kwargs)
 
     @staticmethod
-    def set_langfuse_otel_attributes(span: Span, kwargs, response_obj):
+    def set_langfuse_otel_attributes(span: Span, kwargs: Mapping[str, object], response_obj: object):
         """
         Sets OpenTelemetry span attributes for Langfuse observability.
         Uses the same attribute setting logic as Arize Phoenix for consistency.
@@ -207,7 +213,7 @@ class LangfuseOtelLogger(OpenTelemetry):
         return metadata
 
     @staticmethod
-    def _set_metadata_attributes(span: Span, metadata: dict):
+    def _set_metadata_attributes(span: Span, metadata: Mapping[str, object]):
         """Helper to set metadata attributes from mapping."""
         from litellm.integrations.arize._utils import safe_set_attribute
 
@@ -514,7 +520,7 @@ class LangfuseOtelLogger(OpenTelemetry):
 
     def construct_dynamic_otel_headers(
         self, standard_callback_dynamic_params: StandardCallbackDynamicParams
-    ) -> dict | None:
+    ) -> dict[str, str] | None:
         """
         Construct dynamic Langfuse headers from standard callback dynamic params
 
@@ -523,11 +529,15 @@ class LangfuseOtelLogger(OpenTelemetry):
         Returns:
             dict: A dictionary of dynamic Langfuse headers
         """
-        dynamic_headers: Final = {}
+        dynamic_headers: Final[dict[str, str]] = {}
 
         dynamic_langfuse_public_key: Final = standard_callback_dynamic_params.get("langfuse_public_key")
         dynamic_langfuse_secret_key: Final = standard_callback_dynamic_params.get("langfuse_secret_key")
-        if dynamic_langfuse_public_key and dynamic_langfuse_secret_key:
+        if (
+            dynamic_langfuse_public_key
+            and dynamic_langfuse_secret_key
+            and not _refused_on_otel_v2(standard_callback_dynamic_params)
+        ):
             auth_header: Final = LangfuseOtelLogger._get_langfuse_authorization_header(
                 public_key=dynamic_langfuse_public_key,
                 secret_key=dynamic_langfuse_secret_key,
@@ -549,7 +559,7 @@ class LangfuseOtelLogger(OpenTelemetry):
         """
         public_key: Final = standard_callback_dynamic_params.get("langfuse_public_key")
         secret_key: Final = standard_callback_dynamic_params.get("langfuse_secret_key")
-        if not public_key or not secret_key:
+        if not public_key or not secret_key or _refused_on_otel_v2(standard_callback_dynamic_params):
             return None
 
         langfuse_host: Final = standard_callback_dynamic_params.get("langfuse_host") or self._get_langfuse_otel_host()
@@ -562,7 +572,7 @@ class LangfuseOtelLogger(OpenTelemetry):
     def create_litellm_proxy_request_started_span(
         self,
         start_time: datetime,
-        headers: dict,
+        headers: Mapping[str, object],
     ) -> Span | None:
         """
         Override to prevent creating empty proxy request spans.
@@ -596,12 +606,12 @@ class LangfuseOtelLogger(OpenTelemetry):
                 request_data, original_exception, user_api_key_dict, traceback_str
             )
 
-    async def async_service_success_hook(self, *args, **kwargs):
+    async def async_service_success_hook(self, *args: object, **kwargs: object):
         """
         Langfuse should not receive service success logs.
         """
 
-    async def async_service_failure_hook(self, *args, **kwargs):
+    async def async_service_failure_hook(self, *args: object, **kwargs: object):
         """
         Langfuse should not receive service failure logs.
         """
