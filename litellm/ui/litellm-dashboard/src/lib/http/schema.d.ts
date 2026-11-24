@@ -9569,6 +9569,28 @@ export interface paths {
         patch: operations["lens_request_lens_patch"];
         trace?: never;
     };
+    "/lens/admin/gateway/connect": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Connect Model Gateway
+         * @description Connect this gateway's models to Lens using a dedicated virtual key.
+         *
+         *     Requires a proxy administrator. Existing Lens model settings are preserved.
+         */
+        post: operations["connect_model_gateway_lens_admin_gateway_connect_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/lens/login": {
         parameters: {
             query?: never;
@@ -36297,6 +36319,41 @@ export interface components {
             failed_requests: number;
             /** Status Code */
             status_code: number;
+        };
+        /** GatewaySetupRequest */
+        GatewaySetupRequest: Record<string, never>;
+        /** GatewayStatus */
+        GatewayStatus: {
+            /**
+             * Analysis Models
+             * @default 0
+             */
+            analysis_models: number;
+            /** Api Base */
+            api_base?: string | null;
+            /** Configured */
+            configured: boolean;
+            /** Connected */
+            connected: boolean;
+            /** Error */
+            error?: string | null;
+            /**
+             * Evaluation Models
+             * @default 0
+             */
+            evaluation_models: number;
+            /** Last Refreshed */
+            last_refreshed?: string | null;
+            /**
+             * Login Connected
+             * @default false
+             */
+            login_connected: boolean;
+            /**
+             * Supports Gateway Connect
+             * @default false
+             */
+            supports_gateway_connect: boolean;
         };
         /** GenerateKeyRequest */
         GenerateKeyRequest: {
@@ -70585,6 +70642,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    connect_model_gateway_lens_admin_gateway_connect_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GatewaySetupRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GatewayStatus"];
                 };
             };
             /** @description Validation Error */
