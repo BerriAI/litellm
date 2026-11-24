@@ -8,7 +8,7 @@ parsing, and streaming chunk parsing for models served with
 
 import datetime
 import hashlib
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Final
 
 import httpx
@@ -57,7 +57,7 @@ open_ai_to_generic_oci_role_map: Final[dict[str, OCIRoles]] = {
 # ---------------------------------------------------------------------------
 
 
-def adapt_messages_to_generic_oci_standard_content_message(role: str, content: str | list) -> OCIMessage:
+def adapt_messages_to_generic_oci_standard_content_message(role: str, content: str | Sequence[object]) -> OCIMessage:
     """Convert a plain-text or multipart content message to OCI format."""
     new_content: Final[list[OCIContentPartUnion]] = []
     if isinstance(content, str):
@@ -112,9 +112,9 @@ def adapt_messages_to_generic_oci_standard_content_message(role: str, content: s
     )
 
 
-def adapt_messages_to_generic_oci_standard_tool_call(role: str, tool_calls: list) -> OCIMessage:
+def adapt_messages_to_generic_oci_standard_tool_call(role: str, tool_calls: Sequence[object]) -> OCIMessage:
     """Convert an assistant tool-call message to OCI format."""
-    tool_calls_formatted: Final = []
+    tool_calls_formatted: Final[list[OCIToolCall]] = []
     for tool_call in tool_calls:
         if not isinstance(tool_call, dict):
             raise OCIError(status_code=400, message="Each tool call must be a dictionary")
@@ -171,7 +171,7 @@ def adapt_messages_to_generic_oci_standard(
     messages: list[AllMessageValues],
 ) -> list[OCIMessage]:
     """Convert an OpenAI-format message array to OCI GENERIC format."""
-    new_messages: Final = []
+    new_messages: Final[list[OCIMessage]] = []
     for message in messages:
         role = message["role"]
         content = message.get("content")
@@ -212,12 +212,14 @@ def adapt_messages_to_generic_oci_standard(
 # ---------------------------------------------------------------------------
 
 
-def adapt_tool_definition_to_oci_standard(tools: list[dict], vendor: OCIVendors) -> list[OCIToolDefinition]:
+def adapt_tool_definition_to_oci_standard(
+    tools: Sequence[Mapping[str, object]], vendor: OCIVendors
+) -> list[OCIToolDefinition]:
     """Convert OpenAI-format tool definitions to OCI GENERIC format.
 
     Resolves ``$ref``/``$defs`` and ``anyOf`` that the OCI endpoint rejects.
     """
-    new_tools: Final = []
+    new_tools: Final[list[OCIToolDefinition]] = []
     for tool in tools:
         if tool["type"] != "function":
             raise OCIError(status_code=400, message="OCI only supports function tools")

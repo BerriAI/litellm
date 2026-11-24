@@ -90,6 +90,8 @@ _REALPATH_SCRIPT: Final = (
 )
 _GREP_LINE: Final = re.compile(r"^(.+?):(\d+):(.*)$")
 _FILTER_MIDDLEWARE_NAME: Final = "LiteLLMHarnessToolFilter"
+_NO_METADATA: Final[Mapping[str, object]] = MappingProxyType({})
+_NO_USAGE: Final[Mapping[str, int]] = MappingProxyType({})
 
 
 def _decode(data: bytes) -> str:
@@ -497,7 +499,7 @@ def _number(value: object) -> float | None:
 
 def message_cost(message: object, cost_model: str | None, input_tokens: int, output_tokens: int) -> float | None:
     """Cost of one model call, or None when the token price is unknown."""
-    metadata = getattr(message, "response_metadata", None) or MappingProxyType({})
+    metadata = getattr(message, "response_metadata", None) or _NO_METADATA
     reported = _number(metadata.get("response_cost"))
     if reported is not None:
         return reported
@@ -511,7 +513,7 @@ def record_llm_usage(ctx: SessionContext, cost_model: str | None, response: LLMR
         for generations in response.generations:
             for generation in generations:
                 message = getattr(generation, "message", None)
-                usage = getattr(message, "usage_metadata", None) or MappingProxyType({})
+                usage = getattr(message, "usage_metadata", None) or _NO_USAGE
                 input_tokens = int(usage.get("input_tokens") or 0)
                 output_tokens = int(usage.get("output_tokens") or 0)
                 ctx.input_tokens += input_tokens

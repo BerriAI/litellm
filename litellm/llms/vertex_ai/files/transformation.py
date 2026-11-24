@@ -38,7 +38,6 @@ from litellm.litellm_core_utils.core_helpers import (
     allowed_openai_param_names,
     as_object_list,
     as_str_mapping,
-    drops_unsupported_params,
     iter_items,
 )
 from litellm.litellm_core_utils.litellm_logging import Logging
@@ -47,11 +46,15 @@ from litellm.litellm_core_utils.prompt_templates.file_id_utils import (
     extract_file_data,
     extract_file_metadata,
 )
+from litellm.litellm_core_utils.tool_fields import hosted_mcp_batch_row_remedy, tool_params_without_hosted_mcp
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.anthropic.chat.transformation import ANTHROPIC_TOOL_NAME_REVERSE_MAP_KEY
 from litellm.llms.base_llm.base_utils import map_developer_role_to_system_role
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
-from litellm.llms.base_llm.files.batch_records import responses_batch_body_to_chat_body
+from litellm.llms.base_llm.files.batch_records import (
+    responses_batch_body_to_chat_body,
+    row_or_deployment_drop_params,
+)
 from litellm.llms.base_llm.files.transformation import (
     BaseFilesConfig,
     BaseFileUploadStream,
@@ -85,6 +88,7 @@ from litellm.types.llms.openai import (
     BatchInputFormat,
     CreateFileRequest,
     FileContent,
+    FileContentRequest,
     FileTypes,
     HttpxBinaryResponseContent,
     OpenAICreateFileRequestOptionalParams,
@@ -233,7 +237,7 @@ def _encode_gcp_label_value_chunks(value: str) -> list[str]:
 
 def _decode_gcp_label_value_chunks(values: list[str]) -> str | None:
     """Decode values produced by _encode_gcp_label_value_chunks."""
-    encoded_parts: Final = []
+    encoded_parts: Final[list[str]] = []
     for value in values:
         if not value.startswith(_CUSTOM_ID_RAW_LABEL_PREFIX):
             return None
@@ -290,7 +294,7 @@ def _get_litellm_batch_custom_id_from_labels(labels: Mapping[str, object] | None
     if raw:
         raw_chunks: Final = [str(raw)]
         chunk_prefix: Final = "litellm_custom_id_raw_"
-        indexed_chunks: Final = []
+        indexed_chunks: Final[list[tuple[int, str]]] = []
         for key, value in labels.items():
             if key.startswith(chunk_prefix) and key[len(chunk_prefix) :].isdigit():
                 indexed_chunks.append((int(key[len(chunk_prefix) :]), str(value)))
@@ -817,11 +821,18 @@ def _openai_batch_jsonl_entry_to_vertex_anthropic_row(
     config: Final = VertexAIAnthropicConfig()
     bare_model: Final = model.rsplit("/", 1)[-1]
     params: Final = {**deployment_params, **request_params}
-    drop_params: Final = drops_unsupported_params(params.get("drop_params"))
-    chat_params: Final = {
-        **get_non_default_completion_params(params),
-        **{key: value for key, value in params.items() if key in _CLAUDE_BATCH_OPENAI_PARAMS},
-    }
+    drop_params: Final = row_or_deployment_drop_params(request_params, deployment_params.get("drop_params"))
+    chat_params: Final = tool_params_without_hosted_mcp(
+        {
+            **get_non_default_completion_params(params),
+            **{key: value for key, value in params.items() if key in _CLAUDE_BATCH_OPENAI_PARAMS},
+        },
+        model=bare_model,
+        route="vertex_ai",
+        drop_params=drop_params,
+        remedy=hosted_mcp_batch_row_remedy(request_params.get("drop_params")),
+        handling="drops",
+    )
     if any(map(_names_the_response_format_tool, iter_items(chat_params.get("tools") or ()))):
         raise ValueError(
             f"tool name {RESPONSE_FORMAT_TOOL_NAME!r} is reserved for response_format on Claude, "
@@ -1054,7 +1065,11 @@ def _openai_batch_jsonl_entry_to_vertex_rows(
         raise TypeError("`body` on batch requests must be a JSON object, but was missing or not an object")
     chat_request_body: Final = (
         {
-            **responses_batch_body_to_chat_body(entry_body, custom_llm_provider="vertex_ai"),
+            **responses_batch_body_to_chat_body(
+                entry_body,
+                custom_llm_provider="vertex_ai",
+                drop_params=row_or_deployment_drop_params(entry_body, deployment_params.get("drop_params")),
+            ),
             **{key: value for key, value in entry_body.items() if key == "drop_params" and value is not None},
         }
         if _is_responses_batch_entry(openai_entry)
@@ -1073,7 +1088,7 @@ def _openai_batch_jsonl_entry_to_vertex_rows(
                 deployment_params=deployment_params,
             ),
         )
-    drop_params: Final = drops_unsupported_params(entry_body.get("drop_params", deployment_params.get("drop_params")))
+    drop_params: Final = row_or_deployment_drop_params(entry_body, deployment_params.get("drop_params"))
     vertex_request_body: Final = transform_request_body(
         messages=chat_messages,
         model=chat_request_body.get("model", ""),
@@ -1344,7 +1359,7 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
         headers: dict,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
+        optional_params: Mapping[str, object],
         litellm_params: dict,
         api_key: str | None = None,
         api_base: str | None = None,
@@ -1444,7 +1459,7 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,
+        optional_params: Mapping[str, object],
         litellm_params: Mapping[str, object],
         data: CreateFileRequest,
     ) -> str:
@@ -1490,7 +1505,7 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
 
     def map_openai_params(
         self,
-        non_default_params: dict,
+        non_default_params: Mapping[str, object],
         optional_params: dict,
         model: str,
         drop_params: bool,
@@ -1508,7 +1523,7 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
         config: Final = VertexGeminiConfig()
         raw_model: Final = openai_request_body.get("model", "")
         model: Final = raw_model if isinstance(raw_model, str) else ""
-        drop_params: Final = drops_unsupported_params(openai_request_body.get("drop_params", deployment_drop_params))
+        drop_params: Final = row_or_deployment_drop_params(openai_request_body, deployment_drop_params)
         sampling_params: Final = tuple(
             p for p in ("temperature", "top_p", "top_k") if openai_request_body.get(p) is not None
         )
@@ -1518,7 +1533,14 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
             )
         vertex_params: Final = config.map_openai_params(
             model=model,
-            non_default_params=openai_request_body,
+            non_default_params=tool_params_without_hosted_mcp(
+                openai_request_body,
+                model=model,
+                route="vertex_ai",
+                drop_params=drop_params,
+                remedy=hosted_mcp_batch_row_remedy(openai_request_body.get("drop_params")),
+                handling="drops",
+            ),
             optional_params={},
             drop_params=drop_params,
             allow_integer_enums=False,
@@ -1545,9 +1567,9 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
         self,
         model: str,
         create_file_data: CreateFileRequest,
-        optional_params: dict,
+        optional_params: Mapping[str, object],
         litellm_params: Mapping[str, object],
-    ) -> bytes | str | dict:
+    ) -> bytes | str | dict[str, object]:
         """
         2 Cases:
         1. Handle basic file upload
@@ -1595,7 +1617,7 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
         model: str | None,
         raw_response: Response,
         logging_obj: LiteLLMLoggingObj,
-        litellm_params: dict,
+        litellm_params: Mapping[str, object],
     ) -> OpenAIFileObject:
         """
         Transform VertexAI File upload response into OpenAI-style FileObject
@@ -1647,9 +1669,9 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
     def transform_retrieve_file_request(
         self,
         file_id: str,
-        optional_params: dict,
+        optional_params: Mapping[str, object],
         litellm_params: Mapping[str, object],
-    ) -> tuple[str, dict]:
+    ) -> tuple[str, dict[str, object]]:
         bucket, encoded_object = self._parse_gcs_uri(file_id, litellm_params)
         url: Final = f"https://storage.googleapis.com/storage/v1/b/{bucket}/o/{encoded_object}"
         return url, {}
@@ -1658,7 +1680,7 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
         self,
         raw_response: Response,
         logging_obj: LiteLLMLoggingObj,
-        litellm_params: dict,
+        litellm_params: Mapping[str, object],
     ) -> OpenAIFileObject:
         response_json: Final[_GcsObjectJson] = raw_response.json()
         gcs_id = response_json.get("id", "")
@@ -1677,9 +1699,9 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
     def transform_delete_file_request(
         self,
         file_id: str,
-        optional_params: dict,
+        optional_params: Mapping[str, object],
         litellm_params: Mapping[str, object],
-    ) -> tuple[str, dict]:
+    ) -> tuple[str, dict[str, object]]:
         bucket, encoded_object = self._parse_gcs_uri(file_id, litellm_params)
         url: Final = f"https://storage.googleapis.com/storage/v1/b/{bucket}/o/{encoded_object}"
         return url, {}
@@ -1688,7 +1710,7 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
         self,
         raw_response: Response,
         logging_obj: LiteLLMLoggingObj,
-        litellm_params: dict,
+        litellm_params: Mapping[str, object],
     ) -> FileDeleted:
         file_id = "deleted"
         if hasattr(raw_response, "request") and raw_response.request:
@@ -1704,8 +1726,8 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
     def transform_list_files_request(
         self,
         purpose: str | None,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
     ) -> tuple[str, dict]:
         raise NotImplementedError("VertexAIFilesConfig does not support file listing")
 
@@ -1713,16 +1735,16 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
         self,
         raw_response: Response,
         logging_obj: LiteLLMLoggingObj,
-        litellm_params: dict,
+        litellm_params: Mapping[str, object],
     ) -> list[OpenAIFileObject]:
         raise NotImplementedError("VertexAIFilesConfig does not support file listing")
 
     def transform_file_content_request(
         self,
-        file_content_request,
-        optional_params: dict,
+        file_content_request: FileContentRequest,
+        optional_params: Mapping[str, object],
         litellm_params: Mapping[str, object],
-    ) -> tuple[str, dict]:
+    ) -> tuple[str, dict[str, object]]:
         file_id: Final = file_content_request.get("file_id", "")
         bucket, encoded_object = self._parse_gcs_uri(file_id, litellm_params)
         url: Final = f"https://storage.googleapis.com/storage/v1/b/{bucket}/o/{encoded_object}?alt=media"
@@ -1732,7 +1754,7 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
         self,
         raw_response: Response,
         logging_obj: LiteLLMLoggingObj,
-        litellm_params: dict,
+        litellm_params: Mapping[str, object],
     ) -> HttpxBinaryResponseContent:
         """
         Transform file content response, converting Vertex AI batch output to OpenAI format if applicable.
@@ -1785,7 +1807,7 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
         headers: Mapping[str, str],
         request_url: str,
         logging_obj: LiteLLMLoggingObj,
-        litellm_params: dict,
+        litellm_params: Mapping[str, object],
     ) -> FileContentStreamingResult:
         """
         Streams file content, converting a Vertex AI batch output to OpenAI format row by

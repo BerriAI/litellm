@@ -2,7 +2,7 @@ import json
 import time
 import types
 from collections.abc import Callable, Mapping, Sized
-from typing import Final
+from typing import TYPE_CHECKING, Final
 
 import httpx
 from pydantic import TypeAdapter
@@ -10,6 +10,9 @@ from pydantic import TypeAdapter
 import litellm
 from litellm.litellm_core_utils.core_helpers import iter_items, json_contains, subscript
 from litellm.utils import Choices, Message, ModelResponse, Usage
+
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
 _DECODED_JSON: Final = TypeAdapter(object)
 _STR: Final = TypeAdapter(str)
@@ -27,7 +30,7 @@ def _completion_message(item: object) -> Message:
 
 
 class AlephAlphaError(Exception):
-    def __init__(self, status_code, message):
+    def __init__(self, status_code: int, message: object):
         self.status_code = status_code
         self.message = message
         self.request = httpx.Request(method="POST", url="https://api.aleph-alpha.com/complete")
@@ -181,7 +184,7 @@ class AlephAlphaConfig:
         }
 
 
-def validate_environment(api_key):
+def validate_environment(api_key: object):
     headers: Final = {
         "accept": "application/json",
         "content-type": "application/json",
@@ -196,14 +199,14 @@ def completion(
     messages: list,
     api_base: str,
     model_response: ModelResponse,
-    print_verbose: Callable,
+    print_verbose: Callable[[str], object],
     encoding,
-    api_key,
-    logging_obj,
+    api_key: object,
+    logging_obj: "LiteLLMLoggingObj",
     optional_params: dict,
-    litellm_params=None,
-    logger_fn=None,
-    default_max_tokens_to_sample=None,
+    litellm_params: object = None,
+    logger_fn: object = None,
+    default_max_tokens_to_sample: object = None,
 ):
     headers: Final = validate_environment(api_key)
 
