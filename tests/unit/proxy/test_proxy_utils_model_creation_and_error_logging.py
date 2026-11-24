@@ -288,6 +288,29 @@ async def test_proxy_only_error_log_builds_payload_when_logging_object_has_malfo
         ("/v1/completions", {"prompt": [15339, 1917]}, [{"role": "user", "content": "default-message-value"}]),
         ("/v1/embeddings", {"input": [[15339, 1917], [1]]}, [{"role": "user", "content": "default-message-value"}]),
         ("/v1/responses", {"input": ["PROMPT-CANARY", 7]}, [{"role": "user", "content": "default-message-value"}]),
+        (
+            "/v1/responses",
+            {"input": "PROMPT-CANARY", "turn_off_message_logging": True},
+            [{"role": "user", "content": "default-message-value"}],
+        ),
+        (
+            "/v1/completions",
+            {"prompt": "PROMPT-CANARY", "metadata": {"headers": {"x-litellm-enable-message-redaction": "true"}}},
+            [{"role": "user", "content": "default-message-value"}],
+        ),
+        (
+            "/v1/embeddings",
+            {
+                "input": "PROMPT-CANARY",
+                "proxy_server_request": {"headers": {"litellm-enable-message-redaction": "true"}},
+            },
+            [{"role": "user", "content": "default-message-value"}],
+        ),
+        (
+            "/v1/responses",
+            {"input": "PROMPT-CANARY", "turn_off_message_logging": False},
+            [{"role": "user", "content": "PROMPT-CANARY"}],
+        ),
     ],
     ids=[
         "responses_text",
@@ -305,6 +328,10 @@ async def test_proxy_only_error_log_builds_payload_when_logging_object_has_malfo
         "completions_with_token_ids",
         "embeddings_with_token_id_batches",
         "responses_with_mixed_list",
+        "responses_with_redaction_flag",
+        "completions_with_redaction_header_in_metadata",
+        "embeddings_with_redaction_header_on_the_request",
+        "responses_with_redaction_flag_off",
     ],
 )
 async def test_proxy_only_error_log_keeps_the_prompt_as_the_logged_messages(
