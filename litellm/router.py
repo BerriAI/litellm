@@ -8313,6 +8313,10 @@ class Router:
                 fallback_failure_exception_str,
                 cooldown_info,
             )
+            if isinstance(new_exception, IMAGE_ANSWER_ERRORS) and not isinstance(
+                original_exception, IMAGE_ANSWER_ERRORS
+            ):
+                raise
 
         attempted_fallback_group: Final = input_kwargs.get("fallback_model_group")
         if (
