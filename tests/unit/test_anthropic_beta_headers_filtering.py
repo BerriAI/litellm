@@ -126,7 +126,7 @@ class TestAnthropicBetaHeadersFiltering:
         """user-profiles-billing-2026-10-01 gates the `billing_policy` request field. Anthropic documents it for the
         Claude API (https://platform.claude.com/docs/en/release-notes/overview, 2026-11-17 entry, fetched
         2026-11-22)."""
-        filtered = filter_and_transform_beta_headers(
+        filtered: Final = filter_and_transform_beta_headers(
             beta_headers=["user-profiles-billing-2026-10-01"],
             provider=provider,
         )

@@ -6,6 +6,8 @@ Regression tests for the /v1/messages request-parse fast paths:
   while resolving the (static) type hints only once per process.
 """
 
+from typing import Final
+
 import pytest
 
 import litellm
@@ -170,6 +172,6 @@ def test_param_missing_from_the_drop_list_still_raises_the_unsupported_param_400
 
 
 def test_billing_policy_reaches_the_provider_request():
-    params = {"billing_policy": {"type": "billing_policy"}}
-    result = AnthropicMessagesRequestUtils.get_requested_anthropic_messages_optional_param(params)
+    params: Final = {"billing_policy": {"type": "billing_policy"}}
+    result: Final = AnthropicMessagesRequestUtils.get_requested_anthropic_messages_optional_param(params)
     assert result == params
