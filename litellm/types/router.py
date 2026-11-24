@@ -626,6 +626,7 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
     configurable_clientside_auth_params: CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS = None
     litellm_credential_name: str | None = None
     provider_affinity_header: str | None = None
+    check_provider_endpoint: bool | None = None
 
     ## LOGGING PARAMS ##
     litellm_trace_id: str | None = None
@@ -857,6 +858,7 @@ class LiteLLMParamsTypedDict(TypedDict, total=False):
     ## PASS-THROUGH ENDPOINTS ##
     use_in_pass_through: bool | None
     kubernetes_pod_discovery: ReadOnly[bool | None]
+    check_provider_endpoint: ReadOnly[bool | None]
     litellm_credential_name: str | None
     ## UNIFIED PROJECT/REGION ##
     region_name: str | None
