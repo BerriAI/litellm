@@ -66,6 +66,7 @@ else:
 
 _NON_DEFAULT_PARAMS: Final = TypeAdapter(Mapping[str, object])
 _LITELLM_PARAMS: Final = TypeAdapter(Mapping[str, object])
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 def _anthropic_config_max_tokens() -> int | None:
@@ -548,7 +549,7 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
             api_key=api_key,
             json_mode=json_mode,
         )
-        body: Final = object_mapping(raw_response.json()) or {}
+        body: Final = object_mapping(_DECODED_JSON.validate_python(raw_response.json())) or {}
         trace: Final = object_mapping(body.get(BEDROCK_INVOKE_TRACE_FIELD))
         if trace is not None:
             setattr(response, BEDROCK_INVOKE_TRACE_FIELD, trace)

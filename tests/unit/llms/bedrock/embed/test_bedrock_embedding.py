@@ -1,6 +1,10 @@
+import base64
+import io
 import json
 import asyncio
 import os
+import struct
+import wave
 from datetime import datetime, timezone
 from typing import Final
 from unittest.mock import Mock, patch
@@ -2248,6 +2252,186 @@ def test_bedrock_nova_embedding_estimates_audio_and_meters_the_text_beside_it(
     assert response._hidden_params["response_cost"] == pytest.approx(
         771 * litellm.model_cost[_NOVA_MODEL_ID]["input_cost_per_token"]
     )
+
+
+@pytest.mark.parametrize(
+    ("metered_per_input", "expected_text_tokens"),
+    [(("403", "0"), 403), (("403", None), 403), ((None, "0"), 768)],
+    ids=["metered", "image-header-missing", "text-header-missing"],
+)
+@pytest.mark.parametrize("image_first", [False, True], ids=["text-first", "image-first"])
+def test_bedrock_nova_embedding_bills_the_text_sent_beside_an_image(
+    respx_mock: respx.MockRouter,
+    metered_per_input: tuple[str | None, str | None],
+    expected_text_tokens: int,
+    image_first: bool,
+) -> None:
+    inputs: Final = tuple(
+        zip(("long text", "data:image/png;base64,AAAA"), ("TEXT", "IMAGE"), metered_per_input, strict=True)
+    )
+    ordered: Final = inputs[::-1] if image_first else inputs
+    respx_mock.post(f"https://bedrock-runtime.us-east-1.amazonaws.com/model/{_NOVA_MODEL_ID}/invoke").mock(
+        side_effect=[
+            httpx.Response(
+                200,
+                headers={} if metered is None else {"x-amzn-bedrock-input-token-count": metered},
+                json={"embeddings": [{"embeddingType": embedding_type, "embedding": [0.1] * 3072}]},
+            )
+            for _, embedding_type, metered in ordered
+        ]
+    )
+
+    response: Final = litellm.embedding(
+        model=f"bedrock/{_NOVA_MODEL_ID}",
+        input=[value for value, _, _ in ordered],
+        api_key="test-bearer-token",
+        aws_region_name="us-east-1",
+    )
+
+    token_cost: Final[float] = litellm.model_cost[_NOVA_MODEL_ID]["input_cost_per_token"]
+    image_cost: Final[float] = litellm.model_cost[_NOVA_MODEL_ID]["input_cost_per_image"]
+    assert response._hidden_params["response_cost"] == pytest.approx(expected_text_tokens * token_cost + image_cost)
+
+
+def _wav_base64(seconds: float) -> str:
+    buffer: Final = io.BytesIO()
+    with wave.open(buffer, "wb") as clip:
+        clip.setnchannels(1)
+        clip.setsampwidth(2)
+        clip.setframerate(8000)
+        clip.writeframes(b"\x00\x00" * int(8000 * seconds))
+    return base64.b64encode(buffer.getvalue()).decode()
+
+
+def _mp4_box(box_type: bytes, payload: bytes, wide: bool = False) -> bytes:
+    if wide:
+        return struct.pack(">I4sQ", 1, box_type, 16 + len(payload)) + payload
+    return struct.pack(">I4s", 8 + len(payload), box_type) + payload
+
+
+def _mp4_base64(timescale: int, duration: int, version: int = 0, wide: bool = False) -> str:
+    times: Final = struct.pack(">IQQIQ" if version == 1 else ">IIIII", version << 24, 0, 0, timescale, duration)
+    movie: Final = _mp4_box(b"moov", _mp4_box(b"trak", b"\x00" * 12) + _mp4_box(b"mvhd", times + b"\x00" * 80), wide)
+    return base64.b64encode(
+        _mp4_box(b"ftyp", b"isom\x00\x00\x02\x00") + _mp4_box(b"mdat", b"\x00" * 32) + movie
+    ).decode()
+
+
+def _nova_usage_and_cost(
+    respx_mock: respx.MockRouter, embedding_types: tuple[str, ...], **params: object
+) -> tuple[litellm.Usage, float]:
+    respx_mock.post(f"https://bedrock-runtime.us-east-1.amazonaws.com/model/{_NOVA_MODEL_ID}/invoke").mock(
+        side_effect=[
+            httpx.Response(
+                200,
+                headers={"x-amzn-bedrock-input-token-count": "0"},
+                json={"embeddings": [{"embeddingType": embedding_type, "embedding": [0.1] * 3072}]},
+            )
+            for embedding_type in embedding_types
+        ]
+    )
+    response: Final = litellm.embedding(
+        model=f"bedrock/{_NOVA_MODEL_ID}", api_key="test-bearer-token", aws_region_name="us-east-1", **params
+    )
+    return response.usage, response._hidden_params["response_cost"]
+
+
+def test_bedrock_nova_embedding_bills_inline_audio_by_its_length(respx_mock: respx.MockRouter) -> None:
+    usage, cost = _nova_usage_and_cost(
+        respx_mock,
+        ("AUDIO", "IMAGE", "AUDIO"),
+        input=[
+            f"data:audio/wav;base64,{_wav_base64(2.5)}",
+            "data:image/png;base64,AAAA",
+            f"data:audio/wav;base64,{_wav_base64(4)}",
+        ],
+    )
+
+    prices: Final = litellm.model_cost[_NOVA_MODEL_ID]
+    assert (usage.prompt_tokens, usage.prompt_tokens_details.audio_length_seconds) == (0, 6.5)
+    assert cost == pytest.approx(6.5 * prices["input_cost_per_audio_per_second"] + prices["input_cost_per_image"])
+
+
+@pytest.mark.parametrize(
+    ("video", "expected_seconds"),
+    [
+        (_mp4_base64(timescale=1000, duration=6500), 6.5),
+        (_mp4_base64(timescale=600, duration=3600, version=1), 6.0),
+        (_mp4_base64(timescale=1000, duration=6500, wide=True), 6.5),
+    ],
+    ids=["32-bit-times", "64-bit-times", "64-bit-box-size"],
+)
+def test_bedrock_nova_embedding_bills_inline_video_by_its_length(
+    respx_mock: respx.MockRouter, video: str, expected_seconds: float
+) -> None:
+    usage, cost = _nova_usage_and_cost(
+        respx_mock,
+        ("VIDEO",),
+        input=["clip"],
+        video={"format": "mp4", "embeddingMode": "AUDIO_VIDEO_COMBINED", "source": {"bytes": video}},
+    )
+
+    assert (usage.prompt_tokens, usage.prompt_tokens_details.video_length_seconds) == (0, expected_seconds)
+    assert cost == pytest.approx(
+        expected_seconds * litellm.model_cost[_NOVA_MODEL_ID]["input_cost_per_video_per_second"]
+    )
+
+
+@pytest.mark.parametrize(
+    "media",
+    [
+        {"audio": {"format": "mp3", "source": {"bytes": "AAAA"}}},
+        {"audio": {"format": "wav", "source": {"s3Location": {"uri": "s3://bucket/clip.wav"}}}},
+        {"video": {"format": "webm", "source": {"bytes": base64.b64encode(b"\x1a\x45\xdf\xa3" * 8).decode()}}},
+        {"video": {"format": "mp4", "source": {"bytes": _mp4_base64(timescale=0, duration=6000)}}},
+        {"video": {"format": "mp4", "source": {"bytes": _mp4_base64(timescale=1000, duration=0)}}},
+        {"video": {"format": "mp4", "source": {"bytes": _mp4_base64(timescale=1000, duration=0xFFFFFFFF)}}},
+        {
+            "video": {
+                "format": "mp4",
+                "source": {"bytes": _mp4_base64(timescale=1000, duration=0xFFFFFFFFFFFFFFFF, version=1)},
+            }
+        },
+        {"video": {"format": "mp4", "source": {"bytes": _mp4_base64(timescale=1000, duration=6000)[:40]}}},
+        {"video": {"format": "mp4", "source": {"bytes": "not base64"}}},
+        {"video": {"format": "mp4", "source": {"s3Location": {"uri": "s3://bucket/clip.mp4"}}}},
+        {"video": {"format": "mp4", "source": {"bytes": _mp4_base64(timescale=0xFFFFFFFF, duration=1)}}},
+        {"audio": {"format": "wav", "source": {"bytes": _wav_base64(0.5)}}},
+    ],
+    ids=[
+        "unreadable-audio",
+        "s3-audio",
+        "webm",
+        "mp4-zero-timescale",
+        "mp4-zero-duration",
+        "mp4-unknown-duration",
+        "mp4-unknown-64-bit-duration",
+        "mp4-truncated",
+        "mp4-invalid-base64",
+        "s3-video",
+        "video-shorter-than-the-estimate-is-worth",
+        "audio-shorter-than-the-estimate-is-worth",
+    ],
+)
+def test_bedrock_nova_embedding_estimates_a_clip_it_cannot_measure(
+    respx_mock: respx.MockRouter, media: dict[str, object]
+) -> None:
+    usage, cost = _nova_usage_and_cost(respx_mock, ("AUDIO",), input=["clip"], **media)
+
+    assert (usage.prompt_tokens, usage.prompt_tokens_details) == (768, None)
+    assert cost == pytest.approx(768 * litellm.model_cost[_NOVA_MODEL_ID]["input_cost_per_token"])
+
+
+def test_bedrock_nova_embedding_estimates_an_unmeasured_clip_sent_beside_an_image(
+    respx_mock: respx.MockRouter,
+) -> None:
+    usage, cost = _nova_usage_and_cost(
+        respx_mock, ("IMAGE", "AUDIO"), input=["data:image/png;base64,AAAA", "data:audio/mp3;base64,AAAA"]
+    )
+
+    prices: Final = litellm.model_cost[_NOVA_MODEL_ID]
+    assert usage.prompt_tokens == 768
+    assert cost == pytest.approx(768 * prices["input_cost_per_token"] + prices["input_cost_per_image"])
 
 
 @pytest.mark.parametrize("sync_mode", [True, False], ids=["sync", "async"])

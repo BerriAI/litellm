@@ -871,6 +871,32 @@ mod tests {
     }
 
     #[rstest]
+    #[case::cached_key("cached_key")]
+    #[case::cached_team("cached_team")]
+    #[case::key_owner("key_owner")]
+    #[tokio::test]
+    async fn a_read_the_host_declines_is_not_absent(
+        settings: KeySettings,
+        #[case] declining: &'static str,
+    ) {
+        let host = ScriptedHost {
+            cached: Some(KeyRecord {
+                user_id: Some("u".to_owned()),
+                team_id: Some("t".to_owned()),
+                last_refreshed_at: Some(at(1)),
+                ..virtual_key()
+            }),
+            team_refreshed_at: Some(at(2)),
+            failing: HashMap::from([(declining, Error::HostDeclined)]),
+            ..ScriptedHost::default()
+        };
+        assert_eq!(
+            run(&host, "sk-1", "/chat/completions", &settings).await,
+            Err(Error::HostDeclined)
+        );
+    }
+
+    #[rstest]
     #[case::prefetch_identity("prefetch_identity")]
     #[case::end_user("end_user")]
     #[case::db_key("db_key")]

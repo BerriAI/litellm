@@ -53,6 +53,20 @@ def test_blocked_response_usage_reads_a_message_delta_whose_json_holds_unicode_l
     assert blocked_response_usage([stream]) == {"input_tokens": 11, "output_tokens": 7}
 
 
+@pytest.mark.parametrize(
+    "undecodable_payload",
+    [b"9" * 5000, b"[" * 100_000 + b"]" * 100_000],
+    ids=["huge-number", "deep-nesting"],
+)
+def test_blocked_response_usage_reads_usage_past_a_data_line_it_cannot_decode(undecodable_payload: bytes) -> None:
+    message_start: Final = b'event: message_start\ndata: {"type": "message_start", "message": {"usage": {"input_tokens": 11, "output_tokens": 1}}}\n\n'
+    message_delta: Final = b'event: message_delta\ndata: {"type": "message_delta", "usage": {"output_tokens": 7}}\n\n'
+
+    stream: Final = message_start + b"event: ping\ndata: " + undecodable_payload + b"\n\n" + message_delta
+
+    assert blocked_response_usage([stream]) == {"input_tokens": 11, "output_tokens": 7}
+
+
 @pytest.mark.parametrize("terminal_event_type", ["response.completed", "response.incomplete"])
 def test_blocked_responses_stream_usage_reads_the_terminal_event_of_a_blocked_stream(terminal_event_type: str) -> None:
     upstream_usage: Final = ResponseAPIUsage(input_tokens=14, output_tokens=20, total_tokens=34)

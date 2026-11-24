@@ -111,6 +111,8 @@ describe("ProjectsPage", () => {
 
       renderWithProviders(<ProjectsPage />, { searchParams });
 
+      expect(screen.getByRole("heading", { level: 1, name: "Projects" })).toBeVisible();
+      expect(screen.getByText("Manage projects within your teams")).toBeVisible();
       expect(screen.getByText(/This is a LiteLLM Enterprise feature/)).toBeInTheDocument();
       expect(screen.getByRole("link", { name: "here" })).toHaveAttribute("href", "https://www.litellm.ai/#pricing");
       expect(screen.queryByRole("button", { name: /create project/i })).not.toBeInTheDocument();

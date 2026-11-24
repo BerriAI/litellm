@@ -30,7 +30,7 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.constants import LITELLM_PROXY_ADMIN_NAME, TEAM_DELETE_TRANSACTION_TIMEOUT_SECONDS
-from litellm.litellm_core_utils.core_helpers import as_object_list, decoded_json_object
+from litellm.litellm_core_utils.core_helpers import as_object_list, decoded_json_object, require_attributes
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.litellm_core_utils.ptu_pricing import (
@@ -395,6 +395,16 @@ class _TeamTable(_TeamLookupTable, Protocol):
     ) -> Awaitable[LiteLLM_TeamTable]: ...
 
 
+class _TeamTableDatabase(Protocol):
+    @property
+    def litellm_teamtable(self) -> _TeamTable: ...
+
+
+class _TeamTableClient(Protocol):
+    @property
+    def db(self) -> _TeamTableDatabase: ...
+
+
 def _proxy_model_table(prisma_client: PrismaClient) -> _ProxyModelTable:
     return ModelRepository(prisma_client).table
 
@@ -404,11 +414,22 @@ def _repo_team_table(prisma_client: PrismaClient) -> _TeamLookupTable:
 
 
 def _db_team_table(prisma_client: PrismaClient) -> _TeamTable:
-    return prisma_client.db.litellm_teamtable
+    return require_attributes(prisma_client, _TeamTableClient, "db").db.litellm_teamtable
 
 
 def _model_alias_table(prisma_client: PrismaClient) -> "TableActions[prisma_models.LiteLLM_ModelTable]":
     return ModelTableRepository(prisma_client).table
+
+
+@dataclass(frozen=True, slots=True)
+class _DumpedModelRow:
+    fields: Mapping[str, object]
+    deployment: Deployment
+
+
+def _dump_model_row(row: BaseModel, *, exclude_none: bool = False) -> _DumpedModelRow:
+    fields: Final = row.model_dump(exclude_none=True) if exclude_none else row.model_dump()
+    return _DumpedModelRow(fields=fields, deployment=Deployment(**fields))
 
 
 async def get_db_model(model_id: str, prisma_client: PrismaClient) -> Deployment | None:
@@ -417,7 +438,7 @@ async def get_db_model(model_id: str, prisma_client: PrismaClient) -> Deployment
     if not db_model:
         return None
 
-    deployment_pydantic_obj: Final = Deployment(**db_model.model_dump(exclude_none=True))
+    deployment_pydantic_obj: Final = _dump_model_row(db_model, exclude_none=True).deployment
     return deployment_pydantic_obj
 
 
@@ -1532,13 +1553,13 @@ async def _locked_legacy_update_model_info_json(
     row: Final = await table.find_unique(where={"model_id": model_id})
     if row is None:
         return None
-    payload: Final = row.model_dump()
+    dumped: Final = _dump_model_row(row)
     writes: Final = _legacy_update_model_info_writes(
-        Deployment(**payload), incoming_model_info, discovered_model_info, member_marker, listed_row
+        dumped.deployment, incoming_model_info, discovered_model_info, member_marker, listed_row
     )
     if not writes:
         return None
-    stored_model_info: Final[object] = payload.get("model_info")
+    stored_model_info: Final[object] = dumped.fields.get("model_info")
     stored: Final = (
         _STR_OBJECT_DICT.validate_json(stored_model_info)
         if isinstance(stored_model_info, str)
@@ -3076,7 +3097,7 @@ async def delete_model(
                 detail={"error": f"Model with id={model_info.id} not found in db"},
             )
 
-        model_params: Final = Deployment(**model_in_db.model_dump())
+        model_params: Final = _dump_model_row(model_in_db).deployment
         await ModelManagementAuthChecks.can_user_make_model_call(
             model_params=model_params,
             user_api_key_dict=user_api_key_dict,
@@ -3491,7 +3512,7 @@ async def update_model(
                 )
             else:
                 raise Exception("model not found")
-        deployment: Final = Deployment(**_existing_litellm_params.model_dump())
+        deployment: Final = _dump_model_row(_existing_litellm_params).deployment
 
         write_authorization: Final = await ModelManagementAuthChecks.can_user_make_model_call(
             model_params=deployment,

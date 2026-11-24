@@ -44,6 +44,14 @@ where
         .map_err(|error| PyValueError::new_err(litellm_error::Report::new(&error).to_string()))
 }
 
+pub fn json_parse<T>(what: &str, text: &str) -> PyResult<T>
+where
+    T: DeserializeOwned,
+{
+    serde_json::from_str(text)
+        .map_err(|error| PyValueError::new_err(format!("{what} is not JSON: {error}")))
+}
+
 pub fn json_object_field(py: Python<'_>, document: &str, name: &str) -> PyResult<Py<PyAny>> {
     py.import("json")?
         .call_method1("loads", (document,))?

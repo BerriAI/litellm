@@ -15,7 +15,7 @@ class AuthressAccessKeyDetector(RegexBasedDetector):
         return "Authress Service Client Access Key"
 
     @property
-    def denylist(self) -> list[re.Pattern]:
+    def denylist(self) -> list[re.Pattern[str]]:
         return [
             # For Authress Service Client Access Key
             re.compile(

@@ -144,7 +144,7 @@ def _record_usage(ctx: SessionContext, response: ModelResponse) -> None:
         ctx.calls += 1  # rebind-ok: SessionContext is the runtime's per-session usage sink
         ctx.input_tokens += input_tokens  # rebind-ok: SessionContext is the runtime's per-session usage sink
         ctx.output_tokens += output_tokens  # rebind-ok: SessionContext is the runtime's per-session usage sink
-        ctx.cost += response_cost(response) or 0.0  # rebind-ok: SessionContext is the runtime's per-session usage sink
+        ctx.costs.add(response_cost(response))
     except Exception:
         return
 
