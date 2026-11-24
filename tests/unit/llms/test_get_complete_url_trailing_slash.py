@@ -13,6 +13,7 @@ import pytest
 from _pytest.mark.structures import ParameterSet
 
 import litellm
+from litellm.llms.elevenlabs.common_utils import SCRIBE_REALTIME_MODEL
 from litellm.llms.elevenlabs.text_to_speech.transformation import ElevenLabsTextToSpeechConfig
 from litellm.llms.meta.realtime.transformation import MUSE_MODEL
 from litellm.llms.openai_like.dynamic_config import create_config_class, create_responses_config_class
@@ -77,6 +78,9 @@ INPUTS_BY_BUILDER: Final[Mapping[str, BuilderInputs]] = MappingProxyType(
         ),
         "black_forest_labs.image_generation.transformation.BlackForestLabsImageGenerationConfig": BuilderInputs(
             call={"model": "flux-pro-1.1"}
+        ),
+        "elevenlabs.realtime.transformation.ElevenLabsRealtimeConfig": BuilderInputs(
+            call={"model": SCRIBE_REALTIME_MODEL}
         ),
         "elevenlabs.text_to_speech.transformation.ElevenLabsTextToSpeechConfig": BuilderInputs(
             call={"litellm_params": {ElevenLabsTextToSpeechConfig.ELEVENLABS_VOICE_ID_KEY: "voice-id"}}
