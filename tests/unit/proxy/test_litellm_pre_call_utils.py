@@ -8370,6 +8370,39 @@ async def test_a_callers_provider_specific_header_cannot_gate_itself_on_configur
     assert sent.get("Authorization") == "Bearer caller-token"
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "malformed",
+    [
+        {"custom_llm_provider": "anthropic", "extra_headers": {USER_PROFILE_ID_HEADER: 5}},
+        {"custom_llm_provider": "anthropic"},
+        {"custom_llm_provider": ["anthropic"], "extra_headers": {USER_PROFILE_ID_HEADER: "uprof_client"}},
+        "anthropic",
+    ],
+    ids=["non-string-header-value", "no-extra-headers", "non-string-provider", "not-an-object"],
+)
+async def test_a_malformed_caller_provider_specific_header_is_dropped_and_the_rest_still_reach_the_provider(
+    malformed: object,
+) -> None:
+    updated: Final = await _request_data_added_by_the_proxy(
+        {
+            "provider_specific_header": [
+                malformed,
+                {"custom_llm_provider": "anthropic", "extra_headers": {"x-trace": "t1"}},
+            ]
+        },
+        {"anthropic-beta": "beta-1"},
+        {},
+        _PINNED_KEY,
+    )
+    forwarded: Final = ProviderSpecificHeaderUtils.get_provider_specific_headers(
+        model="claude-sonnet-5-5",
+        provider_specific_header=_FORWARDED_ENTRIES.validate_python(updated.get("provider_specific_header")),
+        custom_llm_provider="anthropic",
+    )
+    assert forwarded == {"x-trace": "t1", "anthropic-beta": "beta-1", USER_PROFILE_ID_HEADER: "uprof_key"}
+
+
 @pytest.mark.parametrize("custom_llm_provider", ["anthropic", "azure_ai", "bedrock", "bedrock_mantle", "vertex_ai"])
 def test_anthropic_user_profile_id_reaches_every_claude_provider(custom_llm_provider: str) -> None:
     data: Final[dict[str, object]] = {}  # mutable-ok: the function under test writes into it
