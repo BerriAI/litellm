@@ -118,6 +118,10 @@ impl IntoResponse for Error {
 pub struct Ended {
     pub error: Box<Error>,
     pub routing: Option<Routing>,
+    /// The deployment whose attempt raised `error`, which names its timeout as Python's
+    /// `failure.timeout` does. It differs from `routing` when a retry that took over a failed
+    /// stream raised the error, since the call keeps the routing of the stream that failed.
+    pub raised_on: Option<String>,
 }
 
 impl<E: Into<Error>> From<E> for Ended {
@@ -125,6 +129,7 @@ impl<E: Into<Error>> From<E> for Ended {
         Self {
             error: Box::new(error.into()),
             routing: None,
+            raised_on: None,
         }
     }
 }
@@ -180,6 +185,36 @@ impl Error {
             Self::Route(error) => route_status(error),
             Self::Routing(error) => routing_status(error),
             Self::Refused(refusal) => refusal.status,
+        }
+    }
+
+    /// Whether the proxy raises this error inside the route's handler, where its response carries
+    /// the proxy's error headers. A model the caller may not reach and a body that cannot be read
+    /// are refused before the handler runs.
+    pub(crate) fn in_handler(&self) -> bool {
+        !matches!(
+            self,
+            Self::ModelAccess(_) | Self::InvalidBody(_) | Self::BodyTooLarge
+        )
+    }
+
+    pub(crate) fn raised_by_provider(&self) -> bool {
+        matches!(self, Self::Route(_) | Self::Ocr(_))
+    }
+
+    /// The provider's response headers on the error, empty for an error no provider responded.
+    pub(crate) fn provider_headers(&self) -> Vec<(String, String)> {
+        match self {
+            Self::Route(error) => error.upstream_headers().to_vec(),
+            Self::Ocr(error) => error
+                .upstream_response()
+                .into_iter()
+                .flat_map(|(_, _, headers)| headers.iter())
+                .filter_map(|(name, value)| {
+                    Some((name.as_str().to_owned(), value.to_str().ok()?.to_owned()))
+                })
+                .collect(),
+            _ => Vec::new(),
         }
     }
 

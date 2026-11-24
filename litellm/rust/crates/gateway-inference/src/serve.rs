@@ -21,7 +21,8 @@ use crate::{
     headers::Routing,
     hooks::{self, CallType, ServedBy},
     model_restamp::ReportedModel,
-    record, request,
+    record::{self, ErrorResponse},
+    request,
     routing::{self, Host, RouteAttempt},
     stream_event::Counts,
 };
@@ -110,6 +111,7 @@ where
     let serve = |hooks: Arc<H::Hooks>, body: Map<String, Value>| async move {
         let model = request::model(&body)?.to_owned();
         let streamed = E::streamed(&body);
+        record::write(|entries| entries.stream_timeout = streamed);
         let endpoint = build(body)?;
         let routed = routing::call(gateway, identity, E::OP, E::PATH, &model, &endpoint).await?;
         let routing = Routing::served(&routed);
@@ -125,14 +127,20 @@ where
             model_group: routed.model_group,
         };
         let (mut output, recorded) = routed.output.response;
-        record::write(|entries| entries.routed(routing, deployment, recorded));
+        let stream = E::held(&mut output).is_some();
+        record::write(|entries| {
+            entries.routed(routing, deployment, recorded);
+            if stream {
+                entries.stream_response = true;
+            }
+        });
         let post_call = hooks::post_call::<E, _>(&hooks, &mut output, served).await?;
         Ok(post_call.answer(E::render(output, reported)?))
     };
     record::write(|entries| {
-        entries.serve_as(E::CALL_TYPE);
+        entries.call_type = Some(E::CALL_TYPE);
         if let Some(call_id) = &call.call_id {
-            entries.name_call(call_id.clone());
+            entries.call_id = Some(call_id.clone());
         }
     });
     let served = match body {
@@ -141,7 +149,34 @@ where
     };
     served.unwrap_or_else(|mut ended| {
         let routing = ended.routing.take();
-        record::write(|entries| entries.respond_with_error(routing));
+        let error = error_response::<H, E>(gateway, ended.raised_on.as_deref(), &ended.error);
+        record::write(|entries| entries.respond_with_error(routing, error));
         ended.response(E::ERRORS, call.request_id.as_deref())
     })
+}
+
+/// How a call of the route `E` that ended on `error` is responded to, `raised_on` naming the
+/// deployment whose attempt raised it.
+fn error_response<H: Host, E: Endpoint>(
+    gateway: &Gateway<H>,
+    raised_on: Option<&str>,
+    error: &Error,
+) -> ErrorResponse {
+    let streamed = record::read(|entries| entries.stream_timeout).unwrap_or(false);
+    let timeout = raised_on
+        .filter(|_| error.raised_by_provider())
+        .and_then(|deployment_id| {
+            routing::served_deployment(
+                gateway,
+                deployment_id,
+                streamed,
+                E::configured_timeout(gateway, deployment_id),
+            )
+        })
+        .and_then(|deployment| deployment.timeout);
+    ErrorResponse {
+        in_handler: error.in_handler(),
+        timeout,
+        provider_headers: error.provider_headers(),
+    }
 }

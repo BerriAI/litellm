@@ -151,13 +151,13 @@ fn key_identity(charged: &Charged) -> KeyIdentity {
 }
 
 fn logged_key_identity(entries: &CallState) -> LoggedKeyIdentity {
-    let charged = entries.charged();
+    let charged = &entries.charged;
     LoggedKeyIdentity {
         metadata_kind: Some(MetadataKind::Mapping),
         key_hash: charged.key_hash.as_deref().map(Scalar::from),
         key_alias: charged.key_alias.as_deref().map(Scalar::from),
         user_id: charged.user_id.as_deref().map(Scalar::from),
-        request_route: entries.call_type().map(route).map(Scalar::from),
+        request_route: entries.call_type.map(route).map(Scalar::from),
         ..LoggedKeyIdentity::default()
     }
 }
@@ -196,7 +196,7 @@ fn spend_log_id(entries: &CallState) -> SpendLogId {
     SpendLogId {
         id: answered
             .into_iter()
-            .chain(entries.call_id())
+            .chain(entries.call_id.as_deref())
             .find(|id| !id.is_empty())
             .map(str::to_owned),
         ..SpendLogId::default()
@@ -218,7 +218,7 @@ fn timing(entries: &CallState) -> AttemptTiming {
     AttemptTiming {
         start: moment(entries.start()),
         end: entries.end().and_then(moment),
-        api_call_start: entries.api_call_start().and_then(moment),
+        api_call_start: entries.api_call_start.and_then(moment),
         completion_start: completion_start.and_then(moment),
         completion_start_present: Some(completion_start.is_some()),
         logged_start: moment(entries.start()),
@@ -229,14 +229,14 @@ fn timing(entries: &CallState) -> AttemptTiming {
 
 /// The spend log callback's input for a served call. A failed call has none yet.
 fn spend_log_input(entries: &CallState) -> Option<Value> {
-    let call_type = entries.call_type()?;
+    let call_type = entries.call_type?;
     let provider = provider(entries);
     spend_log_input::success(&Served {
         call_type,
         route: route(call_type),
-        charged: entries.charged(),
-        call_id: entries.call_id(),
-        trace_id: entries.trace_id(),
+        charged: &entries.charged,
+        call_id: entries.call_id.as_deref(),
+        trace_id: &entries.trace_id,
         stream: entries.stream(),
         start: entries.start(),
         end: entries.end()?,
@@ -249,11 +249,11 @@ fn read(entries: &CallState, field: Field) -> Option<Value> {
     match field {
         Field::Model => entries.model().map(Value::from),
         Field::RequestBody => entries.body().cloned().map(Value::Object),
-        Field::RateLimitStatuses => entries.rate_limit_statuses().cloned(),
+        Field::RateLimitStatuses => entries.rate_limit_statuses.clone(),
         Field::ResponseHeaders => Some(Value::Object(entries.response_headers().clone())),
         Field::Outcome => record(outcome(entries.ended()?)),
         Field::Usage => record(usage(entries.served()?.usage.as_ref()?)),
-        Field::KeyIdentity => record(key_identity(entries.charged())),
+        Field::KeyIdentity => record(key_identity(&entries.charged)),
         Field::LoggedKeyIdentity => record(logged_key_identity(entries)),
         Field::Deployment => record(served_deployment(entries)?),
         Field::AttemptTiming => record(timing(entries)),
@@ -271,12 +271,12 @@ fn facts(entries: &CallState) -> CallFacts {
     let deployment = deployment(entries);
     CallFacts {
         ids: CallIds {
-            call_id: entries.call_id().unwrap_or_default().to_owned(),
+            call_id: entries.call_id.clone().unwrap_or_default(),
             ..CallIds::default()
         },
         kind: CallKind {
             call_type: entries
-                .call_type()
+                .call_type
                 .map(<&str>::from)
                 .unwrap_or_default()
                 .to_owned(),
@@ -293,7 +293,7 @@ fn facts(entries: &CallState) -> CallFacts {
         },
         timing: CallTiming {
             start: unix(entries.start()),
-            provider_start: entries.api_call_start().map(unix),
+            provider_start: entries.api_call_start.map(unix),
             first_token: completion_start(entries).map(unix),
             end: entries.end().map(unix),
         },
@@ -351,7 +351,7 @@ pub fn write(entries: &mut CallState, op: PatchOp) -> Result<(), Unwritable> {
         PatchOp::Set {
             field: Field::RateLimitStatuses,
             value,
-        } => entries.set_rate_limit_statuses(value),
+        } => entries.rate_limit_statuses = Some(value),
         PatchOp::Set {
             field: field @ (Field::OptionalParams | Field::ResponseHeaders),
             ..
@@ -382,7 +382,7 @@ mod tests {
     fn on_a_call<R>(look: impl FnOnce(&mut CallState) -> R) -> R {
         let scoped = || {
             record::write(|entries| {
-                entries.serve_as(CallType::AnthropicMessages);
+                entries.call_type = Some(CallType::AnthropicMessages);
                 entries.hold(Map::from_iter([("model".to_owned(), json!("claude"))]));
                 look(entries)
             })
@@ -493,7 +493,7 @@ mod tests {
         #[case] id: Option<&str>,
     ) {
         let logged = on_a_call(|entries| {
-            entries.name_call("call-1".to_owned());
+            entries.call_id = Some("call-1".to_owned());
             match served {
                 Some(served) => entries.serve(served),
                 None => entries.fail(),

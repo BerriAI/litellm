@@ -1,7 +1,7 @@
 //! What the gateway knows of one call so far, as typed entries. How a callback reads and writes
 //! them by contract field is the callbacks' own view (`gateway/src/callbacks/fields.rs`).
 
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde_json::{Map, Value};
 
@@ -59,6 +59,19 @@ struct ResponseHeaders {
     sent: bool,
 }
 
+/// What the response to a call that ended on an error tells of how it ended.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ErrorResponse {
+    /// The error was raised inside the route's handler, past the checks the proxy makes before
+    /// it, so its response carries the proxy's error headers.
+    pub in_handler: bool,
+    /// The timeout of the provider attempt the call ended on, `None` when no provider attempt
+    /// raised the error.
+    pub timeout: Option<Duration>,
+    /// The provider's response headers on the error the call ended on.
+    pub provider_headers: Vec<(String, String)>,
+}
+
 /// How a call ended.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Ended {
@@ -77,30 +90,45 @@ pub struct Charged {
 
 /// One call as it stands.
 pub struct CallState {
-    call_type: Option<CallType>,
-    call_id: Option<String>,
+    /// The route the call came in on, which the route names once it runs.
+    pub call_type: Option<CallType>,
+    /// The request's `x-litellm-call-id`, which the route names once it runs.
+    pub call_id: Option<String>,
     /// Python's `litellm_trace_id`, which groups the call's spend log row as its session.
-    trace_id: String,
-    charged: Charged,
+    pub trace_id: String,
+    /// Who the call is charged to, which the callbacks name once they begin.
+    pub charged: Charged,
     start: SystemTime,
     /// When the pre-call hook handed the body back for routing, Python's `api_call_start_time`.
-    api_call_start: Option<SystemTime>,
+    pub api_call_start: Option<SystemTime>,
     end: Option<SystemTime>,
-    /// When the served stream's first event arrived, as a stream held before it was answered
-    /// read it.
-    first_event: Option<SystemTime>,
+    /// When the served stream's first event arrived, when the stream was held before it was
+    /// responded to.
+    pub first_event: Option<SystemTime>,
+    started: Instant,
     request: Request,
-    rate_limit_statuses: Option<Value>,
+    pub rate_limit_statuses: Option<Value>,
     response_headers: ResponseHeaders,
     served: Option<ServedCall>,
     ended: Option<Ended>,
     routing: Option<Routing>,
-    served_deployment: Option<ServedDeployment>,
-    attempt: Option<AttemptRecord>,
-    failed_attempts: Vec<AttemptRecord>,
-    /// The call ended on an error, whose response names only what
+    /// The deployment that served the call, which `CallState::routed` writes.
+    pub served_deployment: Option<ServedDeployment>,
+    /// What the attempt that served the call recorded, which `CallState::routed` writes.
+    pub attempt: Option<AttemptRecord>,
+    /// What each attempt that failed recorded, in the order they failed. A call that ended on an
+    /// error has every attempt here.
+    pub failed_attempts: Vec<AttemptRecord>,
+    /// How the call ended, for a call that ended on an error, whose response names only what
     /// [`CallState::respond_with_error`] was told.
-    error_response: bool,
+    error_response: Option<ErrorResponse>,
+    /// Whether the call's attempts run under a deployment's stream timeout, by the route's own
+    /// rule.
+    pub stream_timeout: bool,
+    /// The served response is a stream, whose head goes out before its body.
+    pub stream_response: bool,
+    /// The time the callbacks spent on the call's hooks so far.
+    pub callback_time: Duration,
 }
 
 /// `at` in seconds since the Unix epoch.
@@ -120,6 +148,7 @@ impl CallState {
             api_call_start: None,
             end: None,
             first_event: None,
+            started: Instant::now(),
             request: Request::Named {
                 model: None,
                 stream: false,
@@ -132,7 +161,10 @@ impl CallState {
             served_deployment: None,
             attempt: None,
             failed_attempts: Vec::new(),
-            error_response: false,
+            error_response: None,
+            stream_timeout: false,
+            stream_response: false,
+            callback_time: Duration::ZERO,
         }
     }
 
@@ -152,78 +184,28 @@ impl CallState {
 
     /// The call ended on an error, whose response carries `routing`, what the router did for the
     /// attempt it ended on, in place of what it did for the call before.
-    pub(crate) fn respond_with_error(&mut self, routing: Option<Routing>) {
+    pub(crate) fn respond_with_error(&mut self, routing: Option<Routing>, error: ErrorResponse) {
         self.routing = routing;
-        self.error_response = true;
+        self.error_response = Some(error);
     }
 
-    pub fn is_error_response(&self) -> bool {
-        self.error_response
+    /// How the call ended, for a call whose response is an error.
+    pub fn error_response(&self) -> Option<&ErrorResponse> {
+        self.error_response.as_ref()
+    }
+
+    /// When the record was made, as the request came in on its route.
+    pub fn started(&self) -> Instant {
+        self.started
     }
 
     pub fn routing(&self) -> Option<&Routing> {
         self.routing.as_ref()
     }
 
-    pub fn served_deployment(&self) -> Option<&ServedDeployment> {
-        self.served_deployment.as_ref()
-    }
-
-    /// What the attempt that served the call recorded.
-    pub fn attempt(&self) -> Option<&AttemptRecord> {
-        self.attempt.as_ref()
-    }
-
-    /// What each attempt that failed recorded, in the order they failed. A call that ended on an
-    /// error has every attempt here.
-    pub fn failed_attempts(&self) -> &[AttemptRecord] {
-        &self.failed_attempts
-    }
-
-    /// Keeps the record of an attempt that failed.
-    pub(crate) fn failed(&mut self, attempt: AttemptRecord) {
-        self.failed_attempts.push(attempt);
-    }
-
-    /// The route the call came in on, which the route names once it runs.
-    pub fn serve_as(&mut self, call_type: CallType) {
-        self.call_type = Some(call_type);
-    }
-
-    pub fn call_type(&self) -> Option<CallType> {
-        self.call_type
-    }
-
-    /// The request's `x-litellm-call-id`, which the route names once it runs.
-    pub fn name_call(&mut self, call_id: String) {
-        self.call_id = Some(call_id);
-    }
-
-    pub fn call_id(&self) -> Option<&str> {
-        self.call_id.as_deref()
-    }
-
-    pub fn trace_id(&self) -> &str {
-        &self.trace_id
-    }
-
-    /// Who the call is charged to, which the callbacks name once they begin.
-    pub fn charge_to(&mut self, charged: Charged) {
-        self.charged = charged;
-    }
-
-    pub fn charged(&self) -> &Charged {
-        &self.charged
-    }
-
     /// When the call began.
     pub fn start(&self) -> SystemTime {
         self.start
-    }
-
-    /// When the route took the body back to call the provider with it.
-    pub fn api_call_start(&self) -> Option<SystemTime> {
-        self.api_call_start
     }
 
     /// When the call was served or failed.
@@ -244,22 +226,6 @@ impl CallState {
             Request::Held(body) => body,
             Request::Named { .. } => Map::new(),
         }
-    }
-
-    /// The pre-call hook let the call on to the provider.
-    pub fn call_provider(&mut self) {
-        self.api_call_start = Some(SystemTime::now());
-    }
-
-    /// A held stream's first event arrived `at`.
-    pub fn see_first_event(&mut self, at: SystemTime) {
-        self.first_event = Some(at);
-    }
-
-    /// When the served stream's first event arrived, when the stream was held before it was
-    /// answered.
-    pub fn first_event(&self) -> Option<SystemTime> {
-        self.first_event
     }
 
     /// The request body while it is held, `None` once the route has it back.
@@ -283,14 +249,6 @@ impl CallState {
 
     pub fn stream(&self) -> bool {
         self.request.stream()
-    }
-
-    pub fn rate_limit_statuses(&self) -> Option<&Value> {
-        self.rate_limit_statuses.as_ref()
-    }
-
-    pub fn set_rate_limit_statuses(&mut self, statuses: Value) {
-        self.rate_limit_statuses = Some(statuses);
     }
 
     pub fn response_headers(&self) -> &Map<String, Value> {

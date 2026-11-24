@@ -3697,7 +3697,10 @@ async fn a_take_over_that_serves_nothing_says_which_error_it_ends_on(
         .await;
 
     let raised = match taken {
-        Some(Err(Unanswered { raised })) => raised.map(|Raised(deployment)| deployment),
+        Some(Err(Unanswered { raised })) => raised.map(|raised| {
+            assert_eq!(raised.deployment_id.as_ref(), Some(&raised.failure.0));
+            raised.failure.0
+        }),
         other => panic!("the take-over did not serve nothing: {other:?}"),
     };
     assert_eq!(raised.as_deref(), raised_on);
@@ -3814,7 +3817,10 @@ async fn a_retry_the_host_refuses_ends_the_take_over_before_any_fallback() {
 
     let ended = taken.map(|taken| taken.map(|answer| answer.output.response));
     let refused = Unanswered {
-        raised: Some(Raised("p1".to_owned())),
+        raised: Some(litellm_router_core::Raised {
+            failure: Raised("p1".to_owned()),
+            deployment_id: Some("p1".to_owned()),
+        }),
     };
     assert_eq!(
         (ended, host.selected()),

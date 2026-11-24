@@ -260,7 +260,7 @@ pub(crate) async fn post_call<E: Endpoint, K: CallHooks>(
                             deployment,
                             response_id: seen.response_id.get().cloned(),
                             usage: usage(counts),
-                            first_event: record::read(record::CallState::first_event)
+                            first_event: record::read(|entries| entries.first_event)
                                 .flatten()
                                 .or_else(|| seen.first_event.get().copied()),
                         };

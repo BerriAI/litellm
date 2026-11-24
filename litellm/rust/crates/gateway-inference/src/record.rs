@@ -15,6 +15,7 @@ use std::{
     pin::Pin,
     sync::Arc,
     task::{Context, Poll},
+    time::Instant,
 };
 
 use axum::{
@@ -31,7 +32,7 @@ use tokio::task::futures::TaskLocalFuture;
 
 pub use self::{
     attempt::{AttemptRecord, Recorder, ServedDeployment},
-    entries::{CallState, Charged, Ended, HeadSent, unix},
+    entries::{CallState, Charged, Ended, ErrorResponse, HeadSent, unix},
 };
 
 tokio::task_local! {
@@ -93,12 +94,15 @@ pub async fn attempt<T, F>(future: F) -> (Result<T, crate::Error>, AttemptRecord
 where
     F: Future<Output = Result<T, crate::Error>>,
 {
-    let record = Arc::new(Mutex::new(AttemptRecord::default()));
+    let record = Arc::new(Mutex::new(AttemptRecord {
+        started: Some(Instant::now()),
+        ..AttemptRecord::default()
+    }));
     let output = ATTEMPT.scope(record.clone(), future).await;
     let mut record = std::mem::take(&mut *record.lock());
     if let Err(error) = &output {
         record.record_failure(error);
-        write(|state| state.failed(record.clone()));
+        write(|state| state.failed_attempts.push(record.clone()));
     }
     (output, record)
 }
@@ -233,7 +237,7 @@ mod tests {
         let router = Router::new()
             .route(
                 "/",
-                get(|| async { read(|entries| entries.trace_id().to_owned()).unwrap() }),
+                get(|| async { read(|entries| entries.trace_id.clone()).unwrap() }),
             )
             .layer(axum::middleware::from_fn(scoped));
         let request = Request::get("/")
