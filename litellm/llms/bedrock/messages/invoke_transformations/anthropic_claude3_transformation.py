@@ -39,6 +39,7 @@ from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation
 from litellm.llms.bedrock.common_utils import (
     BedrockError,
     apply_bedrock_invoke_structured_output,
+    bedrock_capability_model,
     bedrock_supports_per_turn_control,
     bedrock_supports_tool_search,
     ensure_bedrock_anthropic_messages_tool_names,
@@ -648,7 +649,7 @@ class AmazonAnthropicClaudeMessagesConfig(
         return list(
             without_unsupported_server_side_fallback_beta(
                 filtered_betas,
-                model=model,
+                model=bedrock_capability_model(model, getattr(litellm_params, "base_model", None)),
                 custom_llm_provider="bedrock",
                 model_info=_MODEL_INFO.validate_python(getattr(litellm_params, "model_info", None)),
                 drop_params=getattr(litellm_params, "drop_params", None),

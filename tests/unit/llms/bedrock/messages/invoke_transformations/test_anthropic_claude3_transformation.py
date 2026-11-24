@@ -2341,6 +2341,7 @@ def test_bedrock_invoke_transform_forwards_per_turn_control_beta_with_message_ou
 SERVER_SIDE_FALLBACK_BETA: Final = "server-side-fallback-2026-06-01"
 BEDROCK_OPUS_4_1: Final = "us.anthropic.claude-opus-4-1-20250805-v1:0"
 BEDROCK_HAIKU_4_5: Final = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+BEDROCK_PROFILE_ARN: Final = "arn:aws:bedrock:us-east-1:000000000000:application-inference-profile/abc123"
 
 
 @pytest.mark.parametrize(
@@ -2377,6 +2378,20 @@ BEDROCK_HAIKU_4_5: Final = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
             False,
             [SERVER_SIDE_FALLBACK_BETA],
             id="deployment_turns_it_on",
+        ),
+        pytest.param(
+            BEDROCK_PROFILE_ARN,
+            {"drop_params": True, "base_model": f"bedrock/{BEDROCK_HAIKU_4_5}"},
+            False,
+            [SERVER_SIDE_FALLBACK_BETA],
+            id="profile_arn_with_a_supporting_base_model",
+        ),
+        pytest.param(
+            BEDROCK_PROFILE_ARN,
+            {"drop_params": True, "base_model": BEDROCK_OPUS_4_1},
+            False,
+            [],
+            id="profile_arn_with_an_opus_4_1_base_model",
         ),
     ],
 )
