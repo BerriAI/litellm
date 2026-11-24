@@ -6020,6 +6020,11 @@ _DROP_UNREAD_OUTPUT_CONFIG_WARNING: Final = (
     "Dropping `output_config` for model=%s (drop_params=True) because the %s chat transformation does not read it."
 )
 
+_OUTPUT_FORMAT_UNSUPPORTED_ON_CHAT: Final = (
+    "`output_format` is only supported on the Messages API (`/v1/messages`). "
+    "On chat completions, send `response_format` instead."
+)
+
 
 def _turns_reasoning_off(value: object) -> bool:
     match value:
@@ -6108,6 +6113,7 @@ def get_optional_params(
     base_model: str | None = None,
     model_info: Mapping[str, object] | None = None,
     _litellm_reasoning_drop_logger: WarningLogger = verbose_logger,
+    _caller_sent_params: object = None,
     **kwargs: object,
 ):
     drop_params = normalize_drop_params(drop_params)  # rebind-ok: config and DB deployments pass "true" as a string
@@ -6120,6 +6126,7 @@ def get_optional_params(
     passed_params.pop("base_model", None)
     passed_params.pop("model_info", None)
     passed_params.pop("_litellm_reasoning_drop_logger", None)
+    passed_params.pop("_caller_sent_params", None)
     provider_config: BaseConfig | None = None
     if custom_llm_provider is not None and custom_llm_provider in [provider.value for provider in LlmProviders]:
         provider_config = ProviderConfigManager.get_provider_chat_config(
@@ -6675,6 +6682,20 @@ def get_optional_params(
             optional_params=optional_params,
             model=model,
             drop_params=bool(drop_params),
+        )
+    explicitly_dropped: Final = additional_drop_params or ()
+    output_format_sources: Final = (
+        (passed_params, ("output_format",)),
+        (as_str_mapping(passed_params.get("extra_body")) or {}, ("extra_body", "extra_body.output_format")),
+    )
+    if isinstance(provider_config, litellm.AnthropicConfig) and any(
+        params.get("output_format") is not None
+        and (not isinstance(_caller_sent_params, tuple) or drop_names[0] in _caller_sent_params)
+        and not any(name in explicitly_dropped for name in drop_names)
+        for params, drop_names in output_format_sources
+    ):
+        raise UnsupportedParamsError(
+            status_code=400, message=_OUTPUT_FORMAT_UNSUPPORTED_ON_CHAT, model=model, llm_provider=custom_llm_provider
         )
     if (litellm.drop_params or drop_params) and custom_llm_provider != "litellm_proxy":
         litellm.AnthropicConfig.maybe_drop_speed_param(

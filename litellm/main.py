@@ -6399,6 +6399,7 @@ def completion(
                 **mapping_args,
                 model_info=deployment_info,
                 _litellm_reasoning_drop_logger=reasoning_drop_logger,
+                _caller_sent_params=routing_kwargs.get("_caller_sent_params"),
                 **mapping_special_params,
             )
 

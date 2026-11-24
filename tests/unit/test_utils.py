@@ -13262,3 +13262,90 @@ async def test_post_deployment_failure_reaches_the_legacy_hook_and_keeps_the_rea
     assert type(recorder.failures[0]) is type(raised.value)
     assert recorder.failures[0] is not raised.value
     assert seen == (["v2", "legacy"] if with_v2 else ["legacy"])
+
+
+_ANTHROPIC_OUTPUT_FORMAT_PLACEMENTS = [
+    pytest.param({"output_format": {"type": "json_schema", "schema": {"type": "object"}}}, id="top_level"),
+    pytest.param({"extra_body": {"output_format": {"type": "json_schema"}}}, id="extra_body"),
+]
+
+
+@pytest.mark.parametrize("sent", _ANTHROPIC_OUTPUT_FORMAT_PLACEMENTS)
+@pytest.mark.parametrize(
+    ("model", "custom_llm_provider"),
+    [("claude-sonnet-4-5", "anthropic"), ("claude-sonnet-4-5@20250929", "vertex_ai")],
+)
+def test_anthropic_output_format_is_rejected_on_chat_completions(
+    sent: dict[str, object], model: str, custom_llm_provider: str
+):
+    from litellm.utils import get_optional_params
+
+    with pytest.raises(litellm.UnsupportedParamsError) as exc_info:
+        get_optional_params(model=model, custom_llm_provider=custom_llm_provider, **sent)
+
+    assert exc_info.value.status_code == 400
+    assert "only supported on the Messages API" in str(exc_info.value)
+    assert "`response_format`" in str(exc_info.value)
+
+
+@pytest.mark.parametrize(
+    ("sent", "dropped"),
+    [
+        pytest.param({"output_format": {"type": "json_schema"}}, "output_format", id="top_level"),
+        pytest.param({"extra_body": {"output_format": {"type": "json_schema"}}}, "extra_body", id="extra_body"),
+        pytest.param(
+            {"extra_body": {"output_format": {"type": "json_schema"}}}, "extra_body.output_format", id="nested_path"
+        ),
+    ],
+)
+def test_anthropic_output_format_named_in_additional_drop_params_is_dropped_not_rejected(
+    sent: dict[str, object], dropped: str
+):
+    from litellm.utils import get_optional_params
+
+    optional_params = get_optional_params(
+        model="claude-sonnet-4-5", custom_llm_provider="anthropic", additional_drop_params=[dropped], **sent
+    )
+
+    assert "output_format" not in optional_params
+    assert "output_format" not in (optional_params.get("extra_body") or {})
+
+
+@pytest.mark.parametrize("deployment_set", _ANTHROPIC_OUTPUT_FORMAT_PLACEMENTS)
+def test_anthropic_output_format_the_caller_did_not_send_is_forwarded_unchanged(deployment_set: dict[str, object]):
+    from litellm.utils import get_optional_params
+
+    optional_params = get_optional_params(
+        model="claude-sonnet-4-5", custom_llm_provider="anthropic", _caller_sent_params=("messages",), **deployment_set
+    )
+
+    assert optional_params == deployment_set
+
+
+def test_router_rejects_anthropic_output_format_from_the_caller_but_not_from_the_deployment():
+    output_format = {"type": "json_schema", "schema": {"type": "object"}}
+    deployment_params = {"model": "anthropic/claude-sonnet-4-5", "api_key": "fake", "mock_response": "hi"}
+    router = litellm.Router(
+        model_list=[{"model_name": "claude", "litellm_params": {**deployment_params, "output_format": output_format}}],
+        num_retries=0,
+    )
+    messages = [{"role": "user", "content": "hi"}]
+
+    assert router.completion(model="claude", messages=messages).choices[0].message.content == "hi"
+    with pytest.raises(litellm.UnsupportedParamsError):
+        router.completion(model="claude", messages=messages, extra_body={"output_format": output_format})
+
+
+def test_response_format_still_maps_to_anthropic_native_structured_output():
+    from litellm.utils import get_optional_params
+
+    optional_params = get_optional_params(
+        model="claude-sonnet-4-5",
+        custom_llm_provider="anthropic",
+        response_format={
+            "type": "json_schema",
+            "json_schema": {"name": "answer", "schema": {"type": "object", "properties": {}}, "strict": True},
+        },
+    )
+
+    assert optional_params["output_format"]["type"] == "json_schema"
