@@ -33,8 +33,6 @@ pub trait Rows: Row {
     type Project: Row;
     type Membership: Row;
     type Org: Row;
-    /// A managed agent's context.
-    type Agent: Row;
 }
 
 pub type KeyRow<H> = <<H as AuthHost>::Rows as Rows>::Key;
@@ -45,7 +43,6 @@ pub type ObjectPermissionRow<H> = <<H as AuthHost>::Rows as Rows>::ObjectPermiss
 pub type ProjectRow<H> = <<H as AuthHost>::Rows as Rows>::Project;
 pub type MembershipRow<H> = <<H as AuthHost>::Rows as Rows>::Membership;
 pub type OrgRow<H> = <<H as AuthHost>::Rows as Rows>::Org;
-pub type AgentRow<H> = <<H as AuthHost>::Rows as Rows>::Agent;
 
 /// Code the operator wrote, which only a host that embeds their Python can run.
 pub trait OperatorHooks: Send + Sync {
@@ -182,7 +179,7 @@ pub trait AuthHost: Send + Sync {
     fn managed_agent(
         &self,
         claims: &Value,
-    ) -> impl Future<Output = Result<Option<ManagedAgent<AgentRow<Self>>>, Error>> + Send;
+    ) -> impl Future<Output = Result<Option<ManagedAgent>, Error>> + Send;
 
     /// The registered agent a JWT's agent claim names.
     fn registered_agent(
@@ -408,7 +405,7 @@ pub trait AuthHost: Send + Sync {
     /// `AgentIdentityStore.record_authentication`
     fn record_agent_authentication(
         &self,
-        agent: &AgentRow<Self>,
+        agent: &ManagedAgent,
     ) -> impl Future<Output = Result<Option<AgentIdentityFailure>, Error>> + Send;
 
     // TODO: the host runs the whole `team_member_add` management endpoint as a proxy admin until

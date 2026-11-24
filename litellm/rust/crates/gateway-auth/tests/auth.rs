@@ -33,7 +33,6 @@ impl Rows for Held {
     type Project = ();
     type Membership = ();
     type Org = ();
-    type Agent = ();
 }
 
 fn stored_key() -> Caller<Held> {

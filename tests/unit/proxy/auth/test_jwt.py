@@ -35,7 +35,7 @@ from litellm.proxy.auth import core
 from litellm.proxy.auth import jwt as proxy_jwt
 from litellm.proxy.auth.host.facts import EndUserRow
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
-from litellm.rust_bridge._native import RustAuthSettings, RustIdentity
+from litellm.rust_bridge._native import RustAuthSettings, RustIdentity, RustManagedAgent
 from litellm.types.proxy.agent_identity import ManagedAgentContext
 from litellm.types.proxy.auth.user_roles import LitellmUserRoles
 
@@ -302,13 +302,17 @@ def test_jwt_result_carries_every_row_the_identity_names(
 def test_delegated_managed_agent_carries_its_one_shot_proof(
     jwt_identity: Callable[..., RustIdentity.Jwt],
 ) -> None:
-    managed: Final = ManagedAgentContext(agent_id="a", mode="delegated", user_id="u")
+    managed: Final = RustManagedAgent(
+        mode="delegated", agent_id="a", user_id="u", binding_revision="r1", subject_oid="oid"
+    )
 
     token: Final = proxy_jwt.auth_from_result(
         proxy_jwt.jwt_result(jwt_identity(agent_id="a", managed_agent=managed), "jwt")
     )
 
-    assert token.managed_agent_context == managed
+    assert token.managed_agent_context == ManagedAgentContext(
+        agent_id="a", mode="delegated", user_id="u", binding_revision="r1", subject_oid="oid"
+    )
     assert token._managed_delegation_verified is True  # pyright: ignore[reportPrivateUsage]  # the proof is private
     assert token.user_role == LitellmUserRoles.INTERNAL_USER
 

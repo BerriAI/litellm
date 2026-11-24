@@ -25,7 +25,7 @@ use crate::{
 /// An identity and the grants it earned, which `commit` writes once nothing refuses the request.
 struct Authorized<R: Rows> {
     identity: JwtIdentity<R>,
-    grants: Grants<R>,
+    grants: Grants,
 }
 
 /// The builder's JWT block: the token, the key it maps to, the operator's check, then who it
@@ -106,8 +106,8 @@ pub(crate) async fn resolve_identity<H: AuthHost>(
 
 /// What a claimant says about itself before any read: the user id an RBAC role rebinds to its
 /// object id, and the team an RBAC team token names.
-fn claimed_ids<R: Rows>(
-    claimant: &Claimant<R>,
+fn claimed_ids(
+    claimant: &Claimant,
     info: &UserInfo,
     claims: &Claims,
     settings: &JwtSettings,
@@ -143,7 +143,7 @@ async fn authorize<H: AuthHost>(
     };
     policy.email_domain(&claimant, &info)?;
     let grants = match &claimant.agent {
-        Some(agent) => Grants::default().with(Grant::RecordAgentAuthentication(agent.row.clone())),
+        Some(agent) => Grants::default().with(Grant::RecordAgentAuthentication(agent.clone())),
         None => Grants::default(),
     };
     if let (ClaimantKind::ManagedAgent(AgentMode::Autonomous), Some(agent)) =
@@ -194,7 +194,7 @@ async fn authorize<H: AuthHost>(
 async fn admin<H: AuthHost>(
     host: &H,
     claims: &Claims,
-    claimant: Claimant<H::Rows>,
+    claimant: Claimant,
     info: UserInfo,
     request: &JwtRequest<'_>,
     settings: &JwtSettings,
@@ -263,13 +263,13 @@ fn team_grant<R: Rows>(team: Option<Team<R::Team>>) -> TeamGrant<R> {
 async fn principal<H: AuthHost>(
     host: &H,
     claims: &Claims,
-    claimant: Claimant<H::Rows>,
+    claimant: Claimant,
     info: UserInfo,
     request: &JwtRequest<'_>,
     settings: &JwtSettings,
     policy: &RoutePolicy<'_>,
     provisioning: Option<Provisioning>,
-    grants: Grants<H::Rows>,
+    grants: Grants,
 ) -> Result<Principal<H::Rows>, Error> {
     let target = Target::from(request);
     let (rbac_team_id, user_id) = claimed_ids(&claimant, &info, claims, settings);
@@ -1066,12 +1066,13 @@ mod tests {
         assert_eq!(calls(&host), expected_calls);
     }
 
-    fn agent(mode: AgentMode) -> ManagedAgent<String> {
+    fn agent(mode: AgentMode) -> ManagedAgent {
         ManagedAgent {
             mode,
             agent_id: "a1".to_owned(),
             user_id: Some("u1".to_owned()),
-            row: "agent a1".to_owned(),
+            binding_revision: Some("r1".to_owned()),
+            subject_oid: None,
         }
     }
 
@@ -1081,13 +1082,13 @@ mod tests {
         "https://idp",
         Some(AgentIdentityFailure { policy_unavailable: true, message: "down".to_owned() }),
         Err(JwtDenial::AgentIdentity(AgentIdentityFailure { policy_unavailable: true, message: "down".to_owned() }).into()),
-        &["managed_agent", "record_agent agent a1"]
+        &["managed_agent", "record_agent a1 r1"]
     )]
     #[case::autonomous_skips_every_other_check(
         "https://idp",
         None,
         Ok(Some("a1")),
-        &["managed_agent", "record_agent agent a1"]
+        &["managed_agent", "record_agent a1 r1"]
     )]
     #[tokio::test]
     async fn autonomous_agent(
@@ -1157,7 +1158,7 @@ mod tests {
                 "delegated a1 team=- explicit=false allowed=-",
                 "granting_team t5",
                 "resolve_user u1 team=t5",
-                "record_agent agent a1",
+                "record_agent a1 r1",
             ]
         );
     }

@@ -18,6 +18,7 @@ from litellm.proxy.auth.host.facts import (
     TeamMissing,
     deactivated,
     key_facts,
+    managed_agent_context,
     user_facts,
 )
 from litellm.rust_bridge._native import RustAuth, RustAuthStep
@@ -249,7 +250,7 @@ async def _agents(call: RustAuth, step: RustAuthStep, host: PythonAuthHost) -> b
         case RustAuthStep.RegisteredAgent(claim=claim):
             call.registered_agent(await host.registered_agent(claim))
         case RustAuthStep.RecordAgentAuthentication(agent=agent):
-            call.agent_failure(await host.record_agent_authentication(agent))
+            call.agent_failure(await host.record_agent_authentication(managed_agent_context(agent)))
         case _:
             return False
     return True

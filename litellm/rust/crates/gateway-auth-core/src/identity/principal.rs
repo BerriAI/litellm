@@ -14,11 +14,11 @@ pub(crate) enum ClaimantKind {
 /// What a JWT's claims say about who sends it, after the cheap agent reads and before any team,
 /// user or organization is read.
 #[derive(Clone, Debug, PartialEq)]
-pub(crate) struct Claimant<R: Rows> {
+pub(crate) struct Claimant {
     pub(crate) kind: ClaimantKind,
     pub(crate) rbac_role: Option<RbacRole>,
     pub(crate) scopes: Vec<String>,
-    pub(crate) agent: Option<ManagedAgent<R::Agent>>,
+    pub(crate) agent: Option<ManagedAgent>,
     /// The managed agent's id, or the registered agent the agent claim names.
     pub(crate) agent_id: Option<String>,
     /// The `iss` claim, which a managed agent's issuer has to be trusted for.
@@ -34,5 +34,5 @@ pub(crate) struct Principal<R: Rows> {
     pub(crate) header_team: Option<HeaderTeam>,
     /// The teams the user's row lists.
     pub(crate) user_teams: Vec<String>,
-    pub(crate) grants: Grants<R>,
+    pub(crate) grants: Grants,
 }

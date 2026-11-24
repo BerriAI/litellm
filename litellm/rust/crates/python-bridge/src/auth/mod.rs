@@ -9,7 +9,7 @@ mod stepper;
 
 pub(crate) use call::{
     AuthCall, AuthOutcome, AuthStep, ClaimIdentityView, DenialView, IdentityView, KeyContextView,
-    MappingView, PlanView, TeamGrantView,
+    ManagedAgentView, MappingView, PlanView, TeamGrantView,
 };
 pub(crate) use jwt::{
     MappedClaimsView, jwt_claims, jwt_is_allowed_domain, jwt_is_jwt, jwt_presents_claims,

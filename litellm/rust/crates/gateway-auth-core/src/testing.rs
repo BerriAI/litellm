@@ -36,7 +36,6 @@ impl Rows for Labels {
     type Project = String;
     type Membership = String;
     type Org = String;
-    type Agent = String;
 }
 
 #[derive(Default)]
@@ -78,7 +77,7 @@ pub(crate) struct ScriptedHost {
     pub(crate) reusable_key: Option<&'static str>,
     /// `Created("minted")` when unset.
     pub(crate) key_mapping_write: Option<KeyMappingWrite>,
-    pub(crate) managed: Option<ManagedAgent<String>>,
+    pub(crate) managed: Option<ManagedAgent>,
     pub(crate) agent_failure: Option<AgentIdentityFailure>,
     pub(crate) agents: HashMap<&'static str, RegisteredAgent>,
     pub(crate) delegated_team: Option<&'static str>,
@@ -485,15 +484,16 @@ impl AuthHost for ScriptedHost {
         }))
     }
 
-    async fn managed_agent(&self, _: &Value) -> Result<Option<ManagedAgent<String>>, Error> {
+    async fn managed_agent(&self, _: &Value) -> Result<Option<ManagedAgent>, Error> {
         self.record("managed_agent");
         Ok(self.managed.clone())
     }
     async fn record_agent_authentication(
         &self,
-        agent: &String,
+        agent: &ManagedAgent,
     ) -> Result<Option<AgentIdentityFailure>, Error> {
-        self.record(format!("record_agent {agent}"));
+        let revision = agent.binding_revision.as_deref().unwrap_or("unbound");
+        self.record(format!("record_agent {} {revision}", agent.agent_id));
         Ok(self.agent_failure.clone())
     }
     async fn registered_agent(&self, claim: &str) -> Result<Option<RegisteredAgent>, Error> {
