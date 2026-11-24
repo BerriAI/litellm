@@ -9154,6 +9154,9 @@ def get_standard_logging_object_payload(
         clean_hidden_params: Final = StandardLoggingPayloadSetup.get_hidden_params(hidden_params)
         if cache_hit is True or (clean_hidden_params["response_cost"] is None and raw_response_cost is not None):
             clean_hidden_params["response_cost"] = llm_response_cost
+        routed_deployment_model: Final = metadata.get("deployment")
+        if clean_hidden_params["litellm_model_name"] is None and isinstance(routed_deployment_model, str):
+            clean_hidden_params["litellm_model_name"] = routed_deployment_model
         if clean_hidden_params["litellm_overhead_time_ms"] is None and status == "success":
             # /v1/messages dict results and the bridge stream wrappers keep it on the logging object;
             # failure payloads stay None like every response type that carries its own _hidden_params
