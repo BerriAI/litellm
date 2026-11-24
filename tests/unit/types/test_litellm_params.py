@@ -189,7 +189,7 @@ OPTION_NAMES: Final = (
     "quality_router_default_model",
     "caching",
     "cache",
-    "allowed_cache_controls",
+    "allowed_response_cache_overrides",
     "ttl",
     "enable_prompt_caching",
     "caching_groups",

@@ -10,7 +10,7 @@ from litellm.litellm_core_utils.core_helpers import without
 from litellm.router_rust.invoke.shaping import as_dict
 from litellm.types.utils import SupportedCacheControls
 
-ALLOWED_CACHE_CONTROLS_PARAM: Final = "allowed_cache_controls"
+ALLOWED_OVERRIDES_PARAM: Final = "allowed_response_cache_overrides"
 IGNORED_CACHE_CONTROLS_HEADER: Final = "x-litellm-ignored-cache-controls"
 _CONTROL_NAMES: Final = {"s-max-age": "s-maxage"}
 _LOCKABLE_CONTROLS: Final = frozenset({*SupportedCacheControls, "use-cache"})
@@ -28,10 +28,10 @@ def model_cache_controls(
     litellm_params: Mapping[str, object], request_cache: object, key_controls: Mapping[str, object] | None = None
 ) -> ModelCacheControls:
     """The deployment's ``cache`` is the default for each control and the request overrides the controls
-    it sends. When the deployment sets ``allowed_cache_controls``, a request control outside that list is
+    it sends. When the deployment sets ``allowed_response_cache_overrides``, a request control outside that list is
     ignored and named in ``ignored``, except a control still at the value the virtual key's own
     ``key_controls`` enforce."""
-    allowed: Final = _listed(litellm_params.get(ALLOWED_CACHE_CONTROLS_PARAM))
+    allowed: Final = _listed(litellm_params.get(ALLOWED_OVERRIDES_PARAM))
     deployment_controls: Final = _canonical(as_dict(litellm_params.get("cache")))
     request_controls: Final = as_dict(request_cache)
     if allowed is None:
@@ -50,12 +50,12 @@ def model_cache_controls(
 
 
 def cache_lock(litellm_params: Mapping[str, object]) -> Mapping[str, object] | None:
-    """The deployment's ``cache`` and ``allowed_cache_controls`` when it sets the list, which its
+    """The deployment's ``cache`` and ``allowed_response_cache_overrides`` when it sets the list, which its
     fallbacks then follow on top of their own."""
-    allowed: Final = litellm_params.get(ALLOWED_CACHE_CONTROLS_PARAM)
+    allowed: Final = litellm_params.get(ALLOWED_OVERRIDES_PARAM)
     if not isinstance(allowed, Sequence) or isinstance(allowed, str):
         return None
-    return {key: litellm_params[key] for key in ("cache", ALLOWED_CACHE_CONTROLS_PARAM) if key in litellm_params}
+    return {key: litellm_params[key] for key in ("cache", ALLOWED_OVERRIDES_PARAM) if key in litellm_params}
 
 
 def with_cache_lock(litellm_params: Mapping[str, object], lock: Mapping[str, object] | None) -> Mapping[str, object]:
@@ -71,7 +71,7 @@ def with_cache_lock(litellm_params: Mapping[str, object], lock: Mapping[str, obj
     return {
         **without(litellm_params, "cache"),
         **({"cache": controls} if controls else {}),
-        ALLOWED_CACHE_CONTROLS_PARAM: list(_listed(lock.get(ALLOWED_CACHE_CONTROLS_PARAM)) or ()),
+        ALLOWED_OVERRIDES_PARAM: list(_listed(lock.get(ALLOWED_OVERRIDES_PARAM)) or ()),
     }
 
 
@@ -80,13 +80,13 @@ def strictest_cache_lock(locks: Sequence[Mapping[str, object]]) -> Mapping[str, 
     to skip the cache stays on, the shortest lifetime wins, and a request control needs every list."""
     if not locks:
         return None
-    lists: Final = [_listed(lock.get(ALLOWED_CACHE_CONTROLS_PARAM)) or () for lock in locks]
+    lists: Final = [_listed(lock.get(ALLOWED_OVERRIDES_PARAM)) or () for lock in locks]
     controls: Final = [_canonical(as_dict(lock.get("cache"))) for lock in locks]
     names: Final = dict.fromkeys(itertools.chain.from_iterable(controls))
     merged: Final = {name: _strictest(name, [each[name] for each in controls if name in each]) for name in names}
     return {
         **({"cache": merged} if merged else {}),
-        ALLOWED_CACHE_CONTROLS_PARAM: [control for control in lists[0] if all(control in each for each in lists)],
+        ALLOWED_OVERRIDES_PARAM: [control for control in lists[0] if all(control in each for each in lists)],
     }
 
 
@@ -123,7 +123,7 @@ def with_model_cache_controls(
     key's controls are read from ``authenticated``, the request before any fallback params went over it."""
     key_controls: Final = _key_cache_controls(request if authenticated is None else authenticated)
     cache: Final = model_cache_controls(litellm_params, request.get("cache"), key_controls)
-    params: Final = without(litellm_params, ALLOWED_CACHE_CONTROLS_PARAM)
+    params: Final = without(litellm_params, ALLOWED_OVERRIDES_PARAM)
     if cache.controls is None:
         return params, request, ()
     controls: Final = {"cache": cache.controls} if cache.controls else {}

@@ -28,25 +28,25 @@ _OFF = {"no-cache": True, "no-store": True}
             id="without a list the request wins the control it sends",
         ),
         pytest.param(
-            {"cache": _OFF, "allowed_cache_controls": []},
+            {"cache": _OFF, "allowed_response_cache_overrides": []},
             {"ttl": 600, "no-cache": False, "no-store": False},
             ModelCacheControls(_OFF, ("ttl", "no-cache", "no-store")),
             id="an empty list locks every control",
         ),
         pytest.param(
-            {"cache": {"ttl": 60}, "allowed_cache_controls": ["no-cache", "no-store"]},
+            {"cache": {"ttl": 60}, "allowed_response_cache_overrides": ["no-cache", "no-store"]},
             {"ttl": 5, "no-cache": True},
             ModelCacheControls({"ttl": 60, "no-cache": True}, ("ttl",)),
             id="a listed control is kept and an unlisted one is ignored",
         ),
         pytest.param(
-            {"cache": {"ttl": 60}, "allowed_cache_controls": ["ttl"]},
+            {"cache": {"ttl": 60}, "allowed_response_cache_overrides": ["ttl"]},
             {"ttl": 5},
             ModelCacheControls({"ttl": 5}),
             id="a listed ttl overrides the model's",
         ),
         pytest.param(
-            {"allowed_cache_controls": []},
+            {"allowed_response_cache_overrides": []},
             {"s-maxage": 5, "namespace": "team-a"},
             ModelCacheControls({"namespace": "team-a"}, ("s-maxage",)),
             id="a lock without a model rule still ignores controls and keeps other cache fields",
@@ -58,31 +58,31 @@ _OFF = {"no-cache": True, "no-store": True}
             id="a request s-maxage replaces the model's s-max-age spelling",
         ),
         pytest.param(
-            {"cache": {"use-cache": False}, "allowed_cache_controls": []},
+            {"cache": {"use-cache": False}, "allowed_response_cache_overrides": []},
             {"use-cache": True},
             ModelCacheControls({"use-cache": False}, ("use-cache",)),
             id="a locked model ignores a request opting in to the cache",
         ),
         pytest.param(
-            {"cache": {"use-cache": False}, "allowed_cache_controls": ["use-cache"]},
+            {"cache": {"use-cache": False}, "allowed_response_cache_overrides": ["use-cache"]},
             {"use-cache": True},
             ModelCacheControls({"use-cache": True}),
             id="a listed use-cache lets a request opt in",
         ),
         pytest.param(
-            {"cache": {"s-maxage": 1}, "allowed_cache_controls": []},
+            {"cache": {"s-maxage": 1}, "allowed_response_cache_overrides": []},
             {"s-max-age": 3600},
             ModelCacheControls({"s-maxage": 1}, ("s-max-age",)),
             id="the s-max-age spelling is locked with s-maxage",
         ),
         pytest.param(
-            {"cache": {"s-maxage": 1}, "allowed_cache_controls": ["s-maxage"]},
+            {"cache": {"s-maxage": 1}, "allowed_response_cache_overrides": ["s-maxage"]},
             {"s-max-age": 3600},
             ModelCacheControls({"s-maxage": 3600}),
             id="the s-max-age spelling is allowed with s-maxage",
         ),
         pytest.param(
-            {"cache": {"ttl": 60}, "allowed_cache_controls": []},
+            {"cache": {"ttl": 60}, "allowed_response_cache_overrides": []},
             None,
             ModelCacheControls({"ttl": 60}),
             id="a locked model with no request controls reports nothing ignored",
@@ -95,15 +95,15 @@ def test_model_cache_controls_merge_per_control(
     assert model_cache_controls(litellm_params, request_cache) == expected
 
 
-def test_allowed_cache_controls_is_not_sent_to_the_provider() -> None:
-    assert is_litellm_owned_kwarg("allowed_cache_controls")
+def test_allowed_response_cache_overrides_is_not_sent_to_the_provider() -> None:
+    assert is_litellm_owned_kwarg("allowed_response_cache_overrides")
 
 
 def test_a_null_list_leaves_the_model_cache_controls_and_the_request_as_they_are() -> None:
     request = {"model": "a"}
 
     params, merged, ignored = with_model_cache_controls(
-        {"model": "openai/a", "cache": {"no-store": True}, "allowed_cache_controls": None}, request
+        {"model": "openai/a", "cache": {"no-store": True}, "allowed_response_cache_overrides": None}, request
     )
 
     assert params == {"model": "openai/a", "cache": {"no-store": True}}
@@ -115,11 +115,11 @@ def test_either_spelling_of_s_maxage_in_a_lock_and_a_fallback_list_is_the_same_c
     from litellm.router_rust.invoke.cache_controls import with_cache_lock
 
     locked = with_cache_lock(
-        {"model": "openai/b", "allowed_cache_controls": ["s-maxage", "ttl"]},
-        {"cache": {"ttl": 60}, "allowed_cache_controls": ["s-max-age", "no-cache"]},
+        {"model": "openai/b", "allowed_response_cache_overrides": ["s-maxage", "ttl"]},
+        {"cache": {"ttl": 60}, "allowed_response_cache_overrides": ["s-max-age", "no-cache"]},
     )
 
-    assert locked == {"model": "openai/b", "cache": {"ttl": 60}, "allowed_cache_controls": ["s-maxage"]}
+    assert locked == {"model": "openai/b", "cache": {"ttl": 60}, "allowed_response_cache_overrides": ["s-maxage"]}
 
 
 @pytest.mark.parametrize("bucket", ["metadata", "litellm_metadata"])
@@ -130,7 +130,7 @@ def test_a_control_the_virtual_key_enforces_survives_a_model_list_that_leaves_it
     }
 
     _, merged, ignored = with_model_cache_controls(
-        {"cache": {"ttl": 60}, "allowed_cache_controls": ["use-cache"]}, request
+        {"cache": {"ttl": 60}, "allowed_response_cache_overrides": ["use-cache"]}, request
     )
 
     assert merged["cache"] == {"ttl": 60, "no-store": True, "use-cache": True}
@@ -141,14 +141,14 @@ def test_a_fallback_with_its_own_list_keeps_the_strictest_of_its_lock_and_the_re
     from litellm.router_rust.invoke.cache_controls import with_cache_lock
 
     locked = with_cache_lock(
-        {"model": "openai/b", "cache": {"no-store": True, "ttl": 60}, "allowed_cache_controls": []},
-        {"cache": {"no-store": False, "ttl": 3600, "s-maxage": None}, "allowed_cache_controls": []},
+        {"model": "openai/b", "cache": {"no-store": True, "ttl": 60}, "allowed_response_cache_overrides": []},
+        {"cache": {"no-store": False, "ttl": 3600, "s-maxage": None}, "allowed_response_cache_overrides": []},
     )
 
     assert locked == {
         "model": "openai/b",
         "cache": {"no-store": True, "ttl": 60, "s-maxage": None},
-        "allowed_cache_controls": [],
+        "allowed_response_cache_overrides": [],
     }
 
 
@@ -156,12 +156,12 @@ def test_the_strictest_lock_keeps_a_lifetime_that_another_lock_leaves_null() -> 
     from litellm.router_rust.invoke.cache_controls import strictest_cache_lock
 
     locks = [
-        {"cache": {"ttl": None}, "allowed_cache_controls": []},
-        {"cache": {"ttl": 60}, "allowed_cache_controls": []},
+        {"cache": {"ttl": None}, "allowed_response_cache_overrides": []},
+        {"cache": {"ttl": 60}, "allowed_response_cache_overrides": []},
     ]
 
-    assert strictest_cache_lock(locks) == {"cache": {"ttl": 60}, "allowed_cache_controls": []}
-    assert strictest_cache_lock(locks[::-1]) == {"cache": {"ttl": 60}, "allowed_cache_controls": []}
+    assert strictest_cache_lock(locks) == {"cache": {"ttl": 60}, "allowed_response_cache_overrides": []}
+    assert strictest_cache_lock(locks[::-1]) == {"cache": {"ttl": 60}, "allowed_response_cache_overrides": []}
 
 
 def test_fallback_params_cannot_pose_as_the_virtual_keys_cache_controls() -> None:
@@ -169,7 +169,7 @@ def test_fallback_params_cannot_pose_as_the_virtual_keys_cache_controls() -> Non
     attempt = {"cache": {"no-store": False}, "litellm_metadata": forged, "metadata": forged}
 
     _, merged, ignored = with_model_cache_controls(
-        {"cache": {"no-store": True}, "allowed_cache_controls": []}, attempt, authenticated={"metadata": {}}
+        {"cache": {"no-store": True}, "allowed_response_cache_overrides": []}, attempt, authenticated={"metadata": {}}
     )
 
     assert merged["cache"] == {"no-store": True}
@@ -180,7 +180,9 @@ def test_a_key_control_the_attempt_changed_is_no_longer_the_keys() -> None:
     key = {"metadata": {"user_api_key_metadata": {"cache": {"no-store": True}}}}
 
     _, merged, ignored = with_model_cache_controls(
-        {"cache": {"ttl": 60}, "allowed_cache_controls": []}, {**key, "cache": {"no-store": False}}, authenticated=key
+        {"cache": {"ttl": 60}, "allowed_response_cache_overrides": []},
+        {**key, "cache": {"no-store": False}},
+        authenticated=key,
     )
 
     assert merged["cache"] == {"ttl": 60}
@@ -191,7 +193,7 @@ def test_a_number_standing_in_for_the_keys_boolean_is_not_the_keys_control() -> 
     key = {"metadata": {"user_api_key_metadata": {"cache": {"no-store": True}}}}
 
     _, merged, ignored = with_model_cache_controls(
-        {"cache": {"no-store": True}, "allowed_cache_controls": []},
+        {"cache": {"no-store": True}, "allowed_response_cache_overrides": []},
         {**key, "cache": {"no-store": 1}},
         authenticated=key,
     )

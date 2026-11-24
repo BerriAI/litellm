@@ -25,21 +25,21 @@ def _deployment(name: str, **cache_params: object) -> Mapping[str, object]:  # k
     ("cache_params", "request_cache", "sent_cache", "ignored"),
     [
         pytest.param(
-            {"cache": _OFF, "allowed_cache_controls": []},
+            {"cache": _OFF, "allowed_response_cache_overrides": []},
             {"ttl": 600, "no-cache": False, "no-store": False},
             _OFF,
             "ttl,no-cache,no-store",
             id="a locked off model stays off and names every ignored control",
         ),
         pytest.param(
-            {"cache": {"ttl": 60}, "allowed_cache_controls": ["no-cache", "no-store"]},
+            {"cache": {"ttl": 60}, "allowed_response_cache_overrides": ["no-cache", "no-store"]},
             {"ttl": 5, "no-cache": True},
             {"ttl": 60, "no-cache": True},
             "ttl",
             id="a locked ttl stays and the allowed no-cache goes through",
         ),
         pytest.param(
-            {"cache": {"ttl": 60}, "allowed_cache_controls": ["ttl"]},
+            {"cache": {"ttl": 60}, "allowed_response_cache_overrides": ["ttl"]},
             {"ttl": 5},
             {"ttl": 5},
             None,
@@ -69,7 +69,7 @@ async def test_attempt_sends_the_merged_cache_controls_and_reports_ignored_ones(
 
     (call,) = host.calls_to("acompletion")
     assert call.kwargs["cache"] == sent_cache
-    assert "allowed_cache_controls" not in call.kwargs
+    assert "allowed_response_cache_overrides" not in call.kwargs
     assert headers(response).get(_HEADER) == ignored
 
 
@@ -77,7 +77,7 @@ async def test_attempt_sends_the_merged_cache_controls_and_reports_ignored_ones(
     ("primary_params", "fallback_params", "primary_cache", "fallback_cache", "ignored"),
     [
         pytest.param(
-            {"cache": {"ttl": 60}, "allowed_cache_controls": []},
+            {"cache": {"ttl": 60}, "allowed_response_cache_overrides": []},
             {},
             {"ttl": 60},
             {"ttl": 60},
@@ -85,16 +85,16 @@ async def test_attempt_sends_the_merged_cache_controls_and_reports_ignored_ones(
             id="a fallback with no rule follows the requested model's lock",
         ),
         pytest.param(
-            {"cache": _OFF, "allowed_cache_controls": []},
-            {"cache": {"ttl": 600}, "allowed_cache_controls": ["ttl"]},
+            {"cache": _OFF, "allowed_response_cache_overrides": []},
+            {"cache": {"ttl": 600}, "allowed_response_cache_overrides": ["ttl"]},
             _OFF,
             {"ttl": 600, "no-cache": True, "no-store": True},
             "ttl",
             id="the requested model's lock goes over the fallback's own rule and list",
         ),
         pytest.param(
-            {"cache": {"ttl": 60}, "allowed_cache_controls": ["ttl"]},
-            {"cache": {"no-store": True, "ttl": 600}, "allowed_cache_controls": []},
+            {"cache": {"ttl": 60}, "allowed_response_cache_overrides": ["ttl"]},
+            {"cache": {"no-store": True, "ttl": 600}, "allowed_response_cache_overrides": []},
             {"ttl": 5},
             {"no-store": True, "ttl": 60},
             "ttl",
@@ -102,7 +102,7 @@ async def test_attempt_sends_the_merged_cache_controls_and_reports_ignored_ones(
         ),
         pytest.param(
             {"cache": {"ttl": 60}},
-            {"cache": {"ttl": 600}, "allowed_cache_controls": []},
+            {"cache": {"ttl": 600}, "allowed_response_cache_overrides": []},
             {"ttl": 5},
             {"ttl": 600},
             "ttl",
@@ -133,7 +133,7 @@ async def test_a_fallback_follows_the_cache_lock_of_the_requested_model(
     primary, fallback = host.calls_to("acompletion")
     assert primary.kwargs["cache"] == primary_cache
     assert fallback.kwargs["cache"] == fallback_cache
-    assert "allowed_cache_controls" not in fallback.kwargs
+    assert "allowed_response_cache_overrides" not in fallback.kwargs
     assert headers(response).get(_HEADER) == ignored
 
 
@@ -143,7 +143,7 @@ async def test_a_fallback_follows_the_cache_lock_of_a_requested_model_that_is_co
     host: Final = ScriptedHost()
     core: Final = rust_core(
         host,
-        model_list=[_deployment("a", cache=_OFF, allowed_cache_controls=[]), _deployment("b")],
+        model_list=[_deployment("a", cache=_OFF, allowed_response_cache_overrides=[]), _deployment("b")],
         num_retries=0,
         fallbacks=[{"a": ["b"]}, {"alias-of-a": ["b"]}],
         model_group_alias={"alias-of-a": "a"},
@@ -167,7 +167,7 @@ async def test_a_lock_without_a_model_rule_keeps_the_router_default_cache_contro
     host: Final = ScriptedHost()
     core: Final = rust_core(
         host,
-        model_list=[_deployment("a", allowed_cache_controls=[])],
+        model_list=[_deployment("a", allowed_response_cache_overrides=[])],
         num_retries=0,
         default_litellm_params={"cache": _OFF},
     )
@@ -182,7 +182,7 @@ async def test_a_lock_without_a_model_rule_keeps_the_router_default_cache_contro
     ("cache_params", "request_cache", "sent_cache"),
     [
         pytest.param(
-            {"cache": _OFF, "allowed_cache_controls": []},
+            {"cache": _OFF, "allowed_response_cache_overrides": []},
             {"ttl": 600, "no-cache": False, "no-store": False},
             _OFF,
             id="a locked off model stays off",
@@ -202,13 +202,13 @@ def test_sync_text_completion_sends_the_merged_cache_controls(
 
     (call,) = host.calls_to("text_completion")
     assert call.kwargs["cache"] == sent_cache
-    assert "allowed_cache_controls" not in call.kwargs
+    assert "allowed_response_cache_overrides" not in call.kwargs
 
 
 def test_sync_text_completion_reports_the_ignored_cache_controls() -> None:
     response: Final = RustCore.build(
         build_router_config(
-            {"model_list": [_deployment("a", cache=_OFF, allowed_cache_controls=[])], "num_retries": 0}
+            {"model_list": [_deployment("a", cache=_OFF, allowed_response_cache_overrides=[])], "num_retries": 0}
         ),
         ScriptedHost(),
     ).text_completion(model="a", prompt="hi", cache={"ttl": 600, "no-store": False})
@@ -236,7 +236,12 @@ async def test_a_prompt_managed_model_sends_the_merged_cache_controls_and_report
     rendered_model: str,
 ) -> None:
     host: Final = ScriptedHost()
-    prompt_params: Final = {"model": "langfuse/a", "prompt_id": "p", "cache": _OFF, "allowed_cache_controls": []}
+    prompt_params: Final = {
+        "model": "langfuse/a",
+        "prompt_id": "p",
+        "cache": _OFF,
+        "allowed_response_cache_overrides": [],
+    }
     core: Final = rust_core(
         host,
         model_list=[
@@ -252,7 +257,7 @@ async def test_a_prompt_managed_model_sends_the_merged_cache_controls_and_report
 
     (call,) = host.calls_to("acompletion")
     assert call.kwargs["cache"] == _OFF
-    assert "allowed_cache_controls" not in call.kwargs
+    assert "allowed_response_cache_overrides" not in call.kwargs
     assert headers(response)[_HEADER] == "ttl,no-store"
 
 
@@ -269,8 +274,11 @@ async def test_a_fallback_of_a_failed_stream_follows_the_cache_lock_of_the_reque
     stream_deployment: str, fallback_cache: dict[str, object]
 ) -> None:
     host: Final = ScriptedHost()
-    ttl_locked: Final = _deployment("a", cache={"ttl": 60}, allowed_cache_controls=[])
-    off_locked: Final = {**_deployment("a", cache=_OFF, allowed_cache_controls=[]), "model_info": {"id": "a-off"}}
+    ttl_locked: Final = _deployment("a", cache={"ttl": 60}, allowed_response_cache_overrides=[])
+    off_locked: Final = {
+        **_deployment("a", cache=_OFF, allowed_response_cache_overrides=[]),
+        "model_info": {"id": "a-off"},
+    }
     core: Final = rust_core(
         host, model_list=[ttl_locked, off_locked, _deployment("b")], num_retries=0, fallbacks=[{"a": ["b"]}]
     )
@@ -290,9 +298,9 @@ async def test_a_fallback_of_a_failed_stream_follows_the_cache_lock_of_the_reque
 async def test_locks_of_one_model_combine_to_the_strictest_whatever_their_order(order: tuple[int, int]) -> None:
     host: Final = ScriptedHost()
     members: Final = [
-        _deployment("a", cache={"no-store": True, "ttl": 600}, allowed_cache_controls=["ttl", "no-cache"]),
+        _deployment("a", cache={"no-store": True, "ttl": 600}, allowed_response_cache_overrides=["ttl", "no-cache"]),
         {
-            **_deployment("a", cache={"no-store": False, "ttl": 60}, allowed_cache_controls=["no-cache"]),
+            **_deployment("a", cache={"no-store": False, "ttl": 60}, allowed_response_cache_overrides=["no-cache"]),
             "model_info": {"id": "a-2"},
         },
     ]
@@ -324,8 +332,8 @@ async def test_a_fallbacks_own_params_cannot_pose_as_the_virtual_keys_cache_cont
     core: Final = rust_core(
         host,
         model_list=[
-            _deployment("a", cache={"no-store": True}, allowed_cache_controls=[]),
-            _deployment("b", cache={"no-store": True}, allowed_cache_controls=[]),
+            _deployment("a", cache={"no-store": True}, allowed_response_cache_overrides=[]),
+            _deployment("b", cache={"no-store": True}, allowed_response_cache_overrides=[]),
         ],
         num_retries=0,
         fallbacks=[{"a": [target]}],

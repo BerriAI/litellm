@@ -266,7 +266,7 @@ class SpecializedRouterOptions:
 class CachingOptions:
     caching: bool | None = None
     cache: "DynamicCacheControl | None" = None
-    allowed_cache_controls: Sequence[str] | None = None
+    allowed_response_cache_overrides: Sequence[str] | None = None
     ttl: float | None = None
     enable_prompt_caching: bool | None = None
     caching_groups: Sequence[Sequence[str]] | None = None
