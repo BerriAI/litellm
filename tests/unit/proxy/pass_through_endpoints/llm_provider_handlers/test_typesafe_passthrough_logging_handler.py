@@ -471,7 +471,7 @@ def test_success_handler_dispatches_eu_jev_to_the_shared_handler():
 
 @pytest.mark.asyncio
 async def test_finalize_before_dispatch_keeps_handler_usage_in_the_spend_row() -> None:
-    """The spend row's token columns must carry the usage the typesafe handler read
+    """The spend row's token columns must carry the usage the EU Jev handler read
     from the provider body, not zeros recomputed from the opaque pass-through response.
 
     Mirrors the proxy call site: the caller passes its init kwargs (no usage yet);
@@ -486,45 +486,45 @@ async def test_finalize_before_dispatch_keeps_handler_usage_in_the_spend_row() -
     from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
     from litellm.types.utils import StandardPassThroughResponseObject, Usage
 
-    model_key: Final = "typesafe/jev-1.13.0"
+    model_key: Final = "eu_jev/eu-jeff-1.0.0"
     pricing: Final = litellm.model_cost[model_key]
     start: Final = datetime(2000, 1, 1)
     logging_obj: Final = Logging(
-        model="jev-1.13.0",
+        model="eu-jeff-1.0.0",
         messages=[],
         stream=False,
         call_type="pass_through_endpoint",
         start_time=start,
-        litellm_call_id="typesafe-finalize-usage",
-        function_id="typesafe-finalize-usage",
+        litellm_call_id="eu-jev-finalize-usage",
+        function_id="eu-jev-finalize-usage",
         kwargs={},
     )
     request: Final = Request(
         {
             "type": "http",
             "method": "POST",
-            "path": "/typesafe/v1/systemone",
+            "path": "/eu_jev/v1/systemone",
             "headers": [],
             "query_string": b"",
         }
     )
-    auth: Final = UserAPIKeyAuth(api_key="typesafe-finalize-key", token="typesafe-finalize-key")
-    request_body: Final = {"model": "jev-1.13.0"}
+    auth: Final = UserAPIKeyAuth(api_key="eu-jev-finalize-key", token="eu-jev-finalize-key")
+    request_body: Final = {"model": "eu-jeff-1.0.0"}
     caller_kwargs: Final = HttpPassThroughEndpointHelpers._init_kwargs_for_pass_through_endpoint(
         request=request,
         user_api_key_dict=auth,
         logging_obj=logging_obj,
-        passthrough_logging_payload={"url": "https://api.typesafe.ai/v1/systemone"},
+        passthrough_logging_payload={"url": "https://eu-jev.com/v1/systemone"},
         _parsed_body=dict(request_body),
     )
     logging_obj.update_environment_variables(
-        model="jev-1.13.0",
+        model="eu-jeff-1.0.0",
         user="unknown",
         optional_params={},
         litellm_params=caller_kwargs["litellm_params"],
         call_type="pass_through_endpoint",
     )
-    body: Final = {"model": "jev-1.13.0", "usage": {"input_tokens": 12, "output_tokens": 1}}
+    body: Final = {"model": "eu-jeff-1.0.0", "usage": {"input_tokens": 12, "output_tokens": 1}}
     expected_cost: Final = 12 * pricing["input_cost_per_token"] + 1 * pricing["output_cost_per_token"]
 
     finalized_details: Final[list[dict[str, object]]] = []  # mutable-ok: records what the injected dispatch saw
@@ -539,17 +539,17 @@ async def test_finalize_before_dispatch_keeps_handler_usage_in_the_spend_row() -
 
     await PassThroughEndpointLogging(log_dispatch=finalize_then_record).pass_through_async_success_handler(
         httpx_response=httpx.Response(
-            200, request=httpx.Request("POST", "https://api.typesafe.ai/v1/systemone"), json=body
+            200, request=httpx.Request("POST", "https://eu-jev.com/v1/systemone"), json=body
         ),
         response_body=body,
         logging_obj=logging_obj,
-        url_route="https://api.typesafe.ai/v1/systemone",
+        url_route="https://eu-jev.com/v1/systemone",
         result="{}",
         start_time=start,
         end_time=start,
         cache_hit=False,
         request_body=request_body,
-        custom_llm_provider="typesafe",
+        custom_llm_provider="eu_jev",
         finalize_before_dispatch=True,
         **caller_kwargs,
     )
