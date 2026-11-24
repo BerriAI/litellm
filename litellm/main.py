@@ -13,6 +13,7 @@ import asyncio
 import contextvars
 import datetime
 import inspect
+import itertools
 import json
 import os
 import random
@@ -77,12 +78,17 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.allowed_tools_tool_choice import (
     drops_unsupported_allowed_tools_tool_choice,
     parse_allowed_tools_tool_choice,
-    raise_if_hosted_tool_choice_unsupported,
 )
 from litellm.litellm_core_utils.asyncify import asyncify, run_async_function
 from litellm.litellm_core_utils.audio_utils.utils import (
     calculate_request_duration,
     get_audio_file_for_health_check,
+)
+from litellm.litellm_core_utils.bridged_audio_output import (
+    AudioOnlyModel,
+    AudioRequested,
+    bridged_audio_output_request,
+    raise_audio_output_refusal,
 )
 from litellm.litellm_core_utils.chat_completion_agentic_loop import (
     bill_first_round_on_failure,
@@ -139,6 +145,7 @@ from litellm.litellm_core_utils.request_timeout_resolver import (
     get_configured_request_timeout,
 )
 from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
+from litellm.litellm_core_utils.tool_fields import raise_if_a_forced_hosted_tool_stays
 from litellm.litellm_core_utils.url_utils import ensure_api_route
 from litellm.llms.base_llm import BaseConfig, BaseImageGenerationConfig
 from litellm.llms.base_llm.base_model_iterator import (
@@ -262,6 +269,7 @@ from .litellm_core_utils.fallback_utils import (
 from .litellm_core_utils.prompt_templates.common_utils import (
     add_system_prompt_to_messages,
     get_completion_messages,
+    is_empty_user_message,
     update_messages_with_model_file_ids,
 )
 from .litellm_core_utils.prompt_templates.factory import (
@@ -574,12 +582,29 @@ def _messages_without_unreadable_pdfs(
     return readable_messages
 
 
+def _messages_without_empty_last_user_turns(
+    messages: Sequence[AllMessageValues],
+    model: str,
+    custom_llm_provider: str,
+    route_params: Mapping[str, object],
+) -> tuple[AllMessageValues, ...] | None:
+    kept_messages: Final = tuple(itertools.dropwhile(is_empty_user_message, reversed(messages)))[::-1]
+    if not kept_messages or len(kept_messages) == len(messages):
+        return None
+    from litellm.responses.bridge_check import target_rejects_model_turn_end
+
+    if not target_rejects_model_turn_end(model, custom_llm_provider, route_params):
+        return None
+    return kept_messages
+
+
 def _messages_readable_by_model(
     messages: Sequence[AllMessageValues],
     model: str,
     custom_llm_provider: str,
     model_info: Mapping[str, object] | None,
     base_model: str | None,
+    api_base: str | None,
     drop_params: bool,
     ensure_alternating_roles: bool | None,
     user_continue_message: ChatCompletionUserMessage | None,
@@ -593,11 +618,22 @@ def _messages_readable_by_model(
         base_model=base_model,
         drop_params=drop_params,
     )
-    if pdf_free_messages is None:
+    sent_messages: Final = messages if pdf_free_messages is None else pdf_free_messages
+    alternating_messages: Final = (
+        _messages_without_empty_last_user_turns(
+            sent_messages,
+            model,
+            custom_llm_provider,
+            {"model_info": model_info, "base_model": base_model, "api_base": api_base},
+        )
+        if ensure_alternating_roles
+        else None
+    )
+    if pdf_free_messages is None and alternating_messages is None:
         return None
     return tuple(
         get_completion_messages(
-            messages=list(pdf_free_messages),
+            messages=list(sent_messages if alternating_messages is None else alternating_messages),
             ensure_alternating_roles=ensure_alternating_roles or False,
             user_continue_message=user_continue_message,
             assistant_continue_message=assistant_continue_message,
@@ -612,7 +648,7 @@ class LiteLLM:
     def __init__(
         self,
         *,
-        api_key=None,
+        api_key: object = None,
         organization: str | None = None,
         base_url: str | None = None,
         timeout: float | None = 600,
@@ -642,7 +678,7 @@ class Completions:
         self.params = params
         self.router_obj = router_obj
 
-    def create(self, messages, model=None, **kwargs):
+    def create(self, messages, model=None, **kwargs: object):
         for k, v in kwargs.items():
             self.params[k] = v
         model = model or self.params.get("model")
@@ -658,7 +694,7 @@ class AsyncCompletions:
         self.params = params
         self.router_obj = router_obj
 
-    async def create(self, messages, model=None, **kwargs):
+    async def create(self, messages, model=None, **kwargs: object):
         for k, v in kwargs.items():
             self.params[k] = v
         model = model or self.params.get("model")
@@ -675,15 +711,15 @@ async def acompletion(
     model: str,
     # Optional OpenAI params: see https://platform.openai.com/docs/api-reference/chat/create
     messages: list = [],
-    functions: list | None = None,
+    functions: Sequence[object] | None = None,
     function_call: str | None = None,
     timeout: float | httpx.Timeout | openai.Timeout | None = None,
     temperature: float | None = None,
     top_p: float | None = None,
     n: int | None = None,
     stream: bool | None = None,
-    stream_options: dict | None = None,
-    stop=None,
+    stream_options: Mapping[str, object] | None = None,
+    stop: object = None,
     max_tokens: int | None = None,
     max_completion_tokens: int | None = None,
     modalities: list[ChatCompletionModality] | None = None,
@@ -691,17 +727,17 @@ async def acompletion(
     audio: ChatCompletionAudioParam | None = None,
     presence_penalty: float | None = None,
     frequency_penalty: float | None = None,
-    logit_bias: dict | None = None,
+    logit_bias: Mapping[str, object] | None = None,
     user: str | None = None,
     # openai v1.0+ new params
-    response_format: dict | type[BaseModel] | None = None,
+    response_format: Mapping[str, object] | type[BaseModel] | None = None,
     seed: int | None = None,
     tools: list | None = None,
-    tool_choice: str | dict | None = None,
+    tool_choice: str | Mapping[str, object] | None = None,
     parallel_tool_calls: bool | None = None,
     logprobs: bool | None = None,
     top_logprobs: int | None = None,
-    deployment_id=None,
+    deployment_id: str | None = None,
     reasoning_effort: Literal["none", "minimal", "low", "medium", "high", "xhigh", "max", "default"] | None = None,
     verbosity: Literal["low", "medium", "high"] | None = None,
     safety_identifier: str | None = None,
@@ -713,8 +749,8 @@ async def acompletion(
     base_url: str | None = None,
     api_version: str | None = None,
     api_key: str | None = None,
-    model_list: list | None = None,  # pass in a list of api_base,keys, etc.
-    extra_headers: dict | None = None,
+    model_list: Sequence[object] | None = None,  # pass in a list of api_base,keys, etc.
+    extra_headers: Mapping[str, object] | None = None,
     # Optional liteLLM function params
     thinking: AnthropicThinkingParam | None = None,
     web_search_options: OpenAIWebSearchOptions | None = None,
@@ -1091,7 +1127,7 @@ async def _awaited_stream(pending: Awaitable[object]) -> object:
 
 
 async def _async_streaming(
-    response: object, model, custom_llm_provider, litellm_params: Mapping[str, object]
+    response: object, model: object, custom_llm_provider: object, litellm_params: Mapping[str, object]
 ) -> AsyncIterator[object]:
     try:
         print_verbose(f"received response in _async_streaming: {response}")
@@ -1230,14 +1266,14 @@ def admitted_prompt_token_counter(prompt_tokens: int | None) -> Callable[[], int
 
 def mock_completion(
     model: str,
-    messages: list,
+    messages: Sequence[object],
     stream: bool | None = False,
     n: int | None = None,
     mock_response: MOCK_RESPONSE_TYPE | None = "This is a mock request",
     mock_tool_calls: list | None = None,
     mock_timeout: bool | None = False,
-    logging=None,
-    custom_llm_provider=None,
+    logging: LiteLLMLoggingObj | None = None,
+    custom_llm_provider: str | None = None,
     timeout: float | str | httpx.Timeout | None = None,
     prompt_tokens: int | None = None,
     **kwargs,
@@ -1403,7 +1439,9 @@ from litellm.responses.bridge_check import (  # noqa: E402  # re-export at the o
 )
 from litellm.responses.bridge_check import (
     bridge_reasoning_effort,
+    drop_refused_extra_body_reasoning,
     serves_only_responses,
+    settle_chat_reasoning_effort,
     str_keyed_mapping,
 )
 from litellm.responses.bridge_check import (  # noqa: E402  # re-export at the old definition site
@@ -5743,14 +5781,14 @@ def _complete_databricks_agent(ctx: CompletionDispatchContext) -> _CompletionDis
 def completion(
     model: str,
     # Optional OpenAI params: see https://platform.openai.com/docs/api-reference/chat/create
-    messages: list = [],
+    messages: Sequence[object] = [],
     timeout: float | str | httpx.Timeout | openai.Timeout | None = None,
     temperature: float | None = None,
     top_p: float | None = None,
     n: int | None = None,
     stream: bool | None = None,
-    stream_options: dict | None = None,
-    stop=None,
+    stream_options: Mapping[str, object] | None = None,
+    stop: object = None,
     max_completion_tokens: int | None = None,
     max_tokens: int | None = None,
     modalities: list[ChatCompletionModality] | None = None,
@@ -5758,42 +5796,42 @@ def completion(
     audio: ChatCompletionAudioParam | None = None,
     presence_penalty: float | None = None,
     frequency_penalty: float | None = None,
-    logit_bias: dict | None = None,
+    logit_bias: Mapping[str, object] | None = None,
     user: str | None = None,
     # openai v1.0+ new params
     reasoning_effort: Literal["none", "minimal", "low", "medium", "high", "xhigh", "max", "default"] | None = None,
     verbosity: Literal["low", "medium", "high"] | None = None,
-    response_format: dict | type[BaseModel] | None = None,
+    response_format: Mapping[str, object] | type[BaseModel] | None = None,
     seed: int | None = None,
-    tools: list | None = None,
-    tool_choice: str | dict | None = None,
+    tools: Sequence[object] | None = None,
+    tool_choice: str | Mapping[str, object] | None = None,
     logprobs: bool | None = None,
     top_logprobs: int | None = None,
     parallel_tool_calls: bool | None = None,
     web_search_options: OpenAIWebSearchOptions | None = None,
     include_server_side_tool_invocations: bool | None = None,
-    deployment_id=None,
-    extra_headers: dict | None = None,
+    deployment_id: str | None = None,
+    extra_headers: Mapping[str, object] | None = None,
     safety_identifier: str | None = None,
     service_tier: str | None = None,
     store: bool | None = None,
     prompt_cache_key: str | None = None,
     prompt_cache_retention: str | None = None,
     # soon to be deprecated params by OpenAI
-    functions: list | None = None,
+    functions: Sequence[object] | None = None,
     function_call: str | None = None,
     # set api_base, api_version, api_key
     base_url: str | None = None,
     api_version: str | None = None,
     api_key: str | None = None,
-    model_list: list | None = None,  # pass in a list of api_base,keys, etc.
+    model_list: Sequence[object] | None = None,  # pass in a list of api_base,keys, etc.
     # Optional liteLLM function params
     thinking: AnthropicThinkingParam | None = None,
     # Session management
     shared_session: Optional["ClientSession"] = None,
     # Per-request JSON schema validation (overrides litellm.enable_json_schema_validation)
     enable_json_schema_validation: bool | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> ModelResponse | CustomStreamWrapper:
     """
     Perform a completion() using any of litellm supported llms (example gpt-4, gpt-3.5-turbo, claude-2, command-nightly)
@@ -6127,6 +6165,13 @@ def completion(
         deployment_model_info: Final = str_keyed_mapping(
             cast(object, model_info)  # cast-ok: model_info is the untyped dict kwarg
         )
+        deployment_base_model: Final = base_model if isinstance(base_model, str) else None
+        supplied_client_api_base: Final = (
+            str(client.base_url)
+            if custom_llm_provider == "openai" and isinstance(client, openai.OpenAI | openai.AsyncOpenAI)
+            else None
+        )
+        reached_api_base: Final = supplied_client_api_base or api_base
         ## RESPONSES API BRIDGE LOGIC ## - check early and normalize model name
         responses_api_model_info, model = responses_api_bridge_check(
             model=model,
@@ -6141,7 +6186,16 @@ def completion(
         reasoning_model_group: Final = model_group_from_metadata(
             routing_kwargs.get("metadata"), routing_kwargs.get("litellm_metadata")
         )
-        requested_output_config: Final = as_str_mapping(non_default_params.get("output_config"))
+        chat_params: Final = drop_refused_extra_body_reasoning(
+            non_default_params,
+            model=model,
+            base_model=deployment_base_model,
+            custom_llm_provider=custom_llm_provider,
+            api_base=reached_api_base,
+            deployment_model_info=deployment_model_info,
+            drop_params=drop_unsupported_reasoning,
+        )
+        requested_output_config: Final = as_str_mapping(chat_params.get("output_config"))
         chat_reasoning: Final = resolve_chat_reasoning(
             reasoning_effort,
             thinking,
@@ -6155,10 +6209,10 @@ def completion(
         resolved_reasoning_effort: Final = chat_reasoning.effort.value
         resolved_output_config: Final = chat_reasoning.output_config
         provider_params: Final = (
-            non_default_params
+            chat_params
             if resolved_output_config is requested_output_config
             else {
-                **{key: value for key, value in non_default_params.items() if key != "output_config"},
+                **{key: value for key, value in chat_params.items() if key != "output_config"},
                 **({"output_config": resolved_output_config} if resolved_output_config is not None else {}),
             }
         )
@@ -6173,13 +6227,6 @@ def completion(
             custom_llm_provider=custom_llm_provider,
             model=model,
             drop_params=drop_unsupported_reasoning,
-        )
-        raise_if_hosted_tool_choice_unsupported(
-            tool_choice=cast(  # cast-ok: widening an untyped dict to object is always sound, the helper validates it with pydantic
-                object, tool_choice
-            ),
-            custom_llm_provider=custom_llm_provider,
-            model=model,
         )
 
         if provider_specific_header is not None:
@@ -6231,6 +6278,16 @@ def completion(
                 provider=LlmProviders(custom_llm_provider),
                 base_model=base_model,
             )
+        raise_if_a_forced_hosted_tool_stays(
+            cast(  # cast-ok: widening untyped tool kwargs to object is always sound, the helper validates them
+                Mapping[str, object],
+                {"tools": tools, "tool_choice": tool_choice},
+            ),
+            model=model,
+            route=custom_llm_provider,
+            drop_params=drop_unsupported_reasoning,
+            provider_config=provider_config,
+        )
 
         if provider_config is not None:
             translated_messages: Final = list(
@@ -6348,7 +6405,6 @@ def completion(
         validated_model_info: Final = (
             _MODEL_INFO_ADAPTER.validate_python(model_info) if isinstance(model_info, dict) else None
         )
-        deployment_base_model: Final = base_model if isinstance(base_model, str) else None
         optional_params = optional_params_for_model_info(validated_model_info, reasoning_drop_warnings)
         fakes_stream: Final = partial(
             _completion_fakes_stream,
@@ -6409,6 +6465,7 @@ def completion(
             custom_llm_provider=custom_llm_provider,
             model_info=validated_model_info,
             base_model=deployment_base_model,
+            api_base=api_base,
             drop_params=drop_unsupported_reasoning,
             ensure_alternating_roles=ensure_alternating_roles,
             user_continue_message=user_continue_message,
@@ -6418,11 +6475,6 @@ def completion(
             messages if readable_messages is None else list(readable_messages)
         )
 
-        supplied_client_api_base: Final = (
-            str(client.base_url)
-            if custom_llm_provider == "openai" and isinstance(client, openai.OpenAI | openai.AsyncOpenAI)
-            else None
-        )
         # For logging - save the values of the litellm-specific params passed in
         requested_litellm_params: Final = get_litellm_params(
             acompletion=acompletion,
@@ -6431,7 +6483,7 @@ def completion(
             logger_fn=logger_fn,
             verbose=verbose,
             custom_llm_provider=custom_llm_provider,
-            api_base=supplied_client_api_base or api_base,
+            api_base=reached_api_base,
             litellm_call_id=kwargs.get("litellm_call_id", None),
             model_alias_map=litellm.model_alias_map,
             completion_call_id=id,
@@ -6587,7 +6639,12 @@ def completion(
                 custom_llm_provider=custom_llm_provider,
                 web_search_options=web_search_options,
                 tools=tools,
-                reasoning_effort=bridge_reasoning_effort(resolved_reasoning_effort, optional_params.get("extra_body")),
+                reasoning_effort=bridge_reasoning_effort(
+                    resolved_reasoning_effort,
+                    optional_params.get("extra_body"),
+                    custom_llm_provider=custom_llm_provider,
+                    api_base=reached_api_base,
+                ),
                 reasoning_summary=_reasoning_summary_for_bridge,
                 api_base=api_base,
                 deployment_model_info=typed_deployment_model_info,
@@ -6646,6 +6703,18 @@ def completion(
         ):
             optional_params, _ = strip_reasoning_summary_aliases_from_optional_params(optional_params)
 
+        chat_optional_params: Final = settle_chat_reasoning_effort(
+            optional_params,
+            requested=resolved_reasoning_effort,
+            model=model,
+            base_model=deployment_base_model,
+            custom_llm_provider=custom_llm_provider,
+            api_base=reached_api_base,
+            deployment_model_info=typed_deployment_model_info,
+            drop_params=drop_unsupported_reasoning,
+            additional_drop_params=routing_kwargs.get("additional_drop_params"),
+        )
+
         _dispatch_ctx: Final = CompletionDispatchContext(
             _azure_detection_model=_azure_detection_model,
             acompletion=acompletion,
@@ -6668,7 +6737,7 @@ def completion(
             metadata=metadata,
             model=model,
             model_response=model_response,
-            optional_params=optional_params,
+            optional_params=chat_optional_params,
             optional_params_for_model_info=optional_params_for_model_info,
             organization=organization,
             provider_config=provider_config,
@@ -6933,7 +7002,7 @@ def _carry_failed_attempt(retry_state: _RetryCallState) -> None:
         logging_obj.carry_failed_attempt_usage()
 
 
-def completion_with_retries(*args, **kwargs):
+def completion_with_retries(*args: object, **kwargs):
     """
     Executes a litellm.completion() with 3 retries
     """
@@ -6966,7 +7035,7 @@ def completion_with_retries(*args, **kwargs):
     return retryer(original_function, *args, **kwargs)
 
 
-async def acompletion_with_retries(*args, **kwargs):
+async def acompletion_with_retries(*args: object, **kwargs):
     """
     [DEPRECATED]. Use 'acompletion' or router.acompletion instead!
     Executes a litellm.completion() with 3 retries
@@ -6999,7 +7068,7 @@ async def acompletion_with_retries(*args, **kwargs):
     return await retryer(original_function, *args, **kwargs)
 
 
-def responses_with_retries(*args, **kwargs):
+def responses_with_retries(*args: object, **kwargs):
     """
     Executes a litellm.responses() with retries
     """
@@ -7034,7 +7103,7 @@ def responses_with_retries(*args, **kwargs):
     return retryer(original_function, *args, **kwargs)
 
 
-async def aresponses_with_retries(*args, **kwargs):
+async def aresponses_with_retries(*args: object, **kwargs):
     """
     Executes a litellm.aresponses() with retries
     """
@@ -7154,8 +7223,8 @@ def _embedding_headers(param: str, configured: object, model: str, drop_params: 
 # Overload for when aembedding=True (returns coroutine)
 @overload
 def embedding(
-    model,
-    input=[],
+    model: str,
+    input: object = [],
     # Optional params
     dimensions: int | None = None,
     encoding_format: str | None = None,
@@ -7167,12 +7236,12 @@ def embedding(
     api_type: str | None = None,
     caching: bool = False,
     user: str | None = None,
-    custom_llm_provider=None,
-    litellm_call_id=None,
-    logger_fn=None,
+    custom_llm_provider: str | None = None,
+    litellm_call_id: object = None,
+    logger_fn: object = None,
     *,
     aembedding: Literal[True],
-    **kwargs,
+    **kwargs: object,
 ) -> Coroutine[object, object, EmbeddingResponse]: 
     ...
 
@@ -7180,8 +7249,8 @@ def embedding(
 # Overload for when aembedding=False or not specified (returns EmbeddingResponse)
 @overload
 def embedding(
-    model,
-    input=[],
+    model: str,
+    input: object = [],
     # Optional params
     dimensions: int | None = None,
     encoding_format: str | None = None,
@@ -7193,12 +7262,12 @@ def embedding(
     api_type: str | None = None,
     caching: bool = False,
     user: str | None = None,
-    custom_llm_provider=None,
-    litellm_call_id=None,
-    logger_fn=None,
+    custom_llm_provider: str | None = None,
+    litellm_call_id: object = None,
+    logger_fn: object = None,
     *,
     aembedding: Literal[False] = False,
-    **kwargs,
+    **kwargs: object,
 ) -> EmbeddingResponse: 
     ...
 
@@ -7207,7 +7276,7 @@ def embedding(
 
 @client
 def embedding(
-    model,
+    model: str,
     input=[],
     # Optional params
     dimensions: int | None = None,
@@ -7220,9 +7289,9 @@ def embedding(
     api_type: str | None = None,
     caching: bool = False,
     user: str | None = None,
-    custom_llm_provider=None,
-    litellm_call_id=None,
-    logger_fn=None,
+    custom_llm_provider: str | None = None,
+    litellm_call_id: object = None,
+    logger_fn: object = None,
     **kwargs,
 ) -> EmbeddingResponse | Coroutine[object, object, EmbeddingResponse]:
     """
@@ -8281,7 +8350,7 @@ async def _resolve_pending_chat_response(pending: Coroutine[object, object, Mode
 
 
 @client
-async def atext_completion(*args, **kwargs) -> TextCompletionResponse | TextCompletionStreamWrapper:
+async def atext_completion(*args: object, **kwargs) -> TextCompletionResponse | TextCompletionStreamWrapper:
     """
     Implemented to handle async streaming for the text completion endpoint
     """
@@ -8367,7 +8436,7 @@ def text_completion(
     | None = None,  # Optional: Penalize new tokens based on whether they appear in the text so far.
     stop: str | list[str] | None = None,  # Optional: Sequences where the API will stop generating further tokens.
     stream: bool | None = None,  # Optional: Whether to stream back partial progress.
-    stream_options: dict | None = None,
+    stream_options: Mapping[str, object] | None = None,
     suffix: str | None = None,  # Optional: The suffix that comes after a completion of inserted text.
     temperature: float | None = None,  # Optional: Sampling temperature to use.
     top_p: float | None = None,  # Optional: Nucleus sampling parameter.
@@ -8376,11 +8445,11 @@ def text_completion(
     api_base: str | None = None,
     api_version: str | None = None,
     api_key: str | None = None,
-    model_list: list | None = None,  # pass in a list of api_base,keys, etc.
+    model_list: Sequence[object] | None = None,  # pass in a list of api_base,keys, etc.
     # Optional liteLLM function params
     custom_llm_provider: str | None = None,
-    *args,
-    **kwargs,
+    *args: object,
+    **kwargs: object,
 ):
     import copy
 
@@ -8461,7 +8530,7 @@ def text_completion(
         optional_params["custom_llm_provider"] = custom_llm_provider
 
     # get custom_llm_provider
-    _model, custom_llm_provider, dynamic_api_key, api_base = get_llm_provider(
+    _model, custom_llm_provider, _, api_base = get_llm_provider(
         model=model,
         custom_llm_provider=custom_llm_provider,
         api_base=api_base,
@@ -8484,7 +8553,7 @@ def text_completion(
             ## if it's a 2d list - each element in the list is a text_completion() request
             if len(prompt) > 0 and isinstance(prompt[0], list):
 
-                def process_prompt(i, individual_prompt):
+                def process_prompt(i: int, individual_prompt):
                     decoded_prompt: Final = tokenizer.decode(individual_prompt)
                     all_params: Final = _ForwardedCompletionParams(**{**kwargs, **optional_params})
                     response: Final[TextCompletionResponse] = text_completion(
@@ -8555,11 +8624,14 @@ def text_completion(
     if model is None:
         raise ValueError("model is not set. Set either via 'model' or 'engine' param.")
     kwargs["text_completion"] = True
+    completion_kwargs: Final = bridged_audio_output_request(kwargs, _model, custom_llm_provider)
+    if isinstance(completion_kwargs, AudioOnlyModel | AudioRequested):
+        raise_audio_output_refusal(completion_kwargs, "/v1/completions")
     response = completion(
         model=model,
         messages=messages,
         *args,
-        **kwargs,
+        **completion_kwargs,
         **_ForwardedCompletionParams(**optional_params),
     )
     if kwargs.get("acompletion", False) is True:
@@ -8590,7 +8662,9 @@ def text_completion(
 ###### Adapter Completion ################
 
 
-async def aadapter_completion(*, adapter_id: str, **kwargs) -> BaseModel | AdapterCompletionStreamWrapper | None:
+async def aadapter_completion(
+    *, adapter_id: str, **kwargs: object
+) -> BaseModel | AdapterCompletionStreamWrapper | None:
     """
     Implemented to handle async calls for adapter_completion()
     """
@@ -8633,7 +8707,7 @@ async def aadapter_generate_content(
     return await coro
 
 
-def adapter_completion(*, adapter_id: str, **kwargs) -> BaseModel | AdapterCompletionStreamWrapper | None:
+def adapter_completion(*, adapter_id: str, **kwargs: object) -> BaseModel | AdapterCompletionStreamWrapper | None:
     translation_obj: CustomLogger | None = None
     for item in litellm.adapters:
         if item["id"] == adapter_id:
@@ -8833,7 +8907,7 @@ async def atranscription(
         # tricks the OpenAI SDK's "best match deserialization" into thinking
         # a plain Transcription is a TranscriptionVerbose/Diarized type.
         if response is not None and not isinstance(response, Coroutine) and file is not None:
-            existing_duration: Final = getattr(response, "duration", None)
+            existing_duration: Final[object] = getattr(response, "duration", None)
             if existing_duration is None:
                 sync_calculated_duration: Final = calculate_request_duration(file)
                 if sync_calculated_duration is not None:
@@ -8907,7 +8981,7 @@ def transcription(
     api_base: str | None = None,
     api_version: str | None = None,
     max_retries: int | None = None,
-    custom_llm_provider=None,
+    custom_llm_provider: str | None = None,
     base_url: str | None = None,
     languages: Sequence[str] | None = None,
     keywords: Sequence[str] | None = None,
@@ -9791,7 +9865,7 @@ async def ahealth_check(
     model_params: dict,
     mode: str | None = None,
     prompt: str | None = None,
-    input: list | None = None,
+    input: Sequence[object] | None = None,
 ):
     """
     Support health checks for different providers. Return remaining rate limit, etc.

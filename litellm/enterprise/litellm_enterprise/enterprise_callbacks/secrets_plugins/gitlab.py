@@ -15,7 +15,7 @@ class GitLabDetector(RegexBasedDetector):
         return "GitLab Secret"
 
     @property
-    def denylist(self) -> list[re.Pattern]:
+    def denylist(self) -> list[re.Pattern[str]]:
         return [
             # GitLab Personal Access Token
             re.compile(r"""glpat-[0-9a-zA-Z\-\_]{20}"""),

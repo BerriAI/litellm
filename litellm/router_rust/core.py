@@ -36,7 +36,7 @@ from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError,
 from typing_extensions import assert_never
 
 from litellm._internal_context import request_parent_otel_span, service_target
-from litellm.constants import DEFAULT_COOLDOWN_TIME_SECONDS
+from litellm.constants import DEFAULT_COOLDOWN_TIME_SECONDS, SEMANTIC_CACHE_POLICY_KEY
 from litellm.integrations.custom_guardrail import is_guardrail_intervention
 from litellm.litellm_core_utils.add_retry_fallback_headers import (
     add_fallback_headers_to_response,
@@ -281,6 +281,7 @@ from litellm.types.router import (
     RoutingGroup,
     RoutingStrategy,
 )
+from litellm.types.semantic_cache import semantic_cache_policy
 from litellm.types.utils import CooldownDeploymentInfo, LlmProviders
 
 if TYPE_CHECKING:
@@ -395,7 +396,7 @@ _SERVED_ARGUMENTS: Final = frozenset(
         "ignore_invalid_deployments",
         # Read host-side by the pre-routing strategies (litellm/router_rust/steps/prerouting.py).
         "auto_router_capability_limit",
-        # Decided in router-core (precall.rs); its facts come from litellm/router_rust/steps/precall.py.
+        # Decided in router-core (precall/mod.rs); its facts come from litellm/router_rust/steps/precall.py.
         "enable_pre_call_checks",
         # Run host-side (litellm/router_rust/steps/plugins.py); router-core filters on what they leave.
         "plugins",
@@ -531,7 +532,9 @@ def _raised_before_provider(error: BaseException) -> bool:
     from litellm.exceptions import UnsupportedParamsError
 
     body: Final = getattr(error, "body", None)
-    return isinstance(error, UnsupportedParamsError) or (isinstance(body, Mapping) and body.get("param") == "priority")
+    return isinstance(error, UnsupportedParamsError) or (
+        not getattr(error, "llm_provider", "") and isinstance(body, Mapping) and body.get("param") == "priority"
+    )
 
 
 def _shares_logging(request: Mapping[str, object]) -> bool:
@@ -1480,6 +1483,10 @@ class _EndpointPort:
 
     def group_members(self, model_name: str) -> Sequence[tuple[object, object]] | None:
         return self._core._hosted._group_members(model_name)  # pyright: ignore[reportPrivateUsage]  # see the class docstring
+
+    def served_deployments(self) -> tuple[Mapping[str, object], ...]:
+        records: Final = self._core._handle.deployments()  # pyright: ignore[reportPrivateUsage]  # see the class docstring
+        return tuple(_with_live_params(self._core, as_str_mapping(record) or {}) for record in records)
 
     def routed_name(self, model: object) -> str:
         return self._core.routed_name(model)
@@ -3876,7 +3883,7 @@ class RustCore(
             return frozenset()
         tag_request: Final = {**request, field: {**metadata}} if isinstance(metadata, Mapping) else dict(request)
         found = frozenset[str]()  # rebind-ok: gains each pass's tag routing picks
-        remaining = [  # rebind-ok: each pass drops what tag routing just picked
+        remaining: list[Mapping[str, object]] = [  # rebind-ok: each pass drops what tag routing just picked
             record for record in routable if picked_id(record) in among
         ]
         while remaining:
@@ -5452,7 +5459,13 @@ class _Driver:
     def _attempt_request(self, step: Mapping[str, object]) -> Mapping[str, object]:
         """The request as the attempt sends it: with the params a fallback's dict target sets (``kwargs.update``)."""
         params: Final = as_str_mapping(step.get("params"))
-        return self._request if params is None else {**self._request, **params}
+        if params is None:
+            return self._request
+        policy: Final = semantic_cache_policy(self._request) if "cache" in params else None
+        if policy is None:
+            return {**self._request, **params}
+        cache: Final = {**(as_str_mapping(params["cache"]) or {}), SEMANTIC_CACHE_POLICY_KEY: policy}
+        return {**self._request, **params, "cache": cache}
 
     async def _slot_or_turn_back(
         self, port: "_EndpointPort", deployment: Mapping[str, object], call: "AttemptCall", admission: Admission | None

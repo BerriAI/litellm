@@ -418,7 +418,7 @@ class GeminiModelInfo(BaseLLMModelInfo):
         return model.replace("gemini/", "")
 
     def process_model_name(self, models: Iterable[Mapping[str, str]]) -> list[str]:
-        litellm_model_names: Final = []
+        litellm_model_names: Final[list[str]] = []
         for model in models:
             stripped_model_name = model["name"].replace("models/", "")
             litellm_model_name = "gemini/" + stripped_model_name
@@ -451,7 +451,9 @@ class GeminiModelInfo(BaseLLMModelInfo):
         litellm_model_names: Final = self.process_model_name(listing["models"])
         return litellm_model_names
 
-    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: dict[str, object] | httpx.Headers
+    ) -> BaseLLMException:
         return GeminiError(status_code=status_code, message=error_message, headers=headers)
 
     def get_token_counter(self) -> BaseTokenCounter | None:

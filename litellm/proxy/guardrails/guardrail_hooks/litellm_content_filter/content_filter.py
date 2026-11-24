@@ -330,7 +330,7 @@ class CategoryConfig:
         self.inherit_from = inherit_from
         self.additional_block_words = [w.lower() for w in additional_block_words] if additional_block_words else []
         # Phrase patterns: regex patterns for catching paraphrases
-        self.phrase_patterns: list[tuple[str, Pattern]] = []
+        self.phrase_patterns: list[tuple[str, Pattern[str]]] = []
         for p in phrase_patterns or []:
             try:
                 self.phrase_patterns.append((p, re.compile(p, re.IGNORECASE)))

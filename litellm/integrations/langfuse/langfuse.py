@@ -154,6 +154,20 @@ def langfuse_trace_id(
     return trace_id
 
 
+def request_langfuse_trace_id(
+    litellm_params: Mapping[str, object], standard_trace_id: object, litellm_trace_id: object, litellm_call_id: object
+) -> str | None:
+    proxy_server_request: Final = litellm_params.get("proxy_server_request")
+    trace_id: Final = langfuse_trace_id(
+        metadata=langfuse_trace_metadata(litellm_params.get("metadata"), proxy_server_request),
+        standard_trace_id=standard_trace_id,
+        litellm_trace_id=litellm_trace_id,
+        litellm_call_id=litellm_call_id,
+        proxy_server_request=proxy_server_request,
+    )
+    return trace_id if isinstance(trace_id, str) else None
+
+
 class _UsageObject(Protocol):
     """Token-count surface the Langfuse logger reads off a response usage payload."""
 
@@ -364,7 +378,7 @@ class LangFuseLogger:
         langfuse_secret=None,
         langfuse_host=None,
         langfuse_environment: str | None = None,
-        flush_interval=1,
+        flush_interval: int = 1,
         allow_env_credentials: bool = True,
     ):
         try:
@@ -1070,7 +1084,7 @@ class LangFuseLogger:
             return []
         return standard_logging_object.get("request_tags", []) or []
 
-    def add_default_langfuse_tags(self, tags, kwargs, metadata):
+    def add_default_langfuse_tags(self, tags: list[str], kwargs, metadata) -> list[str]:
         """
         Helper function to add litellm default langfuse tags
 

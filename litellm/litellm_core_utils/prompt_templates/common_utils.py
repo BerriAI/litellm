@@ -199,6 +199,7 @@ from litellm.litellm_core_utils.prompt_templates.tpm_media_utils import (
 from litellm.litellm_core_utils.prompt_templates.tpm_media_utils import (
     split_media_for_tpm as split_media_for_tpm,  # noqa: PLC0414  # public compatibility re-export
 )
+from litellm.types.llms.anthropic import ANTHROPIC_UNRENDERED_BLOCK_TYPES
 from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionAssistantMessage,
@@ -433,7 +434,7 @@ def strip_name_from_messages(
     """
     Removes 'name' from messages
     """
-    new_messages: Final = []
+    new_messages: Final[list[AllMessageValues]] = []
     for message in messages:
         msg_role = message.get("role")
         msg_copy = message.copy()
@@ -481,6 +482,17 @@ def extract_search_results_text(search_results: object) -> str:
         if citations is not None:
             texts += json.dumps(citations, separators=(",", ":"))
     return texts
+
+
+def is_unrendered_block(block: object) -> bool:
+    fields: Final = as_str_mapping(block)
+    block_type: Final = None if fields is None else fields.get("type")
+    return isinstance(block_type, str) and block_type in ANTHROPIC_UNRENDERED_BLOCK_TYPES
+
+
+def is_unrendered_block_without_text(block: object) -> bool:
+    fields: Final = as_str_mapping(block)
+    return fields is not None and is_unrendered_block(fields) and "text" not in fields
 
 
 def convert_content_list_to_str(
@@ -729,7 +741,7 @@ def convert_openai_message_to_only_content_messages(
 
     Used for calling guardrails integrations which expect string content
     """
-    converted_messages: Final = []
+    converted_messages: Final[list[dict[str, str]]] = []
     user_roles: Final = ["user", "tool", "function"]
     for message in messages:
         if message.get("role") in user_roles:
@@ -791,6 +803,51 @@ def detect_first_expected_role(
     return None
 
 
+_TEXT_BLOCK_TYPES: Final = frozenset({"text", "input_text"})
+
+
+def _is_blank_text_block(block: object) -> bool:
+    fields: Final = as_str_mapping(block)
+    return fields is not None and fields.get("type") in _TEXT_BLOCK_TYPES and not fields.get("text")
+
+
+def is_blank_content(content: object) -> bool:
+    if content is None or content == "":
+        return True
+    blocks: Final = as_object_list(content)
+    return blocks is not None and all(map(_is_blank_text_block, blocks))
+
+
+def is_empty_user_message(message: object) -> bool:
+    mapping: Final = as_str_mapping(message)
+    if mapping is not None:
+        return mapping.get("role") == "user" and is_blank_content(mapping.get("content"))
+    return getattr(message, "role", None) == "user" and is_blank_content(getattr(message, "content", None))
+
+
+def _is_whitespace_text(text: object) -> bool:
+    return not text or (isinstance(text, str) and not text.strip())
+
+
+def _is_whitespace_text_block(block: object) -> bool:
+    fields: Final = as_str_mapping(block)
+    return fields is not None and fields.get("type") in _TEXT_BLOCK_TYPES and _is_whitespace_text(fields.get("text"))
+
+
+def _is_whitespace_content(content: object) -> bool:
+    if content is None or isinstance(content, str):
+        return _is_whitespace_text(content)
+    blocks: Final = as_object_list(content)
+    return blocks is not None and all(map(_is_whitespace_text_block, blocks))
+
+
+def is_whitespace_user_message(message: object) -> bool:
+    mapping: Final = as_str_mapping(message)
+    if mapping is not None:
+        return mapping.get("role") == "user" and _is_whitespace_content(mapping.get("content"))
+    return getattr(message, "role", None) == "user" and _is_whitespace_content(getattr(message, "content", None))
+
+
 def _counts_for_alternation(message: AllMessageValues) -> bool:
     role: Final = message.get("role")
     if role == "user":
@@ -824,7 +881,7 @@ def _insert_user_continue_message(
     # Handle first message if it's an assistant message — always prepend
     # user_continue regardless of tool_calls, to preserve backward compatibility.
     if result_messages[0]["role"] == "assistant":
-        result_messages.insert(0, continue_message)
+        result_messages.insert(0, continue_message.copy())
 
     # Handle consecutive assistant messages in the counted sequence
     i = 1
@@ -835,7 +892,7 @@ def _insert_user_continue_message(
             # Preserve old behavior for malformed adjacent assistant sequences like
             # assistant(tool_calls) -> assistant(no-tool-calls) with no tool message.
             if i > 0 and result_messages[i - 1].get("role") == "assistant":
-                result_messages.insert(i, continue_message)
+                result_messages.insert(i, continue_message.copy())
                 i += 2
                 inserted_continue_message = True
             else:
@@ -844,7 +901,7 @@ def _insert_user_continue_message(
                     previous_message = result_messages[j]
                     if _counts_for_alternation(previous_message):
                         if previous_message["role"] == "assistant":
-                            result_messages.insert(i, continue_message)
+                            result_messages.insert(i, continue_message.copy())
                             i += 2
                             inserted_continue_message = True
                         break
@@ -855,7 +912,7 @@ def _insert_user_continue_message(
     # Handle final message — append user_continue after any trailing assistant,
     # including ones with tool_calls, to preserve backward compatibility.
     if result_messages[-1]["role"] == "assistant" and ensure_alternating_roles:
-        result_messages.append(continue_message)
+        result_messages.append(continue_message.copy())
 
     return result_messages
 
@@ -877,7 +934,7 @@ def _insert_assistant_continue_message(
     continue_message: Final = assistant_continue_message or DEFAULT_ASSISTANT_CONTINUE_MESSAGE
 
     # Find indexes where assistant_continue should be inserted (before that index)
-    insert_before_indexes: Final[set] = set()
+    insert_before_indexes: Final[set[int]] = set()
 
     for i in range(len(messages)):
         curr = messages[i]
@@ -895,7 +952,7 @@ def _insert_assistant_continue_message(
     modified_messages: Final[list[AllMessageValues]] = []
     for i, message in enumerate(messages):
         if i in insert_before_indexes:
-            modified_messages.append(continue_message)
+            modified_messages.append(continue_message.copy())
         modified_messages.append(message)
 
     return modified_messages
@@ -1227,7 +1284,7 @@ def unpack_legacy_defs(
     return schema
 
 
-def sanitize_input_schema_for_anthropic(input_schema: dict) -> "AnthropicInputSchema":
+def sanitize_input_schema_for_anthropic(input_schema: Mapping[str, object]) -> "AnthropicInputSchema":
     """Coerce an arbitrary tool input_schema into the shape Anthropic accepts.
 
     Anthropic requires ``type == "object"``, only recognises ``$defs`` (legacy
@@ -1265,7 +1322,7 @@ def get_tool_call_names(tools: list[ChatCompletionToolParam]) -> list[str]:
     return tool_call_names
 
 
-def is_function_call(optional_params: dict) -> bool:
+def is_function_call(optional_params: Mapping[str, object]) -> bool:
     """
     Checks if the optional params contain the function call
     """
@@ -1460,7 +1517,7 @@ def get_last_user_message(messages: list[AllMessageValues]) -> str | None:
         return None
 
     # Iterate from the end to find the last consecutive block of user messages
-    user_messages: Final = []
+    user_messages: Final[list[AllMessageValues]] = []
     for message in reversed(messages):
         if message.get("role") == "user":
             user_messages.append(message)
@@ -1490,7 +1547,7 @@ def set_last_user_message(messages: list[AllMessageValues], content: str) -> lis
     1. remove all the last consecutive user messages (FROM THE END)
     2. add the new message
     """
-    idx_to_remove: Final = []
+    idx_to_remove: Final[list[int]] = []
     for idx, message in enumerate(reversed(messages)):
         if message.get("role") == "user":
             idx_to_remove.append(idx)
@@ -1608,7 +1665,7 @@ def extract_images_from_message(message: AllMessageValues) -> list[str]:
     data portion is extracted. This is required for providers like Ollama
     that expect pure base64 data rather than full data URLs.
     """
-    images: Final = []
+    images: Final[list[str]] = []
     message_content: Final = message.get("content")
     if isinstance(message_content, list):
         for m in message_content:
@@ -1813,8 +1870,8 @@ def is_present_non_string(value: object) -> bool:
     return value is not None and not isinstance(value, str)
 
 
-def invalid_type_message(field_path: str, value: object) -> str:
-    return f"Invalid type for '{field_path}': expected a string, got {type(value).__name__}"
+def invalid_type_message(field_path: str, value: object, expected: str = "a string") -> str:
+    return f"Invalid type for '{field_path}': expected {expected}, got {type(value).__name__}"
 
 
 def is_unhashable_value_behind(error: TypeError, value: object) -> bool:

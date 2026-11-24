@@ -129,6 +129,7 @@ The following arguments are supported:
 * `models` - (Optional) List of model names that this team can access.
 
 * `metadata` - (Optional) A map of string metadata key-value pairs associated with the team. `tags` and `soft_budget_alerting_emails` are stored by the proxy under metadata but are managed through their own attributes below, not this map.
+* `logging_callback` - (Optional, repeatable) Logging callback managed by Terraform. Requires Terraform 1.11 or later.
 
 * `tags` - (Optional) List of tags applied to the team, used for [spend tracking](https://docs.litellm.ai/docs/proxy/enterprise#tracking-spend-for-custom-tags) and [tag-based routing](https://docs.litellm.ai/docs/proxy/tag_routing).
 
@@ -179,6 +180,29 @@ The following arguments are supported:
 * `rpm_limit_type` - (Optional) How the RPM limit is enforced: `guaranteed_throughput` or `best_effort_throughput`. Changing this forces a new team to be created.
 
 * `tpm_limit_type` - (Optional) How the TPM limit is enforced: `guaranteed_throughput` or `best_effort_throughput`. Changing this forces a new team to be created.
+
+## Logging callbacks
+
+```hcl
+resource "litellm_team" "example" {
+  team_alias = "logging-example"
+
+  logging_callback {
+    callback_name = "langfuse"
+    callback_vars_wo = jsonencode({
+      langfuse_public_key = var.langfuse_public_key
+      langfuse_secret_key = var.langfuse_secret_key
+    })
+    callback_vars_wo_version = 1
+  }
+}
+```
+
+Set `callback_name` to the proxy callback name. `callback_type` accepts `success`, `failure`, or `success_and_failure` (the default). `callback_vars_wo` is a write-only JSON object with string values. Use `jsonencode({})` for callbacks without variables. Terraform does not save the value in plans or state. Bump `callback_vars_wo_version` when the values change, since Terraform cannot detect changes to the variables themselves. Use sensitive, ephemeral Terraform variables for secret inputs rather than hardcoding values.
+
+Terraform manages only the team callbacks you declare, matching them by name and type. Refresh does not add other callbacks to the managed blocks, and rotating or removing managed callbacks leaves the others on the team. If you remove every block, Terraform removes only the callbacks it managed.
+
+To migrate, remove `metadata.logging` from your configuration and declare the blocks instead. If you previously stored secret values in metadata, rotate them and review access to old plans, state, and logs.
 
 ## Attribute Reference
 

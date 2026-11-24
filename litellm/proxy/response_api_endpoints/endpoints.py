@@ -53,6 +53,7 @@ from litellm.litellm_core_utils.core_helpers import as_str_mapping, get_metadata
 from litellm.litellm_core_utils.internal_call_metadata import is_background_response, requests_background
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+from litellm.litellm_core_utils.socket_logging import collect_socket_logging
 from litellm.litellm_core_utils.token_counter import usage_tokenizer_model
 from litellm.litellm_core_utils.tool_fields import TOOL_FIELDS, first_validation_error
 from litellm.llms.openai.responses.guardrail_translation.handler import (
@@ -292,8 +293,8 @@ def _convert_tool_envelope(obj: object, *, to_chat: bool) -> object:
 
 
 def _normalize_tool_dialect(
-    data: dict, *, to_chat: bool
-) -> dict:  # mutable-ok: the parsed request body contract is a plain dict
+    data: dict[str, object], *, to_chat: bool
+) -> dict[str, object]:  # mutable-ok: the parsed request body contract is a plain dict
     tools: Final = data.get("tools")
     tool_choice: Final = data.get("tool_choice")
     normalized_tools: Final = (
@@ -336,8 +337,8 @@ def _router_can_serve(model: str, llm_router: "Router | None") -> bool:
 
 
 def _resolve_cursor_model_variant(
-    data: dict, llm_router: "Router | None"
-) -> dict:  # mutable-ok: the parsed request body contract is a plain dict
+    data: dict[str, object], llm_router: "Router | None"
+) -> dict[str, object]:  # mutable-ok: the parsed request body contract is a plain dict
     model: Final = data.get("model")
     if not isinstance(model, str) or _router_can_serve(model, llm_router):
         return data
@@ -761,7 +762,9 @@ async def cursor_chat_completions(
 
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)
 
-    def cursor_data_generator(response, user_api_key_dict, request_data, request=None):
+    def cursor_data_generator(
+        response: object, user_api_key_dict: UserAPIKeyAuth, request_data, request: Request | None = None
+    ):
         """
         Custom generator that transforms Responses API streaming chunks to chat completion chunks.
 
@@ -2250,7 +2253,7 @@ async def _enforce_responses_ws_first_frame_model_auth(
         user_custom_auth,
     )
 
-    request_data: Final = {"model": model}
+    request_data: Final[dict[str, object]] = {"model": model}
     route: Final = request.scope.get("path") or "/v1/responses"
     if master_key is None and not (
         general_settings.get("enable_jwt_auth", False)
@@ -2734,8 +2737,9 @@ async def _bill_rejected_frame(
     exception: Exception,
     frame_data: dict[str, object],  # mutable-ok: the spend logger stamps the failure row on the request dict
 ) -> None:
-    """Only the spend logger sees a rejected frame; the other failure hooks (the rate limiter's slot release,
-    alerting) belong to the live connection, which stays open. Billing never replaces the guardrail's own error."""
+    """Only the spend logger sees a rejected frame; the other failure hooks (the rate limiter's release of the
+    connection's slot and TPM reservation, alerting) belong to the live connection, which stays open. Billing never
+    replaces the guardrail's own error."""
     for callback in litellm.callbacks:
         if isinstance(callback, ProxyDBLogger):
             try:
@@ -2878,12 +2882,14 @@ async def _responses_websocket_session(
             skip_guardrails=True,
         )
     except RateLimitError as e:
+        await proxy_logging_obj.arelease_refused_responses_websocket_slot(user_api_key_dict)
         verbose_proxy_logger.info("Responses WebSocket refused at open by a rate limit: %s", e)
         with contextlib.suppress(WebSocketDisconnect, RuntimeError, OSError):
             await websocket.send_text(turn_refusal_frame(e))
         await websocket.close(code=1008, reason="Rate limit exceeded")
         return
     except Exception as e:
+        await proxy_logging_obj.arelease_refused_responses_websocket_slot(user_api_key_dict)
         verbose_proxy_logger.exception("Responses WebSocket pre-call error")
         try:
             open_status: Final = error_status_code(e, 500)
@@ -2895,7 +2901,10 @@ async def _responses_websocket_session(
         await websocket.close(code=1008, reason="Pre-call error")
         return
 
+    proxy_logging_obj.leave_responses_websocket_reservation_to_close()
     refused_turns: Final = _RefusedTurns()
+    unfinished_turn: Final = asyncio.Event()
+    relay_crashed: Final = asyncio.Event()
     routed_data: Final = dict(
         data,
         **_socket_trace_id(data),
@@ -2903,6 +2912,7 @@ async def _responses_websocket_session(
         responses_ws_frame_guard=_responses_ws_frame_guard(
             data, user_api_key_dict, proxy_logging_obj, refused_turns.add
         ),
+        responses_ws_on_unfinished_turn=unfinished_turn.set,
         **_routing_hints_from_first_ws_frame(first_message),
     )
 
@@ -2932,6 +2942,7 @@ async def _responses_websocket_session(
                 _ = bill_socket_failure(refused_turns.first)
             raise
         except Exception as e:
+            relay_crashed.set()
             crash_row: Final = bill_socket_failure(e)
             with contextlib.suppress(Exception):
                 await websocket.send_text(_responses_ws_failure_frame(e))
@@ -2946,10 +2957,19 @@ async def _responses_websocket_session(
         return bill_socket_failure(outcome) if isinstance(outcome, Exception) else None
 
     # Phase 2: route to upstream provider
-    try:
-        failure_row: Final = await relay_and_bill_failure()
-    finally:
-        await proxy_logging_obj.arelease_responses_websocket_slot(user_api_key_dict)
+    with collect_socket_logging() as socket_logging:
+        try:
+            failure_row: Final = await relay_and_bill_failure()
+        finally:
+            await proxy_logging_obj.arelease_responses_websocket_slot(
+                user_api_key_dict,
+                "turn_unfinished"
+                if unfinished_turn.is_set()
+                else "relay_failed"
+                if relay_crashed.is_set()
+                else "turns_finished",
+                socket_logging.finished,
+            )
     if failure_row is not None:
         with contextlib.suppress(Exception):
             await asyncio.shield(failure_row)

@@ -61,7 +61,7 @@ def refusal_stop_details(explanation: str | None) -> AnthropicStopDetails:
     return AnthropicStopDetails(type="refusal", category=None, explanation=explanation)
 
 
-MESSAGE_DELTA_OPTIONAL_KEYS: Final = ("stop_details", "safeguard_results")
+MESSAGE_DELTA_OPTIONAL_KEYS: Final = ("stop_details", "safeguard_results", "container")
 
 
 def anthropic_message_delta(
@@ -69,10 +69,11 @@ def anthropic_message_delta(
 ) -> Mapping[str, object]:
     """
     The ``delta`` of the ``message_delta`` event synthesized from a complete
-    Anthropic Messages response. A real stream carries ``stop_details`` and
-    ``safeguard_results`` there, so a client that asked to stream reads them
-    from this event and nowhere else. ``optional_fields`` replaces the
-    response's own when it was rebuilt from a stream that carried them.
+    Anthropic Messages response. A real stream carries ``stop_details``,
+    ``safeguard_results`` and ``container`` there, so a client that asked to
+    stream reads them from this event and nowhere else. ``optional_fields``
+    replaces the response's own when it was rebuilt from a stream that carried
+    them.
     """
     optional_source: Final = response if optional_fields is None else optional_fields
     present_optional: Final = {
@@ -295,6 +296,8 @@ def prepare_native_messages(
     api_base: str | None = None,
     presanitized: bool = False,
 ) -> tuple[list[dict[str, JsonValue]], str | list[dict[str, JsonValue]] | None]:
+    from litellm.responses.bridge_check import needs_empty_user_turn_back
+
     normalized: Final = (
         messages
         if presanitized
@@ -302,10 +305,21 @@ def prepare_native_messages(
             messages, kwargs.get("drop_params"), model=model, custom_llm_provider=custom_llm_provider
         )
     )
+    restored: Final = (
+        [*normalized, {"role": "user", "content": ""}]
+        if needs_empty_user_turn_back(
+            messages[-1] if messages else None,
+            normalized,
+            model,
+            custom_llm_provider,
+            {**kwargs, "api_base": api_base},
+        )
+        else normalized
+    )
     return cast(  # cast-ok: legacy normalizers and injection preserve the JSON message and system shapes
         tuple[list[dict[str, JsonValue]], str | list[dict[str, JsonValue]] | None],
         AnthropicCacheControlHook.maybe_inject_cache_control(
-            normalized,
+            restored,
             system,
             kwargs,
             model=model,
@@ -444,10 +458,10 @@ class AnthropicMessagesRequestUtils:
 
 def mock_response(
     model: str,
-    messages: list[dict],
+    messages: Sequence[Mapping[str, object]],
     max_tokens: int,
     mock_response: str = "Hi! My name is Claude.",
-    **kwargs,
+    **kwargs: object,
 ) -> AnthropicMessagesResponse:
     """
     Mock response for Anthropic messages

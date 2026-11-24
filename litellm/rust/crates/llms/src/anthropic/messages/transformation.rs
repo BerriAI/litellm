@@ -72,6 +72,15 @@ impl MessagesEndpoint for AnthropicMessagesConfig {
         Ok(complete_anthropic_url(api_base, env_lookup))
     }
 
+    fn checks_claude_signatures(
+        &self,
+        api_base: Option<&str>,
+        env_lookup: &dyn Fn(&str) -> Option<String>,
+    ) -> bool {
+        !url_host(&complete_anthropic_url(api_base, env_lookup))
+            .is_some_and(|host| replays_unsigned_thinking(&host))
+    }
+
     fn headers_for_url(&self, headers: Headers, url: &str) -> Headers {
         if !is_foundry_url(url) {
             return headers;
@@ -214,6 +223,14 @@ const FOUNDRY_HOST_SUFFIXES: [&str; 3] = [
 ];
 
 const ANTHROPIC_API_HOST: &str = "api.anthropic.com";
+const UNSIGNED_THINKING_HOST_SUFFIXES: [&str; 6] = [
+    "deepseek.com",
+    "minimax.io",
+    "minimaxi.com",
+    "tencentcloudmaas.com",
+    "z.ai",
+    "bigmodel.cn",
+];
 
 fn url_host(url: &str) -> Option<String> {
     let absolute = if url.contains("://") {
@@ -228,6 +245,12 @@ fn url_host(url: &str) -> Option<String> {
 
 fn is_foundry_host(host: &str) -> bool {
     FOUNDRY_HOST_SUFFIXES
+        .iter()
+        .any(|suffix| host == *suffix || host.ends_with(&format!(".{suffix}")))
+}
+
+fn replays_unsigned_thinking(host: &str) -> bool {
+    UNSIGNED_THINKING_HOST_SUFFIXES
         .iter()
         .any(|suffix| host == *suffix || host.ends_with(&format!(".{suffix}")))
 }
@@ -388,7 +411,9 @@ pub(crate) fn transform_messages_request(
         strip_encrypted_reasoning_blocks_restoring_redacted_data,
         strip_raw_encrypted_reasoning_blocks,
     );
-    let messages = if context.claude_base_model || is_claude_model(&request.model) {
+    let messages = if (context.claude_base_model || is_claude_model(&request.model))
+        && !context.keeps_unsigned_thinking
+    {
         map_messages(
             messages,
             strip_unsigned_thinking_blocks,
@@ -664,7 +689,7 @@ pub fn drop_unsupported_params(
     let speed = match &params.speed {
         Some(speed) if !capabilities.supports_speed => {
             reject("speed", speed_repr(speed), "")?;
-            litellm_tracing::warn!(
+            tracing::warn!(
                 "Dropping unsupported `speed` for model={model} (drop_params=True). Fast mode is only supported on select Opus models."
             );
             None
@@ -1608,6 +1633,22 @@ mod tests {
     }
 
     #[rstest]
+    #[case::anthropic("https://api.anthropic.com", true)]
+    #[case::gateway("https://llm-gateway.example.com/anthropic", true)]
+    #[case::foundry("https://example.services.ai.azure.com/anthropic", true)]
+    #[case::deepseek("https://api.deepseek.com/anthropic", false)]
+    #[case::z_ai("https://api.z.ai/api/anthropic", false)]
+    fn only_an_anthropic_compatible_host_gets_unsigned_thinking_back(
+        #[case] api_base: &str,
+        #[case] checks: bool,
+    ) {
+        assert_eq!(
+            ANTHROPIC_MESSAGES_CONFIG.checks_claude_signatures(Some(api_base), &|_| None),
+            checks
+        );
+    }
+
+    #[rstest]
     fn unsigned_thinking_is_still_replayed_to_an_open_model(unmapped: MessagesModelCapabilities) {
         let messages = tool_turn(Some(
             json!({"type": "thinking", "thinking": "open model plan", "signature": ""}),
@@ -1669,6 +1710,7 @@ mod tests {
                     drops_unsupported_params: false,
                     global_drop_params: false,
                     claude_base_model: false,
+                    keeps_unsigned_thinking: false,
                 }
             );
             return;

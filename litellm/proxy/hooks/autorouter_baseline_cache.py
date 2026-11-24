@@ -24,6 +24,7 @@ from litellm.llms.anthropic.prompt_cache_prediction import (
     TokenCounter,
     UnsupportedCachePlan,
     UnsupportedPredictionTarget,
+    aresolve_baseline_prediction_target,
     count_cache_plan,
     count_prompt_tokens,
     parse_cache_plan,
@@ -40,7 +41,7 @@ from litellm.proxy.spend_tracking.savings import (
 from litellm.router_strategy.auto_router.baseline_request import baseline_request
 from litellm.router_strategy.complexity_router.context_compaction import compaction_applied
 from litellm.types.llms.base import LiteLLMBaseModel
-from litellm.types.router import BaselineRouteStamp
+from litellm.types.router import BaselineRouteStamp, LiteLLM_Params
 from litellm.types.utils import CallTypes, ModelInfo, Usage
 from litellm.utils import get_prompt_cache_min_tokens
 
@@ -53,7 +54,17 @@ _METADATA: Final = TypeAdapter(Mapping[str, object])
 _PRICES: Final[TypeAdapter[ModelInfo | None]] = TypeAdapter(ModelInfo | None)
 _JSON_BODY: Final = TypeAdapter(dict[str, JsonValue])
 _COUNT_TIMEOUT: Final = 3.0
+_TARGET_TIMEOUT: Final = 0.5
 _MAX_COUNTS: Final = 4096
+
+
+async def _baseline_target(params: LiteLLM_Params) -> NativePredictionTarget | UnsupportedPredictionTarget:
+    try:
+        return await asyncio.wait_for(
+            aresolve_baseline_prediction_target(params), optional_callback_budget(_TARGET_TIMEOUT)
+        )
+    except asyncio.TimeoutError:
+        return UnsupportedPredictionTarget("provider_credentials_timeout")
 
 
 class CapturedBaselineObservation(LiteLLMBaseModel):
@@ -76,7 +87,7 @@ class CapturedBaselineObservation(LiteLLMBaseModel):
 class BaselineCacheContext:
     collector: AutoRouterBaselineCache
     capture: CapturedBaselineObservation
-    target: NativePredictionTarget | UnsupportedPredictionTarget
+    baseline_params: LiteLLM_Params = field(repr=False)
     baseline_deployment_id: str
     baseline_body: Mapping[str, JsonValue] | None = field(default=None, repr=False)
     selected_body_digest: str | None = field(default=None, repr=False)
@@ -137,7 +148,9 @@ class AutoRouterBaselineCache(CustomLogger):
             return
         try:
             raw_metadata: Final = kwargs.get(get_metadata_variable_name_from_kwargs(kwargs))
-            metadata: Final = _METADATA.validate_python(raw_metadata) if isinstance(raw_metadata, Mapping) else {}
+            metadata: Final[Mapping[str, object]] = (
+                _METADATA.validate_python(raw_metadata) if isinstance(raw_metadata, Mapping) else {}
+            )
             if metadata.get(INTERNAL_CALL_ORIGIN_METADATA_KEY):
                 return
             if logging_obj.baseline_cache_context is not None:
@@ -157,7 +170,7 @@ class AutoRouterBaselineCache(CustomLogger):
             prices: Final = _PRICES.validate_python(
                 _effective_model_info(router, request.route.baseline_deployment_id, request.route.baseline_model)
             )
-            params: Final = (
+            params: Final[Mapping[str, object]] = (
                 _METADATA.validate_python(deployment.litellm_params.model_dump(mode="json")) if deployment else {}
             )
             projected: Final = (
@@ -206,7 +219,7 @@ class AutoRouterBaselineCache(CustomLogger):
             logging_obj.baseline_cache_context = BaselineCacheContext(
                 self,
                 capture,
-                target,
+                deployment.litellm_params,
                 request.route.baseline_deployment_id,
                 prepare_native_baseline_body(projected, target.model)
                 if projected is not None and isinstance(target, NativePredictionTarget)
@@ -263,7 +276,7 @@ class AutoRouterBaselineCache(CustomLogger):
                 timeout=max(0.0, deadline - asyncio.get_running_loop().time()),
             )
             return (None, counted.reason) if isinstance(counted, UnsupportedCachePlan) else (counted, None)
-        except TimeoutError:
+        except asyncio.TimeoutError:
             return None, "token_count_timeout"
         except Exception:  # noqa: BLE001  # token counting cannot fail a completed request
             return None, "token_count_unavailable"
@@ -342,7 +355,7 @@ async def _capture_native(
                 }
             )
         )
-    target: Final = context.target
+    target: Final = await _baseline_target(context.baseline_params)
     if isinstance(target, UnsupportedPredictionTarget) or not supported_baseline_recipient(target, wire):
         return capture.with_observation(
             original.model_copy(

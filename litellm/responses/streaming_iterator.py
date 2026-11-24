@@ -65,6 +65,7 @@ from litellm.litellm_core_utils.llm_response_utils.get_headers import provider_r
 from litellm.litellm_core_utils.llm_response_utils.response_metadata import (
     update_response_metadata,
 )
+from litellm.litellm_core_utils.socket_logging import track_socket_logging
 from litellm.litellm_core_utils.thread_pool_executor import executor
 from litellm.llms.azure_ai.common_utils import AZURE_MODEL_ROUTER_SELECTED_MODEL_KEY
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
@@ -75,6 +76,7 @@ from litellm.responses.utils import ResponseAPILoggingUtils, ResponsesAPIRequest
 from litellm.types.integrations.custom_logger import converted_stream_requested
 from litellm.types.llms.openai import (
     PART_UNION_TYPES,
+    ErrorEventError,
     ResponseAPIUsage,
     ResponseIncompleteEvent,
     ResponsesAPIResponse,
@@ -248,7 +250,7 @@ async def _finish_even_if_cancelled(work: Awaitable[None]) -> None:
 def spawn_logging_task(
     running_loop: asyncio.AbstractEventLoop, coroutine: Coroutine[object, object, object], *, task_name: str
 ) -> asyncio.Task[object]:
-    task: Final = running_loop.create_task(coroutine)
+    task: Final = running_loop.create_task(track_socket_logging(coroutine))
     _PENDING_LOGGING_TASKS.add(task)
     task.add_done_callback(_PENDING_LOGGING_TASKS.discard)
     task.add_done_callback(lambda done: _log_background_task_failure(done, task_name=task_name))
@@ -337,6 +339,12 @@ def stream_error_status_and_message(error_obj: object) -> tuple[int, str]:
     return _status_code_for_error_fields(error_type, error_code), message
 
 
+def _provider_error_fields(error_obj: object) -> Mapping[str, object]:
+    if isinstance(error_obj, ErrorEventError):
+        return error_obj.model_dump(exclude_none=True)
+    return error_obj if _is_json_object(error_obj) else {}
+
+
 def map_stream_error_to_exception(
     error_obj: object,
     model: str,
@@ -348,11 +356,11 @@ def map_stream_error_to_exception(
 
     error_message, error_type, error_code = _error_event_fields(error_obj)
     status_code: Final = _status_code_for_error_fields(error_type, error_code)
-    error_body: Final = {"message": error_message, "type": error_type, "code": error_code}
+    error_fields: Final = {"message": error_message, "type": error_type, "code": error_code}
     provider_exception: Final = BaseLLMException(
         status_code=status_code,
-        message=f"Error code: {status_code} - {json.dumps({'error': error_body})}",
-        body=error_body,
+        message=f"Error code: {status_code} - {json.dumps({'error': error_fields})}",
+        body={**_provider_error_fields(error_obj), **error_fields},
         headers=headers,
     )
     return _mapped_exception(provider_exception, model, custom_llm_provider, logging_obj)
@@ -387,7 +395,11 @@ def _error_event_error_object(event: object) -> object:
     nested_error: Final = _event_field(event, "error")
     if nested_error is not None:
         return nested_error
-    return {field: value for field in ("message", "code") if _is_error_field_value(value := _event_field(event, field))}
+    return {
+        field: value
+        for field in ("message", "code", "param")
+        if _is_error_field_value(value := _event_field(event, field))
+    }
 
 
 def _mid_stream_fallback_eligible(mapped_exception: Exception) -> bool:
@@ -513,9 +525,10 @@ class BaseResponsesAPIStreamingIterator:
                         "type": ResponsesAPIStreamEvents.ERROR.value,
                     }
                 )
+                tool_input_fix: Final = _string_tool_input_fix(typed_chunk)
                 transformed_chunk: Final = self.responses_api_provider_config.transform_streaming_response(
                     model=self.model,
-                    parsed_chunk=typed_chunk,
+                    parsed_chunk={**typed_chunk, **tool_input_fix} if tool_input_fix else typed_chunk,
                     logging_obj=self.logging_obj,
                 )
                 affinity_model_id: Final = ResponsesAPIRequestUtils.affinity_model_id(self.litellm_metadata)
@@ -1485,7 +1498,14 @@ class MockResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
             request_data=request_data,
             call_type=call_type,
         )
-        self._set_events_from_response(transformed=transformed, logging_obj=logging_obj)
+        self._set_events_from_response(
+            transformed=ResponsesAPIRequestUtils.update_responses_api_response_id_with_model_id(
+                responses_api_response=transformed,
+                custom_llm_provider=custom_llm_provider,
+                litellm_metadata=litellm_metadata,
+            ),
+            logging_obj=logging_obj,
+        )
 
     def _set_events_from_response(
         self,
@@ -1904,6 +1924,28 @@ _CLIENT_RUN_TOOL_ARGUMENTS_DELTA_EVENTS: Final = frozenset(
 _TOOL_ARGUMENTS_DELTA_EVENTS: Final = _CLIENT_RUN_TOOL_ARGUMENTS_DELTA_EVENTS | {
     ResponsesAPIStreamEvents.MCP_CALL_ARGUMENTS_DELTA
 }
+_STRING_TOOL_INPUT_FIELD_BY_EVENT: Final[Mapping[str, str]] = MappingProxyType(
+    {
+        ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DELTA.value: "delta",
+        ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DONE.value: "arguments",
+        ResponsesAPIStreamEvents.MCP_CALL_ARGUMENTS_DELTA.value: "delta",
+        ResponsesAPIStreamEvents.MCP_CALL_ARGUMENTS_DONE.value: "arguments",
+        "response.mcp_call.arguments.delta": "delta",
+        "response.mcp_call.arguments.done": "arguments",
+        ResponsesAPIStreamEvents.CUSTOM_TOOL_CALL_INPUT_DELTA.value: "delta",
+        ResponsesAPIStreamEvents.CUSTOM_TOOL_CALL_INPUT_DONE.value: "input",
+    }
+)
+
+
+def _string_tool_input_fix(chunk: Mapping[str, object]) -> Mapping[str, str]:
+    field_name: Final = _STRING_TOOL_INPUT_FIELD_BY_EVENT.get(str(chunk.get("type")))
+    if field_name is None:
+        return {}
+    value: Final = chunk.get(field_name)
+    if isinstance(value, str):
+        return {}
+    return {field_name: "" if value is None else json.dumps(value, ensure_ascii=False)}
 
 
 def _estimate_usage_from_text(
@@ -2644,9 +2686,11 @@ class ResponsesWebSocketStreaming:
         turn_admission: ResponsesWsTurnAdmission | None = None,
         turn_usage_recorder: ResponsesWsTurnUsageRecorder | None = None,
         frame_guard: ResponsesWsFrameGuard | None = None,
+        on_unfinished_turn: Callable[[], None] | None = None,
     ):
         self.websocket = websocket
         self.backend_ws = backend_ws
+        self.on_unfinished_turn: Callable[[], None] | None = on_unfinished_turn
         self.logging_obj = logging_obj
         self.user_api_key_dict = user_api_key_dict
         self.frame_guard: ResponsesWsFrameGuard | None = frame_guard
@@ -2782,6 +2826,8 @@ class ResponsesWebSocketStreaming:
     def _log_open_turns(self) -> None:
         open_turns: Final = self._open_turns
         self._open_turns = ()
+        if open_turns and self.on_unfinished_turn is not None:
+            self.on_unfinished_turn()
         for turn in open_turns:
             if turn.events:
                 self._log_turn(turn)
@@ -3267,11 +3313,13 @@ class ManagedResponsesWebSocketHandler:
         turn_admission: ResponsesWsTurnAdmission | None = None,
         frame_guard: ResponsesWsFrameGuard | None = None,
         guardrail_callbacks: Sequence[PresidioGuardrailCallback] | None = None,
+        on_unfinished_turn: Callable[[], None] | None = None,
         **kwargs: object,
     ) -> None:
         self.websocket = websocket
         self.model = model
         self.frame_guard = frame_guard
+        self.on_unfinished_turn: Callable[[], None] | None = on_unfinished_turn
         self.guardrail_callbacks: tuple[PresidioGuardrailCallback, ...] = tuple(guardrail_callbacks or ())
         self._pii_tokens: Mapping[str, str] = {}
         self.logging_obj = logging_obj
@@ -3640,26 +3688,35 @@ class ManagedResponsesWebSocketHandler:
         event dict, or ``None``.
         """
         terminal_event: object = None
-        stream_response: Final = await litellm.aresponses(model=model, **call_kwargs)
-        async for chunk in cast(AsyncIterable[object], stream_response):  # cast-ok: aresponses returns an async stream
-            if chunk is None:
-                continue
-            # Read type from the object before serializing to avoid double JSON parse
-            chunk_type = getattr(chunk, "type", None) or (chunk.get("type") if isinstance(chunk, dict) else None)
-            serialized = self._serialize_chunk(chunk)
-            if serialized is None:
-                continue
-            if chunk_type in _HISTORY_TERMINAL_EVENT_TYPES and terminal_event is None:
+        try:
+            stream_response: Final = await litellm.aresponses(model=model, **call_kwargs)
+            async for chunk in cast(AsyncIterable[object], stream_response):  # cast-ok: aresponses returns a stream
+                if chunk is None:
+                    continue
+                # Read type from the object before serializing to avoid double JSON parse
+                chunk_type = getattr(chunk, "type", None) or (chunk.get("type") if _is_json_object(chunk) else None)
+                serialized = self._serialize_chunk(chunk)
+                if serialized is None:
+                    continue
+                if chunk_type in _HISTORY_TERMINAL_EVENT_TYPES and terminal_event is None:
+                    try:
+                        terminal_event = _load_json_value(serialized)
+                    except Exception:
+                        pass
                 try:
-                    terminal_event = _load_json_value(serialized)
-                except Exception:
-                    pass
-            try:
-                await self.websocket.send_text(self._unmask_for_client(serialized))
-            except Exception as send_exc:
-                verbose_logger.debug("ManagedResponsesWS: error sending chunk to client: %s", send_exc)
-                return terminal_event  # Client disconnected
+                    await self.websocket.send_text(self._unmask_for_client(serialized))
+                except Exception as send_exc:
+                    verbose_logger.debug("ManagedResponsesWS: error sending chunk to client: %s", send_exc)
+                    self._report_unfinished_turn(terminal_event)
+                    return terminal_event  # Client disconnected
+        except asyncio.CancelledError:
+            self._report_unfinished_turn(terminal_event)
+            raise
         return terminal_event
+
+    def _report_unfinished_turn(self, terminal_event: object) -> None:
+        if terminal_event is None and self.on_unfinished_turn is not None:
+            self.on_unfinished_turn()
 
     def _unmask_for_client(self, serialized: str) -> str:
         """The provider and the turn history keep Presidio's tokens, the client gets the original text back."""

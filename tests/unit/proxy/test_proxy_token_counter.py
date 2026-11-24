@@ -7409,31 +7409,33 @@ _COUNTED_HELLO: Final[Mapping[str, JsonValue]] = MappingProxyType(
 )
 
 
-def _utils_token_counter(
-    monkeypatch: pytest.MonkeyPatch, body: Mapping[str, JsonValue], headers: Mapping[str, str]
+def _post_count(
+    monkeypatch: pytest.MonkeyPatch,
+    path: str,
+    deployment: Mapping[str, JsonValue],
+    body: Mapping[str, JsonValue],
+    headers: Mapping[str, str],
 ) -> httpx.Response:
     from fastapi.testclient import TestClient
 
     from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
     from litellm.proxy.proxy_server import app
 
-    monkeypatch.setattr(
-        litellm.proxy.proxy_server,
-        "llm_router",
-        Router(
-            model_list=[
-                {
-                    "model_name": "count-log-gpt",
-                    "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "test-key"},
-                    "model_info": {"id": "count-log-utils-deployment"},
-                }
-            ]
-        ),
-    )
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", Router(model_list=[dict(deployment)]))
     monkeypatch.setitem(app.dependency_overrides, user_api_key_auth, lambda: UserAPIKeyAuth(api_key="sk-test"))
-    return TestClient(app, raise_server_exceptions=False).post(
-        "/utils/token_counter", json=dict(body), headers=dict(headers)
-    )
+    return TestClient(app, raise_server_exceptions=False).post(path, json=dict(body), headers=dict(headers))
+
+
+
+def _utils_token_counter(
+    monkeypatch: pytest.MonkeyPatch, body: Mapping[str, JsonValue], headers: Mapping[str, str]
+) -> httpx.Response:
+    deployment: Final[Mapping[str, JsonValue]] = {
+        "model_name": "count-log-gpt",
+        "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "test-key"},
+        "model_info": {"id": "count-log-utils-deployment"},
+    }
+    return _post_count(monkeypatch, "/utils/token_counter", deployment, body, headers)
 
 
 def test_utils_token_counter_logs_one_line_with_the_callers_call_id_model_and_count(
@@ -7484,6 +7486,119 @@ def test_utils_token_counter_without_messages_logs_the_400_it_answers(
             "status_code": 400,
         },
     )
+
+
+@pytest.mark.parametrize("nested", [False, True], ids=["user-content", "tool-result"])
+def test_utils_token_counter_answers_400_naming_a_content_block_the_local_counter_cannot_read(
+    monkeypatch: pytest.MonkeyPatch, token_count_log_lines: Callable[[], tuple[dict[str, object], ...]], nested: bool
+) -> None:
+    block: Final[JsonValue] = {"type": "future_block", "data": "opaque"}
+    content: Final[JsonValue] = (
+        [{"type": "tool_result", "tool_use_id": "toolu_1", "content": [block]}] if nested else [block]
+    )
+
+    response: Final = _utils_token_counter(
+        monkeypatch,
+        {"model": "count-log-gpt", "messages": [{"role": "user", "content": content}]},
+        {"x-litellm-call-id": "count-log-utils-unreadable"},
+    )
+
+    assert response.status_code == 400, response.text
+    error: Final = response.json()["error"]
+    assert (error["type"], error["param"], error["code"]) == ("invalid_request_error", "messages", "400"), error
+    assert error["message"] == "The token counter can't count content blocks of type future_block", error
+    assert [line["status_code"] for line in token_count_log_lines()] == [400]
+
+
+def test_utils_token_counter_answers_400_naming_a_malformed_server_tool_block(monkeypatch: pytest.MonkeyPatch) -> None:
+    block: Final[JsonValue] = {
+        "type": "web_search_tool_result",
+        "tool_use_id": "srv_1",
+        "content": [{"url": "https://example.invalid"}],
+    }
+
+    response: Final = _utils_token_counter(
+        monkeypatch, {"model": "count-log-gpt", "messages": [{"role": "user", "content": [block]}]}, {}
+    )
+
+    assert response.status_code == 400, response.text
+    error: Final = response.json()["error"]
+    assert (error["type"], error["param"]) == ("invalid_request_error", "messages"), error
+    assert error["message"].startswith(
+        "The token counter can't read the content field of a web_search_tool_result block: "
+    ), error
+
+
+_FUTURE_BLOCK: Final = MappingProxyType({"type": "future_block", "data": "opaque"})
+
+
+@pytest.mark.parametrize(
+    ("fields", "param"),
+    [
+        ({"system": [dict(_FUTURE_BLOCK)], "messages": [{"role": "user", "content": "hi"}]}, "system"),
+        ({"system": "Be brief.", "messages": [{"role": "user", "content": [dict(_FUTURE_BLOCK)]}]}, "messages"),
+        (
+            {
+                "system": [{"type": "text", "text": "Be brief."}],
+                "messages": [{"role": "user", "content": [dict(_FUTURE_BLOCK)]}],
+            },
+            None,
+        ),
+        (
+            {
+                "messages": [{"role": "user", "content": [dict(_FUTURE_BLOCK)]}],
+                "contents": [{"role": "user", "parts": [{"text": "Be brief."}]}],
+            },
+            "messages",
+        ),
+    ],
+    ids=["block-in-system", "block-in-messages", "blocks-in-both-fields", "contents-sent-beside-messages"],
+)
+def test_utils_token_counter_points_param_only_at_the_one_field_that_can_hold_the_block(
+    monkeypatch: pytest.MonkeyPatch, fields: Mapping[str, JsonValue], param: str | None
+) -> None:
+    response: Final = _utils_token_counter(monkeypatch, {"model": "count-log-gpt", **fields}, {})
+
+    assert response.status_code == 400, response.text
+    error: Final = response.json()["error"]
+    assert (error["type"], error["param"]) == ("invalid_request_error", param), error
+
+
+def test_utils_token_counter_keeps_500_for_a_known_block_it_fails_to_count(monkeypatch: pytest.MonkeyPatch) -> None:
+    response: Final = _utils_token_counter(
+        monkeypatch, {"model": "count-log-gpt", "messages": [{"role": "user", "content": [{"type": "image"}]}]}, {}
+    )
+
+    assert response.status_code == 500, response.text
+
+
+_INPUT_AUDIO: Final = MappingProxyType({"type": "input_audio", "input_audio": {"data": "UklGRg==", "format": "wav"}})
+
+
+@pytest.mark.parametrize(
+    ("fields", "param"),
+    [
+        ({"input": [{"role": "user", "content": [dict(_INPUT_AUDIO)]}]}, "input"),
+        ({"input": "hi", "instructions": [dict(_INPUT_AUDIO)]}, "instructions"),
+    ],
+    ids=["block-in-input", "block-in-instructions"],
+)
+def test_responses_input_tokens_points_param_at_the_field_holding_a_block_the_local_counter_cannot_read(
+    monkeypatch: pytest.MonkeyPatch, fields: Mapping[str, JsonValue], param: str
+) -> None:
+    deployment: Final[Mapping[str, JsonValue]] = {
+        "model_name": "count-local-vllm",
+        "litellm_params": {"model": "hosted_vllm/zai-org/GLM-5.3", "api_base": "http://127.0.0.1:9/v1"},
+    }
+
+    response: Final = _post_count(
+        monkeypatch, "/v1/responses/input_tokens", deployment, {"model": "count-local-vllm", **fields}, {}
+    )
+
+    assert response.status_code == 400, response.text
+    error: Final = response.json()["error"]
+    assert (error["type"], error["param"]) == ("invalid_request_error", param), error
+    assert error["message"] == "The token counter can't count content blocks of type input_audio", error
 
 
 def test_utils_token_counter_failed_count_logs_its_status_in_place_of_a_count(

@@ -1,3 +1,4 @@
+import asyncio
 import base64
 import copy
 import json
@@ -30,7 +31,7 @@ from litellm.llms.anthropic.chat.transformation import (
 )
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
-from litellm.llms.bedrock.common_utils import BEDROCK_NATIVE_OUTPUT_MAX_PROPERTIES
+from litellm.llms.bedrock.common_utils import BEDROCK_NATIVE_OUTPUT_MAX_PROPERTIES, BedrockError
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.types.llms.bedrock import ContentBlock, ConverseTokenUsageBlock, RequestObject
 from litellm.types.llms.openai import AllMessageValues
@@ -10224,6 +10225,9 @@ def test_not_found_error(model, path, monkeypatch):
     assert exc_info.value.status_code == 404
     assert exc_info.value.response.status_code == 404
     assert exc_info.value.response.headers["x-amzn-requestid"] == "req-123"
+    assert exc_info.value.response.json() == {"message": "The provided model identifier is invalid."}
+    assert "authorization" in sent[0].headers
+    assert "authorization" not in exc_info.value.response.request.headers
     assert [request.url.raw_path for request in sent] == [path]
 
 
@@ -12594,6 +12598,21 @@ def test_converse_sends_no_tools_when_drop_params_drops_every_hosted_mcp_tool(mo
     assert "tool_choice" not in json.dumps(request)
 
 
+@pytest.mark.parametrize("model", ["us.anthropic.claude-haiku-5-5", "us.amazon.nova-2-lite-v1:0"])
+def test_converse_clears_a_tool_choice_naming_the_hosted_mcp_tool_drop_params_dropped(monkeypatch, model):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    request: Final = _converse_request_for_tools(
+        model,
+        {
+            "tools": [_HOSTED_MCP_TOOL, _WEATHER_FUNCTION_TOOL],
+            "tool_choice": {"type": "function", "function": {"name": "deepwiki"}},
+        },
+        drop_params=True,
+    )
+    assert [tool["toolSpec"]["name"] for tool in request["toolConfig"]["tools"]] == ["get_weather"]
+    assert "deepwiki" not in json.dumps(request)
+
+
 def _warnings_naming(caplog: pytest.LogCaptureFixture, param: str) -> tuple[str, ...]:
     return tuple(
         r.getMessage()
@@ -12976,3 +12995,163 @@ def test_modify_params_keeps_adaptive_thinking_when_tool_call_history_has_no_thi
     )
 
     assert request.get("additionalModelRequestFields", {}).get("thinking") == sent_thinking
+
+
+_CONVERSE_CLAUDE: Final = "anthropic.claude-haiku-4-5-20251001-v1:0"
+_CONVERSE_REPLAYED_THINKING: Final = {"type": "thinking", "thinking": "The user said hi.", "signature": "sig-1"}
+_CONVERSE_WEATHER_TOOL: Final = {
+    "type": "function",
+    "function": {"name": "get_weather", "parameters": {"type": "object", "properties": {}}},
+}
+
+
+def _thinking_blocks_turn(thinking_blocks: object) -> list[dict[str, object]]:
+    return [
+        {"role": "user", "content": "Hi"},
+        {"role": "assistant", "content": "Hello", "thinking_blocks": thinking_blocks},
+        {"role": "user", "content": "Go on"},
+    ]
+
+
+def _thinking_blocks_tool_turn(thinking_blocks: object) -> list[dict[str, object]]:
+    return [
+        {"role": "user", "content": "Weather?"},
+        {
+            "role": "assistant",
+            "content": None,
+            "thinking_blocks": thinking_blocks,
+            "tool_calls": [
+                {"id": "toolu_01", "type": "function", "function": {"name": "get_weather", "arguments": "{}"}}
+            ],
+        },
+        {"role": "tool", "tool_call_id": "toolu_01", "content": "rain"},
+    ]
+
+
+def _thinking_blocks_request(
+    messages: list[dict[str, object]],
+    *,
+    drop_params: bool = False,
+    use_async: bool = False,
+    optional_params: dict[str, object] | None = None,
+) -> RequestObject:
+    config: Final = AmazonConverseConfig()
+    params: Final = dict(optional_params or {})
+    if use_async:
+        return asyncio.run(
+            config._async_transform_request(
+                model=_CONVERSE_CLAUDE,
+                messages=messages,
+                optional_params=params,
+                litellm_params={"drop_params": drop_params},
+                headers={},
+            )
+        )
+    return config._transform_request(
+        model=_CONVERSE_CLAUDE,
+        messages=messages,
+        optional_params=params,
+        litellm_params={"drop_params": drop_params},
+        headers={},
+    )
+
+
+@pytest.mark.parametrize("use_async", [False, True])
+@pytest.mark.parametrize(
+    ("thinking_blocks", "type_name"),
+    [
+        pytest.param(5, "int", id="integer"),
+        pytest.param(1.5, "float", id="float"),
+        pytest.param(True, "bool", id="true"),
+    ],
+)
+def test_converse_answers_400_naming_numeric_thinking_blocks(
+    local_model_cost_map, thinking_blocks: object, type_name: str, use_async: bool
+):
+    with pytest.raises(BedrockError) as raised:
+        _thinking_blocks_request(
+            [{"role": "system", "content": "Be terse"}, *_thinking_blocks_turn(thinking_blocks)],
+            use_async=use_async,
+        )
+
+    assert (raised.value.status_code, raised.value.message) == (
+        400,
+        f"Invalid type for 'messages[2].thinking_blocks': expected a list, got {type_name}",
+    )
+
+
+@pytest.mark.parametrize("use_async", [False, True])
+@pytest.mark.parametrize("thinking_blocks", [5, 1.5, True])
+def test_converse_drops_numeric_thinking_blocks_under_drop_params(
+    local_model_cost_map, thinking_blocks: object, use_async: bool
+):
+    assert _thinking_blocks_request(
+        _thinking_blocks_turn(thinking_blocks), drop_params=True, use_async=use_async
+    ) == _thinking_blocks_request(_thinking_blocks_turn(None), drop_params=True, use_async=use_async)
+
+
+@pytest.mark.parametrize("use_async", [False, True])
+def test_converse_drops_thinking_when_a_dropped_number_leaves_a_tool_turn_without_blocks(
+    local_model_cost_map, monkeypatch: pytest.MonkeyPatch, use_async: bool
+):
+    monkeypatch.setattr(litellm, "modify_params", True)
+    optional_params: Final = {
+        "thinking": {"type": "enabled", "budget_tokens": 1024},
+        "tools": [_CONVERSE_WEATHER_TOOL],
+    }
+
+    assert _thinking_blocks_request(
+        _thinking_blocks_tool_turn(5), drop_params=True, use_async=use_async, optional_params=optional_params
+    ) == _thinking_blocks_request(
+        _thinking_blocks_tool_turn(None), drop_params=True, use_async=use_async, optional_params=optional_params
+    )
+
+
+@pytest.mark.parametrize("drop_params", [False, True])
+@pytest.mark.parametrize(
+    ("thinking_blocks", "equivalent"),
+    [
+        pytest.param(0, None, id="zero"),
+        pytest.param(False, None, id="false"),
+        pytest.param("abc", None, id="string"),
+        pytest.param({"a": 1}, None, id="object"),
+        pytest.param(["abc"], None, id="string_block"),
+        pytest.param(
+            [_CONVERSE_REPLAYED_THINKING, "abc"], [_CONVERSE_REPLAYED_THINKING], id="string_after_a_block"
+        ),
+    ],
+)
+def test_converse_keeps_building_thinking_blocks_shapes_that_worked(
+    local_model_cost_map, thinking_blocks: object, equivalent: object, drop_params: bool
+):
+    assert _thinking_blocks_request(
+        _thinking_blocks_turn(thinking_blocks), drop_params=drop_params
+    ) == _thinking_blocks_request(_thinking_blocks_turn(equivalent), drop_params=drop_params)
+
+
+@pytest.mark.parametrize(
+    "messages",
+    [
+        pytest.param(
+            [
+                {"role": "user", "content": "Hi", "thinking_blocks": 5},
+                {"role": "assistant", "content": "Hello", "tool_calls": 5},
+                {"role": "user", "content": "Go on"},
+            ],
+            id="number_on_a_user_turn",
+        ),
+        pytest.param(
+            [
+                {"role": "user", "content": "Hi"},
+                {"role": "assistant", "content": "Hello", "thinking_blocks": 0, "tool_calls": 5},
+                {"role": "user", "content": "Go on"},
+            ],
+            id="zero_on_the_failing_turn",
+        ),
+    ],
+)
+def test_converse_never_blames_thinking_blocks_for_another_fields_type_error(
+    local_model_cost_map, messages: list[dict[str, object]]
+):
+    with pytest.raises(TypeError):
+        _thinking_blocks_request(messages, optional_params={"tools": [_CONVERSE_WEATHER_TOOL]})
