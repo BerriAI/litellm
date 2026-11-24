@@ -14,7 +14,7 @@ use serde_json::{Map, Value};
 
 use crate::{
     limiter::{
-        Candidate, FailureFacts, IoUsage, ModelFacts, PolicyFacts, PostCallFailureFacts, PtuFacts,
+        Candidate, EMBEDDING_CALL_TYPES, FailureFacts, IoUsage, ModelFacts, PolicyFacts, PostCallFailureFacts, PtuFacts,
         SuccessFacts, TargetFacts,
     },
     ptu::{Ceiling, Usage, settlement_tokens},
@@ -377,6 +377,12 @@ impl LoggedCall {
         }
     }
 
+    fn embedding(&self) -> bool {
+        self.call_type
+            .as_deref()
+            .is_some_and(|call_type| EMBEDDING_CALL_TYPES.contains(&call_type))
+    }
+
     fn socket(&self) -> bool {
         self.call_type.as_deref() == Some(RESPONSES_WEBSOCKET_CALL_TYPE)
     }
@@ -502,6 +508,9 @@ impl LoggedCall {
             call_id: self.call_id.clone(),
             exempt: self.exempt(),
             total_tokens,
+            settles_at_reservation: total_tokens == 0
+                && kind != TokenRateLimitType::Output
+                && self.embedding(),
             team_label: self.team_label(),
             targets,
             served_model: resolved.served_model.clone(),

@@ -216,6 +216,8 @@ pub struct SuccessFacts {
     #[serde(default)]
     pub total_tokens: i64,
     #[serde(default)]
+    pub settles_at_reservation: bool,
+    #[serde(default)]
     pub targets: TargetFacts,
     #[serde(default)]
     pub served_model: Option<RateLimitedModel>,
@@ -287,7 +289,7 @@ pub struct Plan {
     pub ptu: bool,
 }
 
-const EMBEDDING_CALL_TYPES: [&str; 2] = ["aembedding", "embedding"];
+pub(crate) const EMBEDDING_CALL_TYPES: [&str; 2] = ["aembedding", "embedding"];
 const RESPONSES_CALL_TYPES: [&str; 2] = ["aresponses", "responses"];
 const EXTRACTION_CALL_TYPES: [&str; 2] = ["extraction", "aextraction"];
 const MCP_TOOL_CALL_TYPE: &str = "call_mcp_tool";
@@ -1521,11 +1523,16 @@ impl ParallelRequestLimiter {
         } else {
             Vec::new()
         };
+        let settled_tokens = if facts.settles_at_reservation {
+            stash.reserved_tokens
+        } else {
+            facts.total_tokens
+        };
         let mut operations: Vec<Op> = self
             .tpm_ops(
                 &charged,
                 &stash.reserved_scopes,
-                facts.total_tokens,
+                settled_tokens,
                 reserved_tokens,
             )
             .into_iter()
