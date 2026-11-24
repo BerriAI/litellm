@@ -530,10 +530,7 @@ class TestOllamaGetModelInfo:
         assert answers == (None, 8192, 8192)
         assert lookups == ["Bearer GATEKEY"] * 3
 
-    @pytest.mark.parametrize("cost_path", [False, True], ids=["get_model_info", "cost-path"])
-    def test_one_cache_entry_serves_every_api_base_and_key_when_the_lookup_sends_neither(
-        self, cost_path: bool
-    ) -> None:
+    def test_one_cache_entry_serves_every_api_base_and_key_when_the_lookup_sends_neither(self) -> None:
         from litellm.utils import cached_get_model_info_helper, cached_model_info_for_call
 
         openai_model: Final = next(
@@ -541,18 +538,14 @@ class TestOllamaGetModelInfo:
             for name, entry in litellm.model_cost.items()
             if entry.get("litellm_provider") == "openai" and entry.get("mode") == "chat"
         )
-        cache: Final = cached_get_model_info_helper if cost_path else litellm.get_model_info
-        cache.cache_clear()
+        cached_get_model_info_helper.cache_clear()
         try:
             for api_base, api_key in (("https://one.test/v1", "key-one"), ("https://two.test/v1", "key-two")):
-                if cost_path:
-                    cached_model_info_for_call(openai_model, "openai", api_base, api_key)
-                else:
-                    litellm.get_model_info(openai_model, custom_llm_provider="openai", api_base=api_base, api_key=api_key)
+                cached_model_info_for_call(openai_model, "openai", api_base, api_key)
 
-            assert cache.cache_info().currsize == 1
+            assert cached_get_model_info_helper.cache_info().currsize == 1
         finally:
-            cache.cache_clear()
+            cached_get_model_info_helper.cache_clear()
 
     def test_get_model_info_normalizes_generate_api_base(self, monkeypatch):
         """When completion passes the final generate URL, model info should use the server base."""
@@ -966,6 +959,57 @@ def test_a_cache_hit_looks_up_the_model_with_the_caller_key(
     assert chat.call_count == 1
     assert lookups.called
     assert {call.request.headers.get("authorization") for call in lookups.calls} == {"Bearer call-key"}
+
+
+@pytest.mark.respx(assert_all_called=False)
+def test_a_cache_hit_never_sends_the_caller_key_to_an_api_base_the_call_did_not_name(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    from concurrent.futures import ThreadPoolExecutor
+
+    from litellm.caching.caching import Cache
+    from litellm.utils import cached_get_model_info_helper
+
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    monkeypatch.setenv("OLLAMA_API_BASE", "http://ollama-default.test:11434")
+    monkeypatch.delenv("OLLAMA_API_KEY", raising=False)
+    monkeypatch.setattr(litellm, "api_base", "http://ollama-call.test:11434")
+    monkeypatch.setattr(litellm, "input_callback", [])
+    monkeypatch.setattr(litellm, "success_callback", [])
+    monkeypatch.setattr(litellm, "_async_success_callback", [])
+    monkeypatch.setattr(litellm, "cache", Cache(type="local"))
+    model_info: Final = {"template": "", "model_info": {}}
+    default_lookups: Final = respx_mock.post("http://ollama-default.test:11434/api/show").respond(200, json=model_info)
+    respx_mock.post("http://ollama-call.test:11434/api/show").respond(200, json=model_info)
+    chat: Final = respx_mock.post("http://ollama-call.test:11434/api/chat").respond(
+        200,
+        json={
+            "model": "key-scope-probe",
+            "done": True,
+            "prompt_eval_count": 3,
+            "eval_count": 2,
+            "message": {"role": "assistant", "content": "hi"},
+        },
+    )
+    litellm.get_model_info.cache_clear()
+    cached_get_model_info_helper.cache_clear()
+    try:
+        for _ in range(2):
+            with ThreadPoolExecutor(max_workers=1) as success_logging:
+                monkeypatch.setattr("litellm.utils.executor", success_logging)
+                monkeypatch.setattr("litellm.litellm_core_utils.litellm_logging.executor", success_logging)
+                litellm.completion(
+                    model="ollama_chat/key-scope-probe",
+                    messages=[{"role": "user", "content": "hi"}],
+                    api_key="call-key",
+                    caching=True,
+                )
+    finally:
+        litellm.get_model_info.cache_clear()
+        cached_get_model_info_helper.cache_clear()
+
+    assert chat.called
+    assert {call.request.headers.get("authorization") for call in default_lookups.calls} <= {None}
 
 
 def test_model_info_lookup_for_a_decisions_endpoint_goes_to_the_server_root() -> None:

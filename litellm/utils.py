@@ -8353,7 +8353,7 @@ def get_model_info(
             "supported_openai_params": ["temperature", "max_tokens", "top_p", "frequency_penalty", "presence_penalty"]
         }
     """
-    if api_key is not None and looks_up_model_info_at_runtime(model, custom_llm_provider):
+    if api_key is not None:
         built: Final = _build_model_info(model, custom_llm_provider, api_base, api_key)
         return built.value if isinstance(built, FailedLookup) else built
     return get_model_info_for_call(model, custom_llm_provider, api_base, None)
@@ -8364,7 +8364,7 @@ def get_model_info_for_call(
 ) -> ModelInfo:
     if not looks_up_model_info_at_runtime(model, custom_llm_provider):
         return _cached_get_model_info(model, custom_llm_provider)
-    return _cached_get_model_info(model, custom_llm_provider, api_base, api_key)
+    return _cached_get_model_info(model, custom_llm_provider, api_base, api_key if api_base else None)
 
 
 get_model_info.cache_clear = _cached_get_model_info.cache_clear

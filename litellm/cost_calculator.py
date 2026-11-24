@@ -2913,17 +2913,21 @@ def _response_api_base(completion_response: object) -> str | None:
     return _get_hidden_str_for_cost_calc(attribute_or_none(completion_response, "_hidden_params"), "api_base")
 
 
-def _request_api_base(litellm_logging_obj: LitellmLoggingObject | None, response_api_base: str | None) -> str | None:
+def _logged_api_base(litellm_logging_obj: LitellmLoggingObject | None) -> str | None:
     logged_params: Final = getattr(litellm_logging_obj, "litellm_params", None)
     if not isinstance(logged_params, Mapping):
-        return response_api_base
+        return None
     api_base: Final = _LOGGED_LITELLM_PARAMS.validate_python(logged_params).get("api_base")
-    return api_base if isinstance(api_base, str) and api_base else response_api_base
+    return api_base if isinstance(api_base, str) and api_base else None
+
+
+def _request_api_base(litellm_logging_obj: LitellmLoggingObject | None, response_api_base: str | None) -> str | None:
+    return _logged_api_base(litellm_logging_obj) or response_api_base
 
 
 def _request_api_key(litellm_logging_obj: LitellmLoggingObject | None) -> str | None:
     api_key: Final = getattr(litellm_logging_obj, "model_info_api_key", None)
-    return api_key if isinstance(api_key, str) else None
+    return api_key if isinstance(api_key, str) and _logged_api_base(litellm_logging_obj) else None
 
 
 def _deployment_model_info(
