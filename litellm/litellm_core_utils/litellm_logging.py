@@ -2216,6 +2216,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 model=self.model or "",
                 logging_obj=self,
                 raw_response=httpx.Response(status_code=200, headers={}),
+                keeps_requested_audio_format=True,
             )
         except Exception as e:  # noqa: BLE001 - cost normalization must never break the response path
             verbose_logger.debug("generate_content response cost normalization failed: %s", e)
@@ -4683,6 +4684,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 status_code=200,
                 headers={},
             ),
+            keeps_requested_audio_format=True,
         )
         return result
 
