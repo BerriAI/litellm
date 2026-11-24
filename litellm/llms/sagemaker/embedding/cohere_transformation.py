@@ -30,6 +30,7 @@ from litellm.llms.bedrock.embed.cohere_transformation import (
 from litellm.llms.cohere.embed.v1_transformation import CohereEmbeddingConfig
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import EmbeddingResponse
+from litellm.utils import is_base64_encoded
 
 from ..common_utils import SagemakerError
 
@@ -42,6 +43,18 @@ def _cohere_embed_body(response_json: object) -> dict[str, object]:
         return body
     subscript(response_json, "embeddings")
     return require_attributes(response_json, dict[str, object], "get")
+
+
+def cohere_extra_body_params(
+    config: BaseEmbeddingConfig, input: Sequence[object], extra_body: Mapping[str, object]
+) -> Mapping[str, object]:
+    """The ``extra_body`` ``input_type`` for a Cohere endpoint, passed as a param so the default is skipped while an
+    explicit argument still wins. Image input keeps the ``image`` type the transform sets."""
+    if not isinstance(config, SagemakerCohereEmbeddingConfig) or "input_type" not in extra_body:
+        return {}
+    if any(isinstance(item, str) and is_base64_encoded(item) for item in input):
+        return {}
+    return {"input_type": extra_body["input_type"]}
 
 
 class SagemakerCohereEmbeddingConfig(BaseEmbeddingConfig):

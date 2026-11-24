@@ -1,7 +1,8 @@
 import base64
+import itertools
 import struct
 from abc import ABC, abstractmethod
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
@@ -21,6 +22,7 @@ else:
 
 
 _BODY_FIELDS: Final = TypeAdapter(dict[str, object])
+_BODY_ITEMS: Final = TypeAdapter(tuple[object, ...])
 
 
 def extra_body_fields(optional_params: Mapping[str, object] | None) -> Mapping[str, object]:
@@ -36,6 +38,33 @@ def split_extra_body(
     """The params without ``extra_body``, and the ``extra_body`` fields to merge into the provider body."""
     params: Final = _BODY_FIELDS.validate_python(optional_params or {})
     return {k: v for k, v in params.items() if k != "extra_body"}, extra_body_fields(params)
+
+
+def split_request_extra_body(
+    extra_body: Mapping[str, object], item_field: str, settings_field: str | None = None
+) -> tuple[Sequence[object], Mapping[str, object]]:
+    """The caller's ``extra_body`` written as a whole provider request, taken apart into its per-input items and its
+    settings. Fields outside the two request fields are settings, and a named settings object wins over them."""
+    items: Final = extra_body.get(item_field)
+    settings: Final = None if settings_field is None else extra_body.get(settings_field)
+    return (
+        _BODY_ITEMS.validate_python(items) if isinstance(items, (list, tuple)) else (),
+        {
+            **{k: v for k, v in extra_body.items() if k not in (item_field, settings_field)},
+            **(_BODY_FIELDS.validate_python(settings) if isinstance(settings, Mapping) else {}),
+        },
+    )
+
+
+def over_extra_body_items(
+    extra_items: Sequence[object], items: Sequence[Mapping[str, object]]
+) -> list[dict[str, object]]:  # mutable-ok: serialized as the request body
+    """Each generated item over the caller's ``extra_body`` item at the same position, so the caller adds fields to an
+    input but never replaces what was generated for it."""
+    return [
+        {**(_BODY_FIELDS.validate_python(extra) if isinstance(extra, Mapping) else {}), **item}
+        for item, extra in zip(items, itertools.chain(extra_items, itertools.repeat(None)))
+    ]
 
 
 class _EmbeddingItems(BaseModel):

@@ -299,7 +299,10 @@ async def test_vertex_async_embedding_call_maps_a_malformed_predict_body_to_a_co
 async def test_vertex_embedding_usage_carries_the_billable_character_count_google_prices_on(
     run_async: bool, predict_endpoint: respx.Route, metadata: dict[str, object], character_count: int | None
 ) -> None:
-    payload: Final = {"predictions": [_gecko_prediction([0.1, 0.2, 0.3], 3), _gecko_prediction([1, 2.0, 3], 5)], **metadata}
+    payload: Final = {
+        "predictions": [_gecko_prediction([0.1, 0.2, 0.3], 3), _gecko_prediction([1, 2.0, 3], 5)],
+        **metadata,
+    }
     response: Final = await _embedding_response(run_async, predict_endpoint, GECKO, payload, _embedding_logging())
 
     assert (response.usage.prompt_tokens, getattr(response.usage.prompt_tokens_details, "character_count", None)) == (
@@ -330,3 +333,31 @@ def test_vertex_embedding_call_sends_extra_body_fields_as_predict_parameters(
     assert body["instances"] == [instance]
     assert "extra_body" not in body["parameters"]
     assert body["parameters"]["autoTruncate"] is False
+
+
+@pytest.mark.parametrize(
+    ("model", "prediction", "content_field"),
+    [(GECKO, _gecko_prediction([0.1, 2], 3), "content"), (BGE, [0.1, 2], "prompt")],
+    ids=["gecko", "bge"],
+)
+def test_vertex_embedding_call_sends_a_request_shaped_extra_body_at_the_request_level(
+    predict_endpoint: respx.Route, model: str, prediction: object, content_field: str
+) -> None:
+    predict_endpoint.mock(return_value=_predict_response({"predictions": [prediction, prediction]}))
+
+    litellm.embedding(
+        model=f"vertex_ai/{model}",
+        input=["hello", "world"],
+        dimensions=128,
+        vertex_project=PUBLIC_CALL_PROJECT,
+        vertex_location="us-central1",
+        extra_body={
+            "instances": [{content_field: "text the guardrails never saw", "title": "greeting"}],
+            "parameters": {"autoTruncate": False, "outputDimensionality": 256},
+        },
+    )
+
+    assert json.loads(predict_endpoint.calls.last.request.content) == {
+        "instances": [{content_field: "hello", "title": "greeting"}, {content_field: "world"}],
+        "parameters": {"autoTruncate": False, "outputDimensionality": 128},
+    }

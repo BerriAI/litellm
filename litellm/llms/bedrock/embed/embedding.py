@@ -52,6 +52,7 @@ from .amazon_titan_multimodal_transformation import (
 )
 from .amazon_titan_v2_transformation import AmazonTitanV2Config
 from .cohere_transformation import BedrockCohereEmbeddingConfig
+from .twelvelabs_marengo_3_transformation import TIMED_MEDIA_OPTION_FIELDS, is_marengo_3_model
 from .twelvelabs_marengo_transformation import TwelveLabsMarengoEmbeddingConfig, drop_params_enabled
 
 _JSON_OBJECT: Final = TypeAdapter(dict[str, object], config=ConfigDict(strict=True, hide_input_in_errors=True))
@@ -120,9 +121,10 @@ _DEFAULTED_FIELDS: Final[Mapping[str, tuple[str, ...]]] = MappingProxyType(
     {
         "cohere": ("input_type",),
         "nova": ("embeddingPurpose", "embeddingDimension"),
-        "twelvelabs": ("textTruncate",),
+        "twelvelabs": ("textTruncate", "inputType"),
     }
 )
+_MARENGO_3_PLACED_FIELDS: Final = ("inputType", *TIMED_MEDIA_OPTION_FIELDS)
 
 
 _InvokeResult: TypeAlias = tuple[dict[str, object], int | None]
@@ -170,8 +172,9 @@ def _caller_values_for_defaults(
 ) -> Mapping[str, object]:
     """The ``extra_body`` values for fields the provider transform only fills with a default, passed as params so the
     default is skipped while an explicit argument for the same field still wins."""
-    if provider == "twelvelabs" and TwelveLabsMarengoEmbeddingConfig(model=model).is_marengo_3:
-        return {}
+    if provider == "twelvelabs" and is_marengo_3_model(model):
+        marengo_3_fields: Final = {**extra_body, **_fields(extra_body.get("modelInput"))}
+        return {k: marengo_3_fields[k] for k in _MARENGO_3_PLACED_FIELDS if k in marengo_3_fields}
     if provider == "cohere" and any(is_base64_encoded(item) for item in input):
         return {}
     source: Final = (
@@ -189,6 +192,15 @@ def _nova_model_input_with_options(
         k: _nova_params_with_options(caller, _fields(v)) if k in _NOVA_PARAMS_KEYS else v
         for k, v in model_input.items()
     }
+
+
+def _without_marengo_3_placed_fields(extra_body: Mapping[str, object]) -> Mapping[str, object]:
+    """The ``extra_body`` without the fields the Marengo 3.0 transform nests under the input type's own object, at the
+    top level and inside ``modelInput``."""
+    remaining: Final = {k: v for k, v in extra_body.items() if k not in _MARENGO_3_PLACED_FIELDS}
+    if "modelInput" not in remaining:
+        return remaining
+    return {**remaining, "modelInput": _without_marengo_3_placed_fields(_fields(remaining["modelInput"]))}
 
 
 _FieldCombiner: TypeAlias = Callable[[object, object], object]
@@ -735,6 +747,11 @@ class BedrockEmbedding(BaseAWSLLM):
                 batch_data.append(nova_request)
 
         request_data: Final = None if data is None else {**extra_body, **data}
+        batch_extra_body: Final = (
+            _without_marengo_3_placed_fields(extra_body)
+            if provider == "twelvelabs" and is_marengo_3_model(bedrock_model)
+            else extra_body
+        )
 
         ### SET RUNTIME ENDPOINT ###
         endpoint_url, proxy_endpoint_url = self.get_runtime_endpoint(
@@ -753,7 +770,7 @@ class BedrockEmbedding(BaseAWSLLM):
                     client=(client if client is not None and isinstance(client, AsyncHTTPHandler) else None),
                     timeout=timeout,
                     batch_data=batch_data,
-                    extra_body=extra_body,
+                    extra_body=batch_extra_body,
                     credentials=credentials,
                     extra_headers=extra_headers,
                     endpoint_url=endpoint_url,
@@ -769,7 +786,7 @@ class BedrockEmbedding(BaseAWSLLM):
                 client=(client if client is not None and isinstance(client, HTTPHandler) else None),
                 timeout=timeout,
                 batch_data=batch_data,
-                extra_body=extra_body,
+                extra_body=batch_extra_body,
                 credentials=credentials,
                 extra_headers=extra_headers,
                 endpoint_url=endpoint_url,

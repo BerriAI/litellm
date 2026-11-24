@@ -17,7 +17,11 @@ from typing_extensions import Self
 from litellm.exceptions import BadRequestError
 from litellm.litellm_core_utils.core_helpers import iter_items, json_contains, require_get, subscript
 from litellm.litellm_core_utils.hidden_params import get_hidden_params
-from litellm.llms.base_llm.embedding.transformation import extra_body_fields
+from litellm.llms.base_llm.embedding.transformation import (
+    extra_body_fields,
+    over_extra_body_items,
+    split_request_extra_body,
+)
 from litellm.llms.vertex_ai.common_utils import GEMINI_FILES_API_URI_PREFIX, gemini_video_metadata_from_openai
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.vertex_ai import (
@@ -610,7 +614,7 @@ def transform_openai_input_gemini_content(
     gemini_model_name: Final = f"models/{model}"
 
     gemini_params: Final = _filter_embed_params(optional_params)
-    extra_body: Final = extra_body_fields(optional_params)
+    extra_requests, extra_body = split_request_extra_body(extra_body_fields(optional_params), "requests")
 
     input_list: Final = _top_level_elements(input)
     audio_track_extraction: Final = audio_track_extraction_enabled(optional_params)
@@ -643,13 +647,14 @@ def transform_openai_input_gemini_content(
             content=ContentType(parts=parts),
             **gemini_params,
         )
-        requests.append(
-            cast(  # cast-ok: extra_body carries raw Gemini fields the TypedDict does not list
-                EmbedContentRequest, {**extra_body, **request}
-            )
-        )
+        requests.append(request)
 
-    return VertexAIBatchEmbeddingsRequestBody(requests=requests)
+    return VertexAIBatchEmbeddingsRequestBody(
+        requests=cast(  # cast-ok: extra_body carries raw Gemini fields the TypedDict does not list
+            list[EmbedContentRequest],
+            over_extra_body_items(extra_requests, [{**extra_body, **request} for request in requests]),
+        )
+    )
 
 
 def transform_openai_input_gemini_embed_content(

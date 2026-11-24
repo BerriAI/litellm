@@ -30,12 +30,8 @@ class TestVertexMultimodalEmbedding:
             "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII=",
         ]
         expected_output = [
-            Instance(
-                image=InstanceImage(bytesBase64Encoded=input_data[0].split(",")[1])
-            ),
-            Instance(
-                image=InstanceImage(bytesBase64Encoded=input_data[1].split(",")[1])
-            ),
+            Instance(image=InstanceImage(bytesBase64Encoded=input_data[0].split(",")[1])),
+            Instance(image=InstanceImage(bytesBase64Encoded=input_data[1].split(",")[1])),
         ]
         assert self.config._process_input_element(input_data[0]) == expected_output[0]
         assert self.config._process_input_element(input_data[1]) == expected_output[1]
@@ -45,9 +41,7 @@ class TestVertexMultimodalEmbedding:
         expected_output = [
             Instance(
                 text="hi",
-                video=InstanceVideo(
-                    gcsUri="gs://my-bucket/embeddings/supermarket-video.mp4"
-                ),
+                video=InstanceVideo(gcsUri="gs://my-bucket/embeddings/supermarket-video.mp4"),
             ),
         ]
         assert self.config.process_openai_embedding_input(input_data) == expected_output
@@ -71,15 +65,13 @@ class TestVertexMultimodalEmbedding:
             Instance(text="hi"),
             Instance(
                 text="hello",
-                video=InstanceVideo(
-                    gcsUri="gs://my-bucket/embeddings/supermarket-video.mp4"
-                ),
+                video=InstanceVideo(gcsUri="gs://my-bucket/embeddings/supermarket-video.mp4"),
             ),
             Instance(text="hey"),
         ]
-        assert (
-            self.config.process_openai_embedding_input(input_data) == expected_output
-        ), f"Expected {expected_output}, but got {self.config.process_openai_embedding_input(input_data)}"
+        assert self.config.process_openai_embedding_input(input_data) == expected_output, (
+            f"Expected {expected_output}, but got {self.config.process_openai_embedding_input(input_data)}"
+        )
 
     def test_process_text_and_base64_image_input(self):
         """Test that text + base64 image combinations are correctly merged into a single instance."""
@@ -92,9 +84,7 @@ class TestVertexMultimodalEmbedding:
             ),
         ]
         result = self.config.process_openai_embedding_input(input_data)
-        assert (
-            result == expected_output
-        ), f"Expected {expected_output}, but got {result}"
+        assert result == expected_output, f"Expected {expected_output}, but got {result}"
 
     def test_process_multiple_text_and_base64_image_pairs(self):
         """Test multiple text + base64 image pairs in a single request."""
@@ -116,26 +106,18 @@ class TestVertexMultimodalEmbedding:
             ),
         ]
         result = self.config.process_openai_embedding_input(input_data)
-        assert (
-            result == expected_output
-        ), f"Expected {expected_output}, but got {result}"
+        assert result == expected_output, f"Expected {expected_output}, but got {result}"
 
     def test_process_base64_image_only_in_list(self):
         """Test that standalone base64 images in a list are processed correctly."""
         base64_image = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII="
         input_data = [base64_image, base64_image]
         expected_output = [
-            Instance(
-                image=InstanceImage(bytesBase64Encoded=base64_image.split(",")[1])
-            ),
-            Instance(
-                image=InstanceImage(bytesBase64Encoded=base64_image.split(",")[1])
-            ),
+            Instance(image=InstanceImage(bytesBase64Encoded=base64_image.split(",")[1])),
+            Instance(image=InstanceImage(bytesBase64Encoded=base64_image.split(",")[1])),
         ]
         result = self.config.process_openai_embedding_input(input_data)
-        assert (
-            result == expected_output
-        ), f"Expected {expected_output}, but got {result}"
+        assert result == expected_output, f"Expected {expected_output}, but got {result}"
 
     def test_process_text_and_gcs_image_input(self):
         """Test that text + GCS image combinations are correctly merged."""
@@ -148,9 +130,7 @@ class TestVertexMultimodalEmbedding:
             ),
         ]
         result = self.config.process_openai_embedding_input(input_data)
-        assert (
-            result == expected_output
-        ), f"Expected {expected_output}, but got {result}"
+        assert result == expected_output, f"Expected {expected_output}, but got {result}"
 
     def test_dimensions_parameter_forwarded_as_dimension(self):
         """Test that the dimensions parameter is forwarded as dimension
@@ -212,6 +192,33 @@ def test_extra_body_fields_reach_the_multimodal_predict_body(
     }
 
 
+def test_a_request_shaped_extra_body_reaches_the_multimodal_predict_body_at_the_request_level(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(google.auth, "default", lambda scopes: (_StaticGoogleCredentials(), "test-project"))
+    route = respx_mock.post(host="us-central1-aiplatform.googleapis.com").mock(
+        return_value=httpx.Response(200, json={"predictions": [{"textEmbedding": [0.1, 0.2]}]})
+    )
+    video: Final = {"gcsUri": "gs://bucket/video.mp4", "videoSegmentConfig": {"startOffsetSec": 1}}
+
+    litellm.embedding(
+        model="vertex_ai/multimodalembedding@001",
+        input="Hello world",
+        dimensions=512,
+        vertex_project="test-project",
+        vertex_location="us-central1",
+        extra_body={
+            "instances": [{"text": "text the guardrails never saw", "video": video}],
+            "parameters": {"dimension": 128, "sampleCount": 1},
+        },
+    )
+
+    assert json.loads(route.calls.last.request.content) == {
+        "instances": [{"text": "Hello world", "video": video}],
+        "parameters": {"dimension": 512, "sampleCount": 1},
+    }
+
+
 LABEL_FIELDS: Final = ("user_api_key_alias", "user_api_key_team_alias", "spend_logs_metadata")
 IDENTITY: Final = MappingProxyType({"user_api_key_alias": "chargeback-key", "user_api_key_team_alias": "ai-platform"})
 PROXY_METADATA: Final = MappingProxyType({**IDENTITY, "spend_logs_metadata": {"cost-center": "cc-1"}})
@@ -221,9 +228,7 @@ SENT_BODY: Final = TypeAdapter(Mapping[str, object])
 SENT_LABELS: Final = TypeAdapter(Mapping[str, str])
 
 
-async def multimodal_embedding_body(
-    is_async: bool, request_labels: Mapping[str, object]
-) -> Mapping[str, object]:
+async def multimodal_embedding_body(is_async: bool, request_labels: Mapping[str, object]) -> Mapping[str, object]:
     reply: Final = MagicMock(
         side_effect=lambda _request: httpx.Response(200, json={"predictions": [{"textEmbedding": [0.1, 0.2]}]})
     )

@@ -2725,6 +2725,51 @@ def test_marengo_3_async_extra_body_cannot_add_another_input_object_to_the_model
     assert json.loads(route.calls.last.request.read())["modelInput"] == {**generated_model_input, "extraOption": 1}
 
 
+@pytest.mark.parametrize(
+    "extra_body",
+    [
+        {"inputType": "video", "startSec": 1, "endSec": 9, "embeddingOption": ["visual"], "inferenceId": "abc"},
+        {
+            "inferenceId": "abc",
+            "modelInput": {"inputType": "video", "startSec": 1, "endSec": 9, "embeddingOption": ["visual"]},
+        },
+        {
+            "inferenceId": "abc",
+            "modelInput": {"inputType": "video", "video": {"startSec": 1, "endSec": 9, "embeddingOption": ["visual"]}},
+        },
+    ],
+    ids=["top_level", "model_input", "nested_under_the_input_type"],
+)
+def test_marengo_3_async_extra_body_options_reach_the_video_object_and_an_explicit_argument_wins(
+    respx_mock: respx.MockRouter, extra_body: dict[str, object]
+) -> None:
+    route: Final = respx_mock.post("https://bedrock-runtime.us-east-1.amazonaws.com/async-invoke").mock(
+        return_value=httpx.Response(200, json={"invocationArn": "arn:aws:bedrock:us-east-1:1:async-invoke/abc"})
+    )
+
+    litellm.embedding(
+        model="bedrock/async_invoke/us.twelvelabs.marengo-embed-3-0-v1:0",
+        input=["s3://bucket/video.mp4"],
+        output_s3_uri="s3://bucket/out/",
+        bucketOwner="123456789012",
+        endSec=5,
+        api_key="test-bearer-token",
+        aws_region_name="us-east-1",
+        extra_body=extra_body,
+    )
+
+    assert json.loads(route.calls.last.request.read())["modelInput"] == {
+        "inferenceId": "abc",
+        "inputType": "video",
+        "video": {
+            "mediaSource": {"s3Location": {"uri": "s3://bucket/video.mp4", "bucketOwner": "123456789012"}},
+            "startSec": 1,
+            "endSec": 5,
+            "embeddingOption": ["visual"],
+        },
+    }
+
+
 def test_bedrock_embedding_signs_the_body_it_sends(
     respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
 ) -> None:

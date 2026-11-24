@@ -624,9 +624,7 @@ class TestFileContentBlocks:
             ({"type": "image_url", "image_url": {"url": IMAGE_DATA_URI}}, "Input should be 'file'"),
         ],
     )
-    def test_malformed_block_answers_400_naming_the_field(
-        self, block: dict[str, object], named_in_error: str
-    ) -> None:
+    def test_malformed_block_answers_400_naming_the_field(self, block: dict[str, object], named_in_error: str) -> None:
         with pytest.raises(BadRequestError, match=named_in_error):
             _build_part_for_input(block)
 
@@ -654,9 +652,18 @@ class TestFileContentBlocks:
             ({"end_offset": "0.4s"}, r"\(0\.4s\) at 1 fps rounds to 0 frames"),
             ({"start_offset": "-10s", "end_offset": " 0.3s"}, r"\(0\.3s\) at 1 fps rounds to 0 frames"),
             ({"start_offset": "5.s", "end_offset": "+5.2s"}, r"\(0\.2s\) at 1 fps rounds to 0 frames"),
-            ({"start_offset": "0s", "end_offset": "0s"}, r": end_offset \(0s\) must be later than the window start \(0s\)"),
-            ({"start_offset": "10s", "end_offset": "0s"}, r": end_offset \(0s\) must be later than the window start \(10s\)"),
-            ({"start_offset": "-0s", "end_offset": "-1s"}, r": end_offset \(-1s\) must be later than the window start \(0s\)"),
+            (
+                {"start_offset": "0s", "end_offset": "0s"},
+                r": end_offset \(0s\) must be later than the window start \(0s\)",
+            ),
+            (
+                {"start_offset": "10s", "end_offset": "0s"},
+                r": end_offset \(0s\) must be later than the window start \(10s\)",
+            ),
+            (
+                {"start_offset": "-0s", "end_offset": "-1s"},
+                r": end_offset \(-1s\) must be later than the window start \(0s\)",
+            ),
             ({"fps": 0, "start_offset": "0s", "end_offset": "10s"}, r"\.fps: must be greater than 0, got 0"),
             ({"fps": -1}, r"\.fps: must be greater than 0, got -1"),
             ({"fps": float("nan")}, r"\.fps: Input should be a finite number"),
@@ -878,6 +885,50 @@ def test_gemini_embedding(respx_mock: respx.MockRouter) -> None:
     assert response.usage.total_tokens == expected_prompt_tokens
 
 
+@pytest.mark.respx(assert_all_called=True)
+def test_gemini_embedding_merges_extra_body_requests_into_the_request_for_the_same_input(
+    respx_mock: respx.MockRouter,
+) -> None:
+    route: Final = respx_mock.post(
+        "https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:batchEmbedContents"
+    ).mock(return_value=httpx.Response(200, json={"embeddings": [{"values": [0.1]}, {"values": [0.2]}]}))
+
+    litellm.embedding(
+        model="gemini/gemini-embedding-001",
+        input=["hello", "world"],
+        dimensions=128,
+        api_key="gemini-test-key",
+        extra_body={
+            "title": "greeting",
+            "requests": [
+                {
+                    "content": {"parts": [{"text": "text the guardrails never saw"}]},
+                    "taskType": "RETRIEVAL_QUERY",
+                    "outputDimensionality": 256,
+                }
+            ],
+        },
+    )
+
+    assert json.loads(route.calls.last.request.content) == {
+        "requests": [
+            {
+                "model": "models/gemini-embedding-001",
+                "content": {"parts": [{"text": "hello"}]},
+                "taskType": "RETRIEVAL_QUERY",
+                "outputDimensionality": 128,
+                "title": "greeting",
+            },
+            {
+                "model": "models/gemini-embedding-001",
+                "content": {"parts": [{"text": "world"}]},
+                "outputDimensionality": 128,
+                "title": "greeting",
+            },
+        ]
+    }
+
+
 @pytest.mark.parametrize(
     ("media_input", "modality", "media_price_key", "media_details_field"),
     [
@@ -1084,10 +1135,13 @@ def test_gemini_batch_embedding_gives_each_input_a_non_negative_share(
         _predictions={"embeddings": [{"values": [0.1]}, {"values": [0.2]}], "usageMetadata": dict(usage_metadata)},
     )
 
-    assert tuple(
-        (usage.prompt_tokens, usage.prompt_tokens_details.text_tokens, usage.prompt_tokens_details.image_tokens)
-        for usage in response.item_usage
-    ) == expected
+    assert (
+        tuple(
+            (usage.prompt_tokens, usage.prompt_tokens_details.text_tokens, usage.prompt_tokens_details.image_tokens)
+            for usage in response.item_usage
+        )
+        == expected
+    )
 
 
 @pytest.mark.parametrize(
@@ -1220,17 +1274,20 @@ async def test_gemini_batch_embedding_cache_hits_report_each_inputs_own_modality
     )
 
     assert calls == 1
-    assert tuple(
-        (
-            item,
+    assert (
+        tuple(
             (
-                hit.usage.prompt_tokens,
-                hit.usage.prompt_tokens_details.text_tokens,
-                hit.usage.prompt_tokens_details.image_tokens,
-            ),
+                item,
+                (
+                    hit.usage.prompt_tokens,
+                    hit.usage.prompt_tokens_details.text_tokens,
+                    hit.usage.prompt_tokens_details.image_tokens,
+                ),
+            )
+            for (item, _), hit in zip(expected_hits, hits, strict=True)
         )
-        for (item, _), hit in zip(expected_hits, hits, strict=True)
-    ) == expected_hits
+        == expected_hits
+    )
 
 
 @pytest.mark.asyncio
@@ -1385,7 +1442,8 @@ def test_gemini_batch_embedding_sends_an_embed_content_config_with_non_string_ke
         "https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-2:batchEmbedContents"
     ).mock(
         return_value=httpx.Response(
-            400, json={"error": {"code": 400, "message": "Invalid JSON payload received.", "status": "INVALID_ARGUMENT"}}
+            400,
+            json={"error": {"code": 400, "message": "Invalid JSON payload received.", "status": "INVALID_ARGUMENT"}},
         )
     )
 
