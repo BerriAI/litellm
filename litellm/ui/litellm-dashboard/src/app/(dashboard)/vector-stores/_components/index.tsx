@@ -182,24 +182,26 @@ const VectorStoreManagement: React.FC<VectorStoreProps> = ({ accessToken, userID
           onTabChange(value);
         }}
       >
-        <TabsList variant="line" className="mb-6 h-auto w-full justify-start overflow-x-auto rounded-none p-0">
-          {canCreateVectorStores && (
-            <TabsTrigger value="create" className="flex-none rounded-none px-4 py-2">
-              {t("vectorStores.page.tabs.create")}
+        <div className="mb-4.5 overflow-x-auto pb-1.5">
+          <TabsList variant="line" className="h-auto w-full justify-start rounded-none p-0">
+            {canCreateVectorStores && (
+              <TabsTrigger value="create" className="flex-none rounded-none px-4 py-2">
+                {t("vectorStores.page.tabs.create")}
+              </TabsTrigger>
+            )}
+            <TabsTrigger value="manage" className="flex-none rounded-none px-4 py-2">
+              {t("vectorStores.page.tabs.manage")}
             </TabsTrigger>
-          )}
-          <TabsTrigger value="manage" className="flex-none rounded-none px-4 py-2">
-            {t("vectorStores.page.tabs.manage")}
-          </TabsTrigger>
-          <TabsTrigger value="test" className="flex-none rounded-none px-4 py-2">
-            {t("vectorStores.page.tabs.test")}
-          </TabsTrigger>
-          {isProxyAdminRole(userRole || "") && (
-            <TabsTrigger value="indexes" className="flex-none rounded-none px-4 py-2">
-              {t("vectorStores.page.tabs.indexes")}
+            <TabsTrigger value="test" className="flex-none rounded-none px-4 py-2">
+              {t("vectorStores.page.tabs.test")}
             </TabsTrigger>
-          )}
-        </TabsList>
+            {isProxyAdminRole(userRole || "") && (
+              <TabsTrigger value="indexes" className="flex-none rounded-none px-4 py-2">
+                {t("vectorStores.page.tabs.indexes")}
+              </TabsTrigger>
+            )}
+          </TabsList>
+        </div>
 
         {canCreateVectorStores && (
           <TabsContent keepMounted={hasVisited("create")} value="create">
