@@ -277,7 +277,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         return _MESSAGE_MAPPINGS.validate_python(gated.messages) if gated.stripped else messages
 
     def _normalize_system_role_messages(
-        self, anthropic_messages_request: dict, model: str, drop_params: object
+        self, anthropic_messages_request: dict[str, object], model: str, drop_params: object
     ) -> None:
         """Normalize ``role: "system"`` entries in ``messages`` per the Anthropic
         ``/v1/messages`` contract, which the first-party API, Bedrock Invoke,

@@ -50,7 +50,7 @@ class BulkUpdateUserRequest(LiteLLMBaseModel):
 
     @field_validator("users", "all_users", "user_updates")
     @classmethod
-    def validate_request(cls, v, info):
+    def validate_request(cls, v: object, info):
         # Get all field values for validation
         values: Final = info.data if hasattr(info, "data") else {}
 

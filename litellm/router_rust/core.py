@@ -532,7 +532,9 @@ def _raised_before_provider(error: BaseException) -> bool:
     from litellm.exceptions import UnsupportedParamsError
 
     body: Final = getattr(error, "body", None)
-    return isinstance(error, UnsupportedParamsError) or (isinstance(body, Mapping) and body.get("param") == "priority")
+    return isinstance(error, UnsupportedParamsError) or (
+        not getattr(error, "llm_provider", "") and isinstance(body, Mapping) and body.get("param") == "priority"
+    )
 
 
 def _shares_logging(request: Mapping[str, object]) -> bool:

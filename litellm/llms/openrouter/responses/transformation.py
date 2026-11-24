@@ -106,10 +106,10 @@ class OpenRouterResponsesAPIConfig(OpenAIResponsesAPIConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, object],
         model: str,
         litellm_params: GenericLiteLLMParams | None,
-    ) -> dict:
+    ) -> dict[str, object]:
         litellm_params = litellm_params or GenericLiteLLMParams()
         api_key: Final = (
             litellm_params.api_key

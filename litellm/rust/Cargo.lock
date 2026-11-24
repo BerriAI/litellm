@@ -4251,6 +4251,7 @@ dependencies = [
  "axum",
  "bytes",
  "futures-util",
+ "http-body 1.1.0",
  "litellm-auth",
  "litellm-cache",
  "litellm-cache-memory",

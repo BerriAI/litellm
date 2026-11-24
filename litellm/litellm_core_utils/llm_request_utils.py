@@ -145,7 +145,7 @@ def ensure_extra_body_is_safe(extra_body: dict[str, object] | None) -> dict[str,
 _ensure_extra_body_is_safe = ensure_extra_body_is_safe
 
 
-def pick_cheapest_chat_models_from_llm_provider(custom_llm_provider: str, n=1):
+def pick_cheapest_chat_models_from_llm_provider(custom_llm_provider: str, n: int = 1):
     """
     Pick the n cheapest chat models from the LLM provider.
 

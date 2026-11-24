@@ -456,7 +456,7 @@ class PrismaWrapper:
         self._log_prefix = f"{log_prefix} " if log_prefix else ""
 
         # Background token refresh task management
-        self._token_refresh_task: asyncio.Task | None = None
+        self._token_refresh_task: asyncio.Task[None] | None = None
         self._reconnection_lock = asyncio.Lock()
         self._last_refresh_time: datetime | None = None
         self._active_drain_tracker = self._instrument_prisma_client(original_prisma)

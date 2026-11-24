@@ -124,6 +124,7 @@ from ..common_utils import (
     build_json_schema,
     build_vertex_schema,
     enums_fit,
+    gemini_media_capability,
     has_bare_root_union,
     has_const,
     parameters_json_schema_for,
@@ -436,14 +437,15 @@ def _is_malformed_without_output(choice: object) -> bool:
     )
 
 
-def _malformed_without_output_error(response: ModelResponse, headers: httpx.Headers) -> VertexAIError | None:
+def malformed_without_output_message(response: ModelResponse) -> str | None:
     if not response.choices or not all(_is_malformed_without_output(choice) for choice in response.choices):
         return None
-    return VertexAIError(
-        status_code=500,
-        message=f"Gemini finished with {_native_finish_reason(response.choices[0])} and returned no output",
-        headers=headers,
-    )
+    return f"Gemini finished with {_native_finish_reason(response.choices[0])} and returned no output"
+
+
+def _malformed_without_output_error(response: ModelResponse, headers: httpx.Headers) -> VertexAIError | None:
+    message: Final = malformed_without_output_message(response)
+    return None if message is None else VertexAIError(status_code=500, message=message, headers=headers)
 
 
 def _served_model_name(model_version: object) -> str | None:
@@ -1165,8 +1167,10 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         return cls._forward_gemini_function_call_id(model)
 
     @classmethod
-    def supports_multimodal_function_responses(cls, model: str) -> bool:
-        return cls.is_gemini_3_or_newer(model)
+    def supports_multimodal_function_responses(cls, model: str, custom_llm_provider: str | None = None) -> bool:
+        return gemini_media_capability(
+            model, "supports_media_in_tool_response", custom_llm_provider=custom_llm_provider
+        )
 
     def _supports_penalty_parameters(self, model: str) -> bool:
         # Gemini 3 models do not support penalty parameters
