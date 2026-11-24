@@ -392,5 +392,17 @@
       "/v1/chat/completions",
       "/v1/completions"
     ]
+  },
+  "sovereigneg": {
+    "base_url": "https://backend.sovereigneg.com/v1",
+    "api_key_env": "SOVEREIGNEG_API_KEY",
+    "api_base_env": "SOVEREIGNEG_API_BASE",
+    "param_mappings": {
+      "max_completion_tokens": "max_tokens"
+    },
+    "provider_info": {
+      "supports_function_calling": true
+    },
+    "supported_endpoints": ["/v1/chat/completions", "/v1/embeddings"]
   }
 }
