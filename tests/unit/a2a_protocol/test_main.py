@@ -935,7 +935,7 @@ def _assert_billed_at_agent_prices(
     assert recorder.agent_id == "agent-1"
 
 
-async def _drain_bridge_stream(litellm_params: Mapping[str, object]) -> None:
+async def _drain_bridge_stream(litellm_params: Mapping[str, object], agent_name: str | None = "trip-planner") -> None:
     from litellm.a2a_protocol.main import asend_message_streaming
 
     _ = [
@@ -945,7 +945,7 @@ async def _drain_bridge_stream(litellm_params: Mapping[str, object]) -> None:
             api_base="http://127.0.0.1:9",
             litellm_params=dict(litellm_params),
             agent_id="agent-1",
-            agent_name="trip-planner",
+            agent_name=agent_name,
         )
     ]
 
@@ -1001,6 +1001,20 @@ async def test_completion_bridge_stream_bills_the_agents_prices(
     spend: Final = await a2a_spend_recorder.logged_spend()
     _assert_billed_at_agent_prices(spend, a2a_spend_recorder, expected_cost, _BRIDGE_REPLY)
     assert spend.model == "a2a_agent/trip-planner"
+
+
+@pytest.mark.parametrize(
+    ("agent_name", "logged_model"),
+    [pytest.param("", "a2a_agent/", id="empty_name"), pytest.param(None, "a2a_agent/unknown", id="no_name")],
+)
+@pytest.mark.asyncio
+async def test_completion_bridge_stream_logs_an_empty_agent_name_as_registered(
+    agent_name: str | None, logged_model: str, a2a_spend_recorder: _A2ASpendRecorder
+) -> None:
+    await _drain_bridge_stream(_bridge_agent_params(_PER_TOKEN_PRICES), agent_name=agent_name)
+
+    spend: Final = await a2a_spend_recorder.logged_spend()
+    assert spend.model == logged_model
 
 
 @pytest.mark.asyncio
