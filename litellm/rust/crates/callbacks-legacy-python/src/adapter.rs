@@ -6,7 +6,10 @@ use crate::LoggingOperation;
 use litellm_host_python::PythonOwned;
 
 use litellm_host::{
-    interceptors::{RawResponse, RequestContext, RetriedRequest, RetryReason, WireRequest},
+    interceptors::{
+        PricedCost, RawResponse, RequestContext, RetriedRequest, RetryReason, StreamMeter,
+        WireRequest,
+    },
     lifecycle::{FailureOrigin, Timing, epoch_seconds},
 };
 use litellm_host_python::{Error as HostError, HookStep, from_py, json_from_py, json_to_py, to_py};
@@ -67,6 +70,8 @@ pub struct LegacyLogging {
     stream_starts_on_first_read: bool,
     /// The params the route's provider logs from the caller's own kwargs.
     logged_call_params: Vec<LoggedCallParam>,
+    /// Where the route leaves a stream's price, read once the stream is delivered.
+    stream_meter: Option<StreamMeter>,
 }
 
 fn retry_reason(reason: &RetryReason) -> Value {
@@ -80,6 +85,29 @@ fn retry_reason(reason: &RetryReason) -> Value {
 
 fn datetime(py: Python<'_>, epoch_seconds: f64) -> PyResult<Py<PyAny>> {
     PyDateTime::from_timestamp(py, epoch_seconds, None).map(|value| value.into_any().unbind())
+}
+
+/// Hands `Logging` the price the route settled, so Python logs and bills it instead of repricing the call. `None` tells
+/// it the route prices this stream once its usage is final
+fn record_route_cost(
+    py: Python<'_>,
+    logger: &Bound<'_, PyAny>,
+    priced: Option<&PricedCost>,
+) -> PyResult<()> {
+    let receipt = priced
+        .map(|priced| crate::NativeReceipt::new(py, &priced.receipt))
+        .transpose()?;
+    Logging::RecordRouteCost.call(
+        py,
+        (
+            logger,
+            receipt,
+            priced.and_then(|priced| priced.service_tier.as_deref()),
+            priced.and_then(|priced| priced.data_residency.as_deref()),
+            priced.and_then(|priced| priced.receipt.basis.vertex_location.as_deref()),
+        ),
+    )?;
+    Ok(())
 }
 
 fn is_cancellation(py: Python<'_>, error: &PyErr) -> bool {
@@ -110,6 +138,7 @@ impl LegacyLogging {
             host_answered: false,
             stream_starts_on_first_read: false,
             logged_call_params: Vec::new(),
+            stream_meter: None,
         }
     }
 
@@ -468,6 +497,9 @@ impl LegacyLogging {
         }
         let logger = self.logger()?;
         let billing = self.stream_billing().ok_or(HostError::MissingState)?;
+        if let Some(priced) = self.stream_meter.as_ref().and_then(StreamMeter::settled) {
+            record_route_cost(py, logger.object(py), Some(priced))?;
+        }
         let billed = Streaming::Success.call(
             py,
             (
@@ -746,6 +778,11 @@ impl LegacyLogging {
     ) -> PyResult<HookStep<Self, ()>> {
         use litellm_host::interceptors::{Cost, ResultSource};
 
+        self.stream_meter = None;
+        if let Some(logger) = &self.logger {
+            logger.object(py).setattr("_route_priced_cost", py.None())?;
+            logger.object(py).setattr("_route_prices", false)?;
+        }
         self.stream_starts_on_first_read = self.operation == LoggingOperation::Messages;
         self.cache_key = match &facts.source {
             ResultSource::Provider => None,
@@ -785,10 +822,18 @@ impl LegacyLogging {
         let details = logger.getattr("model_call_details")?;
         let reported_cost = match &facts.cost {
             Cost::Reported { amount } => amount.as_f64(),
-            Cost::CacheHit | Cost::Deferred => None,
+            Cost::Priced(_) | Cost::Metered(_) | Cost::CacheHit | Cost::Deferred => None,
         };
         logger.setattr("_provider_reported_cost", reported_cost)?;
         details.call_method1("pop", ("response_cost", py.None()))?;
+        match &facts.cost {
+            Cost::Priced(priced) => record_route_cost(py, logger, Some(priced))?,
+            Cost::Metered(meter) => {
+                record_route_cost(py, logger, None)?;
+                self.stream_meter = Some(meter.clone());
+            }
+            Cost::Reported { .. } | Cost::CacheHit | Cost::Deferred => {}
+        }
         if self.cache_key.is_some() {
             details.set_item("cache_hit", true)?;
         } else {
@@ -1610,6 +1655,122 @@ logger._provider_reported_cost = None
                 c"
 assert logger.update['custom_llm_provider'] == 'anthropic', logger.update
 assert ('custom_llm_provider' in logger.update['litellm_params']) is in_params, logger.update
+",
+            );
+        });
+    }
+
+    const ROUTE_PRICED_LOGGER: &CStr = c"
+logger.litellm_params = {}
+logger.optional_params = {}
+logger.model_call_details = {}
+logger._provider_reported_cost = None
+logger._route_priced_cost = 0.75
+";
+
+    fn route_priced(total: f64) -> litellm_host::interceptors::PricedCost {
+        let receipt = litellm_cost::receipt::Receipt::of_total(total);
+        litellm_host::interceptors::PricedCost {
+            receipt: litellm_cost::receipt::Receipt {
+                basis: litellm_cost::query::Basis {
+                    vertex_location: Some("us-east5".into()),
+                    ..receipt.basis.clone()
+                },
+                ..receipt
+            },
+            service_tier: Some("priority".into()),
+            data_residency: Some("EU".into()),
+        }
+    }
+
+    fn provider_facts(
+        cost: litellm_host::interceptors::Cost,
+    ) -> litellm_host::interceptors::ExecutionFacts {
+        litellm_host::interceptors::ExecutionFacts {
+            provider: litellm_host::interceptors::ProviderIdentity {
+                model: "claude-sonnet-4-5".into(),
+                provider: "anthropic".into(),
+            },
+            cost,
+            source: litellm_host::interceptors::ResultSource::Provider,
+        }
+    }
+
+    #[rstest]
+    #[case::priced(true)]
+    #[case::deferred(false)]
+    fn result_ready_hands_logging_the_route_price_and_clears_an_earlier_hops(#[case] priced: bool) {
+        use litellm_host::interceptors::Cost;
+
+        Python::initialize();
+        Python::attach(|py| {
+            let locals = namespace(py, PAYLOAD_LOGGER);
+            run(py, &locals, ROUTE_PRICED_LOGGER);
+            let mut logging = LegacyLogging {
+                logger: Some(PythonLogger::new(local(&locals, "logger").unbind())),
+                operation: crate::LoggingOperation::Messages,
+                ..legacy_call(py, &locals, true)
+            };
+            let cost = match priced {
+                true => Cost::Priced(Box::new(route_priced(0.25))),
+                false => Cost::Deferred,
+            };
+
+            logging.result_ready(py, &provider_facts(cost)).unwrap();
+
+            locals.set_item("priced", priced).unwrap();
+            run(
+                py,
+                &locals,
+                c"
+handed = [value for name, value in logger.calls if name == 'record_route_cost']
+assert handed == ([(0.25, 0.25, 'priority', 'EU', 'us-east5')] if priced else []), logger.calls
+assert logger._route_priced_cost is None, logger._route_priced_cost
+",
+            );
+        });
+    }
+
+    #[rstest]
+    #[case::settled(true)]
+    #[case::ended_before_its_usage(false)]
+    fn a_metered_stream_hands_logging_its_price_before_the_stream_is_billed(#[case] settled: bool) {
+        use litellm_host::interceptors::{Cost, StreamMeter};
+
+        Python::initialize();
+        Python::attach(|py| {
+            let locals = namespace(py, PAYLOAD_LOGGER);
+            run(py, &locals, ROUTE_PRICED_LOGGER);
+            let mut logging = LegacyLogging {
+                logger: Some(PythonLogger::new(local(&locals, "logger").unbind())),
+                operation: crate::LoggingOperation::Messages,
+                ..legacy_call(py, &locals, true)
+            };
+            let meter = StreamMeter::default();
+            logging
+                .result_ready(py, &provider_facts(Cost::Metered(meter.clone())))
+                .unwrap();
+            if settled {
+                meter.settle(route_priced(0.5));
+            }
+            let first: Py<PyAny> = pyo3::types::PyString::new(py, "first").into_any().unbind();
+            let delivered = super::DeliveredStream {
+                head: py.None(),
+                chunks: pyo3::types::PyList::empty(py).unbind(),
+                first_chunk: Some(first),
+            };
+
+            logging.stream_success(py, &delivered, false).unwrap();
+
+            locals.set_item("settled", settled).unwrap();
+            run(
+                py,
+                &locals,
+                c"
+handed = [value for name, value in logger.calls if name in ('record_route_cost', 'stream_success')]
+priced = [(0.5, 0.5, 'priority', 'EU', 'us-east5')] if settled else []
+assert handed == [None, *priced, []], logger.calls
+assert logger._route_prices is False, 'result_ready clears an earlier hop'
 ",
             );
         });

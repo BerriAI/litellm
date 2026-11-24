@@ -103277,13 +103277,13 @@
     },
     "fal_ai/blackforestlabs/flux-3-max/image-to-video": {
         "litellm_provider": "fal_ai",
-        "metadata": {"comment":"per second of generated video by resolution; output_cost_per_second is the default resolution 720p rate"},
+        "metadata": {"comment":"per second of generated video by resolution; output_cost_per_second is the default resolution 720p rate; promotional 35% off rate through 2026-12-07 (UTC) per the page; the regular rates of $0.17 (720p), $0.29 (1080p), $0.40 (2K) and $0.80 (4K) per second apply from 2026-12-08 (ruling fal-ai-promotional-rates-apply-until-promotion-ends, 2026-11-10)"},
         "mode": "video_generation",
-        "output_cost_per_second": 0.17,
-        "output_cost_per_second_1080p": 0.29,
-        "output_cost_per_second_2k": 0.4,
-        "output_cost_per_second_4k": 0.8,
-        "output_cost_per_second_720p": 0.17,
+        "output_cost_per_second": 0.1105,
+        "output_cost_per_second_1080p": 0.1885,
+        "output_cost_per_second_2k": 0.26,
+        "output_cost_per_second_4k": 0.52,
+        "output_cost_per_second_720p": 0.1105,
         "source": "https://fal.ai/models/blackforestlabs/flux-3-max/image-to-video",
         "supported_endpoints": [
             "/v1/videos"
@@ -103298,13 +103298,13 @@
     },
     "fal_ai/blackforestlabs/flux-3-max/text-to-video": {
         "litellm_provider": "fal_ai",
-        "metadata": {"comment":"per second of generated video by resolution; output_cost_per_second is the default resolution 720p rate"},
+        "metadata": {"comment":"per second of generated video by resolution; output_cost_per_second is the default resolution 720p rate; promotional 35% off rate through 2026-12-07 (UTC) per the page; the regular rates of $0.17 (720p), $0.29 (1080p), $0.40 (2K) and $0.80 (4K) per second apply from 2026-12-08 (ruling fal-ai-promotional-rates-apply-until-promotion-ends, 2026-11-10)"},
         "mode": "video_generation",
-        "output_cost_per_second": 0.17,
-        "output_cost_per_second_1080p": 0.29,
-        "output_cost_per_second_2k": 0.4,
-        "output_cost_per_second_4k": 0.8,
-        "output_cost_per_second_720p": 0.17,
+        "output_cost_per_second": 0.1105,
+        "output_cost_per_second_1080p": 0.1885,
+        "output_cost_per_second_2k": 0.26,
+        "output_cost_per_second_4k": 0.52,
+        "output_cost_per_second_720p": 0.1105,
         "source": "https://fal.ai/models/blackforestlabs/flux-3-max/text-to-video",
         "supported_endpoints": [
             "/v1/videos"
@@ -103318,13 +103318,13 @@
     },
     "fal_ai/blackforestlabs/flux-3-max/keyframes-to-video": {
         "litellm_provider": "fal_ai",
-        "metadata": {"comment":"per second of generated video by resolution; output_cost_per_second is the default resolution 720p rate"},
+        "metadata": {"comment":"per second of generated video by resolution; output_cost_per_second is the default resolution 720p rate; promotional 35% off rate through 2026-12-07 (UTC) per the page; the regular rates of $0.17 (720p), $0.29 (1080p), $0.40 (2K) and $0.80 (4K) per second apply from 2026-12-08 (ruling fal-ai-promotional-rates-apply-until-promotion-ends, 2026-11-10)"},
         "mode": "video_generation",
-        "output_cost_per_second": 0.17,
-        "output_cost_per_second_1080p": 0.29,
-        "output_cost_per_second_2k": 0.4,
-        "output_cost_per_second_4k": 0.8,
-        "output_cost_per_second_720p": 0.17,
+        "output_cost_per_second": 0.1105,
+        "output_cost_per_second_1080p": 0.1885,
+        "output_cost_per_second_2k": 0.26,
+        "output_cost_per_second_4k": 0.52,
+        "output_cost_per_second_720p": 0.1105,
         "source": "https://fal.ai/models/blackforestlabs/flux-3-max/keyframes-to-video",
         "supported_endpoints": [
             "/v1/videos"
@@ -110328,14 +110328,13 @@
         "supports_vision": true
     },
     "together_ai/Qwen/Qwen4-Max": {
-        "cache_read_input_token_cost": 5.25e-08,
-        "comment": "These are Together's promotional rates, valid until 2026-11-23. Update on 2026-11-24 when the promotion ends. List rates per 1M tokens on https://www.together.ai/pricing are $1.50 input, $0.075 cached input and $4.50 output.",
-        "input_cost_per_token": 1.05e-06,
+        "cache_read_input_token_cost": 7.5e-08,
+        "input_cost_per_token": 1.5e-06,
         "litellm_provider": "together_ai",
         "max_input_tokens": 1000000,
         "max_output_tokens": 1000000,
         "mode": "chat",
-        "output_cost_per_token": 3.15e-06,
+        "output_cost_per_token": 4.5e-06,
         "source": "https://api.together.ai/v1/models",
         "supports_function_calling": true,
         "supports_prompt_caching": true,
@@ -126135,6 +126134,17 @@
         "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "fal_ai/recraft/vectorize/pro": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.04,
+        "source": "https://fal.ai/models/recraft/vectorize/pro",
+        "supported_endpoints": [
+            "/v1/images/edits",
+            "/v1/images/generations"
+        ],
         "supports_vision": true
     }
 }
