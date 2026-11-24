@@ -2800,36 +2800,46 @@ async def test_partial_embedding_cache_hit_sends_only_misses_and_keeps_input_ord
     assert [item["embedding"] for item in repeat.data] == [[float(len(text))] for text in mixed_input]
 
 
+def _serve_gemini_embeddings_echoing_output_dimensionality(monkeypatch, sent_bodies: list[dict]) -> None:
+    """Gemini answers each request with that request's ``outputDimensionality`` as its embedding."""
+    import httpx
+
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        sent_bodies.append(body)
+        return httpx.Response(
+            200,
+            json={"embeddings": [{"values": [float(item["outputDimensionality"])]} for item in body["requests"]]},
+        )
+
+    client = AsyncHTTPHandler(transport=httpx.MockTransport(respond))
+    monkeypatch.setattr(
+        "litellm.llms.vertex_ai.gemini_embeddings.batch_embed_content_handler.get_async_httpx_client",
+        lambda **_: client,
+    )
+
+
 @pytest.mark.asyncio
 async def test_a_cached_embedding_is_not_served_to_the_same_input_under_another_extra_body_item(monkeypatch):
     import litellm
-    from litellm import CustomLLM
     from litellm.caching.caching import Cache
-    from litellm.types.utils import Embedding, EmbeddingResponse
 
-    class ItemEchoingEmbedder(CustomLLM):
-        async def aembedding(self, model, input, model_response, optional_params, **kwargs) -> EmbeddingResponse:
-            return EmbeddingResponse(
-                model=model,
-                data=[
-                    Embedding(embedding=[float(item["outputDimensionality"])], index=idx, object="embedding")
-                    for idx, item in enumerate(optional_params["extra_body"]["requests"])
-                ],
-            )
-
-    monkeypatch.setattr(
-        litellm, "custom_provider_map", [{"provider": "item-echoing", "custom_handler": ItemEchoingEmbedder()}]
-    )
-    monkeypatch.setattr(litellm, "provider_list", [*litellm.provider_list, "item-echoing"])
-    monkeypatch.setattr(litellm, "_custom_providers", [*litellm._custom_providers, "item-echoing"])
     monkeypatch.setattr(litellm, "cache", Cache(type="local"))
+    _serve_gemini_embeddings_echoing_output_dimensionality(monkeypatch, [])
     extra_body = {"requests": [{"outputDimensionality": 256}, {"outputDimensionality": 128}]}
 
-    first = await litellm.aembedding(model="item-echoing/m", input=["a", "b"], extra_body=extra_body)
-    await asyncio.gather(*_PENDING_CACHE_WRITES)
-    swapped = await litellm.aembedding(model="item-echoing/m", input=["b", "a"], extra_body=extra_body)
-    await asyncio.gather(*_PENDING_CACHE_WRITES)
-    repeated = await litellm.aembedding(model="item-echoing/m", input=["a", "b"], extra_body=extra_body)
+    async def embed(input):
+        response = await litellm.aembedding(
+            model="gemini/gemini-embedding-001", input=input, extra_body=extra_body, api_key="k"
+        )
+        await asyncio.gather(*_PENDING_CACHE_WRITES)
+        return response
+
+    first = await embed(["a", "b"])
+    swapped = await embed(["b", "a"])
+    repeated = await embed(["a", "b"])
 
     assert [item["embedding"] for item in first.data] == [[256.0], [128.0]]
     assert [item["embedding"] for item in swapped.data] == [[256.0], [128.0]]
@@ -2839,6 +2849,40 @@ async def test_a_cached_embedding_is_not_served_to_the_same_input_under_another_
 
 @pytest.mark.asyncio
 async def test_a_partial_embedding_cache_hit_sends_each_missed_input_with_its_own_extra_body_item(monkeypatch):
+    import litellm
+    from litellm.caching.caching import Cache
+
+    monkeypatch.setattr(litellm, "cache", Cache(type="local"))
+    sent_bodies: list[dict] = []
+    _serve_gemini_embeddings_echoing_output_dimensionality(monkeypatch, sent_bodies)
+    extra_body = {
+        "requests": [{"outputDimensionality": 1}, {"outputDimensionality": 2}, {"outputDimensionality": 3}],
+        "taskType": "shared",
+    }
+
+    async def embed(input):
+        response = await litellm.aembedding(
+            model="gemini/gemini-embedding-001", input=input, extra_body=extra_body, api_key="k"
+        )
+        await asyncio.gather(*_PENDING_CACHE_WRITES)
+        return response
+
+    await embed(["cached"])
+    partial = await embed(["cached", "first miss", "second miss"])
+    repeated = await embed(["cached", "first miss", "second miss"])
+
+    assert [item["embedding"] for item in partial.data] == [[1.0], [2.0], [3.0]]
+    assert [item["embedding"] for item in repeated.data] == [[1.0], [2.0], [3.0]]
+    assert [
+        [(r["content"]["parts"][0]["text"], r["outputDimensionality"], r["taskType"]) for r in body["requests"]]
+        for body in sent_bodies
+    ] == [[("cached", 1, "shared")], [("first miss", 2, "shared"), ("second miss", 3, "shared")]]
+
+
+@pytest.mark.asyncio
+async def test_a_partial_embedding_cache_hit_leaves_extra_body_whole_for_a_provider_without_per_input_items(
+    monkeypatch,
+):
     import litellm
     from litellm import CustomLLM
     from litellm.caching.caching import Cache
@@ -2864,30 +2908,13 @@ async def test_a_partial_embedding_cache_hit_sends_each_missed_input_with_its_ow
     monkeypatch.setattr(litellm, "provider_list", [*litellm.provider_list, "recording-embedder"])
     monkeypatch.setattr(litellm, "_custom_providers", [*litellm._custom_providers, "recording-embedder"])
     monkeypatch.setattr(litellm, "cache", Cache(type="local"))
-    extra_body = {
-        "requests": [{"taskType": "A"}, {"taskType": "B"}, {"taskType": "C"}],
-        "instances": [{"title": "a"}, {"title": "b"}],
-        "taskType": "shared",
-    }
+    extra_body = {"requests": ["retry", "log"], "instances": [{"region": "eu"}]}
 
     await litellm.aembedding(model="recording-embedder/m", input=["cached"], extra_body=extra_body)
     await asyncio.gather(*_PENDING_CACHE_WRITES)
-    await litellm.aembedding(
-        model="recording-embedder/m", input=["cached", "first miss", "second miss"], extra_body=extra_body
-    )
-    await asyncio.gather(*_PENDING_CACHE_WRITES)
-    repeated = await litellm.aembedding(
-        model="recording-embedder/m", input=["cached", "first miss", "second miss"], extra_body=extra_body
-    )
-    assert [item["embedding"] for item in repeated.data] == [[6.0], [10.0], [11.0]]
+    await litellm.aembedding(model="recording-embedder/m", input=["cached", "miss"], extra_body=extra_body)
 
-    assert embedder.provider_calls == (
-        (("cached",), extra_body),
-        (
-            ("first miss", "second miss"),
-            {"requests": [{"taskType": "B"}, {"taskType": "C"}], "instances": [{"title": "b"}], "taskType": "shared"},
-        ),
-    ), embedder.provider_calls
+    assert embedder.provider_calls == ((("cached",), extra_body), (("miss",), extra_body)), embedder.provider_calls
 
 
 @pytest.mark.asyncio

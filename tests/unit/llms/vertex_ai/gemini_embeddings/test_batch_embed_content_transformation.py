@@ -900,6 +900,7 @@ def test_gemini_embedding_merges_extra_body_requests_into_the_request_for_the_sa
         api_key="gemini-test-key",
         extra_body={
             "title": "greeting",
+            "taskType": "SEMANTIC_SIMILARITY",
             "requests": [
                 {
                     "content": {"parts": [{"text": "text the guardrails never saw"}]},
@@ -922,9 +923,36 @@ def test_gemini_embedding_merges_extra_body_requests_into_the_request_for_the_sa
             {
                 "model": "models/gemini-embedding-001",
                 "content": {"parts": [{"text": "world"}]},
+                "taskType": "SEMANTIC_SIMILARITY",
                 "outputDimensionality": 128,
                 "title": "greeting",
             },
+        ]
+    }
+
+
+@pytest.mark.respx(assert_all_called=True)
+def test_gemini_embedding_still_sends_an_extra_body_requests_field_that_is_not_a_list(
+    respx_mock: respx.MockRouter,
+) -> None:
+    route: Final = respx_mock.post(
+        "https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:batchEmbedContents"
+    ).mock(return_value=httpx.Response(200, json={"embeddings": [{"values": [0.1]}]}))
+
+    litellm.embedding(
+        model="gemini/gemini-embedding-001",
+        input=["hello"],
+        api_key="gemini-test-key",
+        extra_body={"requests": {"taskType": "RETRIEVAL_QUERY"}},
+    )
+
+    assert json.loads(route.calls.last.request.content) == {
+        "requests": [
+            {
+                "model": "models/gemini-embedding-001",
+                "content": {"parts": [{"text": "hello"}]},
+                "requests": {"taskType": "RETRIEVAL_QUERY"},
+            }
         ]
     }
 

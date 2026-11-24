@@ -29,7 +29,7 @@ import litellm
 from litellm._internal_context import is_internal_call, post_response_phase
 from litellm._logging import print_verbose, verbose_logger
 from litellm.caching import InMemoryCache
-from litellm.caching.caching import S3Cache, response_cache_phase
+from litellm.caching.caching import S3Cache, has_per_input_extra_body, kwargs_for_input, response_cache_phase
 from litellm.constants import CACHE_WRITE_SHUTDOWN_FLUSH_TIMEOUT_SECONDS, RESPONSE_CACHE_EXCLUDED_PROVIDERS
 from litellm.litellm_core_utils.hidden_params import get_hidden_params
 from litellm.litellm_core_utils.llm_response_utils.response_metadata import (
@@ -38,7 +38,7 @@ from litellm.litellm_core_utils.llm_response_utils.response_metadata import (
 from litellm.litellm_core_utils.logging_utils import (
     assemble_complete_response_from_streaming_chunks,
 )
-from litellm.llms.base_llm.embedding.transformation import extra_body_for_inputs, kwargs_for_input
+from litellm.llms.base_llm.embedding.transformation import extra_body_for_inputs
 from litellm.llms.custom_httpx.sse_lines import split_sse_lines
 from litellm.types.caching import CACHED_STREAM_EVENTS_KEY, EMBEDDING_CACHE_FORMAT_VERSION, CachedEmbedding
 from litellm.types.integrations.custom_logger import converted_stream_requested
@@ -511,7 +511,9 @@ class LLMCachingHandler:
                     embedding_uncached_input=self.handle_kwargs_input_list_or_str(kwargs),
                     embedding_uncached_extra_body=extra_body_for_inputs(
                         kwargs.get("extra_body"), _missed_input_indexes(read.cached_result)
-                    ),
+                    )
+                    if has_per_input_extra_body(kwargs)
+                    else kwargs.get("extra_body"),
                 )
 
         verbose_logger.debug("CACHE RESULT: %s", cached_result)

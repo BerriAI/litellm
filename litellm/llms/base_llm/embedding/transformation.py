@@ -44,14 +44,23 @@ def split_request_extra_body(
     extra_body: Mapping[str, object], item_field: str, settings_field: str | None = None
 ) -> tuple[Sequence[object], Mapping[str, object]]:
     """The caller's ``extra_body`` written as a whole provider request, taken apart into its per-input items and its
-    settings. Fields outside the two request fields are settings, and a named settings object wins over them."""
+    settings. Fields outside the two request fields are settings, and a named settings object wins over them. A
+    request field of the wrong shape stays a setting, so the provider rejects it instead of it being dropped."""
     items: Final = extra_body.get(item_field)
     settings: Final = None if settings_field is None else extra_body.get(settings_field)
+    taken: Final = tuple(
+        field
+        for field, is_request_shaped in (
+            (item_field, isinstance(items, (list, tuple))),
+            (settings_field, isinstance(settings, Mapping)),
+        )
+        if is_request_shaped
+    )
     return (
-        _BODY_ITEMS.validate_python(items) if isinstance(items, (list, tuple)) else (),
+        _BODY_ITEMS.validate_python(items) if item_field in taken else (),
         {
-            **{k: v for k, v in extra_body.items() if k not in (item_field, settings_field)},
-            **(_BODY_FIELDS.validate_python(settings) if isinstance(settings, Mapping) else {}),
+            **{k: v for k, v in extra_body.items() if k not in taken},
+            **(_BODY_FIELDS.validate_python(settings) if settings_field in taken else {}),
         },
     )
 
@@ -97,20 +106,12 @@ def extra_body_for_inputs(extra_body: object, kept_input_indexes: Sequence[int])
     }
 
 
-def kwargs_for_input(
-    kwargs: Mapping[str, object], input: object, input_index: int
-) -> dict[str, object]:  # mutable-ok: spread as the cache key kwargs
-    """The call kwargs narrowed to one input and the ``extra_body`` item written for it, so a cached embedding is only
-    reused for the same input under the same item."""
-    return {
-        **kwargs,
-        "input": input,
-        **(
-            {"extra_body": extra_body_for_inputs(kwargs["extra_body"], (input_index,))}
-            if "extra_body" in kwargs
-            else {}
-        ),
-    }
+def has_request_items(extra_body: object) -> bool:
+    """Whether the ``extra_body`` holds a per-input array."""
+    if not isinstance(extra_body, Mapping):
+        return False
+    fields: Final = _BODY_FIELDS.validate_python(extra_body)
+    return any(isinstance(fields.get(field), (list, tuple)) for field in REQUEST_ITEM_FIELDS)
 
 
 def _inputs_kept(items: Sequence[object], kept_input_indexes: Sequence[int]) -> Sequence[object]:
