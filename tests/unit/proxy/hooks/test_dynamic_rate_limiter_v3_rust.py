@@ -4009,7 +4009,13 @@ async def test_the_limiter_loads_and_admits_requests_without_redis_installed(
     )
     handler.update_variables(llm_router=_borrowing_handler(monkeypatch, borrows=False).llm_router)
 
-    await _check(handler, _class_team("team-a"), saturation=0.0, priority="interactive")
+    await handler.async_pre_call_hook(_class_team("team-a"), DualCache(), {"model": "shared-model"}, "acompletion")
+
+    from litellm.proxy.hooks.parallel_request_limiter_v3 import get_or_create_request_stash
+
+    response: Final = get_or_create_request_stash().rate_limit_response
+    assert response is not None
+    assert response["overall_code"] == "OK"
 
 
 @pytest.mark.asyncio
