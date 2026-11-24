@@ -96,6 +96,8 @@ def _history_with_a_gemini_thought(signature_fields: Mapping[str, str | None]) -
     [
         (AnthropicMessagesConfig(), "claude-sonnet-4-5", None),
         (AnthropicMessagesConfig(), "claude-sonnet-4-5", "https://example.services.ai.azure.com/anthropic"),
+        (AnthropicMessagesConfig(), "claude-sonnet-4-5", "https://llm-gateway.example.com/anthropic"),
+        (OpenAILikeAnthropicMessagesConfig(), "claude-sonnet-4-5", "https://llm-gateway.example.com/anthropic"),
         (AzureAnthropicMessagesConfig(), "claude-sonnet-4-5", "https://example.services.ai.azure.com/anthropic"),
         (VertexAIPartnerModelsAnthropicMessagesConfig(), "claude-sonnet-4-5@20250929", None),
         (AmazonAnthropicClaudeMessagesConfig(), "us.anthropic.claude-sonnet-4-5-20250929-v1:0", None),
@@ -162,7 +164,7 @@ def test_a_backend_that_does_not_verify_claude_signatures_gets_its_unsigned_thou
     assert request["messages"][3]["content"] == messages[3]["content"]
 
 
-def test_a_claude_name_behind_an_env_base_url_on_another_host_gets_its_unsigned_thoughts_back(
+def test_a_claude_name_behind_an_env_base_url_on_deepseek_gets_its_unsigned_thoughts_back(
     monkeypatch: pytest.MonkeyPatch,
 ):
     monkeypatch.delenv("ANTHROPIC_API_BASE", raising=False)

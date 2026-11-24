@@ -76,8 +76,8 @@ impl MessagesEndpoint for AnthropicMessagesConfig {
         api_base: Option<&str>,
         env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> bool {
-        url_host(&complete_anthropic_url(api_base, env_lookup))
-            .is_some_and(|host| is_anthropic_host(&host) || is_foundry_host(&host))
+        !url_host(&complete_anthropic_url(api_base, env_lookup))
+            .is_some_and(|host| replays_unsigned_thinking(&host))
     }
 
     fn headers_for_url(&self, headers: Headers, url: &str) -> Headers {
@@ -222,7 +222,14 @@ const FOUNDRY_HOST_SUFFIXES: [&str; 3] = [
 ];
 
 const ANTHROPIC_API_HOST: &str = "api.anthropic.com";
-const ANTHROPIC_DOMAIN: &str = "anthropic.com";
+const UNSIGNED_THINKING_HOST_SUFFIXES: [&str; 6] = [
+    "deepseek.com",
+    "minimax.io",
+    "minimaxi.com",
+    "tencentcloudmaas.com",
+    "z.ai",
+    "bigmodel.cn",
+];
 
 fn url_host(url: &str) -> Option<String> {
     let absolute = if url.contains("://") {
@@ -241,8 +248,10 @@ fn is_foundry_host(host: &str) -> bool {
         .any(|suffix| host == *suffix || host.ends_with(&format!(".{suffix}")))
 }
 
-fn is_anthropic_host(host: &str) -> bool {
-    host == ANTHROPIC_DOMAIN || host.ends_with(&format!(".{ANTHROPIC_DOMAIN}"))
+fn replays_unsigned_thinking(host: &str) -> bool {
+    UNSIGNED_THINKING_HOST_SUFFIXES
+        .iter()
+        .any(|suffix| host == *suffix || host.ends_with(&format!(".{suffix}")))
 }
 
 fn is_foundry_url(url: &str) -> bool {
@@ -1597,6 +1606,22 @@ mod tests {
                 false
             ),
             Ok(body(json!({"messages": tool_turn(None)})))
+        );
+    }
+
+    #[rstest]
+    #[case::anthropic("https://api.anthropic.com", true)]
+    #[case::gateway("https://llm-gateway.example.com/anthropic", true)]
+    #[case::foundry("https://example.services.ai.azure.com/anthropic", true)]
+    #[case::deepseek("https://api.deepseek.com/anthropic", false)]
+    #[case::z_ai("https://api.z.ai/api/anthropic", false)]
+    fn only_an_anthropic_compatible_host_gets_unsigned_thinking_back(
+        #[case] api_base: &str,
+        #[case] checks: bool,
+    ) {
+        assert_eq!(
+            ANTHROPIC_MESSAGES_CONFIG.checks_claude_signatures(Some(api_base), &|_| None),
+            checks
         );
     }
 

@@ -561,11 +561,12 @@ def test_count_sends_the_thinking_history_messages_sends(
     ("api_base", "kept"),
     (
         ("https://api.anthropic.com", False),
+        ("https://llm-gateway.example.com/anthropic", False),
         ("https://api.deepseek.com/anthropic", True),
         ("https://api.z.ai/api/anthropic", True),
     ),
 )
-async def test_handler_sends_an_unsigned_thought_only_to_a_host_that_does_not_check_claude_signatures(
+async def test_handler_sends_an_unsigned_thought_only_to_a_host_that_needs_it_back(
     api_base: str, kept: bool, httpx_transport_clients
 ):
     with respx.mock:
