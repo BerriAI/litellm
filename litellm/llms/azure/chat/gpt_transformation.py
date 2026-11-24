@@ -213,7 +213,7 @@ class AzureOpenAIConfig(BaseConfig):
 
     def map_openai_params(
         self,
-        non_default_params: dict[str, object],
+        non_default_params: dict,
         optional_params: dict,
         model: str,
         drop_params: bool,
@@ -292,10 +292,10 @@ class AzureOpenAIConfig(BaseConfig):
         self,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict[str, object],
+        optional_params: dict,
         litellm_params: Mapping[str, object],
-        headers: dict[str, object],
-    ) -> dict[str, object]:
+        headers: dict,
+    ) -> dict:
         ordered_messages: Final = system_messages_first(messages) if litellm.openai_system_messages_first else messages
         wire_messages: Final = (
             self._with_wire_safe_prompt_cache_breakpoints(model, ordered_messages, litellm_params)
@@ -381,14 +381,14 @@ class AzureOpenAIConfig(BaseConfig):
 
     def validate_environment(
         self,
-        headers: Mapping[str, object],
+        headers: dict,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: Mapping[str, object],
-        litellm_params: Mapping[str, object],
+        optional_params: dict,
+        litellm_params: dict,
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict[str, object]:
+    ) -> dict:
         raise NotImplementedError(
             "Azure OpenAI has custom logic for validating environment, as it uses the OpenAI SDK."
         )
