@@ -65,6 +65,7 @@ from litellm.proxy.spend_tracking.spend_tracking_utils import (
     should_store_prompts_and_responses_in_spend_logs,
     spend_log_row_with_retained_metadata,
 )
+from litellm.proxy.spend_tracking.rust_spend_log_rows import spendlogs_payload_rust
 from litellm.proxy.spend_tracking.legacy_spend_log_rows import (
     _get_messages_for_spend_logs_payload,
     _get_proxy_server_request_for_spend_logs_payload,
@@ -72,6 +73,7 @@ from litellm.proxy.spend_tracking.legacy_spend_log_rows import (
     _get_response_for_spend_logs_payload,
     _scrub_raw_model_from_error_information,
     _stored_request_without_requester_ip_address,
+    logging_payload as legacy_logging_payload,
 )
 from litellm.proxy.utils import hash_token
 from litellm.types.proxy.auth.customer_hierarchy import CustomerHierarchyAuth
@@ -319,6 +321,35 @@ def test_get_logging_payload_includes_kubernetes_pod_routing(
 
     assert json.loads(payload["metadata"])[KUBERNETES_POD_ROUTING_KEY] == expected
     assert _get_spend_logs_metadata(None)["kubernetes_pod_routing"] is None
+
+
+@pytest.mark.parametrize("build_row", (legacy_logging_payload, spendlogs_payload_rust))
+def test_spend_row_keeps_the_callers_spend_logs_metadata_beside_a_planted_litellm_metadata(
+    build_row: Callable[[dict[str, object], object, datetime.datetime, datetime.datetime, None], SpendLogsPayload],
+) -> None:
+    planted: Final = {"user_api_key_hash": "hash", "applied_guardrails": ["pre"]}
+    now: Final = datetime.datetime(2026, 1, 1, tzinfo=timezone.utc)
+    payload: Final = build_row(
+        {
+            "model": "gpt-4o-mini",
+            "litellm_params": {
+                "metadata": {
+                    "litellm_api_version": "1.0.0",
+                    "user_api_key_hash": "hash",
+                    "spend_logs_metadata": {"team": "search"},
+                },
+                "litellm_metadata": planted,
+            },
+        },
+        litellm.ModelResponse(id="chatcmpl-test", choices=[]),
+        now,
+        now,
+        None,
+    )
+
+    stored: Final = TypeAdapter(Mapping[str, object]).validate_json(payload["metadata"])
+    assert stored["spend_logs_metadata"] == {"team": "search"}
+    assert planted == {"user_api_key_hash": "hash", "applied_guardrails": ["pre"]}
 
 
 @pytest.mark.parametrize("store_prompts,redact", [(True, False), (False, False), (True, True)])

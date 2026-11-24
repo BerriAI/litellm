@@ -2149,7 +2149,7 @@ class CustomStreamWrapper:
                 return chunk
 
             request_data: Final = self.logging_obj.model_call_details
-            call_type_str: Final = self.logging_obj.call_type
+            call_type_str: Final = self.logging_obj.payload_call_type()
 
             try:
                 typed_call_type = CallTypes(call_type_str)

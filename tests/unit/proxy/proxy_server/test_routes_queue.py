@@ -24,6 +24,7 @@ from starlette.requests import ClientDisconnect
 from starlette.types import Message
 
 from litellm import Router
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, get_spend_log_metadata_from_kwargs
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy import proxy_server
 from litellm.proxy._types import UserAPIKeyAuth
@@ -433,6 +434,32 @@ def test_a_queued_spend_row_ignores_key_fields_forged_in_the_litellm_metadata_bu
     )
     assert payload["team_id"] == "real-team"
     assert payload["organization_id"] != "forged-org"
+
+
+def test_a_guarded_queued_spend_row_keeps_the_spend_logs_metadata_the_caller_sent(
+    client: TestClient, auth_as: Callable[..., AbstractContextManager[None]], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _queue_router(monkeypatch, default_priority=0)
+    logger: Final = _QueueRequestLogger()
+    monkeypatch.setattr(litellm, "callbacks", [logger])
+    with auth_as():
+        response: Final = client.post(
+            "/queue/chat/completions",
+            json={
+                "model": "gpt-4",
+                "messages": [{"role": "user", "content": "hi"}],
+                "metadata": {"spend_logs_metadata": {"q_k": "q_v"}},
+            },
+        )
+    assert response.status_code == 200, response.text
+    kwargs: Final = logger.requests.get_nowait()
+    litellm_params: Final = as_str_mapping(kwargs.get("litellm_params")) or {}
+    guardrail_planted: Final = {
+        **kwargs,
+        "litellm_params": {**litellm_params, "litellm_metadata": {"user_api_key_hash": "hash"}},
+    }
+
+    assert get_spend_log_metadata_from_kwargs(guardrail_planted)["spend_logs_metadata"] == {"q_k": "q_v"}
 
 
 def test_a_queued_spend_row_stores_the_trace_id_the_caller_sent(

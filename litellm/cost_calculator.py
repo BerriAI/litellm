@@ -2923,7 +2923,8 @@ def _deployment_model_info(
         (
             model_info
             for metadata_key in ("metadata", "litellm_metadata")
-            if (metadata := litellm_params.get(metadata_key)) and (model_info := metadata.get("model_info")) is not None
+            if isinstance(metadata := litellm_params.get(metadata_key), dict)
+            and (model_info := metadata.get("model_info")) is not None
         ),
         None,
     )

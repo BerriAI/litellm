@@ -19990,6 +19990,7 @@ async def async_queue_request(
             user_api_key_dict, "team_object_permission_id", None
         )
         queued_metadata["endpoint"] = str(request.url)
+        queued_metadata["litellm_api_version"] = version
         LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
             headers=_headers, data=data, _metadata_variable_name="metadata"
         )

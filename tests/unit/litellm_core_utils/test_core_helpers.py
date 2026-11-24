@@ -31,6 +31,7 @@ from litellm.litellm_core_utils.core_helpers import (
     get_or_create_metadata_bucket,
     get_parent_otel_span_from_kwargs,
     get_provider_response_headers_from_hidden_params,
+    get_spend_log_metadata_from_kwargs,
     int_of,
     iter_items,
     joined,
@@ -914,6 +915,94 @@ class TestReceiveStampSurvivesASecondMetadataBucket:
         }
 
         assert get_litellm_metadata_from_kwargs(kwargs)["litellm_received_at"] is own
+
+
+@pytest.mark.parametrize(
+    ("planted", "logged"),
+    [
+        ({"user_api_key_hash": "hash"}, {"team": "search"}),
+        ({"user_api_key_hash": "hash", "spend_logs_metadata": {"team": "planted"}}, {"team": "planted"}),
+    ],
+)
+def test_a_planted_litellm_metadata_keeps_the_callers_spend_logs_metadata(
+    planted: dict[str, object], logged: dict[str, str]
+) -> None:
+    kwargs: Final = {
+        "litellm_params": {
+            "metadata": {
+                "litellm_api_version": "1.0.0",
+                "user_api_key_hash": "hash",
+                "spend_logs_metadata": {"team": "search"},
+            },
+            "litellm_metadata": planted,
+        }
+    }
+
+    assert get_spend_log_metadata_from_kwargs(kwargs)["spend_logs_metadata"] == logged
+
+
+def test_carrying_spend_logs_metadata_leaves_the_planted_litellm_metadata_as_the_hook_set_it() -> None:
+    planted: Final = {"user_api_key_hash": "hash", "applied_guardrails": ["pre"]}
+    kwargs: Final = {
+        "litellm_params": {
+            "metadata": {
+                "litellm_api_version": "1.0.0",
+                "user_api_key_hash": "hash",
+                "spend_logs_metadata": {"team": "search"},
+            },
+            "litellm_metadata": planted,
+        }
+    }
+
+    assert get_spend_log_metadata_from_kwargs(kwargs)["spend_logs_metadata"] == {"team": "search"}
+    assert planted == {"user_api_key_hash": "hash", "applied_guardrails": ["pre"]}
+
+
+def test_a_planted_litellm_metadata_keeps_the_fields_the_proxy_filled() -> None:
+    kwargs: Final = {
+        "litellm_params": {
+            "metadata": {
+                "litellm_api_version": "1.0.0",
+                "user_api_key_hash": "hash",
+                "requester_ip_address": "10.0.0.1",
+                "session_id": "session-1",
+                "applied_guardrails": [],
+            },
+            "litellm_metadata": {"user_api_key_hash": "hash", "applied_guardrails": ["pre"]},
+        }
+    }
+
+    spend_metadata: Final = get_spend_log_metadata_from_kwargs(kwargs)
+
+    assert spend_metadata["requester_ip_address"] == "10.0.0.1"
+    assert spend_metadata["session_id"] == "session-1"
+    assert spend_metadata["applied_guardrails"] == ["pre"]
+
+
+def test_a_callers_litellm_api_version_in_the_provider_body_metadata_never_reaches_the_spend_row() -> None:
+    kwargs: Final = {
+        "litellm_params": {
+            "metadata": {
+                "litellm_api_version": "forged",
+                "user_api_key_hash": "hash",
+                "spend_logs_metadata": {"team": "from-the-body"},
+            },
+            "litellm_metadata": {"litellm_api_version": "1.0.0", "user_api_key_hash": "hash"},
+        }
+    }
+
+    assert "spend_logs_metadata" not in get_spend_log_metadata_from_kwargs(kwargs)
+
+
+def test_a_provider_body_metadata_field_never_reaches_the_spend_row_metadata() -> None:
+    kwargs: Final = {
+        "litellm_params": {
+            "metadata": {"user_api_key_hash": "hash", "spend_logs_metadata": {"team": "from-the-body"}},
+            "litellm_metadata": {"user_api_key_hash": "hash"},
+        }
+    }
+
+    assert "spend_logs_metadata" not in get_spend_log_metadata_from_kwargs(kwargs)
 
 
 @pytest.mark.parametrize("reported", [float("nan"), float("inf"), {"total_cost": float("nan")}])

@@ -55,6 +55,26 @@ class TestSetDurationInModelCallDetails:
         )
         assert logging_obj.model_call_details["llm_api_duration_ms"] == pytest.approx(700.0)
 
+    def test_records_windows_in_a_planted_litellm_metadata_beside_the_callers_spend_logs_metadata(self):
+        planted = {"applied_guardrails": ["pre"]}
+        logging_obj = MagicMock()
+        logging_obj.model_call_details = {
+            "litellm_params": {
+                "metadata": {
+                    "litellm_api_version": "1.0.0",
+                    "user_api_key_hash": "hash",
+                    "spend_logs_metadata": {"team": "search"},
+                },
+                "litellm_metadata": planted,
+            }
+        }
+        start = datetime.datetime(2025, 1, 1, 0, 0, 0)
+        end = start + datetime.timedelta(milliseconds=300)
+
+        _set_duration_in_model_call_details(logging_obj, start, end)
+
+        assert planted["llm_api_timing_windows"] == ((start.timestamp(), end.timestamp()),)
+
 
 # ---------------------------------------------------------------------------
 # format_base64_size

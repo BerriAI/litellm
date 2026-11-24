@@ -1583,6 +1583,7 @@ class LLMCachingHandler:
             "stream_response": kwargs.get("stream_response", {}),
             "custom_llm_provider": custom_llm_provider,
             "vertex_location": kwargs.get("vertex_location") or kwargs.get("vertex_ai_location"),
+            **({"litellm_metadata": kwargs["litellm_metadata"]} if kwargs.get("litellm_metadata") is not None else {}),
         }
 
         if litellm.cache is not None:

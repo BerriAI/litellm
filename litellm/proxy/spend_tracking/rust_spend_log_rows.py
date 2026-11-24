@@ -24,7 +24,7 @@ from litellm.constants import (
 )
 from litellm.litellm_core_utils.core_helpers import (
     claude_subscription_usage,
-    get_litellm_metadata_from_kwargs,  # pyright: ignore[reportUnknownVariableType]  # the helper's dict parameter is untyped upstream
+    get_spend_log_metadata_from_kwargs,
 )
 from litellm.litellm_core_utils.hidden_params import served_from_cache
 from litellm.litellm_core_utils.internal_call_metadata import is_unbilled_non_inference_call
@@ -337,7 +337,7 @@ def spend_log_row_input(
     )
     response: Final = response_obj if isinstance(response_obj, BaseModel) else response_obj_dict
     litellm_params: Final = _str_mapping(kwargs.get("litellm_params", {})) or {}
-    metadata: Final = _str_mapping(get_litellm_metadata_from_kwargs(kwargs)) or {}  # pyright: ignore[reportUnknownArgumentType]  # the metadata helper returns an untyped dict
+    metadata: Final = get_spend_log_metadata_from_kwargs(kwargs)
     completion_start_time: Final = _COMPLETION_START_TIME.validate_python(kwargs.get("completion_start_time", end_time))
     call_type: Final = kwargs.get("call_type")
     usage: Final = _final_usage(kwargs, _usage(call_type, metadata, response, response_obj_dict))

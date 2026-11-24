@@ -833,6 +833,25 @@ def get_litellm_metadata_from_kwargs(kwargs: dict):
     return {}
 
 
+def get_spend_log_metadata_from_kwargs(kwargs: Mapping[str, object]) -> Mapping[str, object]:
+    """
+    The request metadata a spend row records. A guardrail hook can plant `litellm_metadata` on a chat request
+    after the proxy filled `metadata`, so the row reads the planted dict over the proxy's `metadata`, in a new
+    dict, since guardrail vendors receive the planted one. The proxy writes its `litellm_api_version` into the
+    bucket it fills at request setup, and the planted dict never holds one. On /v1/messages and /v1/responses the
+    proxy fills `litellm_metadata`, and `metadata` is the provider's body field, which a caller fills freely.
+    """
+    litellm_metadata: Final = as_str_mapping(get_litellm_metadata_from_kwargs(dict(kwargs))) or {}  # pyright: ignore[reportUnknownArgumentType]  # the metadata helper returns an untyped dict
+    litellm_params: Final = as_str_mapping(kwargs.get("litellm_params")) or {}
+    metadata: Final = as_str_mapping(litellm_params.get("metadata")) or {}
+    proxy_filled_metadata_under_a_plant: Final = (
+        "litellm_api_version" in metadata and "litellm_api_version" not in litellm_metadata
+    )
+    if not proxy_filled_metadata_under_a_plant:
+        return litellm_metadata
+    return {**metadata, **litellm_metadata}
+
+
 def _budget_reservation_on_auth_object(user_api_key_auth: object) -> object:
     if isinstance(user_api_key_auth, Mapping):
         return user_api_key_auth.get("budget_reservation")
