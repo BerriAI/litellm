@@ -1,9 +1,9 @@
 import asyncio
 from base64 import b64encode
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from copy import deepcopy
 from threading import get_ident
-from typing import Final
+from typing import Final, Literal
 
 import httpx
 import pytest
@@ -23,9 +23,13 @@ from litellm.llms.azure_ai.anthropic.count_tokens.transformation import (
     AzureAIAnthropicCountTokensConfig,
 )
 from litellm.constants import ANTHROPIC_TOKEN_COUNTING_BETA_VERSION
-from litellm.llms.vertex_ai.vertex_ai_partner_models.count_tokens.handler import count_tokens_headers
+from litellm.llms.vertex_ai.vertex_ai_partner_models.count_tokens.handler import (
+    VertexAIPartnerModelsTokenCounter,
+    count_tokens_headers,
+)
 from litellm.types.llms.anthropic import ANTHROPIC_BETA_HEADER_VALUES
 from litellm.llms.azure_ai.anthropic.messages_transformation import AzureAnthropicMessagesConfig
+from litellm.types.llms.vertex_ai import VERTEX_CREDENTIALS_TYPES
 from litellm.types.router import GenericLiteLLMParams
 
 FALLBACK_BETA = ANTHROPIC_BETA_HEADER_VALUES.SERVER_SIDE_FALLBACK_2026_06_01.value
@@ -599,3 +603,53 @@ def test_platform_count_betas_carry_the_fallback_beta_only_for_a_history_that_ec
 ) -> None:
     assert FALLBACK_BETA in count_betas(FALLBACK_HISTORY).split(",")
     assert FALLBACK_BETA not in count_betas([{"role": "user", "content": "hi"}]).split(",")
+
+
+class _VertexCounterWithAToken(VertexAIPartnerModelsTokenCounter):
+    async def _ensure_access_token_async(
+        self,
+        credentials: VERTEX_CREDENTIALS_TYPES | None,
+        project_id: str | None,
+        custom_llm_provider: Literal["vertex_ai", "vertex_ai_beta", "gemini"],
+    ) -> tuple[str, str]:
+        return "vertex-test-token", "test-project"
+
+
+async def _anthropic_count(messages: list[dict[str, JsonValue]]) -> None:
+    await AnthropicCountTokensHandler().handle_count_tokens_request(
+        model="claude-sonnet-4-5",
+        messages=messages,
+        auth_header={"x-api-key": "sk-ant-api03-test-key"},
+        api_base="https://gateway.example",
+    )
+
+
+async def _azure_count(messages: list[dict[str, JsonValue]]) -> None:
+    await AzureAIAnthropicCountTokensHandler().handle_count_tokens_request(
+        model="claude-sonnet-4-5", messages=messages, api_key="azure-test-key", api_base="https://gateway.example"
+    )
+
+
+async def _vertex_count(messages: list[dict[str, JsonValue]]) -> None:
+    await _VertexCounterWithAToken().handle_count_tokens_request(
+        model="claude-sonnet-4-5",
+        request_data={"model": "claude-sonnet-4-5", "messages": messages},
+        litellm_params={"api_base": "https://gateway.example", "vertex_location": "us-east5"},
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("httpx_transport_clients")
+@pytest.mark.parametrize("count", (_anthropic_count, _azure_count, _vertex_count))
+async def test_each_count_route_sends_the_fallback_beta_only_for_a_history_that_echoes_the_block(
+    count: Callable[[list[dict[str, JsonValue]]], Awaitable[None]],
+) -> None:
+    with respx.mock:
+        route: Final = respx.post(host="gateway.example").mock(
+            return_value=httpx.Response(200, json={"input_tokens": 7})
+        )
+        await count(FALLBACK_HISTORY)
+        await count([{"role": "user", "content": "hi"}])
+
+    sent_betas: Final = [call.request.headers.get("anthropic-beta", "").split(",") for call in route.calls]
+    assert [FALLBACK_BETA in betas for betas in sent_betas] == [True, False]
