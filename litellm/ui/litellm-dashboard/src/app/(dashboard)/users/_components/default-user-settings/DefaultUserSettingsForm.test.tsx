@@ -55,6 +55,7 @@ const SETTINGS: InternalUserSettings = {
     teams: [{ team_id: "team-alpha", max_budget_in_team: 25, user_role: "user" }],
   },
   field_schema: {},
+  can_save: true,
 };
 
 const SAVED_BODY = {
@@ -108,6 +109,13 @@ describe("DefaultUserSettingsForm", () => {
     });
 
     expect(await screen.findByText("Internal User Viewer")).toBeInTheDocument();
+  });
+
+  it("warns that database settings are inactive and blocks editing when they cannot be saved", async () => {
+    renderForm({ fetchSettings: vi.fn().mockResolvedValue({ ...SETTINGS, can_save: false }) });
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("STORE_MODEL_IN_DB is not enabled");
+    expect(screen.getByRole("button", { name: "Edit Settings" })).toBeDisabled();
   });
 
   it("shows a read-only summary until Edit Settings is clicked", async () => {

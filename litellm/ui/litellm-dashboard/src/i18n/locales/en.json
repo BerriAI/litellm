@@ -20964,6 +20964,7 @@
         "description": "Applied to every new internal user created through SSO or the user management APIs."
       },
       "loadError": "Could not load the default user settings.",
+      "dbSettingsInactive": "Changes cannot be saved because STORE_MODEL_IN_DB is not enabled. Settings saved in the database are not applied, only the ones in the config file.",
       "editSettings": "Edit Settings",
       "budgetDurations": {
         "noReset": "No reset",

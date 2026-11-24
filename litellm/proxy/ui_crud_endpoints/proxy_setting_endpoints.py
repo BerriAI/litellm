@@ -252,6 +252,8 @@ class SSOSettingsResponse(SettingsResponse):
 class InternalUserSettingsResponse(SettingsResponse):
     """Response model for internal user settings"""
 
+    can_save: bool = Field(description="Whether database-backed configuration updates are available.")
+
 
 class DefaultTeamSettingsResponse(SettingsResponse):
     """Response model for default team settings"""
@@ -944,16 +946,18 @@ async def get_internal_user_settings():
     Get all SSO settings from the litellm_settings configuration.
     Returns a structured object with values and descriptions for UI display.
     """
-    from litellm.proxy.proxy_server import proxy_config
+    from litellm.proxy import proxy_server
 
-    # Load existing config
-    config: Final = await proxy_config.get_config()
-
-    return await _get_settings_with_schema(
+    config: Final = await proxy_server.proxy_config.get_config()
+    settings: Final = await _get_settings_with_schema(
         settings_key="default_internal_user_params",
         settings_class=DefaultInternalUserParams,
         config=config,
     )
+    return {
+        **settings,
+        "can_save": proxy_server.prisma_client is not None and proxy_server.store_model_in_db is True,
+    }
 
 
 @router.get(

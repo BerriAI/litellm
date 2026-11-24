@@ -20652,6 +20652,7 @@
         "description": "适用于通过 SSO 或用户管理 API 创建的所有新内部用户。"
       },
       "loadError": "无法加载默认用户设置。",
+      "dbSettingsInactive": "由于未启用 STORE_MODEL_IN_DB，无法保存更改。数据库中保存的设置不会生效，仅配置文件中的设置会生效。",
       "editSettings": "编辑设置",
       "budgetDurations": {
         "noReset": "不重置",

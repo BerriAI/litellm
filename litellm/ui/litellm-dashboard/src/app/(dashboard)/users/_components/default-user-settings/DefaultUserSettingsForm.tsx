@@ -13,6 +13,7 @@ import { toast } from "@/lib/toast";
 import { PaginatedSearchSelect } from "@/components/shared/PaginatedSearchSelect";
 import { FieldGroup } from "@/components/ui/field";
 import { FormField } from "@/components/shared/form/FormField";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import type { SearchSelectOption } from "@/components/shared/SearchSelect";
 import { Button } from "@/components/ui/button";
 import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -455,17 +456,24 @@ export const DefaultUserSettingsForm = ({
     );
   }
 
+  const canSave = data.can_save;
+
   return (
     <SettingsCard
       action={
         isEditing ? undefined : (
-          <Button type="button" onClick={() => setIsEditing(true)}>
+          <Button type="button" disabled={!canSave} onClick={() => setIsEditing(true)}>
             {t("users.defaultSettings.editSettings")}
           </Button>
         )
       }
     >
-      {isEditing ? (
+      {!canSave && (
+        <Alert className="mb-4">
+          <AlertDescription>{t("users.defaultSettings.dbSettingsInactive")}</AlertDescription>
+        </Alert>
+      )}
+      {isEditing && canSave ? (
         <SettingsForm
           initialValues={initialValues}
           roleOptions={roleOptions}

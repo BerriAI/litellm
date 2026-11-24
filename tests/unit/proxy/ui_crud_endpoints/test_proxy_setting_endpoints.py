@@ -278,6 +278,21 @@ class TestProxySettingEndpoints:
             "The Pydantic default must match the runtime fallback."
         )
 
+    @pytest.mark.parametrize(
+        ("has_db", "store_model_in_db", "can_save"),
+        [(True, True, True), (True, False, False), (True, None, False), (False, True, False)],
+    )
+    def test_get_internal_user_settings_reports_whether_db_settings_are_active(
+        self, mock_proxy_config, mock_auth, monkeypatch, has_db, store_model_in_db, can_save
+    ):
+        monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", MagicMock() if has_db else None)
+        monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", store_model_in_db)
+
+        response = client.get("/get/internal_user_settings")
+
+        assert response.status_code == 200
+        assert response.json()["can_save"] is can_save
+
     def test_update_internal_user_settings(
         self, mock_proxy_config, mock_auth, monkeypatch
     ):
