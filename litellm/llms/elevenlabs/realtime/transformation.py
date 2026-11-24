@@ -273,10 +273,11 @@ def parse_server_message(payload: str | bytes) -> ElevenLabsServerMessageUnion |
         raise ElevenLabsProtocolError(f"ElevenLabs sent an invalid {message_type} message") from None
 
 
-def elevenlabs_error(error_type: ElevenLabsErrorType) -> ElevenLabsException:
+def elevenlabs_error(message: ElevenLabsErrorMessage) -> ElevenLabsException:
+    verbose_logger.warning("ElevenLabs realtime %s: %s", message.message_type, message.error)
     return ElevenLabsException(
-        status_code=_ERROR_STATUS_CODES.get(error_type, 500),
-        message=f"ElevenLabs realtime transcription failed: {error_type}",
+        status_code=_ERROR_STATUS_CODES.get(message.message_type, 500),
+        message=f"ElevenLabs realtime transcription failed: {message.message_type}",
     )
 
 
@@ -373,8 +374,8 @@ class ElevenLabsEventTransformer:
             case ElevenLabsWarning(warning=warning):
                 verbose_logger.warning("ElevenLabs realtime warning: %s", warning)
                 return ()
-            case ElevenLabsErrorMessage(message_type=error_type):
-                return (self._report(elevenlabs_error(error_type)),)
+            case ElevenLabsErrorMessage():
+                return (self._report(elevenlabs_error(message)),)
             case _:
                 assert_never(message)
 
@@ -554,7 +555,7 @@ class ElevenLabsRealtimeConfig(BaseRealtimeConfig):
             parse_session_update(message, self._options, model, drop_params=self._drop_params)
         )
         self._config = config
-        return (ElevenLabsRealtimeConfigure(query=config.query()).model_dump_json(),)
+        return (ElevenLabsRealtimeConfigure(query=config.query(), sample_rate=config.sample_rate).model_dump_json(),)
 
     def _commit(self, *, discard: bool) -> tuple[str, ...]:
         config: Final = self._require_config()
@@ -605,8 +606,8 @@ async def _session_start_outcome(backend: RealtimeBackend) -> bool:
         match parse_server_message(await _next_frame(backend)):
             case ElevenLabsSessionStarted():
                 return True
-            case ElevenLabsErrorMessage(message_type=error_type):
-                raise elevenlabs_error(error_type)
+            case ElevenLabsErrorMessage() as error:
+                raise elevenlabs_error(error)
             case _:
                 continue
 

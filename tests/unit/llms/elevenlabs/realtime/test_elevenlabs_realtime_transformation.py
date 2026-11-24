@@ -2,6 +2,7 @@ import asyncio
 import base64
 import itertools
 import json
+import logging.handlers
 import math
 from collections.abc import Callable, Mapping
 from types import TracebackType
@@ -12,6 +13,7 @@ from urllib.parse import parse_qs
 import pytest
 
 import litellm
+from litellm import verbose_logger
 from litellm.llms.base_llm.realtime.transformation import RealtimeBackend
 from litellm.llms.elevenlabs.common_utils import ElevenLabsException
 from litellm.llms.elevenlabs.realtime.backend import ElevenLabsRealtimeBackend
@@ -906,6 +908,19 @@ def test_an_error_after_session_started_is_an_error_event_and_not_a_refusal():
     assert config.session_refusal() is None
 
 
+def test_elevenlabs_error_detail_reaches_the_proxy_log_and_stays_out_of_the_client_event():
+    config: Final = _configured()
+    handler: Final = logging.handlers.BufferingHandler(capacity=100)
+    verbose_logger.addHandler(handler)
+    try:
+        events: Final = _response(config, _frame("input_error", error="Audio chunk is not valid PCM"))
+    finally:
+        verbose_logger.removeHandler(handler)
+
+    assert any("input_error: Audio chunk is not valid PCM" in record.getMessage() for record in handler.buffer)
+    assert "Audio chunk is not valid PCM" not in json.dumps(events)
+
+
 async def test_a_refused_session_bills_nothing_at_close():
     upstream: Final = MagicMock(spec=RealtimeBackend)
     upstream.send = AsyncMock()
@@ -974,6 +989,11 @@ def test_api_base_selects_a_regional_host_and_unsupported_models_are_rejected(mo
     )
     with pytest.raises(ValueError, match="Unsupported ElevenLabs realtime model"):
         config.get_complete_url(None, "scribe_v2")
+
+
+def test_the_keyterm_pricing_addon_cannot_be_routed_as_a_realtime_model():
+    with pytest.raises(ValueError, match="Unsupported ElevenLabs realtime model"):
+        ElevenLabsRealtimeConfig().get_complete_url(None, f"elevenlabs/{SCRIBE_REALTIME_MODEL}/keyterms")
 
 
 def test_build_url_defaults_to_the_global_endpoint():

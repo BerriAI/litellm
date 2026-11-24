@@ -41,6 +41,7 @@ class ElevenLabsRealtimeConfigure(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
     kind: Literal["configure"] = "configure"
     query: str
+    sample_rate: int
 
 
 class ElevenLabsInputAudioChunk(TypedDict):

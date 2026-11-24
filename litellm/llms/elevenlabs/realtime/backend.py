@@ -6,7 +6,13 @@ from typing import Final, Literal, TypeAlias
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 from typing_extensions import Self
 from websockets.asyncio.client import ClientConnection
-from websockets.exceptions import ConnectionClosedError, ConnectionClosedOK, InvalidHandshake, InvalidStatus
+from websockets.exceptions import (
+    ConnectionClosed,
+    ConnectionClosedError,
+    ConnectionClosedOK,
+    InvalidHandshake,
+    InvalidStatus,
+)
 from websockets.frames import Close
 
 from litellm import verbose_logger
@@ -17,6 +23,7 @@ from litellm.types.llms.elevenlabs import ElevenLabsRealtimeConfigure
 RealtimeConnect: TypeAlias = Callable[[str, Mapping[str, str]], Awaitable[RealtimeBackend]]
 
 OPEN_TIMEOUT_SECONDS: Final = 8.0
+KEEPALIVE_SECONDS: Final = 5.0
 
 
 class _AudioChunk(BaseModel):
@@ -85,9 +92,15 @@ def _failure_close(error: OSError | TimeoutError | asyncio.TimeoutError | Invali
     return Close(1011, reason)
 
 
-def _configure_query(message: str | bytes) -> str:
+def _keepalive_chunk(sample_rate: int) -> str:
+    return _AudioChunk(
+        message_type="input_audio_chunk", audio_base_64="", commit=False, sample_rate=sample_rate
+    ).model_dump_json()
+
+
+def _parse_configure(message: str | bytes) -> ElevenLabsRealtimeConfigure:
     try:
-        return ElevenLabsRealtimeConfigure.model_validate_json(message).query
+        return ElevenLabsRealtimeConfigure.model_validate_json(message)
     except ValidationError:
         raise RuntimeError("audio was sent before the ElevenLabs realtime session was configured") from None
 
@@ -100,12 +113,16 @@ class ElevenLabsRealtimeBackend:
         *,
         connect: RealtimeConnect = open_realtime_websocket,
         on_audio_sent: Callable[[float], None] | None = None,
+        keepalive_seconds: float = KEEPALIVE_SECONDS,
     ) -> None:
         self._url: Final = url
         self._headers: Final = headers
         self._connect: Final = connect
         self._on_audio_sent: Final = on_audio_sent
+        self._keepalive_seconds: Final = keepalive_seconds
         self._ready: Final = asyncio.Event()
+        self._activity: Final = asyncio.Event()
+        self._keepalive: asyncio.Task[None] | None = None
         self._upstream: RealtimeBackend | None = None
         self._closed: bool = False
         self._opening: bool = False
@@ -132,6 +149,7 @@ class ElevenLabsRealtimeBackend:
         upstream: Final = self._upstream
         if upstream is not None:
             await upstream.send(message)
+            self._activity.set()
             if self._on_audio_sent is not None and isinstance(message, str):
                 try:
                     chunk: Final = _AUDIO_CHUNK_ADAPTER.validate_json(message)
@@ -146,10 +164,10 @@ class ElevenLabsRealtimeBackend:
             raise self._closure()
         if self._opening:
             raise RuntimeError("the ElevenLabs realtime session is already being configured")
-        query: Final = _configure_query(message)
+        configure: Final = _parse_configure(message)
         self._opening = True
         try:
-            opened: Final = await self._connect(f"{self._url}?{query}", self._headers)
+            opened: Final = await self._connect(f"{self._url}?{configure.query}", self._headers)
         except (OSError, TimeoutError, asyncio.TimeoutError, InvalidHandshake) as error:
             if self._closed:
                 raise _normal_closure() from None
@@ -162,7 +180,25 @@ class ElevenLabsRealtimeBackend:
             await opened.close()
             raise _normal_closure()
         self._upstream = opened
+        self._keepalive = asyncio.create_task(self._keep_alive(opened, _keepalive_chunk(configure.sample_rate)))
         self._ready.set()
+
+    async def _went_idle(self) -> bool:
+        self._activity.clear()
+        try:
+            await asyncio.wait_for(self._activity.wait(), self._keepalive_seconds)
+        except asyncio.TimeoutError:
+            return True
+        return False
+
+    async def _keep_alive(self, upstream: RealtimeBackend, chunk: str) -> None:
+        while True:
+            if not await self._went_idle():
+                continue
+            try:
+                await upstream.send(chunk)
+            except ConnectionClosed:
+                return
 
     async def recv(self, decode: bool | None = None) -> str | bytes:
         await self._ready.wait()
@@ -174,6 +210,9 @@ class ElevenLabsRealtimeBackend:
     async def close(self) -> None:
         self._closed = True
         self._ready.set()
+        keepalive: Final = self._keepalive
+        if keepalive is not None:
+            keepalive.cancel()
         upstream: Final = self._upstream
         if upstream is not None:
             await upstream.close()
