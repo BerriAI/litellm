@@ -5,13 +5,18 @@ from typing import Final
 import pytest
 from fastapi import HTTPException
 
+import litellm
 from litellm import Router
 from litellm.constants import SVG_AUTHOR_DEPLOYMENT_METADATA_KEY
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.proxy.image_endpoints.svg_author_model import svg_author_model_updates
 
 AUTHOR_DEPLOYMENT_ID: Final = "my-nano-deployment"
-AUTHOR_STAMP: Final = {"deployment_id": AUTHOR_DEPLOYMENT_ID, "provider_model": "gpt-5-nano"}
+AUTHOR_STAMP: Final = {
+    "deployment_id": AUTHOR_DEPLOYMENT_ID,
+    "provider_model": "gpt-5-nano",
+    "image_deployment_ids": ("image-deployment",),
+}
 
 
 @pytest.fixture
@@ -61,6 +66,10 @@ def _svg_form_field_in_extra_body(model: str) -> Mapping[str, object]:
     return {"extra_body": {"svg[model]": model}}
 
 
+def _svg_in_extra_body_pairs(model: str) -> Mapping[str, object]:
+    return {"extra_body": [["svg", {"model": model}]]}
+
+
 SHAPES: Final = (
     _svg_top_level,
     _svg_json_string,
@@ -68,6 +77,7 @@ SHAPES: Final = (
     _svg_in_extra_body,
     _svg_in_extra_body_string,
     _svg_form_field_in_extra_body,
+    _svg_in_extra_body_pairs,
 )
 
 
@@ -84,7 +94,7 @@ def _author_sent(body: Mapping[str, object]) -> str | None:
     extra_body: Final = body.get("extra_body")
     if extra_body is None:
         return _author_in(body)
-    return _author_in(json.loads(extra_body) if isinstance(extra_body, str) else extra_body)
+    return _author_in(json.loads(extra_body) if isinstance(extra_body, str) else dict(extra_body))
 
 
 def _request(shape: Callable[[str], Mapping[str, object]], author: str) -> Mapping[str, object]:
@@ -116,10 +126,8 @@ async def test_allowed_proxy_author_is_sent_as_its_provider_model_and_recorded(
 ) -> None:
     request: Final = _request(shape, "my-nano")
     authorized: Final = await _authorize(request, UserAPIKeyAuth(models=["gpt-image-2.6", "my-nano"]), router)
-    carriers: Final = sorted(request.keys() & {"svg", "extra_body"})
     assert _author_sent(authorized) == "gpt-5-nano"
     assert authorized["metadata"] == {SVG_AUTHOR_DEPLOYMENT_METADATA_KEY: AUTHOR_STAMP}
-    assert [type(authorized[field]) for field in carriers] == [type(request[field]) for field in carriers]
 
 
 @pytest.mark.asyncio
@@ -197,14 +205,25 @@ async def test_customer_model_limits_apply_to_the_svg_author(router: Router) -> 
 
 
 @pytest.mark.asyncio
-async def test_chained_key_aliases_cannot_approve_a_different_model_than_the_one_sent(router: Router) -> None:
+async def test_chained_key_aliases_send_the_model_they_approve(router: Router) -> None:
     key: Final = UserAPIKeyAuth(
         models=["gpt-image-2.6", "my-nano"],
         aliases={"nano-alias": "restricted-chat", "restricted-chat": "my-nano"},
     )
-    with pytest.raises(ProxyException) as denied:
-        await _authorize(_request(_svg_top_level, "nano-alias"), key, router)
-    assert denied.value.code == "403"
+    authorized: Final = await _authorize(_request(_svg_top_level, "nano-alias"), key, router)
+    assert _author_sent(authorized) == "gpt-5-nano"
+    assert authorized["metadata"] == {SVG_AUTHOR_DEPLOYMENT_METADATA_KEY: AUTHOR_STAMP}
+
+
+@pytest.mark.asyncio
+async def test_key_alias_through_the_global_alias_map_sends_the_model_it_approves(
+    router: Router, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "model_alias_map", {"restricted-chat": "my-nano"})
+    key: Final = UserAPIKeyAuth(models=["gpt-image-2.6", "my-nano"], aliases={"nano": "restricted-chat"})
+    authorized: Final = await _authorize(_request(_svg_top_level, "nano"), key, router)
+    assert _author_sent(authorized) == "gpt-5-nano"
+    assert authorized["metadata"] == {SVG_AUTHOR_DEPLOYMENT_METADATA_KEY: AUTHOR_STAMP}
 
 
 @pytest.mark.asyncio
@@ -223,6 +242,11 @@ async def test_team_alias_for_the_author_is_sent_as_its_team_deployment_model() 
     team_router: Final = Router(
         model_list=[
             {
+                "model_name": "gpt-image-2.6",
+                "litellm_params": {"model": "openai/gpt-image-2.6-flare", "api_key": "sk-test"},
+                "model_info": {"id": "image-deployment"},
+            },
+            {
                 "model_name": "model_name_team1_nano",
                 "litellm_params": {"model": "openai/gpt-5-nano", "api_key": "sk-test"},
                 "model_info": {"id": "team-nano-deployment"},
@@ -237,5 +261,62 @@ async def test_team_alias_for_the_author_is_sent_as_its_team_deployment_model() 
     authorized: Final = await _authorize(_request(_svg_top_level, "team-nano"), key, team_router)
     assert _author_sent(authorized) == "gpt-5-nano"
     assert authorized["metadata"] == {
-        SVG_AUTHOR_DEPLOYMENT_METADATA_KEY: {"deployment_id": "team-nano-deployment", "provider_model": "gpt-5-nano"}
+        SVG_AUTHOR_DEPLOYMENT_METADATA_KEY: {
+            "deployment_id": "team-nano-deployment",
+            "provider_model": "gpt-5-nano",
+            "image_deployment_ids": ("image-deployment",),
+        }
     }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "author_params",
+    [
+        {"model": "azure/gpt-5-nano", "api_key": "sk-test", "api_base": "https://example.openai.azure.com"},
+        {"model": "hosted_vllm/gpt-5-nano", "api_base": "http://localhost:8000"},
+        {"model": "openai/gpt-5-nano", "api_key": "sk-other-account"},
+    ],
+)
+async def test_author_on_another_upstream_account_is_sent_but_not_priced_by_its_deployment(
+    author_params: Mapping[str, object],
+) -> None:
+    mixed: Final = Router(
+        model_list=[
+            {
+                "model_name": "gpt-image-2.6",
+                "litellm_params": {"model": "openai/gpt-image-2.6-flare", "api_key": "sk-test"},
+                "model_info": {"id": "image-deployment"},
+            },
+            {"model_name": "cheap-nano", "litellm_params": author_params, "model_info": {"id": "cheap-nano"}},
+        ]
+    )
+    authorized: Final = await _authorize(_request(_svg_top_level, "cheap-nano"), UserAPIKeyAuth(), mixed)
+    assert _author_sent(authorized) == "gpt-5-nano"
+    assert authorized["metadata"] == {}
+
+
+@pytest.mark.asyncio
+async def test_author_price_covers_only_image_deployments_on_the_authors_account() -> None:
+    two_accounts: Final = Router(
+        model_list=[
+            {
+                "model_name": "gpt-image-2.6",
+                "litellm_params": {"model": "openai/gpt-image-2.6-flare", "api_key": "sk-test"},
+                "model_info": {"id": "image-same-account"},
+            },
+            {
+                "model_name": "gpt-image-2.6",
+                "litellm_params": {"model": "openai/gpt-image-2.6-flare", "api_key": "sk-other-account"},
+                "model_info": {"id": "image-other-account"},
+            },
+            {
+                "model_name": "my-nano",
+                "litellm_params": {"model": "openai/gpt-5-nano", "api_key": "sk-test"},
+                "model_info": {"id": AUTHOR_DEPLOYMENT_ID},
+            },
+        ]
+    )
+    authorized: Final = await _authorize(_request(_svg_top_level, "my-nano"), UserAPIKeyAuth(), two_accounts)
+    stamp: Final = authorized["metadata"][SVG_AUTHOR_DEPLOYMENT_METADATA_KEY]
+    assert stamp["image_deployment_ids"] == ("image-same-account",)

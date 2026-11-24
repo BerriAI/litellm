@@ -18,11 +18,7 @@ from litellm.proxy.auth.auth_checks import (
     get_user_object,
     key_model_aliases_for_auth_check,
 )
-from litellm.proxy.litellm_pre_call_utils import (
-    customer_request_auth,
-    global_then_key_alias_target,
-    team_alias_target,
-)
+from litellm.proxy.litellm_pre_call_utils import customer_request_auth, request_served_model
 from litellm.types.images.main import ImageSVGAuthorDeployment
 from litellm.types.proxy.auth.auth_checks import UserNotFoundError
 
@@ -34,25 +30,31 @@ _SVG_FORM_MODEL_FIELD: Final = "svg[model]"
 _EXTRA_BODY_FIELD: Final = "extra_body"
 _ROUTER_SETTINGS_FIELD: Final = "router_settings_override"
 _JSON_OBJECT: Final = TypeAdapter(dict[str, object])
+_KEY_VALUE_PAIRS: Final = TypeAdapter(list[tuple[str, object]])
 
 
-class _AuthorParams(BaseModel):
+class _DeploymentParams(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     model: str
+    custom_llm_provider: str | None = None
+    api_base: str | None = None
+    api_key: str | None = None
+    organization: str | None = None
+    litellm_credential_name: str | None = None
 
 
-class _AuthorInfo(BaseModel):
+class _DeploymentInfo(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     id: str | None = None
 
 
-class _AuthorDeployment(BaseModel):
+class _Deployment(BaseModel):
     model_config = ConfigDict(frozen=True)
 
-    litellm_params: _AuthorParams
-    model_info: _AuthorInfo = _AuthorInfo()
+    litellm_params: _DeploymentParams
+    model_info: _DeploymentInfo = _DeploymentInfo()
 
 
 def _as_object(value: object) -> Mapping[str, object] | None:
@@ -67,9 +69,19 @@ def _author_of(svg: object) -> str | None:
     return model if isinstance(model, str) and model else None
 
 
+def _as_extra_body(value: object) -> Mapping[str, object] | None:
+    parsed: Final = _as_object(value)
+    if parsed is not None or isinstance(value, str):
+        return parsed
+    try:
+        return dict(_KEY_VALUE_PAIRS.validate_python(value))
+    except ValidationError:
+        return None
+
+
 def _containers(body: Mapping[str, object]) -> Iterator[Mapping[str, object]]:
     yield body
-    yield _as_object(body.get(_EXTRA_BODY_FIELD)) or {}
+    yield _as_extra_body(body.get(_EXTRA_BODY_FIELD)) or {}
 
 
 def _authors_in(container: Mapping[str, object]) -> Iterator[str | None]:
@@ -103,7 +115,7 @@ def _rewritten_svg_fields(container: Mapping[str, object], upstream: str) -> Map
 
 def _rewritten_body_fields(body: Mapping[str, object], upstream: str) -> Mapping[str, object]:
     extra_body: Final = body.get(_EXTRA_BODY_FIELD)
-    parsed_extra_body: Final = _as_object(extra_body)
+    parsed_extra_body: Final = _as_extra_body(extra_body)
     extra_body_fields: Final[Mapping[str, object]] = (
         {} if parsed_extra_body is None else _rewritten_svg_fields(parsed_extra_body, upstream)
     )
@@ -117,18 +129,47 @@ def _rewritten_body_fields(body: Mapping[str, object], upstream: str) -> Mapping
     }
 
 
-def _author_deployment(author: str, team_id: str | None, llm_router: "Router | None") -> _AuthorDeployment | None:
+def _deployments(model_group: str, team_id: str | None, llm_router: "Router | None") -> tuple[_Deployment, ...]:
     deployments: Final[Sequence[object]] = (
-        (llm_router.registry().deployments(author, team_id=team_id) or ()) if llm_router else ()
+        (llm_router.registry().deployments(model_group, team_id=team_id) or ()) if llm_router else ()
     )
-    return _AuthorDeployment.model_validate(deployments[0]) if deployments else None
+    return tuple(_Deployment.model_validate(deployment) for deployment in deployments)
 
 
-def _provider_model(deployment_model: str) -> str:
+def _provider_and_model(params: _DeploymentParams) -> tuple[str | None, str]:
     try:
-        return litellm.get_llm_provider(model=deployment_model)[0]
+        model, provider, _, _ = litellm.get_llm_provider(
+            model=params.model, custom_llm_provider=params.custom_llm_provider
+        )
     except litellm.BadRequestError:
-        return deployment_model
+        return params.custom_llm_provider, params.model
+    return provider, model
+
+
+def _upstream_account(params: _DeploymentParams) -> tuple[object, ...]:
+    return (
+        _provider_and_model(params)[0],
+        (params.api_base or "").rstrip("/") or None,
+        params.api_key,
+        params.organization,
+        params.litellm_credential_name,
+    )
+
+
+def _image_deployments_billed_like(
+    author: _Deployment, body: Mapping[str, object], team_id: str | None, llm_router: "Router | None"
+) -> tuple[str, ...]:
+    image_model: Final = body.get("model")
+    if not isinstance(image_model, str):
+        return ()
+    model_group_alias: Final = (_as_object(body.get(_ROUTER_SETTINGS_FIELD)) or {}).get("model_group_alias")
+    image_group: Final = resolve_model_group_alias(model_group_alias, image_model) or image_model
+    author_account: Final = _upstream_account(author.litellm_params)
+    return tuple(
+        deployment.model_info.id
+        for deployment in _deployments(image_group, team_id, llm_router)
+        if deployment.model_info.id is not None and _upstream_account(deployment.litellm_params) == author_account
+    )
 
 
 async def _check_key_owner_access(model: str, user_api_key_dict: UserAPIKeyAuth, llm_router: "Router | None") -> None:
@@ -193,14 +234,18 @@ async def _authorized_author_updates(
 ) -> Mapping[str, object]:
     model_group_alias: Final = (_as_object(body.get(_ROUTER_SETTINGS_FIELD)) or {}).get("model_group_alias")
     grouped_author: Final = resolve_model_group_alias(model_group_alias, author) or author
-    team_author: Final = team_alias_target(grouped_author, user_api_key_dict, llm_router) or grouped_author
-    served_author: Final = global_then_key_alias_target(team_author, user_api_key_dict)
+    served_author: Final = request_served_model(grouped_author, user_api_key_dict, None, llm_router)
+    served_without_key_aliases: Final = request_served_model(
+        grouped_author, user_api_key_dict.model_copy(update={"aliases": {}}), None, llm_router
+    )
     auth: Final[UserAPIKeyAuth] = customer_request_auth(body) or user_api_key_dict
     without_key_aliases: Final = auth.model_copy(update={"aliases": {}})
-    deployment: Final = _author_deployment(served_author, user_api_key_dict.team_id, llm_router)
-    key_aliased_author: Final = global_then_key_alias_target(grouped_author, user_api_key_dict)
+    deployment: Final = next(iter(_deployments(served_author, user_api_key_dict.team_id, llm_router)), None)
+    key_aliased_author: Final = (
+        ((served_author, without_key_aliases),) if served_author != served_without_key_aliases else ()
+    )
     sent_unchanged_author: Final = () if deployment is not None else ((author, without_key_aliases),)
-    checks: Final = ((grouped_author, auth), (key_aliased_author, without_key_aliases), *sent_unchanged_author)
+    checks: Final = ((grouped_author, auth), *key_aliased_author, *sent_unchanged_author)
     for name, valid_token in checks:
         await can_key_call_resolved_model(
             model=name,
@@ -211,7 +256,8 @@ async def _authorized_author_updates(
         await _check_key_owner_access(name, valid_token, llm_router)
     if deployment is None:
         return {}
-    provider_model: Final = _provider_model(deployment.litellm_params.model)
+    provider_model: Final = _provider_and_model(deployment.litellm_params)[1]
+    billed_like_author: Final = _image_deployments_billed_like(deployment, body, user_api_key_dict.team_id, llm_router)
     metadata: Final = _as_object(body.get(metadata_variable_name)) or {}
     return {
         **_rewritten_body_fields(body, provider_model),
@@ -220,11 +266,13 @@ async def _authorized_author_updates(
                 metadata_variable_name: {
                     **metadata,
                     SVG_AUTHOR_DEPLOYMENT_METADATA_KEY: ImageSVGAuthorDeployment(
-                        deployment_id=deployment.model_info.id, provider_model=provider_model
+                        deployment_id=deployment.model_info.id,
+                        provider_model=provider_model,
+                        image_deployment_ids=billed_like_author,
                     ).model_dump(),
                 }
             }
-            if deployment.model_info.id is not None
+            if deployment.model_info.id is not None and billed_like_author
             else {}
         ),
     }

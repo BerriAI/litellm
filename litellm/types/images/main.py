@@ -51,3 +51,4 @@ class ImageSVGAuthorDeployment(BaseModel):
 
     deployment_id: str
     provider_model: str
+    image_deployment_ids: tuple[str, ...] = ()

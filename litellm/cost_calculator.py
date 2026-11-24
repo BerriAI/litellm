@@ -2899,11 +2899,19 @@ def _svg_author_deployment(litellm_logging_obj: LitellmLoggingObject | None) -> 
     if logged_params is None:
         return None
     params: Final = _LOGGED_LITELLM_PARAMS.validate_python(logged_params)
-    stamps: Final = (
-        _metadata_bucket(params.get(metadata_key)).get(SVG_AUTHOR_DEPLOYMENT_METADATA_KEY)
-        for metadata_key in ("metadata", "litellm_metadata")
+    buckets: Final = tuple(_metadata_bucket(params.get(key)) for key in ("metadata", "litellm_metadata"))
+    stamp: Final = next(
+        (
+            _SVG_AUTHOR_DEPLOYMENT.validate_python(bucket[SVG_AUTHOR_DEPLOYMENT_METADATA_KEY])
+            for bucket in buckets
+            if bucket.get(SVG_AUTHOR_DEPLOYMENT_METADATA_KEY) is not None
+        ),
+        None,
     )
-    return next((_SVG_AUTHOR_DEPLOYMENT.validate_python(stamp) for stamp in stamps if stamp is not None), None)
+    served_by: Final = next(
+        (served for bucket in buckets if (served := _metadata_bucket(bucket.get("model_info")).get("id"))), None
+    )
+    return stamp if stamp is not None and served_by in stamp.image_deployment_ids else None
 
 
 def _metadata_bucket(value: object) -> Mapping[str, object]:
