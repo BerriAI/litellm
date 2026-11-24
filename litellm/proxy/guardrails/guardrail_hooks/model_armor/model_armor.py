@@ -981,7 +981,7 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
 
         # Extract content from response
         content: Final = (
-            self._responses_post_call_text(response)
+            self._responses_api_response_text(response)
             if isinstance(response, ResponsesAPIResponse)
             else self._extract_content_from_response(response)
         )
@@ -989,12 +989,13 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
             verbose_proxy_logger.debug("Model Armor: No text content to process in response, skipping guardrail")
             return
 
+        request_data: Final[Mapping[str, object]] = data
         # Make Model Armor request
         try:
             armor_response: Final = await self.make_model_armor_request(
                 content=content,
                 source="model_response",
-                request_data=data,
+                request_data=request_data,
             )
 
             # Attach Model Armor response & status to this request's metadata to prevent race conditions
@@ -1039,7 +1040,7 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
                 sanitized_content: Final = self._get_sanitized_content(armor_response)
                 if sanitized_content and sanitized_content != content:
                     if isinstance(response, ResponsesAPIResponse):
-                        await self._responses_handler().spread_text_rewrite(response, sanitized_content)
+                        await self._mask_responses_message_text(response, content, sanitized_content, request_data)
                     if isinstance(response, litellm.ModelResponse):
                         self._apply_sanitized_content(response, sanitized_content)
 
@@ -1106,10 +1107,23 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
 
         return OpenAIResponsesHandler()
 
-    def _responses_post_call_text(self, response: ResponsesAPIResponse) -> str:
-        if self.mask_response_content:
-            return self._responses_message_text(response)
-        return self._responses_api_response_text(response)
+    async def _mask_responses_message_text(
+        self, response: ResponsesAPIResponse, scanned: str, sanitized: str, request_data: Mapping[str, object]
+    ) -> None:
+        message_text: Final = self._responses_message_text(response)
+        if not message_text:
+            return
+        message_sanitized: Final = (
+            sanitized
+            if message_text == scanned
+            else self._get_sanitized_content(
+                await self.make_model_armor_request(
+                    content=message_text, source="model_response", request_data=request_data
+                )
+            )
+        )
+        if message_sanitized and message_sanitized != message_text:
+            await self._responses_handler().spread_text_rewrite(response, message_sanitized)
 
     @staticmethod
     def _responses_message_text(response: ResponsesAPIResponse) -> str:

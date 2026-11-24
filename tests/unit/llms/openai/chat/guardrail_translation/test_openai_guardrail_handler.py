@@ -2853,7 +2853,7 @@ class TestRefusalText:
 
     @pytest.mark.asyncio
     async def test_a_masking_guardrail_masks_a_refusal_with_no_content(self):
-        response = self._response(content=None)
+        response: Final = self._response(content=None)
 
         await OpenAIChatCompletionsHandler().process_output_response(
             response=response, guardrail_to_apply=_EmailMaskingGuardrail(guardrail_name="mask")
@@ -2864,7 +2864,7 @@ class TestRefusalText:
 
     @pytest.mark.asyncio
     async def test_a_masking_guardrail_keeps_content_and_refusal_in_their_own_fields(self):
-        response = self._response(content="Write to alice@example.com")
+        response: Final = self._response(content="Write to alice@example.com")
 
         await OpenAIChatCompletionsHandler().process_output_response(
             response=response, guardrail_to_apply=_EmailMaskingGuardrail(guardrail_name="mask")
@@ -2883,7 +2883,7 @@ class TestRefusalText:
 
     @pytest.mark.asyncio
     async def test_an_ended_stream_delivers_the_masked_refusal_over_its_deltas(self):
-        chunks = self._ended_stream()
+        chunks: Final = self._ended_stream()
 
         await OpenAIChatCompletionsHandler().process_output_streaming_response(
             responses_so_far=chunks,
@@ -2892,13 +2892,13 @@ class TestRefusalText:
             deliver_ended_stream_rewrites=True,
         )
 
-        delivered = (getattr(chunk.choices[0].delta, "refusal", None) or "" for chunk in chunks)
+        delivered: Final = (getattr(chunk.choices[0].delta, "refusal", None) or "" for chunk in chunks)
         assert "".join(delivered) == "I cannot help <EMAIL>"
         assert "alice@example.com" not in "".join(chunk.model_dump_json() for chunk in chunks)
 
     @pytest.mark.asyncio
     async def test_an_ended_stream_clears_a_refusal_the_guardrail_empties(self):
-        chunks = self._ended_stream()
+        chunks: Final = self._ended_stream()
 
         await OpenAIChatCompletionsHandler().process_output_streaming_response(
             responses_so_far=chunks,
@@ -2921,10 +2921,23 @@ class TestRefusalText:
 
     @pytest.mark.asyncio
     async def test_a_mid_stream_scan_masks_the_refusal_on_the_chunk_it_scanned(self):
-        chunk = self._stream_chunk(Delta(refusal="write to alice@example.com"))
+        chunk: Final = self._stream_chunk(Delta(refusal="write to alice@example.com"))
 
         await OpenAIChatCompletionsHandler().process_output_streaming_response(
             responses_so_far=[chunk],
+            guardrail_to_apply=_EmailMaskingGuardrail(guardrail_name="mask"),
+            litellm_logging_obj=None,
+        )
+
+        assert chunk.choices[0].delta.refusal == "write to <EMAIL>"
+
+    @pytest.mark.asyncio
+    async def test_a_mid_stream_scan_masks_a_refusal_beside_a_relayed_error_string(self):
+        chunk: Final = self._stream_chunk(Delta(refusal="write to alice@example.com"))
+        relayed_error: Final = 'data: {"error": {"message": "upstream failed"}}'
+
+        await OpenAIChatCompletionsHandler().process_output_streaming_response(
+            responses_so_far=[chunk, relayed_error],  # pyright: ignore[reportArgumentType]  # the proxy relays raw SSE error strings beside chunks
             guardrail_to_apply=_EmailMaskingGuardrail(guardrail_name="mask"),
             litellm_logging_obj=None,
         )

@@ -3943,7 +3943,9 @@ _TOOL_CALL_ITEM: Final = {
 }
 
 
-def _responses_api_events(extra_parts: tuple[dict, ...] = (), extra_items: tuple[dict, ...] = ()):
+def _responses_api_events(
+    extra_parts: tuple[dict[str, object], ...] = (), extra_items: tuple[dict[str, object], ...] = ()
+):
     from litellm.types.llms.openai import (
         OutputTextDeltaEvent,
         ResponseCompletedEvent,
@@ -4255,7 +4257,7 @@ async def test_streaming_masking_blocks_a_responses_stream_whose_scan_includes_a
     with patch.object(
         guardrail.async_handler, "post", _armor_post_mock(_MODEL_ARMOR_SANITIZED)
     ):
-        delivered = await _drain_surface_hook(guardrail, _responses_api_events(extra_items=(_TOOL_CALL_ITEM,)))
+        delivered: Final = await _drain_surface_hook(guardrail, _responses_api_events(extra_items=(_TOOL_CALL_ITEM,)))
 
     assert len(delivered) == 1
     assert isinstance(delivered[0], ErrorEvent)
@@ -6262,40 +6264,40 @@ async def test_apply_guardrail_withholds_a_response_whose_sensitive_data_inspect
 
 
 def _model_armor_post_call_guardrail(mask_response_content: bool) -> ModelArmorGuardrail:
-    guardrail = ModelArmorGuardrail(
+    guardrail: Final = ModelArmorGuardrail(
         template_id="test-template",
         project_id="test-project",
         location="us-central1",
         guardrail_name="model-armor-test",
         mask_response_content=mask_response_content,
+        access_token_provider=_async_token_provider,
     )
-    guardrail._ensure_access_token_async = AsyncMock(return_value=("test-token", "test-project"))
     return guardrail
 
 
-def _armor_http_response(sanitization_result: dict) -> AsyncMock:
-    response = AsyncMock()
+def _armor_http_response(sanitization_result: dict[str, object]) -> AsyncMock:
+    response: Final = AsyncMock()
     response.status_code = 200
     response.json = AsyncMock(return_value={"sanitizationResult": sanitization_result})
     return response
 
 
-def _armor_redaction(text: str) -> dict:
-    deidentify = {"matchState": "MATCH_FOUND", "data": {"text": text}}
+def _armor_redaction(text: str) -> dict[str, object]:
+    deidentify: Final = {"matchState": "MATCH_FOUND", "data": {"text": text}}
     return {
         "filterMatchState": "MATCH_FOUND",
         "filterResults": {"sdp": {"sdpFilterResult": {"deidentifyResult": deidentify}}},
     }
 
 
-def _armor_block() -> dict:
+def _armor_block() -> dict[str, object]:
     return {
         "filterMatchState": "MATCH_FOUND",
         "filterResults": {"pi_and_jailbreak": {"piAndJailbreakFilterResult": {"matchState": "MATCH_FOUND"}}},
     }
 
 
-def _responses_body(*parts: dict):
+def _responses_body(*parts: dict[str, object]):
     from litellm.types.llms.openai import ResponsesAPIResponse
 
     return ResponsesAPIResponse.model_validate(
@@ -6358,9 +6360,9 @@ _POST_CALL_REQUEST: Final = {
 
 @pytest.mark.asyncio
 async def test_post_call_scans_and_sanitizes_a_chat_refusal():
-    guardrail = _model_armor_post_call_guardrail(mask_response_content=True)
-    post = AsyncMock(return_value=_armor_http_response(_armor_redaction("I cannot help card [REDACTED]")))
-    llm_response = litellm.ModelResponse()
+    guardrail: Final = _model_armor_post_call_guardrail(mask_response_content=True)
+    post: Final = AsyncMock(return_value=_armor_http_response(_armor_redaction("I cannot help card [REDACTED]")))
+    llm_response: Final = litellm.ModelResponse()
     llm_response.choices = [
         litellm.Choices(message=litellm.Message(content=None, refusal="I cannot help card 4111-1111-1111-1111"))
     ]
@@ -6376,10 +6378,10 @@ async def test_post_call_scans_and_sanitizes_a_chat_refusal():
 
 @pytest.mark.asyncio
 async def test_post_call_masks_a_chat_answer_and_refusal_into_one_field():
-    guardrail = _model_armor_post_call_guardrail(mask_response_content=True)
-    masked = "Card [REDACTED]. I cannot repeat [REDACTED]"
-    post = AsyncMock(return_value=_armor_http_response(_armor_redaction(masked)))
-    llm_response = litellm.ModelResponse()
+    guardrail: Final = _model_armor_post_call_guardrail(mask_response_content=True)
+    masked: Final = "Card [REDACTED]. I cannot repeat [REDACTED]"
+    post: Final = AsyncMock(return_value=_armor_http_response(_armor_redaction(masked)))
+    llm_response: Final = litellm.ModelResponse()
     llm_response.choices = [
         litellm.Choices(
             message=litellm.Message(
@@ -6393,7 +6395,7 @@ async def test_post_call_masks_a_chat_answer_and_refusal_into_one_field():
             data=dict(_POST_CALL_REQUEST), user_api_key_dict=UserAPIKeyAuth(), response=llm_response
         )
 
-    message = llm_response.choices[0].message
+    message: Final = llm_response.choices[0].message
     assert (message.content, message.refusal) == (masked, "")
 
 
@@ -6403,10 +6405,10 @@ async def test_post_call_masking_keeps_the_answer_of_a_bridged_reasoning_respons
         LiteLLMCompletionResponsesConfig,
     )
 
-    reasoning = "The user wants card 4111-1111-1111-1111 repeated."
-    guardrail = _model_armor_post_call_guardrail(mask_response_content=True)
-    post = AsyncMock(return_value=_armor_http_response(_armor_redaction("Your card is [REDACTED]")))
-    response = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+    reasoning: Final = "The user wants card 4111-1111-1111-1111 repeated."
+    guardrail: Final = _model_armor_post_call_guardrail(mask_response_content=True)
+    post: Final = AsyncMock(return_value=_armor_http_response(_armor_redaction("Your card is [REDACTED]")))
+    response: Final = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
         request_input="What's my credit card?",
         responses_api_request={},
         chat_completion_response=litellm.ModelResponse(
@@ -6431,8 +6433,8 @@ async def test_post_call_masking_keeps_the_answer_of_a_bridged_reasoning_respons
 
 @pytest.mark.asyncio
 async def test_post_call_blocks_on_a_flagged_responses_refusal():
-    guardrail = _model_armor_post_call_guardrail(mask_response_content=False)
-    post = AsyncMock(return_value=_armor_http_response(_armor_block()))
+    guardrail: Final = _model_armor_post_call_guardrail(mask_response_content=False)
+    post: Final = AsyncMock(return_value=_armor_http_response(_armor_block()))
 
     with patch.object(guardrail.async_handler, "post", post), pytest.raises(HTTPException):
         await guardrail.async_post_call_success_hook(
@@ -6442,9 +6444,9 @@ async def test_post_call_blocks_on_a_flagged_responses_refusal():
 
 @pytest.mark.asyncio
 async def test_post_call_masks_a_responses_refusal():
-    guardrail = _model_armor_post_call_guardrail(mask_response_content=True)
-    post = AsyncMock(return_value=_armor_http_response(_armor_redaction("I cannot help card [REDACTED]")))
-    response = _responses_refusal_response()
+    guardrail: Final = _model_armor_post_call_guardrail(mask_response_content=True)
+    post: Final = AsyncMock(return_value=_armor_http_response(_armor_redaction("I cannot help card [REDACTED]")))
+    response: Final = _responses_refusal_response()
 
     with patch.object(guardrail.async_handler, "post", post):
         await guardrail.async_post_call_success_hook(
@@ -6457,9 +6459,9 @@ async def test_post_call_masks_a_responses_refusal():
 
 @pytest.mark.asyncio
 async def test_post_call_masks_plain_text_in_a_responses_body():
-    guardrail = _model_armor_post_call_guardrail(mask_response_content=True)
-    post = AsyncMock(return_value=_armor_http_response(_armor_redaction("card [REDACTED]")))
-    response = _responses_body({"type": "output_text", "text": "card 4111-1111-1111-1111", "annotations": []})
+    guardrail: Final = _model_armor_post_call_guardrail(mask_response_content=True)
+    post: Final = AsyncMock(return_value=_armor_http_response(_armor_redaction("card [REDACTED]")))
+    response: Final = _responses_body({"type": "output_text", "text": "card 4111-1111-1111-1111", "annotations": []})
 
     with patch.object(guardrail.async_handler, "post", post):
         await guardrail.async_post_call_success_hook(
@@ -6471,9 +6473,9 @@ async def test_post_call_masks_plain_text_in_a_responses_body():
 
 @pytest.mark.asyncio
 async def test_post_call_masks_every_part_of_a_responses_body_through_the_first():
-    guardrail = _model_armor_post_call_guardrail(mask_response_content=True)
-    post = AsyncMock(return_value=_armor_http_response(_armor_redaction("card [REDACTED] and more")))
-    response = _responses_body(
+    guardrail: Final = _model_armor_post_call_guardrail(mask_response_content=True)
+    post: Final = AsyncMock(return_value=_armor_http_response(_armor_redaction("card [REDACTED] and more")))
+    response: Final = _responses_body(
         {"type": "output_text", "text": "card 4111-1111-1111-1111", "annotations": []},
         {"type": "output_text", "text": " and more", "annotations": []},
     )
@@ -6486,25 +6488,37 @@ async def test_post_call_masks_every_part_of_a_responses_body_through_the_first(
     assert [part.text for part in response.output[0].content] == ["card [REDACTED] and more", ""]
 
 
-def _responses_body_with_a_card_tool_call():
+def _responses_body_with_a_card_tool_call(text: str = "saving it"):
     from litellm.types.llms.openai import ResponsesAPIResponse
 
-    body = _responses_body({"type": "output_text", "text": "saving it", "annotations": []}).model_dump()
+    body: Final = _responses_body({"type": "output_text", "text": text, "annotations": []}).model_dump()
     return ResponsesAPIResponse.model_validate({**body, "output": [*body["output"], _TOOL_CALL_ITEM]})
 
 
-def _armor_flagging_the_card(flagged: dict) -> AsyncMock:
-    async def flag_the_card(**kwargs):
-        verdict = flagged if "4111" in str(kwargs["json"]) else {"filterMatchState": "NO_MATCH_FOUND"}
+def _armor_flagging_the_card(flagged: dict[str, object]) -> AsyncMock:
+    async def flag_the_card(**kwargs: object) -> AsyncMock:
+        verdict: Final = flagged if "4111" in str(kwargs["json"]) else {"filterMatchState": "NO_MATCH_FOUND"}
         return _armor_http_response(verdict)
 
     return AsyncMock(side_effect=flag_the_card)
 
 
+def _armor_redacting_the_card() -> AsyncMock:
+    card: Final = "4111-1111-1111-1111"
+
+    async def redact_the_card(json: dict[str, dict[str, str]], **kwargs: object) -> AsyncMock:
+        scanned: Final = json["modelResponseData"]["text"]
+        if card not in scanned:
+            return _armor_http_response({"filterMatchState": "NO_MATCH_FOUND"})
+        return _armor_http_response(_armor_redaction(scanned.replace(card, "[REDACTED]")))
+
+    return AsyncMock(side_effect=redact_the_card)
+
+
 @pytest.mark.asyncio
 async def test_post_call_masking_answers_a_tool_call_beside_responses_text_unchanged():
-    guardrail = _model_armor_post_call_guardrail(mask_response_content=True)
-    response = _responses_body_with_a_card_tool_call()
+    guardrail: Final = _model_armor_post_call_guardrail(mask_response_content=True)
+    response: Final = _responses_body_with_a_card_tool_call()
 
     with patch.object(guardrail.async_handler, "post", _armor_flagging_the_card(_armor_redaction("saving [REDACTED]"))):
         await guardrail.async_post_call_success_hook(
@@ -6516,8 +6530,22 @@ async def test_post_call_masking_answers_a_tool_call_beside_responses_text_uncha
 
 
 @pytest.mark.asyncio
-async def test_post_call_blocking_blocks_a_flagged_tool_call_beside_responses_text():
-    guardrail = _model_armor_post_call_guardrail(mask_response_content=False)
+async def test_post_call_masking_masks_responses_text_beside_a_tool_call_with_its_own_rewrite():
+    guardrail: Final = _model_armor_post_call_guardrail(mask_response_content=True)
+    response: Final = _responses_body_with_a_card_tool_call(text="saving card 4111-1111-1111-1111")
+
+    with patch.object(guardrail.async_handler, "post", _armor_redacting_the_card()):
+        await guardrail.async_post_call_success_hook(
+            data=dict(_POST_CALL_REQUEST), user_api_key_dict=UserAPIKeyAuth(), response=response
+        )
+
+    assert response.output[0].content[0].text == "saving card [REDACTED]"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mask_response_content", [False, True])
+async def test_post_call_blocks_a_flagged_tool_call_beside_responses_text(mask_response_content: bool):
+    guardrail: Final = _model_armor_post_call_guardrail(mask_response_content=mask_response_content)
 
     with (
         patch.object(guardrail.async_handler, "post", _armor_flagging_the_card(_armor_block())),
@@ -6554,23 +6582,23 @@ async def test_streaming_masks_every_event_that_spells_out_a_responses_part(part
         if field == "refusal"
         else (OutputTextDeltaEvent, OutputTextDoneEvent, "output_text")
     )
-    position = {"item_id": "msg_1", "output_index": 0, "content_index": 0}
-    events = (
+    position: Final = {"item_id": "msg_1", "output_index": 0, "content_index": 0}
+    events: Final = (
         delta_event(type=f"response.{event_name}.delta", delta=_RAW_REFUSAL[:18], **position),
         delta_event(type=f"response.{event_name}.delta", delta=_RAW_REFUSAL[18:], **position),
         done_event(type=f"response.{event_name}.done", **{field: _RAW_REFUSAL}, **position),
         ResponseCompletedEvent(type="response.completed", response=_responses_body(part)),
     )
-    guardrail = _model_armor_post_call_guardrail(mask_response_content=True)
-    post = AsyncMock(return_value=_armor_http_response(_armor_redaction("I cannot help card [REDACTED]")))
-    request_data = {**_POST_CALL_REQUEST, "metadata": dict(_POST_CALL_REQUEST["metadata"])}
+    guardrail: Final = _model_armor_post_call_guardrail(mask_response_content=True)
+    post: Final = AsyncMock(return_value=_armor_http_response(_armor_redaction("I cannot help card [REDACTED]")))
+    request_data: Final = {**_POST_CALL_REQUEST, "metadata": dict(_POST_CALL_REQUEST["metadata"])}
 
     async def upstream():
         for event in events:
             yield event
 
     with patch.object(guardrail.async_handler, "post", post):
-        released = [
+        released: Final = [
             chunk
             async for chunk in guardrail.async_post_call_streaming_iterator_hook(
                 user_api_key_dict=UserAPIKeyAuth(), response=upstream(), request_data=request_data
@@ -6592,7 +6620,7 @@ async def test_streaming_blocks_a_responses_stream_whose_text_events_a_mask_cann
         ResponsesAPIStreamEvents,
     )
 
-    stray = (
+    stray: Final = (
         ReasoningSummaryTextDeltaEvent(
             type=ResponsesAPIStreamEvents.REASONING_SUMMARY_TEXT_DELTA,
             item_id="rs_1",
@@ -6608,16 +6636,16 @@ async def test_streaming_blocks_a_responses_stream_whose_text_events_a_mask_cann
             delta="4111-1111-1111-1111",
         )
     )
-    guardrail = _surface_guardrail(mask_response_content=True)
+    guardrail: Final = _surface_guardrail(mask_response_content=True)
     first_delta, terminal = _responses_api_events()
-    request_data = {
+    request_data: Final = {
         "model": "gpt-4o-mini",
         "input": "show me a card",
         "metadata": {"guardrails": ["model-armor-test"]},
     }
 
     with patch.object(guardrail.async_handler, "post", _armor_post_mock(_MODEL_ARMOR_DEIDENTIFIED)):
-        delivered = await _drain_surface_hook(guardrail, (first_delta, stray, terminal), request_data)
+        delivered: Final = await _drain_surface_hook(guardrail, (first_delta, stray, terminal), request_data)
 
     assert b"4111-1111-1111-1111" not in _delivered_bytes(delivered)
     assert request_data["metadata"]["_model_armor_status"] == "blocked"
@@ -6627,9 +6655,9 @@ async def test_streaming_blocks_a_responses_stream_whose_text_events_a_mask_cann
 async def test_streaming_masks_a_responses_body_with_several_parts():
     from litellm.types.llms.openai import OutputTextDeltaEvent, ResponsesAPIStreamEvents
 
-    guardrail = _surface_guardrail(mask_response_content=True)
+    guardrail: Final = _surface_guardrail(mask_response_content=True)
     first_delta, terminal = _responses_api_events(extra_parts=(_SECOND_TEXT_PART,))
-    second_delta = OutputTextDeltaEvent(
+    second_delta: Final = OutputTextDeltaEvent(
         type=ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA,
         item_id="msg_1",
         output_index=0,
@@ -6638,7 +6666,7 @@ async def test_streaming_masks_a_responses_body_with_several_parts():
     )
 
     with patch.object(guardrail.async_handler, "post", _armor_post_mock(_MODEL_ARMOR_DEIDENTIFIED)):
-        delivered = await _drain_surface_hook(guardrail, (first_delta, second_delta, terminal))
+        delivered: Final = await _drain_surface_hook(guardrail, (first_delta, second_delta, terminal))
 
     assert b"4111-1111-1111-1111" not in _delivered_bytes(delivered)
     assert [delivered[0].delta, delivered[1].delta] == ["my card is [REDACTED]", ""]

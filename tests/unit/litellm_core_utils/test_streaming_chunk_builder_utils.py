@@ -3105,7 +3105,7 @@ def test_stream_chunk_builder_keeps_the_last_chunks_provider_specific_fields(ove
 
 
 def test_stream_chunk_builder_assembles_a_streamed_refusal():
-    chunks = [
+    chunks: Final = [
         ModelResponseStream(
             id="chatcmpl-refusal",
             created=1,
@@ -3120,6 +3120,6 @@ def test_stream_chunk_builder_assembles_a_streamed_refusal():
         )
     ]
 
-    built = stream_chunk_builder(chunks=chunks)
+    built: Final = stream_chunk_builder(chunks=chunks)
 
     assert built.choices[0].message.refusal == "I cannot help you."

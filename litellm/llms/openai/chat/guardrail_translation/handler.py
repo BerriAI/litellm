@@ -652,14 +652,8 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             )
             return responses_so_far
 
-        # Step 0: Check if any response has text content to process
-        has_any_text_content = False
-        for response in responses_so_far:
-            if self._has_text_content(response):
-                has_any_text_content = True
-                break
-
-        if not has_any_text_content:
+        chunks: Final = tuple(chunk for chunk in responses_so_far if isinstance(chunk, ModelResponseStream))
+        if not any(self._has_text_content(chunk) for chunk in chunks):
             verbose_proxy_logger.warning(
                 "OpenAI Chat Completions: No text content in streaming responses, skipping guardrail"
             )
@@ -668,7 +662,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         # Step 1: Combine all streaming chunks into complete text per choice
         # For streaming, we need to concatenate all delta.content across all chunks
         # Key: (choice_idx, content_idx), Value: combined text
-        combined_texts: Final = self._combine_streaming_texts(responses_so_far)
+        combined_texts: Final = self._combine_streaming_texts(chunks)
 
         # Step 2: Create lists for guardrail processing
         texts_to_check: Final[list[str]] = []
@@ -710,7 +704,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             # Step 4: Apply guardrailed text back to all streaming chunks
             # For each choice, replace the combined text across all chunks
             await self._apply_guardrail_responses_to_output_streaming(
-                responses=responses_so_far,
+                responses=chunks,
                 guardrailed_texts=guardrailed_texts,
                 task_mappings=task_mappings,
             )
@@ -1318,7 +1312,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
 
     async def _apply_guardrail_responses_to_output_streaming(
         self,
-        responses: list["ModelResponseStream"],
+        responses: Sequence["ModelResponseStream"],
         guardrailed_texts: list[str],
         task_mappings: list[tuple[int, int | None]],
     ) -> None:

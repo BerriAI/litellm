@@ -7073,8 +7073,8 @@ async def _drain_output_masking(guardrail: OPTIONAL_PresidioPIIMasking, events: 
 
 @pytest.mark.asyncio
 async def test_mask_and_unmask_cover_a_chat_refusal():
-    guardrail = _email_masking_guardrail()
-    response = ModelResponse(
+    guardrail: Final = _email_masking_guardrail()
+    response: Final = ModelResponse(
         choices=[Choices(index=0, message=Message(role="assistant", refusal="I cannot help alice@example.com"))]
     )
 
@@ -7092,7 +7092,7 @@ async def test_mask_and_unmask_cover_a_chat_refusal():
 @pytest.mark.asyncio
 @pytest.mark.parametrize("part_type", ["refusal", "output_text"])
 async def test_apply_to_output_masks_every_event_of_a_responses_message_stream(part_type: str):
-    collected = await _drain_output_masking(_email_masking_guardrail(), _message_stream_events(part_type))
+    collected: Final = await _drain_output_masking(_email_masking_guardrail(), _message_stream_events(part_type))
 
     assert len(collected) == len(_message_stream_events(part_type))
     assert "alice@example.com" not in json.dumps([event.model_dump() for event in collected], default=str)
@@ -7101,8 +7101,8 @@ async def test_apply_to_output_masks_every_event_of_a_responses_message_stream(p
 
 @pytest.mark.asyncio
 async def test_apply_to_output_blocks_a_responses_stream_before_any_event_is_released():
-    guardrail = _email_masking_guardrail()
-    blocked = BlockedPiiEntityError(entity_type="EMAIL_ADDRESS", guardrail_name="presidio")
+    guardrail: Final = _email_masking_guardrail()
+    blocked: Final = BlockedPiiEntityError(entity_type="EMAIL_ADDRESS", guardrail_name="presidio")
 
     with patch.object(guardrail, "check_pii", side_effect=blocked):
         with pytest.raises(BlockedPiiEntityError):

@@ -8372,7 +8372,7 @@ def _masking_bedrock_guardrail() -> BedrockGuardrail:
     )
 
 
-def _anonymized_scan(*masked_texts: str) -> dict:
+def _anonymized_scan(*masked_texts: str) -> dict[str, object]:
     return {
         "action": "GUARDRAIL_INTERVENED",
         "assessments": [],
@@ -8381,7 +8381,7 @@ def _anonymized_scan(*masked_texts: str) -> dict:
 
 
 def test_output_scan_payload_carries_the_refusal_after_the_content():
-    response = litellm.ModelResponse(
+    response: Final = litellm.ModelResponse(
         choices=[
             litellm.Choices(
                 index=0,
@@ -8390,13 +8390,13 @@ def test_output_scan_payload_carries_the_refusal_after_the_content():
         ]
     )
 
-    items = _masking_bedrock_guardrail()._build_response_content_items(response, has_grounding=False)
+    items: Final = _masking_bedrock_guardrail()._build_response_content_items(response, has_grounding=False)
 
     assert [item["text"]["text"] for item in items] == ["Write to me", "I cannot help alice"]
 
 
 def test_masked_outputs_go_back_to_the_field_each_one_came_from():
-    response = litellm.ModelResponse(
+    response: Final = litellm.ModelResponse(
         choices=[
             litellm.Choices(
                 index=0,
@@ -8415,8 +8415,8 @@ def test_masked_outputs_go_back_to_the_field_each_one_came_from():
 
 @pytest.mark.asyncio
 async def test_a_refusal_only_response_reaches_the_post_call_scan():
-    guardrail = _masking_bedrock_guardrail()
-    response = litellm.ModelResponse(
+    guardrail: Final = _masking_bedrock_guardrail()
+    response: Final = litellm.ModelResponse(
         choices=[litellm.Choices(index=0, message=litellm.Message(role="assistant", refusal="I cannot help alice"))]
     )
 
@@ -8434,15 +8434,15 @@ async def test_a_refusal_only_response_reaches_the_post_call_scan():
 
 @pytest.mark.asyncio
 async def test_masking_on_a_responses_stream_rewrites_the_events_the_client_reads():
-    guardrail = _masking_bedrock_guardrail()
-    stream_events = _responses_stream_events()
+    guardrail: Final = _masking_bedrock_guardrail()
+    stream_events: Final = _responses_stream_events()
 
     async def mock_stream():
         for event in stream_events:
             yield event
 
     with patch.object(guardrail, "make_bedrock_api_request", AsyncMock(return_value=_anonymized_scan("Hello <NAME>"))):
-        yielded = [
+        yielded: Final = [
             event
             async for event in guardrail.async_post_call_streaming_iterator_hook(
                 user_api_key_dict=UserAPIKeyAuth(api_key="test-key", request_route="/v1/responses"),

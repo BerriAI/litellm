@@ -4284,10 +4284,10 @@ class TestNativeWebSocketGuardrailMasking:
 
     @pytest.mark.asyncio
     async def test_mask_response_completed_masks_a_refusal_part(self):
-        handler = _make_streaming(
+        handler: Final = _make_streaming(
             request_data={}, output_guardrail_callbacks=[_FakeWSGuardrail()]
         )
-        event = json.dumps(
+        event: Final = json.dumps(
             {
                 "type": "response.completed",
                 "response": {
@@ -4305,7 +4305,7 @@ class TestNativeWebSocketGuardrailMasking:
             }
         )
 
-        masked = json.loads(await handler._mask_response_completed(event))
+        masked: Final = json.loads(await handler._mask_response_completed(event))
 
         assert (
             masked["response"]["output"][0]["content"][0]["refusal"]
@@ -4314,13 +4314,13 @@ class TestNativeWebSocketGuardrailMasking:
 
     @pytest.mark.asyncio
     async def test_unmask_response_event_restores_a_refusal_part(self):
-        handler = _make_streaming(
+        handler: Final = _make_streaming(
             request_data={
                 "metadata": {"pii_tokens": {"<EMAIL_ADDRESS_1>": "alice@example.com"}}
             },
             guardrail_callbacks=[_FakeWSGuardrail()],
         )
-        event = json.dumps(
+        event: Final = json.dumps(
             {
                 "type": "response.completed",
                 "response": {
@@ -4338,7 +4338,7 @@ class TestNativeWebSocketGuardrailMasking:
             }
         )
 
-        unmasked = json.loads(handler._unmask_response_event(event))
+        unmasked: Final = json.loads(handler._unmask_response_event(event))
 
         assert (
             unmasked["response"]["output"][0]["content"][0]["refusal"]
