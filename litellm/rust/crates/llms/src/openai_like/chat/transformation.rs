@@ -2,7 +2,7 @@
 //! OpenAI-compatible endpoint shares. The body is already OpenAI-shaped, so
 //! parameters pass through verbatim; the port keeps Python's two deviations,
 //! the `max_completion_tokens` -> `max_tokens` rename and the usage
-//! `*_tokens` null-to-zero sanitize. Usage otherwise passes through as the host sent it.
+//! `*_tokens` null-to-zero sanitize. Usage then goes through Python's `Usage` constructor.
 
 use litellm_auth::CredentialPlacement;
 use litellm_secret_value::SecretValue;
@@ -11,8 +11,9 @@ use litellm_core_utils::{
     core_helpers::unix_now, decline::Decline, prompt_templates::factory::THINKING_BLOCKS_FIELD,
 };
 use litellm_llms_types::formats::chat_completions::{
-    ChatCompletionsChoice, ChatCompletionsChoiceMessage, ChatCompletionsResponse,
-    ChatCompletionsUsage, ChatMessage, CompletionTokensDetails, PromptTokensDetails,
+    CacheCreationTokenDetails, ChatCompletionsChoice, ChatCompletionsChoiceMessage,
+    ChatCompletionsResponse, ChatCompletionsUsage, ChatMessage, CompletionTokensDetails,
+    PromptTokensDetails,
 };
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
@@ -169,9 +170,7 @@ impl BaseConfig for OpenAILikeChatConfig {
             .collect::<Result<Vec<_>, _>>()?;
 
         let usage = match body.remove("usage") {
-            Some(Value::Object(usage)) => {
-                host_usage_or_counts(Value::Object(sanitize_usage(usage)))
-            }
+            Some(Value::Object(usage)) => python_usage(host_usage(sanitize_usage(usage))),
             _ => ChatCompletionsUsage::default(),
         };
 
@@ -264,21 +263,121 @@ fn sanitize_usage(usage: Map<String, Value>) -> Map<String, Value> {
         .collect()
 }
 
-fn host_usage_or_counts(usage: Value) -> ChatCompletionsUsage {
-    ChatCompletionsUsage::deserialize(&usage).unwrap_or_else(|_| {
-        let count = |name: &str| usage.get(name).and_then(Value::as_u64).unwrap_or(0);
-        ChatCompletionsUsage {
-            completion_tokens: count("completion_tokens"),
-            prompt_tokens: count("prompt_tokens"),
-            total_tokens: count("total_tokens"),
-            completion_tokens_details: usage
-                .get("completion_tokens_details")
-                .and_then(|details| CompletionTokensDetails::deserialize(details).ok()),
-            prompt_tokens_details: usage
-                .get("prompt_tokens_details")
-                .and_then(|details| PromptTokensDetails::deserialize(details).ok()),
-            ..ChatCompletionsUsage::default()
-        }
+/// Python's `Usage` fails on a field outside its contract, while this keeps every field that
+/// parses on its own and reads a count that does not parse as 0.
+fn host_usage(usage: Map<String, Value>) -> ChatCompletionsUsage {
+    let counts: Map<String, Value> = USAGE_COUNTS
+        .into_iter()
+        .map(|count| (count.to_string(), json!(token_count(usage.get(count)))))
+        .collect();
+    let parses = |fields: &Map<String, Value>| {
+        ChatCompletionsUsage::deserialize(&Value::Object(fields.clone()))
+    };
+    let readable: Map<String, Value> = usage
+        .into_iter()
+        .filter(|(key, value)| {
+            parses(
+                &counts
+                    .clone()
+                    .into_iter()
+                    .chain([(key.clone(), value.clone())])
+                    .collect(),
+            )
+            .is_ok()
+        })
+        .chain(counts.clone())
+        .collect();
+    parses(&readable).unwrap_or_default()
+}
+
+fn token_count(count: Option<&Value>) -> u64 {
+    count
+        .and_then(|count| count.as_u64().or_else(|| count.as_str()?.parse().ok()))
+        .unwrap_or(0)
+}
+
+/// Python's `Usage` constructor: top-level cache and reasoning counts move into the details
+/// objects, the details' cache write aliases agree, and an empty details object is dropped.
+fn python_usage(usage: ChatCompletionsUsage) -> ChatCompletionsUsage {
+    let top_level_count = |key: &str| usage.extra.get(key).and_then(Value::as_u64);
+    let reasoning_tokens = top_level_count("reasoning_tokens").filter(|tokens| *tokens > 0);
+    let cached_tokens = usage
+        .cache_read_input_tokens
+        .or(top_level_count("prompt_cache_hit_tokens"));
+    ChatCompletionsUsage {
+        completion_tokens_details: completion_details(
+            usage
+                .completion_tokens_details
+                .filter(|details| *details != CompletionTokensDetails::default()),
+            reasoning_tokens,
+            usage.completion_tokens,
+        ),
+        prompt_tokens_details: prompt_details(
+            usage
+                .prompt_tokens_details
+                .filter(|details| *details != PromptTokensDetails::default()),
+            cached_tokens,
+            usage.cache_creation_input_tokens,
+        ),
+        extra: usage
+            .extra
+            .into_iter()
+            .filter(|(key, _)| key != "reasoning_tokens")
+            .collect(),
+        ..usage
+    }
+}
+
+fn completion_details(
+    details: Option<CompletionTokensDetails>,
+    reasoning_tokens: Option<u64>,
+    completion_tokens: u64,
+) -> Option<CompletionTokensDetails> {
+    let Some(reasoning_tokens) = reasoning_tokens else {
+        return details;
+    };
+    let details = details.unwrap_or_default();
+    let modality_tokens = |key: &str| details.extra.get(key).and_then(Value::as_u64).unwrap_or(0);
+    let text_tokens = completion_tokens
+        .saturating_sub(reasoning_tokens)
+        .saturating_sub(modality_tokens("image_tokens"))
+        .saturating_sub(modality_tokens("audio_tokens"));
+    Some(CompletionTokensDetails {
+        reasoning_tokens: details.reasoning_tokens.or(Some(reasoning_tokens)),
+        text_tokens: details.text_tokens.or(Some(text_tokens)),
+        ..details
+    })
+}
+
+fn prompt_details(
+    details: Option<PromptTokensDetails>,
+    cached_tokens: Option<u64>,
+    cache_creation_input_tokens: Option<u64>,
+) -> Option<PromptTokensDetails> {
+    if details.is_none() && cached_tokens.is_none() && cache_creation_input_tokens.is_none() {
+        return None;
+    }
+    let details = details.unwrap_or_default();
+    let cache_write_tokens = cache_creation_input_tokens
+        .or(details.cache_write_tokens)
+        .or(details.cache_creation_tokens)
+        .or_else(|| {
+            details
+                .extra
+                .get("cache_creation_input_tokens")
+                .and_then(Value::as_u64)
+        });
+    Some(PromptTokensDetails {
+        cached_tokens: cached_tokens.or(details.cached_tokens),
+        cache_write_tokens,
+        cache_creation_tokens: cache_write_tokens,
+        cache_creation_token_details: details.cache_creation_token_details.or_else(|| {
+            details
+                .extra
+                .get("cache_creation")
+                .and_then(|nested| CacheCreationTokenDetails::deserialize(nested).ok())
+        }),
+        ..details
     })
 }
 
@@ -618,10 +717,93 @@ mod tests {
     }))]
     #[case::host_extension(json!({
         "prompt_tokens": 3, "completion_tokens": 5, "total_tokens": 8,
-        "prompt_cache_hit_tokens": 1, "cost": 0.25
+        "prompt_cache_miss_tokens": 2, "cost": 0.25
     }))]
     fn passes_the_host_usage_through_like_python(#[case] usage: Value) {
         assert_eq!(usage_of(Some(usage.clone())), usage);
+    }
+
+    #[rstest]
+    #[case::deepseek_cache_hit(
+        json!({"prompt_tokens": 3, "completion_tokens": 5, "total_tokens": 8, "prompt_cache_hit_tokens": 1, "cost": 0.25}),
+        json!({
+            "prompt_tokens": 3, "completion_tokens": 5, "total_tokens": 8, "prompt_cache_hit_tokens": 1, "cost": 0.25,
+            "prompt_tokens_details": {"cached_tokens": 1}
+        })
+    )]
+    #[case::anthropic_cache_counts(
+        json!({"prompt_tokens": 3, "completion_tokens": 5, "total_tokens": 8, "cache_read_input_tokens": 6, "cache_creation_input_tokens": 2}),
+        json!({
+            "prompt_tokens": 3, "completion_tokens": 5, "total_tokens": 8, "cache_read_input_tokens": 6, "cache_creation_input_tokens": 2,
+            "prompt_tokens_details": {"cached_tokens": 6, "cache_write_tokens": 2, "cache_creation_tokens": 2}
+        })
+    )]
+    #[case::top_level_cache_read_wins(
+        json!({
+            "prompt_tokens": 3, "completion_tokens": 5, "total_tokens": 8, "prompt_cache_hit_tokens": 1, "cache_read_input_tokens": 6,
+            "prompt_tokens_details": {"cached_tokens": 2, "audio_tokens": 0}
+        }),
+        json!({
+            "prompt_tokens": 3, "completion_tokens": 5, "total_tokens": 8, "prompt_cache_hit_tokens": 1, "cache_read_input_tokens": 6,
+            "prompt_tokens_details": {"cached_tokens": 6, "audio_tokens": 0}
+        })
+    )]
+    #[case::top_level_reasoning(
+        json!({"prompt_tokens": 3, "completion_tokens": 5, "total_tokens": 8, "reasoning_tokens": 2}),
+        json!({
+            "prompt_tokens": 3, "completion_tokens": 5, "total_tokens": 8,
+            "completion_tokens_details": {"reasoning_tokens": 2, "text_tokens": 3}
+        })
+    )]
+    #[case::reasoning_text_leaves_out_audio(
+        json!({
+            "prompt_tokens": 3, "completion_tokens": 9, "total_tokens": 12, "reasoning_tokens": 2,
+            "completion_tokens_details": {"audio_tokens": 3, "reasoning_tokens": 4}
+        }),
+        json!({
+            "prompt_tokens": 3, "completion_tokens": 9, "total_tokens": 12,
+            "completion_tokens_details": {"audio_tokens": 3, "reasoning_tokens": 4, "text_tokens": 4}
+        })
+    )]
+    #[case::zero_reasoning(
+        json!({"prompt_tokens": 3, "completion_tokens": 5, "total_tokens": 8, "reasoning_tokens": 0}),
+        json!({"prompt_tokens": 3, "completion_tokens": 5, "total_tokens": 8})
+    )]
+    #[case::nested_cache_creation(
+        json!({"prompt_tokens": 3, "completion_tokens": 5, "total_tokens": 8, "prompt_tokens_details": {"cache_creation_tokens": 2}}),
+        json!({
+            "prompt_tokens": 3, "completion_tokens": 5, "total_tokens": 8,
+            "prompt_tokens_details": {"cache_write_tokens": 2, "cache_creation_tokens": 2}
+        })
+    )]
+    #[case::nested_anthropic_cache_creation(
+        json!({
+            "prompt_tokens": 3, "completion_tokens": 5, "total_tokens": 8,
+            "prompt_tokens_details": {
+                "cache_creation_input_tokens": 2, "cache_creation": {"ephemeral_5m_input_tokens": 1, "ephemeral_30m_input_tokens": 1}
+            }
+        }),
+        json!({
+            "prompt_tokens": 3, "completion_tokens": 5, "total_tokens": 8,
+            "prompt_tokens_details": {
+                "cache_write_tokens": 2, "cache_creation_tokens": 2,
+                "cache_creation_token_details": {"ephemeral_5m_input_tokens": 1, "ephemeral_30m_input_tokens": 1},
+                "cache_creation_input_tokens": 2, "cache_creation": {"ephemeral_5m_input_tokens": 1, "ephemeral_30m_input_tokens": 1}
+            }
+        })
+    )]
+    #[case::empty_details(
+        json!({
+            "prompt_tokens": 3, "completion_tokens": 5, "total_tokens": 8,
+            "prompt_tokens_details": {}, "completion_tokens_details": {}
+        }),
+        json!({"prompt_tokens": 3, "completion_tokens": 5, "total_tokens": 8})
+    )]
+    fn maps_host_cache_and_reasoning_counts_like_python(
+        #[case] usage: Value,
+        #[case] expected: Value,
+    ) {
+        assert_eq!(usage_of(Some(usage)), expected);
     }
 
     #[rstest]
@@ -639,8 +821,12 @@ mod tests {
     }
 
     #[rstest]
-    #[case::count_that_is_not_a_token_count(
+    #[case::count_sent_as_a_numeric_string(
         json!({"prompt_tokens": "3", "completion_tokens": 1, "total_tokens": 4}),
+        json!({"completion_tokens": 1, "prompt_tokens": 3, "total_tokens": 4})
+    )]
+    #[case::count_that_is_not_a_token_count(
+        json!({"prompt_tokens": "three", "completion_tokens": 1, "total_tokens": 4}),
         json!({"completion_tokens": 1, "prompt_tokens": 0, "total_tokens": 4})
     )]
     #[case::detail_that_is_not_a_token_count(
@@ -658,13 +844,13 @@ mod tests {
         }),
         json!({"completion_tokens": 1, "prompt_tokens": 3, "total_tokens": 4, "prompt_tokens_details": {"cached_tokens": 2}})
     )]
-    #[case::unreadable_top_level_field_keeps_both_details(
+    #[case::unreadable_top_level_field_keeps_every_other_field(
         json!({
-            "prompt_tokens": 3, "completion_tokens": 1, "total_tokens": 4, "service_tier": 1,
-            "prompt_tokens_details": {"cached_tokens": 2}, "completion_tokens_details": {"reasoning_tokens": 1}
+            "prompt_tokens": 3, "completion_tokens": 1, "total_tokens": 4, "service_tier": 1, "cost": 0.25,
+            "cache_read_input_tokens": 2, "completion_tokens_details": {"reasoning_tokens": 1}
         }),
         json!({
-            "completion_tokens": 1, "prompt_tokens": 3, "total_tokens": 4,
+            "completion_tokens": 1, "prompt_tokens": 3, "total_tokens": 4, "cost": 0.25, "cache_read_input_tokens": 2,
             "completion_tokens_details": {"reasoning_tokens": 1}, "prompt_tokens_details": {"cached_tokens": 2}
         })
     )]

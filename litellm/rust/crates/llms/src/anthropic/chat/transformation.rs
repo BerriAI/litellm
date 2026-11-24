@@ -183,6 +183,7 @@ impl ResponseUsageProjection {
                         CacheCreationTokenDetails {
                             ephemeral_5m_input_tokens: cache_creation.ephemeral_5m_input_tokens,
                             ephemeral_1h_input_tokens: cache_creation.ephemeral_1h_input_tokens,
+                            ..CacheCreationTokenDetails::default()
                         }
                     }),
                     ..details
@@ -195,8 +196,6 @@ impl ResponseUsageProjection {
     }
 }
 
-/// Python's `_build_completion_token_details`: a reported thinking count is capped at the
-/// completion, and a thinking block without one leaves the split unknown.
 fn completion_tokens_details(
     completion_tokens: u64,
     thinking_tokens: Option<u64>,

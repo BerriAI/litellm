@@ -43,7 +43,9 @@ pub enum ChatCompletionThinkingBlock {
 #[derive(Default)]
 pub struct CacheCreationTokenDetails {
     pub ephemeral_5m_input_tokens: Option<u64>,
+    pub ephemeral_30m_input_tokens: Option<u64>,
     pub ephemeral_1h_input_tokens: Option<u64>,
+    pub ephemeral_12h_input_tokens: Option<u64>,
 }
 
 #[serde_with::skip_serializing_none]
