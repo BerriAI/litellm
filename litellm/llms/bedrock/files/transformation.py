@@ -1016,6 +1016,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
 
         # --- Anthropic: use existing AmazonAnthropicClaudeConfig ---
         if provider == LlmProviders.ANTHROPIC:
+            from litellm.llms.anthropic.chat.transformation import without_malformed_thinking_blocks
             from litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude3_transformation import (
                 AmazonAnthropicClaudeConfig,
             )
@@ -1046,7 +1047,9 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
             )
             return config.transform_request(
                 model=model,
-                messages=messages,
+                messages=[without_malformed_thinking_blocks(message) for message in messages]
+                if drop_params
+                else messages,
                 optional_params={
                     k: v for k, v in mapped_params.items() if k not in _MAPPED_PARAMS_THE_REQUEST_HANDLER_STRIPS
                 },

@@ -6,6 +6,7 @@ from typing import Final
 from pydantic import JsonValue, TypeAdapter, ValidationError
 from typing_extensions import assert_never
 
+from litellm.litellm_core_utils.prompt_templates.common_utils import is_unrendered_block_without_text
 from litellm.llms.anthropic.pass_through.messages.utils import normalize_native_messages
 from litellm.types.utils import TokenCountMessagesFormat
 
@@ -51,6 +52,8 @@ def _block_label(block: JsonValue, convertible: frozenset[str]) -> str | None:
     block_type: Final = block.get("type")
     if not isinstance(block_type, str):
         return "a block without a type"
+    if is_unrendered_block_without_text(block):
+        return None
     if block_type not in convertible:
         return block_type
     return _source_label(block_type, block.get("source")) if block_type in _SOURCED_BLOCK_TYPES else None

@@ -2,6 +2,7 @@ import asyncio
 import base64
 import copy
 import datetime
+import itertools
 import json
 import os
 import unittest
@@ -1742,6 +1743,146 @@ def test_function_call_done_emits_is_finished():
     assert not result.choices[0].delta.tool_calls, (
         "output_item.done for function_call must not include a duplicate tool_calls delta"
     )
+
+
+def _tool_item(output_index: int, arguments: str) -> dict[str, object]:
+    return {
+        "type": "function_call",
+        "id": f"fc_{output_index}",
+        "call_id": f"call_{output_index}",
+        "name": "simple_add",
+        "arguments": arguments,
+    }
+
+
+def _custom_tool_item(output_index: int, tool_input: str) -> dict[str, object]:
+    return {
+        "type": "custom_tool_call",
+        "id": f"ctc_{output_index}",
+        "call_id": f"call_{output_index}",
+        "name": "apply_patch",
+        "input": tool_input,
+    }
+
+
+def _item_event(event_type: str, output_index: int, item: dict[str, object]) -> dict[str, object]:
+    return {"type": event_type, "output_index": output_index, "item": item}
+
+
+def _tool_added(output_index: int) -> dict[str, object]:
+    return _item_event("response.output_item.added", output_index, _tool_item(output_index, ""))
+
+
+def _tool_arguments_delta(output_index: int, delta: str) -> dict[str, object]:
+    return {"type": "response.function_call_arguments.delta", "output_index": output_index, "delta": delta}
+
+
+def _tool_arguments_done(output_index: int, arguments: str) -> dict[str, object]:
+    return {"type": "response.function_call_arguments.done", "output_index": output_index, "arguments": arguments}
+
+
+def _tool_item_done(output_index: int, arguments: str) -> dict[str, object]:
+    return _item_event("response.output_item.done", output_index, _tool_item(output_index, arguments))
+
+
+def _custom_tool_added(output_index: int) -> dict[str, object]:
+    return _item_event("response.output_item.added", output_index, _custom_tool_item(output_index, ""))
+
+
+def _custom_tool_input_delta(output_index: int, delta: str) -> dict[str, object]:
+    return {"type": "response.custom_tool_call_input.delta", "output_index": output_index, "delta": delta}
+
+
+def _custom_tool_input_done(output_index: int, tool_input: str) -> dict[str, object]:
+    return {"type": "response.custom_tool_call_input.done", "output_index": output_index, "input": tool_input}
+
+
+def _custom_tool_item_done(output_index: int, tool_input: str) -> dict[str, object]:
+    return _item_event("response.output_item.done", output_index, _custom_tool_item(output_index, tool_input))
+
+
+_ADD_5_7: Final = '{"a":5,"b":7}'
+_ADD_1_2: Final = '{"a":1,"b":2}'
+_PATCH: Final = "*** Begin Patch\n*** End Patch"
+
+
+@pytest.mark.parametrize(
+    "events, expected_arguments",
+    [
+        pytest.param(
+            [_tool_added(1), _tool_arguments_done(1, _ADD_5_7), _tool_item_done(1, _ADD_5_7)],
+            {0: _ADD_5_7},
+            id="arguments_only_in_done_events",
+        ),
+        pytest.param(
+            [_tool_added(0), _tool_item_done(0, _ADD_5_7)],
+            {0: _ADD_5_7},
+            id="arguments_only_in_output_item_done",
+        ),
+        pytest.param(
+            [
+                _tool_added(0),
+                _tool_arguments_delta(0, '{"a":5,'),
+                _tool_arguments_delta(0, '"b":7}'),
+                _tool_arguments_done(0, _ADD_5_7),
+                _tool_item_done(0, _ADD_5_7),
+            ],
+            {0: _ADD_5_7},
+            id="streamed_deltas_are_not_repeated_by_done_events",
+        ),
+        pytest.param(
+            [
+                _tool_added(0),
+                _tool_arguments_delta(0, _ADD_5_7),
+                _tool_arguments_done(0, _ADD_5_7),
+                _tool_item_done(0, _ADD_5_7),
+                _tool_added(1),
+                _tool_arguments_done(1, _ADD_1_2),
+                _tool_item_done(1, _ADD_1_2),
+            ],
+            {0: _ADD_5_7, 1: _ADD_1_2},
+            id="one_call_with_deltas_and_one_without",
+        ),
+        pytest.param(
+            [_custom_tool_added(0), _custom_tool_input_done(0, _PATCH), _custom_tool_item_done(0, _PATCH)],
+            {0: _PATCH},
+            id="custom_tool_input_only_in_done_events",
+        ),
+        pytest.param(
+            [_custom_tool_added(0), _custom_tool_item_done(0, _PATCH)],
+            {0: _PATCH},
+            id="custom_tool_input_only_in_output_item_done",
+        ),
+        pytest.param(
+            [
+                _custom_tool_added(0),
+                _custom_tool_input_delta(0, _PATCH),
+                _custom_tool_input_done(0, _PATCH),
+                _custom_tool_item_done(0, _PATCH),
+            ],
+            {0: _PATCH},
+            id="custom_tool_streamed_input_is_not_repeated_by_done_events",
+        ),
+    ],
+)
+def test_streamed_tool_call_arguments_match_upstream_whichever_event_carries_them(
+    events: list[dict[str, object]], expected_arguments: dict[int, str]
+) -> None:
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+
+    iterator: Final = OpenAiResponsesToChatCompletionStreamIterator(streaming_response=None, sync_stream=True)
+    chunks: Final = [iterator.chunk_parser(event) for event in events]
+    tool_call_deltas: Final = list(
+        itertools.chain.from_iterable(chunk.choices[0].delta.tool_calls or [] for chunk in chunks)
+    )
+
+    assembled: Final = {
+        index: "".join(tc.function.arguments or "" for tc in tool_call_deltas if tc.index == index)
+        for index in {tc.index for tc in tool_call_deltas}
+    }
+    assert assembled == expected_arguments
 
 
 def test_text_plus_tool_calls_sequence():
@@ -5196,6 +5337,31 @@ def test_convert_chat_completion_messages_to_responses_api_tool_result_with_tool
 
     function_call_output = next(item for item in response if item.get("type") == "function_call_output")
     assert function_call_output["output"] == [{"type": "input_text", "text": "1 tool found"}]
+
+
+@pytest.mark.parametrize(
+    ("carried", "expected_middle"),
+    ((None, ()), ("carried", ({"type": "output_text", "text": "carried"},))),
+)
+def test_convert_chat_completion_messages_to_responses_api_sends_only_the_text_a_fallback_block_carries(
+    carried: str | None, expected_middle: tuple[dict[str, str], ...]
+) -> None:
+    fallback_block: Final = {
+        "type": "fallback",
+        "from": {"model": "first-model"},
+        "to": {"model": "second-model"},
+        "trigger": {"type": "refusal", "category": "cyber"},
+        **({} if carried is None else {"text": carried}),
+    }
+    reply: Final = {"type": "text", "text": "Hello"}
+    sent_reply: Final = {"type": "output_text", "text": "Hello"}
+
+    response, _ = LiteLLMResponsesTransformationHandler().convert_chat_completion_messages_to_responses_api(
+        [{"role": "user", "content": "hi"}, {"role": "assistant", "content": [reply, fallback_block, reply]}]
+    )
+
+    assistant_message: Final = next(item for item in response if item.get("role") == "assistant")
+    assert assistant_message["content"] == [sent_reply, *expected_middle, sent_reply]
 
 
 def _litellm_encoded_response_id(upstream_id: str) -> str:

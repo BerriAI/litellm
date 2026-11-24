@@ -9,13 +9,14 @@ import json
 import mimetypes
 import re
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
-from functools import partial
+from functools import partial, reduce
 from graphlib import CycleError, TopologicalSorter
 from itertools import chain, groupby, islice
 from os import PathLike
 from pathlib import Path
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal, TypeVar, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, TypeAlias, TypeVar, cast
+from urllib.parse import unquote
 
 from pydantic import TypeAdapter
 
@@ -24,6 +25,7 @@ from litellm import verbose_logger
 from litellm.constants import REDACTED_BY_LITELLM
 from litellm.litellm_core_utils.core_helpers import as_object_list, as_str_mapping
 from litellm.router_utils.batch_utils import InMemoryFile
+from litellm.types.llms.anthropic import ANTHROPIC_UNRENDERED_BLOCK_TYPES
 from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionAssistantMessage,
@@ -165,6 +167,17 @@ def extract_search_results_text(search_results: object) -> str:
         if citations is not None:
             texts += json.dumps(citations, separators=(",", ":"))
     return texts
+
+
+def is_unrendered_block(block: object) -> bool:
+    fields: Final = as_str_mapping(block)
+    block_type: Final = None if fields is None else fields.get("type")
+    return isinstance(block_type, str) and block_type in ANTHROPIC_UNRENDERED_BLOCK_TYPES
+
+
+def is_unrendered_block_without_text(block: object) -> bool:
+    fields: Final = as_str_mapping(block)
+    return fields is not None and is_unrendered_block(fields) and "text" not in fields
 
 
 def convert_content_list_to_str(
@@ -392,6 +405,51 @@ def detect_first_expected_role(
     return None
 
 
+_TEXT_BLOCK_TYPES: Final = frozenset({"text", "input_text"})
+
+
+def _is_blank_text_block(block: object) -> bool:
+    fields: Final = as_str_mapping(block)
+    return fields is not None and fields.get("type") in _TEXT_BLOCK_TYPES and not fields.get("text")
+
+
+def is_blank_content(content: object) -> bool:
+    if content is None or content == "":
+        return True
+    blocks: Final = as_object_list(content)
+    return blocks is not None and all(map(_is_blank_text_block, blocks))
+
+
+def is_empty_user_message(message: object) -> bool:
+    mapping: Final = as_str_mapping(message)
+    if mapping is not None:
+        return mapping.get("role") == "user" and is_blank_content(mapping.get("content"))
+    return getattr(message, "role", None) == "user" and is_blank_content(getattr(message, "content", None))
+
+
+def _is_whitespace_text(text: object) -> bool:
+    return not text or (isinstance(text, str) and not text.strip())
+
+
+def _is_whitespace_text_block(block: object) -> bool:
+    fields: Final = as_str_mapping(block)
+    return fields is not None and fields.get("type") in _TEXT_BLOCK_TYPES and _is_whitespace_text(fields.get("text"))
+
+
+def _is_whitespace_content(content: object) -> bool:
+    if content is None or isinstance(content, str):
+        return _is_whitespace_text(content)
+    blocks: Final = as_object_list(content)
+    return blocks is not None and all(map(_is_whitespace_text_block, blocks))
+
+
+def is_whitespace_user_message(message: object) -> bool:
+    mapping: Final = as_str_mapping(message)
+    if mapping is not None:
+        return mapping.get("role") == "user" and _is_whitespace_content(mapping.get("content"))
+    return getattr(message, "role", None) == "user" and _is_whitespace_content(getattr(message, "content", None))
+
+
 def _counts_for_alternation(message: AllMessageValues) -> bool:
     role: Final = message.get("role")
     if role == "user":
@@ -425,7 +483,7 @@ def _insert_user_continue_message(
     # Handle first message if it's an assistant message — always prepend
     # user_continue regardless of tool_calls, to preserve backward compatibility.
     if result_messages[0]["role"] == "assistant":
-        result_messages.insert(0, continue_message)
+        result_messages.insert(0, continue_message.copy())
 
     # Handle consecutive assistant messages in the counted sequence
     i = 1
@@ -436,7 +494,7 @@ def _insert_user_continue_message(
             # Preserve old behavior for malformed adjacent assistant sequences like
             # assistant(tool_calls) -> assistant(no-tool-calls) with no tool message.
             if i > 0 and result_messages[i - 1].get("role") == "assistant":
-                result_messages.insert(i, continue_message)
+                result_messages.insert(i, continue_message.copy())
                 i += 2
                 inserted_continue_message = True
             else:
@@ -445,7 +503,7 @@ def _insert_user_continue_message(
                     previous_message = result_messages[j]
                     if _counts_for_alternation(previous_message):
                         if previous_message["role"] == "assistant":
-                            result_messages.insert(i, continue_message)
+                            result_messages.insert(i, continue_message.copy())
                             i += 2
                             inserted_continue_message = True
                         break
@@ -456,7 +514,7 @@ def _insert_user_continue_message(
     # Handle final message — append user_continue after any trailing assistant,
     # including ones with tool_calls, to preserve backward compatibility.
     if result_messages[-1]["role"] == "assistant" and ensure_alternating_roles:
-        result_messages.append(continue_message)
+        result_messages.append(continue_message.copy())
 
     return result_messages
 
@@ -496,7 +554,7 @@ def _insert_assistant_continue_message(
     modified_messages: Final[list[AllMessageValues]] = []
     for i, message in enumerate(messages):
         if i in insert_before_indexes:
-            modified_messages.append(continue_message)
+            modified_messages.append(continue_message.copy())
         modified_messages.append(message)
 
     return modified_messages
@@ -994,12 +1052,47 @@ def _estimate_json_bytes(obj: object) -> int:
     return total
 
 
+_DefsScope: TypeAlias = tuple[Mapping[str, object], ...]
+_DEFS_KEYS: Final = ("$defs", "definitions")
+_NON_BODY_KEYS: Final = frozenset({"$defs", "definitions", "components"})
+
 _JSON_SCHEMA_ANNOTATION_KEYWORDS: Final = frozenset(
     {"title", "description", "default", "deprecated", "readOnly", "writeOnly", "examples"}
 )
 JSON_SCHEMA_KEPT_REF_SIBLINGS: Final = _JSON_SCHEMA_ANNOTATION_KEYWORDS | frozenset({"required"})
 
 _SCHEMA_NODE: Final = TypeAdapter(Mapping[str, object])
+
+
+def _mapping_or_empty(value: object) -> Mapping[str, object]:
+    return value if isinstance(value, dict) else {}
+
+
+def _local_defs(node: Mapping[str, object]) -> Mapping[str, object]:
+    return dict(chain.from_iterable(_mapping_or_empty(node.get(key)).items() for key in _DEFS_KEYS))
+
+
+def _scope_with_local_defs(scope: _DefsScope, local_defs: Mapping[str, object]) -> _DefsScope:
+    return (local_defs, *scope) if local_defs else scope
+
+
+def _resolve_in_scope(scope: _DefsScope, ref: str) -> tuple[str, object] | None:
+    name: Final = ref.split("/")[-1]
+    return next(((ref, defs[ref]) if ref in defs else (name, defs[name]) for defs in scope if name in defs), None)
+
+
+class DefsRefTargetNotASchemaError(AttributeError):
+    pass
+
+
+def _definition_schema(definition: object) -> Mapping[str, object]:
+    if isinstance(definition, bool):
+        return {} if definition else {"not": {}}
+    if not isinstance(definition, dict):
+        raise DefsRefTargetNotASchemaError(
+            f"unpack_defs: a $ref target must be a schema object, not {type(definition).__name__}"
+        )
+    return definition
 
 
 def _required_names(schema: Mapping[str, object]) -> tuple[str, ...] | None:
@@ -1023,21 +1116,32 @@ def _ref_target_with_siblings(
     }
 
 
+class DefsInliningBudgetExceededError(ValueError):
+    pass
+
+
+def _keeps_no_ref(_ref: str, _scope: _DefsScope) -> bool:
+    return False
+
+
 def unpack_defs(
     schema: dict,
     defs: dict,
     max_inlined_bytes: int | None = None,
     keep_ref_siblings: bool = False,
-) -> None:
+    *,
+    keeps_ref: Callable[[str, _DefsScope], bool] = _keeps_no_ref,
+) -> int:
     """Expand *all* ``$ref`` entries pointing into ``$defs`` / ``definitions``.
 
     This utility walks the entire schema tree (dicts and lists) so it naturally
     resolves references hidden under any keyword – ``items``, ``allOf``,
     ``anyOf``, ``oneOf``, ``additionalProperties``, etc.
 
-    It mutates *schema* in-place and does **not** return anything.  The helper
-    keeps memory overhead low by resolving nodes as it encounters them rather
-    than materialising a fully dereferenced copy first.
+    It mutates *schema* in-place and returns the JSON-byte size it inlined,
+    counted only when ``max_inlined_bytes`` is set.  The helper keeps memory
+    overhead low by resolving nodes as it encounters them rather than
+    materialising a fully dereferenced copy first.
 
     ``max_inlined_bytes`` caps the cumulative JSON-byte size of every target
     that has been inlined and is checked *before* each ``copy.deepcopy``, so
@@ -1051,6 +1155,9 @@ def unpack_defs(
     ``keep_ref_siblings`` keeps the annotations next to a ``$ref`` (a field's
     ``description``, say) over the inlined target's and adds a sibling
     ``required`` to the target's, since both apply to the value.
+
+    ``keeps_ref`` names the refs to leave as they are, given the definition
+    layers in scope, nearest first, for a provider that resolves those itself.
     """
 
     import copy
@@ -1059,17 +1166,11 @@ def unpack_defs(
     # Combine the defs handed down by the caller with defs/definitions found on
     # the current node.  Local keys shadow parent keys to match JSON-schema
     # scoping rules.
-    root_defs: Final[tuple[Mapping[str, object], ...]] = (
-        {
-            **defs,
-            **schema.get("$defs", {}),
-            **schema.get("definitions", {}),
-        },
-    )
+    root_defs: Final[_DefsScope] = ({**defs, **_local_defs(schema)},)
 
     # Use iterative approach with queue to avoid recursion
     # Each item in queue is (node, parent_container, key/index, active_defs, ref_chain)
-    queue: Final[deque[tuple[object, dict | list | None, str | int | None, tuple, set[str]]]] = deque(
+    queue: Final[deque[tuple[object, dict | list | None, str | int | None, _DefsScope, set[str]]]] = deque(
         [(schema, None, None, root_defs, set())]
     )
     inlined_bytes = 0
@@ -1080,30 +1181,22 @@ def unpack_defs(
         # ----------------------------- dict -----------------------------
         if isinstance(node, dict):
             # --- Case 1: this node *is* a reference ---
-            if "$ref" in node:
-                ref_name = node["$ref"].split("/")[-1]
-                resolved_ref = next(
-                    (
-                        (node["$ref"], scope[node["$ref"]]) if node["$ref"] in scope else (ref_name, scope[ref_name])
-                        for scope in active_defs
-                        if ref_name in scope
-                    ),
-                    None,
-                )
+            ref = node.get("$ref")
+            if isinstance(ref, str) and not keeps_ref(ref, active_defs):
+                resolved_ref = _resolve_in_scope(active_defs, ref)
                 # Unknown reference – leave untouched
                 if resolved_ref is None:
                     continue
-                ref_key, target_schema = resolved_ref
+                ref_key, definition = resolved_ref
 
                 # Check for circular reference in the resolution chain
                 if ref_key in ref_chain:
                     # Circular reference detected - leave as-is to prevent infinite recursion
                     continue
 
+                target_schema = _definition_schema(definition)
                 replacement = (
-                    _ref_target_with_siblings(
-                        _SCHEMA_NODE.validate_python(target_schema), _SCHEMA_NODE.validate_python(node)
-                    )
+                    _ref_target_with_siblings(target_schema, _SCHEMA_NODE.validate_python(node))
                     if keep_ref_siblings
                     else target_schema
                 )
@@ -1111,7 +1204,7 @@ def unpack_defs(
                 if max_inlined_bytes is not None:
                     inlined_bytes += _estimate_json_bytes(replacement)
                     if inlined_bytes > max_inlined_bytes:
-                        raise ValueError(
+                        raise DefsInliningBudgetExceededError(
                             f"unpack_defs: inlined schema exceeded the "
                             f"{max_inlined_bytes:,}-byte budget. Refusing to "
                             f"deep-copy further to prevent schema-bomb "
@@ -1119,13 +1212,7 @@ def unpack_defs(
                         )
 
                 # Merge defs from the target to capture nested definitions
-                child_defs = (
-                    active_defs
-                    if isinstance(target_schema, dict)
-                    and "$defs" not in target_schema
-                    and "definitions" not in target_schema
-                    else ({**target_schema.get("$defs", {}), **target_schema.get("definitions", {})}, *active_defs)
-                )
+                child_defs = _scope_with_local_defs(active_defs, _local_defs(target_schema))
 
                 # Replace the reference with resolved copy
                 resolved = copy.deepcopy(replacement)
@@ -1153,11 +1240,7 @@ def unpack_defs(
 
             # --- Case 2: regular dict – process its values ---
             # Update defs with any nested $defs/definitions present *here*.
-            current_defs = (
-                ({**node.get("$defs", {}), **node.get("definitions", {})}, *active_defs)
-                if "$defs" in node or "definitions" in node
-                else active_defs
-            )
+            current_defs = _scope_with_local_defs(active_defs, _local_defs(node))
 
             # Add all dict values to queue
             for k, v in node.items():
@@ -1169,12 +1252,28 @@ def unpack_defs(
             for idx, item in enumerate(node):
                 queue.append((item, node, idx, active_defs, ref_chain))
 
+    return inlined_bytes
 
-def _has_legacy_defs(schema: object) -> bool:
-    if not isinstance(schema, dict):
-        return False
-    components: Final = schema.get("components")
-    return "definitions" in schema or (isinstance(components, dict) and isinstance(components.get("schemas"), dict))
+
+def _legacy_defs(schema: object) -> Mapping[str, object] | None:
+    node: Final = _mapping_or_empty(schema)
+    components: Final = _mapping_or_empty(node.get("components"))
+    if "definitions" not in node and not isinstance(components.get("schemas"), dict):
+        return None
+    # On key collision, ``definitions`` wins over ``components.schemas`` --
+    # ``unpack_defs`` keys refs by last path segment so a single name can only
+    # resolve to one body, and ``definitions`` is the JSON-Schema-native
+    # namespace.
+    return {**_mapping_or_empty(components.get("schemas")), **_mapping_or_empty(node.get("definitions"))}
+
+
+def _legacy_blocks_are_well_formed(schema: Mapping[str, object]) -> bool:
+    components: Final = schema.get("components", {})
+    return (
+        isinstance(schema.get("definitions") or {}, dict)
+        and isinstance(components, dict)
+        and isinstance(_mapping_or_empty(components).get("schemas") or {}, dict)
+    )
 
 
 # Schema-bomb budget for ``$ref`` inlining: cap the cumulative JSON-byte
@@ -1239,20 +1338,41 @@ def unpack_legacy_defs(
     schemas cannot expand into a schema-bomb before reaching the upstream
     provider -- raises ``ValueError`` on overflow.
     """
-    if not _has_legacy_defs(schema):
+    if _legacy_defs(schema) is None or not _legacy_blocks_are_well_formed(schema):
         return schema
     if copy:
         import copy as _copy
 
         schema = _copy.deepcopy(schema)
-    # On key collision, ``definitions`` wins over ``components.schemas`` --
-    # ``unpack_defs`` keys refs by last path segment so a single name can only
-    # resolve to one body, and ``definitions`` is the JSON-Schema-native
-    # namespace.
-    defs: Final = schema.pop("components", {}).get("schemas") or {}
-    defs.update(schema.pop("definitions", None) or {})
-    unpack_defs(schema, defs, max_inlined_bytes=max_inlined_bytes)
+    defs: Final = _legacy_defs(schema) or {}
+    schema.pop("components", None)
+    schema.pop("definitions", None)
+    unpack_defs(schema, dict(defs), max_inlined_bytes=max_inlined_bytes)
     return schema
+
+
+def inline_refs_outside_root_defs(
+    schema: Mapping[str, object], max_inlined_bytes: int
+) -> tuple[Mapping[str, object], int]:
+    root_defs: Final = dict(_mapping_or_empty(schema.get("$defs")))
+    body: Final = {key: value for key, value in schema.items() if key not in _NON_BODY_KEYS}
+    document: Final = {"body": body, "defs": root_defs}
+    inlined_bytes: Final = unpack_defs(
+        document,
+        {**root_defs, **(_legacy_defs(schema) or {})},
+        max_inlined_bytes=max_inlined_bytes,
+        keeps_ref=lambda ref, scope: (
+            ref_points_into_defs(ref, root_defs) and not any(ref_points_into_defs(ref, layer) for layer in scope[:-1])
+        ),
+    )
+    inlined: Final = document["body"]
+    return ({**inlined, "$defs": root_defs} if root_defs else inlined), inlined_bytes
+
+
+def inline_refs_and_drop_defs(schema: Mapping[str, object], max_inlined_bytes: int) -> tuple[Mapping[str, object], int]:
+    body: Final = {key: value for key, value in schema.items() if key not in _NON_BODY_KEYS}
+    inlined_bytes: Final = unpack_defs(body, dict(_local_defs(schema)), max_inlined_bytes=max_inlined_bytes)
+    return {key: value for key, value in body.items() if key != "$defs"}, inlined_bytes
 
 
 def sanitize_input_schema_for_anthropic(input_schema: dict) -> "AnthropicInputSchema":
@@ -1285,6 +1405,9 @@ _OPENAI_REJECTED_TOP_LEVEL_SCHEMA_KEYS: Final = ("enum", "const", "not")
 _LOCAL_SCHEMA_REF_PREFIXES: Final = (("#/$defs/", "$defs"), ("#/definitions/", "definitions"))
 _MAX_SCHEMA_FLATTEN_DEPTH: Final = 32
 _EMPTY_SCHEMA: Final[Mapping[str, object]] = MappingProxyType({})
+_ROOT_DEFS_POINTER: Final = "#/$defs/"
+_DYNAMIC_REF_KEYWORDS: Final = ("$dynamicRef", "$recursiveRef")
+_DEFS_CONTAINERS: Final = ("$defs", "definitions")
 
 
 def _schema_properties(schema: Mapping[str, object]) -> Mapping[str, object]:
@@ -1326,6 +1449,141 @@ def _resolve_local_schema_ref(root: Mapping[str, object], ref: str) -> Mapping[s
         return None
     target: Final = definitions.get(ref[len(prefix) :])
     return target if isinstance(target, dict) else None
+
+
+def _required_names_in_order(schema: Mapping[str, object]) -> tuple[str, ...]:
+    return tuple(name for name in _list_at(schema, "required") if isinstance(name, str))
+
+
+def _local_definitions(schema: Mapping[str, object]) -> Mapping[str, object]:
+    return dict(chain.from_iterable((_schema_at(schema, container) or {}).items() for container in _DEFS_CONTAINERS))
+
+
+def _shadows_a_definition(target: Mapping[str, object], schema: Mapping[str, object]) -> bool:
+    outer: Final = _local_definitions(schema)
+    return any(name in outer and outer[name] != body for name, body in _local_definitions(target).items())
+
+
+def _with_root_ref_inlined(schema: Mapping[str, object] | None) -> Mapping[str, object] | None:
+    if schema is None:
+        return None
+    ref: Final = schema.get("$ref")
+    target: Final = _resolve_local_schema_ref(schema, ref) if isinstance(ref, str) else None
+    if target is None:
+        return schema
+    if _shadows_a_definition(target, schema):
+        return None
+    siblings: Final = {key: value for key, value in schema.items() if key != "$ref"}
+    required: Final = dict.fromkeys((*_required_names_in_order(target), *_required_names_in_order(schema)))
+    defs: Final = {
+        container: {**(_schema_at(target, container) or {}), **(_schema_at(schema, container) or {})}
+        for container in _DEFS_CONTAINERS
+        if container in target or container in schema
+    }
+    return {
+        **target,
+        **siblings,
+        **defs,
+        "properties": {**_schema_properties(target), **_schema_properties(schema)},
+        "required": list(required),
+    }
+
+
+def schema_with_root_ref_resolved(schema: Mapping[str, object]) -> Mapping[str, object] | None:
+    unresolved: Final[Mapping[str, object] | None] = schema
+    resolved: Final = reduce(
+        lambda partial, _hop: _with_root_ref_inlined(partial), range(_MAX_SCHEMA_FLATTEN_DEPTH), unresolved
+    )
+    return None if resolved is None or isinstance(resolved.get("$ref"), str) else resolved
+
+
+def _referenced_def_names(ref: object) -> frozenset[str] | None:
+    if not isinstance(ref, str):
+        return frozenset()
+    pointer: Final = schema_fragment_ref(ref)
+    if pointer == "#" or (pointer.startswith("#/") and not pointer.startswith("#/$defs")):
+        return frozenset()
+    if not pointer.startswith(_ROOT_DEFS_POINTER):
+        return None
+    name: Final = pointer[len(_ROOT_DEFS_POINTER) :].split("/")[0]
+    return frozenset((name, unquote(name).replace("~1", "/").replace("~0", "~")))
+
+
+def ref_points_into_defs(ref: str, defs: Mapping[str, object]) -> bool:
+    names: Final = _referenced_def_names(ref)
+    return ref.startswith("#") and names is not None and any(name in defs for name in names)
+
+
+def _def_names_a_ref_may_reach(ref: object) -> frozenset[str] | None:
+    names: Final = _referenced_def_names(ref)
+    if names is None or not isinstance(ref, str):
+        return names
+    return names | {ref.split("/")[-1]}
+
+
+def _node_ref_def_names(node: Mapping[object, object]) -> tuple[frozenset[str] | None, ...]:
+    if any(keyword in node for keyword in _DYNAMIC_REF_KEYWORDS):
+        return (None,)
+    return (_def_names_a_ref_may_reach(node["$ref"]),) if "$ref" in node else ()
+
+
+def _json_object(value: object) -> Mapping[object, object] | None:
+    return _JSON_OBJECT.validate_python(value) if isinstance(value, dict) else None
+
+
+def _json_children(value: object) -> tuple[object, ...]:
+    mapping: Final = _json_object(value)
+    if mapping is not None:
+        return tuple(mapping.values())
+    return _SCHEMA_LIST.validate_python(value) if isinstance(value, list) else ()
+
+
+def _json_levels(value: object) -> Iterator[tuple[object, ...]]:
+    frontier: tuple[object, ...] = (value,)  # rebind-ok: level-order cursor, one level a round
+    while frontier:
+        yield frontier
+        frontier = tuple(chain.from_iterable(_json_children(node) for node in frontier))
+
+
+def _json_objects(value: object) -> Iterator[Mapping[object, object]]:
+    values: Final = chain.from_iterable(islice(_json_levels(value), _MAX_SCHEMA_NESTING))
+    return (node for item in values if (node := _json_object(item)) is not None)
+
+
+def _schema_ref_def_names(schema: Mapping[str, object]) -> Iterator[frozenset[str] | None]:
+    return chain.from_iterable(_node_ref_def_names(node) for node in _json_objects(schema))
+
+
+def _definitions_named(blocks: tuple[Mapping[str, object], ...], name: str) -> Iterator[Mapping[str, object]]:
+    return (definition for block in blocks if (definition := _schema_at(block, name)) is not None)
+
+
+def _reached_def_names(
+    body: Mapping[str, object], definition_blocks: tuple[Mapping[str, object], ...]
+) -> frozenset[str] | None:
+    reached: Final[set[str]] = set()  # mutable-ok: copying the visited set every round is quadratic on long ref chains
+    frontier: tuple[Mapping[str, object], ...] = (body,)  # rebind-ok: the schemas the last round reached
+    while frontier:
+        found = tuple(chain.from_iterable(_schema_ref_def_names(node) for node in frontier))
+        if None in found:
+            return None
+        new_names = frozenset(chain.from_iterable(names for names in found if names is not None)) - reached
+        reached.update(new_names)
+        frontier = tuple(chain.from_iterable(_definitions_named(definition_blocks, name) for name in new_names))
+    return frozenset(reached)
+
+
+def schema_without_unreferenced_defs(schema: Mapping[str, object]) -> Mapping[str, object]:
+    defs: Final = _schema_at(schema, "$defs")
+    if defs is None:
+        return schema
+    body: Final = {key: value for key, value in schema.items() if key not in _NON_BODY_KEYS}
+    reached: Final = _reached_def_names(body, (defs, _legacy_defs(schema) or _EMPTY_SCHEMA))
+    if reached is None:
+        return schema
+    kept: Final = {name: definition for name, definition in defs.items() if name in reached}
+    rest: Final = {key: value for key, value in schema.items() if key != "$defs"}
+    return {**rest, "$defs": kept} if kept else rest
 
 
 def _mergeable_branch(
@@ -1609,6 +1867,7 @@ def _schema_nodes(schema: Mapping[str, object]) -> Iterator[Mapping[str, object]
 
 
 _SCHEMA_LIST: Final = TypeAdapter(tuple[object, ...])
+_JSON_OBJECT: Final = TypeAdapter(dict[object, object])
 
 
 def _list_at(container: Mapping[str, object], key: str) -> tuple[object, ...]:
@@ -3194,3 +3453,7 @@ def text_completion_prompt_to_messages(prompt: object) -> tuple[AllMessageValues
     if string_entries and len(string_entries) == len(entries):
         return tuple(ChatCompletionUserMessage(role="user", content=entry) for entry in string_entries)
     raise ValueError(f"`prompt` must be a non-empty string or a non-empty list of strings. Got: {prompt_type_name}.")
+
+
+def invalid_type_message(field_path: str, value: object, expected: str = "a string") -> str:
+    return f"Invalid type for '{field_path}': expected {expected}, got {type(value).__name__}"

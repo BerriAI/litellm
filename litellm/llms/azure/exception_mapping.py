@@ -24,6 +24,7 @@ class AzureOpenAIExceptionMapping:
         provider_message: Final = (azure_error.get("message") if isinstance(azure_error, dict) else None) or message
         provider_type: Final = azure_error.get("type") if isinstance(azure_error, dict) else None
         provider_code: Final = azure_error.get("code") if isinstance(azure_error, dict) else None
+        provider_param: Final = azure_error.get("param")
 
         # Keep the OpenAI-style body fields populated so downstream (proxy + SDK)
         # can surface `type` / `code` correctly.
@@ -31,7 +32,7 @@ class AzureOpenAIExceptionMapping:
             "message": provider_message,
             "type": provider_type or "invalid_request_error",
             "code": provider_code or "content_policy_violation",
-            "param": None,
+            "param": provider_param,
         }
 
         raise ContentPolicyViolationError(

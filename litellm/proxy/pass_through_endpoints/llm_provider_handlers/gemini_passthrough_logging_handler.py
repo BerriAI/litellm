@@ -114,17 +114,8 @@ class GeminiPassthroughLoggingHandler:
 
             # Use Gemini config for transformation
             instance_of_gemini_llm: Final = litellm.GoogleAIStudioGeminiConfig()
-            litellm_model_response: Final[ModelResponse] = instance_of_gemini_llm.transform_response(
-                model=model,
-                messages=[{"role": "user", "content": "no-message-pass-through-endpoint"}],
-                raw_response=httpx_response,
-                model_response=litellm.ModelResponse(),
-                logging_obj=logging_obj,
-                optional_params={},
-                litellm_params={},
-                api_key="",
-                request_data={},
-                encoding=getattr(litellm, "encoding", None),
+            litellm_model_response: Final[ModelResponse] = instance_of_gemini_llm.transform_pass_through_response(
+                model=model, raw_response=httpx_response, logging_obj=logging_obj
             )
             kwargs = GeminiPassthroughLoggingHandler._create_gemini_response_logging_payload_for_generate_content(
                 litellm_model_response=litellm_model_response,
@@ -302,6 +293,7 @@ class GeminiPassthroughLoggingHandler:
                 streaming_response=None,
                 sync_stream=False,
                 logging_obj=litellm_logging_obj,
+                returns_provider_audio=True,
             )
             parsed_chunks: Final = [gemini_iterator.parse_sse_chunk(chunk) for chunk in all_chunks]
         else:

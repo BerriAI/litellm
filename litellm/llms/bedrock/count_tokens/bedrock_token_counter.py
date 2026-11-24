@@ -10,6 +10,7 @@ from pydantic import JsonValue
 from typing_extensions import assert_never
 
 from litellm._logging import verbose_logger
+from litellm.llms.anthropic.common_utils import without_unrendered_blocks
 from litellm.llms.base_llm.base_utils import BaseTokenCounter
 from litellm.llms.bedrock.common_utils import BedrockError, get_bedrock_base_model
 from litellm.llms.bedrock.count_tokens.handler import BedrockCountTokensHandler
@@ -122,7 +123,7 @@ class BedrockTokenCounter(BaseTokenCounter):
         litellm_params: Final = (deployment or {}).get("litellm_params", {})
         request_data: Final[dict[str, object]] = {
             "model": model_to_use,
-            "messages": messages,
+            "messages": list(without_unrendered_blocks(messages)),
             **({"tools": tools} if tools else {}),
             **({"system": system} if system else {}),
         }
