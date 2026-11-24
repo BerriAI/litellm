@@ -116,6 +116,18 @@ def str_keyed_mapping(value: object) -> Mapping[str, object] | None:
     )
 
 
+def _extra_body_reasoning_effort(
+    nested_body: Mapping[str, object], *, reaches_openai: bool
+) -> str | Mapping[str, object] | None:
+    nested_effort: Final = nested_body.get("reasoning_effort")
+    if isinstance(nested_effort, str):
+        return nested_effort
+    nested_object: Final = str_keyed_mapping(nested_effort)
+    if nested_object is not None or not reaches_openai:
+        return nested_object
+    return str_keyed_mapping(nested_body.get("reasoning"))
+
+
 def bridge_reasoning_effort(
     reasoning_effort: str | Mapping[str, object] | None,
     extra_body: object,
@@ -124,15 +136,11 @@ def bridge_reasoning_effort(
     api_base: str | None,
 ) -> str | Mapping[str, object] | None:
     nested_body: Final = str_keyed_mapping(extra_body)
-    if reasoning_effort is not None or nested_body is None:
+    if nested_body is None:
         return reasoning_effort
-    nested_effort: Final = nested_body.get("reasoning_effort")
-    if isinstance(nested_effort, str):
-        return nested_effort
-    nested_object: Final = str_keyed_mapping(nested_effort)
-    if nested_object is not None or not _reaches_openai(custom_llm_provider, api_base):
-        return nested_object
-    return str_keyed_mapping(nested_body.get("reasoning"))
+    reaches_openai: Final = _reaches_openai(custom_llm_provider, api_base)
+    nested: Final = _extra_body_reasoning_effort(nested_body, reaches_openai=reaches_openai)
+    return nested if nested is not None and (reasoning_effort is None or reaches_openai) else reasoning_effort
 
 
 def _targets_openai_api(api_base: str | None) -> bool:
@@ -175,9 +183,8 @@ class _OpenAIReasoningJudge:
     base_model: str | None
     api_base: str | None
     deployment_model_info: Mapping[str, object] | None
-    additional_drop_params: object
 
-    def accepted(self, requested: Mapping[str, object]) -> Mapping[str, object] | None:
+    def accepted(self, requested: Mapping[str, object], additional_drop_params: object) -> Mapping[str, object] | None:
         from litellm.responses.utils import bridge_reasoning
 
         return str_keyed_mapping(
@@ -191,7 +198,7 @@ class _OpenAIReasoningJudge:
                 api_base=self.api_base,
                 deployment_model_info=self.deployment_model_info,
                 drop_params=True,
-                additional_drop_params=self.additional_drop_params,
+                additional_drop_params=additional_drop_params,
             )
         )
 
@@ -205,7 +212,7 @@ class _OpenAIReasoningJudge:
 
     def cleaned(self, body: Mapping[str, object], keys: Sequence[str] = _REASONING_OBJECT_KEYS) -> Mapping[str, object]:
         judged: Final = {
-            key: self.accepted(self._with_effort_checked(nested))
+            key: self.accepted(self._with_effort_checked(nested), additional_drop_params=None)
             for key in keys
             if (nested := str_keyed_mapping(body.get(key))) is not None
         }
@@ -224,11 +231,10 @@ def drop_refused_extra_body_reasoning(
     api_base: str | None,
     deployment_model_info: Mapping[str, object] | None,
     drop_params: bool,
-    additional_drop_params: object,
 ) -> Mapping[str, object]:
     if not drop_params or not _reaches_openai(custom_llm_provider, api_base):
         return params
-    judge: Final = _OpenAIReasoningJudge(model, base_model, api_base, deployment_model_info, additional_drop_params)
+    judge: Final = _OpenAIReasoningJudge(model, base_model, api_base, deployment_model_info)
     sdk_merged: Final = judge.cleaned(params, keys=_SDK_MERGED_REASONING_KEYS)
     extra_body: Final = str_keyed_mapping(params.get("extra_body"))
     return sdk_merged if extra_body is None else {**sdk_merged, "extra_body": judge.cleaned(extra_body)}
@@ -249,13 +255,13 @@ def drop_refused_forwarded_reasoning(forwarded_kwargs: Mapping[str, object], *, 
         base_model=base_model if isinstance(base_model, str) else None,
         api_base=api_base,
         deployment_model_info=str_keyed_mapping(forwarded_kwargs.get("model_info")),
-        additional_drop_params=forwarded_kwargs.get("additional_drop_params"),
     )
     requested: Final = str_keyed_mapping(forwarded_kwargs.get("reasoning_effort"))
+    additional_drop_params: Final = forwarded_kwargs.get("additional_drop_params")
     extra_body: Final = str_keyed_mapping(forwarded_kwargs.get("extra_body"))
     return {
         **judge.cleaned(forwarded_kwargs, keys=_SDK_MERGED_REASONING_KEYS),
-        **({} if requested is None else {"reasoning_effort": judge.accepted(requested)}),
+        **({} if requested is None else {"reasoning_effort": judge.accepted(requested, additional_drop_params)}),
         **({} if extra_body is None else {"extra_body": _with_responses_reasoning(judge.cleaned(extra_body))}),
     }
 

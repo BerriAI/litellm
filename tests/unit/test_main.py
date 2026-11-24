@@ -3669,6 +3669,56 @@ def test_function_tools_with_extra_body_reasoning_stay_on_chat_behind_a_compatib
     assert json.loads(chat_route.calls[0].request.content)["reasoning"] == {"effort": "high"}
 
 
+def test_function_tools_send_an_extra_body_reasoning_summary_to_the_responses_api_over_a_top_level_none(
+    openai_chat_route: respx.Route, openai_responses_route: respx.Route
+):
+    litellm.completion(
+        model="openai/gpt-5.4",
+        messages=[{"role": "user", "content": "hello"}],
+        tools=[{"type": "function", "function": {"name": "get_time", "parameters": {"type": "object"}}}],
+        reasoning_effort="none",
+        extra_body={"reasoning": {"summary": "detailed"}},
+        api_key="fake-key",
+    )
+
+    assert openai_chat_route.called is False
+    assert json.loads(openai_responses_route.calls[0].request.content)["reasoning"]["summary"] == "detailed"
+
+
+def test_function_tools_with_a_top_level_effort_bridge_when_extra_body_carries_no_reasoning(
+    openai_chat_route: respx.Route, openai_responses_route: respx.Route
+):
+    litellm.completion(
+        model="openai/gpt-5.4",
+        messages=[{"role": "user", "content": "hello"}],
+        tools=[{"type": "function", "function": {"name": "get_time", "parameters": {"type": "object"}}}],
+        reasoning_effort="high",
+        extra_body={"prompt_cache_key": "session-1"},
+        api_key="fake-key",
+    )
+
+    assert openai_chat_route.called is False
+    assert json.loads(openai_responses_route.calls[0].request.content)["reasoning"]["effort"] == "high"
+
+
+def test_a_compatible_sdk_client_keeps_the_top_level_effort_for_the_function_tools_bridge(
+    openai_chat_route: respx.Route, respx_mock: respx.MockRouter
+):
+    compatible_base: Final = "https://compatible.example/v1"
+    chat_route: Final = respx_mock.post(f"{compatible_base}/chat/completions").respond(json=_OPENAI_CHAT_ANSWER)
+
+    litellm.completion(
+        model="openai/gpt-5.4",
+        messages=[{"role": "user", "content": "hello"}],
+        tools=[{"type": "function", "function": {"name": "get_time", "parameters": {"type": "object"}}}],
+        reasoning_effort="none",
+        extra_body={"reasoning_effort": "high"},
+        client=OpenAI(base_url=compatible_base, api_key="fake-key"),
+    )
+
+    assert json.loads(chat_route.calls[0].request.content)["reasoning_effort"] == "high"
+
+
 _BRIDGED_OPENAI_ROUTES: Final = pytest.mark.parametrize(
     "model, route_kwargs",
     [
@@ -3712,14 +3762,19 @@ def test_openai_responses_bridge_drops_a_refused_mode_from_extra_body_reasoning_
     assert json.loads(openai_responses_route.calls[0].request.content)["reasoning"] == {"effort": "low"}
 
 
+@pytest.mark.parametrize("top_level_effort", [None, "none"], ids=["no-top-level-effort", "top-level-effort-none"])
 @pytest.mark.parametrize("drop_params", [False, True])
 def test_function_tools_send_an_extra_body_reasoning_object_to_the_responses_api_on_openai(
-    drop_params: bool, openai_chat_route: respx.Route, openai_responses_route: respx.Route
+    drop_params: bool,
+    top_level_effort: str | None,
+    openai_chat_route: respx.Route,
+    openai_responses_route: respx.Route,
 ):
     litellm.completion(
         model="openai/gpt-5.4",
         messages=[{"role": "user", "content": "hello"}],
         tools=[{"type": "function", "function": {"name": "get_time", "parameters": {"type": "object"}}}],
+        reasoning_effort=top_level_effort,
         extra_body={"reasoning": {"effort": "high"}},
         drop_params=drop_params,
         api_key="fake-key",
@@ -3751,6 +3806,66 @@ def test_openai_responses_bridge_keeps_extra_body_reasoning_over_the_top_level_e
         "effort": "high",
         "summary": "detailed",
     }
+
+
+@_BRIDGED_OPENAI_ROUTES
+@pytest.mark.parametrize(
+    "additional_drop_params", [["reasoning_effort"], ["reasoning_effort.summary"]], ids=["effort", "effort-summary"]
+)
+def test_additional_drop_params_leave_an_extra_body_reasoning_object_as_sent(
+    model: str,
+    route_kwargs: dict[str, list[dict[str, object]]],
+    additional_drop_params: list[str],
+    openai_chat_route: respx.Route,
+    openai_responses_route: respx.Route,
+):
+    litellm.completion(
+        model=model,
+        messages=[{"role": "user", "content": "hello"}],
+        extra_body={"reasoning": {"effort": "high", "summary": "detailed"}},
+        drop_params=True,
+        additional_drop_params=additional_drop_params,
+        api_key="fake-key",
+        **route_kwargs,
+    )
+
+    assert json.loads(openai_responses_route.calls[0].request.content)["reasoning"] == {
+        "effort": "high",
+        "summary": "detailed",
+    }
+
+
+def test_openai_chat_keeps_a_string_extra_body_reasoning_effort_over_an_extra_body_reasoning_object(
+    openai_chat_route: respx.Route,
+):
+    litellm.completion(
+        model="openai/gpt-6.1-standard-only",
+        messages=[{"role": "user", "content": "hello"}],
+        extra_body={"reasoning_effort": "low", "reasoning": {"effort": "high"}},
+        drop_params=True,
+        api_key="fake-key",
+    )
+
+    request_body: Final = json.loads(openai_chat_route.calls[0].request.content)
+    assert request_body["reasoning_effort"] == "low"
+    assert "reasoning" not in request_body
+
+
+def test_openai_chat_sends_the_extra_body_reasoning_object_as_its_effort_next_to_a_top_level_reasoning_object(
+    openai_chat_route: respx.Route,
+):
+    litellm.completion(
+        model="openai/gpt-6.1-standard-only",
+        messages=[{"role": "user", "content": "hello"}],
+        reasoning_effort={"effort": "high"},
+        extra_body={"reasoning": {"effort": "low"}},
+        drop_params=True,
+        api_key="fake-key",
+    )
+
+    request_body: Final = json.loads(openai_chat_route.calls[0].request.content)
+    assert request_body["reasoning_effort"] == "low"
+    assert "reasoning" not in request_body
 
 
 def test_openai_chat_reads_the_reasoning_effort_key_first_when_extra_body_carries_both_objects(

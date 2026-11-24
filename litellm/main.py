@@ -6194,7 +6194,6 @@ def completion(
             api_base=reached_api_base,
             deployment_model_info=deployment_model_info,
             drop_params=drop_unsupported_reasoning,
-            additional_drop_params=routing_kwargs.get("additional_drop_params"),
         )
         requested_output_config: Final = as_str_mapping(chat_params.get("output_config"))
         chat_reasoning: Final = resolve_chat_reasoning(
