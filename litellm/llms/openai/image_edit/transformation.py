@@ -157,11 +157,12 @@ class OpenAIImageEditConfig(BaseImageEditConfig):
                 _mask = _mask[0] if _mask else None
 
             if _mask is not None:
-                mask_content_type: Final[str] = ImageEditRequestUtils.get_image_content_type(_mask)
-                if isinstance(_mask, BufferedReader):
-                    files_list.append(("mask", (_mask.name, _mask, mask_content_type)))
-                else:
-                    files_list.append(("mask", ("mask.png", _mask, mask_content_type)))
+                self._add_image_to_files(
+                    files_list=files_list,
+                    image=_mask,
+                    field_name="mask",
+                    default_name="mask.png",
+                )
 
         if markup is not None:
             self._add_image_to_files(

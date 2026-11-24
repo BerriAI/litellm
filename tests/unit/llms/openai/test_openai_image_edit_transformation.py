@@ -385,6 +385,24 @@ def test_transform_image_edit_request_unpacks_markup_tuples(
     assert markup_part[1] == expected_part
 
 
+
+def test_transform_image_edit_request_unpacks_mask_tuple(
+    image_edit_config: OpenAIImageEditConfig,
+) -> None:
+    """A FileTypes tuple passed as mask is sent as that file, not nested as the part's content."""
+    _, files = image_edit_config.transform_image_edit_request(
+        model="gpt-image-2.5-flare",
+        prompt="Fill the masked area",
+        image=[b"\x89PNG\r\n\x1a\n"],
+        image_edit_optional_request_params={"mask": ("cutout", b"\x89PNG\r\n\x1a\n")},
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    mask_part: Final = next((f for f in files if f[0] == "mask"), None)
+    assert mask_part is not None
+    assert mask_part[1] == ("cutout", b"\x89PNG\r\n\x1a\n", "image/png")
+
 @pytest.mark.asyncio
 async def test_aimage_edit_sends_markup_as_multipart_file_not_repr() -> None:
     """End-to-end SDK aimage_edit sends markup as a real file part, never str(BytesIO)."""
