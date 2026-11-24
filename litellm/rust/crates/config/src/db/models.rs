@@ -17,7 +17,9 @@
 //! Python reads `litellm_credential_name` per call (`_stored_credential_values` in `utils.py`).
 //! Here it is filled into `litellm_params` once, so the router only sees plain params: a value
 //! the params already hold wins, and a credential row in the DB wins over the file's
-//! `credential_list` entry of the same name (`CredentialAccessor.upsert_credentials`).
+//! `credential_list` entry of the same name (`CredentialAccessor.upsert_credentials`). A
+//! credential's `oidc/` api_key is filled in only for a model that calls the credential's own
+//! origins, since Python refuses to send it anywhere else (`CredentialApiKeySecretReference`).
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
@@ -28,9 +30,12 @@ use veil::Redact;
 
 use crate::{Error, Object, Value};
 
+mod upstream;
+
 const MODEL_LIST: &str = "model_list";
 const CREDENTIAL_LIST: &str = "credential_list";
 const CREDENTIAL_NAME: &str = "litellm_credential_name";
+const API_KEY: &str = "api_key";
 const ENVIRON_PREFIX: &str = "os.environ/";
 /// `CredentialAccessor.get_credential_values` never hands this value to a call.
 const WITHHELD_CREDENTIAL_VALUE: &str = "github_copilot_app_private_key";
@@ -94,12 +99,22 @@ pub struct MissingCredential {
     pub credential_name: String,
 }
 
+/// A model naming a credential whose `oidc/` api_key is bound to other origins than the model
+/// calls. Python refuses each such call, so the api_key is left out and the model must not be
+/// served natively: admit sends every model naming a credential to Python.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WithheldSecret {
+    pub model_name: String,
+    pub credential_name: String,
+}
+
 /// The document with its final `model_list`, which holds decrypted credentials.
 #[derive(Clone, Redact)]
 pub struct Merged {
     #[redact(with = "[REDACTED]")]
     pub document: Value,
     pub missing_credentials: Box<[MissingCredential]>,
+    pub withheld_secrets: Box<[WithheldSecret]>,
 }
 
 #[derive(Deserialize)]
@@ -131,16 +146,25 @@ pub fn merge(
         .collect();
     let db_ids: HashSet<String> = models.iter().map(|model| model.model_id.clone()).collect();
     let mut missing_credentials = Vec::new();
+    let mut withheld_secrets = Vec::new();
     let model_list = written
         .into_iter()
         .filter(|entry| declared_id(entry).is_none_or(|id| !db_ids.contains(&id)))
         .chain(models.into_iter().map(db_entry))
-        .map(|entry| with_credential(entry, &credentials, &mut missing_credentials))
+        .map(|entry| {
+            with_credential(
+                entry,
+                &credentials,
+                &mut missing_credentials,
+                &mut withheld_secrets,
+            )
+        })
         .collect();
     document.insert(MODEL_LIST.into(), Value::Sequence(model_list));
     Ok(Merged {
         document: Value::Mapping(document),
         missing_credentials: missing_credentials.into(),
+        withheld_secrets: withheld_secrets.into(),
     })
 }
 
@@ -203,6 +227,7 @@ fn with_credential(
     mut entry: Value,
     credentials: &HashMap<String, Object>,
     missing: &mut Vec<MissingCredential>,
+    withheld: &mut Vec<WithheldSecret>,
 ) -> Value {
     let model_name = entry
         .get("model_name")
@@ -227,8 +252,17 @@ fn with_credential(
         });
         return entry;
     };
+    let api_key = Value::from(API_KEY);
+    let withholds_api_key = params.get(&api_key).is_none_or(Value::is_null)
+        && upstream::withholds_api_key(params, values);
+    if withholds_api_key {
+        withheld.push(WithheldSecret {
+            model_name,
+            credential_name: name,
+        });
+    }
     for (key, value) in values.iter() {
-        if key == WITHHELD_CREDENTIAL_VALUE {
+        if key == WITHHELD_CREDENTIAL_VALUE || (withholds_api_key && key == API_KEY) {
             continue;
         }
         let key = Value::from(key.as_str());
@@ -489,6 +523,106 @@ mod tests {
                 credential_name: "shared".to_owned(),
             }]
         );
+    }
+
+    #[rstest]
+    #[case::same_origin_fills(
+        "{api_key: oidc/env/TOKEN, api_base: 'https://Bound.example/v1'}",
+        "{model: openai/a, litellm_credential_name: shared, api_base: 'https://bound.example:443/other/'}",
+        true
+    )]
+    #[case::credential_base_used_when_the_model_sets_none(
+        "{api_key: oidc/env/TOKEN, api_base: https://bound.example}",
+        "{model: openai/a, litellm_credential_name: shared}",
+        true
+    )]
+    #[case::different_origin_is_withheld(
+        "{api_key: oidc/env/TOKEN, api_base: https://bound.example}",
+        "{model: openai/a, litellm_credential_name: shared, api_base: https://elsewhere.example}",
+        false
+    )]
+    #[case::different_port_is_withheld(
+        "{api_key: oidc/env/TOKEN, api_base: https://bound.example}",
+        "{model: openai/a, litellm_credential_name: shared, api_base: 'https://bound.example:8443'}",
+        false
+    )]
+    #[case::a_second_upstream_param_elsewhere_is_withheld(
+        "{api_key: oidc/env/TOKEN, api_base: https://bound.example}",
+        "{model: openai/a, litellm_credential_name: shared, base_url: https://elsewhere.example}",
+        false
+    )]
+    #[case::a_url_in_the_model_elsewhere_is_withheld(
+        "{api_key: oidc/env/TOKEN, api_base: https://bound.example}",
+        "{model: 'openai/https://elsewhere.example/v1', litellm_credential_name: shared}",
+        false
+    )]
+    #[case::credential_without_base_fills_a_model_without_one(
+        "{api_key: oidc/env/TOKEN}",
+        "{model: openai/a, litellm_credential_name: shared}",
+        true
+    )]
+    #[case::credential_without_base_withholds_from_a_model_with_one(
+        "{api_key: oidc/env/TOKEN}",
+        "{model: openai/a, litellm_credential_name: shared, api_base: https://elsewhere.example}",
+        false
+    )]
+    #[case::a_plain_key_fills_anywhere(
+        "{api_key: sk-plain, api_base: https://bound.example}",
+        "{model: openai/a, litellm_credential_name: shared, api_base: https://elsewhere.example}",
+        true
+    )]
+    fn a_credentials_oidc_api_key_is_filled_only_for_its_own_origins(
+        #[case] credential: &str,
+        #[case] params: &str,
+        #[case] filled: bool,
+    ) {
+        let credential_values = object(credential);
+        let merged = merge(
+            yaml("{}"),
+            vec![resolved(db_model("db-1", "a", params, "{}"))],
+            vec![db_credential("shared", credential)],
+        )
+        .unwrap();
+
+        let api_key = &merged.document[MODEL_LIST][0]["litellm_params"]["api_key"];
+        let withheld = [WithheldSecret {
+            model_name: "a".to_owned(),
+            credential_name: "shared".to_owned(),
+        }];
+        match filled {
+            true => {
+                assert_eq!(Some(api_key), credential_values.get("api_key"));
+                assert_eq!(&*merged.withheld_secrets, []);
+            }
+            false => {
+                assert_eq!(api_key, &Value::Null);
+                assert_eq!(&*merged.withheld_secrets, withheld);
+            }
+        }
+    }
+
+    #[rstest]
+    fn a_model_that_sets_its_own_api_key_keeps_it_whatever_the_credential_binds() {
+        let merged = merge(
+            yaml("{}"),
+            vec![resolved(db_model(
+                "db-1",
+                "a",
+                "{model: openai/a, litellm_credential_name: shared, api_key: own, api_base: https://elsewhere.example}",
+                "{}",
+            ))],
+            vec![db_credential(
+                "shared",
+                "{api_key: oidc/env/TOKEN, api_base: https://bound.example}",
+            )],
+        )
+        .unwrap();
+
+        assert_eq!(
+            merged.document[MODEL_LIST][0]["litellm_params"]["api_key"],
+            Value::from("own")
+        );
+        assert_eq!(&*merged.withheld_secrets, []);
     }
 
     #[derive(Deserialize)]
