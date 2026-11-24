@@ -130,7 +130,8 @@ async def _personal_budget_exhausted(
     legacy_budget: Final = valid_token.user_max_budget
     effective_budget: Final = valid_token.effective_user_max_budget()
     base_budget: Final = valid_token.user_budget_without_temporary_increase()
-    if effective_budget == legacy_budget or prisma_client is None or (base_budget is not None and spend < base_budget):
+    within_base_budget: Final = base_budget is not None and spend < base_budget
+    if effective_budget == legacy_budget or prisma_client is None or within_base_budget:
         return effective_budget is not None and spend >= effective_budget
     user: Final = await bounded_db_lookup(
         UserRepository(prisma_client, use_writer=True).find_by_id(user_id), name="user", tracker=None

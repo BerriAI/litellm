@@ -6704,9 +6704,7 @@ class PrismaClient:
                 elif query_type == "find_all" and key_val is not None:
                     response = await UserRepository(self).table.find_many(where=key_val)
                 elif query_type == "find_all" and reset_at is not None:
-                    reset_users: Final = await UserRepository(
-                        self, use_writer=litellm.budget_rollover is True
-                    ).table.find_many(
+                    response = await UserRepository(self, use_writer=litellm.budget_rollover is True).table.find_many(
                         take=limit,
                         where={
                             # A user seeded from default_internal_user_params
@@ -6725,7 +6723,6 @@ class PrismaClient:
                             ],
                         },
                     )
-                    return reset_users
                 elif query_type == "find_all" and user_id_list is not None:
                     response = await UserRepository(self).table.find_many(where={"user_id": {"in": user_id_list}})
                 elif query_type == "find_all":

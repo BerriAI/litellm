@@ -107,7 +107,9 @@ def _queue_guarded_spend_reset(
     spend_after_reset: float,
     *where_values: str | None,
 ) -> bool:
-    if budget_reset_at is None or (spend_decrement == 0 and not where_values) or not isfinite(spend_decrement):
+    if budget_reset_at is None or not isfinite(spend_decrement):
+        return False
+    if spend_decrement == 0 and not where_values:
         return False
     # Prisma rounds Float reads, so exact subtraction can still leave a few ULPs.
     tolerance: Final = 4 * ulp(spend_decrement) if spend_after_reset == 0.0 else 0.0

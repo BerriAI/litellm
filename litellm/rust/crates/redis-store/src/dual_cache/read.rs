@@ -22,9 +22,7 @@ impl<V: Clone + FromValue, R> DualCache<V, R> {
     }
 
     pub(crate) async fn read_remote(&self, request: Option<&RequestRedis>, key: &str) -> Option<V> {
-        let Some(client) = self.redis.client() else {
-            return None;
-        };
+        let client = self.redis.client()?;
         if request.is_some_and(|request| request.misses(client).contains(key)) {
             return None;
         }
