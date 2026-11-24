@@ -88,7 +88,7 @@ class AnthropicFilesConfig(BaseFilesConfig):
         self,
         error_message: str,
         status_code: int,
-        headers: dict | httpx.Headers,
+        headers: dict[str, object] | httpx.Headers,
     ) -> BaseLLMException:
         return AnthropicError(
             status_code=status_code,
@@ -102,7 +102,7 @@ class AnthropicFilesConfig(BaseFilesConfig):
         model: str,
         messages: Sequence[object],
         optional_params: Mapping[str, object],
-        litellm_params: dict,
+        litellm_params: dict[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
     ) -> dict:
@@ -117,8 +117,8 @@ class AnthropicFilesConfig(BaseFilesConfig):
         headers: dict,  # mutable-ok: mirrors the sync validate_environment contract this overrides
         model: str,
         messages: list,  # mutable-ok: mirrors the sync validate_environment contract this overrides
-        optional_params: dict,  # mutable-ok: mirrors the sync validate_environment contract this overrides
-        litellm_params: dict,  # mutable-ok: mirrors the sync validate_environment contract this overrides
+        optional_params: dict[str, object],  # mutable-ok: mirrors the sync validate_environment contract this overrides
+        litellm_params: dict[str, object],  # mutable-ok: mirrors the sync validate_environment contract this overrides
         api_key: str | None = None,
         api_base: str | None = None,
     ) -> dict:  # mutable-ok: mirrors the sync validate_environment contract this overrides
@@ -161,7 +161,7 @@ class AnthropicFilesConfig(BaseFilesConfig):
     def map_openai_params(
         self,
         non_default_params: Mapping[str, object],
-        optional_params: dict,
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
     ) -> dict:

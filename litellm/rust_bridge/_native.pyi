@@ -2552,6 +2552,15 @@ class NativeModelCapacity:
         facts: Mapping[str, object],
         request: NativeRequestRedis | None = None,
     ) -> Future[dict[str, object]]: ...
+    def charge_turn(
+        self,
+        connection: NativeModelCapacityState | None,
+        key: Mapping[str, object],
+        model: str,
+        usage: tuple[int, int, int, int],
+        facts: Mapping[str, object],
+        request: NativeRequestRedis | None = None,
+    ) -> Future[dict[str, object]]: ...
 
 @final
 class ResponsesWebSocketConnection:

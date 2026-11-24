@@ -6,7 +6,7 @@ import uuid
 from collections.abc import Callable, Iterator
 from datetime import timedelta
 from typing import Final, cast
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import pytest
 from fakeredis import FakeServer
@@ -1608,6 +1608,38 @@ class _SetRecordingPipeline:
     async def execute(self) -> list[bool]:
         self.executes += 1
         return [True] * len(self.sets)
+
+
+def test_batch_cache_write_flushes_scoped_ttls_on_successive_event_loops(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def execute() -> list[bool]:
+        await asyncio.sleep(0)
+        return [True]
+
+    monkeypatch.setattr("litellm._redis.get_redis_client", MagicMock())
+    pipes: Final = tuple(MagicMock(execute=AsyncMock(side_effect=execute)) for _ in range(4))
+    client: Final = MagicMock(
+        pipeline=MagicMock(side_effect=tuple(MagicMock(__aenter__=AsyncMock(return_value=pipe)) for pipe in pipes))
+    )
+    monkeypatch.setattr("litellm._redis.get_redis_async_client", MagicMock(return_value=client))
+    cache: Final = RedisCache(host="batch-write-loop-test", namespace="ns")
+
+    async def write_pair(prefix: str) -> None:
+        await asyncio.gather(
+            cache.batch_cache_write(f"{prefix}:a", "first", scoped_ttl=7),
+            cache.batch_cache_write(f"{prefix}:b", "second", scoped_ttl=13),
+        )
+
+    asyncio.run(write_pair("one"))
+    asyncio.run(write_pair("two"))
+
+    assert client.pipeline.call_count == 4
+    assert tuple(pipe.set.call_args_list for pipe in pipes) == (
+        [call(name="ns:one:a", value='"first"', ex=timedelta(seconds=7))],
+        [call(name="ns:one:b", value='"second"', ex=timedelta(seconds=13))],
+        [call(name="ns:two:a", value='"first"', ex=timedelta(seconds=7))],
+        [call(name="ns:two:b", value='"second"', ex=timedelta(seconds=13))],
+    )
+    assert tuple(pipe.execute.await_count for pipe in pipes) == (1, 1, 1, 1)
 
 
 @pytest.mark.asyncio

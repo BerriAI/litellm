@@ -364,8 +364,8 @@ base_llm_http_handler = BaseLLMHTTPHandler()
 
 async def _execute_pre_request_hooks(
     model: str,
-    messages: list[dict],
-    tools: list[dict] | None,
+    messages: list[dict[str, object]],
+    tools: object,
     stream: bool | None,
     custom_llm_provider: str | None,
     **kwargs: object,
@@ -462,8 +462,8 @@ async def _try_websearch_short_circuit(
     tools: list[dict] | None,
     custom_llm_provider: str | None,
     stream: bool | None,
-    kwargs: dict | None = None,
-) -> AnthropicMessagesResponse | AsyncIterator | None:
+    kwargs: Mapping[str, object] | None = None,
+) -> AnthropicMessagesResponse | AsyncIterator[object] | None:
     """
     Attempt to short-circuit a web-search-only request.
 
@@ -707,7 +707,7 @@ async def anthropic_messages(
         )
 
 
-def validate_anthropic_api_metadata(metadata: dict | None = None) -> dict | None:
+def validate_anthropic_api_metadata(metadata: dict | None = None) -> dict[str, object] | None:
     """
     Validate Anthropic API metadata - This is done to ensure only allowed `metadata` fields are passed to Anthropic API
 

@@ -118,7 +118,15 @@ from litellm.router_rust.invoke.endpoints import (
     stamp_error,
     unrouted_fields,
 )
-from litellm.router_rust.invoke.shaping import Shaping, non_stream_timeout, serves_caller_credentials
+from litellm.router_rust.invoke.shaping import (
+    Shaping,
+    attempt_inherited_request,
+    client_header_forwarding_admits,
+    deployment_provider,
+    non_stream_timeout,
+    serves_caller_credentials,
+    sole_provider,
+)
 from litellm.router_rust.invoke.slots import enter_deployment_slot, max_parallel_requests_limit
 from litellm.router_rust.invoke.streaming import (
     StreamAttempt,
@@ -396,7 +404,7 @@ _SERVED_ARGUMENTS: Final = frozenset(
         "ignore_invalid_deployments",
         # Read host-side by the pre-routing strategies (litellm/router_rust/steps/prerouting.py).
         "auto_router_capability_limit",
-        # Decided in router-core (precall.rs); its facts come from litellm/router_rust/steps/precall.py.
+        # Decided in router-core (precall/mod.rs); its facts come from litellm/router_rust/steps/precall.py.
         "enable_pre_call_checks",
         # Run host-side (litellm/router_rust/steps/plugins.py); router-core filters on what they leave.
         "plugins",
@@ -3099,6 +3107,7 @@ class RustCore(
         *,
         fresh: bool = False,
         passthrough: "Callable[[Mapping[str, object], str], Awaitable[object]] | None" = None,
+        caller_key_origin: str | None = None,
     ) -> "tuple[_Driver, Mapping[str, object]]":
         """Drive ``call`` to its ``done`` or ``failed`` step, answering every step on the host.
         ``cut_deployment`` is the attempt whose stream failed, for a recovery call, and
@@ -3106,7 +3115,14 @@ class RustCore(
         ``fresh`` is a call from the top, through the retry and fallback wrappers, and
         ``passthrough`` serves an attempt whose pick failed."""
         driver: Final = _Driver(
-            self, plan, prepared, cut_deployment, stream_failure, fresh=fresh, passthrough=passthrough
+            self,
+            plan,
+            prepared,
+            cut_deployment,
+            stream_failure,
+            fresh=fresh,
+            passthrough=passthrough,
+            caller_key_origin=caller_key_origin,
         )
         try:
             return await self._run_steps(driver, call)
@@ -3176,8 +3192,18 @@ class RustCore(
         stream_failure: tuple[int, BaseException] | None = None,
         *,
         fresh: bool = False,
+        caller_key_origin: str | None = None,
     ) -> "tuple[_Driver, Mapping[str, object]]":
-        driver: Final = _Driver(self, plan, prepared, cut_deployment, stream_failure, sync=True, fresh=fresh)
+        driver: Final = _Driver(
+            self,
+            plan,
+            prepared,
+            cut_deployment,
+            stream_failure,
+            sync=True,
+            fresh=fresh,
+            caller_key_origin=caller_key_origin,
+        )
         try:
             return self._run_sync_steps(driver, call)
         except BaseException:
@@ -3261,12 +3287,20 @@ class RustCore(
         request: Mapping[str, object],
         origin: Mapping[str, object],
         failure: BaseException,
+        *,
+        caller_key_origin: str | None = None,
     ) -> object:
         """The fallback walk for a stream that failed before content: the fallback's response with the
-        router's headers, or the error the walk ended on."""
+        router's headers, or the error the walk ended on. ``caller_key_origin`` is where the failed stream's
+        walk first sent the caller's key."""
         call: Final = self._recovery_call(recovery, op, request, origin, failure)
         driver, step = await self._run(
-            plan_for(op), call, request, origin.get("deployment_id"), (_origin_level(origin), failure)
+            plan_for(op),
+            call,
+            request,
+            origin.get("deployment_id"),
+            (_origin_level(origin), failure),
+            caller_key_origin=caller_key_origin,
         )
         if step["kind"] == "failed":
             raise driver.failed(step)
@@ -3279,23 +3313,38 @@ class RustCore(
         request: Mapping[str, object],
         origin: Mapping[str, object],
         failure: BaseException,
+        *,
+        caller_key_origin: str | None = None,
     ) -> object:
         call: Final = self._recovery_call(recovery, op, request, origin, failure)
         driver, step = self._run_sync(
-            plan_for(op), call, request, origin.get("deployment_id"), (_origin_level(origin), failure)
+            plan_for(op),
+            call,
+            request,
+            origin.get("deployment_id"),
+            (_origin_level(origin), failure),
+            caller_key_origin=caller_key_origin,
         )
         if step["kind"] == "failed":
             raise driver.failed(step)
         return driver.finish(step)
 
     async def retry_stream(
-        self, op: str, request: Mapping[str, object], origin: Mapping[str, object], failure: BaseException
+        self,
+        op: str,
+        request: Mapping[str, object],
+        origin: Mapping[str, object],
+        failure: BaseException,
+        *,
+        caller_key_origin: str | None = None,
     ) -> "tuple[object, int, int] | BaseException":
         """A same-group retry of a stream that failed before content: the retried response (without the
         router's headers) with the retry count and budget, or the newest failure (``failure`` itself
         when no retry ran)."""
         call: Final = self._recovery_call("retry", op, request, origin, failure)
-        driver, step = await self._run(plan_for(op), call, request, origin.get("deployment_id"))
+        driver, step = await self._run(
+            plan_for(op), call, request, origin.get("deployment_id"), caller_key_origin=caller_key_origin
+        )
         try:
             await await_all(driver.outcomes.take_pending())
             if step["kind"] == "failed":
@@ -4601,6 +4650,10 @@ def _params_base_model(core: RustCore, deployment_id: str) -> str | None:
     return base_model if isinstance(base_model, str) else None
 
 
+def _deployment_id(deployment: Mapping[str, object]) -> object:
+    return (as_str_mapping(deployment.get("model_info")) or {}).get("id")
+
+
 class _Driver:
     """Answers the attempt and fallback steps of one call, and shapes its result.
 
@@ -4621,6 +4674,7 @@ class _Driver:
         sync: bool = False,
         fresh: bool = False,
         passthrough: "Callable[[Mapping[str, object], str], Awaitable[object]] | None" = None,
+        caller_key_origin: str | None = None,
     ) -> None:
         self._core: Final = core
         self._sync: Final = sync
@@ -4630,6 +4684,7 @@ class _Driver:
         self._request: Final = request
         self._cut_deployment: Final = cut_deployment if isinstance(cut_deployment, str) else None
         self._last_response: object = None
+        self._caller_key_origin: str | None = caller_key_origin
         self._last_error: BaseException | None = None
         # The level the call raises from: a fallback walk re-entered from a failed stream starts at
         # the level that stream served, on the failure ``async_function_with_fallbacks_common_utils``
@@ -5134,7 +5189,7 @@ class _Driver:
         call: Final = attempt_call(
             self._core._port,  # pyright: ignore[reportPrivateUsage]  # the driver serves its own core
             self._plan,
-            self._attempt_request(step),
+            self._attempt_request(step, self._inherited_request(step, deployment, shape, requested)),
             deployment,
             group=requested,
             requested=requested,
@@ -5205,6 +5260,7 @@ class _Driver:
             routed=routed if isinstance(routed, str) else None,
             slot=slot,
             explain_failure=self._hop_failure_explainer(step),
+            caller_key_origin=self._caller_key_origin,
         )
 
     def _failed(
@@ -5327,12 +5383,14 @@ class _Driver:
         error: BaseException,
     ) -> Mapping[str, object]:
         """A routing pre-call check refused the attempt (``async_routing_strategy_pre_call_checks``):
-        a rate limit cools the deployment down (``set_cooldown_deployments``); the attempt's failure
-        is recorded by nothing else."""
+        a rate limit cools the deployment down (``set_cooldown_deployments``) unless the deployment
+        still has ITPM room for a smaller turn; the attempt's failure is recorded by nothing else."""
         import litellm.exceptions as litellm_exceptions
 
         core: Final = self._core
-        if isinstance(error, litellm_exceptions.RateLimitError):
+        if isinstance(error, litellm_exceptions.RateLimitError) and not getattr(
+            error, "deployment_has_itpm_room", False
+        ):
             deployment_id: Final = (as_str_mapping(deployment.get("model_info")) or {}).get("id")
             if isinstance(deployment_id, str):
                 failure: Final = {**attempt_failure(error), "caller_scoped": core.per_user_deployment(deployment_id)}
@@ -5456,16 +5514,55 @@ class _Driver:
             )
         return None
 
-    def _attempt_request(self, step: Mapping[str, object]) -> Mapping[str, object]:
+    def _attempt_request(
+        self, step: Mapping[str, object], inherited: Mapping[str, object] | None = None
+    ) -> Mapping[str, object]:
         """The request as the attempt sends it: with the params a fallback's dict target sets (``kwargs.update``)."""
+        request: Final = self._request if inherited is None else inherited
         params: Final = as_str_mapping(step.get("params"))
         if params is None:
-            return self._request
+            return request
         policy: Final = semantic_cache_policy(self._request) if "cache" in params else None
         if policy is None:
-            return {**self._request, **params}
+            return {**request, **params}
         cache: Final = {**(as_str_mapping(params["cache"]) or {}), SEMANTIC_CACHE_POLICY_KEY: policy}
-        return {**self._request, **params, "cache": cache}
+        return {**request, **params, "cache": cache}
+
+    def _inherited_request(
+        self, step: Mapping[str, object], deployment: Mapping[str, object], shape: "AttemptShape", group: str
+    ) -> Mapping[str, object]:
+        """The caller's request for this attempt, before a dict fallback target's params: an attempt off the
+        requested group leaves behind the caller credentials and forwarded headers that belong to it."""
+        params: Final = as_str_mapping(deployment.get("litellm_params")) or {}
+        if not shape.is_fallback and self._caller_key_origin is None:
+            self._caller_key_origin = deployment_provider(params)
+        return attempt_inherited_request(
+            self._request,
+            target_params=as_str_mapping(step.get("params")) or {},
+            owner_provider=partial(self._caller_key_owner, deployment),
+            deployment_params=params,
+            router_defaults=self._core._port.shaping.default_litellm_params,  # pyright: ignore[reportPrivateUsage]  # the driver serves its own core
+            rechecks_header_scope=shape.is_fallback or self._cut_deployment is not None,
+            header_forwarding_admits=partial(client_header_forwarding_admits, group, self._request, self._core),
+        )
+
+    def _caller_key_owner(self, deployment: Mapping[str, object]) -> str | None:
+        """Where the caller's key was meant to go: the requested group's provider when all its deployments share
+        one, which holds for every attempt and for a stream recovered in a new walk, since that walk is built from
+        the same request. In a mixed group, the provider the call reached first, for a deployment outside the group;
+        the group's own deployments (its order chain and retries) keep the key."""
+        requested_group: Final = self._requested_group_deployments()
+        requested_provider: Final = sole_provider(requested_group)
+        if requested_provider is not None:
+            return requested_provider
+        member_ids: Final = frozenset(_deployment_id(member) for member in requested_group)
+        return None if _deployment_id(deployment) in member_ids else self._caller_key_origin
+
+    def _requested_group_deployments(self) -> Sequence[Mapping[str, object]]:
+        model: Final = self._request.get("model")
+        if not isinstance(model, str):
+            return ()
+        return self._core.registry().deployments(model_name=model, source="group") or ()
 
     async def _slot_or_turn_back(
         self, port: "_EndpointPort", deployment: Mapping[str, object], call: "AttemptCall", admission: Admission | None

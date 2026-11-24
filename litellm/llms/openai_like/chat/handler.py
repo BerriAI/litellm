@@ -22,6 +22,7 @@ from litellm.llms.custom_httpx.sse_lines import aiter_sse_lines, iter_sse_lines
 from litellm.llms.databricks.streaming_utils import ModelResponseIterator
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 from litellm.llms.openai.openai import OpenAIConfig
+from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import CustomStreamingDecoder, ModelResponse
 from litellm.utils import CustomStreamWrapper, ProviderConfigManager
 
@@ -43,7 +44,7 @@ def _fake_streamed_model_response(payload: object) -> ModelResponse:
 async def make_call(
     client: AsyncHTTPHandler | None,
     api_base: str,
-    headers: dict,
+    headers: dict[str, str],
     data: str,
     model: str,
     messages: Sequence[object],
@@ -80,7 +81,7 @@ async def make_call(
 def make_sync_call(
     client: HTTPHandler | None,
     api_base: str,
-    headers: dict,
+    headers: dict[str, str],
     data: str,
     model: str,
     messages: Sequence[object],
@@ -169,7 +170,7 @@ class OpenAILikeChatHandler(OpenAILikeBase):
     async def acompletion_function(
         self,
         model: str,
-        messages: list,
+        messages: list[AllMessageValues],
         api_base: str,
         custom_prompt_dict: Mapping[str, object],
         model_response: ModelResponse,
@@ -182,7 +183,7 @@ class OpenAILikeChatHandler(OpenAILikeBase):
         stream: bool,
         data: dict,
         base_model: str | None,
-        optional_params: dict,
+        optional_params: dict[str, object],
         litellm_params: object = None,
         logger_fn: object = None,
         headers={},
@@ -240,7 +241,7 @@ class OpenAILikeChatHandler(OpenAILikeBase):
         logging_obj: LiteLLMLoggingObj,
         optional_params: dict,
         acompletion: object = None,
-        litellm_params: dict = {},
+        litellm_params: dict[str, object] = {},
         logger_fn: object = None,
         headers: dict | None = None,
         timeout: float | httpx.Timeout | None = None,

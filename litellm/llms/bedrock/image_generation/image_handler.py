@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
@@ -81,7 +82,7 @@ class BedrockImageGeneration(BaseAWSLLM):
         model: str,
         prompt: str,
         model_response: ImageResponse,
-        optional_params: dict,
+        optional_params: dict[str, object],
         logging_obj: LitellmLogging,
         timeout: float | httpx.Timeout | None,
         aimg_generation: bool = False,
@@ -322,7 +323,7 @@ class BedrockImageGeneration(BaseAWSLLM):
         logging_obj: LitellmLogging,
         prompt: str,
         response: httpx.Response,
-        data: dict,
+        data: Mapping[str, object],
     ) -> ImageResponse:
         """
         Transforms the Image Generation response from Bedrock to OpenAI format
