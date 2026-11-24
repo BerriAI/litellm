@@ -511,16 +511,16 @@ def test_apply_patch_ops_remove_group_filtered_path_without_value():
 
 
 @pytest.mark.parametrize("path", ["groups", "Groups"])
-def test_apply_patch_ops_remove_groups_without_value_or_filter_removes_every_team(path):
+def test_apply_patch_ops_remove_groups_without_value_or_filter_removes_every_team(path: str):
     """RFC 7644 section 3.5.2.2: a remove on a multi-valued attribute with no
     filter removes all of its values"""
-    user = LiteLLM_UserTable(
+    user: Final = LiteLLM_UserTable(
         user_id="user-all",
         user_email="all@example.com",
         teams=["team-1", "team-2"],
         metadata={},
     )
-    patch_ops = SCIMPatchOp(Operations=[SCIMPatchOperation(op="remove", path=path)])
+    patch_ops: Final = SCIMPatchOp(Operations=[SCIMPatchOperation(op="remove", path=path)])
 
     _, final_teams = _apply_patch_ops(existing_user=user, patch_ops=patch_ops)
 
@@ -528,13 +528,13 @@ def test_apply_patch_ops_remove_groups_without_value_or_filter_removes_every_tea
 
 
 def test_apply_patch_ops_remove_groups_then_add_keeps_only_the_added_team():
-    user = LiteLLM_UserTable(
+    user: Final = LiteLLM_UserTable(
         user_id="user-all",
         user_email="all@example.com",
         teams=["team-1", "team-2"],
         metadata={},
     )
-    patch_ops = SCIMPatchOp(
+    patch_ops: Final = SCIMPatchOp(
         Operations=[
             SCIMPatchOperation(op="remove", path="groups"),
             SCIMPatchOperation(op="add", path="groups", value=[{"value": "team-3"}]),
@@ -554,8 +554,8 @@ def test_apply_patch_ops_remove_groups_then_add_keeps_only_the_added_team():
     ],
     ids=["remove-empty-list", "add-without-value"],
 )
-def test_apply_patch_ops_groups_op_naming_no_team_removes_none(operation):
-    user = LiteLLM_UserTable(
+def test_apply_patch_ops_groups_op_naming_no_team_removes_none(operation: SCIMPatchOperation):
+    user: Final = LiteLLM_UserTable(
         user_id="user-all",
         user_email="all@example.com",
         teams=["team-1", "team-2"],

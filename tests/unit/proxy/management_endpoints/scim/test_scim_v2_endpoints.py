@@ -3908,11 +3908,11 @@ async def test_process_group_patch_operations_remove_uses_members_with_roles(moc
 @pytest.mark.asyncio
 @pytest.mark.parametrize("path", ["members", "Members"])
 async def test_process_group_patch_operations_remove_members_without_value_or_filter_removes_every_member(
-    mocker, path
+    mocker: MockerFixture, path: str
 ):
     """RFC 7644 section 3.5.2.2: a remove on a multi-valued attribute with no
     filter removes all of its values"""
-    existing_team = LiteLLM_TeamTable(
+    existing_team: Final = LiteLLM_TeamTable(
         team_id="team-1",
         team_alias="Team One",
         members=[],
@@ -3921,7 +3921,7 @@ async def test_process_group_patch_operations_remove_members_without_value_or_fi
             Member(user_id="member-2", role="user"),
         ],
     )
-    patch_ops = SCIMPatchOp(
+    patch_ops: Final = SCIMPatchOp(
         schemas=["urn:ietf:params:scim:api:messages:2.0:PatchOp"],
         Operations=[SCIMPatchOperation(op="remove", path=path)],
     )
@@ -4269,24 +4269,26 @@ async def test_patch_group_replace_stays_absolute_against_concurrent_roster(mock
         ),
     ],
 )
-async def test_patch_group_remove_every_member_clears_the_live_roster(mocker, operations, expected):
+async def test_patch_group_remove_every_member_clears_the_live_roster(
+    mocker: MockerFixture, operations: list[SCIMPatchOperation], expected: list[str]
+):
     """A ``remove`` on ``members`` with no value or filter empties the roster, so it is
     planned as a target like ``replace``. A member the snapshot read missed (a lagging
     replica, or a request that added it after the read) is still removed by the
     roster write, where a delta built from the snapshot would keep it."""
-    group_id = "team-remove-all-concurrent"
-    snapshot_team = LiteLLM_TeamTable(
+    group_id: Final = "team-remove-all-concurrent"
+    snapshot_team: Final = LiteLLM_TeamTable(
         team_id=group_id,
         team_alias="Group",
         members_with_roles=[Member(user_id="zed", role="user")],
         metadata={"externalId": "grp-ext"},
     )
-    live_team = snapshot_team.model_copy(
+    live_team: Final = snapshot_team.model_copy(
         update={"members_with_roles": [Member(user_id="zed", role="user"), Member(user_id="carol", role="user")]}
     )
-    patch_ops = SCIMPatchOp(schemas=["urn:ietf:params:scim:api:messages:2.0:PatchOp"], Operations=operations)
+    patch_ops: Final = SCIMPatchOp(schemas=["urn:ietf:params:scim:api:messages:2.0:PatchOp"], Operations=operations)
 
-    mock_prisma_client = mocker.MagicMock()
+    mock_prisma_client: Final = mocker.MagicMock()
     mock_prisma_client.db = mocker.MagicMock()
     mock_prisma_client.db.litellm_teamtable = mocker.MagicMock()
     mock_prisma_client.db.litellm_teamtable.find_unique = AsyncMock(return_value=snapshot_team)
@@ -4305,7 +4307,7 @@ async def test_patch_group_remove_every_member_clears_the_live_roster(mocker, op
     )
     mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
 
-    group = await patch_group(group_id=group_id, patch_ops=patch_ops)
+    group: Final = await patch_group(group_id=group_id, patch_ops=patch_ops)
 
     assert [member.value for member in group.members or []] == expected
 
