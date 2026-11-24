@@ -1,5 +1,8 @@
 import asyncio
 import json
+import os
+import subprocess
+import sys
 import time
 from collections.abc import Awaitable, Callable, Mapping
 from pathlib import Path
@@ -29,6 +32,18 @@ def local_model_cost_map(monkeypatch):
     litellm.get_model_info.cache_clear()
     yield
     litellm.get_model_info.cache_clear()
+
+
+def test_litellm_imports_without_the_websockets_package():
+    result: Final = subprocess.run(
+        [sys.executable, "-I", "-c", "import sys; sys.modules['websockets'] = None; import litellm"],
+        env={**os.environ, "LITELLM_LOCAL_MODEL_COST_MAP": "True"},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
 
 
 class FakeLogging:
