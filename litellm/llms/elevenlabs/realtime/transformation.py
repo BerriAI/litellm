@@ -398,11 +398,11 @@ class ElevenLabsEventTransformer:
     def _committed(self, text: str) -> tuple[OpenAIRealtimeEvents, ...]:
         turn: Final = self._turn
         self._turn = None
-        discarded: Final = self._pending_commit_discards[:1] == (True,)
+        answered_commit: Final = self._pending_commit_discards[:1]
         self._pending_commit_discards = self._pending_commit_discards[1:]
-        if discarded:
+        if answered_commit == (True,):
             return ()
-        if turn is None and not text:
+        if turn is None and not text and answered_commit != (False,):
             return ()
         item_id: Final = self._new_item_id() if turn is None else turn.item_id
         started: Final[tuple[OpenAIRealtimeEvents, ...]] = (
