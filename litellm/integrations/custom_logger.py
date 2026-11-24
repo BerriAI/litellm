@@ -2,7 +2,7 @@
 #    On success, logs events to Promptlayer
 import re
 import traceback
-from collections.abc import AsyncGenerator, Mapping, Sequence
+from collections.abc import AsyncGenerator, Callable, Mapping, MutableMapping, Sequence
 from datetime import datetime
 from functools import cache
 from itertools import takewhile
@@ -104,7 +104,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         turn_off_message_logging: bool = False,
         # deprecated param, use `turn_off_message_logging` instead
         message_logging: bool = True,
-        **kwargs,
+        **kwargs: object,
     ) -> None:
         """
         Args:
@@ -165,27 +165,27 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
 
         return list(params)
 
-    def log_pre_api_call(self, model, messages, kwargs):
+    def log_pre_api_call(self, model: str, messages: object, kwargs: Mapping[str, object]):
         pass
 
-    def log_post_api_call(self, kwargs, response_obj, start_time, end_time):
+    def log_post_api_call(self, kwargs: object, response_obj: object, start_time: object, end_time: object):
         pass
 
-    def log_stream_event(self, kwargs, response_obj, start_time, end_time):
+    def log_stream_event(self, kwargs, response_obj: object, start_time: object, end_time: object):
         pass
 
     def log_success_event(self, kwargs, response_obj, start_time, end_time):
         pass
 
-    def log_failure_event(self, kwargs, response_obj, start_time, end_time):
+    def log_failure_event(self, kwargs, response_obj: object, start_time, end_time):
         pass
 
     #### ASYNC ####
 
-    async def async_log_stream_event(self, kwargs, response_obj, start_time, end_time):
+    async def async_log_stream_event(self, kwargs, response_obj: object, start_time: object, end_time: object):
         pass
 
-    async def async_log_pre_api_call(self, model, messages, kwargs):
+    async def async_log_pre_api_call(self, model: str, messages: object, kwargs: Mapping[str, object]):
         pass
 
     async def async_pre_request_hook(self, model: str, messages: list, kwargs: dict) -> dict | None:
@@ -216,7 +216,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         pass
 
-    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+    async def async_log_failure_event(self, kwargs, response_obj: object, start_time, end_time):
         pass
 
     async def async_log_failed_attempt(
@@ -576,7 +576,14 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
 
     #### SINGLE-USE #### - https://docs.litellm.ai/docs/observability/custom_callback#using-your-custom-callback-function
 
-    def log_input_event(self, model, messages, kwargs, print_verbose, callback_func):
+    def log_input_event(
+        self,
+        model: object,
+        messages: object,
+        kwargs: MutableMapping[str, object],
+        print_verbose: Callable[[str], object],
+        callback_func: Callable[..., object],
+    ):
         try:
             kwargs["model"] = model
             kwargs["messages"] = messages
@@ -588,7 +595,14 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         except Exception:
             print_verbose(f"Custom Logger Error - {traceback.format_exc()}")
 
-    async def async_log_input_event(self, model, messages, kwargs, print_verbose, callback_func):
+    async def async_log_input_event(
+        self,
+        model: object,
+        messages: object,
+        kwargs: MutableMapping[str, object],
+        print_verbose: Callable[[str], object],
+        callback_func,
+    ):
         try:
             kwargs["model"] = model
             kwargs["messages"] = messages
@@ -600,7 +614,15 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         except Exception:
             print_verbose(f"Custom Logger Error - {traceback.format_exc()}")
 
-    def log_event(self, kwargs, response_obj, start_time, end_time, print_verbose, callback_func):
+    def log_event(
+        self,
+        kwargs: MutableMapping[str, object],
+        response_obj: object,
+        start_time: object,
+        end_time: object,
+        print_verbose: Callable[[str], object],
+        callback_func,
+    ):
         # Method definition
         try:
             kwargs["log_event_type"] = "post_api_call"
@@ -613,7 +635,15 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         except Exception:
             print_verbose(f"Custom Logger Error - {traceback.format_exc()}")
 
-    async def async_log_event(self, kwargs, response_obj, start_time, end_time, print_verbose, callback_func):
+    async def async_log_event(
+        self,
+        kwargs: MutableMapping[str, object],
+        response_obj: object,
+        start_time: object,
+        end_time: object,
+        print_verbose: Callable[[str], object],
+        callback_func,
+    ):
         # Method definition
         try:
             kwargs["log_event_type"] = "post_api_call"
@@ -631,7 +661,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
     #########################################################
 
     async def async_post_mcp_tool_call_hook(
-        self, kwargs, response_obj: MCPPostCallResponseObject, start_time, end_time
+        self, kwargs, response_obj: MCPPostCallResponseObject, start_time: datetime, end_time: datetime
     ) -> MCPPostCallResponseObject | None:
         """
         This log gets called after the MCP tool call is made.
@@ -922,7 +952,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
             else text
         )
 
-    def _select_metadata_field(self, request_kwargs: dict | None = None) -> str | None:
+    def _select_metadata_field(self, request_kwargs: Mapping[str, object] | None = None) -> str | None:
         """
         Select the metadata field to use for logging
 

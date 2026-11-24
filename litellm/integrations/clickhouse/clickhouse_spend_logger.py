@@ -36,7 +36,7 @@ _INVALID_TRACE_ID: Final = "0" * 32
 _INVALID_SPAN_ID: Final = "0" * 16
 TRACE_INGEST_ROUTE: Final = "/v1/traces"
 _METADATA_MAPPING: Final = TypeAdapter(Mapping[str, object])
-_METADATA_VALUE: Final = TypeAdapter(JsonValue)
+_METADATA_VALUE: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
 _EMPTY_MAPPING: Final[Mapping[str, object]] = MappingProxyType({})
 _INTERNAL_METADATA_KEYS: Final = frozenset(
     (

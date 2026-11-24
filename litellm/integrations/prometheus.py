@@ -2520,7 +2520,7 @@ class PrometheusLogger(CustomLogger):
         reason_label: Final = (
             MappingProxyType({ZERO_COST_REASON_LABEL: zero_cost_diagnostic["reason"]})
             if ZERO_COST_REASON_LABEL in supported_labels
-            else MappingProxyType({})
+            else MappingProxyType[str, str]({})
         )
         labels: Final = MappingProxyType(
             {

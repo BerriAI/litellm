@@ -26,7 +26,7 @@ class LangtraceAttributes:
     This class is used to save trace attributes to Langtrace's spans
     """
 
-    def set_langtrace_attributes(self, span: Span, kwargs, response_obj):
+    def set_langtrace_attributes(self, span: Span, kwargs, response_obj: object):
         """
         This function is used to log the event to Langtrace
         """

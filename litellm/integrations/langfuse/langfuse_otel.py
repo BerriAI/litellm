@@ -529,7 +529,7 @@ class LangfuseOtelLogger(OpenTelemetry):
         Returns:
             dict: A dictionary of dynamic Langfuse headers
         """
-        dynamic_headers: Final = {}
+        dynamic_headers: Final[dict[str, str]] = {}
 
         dynamic_langfuse_public_key: Final = standard_callback_dynamic_params.get("langfuse_public_key")
         dynamic_langfuse_secret_key: Final = standard_callback_dynamic_params.get("langfuse_secret_key")

@@ -3767,3 +3767,46 @@ def test_every_prisma_crud_call_site_names_a_known_table_so_no_half_named_postgr
         if re.fullmatch(r"postgres\.(select|insert|update|delete) LiteLLM_\w+", name) is None
     }
     assert half_named == {}, half_named
+
+
+def test_the_prisma_crud_scan_finds_every_receiver_and_table_form_and_reports_a_missing_table(tmp_path: Path) -> None:
+    from litellm.integrations.otel.model.spans import _PRISMA_MODEL_BY_TABLE_NAME
+
+    sources: Final = {
+        "litellm/proxy/calls.py": (
+            'prisma_client.get_data(token="t")\n'
+            'self.update_data(team_id="t", data={})\n'
+            'db.delete_data(user_id="u")\n'
+            'proxy_server.prisma_client.insert_data(data={}, table_name="spend")\n'
+            'prisma_client.get_generic_data(key="k", value="v", table_name="config")\n'
+            "prisma_client.insert_data(data={})\n"
+            'self.get_data(query_type="find_all")\n'
+            'cache.get_data(token="t")\n'
+            "prisma_client.connect()\n"
+        ),
+        "enterprise/hooks.py": 'prisma_client.get_data(user_id="u")\n',
+        "litellm-proxy-extras/extras.py": 'db.update_data(token="t", data={})\n',
+        "litellm/tests/ignored.py": "prisma_client.insert_data(data={})\n",
+        "litellm/ui/node_modules/ignored.py": "prisma_client.insert_data(data={})\n",
+    }
+    for relative, text in sources.items():
+        path: Final = tmp_path / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+
+    per_file: Final = (_crud_call_sites_in(path, tmp_path) for path in _source_files(tmp_path))
+    sites: Final = tuple(site for sites_in_file in per_file for site in sites_in_file)  # comprehension-ok: flatten
+
+    assert {(site.location, site.call_type, site.table_name) for site in sites} == {
+        ("litellm/proxy/calls.py:1", "get_data", "key"),
+        ("litellm/proxy/calls.py:2", "update_data", "team"),
+        ("litellm/proxy/calls.py:3", "delete_data", "user"),
+        ("litellm/proxy/calls.py:4", "insert_data", "spend"),
+        ("litellm/proxy/calls.py:5", "get_generic_data", "config"),
+        ("litellm/proxy/calls.py:6", "insert_data", None),
+        ("litellm/proxy/calls.py:7", "get_data", None),
+        ("enterprise/hooks.py:1", "get_data", "user"),
+        ("litellm-proxy-extras/extras.py:1", "update_data", "key"),
+    }
+    unresolved: Final = sorted(site.location for site in sites if site.table_name not in _PRISMA_MODEL_BY_TABLE_NAME)
+    assert unresolved == ["litellm/proxy/calls.py:6", "litellm/proxy/calls.py:7"]

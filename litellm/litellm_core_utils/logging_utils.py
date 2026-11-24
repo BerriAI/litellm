@@ -372,7 +372,7 @@ def track_llm_api_timing():
 
     def decorator(func):
         @functools.wraps(func)
-        async def async_wrapper(*args, **kwargs):
+        async def async_wrapper(*args: object, **kwargs):
             start_time: Final = datetime.now()
             start_time_float: Final = time.time()
             logging_obj: Final = kwargs.get("logging_obj", None)
@@ -419,7 +419,7 @@ def track_llm_api_timing():
                     verbose_logger.debug("Error in service logging: %s", e)
 
         @functools.wraps(func)
-        def sync_wrapper(*args, **kwargs):
+        def sync_wrapper(*args: object, **kwargs):
             start_time: Final = datetime.now()
             start_time_float: Final = time.time()
             logging_obj: Final = kwargs.get("logging_obj", None)

@@ -228,7 +228,7 @@ class OllamaChatConfig(BaseConfig):
         optional_params: dict,
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:
         request_params: Final = tool_params_without_hosted_mcp(
             _REQUEST_PARAMS.validate_python(non_default_params),
             model=model,
@@ -273,14 +273,14 @@ class OllamaChatConfig(BaseConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, object],
         model: str,
         messages: list[AllMessageValues],
         optional_params: Mapping[str, object],
         litellm_params: Mapping[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         if api_key is not None and "Authorization" not in headers:
             headers["Authorization"] = f"Bearer {api_key}"
         return headers
@@ -307,8 +307,8 @@ class OllamaChatConfig(BaseConfig):
         self,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         headers: Mapping[str, object],
     ) -> dict[str, object]:
         stream: Final = optional_params.pop("stream", False)
@@ -488,7 +488,9 @@ class OllamaChatConfig(BaseConfig):
         )
         return model_response
 
-    def get_error_class(self, error_message: str, status_code: int, headers: dict | Headers) -> BaseLLMException:
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: dict[str, object] | Headers
+    ) -> BaseLLMException:
         return OllamaError(status_code=status_code, message=error_message, headers=headers)
 
     def get_model_response_iterator(

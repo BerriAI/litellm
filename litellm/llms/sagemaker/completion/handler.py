@@ -2,7 +2,7 @@ import json
 import types
 from collections.abc import Callable, Mapping
 from copy import deepcopy
-from typing import ClassVar, Final, cast
+from typing import TYPE_CHECKING, ClassVar, Final, cast
 
 import httpx
 from pydantic import TypeAdapter
@@ -41,8 +41,23 @@ from ..common_utils import (
 from ..embedding.transformation import SagemakerEmbeddingConfig
 from .transformation import SagemakerConfig
 
+if TYPE_CHECKING:
+    from botocore.credentials import Credentials
+
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
+
 sagemaker_config: Final = SagemakerConfig()
 _DECODED_JSON: Final = TypeAdapter(object)
+
+
+class _PrepareRequestArgs(TypedDict):
+    model: ReadOnly[str]
+    data: ReadOnly[Mapping[str, object]]
+    optional_params: ReadOnly[Mapping[str, object]]
+    litellm_params: ReadOnly[dict[str, object]]
+    credentials: ReadOnly["Credentials"]
+    aws_region_name: ReadOnly[str]
+    messages: ReadOnly[list[AllMessageValues]]
 
 
 class _InvokeEndpointArgs(TypedDict):
@@ -94,12 +109,12 @@ class SagemakerLLM(BaseAWSLLM):
 
     def _prepare_request(
         self,
-        credentials,
+        credentials: "Credentials",
         model: str,
-        data: dict,
+        data: Mapping[str, object],
         messages: list[AllMessageValues],
-        litellm_params: dict,
-        optional_params: dict,
+        litellm_params: dict[str, object],
+        optional_params: Mapping[str, object],
         aws_region_name: str,
         extra_headers: dict | None = None,
     ):
@@ -142,13 +157,13 @@ class SagemakerLLM(BaseAWSLLM):
         model: str,
         messages: list,
         model_response: ModelResponse,
-        print_verbose: Callable,
-        encoding,
+        print_verbose: object,
+        encoding: "Tokenizer | None",
         logging_obj: LiteLLMLoggingObj,
         optional_params: dict,
         litellm_params: dict,
         timeout: float | httpx.Timeout | None = None,
-        custom_prompt_dict={},
+        custom_prompt_dict: object = {},
         hf_model_name: str | None = None,
         logger_fn: object = None,
         acompletion: bool = False,
@@ -257,7 +272,7 @@ class SagemakerLLM(BaseAWSLLM):
             litellm_params=litellm_params,
             headers=headers,
         )
-        prepared_request_args: Final = {
+        prepared_request_args: Final[_PrepareRequestArgs] = {
             "model": model,
             "data": _data,
             "optional_params": optional_params,
@@ -398,12 +413,12 @@ class SagemakerLLM(BaseAWSLLM):
         self,
         messages: list[AllMessageValues],
         model: str,
-        custom_prompt_dict: dict,
+        custom_prompt_dict: object,
         hf_model_name: str | None,
-        credentials,
+        credentials: "Credentials",
         aws_region_name: str,
-        optional_params,
-        encoding,
+        optional_params: Mapping[str, object],
+        encoding: object,
         model_response: ModelResponse,
         model_id: str | None,
         logging_obj: LiteLLMLoggingObj,
@@ -418,7 +433,7 @@ class SagemakerLLM(BaseAWSLLM):
             headers=headers,
         )
         asyncified_prepare_request: Final = asyncify(self._prepare_request)
-        prepared_request_args: Final = {
+        prepared_request_args: Final[_PrepareRequestArgs] = {
             "model": model,
             "data": data,
             "optional_params": optional_params,
@@ -462,11 +477,11 @@ class SagemakerLLM(BaseAWSLLM):
         self,
         messages: list[AllMessageValues],
         model: str,
-        custom_prompt_dict: dict,
+        custom_prompt_dict: object,
         hf_model_name: str | None,
-        credentials,
+        credentials: "Credentials",
         aws_region_name: str,
-        encoding,
+        encoding: "Tokenizer | None",
         model_response: ModelResponse,
         optional_params: dict,
         logging_obj: LiteLLMLoggingObj,
@@ -486,7 +501,7 @@ class SagemakerLLM(BaseAWSLLM):
         )
 
         asyncified_prepare_request: Final = asyncify(self._prepare_request)
-        prepared_request_args: Final = {
+        prepared_request_args: Final[_PrepareRequestArgs] = {
             "model": model,
             "data": data,
             "optional_params": optional_params,
@@ -551,12 +566,12 @@ class SagemakerLLM(BaseAWSLLM):
         model: str,
         input: list,
         model_response: EmbeddingResponse,
-        print_verbose: Callable,
-        encoding,
+        print_verbose: Callable[[str], object],
+        encoding: object,
         logging_obj: LiteLLMLoggingObj,
         optional_params: dict,
         custom_prompt_dict: object = {},
-        litellm_params=None,
+        litellm_params: Mapping[str, object] | None = None,
         logger_fn: object = None,
     ):
         """
