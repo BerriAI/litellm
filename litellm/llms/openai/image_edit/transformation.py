@@ -97,7 +97,7 @@ class OpenAIImageEditConfig(BaseImageEditConfig):
         image: FileTypes | Sequence[FileTypes | None] | None,
         image_edit_optional_request_params: dict,
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
+        headers: dict[str, str],
     ) -> tuple[dict[str, object], RequestFiles]:
         """
         Transform image edit request to OpenAI API format.

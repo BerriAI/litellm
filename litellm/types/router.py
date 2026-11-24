@@ -606,6 +606,11 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
         def __init__(self, /, **data: object) -> None: ...  # kwargs-ok: provider parameters vary by deployment
 
     custom_llm_provider: str | None = None
+    oauth_client_credentials: bool | None = None
+    oauth_token_url: str | None = None
+    oauth_client_id: str | None = None
+    oauth_client_secret: str | None = Field(default=None, repr=False)
+    oauth_scope: str | None = None
     responses_api_version: str | None = None
     tpm: int | None = None
     rpm: int | None = None
@@ -980,6 +985,7 @@ class Deployment(LiteLLMBaseModel):
 class DiscoveredDeploymentModelInfo:
     deployment: Mapping[str, object]
     limits: Mapping[str, int]
+    limits_by_model: Mapping[str, Mapping[str, int]] = field(default_factory=lambda: MappingProxyType({}))
 
 
 @dataclass(frozen=True, slots=True)

@@ -246,7 +246,9 @@ class DeepinfraRerankConfig(BaseRerankConfig):
     def get_supported_cohere_rerank_params(self, model: str) -> list[str]:
         return ["query", "documents"]
 
-    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: dict[str, object] | httpx.Headers
+    ) -> BaseLLMException:
         # Deepinfra errors may come as JSON: {"detail": {"error": "..."}}
         import json
 

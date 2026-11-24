@@ -100,6 +100,8 @@ def get_modified_max_tokens(
     user_max_tokens: int | None,
     buffer_perc: float | None,
     buffer_num: float | None,
+    api_base: str | None = None,
+    api_key: str | None = None,
 ) -> int | None:
     """
     Params:
@@ -112,14 +114,15 @@ def get_modified_max_tokens(
         if user_max_tokens is None:
             return None
 
-        ## MODEL INFO
-        _model_info: Final = litellm.get_model_info(model=model)
+        from litellm.utils import get_model_info_for_call
 
         max_output_tokens: Final = litellm.get_max_tokens(model=base_model)  # assume min context window is 4k tokens
 
         ## UNKNOWN MAX OUTPUT TOKENS - return user defined amount
         if max_output_tokens is None:
             return user_max_tokens
+
+        _model_info: Final = get_model_info_for_call(model, None, api_base, api_key)
 
         input_tokens = litellm.token_counter(model=base_model, messages=messages)
 
@@ -673,7 +676,7 @@ def _is_pdf_block(block: Mapping[str, object]) -> bool:
 
 
 def _bedrock_data_uri_media_scope(
-    resolved_model: str, media: Sequence[Mapping[str, object]]
+    resolved_model: str, media: Sequence[Mapping[str, object]], input_type: str | None
 ) -> _DataUriMediaScope | None:
     from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
     from litellm.llms.bedrock.common_utils import BedrockModelInfo
@@ -686,14 +689,16 @@ def _bedrock_data_uri_media_scope(
         case "cohere":
             return "whole_batch"
         case "twelvelabs":
-            return None
+            return "per_item" if input_type == "image" else None
         case "nova" if any(map(_is_pdf_block, media)):
             return None
         case _:
             return "per_item"
 
 
-def _data_uri_media_scope(model: str, media: Sequence[Mapping[str, object]]) -> _DataUriMediaScope | None:
+def _data_uri_media_scope(
+    model: str, media: Sequence[Mapping[str, object]], input_type: str | None
+) -> _DataUriMediaScope | None:
     from litellm.utils import supports_embedding_image_input
 
     try:
@@ -701,7 +706,7 @@ def _data_uri_media_scope(model: str, media: Sequence[Mapping[str, object]]) -> 
     except litellm.exceptions.BadRequestError:
         return None
     if provider == "bedrock":
-        return _bedrock_data_uri_media_scope(resolved_model, media)
+        return _bedrock_data_uri_media_scope(resolved_model, media, input_type)
     if not supports_embedding_image_input(model):
         return None
     if provider == "cohere":
@@ -709,23 +714,48 @@ def _data_uri_media_scope(model: str, media: Sequence[Mapping[str, object]]) -> 
     return "per_item" if provider in _PER_ITEM_DATA_URI_EMBEDDING_PROVIDERS else None
 
 
-def split_embedding_input_tokens(
-    value: _EmbeddingInputT, media_models: Callable[[], Sequence[str]], fallback_model: str | None = None
-) -> tuple[_EmbeddingInputT, int]:
+def count_embedding_input_tokens(
+    value: _EmbeddingInputT,
+    media_models: Callable[[], Sequence[str]],
+    fallback_model: str | None = None,
+    input_type: str | None = None,
+) -> tuple[_EmbeddingInputT, int, bool]:
+    """The input left to count as text, the tokens of the media priced out of it, and whether it holds media
+    no deployment prices, which stays in the text."""
     from litellm.litellm_core_utils.prompt_templates.tpm_media_utils import (
-        embedding_input_is_all_media,
+        embedding_input_holds_media_read_as_text,
         split_embedding_media_for_tpm,
     )
 
+    if embedding_input_holds_media_read_as_text(value, input_type):
+        return value, 0, True
     text, media = split_embedding_media_for_tpm(value)
     if not media:
-        return value, 0
+        return value, 0, False
     models: Final = tuple(media_models())
-    scopes: Final = frozenset(_data_uri_media_scope(model, media) for model in models)
-    if not models or None in scopes or ("whole_batch" in scopes and not embedding_input_is_all_media(value)):
-        return value, 0
+    if not _prices_embedding_media(value, media, models, input_type):
+        return value, 0, True
     media_tokens: Final = sum(estimate_media_block_tokens(block, models, fallback_model) for block in media)
-    return cast(_EmbeddingInputT, text), media_tokens  # cast-ok: the projection keeps the input's container shape
+    return cast(_EmbeddingInputT, text), media_tokens, False  # cast-ok: the projection keeps the input's shape
+
+
+def split_embedding_input_tokens(
+    value: _EmbeddingInputT,
+    media_models: Callable[[], Sequence[str]],
+    fallback_model: str | None = None,
+    input_type: str | None = None,
+) -> tuple[_EmbeddingInputT, int]:
+    text, media_tokens, _ = count_embedding_input_tokens(value, media_models, fallback_model, input_type)
+    return text, media_tokens
+
+
+def _prices_embedding_media(
+    value: object, media: Sequence[Mapping[str, object]], models: Sequence[str], input_type: str | None
+) -> bool:
+    from litellm.litellm_core_utils.prompt_templates.tpm_media_utils import embedding_input_is_all_media
+
+    scopes: Final = frozenset(_data_uri_media_scope(model, media, input_type) for model in models)
+    return bool(models) and None not in scopes and ("whole_batch" not in scopes or embedding_input_is_all_media(value))
 
 
 def embedding_aware_token_count(
@@ -1947,7 +1977,13 @@ def _count_anthropic_content(
 
 
 _TEXT_FIELD_BY_BLOCK_TYPE: Final = MappingProxyType(
-    {"text": "text", "thinking": "thinking", "redacted_thinking": "thinking", "compaction": "content"}
+    {
+        "text": "text",
+        "thinking": "thinking",
+        "redacted_thinking": "thinking",
+        "compaction": "content",
+        "fallback": "text",
+    }
 )
 
 

@@ -148,7 +148,7 @@ class HumanloopLogger(CustomLogger):
         self,
         model: str,
         messages: list[AllMessageValues],
-        non_default_params: dict,
+        non_default_params: dict[str, object],
         prompt_id: str | None,
         prompt_variables: dict | None,
         dynamic_callback_params: StandardCallbackDynamicParams,

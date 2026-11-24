@@ -6,7 +6,7 @@ import importlib
 import json
 import sys
 import warnings
-from collections.abc import Hashable, Iterable, Mapping, Sequence
+from collections.abc import Callable, Hashable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from itertools import chain, groupby
 from types import MappingProxyType, ModuleType
@@ -58,6 +58,7 @@ from litellm.litellm_core_utils.prompt_templates.json_schema_utils import (
 from litellm.litellm_core_utils.prompt_templates.json_schema_utils import (
     is_object_schema as is_object_schema,  # noqa: PLC0414  # public compatibility re-export
 )
+from litellm.litellm_core_utils.prompt_templates.json_schema_utils import ref_points_into_defs
 from litellm.litellm_core_utils.prompt_templates.json_schema_utils import (
     schema_fragment_ref as schema_fragment_ref,  # noqa: PLC0414  # public compatibility re-export
 )
@@ -199,6 +200,7 @@ from litellm.litellm_core_utils.prompt_templates.tpm_media_utils import (
 from litellm.litellm_core_utils.prompt_templates.tpm_media_utils import (
     split_media_for_tpm as split_media_for_tpm,  # noqa: PLC0414  # public compatibility re-export
 )
+from litellm.types.llms.anthropic import ANTHROPIC_UNRENDERED_BLOCK_TYPES
 from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionAssistantMessage,
@@ -481,6 +483,17 @@ def extract_search_results_text(search_results: object) -> str:
         if citations is not None:
             texts += json.dumps(citations, separators=(",", ":"))
     return texts
+
+
+def is_unrendered_block(block: object) -> bool:
+    fields: Final = as_str_mapping(block)
+    block_type: Final = None if fields is None else fields.get("type")
+    return isinstance(block_type, str) and block_type in ANTHROPIC_UNRENDERED_BLOCK_TYPES
+
+
+def is_unrendered_block_without_text(block: object) -> bool:
+    fields: Final = as_str_mapping(block)
+    return fields is not None and is_unrendered_block(fields) and "text" not in fields
 
 
 def convert_content_list_to_str(
@@ -1011,12 +1024,47 @@ def _estimate_json_bytes(obj: object) -> int:
     return total
 
 
+_DefsScope: TypeAlias = tuple[Mapping[str, object], ...]
+_DEFS_KEYS: Final = ("$defs", "definitions")
+_NON_BODY_KEYS: Final = frozenset({"$defs", "definitions", "components"})
+
 _JSON_SCHEMA_ANNOTATION_KEYWORDS: Final = frozenset(
     {"title", "description", "default", "deprecated", "readOnly", "writeOnly", "examples"}
 )
 JSON_SCHEMA_KEPT_REF_SIBLINGS: Final = _JSON_SCHEMA_ANNOTATION_KEYWORDS | frozenset({"required"})
 
 _SCHEMA_NODE: Final = TypeAdapter(Mapping[str, object])
+
+
+def _mapping_or_empty(value: object) -> Mapping[str, object]:
+    return value if isinstance(value, dict) else {}
+
+
+def _local_defs(node: Mapping[str, object]) -> Mapping[str, object]:
+    return dict(chain.from_iterable(_mapping_or_empty(node.get(key)).items() for key in _DEFS_KEYS))
+
+
+def _scope_with_local_defs(scope: _DefsScope, local_defs: Mapping[str, object]) -> _DefsScope:
+    return (local_defs, *scope) if local_defs else scope
+
+
+def _resolve_in_scope(scope: _DefsScope, ref: str) -> tuple[str, object] | None:
+    name: Final = ref.split("/")[-1]
+    return next(((ref, defs[ref]) if ref in defs else (name, defs[name]) for defs in scope if name in defs), None)
+
+
+class DefsRefTargetNotASchemaError(AttributeError):
+    pass
+
+
+def _definition_schema(definition: object) -> Mapping[str, object]:
+    if isinstance(definition, bool):
+        return {} if definition else {"not": {}}
+    if not isinstance(definition, dict):
+        raise DefsRefTargetNotASchemaError(
+            f"unpack_defs: a $ref target must be a schema object, not {type(definition).__name__}"
+        )
+    return definition
 
 
 def _required_names(schema: Mapping[str, object]) -> tuple[str, ...] | None:
@@ -1040,21 +1088,32 @@ def _ref_target_with_siblings(
     }
 
 
+class DefsInliningBudgetExceededError(ValueError):
+    pass
+
+
+def _keeps_no_ref(_ref: str, _scope: _DefsScope) -> bool:
+    return False
+
+
 def unpack_defs(
     schema: dict,
     defs: dict,
     max_inlined_bytes: int | None = None,
     keep_ref_siblings: bool = False,
-) -> None:
+    *,
+    keeps_ref: Callable[[str, _DefsScope], bool] = _keeps_no_ref,
+) -> int:
     """Expand *all* ``$ref`` entries pointing into ``$defs`` / ``definitions``.
 
     This utility walks the entire schema tree (dicts and lists) so it naturally
     resolves references hidden under any keyword – ``items``, ``allOf``,
     ``anyOf``, ``oneOf``, ``additionalProperties``, etc.
 
-    It mutates *schema* in-place and does **not** return anything.  The helper
-    keeps memory overhead low by resolving nodes as it encounters them rather
-    than materialising a fully dereferenced copy first.
+    It mutates *schema* in-place and returns the JSON-byte size it inlined,
+    counted only when ``max_inlined_bytes`` is set.  The helper keeps memory
+    overhead low by resolving nodes as it encounters them rather than
+    materialising a fully dereferenced copy first.
 
     ``max_inlined_bytes`` caps the cumulative JSON-byte size of every target
     that has been inlined and is checked *before* each ``copy.deepcopy``, so
@@ -1068,6 +1127,9 @@ def unpack_defs(
     ``keep_ref_siblings`` keeps the annotations next to a ``$ref`` (a field's
     ``description``, say) over the inlined target's and adds a sibling
     ``required`` to the target's, since both apply to the value.
+
+    ``keeps_ref`` names the refs to leave as they are, given the definition
+    layers in scope, nearest first, for a provider that resolves those itself.
     """
 
     import copy
@@ -1076,17 +1138,11 @@ def unpack_defs(
     # Combine the defs handed down by the caller with defs/definitions found on
     # the current node.  Local keys shadow parent keys to match JSON-schema
     # scoping rules.
-    root_defs: Final[tuple[Mapping[str, object], ...]] = (
-        {
-            **defs,
-            **schema.get("$defs", {}),
-            **schema.get("definitions", {}),
-        },
-    )
+    root_defs: Final[_DefsScope] = ({**defs, **_local_defs(schema)},)
 
     # Use iterative approach with queue to avoid recursion
     # Each item in queue is (node, parent_container, key/index, active_defs, ref_chain)
-    queue: Final[deque[tuple[object, dict | list | None, str | int | None, tuple, set[str]]]] = deque(
+    queue: Final[deque[tuple[object, dict | list | None, str | int | None, _DefsScope, set[str]]]] = deque(
         [(schema, None, None, root_defs, set())]
     )
     inlined_bytes = 0
@@ -1097,30 +1153,22 @@ def unpack_defs(
         # ----------------------------- dict -----------------------------
         if isinstance(node, dict):
             # --- Case 1: this node *is* a reference ---
-            if "$ref" in node:
-                ref_name = node["$ref"].split("/")[-1]
-                resolved_ref = next(
-                    (
-                        (node["$ref"], scope[node["$ref"]]) if node["$ref"] in scope else (ref_name, scope[ref_name])
-                        for scope in active_defs
-                        if ref_name in scope
-                    ),
-                    None,
-                )
+            ref = node.get("$ref")
+            if isinstance(ref, str) and not keeps_ref(ref, active_defs):
+                resolved_ref = _resolve_in_scope(active_defs, ref)
                 # Unknown reference – leave untouched
                 if resolved_ref is None:
                     continue
-                ref_key, target_schema = resolved_ref
+                ref_key, definition = resolved_ref
 
                 # Check for circular reference in the resolution chain
                 if ref_key in ref_chain:
                     # Circular reference detected - leave as-is to prevent infinite recursion
                     continue
 
+                target_schema = _definition_schema(definition)
                 replacement = (
-                    _ref_target_with_siblings(
-                        _SCHEMA_NODE.validate_python(target_schema), _SCHEMA_NODE.validate_python(node)
-                    )
+                    _ref_target_with_siblings(target_schema, _SCHEMA_NODE.validate_python(node))
                     if keep_ref_siblings
                     else target_schema
                 )
@@ -1128,7 +1176,7 @@ def unpack_defs(
                 if max_inlined_bytes is not None:
                     inlined_bytes += _estimate_json_bytes(replacement)
                     if inlined_bytes > max_inlined_bytes:
-                        raise ValueError(
+                        raise DefsInliningBudgetExceededError(
                             f"unpack_defs: inlined schema exceeded the "
                             f"{max_inlined_bytes:,}-byte budget. Refusing to "
                             f"deep-copy further to prevent schema-bomb "
@@ -1136,13 +1184,7 @@ def unpack_defs(
                         )
 
                 # Merge defs from the target to capture nested definitions
-                child_defs = (
-                    active_defs
-                    if isinstance(target_schema, dict)
-                    and "$defs" not in target_schema
-                    and "definitions" not in target_schema
-                    else ({**target_schema.get("$defs", {}), **target_schema.get("definitions", {})}, *active_defs)
-                )
+                child_defs = _scope_with_local_defs(active_defs, _local_defs(target_schema))
 
                 # Replace the reference with resolved copy
                 resolved = copy.deepcopy(replacement)
@@ -1170,11 +1212,7 @@ def unpack_defs(
 
             # --- Case 2: regular dict – process its values ---
             # Update defs with any nested $defs/definitions present *here*.
-            current_defs = (
-                ({**node.get("$defs", {}), **node.get("definitions", {})}, *active_defs)
-                if "$defs" in node or "definitions" in node
-                else active_defs
-            )
+            current_defs = _scope_with_local_defs(active_defs, _local_defs(node))
 
             # Add all dict values to queue
             for k, v in node.items():
@@ -1186,12 +1224,28 @@ def unpack_defs(
             for idx, item in enumerate(node):
                 queue.append((item, node, idx, active_defs, ref_chain))
 
+    return inlined_bytes
 
-def _has_legacy_defs(schema: object) -> bool:
-    if not isinstance(schema, dict):
-        return False
-    components: Final = schema.get("components")
-    return "definitions" in schema or (isinstance(components, dict) and isinstance(components.get("schemas"), dict))
+
+def _legacy_defs(schema: object) -> Mapping[str, object] | None:
+    node: Final = _mapping_or_empty(schema)
+    components: Final = _mapping_or_empty(node.get("components"))
+    if "definitions" not in node and not isinstance(components.get("schemas"), dict):
+        return None
+    # On key collision, ``definitions`` wins over ``components.schemas`` --
+    # ``unpack_defs`` keys refs by last path segment so a single name can only
+    # resolve to one body, and ``definitions`` is the JSON-Schema-native
+    # namespace.
+    return {**_mapping_or_empty(components.get("schemas")), **_mapping_or_empty(node.get("definitions"))}
+
+
+def _legacy_blocks_are_well_formed(schema: Mapping[str, object]) -> bool:
+    components: Final = schema.get("components", {})
+    return (
+        isinstance(schema.get("definitions") or {}, dict)
+        and isinstance(components, dict)
+        and isinstance(_mapping_or_empty(components).get("schemas") or {}, dict)
+    )
 
 
 # Schema-bomb budget for ``$ref`` inlining: cap the cumulative JSON-byte
@@ -1256,20 +1310,41 @@ def unpack_legacy_defs(
     schemas cannot expand into a schema-bomb before reaching the upstream
     provider -- raises ``ValueError`` on overflow.
     """
-    if not _has_legacy_defs(schema):
+    if _legacy_defs(schema) is None or not _legacy_blocks_are_well_formed(schema):
         return schema
     if copy:
         import copy as _copy
 
         schema = _copy.deepcopy(schema)
-    # On key collision, ``definitions`` wins over ``components.schemas`` --
-    # ``unpack_defs`` keys refs by last path segment so a single name can only
-    # resolve to one body, and ``definitions`` is the JSON-Schema-native
-    # namespace.
-    defs: Final = schema.pop("components", {}).get("schemas") or {}
-    defs.update(schema.pop("definitions", None) or {})
-    unpack_defs(schema, defs, max_inlined_bytes=max_inlined_bytes)
+    defs: Final = _legacy_defs(schema) or {}
+    schema.pop("components", None)
+    schema.pop("definitions", None)
+    unpack_defs(schema, dict(defs), max_inlined_bytes=max_inlined_bytes)
     return schema
+
+
+def inline_refs_outside_root_defs(
+    schema: Mapping[str, object], max_inlined_bytes: int
+) -> tuple[Mapping[str, object], int]:
+    root_defs: Final = dict(_mapping_or_empty(schema.get("$defs")))
+    body: Final = {key: value for key, value in schema.items() if key not in _NON_BODY_KEYS}
+    document: Final = {"body": body, "defs": root_defs}
+    inlined_bytes: Final = unpack_defs(
+        document,
+        {**root_defs, **(_legacy_defs(schema) or {})},
+        max_inlined_bytes=max_inlined_bytes,
+        keeps_ref=lambda ref, scope: (
+            ref_points_into_defs(ref, root_defs) and not any(ref_points_into_defs(ref, layer) for layer in scope[:-1])
+        ),
+    )
+    inlined: Final = document["body"]
+    return ({**inlined, "$defs": root_defs} if root_defs else inlined), inlined_bytes
+
+
+def inline_refs_and_drop_defs(schema: Mapping[str, object], max_inlined_bytes: int) -> tuple[Mapping[str, object], int]:
+    body: Final = {key: value for key, value in schema.items() if key not in _NON_BODY_KEYS}
+    inlined_bytes: Final = unpack_defs(body, dict(_local_defs(schema)), max_inlined_bytes=max_inlined_bytes)
+    return {key: value for key, value in body.items() if key != "$defs"}, inlined_bytes
 
 
 def sanitize_input_schema_for_anthropic(input_schema: Mapping[str, object]) -> "AnthropicInputSchema":

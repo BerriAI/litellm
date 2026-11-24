@@ -481,8 +481,13 @@ impl<H: RouterHost> Call<'_, H> {
             } else {
                 WhenAllUnhealthy::KeepAll
             };
+            let unpaused: Vec<Arc<Deployment>> = all
+                .iter()
+                .filter(|d| !d.model_info.blocked)
+                .cloned()
+                .collect();
             self.health()
-                .health_check_filter(settings, all.clone(), when_all_unhealthy)
+                .health_check_filter(settings, unpaused, when_all_unhealthy)
                 .await
         };
         let mut healthy: Vec<Arc<Deployment>> = checked

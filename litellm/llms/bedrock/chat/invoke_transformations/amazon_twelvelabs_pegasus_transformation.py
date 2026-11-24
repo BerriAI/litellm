@@ -122,7 +122,7 @@ class AmazonTwelveLabsPegasusConfig(AmazonInvokeConfig, BaseConfig):
         self,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
+        optional_params: dict[str, object],
         litellm_params: Mapping[str, object],
         headers: Mapping[str, object],
     ) -> dict[str, object]:
