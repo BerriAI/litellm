@@ -3,6 +3,7 @@ import contextvars
 import functools
 import inspect
 import itertools
+import json
 import logging
 import os
 import re
@@ -179,11 +180,26 @@ def _names_a_credential_field(key: str | None) -> bool:
     )
 
 
+_EMBEDDED_JSON: Final[TypeAdapter[dict[str, object] | list[object]]] = TypeAdapter(dict[str, object] | list[object])
+
+
+def _redacted_embedded_json(key: str | None, value: str, depth: int) -> str:
+    """A string holding a JSON object or array has its fields redacted like the structured form."""
+    if not value.lstrip().startswith(("{", "[")):
+        return value
+    try:
+        embedded: Final = _EMBEDDED_JSON.validate_json(value)
+    except (ValueError, RecursionError):
+        return value
+    redacted: Final = _redacted_client_field(key, embedded, depth + 1)
+    return value if redacted == embedded else json.dumps(redacted, separators=(",", ":"))
+
+
 def _redacted_client_field(key: str | None, value: object, depth: int = 0) -> object:
     if _names_a_credential_header(key) or _names_a_credential_field(key):
         return REDACTED
     if isinstance(value, str):
-        return redact_internal_details(redact_structured_value(key, value))
+        return redact_internal_details(redact_structured_value(key, _redacted_embedded_json(key, value, depth)))
     if isinstance(value, (dict, list, tuple)) and (depth > DEFAULT_MAX_RECURSE_DEPTH or _names_a_credential(key)):
         return REDACTED
     if isinstance(value, dict):
