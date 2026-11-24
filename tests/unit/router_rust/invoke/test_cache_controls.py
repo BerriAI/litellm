@@ -200,3 +200,27 @@ def test_a_number_standing_in_for_the_keys_boolean_is_not_the_keys_control() -> 
 
     assert merged["cache"]["no-store"] is True
     assert ignored == ("no-store",)
+
+
+@pytest.mark.parametrize(
+    ("key_cache", "expected", "ignored_controls"),
+    [
+        ({"no-store": False, "ttl": 86400}, {"no-store": True, "ttl": 60}, ("no-store", "ttl")),
+        ({"no-store": True, "ttl": 5}, {"no-store": True, "ttl": 5}, ()),
+        ({"no-cache": False, "s-maxage": 5}, {"no-store": True, "ttl": 60}, ("no-cache", "s-maxage")),
+        ({"no-cache": True, "ttl": 60}, {"no-store": True, "ttl": 60, "no-cache": True}, ()),
+    ],
+)
+def test_a_virtual_keys_control_survives_a_locked_model_only_where_it_is_at_least_as_strict(
+    key_cache: dict[str, object], expected: dict[str, object], ignored_controls: tuple[str, ...]
+) -> None:
+    key = {"metadata": {"user_api_key_metadata": {"cache": key_cache}}}
+
+    _, merged, ignored = with_model_cache_controls(
+        {"cache": {"no-store": True, "ttl": 60}, "allowed_response_cache_overrides": []},
+        {**key, "cache": dict(key_cache)},
+        authenticated=key,
+    )
+
+    assert merged["cache"] == expected
+    assert ignored == ignored_controls

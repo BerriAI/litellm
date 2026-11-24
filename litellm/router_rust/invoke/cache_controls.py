@@ -30,7 +30,7 @@ def model_cache_controls(
     """The deployment's ``cache`` is the default for each control and the request overrides the controls
     it sends. When the deployment sets ``allowed_response_cache_overrides``, a request control outside that list is
     ignored and named in ``ignored``, except a control still at the value the virtual key's own
-    ``key_controls`` enforce."""
+    ``key_controls`` enforce, and only where that value is at least as strict as the deployment's."""
     allowed: Final = _listed(litellm_params.get(ALLOWED_OVERRIDES_PARAM))
     deployment_controls: Final = _canonical(as_dict(litellm_params.get("cache")))
     request_controls: Final = as_dict(request_cache)
@@ -43,7 +43,10 @@ def model_cache_controls(
         for control in request_controls
         if _CONTROL_NAMES.get(control, control) in _LOCKABLE_CONTROLS
         and _CONTROL_NAMES.get(control, control) not in allowed
-        and not _is_key_value(key_controls or {}, control, request_controls[control])
+        and not (
+            _is_key_value(key_controls or {}, control, request_controls[control])
+            and _tightens(deployment_controls, _CONTROL_NAMES.get(control, control), request_controls[control])
+        )
     )
     kept: Final = {control: value for control, value in request_controls.items() if control not in ignored}
     return ModelCacheControls({**deployment_controls, **_canonical(kept)}, ignored)
@@ -133,6 +136,20 @@ def with_model_cache_controls(
 def _is_key_value(key_controls: Mapping[str, object], control: str, value: object) -> bool:
     """``1`` is not the key's ``True``: the cache reads these controls by identity."""
     return control in key_controls and type(key_controls[control]) is type(value) and key_controls[control] == value
+
+
+def _tightens(deployment_controls: Mapping[str, object], name: str, value: object) -> bool:
+    """A key's owner can edit the key's ``cache``, so it may skip the cache or shorten a lifetime the
+    deployment sets, never the reverse."""
+    if name in {"no-cache", "no-store"}:
+        return value is True
+    own: Final = _number(deployment_controls.get(name))
+    requested: Final = _number(value)
+    return own is not None and requested is not None and requested <= own
+
+
+def _number(value: object) -> float | None:
+    return value if isinstance(value, (int, float)) and not isinstance(value, bool) else None
 
 
 def _key_cache_controls(request: Mapping[str, object]) -> Mapping[str, object]:
