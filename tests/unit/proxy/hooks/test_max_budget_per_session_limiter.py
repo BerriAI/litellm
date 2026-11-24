@@ -13,18 +13,22 @@ from types import MappingProxyType
 from typing import Final
 from unittest.mock import patch
 
+import httpx
 import logging
 import pytest
 from fastapi import HTTPException
 
+import litellm
 from litellm.caching.caching import DualCache
 from litellm.caching.redis_cache import _redis_circuit_breaker_guard
+from litellm.llms.gemini.empty_image_response import UnservedImageError
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.hooks.max_budget_per_session_limiter import (
     PROXY_MaxBudgetPerSessionHandler,
 )
 from litellm.proxy.utils import InternalUsageCache
 from litellm.types.agents import AgentResponse
+from litellm.types.utils import ImageResponse, Usage
 from litellm.types.videos.utils import POLLED_VIDEO_STATUS_KWARG
 
 
@@ -397,6 +401,54 @@ async def test_a_cost_that_is_not_a_finite_number_leaves_the_session_spend_alone
 
     assert await handler._get_current_spend(cache_key) == 0.25
 
+
+
+def _image_call(response_cost: float, **fields: object) -> dict[str, object]:
+    return {
+        "call_type": "aimage_generation",
+        "standard_logging_object": {"response_cost": response_cost},
+        "litellm_params": {"metadata": {"session_id": "session-images", "agent_id": "agent-budget-123"}},
+        **fields,
+    }
+
+
+@pytest.mark.asyncio
+async def test_billed_image_answers_without_an_image_count_toward_the_session_budget_once_each():
+    handler: Final = PROXY_MaxBudgetPerSessionHandler(internal_usage_cache=InternalUsageCache(DualCache()))
+    unserved_cost: Final = 2.55e-05
+    served_cost: Final = 3.9e-05
+    reply: Final = httpx.Response(422, request=httpx.Request("POST", "https://gemini.invalid"))
+    unserved: Final = _image_call(
+        unserved_cost,
+        exception=UnservedImageError(
+            message="Gemini returned no image, finishReason=STOP",
+            model="gemini/gemini-3.1-flash-image",
+            llm_provider="gemini",
+            response=reply,
+            billed_answer=ImageResponse(created=1, data=[]),
+        ),
+    )
+    rejected_prompt: Final = _image_call(
+        unserved_cost,
+        exception=litellm.ContentPolicyViolationError(
+            message="prompt rejected", model="gemini/gemini-3.1-flash-image", llm_provider="gemini"
+        ),
+    )
+    served_after_an_unserved_answer: Final = _image_call(
+        served_cost + unserved_cost,
+        failed_attempts_billed_on_success=((Usage(prompt_tokens=9, completion_tokens=7), unserved_cost),),
+    )
+
+    with patch(
+        "litellm.proxy.agent_endpoints.agent_registry.global_agent_registry"
+    ) as mock_registry:
+        mock_registry.get_agent_by_id.return_value = _make_mock_agent(max_budget_per_session=5.0)
+        for failure in (unserved, rejected_prompt, unserved):
+            await handler.async_log_failure_event(failure, None, None, None)
+        await handler.async_log_success_event(served_after_an_unserved_answer, None, None, None)
+
+    spend: Final = await handler._get_current_spend(handler._make_cache_key("session-images"))
+    assert spend == pytest.approx(2 * unserved_cost + served_cost)
 
 @pytest.mark.asyncio
 async def test_no_agent_id_passes():

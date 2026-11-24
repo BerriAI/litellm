@@ -1308,6 +1308,7 @@ _RESPONSES_CALL_TYPES: Final = frozenset((CallTypes.responses.value, CallTypes.a
 _RERANK_CALL_TYPES: Final = frozenset((CallTypes.rerank.value, CallTypes.arerank.value))
 
 _FAILED_ATTEMPTS_USAGE: Final = TypeAdapter(tuple[tuple[Usage, float], ...])
+_CARRIED_ATTEMPTS: Final = TypeAdapter(tuple[object, ...])
 
 
 def _billed_across_attempts(
@@ -1737,6 +1738,15 @@ def _failure_usage_to_lift(
     return _billed_across_attempts(failed_attempts, current_usage, current_cost)
 
 
+def _usage_the_success_left_unbilled(logging_obj: Logging) -> tuple[Usage, float] | None:
+    owed: Final = frozenset(id(attempt) for attempt in logging_obj.failed_attempts_owed_on_success)
+    carried: Final = _CARRIED_ATTEMPTS.validate_python(logging_obj.model_call_details.get("failed_attempts_usage", ()))
+    unbilled: Final = _FAILED_ATTEMPTS_USAGE.validate_python(
+        tuple(attempt for attempt in carried if id(attempt) not in owed)
+    )
+    return _billed_across_attempts(unbilled, None, None) if unbilled else None
+
+
 _EMPTY_LIFT: Final = MappingProxyType({})
 
 
@@ -2012,14 +2022,18 @@ def _failure_fields_to_lift(
         if _client_seen is None
         else _record_pricing(_model_call_details, _client_seen, _base_model)
     )
-    _usage_to_lift: Final = _failure_usage_to_lift(
-        model_call_details=_row_pricing_details,
-        request_body=request_data,
-        dispatched=_model_call_details.get("current_attempt_api_call_start_time", _first_handoff) is not None,
-        provider_billed=_billed,
-        deployment_id=_deployment_id if _client_seen is None else _record_deployment_id(_client_seen),
-        base_model=_row_base_model,
-        dispatched_call_type=_estimate_call_type,
+    _usage_to_lift: Final = (
+        _usage_the_success_left_unbilled(_logging_obj)
+        if isinstance(_logging_obj, Logging) and _success_already_logged
+        else _failure_usage_to_lift(
+            model_call_details=_row_pricing_details,
+            request_body=request_data,
+            dispatched=_model_call_details.get("current_attempt_api_call_start_time", _first_handoff) is not None,
+            provider_billed=_billed,
+            deployment_id=_deployment_id if _client_seen is None else _record_deployment_id(_client_seen),
+            base_model=_row_base_model,
+            dispatched_call_type=_estimate_call_type,
+        )
     )
     _prompt_estimate: Final = (
         _estimated_prompt_usage(_model_call_details, request_data, _estimate_call_type)

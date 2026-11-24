@@ -8,11 +8,13 @@ from datetime import datetime, timezone
 from types import MappingProxyType, SimpleNamespace
 from typing import Final
 
+import httpx
 import pytest
 
 import litellm
 from litellm.caching.caching import DualCache
 from litellm.litellm_core_utils.model_latest_aliases import get_model_latest_aliases
+from litellm.llms.gemini.empty_image_response import ImageRefusalError
 from litellm.proxy._types import Litellm_EntityType, UserAPIKeyAuth
 from litellm.proxy.db.db_transaction_queue.window_spend_update_queue import WindowSpendTransaction
 from litellm.proxy.hooks.model_budget_shared_windows import DatabaseSharedWindows, SharedWindows
@@ -27,7 +29,7 @@ from litellm.proxy.hooks.model_max_budget_limiter import (
 )
 from litellm.router import Router
 from litellm.types.caching import RedisPipelineIncrementOperation
-from litellm.types.utils import LiteLLMBatch, LiteLLMRealtimeStreamLoggingObject, Usage
+from litellm.types.utils import ImageResponse, LiteLLMBatch, LiteLLMRealtimeStreamLoggingObject, Usage
 from litellm.types.videos.main import VideoObject
 from litellm.types.videos.utils import POLLED_VIDEO_STATUS_KWARG
 
@@ -125,6 +127,42 @@ async def _spend(limiter: PROXY_VirtualKeyModelMaxBudgetLimiter, spend_key: str)
 
 def _local_spend(limiter: PROXY_VirtualKeyModelMaxBudgetLimiter, spend_key: str) -> float:
     return limiter.dual_cache.in_memory_cache.get_cache(key=spend_key) or 0.0
+
+
+@pytest.mark.asyncio
+async def test_billed_image_refusals_count_toward_model_budgets_once_each():
+    limiter: Final = PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=DualCache())
+    refusal_cost: Final = 2.55e-05
+    served_cost: Final = 3.9e-05
+    reply: Final = httpx.Response(400, request=httpx.Request("POST", "https://gemini.invalid"))
+    refused: Final = {
+        **_event("aimage_generation", refusal_cost),
+        "exception": ImageRefusalError(
+            message="Gemini refused to return an image, finishReason=IMAGE_PROHIBITED_CONTENT",
+            model="gemini/gemini-3.1-flash-image",
+            llm_provider="gemini",
+            response=reply,
+            provider_specific_fields={"finish_reason": "IMAGE_PROHIBITED_CONTENT"},
+            billed_answer=ImageResponse(created=1, data=[]),
+        ),
+    }
+    rejected_prompt: Final = {
+        **_event("aimage_generation", refusal_cost),
+        "exception": litellm.ContentPolicyViolationError(
+            message="prompt rejected", model="gemini/gemini-3.1-flash-image", llm_provider="gemini"
+        ),
+    }
+    served_after_a_refusal: Final = {
+        **_event("aimage_generation", served_cost + refusal_cost),
+        "failed_attempts_billed_on_success": ((Usage(prompt_tokens=9, completion_tokens=7), refusal_cost),),
+    }
+
+    for failure in (refused, rejected_prompt, refused):
+        await limiter.async_log_failure_event(failure, response_obj=None, start_time=None, end_time=None)
+    await _log_success(limiter, served_after_a_refusal)
+
+    assert await _spend(limiter, KEY_SPEND_KEY) == pytest.approx(2 * refusal_cost + served_cost)
+    assert await _spend(limiter, USER_SPEND_KEY) == pytest.approx(2 * refusal_cost + served_cost)
 
 
 @pytest.mark.asyncio

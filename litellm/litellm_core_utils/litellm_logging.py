@@ -3313,7 +3313,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 dynamic_success_callbacks=self.dynamic_async_failure_callbacks,
                 global_callbacks=litellm._async_failure_callback,  # pyright: ignore[reportPrivateUsage]  # Existing registry has no public accessor
             )
-            if isinstance(callback, CustomLogger) and callback.logs_every_failed_attempt
+            if isinstance(callback, CustomLogger) and callback.logs_failed_attempt(exception)
         )
         if not callbacks:
             return
@@ -3538,6 +3538,10 @@ class Logging(LiteLLMLoggingBaseClass):
 
     def with_failed_attempts_owed(self, own_cost: float) -> float:
         return own_cost + sum(cost for _, cost in self._failed_attempts_owed_on_success)
+
+    @property
+    def failed_attempts_owed_on_success(self) -> tuple[ServedRound, ...]:
+        return self._failed_attempts_owed_on_success
 
     def record_served_rounds_for_failure(self, served_rounds: tuple[ServedRound, ...]) -> None:
         if not served_rounds:

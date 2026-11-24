@@ -3327,13 +3327,16 @@ class PrometheusLogger(CustomLogger):
     ) -> None:
         usage: Final = request_data.get("combined_usage_object")
         response_cost: Final = request_data.get("response_cost")
+        logged: Final = _logged_fields(request_data.get("standard_logging_object"))
+        if logged.get("status") == "success":
+            return
         if (
             request_data.get("call_type") not in IMAGE_CALL_TYPES
             or not isinstance(usage, litellm.Usage)
             or not isinstance(response_cost, (int, float))
         ):
             return
-        billed_model: Final = _logged_fields(request_data.get("standard_logging_object")).get("model")
+        billed_model: Final = logged.get("model")
         billed_values: Final = replace(enum_values, model=billed_model if isinstance(billed_model, str) else None)
         label_context: Final = PrometheusLabelFactoryContext(billed_values)
 

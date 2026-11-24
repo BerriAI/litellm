@@ -2,8 +2,9 @@ from collections.abc import Mapping
 from typing import Final
 
 import httpx
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 
+from litellm.constants import IMAGE_CALL_TYPES
 from litellm.exceptions import (
     ContentPolicyViolationError,
     UnprocessableEntityError,
@@ -15,6 +16,8 @@ from litellm.types.utils import ImageResponse
 _REASONS_WITHOUT_A_POLICY_VERDICT: Final = frozenset({"NO_IMAGE", "IMAGE_OTHER", "OTHER", "LANGUAGE"})
 _REFUSALS_GOOGLE_DOES_NOT_CHARGE: Final = frozenset({"IMAGE_RECITATION"})
 _ERROR_DOCS_URL: Final = "https://docs.litellm.ai/docs"
+_LOGGED_FIELDS: Final = TypeAdapter(dict[str, object])
+_ATTEMPT_COSTS: Final = TypeAdapter(tuple[tuple[object, float], ...])
 
 
 class UnservedImageError(UnprocessableEntityError):
@@ -43,6 +46,25 @@ class ImageRefusalError(ContentPolicyViolationError):
             provider_specific_fields=dict(provider_specific_fields),
         )
         self.billed_answer: Final = billed_answer
+
+
+def is_answer_without_an_image(exception: object) -> bool:
+    return isinstance(exception, (ImageRefusalError, UnservedImageError))
+
+
+def bills_an_answer_without_an_image(kwargs: Mapping[str, object]) -> bool:
+    if not is_answer_without_an_image(kwargs.get("exception")):
+        return False
+    logged: Final = kwargs.get("standard_logging_object")
+    response_cost: Final = _LOGGED_FIELDS.validate_python(logged).get("response_cost") if logged is not None else None
+    return isinstance(response_cost, (int, float)) and response_cost > 0
+
+
+def cost_of_image_answers_billed_on_failure(kwargs: Mapping[str, object]) -> float:
+    if kwargs.get("call_type") not in IMAGE_CALL_TYPES:
+        return 0.0
+    carried: Final = _ATTEMPT_COSTS.validate_python(kwargs.get("failed_attempts_billed_on_success", ()))
+    return sum(cost for _, cost in carried)
 
 
 class _Candidate(BaseModel):

@@ -1246,6 +1246,111 @@ class TestPostCallFailureHookEstimatesDispatchedInputTokens:
         assert request_data.get("response_cost", 0.0) == 0.0
 
     @pytest.mark.asyncio
+    async def test_an_image_rejected_after_its_success_log_ran_bills_nothing_on_the_failure_row(self, monkeypatch):
+        from datetime import datetime
+
+        import respx
+
+        from litellm import Router
+        from litellm.proxy.hooks.proxy_track_cost_callback import failure_row_response_cost
+        from litellm.utils import Rules, function_setup
+
+        class _SuccessLog(CustomLogger):
+            def __init__(self) -> None:
+                super().__init__()
+                self.cost: object = None
+                self.logged: Final = asyncio.Event()
+
+            async def async_log_success_event(self, kwargs, response_obj, start_time, end_time) -> None:
+                self.cost = kwargs["standard_logging_object"]["response_cost"]
+                self.logged.set()
+
+        usage: Final = {"promptTokenCount": 9, "candidatesTokenCount": 7, "totalTokenCount": 16}
+        image: Final = {"inlineData": {"mimeType": "image/png", "data": "aW1n"}}
+        monkeypatch.setattr(litellm, "callbacks", [])
+        monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+        success_log: Final = _SuccessLog()
+        litellm.logging_callback_manager.add_litellm_callback(success_log)
+        router: Final = Router(
+            model_list=[
+                {
+                    "model_name": group,
+                    "litellm_params": {
+                        "model": "gemini/gemini-3.1-flash-image",
+                        "api_key": "test-key",
+                        "api_base": f"https://{group}.invalid/v1",
+                    },
+                }
+                for group in ("primary", "backup")
+            ],
+            fallbacks=[{"primary": ["backup"]}],
+            num_retries=0,
+        )
+        logging_obj, request = function_setup(
+            original_function="aimage_generation",
+            rules_obj=Rules(),
+            start_time=datetime.now(),
+            model="primary",
+            prompt="a single small red dot",
+            litellm_call_id="refused-then-served-then-rejected",
+        )
+        with respx.mock(assert_all_called=False) as upstream:
+            upstream.post(url__startswith="https://primary.invalid/").respond(
+                200,
+                json={
+                    "candidates": [{"finishReason": "IMAGE_PROHIBITED_CONTENT", "content": {"role": "model"}}],
+                    "usageMetadata": usage,
+                },
+            )
+            upstream.post(url__startswith="https://backup.invalid/").respond(
+                200,
+                json={
+                    "candidates": [{"finishReason": "STOP", "content": {"parts": [image]}}],
+                    "usageMetadata": usage,
+                },
+            )
+            await router.aimage_generation(**request, litellm_logging_obj=logging_obj)
+            await asyncio.wait_for(success_log.logged.wait(), 10)
+
+        request_data: Final = {"litellm_logging_obj": logging_obj, "metadata": {}}
+        await self._run(
+            request_data,
+            original_exception=HTTPException(status_code=400, detail="post_call guardrail rejected the image"),
+            dispatched_call_type="aimage_generation",
+        )
+
+        assert isinstance(success_log.cost, float) and success_log.cost > 0
+        assert failure_row_response_cost(request_data) == 0.0
+
+    @pytest.mark.asyncio
+    async def test_a_failure_after_an_enqueued_success_log_lifts_only_the_attempts_that_success_does_not_bill(self):
+        from datetime import datetime
+
+        from litellm.types.utils import Usage
+
+        logging_obj: Final = Logging(
+            model="gemini/gemini-3.1-flash-image",
+            messages=[],
+            stream=False,
+            call_type="aimage_generation",
+            start_time=datetime(2026, 1, 1, 12, 0, 0),
+            litellm_call_id="success-enqueued-with-carried-attempts",
+            function_id="fn",
+        )
+        logging_obj.record_served_rounds_for_failure(((Usage(prompt_tokens=9, completion_tokens=7), 0.02),))
+        logging_obj.carry_failed_attempt_usage()
+        logging_obj.record_partial_usage_for_failure(Usage(prompt_tokens=5, completion_tokens=3), 0.03)
+        logging_obj.carry_failed_attempt_usage()
+        assert logging_obj.claim_async_success_log()
+        logging_obj.mark_async_success_log_enqueued()
+        request_data: Final = {"litellm_logging_obj": logging_obj, "metadata": {}}
+
+        await self._run(request_data, original_exception=HTTPException(status_code=400, detail="rejected"))
+
+        assert request_data["response_cost"] == pytest.approx(0.03)
+        assert request_data["combined_usage_object"].completion_tokens == 3
+
+    @pytest.mark.asyncio
     async def test_client_disconnect_with_a_claimed_but_deferred_success_log_is_still_priced(self):
         """With a post_call guardrail registered the success log is claimed but parked in the deferred slot,
         and a 499 raised before the flush means it never runs. Nothing else bills that request, so the
