@@ -280,13 +280,16 @@ def apply_grounding_request_counts(
     return counted.model_copy(update=updates)
 
 
+_ChunkT = TypeVar("_ChunkT")
+
+
 class ChunkProcessor:
     def __init__(self, chunks: list, messages: Sequence[object] | None = None):
         self.chunks = self._sort_chunks(chunks)
         self.messages = messages
         self.first_chunk = chunks[0]
 
-    def _sort_chunks(self, chunks: list) -> list:
+    def _sort_chunks(self, chunks: list[_ChunkT]) -> list[_ChunkT]:
         if not chunks:
             return []
 
