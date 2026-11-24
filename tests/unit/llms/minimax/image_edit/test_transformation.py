@@ -159,6 +159,7 @@ def test_minimax_image_edit_bills_its_token_rates(model: str):
         ({"extra_body": {"area": "1K"}}, {"area": "1K"}),
         ({"area": "2K", "extra_body": {"area": "1K"}}, {"area": "1K"}),
         ({"extra_body": {"model": "MiniMax-H3-Image-Highspeed", "seed": 7}}, {"seed": "7"}),
+        ({"additional_drop_params": ["imageConfig"], "imageConfig[aspectRatio]": "9:16", "seed": 7}, {"seed": "7"}),
         (
             {
                 "extra_body": {
