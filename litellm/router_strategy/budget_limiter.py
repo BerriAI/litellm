@@ -149,7 +149,7 @@ class RouterBudgetLimiting(CustomLogger):
     def __init__(
         self,
         dual_cache: DualCache,
-        provider_budget_config: GenericBudgetConfigType | None,
+        provider_budget_config: dict | None,
         model_list: Sequence[Mapping[str, object]] | None = None,
         clock: Callable[[], float] = time.time,
     ):
@@ -224,7 +224,7 @@ class RouterBudgetLimiting(CustomLogger):
         if len(healthy_deployments) == 0:
             return healthy_deployments
 
-        potential_deployments: list[dict[str, object]] = []
+        potential_deployments: list[dict] = []
 
         (
             cache_keys,
@@ -360,7 +360,7 @@ class RouterBudgetLimiting(CustomLogger):
     async def _async_get_cache_keys_for_router_budget_limiting(
         self,
         healthy_deployments: Sequence[Mapping[str, object]],
-        request_kwargs: Mapping[str, object] | None = None,
+        request_kwargs: dict | None = None,
     ) -> tuple[
         list[str],
         dict[str, GenericBudgetInfo],
@@ -564,7 +564,7 @@ class RouterBudgetLimiting(CustomLogger):
         return True
 
     @with_service_target("router_budgets")
-    async def async_log_success_event(self, kwargs, response_obj: object, start_time: object, end_time: object):
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         """Original method now uses helper functions"""
         verbose_router_logger.debug("in RouterBudgetLimiting.async_log_success_event")
         callback_fields: Final = _CALLBACK_FIELDS.validate_python(kwargs)
@@ -754,7 +754,7 @@ class RouterBudgetLimiting(CustomLogger):
         if redis_cache is None or not await self._flush_queued_increment_operations(redis_cache):
             return
 
-        cache_keys: Final[list[str]] = []
+        cache_keys: Final = []
 
         if self.provider_budget_config is not None:
             for provider, config in self.provider_budget_config.items():
@@ -915,7 +915,7 @@ class RouterBudgetLimiting(CustomLogger):
 
     @staticmethod
     def should_init_router_budget_limiter(
-        provider_budget_config: Mapping[str, object] | None,
+        provider_budget_config: dict | None,
         model_list: Sequence[Mapping[str, object]] | None = None,
     ):
         """
