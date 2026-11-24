@@ -259,22 +259,24 @@ async fn an_open_webui_request_is_parsed_without_include_image_base64(#[case] op
     assert_eq!(requests[2].json().get("drop_params"), None);
 }
 
+#[rstest]
+#[case::base64(json!({"include_image_base64": true}), "include_image_base64")]
+#[case::links(json!({"output": {"include_images": true}}), "output.include_images")]
 #[tokio::test]
-async fn include_image_base64_true_is_refused_before_anything_is_uploaded() {
+async fn an_image_request_is_refused_before_anything_is_uploaded(
+    #[case] options: Value,
+    #[case] refused: &str,
+) {
     let upstream = upstream([]).await;
 
-    let error = perform(nace_request(
-        "nace/parse-low",
-        &upstream.uri(),
-        json!({"include_image_base64": true}),
-    ))
-    .await
-    .unwrap_err();
+    let error = perform(nace_request("nace/parse-low", &upstream.uri(), options))
+        .await
+        .unwrap_err();
 
     assert!(
         error
             .to_string()
-            .contains("unsupported OCR param include_image_base64"),
+            .contains(&format!("unsupported OCR param {refused}")),
         "{error}"
     );
     assert!(received(&upstream).await.is_empty());
@@ -1071,43 +1073,27 @@ async fn a_poll_that_names_another_job_is_refused_and_the_created_job_deleted() 
     );
 }
 
-#[rstest]
-#[case::succeeded(
-    vec![succeeded(workspace_source()), deleted()],
-    &["DELETE /v1/documents/workspaces/workspace-1/files/file-1"]
-)]
-#[case::failed(
-    vec![
-        status_job_failed(),
-        job_deleted(),
-        deleted(),
-    ],
-    &[
-        "DELETE /v1/documents/jobs/job-1",
-        "DELETE /v1/documents/workspaces/workspace-1/files/file-1"
-    ]
-)]
 #[tokio::test]
-async fn figure_crops_keep_a_finished_job_but_not_the_uploaded_file(
-    #[case] rest: Vec<ResponseTemplate>,
-    #[case] cleanup: &[&str],
-) {
-    let upstream = upload_upstream(rest).await;
+async fn dropped_image_links_are_not_requested_and_the_job_is_deleted() {
+    let upstream = upload_upstream([succeeded(workspace_source()), job_deleted(), deleted()]).await;
 
-    let _ = perform(nace_request(
+    perform(nace_request(
         "nace/parse-low",
         &upstream.uri(),
-        json!({"output": {"include_images": true}}),
+        json!({"output": {"include_images": true}, "drop_params": true}),
     ))
-    .await;
+    .await
+    .unwrap();
 
-    assert_eq!(calls(&received(&upstream).await)[3..], *cleanup);
-}
-
-fn status_job_failed() -> ResponseTemplate {
-    let mut failed = job("failed", workspace_source(), Value::Null);
-    failed["error"] = json!({"code": "corrupt_file", "message": "Not a PDF.", "retryable": false});
-    json_response(failed)
+    let requests = received(&upstream).await;
+    assert_eq!(requests[2].json()["output"].get("include_images"), None);
+    assert_eq!(
+        calls(&requests)[3..],
+        [
+            "DELETE /v1/documents/jobs/job-1",
+            "DELETE /v1/documents/workspaces/workspace-1/files/file-1"
+        ]
+    );
 }
 
 #[tokio::test]

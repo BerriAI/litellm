@@ -62,6 +62,7 @@ const CLEANUP_TIMEOUT: Duration = Duration::from_secs(5);
 const DEFAULT_USER_AGENT: &str = "litellm";
 const OUTPUT_PARAM: &str = "output";
 const INCLUDE_IMAGE_BASE64_PARAM: &str = "include_image_base64";
+const INCLUDE_IMAGES_OUTPUT: &str = "include_images";
 const PAGE_RANGES_PARAM: &str = "page_ranges";
 const PAGES_PARAM: &str = "pages";
 const RESERVED_PARAMS: &[&str] = &["source", "corpus_sources", "parse_mode", "parser"];
@@ -81,8 +82,8 @@ const SUPPORTED_PARAMS: &[&str] = &[
     INCLUDE_IMAGE_BASE64_PARAM,
     DROP_PARAMS_PARAM,
 ];
-const IMAGE_BASE64_REASON: &str =
-    "Nace returns images as links through `output.include_images`, never as base64";
+const IMAGES_REASON: &str =
+    "Nace returns images only as links that need the Nace API key and are deleted with the job";
 const URL_SOURCE_EXTENSIONS: &[&str] = &[
     "avi", "csv", "doc", "docm", "docx", "eml", "flac", "htm", "html", "jpeg", "jpg", "json",
     "log", "m4a", "md", "mdx", "mkv", "mov", "mp3", "mp4", "mpga", "msg", "oft", "oga", "ogg",
@@ -334,7 +335,7 @@ impl BaseOcrConfig for NaceParseConfig {
         {
             return Err(Error::UnsupportedParam {
                 param: INCLUDE_IMAGE_BASE64_PARAM.to_owned(),
-                reason: IMAGE_BASE64_REASON,
+                reason: IMAGES_REASON,
             });
         }
         compose_body(non_default_params, &Map::new(), SUPPORTED_PARAMS)?;
@@ -344,10 +345,25 @@ impl BaseOcrConfig for NaceParseConfig {
             Some(Value::Object(output)) => output.clone(),
             Some(_) => return Err(Error::request_field(OUTPUT_PARAM, Refusal::OutputShape)),
         };
+        if output.get(INCLUDE_IMAGES_OUTPUT) == Some(&Value::Bool(true))
+            && !drops_unsupported_params(non_default_params)
+        {
+            return Err(Error::UnsupportedParam {
+                param: format!("{OUTPUT_PARAM}.{INCLUDE_IMAGES_OUTPUT}"),
+                reason: IMAGES_REASON,
+            });
+        }
         let mapped_pages = pages_to_ranges(non_default_params.get(PAGES_PARAM))?;
         Ok(NaceParseParams {
             parse_mode,
-            output: page_split_output(output),
+            output: page_split_output(
+                output
+                    .into_iter()
+                    .filter(|(name, value)| {
+                        !(name == INCLUDE_IMAGES_OUTPUT && *value == Value::Bool(true))
+                    })
+                    .collect(),
+            ),
             options: non_default_params
                 .select(SUPPORTED_PARAMS)
                 .into_iter()
@@ -466,9 +482,7 @@ impl BaseOcrConfig for NaceParseConfig {
             },
             Err(error) => Err(error),
         };
-        if let Some(job_id) = job_id
-            && !(response.is_ok() && followups.keep_job)
-        {
+        if let Some(job_id) = job_id {
             delete_job(context.client, context.connection, context.headers, &job_id).await;
         }
         response
@@ -895,8 +909,6 @@ struct Followups<'a> {
     headers: &'a [(String, String)],
     native: bool,
     page_ranges: Vec<PageRange>,
-    /// The result links figure crops that live only as long as the job.
-    keep_job: bool,
 }
 
 impl<'a> Followups<'a> {
@@ -908,11 +920,6 @@ impl<'a> Followups<'a> {
             headers: context.headers,
             native: context.request_format == OcrResponseFormat::Native,
             page_ranges: requested_page_ranges(context.optional_params).unwrap_or_default(),
-            keep_job: context
-                .optional_params
-                .get(OUTPUT_PARAM)
-                .and_then(|output| output.get("include_images"))
-                == Some(&Value::Bool(true)),
         }
     }
 
@@ -1777,6 +1784,14 @@ mod tests {
         json!({"output": {"formats": ["markdown"]}}),
         json!({"formats": ["markdown"], "include_page_markers": true})
     )]
+    #[case::image_links_dropped(
+        json!({"output": {"include_images": true, "table_format": "html"}, "drop_params": true}),
+        json!({"table_format": "html", "include_page_markers": true})
+    )]
+    #[case::image_links_off(
+        json!({"output": {"include_images": false}}),
+        json!({"include_images": false, "include_page_markers": true})
+    )]
     fn output_always_keeps_markdown_and_page_markers(
         #[case] options: Value,
         #[case] expected: Value,
@@ -1831,14 +1846,25 @@ mod tests {
     }
 
     #[rstest]
-    #[case::alone(json!({"include_image_base64": true}))]
-    #[case::drop_params_off(json!({"include_image_base64": true, "drop_params": false}))]
-    fn include_image_base64_true_is_refused_unless_params_are_dropped(#[case] options: Value) {
+    #[case::base64_alone(json!({"include_image_base64": true}), "include_image_base64")]
+    #[case::base64_drop_params_off(
+        json!({"include_image_base64": true, "drop_params": false}),
+        "include_image_base64"
+    )]
+    #[case::links_alone(json!({"output": {"include_images": true}}), "output.include_images")]
+    #[case::links_drop_params_off(
+        json!({"output": {"include_images": true}, "drop_params": false}),
+        "output.include_images"
+    )]
+    fn image_requests_are_refused_unless_params_are_dropped(
+        #[case] options: Value,
+        #[case] refused: &str,
+    ) {
         let error = NaceParseConfig
             .map_ocr_params(&arguments(options), "parse-low")
             .unwrap_err();
         assert!(
-            matches!(&error, Error::UnsupportedParam { param, .. } if param == INCLUDE_IMAGE_BASE64_PARAM),
+            matches!(&error, Error::UnsupportedParam { param, .. } if param == refused),
             "{error}"
         );
     }
