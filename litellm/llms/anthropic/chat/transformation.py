@@ -54,6 +54,7 @@ from litellm.litellm_core_utils.tool_fields import tool_params_without_hosted_mc
 from litellm.llms.base_llm.base_utils import (
     ResponseFormatSchema,
     as_json_object,
+    optional_str,
     response_format_schema,
     split_response_format_answer,
     type_to_response_format_param,
@@ -125,6 +126,7 @@ from ..common_utils import (
     REFUSAL_STOP_FIELDS,
     AnthropicError,
     AnthropicModelInfo,
+    chat_target_keeps_unsigned_thinking,
     eager_input_streaming_flag,
     process_anthropic_headers,
     refusal_provider_specific_fields,
@@ -2362,9 +2364,23 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         """Anthropic requires ``tools`` when messages include tool blocks; LiteLLM injects a dummy tool if omitted (no ``modify_params`` needed)."""
         from litellm.litellm_core_utils.prompt_templates.factory import (
             anthropic_messages_pt,
+            with_reasoning_content_as_thinking_block,
         )
 
-        if "tools" not in optional_params and messages is not None and has_tool_call_blocks(messages):
+        deployment_params: Final = _REQUEST_PARAMS_ADAPTER.validate_python(litellm_params)
+        keeps_unsigned_thinking: Final = chat_target_keeps_unsigned_thinking(
+            self._resolved_provider,
+            model,
+            optional_str(deployment_params.get("base_model")),
+            optional_str(deployment_params.get("api_base")),
+        )
+        replayed_messages: Final = (
+            [with_reasoning_content_as_thinking_block(message) for message in messages]
+            if keeps_unsigned_thinking
+            else messages
+        )
+
+        if "tools" not in optional_params and has_tool_call_blocks(replayed_messages):
             optional_params["tools"], _ = self._map_tools(add_dummy_tool(custom_llm_provider="anthropic"))
 
         # Drop thinking param if thinking is enabled but thinking_blocks are missing
@@ -2377,8 +2393,8 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         if (
             optional_params.get("thinking") is not None
             and messages is not None
-            and last_assistant_with_tool_calls_has_no_thinking_blocks(messages)
-            and not any_assistant_message_has_thinking_blocks(messages)
+            and last_assistant_with_tool_calls_has_no_thinking_blocks(replayed_messages)
+            and not any_assistant_message_has_thinking_blocks(replayed_messages)
         ):
             if litellm.modify_params:
                 optional_params.pop("thinking", None)
@@ -2423,15 +2439,18 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         _name_forward_map, _name_reverse_map = self._sanitize_tool_names_in_request(
             optional_params=optional_params,
         )
-        if _name_forward_map:
-            messages = self._rewrite_tool_names_in_messages(messages, _name_forward_map)
+        request_messages: Final = (
+            self._rewrite_tool_names_in_messages(replayed_messages, _name_forward_map)
+            if _name_forward_map
+            else replayed_messages
+        )
         if _name_reverse_map and isinstance(litellm_params, dict):
             litellm_params[ANTHROPIC_TOOL_NAME_REVERSE_MAP_KEY] = _name_reverse_map
 
         # Only the leading system run becomes the top-level system prompt. A later
         # system message stays in the conversation: hoisting it rewrites the cached
         # prefix and re-bills the whole history at cache-write pricing (#36559).
-        leading_system_run, later_messages = split_leading_system_run(messages)
+        leading_system_run, later_messages = split_leading_system_run(request_messages)
         anthropic_system_message_list: Final = self.translate_system_message(messages=list(leading_system_run))
         # Handling anthropic API Prompt Caching
         if len(anthropic_system_message_list) > 0:
@@ -2448,6 +2467,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 model=model,
                 messages=list(conversation),
                 llm_provider=self._resolved_provider,
+                keeps_unsigned_thinking=keeps_unsigned_thinking,
             )
         except Exception as e:
             raise AnthropicError(

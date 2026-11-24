@@ -2771,12 +2771,43 @@ def _pair_tool_calls_with_results(messages: Sequence[AllMessageValues]) -> tuple
 
 def _replayable_thinking_blocks(
     thinking_blocks: list[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock],
+    *,
+    keeps_unsigned_thinking: bool = False,
 ) -> list[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock]:
     return [
         _without_stream_index(_with_native_redacted_data(block))
         for block in thinking_blocks
-        if not is_unsignable_thinking_block(block)
+        if _is_replayable_thinking_block(block, keeps_unsigned_thinking=keeps_unsigned_thinking)
     ]
+
+
+def _is_replayable_thinking_block(block: object, *, keeps_unsigned_thinking: bool) -> bool:
+    if not is_unsignable_thinking_block(block):
+        return True
+    return keeps_unsigned_thinking and _is_unsigned_thinking_with_text(block)
+
+
+def _is_unsigned_thinking_with_text(block: object) -> bool:
+    if is_encrypted_reasoning_block(block):
+        return False
+    match block:
+        case {"type": "thinking", "thinking": str() as text}:
+            return bool(text.strip())
+        case _:
+            return False
+
+
+def with_reasoning_content_as_thinking_block(message: AllMessageValues) -> AllMessageValues:
+    match message:
+        case {"role": "assistant", "reasoning_content": str() as reasoning} if reasoning.strip() and not message.get(
+            "thinking_blocks"
+        ):
+            thinking_block: Final = ChatCompletionThinkingBlock(type="thinking", thinking=reasoning)
+            return cast(  # cast-ok: the pattern matched an assistant message, which carries thinking_blocks
+                AllMessageValues, {**message, "thinking_blocks": [thinking_block]}
+            )
+        case _:
+            return message
 
 
 def _without_stream_index(
@@ -2850,6 +2881,8 @@ def anthropic_messages_pt(
     messages: list[AllMessageValues],
     model: str,
     llm_provider: str,
+    *,
+    keeps_unsigned_thinking: bool = False,
 ) -> _AnthropicMessageList:
     """
     format messages for anthropic
@@ -3037,7 +3070,9 @@ def anthropic_messages_pt(
 
             _raw_thinking_blocks = assistant_content_block.get("thinking_blocks", None)
             thinking_blocks = (
-                _replayable_thinking_blocks(_raw_thinking_blocks) if _raw_thinking_blocks is not None else None
+                _replayable_thinking_blocks(_raw_thinking_blocks, keeps_unsigned_thinking=keeps_unsigned_thinking)
+                if _raw_thinking_blocks is not None
+                else None
             )
 
             # Check if tool_calls contain server tool calls (web search, etc.)
@@ -3201,7 +3236,9 @@ def anthropic_messages_pt(
                             continue
                         # handle thinking blocks
                         text_block = cast(str, m.get("text", ""))
-                        if m.get("type", "") == "thinking" and not is_unsignable_thinking_block(m):
+                        if m.get("type", "") == "thinking" and _is_replayable_thinking_block(
+                            m, keeps_unsigned_thinking=keeps_unsigned_thinking
+                        ):
                             anthropic_message: ChatCompletionThinkingBlock | AnthropicMessagesTextParam = cast(
                                 ChatCompletionThinkingBlock, m
                             )

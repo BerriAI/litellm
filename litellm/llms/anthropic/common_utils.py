@@ -156,6 +156,17 @@ def verifies_claude_thinking_signatures(custom_llm_provider: str | None, model: 
     return upstream is None or not replays_unsigned_thinking(upstream)
 
 
+_ANY_MODEL_ANTHROPIC_PROTOCOL_ROUTES: Final = frozenset({"anthropic"})
+
+
+def chat_target_keeps_unsigned_thinking(
+    custom_llm_provider: str, model: str, base_model: str | None, api_base: str | None
+) -> bool:
+    return custom_llm_provider in _ANY_MODEL_ANTHROPIC_PROTOCOL_ROUTES and not any(
+        verifies_claude_thinking_signatures(custom_llm_provider, name, api_base) for name in (model, base_model) if name
+    )
+
+
 def is_anthropic_messages_url(url: str) -> bool:
     """Check whether a URL addresses Anthropic's Messages API."""
     parsed_url: Final = urlparse(url)

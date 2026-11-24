@@ -2,6 +2,7 @@ import copy
 import json
 from collections.abc import Mapping
 from itertools import chain
+from types import MappingProxyType
 from typing import Final
 from unittest.mock import MagicMock, patch
 
@@ -10113,3 +10114,163 @@ def test_transform_request_leaves_the_callers_extra_body_for_a_repeat_call() -> 
 
     assert [request.get("top_k") for request in requests] == [5, 5]
     assert all("extra_body" not in request for request in requests)
+
+
+_EARLIER_REASONING: Final = "The user wants Paris weather, so I call get_weather first."
+_MOONSHOT_ANTHROPIC_PARAMS: Final = MappingProxyType({"api_base": "https://api.moonshot.ai/anthropic"})
+
+
+def _tool_loop_replaying(reasoning: Mapping[str, object]) -> list[dict[str, object]]:
+    return [
+        {"role": "user", "content": "What is the weather in Paris?"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {"id": "call_1", "type": "function", "function": {"name": "get_weather", "arguments": '{"city": "Paris"}'}}
+            ],
+            **reasoning,
+        },
+        {"role": "tool", "tool_call_id": "call_1", "content": "sunny, 21C"},
+    ]
+
+
+_REASONING_CONTENT_ONLY: Final = MappingProxyType({"reasoning_content": _EARLIER_REASONING})
+_UNSIGNED_THINKING_BLOCKS: Final = MappingProxyType(
+    {"thinking_blocks": [{"type": "thinking", "thinking": _EARLIER_REASONING, "signature": None}]}
+)
+
+
+def _replayed_assistant_content(
+    config: AnthropicConfig, model: str, reasoning: Mapping[str, object], litellm_params: Mapping[str, object]
+) -> list[object]:
+    request: Final = config.transform_request(
+        model=model,
+        messages=_tool_loop_replaying(reasoning),
+        optional_params={"max_tokens": 1024},
+        litellm_params=dict(litellm_params),
+        headers={},
+    )
+    return request["messages"][1]["content"]
+
+
+@pytest.mark.parametrize(
+    ("reasoning", "replayed_thinking"),
+    [
+        pytest.param(
+            _REASONING_CONTENT_ONLY,
+            {"type": "thinking", "thinking": _EARLIER_REASONING},
+            id="reasoning_content",
+        ),
+        pytest.param(
+            _UNSIGNED_THINKING_BLOCKS,
+            {"type": "thinking", "thinking": _EARLIER_REASONING, "signature": None},
+            id="unsigned_thinking_blocks",
+        ),
+    ],
+)
+def test_non_claude_anthropic_protocol_host_gets_the_earlier_turns_reasoning(
+    reasoning: Mapping[str, object], replayed_thinking: dict[str, object]
+) -> None:
+    content: Final = _replayed_assistant_content(AnthropicConfig(), "kimi-k3", reasoning, _MOONSHOT_ANTHROPIC_PARAMS)
+
+    assert content == [
+        replayed_thinking,
+        {"type": "tool_use", "id": "call_1", "name": "get_weather", "input": {"city": "Paris"}},
+    ]
+
+
+@pytest.mark.parametrize(
+    ("config", "model", "litellm_params"),
+    [
+        pytest.param(AnthropicConfig(), "claude-sonnet-5-5", {}, id="anthropic_api"),
+        pytest.param(
+            AnthropicConfig(), "claude-sonnet-5-5", {"api_base": "https://llm-gateway.example.com"}, id="claude_gateway"
+        ),
+        pytest.param(
+            AnthropicConfig(),
+            "sonnet-alias",
+            {"api_base": "https://llm-gateway.example.com", "base_model": "claude-sonnet-5-5"},
+            id="claude_base_model_behind_an_alias",
+        ),
+        pytest.param(
+            AmazonAnthropicClaudeConfig(),
+            "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abc123",
+            {},
+            id="bedrock_inference_profile_arn",
+        ),
+        pytest.param(
+            AzureAnthropicConfig(),
+            "prod-sonnet",
+            {"api_base": "https://example.services.ai.azure.com/anthropic"},
+            id="azure_deployment_name",
+        ),
+        pytest.param(VertexAIAnthropicConfig(), "claude-sonnet-5-5", {}, id="vertex_ai"),
+    ],
+)
+@pytest.mark.parametrize(
+    "reasoning", [_REASONING_CONTENT_ONLY, _UNSIGNED_THINKING_BLOCKS], ids=["reasoning_content", "unsigned_thinking_blocks"]
+)
+def test_claude_signature_checking_target_never_gets_unsigned_reasoning(
+    config: AnthropicConfig, model: str, litellm_params: Mapping[str, object], reasoning: Mapping[str, object]
+) -> None:
+    content: Final = _replayed_assistant_content(config, model, reasoning, litellm_params)
+
+    assert [block["type"] for block in content] == ["tool_use"]
+
+
+@pytest.mark.parametrize(
+    "reasoning", [_REASONING_CONTENT_ONLY, _UNSIGNED_THINKING_BLOCKS], ids=["reasoning_content", "unsigned_thinking_blocks"]
+)
+def test_claude_name_on_a_host_that_replays_unsigned_thinking_gets_the_reasoning(
+    reasoning: Mapping[str, object],
+) -> None:
+    content: Final = _replayed_assistant_content(
+        AnthropicConfig(), "claude-sonnet-5-5", reasoning, {"api_base": "https://api.deepseek.com/anthropic"}
+    )
+
+    assert [block["type"] for block in content] == ["thinking", "tool_use"]
+
+
+@pytest.mark.parametrize(
+    "reasoning",
+    [
+        pytest.param({"reasoning_content": "  "}, id="blank_reasoning_content"),
+        pytest.param({"thinking_blocks": [{"type": "thinking", "thinking": "", "signature": None}]}, id="blank_block"),
+        pytest.param({"thinking_blocks": [{"type": "thinking", "signature": None}]}, id="block_without_text"),
+        pytest.param(
+            {
+                "thinking_blocks": [
+                    {
+                        "type": "thinking",
+                        "thinking": _EARLIER_REASONING,
+                        "signature": encrypted_reasoning_signature("gAAAAB-openai-encrypted"),
+                    }
+                ]
+            },
+            id="another_providers_encrypted_reasoning",
+        ),
+    ],
+)
+def test_non_claude_host_never_gets_blank_or_encrypted_reasoning(reasoning: Mapping[str, object]) -> None:
+    content: Final = _replayed_assistant_content(AnthropicConfig(), "kimi-k3", reasoning, _MOONSHOT_ANTHROPIC_PARAMS)
+
+    assert [block["type"] for block in content] == ["tool_use"]
+
+
+def test_replayed_reasoning_content_keeps_thinking_enabled_under_modify_params(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "modify_params", True)
+    thinking: Final = {"type": "enabled", "budget_tokens": 2000}
+
+    request: Final = AnthropicConfig().transform_request(
+        model="kimi-k3",
+        messages=_tool_loop_replaying(_REASONING_CONTENT_ONLY),
+        optional_params={"thinking": dict(thinking), "max_tokens": 4096},
+        litellm_params=dict(_MOONSHOT_ANTHROPIC_PARAMS),
+        headers={},
+    )
+
+    assert request.get("thinking") == thinking
+    assert request["messages"][1]["content"][0] == {"type": "thinking", "thinking": _EARLIER_REASONING}

@@ -193,6 +193,10 @@ def as_json_object(value: object) -> Mapping[str, JsonValue] | None:
         return None
 
 
+def optional_str(value: object) -> str | None:
+    return value if isinstance(value, str) else None
+
+
 def _names(value: object) -> frozenset[str]:
     try:
         return _NAMES.validate_python(value)
