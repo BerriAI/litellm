@@ -1513,6 +1513,20 @@ class TestBedrockMantleGemma4SchemaKeywords:
 
         assert (body["tools"][0]["function"]["parameters"] == _ask_user_question_parameters()) is keeps_every_keyword
 
+    @pytest.mark.parametrize(
+        "model, supports_all",
+        [("google.gemma-4-31b", False), ("eu-central-1/google.gemma-4-e2b", False), ("openai.gpt-oss-120b", True)],
+    )
+    def test_a_cost_map_row_without_the_flag_falls_back_to_its_family(self, model: str, supports_all: bool) -> None:
+        from litellm.llms.bedrock_mantle.common_utils import mantle_supports_all_json_schema_keywords
+
+        rows_without_the_flag: Final = {
+            f"bedrock_mantle/{name}": {"litellm_provider": "bedrock_mantle", "mode": "chat"}
+            for name in ("google.gemma-4-31b", "google.gemma-4-e2b", "openai.gpt-oss-120b")
+        }
+
+        assert mantle_supports_all_json_schema_keywords(model, {}, rows_without_the_flag) is supports_all
+
     @pytest.mark.parametrize("model, drops", [("google.gemma-4-31b", True), ("openai.gpt-oss-120b", False)])
     def test_schemas_sent_through_extra_body_follow_the_same_rule(self, monkeypatch, model: str, drops: bool) -> None:
         _use_mantle_bearer(monkeypatch)

@@ -125,6 +125,9 @@ def _with_schemas_model_accepts(
 ) -> Mapping[str, object]:
     if mantle_supports_all_json_schema_keywords(model, litellm_params, model_cost_table.published()):
         return params
+    verbose_logger.debug(
+        "Bedrock Mantle %s does not support all JSON schema keywords, so the ones it rejects are dropped", model
+    )
     return MappingProxyType({key: _chat_value_gemma_4_accepts(key, value) for key, value in params.items()})
 
 

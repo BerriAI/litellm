@@ -187,10 +187,11 @@ def mantle_supports_all_json_schema_keywords(
     if declared is not None:
         return declared
     bare_model: Final = split_mantle_region_prefix(model)[1]
-    entry: Final = as_str_mapping(model_cost.get(f"bedrock_mantle/{bare_model}"))
-    if entry is None:
-        return not bare_model.startswith("google.gemma-4")
-    return entry.get("supports_all_json_schema_keywords") is not False
+    match as_str_mapping(model_cost.get(f"bedrock_mantle/{bare_model}")):
+        case {"supports_all_json_schema_keywords": bool(listed)}:
+            return listed
+        case _:
+            return not bare_model.startswith("google.gemma-4")
 
 
 def drop_schema_keywords_gemma_4_rejects(schema: Mapping[str, object]) -> Mapping[str, object]:
