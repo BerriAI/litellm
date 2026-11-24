@@ -1097,9 +1097,11 @@ def transform_chat_to_interactions_request(
         model=model,
         model_info=litellm_params.get("model_info"),
     )
-    safety_settings: Final = interactions_safety_settings(
-        requested_safety_settings(normalized_params), custom_llm_provider
-    )
+    safety_settings: Final[list[JsonValue]] = [
+        {**setting}
+        for setting in interactions_safety_settings(requested_safety_settings(normalized_params), custom_llm_provider)
+        or ()
+    ]
     explicit_store: Final = normalized_params.get("store")
     passthrough_entries: Final = {
         **(
@@ -1124,7 +1126,7 @@ def transform_chat_to_interactions_request(
         **({"tools": tools} if tools is not None else {}),
         **({"response_format": response_format} if response_format is not None else {}),
         **({"generation_config": generation_config} if generation_config is not None else {}),
-        **({"safety_settings": [dict(setting) for setting in safety_settings]} if safety_settings else {}),
+        **({"safety_settings": safety_settings} if safety_settings else {}),
         **({"stream": True} if stream else {}),
         **passthrough_entries,
     }
