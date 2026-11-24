@@ -483,14 +483,17 @@ fn windows_keyed(windows: &[WindowIdentity], key: &str) -> Vec<WindowIdentity> {
         .collect()
 }
 
-/// How a WebSocket closed, which decides what its admission reservation settles to.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, strum::EnumString)]
-#[strum(serialize_all = "snake_case")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, strum::EnumString, strum::VariantArray)]
 pub enum SocketClose {
+    #[strum(serialize = "refused_at_open")]
     RefusedAtOpen,
+    #[strum(serialize = "relay_failed")]
     RelayFailed,
+    #[strum(serialize = "turns_finished")]
     TurnsFinished,
+    #[strum(serialize = "turn_unfinished")]
     TurnUnfinished,
+    #[strum(serialize = "settled_by_its_log")]
     SettledByItsLog,
 }
 
