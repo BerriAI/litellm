@@ -21,6 +21,7 @@ from pydantic import TypeAdapter
 
 from litellm.batches.batch_utils import batch_cost_is_final
 from litellm.constants import MAX_FILE_LIST_LIMIT
+from litellm.llms.vertex_ai.common_utils import GEMINI_FILES_API_V1_URI_PREFIX
 from litellm.proxy._types import ProxyException
 from litellm.repositories.managed_file_repository import ManagedFileRepository
 from litellm.repositories.table_repositories import (
@@ -376,6 +377,7 @@ def _iter_stored_forms(bare_ids: Sequence[str]) -> Iterator[str]:
         yield bare_id
         yield f"files/{bare_id}"
         yield f"{_GEMINI_FILES_URL}{bare_id}"
+        yield f"{GEMINI_FILES_API_V1_URI_PREFIX}{bare_id}"
 
 
 def provider_file_id_spellings(file_id: str) -> tuple[str, ...]:
