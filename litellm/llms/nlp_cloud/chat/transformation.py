@@ -107,7 +107,7 @@ class NLPCloudConfig(BaseConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, str],
         model: str,
         messages: list[AllMessageValues],
         optional_params: Mapping[str, object],
@@ -138,10 +138,10 @@ class NLPCloudConfig(BaseConfig):
     def map_openai_params(
         self,
         non_default_params: Mapping[str, object],
-        optional_params: dict,
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:
         for param, value in non_default_params.items():
             if param == "max_tokens":
                 optional_params["max_length"] = value
@@ -161,7 +161,9 @@ class NLPCloudConfig(BaseConfig):
                 optional_params["stop_sequences"] = value
         return optional_params
 
-    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: dict[str, str] | httpx.Headers
+    ) -> BaseLLMException:
         return NLPCloudError(status_code=status_code, message=error_message, headers=headers)
 
     def transform_request(
@@ -170,7 +172,7 @@ class NLPCloudConfig(BaseConfig):
         messages: list[AllMessageValues],
         optional_params: Mapping[str, object],
         litellm_params: Mapping[str, object],
-        headers: dict,
+        headers: dict[str, str],
     ) -> dict[str, object]:
         text: Final = " ".join(convert_content_list_to_str(message) for message in messages)
 

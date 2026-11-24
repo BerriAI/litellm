@@ -222,7 +222,7 @@ def convert_to_ollama_image(openai_image_url: str):
         )
 
 
-def _handle_ollama_system_message(messages: list, prompt: str, msg_i: int) -> tuple[str, int]:
+def _handle_ollama_system_message(messages: Sequence[AllMessageValues], prompt: str, msg_i: int) -> tuple[str, int]:
     system_content_str = ""
     ## MERGE CONSECUTIVE SYSTEM CONTENT ##
     while msg_i < len(messages) and messages[msg_i]["role"] == "system":
@@ -2629,7 +2629,7 @@ def add_cache_control_to_content(
     | AnthropicMessagesDocumentParam
     | AnthropicMessagesToolUseParam
     | ChatCompletionThinkingBlock,
-    original_content_element: dict | AllMessageValues | ChatCompletionFileObject,
+    original_content_element: Mapping[str, object] | AllMessageValues | ChatCompletionFileObject,
 ):
     cache_control_param: Final = original_content_element.get("cache_control")
     if cache_control_param is not None and isinstance(cache_control_param, dict):
@@ -4480,7 +4480,7 @@ def gemini_text_image_pt(messages: Sequence[Mapping[str, object]]):
     return content
 
 
-def azure_text_pt(messages: list):
+def azure_text_pt(messages: Sequence[Mapping[str, object]]):
     prompt = ""
     for message in messages:
         if isinstance(message["content"], str):
@@ -4495,7 +4495,7 @@ def azure_text_pt(messages: list):
 
 
 ###### AZURE AI #######
-def stringify_json_tool_call_content(messages: list) -> list:
+def stringify_json_tool_call_content(messages: list[AllMessageValues]) -> list[AllMessageValues]:
     """
 
     - Check 'content' in tool role -> convert to dict (if not) -> stringify
