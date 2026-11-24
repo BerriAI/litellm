@@ -3826,6 +3826,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "litellm-call-scope"
+version = "0.1.0"
+dependencies = [
+ "rstest",
+ "thiserror 2.0.21",
+ "tokio",
+]
+
+[[package]]
 name = "litellm-callbacks"
 version = "0.1.0"
 dependencies = [
@@ -4214,6 +4223,7 @@ dependencies = [
  "jiff",
  "litellm-at-rest",
  "litellm-auth-store",
+ "litellm-call-scope",
  "litellm-callbacks",
  "litellm-callbacks-budgets",
  "litellm-callbacks-model-capacity",
@@ -4355,6 +4365,7 @@ dependencies = [
  "litellm-cache",
  "litellm-cache-memory",
  "litellm-cache-response",
+ "litellm-call-scope",
  "litellm-callbacks",
  "litellm-config",
  "litellm-core-utils",
@@ -4562,6 +4573,7 @@ dependencies = [
  "litellm-cache",
  "litellm-cache-memory",
  "litellm-cache-response",
+ "litellm-call-scope",
  "litellm-core-utils",
  "litellm-cost",
  "litellm-env",
@@ -4846,6 +4858,7 @@ dependencies = [
  "litellm-auth-store",
  "litellm-cache",
  "litellm-cache-response",
+ "litellm-call-scope",
  "litellm-callbacks",
  "litellm-callbacks-budgets",
  "litellm-callbacks-legacy-python",
@@ -4978,6 +4991,7 @@ dependencies = [
  "litellm-auth-azure",
  "litellm-auth-gcp",
  "litellm-auth-types",
+ "litellm-call-scope",
  "litellm-circuit-breaker",
  "litellm-env",
  "litellm-error",
@@ -5031,6 +5045,7 @@ dependencies = [
  "jiff",
  "litellm-cache",
  "litellm-cache-memory",
+ "litellm-call-scope",
  "litellm-circuit-breaker",
  "litellm-python-compat",
  "litellm-redis-client",
@@ -5054,6 +5069,7 @@ dependencies = [
 name = "litellm-redis-testing"
 version = "0.1.0"
 dependencies = [
+ "litellm-call-scope",
  "pkcs8",
  "rcgen",
  "tempfile",
@@ -5077,6 +5093,7 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "jiff",
+ "litellm-call-scope",
  "litellm-core-utils",
  "litellm-db",
  "litellm-error",

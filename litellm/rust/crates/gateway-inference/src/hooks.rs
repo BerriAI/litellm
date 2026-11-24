@@ -167,7 +167,7 @@ where
             success_log,
         }) => {
             if let Some(served) = success_log {
-                record::spawn_in_call(async move { hooks.succeeded(served).await });
+                litellm_call_scope::spawn_in_call(async move { hooks.succeeded(served).await });
             }
             Ok(response)
         }
