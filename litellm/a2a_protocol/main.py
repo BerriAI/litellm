@@ -737,12 +737,13 @@ async def asend_message_streaming(
             agent_extra_headers=agent_extra_headers,
         )
         caller_logging_obj: Final = kwargs.get("litellm_logging_obj")
+        bridge_agent_name: Final = agent_name if agent_name is not None else "unknown"
         bridge_logging_obj: Final = (
             caller_logging_obj
             if isinstance(caller_logging_obj, Logging)
             else _build_streaming_logging_obj(
                 request=request,
-                agent_name=agent_name or "unknown",
+                agent_name=bridge_agent_name,
                 agent_id=agent_id,
                 litellm_params=litellm_params,
                 metadata=metadata,
@@ -757,7 +758,7 @@ async def asend_message_streaming(
             stream=bridge_stream,
             request=request,
             logging_obj=bridge_logging_obj,
-            agent_name=agent_name or "unknown",
+            agent_name=bridge_agent_name,
         )
         try:
             async for chunk in bridge_iterator:
