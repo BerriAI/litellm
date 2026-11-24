@@ -948,10 +948,19 @@ class AmazonBedrockGlobalConfig:
         ]
 
 
+class _HeaderSink(Protocol):
+    def add_header(self, _name: str, _value: object, /) -> object: ...
+
+
+class _RequestWithHeaders(Protocol):
+    @property
+    def headers(self) -> _HeaderSink: ...
+
+
 def add_custom_header(headers: Mapping[str, object]):
     """Closure to capture the headers and add them."""
 
-    def callback(request, **kwargs: object):
+    def callback(request: _RequestWithHeaders, **kwargs: object):
         """Actual callback function that Boto3 will call."""
         for header_name, header_value in headers.items():
             request.headers.add_header(header_name, header_value)
@@ -2783,7 +2792,7 @@ class CommonBatchFilesUtils:
     def sign_aws_request(
         self,
         service_name: str,
-        data: str | dict | BedrockCreateBatchRequest,
+        data: str | dict[str, object] | BedrockCreateBatchRequest,
         endpoint_url: str,
         optional_params: dict,
         method: str = "POST",
@@ -2866,7 +2875,7 @@ class CommonBatchFilesUtils:
         optional_params: Mapping[str, object],
         bucket_env_var: str = "AWS_S3_BUCKET_NAME",
         key_prefix: str = "litellm",
-    ) -> tuple:
+    ) -> tuple[object, str]:
         """
         Get S3 bucket and generate a unique key from configuration.
 

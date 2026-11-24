@@ -2,7 +2,7 @@
 ## handler file for TextCompletionCodestral Integration - https://codestral.com/
 
 import json
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from functools import partial
 from typing import Final, Protocol
 
@@ -102,7 +102,7 @@ async def make_call(
     headers: dict[str, object],
     data: str,
     model: str,
-    messages: list,
+    messages: Sequence[object],
     logging_obj: LiteLLMLogging,
 ):
     response: Final = await client.post(api_base, headers=headers, data=data, stream=True)
@@ -129,11 +129,11 @@ class CodestralTextCompletion:
     def _validate_environment(
         self,
         api_key: str | None,
-        user_headers: dict,
-    ) -> dict:
+        user_headers: dict[str, object],
+    ) -> dict[str, object]:
         if api_key is None:
             raise ValueError("Missing CODESTRAL_API_Key - Please add CODESTRAL_API_Key to your environment variables")
-        headers = {
+        headers: dict[str, object] = {
             "content-type": "application/json",
             "Authorization": f"Bearer {api_key}",
         }
@@ -168,12 +168,12 @@ class CodestralTextCompletion:
         model_response: TextCompletionResponse,
         stream: bool,
         logging_obj: LiteLLMLogging,
-        optional_params: dict,
+        optional_params: Mapping[str, object],
         api_key: str,
-        data: dict | str,
-        messages: list,
-        print_verbose,
-        encoding,
+        data: Mapping[str, object] | str,
+        messages: Sequence[object],
+        print_verbose: Callable[[str], object],
+        encoding: object,
     ) -> TextCompletionResponse:
         ## LOGGING
         logging_obj.post_call(
@@ -239,18 +239,18 @@ class CodestralTextCompletion:
         model: str,
         messages: list,
         api_base: str,
-        custom_prompt_dict: dict,
+        custom_prompt_dict: Mapping[str, Mapping[str, object]],
         model_response: TextCompletionResponse,
-        print_verbose: Callable,
-        encoding,
+        print_verbose: Callable[[str], object],
+        encoding: object,
         api_key: str,
         logging_obj: LiteLLMLogging,
         optional_params: dict,
         timeout: float | httpx.Timeout,
-        acompletion=None,
-        litellm_params=None,
-        logger_fn=None,
-        headers: dict = {},
+        acompletion: object = None,
+        litellm_params: object = None,
+        logger_fn: object = None,
+        headers: dict[str, object] = {},
     ) -> TextCompletionResponse | CustomStreamWrapper:
         headers = self._validate_environment(api_key, headers)
 
@@ -375,16 +375,16 @@ class CodestralTextCompletion:
     async def async_completion(
         self,
         model: str,
-        messages: list,
+        messages: Sequence[object],
         api_base: str,
         model_response: TextCompletionResponse,
-        print_verbose: Callable,
-        encoding,
+        print_verbose: Callable[[str], object],
+        encoding: object,
         api_key: str,
         logging_obj: LiteLLMLogging,
-        stream,
+        stream: bool,
         data: dict,
-        optional_params: dict,
+        optional_params: Mapping[str, object],
         timeout: float | httpx.Timeout,
         litellm_params: object = None,
         logger_fn: object = None,
@@ -423,11 +423,11 @@ class CodestralTextCompletion:
     async def async_streaming(
         self,
         model: str,
-        messages: list,
+        messages: Sequence[object],
         api_base: str,
         model_response: TextCompletionResponse,
-        print_verbose: Callable,
-        encoding,
+        print_verbose: Callable[[str], object],
+        encoding: object,
         api_key: str,
         logging_obj: LiteLLMLogging,
         data: dict,

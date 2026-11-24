@@ -181,7 +181,7 @@ def rerank(
             present_version_params=present_version_params,
         )
 
-        optional_rerank_params: Final[dict] = get_optional_rerank_params(
+        optional_rerank_params: Final[dict[str, object]] = get_optional_rerank_params(
             rerank_provider_config=rerank_provider_config,
             model=model,
             drop_params=kwargs.get("drop_params") or litellm.drop_params or False,

@@ -212,7 +212,7 @@ class ApplyGuardrailMessageSelection(NamedTuple):
     skip_scan: bool = False
 
 
-def _redact_pii_matches(response_json: dict) -> dict:
+def _redact_pii_matches(response_json: dict[str, object]) -> dict[str, object]:
     """
     Redact match-like fields from a Bedrock ApplyGuardrail JSON payload.
 
@@ -762,9 +762,9 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
 
     def _locate_message_texts_slice(
         self,
-        structured_messages: list[AllMessageValues],
+        structured_messages: Sequence[AllMessageValues],
         target_index: int,
-        texts: list[str],
+        texts: Sequence[str],
     ) -> tuple[int, int] | None:
         """
         Map one message's text segments to their (offset, length) slice in the
@@ -789,7 +789,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
 
     def _select_messages_for_apply_guardrail(
         self,
-        texts: list[str],
+        texts: Sequence[str],
         inputs: "GenericGuardrailAPIInputs",
         request_data: dict[str, object],
         input_type: Literal["request", "response"],
@@ -903,9 +903,9 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
 
     def _merge_filtered_messages(
         self,
-        original_messages: list[AllMessageValues] | None,
+        original_messages: Sequence[AllMessageValues] | None,
         updated_target_messages: list[AllMessageValues],
-        target_indices: list[int] | None,
+        target_indices: Sequence[int] | None,
     ) -> list[AllMessageValues]:
         if not target_indices:
             return updated_target_messages
@@ -973,7 +973,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         optional_params: object,
         aws_region_name: str,
         api_key: str | None = None,
-        extra_headers: dict[str, str] | None = None,
+        extra_headers: Mapping[str, str] | None = None,
         request_path: str | None = None,
     ):
         headers = {"Content-Type": "application/json"}
@@ -2006,7 +2006,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
 
     @staticmethod
     def _chunk_texts_into_checks_messages(
-        role: Literal["user", "assistant", "system"], texts: list[str]
+        role: Literal["user", "assistant", "system"], texts: Sequence[str]
     ) -> list[BedrockChecksMessage]:
         """Group ``texts`` into role-tagged messages of <= the API content-block cap.
 
@@ -2236,7 +2236,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
 
     @staticmethod
     def _build_invoke_checks_tracing_detail(
-        violations: list[BedrockChecksViolation],
+        violations: Sequence[BedrockChecksViolation],
     ) -> GuardrailTracingDetail:
         tracing_detail: Final[GuardrailTracingDetail] = {}
         categories: Final = [
@@ -2250,7 +2250,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         return tracing_detail
 
     def _get_block_exception_for_checks(
-        self, violations: list[BedrockChecksViolation], request_data: dict | None = None
+        self, violations: Sequence[BedrockChecksViolation], request_data: dict | None = None
     ) -> HTTPException | ModifyResponseException:
         """Build the block exception for an over-threshold InvokeGuardrailChecks result.
 
@@ -3250,7 +3250,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         return masked_output_text
 
     def _apply_masking_to_messages(
-        self, messages: list[AllMessageValues], masked_texts: list[str]
+        self, messages: list[AllMessageValues], masked_texts: Sequence[str]
     ) -> list[AllMessageValues]:
         """
         Apply masked texts to message content using index tracking.
@@ -3292,7 +3292,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         return updated_messages
 
     def _mask_content_list(
-        self, content_list: Sequence[object], masked_texts: list[str], masking_index: int
+        self, content_list: Sequence[object], masked_texts: Sequence[str], masking_index: int
     ) -> tuple[list[Any], int]:
         """
         Apply masking to a list of content items.
