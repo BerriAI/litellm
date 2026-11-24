@@ -3765,6 +3765,44 @@ async def test_transformed_transcription_completion_never_sends_response_create(
 
 
 @pytest.mark.asyncio
+async def test_a_client_disconnect_before_the_completed_event_still_logs_its_usage():
+    usage: Final = {"type": "duration", "seconds": 90.0}
+    batch: Final = [
+        {"type": "conversation.item.input_audio_transcription.delta", "item_id": "turn_1", "delta": "Hello"},
+        {"type": "input_audio_buffer.speech_stopped", "item_id": "turn_1"},
+        {"type": "conversation.item.input_audio_transcription.completed", "item_id": "turn_1", "transcript": "Hello.", "usage": usage},
+    ]
+    provider_config: Final = MagicMock()
+    provider_config.requires_session_configuration.return_value = True
+    provider_config.transform_realtime_response.return_value = {
+        "response": batch,
+        "current_output_item_id": None,
+        "current_response_id": None,
+        "current_delta_chunks": None,
+        "current_conversation_id": None,
+        "current_item_chunks": None,
+        "current_delta_type": None,
+        "session_configuration_request": None,
+    }
+    client_ws: Final = MagicMock()
+    client_ws.send_text = AsyncMock(side_effect=asyncio.CancelledError)
+    streaming: Final = RealTimeStreaming(
+        client_ws,
+        MagicMock(),
+        MagicMock(),
+        provider_config=provider_config,
+        model="scribe_v2_realtime",
+        force_transcription_model="scribe_v2_realtime",
+    )
+
+    with pytest.raises(asyncio.CancelledError):
+        await streaming._handle_provider_config_message("{}")
+
+    logged: Final = [dict(message) for message in streaming.messages]
+    assert {"type": "conversation.item.input_audio_transcription.completed", "usage": usage} in logged
+
+
+@pytest.mark.asyncio
 async def test_transcription_session_still_runs_transcription_guardrail(monkeypatch: pytest.MonkeyPatch):
     class BlockingGuardrail(CustomGuardrail):
         async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
