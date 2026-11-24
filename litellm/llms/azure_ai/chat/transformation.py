@@ -658,8 +658,8 @@ class AzureAIStudioConfig(OpenAIConfig):
         model: str,
         messages: list[AllMessageValues],
         optional_params: dict[str, object],
-        litellm_params: dict,
-        headers: dict,
+        litellm_params: dict[str, object],
+        headers: dict[str, object],
     ) -> dict[str, object]:
         extra_body: Final = optional_params.pop("extra_body", {})
         if extra_body and isinstance(extra_body, dict):

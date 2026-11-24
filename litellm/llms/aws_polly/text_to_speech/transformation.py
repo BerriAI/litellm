@@ -78,7 +78,7 @@ class AWSPollyTextToSpeechConfig(BaseTextToSpeechConfig, BaseAWSLLM):
         input: str,
         voice: str | dict | None,
         optional_params: dict,
-        litellm_params_dict: dict,
+        litellm_params_dict: dict[str, object],
         logging_obj: "LiteLLMLoggingObj",
         timeout: float | httpx.Timeout,
         extra_headers: dict[str, object] | None,

@@ -3134,7 +3134,7 @@ class ComplexityRouter(CustomLogger):
     ) -> Mapping[str, object]:
         entries: Final = self.config.tier_model_configs.get(_tier_name(tier), ()) if tier is not None else ()
         entry: Final = next((candidate for candidate in entries if candidate.model_name == model), None)
-        explicit: Final = entry.litellm_params if entry is not None else MappingProxyType({})
+        explicit: Final[Mapping[str, object]] = entry.litellm_params if entry is not None else MappingProxyType({})
         if not self.config.max_tokens_from_tier_model or not OUTPUT_TOKEN_CEILING_PARAMS.isdisjoint(explicit):
             return explicit
         ceiling: Final = self._group_output_ceiling(model)

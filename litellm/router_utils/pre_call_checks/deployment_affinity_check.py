@@ -399,7 +399,7 @@ class DeploymentAffinityCheck(CustomLogger):
         messages: list[AllMessageValues] | None,
         request_kwargs: dict[str, object] | None = None,
         parent_otel_span: Span | None = None,
-    ) -> list[dict]:
+    ) -> list[dict[str, object]]:
         """
         Optionally filter healthy deployments based on:
         1. `previous_response_id` (Responses API continuity) [highest priority]
@@ -599,7 +599,7 @@ class DeploymentAffinityCheck(CustomLogger):
 
     async def async_pre_call_deployment_hook(
         self, kwargs: dict[str, object], call_type: CallTypes | None
-    ) -> dict | None:
+    ) -> dict[str, object] | None:
         """
         Persist/update the API-key -> deployment mapping for this request.
 

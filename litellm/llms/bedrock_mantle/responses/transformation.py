@@ -241,10 +241,10 @@ class BedrockMantleResponsesAPIConfig(BedrockMantleAuthMixin, OpenAIResponsesAPI
         self,
         model: str,
         input: "str | ResponseInputParam",
-        response_api_optional_request_params: dict,
+        response_api_optional_request_params: dict[str, object],
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> dict:
+    ) -> dict[str, object]:
         params: Final = cast(  # cast-ok: the base signature leaves the params dict untyped
             "ResponsesAPIOptionalRequestParams", response_api_optional_request_params
         )

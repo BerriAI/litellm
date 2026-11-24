@@ -2059,7 +2059,7 @@ class Logging(LiteLLMLoggingBaseClass):
             return custom_logger
         return None
 
-    def _get_raw_request_body(self, data: dict | str | None) -> dict:
+    def _get_raw_request_body(self, data: dict[str, object] | str | None) -> dict:
         if data is None:
             return {"error": "Received empty dictionary for raw request body"}
         if isinstance(data, str):
@@ -8150,7 +8150,7 @@ class StandardLoggingPayloadSetup:
         mcp_tool_call_metadata: StandardLoggingMCPToolCall | None = None,
         vector_store_request_metadata: list[StandardLoggingVectorStoreRequest] | None = None,
         usage_object: dict | None = None,
-        proxy_server_request: dict | None = None,
+        proxy_server_request: Mapping[str, object] | None = None,
         start_time: dt_object | None = None,
         response_id: str | None = None,
         custom_llm_provider: str | None = None,

@@ -122,7 +122,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         data: dict,
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: "LiteLLMLoggingObj | None" = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Process input messages by applying guardrails to text content.
         """
