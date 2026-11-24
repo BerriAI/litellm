@@ -845,7 +845,6 @@ async fn read_bytes(
         })
 }
 
-/// The credential of the `Authorization` header, without its `Bearer` scheme.
 fn api_key(headers: &[(String, String)]) -> Option<&str> {
     headers
         .iter()

@@ -230,10 +230,10 @@ async fn an_inline_document_is_uploaded_parsed_by_file_and_deleted() {
         "{multipart}"
     );
     assert_eq!(parse.json()["source"], workspace_source());
-    for request in [grant, parse] {
-        assert_eq!(request.header("authorization"), Some("Bearer test-key"));
-        assert_eq!(request.header("x-trace"), Some("nace-test"));
-    }
+    assert_eq!(
+        [grant, parse].map(|request| (request.header("authorization"), request.header("x-trace"))),
+        [(Some("Bearer test-key"), Some("nace-test")); 2]
+    );
     assert_eq!(delete.header("authorization"), Some("Bearer test-key"));
     assert_eq!(delete.header("x-trace"), None);
 }
@@ -409,10 +409,13 @@ async fn a_queued_job_is_polled_until_it_ends() {
             "DELETE /v1/documents/jobs/job-1",
         ]
     );
-    for poll in &requests[1..] {
-        assert_eq!(poll.header("authorization"), Some("Bearer test-key"));
-        assert_eq!(poll.header("x-trace"), None);
-    }
+    assert_eq!(
+        requests[1..]
+            .iter()
+            .map(|call| (call.header("authorization"), call.header("x-trace")))
+            .collect::<Vec<_>>(),
+        [(Some("Bearer test-key"), None); 3]
+    );
     assert_eq!(response.pages.len(), 3);
     assert_eq!(
         response.provider_native_response.map(Value::Object),
