@@ -9774,7 +9774,8 @@ def _dump_json_with_null_finish_reasons(chunk: BaseModel, null_finish_reasons: t
                 {**choice, "finish_reason": None} if null_finish_reason else choice
                 for choice, null_finish_reason in zip(choices, null_finish_reasons, strict=True)
             ],
-        }
+        },
+        inf_nan_mode="null",
     )
 
 
