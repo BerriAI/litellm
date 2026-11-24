@@ -144,7 +144,10 @@ class PassThroughStreamingHandler:
     ) -> None:
         if endpoint_type == EndpointType.ANTHROPIC:
             AnthropicPassthroughLoggingHandler.record_partial_usage_for_failure(
-                litellm_logging_obj=litellm_logging_obj, request_body=request_body, all_chunks=raw_bytes
+                litellm_logging_obj=litellm_logging_obj,
+                request_body=request_body,
+                all_chunks=raw_bytes,
+                url_route=stream_context.url_route if stream_context is not None else None,
             )
             return
         if stream_context is None or not raw_bytes:
