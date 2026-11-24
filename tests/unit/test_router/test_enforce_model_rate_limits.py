@@ -19,7 +19,6 @@ from litellm.redis.stores.router_usage import CounterIncrement, CounterKind, Rou
 from litellm.router_utils.pre_call_checks.model_rate_limit_check import (
     ModelRateLimitingCheck,
 )
-from litellm.utils import get_utc_datetime
 from tests.unit.redis.stores.router_usage_double import FakeUsageHandle, usage_store
 
 TPM_DEPLOYMENT = {
@@ -28,6 +27,7 @@ TPM_DEPLOYMENT = {
     "model_info": {"id": "replica-test-id"},
     "model_name": "test-model",
 }
+FIXED_NOW = datetime(2026, 1, 1, 12, 0, 30, tzinfo=timezone.utc)
 
 
 def _memory_usage() -> RouterUsageStore:
@@ -35,7 +35,7 @@ def _memory_usage() -> RouterUsageStore:
 
 
 def _check(
-    usage: RouterUsage | None = None, clock: Callable[[], datetime] = get_utc_datetime
+    usage: RouterUsage | None = None, clock: Callable[[], datetime] = lambda: FIXED_NOW
 ) -> ModelRateLimitingCheck:
     return ModelRateLimitingCheck(usage=usage or _memory_usage(), clock=clock)
 
@@ -47,9 +47,8 @@ def _counter(deployment: dict, kind: CounterKind, window: str) -> UsageCounter:
 
 
 def _this_minute(deployment: dict, kind: CounterKind, value: float) -> dict[UsageCounter, float]:
-    """``value`` under this minute's counter and the next, so a test crossing a minute still finds it."""
-    now: Final = get_utc_datetime()
-    return {_counter(deployment, kind, minute.strftime("%H-%M")): value for minute in (now, now + timedelta(minutes=1))}
+    """``value`` under this test's fixed minute counter."""
+    return {_counter(deployment, kind, FIXED_NOW.strftime("%H-%M")): value}
 
 
 RPM_DEPLOYMENT: Final = {
@@ -70,7 +69,7 @@ _SUCCESS_KWARGS: Final = {
 
 
 def _tpm_increments(handle: FakeUsageHandle) -> tuple[tuple[object, object], ...]:
-    """The (tokens, ttl) each success charged to test-id's gpt-4 tpm counter this minute or the next."""
+    """The (tokens, ttl) each success charged to test-id's gpt-4 tpm counter."""
     tpm_counters: Final = frozenset(_this_minute(RPM_DEPLOYMENT, "tpm", 0))
     return tuple((args[1], args[2]) for name, args in handle.calls if name == "increment" and args[0] in tpm_counters)
 

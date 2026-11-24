@@ -137,9 +137,9 @@ class ModelRateLimitingCheck(CustomLogger):
     this check actively enforces those limits across ALL routing strategies.
     """
 
-    def __init__(self, usage: RouterUsage, clock: Callable[[], datetime] = get_utc_datetime) -> None:
+    def __init__(self, usage: RouterUsage, clock: Callable[[], datetime] | None = None) -> None:
         self.usage = usage
-        self.clock = clock
+        self.clock = clock if clock is not None else get_utc_datetime
         # model_ids already warned about itpm/otpm + tpm/rpm on the same deployment,
         # so the warning is logged once per deployment rather than per request.
         self._io_token_conflict_warned_ids: set[str] = set()

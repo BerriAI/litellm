@@ -658,6 +658,7 @@ impl<C: RouterCache> Health<C> {
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
+    use std::sync::{Arc, Mutex};
 
     use rstest::rstest;
 
@@ -741,8 +742,32 @@ mod tests {
         .unwrap()
     }
 
+    #[derive(Clone)]
+    struct TestClock(Arc<Mutex<SystemTime>>);
+
+    impl TestClock {
+        fn new(time: SystemTime) -> Self {
+            Self(Arc::new(Mutex::new(time)))
+        }
+
+        fn set(&self, time: SystemTime) {
+            *self.0.lock().unwrap() = time;
+        }
+    }
+
+    impl Clock for TestClock {
+        fn now(&self) -> SystemTime {
+            *self.0.lock().unwrap()
+        }
+    }
+
     fn health() -> Health<InMemoryRouterCache> {
-        Health::new(InMemoryRouterCache::default(), Arc::new(SystemClock))
+        Health::new(
+            InMemoryRouterCache::default(),
+            Arc::new(TestClock::new(
+                UNIX_EPOCH + Duration::from_secs(86_400 * 3 + 10 * 3_600 + 30),
+            )),
+        )
     }
 
     fn settings(dynamic: RouterDynamicConfig) -> Settings {
@@ -1308,7 +1333,9 @@ mod tests {
     #[tokio::test]
     async fn usage_is_keyed_by_the_model_served(#[case] model: Option<&str>, #[case] keyed: &str) {
         let cache = InMemoryRouterCache::default();
-        let clock = Arc::new(SystemClock);
+        let clock = Arc::new(TestClock::new(
+            UNIX_EPOCH + Duration::from_secs(86_400 * 3 + 10 * 3_600 + 30),
+        ));
         let health = Health::new(cache.clone(), clock.clone());
         let deployment = Deployment::from_spec(deployment("a", serde_json::json!({}))).unwrap();
 
@@ -1329,5 +1356,24 @@ mod tests {
                 requests: Some(1.0),
             },
         );
+    }
+
+    #[tokio::test]
+    async fn usage_moves_to_a_new_bucket_at_the_minute_boundary() {
+        let cache = InMemoryRouterCache::default();
+        let before_boundary =
+            UNIX_EPOCH + Duration::from_secs(86_400 * 3 + 10 * 3_600 + 59 * 60 + 59);
+        let clock = Arc::new(TestClock::new(before_boundary));
+        let health = Health::new(cache, clock.clone());
+        let deployment = Deployment::from_spec(deployment("a", serde_json::json!({}))).unwrap();
+
+        health
+            .add_usage(&deployment, None, 15.0, 1.0)
+            .await
+            .unwrap();
+        assert_eq!(health.usage(&deployment).await.unwrap(), (15, 1));
+
+        clock.set(before_boundary + Duration::from_secs(1));
+        assert_eq!(health.usage(&deployment).await.unwrap(), (0, 0));
     }
 }

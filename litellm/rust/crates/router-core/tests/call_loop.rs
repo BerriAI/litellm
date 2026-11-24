@@ -432,6 +432,7 @@ fn router(config: RouterConfig, dynamic: serde_json::Value, host: Arc<ScriptedHo
     let dynamic: RouterDynamicConfig = serde_json::from_value(dynamic).unwrap();
     let router = Router::builder(config, dynamic)
         .randomness(Arc::new(SeededRandomness::new(7)))
+        .clock(Arc::new(StoppedClock(utc_hour(10))))
         .build()
         .unwrap();
     Hosted { router, host }
@@ -1371,7 +1372,7 @@ async fn a_reported_success_keeps_the_filled_wildcard_model() {
         ..SuccessReport::default()
     };
     router.report_success("w1", 7.0, 0.0, report).await.unwrap();
-    let minute = current_minute(std::time::SystemTime::now());
+    let minute = current_minute(std::time::UNIX_EPOCH + Duration::from_secs(utc_hour(10)));
     let tokens = |model: &str| {
         host.cache
             .counted(&UsageWindow {

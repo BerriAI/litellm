@@ -1,5 +1,5 @@
 import asyncio
-from datetime import datetime, timedelta
+from datetime import datetime, timezone
 from typing import Final
 
 import pytest
@@ -8,12 +8,24 @@ from litellm import Router, token_counter
 from litellm.redis.stores.router_usage import UsageCounter
 from litellm.router_strategy.lowest_tpm_rpm_v2 import LowestTPMLoggingHandler_v2, PrefetchedUsage
 from litellm.types.router import DeploymentTypedDict, LiteLLMParamsTypedDict, RouterErrors
-from litellm.utils import get_utc_datetime
 from tests.unit.redis.stores.router_usage_double import FakeUsageHandle, usage_store
 
 MODEL_GROUP: Final = "lowest-tpm-router"
 HIGH_USAGE_DEPLOYMENT_ID: Final = "highest-usage"
 LOW_USAGE_DEPLOYMENT_ID: Final = "lowest-usage"
+FIXED_NOW = datetime(2026, 1, 1, 12, 0, 30, tzinfo=timezone.utc)
+
+
+class FixedDateTime(datetime):
+    @classmethod
+    def now(cls, tz: timezone | None = None) -> datetime:
+        return FIXED_NOW if tz is not None else FIXED_NOW.replace(tzinfo=None)
+
+
+@pytest.fixture(autouse=True)
+def fixed_router_clock(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("litellm.router_strategy.lowest_tpm_rpm_v2.get_utc_datetime", lambda: FIXED_NOW)
+    monkeypatch.setattr("litellm.router_strategy.lowest_tpm_rpm.datetime", FixedDateTime)
 
 
 def _deployment(deployment_id: str) -> DeploymentTypedDict:
@@ -42,16 +54,8 @@ def test_usage_based_routing_v1_selects_the_lowest_recorded_tpm() -> None:
         HIGH_USAGE_DEPLOYMENT_ID: 100,
         LOW_USAGE_DEPLOYMENT_ID: 1,
     }
-    now: Final = datetime.now()
-    cache_keys: Final = tuple(
-        f"{MODEL_GROUP}:tpm:{(now + timedelta(minutes=offset)).strftime('%H-%M')}"
-        for offset in range(60)
-    )
-
-    for cache_key in cache_keys:
-        router.cache.set_cache(
-            key=cache_key, value=usage_by_deployment, ttl=float("inf")
-        )
+    minute: Final = FIXED_NOW.strftime("%H-%M")
+    router.cache.set_cache(key=f"{MODEL_GROUP}:tpm:{minute}", value=usage_by_deployment, ttl=float("inf"))
 
     deployment: Final = router.get_available_deployment(
         model=MODEL_GROUP,
@@ -70,13 +74,12 @@ def test_usage_based_routing_v1_skips_a_deployment_whose_tpm_limit_is_used_up() 
         routing_strategy="usage-based-routing",
         num_retries=0,
     )
-    now: Final = datetime.now()
-    for offset in range(-1, 2):
-        router.cache.set_cache(
-            key=f"{MODEL_GROUP}:tpm:{(now + timedelta(minutes=offset)).strftime('%H-%M')}",
-            value={LOW_USAGE_DEPLOYMENT_ID: 100, HIGH_USAGE_DEPLOYMENT_ID: 500},
-            ttl=float("inf"),
-        )
+    minute: Final = FIXED_NOW.strftime("%H-%M")
+    router.cache.set_cache(
+        key=f"{MODEL_GROUP}:tpm:{minute}",
+        value={LOW_USAGE_DEPLOYMENT_ID: 100, HIGH_USAGE_DEPLOYMENT_ID: 500},
+        ttl=float("inf"),
+    )
 
     deployment: Final = router.get_available_deployment(
         model=MODEL_GROUP,
@@ -92,7 +95,7 @@ async def test_v2_async_selection_uses_prefetched_counters_only_when_they_cover_
         {"model_name": "g", "litellm_params": {"model": "m"}, "model_info": {"id": "a"}},
         {"model_name": "g", "litellm_params": {"model": "m"}, "model_info": {"id": "b"}},
     ]
-    minute = get_utc_datetime().strftime("%H-%M")
+    minute = FIXED_NOW.strftime("%H-%M")
     tpm_counters = tuple(UsageCounter.for_deployment(d, "m", "tpm", minute) for d in ("a", "b"))
     counters = tpm_counters + tuple(UsageCounter.for_deployment(d, "m", "rpm", minute) for d in ("a", "b"))
     handle = FakeUsageHandle(redis=dict(zip(tpm_counters, [100, 10])))
@@ -184,13 +187,12 @@ def _router_with_recorded_rpm(recorded: int, enable_pre_call_checks: bool) -> Ro
         enable_pre_call_checks=enable_pre_call_checks,
         num_retries=0,
     )
-    now: Final = datetime.now()
-    for offset in range(-1, 2):
-        router.cache.set_cache(
-            key=f"{MODEL_GROUP}:rpm:{(now + timedelta(minutes=offset)).strftime('%H-%M')}",
-            value={LOW_USAGE_DEPLOYMENT_ID: recorded},
-            ttl=float("inf"),
-        )
+    minute: Final = FIXED_NOW.strftime("%H-%M")
+    router.cache.set_cache(
+        key=f"{MODEL_GROUP}:rpm:{minute}",
+        value={LOW_USAGE_DEPLOYMENT_ID: recorded},
+        ttl=float("inf"),
+    )
     return router
 
 
