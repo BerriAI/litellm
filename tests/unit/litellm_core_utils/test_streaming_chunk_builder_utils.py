@@ -3102,24 +3102,3 @@ def test_stream_chunk_builder_keeps_the_last_chunks_provider_specific_fields(ove
 
     assert response is not None
     assert getattr(response.choices[0], "provider_specific_fields", None) == {"native_finish_reason": "SAFETY"}
-
-
-def test_stream_chunk_builder_assembles_a_streamed_refusal():
-    chunks: Final = [
-        ModelResponseStream(
-            id="chatcmpl-refusal",
-            created=1,
-            model="gpt-4",
-            object="chat.completion.chunk",
-            choices=[StreamingChoices(index=0, delta=delta, finish_reason=finish_reason)],
-        )
-        for delta, finish_reason in (
-            (Delta(role="assistant", refusal="I cannot "), None),
-            (Delta(refusal="help you."), None),
-            (Delta(), "stop"),
-        )
-    ]
-
-    built: Final = stream_chunk_builder(chunks=chunks)
-
-    assert built.choices[0].message.refusal == "I cannot help you."

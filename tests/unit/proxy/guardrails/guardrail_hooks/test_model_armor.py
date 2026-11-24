@@ -14,6 +14,7 @@ import litellm
 import litellm.types.utils
 from litellm._logging import verbose_proxy_logger
 from litellm.caching import DualCache
+from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, MaskedHTTPStatusError
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.anthropic_sse import anthropic_sse_error_frames
@@ -6543,8 +6544,14 @@ async def test_post_call_masking_masks_responses_text_beside_a_tool_call_with_it
 
 
 @pytest.mark.asyncio
-async def test_post_call_masking_blocks_responses_text_that_only_its_own_rescan_flags():
+async def test_post_call_masking_blocks_and_logs_responses_text_that_only_its_own_rescan_flags():
     guardrail: Final = _model_armor_post_call_guardrail(mask_response_content=True)
+    standard_logging_object: Final[dict[str, list[dict[str, dict[str, object]]] | None]] = {
+        "guardrail_information": None
+    }
+    logging_obj: Final = MagicMock(
+        spec=Logging, model_call_details={"standard_logging_object": standard_logging_object}
+    )
 
     async def redact_the_card_and_flag_the_text(json: dict[str, dict[str, str]], **kwargs: object) -> AsyncMock:
         scanned: Final = json["modelResponseData"]["text"]
@@ -6557,9 +6564,45 @@ async def test_post_call_masking_blocks_responses_text_that_only_its_own_rescan_
         pytest.raises(HTTPException) as blocked,
     ):
         await guardrail.async_post_call_success_hook(
-            data=dict(_POST_CALL_REQUEST),
+            data={**_POST_CALL_REQUEST, "litellm_logging_obj": logging_obj},
             user_api_key_dict=UserAPIKeyAuth(),
             response=_responses_body_with_a_card_tool_call(),
+        )
+
+    assert blocked.value.status_code == 400
+    assert [
+        entry["guardrail_response"]["model_armor_status"]
+        for entry in standard_logging_object["guardrail_information"] or ()
+    ] == ["success", "blocked"]
+
+
+@pytest.mark.asyncio
+async def test_post_call_masking_blocks_responses_text_whose_rescan_matches_without_a_rewrite():
+    guardrail: Final = _model_armor_post_call_guardrail(mask_response_content=True)
+    unrewritten_match: Final = {
+        "filterMatchState": "MATCH_FOUND",
+        "filterResults": {"sdp": {"sdpFilterResult": {"deidentifyResult": {"matchState": "MATCH_FOUND"}}}},
+    }
+
+    async def redact_the_card_then_match_without_a_rewrite(
+        json: dict[str, dict[str, str]], **kwargs: object
+    ) -> AsyncMock:
+        scanned: Final = json["modelResponseData"]["text"]
+        if "4111" in scanned:
+            return _armor_http_response(_armor_redaction(scanned.replace("4111", "[REDACTED]")))
+        return _armor_http_response(unrewritten_match)
+
+    response: Final = _responses_body_with_a_card_tool_call("your card is on file")
+    with (
+        patch.object(
+            guardrail.async_handler, "post", AsyncMock(side_effect=redact_the_card_then_match_without_a_rewrite)
+        ),
+        pytest.raises(HTTPException) as blocked,
+    ):
+        await guardrail.async_post_call_success_hook(
+            data=dict(_POST_CALL_REQUEST),
+            user_api_key_dict=UserAPIKeyAuth(),
+            response=response,
         )
 
     assert blocked.value.status_code == 400

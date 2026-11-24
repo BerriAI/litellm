@@ -971,10 +971,7 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
         response: LLMResponseTypes,
     ):
         """Post-call hook to sanitize model responses."""
-        from litellm.proxy.common_utils.callback_utils import (
-            add_guardrail_response_to_standard_logging_object,
-            add_guardrail_to_applied_guardrails_header,
-        )
+        from litellm.proxy.common_utils.callback_utils import add_guardrail_to_applied_guardrails_header
 
         if self.should_run_guardrail(data=data, event_type=GuardrailEventHooks.post_call) is not True:
             return
@@ -998,38 +995,15 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
                 request_data=request_data,
             )
 
-            # Attach Model Armor response & status to this request's metadata to prevent race conditions
-            if isinstance(armor_response, dict):
-                model_armor_logged_object: Final = {
-                    "model_armor_response": self._build_logging_response(armor_response),
-                    "model_armor_status": (
-                        "blocked"
-                        if self._should_block_content(
-                            armor_response,
-                            allow_sanitization=self.mask_response_content,
-                        )
-                        else "success"
-                    ),
-                }
-                standard_logging_guardrail_information: Final = StandardLoggingGuardrailInformation(
-                    guardrail_name=self.guardrail_name,
-                    guardrail_provider="model_armor",
-                    guardrail_mode=GuardrailEventHooks.post_call,
-                    guardrail_response=model_armor_logged_object,
-                    guardrail_status="success",
-                    start_time=data.get("start_time"),
-                )
-                add_guardrail_response_to_standard_logging_object(
-                    litellm_logging_obj=data.get("litellm_logging_obj"),
-                    guardrail_response=standard_logging_guardrail_information,
-                )
+            blocked: Final = self._should_block_content(armor_response, allow_sanitization=self.mask_response_content)
+            self._log_post_call_armor_response(data, armor_response, blocked=blocked)
 
             # Add guardrail to applied_guardrails BEFORE potential blocking
             # This ensures guardrail is recorded even when it blocks the request
             add_guardrail_to_applied_guardrails_header(request_data=data, guardrail_name=self.guardrail_name)
 
             # Check if content should be blocked
-            if self._should_block_content(armor_response, allow_sanitization=self.mask_response_content):
+            if blocked:
                 raise HTTPException(
                     status_code=400,
                     detail=self._build_block_error_detail("Response blocked by Model Armor", armor_response),
@@ -1119,16 +1093,44 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
         if message_sanitized and message_sanitized != message_text:
             await self._responses_handler().spread_text_rewrite(response, message_sanitized)
 
+    def _log_post_call_armor_response(
+        self, data: Mapping[str, object], armor_response: _ModelArmorResponse, *, blocked: bool
+    ) -> None:
+        from litellm.litellm_core_utils.litellm_logging import Logging
+        from litellm.proxy.common_utils.callback_utils import add_guardrail_response_to_standard_logging_object
+
+        logging_obj: Final = data.get("litellm_logging_obj")
+        start_time: Final = data.get("start_time")
+        add_guardrail_response_to_standard_logging_object(
+            litellm_logging_obj=logging_obj if isinstance(logging_obj, Logging) else None,
+            guardrail_response=StandardLoggingGuardrailInformation(
+                guardrail_name=self.guardrail_name,
+                guardrail_provider="model_armor",
+                guardrail_mode=GuardrailEventHooks.post_call,
+                guardrail_response={
+                    "model_armor_response": self._build_logging_response(armor_response),
+                    "model_armor_status": "blocked" if blocked else "success",
+                },
+                guardrail_status="success",
+                start_time=start_time if isinstance(start_time, float) else None,
+            ),
+        )
+
     async def _rescanned_message_text(self, message_text: str, request_data: Mapping[str, object]) -> str | None:
         armor_response: Final = await self.make_model_armor_request(
             content=message_text, source="model_response", request_data=request_data
         )
-        if self._should_block_content(armor_response, allow_sanitization=self.mask_response_content):
+        sanitized: Final = self._get_sanitized_content(armor_response)
+        blocked: Final = self._should_block_content(armor_response, allow_sanitization=self.mask_response_content) or (
+            not sanitized and self._has_deidentify_match(armor_response)
+        )
+        self._log_post_call_armor_response(request_data, armor_response, blocked=blocked)
+        if blocked:
             raise HTTPException(
                 status_code=400,
                 detail=self._build_block_error_detail("Response blocked by Model Armor", armor_response),
             )
-        return self._get_sanitized_content(armor_response)
+        return sanitized
 
     @staticmethod
     def _responses_message_text(response: ResponsesAPIResponse) -> str:

@@ -7113,6 +7113,28 @@ async def test_apply_to_output_blocks_a_responses_stream_before_any_event_is_rel
 
 
 @pytest.mark.asyncio
+async def test_apply_to_output_ends_a_responses_stream_before_any_event_when_the_analyzer_is_unreachable():
+    guardrail: Final = OPTIONAL_PresidioPIIMasking(
+        presidio_analyzer_api_base="http://127.0.0.1:9/",
+        presidio_anonymizer_api_base="http://127.0.0.1:9/",
+        apply_to_output=True,
+    )
+
+    async def stream():
+        for event in _message_stream_events():
+            yield event
+
+    released: Final = guardrail.async_post_call_streaming_iterator_hook(
+        user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
+        response=stream(),
+        request_data={"input": "hello"},
+    )
+
+    with pytest.raises(Exception, match="Presidio PII analysis failed"):
+        await anext(released)
+
+
+@pytest.mark.asyncio
 async def test_apply_to_output_ends_a_responses_stream_cut_short_mid_tool_call_before_releasing_its_raw_arguments():
     tool_call: Final = BaseLiteLLMOpenAIResponseObject(
         type="function_call", id="fc_1", call_id="call_1", name="save", arguments="", status="in_progress"
