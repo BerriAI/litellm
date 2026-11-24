@@ -278,9 +278,6 @@ _LATEST_TURN_KEPT_KEYS: Final = frozenset({"model"})
 _TURNS_KEYS: Final = ("messages", "input")
 
 
-_LOGGED_KWARG: Final = TypeAdapter(object)
-
-
 def _is_tool_output_block(block: object) -> bool:
     return _block_type(block) in _TOOL_OUTPUT_BLOCK_TYPES
 
@@ -749,7 +746,7 @@ def logging_payload(
         kwargs.get("completion_start_time", end_time)
     )
     call_type: Final = kwargs.get("call_type")
-    cache_hit: Final = _LOGGED_KWARG.validate_python(kwargs.get("cache_hit", False))
+    cache_hit: Final = kwargs.get("cache_hit", False)
 
     # Convert response_obj to dict first
     if isinstance(response_obj, dict):
