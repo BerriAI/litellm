@@ -7357,7 +7357,12 @@ def embedding(
             model,
             drop_unsupported_params,
         ),
-        **_embedding_headers("extra_headers", extra_headers, model, drop_unsupported_params),
+        **_embedding_headers(
+            "extra_headers",
+            cast(object, extra_headers),  # cast-ok: untyped request kwargs
+            model,
+            drop_unsupported_params,
+        ),
     }
     # Inject proxy auth headers if configured
     if litellm.proxy_auth is not None:
