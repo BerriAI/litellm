@@ -1550,6 +1550,10 @@ class Logging(LiteLLMLoggingBaseClass):
             self.litellm_params  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # Logging.litellm_params is untyped
         )
 
+    def get_preset_cache_key(self) -> str | None:
+        preset_cache_key: Final = self._litellm_params_view.get("preset_cache_key")
+        return preset_cache_key if isinstance(preset_cache_key, str) else None
+
     def get_router_pricing_provider(self) -> str | None:
         """The deployment's ``model_info.pricing_provider``, the provider its cost-map lookups run under."""
         litellm_params: Final = cast(  # cast-ok: callback metadata is caller-provided
