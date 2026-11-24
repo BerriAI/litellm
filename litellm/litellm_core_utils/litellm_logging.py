@@ -5675,7 +5675,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 and failure.__traceback__ is not None
             ):
                 self.model_call_details = {
-                    key: value for key, value in self.model_call_details.items() if key != "exception"
+                    key: value for key, value in self._model_call_details_view.items() if key != "exception"
                 }
 
     def failure_handler(
