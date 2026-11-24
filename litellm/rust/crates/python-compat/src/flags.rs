@@ -8,7 +8,6 @@
 //! | [`coerces_to_true`] | `litellm._redis._coerces_to_true(value)` |
 //! | [`str_to_bool_or_truthy`] | `bool(str_to_bool(value) if isinstance(value, str) else value)` |
 //! | [`lax_bool`] | `litellm.litellm_core_utils.core_helpers.lax_bool(value)` |
-//! | [`env_flag`] | `litellm.litellm_core_utils.core_helpers.env_flag({name: text}, name, logger)` |
 
 use crate::{Value, pydantic, truthy::truthy, unicode::isspace};
 
@@ -55,10 +54,4 @@ pub fn lax_bool(value: &Value) -> Option<bool> {
         Value::Str(text) => pydantic::lax_bool(&text.trim_matches(isspace).into()),
         other => pydantic::lax_bool(other),
     }
-}
-
-/// Blank text is off, and text pydantic's lax `bool` refuses is on, so a typo never silently disables a flag.
-pub fn env_flag(text: &str) -> bool {
-    let word = text.trim_matches(isspace);
-    !word.is_empty() && pydantic::lax_bool(&word.into()) != Some(false)
 }

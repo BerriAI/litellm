@@ -10,6 +10,7 @@ brand_self so all other major airlines are treated as competitors.
 """
 
 import json
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Final
 
@@ -156,7 +157,7 @@ class AirlineCompetitorIntentChecker(BaseCompetitorIntentChecker):
     with other_meaning/competitor signals and explicit markers.
     """
 
-    def __init__(self, config: dict[str, Any]) -> None:
+    def __init__(self, config: Mapping[str, object]) -> None:
         merged: Final[dict[str, Any]] = dict(config)
         if not merged.get("other_meaning_signals"):
             merged["other_meaning_signals"] = AIRLINE_OTHER_MEANING_SIGNALS

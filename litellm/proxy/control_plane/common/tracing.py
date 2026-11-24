@@ -15,6 +15,8 @@ from opentelemetry.semconv.attributes.server_attributes import SERVER_ADDRESS, S
 from opentelemetry.semconv.attributes.url_attributes import URL_PATH, URL_SCHEME
 from opentelemetry.trace import Span, SpanKind, StatusCode, Tracer, get_current_span, use_span
 from pydantic import AliasChoices
+from starlette.routing import Match, Mount
+from starlette.staticfiles import StaticFiles
 
 from litellm.integrations.otel.model.config import OpenTelemetryV2Config
 from litellm.integrations.otel.plumbing.context import inject_trace_context
@@ -28,6 +30,7 @@ if TYPE_CHECKING:
     from opentelemetry.sdk.resources import Resource
     from opentelemetry.sdk.trace import TracerProvider
     from opentelemetry.sdk.trace.export import SpanExporter
+    from starlette.types import ASGIApp, Receive, Scope, Send
 
 
 def _setting_aliases(field_name: Literal["endpoint", "traces_endpoint"]) -> tuple[str, ...]:
@@ -50,6 +53,7 @@ UNTRACED_PATHS: Final = (
     "/healthz",
     "/readyz",
 )
+DOCUMENTATION_ASSET_MOUNTS: Final = frozenset({"scalar", "swagger"})
 OTEL_ENDPOINT_ENV_ALIASES: Final = _setting_aliases("endpoint") + _setting_aliases("traces_endpoint")
 DEFAULT_PORTS: Final = {"https": 443, "http": 80}
 PATH_ATTRIBUTES: Final = ("http.target", "url.path")
@@ -239,12 +243,12 @@ class Telemetry:
     http_capture_headers_server_request: tuple[str, ...] | None = None
     http_capture_headers_sanitize_fields: tuple[str, ...] = SENSITIVE_HTTP_HEADERS
 
-    def instrument(self, app: FastAPI) -> None:
+    def instrument(self, app: FastAPI, *, documentation_paths: tuple[str, ...] = ()) -> None:
         if self.provider is None:
             return
         from opentelemetry.instrumentation import fastapi  # pyright: ignore[reportMissingTypeStubs]  # untyped contrib
 
-        paths: Final = (*UNTRACED_PATHS, app.docs_url, app.openapi_url)
+        paths: Final = (*UNTRACED_PATHS, app.docs_url, app.openapi_url, *documentation_paths)
         excluded_urls: Final = ",".join(f"^https?://[^/]+{re.escape(path)}$" for path in paths if path is not None)
         fastapi.FastAPIInstrumentor.instrument_app(  # pyright: ignore[reportUnknownMemberType]  # untyped contrib
             app,
@@ -259,6 +263,32 @@ class Telemetry:
             excluded_urls=excluded_urls,
             exclude_spans=["receive", "send"],
         )
+        instrumented_stack: Final = app.build_middleware_stack
+
+        def build_middleware_stack() -> ASGIApp:
+            from opentelemetry.instrumentation.utils import suppress_http_instrumentation
+
+            stack: Final = instrumented_stack()
+            asset_mounts: Final = tuple(
+                route
+                for route in app.routes
+                if isinstance(route, Mount)
+                and isinstance(route.app, StaticFiles)
+                and route.name in DOCUMENTATION_ASSET_MOUNTS
+            )
+
+            async def exclude_asset_requests(scope: Scope, receive: Receive, send: Send) -> None:
+                if scope["type"] == "http" and any(mount.matches(scope)[0] is Match.FULL for mount in asset_mounts):
+                    route: Final = next((route for route in app.routes if route.matches(scope)[0] is Match.FULL), None)
+                    if route in asset_mounts:
+                        with suppress_http_instrumentation():
+                            await stack(scope, receive, send)
+                        return
+                await stack(scope, receive, send)
+
+            return exclude_asset_requests
+
+        app.build_middleware_stack = build_middleware_stack  # rebind-ok: wrap the complete ASGI stack
 
     def shutdown(self) -> None:
         if self.provider is None:

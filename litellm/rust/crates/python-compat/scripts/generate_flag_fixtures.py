@@ -9,9 +9,7 @@ helpers left null for an input that is not a string.
 
 import ast
 import json
-import logging
 import sys
-from collections.abc import Mapping
 from pathlib import Path
 from typing import Final
 
@@ -28,20 +26,14 @@ def helpers(module, *names):
         if (isinstance(node, ast.FunctionDef) and node.name in names)
         or (isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name) and node.target.id in names)
     ]
-    namespace = {
-        "Final": Final,
-        "Mapping": Mapping,
-        "logging": logging,
-        "TypeAdapter": TypeAdapter,
-        "ValidationError": ValidationError,
-    }
+    namespace = {"Final": Final, "TypeAdapter": TypeAdapter, "ValidationError": ValidationError}
     exec(compile(ast.Module(body=functions, type_ignores=[]), module, "exec"), namespace)
     return [namespace[name] for name in names]
 
 
 _str_to_bool, _coerces_to_true = helpers("_redis.py", "_str_to_bool", "_coerces_to_true")
 (str_to_bool,) = helpers("secret_managers/main.py", "str_to_bool")
-_, lax_bool, env_flag = helpers("litellm_core_utils/core_helpers.py", "_LAX_BOOL", "lax_bool", "env_flag")
+_, lax_bool = helpers("litellm_core_utils/core_helpers.py", "_LAX_BOOL", "lax_bool")
 
 TEXTS = [
     "",
@@ -114,7 +106,6 @@ def row(value):
         "coerces_to_true": _coerces_to_true(value),
         "str_to_bool_or_truthy": bool(str_to_bool(value) if is_text else value),
         "lax_bool": lax_bool(value),
-        "env_flag": env_flag({"FLAG": value}, "FLAG", logging.getLogger("fixtures")) if is_text else None,
     }
 
 

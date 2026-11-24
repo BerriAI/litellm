@@ -3,7 +3,7 @@
 use litellm_python_compat::{
     Value,
     flags::{
-        coerces_to_true, env_flag, lax_bool, lower_is_true, redis_str_to_bool, str_to_bool,
+        coerces_to_true, lax_bool, lower_is_true, redis_str_to_bool, str_to_bool,
         str_to_bool_or_truthy,
     },
     json,
@@ -24,7 +24,6 @@ struct Row {
     coerces_to_true: bool,
     str_to_bool_or_truthy: bool,
     lax_bool: Option<bool>,
-    env_flag: Option<bool>,
 }
 
 fn fixtures() -> Fixtures {
@@ -49,7 +48,6 @@ fn replay(input: &str) -> Row {
         coerces_to_true: coerces_to_true(&value),
         str_to_bool_or_truthy: str_to_bool_or_truthy(&value),
         lax_bool: lax_bool(&value),
-        env_flag: text.map(env_flag),
     }
 }
 

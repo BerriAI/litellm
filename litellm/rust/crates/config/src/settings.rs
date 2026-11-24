@@ -1,18 +1,13 @@
-use litellm_env::Lookup;
-use litellm_python_compat::{
-    flags::{env_flag, lower_is_true},
-    lenient::{IsTrue, StrBool, Truthy},
-    number::float,
-};
+use litellm_python_compat::lenient::{IsTrue, LaxBool, StrBool, Truthy};
 use litellm_secret_value::SecretValue;
 use serde::Deserialize;
-use serde_with::serde_as;
+use serde_with::{Map, serde_as};
 use veil::Redact;
 
 use crate::{
     AdditionalFields, CacheSettings, JwtAuthSettings, LitellmRole, Object, PassThroughEndpoint,
-    RedisSettings, RolePermissions, RouteList, Spelled, Value,
-    value::{lax_flag, one_or_many, seconds},
+    PriorityReservation, PriorityReservationSettings, RedisSettings, RolePermissions, RouteList,
+    Spelled, Value, value::one_or_many,
 };
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
@@ -128,12 +123,15 @@ pub struct GeneralSettings {
     pub allowed_routes: Option<Box<[String]>>,
     pub custom_auth: Option<String>,
     pub litellm_key_header_name: Option<String>,
+    pub required_customer_headers: Box<[String]>,
     pub litellm_jwtauth: Option<JwtAuthSettings>,
     pub role_permissions: Option<Box<[RolePermissions]>>,
     /// `bool(general_settings.get("enforce_rbac"))`
     #[serde_as(as = "Truthy")]
     pub enforce_rbac: bool,
     pub user_header_name: Option<String>,
+    /// Which tokens a TPM limit counts: `input`, `output`, or anything else for their total.
+    pub token_rate_limit_type: Option<String>,
     #[serde(deserialize_with = "user_header_mappings")]
     pub user_header_mappings: Box<[UserHeaderMapping]>,
     #[serde(flatten)]
@@ -191,40 +189,16 @@ impl Default for GeneralSettings {
             allowed_routes: None,
             custom_auth: None,
             litellm_key_header_name: None,
+            required_customer_headers: Box::default(),
             litellm_jwtauth: None,
             role_permissions: None,
             enforce_rbac: false,
             user_header_name: None,
+            token_rate_limit_type: None,
             user_header_mappings: Box::default(),
             additional_fields: AdditionalFields::default(),
         }
     }
-}
-
-#[derive(Clone, Debug, Default, Deserialize)]
-#[serde(default)]
-pub struct RouterSettings {
-    pub routing_strategy: Option<String>,
-    pub routing_strategy_args: Option<Object>,
-    pub routing_groups: Option<Box<[Object]>>,
-    pub retry_policy: Option<Object>,
-    pub model_group_retry_policy: Option<Object>,
-    pub model_group_affinity_config: Option<Object>,
-    pub allowed_fails: Option<u64>,
-    pub cooldown_time: Option<f64>,
-    pub num_retries: Option<u64>,
-    pub timeout: Option<f64>,
-    pub max_retries: Option<u64>,
-    pub retry_after: Option<f64>,
-    pub fallbacks: Option<Box<[Object]>>,
-    pub context_window_fallbacks: Option<Box<[Object]>>,
-    pub model_group_alias: Option<Object>,
-    pub enable_tag_filtering: Option<bool>,
-    pub weights: Option<Object>,
-    pub tag_routing_prefix: Option<String>,
-    pub optional_pre_call_checks: Option<Box<[String]>>,
-    #[serde(flatten)]
-    pub additional_fields: AdditionalFields,
 }
 
 /// Callback entries can carry credentials inline, so only whether they are set is printed.
@@ -241,14 +215,31 @@ pub struct LiteLlmSettings {
     pub aiohttp_trust_env: Option<bool>,
     pub disable_aiohttp_trust_env: Option<bool>,
     pub disable_aiohttp_transport: Option<bool>,
-    #[serde(deserialize_with = "lax_flag")]
+    #[serde_as(as = "LaxBool")]
     pub drop_params: Option<bool>,
-    #[serde_as(as = "Truthy")]
-    pub reasoning_auto_summary: bool,
+    #[serde_as(as = "LaxBool")]
+    pub modify_params: Option<bool>,
+    #[serde_as(as = "LaxBool")]
+    pub enable_anthropic_prompt_caching: Option<bool>,
+    #[serde_as(as = "LaxBool")]
+    pub reasoning_auto_summary: Option<bool>,
+    #[serde_as(as = "LaxBool")]
+    pub use_chat_completions_url_for_anthropic_messages: Option<bool>,
+    #[serde_as(as = "LaxBool")]
+    pub route_all_chat_openai_to_responses: Option<bool>,
+    #[serde_as(as = "LaxBool")]
+    pub gemini_live_defer_setup: Option<bool>,
+    pub anthropic_prompt_caching_ttl: Option<String>,
+    pub model_cost_map_url: Option<SecretValue>,
+    pub blog_posts_url: Option<SecretValue>,
+    pub anthropic_beta_headers_url: Option<SecretValue>,
+    pub autorouter_presets_url: Option<SecretValue>,
     pub request_timeout: Option<Spelled<f64>>,
     pub num_retries: Option<u64>,
     pub cache: Option<bool>,
     pub cache_params: Option<CacheSettings>,
+    #[serde_as(as = "LaxBool")]
+    pub enable_redis_auth_cache: Option<bool>,
     #[serde(deserialize_with = "one_or_many")]
     #[redact(fixed = 3)]
     pub callbacks: Option<Vec<Value>>,
@@ -260,33 +251,12 @@ pub struct LiteLlmSettings {
     pub failure_callback: Option<Vec<Value>>,
     pub json_logs: Option<bool>,
     pub set_verbose: Option<bool>,
+    /// In the order written, which the proxy's dict keeps.
+    #[serde_as(as = "Option<Map<_, _>>")]
+    pub priority_reservation: Option<Vec<(String, PriorityReservation)>>,
+    pub priority_reservation_settings: Option<PriorityReservationSettings>,
     #[serde(flatten)]
     pub additional_fields: AdditionalFields,
-}
-
-impl LiteLlmSettings {
-    /// `litellm.drop_params` once the proxy loads this config: the setting when the key is present,
-    /// else `LITELLM_DROP_PARAMS` as `litellm/__init__.py` reads it at import.
-    pub fn drops_params(&self, env: &impl Lookup) -> bool {
-        self.drop_params
-            .unwrap_or_else(|| env_flag(&env.get("LITELLM_DROP_PARAMS").unwrap_or_default()))
-    }
-
-    /// `is_reasoning_auto_summary_enabled()`.
-    pub fn summarizes_reasoning(&self, env: &impl Lookup) -> bool {
-        self.reasoning_auto_summary
-            || env
-                .get("LITELLM_REASONING_AUTO_SUMMARY")
-                .is_some_and(|value| lower_is_true(&value))
-    }
-
-    /// `get_configured_request_timeout()`: the setting when present, else `REQUEST_TIMEOUT`.
-    pub fn request_timeout_seconds(&self, env: &impl Lookup) -> Option<f64> {
-        match &self.request_timeout {
-            Some(timeout) => seconds(timeout),
-            None => env.get("REQUEST_TIMEOUT").and_then(|text| float(&text)),
-        }
-    }
 }
 
 #[cfg(test)]
@@ -295,82 +265,6 @@ mod tests {
 
     use super::{GeneralSettings, LiteLlmSettings};
     use crate::JwtAuthSettings;
-
-    fn settings(yaml: &str) -> LiteLlmSettings {
-        serde_yaml_ng::from_str(yaml).unwrap()
-    }
-
-    fn env_with(
-        name: &'static str,
-        value: Option<&'static str>,
-    ) -> impl Fn(&str) -> Option<String> {
-        move |key| value.filter(|_| key == name).map(str::to_owned)
-    }
-
-    #[rstest]
-    #[case::unset("{}", None, false)]
-    #[case::env_on("{}", Some("true"), true)]
-    #[case::env_blank("{}", Some("  "), false)]
-    #[case::env_off_word("{}", Some(" No "), false)]
-    #[case::env_unknown_word_is_on("{}", Some("maybe"), true)]
-    #[case::settings_word("drop_params: \" True \"", None, true)]
-    #[case::settings_unknown_word_is_off("drop_params: maybe", None, false)]
-    #[case::settings_one("drop_params: 1", None, true)]
-    #[case::settings_two_is_not_a_flag("drop_params: 2", None, false)]
-    #[case::settings_off_over_env_on("drop_params: false", Some("true"), false)]
-    #[case::settings_null_over_env_on("drop_params: null", Some("true"), false)]
-    #[case::settings_on_over_env_off("drop_params: true", Some("false"), true)]
-    fn drop_params_come_from_settings_else_the_env_flag(
-        #[case] yaml: &str,
-        #[case] flag: Option<&'static str>,
-        #[case] expected: bool,
-    ) {
-        assert_eq!(
-            settings(yaml).drops_params(&env_with("LITELLM_DROP_PARAMS", flag)),
-            expected
-        );
-    }
-
-    #[rstest]
-    #[case::unset("{}", None, false)]
-    #[case::settings_flag("reasoning_auto_summary: true", None, true)]
-    #[case::settings_off("reasoning_auto_summary: false", None, false)]
-    #[case::settings_one("reasoning_auto_summary: 1", None, true)]
-    #[case::settings_zero("reasoning_auto_summary: 0", None, false)]
-    #[case::settings_null("reasoning_auto_summary: null", None, false)]
-    #[case::settings_text_is_truthy("reasoning_auto_summary: \"false\"", None, true)]
-    #[case::env_flag("{}", Some("TRUE"), true)]
-    #[case::env_off("{}", Some("false"), false)]
-    #[case::env_yes_is_not_true("{}", Some("yes"), false)]
-    #[case::env_on_over_settings_off("reasoning_auto_summary: false", Some("true"), true)]
-    fn reasoning_auto_summary_comes_from_settings_or_env(
-        #[case] yaml: &str,
-        #[case] flag: Option<&'static str>,
-        #[case] expected: bool,
-    ) {
-        assert_eq!(
-            settings(yaml).summarizes_reasoning(&env_with("LITELLM_REASONING_AUTO_SUMMARY", flag)),
-            expected
-        );
-    }
-
-    #[rstest]
-    #[case::unset("{}", None, None)]
-    #[case::settings_number("request_timeout: 2", None, Some(2.0))]
-    #[case::settings_text("request_timeout: \" 2.5 \"", None, Some(2.5))]
-    #[case::env("{}", Some("30"), Some(30.0))]
-    #[case::unparsable_env("{}", Some("soon"), None)]
-    #[case::settings_over_env("request_timeout: 2", Some("30"), Some(2.0))]
-    fn request_timeout_comes_from_settings_or_env(
-        #[case] yaml: &str,
-        #[case] seconds: Option<&'static str>,
-        #[case] expected: Option<f64>,
-    ) {
-        assert_eq!(
-            settings(yaml).request_timeout_seconds(&env_with("REQUEST_TIMEOUT", seconds)),
-            expected
-        );
-    }
 
     #[test]
     fn jwt_auth_settings_hide_unknown_fields() {
@@ -382,6 +276,19 @@ mod tests {
 
         assert!(!debug.contains("credential-value"), "{debug}");
         assert!(debug.contains("[REDACTED]"), "{debug}");
+    }
+
+    #[rstest]
+    #[case::a_word_for_on(serde_json::json!("on"), Some(true))]
+    #[case::a_word_that_is_no_flag(serde_json::json!("banana"), None)]
+    fn a_flag_key_written_as_text_is_read_by_the_one_flag_rule(
+        #[case] written: serde_json::Value,
+        #[case] expected: Option<bool>,
+    ) {
+        let settings: LiteLlmSettings =
+            serde_json::from_value(serde_json::json!({"modify_params": written})).unwrap();
+
+        assert_eq!(settings.modify_params, expected);
     }
 
     #[test]

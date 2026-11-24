@@ -36,7 +36,7 @@ from litellm.litellm_core_utils.add_retry_fallback_headers import (
     ensure_response_additional_headers,
     response_has_hidden_params,
 )
-from litellm.litellm_core_utils.core_helpers import as_str_mapping
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, attribute_or_none
 from litellm.litellm_core_utils.token_counter import offload_token_count
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError, map_v3_rate_limit_type
@@ -286,7 +286,9 @@ _PAIRS: Final = TypeAdapter(tuple[tuple[str, object], ...])
 
 
 def _registry_unavailable(error: Exception) -> bool:
-    if isinstance(error, RedisCircuitBreakerOpenError | ValidationError):
+    from litellm.rust_bridge._native import NativeRedisStoreError
+
+    if isinstance(error, RedisCircuitBreakerOpenError | ValidationError | NativeRedisStoreError):
         return True
     try:
         from redis.exceptions import RedisError
@@ -666,7 +668,7 @@ def _request_stash(hook: Hook, data: Mapping[str, object] | None) -> RequestRate
 
 def _targeted(hook: Hook, view: object) -> bool:
     if hook is Hook.attempt_ended:
-        return getattr(view, Field.outcome.value, None) == AttemptOutcome.success
+        return attribute_or_none(view, Field.outcome.value) == AttemptOutcome.success
     return hook in _TARGETED_HOOKS
 
 

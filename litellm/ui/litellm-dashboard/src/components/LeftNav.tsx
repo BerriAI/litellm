@@ -1,4 +1,5 @@
 import { SidebarBrand } from "@/components/shared/SidebarBrand";
+import { GatewayLensNavigation } from "@/components/lens/GatewayLensNavigation";
 import { canViewProjectsPage, projectReaderRoles } from "@/app/(dashboard)/hooks/projects/projectAccess";
 import { useTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
@@ -49,6 +50,7 @@ import {
   House,
   KeyRound,
   LayoutGrid,
+  Layers,
   Network,
   Palette,
   PiggyBank,
@@ -90,6 +92,7 @@ import {
   rolesWithWriteAccess,
   proxyAdminTierRoles,
 } from "../utils/roles";
+import { useGrantedApps } from "@/app/(dashboard)/apps/_components/useGrantedApps";
 import BetaBadge from "./BetaBadge";
 import SidebarAccountMenu from "./SidebarAccountMenu/SidebarAccountMenu";
 import SidebarUsageCard from "./SidebarUsageCard";
@@ -127,6 +130,7 @@ export interface MenuVisibilityContext {
   isViewOnly: boolean;
   isOrgAdmin: boolean;
   isTeamAdmin: boolean;
+  hasAppGrant?: boolean;
   enabledPagesInternalUsers?: string[] | null;
   disableAgentsForInternalUsers?: boolean;
   allowAgentsForTeamAdmins?: boolean;
@@ -174,8 +178,18 @@ const pageIsEnabledForInternalUser = (item: MenuItem, context: MenuVisibilityCon
   return enabledPages.includes(item.page);
 };
 
+const CUSTOMER_PORTAL_ADMIN_KEYS: ReadonlySet<string> = new Set([
+  "customers",
+  "apps",
+  "app-groups",
+  "customer-access",
+  "customer-settings",
+]);
+
 const menuItemIsVisible = (item: MenuItem, context: MenuVisibilityContext, isAdmin: boolean): boolean => {
   if (item.children && item.children.length === 0) return false;
+  if (item.key === "apps" && context.hasAppGrant) return true;
+  if (context.isViewOnly && CUSTOMER_PORTAL_ADMIN_KEYS.has(item.key)) return false;
   if (item.key === "llm-playground" && context.isViewOnly) return false;
   const adminVisibility = adminPageVisibility(item, context, isAdmin);
   if (adminVisibility !== null) return adminVisibility;
@@ -222,9 +236,23 @@ const customerPortalGroups: MenuGroup[] = [
         roles: all_admin_roles.filter(isProxyAdminRole),
       },
       {
+        key: "app-groups",
+        page: "app-groups",
+        label: "apps.groups.title",
+        icon: <Layers {...ICON} />,
+        roles: all_admin_roles.filter(isProxyAdminRole),
+      },
+      {
+        key: "customer-access",
+        page: "customers/access",
+        label: "apps.internalAccess.title",
+        icon: <ShieldCheck {...ICON} />,
+        roles: all_admin_roles.filter(isProxyAdminRole),
+      },
+      {
         key: "customer-settings",
         page: "customers/settings",
-        label: "customerPortal.hierarchy.settings",
+        label: "customerPortal.budgetGroups.title",
         icon: <SettingsIcon {...ICON} />,
         roles: all_admin_roles.filter(isProxyAdminRole),
       },
@@ -525,10 +553,11 @@ const LENS_ROUTE = "lens";
 
 export const routeOf = (item: MenuItem): string => item.route ?? item.page;
 
+const CUSTOMER_SUBPAGES = ["customers/settings", "customers/access"] as const;
+
 const routeForPathname = (pathname: string): string =>
-  pathname.replace(/\/$/, "").endsWith("/customers/settings")
-    ? "customers/settings"
-    : routeSegmentForPathname(pathname) || HOME_ROUTE;
+  CUSTOMER_SUBPAGES.find((page) => pathname.replace(/\/$/, "").endsWith(`/${page}`)) ??
+  (routeSegmentForPathname(pathname) || HOME_ROUTE);
 
 const findParentKey = (route: string): string | null => {
   for (const group of menuGroups) {
@@ -643,6 +672,7 @@ const Sidebar_: React.FC<SidebarProps> = ({
   }
 
   const isTeamAdmin = useMemo(() => isUserTeamAdminForAnyTeam(teams ?? null, userId ?? ""), [teams, userId]);
+  const { hasGrant: hasAppGrant } = useGrantedApps();
 
   const visibleGroups = useMemo(() => {
     const context: MenuVisibilityContext = {
@@ -650,6 +680,7 @@ const Sidebar_: React.FC<SidebarProps> = ({
       isViewOnly,
       isOrgAdmin,
       isTeamAdmin,
+      hasAppGrant,
       enabledPagesInternalUsers,
       disableAgentsForInternalUsers,
       allowAgentsForTeamAdmins,
@@ -664,6 +695,7 @@ const Sidebar_: React.FC<SidebarProps> = ({
     disableAgentsForInternalUsers,
     disableVectorStoresForInternalUsers,
     enabledPagesInternalUsers,
+    hasAppGrant,
     isOrgAdmin,
     isTeamAdmin,
     isViewOnly,
@@ -767,22 +799,28 @@ const Sidebar_: React.FC<SidebarProps> = ({
         </SidebarGroup>
         <SidebarContent>
           <ScrollArea className="min-h-0 flex-1">
-            <nav className="flex flex-col gap-0.5 px-3 pb-3">
-              {(inLensWorkspace ? [] : visibleGroups).map((group, gi) => (
-                <SidebarGroup key={group.groupLabel} className="gap-0.5 px-0 py-1">
-                  {gi > 0 && (
-                    <SidebarSeparator
-                      aria-hidden
-                      className="my-2 hidden data-horizontal:w-auto group-data-[collapsible=icon]:block"
-                    />
-                  )}
-                  <SidebarGroupLabel className="block h-auto pt-3 pb-1.5 text-[11px] font-semibold tracking-wider text-muted-foreground uppercase group-data-[collapsible=icon]:hidden">
-                    {term(groupText(group.groupLabel))}
-                  </SidebarGroupLabel>
-                  <SidebarMenu className={navMenuClassName}>{group.items.map((item) => renderItem(item))}</SidebarMenu>
-                </SidebarGroup>
-              ))}
-            </nav>
+            {inLensWorkspace ? (
+              <GatewayLensNavigation collapsed={collapsed} />
+            ) : (
+              <nav className="flex flex-col gap-0.5 px-3 pb-3">
+                {visibleGroups.map((group, gi) => (
+                  <SidebarGroup key={group.groupLabel} className="gap-0.5 px-0 py-1">
+                    {gi > 0 && (
+                      <SidebarSeparator
+                        aria-hidden
+                        className="my-2 hidden data-horizontal:w-auto group-data-[collapsible=icon]:block"
+                      />
+                    )}
+                    <SidebarGroupLabel className="block h-auto pt-3 pb-1.5 text-[11px] font-semibold tracking-wider text-muted-foreground uppercase group-data-[collapsible=icon]:hidden">
+                      {term(groupText(group.groupLabel))}
+                    </SidebarGroupLabel>
+                    <SidebarMenu className={navMenuClassName}>
+                      {group.items.map((item) => renderItem(item))}
+                    </SidebarMenu>
+                  </SidebarGroup>
+                ))}
+              </nav>
+            )}
           </ScrollArea>
         </SidebarContent>
 

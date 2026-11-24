@@ -7,8 +7,7 @@
       "lower_is_true": null,
       "coerces_to_true": false,
       "str_to_bool_or_truthy": false,
-      "lax_bool": null,
-      "env_flag": null
+      "lax_bool": null
     },
     {
       "input": "true",
@@ -17,8 +16,7 @@
       "lower_is_true": null,
       "coerces_to_true": true,
       "str_to_bool_or_truthy": true,
-      "lax_bool": true,
-      "env_flag": null
+      "lax_bool": true
     },
     {
       "input": "false",
@@ -27,8 +25,7 @@
       "lower_is_true": null,
       "coerces_to_true": false,
       "str_to_bool_or_truthy": false,
-      "lax_bool": false,
-      "env_flag": null
+      "lax_bool": false
     },
     {
       "input": "0",
@@ -37,8 +34,7 @@
       "lower_is_true": null,
       "coerces_to_true": false,
       "str_to_bool_or_truthy": false,
-      "lax_bool": false,
-      "env_flag": null
+      "lax_bool": false
     },
     {
       "input": "1",
@@ -47,8 +43,7 @@
       "lower_is_true": null,
       "coerces_to_true": true,
       "str_to_bool_or_truthy": true,
-      "lax_bool": true,
-      "env_flag": null
+      "lax_bool": true
     },
     {
       "input": "2",
@@ -57,8 +52,7 @@
       "lower_is_true": null,
       "coerces_to_true": true,
       "str_to_bool_or_truthy": true,
-      "lax_bool": null,
-      "env_flag": null
+      "lax_bool": null
     },
     {
       "input": "-1",
@@ -67,8 +61,7 @@
       "lower_is_true": null,
       "coerces_to_true": true,
       "str_to_bool_or_truthy": true,
-      "lax_bool": null,
-      "env_flag": null
+      "lax_bool": null
     },
     {
       "input": "0.0",
@@ -77,8 +70,7 @@
       "lower_is_true": null,
       "coerces_to_true": false,
       "str_to_bool_or_truthy": false,
-      "lax_bool": false,
-      "env_flag": null
+      "lax_bool": false
     },
     {
       "input": "0.5",
@@ -87,8 +79,7 @@
       "lower_is_true": null,
       "coerces_to_true": true,
       "str_to_bool_or_truthy": true,
-      "lax_bool": null,
-      "env_flag": null
+      "lax_bool": null
     },
     {
       "input": "1.0",
@@ -97,8 +88,7 @@
       "lower_is_true": null,
       "coerces_to_true": true,
       "str_to_bool_or_truthy": true,
-      "lax_bool": true,
-      "env_flag": null
+      "lax_bool": true
     },
     {
       "input": "[]",
@@ -107,8 +97,7 @@
       "lower_is_true": null,
       "coerces_to_true": false,
       "str_to_bool_or_truthy": false,
-      "lax_bool": null,
-      "env_flag": null
+      "lax_bool": null
     },
     {
       "input": "[false]",
@@ -117,8 +106,7 @@
       "lower_is_true": null,
       "coerces_to_true": true,
       "str_to_bool_or_truthy": true,
-      "lax_bool": null,
-      "env_flag": null
+      "lax_bool": null
     },
     {
       "input": "{}",
@@ -127,8 +115,7 @@
       "lower_is_true": null,
       "coerces_to_true": false,
       "str_to_bool_or_truthy": false,
-      "lax_bool": null,
-      "env_flag": null
+      "lax_bool": null
     },
     {
       "input": "{\"a\": null}",
@@ -137,8 +124,7 @@
       "lower_is_true": null,
       "coerces_to_true": true,
       "str_to_bool_or_truthy": true,
-      "lax_bool": null,
-      "env_flag": null
+      "lax_bool": null
     },
     {
       "input": "\"\"",
@@ -147,8 +133,7 @@
       "lower_is_true": false,
       "coerces_to_true": false,
       "str_to_bool_or_truthy": false,
-      "lax_bool": null,
-      "env_flag": false
+      "lax_bool": null
     },
     {
       "input": "\" \"",
@@ -157,8 +142,7 @@
       "lower_is_true": false,
       "coerces_to_true": false,
       "str_to_bool_or_truthy": false,
-      "lax_bool": null,
-      "env_flag": false
+      "lax_bool": null
     },
     {
       "input": "\"true\"",
@@ -167,8 +151,7 @@
       "lower_is_true": true,
       "coerces_to_true": true,
       "str_to_bool_or_truthy": true,
-      "lax_bool": true,
-      "env_flag": true
+      "lax_bool": true
     },
     {
       "input": "\"True\"",
@@ -177,8 +160,7 @@
       "lower_is_true": true,
       "coerces_to_true": true,
       "str_to_bool_or_truthy": true,
-      "lax_bool": true,
-      "env_flag": true
+      "lax_bool": true
     },
     {
       "input": "\"TRUE\"",
@@ -187,8 +169,7 @@
       "lower_is_true": true,
       "coerces_to_true": true,
       "str_to_bool_or_truthy": true,
-      "lax_bool": true,
-      "env_flag": true
+      "lax_bool": true
     },
     {
       "input": "\"tRuE\"",
@@ -197,8 +178,7 @@
       "lower_is_true": true,
       "coerces_to_true": true,
       "str_to_bool_or_truthy": true,
-      "lax_bool": true,
-      "env_flag": true
+      "lax_bool": true
     },
     {
       "input": "\" true \"",
@@ -207,8 +187,7 @@
       "lower_is_true": false,
       "coerces_to_true": false,
       "str_to_bool_or_truthy": true,
-      "lax_bool": true,
-      "env_flag": true
+      "lax_bool": true
     },
     {
       "input": "\"\\ttrue\\n\"",
@@ -217,8 +196,7 @@
       "lower_is_true": false,
       "coerces_to_true": false,
       "str_to_bool_or_truthy": true,
-      "lax_bool": true,
-      "env_flag": true
+      "lax_bool": true
     },
     {
       "input": "\"\\u001ctrue\\u001f\"",
@@ -227,8 +205,7 @@
       "lower_is_true": false,
       "coerces_to_true": false,
       "str_to_bool_or_truthy": true,
-      "lax_bool": true,
-      "env_flag": true
+      "lax_bool": true
     },
     {
       "input": "\"\\u00a0false\\u2003\"",
@@ -237,8 +214,7 @@
       "lower_is_true": false,
       "coerces_to_true": false,
       "str_to_bool_or_truthy": false,
-      "lax_bool": false,
-      "env_flag": false
+      "lax_bool": false
     },
     {
       "input": "\"true\\u200b\"",
@@ -247,8 +223,7 @@
       "lower_is_true": false,
       "coerces_to_true": false,
       "str_to_bool_or_truthy": false,
-      "lax_bool": null,
-      "env_flag": true
+      "lax_bool": null
     },
     {
       "input": "\"false\"",
@@ -257,8 +232,7 @@
       "lower_is_true": false,
       "coerces_to_true": false,
       "str_to_bool_or_truthy": false,
-      "lax_bool": false,
-      "env_flag": false
+      "lax_bool": false
     },
     {
       "input": "\"False\"",
@@ -267,8 +241,7 @@
       "lower_is_true": false,
       "coerces_to_true": false,
       "str_to_bool_or_truthy": false,
-      "lax_bool": false,
-      "env_flag": false
+      "lax_bool": false
     },
     {
       "input": "\"FALSE\"",
@@ -277,8 +250,7 @@
       "lower_is_true": false,
       "coerces_to_true": false,
       "str_to_bool_or_truthy": false,
-      "lax_bool": false,
-      "env_flag": false
+      "lax_bool": false
     },
     {
       "input": "\" false\"",
@@ -287,8 +259,7 @@
       "lower_is_true": false,
       "coerces_to_true": false,
       "str_to_bool_or_truthy": false,
-      "lax_bool": false,
-      "env_flag": false
+      "lax_bool": false
     },
     {
       "input": "\"1\"",
@@ -297,8 +268,7 @@
       "lower_is_true": false,
       "coerces_to_true": true,
       "str_to_bool_or_truthy": false,
-      "lax_bool": true,
-      "env_flag": true
+      "lax_bool": true
     },
     {
       "input": "\"0\"",
@@ -307,8 +277,7 @@
       "lower_is_true": false,
       "coerces_to_true": false,
       "str_to_bool_or_truthy": false,
-      "lax_bool": false,
-      "env_flag": false
+      "lax_bool": false
     },
     {
       "input": "\" 1\"",
@@ -317,8 +286,7 @@
       "lower_is_true": false,
       "coerces_to_true": false,
       "str_to_bool_or_truthy": false,
-      "lax_bool": true,
-      "env_flag": true
+      "lax_bool": true
     },
     {
       "input": "\"yes\"",
@@ -327,8 +295,7 @@
       "lower_is_true": false,
       "coerces_to_true": true,
       "str_to_bool_or_truthy": false,
-      "lax_bool": true,
-      "env_flag": true
+      "lax_bool": true
     },
     {
       "input": "\"Yes\"",
@@ -337,8 +304,7 @@
       "lower_is_true": false,
       "coerces_to_true": true,
       "str_to_bool_or_truthy": false,
-      "lax_bool": true,
-      "env_flag": true
+      "lax_bool": true
     },
     {
       "input": "\"YES\"",
@@ -347,8 +313,7 @@
       "lower_is_true": false,
       "coerces_to_true": true,
       "str_to_bool_or_truthy": false,
-      "lax_bool": true,
-      "env_flag": true
+      "lax_bool": true
     },
     {
       "input": "\" yes\"",
@@ -357,8 +322,7 @@
       "lower_is_true": false,
       "coerces_to_true": false,
       "str_to_bool_or_truthy": false,
-      "lax_bool": true,
-      "env_flag": true
+      "lax_bool": true
     },
     {
       "input": "\"no\"",
@@ -367,8 +331,7 @@
       "lower_is_true": false,
       "coerces_to_true": false,
       "str_to_bool_or_truthy": false,
-      "lax_bool": false,
-      "env_flag": false
+      "lax_bool": false
     },
     {
       "input": "\"on\"",
@@ -377,8 +340,7 @@
       "lower_is_true": false,
       "coerces_to_true": false,
       "str_to_bool_or_truthy": false,
-      "lax_bool": true,
-      "env_flag": true
+      "lax_bool": true
     },
     {
       "input": "\"On\"",
@@ -387,8 +349,7 @@
       "lower_is_true": false,
       "coerces_to_true": false,
       "str_to_bool_or_truthy": false,
-      "lax_bool": true,
-      "env_flag": true
+      "lax_bool": true
     },
     {
       "input": "\"off\"",
@@ -397,8 +358,7 @@
       "lower_is_true": false,
       "coerces_to_true": false,
       "str_to_bool_or_truthy": false,
-      "lax_bool": false,
-      "env_flag": false
+      "lax_bool": false
     },
     {
       "input": "\"t\"",
@@ -407,8 +367,7 @@
       "lower_is_true": false,
       "coerces_to_true": false,
       "str_to_bool_or_truthy": false,
-      "lax_bool": true,
-      "env_flag": true
+      "lax_bool": true
     },
     {
       "input": "\"f\"",
@@ -417,8 +376,7 @@
       "lower_is_true": false,
       "coerces_to_true": false,
       "str_to_bool_or_truthy": false,
-      "lax_bool": false,
-      "env_flag": false
+      "lax_bool": false
     },
     {
       "input": "\"y\"",
@@ -427,8 +385,7 @@
       "lower_is_true": false,
       "coerces_to_true": false,
       "str_to_bool_or_truthy": false,
-      "lax_bool": true,
-      "env_flag": true
+      "lax_bool": true
     },
     {
       "input": "\"n\"",
@@ -437,8 +394,7 @@
       "lower_is_true": false,
       "coerces_to_true": false,
       "str_to_bool_or_truthy": false,
-      "lax_bool": false,
-      "env_flag": false
+      "lax_bool": false
     },
     {
       "input": "\"2\"",
@@ -447,8 +403,7 @@
       "lower_is_true": false,
       "coerces_to_true": false,
       "str_to_bool_or_truthy": false,
-      "lax_bool": null,
-      "env_flag": true
+      "lax_bool": null
     },
     {
       "input": "\"-1\"",
@@ -457,8 +412,7 @@
       "lower_is_true": false,
       "coerces_to_true": false,
       "str_to_bool_or_truthy": false,
-      "lax_bool": null,
-      "env_flag": true
+      "lax_bool": null
     },
     {
       "input": "\"1.0\"",
@@ -467,8 +421,7 @@
       "lower_is_true": false,
       "coerces_to_true": false,
       "str_to_bool_or_truthy": false,
-      "lax_bool": null,
-      "env_flag": true
+      "lax_bool": null
     },
     {
       "input": "\"truthy\"",
@@ -477,8 +430,7 @@
       "lower_is_true": false,
       "coerces_to_true": false,
       "str_to_bool_or_truthy": false,
-      "lax_bool": null,
-      "env_flag": true
+      "lax_bool": null
     },
     {
       "input": "\"maybe\"",
@@ -487,8 +439,7 @@
       "lower_is_true": false,
       "coerces_to_true": false,
       "str_to_bool_or_truthy": false,
-      "lax_bool": null,
-      "env_flag": true
+      "lax_bool": null
     },
     {
       "input": "\"None\"",
@@ -497,8 +448,7 @@
       "lower_is_true": false,
       "coerces_to_true": false,
       "str_to_bool_or_truthy": false,
-      "lax_bool": null,
-      "env_flag": true
+      "lax_bool": null
     },
     {
       "input": "\"null\"",
@@ -507,8 +457,7 @@
       "lower_is_true": false,
       "coerces_to_true": false,
       "str_to_bool_or_truthy": false,
-      "lax_bool": null,
-      "env_flag": true
+      "lax_bool": null
     },
     {
       "input": "\"\\u0130\"",
@@ -517,8 +466,7 @@
       "lower_is_true": false,
       "coerces_to_true": false,
       "str_to_bool_or_truthy": false,
-      "lax_bool": null,
-      "env_flag": true
+      "lax_bool": null
     },
     {
       "input": "\"tru\\u212a\"",
@@ -527,8 +475,7 @@
       "lower_is_true": false,
       "coerces_to_true": false,
       "str_to_bool_or_truthy": false,
-      "lax_bool": null,
-      "env_flag": true
+      "lax_bool": null
     }
   ]
 }

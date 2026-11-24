@@ -216,7 +216,7 @@ class CompletionDispatchContext:
     custom_llm_provider: str
     custom_prompt_dict: dict
     extra_headers: dict | None
-    headers: dict
+    headers: dict[str, object]
     hf_model_name: str | None
     kwargs: dict
     litellm_params: dict[str, object]
@@ -237,7 +237,7 @@ class CompletionDispatchContext:
     stream: bool | None
     temperature: float | None
     text_completion: bool
-    timeout: float | str | httpx.Timeout | None
+    timeout: float | httpx.Timeout | None
     timeout_for_optional_params: Callable[[Mapping[str, object]], float | httpx.Timeout]
     top_p: float | None
 

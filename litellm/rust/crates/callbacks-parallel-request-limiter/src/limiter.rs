@@ -170,6 +170,8 @@ pub struct PostCallFailureFacts {
 pub struct TargetFacts {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub app_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub app_group_id: Option<String>,
     pub user_api_key_hash: Option<String>,
     pub user_api_key_user_id: Option<String>,
     pub user_api_key_team_id: Option<String>,
@@ -421,7 +423,9 @@ pub(crate) fn auth_members(
     Ok(members)
 }
 
-fn prior_response(input: &HookInput) -> Result<Option<PriorResponse>, CallbackError> {
+/// The statuses a callback that ran earlier published, as the answer this limiter starts its own
+/// from: a member that is `None` is left out.
+pub fn prior_response(input: &HookInput) -> Result<Option<PriorResponse>, CallbackError> {
     let Some(Value::Object(mut statuses)) = input.fields.raw(Field::RateLimitStatuses)?.cloned()
     else {
         return Ok(None);
@@ -477,6 +481,20 @@ fn windows_keyed(windows: &[WindowIdentity], key: &str) -> Vec<WindowIdentity> {
         .filter(|identity| identity.counter.scope.descriptor == key)
         .cloned()
         .collect()
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, strum::EnumString, strum::VariantArray)]
+pub enum SocketClose {
+    #[strum(serialize = "refused_at_open")]
+    RefusedAtOpen,
+    #[strum(serialize = "relay_failed")]
+    RelayFailed,
+    #[strum(serialize = "turns_finished")]
+    TurnsFinished,
+    #[strum(serialize = "turn_unfinished")]
+    TurnUnfinished,
+    #[strum(serialize = "settled_by_its_log")]
+    SettledByItsLog,
 }
 
 pub struct ParallelRequestLimiter {
@@ -748,6 +766,7 @@ impl ParallelRequestLimiter {
             stash.reserved_tokens = estimated;
             stash.ptu_reserved_tokens = ptu_estimated;
             stash.ptu_windows = windows_keyed(tpm_response.windows(), PTU_TEAM);
+            stash.reserved_windows = tpm_response.windows().to_vec();
             stash.reserved_model = facts.reserved_model.clone();
             stash.reserved_scopes = descriptors
                 .iter()
@@ -937,6 +956,46 @@ impl ParallelRequestLimiter {
         }
     }
 
+    /// `raise_if_over_limit_before_body`: refuses a call from its caller alone once a limit that
+    /// needs no body is used up. Counters are only read, so an admitted call is still counted by
+    /// [`Self::pre_call`]. A token limit is left to it too when tokens are reserved before the call.
+    pub async fn before_body(
+        &self,
+        descriptors: &[Descriptor],
+        policy: PolicyFacts,
+        request: Option<&RequestRedis>,
+    ) -> Option<Abort> {
+        if descriptors.is_empty() {
+            return None;
+        }
+        let settings = self.engine.settings();
+        let ctx = Ctx {
+            policy: policy.into(),
+            request,
+        };
+        match self
+            .engine
+            .should_rate_limit(
+                descriptors,
+                true,
+                settings.tpm_reservation_enabled,
+                None,
+                false,
+                ctx,
+            )
+            .await
+        {
+            Ok(response) => refusal::rate_limited(
+                &response,
+                descriptors,
+                None,
+                self.engine.now(),
+                settings.window_size,
+            ),
+            Err(Unverifiable) => Some(refusal::unverifiable()),
+        }
+    }
+
     fn refuse(&self, response: &crate::status::Response, facts: &PreCallFacts) -> Option<Abort> {
         refusal::rate_limited(
             response,
@@ -999,14 +1058,10 @@ impl ParallelRequestLimiter {
             request: None,
         };
         self.release_stashed(state, false, ctx).await;
-        let enqueued = state.stash().batch_enqueued.take();
-        if let Some(reservation) = enqueued {
-            self.enqueued.refund(&reservation).await;
+        if state.stash().settles_at_close {
+            return;
         }
-        let refunds = std::mem::take(&mut state.stash().batch_tpd_refunds);
-        if !refunds.is_empty() {
-            self.engine.reservation_aware(&refunds).await;
-        }
+        self.refund_batch_reservations(state).await;
         let settlements = {
             let mut stash = state.stash();
             let (reserved, itpm, otpm) = Self::open_reservations(&stash);
@@ -1021,6 +1076,94 @@ impl ParallelRequestLimiter {
             );
             stash.mark_reservation_released();
             settlements
+        };
+        for settlement in settlements {
+            self.engine.settle(settlement, ctx, false).await;
+        }
+    }
+
+    async fn refund_batch_reservations(&self, state: &LimiterState) {
+        let enqueued = state.stash().batch_enqueued.take();
+        if let Some(reservation) = enqueued {
+            self.enqueued.refund(&reservation).await;
+        }
+        let refunds = std::mem::take(&mut state.stash().batch_tpd_refunds);
+        if !refunds.is_empty() {
+            self.engine.reservation_aware(&refunds).await;
+        }
+    }
+
+    /// Leaves a WebSocket's admission reservation to its close: the failure callbacks of the
+    /// socket's own call then only free its slot.
+    pub fn leave_reservation_to_socket_close(&self, state: &LimiterState) {
+        state.stash().settles_at_close = true;
+    }
+
+    /// Frees a closed WebSocket's slot and settles its admission reservation by how it closed.
+    /// A socket refused at open, or whose relay failed, relayed nothing and gives back everything.
+    /// One whose turns all finished gives back its token windows but keeps the team PTU estimate,
+    /// since its turns never charge the PTU share. A turn cut before its terminal event charged
+    /// nothing, so its socket keeps every reservation until the windows end. A socket that logs
+    /// as one row under its own call id is settled by that row.
+    pub async fn close_socket(&self, state: &LimiterState, close: SocketClose) {
+        if close == SocketClose::TurnUnfinished {
+            state.stash().mark_reservation_released();
+        }
+        self.release_on_disconnect(state).await;
+        match close {
+            SocketClose::RefusedAtOpen | SocketClose::RelayFailed => {
+                self.refund_socket_reservation(state, true).await;
+            }
+            SocketClose::TurnsFinished => self.refund_socket_reservation(state, false).await,
+            SocketClose::TurnUnfinished | SocketClose::SettledByItsLog => {}
+        }
+    }
+
+    async fn refund_socket_reservation(&self, state: &LimiterState, refunds_ptu: bool) {
+        if !state.stash().owned {
+            return;
+        }
+        self.refund_batch_reservations(state).await;
+        let settlements = {
+            let mut stash = state.stash();
+            let (reserved, itpm, otpm) = Self::open_reservations(&stash);
+            if reserved <= 0 && itpm <= 0 && otpm <= 0 {
+                return;
+            }
+            let targets: Vec<(String, String)> = stash
+                .reserved_scopes
+                .iter()
+                .filter(|scope| scope.0 != PTU_TEAM)
+                .cloned()
+                .collect();
+            let combined = if reserved > 0 {
+                self.engine.project_ops(
+                    &targets,
+                    &stash.reserved_scopes,
+                    0,
+                    reserved,
+                    &stash.reserved_windows,
+                )
+            } else {
+                Vec::new()
+            };
+            let ptu = if refunds_ptu && reserved > 0 {
+                self.ptu_failure_ops(&stash, 0, None)
+            } else {
+                Vec::new()
+            };
+            let settlements = vec![
+                Settlement::Project(combined),
+                self.io_failure_settlement(&stash.itpm, 0, itpm),
+                self.io_failure_settlement(&stash.otpm, 0, otpm),
+                Settlement::Project(ptu),
+            ];
+            stash.mark_reservation_released();
+            settlements
+        };
+        let ctx = Ctx {
+            policy: Policy::default(),
+            request: None,
         };
         for settlement in settlements {
             self.engine.settle(settlement, ctx, false).await;
@@ -1168,6 +1311,9 @@ impl ParallelRequestLimiter {
             }
         }
         self.release_stashed(state, true, ctx).await;
+        if state.stash().settles_at_close {
+            return;
+        }
         let settlements = {
             let mut stash = state.stash();
             let open = Self::open_reservations(&stash);
@@ -1976,6 +2122,9 @@ fn collect_targets(
     let app_member = truthy(&facts.app_id)
         .zip(truthy(&facts.customer_member_id))
         .map(|(app, customer)| format!("{app}:{customer}"));
+    let group_org = truthy(&facts.app_group_id)
+        .zip(truthy(&facts.customer_org_id))
+        .map(|(group, customer)| format!("{group}:{customer}"));
     let customers = [
         ("customer_org", truthy(&facts.customer_org_id)),
         ("customer_team", truthy(&facts.customer_team_id)),
@@ -1983,6 +2132,8 @@ fn collect_targets(
         ("app", truthy(&facts.app_id)),
         ("app_customer_org", app_org.as_deref()),
         ("app_customer_member", app_member.as_deref()),
+        ("app_group", truthy(&facts.app_group_id)),
+        ("app_group_customer_org", group_org.as_deref()),
     ];
     for (scope, owner) in customers {
         if let Some(owner) = owner {
@@ -2001,6 +2152,8 @@ fn collect_targets(
         ("model_per_app", customers[3].1),
         ("model_per_app_customer_org", customers[4].1),
         ("model_per_app_customer_member", customers[5].1),
+        ("model_per_app_group", customers[6].1),
+        ("model_per_app_group_customer_org", customers[7].1),
     ];
     if let Some(model_group) = model_group.filter(|group| !group.is_empty()) {
         let mut seen: Vec<&str> = Vec::new();
@@ -2071,12 +2224,15 @@ mod app_tests {
     #[case::app("app", "app")]
     #[case::organization("app_customer_org", "app:org")]
     #[case::member("app_customer_member", "app:member")]
+    #[case::group("app_group", "group")]
+    #[case::group_org("app_group_customer_org", "group:org")]
     fn app_usage_settles_on_its_scope_and_every_served_model(
         #[case] owner: &str,
         #[case] identity: &str,
     ) {
         let facts = TargetFacts {
             app_id: Some("app".into()),
+            app_group_id: Some("group".into()),
             customer_org_id: Some("org".into()),
             customer_member_id: Some("member".into()),
             ..Default::default()

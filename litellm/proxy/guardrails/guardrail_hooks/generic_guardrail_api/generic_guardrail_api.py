@@ -288,7 +288,7 @@ class GenericGuardrailAPI(CustomGuardrail):
         unreachable_fallback: Literal["fail_closed", "fail_open"] = "fail_closed",
         fail_on_error: bool | None = True,
         forward_messages_as_sent: bool | None = False,
-        extra_headers: list | None = None,
+        extra_headers: Sequence[object] | None = None,
         streaming_end_of_stream_only: bool | None = None,
         streaming_sampling_rate: int | None = None,
         streaming_transform_mode: Literal["block_only", "incremental_diff"] | None = None,
@@ -545,7 +545,7 @@ class GenericGuardrailAPI(CustomGuardrail):
     async def apply_guardrail(
         self,
         inputs: GenericGuardrailAPIInputs,
-        request_data: dict,
+        request_data: dict[str, object],
         input_type: Literal["request", "response"],
         logging_obj: Optional["LiteLLMLoggingObj"] = None,
     ) -> GenericGuardrailAPIInputs:
@@ -583,10 +583,8 @@ class GenericGuardrailAPI(CustomGuardrail):
         if request_data is None:
             request_data = {}
 
-        request_body: Final = request_data.get("body") or {}
-
         # Merge additional provider specific params from config and dynamic params
-        dynamic_params: Final[Mapping[str, object]] = self.get_guardrail_dynamic_request_body_params(request_body) or {}
+        dynamic_params: Final[Mapping[str, object]] = self.get_guardrail_dynamic_request_body_params(request_data) or {}
         additional_params: Final = {**self.additional_provider_specific_params, **dynamic_params}
 
         # Extract user API key metadata

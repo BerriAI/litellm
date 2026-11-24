@@ -87,7 +87,7 @@ class ENTERPRISE_GoogleTextModeration(CustomLogger):
                 f"Google Text Moderation: {category}_confidence_threshold: {set_confidence_value}"
             )
 
-    def print_verbose(self, print_statement):
+    def print_verbose(self, print_statement: object):
         try:
             verbose_proxy_logger.debug(print_statement)
             if litellm.set_verbose:

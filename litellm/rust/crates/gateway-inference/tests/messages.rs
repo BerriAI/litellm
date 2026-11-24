@@ -4,12 +4,8 @@ use axum::{
     body::{Body, to_bytes},
     http::Request,
 };
-use litellm_gateway_inference::Deployment;
-use litellm_inference_messages::{MessagesSettings, MessagesShaping};
-use litellm_router::MessagesTimeouts;
 use rstest::rstest;
-use serde_json::{Map, Value, json};
-use std::time::Duration;
+use serde_json::{Value, json};
 use tower::ServiceExt;
 use wiremock::{
     Mock, MockServer, ResponseTemplate,
@@ -388,103 +384,6 @@ fn messages_request(model: &str, params: Value) -> Value {
     request
 }
 
-#[rstest]
-#[case::dropped_by_request(json!({"drop_params": true, "speed": "fast"}))]
-#[case::dropped_by_path(json!({"additional_drop_params": ["top_k"], "top_k": 5}))]
-#[tokio::test]
-async fn request_drop_settings_apply_and_never_reach_the_provider(#[case] settings: Value) {
-    let upstream = MockServer::start().await;
-    let messages = json!([{"role": "user", "content": "hi"}]);
-    Mock::given(method("POST"))
-        .and(path("/v1/messages"))
-        .and(body_json(
-            json!({"model": "test-model", "messages": messages, "max_tokens": 16, "stream": false}),
-        ))
-        .respond_with(
-            ResponseTemplate::new(200).set_body_json(json!({"id": "msg_test",
-            "type": "message", "role": "assistant", "model": "test-model",
-            "content": [{"type": "text", "text": "hello"}], "stop_reason": "end_turn",
-            "usage": {"input_tokens": 1, "output_tokens": 1}})),
-        )
-        .expect(1)
-        .mount(&upstream)
-        .await;
-    let body: Map<String, Value> = json!({"model": "public/model", "messages": messages,
-        "max_tokens": 16, "stream": false})
-    .as_object()
-    .unwrap()
-    .clone()
-    .into_iter()
-    .chain(settings.as_object().unwrap().clone())
-    .collect();
-
-    let response = support::post(
-        support::app("anthropic/test-model", &upstream.uri()),
-        "/v1/messages",
-        Value::Object(body),
-    )
-    .await;
-
-    assert_eq!(response.status(), 200);
-}
-
-#[rstest]
-#[case::deployment_timeout_without_stream(false, Some(5), None, true)]
-#[case::stream_timeout_with_stream(true, None, Some(5), true)]
-#[case::stream_timeout_ignored_without_stream(false, None, Some(5), false)]
-#[case::request_timeout_alone(false, None, None, false)]
-#[tokio::test]
-async fn a_deployment_timeout_outlasts_the_global_request_timeout(
-    #[case] stream: bool,
-    #[case] timeout: Option<u64>,
-    #[case] stream_timeout: Option<u64>,
-    #[case] answered: bool,
-) {
-    let upstream = MockServer::start().await;
-    let template = if stream {
-        ResponseTemplate::new(200).set_body_raw(
-            "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
-            "text/event-stream",
-        )
-    } else {
-        ResponseTemplate::new(200).set_body_json(json!({"id": "msg_test", "type": "message",
-            "role": "assistant", "model": "test-model", "content": [], "stop_reason": "end_turn",
-            "usage": {"input_tokens": 1, "output_tokens": 1}}))
-    };
-    Mock::given(method("POST"))
-        .and(path("/v1/messages"))
-        .respond_with(template.set_delay(Duration::from_millis(400)))
-        .mount(&upstream)
-        .await;
-    let deployment = Deployment {
-        model: "anthropic/test-model".into(),
-        api_base: Some(upstream.uri()),
-        api_key: Some("test-key".into()),
-        messages_timeouts: MessagesTimeouts {
-            timeout: timeout.map(Duration::from_secs),
-            stream_timeout: stream_timeout.map(Duration::from_secs),
-        },
-        shaping: MessagesShaping {
-            settings: MessagesSettings {
-                request_timeout: Some(0.05),
-                ..MessagesSettings::default()
-            },
-            ..MessagesShaping::default()
-        },
-        ..Deployment::default()
-    };
-
-    let response = support::post(
-        support::app_for(deployment),
-        "/v1/messages",
-        json!({"model": "public/model", "messages": [{"role": "user", "content": "hi"}],
-            "max_tokens": 16, "stream": stream}),
-    )
-    .await;
-
-    assert_eq!(response.status() == 200, answered);
-}
-
 #[tokio::test]
 async fn invalid_messages_stays_an_anthropic_error() {
     let response = support::post(
@@ -499,10 +398,75 @@ async fn invalid_messages_stays_an_anthropic_error() {
     assert_eq!(body["error"]["type"], "invalid_request_error");
 }
 
-const FIRST_EVENT: &str = "event: message_start\ndata: {}\n\n";
+fn requesting_api_version_2026_10_21(temperature: Value) -> Request<Body> {
+    Request::post("/v1/messages")
+        .header("content-type", "application/json")
+        .header("anthropic-version", "2026-10-21")
+        .body(Body::from(
+            messages_request(
+                "public/model",
+                json!({"max_tokens": 16, "temperature": temperature}),
+            )
+            .to_string(),
+        ))
+        .unwrap()
+}
 
 #[tokio::test]
-async fn a_stream_that_fails_after_opening_ends_with_an_sse_error_frame() {
+async fn sampling_params_under_an_api_version_anthropic_removed_them_from_are_refused_before_calling_anthropic()
+ {
+    let response = support::app("anthropic/test-model", "https://api.anthropic.com")
+        .oneshot(requesting_api_version_2026_10_21(json!(1)))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 400);
+    let body = support::json(response).await;
+    assert_eq!(body["error"]["type"], "invalid_request_error");
+    assert_eq!(
+        body["error"]["message"],
+        "invalid request: test-model does not support temperature=1. anthropic-version \
+         2026-10-21 removed temperature, top_p and top_k. To drop unsupported params, set \
+         `litellm.drop_params = True`."
+    );
+}
+
+#[rstest]
+#[tokio::test]
+async fn sampling_params_reach_a_third_party_anthropic_api_under_an_api_version_anthropic_removed_them_from(
+    #[values(false, true)] drop_params: bool,
+) {
+    let upstream = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/anthropic/v1/messages"))
+        .and(header("anthropic-version", "2026-10-21"))
+        .and(body_json(messages_request(
+            "test-model",
+            json!({"max_tokens": 16, "temperature": 0.2}),
+        )))
+        .respond_with(message_response())
+        .expect(1)
+        .mount(&upstream)
+        .await;
+    let app = support::app_with_shaping(
+        "anthropic/test-model",
+        &format!("{}/anthropic", upstream.uri()),
+        deployment_params(json!({})),
+        json!({"drop_params": drop_params}),
+    );
+
+    let response = app
+        .oneshot(requesting_api_version_2026_10_21(json!(0.2)))
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), 200, "{}", support::json(response).await);
+}
+
+const FIRST_EVENT: &str = "event: message_start\ndata: {}\n\n";
+
+/// A stream of `public/model`, whose deployment retries `num_retries` times and whose provider
+/// sends one event and then drops the connection, never to answer again.
+async fn broken_stream(num_retries: u32) -> axum::response::Response {
     let base = support::truncating_upstream(FIRST_EVENT).await;
     let request = Request::post("/v1/messages")
         .header("content-type", "application/json")
@@ -512,11 +476,19 @@ async fn a_stream_that_fails_after_opening_ends_with_an_sse_error_frame() {
             .to_string(),
         ))
         .unwrap();
+    support::app_with_litellm_params(
+        "anthropic/test-model",
+        &base,
+        json!({"num_retries": num_retries}),
+    )
+    .oneshot(request)
+    .await
+    .unwrap()
+}
 
-    let response = support::app("anthropic/test-model", &base)
-        .oneshot(request)
-        .await
-        .unwrap();
+#[tokio::test]
+async fn a_stream_that_breaks_with_no_attempt_left_to_answer_ends_with_an_sse_error_frame() {
+    let response = broken_stream(0).await;
 
     assert_eq!(response.status(), 200);
     let body = to_bytes(response.into_body(), 4096).await.unwrap();
@@ -530,6 +502,74 @@ async fn a_stream_that_fails_after_opening_ends_with_an_sse_error_frame() {
     assert_eq!(error["error"]["type"], "api_error");
 }
 
+#[tokio::test]
+async fn a_stream_that_breaks_before_content_and_is_not_answered_for_ends_on_an_error_answer() {
+    let response = broken_stream(1).await;
+
+    let routed: Vec<(&str, &str)> = [
+        "x-litellm-model-group",
+        "x-litellm-attempted-retries",
+        "x-litellm-attempted-fallbacks",
+    ]
+    .into_iter()
+    .filter_map(|name| Some((name, response.headers().get(name)?.to_str().ok()?)))
+    .collect();
+    assert_eq!(
+        (response.status().as_u16(), routed),
+        (
+            500,
+            vec![
+                ("x-litellm-model-group", "public/model"),
+                ("x-litellm-attempted-retries", "0"),
+                ("x-litellm-attempted-fallbacks", "0"),
+            ]
+        )
+    );
+    let error = support::json(response).await;
+    assert_eq!(
+        (&error["type"], &error["error"]["type"]),
+        (&json!("error"), &json!("api_error"))
+    );
+}
+
+/// The Python proxy answers a provider's 413 as a 400 `invalid_request_error`, and a 408 with
+/// the type `api_error`. The gateway answers what the provider said.
+#[rstest]
+#[case::too_large(413, "request_too_large")]
+#[case::timed_out(408, "timeout_error")]
+#[tokio::test]
+async fn a_providers_refusal_is_answered_with_its_own_status_and_error_type(
+    #[case] status: u16,
+    #[case] error_type: &str,
+) {
+    let upstream = MockServer::start().await;
+    let error = json!({"type": "error", "error": {"type": error_type, "message": "refused"}});
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(status).set_body_json(error.clone()))
+        .mount(&upstream)
+        .await;
+    let request = Request::post("/v1/messages")
+        .header("content-type", "application/json")
+        .body(Body::from(json!({
+            "model": "public/model", "messages": [{"role": "user", "content": "hi"}], "max_tokens": 16,
+        }).to_string()))
+        .unwrap();
+
+    let response = support::app_with_litellm_params(
+        "anthropic/test-model",
+        &upstream.uri(),
+        json!({"num_retries": 0}),
+    )
+    .oneshot(request)
+    .await
+    .unwrap();
+
+    assert_eq!(
+        (response.status().as_u16(), support::json(response).await),
+        (status, error)
+    );
+}
+
 #[rstest]
 #[tokio::test]
 async fn hosted_provider_failure_preserves_status_body_and_request_id() {
@@ -539,7 +579,7 @@ async fn hosted_provider_failure_preserves_status_body_and_request_id() {
     Mock::given(method("POST"))
         .and(path("/v1/messages"))
         .respond_with(ResponseTemplate::new(429).set_body_json(error.clone()))
-        .expect(1)
+        .expect(3)
         .mount(&upstream)
         .await;
     let request = Request::post("/v1/messages")
@@ -558,25 +598,6 @@ async fn hosted_provider_failure_preserves_status_body_and_request_id() {
     assert_eq!(body["type"], error["type"]);
     assert_eq!(body["error"], error["error"]);
     assert_eq!(body["request_id"], "host-http-request");
-}
-
-#[rstest]
-#[case::messages("/v1/messages")]
-#[case::chat("/v1/chat/completions")]
-#[case::model_path("/engines/path-model/chat/completions")]
-#[case::ocr("/ocr")]
-#[case::transcription("/audio/transcriptions")]
-#[tokio::test]
-async fn model_permissions_prevent_provider_calls(#[case] path: &str) {
-    let upstream = MockServer::start().await;
-    let app = support::app_with_permissions(
-        "anthropic/test-model",
-        &upstream.uri(),
-        litellm_gateway_auth::Permissions::None,
-    );
-    let response = support::post(app, path, json!({"model": "public/model"})).await;
-    assert_eq!(response.status(), 403);
-    assert!(upstream.received_requests().await.unwrap().is_empty());
 }
 
 #[rstest]
@@ -621,9 +642,47 @@ async fn openrouter_receives_native_messages_headers_and_its_deployment_bearer(
     if streaming {
         assert_eq!(to_bytes(response.into_body(), 4096).await.unwrap(), sse);
     } else {
-        assert_eq!(support::json(response).await, message);
+        let served = message
+            .as_object()
+            .unwrap()
+            .iter()
+            .map(|(name, value)| match name.as_str() {
+                "model" => (name.clone(), json!("public/model")),
+                _ => (name.clone(), value.clone()),
+            })
+            .collect();
+        assert_eq!(support::json(response).await, Value::Object(served));
     }
     let requests = upstream.received_requests().await.unwrap();
     assert_eq!(requests.len(), 1);
     assert!(!requests[0].headers.contains_key("x-api-key"));
+}
+
+#[rstest]
+#[tokio::test]
+async fn the_body_is_read_as_json_whatever_the_content_type(
+    #[values(None, Some("application/json"), Some("text/plain"))] content_type: Option<&str>,
+) {
+    let upstream = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(message_response())
+        .expect(1)
+        .mount(&upstream)
+        .await;
+    let request = Request::post("/v1/messages");
+    let request = match content_type {
+        Some(content_type) => request.header("content-type", content_type),
+        None => request,
+    };
+    let response = support::app("anthropic/test-model", &upstream.uri())
+        .oneshot(
+            request
+                .body(Body::from(
+                    messages_request("public/model", json!({"max_tokens": 16})).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
 }

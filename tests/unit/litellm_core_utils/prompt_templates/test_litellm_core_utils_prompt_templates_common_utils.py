@@ -4,7 +4,7 @@ import importlib
 import json
 import tracemalloc
 import warnings
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import Final, cast
 from unittest import mock
 
@@ -25,6 +25,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     handle_messages_with_content_list_to_str_conversion,
     hoist_images_from_tool_messages,
     merge_consecutive_system_messages,
+    strip_litellm_internal_message_fields,
     strip_litellm_response_only_fields,
     system_messages_first,
 )
@@ -32,7 +33,12 @@ from litellm.litellm_core_utils.prompt_templates.json_schema_utils import (
     flatten_combinators_and_drop_non_python_regex_patterns,
 )
 from litellm.litellm_core_utils.prompt_templates.tool_call_json_repair import parse_tool_call_arguments
-from litellm.types.llms.openai import ChatCompletionAudioObject, ChatCompletionFileObject, ChatCompletionImageObject
+from litellm.types.llms.openai import (
+    AllMessageValues,
+    ChatCompletionAudioObject,
+    ChatCompletionFileObject,
+    ChatCompletionImageObject,
+)
 from litellm.types.utils import ChatCompletionMessageToolCall, Choices, Function, Message, ModelResponse
 
 _ARTIFACT_FIELD_PATTERN: Final = r'^(?!__.*__$)[^\p{Cc}\p{Cf}\p{Zl}\p{Zp}"\\./[\]]{1,200}$'
@@ -935,6 +941,15 @@ def test_get_semantic_cache_prompt_from_messages_matches_get_str_from_messages_w
     assert get_semantic_cache_prompt_from_messages(messages) == get_str_from_messages(messages)
 
 
+def test_get_str_from_messages_keeps_the_text_a_fallback_block_carries_like_a_text_block() -> None:
+    user_turn: Final = {"role": "user", "content": "Hi"}
+    reply: Final = {"type": "text", "text": "Hello"}
+    with_fallback: Final = [user_turn, {"role": "assistant", "content": [{"type": "fallback", "text": "carried"}, reply]}]
+    with_text: Final = [user_turn, {"role": "assistant", "content": [{"type": "text", "text": "carried"}, reply]}]
+
+    assert get_str_from_messages(with_fallback) == get_str_from_messages(with_text)
+
+
 def test_strip_litellm_response_only_fields_drops_nested_tool_call_provider_fields() -> None:
     message: Final = {
         "role": "assistant",
@@ -960,6 +975,25 @@ def test_strip_litellm_response_only_fields_drops_nested_tool_call_provider_fiel
     assert "provider_specific_fields" not in function
     assert function["name"] == "get_weather"
     assert function["arguments"] == '{"city": "Paris"}'
+
+
+@pytest.mark.parametrize("strip", [strip_litellm_response_only_fields, strip_litellm_internal_message_fields])
+def test_strip_litellm_fields_drops_generated_image_provider_fields(
+    strip: Callable[[AllMessageValues], AllMessageValues],
+) -> None:
+    image: Final = {"image_url": {"url": "data:image/png;base64,Y2F0"}, "index": 0, "type": "image_url"}
+    unsigned_image: Final = {"image_url": {"url": "data:image/png;base64,ZG9n"}, "index": 1, "type": "image_url"}
+    message: Final = cast(
+        AllMessageValues,
+        {
+            "role": "assistant",
+            "content": "Here is your cat.",
+            "images": [{**image, "provider_specific_fields": {"thought_signature": "sig-cat"}}, unsigned_image],
+            "provider_specific_fields": {"thought_signatures": ["sig-cat"]},
+        },
+    )
+
+    assert strip(message) == {"role": "assistant", "content": "Here is your cat.", "images": [image, unsigned_image]}
 
 
 @pytest.mark.parametrize("part_type", ["image_url", "input_image"])

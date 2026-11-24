@@ -13,9 +13,16 @@ from typing_extensions import assert_never
 
 import litellm
 from litellm.harness.endpoint import response_cost
-from litellm.harness.evaluation.types import CheckResult, CommandCheck, EvalCheck, JudgeCheck, PredicateCheck
+from litellm.harness.evaluation.types import (
+    CheckResult,
+    CommandCheck,
+    EvalCheck,
+    EvalOutput,
+    JudgeCheck,
+    PredicateCheck,
+)
 from litellm.harness.sandbox.base import Sandbox
-from litellm.harness.types import Result, Usage
+from litellm.harness.types import Usage
 from litellm.types.utils import ModelResponse
 
 _MAX_DETAIL_CHARS: Final = 4000
@@ -43,7 +50,7 @@ def _judge_usage(response: ModelResponse) -> Usage:
     return Usage(input_tokens=parsed.prompt_tokens or 0, output_tokens=parsed.completion_tokens or 0, calls=1)
 
 
-def _judge_input(prompt: str, result: Result) -> str:
+def _judge_input(prompt: str, result: EvalOutput) -> str:
     return json.dumps(
         {
             "task": prompt,
@@ -69,7 +76,7 @@ def _judge_result(response: ModelResponse) -> CheckResult:
 
 async def _run_judge(
     check: JudgeCheck,
-    result: Result,
+    result: EvalOutput,
     metadata: Mapping[str, object],
     api_base: str | None,
     api_key: str | None,
@@ -112,7 +119,7 @@ def _predicate_result(value: object) -> CheckResult:
 
 async def run_check(
     check: EvalCheck,
-    result: Result,
+    result: EvalOutput,
     sandbox: Sandbox,
     metadata: Mapping[str, object],
     *,

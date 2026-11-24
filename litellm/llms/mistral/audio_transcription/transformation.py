@@ -4,11 +4,14 @@ Support for Mistral Voxtral audio transcription via ``/v1/audio/transcriptions``
 API reference: https://docs.mistral.ai/api/#tag/audio/operation/audio_transcriptions_v1_audio_transcriptions_post
 """
 
+from collections.abc import Mapping
 from typing import Final
 
 import httpx
+from pydantic import TypeAdapter
 
 from litellm.litellm_core_utils.audio_utils.utils import process_audio_file
+from litellm.litellm_core_utils.core_helpers import json_contains, require_get, subscript
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.audio_transcription.transformation import (
     AudioTranscriptionRequestData,
@@ -21,6 +24,8 @@ from litellm.types.llms.openai import (
     OpenAIAudioTranscriptionOptionalParams,
 )
 from litellm.types.utils import FileTypes, TranscriptionResponse
+
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class MistralAudioTranscriptionException(BaseLLMException):
@@ -38,11 +43,11 @@ class MistralAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
 
     def map_openai_params(
         self,
-        non_default_params: dict,
-        optional_params: dict,
+        non_default_params: Mapping[str, object],
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:
         supported_params: Final = self.get_supported_openai_params(model)
         for k, v in non_default_params.items():
             if k in supported_params:
@@ -54,8 +59,8 @@ class MistralAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         stream: bool | None = None,
     ) -> str:
         return join_api_base("https://api.mistral.ai/v1" if api_base is None else api_base, "audio/transcriptions")
@@ -69,18 +74,18 @@ class MistralAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: Mapping[str, object],
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         if api_key is None:
             api_key = get_secret_str("MISTRAL_API_KEY")
 
-        default_headers: Final = {
+        default_headers: Final[dict[str, object]] = {
             "Authorization": f"Bearer {api_key}",
             "accept": "application/json",
         }
@@ -91,12 +96,12 @@ class MistralAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         self,
         model: str,
         audio_file: FileTypes,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
     ) -> AudioTranscriptionRequestData:
         processed_audio: Final = process_audio_file(audio_file)
 
-        form_fields: Final[dict] = {
+        form_fields: Final[dict[str, object]] = {
             "model": model,
         }
 
@@ -130,7 +135,7 @@ class MistralAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         raw_response: httpx.Response,
     ) -> TranscriptionResponse:
         try:
-            response_json: Final = raw_response.json()
+            response_json: Final = _DECODED_JSON.validate_python(raw_response.json())
         except Exception:
             raise MistralAudioTranscriptionException(
                 message="Received non-JSON response from Mistral audio transcription",
@@ -138,14 +143,18 @@ class MistralAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
                 headers=raw_response.headers,
             )
 
-        text: Final = response_json.get("text") or ""
-        response: Final = TranscriptionResponse(text=text)
+        text: Final = require_get(response_json).get("text") or ""
+        response: Final = (
+            TranscriptionResponse(text=text)
+            if isinstance(text, str)
+            else TranscriptionResponse.model_validate({"text": text})
+        )
 
         # Preserve Mistral-specific fields (e.g. diarization segments)
-        if "segments" in response_json:
-            response["segments"] = response_json["segments"]
-        if "language" in response_json:
-            response["language"] = response_json["language"]
+        if json_contains(response_json, "segments"):
+            response["segments"] = subscript(response_json, "segments")
+        if json_contains(response_json, "language"):
+            response["language"] = subscript(response_json, "language")
 
-        response.hidden_params = response_json
+        response.hidden_params = response_json  # pyright: ignore[reportAttributeAccessIssue]  # main stored it as is
         return response

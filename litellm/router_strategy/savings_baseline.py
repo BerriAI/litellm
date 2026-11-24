@@ -18,6 +18,7 @@ from collections.abc import Iterable, Mapping
 from typing import TYPE_CHECKING, Final, NamedTuple
 
 from litellm._logging import verbose_router_logger
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.router_deprecated import renamed_router_param
 from litellm.types.utils import PromptTokensDetailsWrapper, Usage
 
@@ -81,21 +82,31 @@ def _models_in(ctx: "RoutingContext", group_name: str) -> tuple[Baseline, ...]:
     straight at a provider model rather than at a configured group, and prices under
     its own name because there is no deployment to override it.
     """
+    from litellm.cost_calculator import base_model_for_pricing
+
     deployments: Final = ctx.registry().deployments(group_name, source="named")
     if not deployments:
         return (Baseline(qualified),) if (qualified := canonical_model(group_name)) else ()
 
     def candidate(deployment: Mapping[str, object]) -> Baseline | None:
-        params: Final = deployment.get("litellm_params")
-        if not isinstance(params, dict):
+        params: Final = as_str_mapping(deployment.get("litellm_params"))
+        if params is None:
             return None
-        info: Final = deployment.get("model_info")
-        base: Final = info.get("base_model") if isinstance(info, dict) else None
-        model: Final = base or params.get("base_model") or params.get("model")
-        qualified: Final = canonical_model(model, params.get("custom_llm_provider")) if model else None
+        info: Final = as_str_mapping(deployment.get("model_info"))
+        model: Final = (
+            base_model_for_pricing(info.get("base_model") if info is not None else None)
+            or base_model_for_pricing(params.get("base_model"))
+            or params.get("model")
+        )
+        provider: Final = params.get("custom_llm_provider")
+        qualified: Final = (
+            canonical_model(model, provider if isinstance(provider, str) else None)
+            if isinstance(model, str) and model
+            else None
+        )
         if qualified is None:
             return None
-        deployment_id: Final = info.get("id") if isinstance(info, dict) else None
+        deployment_id: Final = info.get("id") if info is not None else None
         return Baseline(qualified, str(deployment_id) if deployment_id else None)
 
     return tuple(c for deployment in deployments if (c := candidate(deployment)) is not None)

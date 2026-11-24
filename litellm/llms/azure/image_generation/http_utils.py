@@ -1,9 +1,14 @@
 """HTTP helpers for Azure OpenAI image generation (REST, not SDK)."""
 
-from typing import Final
+from collections.abc import Mapping
+from typing import Final, TypeVar
+
+_Body = TypeVar("_Body", bound=Mapping[str, object])
 
 
-def azure_deployment_image_generation_json_body(api_base: str, data: dict, deployment_name: str | None = None) -> dict:
+def azure_deployment_image_generation_json_body(
+    api_base: str, data: _Body, deployment_name: str | None = None
+) -> _Body | dict[str, object]:
     """
     Build the JSON body for Azure OpenAI image generation POSTs.
 
@@ -22,7 +27,7 @@ def azure_deployment_image_generation_json_body(api_base: str, data: dict, deplo
     v1_route: Final = "/openai/v1/images/" in api_base and bool(deployment_name)
     if not drop_model and not v1_route:
         return data
-    entries: Final = (
+    entries: Final[tuple[tuple[str, object], ...]] = (
         tuple((k, v) for k, v in data.items() if k != "model")
         if drop_model
         else (*data.items(), ("model", deployment_name))

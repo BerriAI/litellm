@@ -1,7 +1,5 @@
 use std::{collections::BTreeMap, fmt, ops::Deref};
 
-use litellm_python_compat::{Value as PythonValue, flags::lax_bool, number::float};
-use litellm_router_types::Spelled;
 use serde::{Deserialize, Deserializer};
 
 pub type Value = serde_yaml_ng::Value;
@@ -57,23 +55,4 @@ pub(crate) fn one_or_many<'de, D: Deserializer<'de>>(
             one => vec![one],
         }),
     )
-}
-
-/// Python's `float(value)` on a timeout written as a number or as text, so `"30"` is 30 seconds and
-/// text `float` refuses is no timeout.
-pub fn seconds(timeout: &Spelled<f64>) -> Option<f64> {
-    match timeout {
-        Spelled::Value(seconds) => Some(*seconds),
-        Spelled::Text(text) => float(text),
-    }
-}
-
-/// `drop_params_flag(value)`: a key that is present reads through LiteLLM's `lax_bool`, so `null` and
-/// text pydantic refuses are off, and an absent key stays `None`.
-pub(crate) fn lax_flag<'de, D: Deserializer<'de>>(
-    deserializer: D,
-) -> Result<Option<bool>, D::Error> {
-    Ok(Some(
-        lax_bool(&PythonValue::deserialize(deserializer)?) == Some(true),
-    ))
 }

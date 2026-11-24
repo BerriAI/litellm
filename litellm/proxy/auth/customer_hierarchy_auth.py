@@ -19,13 +19,20 @@ from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 import litellm
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
-from litellm.proxy._types import JWTIssuerConfig, LiteLLM_JWTAuth, ProxyErrorTypes, ProxyException
+from litellm.proxy._types import (
+    REQUIRED_CUSTOMER_HEADERS_ADAPTER,
+    REQUIRED_CUSTOMER_HEADERS_SETTING,
+    JWTIssuerConfig,
+    LiteLLM_JWTAuth,
+    ProxyErrorTypes,
+    ProxyException,
+)
 from litellm.proxy.auth.auth_checks import can_object_call_model
 from litellm.proxy.auth.auth_object_prefetch import AUTH_OBJECTS_TARGET
 from litellm.proxy.auth.customer_member_auto_create import ensure_customer_member, ensure_customer_organization
 from litellm.proxy.auth.customer_spend import current_customer_spend
 from litellm.proxy.auth.route_checks import RouteChecks
-from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_and_broadcast
+from litellm.proxy.common_utils.cache_invalidation_pubsub import evict_and_broadcast
 from litellm.proxy.common_utils.customer_usage import CustomerIdentifier
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache, get_management_object_ttl
 from litellm.proxy.management_helpers.customer_hierarchy import (
@@ -37,6 +44,7 @@ from litellm.proxy.management_helpers.customer_hierarchy import (
     related_budget,
     utc_now,
 )
+from litellm.redis.stores.auth_cache import AuthObject
 from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.table_repositories import CustomerTeamRepository
 from litellm.rust_bridge._native import jwt_claims
@@ -123,14 +131,6 @@ class CustomerBudgetExceededError(litellm.BudgetExceededError):
         self.customer_hierarchy: Final = hierarchy
 
 
-def customer_member_cache_key(customer_member_id: str) -> str:
-    return f"customer_member_id:{customer_member_id}"
-
-
-def customer_org_alias_cache_key(customer_org_alias: str) -> str:
-    return f"customer_org_alias:{customer_org_alias}"
-
-
 def _header_value(headers: Mapping[str, object] | None, header: str) -> str | None:
     if headers is None:
         return None
@@ -141,6 +141,19 @@ def _header_value(headers: Mapping[str, object] | None, header: str) -> str | No
         if name.lower() == lower_header and isinstance(value, str) and value.strip()
     )
     return values[0] if values else None
+
+
+def validate_required_customer_headers_metadata(metadata: Mapping[str, object] | None) -> None:
+    specified: Final = metadata.get(REQUIRED_CUSTOMER_HEADERS_SETTING) if metadata else None
+    if specified is None:
+        return
+    try:
+        REQUIRED_CUSTOMER_HEADERS_ADAPTER.validate_python(specified)
+    except ValidationError as error:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "metadata.required_customer_headers must be a list of valid HTTP header names."},
+        ) from error
 
 
 @dataclass(frozen=True, slots=True)
@@ -158,11 +171,11 @@ class CustomerIdentityHeaderNames:
         )
 
 
-_DEFAULT_CUSTOMER_HEADER_NAMES: Final = CustomerIdentityHeaderNames()
+DEFAULT_CUSTOMER_HEADER_NAMES: Final = CustomerIdentityHeaderNames()
 
 
 def customer_identity_from_headers(
-    headers: Mapping[str, object] | None, *, names: CustomerIdentityHeaderNames = _DEFAULT_CUSTOMER_HEADER_NAMES
+    headers: Mapping[str, object] | None, *, names: CustomerIdentityHeaderNames = DEFAULT_CUSTOMER_HEADER_NAMES
 ) -> CustomerRequestIdentity | None:
     """The customer the request named, or None when it carried neither customer header."""
     identity: Final = CustomerRequestIdentity(
@@ -191,18 +204,13 @@ def customer_identity_from_request(
     verified_claims: Mapping[str, object] | None,
     settings: LiteLLM_JWTAuth,
     *,
-    general_settings: Mapping[str, object] | None = None,
+    names: CustomerIdentityHeaderNames = DEFAULT_CUSTOMER_HEADER_NAMES,
 ) -> CustomerRequestIdentity | None:
     """With customer claims mapped, a verified JWT alone names the customer and the headers are ignored."""
     claims_name_customer: Final = verified_claims is not None and (
         _maps_customer_claims(settings) or any(_maps_customer_claims(issuer) for issuer in settings.issuers or ())
     )
     if not claims_name_customer or verified_claims is None:
-        names: Final = (
-            CustomerIdentityHeaderNames.from_settings(general_settings)
-            if general_settings is not None
-            else _DEFAULT_CUSTOMER_HEADER_NAMES
-        )
         return customer_identity_from_headers(headers, names=names)
     mapped: Final = jwt_claims(dict(verified_claims), settings)
     identity: Final = CustomerRequestIdentity(
@@ -338,7 +346,7 @@ async def get_customer_hierarchy(
     user_api_key_cache: UserApiKeyCache,
     now: datetime | None = None,
 ) -> CustomerHierarchyAuth | None:
-    cache_key: Final = customer_member_cache_key(customer_member_id)
+    cache_key: Final = AuthObject.customer_member(customer_member_id)
     cached: Final = await user_api_key_cache.async_get_cache(key=cache_key, model_type=CustomerHierarchyAuth)
     if cached is not None:
         return cached
@@ -427,7 +435,7 @@ async def get_customer_organization_hierarchy(
     now: datetime | None = None,
 ) -> CustomerHierarchyAuth | AmbiguousOrganizationAlias | None:
     """The organization-only hierarchy behind an alias, None when no organization carries it."""
-    cache_key: Final = customer_org_alias_cache_key(customer_org_alias)
+    cache_key: Final = AuthObject.customer_org_alias(customer_org_alias)
     cached: Final = await user_api_key_cache.async_get_cache(key=cache_key, model_type=CustomerHierarchyAuth)
     if cached is not None:
         return cached
@@ -570,7 +578,9 @@ OrganizationRegistrar: TypeAlias = Callable[[str, "PrismaClient"], Awaitable[Org
 
 
 def _organization_from_lookup(
-    customer_org_alias: str, organization: CustomerHierarchyAuth | AmbiguousOrganizationAlias | None
+    customer_org_alias: str,
+    organization: CustomerHierarchyAuth | AmbiguousOrganizationAlias | None,
+    org_alias_header: str,
 ) -> CustomerHierarchyAuth | None:
     if organization is None:
         return _untracked(f"organization alias not found: {customer_org_alias}", CUSTOMER_ORG_ALIAS_HEADER)
@@ -578,7 +588,7 @@ def _organization_from_lookup(
         raise ProxyException(
             message=f"Customer organization alias is not unique: {customer_org_alias}",
             type=ProxyErrorTypes.bad_request_error,
-            param=CUSTOMER_ORG_ALIAS_HEADER,
+            param=org_alias_header,
             code=status.HTTP_400_BAD_REQUEST,
         )
     return organization
@@ -590,6 +600,7 @@ async def _register_organization(
     user_api_key_cache: UserApiKeyCache,
     register: OrganizationRegistrar,
     key_metadata: Mapping[str, object],
+    header_names: CustomerIdentityHeaderNames,
 ) -> CustomerHierarchyAuth | None:
     """An alias the proxy has never seen becomes an organization with that id and alias, so a customer's first
     request is charged to it instead of running untracked. A key pinned to another organization is refused first.
@@ -599,7 +610,7 @@ async def _register_organization(
             "Could not register customer organization: alias is not a valid customer identifier"
         )
         return _untracked(f"organization alias not found: {customer_org_alias}", CUSTOMER_ORG_ALIAS_HEADER)
-    _check_key_scope(customer_org_alias, key_metadata)
+    _check_key_scope(customer_org_alias, key_metadata, header_names.member_id)
     registered: Final = await register(customer_org_alias, prisma_client)
     if isinstance(registered, Failure):
         if registered.code is ErrorCode.FREE_TIER_LIMIT:
@@ -616,6 +627,7 @@ async def _register_organization(
     return _organization_from_lookup(
         customer_org_alias,
         await get_customer_organization_hierarchy(customer_org_alias, prisma_client, user_api_key_cache),
+        header_names.org_alias,
     )
 
 
@@ -625,15 +637,16 @@ async def _organization_named_by_alias(
     user_api_key_cache: UserApiKeyCache,
     register: OrganizationRegistrar,
     key_metadata: Mapping[str, object],
+    header_names: CustomerIdentityHeaderNames,
 ) -> CustomerHierarchyAuth | None:
     if prisma_client is None:
         return _untracked(f"organization alias not found: {customer_org_alias}", CUSTOMER_ORG_ALIAS_HEADER)
     found: Final = await get_customer_organization_hierarchy(customer_org_alias, prisma_client, user_api_key_cache)
     if found is None:
         return await _register_organization(
-            customer_org_alias, prisma_client, user_api_key_cache, register, key_metadata
+            customer_org_alias, prisma_client, user_api_key_cache, register, key_metadata, header_names
         )
-    return _organization_from_lookup(customer_org_alias, found)
+    return _organization_from_lookup(customer_org_alias, found, header_names.org_alias)
 
 
 MemberRegistrar: TypeAlias = Callable[[str, str, "PrismaClient"], Awaitable[CustomerMember | Failure]]
@@ -716,6 +729,8 @@ async def load_customer_hierarchy(
     register: MemberRegistrar = ensure_customer_member,
     key_metadata: Mapping[str, object] = MappingProxyType({}),
     register_organization: OrganizationRegistrar = ensure_customer_organization,
+    *,
+    header_names: CustomerIdentityHeaderNames = DEFAULT_CUSTOMER_HEADER_NAMES,
 ) -> CustomerHierarchyAuth | None:
     """The hierarchy the headers name, or None when the proxy knows none of the ids, in which case the request runs
     untracked. An alias the proxy has never seen is registered as a new organization first. A member header next to an alias header must name a member of that organization; a member the
@@ -724,13 +739,18 @@ async def load_customer_hierarchy(
     """
     organization: Final = (
         await _organization_named_by_alias(
-            identity.customer_org_alias, prisma_client, user_api_key_cache, register_organization, key_metadata
+            identity.customer_org_alias,
+            prisma_client,
+            user_api_key_cache,
+            register_organization,
+            key_metadata,
+            header_names,
         )
         if identity.customer_org_alias is not None
         else None
     )
     if organization is not None:
-        check_customer_hierarchy_key_scope(organization, key_metadata)
+        check_customer_hierarchy_key_scope(organization, key_metadata, member_header=header_names.member_id)
     if identity.customer_member_id is None:
         if identity.customer_team_id is not None:
             raise _forbidden("a customer team header needs a customer member header", CUSTOMER_TEAM_ID_HEADER)
@@ -744,7 +764,7 @@ async def load_customer_hierarchy(
         raise _forbidden(
             f"Customer member {identity.customer_member_id} does not belong to the organization "
             f"aliased {identity.customer_org_alias}",
-            CUSTOMER_ORG_ALIAS_HEADER,
+            header_names.org_alias,
         )
     if identity.customer_team_id is None or hierarchy.customer_member_id is None:
         return hierarchy
@@ -771,6 +791,8 @@ async def resolve_customer_hierarchy(
     key_metadata: Mapping[str, object] | None = None,
     register: MemberRegistrar = ensure_customer_member,
     register_organization: OrganizationRegistrar = ensure_customer_organization,
+    *,
+    header_names: CustomerIdentityHeaderNames = DEFAULT_CUSTOMER_HEADER_NAMES,
 ) -> CustomerHierarchyAuth | None:
     """Load the hierarchy the headers name and admit the request against it, or None when no id is known.
     ``request_model`` is the model the route will actually serve, which may differ from the body.
@@ -779,13 +801,21 @@ async def resolve_customer_hierarchy(
 
     metadata: Final = key_metadata or {}
     cached: Final = await load_customer_hierarchy(
-        identity, prisma_client, user_api_key_cache, register, metadata, register_organization
+        identity,
+        prisma_client,
+        user_api_key_cache,
+        register,
+        metadata,
+        register_organization,
+        header_names=header_names,
     )
     if cached is None:
         return None
     hierarchy: Final = await current_customer_spend(cached, get_current_spend)
     try:
-        await check_customer_hierarchy_access(hierarchy, llm_router, request_model, route, key_metadata)
+        await check_customer_hierarchy_access(
+            hierarchy, llm_router, request_model, route, key_metadata, member_header=header_names.member_id
+        )
     except litellm.BudgetExceededError as error:
         raise CustomerBudgetExceededError(hierarchy, error) from error
     return hierarchy
@@ -797,8 +827,10 @@ async def check_customer_hierarchy_access(
     request_model: str | Sequence[str] | None,
     route: str,
     key_metadata: Mapping[str, object] | None = None,
+    *,
+    member_header: str = CUSTOMER_MEMBER_ID_HEADER,
 ) -> None:
-    check_customer_hierarchy_key_scope(hierarchy, key_metadata or {})
+    check_customer_hierarchy_key_scope(hierarchy, key_metadata or {}, member_header=member_header)
     requested: Final = (request_model,) if isinstance(request_model, str) else tuple(request_model or ())
     for model in requested:
         if model:
@@ -810,21 +842,26 @@ async def check_customer_hierarchy_access(
         await check_customer_hierarchy_windows(hierarchy)
 
 
-def check_customer_hierarchy_key_scope(hierarchy: CustomerHierarchyAuth, key_metadata: Mapping[str, object]) -> None:
+def check_customer_hierarchy_key_scope(
+    hierarchy: CustomerHierarchyAuth,
+    key_metadata: Mapping[str, object],
+    *,
+    member_header: str = CUSTOMER_MEMBER_ID_HEADER,
+) -> None:
     """A key whose metadata pins ``customer_org_id`` may only act for members of that organization."""
     if hierarchy.customer_org_id is None:
         return
-    _check_key_scope(hierarchy.customer_org_id, key_metadata)
+    _check_key_scope(hierarchy.customer_org_id, key_metadata, member_header)
 
 
-def _check_key_scope(customer_org_id: str, key_metadata: Mapping[str, object]) -> None:
+def _check_key_scope(customer_org_id: str, key_metadata: Mapping[str, object], member_header: str) -> None:
     key_customer_org_id: Final = key_metadata.get("customer_org_id")
     if key_customer_org_id is None or key_customer_org_id == customer_org_id:
         return
     raise ProxyException(
         message="API key is not allowed to act for this customer member's organization",
         type=ProxyErrorTypes.auth_error,
-        param=CUSTOMER_MEMBER_ID_HEADER,
+        param=member_header,
         code=status.HTTP_403_FORBIDDEN,
     )
 
@@ -832,7 +869,7 @@ def _check_key_scope(customer_org_id: str, key_metadata: Mapping[str, object]) -
 @with_service_target(AUTH_OBJECTS_TARGET)
 async def forget_customer_hierarchies(customer_member_ids: Sequence[str], user_api_key_cache: UserApiKeyCache) -> None:
     """Drop the cached hierarchies of members whose own, team, org or template budget changed so auth reloads them."""
-    await evict_and_broadcast(tuple(customer_member_cache_key(m) for m in customer_member_ids), user_api_key_cache)
+    await evict_and_broadcast(tuple(AuthObject.customer_member(m).key for m in customer_member_ids), user_api_key_cache)
 
 
 @with_service_target(AUTH_OBJECTS_TARGET)
@@ -840,6 +877,6 @@ async def forget_customer_organization_aliases(
     aliases: Sequence[str | None], user_api_key_cache: UserApiKeyCache
 ) -> None:
     """Drop the cached organization hierarchies behind aliases whose organization changed so request auth reloads them."""
-    keys: Final = tuple(customer_org_alias_cache_key(alias) for alias in dict.fromkeys(aliases) if alias)
+    keys: Final = tuple(AuthObject.customer_org_alias(alias).key for alias in dict.fromkeys(aliases) if alias)
     if keys:
         await evict_and_broadcast(keys, user_api_key_cache)
