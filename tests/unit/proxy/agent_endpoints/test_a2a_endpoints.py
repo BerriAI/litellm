@@ -3433,3 +3433,37 @@ def test_a2a_http_refusals_answer_as_jsonrpc_errors_with_a_null_id_for_unparseab
     assert body["error"]["code"] == -32000
     assert body["error"]["message"] == "Agent 'agent-1' is not allowed"
     assert body["error"]["data"]["code"] == "403"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ("message/send", "message/stream", "tasks/resubscribe"))
+async def test_invoke_agent_a2a_rejects_unregistered_agent_guardrail_before_pre_call(method: str) -> None:
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.agent_endpoints.a2a_endpoints import invoke_agent_a2a
+    from litellm.proxy.utils import ProxyLogging
+
+    agent = _make_agent_mock()
+    agent.litellm_params = {"guardrails": ["missing-agent-guardrail"]}
+    proxy_logging = MagicMock(spec=ProxyLogging)
+
+    proxy_logging.pre_call_hook = AsyncMock()
+
+    with ExitStack() as stack:
+        for base_patch in _base_patches(agent):
+            stack.enter_context(base_patch)
+        stack.enter_context(patch("litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging))
+        stack.enter_context(
+            patch("litellm.proxy.proxy_server.general_settings", {"reject_unregistered_guardrails": True})
+        )
+        backend_auth = stack.enter_context(patch("litellm.proxy.agent_endpoints.a2a_endpoints._resolve_backend_auth"))
+        with pytest.raises(HTTPException, match=r"Unknown guardrail.*missing-agent-guardrail") as exc:
+            await invoke_agent_a2a(
+                agent_id="test-agent",
+                request=_make_request_mock(method, {}),
+                fastapi_response=MagicMock(),
+                user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
+            )
+
+    assert exc.value.status_code == 400
+    proxy_logging.pre_call_hook.assert_not_awaited()
+    backend_auth.assert_not_awaited()

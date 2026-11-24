@@ -424,6 +424,24 @@ describe("useKeys", () => {
     expect(result.current.data?.keys[0].project_id).toBe("project-1");
   });
 
+  it("requests only keys owned by the exact team member", async () => {
+    mockFetch.mockResolvedValue({ ok: true, json: async () => mockKeysResponse });
+    const { result } = renderHook(() => useKeys(1, 10, { teamID: "team-1", ownerUserID: "user-1" }), { wrapper });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    const [requestUrl]: [string] = mockFetch.mock.calls[0] as [string];
+    const { searchParams } = new URL(requestUrl, "http://localhost");
+    const expectedParams = {
+      team_id: "team-1",
+      user_id: "user-1",
+      substring_matching: "false",
+      include_team_keys: "false",
+      include_created_by_keys: "false",
+    };
+    expect(Object.fromEntries(searchParams)).toMatchObject(expectedParams);
+  });
+
   it("should pass both projectID and teamID filters to the API", async () => {
     mockFetch.mockResolvedValueOnce({
       ok: true,

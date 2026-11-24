@@ -2,8 +2,8 @@ use std::{any::Any, panic::AssertUnwindSafe, sync::Arc};
 
 use futures_util::FutureExt;
 use litellm_callbacks::{
-    CallFacts, ErasedCallback, Field, FieldValues, Hook, HookInput, ManifestError, RequestState,
-    Verdict,
+    CallFacts, ErasedCallback, Field, FieldValues, Hook, HookInput, Manifest, ManifestError,
+    RequestState, Verdict,
 };
 use litellm_host_python::{Execution, from_py, json_from_py, json_to_py, run_async_value};
 use pyo3::{
@@ -15,6 +15,8 @@ use serde_json::Value;
 
 mod hosted;
 pub mod payload;
+
+pub use hosted::{host_call_error, run_hosted, run_hosted_hook};
 
 #[pyclass(frozen, name = "RustCallback")]
 pub struct RustCallback {
@@ -133,6 +135,19 @@ impl RustCallback {
         })
     }
 
+    fn flush<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let callback = Arc::clone(&self.callback);
+        let render_loop = payload::running_loop(py);
+        run_async_value(py, async move {
+            payload::on_render_loop(
+                render_loop,
+                AssertUnwindSafe(async move { callback.flush().await }).catch_unwind(),
+            )
+            .await
+            .map_err(panic_error)
+        })
+    }
+
     #[pyo3(signature = (hook, fields, call, state, host, /))]
     fn start<'py>(
         &self,
@@ -149,13 +164,7 @@ impl RustCallback {
             .then(|| payload::running_loop(py))
             .flatten();
         Ok(Execution::new(
-            hosted::HostedExecution::new(
-                Arc::clone(&self.callback),
-                input,
-                state,
-                render_loop,
-                host,
-            ),
+            hosted::callback_execution(Arc::clone(&self.callback), input, state, render_loop, host),
             execution_steps,
         ))
     }
@@ -168,25 +177,34 @@ impl RustCallback {
         fields: &Bound<'py, PyDict>,
         call: Option<&Bound<'py, PyAny>>,
     ) -> PyResult<HookInput> {
-        let hook: Hook = named(hook)?;
-        let subscription = self
-            .callback
-            .manifest()
-            .subscription(hook)
-            .ok_or_else(|| PyValueError::new_err(format!("{hook:?} has no subscription")))?;
-        let mut values = FieldValues::new(subscription.reads);
-        for (name, value) in fields {
-            let field: Field = named(&name.extract::<String>()?)?;
-            if field.by_reference() {
-                values.set_payload(payload::stash(value.unbind()));
-                continue;
-            }
-            values.insert(field, json_from_py(&value)?);
-        }
-        Ok(HookInput {
-            hook,
-            fields: values,
-            call: call.map(from_py::<CallFacts>).transpose()?,
-        })
+        hook_input(self.callback.manifest(), hook, fields, call)
     }
+}
+
+/// The input of one `hook` run from the proxy's field values and call facts, read by the hook's
+/// subscription in `manifest`. For a host that starts a callback's hook itself.
+pub fn hook_input<'py>(
+    manifest: &Manifest,
+    hook: &str,
+    fields: &Bound<'py, PyDict>,
+    call: Option<&Bound<'py, PyAny>>,
+) -> PyResult<HookInput> {
+    let hook: Hook = named(hook)?;
+    let subscription = manifest
+        .subscription(hook)
+        .ok_or_else(|| PyValueError::new_err(format!("{hook:?} has no subscription")))?;
+    let mut values = FieldValues::new(subscription.reads);
+    for (name, value) in fields {
+        let field: Field = named(&name.extract::<String>()?)?;
+        if field.by_reference() {
+            values.set_payload(payload::stash(value.unbind()));
+            continue;
+        }
+        values.insert(field, json_from_py(&value)?);
+    }
+    Ok(HookInput {
+        hook,
+        fields: values,
+        call: call.map(from_py::<CallFacts>).transpose()?,
+    })
 }

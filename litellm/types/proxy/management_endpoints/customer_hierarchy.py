@@ -2,7 +2,7 @@ from collections.abc import Mapping
 from datetime import datetime
 from hashlib import sha256
 from json import dumps
-from typing import Final, Literal, TypeAlias
+from typing import Annotated, Final, Literal, TypeAlias
 
 from pydantic import (
     AwareDatetime,
@@ -14,6 +14,7 @@ from pydantic import (
     field_validator,
     model_validator,
 )
+from pydantic.json_schema import SkipJsonSchema
 
 from litellm.models.budget import BudgetLimits
 from litellm.proxy.common_utils.timezone_utils import budget_duration_error
@@ -80,6 +81,15 @@ class OrganizationFields(BaseModel):
 
     alias: str | None = None
     budget: Budget | None = None
+    budget_id: str | None = Field(
+        default=None, min_length=1, description="Organization budget group ID. Null clears it; omit to keep it."
+    )
+
+    @model_validator(mode="after")
+    def exclusive_budget(self) -> "OrganizationFields":
+        if self.budget_id is not None and self.budget is not None:
+            raise ValueError("Choose a budget group or a custom budget")
+        return self
 
 
 class OrganizationPatch(OrganizationFields):
@@ -116,22 +126,49 @@ class TeamCreate(TeamPatch):
     parent_org_id: str
 
 
-class MemberPatch(BaseModel):
+class MemberFields(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     alias: str | None = None
     budget_id: str | None = None
+    budget: Budget | None = Field(
+        default=None,
+        description="Permanent member-specific budget. When leaving a preset, copies its settings into a private budget "
+        "and applies supplied fields. Later edits patch that private budget. Explicit null fields clear limits. "
+        "Independent of temporary budget_override.",
+    )
     budget_override: Budget | None = None
     budget_override_expires_at: AwareDatetime | None = None
 
+    @model_validator(mode="after")
+    def exclusive_budget(self) -> "MemberFields":
+        if self.budget_id is not None and self.budget is not None:
+            raise ValueError("Choose a budget group or a custom budget")
+        return self
 
-class MemberCreate(MemberPatch):
+
+class MemberPatch(MemberFields):
+    parent_team_ids: Annotated[tuple[str, ...], Field(min_length=1)] | SkipJsonSchema[None] = Field(
+        default=None,
+        description="Replace the member's teams within its existing organization. First team is the default. "
+        "Omit to keep current teams. Member identity, budgets and historical usage are retained.",
+    )
+
+    @field_validator("parent_team_ids")
+    @classmethod
+    def valid_parent_teams(cls, value: tuple[str, ...] | None) -> tuple[str, ...]:
+        if value is None or any(not team.strip() for team in value) or len(set(value)) != len(value):
+            raise ValueError("parent_team_ids must contain unique, nonempty team IDs")
+        return value
+
+
+class MemberCreate(MemberFields):
     customer_member_id: str | None = None
     parent_org_id: str | None = Field(default=None, description="Must match the parent teams' organization when set")
     parent_team_ids: tuple[str, ...] = Field(min_length=1, description="Teams the member belongs to, first is default")
 
 
-class MemberUpsert(MemberPatch):
+class MemberUpsert(MemberFields):
     customer_member_id: str = Field(min_length=1)
     customer_org_id: str | None = None
     customer_org_alias: str | None = None
@@ -172,11 +209,9 @@ class AuditFields(BaseModel):
     updated_by: str
 
 
-class Organization(AuditFields):
-    member_count: int = Field(default=0, ge=0, description="Current registered members across all customer teams")
-    budget_id: str | None = None
-    budget: Budget | None = None
-    customer_org_id: str
+class BudgetGroups(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
     default_budget_template_id: str | None = None
     default_budgets: tuple[OrganizationBudget, ...] = ()
 
@@ -191,6 +226,16 @@ class Organization(AuditFields):
             ),
         }
         return sha256(dumps(configuration, sort_keys=True).encode()).hexdigest()
+
+
+class Organization(AuditFields, BudgetGroups):
+    member_count: int = Field(default=0, ge=0, description="Current registered members across all customer teams")
+    budget_id: str | None = None
+    budget_is_shared: bool | None = Field(
+        default=None, description="Whether budget_id references a reusable organization group"
+    )
+    budget: Budget | None = None
+    customer_org_id: str
 
 
 class Team(AuditFields):
@@ -209,6 +254,7 @@ class CustomerMember(AuditFields):
     parent_org_id: str
     parent_team_ids: tuple[str, ...]
     budget_id: str | None = None
+    budget: Budget | None = None
     budget_override_id: str | None = None
     budget_override: Budget | None = None
     budget_override_expires_at: datetime | None = None

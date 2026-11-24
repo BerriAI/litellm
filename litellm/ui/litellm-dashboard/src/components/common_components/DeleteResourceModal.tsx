@@ -21,6 +21,7 @@ interface DeleteResourceModalProps {
   onCancel: () => void;
   onOk: () => void;
   confirmLoading: boolean;
+  confirmDisabled?: boolean;
   requiredConfirmation?: string;
   errorMessage?: string | null;
 }
@@ -35,11 +36,13 @@ export default function DeleteResourceModal({
   onCancel,
   onOk,
   confirmLoading,
+  confirmDisabled = false,
   requiredConfirmation,
   errorMessage,
 }: DeleteResourceModalProps) {
   const { t } = useTranslation();
   const [requiredConfirmationInput, setRequiredConfirmationInput] = useState("");
+  const confirmationMissing = Boolean(requiredConfirmation && requiredConfirmationInput !== requiredConfirmation);
 
   useEffect(() => {
     if (isOpen) {
@@ -115,7 +118,7 @@ export default function DeleteResourceModal({
           <Button
             variant="destructive"
             onClick={onOk}
-            disabled={(!!requiredConfirmation && requiredConfirmationInput !== requiredConfirmation) || confirmLoading}
+            disabled={confirmationMissing || confirmLoading || confirmDisabled}
           >
             {confirmLoading
               ? t("commonComponents.deleteResourceModal.deleting")

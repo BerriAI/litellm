@@ -31,7 +31,7 @@ class SagemakerNovaConfig(SagemakerChatConfig):
         """Nova expects `stream: true` in the request body for streaming."""
         return True
 
-    def get_supported_openai_params(self, model: str) -> list:
+    def get_supported_openai_params(self, model: str) -> list[str]:
         """Extend parent params with Nova-specific parameters."""
         params: Final = super().get_supported_openai_params(model)
         nova_params: Final = [
@@ -49,10 +49,10 @@ class SagemakerNovaConfig(SagemakerChatConfig):
         self,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
-        headers: dict,
-    ) -> dict:
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
+        headers: dict[str, object],
+    ) -> dict[str, object]:
         """
         Nova SageMaker endpoints do not accept 'model' in the request body.
         Only supported fields: messages, max_tokens, max_completion_tokens,

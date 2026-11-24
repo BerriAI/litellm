@@ -24,7 +24,7 @@ additional_drop_params to remove nested fields from optional parameters.
 """
 
 import copy
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from typing import Any, Final, TypeVar
 
 T = TypeVar("T")
@@ -80,7 +80,7 @@ def get_nested_value(data: Mapping[str, object], key_path: str, default: T | Non
     return current if isinstance(current, type(default)) else default
 
 
-def _parse_path_segments(path: str) -> list:
+def _parse_path_segments(path: str) -> list[str]:
     """
     Parse a JSONPath-like string into segments using regex.
 
@@ -102,15 +102,15 @@ def _parse_path_segments(path: str) -> list:
     import re
 
     # Match field names OR bracket expressions
-    # Pattern: field_name (anything except . or [) | [anything_in_brackets]
-    pattern: Final = r"[^\.\[]+|\[[^\]]*\]"
+    # Pattern: field_name (anything except . or [) | [anything_in_brackets except [ or ]]
+    pattern: Final = r"[^\.\[]+|\[[^\]\[]*\]"
     segments: Final = re.findall(pattern, path)
     return segments
 
 
 def _delete_nested_value_custom(
     data: dict[str, object] | list[object],
-    segments: list,
+    segments: Sequence[str],
     segment_index: int = 0,
 ) -> None:
     """

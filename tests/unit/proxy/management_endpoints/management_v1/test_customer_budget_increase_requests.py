@@ -1,10 +1,14 @@
+import asyncio
+from datetime import timedelta
 from typing import Final
 
+import pytest
 from fastapi.testclient import TestClient
 
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from tests.unit.proxy.management_endpoints.management_v1.test_customers import client
+from tests.unit.proxy.management_helpers.test_customer_hierarchy import NOW, Database
 
 REQUESTS: Final = "/management/v1/customer_budget_increase_requests"
 EXPIRES: Final = "2026-02-01T00:00:00Z"
@@ -44,9 +48,30 @@ def _paused_member(http: TestClient, cap_policy: str | None) -> str:
     return "paused-member"
 
 
-def test_request_waits_for_review_and_an_approval_lands_as_the_members_override() -> None:
-    http: Final = client()
+@pytest.mark.parametrize(
+    "field,maximum", ((None, 100), ("budget", 150), ("budget_override", None), ("budget_override", 150))
+)
+def test_request_waits_for_review_and_an_approval_lands_as_the_members_override(
+    field: str | None, maximum: int | None
+) -> None:
+    database: Final = Database()
+    http: Final = client(database=database)
     member_id: Final = _paused_member(http, "pause_allow_increase")
+    path: Final = f"/management/v1/customer_members/{member_id}"
+    policy: Final = {
+        "max_budget": maximum,
+        "rpm_limit": 17,
+        "model_rpm_limit": {"model": 5},
+        "budget_limits": [{"budget_duration": "12mo", "max_budget": 8000}],
+    }
+    original: Final = (http.patch(path, json={field: policy}) if field else http.get(path)).json()
+    if field == "budget_override":
+        asyncio.run(
+            database.litellm_budgettable.update(
+                where={"budget_id": original["budget_override_id"]},
+                data={"temp_budget_increase": 50, "temp_budget_expiry": NOW + timedelta(days=35)},
+            )
+        )
     filed: Final = http.post(
         REQUESTS,
         json={
@@ -81,6 +106,18 @@ def test_request_waits_for_review_and_an_approval_lands_as_the_members_override(
     again: Final = http.put(f"{REQUESTS}/{request_id}/approve")
     assert again.status_code == 409, again.text
     assert http.get(REQUESTS, params={"status": "pending_review"}).json()["meta"]["total_count"] == 0
+    edited: Final = http.patch(path, json={"budget": {"rpm_limit": 23}}).json()
+    assert edited["budget_override"] == member.json()["budget_override"]
+    assert edited["budget_override_id"] == member.json()["budget_override_id"]
+    assert edited["budget_override_expires_at"] == EXPIRES
+    assert edited["budget_reset_at"] == original["budget_reset_at"]
+    for days, increase in ((32, 50 if field == "budget_override" else 0), (36, 0)):
+        expired: Final = client(database=database, now=NOW + timedelta(days=days)).get(path).json()
+        assert expired["effective_budget"] == {
+            **original["effective_budget"],
+            "rpm_limit": 23,
+            "max_budget": original["effective_budget"]["max_budget"] + increase,
+        }
 
 
 def test_rejection_keeps_the_member_paused_and_records_the_notes() -> None:

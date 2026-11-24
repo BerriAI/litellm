@@ -36,7 +36,7 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.litellm_core_utils.core_helpers import has_attributes, iter_items, require_attributes
+from litellm.litellm_core_utils.core_helpers import has_attributes, iter_items, length_of, require_attributes
 from litellm.llms.litellm_proxy.skills.constants import LITELLM_SKILL_ID_PREFIX
 from litellm.llms.litellm_proxy.skills.prompt_injection import (
     SkillPromptInjectionHandler,
@@ -90,6 +90,26 @@ class _HasContent(Protocol):
     def content(self) -> object: ...
 
 
+class _HasStartsWith(Protocol):
+    def startswith(self, prefix: str, /) -> object: ...
+
+
+class _HasGet(Protocol):
+    def get(self, key: str, default: str, /) -> object: ...
+
+
+class _ExtraFields(Protocol):
+    def __setitem__(self, key: str, value: object, /) -> None: ...
+
+
+class _HasModelExtra(Protocol):
+    model_extra: _ExtraFields | None
+
+
+class _AttributeTarget(Protocol):
+    def __setattr__(self, name: str, value: object, /) -> None: ...
+
+
 @with_config(ConfigDict(extra="allow", strict=True))
 class _CodeExecutionToolArgs(TypedDict, total=False):
     code: ReadOnly[str]
@@ -113,6 +133,25 @@ def _first_choice(response: _ChatCompletion) -> _ChatChoice:
 
 def _dict_or_none(value: object) -> Mapping[str, object] | None:
     return value if isinstance(value, dict) else None
+
+
+def _record_generated_files(response: _AttributeTarget, generated_files: Sequence[Mapping[str, object]]) -> None:
+    if isinstance(response, dict):
+        response["_litellm_generated_files"] = generated_files
+        verbose_proxy_logger.debug("SkillsInjectionHook: Attached %s files to dict response", len(generated_files))
+        return
+
+    try:
+        response._litellm_generated_files = generated_files
+    except AttributeError:
+        pass
+
+    if has_attributes(response, _HasModelExtra, "model_extra"):
+        if response.model_extra is None:
+            response.model_extra = {}
+        response.model_extra["_litellm_generated_files"] = generated_files
+
+    verbose_proxy_logger.debug("SkillsInjectionHook: Attached %s files to response", len(generated_files))
 
 
 class SkillsInjectionHook(CustomLogger):
@@ -213,7 +252,7 @@ class SkillsInjectionHook(CustomLogger):
     def _process_for_messages_api(
         self,
         data: dict,
-        litellm_skills: list[LiteLLM_SkillsTable],
+        litellm_skills: Sequence[LiteLLM_SkillsTable],
         use_anthropic_format: bool = True,
     ) -> dict:
         """
@@ -285,7 +324,7 @@ class SkillsInjectionHook(CustomLogger):
     def _process_non_anthropic_model(
         self,
         data: dict,
-        litellm_skills: list[LiteLLM_SkillsTable],
+        litellm_skills: Sequence[LiteLLM_SkillsTable],
     ) -> dict:
         """
         Process skills for non-Anthropic models (OpenAI format tools).
@@ -448,9 +487,11 @@ class SkillsInjectionHook(CustomLogger):
         # Check if any tool call needs execution (litellm_code_execution or skill tool)
         has_executable_tool = False
         for tc in tool_calls:
-            tool_name: str = tc.get("name", "")
+            tool_name = tc.get("name", "")
             # Execute if it's litellm_code_execution OR a skill tool (litellm_skill_xxx)
-            if tool_name == LiteLLMInternalTools.CODE_EXECUTION.value or tool_name.startswith(LITELLM_SKILL_ID_PREFIX):
+            if tool_name == LiteLLMInternalTools.CODE_EXECUTION.value or require_attributes(
+                tool_name, _HasStartsWith, "startswith"
+            ).startswith(LITELLM_SKILL_ID_PREFIX):
                 has_executable_tool = True
                 break
 
@@ -466,9 +507,9 @@ class SkillsInjectionHook(CustomLogger):
             skill_files=all_skill_files,
         )
 
-    def _extract_tool_calls(self, response: object) -> list[dict[str, Any]]:
+    def _extract_tool_calls(self, response: object) -> Sequence[Mapping[str, object]]:
         """Extract tool calls from response, handling both formats."""
-        tool_calls: Final = []
+        tool_calls: Final[list[dict[str, object]]] = []
 
         # Get content - handle both dict and object responses
         response_mapping: Final = _dict_or_none(response)
@@ -561,7 +602,7 @@ class SkillsInjectionHook(CustomLogger):
                 if isinstance(current_response, dict)
                 else getattr(current_response, "content", [])
             )
-            content_blocks = []
+            content_blocks: list[object] = []
             for block in raw_content or []:
                 if isinstance(block, dict):
                     content_blocks.append(block)
@@ -588,15 +629,15 @@ class SkillsInjectionHook(CustomLogger):
             # Process tool calls
             tool_results = []
             for tc in tool_calls:
-                tool_name: str = tc.get("name", "")
+                tool_name = tc.get("name", "")
                 tool_id = tc.get("id", "")
-                tool_input: Mapping[str, str] = tc.get("input", {})
+                tool_input = tc.get("input", {})
 
                 # Execute if it's litellm_code_execution OR a skill tool
                 if tool_name == LiteLLMInternalTools.CODE_EXECUTION.value:
-                    code = tool_input.get("code", "")
+                    code = require_attributes(tool_input, _HasGet, "get").get("code", "")
                     result = await self._execute_code(code, skill_files, executor, generated_files)
-                elif tool_name.startswith(LITELLM_SKILL_ID_PREFIX):
+                elif require_attributes(tool_name, _HasStartsWith, "startswith").startswith(LITELLM_SKILL_ID_PREFIX):
                     # Skill tool - execute the skill's code
                     result = await self._execute_skill_tool(
                         tool_name, tool_input, skill_files, executor, generated_files
@@ -636,14 +677,14 @@ class SkillsInjectionHook(CustomLogger):
 
     async def _execute_code(
         self,
-        code: str,
+        code: object,
         skill_files: dict[str, bytes],
         executor: "SkillsSandboxExecutor",
         generated_files: list[dict[str, object]],
     ) -> str:
         """Execute code in sandbox and return result string."""
         try:
-            verbose_proxy_logger.debug("SkillsInjectionHook: Executing code (%s chars)", len(code))
+            verbose_proxy_logger.debug("SkillsInjectionHook: Executing code (%s chars)", length_of(code))
 
             exec_result: Final = executor.execute(code=code, skill_files=skill_files)
 
@@ -672,8 +713,8 @@ class SkillsInjectionHook(CustomLogger):
 
     async def _execute_skill_tool(
         self,
-        tool_name: str,
-        tool_input: Mapping[str, str],
+        tool_name: object,
+        tool_input: object,
         skill_files: dict[str, bytes],
         executor: "SkillsSandboxExecutor",
         generated_files: list[dict[str, object]],
@@ -909,7 +950,7 @@ print('No executable skill module found')
     def _attach_files_to_response(
         self,
         response: Any,
-        generated_files: list[dict[str, object]],
+        generated_files: Sequence[Mapping[str, object]],
     ) -> LLMResponseTypes:
         """
         Attach generated files to the response object.
@@ -917,29 +958,6 @@ print('No executable skill module found')
         Files are added to response._litellm_generated_files for easy access.
         For dict responses, files are added as a key.
         """
-        if not generated_files:
-            return response
-
-        raw_response: Final = response
-
-        # Handle dict response (Anthropic/messages API format)
-        if isinstance(response, dict):
-            response["_litellm_generated_files"] = generated_files
-            verbose_proxy_logger.debug("SkillsInjectionHook: Attached %s files to dict response", len(generated_files))
-            return raw_response
-
-        # Handle object response (OpenAI format)
-        try:
-            response._litellm_generated_files = generated_files
-        except AttributeError:
-            pass
-
-        # Also add to model_extra if available (for serialization)
-        if hasattr(response, "model_extra"):
-            if response.model_extra is None:
-                response.model_extra = {}
-            response.model_extra["_litellm_generated_files"] = generated_files
-
-        verbose_proxy_logger.debug("SkillsInjectionHook: Attached %s files to response", len(generated_files))
-
+        if generated_files:
+            _record_generated_files(response, generated_files)
         return response

@@ -45,6 +45,16 @@ def repository_zip(entries: tuple[tuple[str | zipfile.ZipInfo, bytes], ...]) -> 
      GitHubSkillSource("author", "repo", "release/v2", "pdf-summarizer", NESTED)),
     (f"https://github.com/author/repo/tree/release%2Fv2/{NESTED}", None, "HEAD", None,
      GitHubSkillSource("author", "repo", "release/v2", None, NESTED)),
+    ("https://github.com/author/repo/blob/main/SKILL.md", None, "HEAD", None,
+     GitHubSkillSource("author", "repo", "main", None, "")),
+    ("https://github.com/author/repo/blob/release%2Fv2/skills/pdf%2Dsummarizer/SKILL.md",
+     "pdf-summarizer", "HEAD", None, GitHubSkillSource("author", "repo", "release/v2", "pdf-summarizer", NESTED)),
+    ("https://github.com/author/repo/blob/main/README.md", None, "HEAD", None, 400),
+    (f"https://github.com/author/repo/blob/main/{NESTED}/skill.md", None, "HEAD", None, 400),
+    (f"https://github.com/author/repo/blob/main/{NESTED}/SKILL.md/extra", None, "HEAD", None, 400),
+    ("https://github.com/author/repo/blob/main", None, "HEAD", None, 400),
+    (f"https://github.com/author/repo/blob/main/{NESTED}/SKILL.md", None, "other", None, 400),
+    (f"https://github.com/author/repo/blob/main/{NESTED}/SKILL.md", None, "HEAD", NESTED, 400),
     ("http://github.com/author/repo", None, "HEAD", None, 400),
     ("https://github.com.example/author/repo", None, "HEAD", None, 400),
     ("https://user:secret@github.com/author/repo", None, "HEAD", None, 400),
@@ -136,6 +146,30 @@ def test_repository_selection(skill: str | None, path: str | None, root_name: by
         GitHubSkillSource("author", "repo", "HEAD", skill, path),
     )
     assert (result.status if isinstance(result, SkillImportError) else result.declared_name) == expected
+
+
+@pytest.mark.parametrize(("blob_path", "expected_guide"), (
+    ("SKILL.md", b"Root PDF guide"),
+    ("skills/pdf%2Dsummarizer/SKILL.md", b"Nested PDF guide"),
+))
+def test_blob_url_selects_its_directory_among_matching_skill_names(blob_path: str, expected_guide: bytes) -> None:
+    source: Final = parse_skill_source(
+        f"https://github.com/author/repo/blob/release%2Fv2/{blob_path}",
+        skill="pdf-summarizer", ref="HEAD", path=None,
+    )
+    assert isinstance(source, GitHubSkillSource)
+    assert source.archive_url == "https://codeload.github.com/author/repo/zip/release%2Fv2"
+    content: Final = repository_zip((
+        ("repo/SKILL.md", MANIFEST),
+        ("repo/references/guide.md", b"Root PDF guide"),
+        (f"repo/{NESTED}/SKILL.md", MANIFEST),
+        (f"repo/{NESTED}/references/guide.md", b"Nested PDF guide"),
+    ))
+    result: Final = select_imported_skill(content, source)
+    assert not isinstance(result, SkillImportError)
+    with zipfile.ZipFile(io.BytesIO(result.content)) as archive:
+        assert archive.read("SKILL.md") == MANIFEST
+        assert archive.read("references/guide.md") == expected_guide
 
 
 def test_corrupt_manifest_compression_returns_an_import_error() -> None:

@@ -46,6 +46,30 @@ class TestResponsesAPIRequestUtils:
         assert "prompt" in result
         assert result["prompt"] == {"id": "pmpt_123"}
 
+    def test_get_optional_params_responses_api_forwards_a_param_a_tuple_allowlist_names(self):
+        result: Final = ResponsesAPIRequestUtils.get_optional_params_responses_api(
+            model="gpt-4o",
+            responses_api_provider_config=OpenAIResponsesAPIConfig(),
+            response_api_optional_params=ResponsesAPIOptionalRequestParams(
+                {"temperature": 0.7, "custom_flag": "on"}  # pyright: ignore[reportCallIssue]  # an unsupported key is the input under test
+            ),
+            allowed_openai_params=("custom_flag",),
+        )
+
+        assert result == {"temperature": 0.7, "custom_flag": "on"}
+
+    def test_get_optional_params_responses_api_reads_a_bare_string_allowlist_as_one_param_name(self):
+        result: Final = ResponsesAPIRequestUtils.get_optional_params_responses_api(
+            model="gpt-4o",
+            responses_api_provider_config=OpenAIResponsesAPIConfig(),
+            response_api_optional_params=ResponsesAPIOptionalRequestParams(
+                {"temperature": 0.7, "custom_flag": "on"}  # pyright: ignore[reportCallIssue]  # an unsupported key is the input under test
+            ),
+            allowed_openai_params="custom_flag",
+        )
+
+        assert result == {"temperature": 0.7, "custom_flag": "on"}
+
     def test_get_optional_params_responses_api_unsupported_param(self):
         """Test that unsupported parameters raise an error"""
         # Setup
@@ -122,6 +146,28 @@ class TestResponsesAPIRequestUtils:
         assert result["temperature"] == 0.7
         assert result["max_output_tokens"] == 100
         assert result["prompt"] == {"id": "pmpt_456"}
+
+    def test_background_options_reach_the_openai_responses_request(self):
+        """`background_options` picks the completion window of a background response
+        (https://github.com/openai/openai-python/commit/720bcb501dff, fetched 2026-11-22)."""
+        sent: Final[dict[str, object]] = {
+            "background": True,
+            "background_options": {"completion_window": "2h", "continuation_id": "cont_123"},
+            "invalid_param": "value",
+        }
+
+        result: Final[dict[str, object]] = ResponsesAPIRequestUtils.get_optional_params_responses_api(
+            model="gpt-5",
+            responses_api_provider_config=OpenAIResponsesAPIConfig(),
+            response_api_optional_params=ResponsesAPIRequestUtils.get_requested_response_api_optional_param(
+                dict(sent)
+            ),
+        )
+
+        assert result == {
+            "background": True,
+            "background_options": {"completion_window": "2h", "continuation_id": "cont_123"},
+        }
 
     def test_get_requested_response_api_optional_param_drops_nested_path(self):
         """Nested additional_drop_params paths like reasoning.summary must be honored"""
@@ -342,6 +388,22 @@ class TestResponseAPILoggingUtils:
         assert result.prompt_tokens == 15
         assert result.completion_tokens == 25
         assert result.total_tokens == 40  # 15 + 25
+
+    def test_video_output_tokens_keep_their_own_detail_instead_of_counting_as_text(self) -> None:
+        """Gemini Live Avatar bills video output at its own rate, so the tokens must not fold into text."""
+        usage: Final = {
+            "input_tokens": 10,
+            "output_tokens": 30000,
+            "total_tokens": 30010,
+            "output_tokens_details": {"audio_tokens": 100, "text_tokens": 20, "video_tokens": 29880},
+        }
+
+        details: Final = ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(
+            usage
+        ).completion_tokens_details
+
+        assert details is not None
+        assert (details.video_tokens, details.audio_tokens, details.text_tokens) == (29880, 100, 20)
 
     def test_transform_response_api_usage_with_image_tokens(self):
         """Test transformation handles image_tokens from image generation responses.

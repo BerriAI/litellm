@@ -18,6 +18,7 @@ from ..common_utils import (
     DEFAULT_GITHUB_COPILOT_API_BASE,
     GetAccessTokenError,
     get_copilot_default_headers,
+    pin_session_authorization,
 )
 from ..per_user_auth import require_github_copilot_user_session
 
@@ -75,9 +76,9 @@ class GithubCopilotConfig(OpenAIConfig):
 
     def _transform_messages(
         self,
-        messages,
+        messages: list[AllMessageValues],
         model: str,
-    ):
+    ) -> list[AllMessageValues]:
         import litellm
 
         # Check if system-to-assistant conversion is disabled
@@ -87,7 +88,7 @@ class GithubCopilotConfig(OpenAIConfig):
             return messages
 
         # Default behavior: convert system messages to assistant for compatibility
-        transformed_messages: Final = []
+        transformed_messages: Final[list[AllMessageValues]] = []
         for message in messages:
             if message.get("role") == "system":
                 # Convert system message to assistant message
@@ -109,7 +110,7 @@ class GithubCopilotConfig(OpenAIConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, object],
         model: str,
         messages: list[AllMessageValues],
         optional_params: dict,
@@ -126,10 +127,10 @@ class GithubCopilotConfig(OpenAIConfig):
         )
         session_token: Final = user_session.token if user_session is not None else None
         validated_headers: Final = {**self._copilot_headers(session_token), **parent_headers}
-        if session_token is not None:
+        if user_session is not None:
             # the caller's stored session token wins unconditionally, even over a
             # caller-supplied api_key or the parent's placeholder Authorization
-            validated_headers["Authorization"] = f"Bearer {session_token}"
+            pin_session_authorization(validated_headers, user_session.token, user_session.integration_id)
 
         # Add X-Initiator header based on message roles
         initiator: Final = self._determine_initiator(messages)
@@ -273,7 +274,7 @@ class GithubCopilotConfig(OpenAIConfig):
         else:
             finish_reason = "length"
 
-        message: Final[dict] = {
+        message: Final[dict[str, object]] = {
             "role": "assistant",
             "content": content if content or not tool_calls else None,
         }
@@ -291,7 +292,7 @@ class GithubCopilotConfig(OpenAIConfig):
             synthesized["usage"] = cls._normalize_anthropic_usage(usage)
         return synthesized
 
-    def transform_parsed_response_dict(self, parsed_response: dict) -> dict:
+    def transform_parsed_response_dict(self, parsed_response: dict[str, object]) -> dict[str, object]:
         """
         Repair the OpenAI-SDK-parsed response on the handler path that bypasses
         transform_response. See: https://github.com/BerriAI/litellm/issues/30927

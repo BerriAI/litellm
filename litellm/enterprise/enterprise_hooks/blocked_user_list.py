@@ -20,7 +20,7 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import LiteLLM_EndUserTable, UserAPIKeyAuth
 from litellm.proxy.common_utils.user_api_key_cache import AUTH_OBJECTS_TARGET
 from litellm.proxy.utils import PrismaClient
-from litellm.repositories.table_repositories import EndUserRepository
+from litellm.repositories.end_user_repository import EndUserRepository
 
 _REQUEST_BODY_VALUE: Final = TypeAdapter(object)
 
@@ -53,7 +53,7 @@ class ENTERPRISE_BlockedUserList(CustomLogger):
                     f"An error occurred: {str(e)}, blocked_user_list={blocked_user_list}"
                 )
 
-    def print_verbose(self, print_statement, level: Literal["INFO", "DEBUG"] = "DEBUG"):
+    def print_verbose(self, print_statement: object, level: Literal["INFO", "DEBUG"] = "DEBUG"):
         if level == "INFO":
             verbose_proxy_logger.info(print_statement)
         elif level == "DEBUG":

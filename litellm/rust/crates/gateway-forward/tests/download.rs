@@ -10,6 +10,7 @@ use std::{
 
 use axum::{body::Body, extract::Request, http::StatusCode, response::Response};
 use http_body_util::BodyExt;
+use litellm_gateway_forward::ANSWERED_BY_HEADER;
 use rstest::rstest;
 use support::{Gateway, client, raw_upstream, recording, within};
 use tokio::sync::{Notify, mpsc};
@@ -125,8 +126,8 @@ async fn a_large_download_is_paced_by_the_client_and_keeps_its_content_length() 
     }
 }
 
-/// The UI revalidates its static assets, and a 304 must carry exactly the validators Python sent,
-/// with no length invented for a body it never has.
+/// The UI revalidates its static assets, and a 304 must carry exactly the validators Python sent
+/// and who answered, with no length invented for a body it never has.
 #[rstest]
 #[tokio::test]
 async fn a_conditional_request_gets_python_304_with_its_validators_only() {
@@ -155,7 +156,10 @@ async fn a_conditional_request_gets_python_304_with_its_validators_only() {
         assert_eq!(head.status, StatusCode::NOT_MODIFIED);
         let mut names: Vec<_> = head.headers.iter().map(|(name, _)| name.as_str()).collect();
         names.sort_unstable();
-        assert_eq!(names, ["cache-control", "date", "etag", "vary"]);
+        assert_eq!(
+            names,
+            ["cache-control", "date", "etag", "vary", ANSWERED_BY_HEADER]
+        );
         assert_eq!(head.header("etag"), Some(&b"\"5f1-abc\""[..]));
         assert_eq!(
             head.header("date"),

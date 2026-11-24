@@ -7,7 +7,7 @@ describe("TruePassthroughWarning", () => {
   it("warns when auth type is true_passthrough", () => {
     render(<TruePassthroughWarning authType={AUTH_TYPE.TRUE_PASSTHROUGH} />);
 
-    expect(screen.getByText("True Passthrough disables LiteLLM authentication for this server")).toBeInTheDocument();
+    expect(screen.getByText("True Pass-Through disables LiteLLM authentication for this server")).toBeInTheDocument();
     expect(screen.getByText(/Anyone who can reach the gateway can call this server/)).toBeInTheDocument();
   });
 

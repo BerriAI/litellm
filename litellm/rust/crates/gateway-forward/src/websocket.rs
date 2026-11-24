@@ -11,12 +11,12 @@ use hyper::{
 use hyper_util::rt::TokioIo;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-use crate::{Rejection, connections::Connections, rewrite};
+use crate::{NotForwarded, connections::Connections, rewrite};
 
 pub(crate) fn take_handshake(
     connections: &Connections,
     request: &mut Request,
-) -> Result<Option<OnUpgrade>, Rejection> {
+) -> Result<Option<OnUpgrade>, NotForwarded> {
     if request.method() != Method::GET
         || request.version() != Version::HTTP_11
         || !rewrite::is_websocket_handshake(request.headers())
@@ -24,7 +24,7 @@ pub(crate) fn take_handshake(
         return Ok(None);
     }
     if connections.is_draining() {
-        return Err(Rejection::ShuttingDown);
+        return Err(NotForwarded::ShuttingDown);
     }
     Ok(Some(hyper::upgrade::on(request)))
 }
@@ -33,15 +33,15 @@ pub(crate) async fn switch(
     connections: &Connections,
     downstream: OnUpgrade,
     mut response: Response<Incoming>,
-) -> Result<Response, Rejection> {
+) -> Result<Response, NotForwarded> {
     if !rewrite::is_websocket_handshake(response.headers()) {
-        return Err(Rejection::UnrequestedUpgrade);
+        return Err(NotForwarded::UnrequestedUpgrade);
     }
     let upstream = connections
         .until_closed(hyper::upgrade::on(&mut response))
         .await
-        .ok_or(Rejection::ShuttingDown)?
-        .map_err(Rejection::UpgradeFailed)?;
+        .ok_or(NotForwarded::ShuttingDown)?
+        .map_err(NotForwarded::UpgradeFailed)?;
     connections.spawn(async move {
         match downstream.await {
             Ok(downstream) => relay(downstream, upstream).await,

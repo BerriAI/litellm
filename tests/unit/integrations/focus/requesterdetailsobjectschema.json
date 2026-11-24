@@ -1,0 +1,70 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": "https://focus.finops.org/schemas/requesterdetailsobject.json",
+    "title": "Requester Details Object",
+    "description": "Schema for validating the Requester Details column structure in FOCUS datasets. The column is an array of key-value entries, where each entry's value is an object of FOCUS-defined descriptive properties (Type, Name, Email) plus optional custom properties.",
+    "type": "array",
+    "minItems": 1,
+    "items": {
+        "type": "object",
+        "required": [
+            "key",
+            "value"
+        ],
+        "properties": {
+            "key": {
+                "type": "string",
+                "description": "Names the requester level the entry describes: \"Principal\", \"Credential\", or a custom key",
+                "anyOf": [
+                    {
+                        "enum": [
+                            "Principal",
+                            "Credential"
+                        ]
+                    },
+                    {
+                        "pattern": "^x_[A-Z][a-zA-Z0-9]*$"
+                    }
+                ]
+            },
+            "value": {
+                "$ref": "#/$defs/entryValue"
+            }
+        },
+        "additionalProperties": false
+    },
+    "$defs": {
+        "entryValue": {
+            "type": "object",
+            "minProperties": 1,
+            "description": "Descriptive attributes of the requester level named by the entry key",
+            "properties": {
+                "Type": {
+                    "type": "string",
+                    "description": "The kind of entity the entry describes (e.g., User, Service Account, API Key, Session)"
+                },
+                "Name": {
+                    "type": "string",
+                    "description": "Readable display name for the entity the entry describes"
+                },
+                "Email": {
+                    "type": "string",
+                    "description": "Email address associated with the entity the entry describes"
+                }
+            },
+            "patternProperties": {
+                "^x_[A-Z][a-zA-Z0-9]*$": {
+                    "type": [
+                        "string",
+                        "number",
+                        "boolean",
+                        "object",
+                        "array"
+                    ],
+                    "description": "Custom data generator-defined properties prefixed with x_ in PascalCase format"
+                }
+            },
+            "additionalProperties": false
+        }
+    }
+}

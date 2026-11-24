@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING, Any, Final
 import httpx
 from pydantic import ConfigDict, TypeAdapter
 
+from litellm.images.fan_out import image_request_count
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.image_generation.transformation import (
     BaseImageGenerationConfig,
@@ -58,11 +59,11 @@ class GoogleImageGenConfig(BaseImageGenerationConfig):
 
     def map_openai_params(
         self,
-        non_default_params: dict,
-        optional_params: dict,
+        non_default_params: Mapping[str, object],
+        optional_params: Mapping[str, object],
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:
         mapped_params = map_openai_image_params_to_gemini(
             params=non_default_params,
             model=model,
@@ -73,13 +74,18 @@ class GoogleImageGenConfig(BaseImageGenerationConfig):
             mapped_params = map_gemini_image_tools_params(non_default_params, mapped_params)
         return mapped_params
 
+    def get_request_count(self, model: str, optional_params: Mapping[str, object]) -> int:
+        if not is_gemini_image_model(model):
+            return 1
+        return image_request_count(optional_params.get("sampleCount"), model=model, llm_provider="gemini")
+
     def get_complete_url(
         self,
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         stream: bool | None = None,
     ) -> str:
         """
@@ -101,14 +107,14 @@ class GoogleImageGenConfig(BaseImageGenerationConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, object],
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         final_api_key: Final[str | None] = api_key or get_secret_str("GEMINI_API_KEY")
         if not final_api_key:
             raise ValueError("GEMINI_API_KEY is not set")
@@ -122,9 +128,9 @@ class GoogleImageGenConfig(BaseImageGenerationConfig):
         model: str,
         prompt: str,
         optional_params: dict,
-        litellm_params: dict,
-        headers: dict,
-    ) -> dict:
+        litellm_params: Mapping[str, object],
+        headers: Mapping[str, object],
+    ) -> dict[str, object]:
         """
         Transform the image generation request to Gemini format
 
@@ -144,7 +150,7 @@ class GoogleImageGenConfig(BaseImageGenerationConfig):
         """
         # For Gemini Flash Image Preview models, use standard Gemini format
         if is_gemini_image_model(model):
-            request_body: Final[dict] = {
+            request_body: Final[dict[str, object]] = {
                 "contents": [{"parts": [{"text": prompt}]}],
                 "generationConfig": get_gemini_image_generation_config(
                     model=model,
@@ -169,7 +175,7 @@ class GoogleImageGenConfig(BaseImageGenerationConfig):
             )
             return request_body_obj.model_dump(exclude_none=True)
 
-    def _transform_image_usage(self, usage_metadata: dict):
+    def _transform_image_usage(self, usage_metadata: object):
         return transform_gemini_image_usage(_JSON_DICT.validate_python(usage_metadata))
 
     def transform_image_generation_response(
@@ -178,9 +184,9 @@ class GoogleImageGenConfig(BaseImageGenerationConfig):
         raw_response: httpx.Response,
         model_response: ImageResponse,
         logging_obj: LiteLLMLoggingObj,
-        request_data: dict,
-        optional_params: dict,
-        litellm_params: dict,
+        request_data: Mapping[str, object],
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,

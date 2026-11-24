@@ -788,10 +788,10 @@ async def test_url_agent_stream_is_logged_under_the_configured_agent_name(
 
 @pytest.mark.asyncio
 async def test_asend_message_counts_usage_off_the_event_loop(monkeypatch):
-    from tests.large_text import text
     from tests.unit.litellm_core_utils.event_loop_lag import (
         assert_loop_stayed_free,
         timed_with_loop_lags,
+        uncounted_text,
         warm_tokenizer,
     )
 
@@ -804,11 +804,11 @@ async def test_asend_message_counts_usage_off_the_event_loop(monkeypatch):
     reply = _conv.pb2_v10.StreamResponse()
     reply.message.message_id = "reply-1"
     reply.message.role = _conv.pb2_v10.Role.ROLE_AGENT
-    reply.message.parts.add().text = text * 100
+    reply.message.parts.add().text = uncounted_text()
     request = SendMessageRequest(
         id="r1",
         params=MessageSendParams(
-            message={"messageId": "m1", "role": "user", "parts": [{"kind": "text", "text": text * 100}]}
+            message={"messageId": "m1", "role": "user", "parts": [{"kind": "text", "text": uncounted_text()}]}
         ),
     )
 

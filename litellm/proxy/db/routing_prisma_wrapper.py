@@ -6,7 +6,7 @@ otherwise PrismaClient uses the writer-only PrismaWrapper directly.
 
 import asyncio
 import os
-from collections.abc import Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from datetime import timedelta
 from typing import TYPE_CHECKING, Any, Final
 
@@ -134,6 +134,7 @@ class RoutingPrismaWrapper:
         # When True, reads fall back to the writer. Flipped on by reader
         # connect/recreate failures and flipped off on the next reader recovery.
         self._reader_unavailable: bool = False
+        self._reader_repair_epoch: int = 0
         self._writer_unavailable: bool = False
 
     @property
@@ -279,16 +280,67 @@ class RoutingPrismaWrapper:
         if not writer_recreated:
             return False
         self._writer_unavailable = False
-        try:
-            await self._recreate_reader(http_client=http_client)
-            self._reader_unavailable = False
-        except Exception as e:
-            self._reader_unavailable = True
-            verbose_proxy_logger.warning(
+        repair: Final = self._begin_reader_repair()
+        self._finish_reader_repair(
+            repair,
+            await self._reader_answers(
+                self._recreate_reader(http_client=http_client),
                 "Failed to recreate reader Prisma client: %s. "
                 "Reads will fall back to the writer until the reader recovers.",
-                e,
-            )
+            ),
+        )
+        return True
+
+    def _begin_reader_repair(self) -> int:
+        self._reader_unavailable = True
+        self._reader_repair_epoch += 1
+        return self._reader_repair_epoch
+
+    def _finish_reader_repair(self, repair: int, reader_answered: bool) -> bool:
+        """Route reads back to the reader unless a newer repair started while this one ran."""
+        if not reader_answered or repair != self._reader_repair_epoch:
+            return False
+        self._reader_unavailable = False
+        return True
+
+    async def degrade_reader_unless_healthy(self) -> None:
+        """Probe the reader and send reads to the writer when it does not answer."""
+        if self._reader_unavailable:
+            return
+        repair: Final = self._begin_reader_repair()
+        self._finish_reader_repair(
+            repair,
+            await self._reader_answers(
+                self._reader.query_raw("SELECT 1"),
+                "Reader probe failed: %s. Reads will fall back to the writer until the reader recovers.",
+            ),
+        )
+
+    async def recover_reader(self) -> bool:
+        """Recreate a reader that reads currently bypass, and route reads back to it on success."""
+        repair: Final = self._begin_reader_repair()
+        recovered: Final = self._finish_reader_repair(
+            repair,
+            await self._reader_answers(
+                self._recreate_and_probe_reader(),
+                "Reader Prisma client is still unavailable: %s",
+            ),
+        )
+        if recovered:
+            verbose_proxy_logger.info("Reader Prisma client recovered; reads are routed to the reader again.")
+        return recovered
+
+    async def _recreate_and_probe_reader(self) -> None:
+        await self._recreate_reader()
+        await self._reader.query_raw("SELECT 1")
+
+    @staticmethod
+    async def _reader_answers(step: Awaitable[object], failure_message: str) -> bool:
+        try:
+            await step
+        except Exception as e:
+            verbose_proxy_logger.warning(failure_message, e)
+            return False
         return True
 
     async def _recreate_reader(self, http_client: "HttpConfig | None" = None) -> None:

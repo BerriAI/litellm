@@ -16,6 +16,8 @@ from typing_extensions import TypeIs  # noqa: TID251  # the guards narrow hook v
 from litellm._logging import redact_internal_details_from_client_message
 from litellm._uuid import uuid
 from litellm.exceptions import MidStreamFallbackError
+from litellm.litellm_core_utils.routing_common_utils import carries_fallback_failure
+from litellm.proxy.common_utils.openai_error_payload import relayed_provider_specific_fields
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import ResponseFailedEvent, ResponsesAPIResponse, ResponsesAPIStreamEvents
 
@@ -179,8 +181,9 @@ def _failure_details(original: Exception) -> _FailureDetails:
     if not isinstance(body, Mapping):
         return mapped
     upstream: Final = _FailureDetails.model_validate(body)
+    router_message: Final = mapped.message if mapped.message and carries_fallback_failure(mapped.message) else None
     return _FailureDetails(
-        message=upstream.message or mapped.message,
+        message=router_message or upstream.message or mapped.message,
         code=upstream.code if upstream.code is not None else mapped.code,
         type=upstream.type or mapped.type,
         status_code=mapped.status_code,
@@ -393,6 +396,7 @@ class ResponsesStreamErrorState:
             return None
         original: Final = _original_failure(exception)
         details: Final = _failure_details(original)
+        provider_specific_fields: Final = relayed_provider_specific_fields(original)
         response: Final = ResponsesAPIResponse.model_validate(
             MappingProxyType(
                 {
@@ -406,6 +410,11 @@ class ResponsesStreamErrorState:
                         {
                             "code": _response_error_code(details),
                             "message": redact_internal_details_from_client_message(details.message or str(original)),
+                            **(
+                                {}
+                                if provider_specific_fields is None
+                                else {"provider_specific_fields": provider_specific_fields}
+                            ),
                         }
                     ),
                 }

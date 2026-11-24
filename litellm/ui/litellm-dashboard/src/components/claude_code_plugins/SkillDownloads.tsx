@@ -1,4 +1,5 @@
-import { useInfiniteQuery, type QueryFunctionContext } from "@tanstack/react-query";
+import { useInfiniteQuery, useMutation, type QueryFunctionContext } from "@tanstack/react-query";
+import { downloadBlob } from "@/components/EntityUsageExport/utils";
 import { RefreshCw } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { apiClient } from "@/components/networking";
@@ -16,6 +17,14 @@ interface SkillDownloadsProps {
 
 export function SkillDownloads({ skill, accessToken }: SkillDownloadsProps) {
   const { t, i18n } = useTranslation();
+  const exportCsv = useMutation({
+    mutationFn: async () => {
+      const blob = await apiClient.getBlob(`/skill-hub/skills/${encodeURIComponent(skill.name)}/downloads/export`, {
+        accessToken,
+      });
+      downloadBlob(blob, `${skill.name}.csv`);
+    },
+  });
   const queryOptions = {
     queryKey: skillDownloadsQueryKey(skill, accessToken),
     queryFn: ({ pageParam, signal }: QueryFunctionContext<ReturnType<typeof skillDownloadsQueryKey>, string | null>) =>
@@ -48,11 +57,25 @@ export function SkillDownloads({ skill, accessToken }: SkillDownloadsProps) {
             {t("claudeCodePlugins.skillDetail.downloads.attributionNote")}
           </p>
         </div>
-        <Button variant="outline" size="sm" disabled={isFetching} onClick={() => void refetch()}>
-          <RefreshCw className="size-4" />
-          {t("claudeCodePlugins.skillDetail.downloads.refresh")}
-        </Button>
+        <div className="flex gap-2">
+          <Button variant="outline" size="sm" disabled={exportCsv.isPending} onClick={() => exportCsv.mutate()}>
+            {t(
+              exportCsv.isPending
+                ? "claudeCodePlugins.skillDetail.downloads.exporting"
+                : "claudeCodePlugins.skillDetail.downloads.downloadCsv",
+            )}
+          </Button>
+          <Button variant="outline" size="sm" disabled={isFetching} onClick={() => void refetch()}>
+            <RefreshCw className="size-4" />
+            {t("claudeCodePlugins.skillDetail.downloads.refresh")}
+          </Button>
+        </div>
       </div>
+      {exportCsv.isError && (
+        <p role="alert" className="text-sm text-destructive">
+          {t("claudeCodePlugins.skillDetail.downloads.exportFailed")}
+        </p>
+      )}
       {data && (
         <dl className="flex flex-wrap gap-x-8 gap-y-4">
           <div>

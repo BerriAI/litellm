@@ -28,7 +28,12 @@ class Route(str, Enum):
 class Target(str, Enum):
     CHAT_COMPLETIONS = "chat_completions"
     MESSAGES = "messages"
+    MESSAGES_PASSTHROUGH = "messages_passthrough"
+    """A deployment's own /v1/messages, which Python's OpenAI-compatible config forwards untranslated."""
     RESPONSES = "responses"
+
+
+NATIVE_MESSAGES_TARGETS: Final = frozenset({Target.MESSAGES, Target.MESSAGES_PASSTHROUGH})
 
 
 class Feature(str, Enum):
@@ -193,9 +198,20 @@ RULES: Final[Rules] = (
     RouteRule(Route.CHAT_COMPLETIONS, Rollout.PYTHON_ONLY),
     RouteRule(Route.EMBEDDINGS, Rollout.PYTHON_ONLY),
     RouteRule(Route.OCR, Rollout.RUST_REQUIRED),
-    RouteRule(Route.MESSAGES, Rollout.PYTHON_ONLY, targets=frozenset({Target.CHAT_COMPLETIONS, Target.RESPONSES})),
+    RouteRule(
+        Route.MESSAGES,
+        Rollout.PYTHON_ONLY,
+        targets=frozenset({Target.CHAT_COMPLETIONS, Target.RESPONSES, Target.MESSAGES_PASSTHROUGH}),
+    ),
     RouteRule(Route.MESSAGES, Rollout.PYTHON_ONLY, features=MESSAGES_PYTHON_FEATURES),
-    RouteRule(Route.MESSAGES, Rollout.RUST_REQUIRED, providers=frozenset({"anthropic"})),
+    # Outside anthropic, these providers serve native Messages only for Claude, so the target, not the provider,
+    # decides: their other models translate on Python, also when `_rust_only_refusal` has no target.
+    RouteRule(
+        Route.MESSAGES,
+        Rollout.RUST_REQUIRED,
+        providers=frozenset({"anthropic", "azure_ai", "bedrock", "bedrock_mantle", "vertex_ai"}),
+        targets=frozenset({Target.MESSAGES}),
+    ),
     RouteRule(Route.MESSAGES, Rollout.PYTHON_ONLY),
     RouteRule(Route.RESPONSES, Rollout.PYTHON_ONLY, features=RESPONSES_PYTHON_FEATURES),
     RouteRule(Route.RESPONSES, Rollout.PYTHON_ONLY),

@@ -65,7 +65,7 @@ def _billable_units(usage: Usage, model_info: ModelInfo) -> int:
     return queries if model_info.get("web_search_billing_unit") == "per_query" else 1
 
 
-def _record_freed_cost(
+def record_freed_cost(
     kwargs: MutableMapping[str, object],  # mutable-ok: writes the reduced cost where the spend row reads it
     sl_object: StandardLoggingPayload,
     original_cost: float,
@@ -101,7 +101,7 @@ async def apply_search_free_tier(
     if allocation is None:
         return response_cost
     kwargs[_COUNTED_KWARG] = True  # rebind-ok: legacy callback deduplication
-    return _record_freed_cost(kwargs, sl_object, response_cost, allocation.discount)
+    return record_freed_cost(kwargs, sl_object, response_cost, allocation.discount)
 
 
 @with_service_target("search_free_tier")
