@@ -1521,10 +1521,10 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
     @staticmethod
     def _resolve_search_tool_conflict(
         gtool_func_declarations: Sequence[object],
-        googleSearch: dict | None,
-        googleSearchRetrieval: dict | None,
-        enterpriseWebSearch: dict | None,
-        urlContext: dict | None,
+        googleSearch: dict[str, object] | None,
+        googleSearchRetrieval: dict[str, object] | None,
+        enterpriseWebSearch: dict[str, object] | None,
+        urlContext: dict[str, object] | None,
         optional_params: dict[str, object],
         keep_search_tools_with_functions: bool = False,
     ) -> tuple:
@@ -1592,7 +1592,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
     def _build_function_tools(
         self,
-        value: list[dict],
+        value: list[dict[str, object]],
         optional_params: dict,
         send_integer_enums: bool = False,
         pin_consts: bool = True,
@@ -1620,14 +1620,14 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             googleMaps tools contain location data
         """
         gtool_func_declarations: Final[list[FunctionDeclaration]] = []
-        googleSearch: dict | None = None
-        googleSearchRetrieval: dict | None = None
-        enterpriseWebSearch: dict | None = None
+        googleSearch: dict[str, object] | None = None
+        googleSearchRetrieval: dict[str, object] | None = None
+        enterpriseWebSearch: dict[str, object] | None = None
         urlContext: dict[str, object] | None = None
-        code_execution: dict | None = None
-        googleMaps: dict | None = None
-        google_maps_retrieval_config: dict | None = None
-        computerUse: dict | None = None
+        code_execution: dict[str, object] | None = None
+        googleMaps: dict[str, object] | None = None
+        google_maps_retrieval_config: dict[str, object] | None = None
+        computerUse: dict[str, object] | None = None
         # remove 'additionalProperties' from tools
         schema_value: Final[JsonValue] = deepcopy(cast(JsonValue, value))  # cast-ok: tools are JSON request data
         parameters_json_schemas: Final = _parameters_json_schemas(
@@ -1812,7 +1812,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
     def _map_response_schema(
         self,
-        value: dict,
+        value: dict[str, object],
         send_integer_enums: bool = False,
         pin_consts: bool = True,
     ) -> Mapping[str, object]:
@@ -3353,7 +3353,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
     @staticmethod
     def _extract_candidate_metadata(
         candidate: Candidates,
-    ) -> tuple[list[dict], list[dict[str, object]], list[object], list[object]]:
+    ) -> tuple[list[dict[str, object]], list[dict[str, object]], list[object], list[object]]:
         """
         Extract metadata from a single candidate response.
 
@@ -3363,7 +3363,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             safety_ratings: List
             citation_metadata: List
         """
-        grounding_metadata: Final[list[dict]] = []
+        grounding_metadata: Final[list[dict[str, object]]] = []
         url_context_metadata: Final[list[dict[str, object]]] = []
         safety_ratings: Final[list[object]] = []
         citation_metadata: Final[list[object]] = []
@@ -3381,7 +3381,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             citation_metadata.extend(per_hop(candidate["citationMetadata"]))
 
         if "urlContextMetadata" in candidate:
-            url_context_metadata.extend(cast(tuple[dict, ...], per_hop(candidate["urlContextMetadata"])))
+            url_context_metadata.extend(cast(tuple[dict[str, object], ...], per_hop(candidate["urlContextMetadata"])))
 
         return (
             grounding_metadata,
@@ -3524,7 +3524,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         standard_optional_params: dict[str, object],
         cumulative_tool_call_index: int = 0,
         thought_signature_in_tool_call_id: bool = True,
-    ) -> tuple[list[dict], list[dict], list, list, int]:
+    ) -> tuple[list[dict[str, object]], list[dict[str, object]], list, list, int]:
         """
         Helper method to process candidates and extract metadata
 
@@ -3540,8 +3540,8 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         )
         from litellm.types.utils import ModelResponseStream
 
-        grounding_metadata: Final[list[dict]] = []
-        url_context_metadata: Final[list[dict]] = []
+        grounding_metadata: Final[list[dict[str, object]]] = []
+        url_context_metadata: Final[list[dict[str, object]]] = []
         safety_ratings: Final[list] = []
         citation_metadata: Final[list] = []
 
@@ -3766,7 +3766,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
     def _transform_google_generate_content_to_openai_model_response(
         self,
-        completion_response: GenerateContentResponseBody | dict,
+        completion_response: GenerateContentResponseBody | dict[str, object],
         model_response: ModelResponse,
         model: str,
         logging_obj: LoggingClass,
@@ -3805,9 +3805,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         response_id: Final = completion_response.get("responseId")
         if response_id:
             model_response.id = response_id
-        url_context_metadata: list[dict] = []
+        url_context_metadata: list[dict[str, object]] = []
         try:
-            grounding_metadata: list[dict] = []
+            grounding_metadata: list[dict[str, object]] = []
             safety_ratings: list[dict] = []
             citation_metadata: list[dict] = []
             if _candidates:
@@ -4919,10 +4919,10 @@ class ModelResponseIterator:
             if blocked_response is not None:
                 model_response = blocked_response
 
-            grounding_metadata: list[dict] = []
-            url_context_metadata: list[dict] = []
-            safety_ratings: list[dict] = []
-            citation_metadata: list[dict] = []
+            grounding_metadata: list[dict[str, object]] = []
+            url_context_metadata: list[dict[str, object]] = []
+            safety_ratings: list[dict[str, object]] = []
+            citation_metadata: list[dict[str, object]] = []
 
             _candidates: Final[list[Candidates] | None] = processed_chunk.get("candidates")
             if _candidates:
