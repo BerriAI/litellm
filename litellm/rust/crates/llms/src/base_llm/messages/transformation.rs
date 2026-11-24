@@ -1,4 +1,4 @@
-use litellm_host::interceptors::RetriedRequest;
+use litellm_host::interceptors::{RetriedRequest, RetryReason};
 use litellm_llms_types::formats::messages::{
     MessagesOptionalParams, MessagesRequest, MessagesResponse,
 };
@@ -241,6 +241,20 @@ pub trait MessagesReply {
         _context: &MessagesTransformContext,
     ) -> Option<RetriedRequest> {
         None
+    }
+    /// The headers a retried body goes out with, for a retry that needs a beta the first
+    /// attempt did not.
+    fn headers_for_retry(&self, headers: Headers, _reasons: &[RetryReason]) -> Headers {
+        headers
+    }
+    /// Whether this failure still gets a retry once the attempt limit is used up.
+    fn retries_past_attempt_limit(
+        &self,
+        _last_reasons: &[RetryReason],
+        _status: u16,
+        _error_text: &str,
+    ) -> bool {
+        false
     }
 }
 

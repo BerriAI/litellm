@@ -1,4 +1,4 @@
-use litellm_host::interceptors::RetriedRequest;
+use litellm_host::interceptors::{RetriedRequest, RetryReason};
 
 use crate::{
     anthropic::messages::transformation::ANTHROPIC_MESSAGES_CONFIG,
@@ -53,7 +53,7 @@ use crate::bedrock::{
     request_metadata::{bedrock_request_metadata_headers, merge_bedrock_invoke_headers},
 };
 
-use super::{request, stream};
+use super::{betas::with_thinking_binding_beta, request, stream};
 
 const INVOKE_MODEL_PREFIX: &str = "invoke/";
 
@@ -411,7 +411,18 @@ impl MessagesReply for BedrockInvokeMessagesConfig {
         request_body: &Value,
         context: &MessagesTransformContext,
     ) -> Option<RetriedRequest> {
-        ANTHROPIC_MESSAGES_CONFIG.retry_after_http_error(status, error_text, request_body, context)
+        ANTHROPIC_MESSAGES_CONFIG
+            .retry_after_http_error(status, error_text, request_body, context)
+            .map(with_thinking_binding_beta)
+    }
+
+    fn retries_past_attempt_limit(
+        &self,
+        last_reasons: &[RetryReason],
+        status: u16,
+        error_text: &str,
+    ) -> bool {
+        ANTHROPIC_MESSAGES_CONFIG.retries_past_attempt_limit(last_reasons, status, error_text)
     }
 }
 

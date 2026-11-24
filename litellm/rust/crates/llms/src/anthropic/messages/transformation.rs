@@ -33,12 +33,12 @@ use crate::{
     anthropic::common_utils::{
         ANTHROPIC_API_BASE_ENV, ANTHROPIC_API_KEY_ENV, ANTHROPIC_AUTH_TOKEN_ENV,
         ANTHROPIC_BASE_URL_ENV, OauthHandling, OauthToken,
-        anthropic_request_errors_on_thinking_binding_mismatch, complete_anthropic_url,
-        existing_betas, get_api_key, get_auth_header, has_advisor_tool, has_anthropic_credential,
-        is_anthropic_invalid_thinking_block_error, is_anthropic_thinking_binding_mismatch_error,
-        is_claude_strict_tools_rejection, is_tool_search_used, map_messages, merge_beta_headers,
-        minted_oauth_environment, optionally_handle_anthropic_oauth,
-        requires_native_compaction_beta, strip_advisor_blocks,
+        anthropic_request_errors_on_thinking_binding_mismatch, anthropic_thinking_binding_retry,
+        complete_anthropic_url, existing_betas, get_api_key, get_auth_header, has_advisor_tool,
+        has_anthropic_credential, is_anthropic_invalid_thinking_block_error,
+        is_anthropic_thinking_binding_mismatch_error, is_claude_strict_tools_rejection,
+        is_tool_search_used, map_messages, merge_beta_headers, minted_oauth_environment,
+        optionally_handle_anthropic_oauth, requires_native_compaction_beta, strip_advisor_blocks,
         strip_encrypted_reasoning_blocks_restoring_redacted_data, strip_raw_advisor_blocks,
         strip_raw_encrypted_reasoning_blocks, strip_raw_unsigned_thinking_blocks,
         strip_thinking_blocks_from_anthropic_messages_request, strip_unsigned_thinking_blocks,
@@ -209,7 +209,20 @@ impl MessagesReply for AnthropicMessagesConfig {
         request_body: &Value,
         context: &MessagesTransformContext,
     ) -> Option<RetriedRequest> {
-        retry_anthropic_messages_after_http_error(status, error_text, request_body, context)
+        retry_claude_messages_after_http_error(status, error_text, request_body, context)
+    }
+
+    fn headers_for_retry(&self, headers: Headers, reasons: &[RetryReason]) -> Headers {
+        claude_retry_headers(headers, reasons)
+    }
+
+    fn retries_past_attempt_limit(
+        &self,
+        last_reasons: &[RetryReason],
+        status: u16,
+        error_text: &str,
+    ) -> bool {
+        claude_retries_past_attempt_limit(last_reasons, status, error_text)
     }
 }
 
@@ -292,13 +305,24 @@ pub fn transform_anthropic_messages_request_on_http_error(
     error_text: &str,
     request_body: Value,
 ) -> RetriedRequest {
-    let mut reasons = Vec::new();
-    let mut body = if status == 400 && is_anthropic_invalid_thinking_block_error(error_text) {
-        reasons.push(RetryReason::ThinkingSignature);
-        strip_thinking_blocks_from_anthropic_messages_request(request_body)
+    let (reasons, body) = if status == 400 && is_anthropic_invalid_thinking_block_error(error_text)
+    {
+        (
+            vec![RetryReason::ThinkingSignature],
+            strip_thinking_blocks_from_anthropic_messages_request(request_body),
+        )
     } else {
-        request_body
+        (Vec::new(), request_body)
     };
+    without_rejected_strict_tools(status, error_text, reasons, body)
+}
+
+fn without_rejected_strict_tools(
+    status: u16,
+    error_text: &str,
+    mut reasons: Vec<RetryReason>,
+    mut body: Value,
+) -> RetriedRequest {
     let without_strict = if is_claude_strict_tools_rejection(status, error_text) {
         tools_without_strict(body.get("tools"))
     } else {
@@ -327,6 +351,57 @@ pub fn retry_anthropic_messages_after_http_error(
                 request_body.clone(),
             )
         },
+    )
+}
+
+/// The retry for hosts that serve Claude: a binding mismatch keeps the history and asks Claude
+/// to drop the mismatched blocks. Everything else retries like any Messages host.
+fn retry_claude_messages_after_http_error(
+    status: u16,
+    error_text: &str,
+    request_body: &Value,
+    context: &MessagesTransformContext,
+) -> Option<RetriedRequest> {
+    let thinking = (status == 400)
+        .then(|| anthropic_thinking_binding_retry(error_text, request_body))
+        .flatten();
+    let Some(thinking) = thinking else {
+        return retry_anthropic_messages_after_http_error(
+            status,
+            error_text,
+            request_body,
+            context,
+        );
+    };
+    let mut body = request_body.clone();
+    body["thinking"] = thinking;
+    Some(without_rejected_strict_tools(
+        status,
+        error_text,
+        vec![RetryReason::ThinkingBinding],
+        body,
+    ))
+}
+
+/// A signature rejected after a binding retry still needs the strip that retry displaced.
+fn claude_retries_past_attempt_limit(
+    last_reasons: &[RetryReason],
+    status: u16,
+    error_text: &str,
+) -> bool {
+    last_reasons.contains(&RetryReason::ThinkingBinding)
+        && status == 400
+        && is_anthropic_invalid_thinking_block_error(error_text)
+        && !is_anthropic_thinking_binding_mismatch_error(error_text)
+}
+
+fn claude_retry_headers(headers: Headers, reasons: &[RetryReason]) -> Headers {
+    if !reasons.contains(&RetryReason::ThinkingBinding) {
+        return headers;
+    }
+    merge_beta_headers(
+        headers,
+        BetaSet::from_iter([AnthropicBeta::ThinkingBindingControls20260801]),
     )
 }
 
@@ -2361,7 +2436,7 @@ mod tests {
     }
 
     #[test]
-    fn the_http_error_retry_matches_the_cases_shared_with_python() {
+    fn hosts_without_binding_recovery_match_the_cases_shared_with_python() {
         let fixture: Value = serde_json::from_str(include_str!(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/tests/fixtures/anthropic_messages_http_error_retry.json"
@@ -2374,7 +2449,9 @@ mod tests {
             .iter()
             .filter(|case| {
                 let mut body = table["request"].clone();
-                body["thinking"] = case["thinking"].clone();
+                if let Some(thinking) = case.get("thinking") {
+                    body["thinking"] = thinking.clone();
+                }
                 let status = u16::try_from(case["status"].as_u64().unwrap()).unwrap();
                 let error_text = case["error_text"].as_str().unwrap();
                 let retried = should_retry_anthropic_messages_on_http_error(
@@ -2383,13 +2460,13 @@ mod tests {
                     &body,
                     &MessagesTransformContext::default(),
                 );
-                let stripped = case["stripped"].as_bool().unwrap();
                 let transformed = transform_anthropic_messages_request_on_http_error(
                     status,
                     error_text,
                     body.clone(),
                 );
-                let expected = if stripped {
+                let outcome = case.get("other_hosts_outcome").unwrap_or(&case["outcome"]);
+                let expected = if outcome == "strip" {
                     RetriedRequest {
                         reasons: vec![RetryReason::ThinkingSignature],
                         body: table["stripped_request"].clone(),
@@ -2400,7 +2477,13 @@ mod tests {
                         body,
                     }
                 };
-                retried != case["retried"].as_bool().unwrap() || transformed != expected
+                retried
+                    != case
+                        .get("other_hosts_retried")
+                        .unwrap_or(&case["retried"])
+                        .as_bool()
+                        .unwrap()
+                    || transformed != expected
             })
             .map(|case| case["name"].as_str().unwrap())
             .collect();

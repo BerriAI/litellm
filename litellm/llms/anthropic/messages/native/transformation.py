@@ -38,6 +38,7 @@ from litellm.types.llms.anthropic import (
     ANTHROPIC_ADVISOR_TOOL_TYPE,
     ANTHROPIC_BETA_HEADER_VALUES,
     ANTHROPIC_MID_CONVERSATION_TOOL_CHANGES_BETA_HEADER,
+    ANTHROPIC_THINKING_BINDING_CONTROLS_BETA_HEADER,
     AnthropicMessagesRequest,
 )
 from litellm.types.llms.anthropic_messages.anthropic_response import (
@@ -161,6 +162,11 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
     def supports_message_threads(self) -> bool:
         return is_beta_header_supported_by_bundled_config(
             ANTHROPIC_BETA_HEADER_VALUES.MESSAGE_THREADS_2026_08_12.value, self._resolved_provider
+        )
+
+    def recovers_thinking_binding_mismatch(self) -> bool:
+        return is_beta_header_supported_by_bundled_config(
+            ANTHROPIC_THINKING_BINDING_CONTROLS_BETA_HEADER, self._resolved_provider
         )
 
     def supports_safeguards(self) -> bool:

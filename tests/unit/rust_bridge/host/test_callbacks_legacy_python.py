@@ -1,6 +1,7 @@
 import asyncio
 import datetime
 import inspect
+import logging
 from collections.abc import Mapping
 from pathlib import Path
 from types import MappingProxyType
@@ -12,6 +13,7 @@ from pydantic import TypeAdapter
 
 import litellm
 from litellm._internal_context import is_internal_call
+from litellm._logging import verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.llm_cost_calc.pricing_bridge import AdjustFacts, CallFacts, price, priced_usage
@@ -451,6 +453,23 @@ async def test_a_retry_that_dropped_strict_tools_warns_with_the_dropped_count(
     await legacy.retried_request(_messages_logger(), {"messages": []}, {"messages": []}, reasons)
 
     assert warnings == warned
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("reasons", "warned"),
+    [
+        pytest.param(({"kind": "thinking_signature"},), 0, id="thinking_signature"),
+        pytest.param(({"kind": "thinking_binding"},), 1, id="thinking_binding"),
+    ],
+)
+async def test_a_binding_retry_warns_the_operator(
+    caplog: pytest.LogCaptureFixture, reasons: tuple[Mapping[str, object], ...], warned: int
+) -> None:
+    with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+        await legacy.retried_request(_messages_logger(), {"messages": []}, {"messages": []}, reasons)
+
+    assert sum("bound to a different conversation" in record.getMessage() for record in caplog.records) == warned
 
 
 def test_stream_head_is_stamped_in_place_with_the_call_hidden_params() -> None:

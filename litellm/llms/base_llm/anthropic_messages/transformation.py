@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, Any, Final
 import httpx
 
 from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
+from litellm.types.llms.anthropic import ANTHROPIC_THINKING_BINDING_CONTROLS_BETA_HEADER
 from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicMessagesResponse,
 )
@@ -198,6 +199,36 @@ class BaseAnthropicMessagesConfig(ABC):
         """
         return 2
 
+    def recovers_thinking_binding_mismatch(self) -> bool:
+        """Whether this upstream is a Claude host that accepts ``thinking.block_binding``."""
+        return False
+
+    def _thinking_binding_retry(self, e: httpx.HTTPStatusError, request_body: object) -> Mapping[object, object] | None:
+        from litellm.llms.anthropic.common_utils import anthropic_thinking_binding_retry
+
+        if e.response.status_code != 400 or not self.recovers_thinking_binding_mismatch():
+            return None
+        return anthropic_thinking_binding_retry(e.response.text, request_body)
+
+    def retries_anthropic_messages_past_attempt_limit(
+        self, previous_error: httpx.HTTPStatusError, e: httpx.HTTPStatusError, request_body: object
+    ) -> bool:
+        """A signature rejected after a binding retry still needs the strip that retry displaced."""
+        from litellm.llms.anthropic.common_utils import is_anthropic_signature_rejection_after_binding_retry
+
+        return (
+            e.response.status_code == 400
+            and self.recovers_thinking_binding_mismatch()
+            and is_anthropic_signature_rejection_after_binding_retry(
+                previous_error.response.text, e.response.text, request_body
+            )
+        )
+
+    def anthropic_messages_retry_header_beta(self, e: httpx.HTTPStatusError, request_body: object) -> str | None:
+        if self._thinking_binding_retry(e, request_body) is None:
+            return None
+        return ANTHROPIC_THINKING_BINDING_CONTROLS_BETA_HEADER
+
     def should_retry_anthropic_messages_on_http_error(
         self, e: httpx.HTTPStatusError, litellm_params: Mapping[str, object], request_body: object = None
     ) -> bool:
@@ -226,7 +257,7 @@ class BaseAnthropicMessagesConfig(ABC):
             and body is not None
             and tools_without_strict(body.get("tools")) is not None
         )
-        if drops_rejected_strict_tools:
+        if drops_rejected_strict_tools or self._thinking_binding_retry(e, request_body) is not None:
             return True
         caller_asked_for_this_error: Final = anthropic_request_errors_on_thinking_binding_mismatch(
             request_body
@@ -245,9 +276,14 @@ class BaseAnthropicMessagesConfig(ABC):
             strip_thinking_blocks_from_anthropic_messages_request_dict,
             tools_without_strict,
             warn_claude_strict_tools_dropped,
+            warn_thinking_binding_mismatch_recovered,
         )
 
-        if e.response.status_code == 400 and is_anthropic_invalid_thinking_block_error(e.response.text):
+        binding_thinking: Final = self._thinking_binding_retry(e, request_data)
+        if binding_thinking is not None:
+            request_data["thinking"] = binding_thinking  # rebind-ok: the retry loop re-signs this same dict
+            warn_thinking_binding_mismatch_recovered()
+        elif e.response.status_code == 400 and is_anthropic_invalid_thinking_block_error(e.response.text):
             strip_thinking_blocks_from_anthropic_messages_request_dict(request_data)
         without_strict: Final = (
             tools_without_strict(request_data.get("tools"))

@@ -2176,6 +2176,37 @@ def anthropic_request_errors_on_thinking_binding_mismatch(request_body: object) 
     return binding is not None and binding.get("prefix_mismatch_behavior") == "error"
 
 
+def anthropic_thinking_binding_retry(error_text: str, request_body: object) -> Mapping[object, object] | None:
+    """The ``thinking`` that lets Claude drop blocks bound to another conversation, keeping the
+    history as sent. None when the error is another one, or the caller's ``thinking`` is not
+    adaptive or already chose a binding."""
+    body: Final = validated_object_mapping(request_body)
+    if body is None or not is_anthropic_thinking_binding_mismatch_error(error_text):
+        return None
+    requested: Final = body.get("thinking")
+    thinking: Final[Mapping[object, object] | None] = (
+        {"type": "adaptive"} if requested is None else validated_object_mapping(requested)
+    )
+    if thinking is None or thinking.get("type") != "adaptive" or "block_binding" in thinking:
+        return None
+    return {**thinking, "block_binding": {"prefix_mismatch_behavior": "drop_block"}}
+
+
+def is_anthropic_signature_rejection_after_binding_retry(
+    previous_error_text: str, error_text: str, request_body: object
+) -> bool:
+    body: Final = validated_object_mapping(request_body)
+    thinking: Final = validated_object_mapping(body.get("thinking")) if body is not None else None
+    binding: Final = validated_object_mapping(thinking.get("block_binding")) if thinking is not None else None
+    return (
+        binding is not None
+        and binding.get("prefix_mismatch_behavior") == "drop_block"
+        and is_anthropic_thinking_binding_mismatch_error(previous_error_text)
+        and is_anthropic_invalid_thinking_block_error(error_text)
+        and not is_anthropic_thinking_binding_mismatch_error(error_text)
+    )
+
+
 _CLAUDE_STRICT_TOOLS_REJECTION: Final = re.compile(
     r"Too many strict tools \(\d+\)"
     r"|Schemas contains too many (?:optional parameters|parameters with union types)"
@@ -2215,6 +2246,14 @@ def warn_claude_strict_tools_dropped(dropped_count: int) -> None:
         "Claude rejected the request's strict schemas, so litellm removed `strict` from every tool (%d had "
         "strict true) and sent the request again because drop_params is set.",
         dropped_count,
+    )
+
+
+def warn_thinking_binding_mismatch_recovered() -> None:
+    litellm.verbose_logger.warning(
+        "Claude rejected a thinking block bound to a different conversation, so litellm sent the request again "
+        "with thinking.block_binding.prefix_mismatch_behavior set to drop_block. The conversation history still "
+        "holds the mismatched blocks, so later requests that replay it will hit this error again."
     )
 
 

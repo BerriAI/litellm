@@ -1,5 +1,6 @@
 use std::collections::BTreeSet;
 
+use litellm_host::interceptors::{RetriedRequest, RetryReason};
 use litellm_llms_types::providers::anthropic::{AnthropicBeta, BETA_HEADER, BetaProvider, BetaSet};
 use litellm_python_compat::truthy::json_truthy;
 use serde_json::Value;
@@ -208,6 +209,25 @@ fn thinking_betas(thinking: Option<&Value>) -> impl Iterator<Item = &'static str
         matches!(thinking, Some(Value::Object(thinking)) if thinking.contains_key("block_binding"))
             .then_some(THINKING_BINDING_CONTROLS);
     display.into_iter().chain(binding)
+}
+
+/// InvokeModel reads betas from the body, so a binding retry names its beta there.
+pub(super) fn with_thinking_binding_beta(retried: RetriedRequest) -> RetriedRequest {
+    if !retried.reasons.contains(&RetryReason::ThinkingBinding) {
+        return retried;
+    }
+    let RetriedRequest { reasons, mut body } = retried;
+    let betas: BTreeSet<String> = body
+        .get("anthropic_beta")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .chain([THINKING_BINDING_CONTROLS])
+        .map(str::to_owned)
+        .collect();
+    body["anthropic_beta"] = betas.into_iter().map(Value::String).collect();
+    RetriedRequest { reasons, body }
 }
 
 fn carries_signed_compaction_block(messages: &[Value]) -> bool {
@@ -773,5 +793,45 @@ mod tests {
             drop_params,
         );
         assert_eq!(body["messages"], expected);
+    }
+
+    #[rstest]
+    #[case::merges_with_the_callers_betas(
+        vec![RetryReason::ThinkingBinding],
+        json!({"anthropic_beta": ["zeta-beta", "alpha-beta"]}),
+        json!({"anthropic_beta": ["alpha-beta", THINKING_BINDING_CONTROLS, "zeta-beta"]})
+    )]
+    #[case::adds_the_list_when_there_is_none(
+        vec![RetryReason::ThinkingBinding],
+        json!({}),
+        json!({"anthropic_beta": [THINKING_BINDING_CONTROLS]})
+    )]
+    #[case::does_not_repeat_the_beta(
+        vec![RetryReason::ThinkingBinding],
+        json!({"anthropic_beta": [THINKING_BINDING_CONTROLS]}),
+        json!({"anthropic_beta": [THINKING_BINDING_CONTROLS]})
+    )]
+    #[case::leaves_other_retries_alone(
+        vec![RetryReason::ThinkingSignature],
+        json!({"anthropic_beta": ["zeta-beta"]}),
+        json!({"anthropic_beta": ["zeta-beta"]})
+    )]
+    fn a_binding_retry_names_its_beta_in_the_body(
+        #[case] reasons: Vec<RetryReason>,
+        #[case] body: Value,
+        #[case] expected: Value,
+    ) {
+        let retried = with_thinking_binding_beta(RetriedRequest {
+            reasons: reasons.clone(),
+            body,
+        });
+
+        assert_eq!(
+            retried,
+            RetriedRequest {
+                reasons,
+                body: expected
+            }
+        );
     }
 }

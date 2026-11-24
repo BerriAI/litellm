@@ -11,6 +11,8 @@ use rstest::rstest;
 use super::*;
 
 const INVALID_SIGNATURE: &str = "messages.1.content.0: Invalid `signature` in `thinking` block";
+const BOUND_ELSEWHERE: &str = "messages.1.content.0: Invalid `signature` in `thinking` block. The block is bound to a different conversation";
+const BINDING_BETA: &str = "thinking-binding-controls-2026-08-01";
 const UNREACHABLE_BASE: &str = "http://127.0.0.1:9";
 
 #[derive(Debug, thiserror::Error)]
@@ -312,6 +314,49 @@ async fn the_raw_head_carries_the_bytes_the_host_transport_last_sent(
     let head = raw.head.expect("the head is forwarded");
     assert_eq!(head.sent_body, retried.raw_body);
     assert_eq!(head.streamed, stream);
+}
+
+#[rstest]
+#[tokio::test]
+async fn the_raw_head_carries_the_beta_a_binding_retry_sent_through_the_host_transport(
+    call: MessagesCall,
+    #[values(false, true)] stream: bool,
+) {
+    let frames: &'static [&'static str] =
+        &["event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n"];
+    let success = if stream {
+        Scripted::Stream(frames)
+    } else {
+        Scripted::Complete(message_body())
+    };
+    let transport = ScriptedTransport::new([Scripted::Rejected(400, BOUND_ELSEWHERE), success]);
+    let fields = json!({"stream": stream, "thinking": {"type": "adaptive"}});
+    let host =
+        RecordingCall::<Messages>::new(hosted_call(with_fields(call, replayed_thinking()), fields));
+
+    execute_recorded(transport.clone(), &host)
+        .await
+        .expect("the retry succeeds");
+
+    let sent = transport.sent();
+    let [_, retried] = sent.as_slice() else {
+        panic!("two requests");
+    };
+    let beta_header = |headers: &[(String, String)]| {
+        headers
+            .iter()
+            .find(|(name, _)| name.eq_ignore_ascii_case("anthropic-beta"))
+            .map(|(_, value)| value.clone())
+    };
+    let [raw] = <[_; 1]>::try_from(host.events.0.raw_heads()).unwrap();
+    let logged = raw
+        .head
+        .expect("the head is forwarded")
+        .retry_headers
+        .expect("the retry changed the headers");
+    let retried_beta = beta_header(&retried.headers).expect("the retry names a beta");
+    assert!(retried_beta.split(',').any(|beta| beta == BINDING_BETA));
+    assert_eq!(beta_header(&logged), Some(retried_beta));
 }
 
 #[rstest]

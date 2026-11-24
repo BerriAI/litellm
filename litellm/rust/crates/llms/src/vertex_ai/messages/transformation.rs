@@ -8,7 +8,7 @@ use litellm_auth_gcp::{
     VertexConfig, get_vertex_ai_project, get_vertex_ai_project_from_credentials, secret_names,
     vertex::vertex_location,
 };
-use litellm_host::interceptors::RetriedRequest;
+use litellm_host::interceptors::{RetriedRequest, RetryReason};
 use litellm_http::request::{header_value, without_headers};
 use litellm_llms_types::{
     formats::messages::{MessagesOptionalParams, MessagesRequest, MessagesTool, OutputConfig},
@@ -216,6 +216,19 @@ impl MessagesReply for VertexAiMessagesConfig {
         context: &MessagesTransformContext,
     ) -> Option<RetriedRequest> {
         ANTHROPIC_MESSAGES_CONFIG.retry_after_http_error(status, error_text, request_body, context)
+    }
+
+    fn headers_for_retry(&self, headers: Headers, reasons: &[RetryReason]) -> Headers {
+        ANTHROPIC_MESSAGES_CONFIG.headers_for_retry(headers, reasons)
+    }
+
+    fn retries_past_attempt_limit(
+        &self,
+        last_reasons: &[RetryReason],
+        status: u16,
+        error_text: &str,
+    ) -> bool {
+        ANTHROPIC_MESSAGES_CONFIG.retries_past_attempt_limit(last_reasons, status, error_text)
     }
 }
 

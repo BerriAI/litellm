@@ -14,6 +14,7 @@ use litellm_http::Phases;
 use litellm_llms::base_llm::{
     auth::Authenticated,
     messages::{
+        context::MessagesTransformContext,
         streaming::{ByteStream, StreamDecoder},
         transformation::BaseMessagesConfig,
     },
@@ -287,12 +288,15 @@ async fn call_provider(
     let timeout = request
         .timeout
         .unwrap_or(Duration::from_secs(MESSAGES_TIMEOUT_SECS));
-    let (upstream, sent_body) =
-        send_recovering(http, transport, &request, timeout, context).await?;
+    let Recovered {
+        upstream,
+        sent_body,
+        retry_headers,
+    } = send_recovering(http, transport, &request, timeout, context).await?;
     let response = match upstream {
         Upstream::Native(response) => response,
         Upstream::Hosted(response) => {
-            return hosted_response(response, sent_body, request, context).await;
+            return hosted_response(response, sent_body, retry_headers, request, context).await;
         }
     };
     let ProviderCall {
@@ -310,6 +314,7 @@ async fn call_provider(
         status: response.status().as_u16(),
         headers: super::encoding::header_pairs(response.headers()),
         sent_body,
+        retry_headers,
         streamed: stream,
     };
     if stream {
@@ -347,6 +352,7 @@ async fn call_provider(
 async fn hosted_response(
     response: TransportResponse,
     sent_body: Bytes,
+    retry_headers: Option<Vec<(String, String)>>,
     request: ProviderCall,
     context: &CallContext<'_, impl Interceptors<Error>>,
 ) -> Result<MessagesCallResponse, Error> {
@@ -372,6 +378,7 @@ async fn hosted_response(
                     status,
                     headers: headers.clone(),
                     sent_body,
+                    retry_headers,
                     streamed: true,
                 }))
                 .await?;
@@ -392,6 +399,7 @@ async fn hosted_response(
             status,
             headers,
             sent_body,
+            retry_headers,
             streamed: false,
         }))
         .await?;
@@ -441,6 +449,12 @@ fn hosted_request(
     })
 }
 
+struct Recovered {
+    upstream: Upstream,
+    sent_body: Bytes,
+    retry_headers: Option<Vec<(String, String)>>,
+}
+
 fn unsendable_url(provider: MessagesProvider, url: &str) -> Option<UnsendableUrl> {
     provider
         .refuses_unsendable_urls()
@@ -454,11 +468,18 @@ async fn send_recovering(
     request: &ProviderCall,
     timeout: Duration,
     context: &CallContext<'_, impl Interceptors<Error>>,
-) -> Result<(Upstream, Bytes), Error> {
+) -> Result<Recovered, Error> {
     let config = request.provider.config();
     let mut body = std::borrow::Cow::Borrowed(&request.wire.body);
+    let mut headers = request.wire.headers.clone();
     let mut attempt = 1;
     let mut recovered: Vec<(u16, String)> = Vec::new();
+    let mut last_reasons = Vec::new();
+    let finished = |upstream, sent_body, headers: Vec<(String, String)>| Recovered {
+        upstream,
+        sent_body,
+        retry_headers: (headers != request.wire.headers).then_some(headers),
+    };
     loop {
         log_request_body(request.provider.as_str(), request.stream, &body);
         if let Some(value) = &request.unencodable_request_header {
@@ -481,7 +502,7 @@ async fn send_recovering(
             )));
         }
         let authenticated = Authenticated {
-            headers: request.wire.headers.clone(),
+            headers: headers.clone(),
             signer: request.signer.clone(),
         };
         let sent_body = raw_leaf_body(&body)?;
@@ -521,7 +542,7 @@ async fn send_recovering(
         }
         let failure = match response {
             Upstream::Native(response) if response.status().is_success() => {
-                return Ok((Upstream::Native(response), sent_body));
+                return Ok(finished(Upstream::Native(response), sent_body, headers));
             }
             Upstream::Native(response) => {
                 provider_failure(response, timeout, request.stream).await?
@@ -539,7 +560,7 @@ async fn send_recovering(
                     raised: Some(error),
                 }
             }
-            hosted @ Upstream::Hosted(_) => return Ok((hosted, sent_body)),
+            hosted @ Upstream::Hosted(_) => return Ok(finished(hosted, sent_body, headers)),
         };
         if let Some(fallback) = request.native_output_fallback.as_ref().filter(|_| {
             config.retries_without_native_output(
@@ -550,12 +571,15 @@ async fn send_recovering(
             )
         }) {
             let rebuilt = fallback.body(config)?;
-            let replayed = replayed_recoveries(config, rebuilt, &recovered, request);
+            let replayed =
+                replayed_recoveries(config, rebuilt, &recovered, &request.transform_context);
             body = std::borrow::Cow::Owned(replayed.body.clone());
             context.provider_request_retried(replayed).await?;
             continue;
         }
-        let retried = if attempt == MESSAGES_HTTP_ERROR_ATTEMPTS {
+        let retried = if attempt >= MESSAGES_HTTP_ERROR_ATTEMPTS
+            && !config.retries_past_attempt_limit(&last_reasons, failure.status, &failure.text)
+        {
             None
         } else {
             config.retry_after_http_error(
@@ -571,8 +595,10 @@ async fn send_recovering(
         attempt += 1;
         recovered.push((failure.status, failure.text.clone()));
         tracing::debug!(
-            "Anthropic /v1/messages: retrying after a recoverable HTTP error (attempt {attempt}/{MESSAGES_HTTP_ERROR_ATTEMPTS})."
+            "Anthropic /v1/messages: retrying after a recoverable HTTP error (attempt {attempt})."
         );
+        headers = config.headers_for_retry(headers, &retried.reasons);
+        last_reasons.clone_from(&retried.reasons);
         body = std::borrow::Cow::Owned(retried.body.clone());
         context.provider_request_retried(retried).await?;
     }
@@ -582,7 +608,7 @@ fn replayed_recoveries(
     config: &dyn BaseMessagesConfig,
     rebuilt: Value,
     recovered: &[(u16, String)],
-    request: &ProviderCall,
+    context: &MessagesTransformContext,
 ) -> litellm_host::interceptors::RetriedRequest {
     recovered.iter().fold(
         litellm_host::interceptors::RetriedRequest {
@@ -593,7 +619,7 @@ fn replayed_recoveries(
             *status,
             text,
             &replayed.body,
-            &request.transform_context,
+            context,
         ) {
             Some(retried) => litellm_host::interceptors::RetriedRequest {
                 reasons: replayed
@@ -951,6 +977,36 @@ mod tests {
 
     use super::*;
     use crate::common_utils::messages_provider;
+
+    #[rstest]
+    #[case::binding_recovery(
+        "messages.1.content.0: Invalid `signature` in `thinking` block. The block is bound to a different conversation.",
+        json!({"type": "adaptive", "block_binding": {"prefix_mismatch_behavior": "drop_block"}}),
+        vec![litellm_host::interceptors::RetryReason::ThinkingBinding]
+    )]
+    #[case::thinking_strip(
+        "messages.1.content.0: Invalid `signature` in `thinking` block",
+        Value::Null,
+        vec![litellm_host::interceptors::RetryReason::ThinkingSignature]
+    )]
+    fn a_rebuilt_body_replays_each_recovery(
+        #[case] error_text: &str,
+        #[case] thinking: Value,
+        #[case] reasons: Vec<litellm_host::interceptors::RetryReason>,
+    ) {
+        let replayed = replayed_recoveries(
+            &litellm_llms::anthropic::messages::transformation::ANTHROPIC_MESSAGES_CONFIG,
+            json!({"messages": [], "thinking": {"type": "adaptive"}}),
+            &[(400, error_text.to_owned())],
+            &MessagesTransformContext::default(),
+        );
+
+        assert_eq!(replayed.reasons, reasons);
+        assert_eq!(
+            replayed.body.get("thinking").unwrap_or(&Value::Null),
+            &thinking
+        );
+    }
 
     #[rstest]
     #[case::anthropic(

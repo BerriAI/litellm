@@ -16,6 +16,7 @@ pub struct WireRequest {
 pub enum RetryReason {
     ThinkingSignature,
     StrictTools { dropped: usize },
+    ThinkingBinding,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -53,6 +54,8 @@ pub struct ResponseHead {
     pub status: u16,
     pub headers: Vec<(String, String)>,
     pub sent_body: Bytes,
+    /// Set when a retry sent headers other than the wire request the host saw.
+    pub retry_headers: Option<Vec<(String, String)>>,
     pub streamed: bool,
 }
 

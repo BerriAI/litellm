@@ -16,8 +16,8 @@ use crate::{
     anthropic::{
         common_utils::{has_anthropic_credential, strip_billing_metadata_from_system},
         messages::transformation::{
-            ANTHROPIC_MESSAGES_CONFIG, transform_messages_request,
-            update_headers_with_anthropic_beta,
+            ANTHROPIC_MESSAGES_CONFIG, retry_anthropic_messages_after_http_error,
+            transform_messages_request, update_headers_with_anthropic_beta,
         },
     },
     base_llm::{
@@ -148,7 +148,7 @@ impl MessagesReply for DeepSeekMessagesConfig {
         request_body: &Value,
         context: &MessagesTransformContext,
     ) -> Option<RetriedRequest> {
-        ANTHROPIC_MESSAGES_CONFIG.retry_after_http_error(status, error_text, request_body, context)
+        retry_anthropic_messages_after_http_error(status, error_text, request_body, context)
     }
 }
 

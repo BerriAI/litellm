@@ -41,6 +41,9 @@ class OpenAILikeAnthropicMessagesConfig(AnthropicMessagesConfig):
     def supports_message_threads(self) -> bool:
         return False
 
+    def recovers_thinking_binding_mismatch(self) -> bool:
+        return False
+
     def hoists_wrapped_defer_loading(self, model: str) -> bool:
         return False
 
