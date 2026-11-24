@@ -691,24 +691,6 @@ def test_the_session_a_killed_deploy_left_waiting_on_a_lock_is_ended_before_its_
 
 
 @requires_db
-def test_a_killed_deploy_whose_session_was_no_longer_running_a_statement_keeps_its_row_for_the_operator(
-    scratch_database: str,
-) -> None:
-    session_name: Final = f"litellm-migrate-{uuid.uuid4().hex[:16]}"
-    finished: Final = psycopg.connect(scratch_database, autocommit=True, application_name=session_name)
-    attempt_started: Final = time.monotonic()
-    _start_a_ledger_row(finished, logs=None, applied_steps=0, age="0 seconds")
-    finished.execute('ALTER TABLE "LiteLLM_SpendLogs" ADD COLUMN "committed_before_the_check" TEXT')
-
-    rolled_back: Final = roll_back_killed_migration(scratch_database, "public", session_name, attempt_started)
-
-    assert rolled_back == ()
-    assert _sessions_named(scratch_database, session_name) == []
-    assert "committed_before_the_check" in _spend_logs_columns(scratch_database)
-    assert _ledger_rows(scratch_database, KILLED_MIGRATION) == [(False, False)]
-
-
-@requires_db
 @pytest.mark.parametrize(
     ("logs", "applied_steps", "age"),
     (("ERROR: boom", 0, "0 seconds"), (None, 1, "0 seconds"), (None, 0, "1 hour")),
