@@ -9,6 +9,7 @@ Docs - https://docs.mistral.ai/api/
 import reprlib
 from collections.abc import AsyncIterator, Coroutine, Iterator, Mapping, Sequence
 from itertools import accumulate, count
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal, cast, get_type_hints, overload
 from urllib.parse import urlparse
 
@@ -97,6 +98,18 @@ _MISTRAL_FILE_PART: Final = TypeAdapter(MistralFilePart)
 _DECODED_JSON: Final = TypeAdapter(object)
 _REASONING_LEVELS: Final = frozenset(REASONING_EFFORT_ADVERTISEMENT_ORDER)
 _PROVIDER_DEFAULT_EFFORT: Final = "default"
+_SENT_AS_IS: Final = frozenset(
+    ("temperature", "top_p", "stop", "response_format", "parallel_tool_calls", "prompt_cache_key")
+)
+_SENT_AS_IS_WHEN_SUPPORTED: Final = frozenset(("presence_penalty", "frequency_penalty", "n"))
+_ACCEPTED_MESSAGE_FIELDS: Final = MappingProxyType(
+    {
+        "system": frozenset(("role", "content")),
+        "user": frozenset(("role", "content")),
+        "assistant": frozenset(("role", "content", "tool_calls", "prefix")),
+        "tool": frozenset(("role", "content", "tool_call_id", "name")),
+    }
+)
 _NON_LEVEL_EFFORT_REASON: Final = "the Mistral API takes it only as a level such as 'high'."
 _UNUSABLE_TOOL_CHOICE_REASON: Final = (
     "the Mistral API takes tool_choice only as 'auto', 'none', 'any', 'required', "
@@ -165,12 +178,12 @@ class MistralConfig(OpenAIGPTConfig):
         temperature: int | None = None,
         top_p: int | None = None,
         max_tokens: int | None = None,
-        tools: list | None = None,
+        tools: Sequence[object] | None = None,
         tool_choice: Literal["auto", "any", "none"] | ChatCompletionToolChoiceObjectParam | None = None,
         random_seed: int | None = None,
         safe_prompt: bool | None = None,
-        response_format: dict | None = None,
-        stop: str | list | None = None,
+        response_format: Mapping[str, object] | None = None,
+        stop: str | Sequence[object] | None = None,
     ) -> None:
         locals_: Final[Mapping[str, object]] = dict(locals())
         for key, value in locals_.items():
@@ -254,11 +267,12 @@ class MistralConfig(OpenAIGPTConfig):
     def map_openai_params(
         self,
         non_default_params: dict,
-        optional_params: dict,
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
     ) -> dict:
         requested: Final = _MISTRAL_REASONING_EFFORT_PARAMS.validate_python(non_default_params)
+        supported_params: Final = frozenset(self.get_supported_openai_params(model))
         reasoning_level: Final = (
             _public_reasoning_level(self._reasoning_level_to_send(model, requested, drop_params))
             if "reasoning_effort" in requested
@@ -303,7 +317,7 @@ class MistralConfig(OpenAIGPTConfig):
                 optional_params["reasoning_effort"] = _accepted_reasoning_effort(
                     model, thinking_effort, self.custom_llm_provider
                 )
-            if param in ("temperature", "top_p", "stop", "response_format", "parallel_tool_calls", "prompt_cache_key"):
+            if param in _SENT_AS_IS or (param in _SENT_AS_IS_WHEN_SUPPORTED and param in supported_params):
                 optional_params[param] = value
         return optional_params
 
@@ -437,7 +451,7 @@ class MistralConfig(OpenAIGPTConfig):
         ## 3. Handle name in message
         prepared_messages: Final = tuple(
             MistralConfig._handle_tool_call_message(m)
-            for m in MistralConfig._flattened_messages(replayed_messages, keeps_reasoning)
+            for m in self._flattened_messages(replayed_messages, keeps_reasoning)
         )
         new_messages: Final[list[AllMessageValues]] = [
             strip_none_values_from_message(MistralConfig._with_tool_reply_content(m))
@@ -661,7 +675,7 @@ class MistralConfig(OpenAIGPTConfig):
             tuple(
                 map(
                     MistralConfig._handle_tool_call_message,
-                    MistralConfig._flattened_messages(replayed_messages, self.accepts_reasoning(model)),
+                    self._flattened_messages(replayed_messages, self.accepts_reasoning(model)),
                 )
             )
         )
@@ -691,14 +705,11 @@ class MistralConfig(OpenAIGPTConfig):
             case _:
                 return False
 
-    @staticmethod
+    @classmethod
     def _flattened_messages(
-        messages: Sequence[AllMessageValues], keeps_reasoning: bool
+        cls, messages: Sequence[AllMessageValues], keeps_reasoning: bool
     ) -> tuple[AllMessageValues, ...]:
-        return tuple(
-            MistralConfig._handle_name_in_message(MistralConfig._with_flattened_content(m, keeps_reasoning))
-            for m in messages
-        )
+        return tuple(cls._handle_name_in_message(cls._with_flattened_content(m, keeps_reasoning)) for m in messages)
 
     @staticmethod
     def _sent_flags(messages: Sequence[AllMessageValues]) -> tuple[bool, ...]:
@@ -779,6 +790,12 @@ class MistralConfig(OpenAIGPTConfig):
                 )
             case _:
                 return message
+
+    @staticmethod
+    def _with_content_parts(message: AllMessageValues, parts: Sequence[object]) -> AllMessageValues:
+        return cast(  # cast-ok: every message role takes a list of content parts
+            AllMessageValues, {**message, "content": list(parts)}
+        )
 
     @classmethod
     def _handle_name_in_message(cls, message: AllMessageValues) -> AllMessageValues:
@@ -926,7 +943,7 @@ class MistralConfig(OpenAIGPTConfig):
                         for block in content:
                             if block.get("type") == "thinking":
                                 thinking_blocks = block.get("thinking", [])
-                                thinking_texts = []
+                                thinking_texts: list[str] = []
                                 for thinking_block in thinking_blocks:
                                     if thinking_block.get("type") == "text":
                                         thinking_texts.append(thinking_block.get("text", ""))
@@ -945,9 +962,9 @@ class MistralConfig(OpenAIGPTConfig):
         self,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
-        headers: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: dict[str, object],
+        headers: dict[str, object],
     ) -> dict:
         """
         Transform the overall request to be sent to the API.
@@ -955,25 +972,39 @@ class MistralConfig(OpenAIGPTConfig):
         Returns:
             dict: The transformed request. Sent as the body of the API call.
         """
+        routing: Final = _MISTRAL_REQUEST_ROUTING.validate_python(litellm_params)
         cache_key_params: Final = _MISTRAL_CACHE_KEY_PARAMS.validate_python(optional_params)
         withheld_params: Final = (
             ("client_metadata", "prompt_cache_key")
             if "prompt_cache_key" in cache_key_params
-            and self._prompt_cache_key_withheld(
-                model, cache_key_params["prompt_cache_key"], _MISTRAL_REQUEST_ROUTING.validate_python(litellm_params)
-            )
+            and self._prompt_cache_key_withheld(model, cache_key_params["prompt_cache_key"], routing)
             else ("client_metadata",)
         )
         upstream_params: Final = {key: value for key, value in optional_params.items() if key not in withheld_params}
 
         # Call parent transform_request which handles _transform_messages
-        return super().transform_request(
-            model=model,
-            messages=messages,
-            optional_params=upstream_params,
-            litellm_params=litellm_params,
-            headers=headers,
+        request: Final = cast(  # cast-ok: the parent builds a JSON request body keyed by str
+            dict[str, object],
+            super().transform_request(
+                model=model,
+                messages=messages,
+                optional_params=upstream_params,
+                litellm_params=litellm_params,
+                headers=headers,
+            ),
         )
+        sent_messages: Final = as_object_list(request.get("messages"))
+        if sent_messages is None or (litellm.drop_params is not True and routing.get("drop_params") is not True):
+            return request
+        return {**request, "messages": list(map(MistralConfig._with_accepted_fields, sent_messages))}
+
+    @staticmethod
+    def _with_accepted_fields(message: object) -> object:
+        fields: Final = as_str_mapping(message)
+        accepted: Final = _ACCEPTED_MESSAGE_FIELDS.get(str(fields.get("role"))) if fields is not None else None
+        if fields is None or accepted is None:
+            return message
+        return {name: value for name, value in fields.items() if name in accepted}
 
     def transform_response(
         self,
@@ -981,10 +1012,10 @@ class MistralConfig(OpenAIGPTConfig):
         raw_response: httpx.Response,
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
-        request_data: dict,
+        request_data: Mapping[str, object],
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
@@ -1059,12 +1090,12 @@ class MistralChatResponseIterator(OpenAIChatCompletionStreamingHandler):
     @staticmethod
     def _normalize_content_blocks(
         content_blocks: list[dict],
-    ) -> tuple[str | None, list[dict], str | None]:
+    ) -> tuple[str | None, list[dict[str, str]], str | None]:
         """
         Convert Mistral magistral content blocks into OpenAI-compatible content + thinking_blocks.
         """
         text_segments: Final[list[str]] = []
-        thinking_blocks: Final[list[dict]] = []
+        thinking_blocks: Final[list[dict[str, str]]] = []
         reasoning_segments: Final[list[str]] = []
 
         for block in content_blocks:

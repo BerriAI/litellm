@@ -1,20 +1,30 @@
 //! The proxy's inference endpoints as an axum [`Router`] a server mounts.
 //!
-//! Authentication, rate limiting and logging are the mounting server's layers; this crate
-//! routes a public model name through `litellm-router-core` (pick, retries, fallbacks, cooldowns)
-//! and runs the core route on each attempt.
+//! Authentication is the mounting server's layer; this crate routes a public model name through
+//! `litellm-router-core` (pick, retries, fallbacks, cooldowns), runs the core route on each
+//! attempt, and tells the host's callback hooks what happened to the call (`hooks.rs`).
 
+mod asked;
 mod caching;
 mod error;
+mod group_usage;
 mod headers;
+mod hooks;
 pub mod messages;
 mod model_restamp;
 mod ocr;
+mod rate_limited;
+pub mod record;
 mod request;
 pub mod routing;
+mod routing_cache;
+mod serve;
 mod stream_event;
 mod stream_hold;
 mod stream_outcome;
+#[cfg(test)]
+mod test_support;
+mod worker_outcomes;
 
 use std::{collections::HashMap, sync::Arc};
 
@@ -26,16 +36,21 @@ use litellm_inference_ocr::OcrRoute;
 use litellm_llms::base_llm::ocr::{handler::OcrClient, settings::OcrSettings};
 use litellm_secrets::source::SecretSource;
 
+pub use asked::call_type;
 pub use error::{BodyError, Ended, Error};
+pub use group_usage::{GroupLimits, group_limits};
 pub use headers::ExposedHeader;
-pub use request::{JsonObject, RequestId};
+pub use hooks::{CallHooks, CallType, HookError, Refusal, ServedCall};
+pub use litellm_redis_store::RouterTiers;
+pub use rate_limited::RateLimited;
+pub use request::{JsonObject, MAX_BODY_BYTES, RequestId};
 pub use routing::Host;
+pub use routing_cache::RoutingCache;
 
 pub struct Gateway<H> {
     host: H,
     cache: Option<Arc<dyn litellm_cache_response::ResponseCacheService>>,
-    /// Cooldowns, allowed-fails counters and per-minute usage of the deployments, in this process.
-    routing: Arc<litellm_router_core::InMemoryRouterCache>,
+    routing: Arc<RoutingCache>,
     /// How the messages route shapes a call to each deployment, by deployment id.
     shaping: HashMap<String, MessagesShaping>,
     pub messages: MessagesRoute,
@@ -54,9 +69,8 @@ impl<H: Host> Gateway<H> {
         }
     }
 
-    /// Cooldowns, allowed-fails counters and per-minute usage of the deployments, which the host
-    /// hands router-core.
-    pub fn routing(&self) -> &litellm_router_core::InMemoryRouterCache {
+    /// The deployments' routing state, which the host hands router-core.
+    pub fn routing(&self) -> &RoutingCache {
         &self.routing
     }
 
@@ -71,6 +85,7 @@ impl<H: Host> Gateway<H> {
         secrets: Arc<dyn SecretSource>,
         router: litellm_router_core::Router,
         shaping: HashMap<String, MessagesShaping>,
+        routing: RoutingCache,
         host: H,
     ) -> Result<Self, litellm_http::Error> {
         let provider = resources.pool.client(&http, ClientVariant::Provider)?;
@@ -78,7 +93,7 @@ impl<H: Host> Gateway<H> {
         Ok(Self {
             host,
             cache: None,
-            routing: Arc::default(),
+            routing: Arc::new(routing),
             shaping,
             messages: MessagesRoute::new(provider, auth.clone(), secrets.clone()),
             ocr: OcrRoute::new(OcrClient::new(
@@ -106,5 +121,10 @@ pub fn router<H: Host>(gateway: Arc<Gateway<H>>) -> Router {
             request::MAX_BODY_BYTES,
         ))
         .layer(headers::layer())
+        .layer(axum::middleware::from_fn_with_state(
+            gateway.clone(),
+            group_usage::told::<H>,
+        ))
+        .layer(axum::middleware::from_fn(record::scoped))
         .with_state(gateway)
 }

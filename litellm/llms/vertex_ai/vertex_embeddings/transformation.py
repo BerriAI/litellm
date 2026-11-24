@@ -99,7 +99,7 @@ class VertexAITextEmbeddingConfig(LiteLLMBaseModel):
     def get_supported_openai_params(self):
         return ["dimensions"]
 
-    def map_openai_params(self, non_default_params: dict, optional_params: dict, kwargs: dict):
+    def map_openai_params(self, non_default_params: Mapping[str, object], optional_params: dict, kwargs: dict):
         for param, value in non_default_params.items():
             if param == "dimensions":
                 optional_params["outputDimensionality"] = value
@@ -108,13 +108,13 @@ class VertexAITextEmbeddingConfig(LiteLLMBaseModel):
             optional_params["task_type"] = kwargs.pop("input_type")
         return optional_params, kwargs
 
-    def get_mapped_special_auth_params(self) -> dict:
+    def get_mapped_special_auth_params(self) -> dict[str, str]:
         """
         Common auth params across bedrock/vertex_ai/azure/watsonx
         """
         return {"project": "vertex_project", "region_name": "vertex_location"}
 
-    def map_special_auth_params(self, non_default_params: dict, optional_params: dict):
+    def map_special_auth_params(self, non_default_params: Mapping[str, object], optional_params: dict):
         mapped_params: Final = self.get_mapped_special_auth_params()
 
         for param, value in non_default_params.items():
@@ -177,7 +177,7 @@ class VertexAITextEmbeddingConfig(LiteLLMBaseModel):
         return vertex_request
 
     def _transform_openai_request_to_fine_tuned_embedding_request(
-        self, input: list | str, optional_params: dict, model: str
+        self, input: list[str] | str, optional_params: Mapping[str, object], model: str
     ) -> VertexEmbeddingRequest:
         """
         Transforms an openai request to a vertex fine-tuned embedding request.
@@ -266,7 +266,7 @@ class VertexAITextEmbeddingConfig(LiteLLMBaseModel):
 
         _predictions: Final = response["predictions"]
 
-        embedding_response: Final = []
+        embedding_response: Final[list[dict[str, object]]] = []
         input_tokens: int = 0
         for idx, element in enumerate(_predictions):
             embedding = element["embeddings"]
@@ -302,7 +302,7 @@ class VertexAITextEmbeddingConfig(LiteLLMBaseModel):
         """
         _predictions: Final = response["predictions"]
 
-        embedding_response: Final = []
+        embedding_response: Final[list[dict[str, object]]] = []
         # For fine-tuned models, we don't get token counts in the response
         input_tokens: Final = 0
 

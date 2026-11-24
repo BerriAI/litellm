@@ -34,7 +34,7 @@ class BaseRerankConfig(ABC):
         self,
         model: str,
         optional_rerank_params: dict,
-        headers: dict,
+        headers: dict[str, object],
         litellm_params: dict | None = None,
     ) -> dict:
         return {}
@@ -70,7 +70,7 @@ class BaseRerankConfig(ABC):
         return api_base or ""
 
     @abstractmethod
-    def get_supported_cohere_rerank_params(self, model: str) -> list:
+    def get_supported_cohere_rerank_params(self, model: str) -> list[str]:
         pass
 
     @abstractmethod

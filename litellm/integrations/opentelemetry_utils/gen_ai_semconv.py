@@ -29,7 +29,7 @@ Events:
   included only when content capture is enabled).
 """
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterable, Mapping
 from datetime import datetime
 from enum import Enum
 from typing import TYPE_CHECKING, Final, Protocol
@@ -44,6 +44,7 @@ if TYPE_CHECKING:
     from opentelemetry.trace import SpanContext
 
     from litellm.integrations.opentelemetry import OpenTelemetryConfig
+    from litellm.types.utils import StandardLoggingPayload
 
     Span = _Span
 else:
@@ -128,9 +129,9 @@ class OTELGenAISemconvMixin:
 
         def _capture_in_event(self) -> bool: ...
 
-        def _transform_messages_to_otel_semantic_conventions(self, messages: list[dict] | str) -> list[dict]: ...
+        def _transform_messages_to_otel_semantic_conventions(self, messages: Iterable[object] | str) -> list[dict]: ...
 
-        def _transform_choices_to_otel_semantic_conventions(self, choices: list[dict]) -> list[dict]: ...
+        def _transform_choices_to_otel_semantic_conventions(self, choices: Iterable[object]) -> list[dict]: ...
 
         def _to_ns(self, dt: datetime) -> int: ...
 
@@ -163,7 +164,7 @@ class OTELGenAISemconvMixin:
             case _:
                 return "chat"
 
-    def _set_semconv_request_attributes(self, span: Span, optional_params: dict) -> None:
+    def _set_semconv_request_attributes(self, span: Span, optional_params: Mapping[str, object]) -> None:
         """Add ``gen_ai.request.*`` span attributes from ``optional_params``.
 
         Covers the sampling params plus the conditionally-required
@@ -192,7 +193,9 @@ class OTELGenAISemconvMixin:
         if isinstance(n, int) and n > 1:
             self.safe_set_attribute(span=span, key="gen_ai.request.choice.count", value=n)
 
-    def _set_semconv_cache_token_attributes(self, span: Span, standard_logging_payload) -> None:
+    def _set_semconv_cache_token_attributes(
+        self, span: Span, standard_logging_payload: "StandardLoggingPayload | None"
+    ) -> None:
         """Add ``gen_ai.usage.cache_*.input_tokens`` from the usage object.
 
         No-op when the payload or the usage values are missing/zero.

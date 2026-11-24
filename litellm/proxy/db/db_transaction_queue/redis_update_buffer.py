@@ -80,6 +80,8 @@ else:
 BufferedSpendTransactions: TypeAlias = DBSpendUpdateTransactions | Mapping[str, BaseDailySpendTransaction]
 
 _SpendTransactionField: TypeAlias = Literal[
+    "app_group_list_transactions",
+    "app_group_customer_org_list_transactions",
     "app_list_transactions",
     "app_customer_org_list_transactions",
     "app_customer_member_list_transactions",
@@ -532,6 +534,11 @@ class RedisUpdateBuffer:
                 (
                     Litellm_EntityType.APP,
                     db_spend_update_transactions.get("app_list_transactions"),
+                ),
+                (Litellm_EntityType.APP_GROUP, db_spend_update_transactions.get("app_group_list_transactions")),
+                (
+                    Litellm_EntityType.APP_GROUP_CUSTOMER_ORG,
+                    db_spend_update_transactions.get("app_group_customer_org_list_transactions"),
                 ),
                 (
                     Litellm_EntityType.APP_CUSTOMER_ORG,
@@ -1140,6 +1147,12 @@ class RedisUpdateBuffer:
             **(
                 {
                     "app_list_transactions": _merged_entity_transactions(list_of_transactions, "app_list_transactions"),
+                    "app_group_list_transactions": _merged_entity_transactions(
+                        list_of_transactions, "app_group_list_transactions"
+                    ),
+                    "app_group_customer_org_list_transactions": _merged_entity_transactions(
+                        list_of_transactions, "app_group_customer_org_list_transactions"
+                    ),
                     "app_customer_org_list_transactions": _merged_entity_transactions(
                         list_of_transactions, "app_customer_org_list_transactions"
                     ),

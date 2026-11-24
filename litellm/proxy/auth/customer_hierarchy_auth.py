@@ -19,7 +19,14 @@ from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 import litellm
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
-from litellm.proxy._types import JWTIssuerConfig, LiteLLM_JWTAuth, ProxyErrorTypes, ProxyException
+from litellm.proxy._types import (
+    REQUIRED_CUSTOMER_HEADERS_ADAPTER,
+    REQUIRED_CUSTOMER_HEADERS_SETTING,
+    JWTIssuerConfig,
+    LiteLLM_JWTAuth,
+    ProxyErrorTypes,
+    ProxyException,
+)
 from litellm.proxy.auth.auth_checks import can_object_call_model
 from litellm.proxy.auth.auth_object_prefetch import AUTH_OBJECTS_TARGET
 from litellm.proxy.auth.customer_member_auto_create import ensure_customer_member, ensure_customer_organization
@@ -134,6 +141,19 @@ def _header_value(headers: Mapping[str, object] | None, header: str) -> str | No
         if name.lower() == lower_header and isinstance(value, str) and value.strip()
     )
     return values[0] if values else None
+
+
+def validate_required_customer_headers_metadata(metadata: Mapping[str, object] | None) -> None:
+    specified: Final = metadata.get(REQUIRED_CUSTOMER_HEADERS_SETTING) if metadata else None
+    if specified is None:
+        return
+    try:
+        REQUIRED_CUSTOMER_HEADERS_ADAPTER.validate_python(specified)
+    except ValidationError as error:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "metadata.required_customer_headers must be a list of valid HTTP header names."},
+        ) from error
 
 
 @dataclass(frozen=True, slots=True)
