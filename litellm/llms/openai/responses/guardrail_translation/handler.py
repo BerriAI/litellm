@@ -2719,7 +2719,9 @@ class OpenAIResponsesHandler(BaseTranslation):
         if not content:
             return
 
-        verbose_proxy_logger.debug("OpenAI Responses API: Processing output item: %s", output_item)
+        verbose_proxy_logger.debug(
+            "OpenAI Responses API: Processing output item %d with %d content parts", output_idx, len(content)
+        )
 
         for content_idx, content_item in enumerate(content):
             text_content = stream_item_field(content_item, _content_part_text_field(content_item))

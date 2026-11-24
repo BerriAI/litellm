@@ -2,6 +2,7 @@ import asyncio
 import base64
 import io
 import json
+import logging
 from collections.abc import Iterator, Sequence
 from typing import Final, cast
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
@@ -6375,6 +6376,20 @@ async def test_post_call_scans_and_sanitizes_a_chat_refusal():
 
     assert "4111-1111-1111-1111" in str(post.call_args)
     assert llm_response.choices[0].message.refusal == "I cannot help card [REDACTED]"
+
+
+@pytest.mark.asyncio
+async def test_post_call_debug_logs_leave_out_the_responses_text_it_scans(caplog: pytest.LogCaptureFixture):
+    guardrail: Final = _model_armor_post_call_guardrail(mask_response_content=True)
+    post: Final = AsyncMock(return_value=_armor_http_response({"filterMatchState": "NO_MATCH_FOUND"}))
+
+    with patch.object(guardrail.async_handler, "post", post), caplog.at_level(logging.DEBUG, logger="LiteLLM Proxy"):
+        await guardrail.async_post_call_success_hook(
+            data=dict(_POST_CALL_REQUEST), user_api_key_dict=UserAPIKeyAuth(), response=_responses_refusal_response()
+        )
+
+    assert caplog.records
+    assert "4111" not in caplog.text
 
 
 @pytest.mark.asyncio
