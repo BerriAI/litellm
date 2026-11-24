@@ -388,7 +388,7 @@ if MCP_AVAILABLE:
         )
         payload.oauth2_flow = "client_credentials" if has_m2m_shape else "authorization_code"
 
-    _VALID_MCP_REQUIRED_FIELDS: Final[frozenset] = frozenset(NewMCPServerRequest.model_fields)
+    _VALID_MCP_REQUIRED_FIELDS: Final[frozenset[str]] = frozenset(NewMCPServerRequest.model_fields)
 
     def _validate_mcp_required_fields(payload: NewMCPServerRequest) -> None:
         """Validate submission payload against admin-configured mcp_required_fields."""
@@ -1130,7 +1130,7 @@ if MCP_AVAILABLE:
         )
         from litellm.proxy.proxy_server import prisma_client
 
-        access_groups: Final = set()
+        access_groups: Final = set[str]()
 
         # Get from config-loaded servers
         for server in global_mcp_server_manager.config_mcp_servers.values():
@@ -2965,7 +2965,7 @@ if MCP_AVAILABLE:
 
     @catalog_operation(lambda: global_mcp_server_manager)
     async def _authorize_and_fetch_mcp_server(
-        prisma_client,
+        prisma_client: "PrismaClient",
         user_api_key_dict: UserAPIKeyAuth,
         server_id: str,
     ) -> LiteLLM_MCPServerTable:

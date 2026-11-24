@@ -385,8 +385,10 @@ class OpenAIChatCompletionResponseIterator(BaseModelResponseIterator):
             raise e
 
 
-_EXTRA_HEADERS_ADAPTER: Final = TypeAdapter(dict[str, str | InstanceOf[Omit]] | None)
-_EXTRA_QUERY_ADAPTER: Final = TypeAdapter(dict[str, object] | None)
+_EXTRA_HEADERS_ADAPTER: Final = TypeAdapter[dict[str, str | InstanceOf[Omit]] | None](
+    dict[str, str | InstanceOf[Omit]] | None
+)
+_EXTRA_QUERY_ADAPTER: Final = TypeAdapter[dict[str, object] | None](dict[str, object] | None)
 _NO_EXTRA_HEADERS: Final[Mapping[str, str | Omit]] = types.MappingProxyType({})
 _SDK_OPTION_KEYS: Final = frozenset(("extra_headers", "extra_query", "extra_body"))
 _CLIENT_API_KEY_ONLY_AUTH: Final[Mapping[str, Mapping[str, bool]]] = (
@@ -591,7 +593,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
     async def make_openai_chat_completion_request(
         self,
         openai_aclient: AsyncOpenAI,
-        data: dict,
+        data: Mapping[str, object],
         timeout: float | httpx.Timeout,
         logging_obj: LiteLLMLoggingObj,
     ) -> tuple[dict, BaseModel]:
@@ -647,7 +649,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
     def make_sync_openai_chat_completion_request(
         self,
         openai_client: OpenAI,
-        data: dict,
+        data: Mapping[str, object],
         timeout: float | httpx.Timeout,
         logging_obj: LiteLLMLoggingObj,
     ) -> tuple[dict, BaseModel]:
@@ -705,7 +707,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         response: object,
         model: str,
         messages: list[dict],
-        optional_params: dict,
+        optional_params: dict[str, object],
         logging_obj: LiteLLMLoggingObj,
         stream: bool,
         litellm_params: dict,
@@ -741,7 +743,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
         model: str,
-        stream_options: dict | None = None,
+        stream_options: Mapping[str, object] | None = None,
     ) -> CustomStreamWrapper:
         completion_stream: Final = MockResponseIterator(model_response=response)
         streaming_response: Final = CustomStreamWrapper(
@@ -762,15 +764,15 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         litellm_params: dict,
         logging_obj: LiteLLMLoggingObj,
         model: str | None = None,
-        messages: list | None = None,
-        print_verbose: Callable | None = None,
+        messages: list[AllMessageValues] | None = None,
+        print_verbose: Callable[[str], object] | None = None,
         api_key: str | None = None,
         api_base: str | None = None,
         api_version: str | None = None,
         dynamic_params: bool | None = None,
         azure_ad_token: str | None = None,
         acompletion: bool = False,
-        logger_fn=None,
+        logger_fn: object = None,
         headers: dict | None = None,
         custom_prompt_dict: dict = {},
         client=None,
@@ -1019,11 +1021,11 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         api_base: str | None = None,
         api_version: str | None = None,
         organization: str | None = None,
-        client=None,
+        client: OpenAI | AsyncOpenAI | None = None,
         max_retries=None,
-        headers=None,
+        headers: dict[str, object] | None = None,
         drop_params: bool | None = None,
-        stream_options: dict | None = None,
+        stream_options: Mapping[str, object] | None = None,
         fake_stream: bool = False,
         shared_session: Optional["ClientSession"] = None,
     ):
@@ -1132,7 +1134,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
 
     def streaming(
         self,
-        logging_obj,
+        logging_obj: LiteLLMLoggingObj,
         timeout: float | httpx.Timeout,
         data: dict,
         model: str,
@@ -1140,10 +1142,10 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         api_base: str | None = None,
         api_version: str | None = None,
         organization: str | None = None,
-        client=None,
+        client: OpenAI | AsyncOpenAI | None = None,
         max_retries=None,
-        headers=None,
-        stream_options: dict | None = None,
+        headers: dict[str, object] | None = None,
+        stream_options: Mapping[str, object] | None = None,
         litellm_params: Mapping[str, object] | None = None,
     ):
         data["stream"] = True
@@ -1192,7 +1194,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
     async def async_streaming(
         self,
         timeout: float | httpx.Timeout,
-        messages: list,
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         provider_config: BaseConfig,
@@ -1202,11 +1204,11 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         api_base: str | None = None,
         api_version: str | None = None,
         organization: str | None = None,
-        client=None,
+        client: OpenAI | AsyncOpenAI | None = None,
         max_retries=None,
-        headers=None,
+        headers: dict[str, object] | None = None,
         drop_params: bool | None = None,
-        stream_options: dict | None = None,
+        stream_options: Mapping[str, object] | None = None,
         shared_session: Optional["ClientSession"] = None,
     ):
         response = None
@@ -1310,7 +1312,9 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                             body=exception_body,
                         )
 
-    def get_stream_options(self, stream_options: dict | None, api_base: str | None) -> dict:
+    def get_stream_options(
+        self, stream_options: Mapping[str, object] | None, api_base: str | None
+    ) -> dict[str, object]:
         """
         Pass `stream_options` to the data dict for OpenAI requests
         """
@@ -1357,7 +1361,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
 
     async def aembedding(
         self,
-        input: list,
+        input: Sequence[object],
         data: dict,
         model_response: EmbeddingResponse,
         timeout: float,
@@ -1365,7 +1369,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         api_key: str | None = None,
         api_base: str | None = None,
         client: AsyncOpenAI | None = None,
-        max_retries=None,
+        max_retries: int | None = None,
         shared_session: Optional["ClientSession"] = None,
         litellm_params: Mapping[str, object] | None = None,
     ):
@@ -1438,13 +1442,13 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         model: str,
         input: list,
         timeout: float,
-        logging_obj,
+        logging_obj: LiteLLMLoggingObj,
         model_response: EmbeddingResponse,
         optional_params: dict,
         api_key: str | None = None,
         api_base: str | None = None,
         client=None,
-        aembedding=None,
+        aembedding: bool | None = None,
         max_retries: int | None = None,
         shared_session: Optional["ClientSession"] = None,
         litellm_params: Mapping[str, object] | None = None,
@@ -1537,8 +1541,8 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         logging_obj: LiteLLMLoggingObj,
         api_key: str | None = None,
         api_base: str | None = None,
-        client=None,
-        max_retries=None,
+        client: OpenAI | AsyncOpenAI | None = None,
+        max_retries: int | None = None,
         organization: str | None = None,
         headers: dict | None = None,
         litellm_params: Mapping[str, object] | None = None,
@@ -1604,8 +1608,8 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         api_key: str | None = None,
         api_base: str | None = None,
         model_response: ImageResponse | None = None,
-        client=None,
-        aimg_generation=None,
+        client: OpenAI | AsyncOpenAI | None = None,
+        aimg_generation: bool | None = None,
         organization: str | None = None,
         headers: dict | None = None,
         litellm_params: Mapping[str, object] | None = None,
@@ -1715,7 +1719,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         timeout: float | httpx.Timeout,
         logging_obj: LiteLLMLoggingObj,
         aspeech: bool | None = None,
-        client=None,
+        client: OpenAI | AsyncOpenAI | None = None,
         shared_session: Optional["ClientSession"] = None,
         stream: bool = False,
         litellm_params: Mapping[str, object] | None = None,
@@ -1783,7 +1787,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         max_retries: int,
         timeout: float | httpx.Timeout,
         logging_obj: LiteLLMLoggingObj,
-        client=None,
+        client: OpenAI | AsyncOpenAI | None = None,
         shared_session: Optional["ClientSession"] = None,
         stream: bool = False,
         litellm_params: Mapping[str, object] | None = None,
@@ -2568,7 +2572,7 @@ class OpenAIAssistantsAPI(BaseLLM):
         max_retries: int | None,
         organization: str | None,
         client=None,
-        aget_assistants=None,
+        aget_assistants: bool | None = None,
         order: str | None = "desc",
         limit: int | None = 20,
         before: str | None = None,
@@ -2646,7 +2650,7 @@ class OpenAIAssistantsAPI(BaseLLM):
         organization: str | None,
         create_assistant_data: dict,
         client=None,
-        async_create_assistants=None,
+        async_create_assistants: bool | None = None,
         *,
         litellm_params: Mapping[str, object] | None = None,
     ):
@@ -2710,7 +2714,7 @@ class OpenAIAssistantsAPI(BaseLLM):
         organization: str | None,
         assistant_id: str,
         client=None,
-        async_delete_assistants=None,
+        async_delete_assistants: bool | None = None,
         *,
         litellm_params: Mapping[str, object] | None = None,
     ):
@@ -2934,7 +2938,7 @@ class OpenAIAssistantsAPI(BaseLLM):
         max_retries: int | None,
         organization: str | None,
         client=None,
-        aget_messages=None,
+        aget_messages: bool | None = None,
         *,
         litellm_params: Mapping[str, object] | None = None,
     ):
@@ -2967,7 +2971,7 @@ class OpenAIAssistantsAPI(BaseLLM):
 
     async def async_create_thread(
         self,
-        metadata: dict | None,
+        metadata: Mapping[str, object] | None,
         api_key: str | None,
         api_base: str | None,
         timeout: float | httpx.Timeout,
@@ -3008,7 +3012,7 @@ class OpenAIAssistantsAPI(BaseLLM):
     @overload
     def create_thread(
         self, 
-        metadata: dict | None,
+        metadata: Mapping[str, object] | None,
         api_key: str | None,
         api_base: str | None,
         timeout: float | httpx.Timeout,
@@ -3025,7 +3029,7 @@ class OpenAIAssistantsAPI(BaseLLM):
     @overload
     def create_thread(
         self, 
-        metadata: dict | None,
+        metadata: Mapping[str, object] | None,
         api_key: str | None,
         api_base: str | None,
         timeout: float | httpx.Timeout,
@@ -3043,7 +3047,7 @@ class OpenAIAssistantsAPI(BaseLLM):
 
     def create_thread(
         self,
-        metadata: dict | None,
+        metadata: Mapping[str, object] | None,
         api_key: str | None,
         api_base: str | None,
         timeout: float | httpx.Timeout,
@@ -3051,7 +3055,7 @@ class OpenAIAssistantsAPI(BaseLLM):
         organization: str | None,
         messages: Iterable[OpenAICreateThreadParamsMessage] | None,
         client=None,
-        acreate_thread=None,
+        acreate_thread: bool | None = None,
         *,
         litellm_params: Mapping[str, object] | None = None,
     ):
@@ -3178,7 +3182,7 @@ class OpenAIAssistantsAPI(BaseLLM):
         max_retries: int | None,
         organization: str | None,
         client=None,
-        aget_thread=None,
+        aget_thread: bool | None = None,
         *,
         litellm_params: Mapping[str, object] | None = None,
     ):
@@ -3265,7 +3269,7 @@ class OpenAIAssistantsAPI(BaseLLM):
         assistant_id: str,
         additional_instructions: str | None,
         instructions: str | None,
-        metadata: dict | None,
+        metadata: dict[str, str] | None,
         model: str | None,
         tools: Iterable[AssistantToolParam] | None,
         event_handler: AssistantEventHandler | None,
@@ -3335,7 +3339,7 @@ class OpenAIAssistantsAPI(BaseLLM):
         assistant_id: str,
         additional_instructions: str | None,
         instructions: str | None,
-        metadata: dict | None,
+        metadata: dict[str, str] | None,
         model: str | None,
         stream: bool | None,
         tools: Iterable[AssistantToolParam] | None,
@@ -3359,7 +3363,7 @@ class OpenAIAssistantsAPI(BaseLLM):
         assistant_id: str,
         additional_instructions: str | None,
         instructions: str | None,
-        metadata: dict | None,
+        metadata: dict[str, str] | None,
         model: str | None,
         stream: bool | None,
         tools: Iterable[AssistantToolParam] | None,
@@ -3394,7 +3398,7 @@ class OpenAIAssistantsAPI(BaseLLM):
         max_retries: int | None,
         organization: str | None,
         client=None,
-        arun_thread=None,
+        arun_thread: bool | None = None,
         event_handler: AssistantEventHandler | None = None,
         *,
         litellm_params: Mapping[str, object] | None = None,

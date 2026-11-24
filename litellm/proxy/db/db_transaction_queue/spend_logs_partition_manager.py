@@ -199,11 +199,8 @@ class SpendLogsPartitionManager:
         """
         Run one DDL statement under a Postgres statement and lock timeout.
 
-        Partition DDL takes an ACCESS EXCLUSIVE lock, so an unbounded statement
-        queues behind any long-running reader for as long as that reader lives,
-        and the caller's run budget cannot cut it short. lock_timeout bounds the
-        wait for the lock and statement_timeout bounds the work itself, so a
-        partition this run cannot get is simply left for the next one.
+        lock_timeout bounds the wait for DDL locks, and statement_timeout bounds
+        the work itself, including validation of the DEFAULT partition on attach.
         """
         async with (
             db_span("create_spend_log_partition", "LiteLLM_SpendLogs"),
@@ -218,8 +215,7 @@ class SpendLogsPartitionManager:
     ) -> list[str]:
         """
         Ensure the current and upcoming partitions exist, returning the names
-        now present. CREATE TABLE IF NOT EXISTS is a no-op for partitions that
-        already exist, so this list is "ensured present", not "newly created".
+        now present, including partitions that were already attached.
         """
         ensured: Final[list[str]] = []
         for name, lower, upper in upcoming_partitions(
@@ -232,14 +228,51 @@ class SpendLogsPartitionManager:
             try:
                 await self._execute_bounded_ddl(
                     prisma_client,
-                    f'CREATE TABLE IF NOT EXISTS "{name}" '
-                    f'PARTITION OF "{SPEND_LOGS_TABLE}" '
-                    f"FOR VALUES FROM ('{lower.isoformat()}') TO ('{upper.isoformat()}')",
+                    f"""
+                    DO $$
+                    DECLARE
+                        default_partition pg_catalog.regclass;
+                    BEGIN
+                        IF NOT EXISTS (
+                            SELECT 1 FROM pg_catalog.pg_inherits
+                            WHERE inhparent = '"{SPEND_LOGS_TABLE}"'::regclass
+                              AND inhrelid = pg_catalog.to_regclass('"{name}"')
+                        ) THEN
+                            LOCK TABLE ONLY "{SPEND_LOGS_TABLE}" IN SHARE UPDATE EXCLUSIVE MODE;
+                            IF NOT EXISTS (
+                                SELECT 1 FROM pg_catalog.pg_inherits
+                                WHERE inhparent = '"{SPEND_LOGS_TABLE}"'::regclass
+                                  AND inhrelid = pg_catalog.to_regclass('"{name}"')
+                            ) THEN
+                                SELECT partdefid::pg_catalog.regclass INTO default_partition
+                                FROM pg_catalog.pg_partitioned_table
+                                WHERE partrelid = '"{SPEND_LOGS_TABLE}"'::regclass AND partdefid <> 0;
+                                IF default_partition IS NOT NULL THEN
+                                    EXECUTE pg_catalog.format(
+                                        'LOCK TABLE ONLY %s IN ACCESS EXCLUSIVE MODE', default_partition
+                                    );
+                                END IF;
+                                CREATE TABLE "{name}" (LIKE "{SPEND_LOGS_TABLE}" INCLUDING ALL);
+                                ALTER TABLE "{SPEND_LOGS_TABLE}" ATTACH PARTITION "{name}"
+                                    FOR VALUES FROM ('{lower.isoformat()}') TO ('{upper.isoformat()}');
+                            END IF;
+                        END IF;
+                    END
+                    $$;
+                    """,
                     budget_ms,
                 )
                 ensured.append(name)
             except Exception as e:
-                verbose_proxy_logger.warning("Failed to ensure spend-log partition %s: %s", name, e)
+                verbose_proxy_logger.error(
+                    "Failed to attach spend-log partition %s for [%s, %s): %s. "
+                    "If validation of the DEFAULT partition is failing, move any rows in this range out of DEFAULT "
+                    "and add a validated CHECK constraint excluding this range to avoid scanning it on attach.",
+                    name,
+                    lower,
+                    upper,
+                    e,
+                )
         return ensured
 
     async def _list_partitions(
