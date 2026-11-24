@@ -17,7 +17,7 @@ from litellm.completion_extras.litellm_responses_transformation.transformation i
     replayed_tool_search_tools,
     without_tool_search_items_loading,
 )
-from litellm.exceptions import GuardrailRaisedException
+from litellm.exceptions import APIError, GuardrailRaisedException
 from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,
@@ -1724,9 +1724,14 @@ class ToolPermissionGuardrail(CustomGuardrail):
         async for chunk in response:
             all_chunks.append(chunk)
 
-        assembled_model_response: Final[ModelResponse | TextCompletionResponse | None] = (
-            stream_chunk_builder(chunks=all_chunks) if not is_raw_sse_stream(all_chunks) else None
-        )
+        try:
+            assembled_model_response: Final[ModelResponse | TextCompletionResponse | None] = (
+                stream_chunk_builder(chunks=all_chunks) if not is_raw_sse_stream(all_chunks) else None
+            )
+        except APIError as error:
+            if not any(isinstance(chunk, (str, bytes)) for chunk in all_chunks):
+                raise
+            raise self._unverifiable_stream_error() from error
         if isinstance(assembled_model_response, ModelResponse):
             denied_tools = self._check_assembled_stream(
                 assembled_model_response, self._returned_call_names(request_data)
@@ -1743,6 +1748,15 @@ class ToolPermissionGuardrail(CustomGuardrail):
         for sse_chunk in self._raw_stream_to_deliver(all_chunks, request_data, user_api_key_dict.request_route):
             yield sse_chunk
 
+    def _unverifiable_stream_error(self) -> GuardrailRaisedException:
+        return GuardrailRaisedException(
+            guardrail_name=self.guardrail_name,
+            message=(
+                "Streamed response could not be verified for tool permissions "
+                "(not a parseable Anthropic SSE stream), blocking it"
+            ),
+        )
+
     def _raw_stream_to_deliver(
         self, source_chunks: Sequence[object], request_data: Mapping[str, object], route: str | None
     ) -> Sequence[object]:
@@ -1754,13 +1768,7 @@ class ToolPermissionGuardrail(CustomGuardrail):
         )
         if anthropic_response is None:
             if is_raw_sse_stream(source_chunks) and not is_sse_error_stream(source_chunks):
-                raise GuardrailRaisedException(
-                    guardrail_name=self.guardrail_name,
-                    message=(
-                        "Streamed response could not be verified for tool permissions "
-                        "(not a parseable Anthropic SSE stream), blocking it"
-                    ),
-                )
+                raise self._unverifiable_stream_error()
             return source_chunks
         return self._anthropic_stream_to_deliver(
             anthropic_response, source_chunks, self._returned_call_names(request_data)
