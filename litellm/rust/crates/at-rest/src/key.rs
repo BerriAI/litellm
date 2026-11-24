@@ -8,7 +8,7 @@ use litellm_secret_value::SecretValue;
 use veil::Redact;
 
 use crate::approved::{self, Key};
-use crate::{DecryptError, EncryptError, SaltKeyTooShort, secretbox};
+use crate::{DecryptError, EncryptError, KeyError, secretbox};
 
 const V2_GCM_PREFIX: &str = "v2:gcm:";
 const FIPS_KEY_LABEL: &[u8] = b"litellm-at-rest:aes-256-gcm:";
@@ -31,6 +31,8 @@ pub enum KeyDerivation {
     Sha256,
     /// KBKDF counter-mode HMAC-SHA256 of the salt key under the label `litellm-at-rest:aes-256-gcm:`, Python's
     /// `_fips_at_rest_key` with `fips_mode` on. Reads and writes only `v2:gcm:` values
+    ///
+    /// Format compatibility with values Python wrote in fips_mode, not FIPS-validated crypto
     FipsKbkdf,
 }
 
@@ -65,26 +67,16 @@ impl<'a> Plaintext<'a> {
 }
 
 impl AtRestKey {
-    /// The key with `fips_mode` off, the same as `derive(salt_key, KeyDerivation::Sha256)`
-    pub fn from_salt_key(salt_key: &SecretValue) -> Self {
-        Self {
-            key: approved::sha256(salt_key.expose().as_bytes()),
-            derivation: KeyDerivation::Sha256,
-        }
-    }
-
-    /// Only `KeyDerivation::FipsKbkdf` can fail, when the salt key is under 14 bytes of UTF-8
-    pub fn derive(
-        salt_key: &SecretValue,
-        derivation: KeyDerivation,
-    ) -> Result<Self, SaltKeyTooShort> {
+    /// Fails for `KeyDerivation::FipsKbkdf` when the salt key is under 14 bytes of UTF-8, and always in the `fips`
+    /// build until a validated module is wired in
+    pub fn derive(salt_key: &SecretValue, derivation: KeyDerivation) -> Result<Self, KeyError> {
         let bytes = salt_key.expose().as_bytes();
         let key = match derivation {
-            KeyDerivation::Sha256 => approved::sha256(bytes),
+            KeyDerivation::Sha256 => approved::sha256(bytes)?,
             KeyDerivation::FipsKbkdf if bytes.len() < FIPS_MIN_SALT_KEY_BYTES => {
-                return Err(SaltKeyTooShort);
+                return Err(KeyError::SaltKeyTooShort);
             }
-            KeyDerivation::FipsKbkdf => approved::kbkdf_hmac_sha256(bytes, FIPS_KEY_LABEL, b""),
+            KeyDerivation::FipsKbkdf => approved::kbkdf_hmac_sha256(bytes, FIPS_KEY_LABEL, b"")?,
         };
         Ok(Self { key, derivation })
     }
@@ -133,7 +125,7 @@ fn decode(text: &str) -> Result<Vec<u8>, DecryptError> {
         .map_err(DecryptError::NotBase64)
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(feature = "fips")))]
 mod tests {
     use std::sync::LazyLock;
 
@@ -144,7 +136,7 @@ mod tests {
     use serde::Deserialize;
 
     use super::{Algorithm, AtRestKey, KeyDerivation, Plaintext, V2_GCM_PREFIX};
-    use crate::{DecryptError, EncryptError, SaltKeyTooShort, approved};
+    use crate::{DecryptError, EncryptError, KeyError, approved};
 
     #[derive(Deserialize)]
     struct PythonFixture {
@@ -195,7 +187,12 @@ mod tests {
 
     #[fixture]
     fn key() -> AtRestKey {
-        AtRestKey::from_salt_key(&SecretValue::new(PYTHON.salt_key.as_str()))
+        sha256_key(&PYTHON.salt_key)
+    }
+
+    fn sha256_key(salt_key: &str) -> AtRestKey {
+        AtRestKey::derive(&SecretValue::new(salt_key), KeyDerivation::Sha256)
+            .expect("sha256 takes any salt key")
     }
 
     #[fixture]
@@ -259,7 +256,7 @@ mod tests {
         assert_reads_as_python(&key, python_case(name));
     }
 
-    #[cfg(all(feature = "xsalsa20", not(feature = "fips")))]
+    #[cfg(feature = "xsalsa20")]
     #[rstest]
     #[case::legacy_api_key("legacy_api_key")]
     #[case::legacy_empty("legacy_empty")]
@@ -291,20 +288,11 @@ mod tests {
     #[case::gcm_api_key("gcm_api_key")]
     #[case::gcm_empty("gcm_empty")]
     #[case::gcm_unicode("gcm_unicode")]
-    #[cfg_attr(
-        all(feature = "xsalsa20", not(feature = "fips")),
-        case::legacy_api_key("legacy_api_key")
-    )]
-    #[cfg_attr(
-        all(feature = "xsalsa20", not(feature = "fips")),
-        case::legacy_empty("legacy_empty")
-    )]
-    #[cfg_attr(
-        all(feature = "xsalsa20", not(feature = "fips")),
-        case::legacy_unicode("legacy_unicode")
-    )]
+    #[cfg_attr(feature = "xsalsa20", case::legacy_api_key("legacy_api_key"))]
+    #[cfg_attr(feature = "xsalsa20", case::legacy_empty("legacy_empty"))]
+    #[cfg_attr(feature = "xsalsa20", case::legacy_unicode("legacy_unicode"))]
     fn decrypts_the_values_python_verified(#[case] name: &str) {
-        let key = AtRestKey::from_salt_key(&SecretValue::new(RUST.salt_key.as_str()));
+        let key = sha256_key(&RUST.salt_key);
         let case = rust_case(&RUST, name);
 
         assert_eq!(
@@ -346,7 +334,7 @@ mod tests {
         assert_eq!(key.decrypt(&stored).as_deref(), Ok(plaintext));
     }
 
-    #[cfg(all(feature = "xsalsa20", not(feature = "fips")))]
+    #[cfg(feature = "xsalsa20")]
     #[rstest]
     #[case::api_key("sk-proj-credential-value")]
     #[case::empty("")]
@@ -360,14 +348,14 @@ mod tests {
     }
 
     #[rstest]
-    #[case::too_short("sk-thirteen-b", Some(SaltKeyTooShort))]
+    #[case::too_short("sk-thirteen-b", Some(KeyError::SaltKeyTooShort))]
     #[case::fourteen_bytes("sk-fourteen-by", None)]
     #[case::fourteen_bytes_in_seven_characters("ééééééé", None)]
-    #[case::thirteen_bytes_in_seven_characters("éééééée", Some(SaltKeyTooShort))]
-    #[case::empty("", Some(SaltKeyTooShort))]
+    #[case::thirteen_bytes_in_seven_characters("éééééée", Some(KeyError::SaltKeyTooShort))]
+    #[case::empty("", Some(KeyError::SaltKeyTooShort))]
     fn fips_mode_needs_a_salt_key_of_at_least_fourteen_bytes(
         #[case] salt_key: &str,
-        #[case] expected: Option<SaltKeyTooShort>,
+        #[case] expected: Option<KeyError>,
     ) {
         assert_eq!(
             AtRestKey::derive(&SecretValue::new(salt_key), KeyDerivation::FipsKbkdf).err(),
@@ -376,22 +364,18 @@ mod tests {
     }
 
     #[rstest]
-    fn the_sha256_derivation_is_the_salt_key_one_and_takes_any_length(key: AtRestKey) {
-        let derived = AtRestKey::derive(
-            &SecretValue::new(PYTHON.salt_key.as_str()),
-            KeyDerivation::Sha256,
-        )
-        .expect("sha256 takes any salt key");
-        let short = AtRestKey::derive(&SecretValue::new("short"), KeyDerivation::Sha256);
+    #[case::empty("")]
+    #[case::thirteen_bytes("sk-thirteen-b")]
+    fn the_sha256_derivation_takes_a_salt_key_of_any_length(#[case] salt_key: &str) {
+        let key = sha256_key(salt_key);
         let stored = key
             .encrypt("sk-proj-credential-value", Algorithm::Aes256Gcm)
             .expect("encrypts");
 
         assert_eq!(
-            derived.decrypt(&stored).as_deref(),
+            key.decrypt(&stored).as_deref(),
             Ok("sk-proj-credential-value")
         );
-        assert!(short.is_ok());
     }
 
     #[rstest]
@@ -418,7 +402,7 @@ mod tests {
 
     #[rstest]
     fn a_fips_value_is_not_a_ciphertext_under_the_sha256_key() {
-        let key = AtRestKey::from_salt_key(&SecretValue::new(PYTHON_FIPS.salt_key.as_str()));
+        let key = sha256_key(&PYTHON_FIPS.salt_key);
 
         assert_eq!(
             key.decrypt(&python_fips_case("fips_api_key").stored),
@@ -426,7 +410,7 @@ mod tests {
         );
     }
 
-    #[cfg(not(all(feature = "xsalsa20", not(feature = "fips"))))]
+    #[cfg(not(feature = "xsalsa20"))]
     #[rstest]
     fn without_xsalsa20_nacl_values_are_unreadable_even_with_fips_mode_off(key: AtRestKey) {
         assert_eq!(
@@ -440,10 +424,7 @@ mod tests {
     }
 
     #[rstest]
-    #[cfg_attr(
-        all(feature = "xsalsa20", not(feature = "fips")),
-        case::legacy(Algorithm::XSalsa20Poly1305, false)
-    )]
+    #[cfg_attr(feature = "xsalsa20", case::legacy(Algorithm::XSalsa20Poly1305, false))]
     #[case::gcm(Algorithm::Aes256Gcm, true)]
     fn only_gcm_values_carry_the_version_prefix(
         key: AtRestKey,
@@ -458,10 +439,7 @@ mod tests {
     }
 
     #[rstest]
-    #[cfg_attr(
-        all(feature = "xsalsa20", not(feature = "fips")),
-        case::legacy(key(), Algorithm::XSalsa20Poly1305)
-    )]
+    #[cfg_attr(feature = "xsalsa20", case::legacy(key(), Algorithm::XSalsa20Poly1305))]
     #[case::gcm(key(), Algorithm::Aes256Gcm)]
     #[case::fips_gcm(fips_key(), Algorithm::Aes256Gcm)]
     fn every_encryption_draws_a_fresh_nonce(#[case] key: AtRestKey, #[case] algorithm: Algorithm) {
@@ -477,11 +455,11 @@ mod tests {
 
     #[rstest]
     #[cfg_attr(
-        all(feature = "xsalsa20", not(feature = "fips")),
+        feature = "xsalsa20",
         case::legacy_wrong_key(python_case("legacy_wrong_key").stored.clone())
     )]
     #[cfg_attr(
-        all(feature = "xsalsa20", not(feature = "fips")),
+        feature = "xsalsa20",
         case::legacy_shorter_than_its_nonce(URL_SAFE.encode([0u8; 12]))
     )]
     #[case::gcm_wrong_key(python_case("gcm_wrong_key").stored.clone())]
@@ -549,5 +527,41 @@ mod tests {
 
         assert!(!debug.contains("credential-value"));
         assert!(debug.contains("[REDACTED]"));
+    }
+}
+
+#[cfg(all(test, feature = "fips"))]
+mod fips_build_tests {
+    use litellm_secret_value::SecretValue;
+    use rstest::rstest;
+
+    use super::{AtRestKey, KeyDerivation};
+    use crate::KeyError;
+
+    #[rstest]
+    #[case::sha256(
+        KeyDerivation::Sha256,
+        "sk-a-long-enough-salt-key",
+        KeyError::NoValidatedBackend
+    )]
+    #[case::fips_kbkdf(
+        KeyDerivation::FipsKbkdf,
+        "sk-a-long-enough-salt-key",
+        KeyError::NoValidatedBackend
+    )]
+    #[case::fips_kbkdf_too_short(
+        KeyDerivation::FipsKbkdf,
+        "sk-thirteen-b",
+        KeyError::SaltKeyTooShort
+    )]
+    fn no_key_can_be_derived_without_a_validated_module(
+        #[case] derivation: KeyDerivation,
+        #[case] salt_key: &str,
+        #[case] expected: KeyError,
+    ) {
+        assert_eq!(
+            AtRestKey::derive(&SecretValue::new(salt_key), derivation).err(),
+            Some(expected)
+        );
     }
 }

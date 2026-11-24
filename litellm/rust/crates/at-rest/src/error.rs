@@ -11,6 +11,8 @@ pub enum DecryptError {
     NotGcmInFipsMode,
     #[error("this build has no XSalsa20-Poly1305, so NaCl values cannot be read")]
     XSalsa20NotBuilt,
+    #[error("the fips build has no validated module to run AES-256-GCM")]
+    NoValidatedBackend,
 }
 
 /// Why a value could not be encrypted
@@ -24,10 +26,16 @@ pub enum EncryptError {
     XSalsa20InFipsMode,
     #[error("this build has no XSalsa20-Poly1305")]
     XSalsa20NotBuilt,
+    #[error("the fips build has no validated module to run AES-256-GCM or draw its nonce")]
+    NoValidatedBackend,
 }
 
-/// The salt key is under the 112 bits (14 bytes of UTF-8) fips_mode derives its keys from, Python's
-/// `key_derivation_key` returning None
+/// Why the salt key could not become a cipher key
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
-#[error("with fips_mode on, the salt key must be at least 112 bits (14 bytes)")]
-pub struct SaltKeyTooShort;
+pub enum KeyError {
+    /// Python's `key_derivation_key` returning None
+    #[error("with fips_mode on, the salt key must be at least 112 bits (14 bytes)")]
+    SaltKeyTooShort,
+    #[error("the fips build has no validated module to derive the key")]
+    NoValidatedBackend,
+}

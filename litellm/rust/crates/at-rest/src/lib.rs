@@ -7,9 +7,10 @@ mod error;
 mod key;
 mod secretbox;
 
-pub use error::{DecryptError, EncryptError, SaltKeyTooShort};
+pub use error::{DecryptError, EncryptError, KeyError};
 pub use key::{Algorithm, AtRestKey, KeyDerivation, Plaintext};
 
+#[cfg(not(feature = "fips"))]
 fn random_nonce<const N: usize>() -> Result<[u8; N], EncryptError> {
     let mut nonce = [0u8; N];
     getrandom::fill(&mut nonce).map_err(EncryptError::Nonce)?;
