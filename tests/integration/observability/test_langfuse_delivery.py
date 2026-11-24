@@ -1613,11 +1613,74 @@ def test_refused_request_keeps_the_prompt_out_of_the_generation_model_parameters
         attributes: Final = spans[0].attributes
         assert _attribute(attributes, "langfuse.observation.level") == "ERROR"
         assert canary not in str(_attribute(attributes, "langfuse.observation.model.parameters"))
-        prompt_is_logged_as_input: Final = rejection != "rate_limited" and endpoint in (
-            "/v1/chat/completions",
-            "/v1/messages",
+        assert (canary in str(_attribute(attributes, "langfuse.observation.input"))) == (rejection != "rate_limited")
+
+
+def _refused_prompt(shape: str, canary: str) -> tuple[str, dict[str, JsonValue]]:
+    chat_messages: Final[JsonValue] = [{"role": "user", "content": canary}]
+    return {
+        "chat": ("/v1/chat/completions", {"messages": chat_messages}),
+        "anthropic_messages": ("/v1/messages", {"max_tokens": 16, "messages": chat_messages}),
+        "responses_text": ("/v1/responses", {"input": canary}),
+        "responses_items": (
+            "/v1/responses",
+            {"input": [{"role": "user", "content": [{"type": "input_text", "text": canary}]}]},
+        ),
+        "completions_text": ("/v1/completions", {"prompt": canary}),
+        "completions_list": ("/v1/completions", {"prompt": [canary]}),
+        "embeddings_text": ("/v1/embeddings", {"input": canary}),
+        "embeddings_list": ("/v1/embeddings", {"input": [canary]}),
+    }[shape]
+
+
+@pytest.mark.parametrize(
+    "shape",
+    (
+        "chat",
+        "anthropic_messages",
+        "responses_text",
+        "responses_items",
+        "completions_text",
+        "completions_list",
+        "embeddings_text",
+        "embeddings_list",
+    ),
+)
+@pytest.mark.parametrize("rejection", ("unknown_key", "model_not_allowed", "budget_exceeded"))
+def test_refused_request_logs_the_prompt_as_the_generation_input(
+    audit_rig: _AuditRig, shape: str, rejection: str
+) -> None:
+    marker: Final = "refused" + uuid.uuid4().hex
+    provider_secret: Final = "synthetic-provider-secret-" + marker
+    canary: Final = "prompt-" + uuid.uuid4().hex
+    call_id: Final = str(uuid.uuid4())
+    targets: Final[list[str]] = []  # mutable-ok: the upstream records every hit
+
+    with wire_server(_audit_upstream(provider_secret, marker, targets)) as provider:
+        model: Final = audit_rig.scenario.model(api_base=provider.url + "/v1", api_key=provider_secret)
+        endpoint, prompt = _refused_prompt(shape, canary)
+        refused: Final = audit_rig.candidate.request(
+            "POST",
+            endpoint,
+            {"model": model, **prompt, "litellm_call_id": call_id},
+            key=_refused_key(rejection, audit_rig, model),
         )
-        assert (canary in str(_attribute(attributes, "langfuse.observation.input"))) == prompt_is_logged_as_input
+        assert 400 <= refused.status_code < 500, refused.text
+        assert targets == [], targets
+        received: Final[list[Request]] = []  # mutable-ok: drain() consumes the queue, later polls keep earlier ones
+
+        def exported() -> tuple[Span, ...]:
+            received.extend(audit_rig.destination.drain())
+            return tuple(
+                span
+                for span in _spans(received)
+                if _attribute(span.attributes, "langfuse.observation.metadata.litellm_call_id") == call_id
+            )
+
+        spans: Final = eventually(exported, lambda values: len(values) == 1, seconds=20)
+        attributes: Final = spans[0].attributes
+        assert _attribute(attributes, "langfuse.observation.level") == "ERROR"
+        assert canary in str(_attribute(attributes, "langfuse.observation.input"))
 
 
 @pytest.mark.parametrize(("endpoint", "kind", "expected_target"), _AUDIT_ENDPOINTS[:2])
