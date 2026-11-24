@@ -164,7 +164,7 @@ class NvidiaNimRerankConfig(BaseRerankConfig):
         api_key: str | None = None,
         optional_params: Mapping[str, object] | None = None,
         litellm_params: Mapping[str, object] | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Validate that the Nvidia NIM API key is present.
         """
@@ -191,7 +191,7 @@ class NvidiaNimRerankConfig(BaseRerankConfig):
         self,
         model: str,
         optional_rerank_params: dict,
-        headers: dict,
+        headers: dict[str, object],
         litellm_params: dict | None = None,
     ) -> dict[str, object]:
         """
@@ -353,7 +353,9 @@ class NvidiaNimRerankConfig(BaseRerankConfig):
             meta=meta,
         )
 
-    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: dict[str, object] | httpx.Headers
+    ) -> BaseLLMException:
         return BaseLLMException(
             status_code=status_code,
             message=error_message,

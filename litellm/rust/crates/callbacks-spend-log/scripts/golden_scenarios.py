@@ -32,6 +32,7 @@ _CHAT_RESPONSE: Final = {
                 "role": "assistant",
                 "content": "secret answer",
                 "reasoning_content": "secret thought",
+                "refusal": "secret refusal",
                 "thinking_blocks": [{"type": "thinking", "thinking": "t"}],
                 "audio": {"data": "a"},
                 "images": [{"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}}],

@@ -1462,7 +1462,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
         return transformed_config
 
-    def _extract_google_maps_retrieval_config(self, google_maps_config: dict) -> tuple[dict, dict | None]:
+    def _extract_google_maps_retrieval_config(
+        self, google_maps_config: Mapping[str, object]
+    ) -> tuple[dict[str, object], dict[str, object] | None]:
         """
         Extract location configuration from googleMaps tool for Vertex AI toolConfig.
 
@@ -1478,7 +1480,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 - cleaned_google_maps_config: googleMaps config without location fields
                 - retrieval_config: Location config for toolConfig.retrievalConfig or None
         """
-        retrieval_config = None
+        retrieval_config: dict[str, object] | None = None
         latitude: Final = google_maps_config.get("latitude")
         longitude: Final = google_maps_config.get("longitude")
         language_code: Final = google_maps_config.get("languageCode")
@@ -1531,7 +1533,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         urlContext: dict[str, object] | None,
         optional_params: dict[str, object],
         keep_search_tools_with_functions: bool = False,
-    ) -> tuple:
+    ) -> tuple[dict[str, object] | None, dict[str, object] | None, dict[str, object] | None, dict[str, object] | None]:
         """
         Resolve the Gemini 2.x constraint: multiple Tool objects in a request must
         ALL be search tools. When function declarations are mixed with search
@@ -4179,7 +4181,7 @@ class VertexLLM(VertexBase):
         logging_obj: LoggingClass,
         stream: bool | None,
         optional_params: dict,
-        litellm_params: dict,
+        litellm_params: Mapping[str, object],
         logger_fn: object = None,
         api_base: str | None = None,
         client: AsyncHTTPHandler | None = None,
@@ -4292,7 +4294,7 @@ class VertexLLM(VertexBase):
         logging_obj: LoggingClass,
         stream: bool | None,
         optional_params: dict,
-        litellm_params: dict,
+        litellm_params: Mapping[str, object],
         logger_fn: object = None,
         api_base: str | None = None,
         client: AsyncHTTPHandler | None = None,

@@ -716,12 +716,12 @@ async def _run_model_health_check(model: dict):
     )
 
 
-async def _run_health_checks_with_bounded_concurrency(models: list, concurrency_limit: int) -> tuple[list, int]:
+async def _run_health_checks_with_bounded_concurrency(models: list, concurrency_limit: int) -> tuple[list[object], int]:
     """
     Run health checks with at most `concurrency_limit` active tasks.
     Preserves result ordering to match `models`.
     """
-    results: Final[list] = [None] * len(models)
+    results: Final[list[object]] = [None] * len(models)
     tasks_to_index: Final[dict[asyncio.Task, int]] = {}
     model_iter: Final = iter(enumerate(models))
     peak_in_flight = 0
@@ -955,7 +955,7 @@ def _same_health_check_model(deployment_model: str | None, probe_params: Mapping
 
 def update_litellm_params_for_health_check(
     model_info: dict, litellm_params: dict, deployment_model: str | None = None
-) -> dict:
+) -> dict[str, object]:
     """
     Update the litellm params for health check.
 
@@ -1086,7 +1086,7 @@ _update_litellm_params_for_health_check: Final = update_litellm_params_for_healt
 
 
 async def perform_health_check(
-    model_list: list,
+    model_list: Sequence[Mapping[str, object]],
     model: str | None = None,
     cli_model: str | None = None,
     details: bool | None = True,

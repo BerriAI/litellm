@@ -378,7 +378,7 @@ class NomaGuardrail(CustomGuardrail):
             verbose_proxy_logger.error("Error determining NOMA guardrail status: %s", e)
             return "guardrail_failed_to_respond"
 
-    def _should_only_sensitive_data_failed(self, classification_obj: dict) -> bool:
+    def _should_only_sensitive_data_failed(self, classification_obj: Mapping[object, object]) -> bool:
         """
         Check if only sensitive data detectors (PII, PCI, secrets) have result=true in the classification.
 
@@ -572,9 +572,9 @@ class NomaGuardrail(CustomGuardrail):
         self,
         user_api_key_dict: UserAPIKeyAuth,
         cache: DualCache,
-        data: dict,
+        data: dict[str, object],
         call_type: CallTypesLiteral,
-    ) -> Exception | str | dict | None:
+    ) -> Exception | str | dict[str, object] | None:
         verbose_proxy_logger.debug("Running Noma pre-call hook")
 
         event_type = GuardrailEventHooks.pre_call
@@ -621,10 +621,10 @@ class NomaGuardrail(CustomGuardrail):
 
     async def async_moderation_hook(
         self,
-        data: dict,
+        data: dict[str, object],
         user_api_key_dict: UserAPIKeyAuth,
         call_type: CallTypesLiteral,
-    ) -> Exception | str | dict | None:
+    ) -> Exception | str | dict[str, object] | None:
         event_type: GuardrailEventHooks = GuardrailEventHooks.during_call
         if call_type == CallTypes.call_mcp_tool.value:
             event_type = GuardrailEventHooks.pre_mcp_call
@@ -669,7 +669,7 @@ class NomaGuardrail(CustomGuardrail):
 
     async def async_post_call_success_hook(
         self,
-        data: dict,
+        data: dict[str, object],
         user_api_key_dict: UserAPIKeyAuth,
         response: LLMResponse,
     ):
@@ -746,7 +746,7 @@ class NomaGuardrail(CustomGuardrail):
         llm_request_id: str | None,
         request_data: dict,
         user_auth: UserAPIKeyAuth,
-        extra_data: dict,
+        extra_data: Mapping[str, object],
     ) -> object:
         call_id: Final = request_data.get("litellm_call_id")
         headers: Final = {
@@ -820,7 +820,7 @@ class NomaGuardrail(CustomGuardrail):
         self,
         user_api_key_dict: UserAPIKeyAuth,
         response: AsyncIterable[ModelResponseStream],
-        request_data: dict,
+        request_data: dict[str, object],
     ) -> AsyncGenerator[ModelResponseStream, None]:
         """Process streaming response chunks with Noma guardrail."""
 

@@ -73,11 +73,15 @@ from litellm.types.llms.vertex_ai import PartType as VertexPartType
 from litellm.types.utils import GenericImageParsingChunk
 
 from .common_utils import (
+    DEFS_MAX_INLINED_BYTES,
+    DefsInliningBudgetExceededError,
     as_openai_image_part,
     converse_redacted_content,
     convert_content_list_to_str,
     has_blank_redacted_data,
     infer_content_type_from_url_and_content,
+    inline_refs_and_drop_defs,
+    inline_refs_outside_root_defs,
     is_encrypted_reasoning_block,
     is_non_content_values_set,
     is_unsignable_thinking_block,
@@ -86,6 +90,7 @@ from .common_utils import (
     salvage_concatenated_tool_arguments,
 )
 from .image_handling import convert_url_to_base64, is_pdf_media_type
+from .json_schema_utils import schema_with_root_ref_resolved, schema_without_unreferenced_defs
 
 
 def default_pt(messages):
@@ -222,7 +227,7 @@ def convert_to_ollama_image(openai_image_url: str):
         )
 
 
-def _handle_ollama_system_message(messages: list, prompt: str, msg_i: int) -> tuple[str, int]:
+def _handle_ollama_system_message(messages: Sequence[AllMessageValues], prompt: str, msg_i: int) -> tuple[str, int]:
     system_content_str = ""
     ## MERGE CONSECUTIVE SYSTEM CONTENT ##
     while msg_i < len(messages) and messages[msg_i]["role"] == "system":
@@ -236,6 +241,7 @@ def _handle_ollama_system_message(messages: list, prompt: str, msg_i: int) -> tu
 
 _OLLAMA_USER_ROLES: Final = frozenset({"user", "tool", "function"})
 _DECODED_JSON: Final = TypeAdapter(object)
+_TOOL_SCHEMA: Final = TypeAdapter(dict[str, object])
 
 
 def _ollama_bad_message(model: str, message: AllMessageValues, msg_i: int, detail: str) -> "litellm.BadRequestError":
@@ -2636,7 +2642,7 @@ def add_cache_control_to_content(
     | AnthropicMessagesDocumentParam
     | AnthropicMessagesToolUseParam
     | ChatCompletionThinkingBlock,
-    original_content_element: dict | AllMessageValues | ChatCompletionFileObject,
+    original_content_element: Mapping[str, object] | AllMessageValues | ChatCompletionFileObject,
 ):
     cache_control_param: Final = original_content_element.get("cache_control")
     if cache_control_param is not None and isinstance(cache_control_param, dict):
@@ -4487,7 +4493,7 @@ def gemini_text_image_pt(messages: Sequence[Mapping[str, object]]):
     return content
 
 
-def azure_text_pt(messages: list):
+def azure_text_pt(messages: Sequence[Mapping[str, object]]):
     prompt = ""
     for message in messages:
         if isinstance(message["content"], str):
@@ -6733,8 +6739,8 @@ def _bedrock_tools_pt(
         }
     ]
     """
-    from litellm.litellm_core_utils.prompt_templates.common_utils import unpack_defs
     from litellm.llms.bedrock.common_utils import (
+        bedrock_converse_resolves_tool_schema_defs,
         bedrock_converse_supports_strict_tools,
         normalize_json_schema_custom_types_to_object,
     )
@@ -6746,7 +6752,9 @@ def _bedrock_tools_pt(
     # maps toolSpec to the native Anthropic tool shape, which has no strict
     # field, even though Anthropic's native API accepts it as a top-level key.
     supports_strict_tools: Final = bool(model and bedrock_converse_supports_strict_tools(model))
+    resolves_schema_defs: Final = bedrock_converse_resolves_tool_schema_defs(model)
     tool_block_list: Final[list[BedrockToolBlock]] = []
+    inlined_bytes = 0  # rebind-ok: the inlining budget is shared by every tool in the request
     for tool_idx, tool in enumerate(tools):
         # Check if tool is already a BedrockToolBlock (e.g., systemTool for Nova grounding)
         if _is_bedrock_tool_block(tool):
@@ -6781,13 +6789,26 @@ def _bedrock_tools_pt(
         else:
             description = name
 
-        defs = parameters.pop("$defs", {})
-        defs_copy = defs if isinstance(defs, dict) else {}
-        # Expand $ref references in parameters using the definitions
-        # Note: We don't pre-flatten defs as that causes exponential memory growth
-        # with circular references (see issue #19098). unpack_defs handles nested
-        # refs recursively and correctly detects/skips circular references.
-        unpack_defs(parameters, defs_copy)
+        remaining_inline_bytes = DEFS_MAX_INLINED_BYTES - inlined_bytes
+        tool_schema = _TOOL_SCHEMA.validate_python(parameters)
+        try:
+            if resolves_schema_defs and (defs_keeping_schema := schema_with_root_ref_resolved(tool_schema)) is not None:
+                inlined, tool_inlined_bytes = inline_refs_outside_root_defs(
+                    schema_without_unreferenced_defs(defs_keeping_schema), remaining_inline_bytes
+                )
+                parameters = dict(schema_without_unreferenced_defs(inlined))
+            else:
+                inlined, tool_inlined_bytes = inline_refs_and_drop_defs(tool_schema, remaining_inline_bytes)
+                parameters = dict(inlined)
+        except DefsInliningBudgetExceededError as e:
+            raise litellm.ContextWindowExceededError(
+                message=f"Inlining the $ref definitions of tool '{raw_name}' copies more than "
+                f"{DEFS_MAX_INLINED_BYTES:,} bytes of definitions across the request's tools, "
+                "more than a model context window holds. Reference shared $defs less often or flatten the schema.",
+                model=model,
+                llm_provider="bedrock",
+            ) from e
+        inlined_bytes += tool_inlined_bytes
         normalize_json_schema_custom_types_to_object(parameters)
         if not (isinstance(root_type := parameters.get("type"), str) and root_type in _valid_json_schema_root_types):
             parameters["type"] = "object"

@@ -184,7 +184,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
     async def async_log_pre_api_call(self, model: str, messages: object, kwargs: Mapping[str, object]):
         pass
 
-    async def async_pre_request_hook(self, model: str, messages: list, kwargs: dict) -> dict | None:
+    async def async_pre_request_hook(self, model: str, messages: list, kwargs: dict) -> dict[str, object] | None:
         """
         Hook called before making the API request to allow modifying request parameters.
 
@@ -249,7 +249,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         prompt_version: int | None = None,
         ignore_prompt_manager_model: bool | None = False,
         ignore_prompt_manager_optional_params: bool | None = False,
-    ) -> tuple[str, list[AllMessageValues], dict]:
+    ) -> tuple[str, list[AllMessageValues], dict[str, object]]:
         """
         Returns:
         - model: str - the model to use (can be pulled from prompt management tool)
@@ -271,7 +271,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         prompt_version: int | None = None,
         ignore_prompt_manager_model: bool | None = False,
         ignore_prompt_manager_optional_params: bool | None = False,
-    ) -> tuple[str, list[AllMessageValues], dict]:
+    ) -> tuple[str, list[AllMessageValues], dict[str, object]]:
         """
         Returns:
         - model: str - the model to use (can be pulled from prompt management tool)
@@ -307,12 +307,15 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         messages: list[AllMessageValues] | None,
         request_kwargs: dict | None = None,
         parent_otel_span: Span | None = None,
-    ) -> list[dict]:
+    ) -> list[dict[str, object]]:
         return healthy_deployments
+
+    def filters_deployments_for(self, request_kwargs: Mapping[str, object]) -> bool:
+        return True
 
     async def async_pre_call_deployment_hook(
         self, kwargs: dict[str, object], call_type: CallTypes | None
-    ) -> dict | None:
+    ) -> dict[str, object] | None:
         """
         Allow modifying the request just before it's sent to the deployment.
 
@@ -321,10 +324,10 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         Used in managed_files.py
         """
 
-    async def async_pre_call_check(self, deployment: dict, parent_otel_span: Span | None) -> dict | None:
+    async def async_pre_call_check(self, deployment: dict, parent_otel_span: Span | None) -> dict[str, object] | None:
         pass
 
-    def pre_call_check(self, deployment: dict) -> dict | None:
+    def pre_call_check(self, deployment: dict) -> dict[str, object] | None:
         pass
 
     async def async_post_call_success_deployment_hook(
@@ -538,11 +541,13 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
     ) -> Any:
         pass
 
-    async def async_logging_hook(self, kwargs: dict, result: object, call_type: str) -> tuple[dict, object]:
+    async def async_logging_hook(
+        self, kwargs: dict, result: object, call_type: str
+    ) -> tuple[dict[str, object], object]:
         """For masking logged request/response. Return a modified version of the request/result."""
         return kwargs, result
 
-    def logging_hook(self, kwargs: dict, result: object, call_type: str) -> tuple[dict, object]:
+    def logging_hook(self, kwargs: dict, result: object, call_type: str) -> tuple[dict[str, object], object]:
         """For masking logged request/response. Return a modified version of the request/result."""
         return kwargs, result
 
@@ -687,7 +692,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         stream: bool,
         custom_llm_provider: str,
         kwargs: dict,
-    ) -> tuple[bool, dict]:
+    ) -> tuple[bool, dict[str, object]]:
         """
         Hook to determine if agentic loop should be executed.
 
@@ -873,7 +878,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         stream: bool,
         custom_llm_provider: str,
         kwargs: dict,
-    ) -> tuple[bool, dict]:
+    ) -> tuple[bool, dict[str, object]]:
         """
         Hook to determine if chat completion agentic loop should be executed.
         """
@@ -974,7 +979,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         `turn_off_message_logging` leaves the success event they receive unredacted."""
         return False
 
-    def redact_standard_logging_payload_from_model_call_details(self, model_call_details: dict) -> dict:
+    def redact_standard_logging_payload_from_model_call_details(self, model_call_details: dict) -> dict[str, object]:
         """
         Redacts or excludes fields from StandardLoggingPayload before callbacks receive it.
 
@@ -1031,7 +1036,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
     async def get_proxy_server_request_from_cold_storage_with_object_key(
         self,
         object_key: str,
-    ) -> dict | None:
+    ) -> dict[str, object] | None:
         """
         Get the proxy server request from cold storage using the object key directly.
         """

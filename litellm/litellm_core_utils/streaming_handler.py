@@ -544,7 +544,7 @@ class CustomStreamWrapper:
         custom_llm_provider: str | None = None,
         stream_options=None,
         make_call: Callable | None = None,
-        _response_headers: dict | httpx.Headers | None = None,
+        _response_headers: Mapping[str, object] | httpx.Headers | None = None,
         count_prompt_tokens: Callable[[], int] | None = None,
         is_mock: bool = False,
         response_cost: float | None = None,
@@ -596,7 +596,7 @@ class CustomStreamWrapper:
         self.complete_response = ""
         self.response_uptil_now = ""
         self._emitted_disqualifying_content = False
-        _model_info: Final[dict] = litellm_params.model_info or {}
+        _model_info: Final[Mapping[str, object]] = litellm_params.model_info or {}
 
         _api_base: Final = get_api_base(
             model=model or "",

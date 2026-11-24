@@ -3512,6 +3512,482 @@ def test_bedrock_tools_pt_sends_malformed_parameters_as_an_object_schema(paramet
     assert "$defs" not in input_schema
 
 
+_ADDRESS_SCHEMA: Final = {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]}
+
+
+@pytest.mark.parametrize(
+    ("legacy_defs", "ref"),
+    [
+        ({"definitions": {"Address": _ADDRESS_SCHEMA}}, "#/definitions/Address"),
+        ({"components": {"schemas": {"Address": _ADDRESS_SCHEMA}}}, "#/components/schemas/Address"),
+    ],
+    ids=["definitions", "components_schemas"],
+)
+def test_bedrock_tools_pt_inlines_legacy_definitions_for_claude(legacy_defs: dict[str, object], ref: str) -> None:
+    parameters: Final = {"type": "object", "properties": {"home": {"$ref": ref}}, "required": ["home"], **legacy_defs}
+    tools: Final = [{"type": "function", "function": {"name": "save_address", "parameters": parameters}}]
+
+    sent: Final = _bedrock_tools_pt(tools, model="us.anthropic.claude-sonnet-5-5")[0]["toolSpec"]["inputSchema"]["json"]
+
+    assert sent == {"type": "object", "properties": {"home": _ADDRESS_SCHEMA}, "required": ["home"]}
+
+
+@pytest.mark.parametrize(
+    "legacy_defs",
+    [{"definitions": 5}, {"components": "openapi", "definitions": {"Address": _ADDRESS_SCHEMA}}],
+    ids=["definitions_not_a_map", "components_not_a_map"],
+)
+def test_bedrock_tools_pt_drops_a_malformed_legacy_defs_block_for_claude(legacy_defs: dict[str, object]) -> None:
+    parameters: Final = {"type": "object", "properties": {"name": {"type": "string"}}, **legacy_defs}
+    tools: Final = [{"type": "function", "function": {"name": "save_name", "parameters": parameters}}]
+
+    sent: Final = _bedrock_tools_pt(tools, model="us.anthropic.claude-sonnet-5-5")[0]["toolSpec"]["inputSchema"]["json"]
+
+    assert sent == {"type": "object", "properties": {"name": {"type": "string"}}, "required": []}
+
+
+def test_bedrock_tools_pt_sends_strict_claude_tools_with_their_defs() -> None:
+    parameters: Final = {
+        "type": "object",
+        "properties": {"home": {"$ref": "#/$defs/Address"}},
+        "required": ["home"],
+        "additionalProperties": False,
+        "$defs": {"Address": {**_ADDRESS_SCHEMA, "additionalProperties": False}},
+    }
+    tools: Final = [
+        {"type": "function", "function": {"name": "save_address", "strict": True, "parameters": parameters}}
+    ]
+
+    tool_spec: Final = _bedrock_tools_pt(tools, model="us.anthropic.claude-haiku-4-5-20251001-v1:0")[0]["toolSpec"]
+
+    assert tool_spec["strict"] is True
+    assert tool_spec["inputSchema"]["json"] == parameters
+
+
+def test_bedrock_tools_pt_resolves_a_root_ref_for_claude_and_keeps_its_defs() -> None:
+    node: Final = {
+        "type": "object",
+        "properties": {"name": {"type": "string"}, "children": {"type": "array", "items": {"$ref": "#/$defs/Node"}}},
+        "required": ["name", "children"],
+    }
+    tools: Final = [
+        {
+            "type": "function",
+            "function": {"name": "save_tree", "parameters": {"$defs": {"Node": node}, "$ref": "#/$defs/Node"}},
+        }
+    ]
+
+    sent: Final = _bedrock_tools_pt(tools, model="us.anthropic.claude-sonnet-5-5")[0]["toolSpec"]["inputSchema"]["json"]
+
+    assert sent == {**node, "$defs": {"Node": node}}
+
+
+def test_bedrock_tools_pt_follows_a_chain_of_root_refs_for_claude() -> None:
+    defs: Final = {"Alias": {"$ref": "#/$defs/Address"}, "Address": _ADDRESS_SCHEMA}
+    tools: Final = [
+        {"type": "function", "function": {"name": "save_address", "parameters": {"$ref": "#/$defs/Alias", "$defs": defs}}}
+    ]
+
+    sent: Final = _bedrock_tools_pt(tools, model="us.anthropic.claude-sonnet-5-5")[0]["toolSpec"]["inputSchema"]["json"]
+
+    assert sent == _ADDRESS_SCHEMA
+
+
+@pytest.mark.parametrize("hops", [32, 40])
+def test_bedrock_tools_pt_keeps_the_arguments_of_a_root_ref_chain_past_the_hop_limit_for_claude(hops: int) -> None:
+    aliases: Final = {f"Alias{i}": {"$ref": f"#/$defs/Alias{i + 1}"} for i in range(hops)}
+    defs: Final = {**aliases, f"Alias{hops}": _ADDRESS_SCHEMA}
+    tools: Final = [
+        {"type": "function", "function": {"name": "save_address", "parameters": {"$ref": "#/$defs/Alias0", "$defs": defs}}}
+    ]
+
+    sent: Final = _bedrock_tools_pt(tools, model="us.anthropic.claude-sonnet-5-5")[0]["toolSpec"]["inputSchema"]["json"]
+
+    assert sent["properties"] == _ADDRESS_SCHEMA["properties"]
+    assert sent["required"] == _ADDRESS_SCHEMA["required"]
+
+
+_ORDER_SCHEMA: Final = {
+    "type": "object",
+    "properties": {"street": {"type": "string"}, "city": {"type": "string"}},
+    "required": ["street", "city"],
+}
+
+
+@pytest.mark.parametrize(
+    ("siblings", "expected"),
+    [
+        (
+            {"type": "object", "properties": {}, "additionalProperties": False},
+            {**_ORDER_SCHEMA, "additionalProperties": False},
+        ),
+        (
+            {
+                "properties": {"city": {"type": "string", "enum": ["Paris"]}, "note": {"type": "string"}},
+                "required": ["note"],
+            },
+            {
+                "type": "object",
+                "properties": {
+                    "street": {"type": "string"},
+                    "city": {"type": "string", "enum": ["Paris"]},
+                    "note": {"type": "string"},
+                },
+                "required": ["street", "city", "note"],
+            },
+        ),
+    ],
+    ids=["mcp_normalized_empty_properties", "root_properties_win"],
+)
+def test_bedrock_tools_pt_merges_root_ref_siblings_into_its_target_for_claude(
+    siblings: dict[str, object], expected: dict[str, object]
+) -> None:
+    parameters: Final = {"$ref": "#/$defs/Order", "$defs": {"Order": _ORDER_SCHEMA}, **siblings}
+    tools: Final = [{"type": "function", "function": {"name": "ship_order", "strict": True, "parameters": parameters}}]
+
+    tool_spec: Final = _bedrock_tools_pt(tools, model="us.anthropic.claude-haiku-4-5-20251001-v1:0")[0]["toolSpec"]
+
+    assert tool_spec["inputSchema"]["json"] == expected
+
+
+def test_bedrock_tools_pt_sends_claude_only_the_defs_its_refs_reach() -> None:
+    defs: Final = {
+        "Home": {"type": "object", "properties": {"address": {"$ref": "#/$defs/Address"}}},
+        "Address": _ADDRESS_SCHEMA,
+        "Place": _ORDER_SCHEMA,
+        "Unused": {"type": "string"},
+    }
+    properties: Final = {
+        "home": {"$ref": "#/$defs/Home"},
+        "city": {"$ref": "#/$defs/Place/properties/city"},
+        "same_home": {"$ref": "#/properties/home"},
+        "parent": {"$ref": "#"},
+    }
+    parameters: Final = {"type": "object", "properties": properties, "$defs": defs}
+    tools: Final = [{"type": "function", "function": {"name": "save_home", "parameters": parameters}}]
+
+    sent: Final = _bedrock_tools_pt(tools, model="us.anthropic.claude-sonnet-5-5")[0]["toolSpec"]["inputSchema"]["json"]
+
+    assert sent["$defs"] == {"Home": defs["Home"], "Address": _ADDRESS_SCHEMA, "Place": _ORDER_SCHEMA}
+
+
+def test_bedrock_tools_pt_keeps_a_claude_def_whose_name_its_ref_escapes() -> None:
+    defs: Final = {"a/b c~1": _ADDRESS_SCHEMA, "Unused": {"type": "string"}}
+    parameters: Final = {"type": "object", "properties": {"home": {"$ref": "#/$defs/a~1b%20c~01"}}, "$defs": defs}
+    tools: Final = [{"type": "function", "function": {"name": "save_home", "parameters": parameters}}]
+
+    sent: Final = _bedrock_tools_pt(tools, model="us.anthropic.claude-sonnet-5-5")[0]["toolSpec"]["inputSchema"]["json"]
+
+    assert sent["$defs"] == {"a/b c~1": _ADDRESS_SCHEMA}
+
+
+@pytest.mark.parametrize(
+    "home",
+    [{"$ref": "#home"}, {"$dynamicRef": "#home"}, {"$ref": "#/$defs"}],
+    ids=["anchor_ref", "dynamic_ref", "whole_defs_ref"],
+)
+def test_bedrock_tools_pt_keeps_every_claude_def_when_a_ref_may_reach_one_by_other_means(
+    home: dict[str, object],
+) -> None:
+    defs: Final = {"Home": {"$anchor": "home", **_ADDRESS_SCHEMA}, "Spare": {"type": "string"}}
+    parameters: Final = {"type": "object", "properties": {"home": home}, "$defs": defs}
+    tools: Final = [{"type": "function", "function": {"name": "save_home", "parameters": parameters}}]
+
+    sent: Final = _bedrock_tools_pt(tools, model="us.anthropic.claude-sonnet-5-5")[0]["toolSpec"]["inputSchema"]["json"]
+
+    assert sent["$defs"] == defs
+
+
+def _with_root_defs_inlined(schema: object, defs: Mapping[str, object]) -> object:
+    if isinstance(schema, list):
+        return [_with_root_defs_inlined(item, defs) for item in schema]
+    if not isinstance(schema, dict):
+        return schema
+    ref: Final = schema.get("$ref")
+    if isinstance(ref, str) and ref.startswith("#/$defs/"):
+        return _with_root_defs_inlined(defs[ref.removeprefix("#/$defs/")], defs)
+    return {key: _with_root_defs_inlined(value, defs) for key, value in schema.items()}
+
+
+_SHIP_TO: Final = {"type": "object", "properties": {"to": {"$ref": "#/$defs/Address"}}, "required": ["to"]}
+_ZIP_ONLY: Final = {"type": "object", "properties": {"zip": {"type": "string"}}, "required": ["zip"]}
+
+
+@pytest.mark.parametrize(
+    "parameters",
+    [
+        {"$ref": "#/definitions/Ship", "definitions": {"Ship": _SHIP_TO}, "$defs": {"Address": _ADDRESS_SCHEMA}},
+        {"$ref": "#/$defs/Ship", "$defs": {"Ship": {**_SHIP_TO, "$defs": {"Address": _ADDRESS_SCHEMA}}}},
+        {
+            "type": "object",
+            "properties": {"to": {"$ref": "#/%24defs/Address"}},
+            "required": ["to"],
+            "$defs": {"Address": _ADDRESS_SCHEMA},
+        },
+        {
+            "type": "object",
+            "properties": {"to": {"$ref": "#/definitions/Address"}},
+            "required": ["to"],
+            "$defs": {"Address": _ADDRESS_SCHEMA},
+        },
+        {
+            "type": "object",
+            "properties": {"ship": {"$ref": "#/definitions/Ship"}},
+            "required": ["ship"],
+            "definitions": {"Ship": _SHIP_TO},
+            "$defs": {"Address": _ADDRESS_SCHEMA},
+        },
+        {
+            "type": "object",
+            "properties": {"ship": {**_SHIP_TO, "$defs": {"Address": _ADDRESS_SCHEMA}}},
+            "required": ["ship"],
+            "$defs": {"Unused": {"type": "string"}},
+        },
+        {
+            "type": "object",
+            "properties": {
+                "ship": {
+                    "type": "object",
+                    "properties": {"gift": {"type": "boolean"}},
+                    "dependencies": {"gift": {"properties": {"to": {"$ref": "#/$defs/Address"}}}},
+                }
+            },
+            "$defs": {"Address": _ADDRESS_SCHEMA},
+        },
+        {
+            "type": "object",
+            "properties": {"ship": {**_SHIP_TO, "$defs": {"Address": _ZIP_ONLY}}},
+            "required": ["ship"],
+            "$defs": {"Address": _ADDRESS_SCHEMA},
+        },
+        {
+            "type": "object",
+            "properties": {"ship": {"$ref": "#/$defs/Ship"}},
+            "required": ["ship"],
+            "$defs": {"Ship": {**_SHIP_TO, "$defs": {"Address": _ZIP_ONLY}}, "Address": _ADDRESS_SCHEMA},
+        },
+        {"$ref": "/$defs/Ship", "$defs": {"Ship": _SHIP_TO, "Address": _ADDRESS_SCHEMA}},
+        {
+            "type": "object",
+            "properties": {"to": {"$ref": "/$defs/Address"}},
+            "required": ["to"],
+            "$defs": {"Address": _ADDRESS_SCHEMA},
+        },
+    ],
+    ids=[
+        "root_ref_into_definitions_beside_defs",
+        "root_ref_target_with_its_own_defs",
+        "percent_encoded_defs_pointer",
+        "definitions_pointer_into_root_defs",
+        "property_ref_into_definitions_that_refs_defs",
+        "property_with_its_own_defs",
+        "ref_under_dependencies",
+        "property_defs_shadowing_a_root_name",
+        "defs_entry_shadowing_a_root_name",
+        "root_ref_without_a_leading_hash",
+        "property_ref_without_a_leading_hash",
+    ],
+)
+def test_bedrock_tools_pt_sends_claude_a_schema_that_means_what_full_inlining_does(
+    parameters: dict[str, object],
+) -> None:
+    tools: Final = [{"type": "function", "function": {"name": "ship", "parameters": parameters}}]
+
+    claude: Final = _bedrock_tools_pt(deepcopy(tools), model="us.anthropic.claude-sonnet-5-5")[0]["toolSpec"]
+    inlined: Final = _bedrock_tools_pt(deepcopy(tools), model="us.amazon.nova-2-lite-v1:0")[0]["toolSpec"]
+
+    claude_schema: Final = claude["inputSchema"]["json"]
+    claude_body: Final = {key: value for key, value in claude_schema.items() if key != "$defs"}
+    assert _with_root_defs_inlined(claude_body, claude_schema.get("$defs", {})) == inlined["inputSchema"]["json"]
+
+
+def test_bedrock_tools_pt_spends_no_inlining_budget_on_unused_claude_defs() -> None:
+    big: Final = {"type": "string", "description": "x" * 1_000_000}
+    unused: Final = {f"Unused{i}": {"$ref": "#/definitions/Big"} for i in range(11)}
+    parameters: Final = {
+        "type": "object",
+        "properties": {"a": {"type": "string"}},
+        "required": ["a"],
+        "$defs": unused,
+        "definitions": {"Big": big},
+    }
+    tools: Final = [{"type": "function", "function": {"name": "t", "parameters": parameters}}]
+
+    sent: Final = _bedrock_tools_pt(tools, model="us.anthropic.claude-sonnet-5-5")[0]["toolSpec"]["inputSchema"]["json"]
+
+    assert sent == {"type": "object", "properties": {"a": {"type": "string"}}, "required": ["a"]}
+
+
+def test_bedrock_tools_pt_spends_no_inlining_budget_on_claude_defs_only_unused_definitions_reach() -> None:
+    big: Final = {"type": "string", "description": "x" * 1_000_000}
+    heavy: Final = {"type": "object", "properties": {f"p{i}": {"$ref": "#/definitions/Big"} for i in range(11)}}
+    parameters: Final = {
+        "type": "object",
+        "properties": {"a": {"type": "string"}},
+        "required": ["a"],
+        "$defs": {"Heavy": heavy},
+        "definitions": {"Big": big, "Unused": {"$ref": "#/$defs/Heavy"}},
+    }
+    tools: Final = [{"type": "function", "function": {"name": "t", "parameters": parameters}}]
+
+    sent: Final = _bedrock_tools_pt(tools, model="us.anthropic.claude-sonnet-5-5")[0]["toolSpec"]["inputSchema"]["json"]
+
+    assert sent == {"type": "object", "properties": {"a": {"type": "string"}}, "required": ["a"]}
+
+
+@pytest.mark.parametrize("model", ["us.anthropic.claude-sonnet-5-5", "us.amazon.nova-2-lite-v1:0"])
+def test_bedrock_tools_pt_spends_no_inlining_budget_on_unused_legacy_definitions(model: str) -> None:
+    big: Final = {"type": "string", "description": "x" * 1_000_000}
+    unused: Final = {f"Unused{i}": {"$ref": "#/definitions/Big"} for i in range(11)}
+    parameters: Final = {
+        "type": "object",
+        "properties": {"a": {"type": "string"}},
+        "required": ["a"],
+        "definitions": {"Big": big, **unused},
+    }
+    tools: Final = [{"type": "function", "function": {"name": "t", "parameters": parameters}}]
+
+    sent: Final = _bedrock_tools_pt(tools, model=model)[0]["toolSpec"]["inputSchema"]["json"]
+
+    assert sent == {"type": "object", "properties": {"a": {"type": "string"}}, "required": ["a"]}
+
+
+def test_bedrock_tools_pt_resolves_a_root_ref_targets_refs_to_its_own_defs_for_claude() -> None:
+    zip_only: Final = {"type": "object", "properties": {"zip": {"type": "string"}}, "required": ["zip"]}
+    request: Final = {
+        "type": "object",
+        "properties": {"to": {"$ref": "#/$defs/Address"}},
+        "required": ["to"],
+        "$defs": {"Address": zip_only},
+    }
+    parameters: Final = {"$ref": "#/$defs/Request", "$defs": {"Request": request, "Address": _ADDRESS_SCHEMA}}
+    tools: Final = [{"type": "function", "function": {"name": "send", "parameters": parameters}}]
+
+    sent_to_claude: Final = _bedrock_tools_pt(deepcopy(tools), model="us.anthropic.claude-sonnet-5-5")
+    sent_to_nova: Final = _bedrock_tools_pt(deepcopy(tools), model="us.amazon.nova-2-lite-v1:0")
+
+    assert sent_to_claude[0]["toolSpec"]["inputSchema"]["json"]["properties"] == {"to": zip_only}
+    assert sent_to_claude == sent_to_nova
+
+
+def test_bedrock_tools_pt_keeps_defs_a_root_ref_target_repeats_unchanged_for_claude() -> None:
+    request: Final = {
+        "type": "object",
+        "properties": {"to": {"$ref": "#/$defs/Address"}},
+        "required": ["to"],
+        "$defs": {"Address": _ADDRESS_SCHEMA},
+    }
+    parameters: Final = {"$ref": "#/$defs/Request", "$defs": {"Request": request, "Address": _ADDRESS_SCHEMA}}
+    tools: Final = [{"type": "function", "function": {"name": "send", "parameters": parameters}}]
+
+    sent: Final = _bedrock_tools_pt(tools, model="us.anthropic.claude-sonnet-5-5")[0]["toolSpec"]["inputSchema"]["json"]
+
+    assert sent == {
+        "type": "object",
+        "properties": {"to": {"$ref": "#/$defs/Address"}},
+        "required": ["to"],
+        "$defs": {"Address": _ADDRESS_SCHEMA},
+    }
+
+
+def test_bedrock_tools_pt_sends_claude_tools_whose_properties_have_non_string_keys() -> None:
+    parameters: Final = {
+        "type": "object",
+        "properties": {1: {"type": "string"}, "home": {"$ref": "#/$defs/Address"}},
+        "$defs": {"Address": _ADDRESS_SCHEMA},
+    }
+    tools: Final = [{"type": "function", "function": {"name": "t", "parameters": parameters}}]
+
+    sent: Final = _bedrock_tools_pt(tools, model="us.anthropic.claude-sonnet-5-5")[0]["toolSpec"]["inputSchema"]["json"]
+
+    assert sent["properties"] == {1: {"type": "string"}, "home": {"$ref": "#/$defs/Address"}}
+    assert sent["$defs"] == {"Address": _ADDRESS_SCHEMA}
+
+
+def test_bedrock_tools_pt_inlines_boolean_definitions_as_the_schemas_they_mean() -> None:
+    parameters: Final = {
+        "type": "object",
+        "properties": {"anything": {"$ref": "#/$defs/Anything"}, "nothing": {"$ref": "#/$defs/Nothing"}},
+        "$defs": {"Anything": True, "Nothing": False},
+    }
+    tools: Final = [{"type": "function", "function": {"name": "t", "parameters": parameters}}]
+
+    sent: Final = _bedrock_tools_pt(tools, model="us.amazon.nova-2-lite-v1:0")[0]["toolSpec"]["inputSchema"]["json"]
+
+    assert sent["properties"] == {"anything": {}, "nothing": {"not": {}}}
+
+
+def test_bedrock_tools_pt_keeps_defs_for_claude_behind_any_region_prefix() -> None:
+    parameters: Final = {
+        "type": "object",
+        "properties": {"to": {"$ref": "#/$defs/Address"}},
+        "required": ["to"],
+        "$defs": {"Address": _ADDRESS_SCHEMA},
+    }
+    tools: Final = [{"type": "function", "function": {"name": "ship", "parameters": deepcopy(parameters)}}]
+
+    sent: Final = _bedrock_tools_pt(tools, model="ca.anthropic.claude-sonnet-5-5")[0]["toolSpec"]["inputSchema"]["json"]
+
+    assert sent == parameters
+
+
+def test_bedrock_tools_pt_sends_no_defs_to_models_that_need_inlining() -> None:
+    parameters: Final = {"$ref": "#/$defs/Ship", "$defs": {"Ship": {**_SHIP_TO, "$defs": {"Address": _ADDRESS_SCHEMA}}}}
+    tools: Final = [{"type": "function", "function": {"name": "ship", "parameters": parameters}}]
+
+    sent: Final = _bedrock_tools_pt(tools, model="us.amazon.nova-2-lite-v1:0")[0]["toolSpec"]["inputSchema"]["json"]
+
+    assert sent == {"type": "object", "properties": {"to": _ADDRESS_SCHEMA}, "required": ["to"]}
+
+
+def test_bedrock_tools_pt_inlines_legacy_refs_under_a_root_defs_ref_for_claude() -> None:
+    defs: Final = {
+        "Home": {"type": "object", "properties": {"address": {"$ref": "#/definitions/Address"}}, "required": ["address"]}
+    }
+    parameters: Final = {"$ref": "#/$defs/Home", "$defs": defs, "definitions": {"Address": _ADDRESS_SCHEMA}}
+    tools: Final = [{"type": "function", "function": {"name": "save_home", "parameters": parameters}}]
+
+    sent: Final = _bedrock_tools_pt(tools, model="us.anthropic.claude-sonnet-5-5")[0]["toolSpec"]["inputSchema"]["json"]
+
+    assert sent == {"type": "object", "properties": {"address": _ADDRESS_SCHEMA}, "required": ["address"]}
+
+
+def test_bedrock_tools_pt_inlines_only_legacy_refs_for_claude() -> None:
+    parameters: Final = {
+        "type": "object",
+        "properties": {"home": {"$ref": "#/definitions/Address"}, "work": {"$ref": "#/$defs/Address"}},
+        "required": ["home", "work"],
+        "definitions": {"Address": _ADDRESS_SCHEMA},
+        "$defs": {"Address": {"type": "string"}},
+    }
+    tools: Final = [{"type": "function", "function": {"name": "save_addresses", "parameters": parameters}}]
+
+    sent: Final = _bedrock_tools_pt(tools, model="us.anthropic.claude-sonnet-5-5")[0]["toolSpec"]["inputSchema"]["json"]
+
+    assert sent == {
+        "type": "object",
+        "properties": {"home": _ADDRESS_SCHEMA, "work": {"$ref": "#/$defs/Address"}},
+        "required": ["home", "work"],
+        "$defs": {"Address": {"type": "string"}},
+    }
+
+
+def test_bedrock_tools_pt_keeps_claude_defs_refs_beside_an_empty_definitions_block() -> None:
+    depth: Final = 17
+    branches: Final = {
+        f"L{i}": {"type": "object", "properties": {"left": {"$ref": f"#/$defs/L{i + 1}"}, "right": {"$ref": f"#/$defs/L{i + 1}"}}}
+        for i in range(depth)
+    }
+    defs: Final = {**branches, f"L{depth}": {"type": "string"}}
+    parameters: Final = {"type": "object", "properties": {"root": {"$ref": "#/$defs/L0"}}, "$defs": defs, "definitions": {}}
+    tools: Final = [{"type": "function", "function": {"name": "tree", "parameters": parameters}}]
+
+    sent: Final = _bedrock_tools_pt(tools, model="us.anthropic.claude-sonnet-5-5")[0]["toolSpec"]["inputSchema"]["json"]
+
+    assert sent["properties"] == {"root": {"$ref": "#/$defs/L0"}}
+    assert sent["$defs"] == defs
+
+
 def test_bedrock_tools_pt_strict_parameter():
     """Regression for strict tools on the Bedrock Converse path.
 

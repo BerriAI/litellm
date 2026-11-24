@@ -60,7 +60,12 @@ from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues, PromptCacheBreakpoint
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import ModelResponse, ModelResponseStream, ProviderField
-from litellm.utils import add_path_to_api_base, catalog_with_runtime_registrations, supports_tool_choice
+from litellm.utils import (
+    add_path_to_api_base,
+    catalog_with_runtime_registrations,
+    has_catalog_entry,
+    supports_tool_choice,
+)
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
@@ -333,6 +338,13 @@ def _reasoning_effort_params(
             assert_never(outcome)
 
 
+def _chat_param_the_responses_api_lacks(optional_params: Mapping[str, object]) -> str | None:
+    n: Final = optional_params.get("n")
+    if isinstance(n, int) and n > 1:
+        return "n"
+    return "seed" if optional_params.get("seed") is not None else None
+
+
 def _without_tool_choice_when_no_tools(optional_params: Mapping[str, object]) -> Mapping[str, object]:
     if optional_params.get("tools") or optional_params.get("functions"):
         return optional_params
@@ -340,6 +352,34 @@ def _without_tool_choice_when_no_tools(optional_params: Mapping[str, object]) ->
 
 
 class AzureAIStudioConfig(OpenAIConfig):
+    @staticmethod
+    def gpt_5_base_model(model: str, base_model: str | None) -> str | None:
+        """The deployment name a gpt-5-family base_model stands for, so a custom-named deployment takes the
+        params and request shape of the deployment named after its base_model. A deployment named after a
+        model LiteLLM knows keeps its own name, since its base_model then only sets pricing."""
+        if base_model is None or azureAIGPT5Config.is_model_gpt_5_model(model) or has_catalog_entry(model, "azure_ai"):
+            return None
+        name: Final = base_model.rsplit("/", 1)[-1]
+        return name if azureAIGPT5Config.is_model_gpt_5_model(name) else None
+
+    @staticmethod
+    def raise_if_base_model_bridge_would_drop_a_param(
+        optional_params: Mapping[str, object], *, model: str, base_model: str | None, drop_params: bool
+    ) -> None:
+        if drop_params or AzureAIStudioConfig.gpt_5_base_model(model, base_model) is None:
+            return
+        param: Final = _chat_param_the_responses_api_lacks(optional_params)
+        if param is None:
+            return
+        raise UnsupportedParamsError(
+            message=f"azure_ai/{model} goes to the Responses API because its base_model {base_model} is a "
+            f"gpt-5 model, and the Responses API has no `{param}` field. "
+            "To drop it, set `litellm.drop_params=True`, pass `drop_params=True`, or for proxy: "
+            "`litellm_settings: drop_params: true`.",
+            model=model,
+            llm_provider="azure_ai",
+        )
+
     def get_supported_openai_params(self, model: str) -> list[str]:
         model_supports_tool_choice = True  # azure ai supports this by default
         if not supports_tool_choice(model=f"azure_ai/{model}"):
@@ -379,11 +419,12 @@ class AzureAIStudioConfig(OpenAIConfig):
         base_model: str | None = None,
         allowed_openai_params: Collection[str] = (),
     ) -> dict[str, object]:  # mutable-ok: OpenAIConfig.map_openai_params signature
-        if azureAIGPT5Config.is_model_gpt_5_model(model):
+        detection_model: Final = self.gpt_5_base_model(model, base_model) or model
+        if azureAIGPT5Config.is_model_gpt_5_model(detection_model):
             return azureAIGPT5Config.map_openai_params(
                 non_default_params=non_default_params,
                 optional_params=optional_params,
-                model=model,
+                model=detection_model,
                 drop_params=drop_params,
                 declared_reasoning_efforts=declared_reasoning_efforts,
                 reasoning_drop_logger=reasoning_drop_logger,
@@ -412,7 +453,9 @@ class AzureAIStudioConfig(OpenAIConfig):
         }
 
     def refuses_reasoning_effort(self, model: str, reasoning_effort: object, *, base_model: str | None) -> bool:
-        return not azureAIGPT5Config.is_model_gpt_5_model(model) and isinstance(
+        return not azureAIGPT5Config.is_model_gpt_5_model(
+            self.gpt_5_base_model(model, base_model) or model
+        ) and isinstance(
             _catalog_reasoning_effort_outcome(reasoning_effort, model, base_model=base_model, level_check_waived=False),
             _UnsendableReasoningEffort,
         )
@@ -658,8 +701,8 @@ class AzureAIStudioConfig(OpenAIConfig):
         model: str,
         messages: list[AllMessageValues],
         optional_params: dict[str, object],
-        litellm_params: dict,
-        headers: dict,
+        litellm_params: dict[str, object],
+        headers: dict[str, object],
     ) -> dict[str, object]:
         extra_body: Final = optional_params.pop("extra_body", {})
         if extra_body and isinstance(extra_body, dict):

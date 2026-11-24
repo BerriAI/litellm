@@ -442,7 +442,7 @@ class _RegistryHost(Protocol):
         id: str | None = None,
     ) -> "ModelMapInfo": ...
 
-    def _core_get_discovered_model_info(self, model_id: str | None) -> Mapping[str, int]: ...
+    def _core_get_discovered_model_info(self, model_id: str | None, model: str | None = None) -> Mapping[str, int]: ...
 
     def _core_get_model_list(
         self, model_name: str | None = None, team_id: str | None = None
@@ -554,7 +554,9 @@ class _RegistryHost(Protocol):
 
     def _core_get_configured_token_limits(self, model_name: str) -> tuple[int | None, int | None]: ...
 
-    def _core_get_model_listing_info(self, model_name: str) -> "DeploymentModelListingInfo | None": ...
+    def _core_get_model_listing_info(
+        self, model_name: str, team_id: str | None = None
+    ) -> "DeploymentModelListingInfo | None": ...
 
     def get_routing_group(self, model_name: str) -> "RoutingGroup | None": ...
 
@@ -641,9 +643,12 @@ class RouterRegistry:
             deployment=deployment, received_model_name=received_model_name, id=id
         )
 
-    def discovered_model_info(self, id: str | None) -> Mapping[str, int]:
-        """Limits discovered from the provider for a deployment (was ``get_discovered_model_info``)."""
-        return self._router._core_get_discovered_model_info(id)
+    def discovered_model_info(self, id: str | None, model: str | None = None) -> Mapping[str, int]:
+        """Limits discovered from the provider for a deployment (was ``get_discovered_model_info``).
+
+        ``model`` is the concrete model a wildcard deployment serves, which selects its row in the catalog.
+        """
+        return self._router._core_get_discovered_model_info(id, model)
 
     def zero_cost(self) -> Mapping[str, bool] | None:
         """The per-deployment zero-cost lookup the auth checks read (was ``_zero_cost_cache``)."""
@@ -1273,7 +1278,7 @@ class RouterRegistry:
         if field == "token_limits":
             return r._core_get_configured_token_limits(name)
         if field == "listing_info":
-            return r._core_get_model_listing_info(name)
+            return r._core_get_model_listing_info(name, team_id=team_id)
         raise ValueError(f"unknown group field {field!r}")
 
     def routing_groups(self) -> "dict[str, RoutingGroup]":  # mutable-ok: the routing_groups attribute, the live dict

@@ -3,7 +3,7 @@ import html as _html
 import json
 import secrets
 import time
-from collections.abc import AsyncIterator, Callable, Mapping
+from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import (
@@ -143,7 +143,7 @@ if TYPE_CHECKING:
 # Keyed by (server_id, resource_url) → (expires_at_epoch, payload).
 # A payload of ``None`` is a negative-result entry that prevents repeated
 # upstream fetches when the IdP consistently has no metadata to serve.
-_OAUTH_METADATA_CACHE: Final[dict[tuple[str, str], tuple[float, dict | None]]] = {}
+_OAUTH_METADATA_CACHE: Final[dict[tuple[str, str], tuple[float, dict[str, object] | None]]] = {}
 _OAUTH_METADATA_CACHE_TTL_SECONDS: Final = 300
 _OAUTH_METADATA_NEGATIVE_CACHE_TTL_SECONDS: Final = 60
 _OAUTH_METADATA_CACHE_MAX_SIZE: Final = 128
@@ -2064,7 +2064,9 @@ def client_supplied_redirect_uris(value: object) -> list[str] | None:
     return uris if len(uris) == len(value) else None
 
 
-_CLIENT_APPLICATION_TYPE: Final = TypeAdapter(Literal["native", "web"] | None)
+_CLIENT_APPLICATION_TYPE: Final[TypeAdapter[Literal["native", "web"] | None]] = TypeAdapter(
+    Literal["native", "web"] | None
+)
 
 
 def client_supplied_application_type(value: object) -> Literal["native", "web"] | None:
@@ -2232,8 +2234,8 @@ async def register_client_with_server(
     request: Request,
     mcp_server: MCPServer,
     client_name: str,
-    grant_types: list | None,
-    response_types: list | None,
+    grant_types: Sequence[object] | None,
+    response_types: Sequence[object] | None,
     token_endpoint_auth_method: str | None,
     fallback_client_id: str | None = None,
     replace_stale_client: bool = False,
@@ -2920,7 +2922,7 @@ async def callback(
 
 async def fetch_upstream_oauth_protected_resource(
     mcp_server: MCPServer,
-) -> dict | None:
+) -> dict[str, object] | None:
     """Fetch the upstream MCP server's ``.well-known/oauth-protected-resource``
     metadata for a pass-through server.
 
@@ -2956,7 +2958,7 @@ async def fetch_upstream_oauth_protected_resource(
             return cached[1]
         generation: Final = _OAUTH_METADATA_GENERATIONS.get(mcp_server.server_id, 0)
 
-        def store(payload: dict | None, ttl_seconds: int) -> None:
+        def store(payload: dict[str, object] | None, ttl_seconds: int) -> None:
             if _OAUTH_METADATA_GENERATIONS.get(mcp_server.server_id, 0) != generation:
                 return
             stored_at: Final = time.time()

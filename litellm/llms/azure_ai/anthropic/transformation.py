@@ -149,7 +149,7 @@ class AzureAnthropicConfig(AnthropicConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        headers: dict,
+        headers: dict[str, object],
     ) -> dict[str, object]:
         """
         Transform request using parent AnthropicConfig, then remove unsupported params.

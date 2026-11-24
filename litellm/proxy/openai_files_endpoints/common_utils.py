@@ -1632,7 +1632,7 @@ async def _extract_target_model_names_from_form(request: "Request") -> list[str]
         if _is_target_model_names_key(key) and isinstance(value, str):
             names.extend(_extract_target_model_names_simple(value))
 
-    seen: Final = set()
+    seen: Final[set[str]] = set()
     result: Final[list[str]] = []
     for name in names:
         if name and name not in seen:
@@ -1830,7 +1830,7 @@ def _batch_owner_auth_from_db_object(db_batch_object: object) -> "UserAPIKeyAuth
     return UserAPIKeyAuth(user_id=created_by, team_id=raw_team_id if isinstance(raw_team_id, str) else None)
 
 
-async def resolve_input_file_id_to_unified(response, prisma_client: "PrismaClient | None") -> None:
+async def resolve_input_file_id_to_unified(response: "LiteLLMBatch", prisma_client: "PrismaClient | None") -> None:
     """
     If the batch response contains a raw provider input_file_id (not already a
     unified ID), look up the corresponding unified file ID from the managed file
@@ -1852,7 +1852,7 @@ async def resolve_input_file_id_to_unified(response, prisma_client: "PrismaClien
             pass
 
 
-async def resolve_output_file_ids_to_unified(response, prisma_client: "PrismaClient | None") -> None:
+async def resolve_output_file_ids_to_unified(response: "LiteLLMBatch", prisma_client: "PrismaClient | None") -> None:
     """
     If the batch response contains raw provider output_file_id or error_file_id
     (not already unified IDs), look up the corresponding unified file IDs from
@@ -2069,6 +2069,13 @@ def batch_cost_poller_is_active() -> bool:
         return False
 
 
+def created_batch_endpoint(provider_batch: "LiteLLMBatch", stored_batch: "LiteLLMBatch | None") -> str:
+    if stored_batch is None or not stored_batch.endpoint:
+        return provider_batch.endpoint
+    provider_named_the_endpoint: Final = provider_batch.endpoint not in ("", "/v1/chat/completions")
+    return provider_batch.endpoint if provider_named_the_endpoint else stored_batch.endpoint
+
+
 def _completed_batch_safe_to_retire(response: "LiteLLMBatch") -> bool:
     """Whether a "completed" batch may be retired from cost recovery.
 
@@ -2088,7 +2095,7 @@ def _completed_batch_safe_to_retire(response: "LiteLLMBatch") -> bool:
 async def update_batch_in_database(
     batch_id: str,
     unified_batch_id: str | Literal[False],
-    response,
+    response: "LiteLLMBatch",
     managed_files_obj: object | None,
     prisma_client: "PrismaClient | None",
     verbose_proxy_logger: logging.Logger,

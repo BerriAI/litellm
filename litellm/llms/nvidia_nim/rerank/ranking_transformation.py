@@ -82,7 +82,7 @@ class NvidiaNimRankingConfig(NvidiaNimRerankConfig):
 
     def map_cohere_rerank_params(
         self,
-        non_default_params: dict | None,  # mutable-ok: matches BaseRerankConfig's request contract
+        non_default_params: dict[str, object] | None,  # mutable-ok: matches BaseRerankConfig's request contract
         model: str,
         drop_params: bool,
         query: str,
@@ -125,8 +125,8 @@ class NvidiaNimRankingConfig(NvidiaNimRerankConfig):
         self,
         model: str,
         optional_rerank_params: Mapping[str, object],
-        headers: dict,
-        litellm_params: dict | None = None,
+        headers: dict[str, object],
+        litellm_params: dict[str, object] | None = None,
     ) -> dict[str, object]:
         """
         Transform request, using clean model name without 'ranking/' prefix.
@@ -158,9 +158,9 @@ class NvidiaNimRankingConfig(NvidiaNimRerankConfig):
         model_response: RerankResponse,
         logging_obj: LiteLLMLoggingObj,
         api_key: str | None = None,
-        request_data: dict | None = None,  # mutable-ok: matches BaseRerankConfig's response contract
+        request_data: dict[str, object] | None = None,  # mutable-ok: matches BaseRerankConfig's response contract
         optional_params: dict | None = None,  # mutable-ok: matches BaseRerankConfig's response contract
-        litellm_params: dict | None = None,  # mutable-ok: matches BaseRerankConfig's response contract
+        litellm_params: dict[str, object] | None = None,  # mutable-ok: matches BaseRerankConfig's response contract
     ) -> RerankResponse:
         """
         Convert the native ranking response, then apply top_n client-side.
