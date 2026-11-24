@@ -685,8 +685,8 @@ class Cache:
     def _get_param_value(
         self,
         param: str,
-        kwargs: dict,
-    ) -> str | None:
+        kwargs: dict[str, object],
+    ) -> object:
         """
         Get the value for the given param from kwargs
         """
