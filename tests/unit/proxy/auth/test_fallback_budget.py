@@ -2,7 +2,6 @@ from collections.abc import Mapping, Sequence
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
-import litellm
 import pytest
 
 from litellm import Router
@@ -18,6 +17,7 @@ from litellm.proxy.hooks.model_max_budget_limiter import (
     model_budget_spend_cache_key,
     team_member_budget_entity_id,
 )
+from tests.unit.test_router.core.scripted_host import ScriptedHost, rate_limit, rust_core
 
 FREE_MODEL = {
     "model_name": "free-model",
@@ -164,7 +164,7 @@ async def test_router_fallback_budget_check_resolves_model_group_alias_before_me
     within_budget: Final = await budget_check(
         model="backup",
         request_kwargs={"metadata": {"user_api_key_auth": token}},
-        llm_router=router,
+        ctx=router._core_ctx,
     )
 
     assert within_budget is False
@@ -195,7 +195,7 @@ async def test_router_fallback_budget_check_refuses_an_exhausted_alias_cap() -> 
     within_budget: Final = await budget_check(
         model="backup",
         request_kwargs={"metadata": {"user_api_key_auth": token}},
-        llm_router=router,
+        ctx=router._core_ctx,
     )
 
     assert within_budget is False
@@ -229,7 +229,7 @@ async def test_router_fallback_budget_check_allows_alias_when_both_names_are_wit
     within_budget: Final = await budget_check(
         model="backup",
         request_kwargs={"metadata": {"user_api_key_auth": token}},
-        llm_router=router,
+        ctx=router._core_ctx,
     )
 
     assert within_budget is True
@@ -252,7 +252,7 @@ async def test_router_fallback_budget_check_deduplicates_non_alias_target() -> N
     within_budget: Final = await budget_check(
         model="paid-model",
         request_kwargs={"metadata": {"user_api_key_auth": token}},
-        llm_router=router,
+        ctx=router._core_ctx,
     )
 
     assert within_budget is True
@@ -346,12 +346,12 @@ async def test_team_key_inherits_personal_budget_when_opted_in(monkeypatch):
 @pytest.mark.asyncio
 async def test_check_is_a_no_op_while_not_enforced():
     request = {"metadata": {"user_api_key_auth": _token(user_spend=1900.0, user_max_budget=50.0)}}
-    assert await NOT_ENFORCED(model="paid-model", request_kwargs=request, llm_router=_router()) is True
+    assert await NOT_ENFORCED(model="paid-model", request_kwargs=request, ctx=_router()._core_ctx) is True
 
 
 @pytest.mark.asyncio
 async def test_request_without_a_key_is_unrestricted():
-    assert await ENFORCED(model="paid-model", request_kwargs={}, llm_router=_router()) is True
+    assert await ENFORCED(model="paid-model", request_kwargs={}, ctx=_router()._core_ctx) is True
 
 
 @pytest.mark.asyncio
@@ -360,8 +360,8 @@ async def test_enforced_check_reads_the_key_from_request_metadata(metadata_field
     over = {metadata_field: {"user_api_key_auth": _token(user_spend=1900.0, user_max_budget=50.0)}}
     under = {metadata_field: {"user_api_key_auth": _token(user_spend=1.0, user_max_budget=50.0)}}
 
-    assert await ENFORCED(model="paid-model", request_kwargs=over, llm_router=_router()) is False
-    assert await ENFORCED(model="paid-model", request_kwargs=under, llm_router=_router()) is True
+    assert await ENFORCED(model="paid-model", request_kwargs=over, ctx=_router()._core_ctx) is False
+    assert await ENFORCED(model="paid-model", request_kwargs=under, ctx=_router()._core_ctx) is True
 
 
 @pytest.mark.asyncio
@@ -382,7 +382,7 @@ async def test_router_check_passes_member_limiter_from_request_metadata() -> Non
     within_budget: Final = await budget_check(
         model="paid-model",
         request_kwargs=request_kwargs,
-        llm_router=_router(),
+        ctx=_router()._core_ctx,
     )
 
     assert within_budget is False
@@ -424,52 +424,46 @@ async def test_check_fails_closed_when_the_spend_lookup_breaks(monkeypatch):
     monkeypatch.setattr(proxy_server, "get_current_spend", _boom, raising=False)
     request = {"metadata": {"user_api_key_auth": _token(user_spend=1.0, user_max_budget=50.0)}}
 
-    assert await ENFORCED(model="paid-model", request_kwargs=request, llm_router=_router()) is False
+    assert await ENFORCED(model="paid-model", request_kwargs=request, ctx=_router()._core_ctx) is False
 
 
 @pytest.mark.asyncio
-async def test_router_skips_the_paid_fallback_target_when_over_budget():
-    from litellm.router_utils.fallback_event_handlers import (
-        AttemptedFallbackTargets,
-        _is_fallback_target_within_budget,
+@pytest.mark.parametrize(
+    ("check", "spend", "expected"),
+    [
+        (ENFORCED, 1900.0, ("free-model-id", "backup-id")),
+        (ENFORCED, 1.0, ("free-model-id", "paid-model-id")),
+        (None, 1900.0, ("free-model-id", "paid-model-id")),
+    ],
+)
+async def test_router_checks_the_budget_before_attempting_a_fallback(
+    check: RouterFallbackBudgetCheck | None, spend: float, expected: tuple[str, str]
+) -> None:
+    host: Final = ScriptedHost()
+    core: Final = rust_core(
+        host,
+        model_list=[
+            FREE_MODEL,
+            PAID_MODEL,
+            {
+                **FREE_MODEL,
+                "model_name": "backup",
+                "litellm_params": {**FREE_MODEL["litellm_params"], "model": "ollama/backup"},
+                "model_info": {**FREE_MODEL["model_info"], "id": "backup-id"},
+            },
+        ],
+        fallbacks=[{"free-model": ["paid-model", "backup"]}],
+        fallback_budget_check=check,
+        num_retries=0,
     )
-    from litellm.types.router import FallbackSkipReason, SkippedFallbackTarget
-
-    router = Router(
-        model_list=[FREE_MODEL, PAID_MODEL],
-        fallbacks=[{"free-model": ["paid-model"]}],
-        fallback_budget_check=ENFORCED,
+    host.answer("ollama/llama2", rate_limit())
+    response: Final = await core.acompletion(
+        model="free-model",
+        messages=[{"role": "user", "content": "hello"}],
+        metadata={"user_api_key_auth": _token(user_spend=spend, user_max_budget=50.0)},
     )
-    over = {"metadata": {"user_api_key_auth": _token(user_spend=1900.0, user_max_budget=50.0)}}
-    under = {"metadata": {"user_api_key_auth": _token(user_spend=1.0, user_max_budget=50.0)}}
-    over_attempted: Final = AttemptedFallbackTargets()
-    under_attempted: Final = AttemptedFallbackTargets()
-
-    assert (
-        await _is_fallback_target_within_budget(router, "paid-model", "free-model", over, attempted=over_attempted)
-        is False
-    )
-    assert (
-        await _is_fallback_target_within_budget(
-            router, "paid-model", "free-model", under, attempted=under_attempted
-        )
-        is True
-    )
-    assert over_attempted.skipped == (SkippedFallbackTarget("paid-model", FallbackSkipReason.OVER_BUDGET),)
-
-
-@pytest.mark.asyncio
-async def test_router_without_a_budget_check_attempts_every_fallback():
-    from litellm.router_utils.fallback_event_handlers import AttemptedFallbackTargets, _is_fallback_target_within_budget
-
-    router = _router()  # fallback_budget_check defaults to None
-    over = {"metadata": {"user_api_key_auth": _token(user_spend=1900.0, user_max_budget=50.0)}}
-    attempted: Final = AttemptedFallbackTargets()
-
-    assert (
-        await _is_fallback_target_within_budget(router, "paid-model", "free-model", over, attempted=attempted)
-        is True
-    )
+    assert tuple(host.deployments_called("acompletion")) == expected
+    assert response._hidden_params["model_id"] == expected[-1]
 
 
 @pytest.mark.asyncio
@@ -483,7 +477,7 @@ async def test_enforcement_is_on_by_default_and_opt_out_restores_the_leak(monkey
     over = {"metadata": {"user_api_key_auth": _token(user_spend=1900.0, user_max_budget=50.0)}}
 
     monkeypatch.setattr(proxy_server, "general_settings", {}, raising=False)
-    assert await router_fallback_budget_check(model="paid-model", request_kwargs=over, llm_router=_router()) is False
+    assert await router_fallback_budget_check(model="paid-model", request_kwargs=over, ctx=_router()._core_ctx) is False
 
     monkeypatch.setattr(proxy_server, "general_settings", {"enforce_fallback_budget": False}, raising=False)
-    assert await router_fallback_budget_check(model="paid-model", request_kwargs=over, llm_router=_router()) is True
+    assert await router_fallback_budget_check(model="paid-model", request_kwargs=over, ctx=_router()._core_ctx) is True

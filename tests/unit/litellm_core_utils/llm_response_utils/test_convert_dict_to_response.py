@@ -1,6 +1,7 @@
 import asyncio
 import importlib
 import json
+from collections.abc import Mapping
 from datetime import datetime, timedelta
 from typing import Final
 
@@ -13,6 +14,32 @@ from litellm.types.utils import ChatCompletionMessageCustomToolCall, ChatComplet
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 
 FIXED_TIME: Final[datetime] = datetime(2025, 1, 1, 12, 0, 0)
+
+
+@pytest.mark.parametrize("cached_fields", [{}, {"cached_tokens": None}, {"cached_tokens": 0}, {"cached_tokens": 6}])
+@pytest.mark.parametrize("convert", [False, True])
+def test_image_response_null_cached_tokens_match_absent(cached_fields: dict[str, int | None], convert: bool) -> None:
+    payload: Final = {
+        "created": 1700000000,
+        "data": [{"b64_json": "AA=="}],
+        "usage": {
+            "input_tokens": 10,
+            "output_tokens": 20,
+            "total_tokens": 30,
+            "input_tokens_details": {"text_tokens": 4, "image_tokens": 6, **cached_fields},
+        },
+    }
+    response: Final = (
+        LiteLLMResponseObjectHandler.convert_to_image_response(payload) if convert else ImageResponse(**payload)
+    )
+    assert response.usage is not None
+    assert response.usage.input_tokens_details.model_dump() == {
+        "text_tokens": 4,
+        "image_tokens": 6,
+        "cached_tokens": cached_fields.get("cached_tokens") or 0,
+        "cached_tokens_details": None,
+    }
+    assert response.data[0].b64_json == "AA=="
 
 
 def test_reused_ollama_ids_have_distinct_response_and_spend_ids() -> None:
@@ -319,6 +346,83 @@ _SCALAR_DEFAULTS = {
     "api_key": getattr(litellm, "api_key", None),
     "cohere_key": getattr(litellm, "cohere_key", None),
 }
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
+@pytest.mark.parametrize("reuse_response", [False, True])
+def test_convert_to_image_response_preserves_typed_svg_usage(reuse_response: bool) -> None:
+    svg_usage: Final = {
+        "model": "gpt-6.2-sol", "input_tokens": 10, "output_tokens": 20,
+        "reasoning_tokens": 5, "total_tokens": 30,
+    }
+    result: Final = convert_to_model_response_object(
+        response_object={"created": 1234567890, "data": [{"b64_json": "image"}], "svg_usage": svg_usage},
+        response_type="image_generation",
+        model_response_object=ImageResponse() if reuse_response else None,
+    )
+    assert result.svg_usage is not None
+    assert result.svg_usage.model_dump() == svg_usage
+    assert result.model_dump()["svg_usage"] == svg_usage
+
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
+@pytest.mark.parametrize("svg_usage", [
+    {"input_tokens": 10, "output_tokens": 20},
+    {"model": "gpt-6.2-sol", "input_tokens": "invalid", "output_tokens": 20},
+])
+def test_malformed_svg_usage_keeps_image_response_intact(svg_usage: dict[str, object]) -> None:
+    result: Final = convert_to_model_response_object(
+        response_object={"created": 1234567890, "data": [{"b64_json": "image"}], "svg_usage": svg_usage},
+        response_type="image_generation",
+    )
+    assert result.created == 1234567890
+    assert result.data[0].b64_json == "image"
+    assert result.svg_usage is None
+
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
+@pytest.mark.parametrize("token_field", ["input_tokens", "output_tokens", "reasoning_tokens", "total_tokens"])
+def test_negative_svg_tokens_keep_image_response_and_rendering_cost(
+    token_field: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    with caplog.at_level("DEBUG", logger="LiteLLM"):
+        result: Final = convert_to_model_response_object(
+            response_object={
+                "created": 1234567890,
+                "data": [{"b64_json": "image"}],
+                "usage": {
+                    "input_tokens": 10, "output_tokens": 20, "total_tokens": 30,
+                    "input_tokens_details": {"text_tokens": 10, "image_tokens": 0},
+                },
+                "svg_usage": {
+                    "model": "gpt-6.2-sol", "input_tokens": 10, "output_tokens": 20,
+                    "reasoning_tokens": 5, "total_tokens": 30, token_field: -1,
+                },
+            },
+            response_type="image_generation",
+        )
+    image_only: Final = result.model_copy(update={"svg_usage": None})
+    rendering_cost: Final = litellm.completion_cost(
+        model="gpt-image-2.6-flare", completion_response=image_only, call_type="image_generation"
+    )
+    assert result.created == 1234567890
+    assert result.data[0].b64_json == "image"
+    assert result.svg_usage is None
+    assert "Ignoring invalid SVG authoring usage in image response" in caplog.text
+    assert rendering_cost > 0
+    assert litellm.completion_cost(
+        model="gpt-image-2.6-flare", completion_response=result, call_type="image_generation"
+    ) == pytest.approx(rendering_cost)
+
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
+def test_svg_usage_defaults_optional_token_counts() -> None:
+    result: Final = ImageResponse(svg_usage={"model": "gpt-6.2-sol", "input_tokens": 10, "output_tokens": 20})
+    assert result.svg_usage is not None
+    assert result.svg_usage.model_dump() == {
+        "model": "gpt-6.2-sol", "input_tokens": 10, "output_tokens": 20,
+        "reasoning_tokens": 0, "total_tokens": 0,
+    }
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 def test_convert_to_image_response_basic():
@@ -1110,6 +1214,44 @@ def test_convert_to_model_response_object_with_logprobs():
 
     assert result.system_fingerprint is None
     assert result._hidden_params is not None
+
+
+@pytest.mark.parametrize(
+    "upstream_logprobs",
+    [
+        pytest.param({"content": [{"token": "Hi", "logprob": None}]}, id="null-content-logprob"),
+        pytest.param(
+            {
+                "content": [{"token": "Hi", "logprob": -0.1, "top_logprobs": []}],
+                "refusal": [{"token": "I", "logprob": None}],
+            },
+            id="null-refusal-logprob",
+        ),
+    ],
+)
+def test_convert_to_model_response_object_passes_nonconforming_logprobs_through(
+    upstream_logprobs: Mapping[str, object],
+) -> None:
+    result: Final = convert_to_model_response_object(
+        response_object={
+            "id": "chatcmpl-123",
+            "object": "chat.completion",
+            "created": 1702685778,
+            "model": "test-model",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {"role": "assistant", "content": "Hi"},
+                    "logprobs": upstream_logprobs,
+                    "finish_reason": "stop",
+                }
+            ],
+        },
+        model_response_object=ModelResponse(),
+    )
+
+    assert json.loads(result.model_dump_json())["choices"][0]["logprobs"] == upstream_logprobs
+
 
 def test_convert_to_model_response_object_error():
     """Test error handling for None response object."""
@@ -2214,6 +2356,35 @@ class TestNormalizeImagesForMessage:
         result = _normalize_images_for_message(images)
         assert result[0]["index"] == 5
 
+@pytest.mark.parametrize(
+    "image_fields",
+    [{}, {"upstream_id": "img-1"}, {"thought_signature": 42}],
+    ids=["empty", "without-signature", "non-string-signature"],
+)
+def test_chat_response_keeps_image_provider_fields_as_sent(image_fields: dict[str, object]) -> None:
+    image: Final = {
+        "type": "image_url",
+        "image_url": {"url": "data:image/png;base64,QQ=="},
+        "index": 0,
+        "provider_specific_fields": image_fields,
+    }
+    response: Final = convert_to_model_response_object(
+        response_object={
+            "id": "chatcmpl-1",
+            "object": "chat.completion",
+            "created": 1700000000,
+            "model": "image-model",
+            "choices": [
+                {"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": None, "images": [image]}}
+            ],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+        },
+        model_response_object=ModelResponse(),
+    )
+
+    assert response.choices[0].message.images == [image]
+
+
 class TestSafeConvertCreatedField:
     def test_none_returns_current_time(self):
         import time
@@ -2287,17 +2458,19 @@ class TestConvertToStreamingResponse:
         }
 
         chunks = list(convert_to_streaming_response(response_object=response_object))
-        assert len(chunks) == 1
-        chunk = chunks[0]
-        assert chunk.id == "chatcmpl-123"
-        assert chunk.model == "gpt-4"
-        assert chunk.created == 1700000000
-        assert chunk.system_fingerprint == "fp_abc"
-        assert chunk.choices[0].delta.content == "Hello!"
-        assert chunk.choices[0].delta.role == "assistant"
-        assert chunk.choices[0].finish_reason == "stop"
-        assert chunk.usage.prompt_tokens == 5
-        assert chunk.usage.completion_tokens == 2
+        assert len(chunks) == 2
+        assert all(chunk.id == "chatcmpl-123" for chunk in chunks)
+        assert all(chunk.model == "gpt-4" for chunk in chunks)
+        assert all(chunk.created == 1700000000 for chunk in chunks)
+        assert all(chunk.system_fingerprint == "fp_abc" for chunk in chunks)
+        content, finish = chunks
+        assert content.choices[0].delta.content == "Hello!"
+        assert content.choices[0].delta.role == "assistant"
+        assert content.choices[0].finish_reason is None
+        assert finish.choices[0].delta.content is None
+        assert finish.choices[0].finish_reason == "stop"
+        assert finish.usage.prompt_tokens == 5
+        assert finish.usage.completion_tokens == 2
 
     def test_finish_details_fallback(self):
         from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
@@ -2315,7 +2488,7 @@ class TestConvertToStreamingResponse:
         }
 
         chunks = list(convert_to_streaming_response(response_object=response_object))
-        assert chunks[0].choices[0].finish_reason == "length"
+        assert chunks[-1].choices[0].finish_reason == "length"
 
     def test_tool_calls_in_streaming(self):
         from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
@@ -2347,17 +2520,20 @@ class TestConvertToStreamingResponse:
         }
 
         async def run():
-            chunks = []
-            async for chunk in convert_to_streaming_response_async(
-                response_object=response_object
-            ):
-                chunks.append(chunk)
-            return chunks
+            return [
+                chunk
+                async for chunk in convert_to_streaming_response_async(
+                    response_object=response_object
+                )
+            ]
 
         chunks = asyncio.run(run())
-        assert len(chunks) == 1
+        assert len(chunks) == 2
         assert chunks[0].choices[0].delta.tool_calls[0].id == "call_1"
         assert chunks[0].choices[0].delta.tool_calls[0].function.name == "get_weather"
+        assert chunks[0].choices[0].finish_reason is None
+        assert chunks[1].choices[0].delta.tool_calls is None
+        assert chunks[1].choices[0].finish_reason == "tool_calls"
 
 class TestConvertToStreamingResponseAsync:
     def test_none_raises(self):
@@ -2395,23 +2571,98 @@ class TestConvertToStreamingResponseAsync:
         }
 
         async def run():
-            chunks = []
-            async for chunk in convert_to_streaming_response_async(
-                response_object=response_object
-            ):
-                chunks.append(chunk)
-            return chunks
+            return [
+                chunk
+                async for chunk in convert_to_streaming_response_async(
+                    response_object=response_object
+                )
+            ]
 
         chunks = asyncio.run(run())
         # Cached replay is sliced into word-shaped chunks to preserve
         # streaming cadence; joining the slices reconstructs the content.
-        assert len(chunks) == 2
+        assert len(chunks) == 3
         assert all(c.id == "msg_async_1" for c in chunks)
         assert all(c.model == "claude-3" for c in chunks)
         assert "".join(c.choices[0].delta.content or "" for c in chunks) == "Hi there"
         assert chunks[0].choices[0].finish_reason is None
         assert chunks[-1].choices[0].finish_reason == "stop"
         assert chunks[-1].usage.prompt_tokens == 3
+
+    def test_preserves_reasoning_fields(self):
+        import asyncio
+
+        from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
+            convert_to_streaming_response_async,
+        )
+
+        thinking_blocks = [
+            {
+                "type": "thinking",
+                "thinking": "cached reasoning",
+                "signature": "sig-cache",
+            }
+        ]
+        annotations = [
+            {
+                "type": "url_citation",
+                "url_citation": {
+                    "start_index": 0,
+                    "end_index": 5,
+                    "title": "Cached source",
+                    "url": "https://example.com/cached-source",
+                },
+            }
+        ]
+        response_object = {
+            "id": "msg_async_reasoning_cache",
+            "model": "claude-3",
+            "created": 1700000000,
+            "choices": [
+                {
+                    "finish_reason": "stop",
+                    "index": 0,
+                    "message": {
+                        "content": "Final answer",
+                        "role": "assistant",
+                        "reasoning_content": "cached reasoning",
+                        "thinking_blocks": thinking_blocks,
+                        "annotations": annotations,
+                    },
+                }
+            ],
+        }
+
+        async def run():
+            return [
+                chunk
+                async for chunk in convert_to_streaming_response_async(
+                    response_object=response_object
+                )
+            ]
+
+        chunks = asyncio.run(run())
+
+        assert (
+            "".join(c.choices[0].delta.content or "" for c in chunks) == "Final answer"
+        )
+        assert chunks[0].choices[0].delta.content is None
+        assert chunks[0].choices[0].delta.reasoning_content == "cached reasoning"
+        assert chunks[0].choices[0].delta.thinking_blocks == thinking_blocks
+        last_content = max(
+            i for i, c in enumerate(chunks) if c.choices[0].delta.content
+        )
+        assert chunks[last_content].choices[0].delta.annotations == annotations
+        assert [
+            i for i, c in enumerate(chunks) if c.choices[0].delta.get("annotations")
+        ] == [last_content]
+        assert not any(
+            hasattr(c.choices[0].delta, "reasoning_content") for c in chunks[1:]
+        )
+        assert not any(
+            hasattr(c.choices[0].delta, "thinking_blocks") for c in chunks[1:]
+        )
+
 
 class TestHandleInvalidParallelToolCalls:
     def test_none_input(self):
@@ -2695,6 +2946,44 @@ class TestConvertToModelResponseObjectAudioTranscription:
         assert result.usage.output_tokens == 5
         assert result.usage.input_token_details.audio_tokens == 4
 
+    @pytest.mark.parametrize(
+        ("hidden_params", "expected"),
+        [
+            (None, {"text": "Hello"}),
+            ({"cache_hit": True}, {"text": "Hello", "request_id": "rid-1", "truncated": True}),
+        ],
+    )
+    def test_request_id_and_truncation_come_back_only_from_the_cache(
+        self, hidden_params: dict[str, object] | None, expected: dict[str, object]
+    ) -> None:
+        from litellm.types.utils import TranscriptionResponse
+
+        result: Final = convert_to_model_response_object(
+            response_object={"text": "Hello", "request_id": "rid-1", "truncated": True},
+            model_response_object=TranscriptionResponse(),
+            response_type="audio_transcription",
+            hidden_params=hidden_params,
+        )
+        assert result.model_dump(exclude_none=True) == expected
+
+    def test_parse_error_keeps_the_transcript_out_of_the_exception(self):
+        import traceback
+
+        from litellm.types.utils import TranscriptionResponse
+
+        transcript: Final = "CANARYTRANSCRIPT customer account ending 2750"
+
+        with pytest.raises(Exception, match="Invalid response object") as exc_info:
+            convert_to_model_response_object(
+                response_object={"text": transcript, "usage": {"type": "duration", "seconds": "not-a-number"}},
+                model_response_object=TranscriptionResponse(),
+                response_type="audio_transcription",
+            )
+
+        rendered: Final = "".join(traceback.format_exception(exc_info.value))
+        assert "received_args=" in rendered
+        assert "CANARYTRANSCRIPT" not in rendered
+
 class TestConvertToModelResponseObjectRerank:
     def test_basic_rerank(self):
         from litellm.types.utils import RerankResponse
@@ -2712,6 +3001,71 @@ class TestConvertToModelResponseObjectRerank:
         )
         assert result.id == "rerank-123"
         assert result.results[0]["relevance_score"] == 0.9
+
+    @pytest.mark.parametrize("usage_key", ["usage", "provider_usage"])
+    @pytest.mark.parametrize("supplied", [True, False])
+    def test_rerank_keeps_the_provider_usage_on_both_overloads(self, usage_key: str, supplied: bool) -> None:
+        from litellm.types.utils import RerankResponse
+
+        usage: Final = {"search_units": 1, "cost": 0.002, "vendor_detail": {"tier": "x"}}
+        response_object: Final = {"id": "rerank-123", "meta": None, "results": [], usage_key: usage}
+        supplied_response: Final = RerankResponse() if supplied else None
+
+        result: Final = convert_to_model_response_object(
+            response_object=response_object,
+            model_response_object=supplied_response,
+            response_type="rerank",
+        )
+
+        assert not supplied or result is supplied_response
+        assert isinstance(result, RerankResponse)
+        assert result.provider_usage == usage
+        assert result.model_dump(by_alias=True)["usage"] == usage
+
+    @pytest.mark.parametrize("malformed_usage", ["n/a", ["search_units", 1], 7, None])
+    def test_rerank_with_malformed_provider_usage_still_converts(self, malformed_usage: object) -> None:
+        from litellm.types.utils import RerankResponse
+
+        result: Final = convert_to_model_response_object(
+            response_object={"id": "rerank-123", "meta": None, "results": [], "usage": malformed_usage},
+            model_response_object=None,
+            response_type="rerank",
+        )
+
+        assert isinstance(result, RerankResponse)
+        assert result.id == "rerank-123"
+        assert result.provider_usage is None
+        assert "usage" not in result.model_dump(by_alias=True)
+
+    @pytest.mark.parametrize(
+        ("incoming", "expected_usage"),
+        [
+            ({"usage": None}, None),
+            ({"provider_usage": None}, None),
+            ({"usage": "n/a"}, None),
+            ({"usage": ["search_units", 1]}, None),
+            ({"provider_usage": 7}, None),
+            ({"usage": {"search_units": 2, "cost": 0.004}}, {"search_units": 2, "cost": 0.004}),
+            ({"usage": None, "provider_usage": {"search_units": 2, "cost": 0.004}}, None),
+            ({}, {"search_units": 1, "cost": 0.002}),
+        ],
+    )
+    def test_rerank_updates_provider_usage_only_when_supplied(
+        self, incoming: Mapping[str, object], expected_usage: Mapping[str, object] | None
+    ) -> None:
+        from litellm.types.utils import RerankResponse
+
+        supplied: Final = RerankResponse(id="stale", results=[], usage={"search_units": 1, "cost": 0.002})
+
+        result: Final = convert_to_model_response_object(
+            response_object={"id": "rerank-123", "results": [], **incoming},
+            model_response_object=supplied,
+            response_type="rerank",
+        )
+
+        assert result is supplied
+        assert result.id == "rerank-123"
+        assert result.provider_usage == expected_usage
 
 class TestConvertToModelResponseObjectCompletion:
     def test_tool_calls_finish_reason_override(self):
@@ -2968,3 +3322,165 @@ def test_convert_to_model_response_object_function_output():
     assert result.usage.completion_tokens_details == CompletionTokensDetailsWrapper(reasoning_tokens=0)
 
     assert result._hidden_params is not None
+
+
+@pytest.mark.parametrize(
+    "vllm_choice_fields",
+    [{"stop_reason": ", 5", "token_ids": [16, 11, 220]}, {"stop_reason": 151645}, {"stop_reason": None, "token_ids": None}],
+    ids=["stop-string-with-token-ids", "stop-token", "natural-stop"],
+)
+def test_vllm_choice_fields_stay_on_the_choice_through_a_cache_round_trip(
+    vllm_choice_fields: dict[str, object],
+) -> None:
+    upstream: Final = {
+        "id": "chatcmpl-1",
+        "object": "chat.completion",
+        "created": 1,
+        "model": "Qwen/Qwen3-0.6B",
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "1, 2, 3, 4"},
+                "finish_reason": "stop",
+                **vllm_choice_fields,
+            }
+        ],
+    }
+    response: Final = convert_to_model_response_object(response_object=upstream, model_response_object=ModelResponse())
+    assert isinstance(response, ModelResponse)
+    cache_hit: Final = convert_to_model_response_object(
+        response_object=json.loads(response.model_dump_json()), model_response_object=ModelResponse()
+    )
+    assert isinstance(cache_hit, ModelResponse)
+
+    dumped_choices: Final = [json.loads(rebuilt.model_dump_json())["choices"][0] for rebuilt in (response, cache_hit)]
+    assert [{field: choice.get(field, "missing") for field in vllm_choice_fields} for choice in dumped_choices] == [
+        vllm_choice_fields,
+        vllm_choice_fields,
+    ]
+
+
+@pytest.mark.parametrize(
+    "vllm_choice_fields",
+    [{"stop_reason": ", 5", "token_ids": [16, 11, 220]}, {"stop_reason": None, "token_ids": None}],
+    ids=["stop-string-with-token-ids", "natural-stop"],
+)
+def test_vllm_choice_fields_cached_only_under_provider_specific_fields_come_back_on_the_choice(
+    vllm_choice_fields: dict[str, object],
+) -> None:
+    cached_before_upgrade: Final = {
+        "id": "chatcmpl-1",
+        "object": "chat.completion",
+        "created": 1,
+        "model": "Qwen/Qwen3-0.6B",
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "1, 2, 3, 4"},
+                "finish_reason": "stop",
+                "provider_specific_fields": vllm_choice_fields,
+            }
+        ],
+    }
+    cache_hit: Final = convert_to_model_response_object(
+        response_object=cached_before_upgrade, model_response_object=ModelResponse()
+    )
+    assert isinstance(cache_hit, ModelResponse)
+
+    dumped_choice: Final = json.loads(cache_hit.model_dump_json())["choices"][0]
+    assert {field: dumped_choice.get(field, "missing") for field in vllm_choice_fields} == vllm_choice_fields
+
+
+@pytest.mark.parametrize(
+    "reported_cost",
+    [
+        float("nan"),
+        float("inf"),
+        {"input_tokens_cost": 0.0001, "request_cost": 0.005, "total_cost": float("nan")},
+        {"input_tokens_cost": float("inf"), "request_cost": 0.005, "total_cost": 0.0051},
+    ],
+    ids=["nan", "inf", "breakdown-with-nan-total", "breakdown-with-inf-part"],
+)
+def test_a_non_finite_provider_usage_cost_is_dropped_so_the_response_is_strict_json(reported_cost: object):
+    response: Final = convert_to_model_response_object(
+        response_object={
+            "id": "chatcmpl-non-finite-cost",
+            "object": "chat.completion",
+            "created": 1,
+            "model": "gpt-4o",
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 3, "completion_tokens": 1, "total_tokens": 4, "cost": reported_cost},
+        },
+        model_response_object=ModelResponse(),
+    )
+
+    usage: Final = json.loads(json.dumps(response.model_dump(), allow_nan=False))["usage"]
+    assert "cost" not in usage
+    assert usage["total_tokens"] == 4
+
+
+def test_a_finite_provider_cost_breakdown_with_non_string_keys_is_kept():
+    response: Final = convert_to_model_response_object(
+        response_object={
+            "id": "chatcmpl-int-key-cost",
+            "object": "chat.completion",
+            "created": 1,
+            "model": "gpt-4o",
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 3, "completion_tokens": 1, "total_tokens": 4, "cost": {1: 0.5}},
+        },
+        model_response_object=ModelResponse(),
+    )
+
+    assert response.usage.cost == {1: 0.5}
+
+
+_URL_CITATION: Final = {
+    "type": "url_citation",
+    "url_citation": {
+        "url": "https://example.com",
+        "title": "Example",
+        "content": "cited snippet",
+        "start_index": 0,
+        "end_index": 4,
+    },
+}
+_FILE_ANNOTATION: Final = {
+    "type": "file",
+    "file": {"hash": "abc123", "name": "report.pdf", "content": [{"type": "text", "text": "parsed page"}]},
+}
+
+
+def _message_with_annotations(annotations: list[dict[str, object]]) -> Message:
+    response: Final = {
+        "id": "gen-1",
+        "object": "chat.completion",
+        "created": 1712697600,
+        "model": "z-ai/glm-5.3",
+        "choices": [
+            {
+                "index": 0,
+                "finish_reason": "stop",
+                "message": {"role": "assistant", "content": "done", "annotations": annotations},
+            }
+        ],
+        "usage": {"completion_tokens": 1, "prompt_tokens": 1, "total_tokens": 2},
+    }
+    return convert_to_model_response_object(
+        response_object=response, model_response_object=ModelResponse(), response_type="completion"
+    ).choices[0].message
+
+
+def test_annotations_typed_other_than_url_citation_move_to_provider_specific_fields() -> None:
+    untyped_annotation: Final = {"start_index": 0, "end_index": 4}
+    message: Final = _message_with_annotations([_URL_CITATION, untyped_annotation, _FILE_ANNOTATION])
+
+    assert message.annotations == [_URL_CITATION, untyped_annotation]
+    assert message.provider_specific_fields["annotations"] == [_FILE_ANNOTATION]
+
+
+def test_url_citation_annotations_keep_provider_keys() -> None:
+    message: Final = _message_with_annotations([_URL_CITATION])
+
+    assert message.annotations == [_URL_CITATION]
+    assert "annotations" not in (message.provider_specific_fields or {})

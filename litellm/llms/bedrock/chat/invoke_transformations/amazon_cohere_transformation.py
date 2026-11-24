@@ -37,9 +37,10 @@ class AmazonCohereConfig(AmazonInvokeConfig, CohereChatConfig):
 
     @classmethod
     def get_config(cls):
+        class_attributes: Final[Mapping[str, object]] = types.MappingProxyType(cls.__dict__)
         return {
             k: v
-            for k, v in cls.__dict__.items()
+            for k, v in class_attributes.items()
             if not k.startswith("__")
             and not k.startswith("_abc")
             and not isinstance(
@@ -60,11 +61,11 @@ class AmazonCohereConfig(AmazonInvokeConfig, CohereChatConfig):
 
     def map_openai_params(
         self,
-        non_default_params: dict,
-        optional_params: dict,
+        non_default_params: dict[str, object],
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:
         return CohereChatConfig.map_openai_params(
             self,
             non_default_params=non_default_params,

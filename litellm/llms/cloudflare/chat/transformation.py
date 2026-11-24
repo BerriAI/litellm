@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from typing import Final
 
 import httpx
@@ -14,7 +15,7 @@ from litellm.types.llms.openai import AllMessageValues
 
 
 class CloudflareError(BaseLLMException):
-    def __init__(self, status_code, message):
+    def __init__(self, status_code: int, message: str) -> None:
         self.status_code = status_code
         self.message = message
         self.request = httpx.Request(method="POST", url="https://api.cloudflare.com")
@@ -33,8 +34,8 @@ class CloudflareChatConfig(OpenAIGPTConfig):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         stream: bool | None = None,
     ) -> str:
         return super().get_complete_url(
@@ -58,7 +59,7 @@ class CloudflareChatConfig(OpenAIGPTConfig):
         trimmed: Final = api_base.rstrip("/")
         if trimmed.endswith("/ai/run"):
             verbose_logger.warning(
-                "Cloudflare api_base ending in '/ai/run' is the legacy Workers AI path and no longer serves OpenAI-compatible requests; rewriting to the '/ai/v1' endpoint"
+                "Cloudflare chat completions require the OpenAI-compatible '/ai/v1' endpoint; rewriting api_base ending in '/ai/run' to '/ai/v1'. Decision models continue to use the native Workers AI '/ai/run/{model}' endpoint."
             )
             return join_api_base(trimmed[: -len("/ai/run")], "ai/v1")
         return api_base
@@ -68,8 +69,8 @@ class CloudflareChatConfig(OpenAIGPTConfig):
         headers: dict,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
     ) -> dict:
@@ -87,7 +88,9 @@ class CloudflareChatConfig(OpenAIGPTConfig):
             api_base=api_base,
         )
 
-    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: Mapping[str, object] | httpx.Headers
+    ) -> BaseLLMException:
         return CloudflareError(
             status_code=status_code,
             message=error_message,

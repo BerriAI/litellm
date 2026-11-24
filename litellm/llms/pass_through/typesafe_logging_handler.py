@@ -6,11 +6,13 @@ import httpx
 from pydantic import TypeAdapter, ValidationError
 
 import litellm
+from litellm.litellm_core_utils.core_helpers import finite_reported_cost
 from litellm.litellm_core_utils.decisions_pricing import apply_decisions_pricing
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.litellm_logging import (
     get_standard_logging_object_payload,  # pyright: ignore[reportUnknownVariableType]  # legacy helper has an untyped signature
 )
+from litellm.llms.eu_jev.common_utils import EU_JEV_LATEST_MODEL, eu_jev_registry_model
 from litellm.llms.laya.common_utils import laya_response_model
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.utils import ModelResponse, StandardPassThroughResponseObject, Usage
@@ -82,18 +84,27 @@ class TypeSafePassthroughLoggingHandler:
         response_model: Final = (
             laya_response_model(response_body, request_model) if custom_llm_provider == "laya" else response.model
         )
-        logged_model: Final = response_model or request_model or "unknown"
+        registry_request_model: Final = (
+            eu_jev_registry_model(request_model) if custom_llm_provider == "eu_jev" else request_model
+        )
+        logged_model: Final = response_model or registry_request_model or "unknown"
         model_name: Final = f"{custom_llm_provider}/{logged_model}"
         usage: Final = response.usage or _TypeSafeUsage()
         input_tokens: Final = usage.input_tokens
         output_tokens: Final = usage.output_tokens
+        candidate_models: Final = (
+            (response_model, registry_request_model, EU_JEV_LATEST_MODEL)
+            if custom_llm_provider == "eu_jev"
+            else (response_model, registry_request_model)
+        )
         candidate_model_keys: Final = tuple(
-            f"{custom_llm_provider}/{model}" for model in (response_model, request_model) if model is not None
+            f"{custom_llm_provider}/{model}" for model in candidate_models if model is not None
         )
         pricing: Final = _pricing_for(candidate_model_keys)
+        reported_cost: Final = finite_reported_cost(usage.cost) if custom_llm_provider == "openrouter" else None
         response_cost: Final = (
-            usage.cost
-            if custom_llm_provider == "openrouter" and usage.cost is not None
+            reported_cost
+            if reported_cost is not None
             else input_tokens * pricing.input_cost_per_token + output_tokens * pricing.output_cost_per_token
         )
         usage_object: Final = Usage(

@@ -1,3 +1,6 @@
+import logging
+from typing import Final
+
 import httpx
 import pytest
 
@@ -242,11 +245,33 @@ def test_map_openai_params_maps_reasoning_effort(effort, expected):
     assert mapped["reasoning"] is expected
 
 
-def test_map_openai_params_drops_unknown_reasoning_effort_when_dropping():
-    mapped = FalAIChatConfig().map_openai_params(
-        non_default_params={"reasoning_effort": "extreme"}, optional_params={}, model=MODEL, drop_params=True
-    )
+@pytest.mark.parametrize("drop_globally", [False, True])
+def test_map_openai_params_drops_unknown_reasoning_effort_with_one_warning(
+    drop_globally: bool, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", drop_globally)
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        mapped: Final = FalAIChatConfig().map_openai_params(
+            non_default_params={"reasoning_effort": "xhigh"},
+            optional_params={},
+            model=MODEL,
+            drop_params=not drop_globally,
+        )
+    drop_warnings: Final = [record.getMessage() for record in caplog.records if "Dropping" in record.getMessage()]
     assert "reasoning" not in mapped
+    assert len(drop_warnings) == 1
+    assert all(fragment in drop_warnings[0] for fragment in ("reasoning_effort='xhigh'", MODEL, "(drop_params=True)"))
+
+
+def test_map_openai_params_rejects_unknown_reasoning_effort_without_drop_params(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    with pytest.raises(FalAIError) as exc_info:
+        FalAIChatConfig().map_openai_params(
+            non_default_params={"reasoning_effort": "xhigh"}, optional_params={}, model=MODEL, drop_params=False
+        )
+    assert exc_info.value.status_code == 400
 
 
 @pytest.mark.parametrize("effort", [{"level": "low"}, ["low"], 1])

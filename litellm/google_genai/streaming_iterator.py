@@ -1,12 +1,17 @@
 import asyncio
+from collections.abc import AsyncIterator, Iterator, Mapping
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Final
 
+import httpx
+
 import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.llms.custom_httpx.sse_lines import aiter_sse_lines, iter_sse_lines
 from litellm.proxy.pass_through_endpoints.success_handler import (
     PassThroughEndpointLogging,
 )
+from litellm.responses.streaming_iterator import spawn_logging_task
 from litellm.types.passthrough_endpoints.pass_through_endpoints import EndpointType
 
 if TYPE_CHECKING:
@@ -23,7 +28,7 @@ def _encode_google_genai_sse_event(event_lines: list[str]) -> bytes:
     return ("\n".join(event_lines) + "\n\n").encode("utf-8")
 
 
-def _next_google_genai_sse_chunk(line_iter) -> bytes:
+def _next_google_genai_sse_chunk(line_iter: Iterator[str]) -> bytes:
     event_lines: Final[list[str]] = []
     while True:
         try:
@@ -39,7 +44,7 @@ def _next_google_genai_sse_chunk(line_iter) -> bytes:
         event_lines.append(line)
 
 
-async def _anext_google_genai_sse_chunk(line_iter) -> bytes:
+async def _anext_google_genai_sse_chunk(line_iter: AsyncIterator[str]) -> bytes:
     event_lines: Final[list[str]] = []
     while True:
         try:
@@ -64,7 +69,7 @@ class BaseGoogleGenAIGenerateContentStreamingIterator:
     def __init__(
         self,
         litellm_logging_obj: LiteLLMLoggingObj,
-        request_body: dict,
+        request_body: dict[str, object],
         model: str,
         custom_llm_provider: str,
         hidden_params: dict[str, object] | None = None,
@@ -89,7 +94,8 @@ class BaseGoogleGenAIGenerateContentStreamingIterator:
         )
 
         end_time: Final = datetime.now()
-        asyncio.create_task(
+        spawn_logging_task(
+            asyncio.get_running_loop(),
             PassThroughStreamingHandler.route_streaming_logging_to_handler(
                 litellm_logging_obj=self.litellm_logging_obj,
                 passthrough_success_handler_obj=GLOBAL_PASS_THROUGH_SUCCESS_HANDLER_OBJ,
@@ -100,7 +106,8 @@ class BaseGoogleGenAIGenerateContentStreamingIterator:
                 raw_bytes=self.collected_chunks,
                 end_time=end_time,
                 model=self.model,
-            )
+            ),
+            task_name="Google GenAI stream success log",
         )
 
 
@@ -111,13 +118,13 @@ class GoogleGenAIGenerateContentStreamingIterator(BaseGoogleGenAIGenerateContent
 
     def __init__(
         self,
-        response,
+        response: httpx.Response,
         model: str,
         logging_obj: LiteLLMLoggingObj,
         generate_content_provider_config: BaseGoogleGenAIGenerateContentConfig,
-        litellm_metadata: dict,
+        litellm_metadata: Mapping[str, object],
         custom_llm_provider: str,
-        request_body: dict | None = None,
+        request_body: dict[str, object] | None = None,
         hidden_params: dict[str, object] | None = None,
     ):
         super().__init__(
@@ -131,9 +138,9 @@ class GoogleGenAIGenerateContentStreamingIterator(BaseGoogleGenAIGenerateContent
         self.model = model
         self.generate_content_provider_config = generate_content_provider_config
         self.litellm_metadata = litellm_metadata
-        # Gemini streamGenerateContent uses SSE line framing; iter_lines keeps
+        # Gemini streamGenerateContent uses SSE line framing; iter_sse_lines keeps
         # large inlineData payloads (e.g. image/jpeg) intact within one event.
-        self.stream_iterator = response.iter_lines()
+        self.stream_iterator = iter_sse_lines(response.iter_text())
 
     def __iter__(self):
         return self
@@ -149,7 +156,7 @@ class GoogleGenAIGenerateContentStreamingIterator(BaseGoogleGenAIGenerateContent
     def __aiter__(self):
         return self
 
-    async def __anext__(self):
+    async def __anext__(self) -> bytes:
         # This should not be used for sync responses
         # If you need async iteration, use AsyncGoogleGenAIGenerateContentStreamingIterator
         raise NotImplementedError("Use AsyncGoogleGenAIGenerateContentStreamingIterator for async iteration")
@@ -162,13 +169,13 @@ class AsyncGoogleGenAIGenerateContentStreamingIterator(BaseGoogleGenAIGenerateCo
 
     def __init__(
         self,
-        response,
+        response: httpx.Response,
         model: str,
         logging_obj: LiteLLMLoggingObj,
         generate_content_provider_config: BaseGoogleGenAIGenerateContentConfig,
-        litellm_metadata: dict,
+        litellm_metadata: Mapping[str, object],
         custom_llm_provider: str,
-        request_body: dict | None = None,
+        request_body: dict[str, object] | None = None,
         hidden_params: dict[str, object] | None = None,
     ):
         super().__init__(
@@ -182,9 +189,9 @@ class AsyncGoogleGenAIGenerateContentStreamingIterator(BaseGoogleGenAIGenerateCo
         self.model = model
         self.generate_content_provider_config = generate_content_provider_config
         self.litellm_metadata = litellm_metadata
-        # Gemini streamGenerateContent uses SSE line framing; aiter_lines keeps
+        # Gemini streamGenerateContent uses SSE line framing; aiter_sse_lines keeps
         # large inlineData payloads (e.g. image/jpeg) intact within one event.
-        self.stream_iterator = response.aiter_lines()
+        self.stream_iterator = aiter_sse_lines(response.aiter_text())
 
     def __aiter__(self):
         return self

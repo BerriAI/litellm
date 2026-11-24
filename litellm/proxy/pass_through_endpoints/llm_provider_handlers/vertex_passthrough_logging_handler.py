@@ -2,8 +2,9 @@ import asyncio
 import re
 from collections.abc import Mapping, Sequence
 from datetime import datetime
+from itertools import chain
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, cast
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 import httpx
 from pydantic import ConfigDict, TypeAdapter
@@ -11,6 +12,7 @@ from pydantic import ConfigDict, TypeAdapter
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import VERTEX_BATCH_PREDICTION_JOBS_ROUTE
+from litellm.litellm_core_utils.core_helpers import SupportsGet, as_object_list, iter_items, joined, require_get
 from litellm.litellm_core_utils.hidden_params import get_hidden_params
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.llm_cost_calc.usage_object_transformation import (
@@ -19,6 +21,7 @@ from litellm.litellm_core_utils.llm_cost_calc.usage_object_transformation import
 from litellm.llms.vertex_ai.common_utils import (
     get_vertex_ai_lyria_generation_cost,
     get_vertex_location_from_url,
+    get_vertex_model_id_from_url,
 )
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
     ModelResponseIterator as VertexModelResponseIterator,
@@ -47,6 +50,19 @@ from litellm.types.utils import (
 )
 
 vertex_search_api_config: Final = VertexSearchAPIVectorStoreConfig()
+GEMINI_API_HOST_SUFFIX: Final = "generativelanguage.googleapis.com"
+GOOGLE_AI_HOST_SUFFIXES: Final = (
+    GEMINI_API_HOST_SUFFIX,
+    "aiplatform.googleapis.com",
+    "discoveryengine.googleapis.com",
+)
+_VERTEX_MULTI_REGION_HOST: Final = re.compile(r"aiplatform\.[a-z0-9-]+\.rep\.googleapis\.com")
+
+
+def _is_host_or_subdomain(hostname: str, suffix: str) -> bool:
+    return hostname == suffix or hostname.endswith((f".{suffix}", f"-{suffix}"))
+
+
 if TYPE_CHECKING:
     from litellm.types.utils import LiteLLMBatch
 
@@ -72,6 +88,15 @@ def _interactions_model(
     if isinstance(request_model, str) and request_model:
         return request_model
     return None
+
+
+def _dict_getter(value: object) -> SupportsGet | None:
+    """The value's key reader when it is a dict, else None."""
+    return require_get(value) if _is_dict(value) else None
+
+
+def _is_dict(value: object) -> bool:
+    return isinstance(value, dict)
 
 
 class GeminiSseChunkParser(VertexModelResponseIterator):
@@ -147,7 +172,7 @@ class VertexPassthroughLoggingHandler:
         end_time: datetime,
         cache_hit: bool,
         request_body: dict | None = None,
-        **kwargs,
+        **kwargs: object,
     ) -> PassThroughEndpointLoggingTypedDict:
         vertex_location: Final = get_vertex_location_from_url(url_route)
         if vertex_location is not None:
@@ -351,7 +376,7 @@ class VertexPassthroughLoggingHandler:
         httpx_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
         url_route: str,
-        kwargs: dict,
+        kwargs: dict[str, object],
     ) -> PassThroughEndpointLoggingTypedDict:
         """Handle predict endpoint responses (embeddings, image generation)."""
         from litellm.llms.vertex_ai.image_generation.image_generation_handler import (
@@ -437,7 +462,7 @@ class VertexPassthroughLoggingHandler:
         json_response: dict,  # mutable-ok: passthrough logging receives the decoded provider response dictionary
         logging_obj: LiteLLMLoggingObj,
         model: str,
-        kwargs: dict,  # mutable-ok: passthrough logging enriches the shared callback metadata dictionary
+        kwargs: dict[str, object],  # mutable-ok: passthrough logging enriches the shared callback metadata dictionary
     ) -> PassThroughEndpointLoggingTypedDict:
         prediction_count: Final = VertexPassthroughLoggingHandler._get_audio_prediction_count(
             json_response=json_response
@@ -486,37 +511,38 @@ class VertexPassthroughLoggingHandler:
     def _get_audio_prediction_count(
         json_response: Mapping[str, object],
     ) -> int:
-        predictions: Final = json_response.get("predictions")
-        if not isinstance(predictions, list):
+        predictions: Final = as_object_list(json_response.get("predictions"))
+        if predictions is None:
             return 0
         return sum(
             1
-            for prediction in predictions
-            if isinstance(prediction, dict) and (prediction.get("audioContent") or prediction.get("bytesBase64Encoded"))
+            for fields in (_dict_getter(prediction) for prediction in predictions)
+            if fields is not None and (fields.get("audioContent") or fields.get("bytesBase64Encoded"))
         )
 
     @staticmethod
-    def _extract_embed_content_input(request_body: dict | None, batch: bool) -> str:
+    def _extract_embed_content_input(request_body: Mapping[str, object] | None, batch: bool) -> str:
         """Extract raw input text from an :embedContent or :batchEmbedContents request body for token counting."""
         if not request_body:
             return ""
         if batch:
-            texts: Final = []
-            for req in request_body.get("requests", []):
-                for part in req.get("content", {}).get("parts", []):
-                    texts.append(part.get("text", ""))
-            return " ".join(texts)
+            part_lists: Final = (
+                iter_items(require_get(require_get(req).get("content", {})).get("parts", []))
+                for req in iter_items(request_body.get("requests", []))
+            )
+            texts: Final = [require_get(part).get("text", "") for part in chain.from_iterable(part_lists)]
+            return joined(" ", texts)
         else:
-            parts: Final = request_body.get("content", {}).get("parts", [])
-            return " ".join(part.get("text", "") for part in parts)
+            parts: Final = require_get(request_body.get("content", {})).get("parts", [])
+            return joined(" ", (require_get(part).get("text", "") for part in iter_items(parts)))
 
     @staticmethod
     def _handle_embed_content_response(
         httpx_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
         url_route: str,
-        kwargs: dict,
-        request_body: dict | None = None,
+        kwargs: dict[str, object],
+        request_body: Mapping[str, object] | None = None,
     ) -> PassThroughEndpointLoggingTypedDict:
         """Handle Vertex :embedContent and :batchEmbedContents endpoint responses."""
         from litellm.llms.vertex_ai.gemini_embeddings.batch_embed_content_transformation import (
@@ -527,7 +553,7 @@ class VertexPassthroughLoggingHandler:
         )
 
         model: Final = VertexPassthroughLoggingHandler.extract_model_from_url(url_route)
-        response_json: Final = httpx_response.json()
+        response_json: Final = _DECODED_JSON.validate_python(httpx_response.json())
         is_batch: Final = "batchEmbedContents" in url_route
 
         input_text: Final = VertexPassthroughLoggingHandler._extract_embed_content_input(
@@ -580,7 +606,7 @@ class VertexPassthroughLoggingHandler:
         litellm_logging_obj: LiteLLMLoggingObj,
         passthrough_success_handler_obj: PassThroughEndpointLogging,
         url_route: str,
-        request_body: dict,
+        request_body: Mapping[str, object],
         endpoint_type: EndpointType,
         start_time: datetime,
         all_chunks: list[str],
@@ -684,11 +710,18 @@ class VertexPassthroughLoggingHandler:
 
     @staticmethod
     def extract_model_from_url(url: str) -> str:
-        pattern: Final = r"/models/([^:]+)"
-        match: Final = re.search(pattern, url)
-        if match:
-            return match.group(1)
-        return "unknown"
+        return get_vertex_model_id_from_url(url) or "unknown"
+
+    @staticmethod
+    def model_from_url_route(url_route: str) -> str | None:
+        parsed_url: Final = urlparse(url_route)
+        model: Final = get_vertex_model_id_from_url(parsed_url.path)
+        if model is None:
+            return "vertex_ai/search_api" if ":search" in parsed_url.path else None
+        streamed: Final = "sse" in parse_qs(parsed_url.query).get("alt", ())
+        if parsed_url.path.endswith((":rawPredict", ":streamRawPredict")) and not streamed:
+            return f"vertex_ai/{model}"
+        return model
 
     @staticmethod
     def extract_model_name_from_vertex_path(vertex_model_path: str) -> str:
@@ -734,20 +767,34 @@ class VertexPassthroughLoggingHandler:
         return None
 
     @staticmethod
-    def _get_custom_llm_provider(url: str, logging_obj: LiteLLMLoggingObj) -> str:
+    def is_google_ai_url(url: str) -> bool:
         hostname: Final = urlparse(url).hostname
-        if logging_obj.model_call_details.get("custom_llm_provider") == litellm.LlmProviders.GEMINI.value or (
-            hostname is not None
-            and (
-                hostname == "generativelanguage.googleapis.com"
-                or hostname.endswith(".generativelanguage.googleapis.com")
-            )
-        ):
+        return hostname is not None and (
+            any(_is_host_or_subdomain(hostname, suffix) for suffix in GOOGLE_AI_HOST_SUFFIXES)
+            or _VERTEX_MULTI_REGION_HOST.fullmatch(hostname) is not None
+        )
+
+    @staticmethod
+    def is_gemini_api_host(url: str) -> bool:
+        hostname: Final = urlparse(url).hostname
+        return hostname is not None and (
+            hostname == GEMINI_API_HOST_SUFFIX or hostname.endswith(f".{GEMINI_API_HOST_SUFFIX}")
+        )
+
+    @staticmethod
+    def custom_llm_provider_from_url(url: str) -> str:
+        if VertexPassthroughLoggingHandler.is_gemini_api_host(url):
             return litellm.LlmProviders.GEMINI.value
         return litellm.LlmProviders.VERTEX_AI.value
 
     @staticmethod
-    def _is_multimodal_embedding_response(json_response: dict) -> bool:
+    def _get_custom_llm_provider(url: str, logging_obj: LiteLLMLoggingObj) -> str:
+        if logging_obj.model_call_details.get("custom_llm_provider") == litellm.LlmProviders.GEMINI.value:
+            return litellm.LlmProviders.GEMINI.value
+        return VertexPassthroughLoggingHandler.custom_llm_provider_from_url(url)
+
+    @staticmethod
+    def _is_multimodal_embedding_response(json_response: Mapping[str, object]) -> bool:
         """
         Detect if the response is from a multimodal embedding request.
 
@@ -764,7 +811,7 @@ class VertexPassthroughLoggingHandler:
         # Check if response contains multimodal embedding fields
         if "predictions" in json_response:
             predictions: Final = json_response["predictions"]
-            for prediction in predictions:
+            for prediction in iter_items(predictions):
                 if isinstance(prediction, dict):
                     # Check for multimodal embedding response fields
                     if any(
@@ -783,13 +830,13 @@ class VertexPassthroughLoggingHandler:
     def _create_vertex_response_logging_payload_for_generate_content(
         litellm_model_response: ModelResponse | TextCompletionResponse,
         model: str,
-        kwargs: dict,
+        kwargs: dict[str, object],
         start_time: datetime,
         end_time: datetime,
         logging_obj: LiteLLMLoggingObj,
         custom_llm_provider: str,
         vertex_location: str | None,
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Create the standard logging object for Vertex passthrough generateContent (streaming and non-streaming)
 
@@ -824,7 +871,7 @@ class VertexPassthroughLoggingHandler:
         start_time: datetime,
         end_time: datetime,
         cache_hit: bool,
-        **kwargs,
+        **kwargs: object,
     ) -> PassThroughEndpointLoggingTypedDict:
         """
         Handle batch prediction jobs passthrough logging.
@@ -909,7 +956,7 @@ class VertexPassthroughLoggingHandler:
                 kwargs["batch_job_state"] = "JOB_STATE_PENDING"
 
                 logging_obj.model = model_name
-                logging_obj.model_call_details["model"] = logging_obj.model
+                logging_obj.model_call_details["model"] = model_name
                 logging_obj.model_call_details["response_cost"] = response_cost
                 logging_obj.model_call_details["batch_id"] = batch_id
 
@@ -1075,8 +1122,7 @@ class VertexPassthroughLoggingHandler:
             # Try to find the model in the router by the extracted model name
             extracted_model_name = VertexPassthroughLoggingHandler.extract_model_name_from_vertex_path(model_name)
 
-            # Use the existing get_model_ids method from router
-            model_ids: Final = llm_router.get_model_ids(model_name=extracted_model_name)
+            model_ids: Final = llm_router.registry().names(extracted_model_name, kind="ids")
             if model_ids and len(model_ids) > 0:
                 # Use the first model ID found
                 actual_model_id = model_ids[0]

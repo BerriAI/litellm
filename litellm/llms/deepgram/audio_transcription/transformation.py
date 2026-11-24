@@ -2,12 +2,13 @@
 Translates from OpenAI's `/v1/audio/transcriptions` to Deepgram's `/v1/listen`
 """
 
-from collections.abc import Iterable, Mapping
-from typing import Final
+from collections.abc import Iterable, Mapping, Sequence
+from typing import Final, Protocol, cast
 from urllib.parse import urlencode
 
 from httpx import Headers, Response
-from pydantic import ConfigDict, TypeAdapter
+from pydantic import ConfigDict, InstanceOf, TypeAdapter
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm.litellm_core_utils.audio_utils.utils import process_audio_file
 from litellm.litellm_core_utils.url_utils import join_api_base
@@ -27,6 +28,31 @@ from ..common_utils import DeepgramException
 
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
 _JSON_OBJECTS: Final = TypeAdapter(Iterable[Mapping[str, object]], config=ConfigDict(hide_input_in_errors=True))
+_RESPONSE_BODY: Final = TypeAdapter(InstanceOf[dict[str, object]], config=ConfigDict(hide_input_in_errors=True))
+_WORD_LIST: Final = TypeAdapter(InstanceOf[list[object]], config=ConfigDict(hide_input_in_errors=True))
+
+
+class _JsonResponse(Protocol):
+    def json(self) -> object: ...
+
+
+def _json_body(response: _JsonResponse) -> object:
+    return response.json()
+
+
+class _DeepgramAlternative(TypedDict):
+    transcript: ReadOnly[str]
+    words: ReadOnly[Sequence[Mapping[str, object]]]
+    paragraphs: ReadOnly[NotRequired[Mapping[str, str]]]
+
+
+class _DeepgramChannel(TypedDict):
+    alternatives: ReadOnly[Sequence[_DeepgramAlternative]]
+
+
+class _DeepgramResponse(TypedDict):
+    results: ReadOnly[Mapping[str, Sequence[_DeepgramChannel]]]
+    metadata: ReadOnly[Mapping[str, float]]
 
 
 class DeepgramAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
@@ -35,7 +61,7 @@ class DeepgramAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
 
     def map_openai_params(
         self,
-        non_default_params: dict,
+        non_default_params: Mapping[str, object],
         optional_params: dict,
         model: str,
         drop_params: bool,
@@ -53,8 +79,8 @@ class DeepgramAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         self,
         model: str,
         audio_file: FileTypes,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
     ) -> AudioTranscriptionRequestData:
         """
         Processes the audio file input based on its type and returns AudioTranscriptionRequestData.
@@ -82,7 +108,10 @@ class DeepgramAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         Transforms the raw response from Deepgram to the TranscriptionResponse format
         """
         try:
-            response_json: Final = raw_response.json()
+            body: Final = _json_body(raw_response)
+            response_json: Final = cast(  # cast-ok: the body passes through unvalidated, as before it was typed
+                _DeepgramResponse, body
+            )
 
             # Get the first alternative from the first channel
             first_channel: Final = response_json["results"]["channels"][0]
@@ -102,7 +131,7 @@ class DeepgramAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
                 text = first_alternative["paragraphs"]["transcript"]
             else:
                 # Diarization without paragraphs: reconstruct from words
-                text = self._reconstruct_diarized_transcript(first_alternative["words"])
+                text = self._reconstruct_diarized_transcript(_WORD_LIST.validate_python(first_alternative["words"]))
 
             # Create TranscriptionResponse object
             response: Final = TranscriptionResponse(text=text)
@@ -124,12 +153,12 @@ class DeepgramAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
                 ]
 
             # Store full response in hidden params
-            response.hidden_params = response_json
+            response.hidden_params = _RESPONSE_BODY.validate_python(body)
 
             return response
 
         except Exception as e:
-            raise ValueError(f"Error transforming Deepgram response: {e}\nResponse: {raw_response.text}")
+            raise ValueError(f"Error transforming Deepgram response: {e}") from None
 
     def _reconstruct_diarized_transcript(self, words: list) -> str:
         """
@@ -144,7 +173,7 @@ class DeepgramAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         if not words:
             return ""
 
-        segments: Final = []
+        segments: Final[list[str]] = []
         current_speaker = None
         current_words: list[str] = []
 
@@ -175,7 +204,7 @@ class DeepgramAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         api_key: str | None,
         model: str,
         optional_params: dict,
-        litellm_params: dict,
+        litellm_params: Mapping[str, object],
         stream: bool | None = None,
     ) -> str:
         if api_base is None:
@@ -195,7 +224,7 @@ class DeepgramAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
 
         return url
 
-    def _format_param_value(self, value) -> str:
+    def _format_param_value(self, value: object) -> str:
         """
         Formats a parameter value for use in query string.
 
@@ -209,7 +238,7 @@ class DeepgramAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
             return str(value).lower()
         return str(value)
 
-    def _build_query_params(self, optional_params: dict, model: str) -> dict:
+    def _build_query_params(self, optional_params: dict, model: str) -> dict[str, str]:
         """
         Builds a dictionary of query parameters from optional_params.
 
@@ -220,7 +249,7 @@ class DeepgramAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         Returns:
             Dictionary of filtered and formatted query parameters
         """
-        query_params: Final = {}
+        query_params: Final[dict[str, str]] = {}
         provider_specific_params: Final = self.get_provider_specific_params(
             optional_params=optional_params,
             model=model,
@@ -236,14 +265,14 @@ class DeepgramAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: Mapping[str, object],
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, str]:
         api_key = api_key or get_secret_str("DEEPGRAM_API_KEY")
         return {
             "Authorization": f"Token {api_key}",

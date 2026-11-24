@@ -150,6 +150,10 @@ def error_type(response: httpx.Response) -> str:
     return str(object_value(JSON_OBJECT.validate_json(response.content)["error"])["type"])
 
 
+def budget_refusal_error_type(route: str) -> str:
+    return "invalid_request_error" if route == "messages" else "budget_exceeded"
+
+
 def settle(
     send: Callable[[str], httpx.Response], status: int, *, burst: int = GATEWAY_BURST, seconds: float = 60
 ) -> None:

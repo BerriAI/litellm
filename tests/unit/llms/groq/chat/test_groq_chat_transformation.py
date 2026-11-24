@@ -1,4 +1,6 @@
+import copy
 import logging
+from typing import Final
 from unittest.mock import patch
 
 import httpx
@@ -205,6 +207,13 @@ class TestGroqWebSearchUsageSignal:
         model_response = litellm.ModelResponse()
         GroqChatConfig()._add_web_search_usage(model_response=model_response)
         assert getattr(model_response, "usage", None) is None
+
+
+def test_reply_without_service_tier_is_reported_as_auto():
+    reply_without_tier: Final = {k: v for k, v in _searched_groq_response(None).items() if k != "service_tier"}
+    response: Final = _groq_completion_with_mocked_response(reply_without_tier)
+    assert response.service_tier == "auto"
+    assert response.choices[0].message.content == "Top headline: example"
 
 
 @pytest.mark.parametrize(
@@ -523,3 +532,84 @@ def test_tool_search_reply_sent_to_groq_drops_litellm_response_fields():
             }
         ],
     }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("is_async", [False, True])
+@pytest.mark.parametrize("with_tool_call", [False, True])
+async def test_streamed_reasoning_reply_can_be_replayed(is_async: bool, with_tool_call: bool) -> None:
+    tool_calls: Final = [
+        {
+            "index": 0,
+            "id": "call_weather",
+            "type": "function",
+            "function": {"name": "get_weather", "arguments": '{"city":"Paris"}'},
+        }
+    ]
+    handler: Final = GroqChatCompletionStreamingHandler(streaming_response=iter(()), sync_stream=True)
+    chunk: Final = handler.chunk_parser(
+        {
+            "id": "chatcmpl-reasoning",
+            "object": "chat.completion.chunk",
+            "created": 1769511767,
+            "model": "openai/gpt-oss-20b",
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {
+                        "role": "assistant",
+                        "reasoning": "I should check the weather.",
+                        "content": "" if with_tool_call else "Hello there!",
+                        **({"tool_calls": tool_calls} if with_tool_call else {}),
+                    },
+                    "finish_reason": "tool_calls" if with_tool_call else "stop",
+                }
+            ],
+        }
+    )
+    reply: Final = litellm.stream_chunk_builder([chunk]).choices[0].message
+    assert reply.reasoning_content == "I should check the weather."
+    history: Final = [reply.model_dump(exclude_none=True)]
+    config: Final = GroqChatConfig()
+
+    if is_async:
+        replayed = await config._transform_messages(messages=history, model="openai/gpt-oss-20b", is_async=True)
+    else:
+        replayed = config._transform_messages(messages=history, model="openai/gpt-oss-20b", is_async=False)
+
+    assert replayed == [
+        {
+            "role": "assistant",
+            "content": "" if with_tool_call else "Hello there!",
+            **(
+                {
+                    "tool_calls": [
+                        {
+                            "id": "call_weather",
+                            "type": "function",
+                            "function": {"name": "get_weather", "arguments": '{"city":"Paris"}'},
+                        }
+                    ]
+                }
+                if with_tool_call
+                else {}
+            ),
+        }
+    ]
+    assert reply.reasoning_content == "I should check the weather."
+
+
+def test_groq_request_drops_null_assistant_fields_without_touching_the_callers_messages() -> None:
+    messages: Final = [
+        {"role": "user", "content": "Hi"},
+        {"role": "assistant", "content": "Hello", "function_call": None, "tool_calls": None},
+        {"role": "user", "content": "Again"},
+    ]
+    messages_before: Final = copy.deepcopy(messages)
+
+    body: Final = GroqChatConfig().transform_request(
+        model="openai/gpt-oss-120b", messages=messages, optional_params={}, litellm_params={}, headers={}
+    )
+
+    assert body["messages"][1] == {"role": "assistant", "content": "Hello"}
+    assert messages == messages_before

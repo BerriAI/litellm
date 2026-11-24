@@ -2,7 +2,7 @@
 ## handler file for TextCompletionCodestral Integration - https://codestral.com/
 
 import json
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from functools import partial
 from typing import Final, Protocol
 
@@ -20,6 +20,7 @@ from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     get_async_httpx_client,
 )
+from litellm.llms.custom_httpx.sse_lines import aiter_sse_lines, iter_sse_lines
 from litellm.types.utils import TextChoices
 from litellm.utils import CustomStreamWrapper, TextCompletionResponse
 
@@ -74,8 +75,8 @@ class _CodestralHTTPResponse(Protocol):
 class TextCompletionCodestralError(Exception):
     def __init__(
         self,
-        status_code,
-        message,
+        status_code: int,
+        message: str,
         request: httpx.Request | None = None,
         response: httpx.Response | None = None,
     ):
@@ -102,14 +103,14 @@ async def make_call(
     data: str,
     model: str,
     messages: list,
-    logging_obj,
+    logging_obj: LiteLLMLogging,
 ):
     response: Final = await client.post(api_base, headers=headers, data=data, stream=True)
 
     if response.status_code != 200:
         raise TextCompletionCodestralError(status_code=response.status_code, message=response.text)
 
-    completion_stream: Final = response.aiter_lines()
+    completion_stream: Final = aiter_sse_lines(response.aiter_text())
     # LOGGING
     logging_obj.post_call(
         input=messages,
@@ -268,7 +269,7 @@ class CodestralTextCompletion:
             prompt = prompt_factory(model=model, messages=messages)
 
         ## Load Config
-        config: Final = litellm.CodestralTextCompletionConfig.get_config()
+        config: Final[Mapping[str, object]] = litellm.CodestralTextCompletionConfig.get_config()
         for k, v in config.items():
             if (
                 k not in optional_params
@@ -339,13 +340,13 @@ class CodestralTextCompletion:
             response = litellm.module_level_client.post(
                 completion_url,
                 headers=headers,
-                data=json.dumps(data),
+                data=json.dumps({**data, "stream": True}),
                 stream=stream,
             )
             _response: Final = CustomStreamWrapper(
-                response.iter_lines(),
+                iter_sse_lines(response.iter_text()),
                 model,
-                custom_llm_provider="codestral",
+                custom_llm_provider="text-completion-codestral",
                 logging_obj=logging_obj,
             )
             return _response
@@ -379,14 +380,14 @@ class CodestralTextCompletion:
         model_response: TextCompletionResponse,
         print_verbose: Callable,
         encoding,
-        api_key,
-        logging_obj,
+        api_key: str,
+        logging_obj: LiteLLMLogging,
         stream,
         data: dict,
         optional_params: dict,
         timeout: float | httpx.Timeout,
-        litellm_params=None,
-        logger_fn=None,
+        litellm_params: object = None,
+        logger_fn: object = None,
         headers={},
     ) -> TextCompletionResponse:
         async_handler: Final = get_async_httpx_client(
@@ -427,13 +428,13 @@ class CodestralTextCompletion:
         model_response: TextCompletionResponse,
         print_verbose: Callable,
         encoding,
-        api_key,
+        api_key: str,
         logging_obj: LiteLLMLogging,
         data: dict,
         timeout: float | httpx.Timeout,
-        optional_params=None,
-        litellm_params=None,
-        logger_fn=None,
+        optional_params: object = None,
+        litellm_params: object = None,
+        logger_fn: object = None,
         headers={},
     ) -> CustomStreamWrapper:
         data["stream"] = True
@@ -455,5 +456,5 @@ class CodestralTextCompletion:
         )
         return streamwrapper
 
-    def embedding(self, *args, **kwargs):
+    def embedding(self, *args: object, **kwargs: object):
         pass

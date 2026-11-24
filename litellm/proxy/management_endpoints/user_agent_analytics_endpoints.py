@@ -139,7 +139,7 @@ _DISTINCT_TAG_ROWS: Final = TypeAdapter(list[_DistinctTagRow])
 _ACTIVE_USERS_ROWS: Final = TypeAdapter(list[_ActiveUsersRow])
 _TAG_SUMMARY_ROWS: Final = TypeAdapter(list[_TagSummaryRow])
 
-_RowT_co: Final = TypeVar("_RowT_co", covariant=True)
+_RowT_co = TypeVar("_RowT_co", covariant=True)
 
 if TYPE_CHECKING:
 
@@ -158,7 +158,9 @@ def _typed_table(repo: DailyTagSpendRepository | VerificationTokenRepository | U
 
 
 async def _query_raw(prisma_client: "PrismaClient", sql_query: str, *params: object) -> object:
-    return await prisma_client.db.query_raw(sql_query, *params)
+    from litellm.proxy.utils import query_raw_rows
+
+    return await query_raw_rows(prisma_client.db, sql_query, *params)
 
 
 @router.get(
@@ -267,7 +269,7 @@ async def get_daily_active_users(
 
         # Handle multiple tag filters (takes precedence over single tag filter)
         if tag_filters and len(tag_filters) > 0:
-            tag_conditions: Final = []
+            tag_conditions: Final[list[str]] = []
             for i, tag in enumerate(tag_filters):
                 param_index = len(params) + 1
                 tag_conditions.append(f"dts.tag = ${param_index}")
@@ -364,7 +366,7 @@ async def get_weekly_active_users(
 
         # Handle multiple tag filters (takes precedence over single tag filter)
         if tag_filters and len(tag_filters) > 0:
-            tag_conditions: Final = []
+            tag_conditions: Final[list[str]] = []
             for i, tag in enumerate(tag_filters):
                 param_index = len(params) + 1
                 tag_conditions.append(f"dts.tag = ${param_index}")
@@ -485,7 +487,7 @@ async def get_monthly_active_users(
 
         # Handle multiple tag filters (takes precedence over single tag filter)
         if tag_filters and len(tag_filters) > 0:
-            tag_conditions: Final = []
+            tag_conditions: Final[list[str]] = []
             for i, tag in enumerate(tag_filters):
                 param_index = len(params) + 1
                 tag_conditions.append(f"dts.tag = ${param_index}")
@@ -596,7 +598,7 @@ async def get_tag_summary(
 
         # Handle multiple tag filters (takes precedence over single tag filter)
         if tag_filters and len(tag_filters) > 0:
-            tag_conditions: Final = []
+            tag_conditions: Final[list[str]] = []
             for i, tag in enumerate(tag_filters):
                 param_index = len(params) + 1
                 tag_conditions.append(f"dts.tag = ${param_index}")

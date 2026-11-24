@@ -1,7 +1,5 @@
 import asyncio
-import os
-import traceback
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Final
@@ -15,36 +13,31 @@ from litellm.constants import PROXY_DB_LOOKUP_STALL_WINDOW_SECONDS
 from litellm.proxy.db.db_lookup_gate import db_lookup_stall_tracker
 
 load_dotenv()
-import time
 
 
 import pytest
 
 import litellm
-from litellm.proxy.management_endpoints.team_endpoints import (
-    new_team,
-)
 from litellm_enterprise.proxy.management_endpoints.project_endpoints import (
     new_project,
     update_project,
     delete_project,
     project_info,
 )
+from litellm.proxy.management_helpers.model_quota_policy import ModelRoute, TeamDeployment, router_model_routes
 from litellm.proxy.proxy_server import (
     LitellmUserRoles,
 )
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
-from litellm.proxy.utils import PrismaClient, ProxyLogging
+from litellm.proxy.utils import ProxyLogging
 
 
-
-from litellm.caching.caching import DualCache
+from litellm.redis.stores.auth_cache import AuthObject
 from litellm.proxy._types import (
     LiteLLM_ProjectTable,
     NewProjectRequest,
     UpdateProjectRequest,
     DeleteProjectRequest,
-    NewTeamRequest,
     UserAPIKeyAuth,
     LiteLLM_OrganizationMembershipTable,
     LiteLLM_TeamTable,
@@ -55,387 +48,9 @@ from litellm.proxy._types import (
 from litellm.proxy.management.teams.authz import TeamAccess
 from litellm.proxy.management.users.service import PrismaOrgRoles
 from tests._master_key import MASTER_KEY
+from tests.unit.proxy.rust_auth_stores import install_rust_auth_stores
 
-proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
-
-
-@pytest.fixture
-def prisma_client():
-    from litellm.proxy.proxy_cli import append_query_params
-
-    ### add connection pool + pool timeout args
-    params = {"connection_limit": 100, "pool_timeout": 60}
-    database_url = os.getenv("DATABASE_URL")
-    modified_url = append_query_params(database_url, params)
-    os.environ["DATABASE_URL"] = modified_url
-
-    # Assuming PrismaClient is a class that needs to be instantiated
-    prisma_client = PrismaClient(
-        database_url=os.environ["DATABASE_URL"], proxy_logging_obj=proxy_logging_obj
-    )
-
-    # Reset litellm.proxy.proxy_server.prisma_client to None
-    litellm.proxy.proxy_server.litellm_proxy_budget_name = (
-        f"litellm-proxy-budget-{time.time()}"
-    )
-    litellm.proxy.proxy_server.user_custom_key_generate = None
-
-    # Enable premium_user for project management tests
-    setattr(litellm.proxy.proxy_server, "premium_user", True)
-
-    return prisma_client
-
-
-@pytest.mark.skip(reason="Requires reliable external DB connection (prisma).")
-@pytest.mark.asyncio
-async def test_new_project(prisma_client):
-    """
-    Test creating a new project with budget, models, and metadata.
-    """
-    try:
-        print("prisma client=", prisma_client)
-
-        setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
-        setattr(litellm.proxy.proxy_server, "master_key", MASTER_KEY)
-
-        await litellm.proxy.proxy_server.prisma_client.connect()
-
-        # Create a team first
-        _team_id = f"project-test-team_{uuid.uuid4()}"
-        await new_team(
-            NewTeamRequest(
-                team_id=_team_id,
-            ),
-            http_request=Request(scope={"type": "http"}),
-            user_api_key_dict=UserAPIKeyAuth(
-                user_role=LitellmUserRoles.PROXY_ADMIN,
-                api_key=MASTER_KEY,
-                user_id="1234",
-            ),
-        )
-
-        # Create a project
-        project_data = NewProjectRequest(
-            project_alias="test-project",
-            description="Test project for unit testing",
-            team_id=_team_id,
-            metadata={"use_case_id": "TEST-001", "responsible_ai_id": "RAI-001"},
-            models=["gpt-5.5", "gpt-5-mini"],
-            max_budget=100.0,
-            model_rpm_limit={"gpt-5.5": 100},
-            model_tpm_limit={"gpt-5.5": 1000},
-        )
-
-        response = await new_project(
-            data=project_data,
-            http_request=Request(scope={"type": "http"}),
-            user_api_key_dict=UserAPIKeyAuth(
-                user_role=LitellmUserRoles.PROXY_ADMIN,
-                api_key=MASTER_KEY,
-                user_id="1234",
-            ),
-        )
-
-        print("New project response:", response)
-
-        # Assertions
-        assert response.project_id is not None
-        assert response.project_alias == "test-project"
-        assert response.description == "Test project for unit testing"
-        assert response.team_id == _team_id
-        assert response.models == ["gpt-5.5", "gpt-5-mini"]
-        # model_rpm_limit and model_tpm_limit are stored in metadata
-        assert response.metadata["use_case_id"] == "TEST-001"
-        assert response.metadata["responsible_ai_id"] == "RAI-001"
-        assert response.metadata["model_rpm_limit"] == {"gpt-5.5": 100}
-        assert response.metadata["model_tpm_limit"] == {"gpt-5.5": 1000}
-        assert response.litellm_budget_table is not None
-        assert response.litellm_budget_table.max_budget == 100.0
-
-    except Exception as e:
-        print("Got Exception", e)
-        traceback.print_exc()
-        pytest.fail(f"Got exception {e}")
-
-
-@pytest.mark.skip(reason="Requires reliable external DB connection (prisma).")
-@pytest.mark.asyncio
-async def test_update_project(prisma_client):
-    """
-    Test updating an existing project's budget, models, and metadata.
-    """
-    try:
-        print("prisma client=", prisma_client)
-
-        setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
-        setattr(litellm.proxy.proxy_server, "master_key", MASTER_KEY)
-
-        await litellm.proxy.proxy_server.prisma_client.connect()
-
-        # Create a team first
-        _team_id = f"project-test-team_{uuid.uuid4()}"
-        await new_team(
-            NewTeamRequest(
-                team_id=_team_id,
-            ),
-            http_request=Request(scope={"type": "http"}),
-            user_api_key_dict=UserAPIKeyAuth(
-                user_role=LitellmUserRoles.PROXY_ADMIN,
-                api_key=MASTER_KEY,
-                user_id="1234",
-            ),
-        )
-
-        # Create a project
-        project_data = NewProjectRequest(
-            project_alias="test-project-update",
-            description="Original description",
-            team_id=_team_id,
-            metadata={
-                "use_case_id": "TEST-002",
-            },
-            models=["gpt-5.5"],
-            max_budget=50.0,
-        )
-
-        create_response = await new_project(
-            data=project_data,
-            http_request=Request(scope={"type": "http"}),
-            user_api_key_dict=UserAPIKeyAuth(
-                user_role=LitellmUserRoles.PROXY_ADMIN,
-                api_key=MASTER_KEY,
-                user_id="1234",
-            ),
-        )
-
-        print("Created project:", create_response)
-        project_id = create_response.project_id
-
-        # Update the project
-        update_data = UpdateProjectRequest(
-            project_id=project_id,
-            project_alias="test-project-updated",
-            description="Updated description",
-            metadata={
-                "use_case_id": "TEST-002-UPDATED",
-                "additional_field": "new_value",
-            },
-            models=["gpt-5.5", "gpt-5-mini", "claude-3"],
-            max_budget=200.0,
-            model_rpm_limit={"gpt-5.5": 200, "claude-3": 50},
-            model_tpm_limit={"gpt-5.5": 2000, "claude-3": 500},
-        )
-
-        update_response = await update_project(
-            data=update_data,
-            http_request=Request(scope={"type": "http"}),
-            user_api_key_dict=UserAPIKeyAuth(
-                user_role=LitellmUserRoles.PROXY_ADMIN,
-                api_key=MASTER_KEY,
-                user_id="1234",
-            ),
-        )
-
-        print("Updated project response:", update_response)
-
-        # Assertions
-        assert update_response.project_id == project_id
-        assert update_response.project_alias == "test-project-updated"
-        assert update_response.description == "Updated description"
-        assert update_response.models == ["gpt-5.5", "gpt-5-mini", "claude-3"]
-        # model_rpm_limit and model_tpm_limit are stored in metadata
-        assert update_response.metadata["use_case_id"] == "TEST-002-UPDATED"
-        assert update_response.metadata["additional_field"] == "new_value"
-        assert update_response.metadata["model_rpm_limit"] == {
-            "gpt-5.5": 200,
-            "claude-3": 50,
-        }
-        assert update_response.metadata["model_tpm_limit"] == {
-            "gpt-5.5": 2000,
-            "claude-3": 500,
-        }
-        assert update_response.litellm_budget_table is not None
-        assert update_response.litellm_budget_table.max_budget == 200.0
-
-    except Exception as e:
-        print("Got Exception", e)
-        traceback.print_exc()
-        pytest.fail(f"Got exception {e}")
-
-
-@pytest.mark.skip(reason="Requires reliable external DB connection (prisma).")
-@pytest.mark.asyncio
-async def test_delete_project(prisma_client):
-    """
-    Test deleting a project.
-    """
-    try:
-        print("prisma client=", prisma_client)
-
-        setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
-        setattr(litellm.proxy.proxy_server, "master_key", MASTER_KEY)
-
-        await litellm.proxy.proxy_server.prisma_client.connect()
-
-        # Create a team first
-        _team_id = f"project-test-team_{uuid.uuid4()}"
-        await new_team(
-            NewTeamRequest(
-                team_id=_team_id,
-            ),
-            http_request=Request(scope={"type": "http"}),
-            user_api_key_dict=UserAPIKeyAuth(
-                user_role=LitellmUserRoles.PROXY_ADMIN,
-                api_key=MASTER_KEY,
-                user_id="1234",
-            ),
-        )
-
-        # Create a project
-        project_data = NewProjectRequest(
-            project_alias="test-project-delete",
-            team_id=_team_id,
-            models=["gpt-5.5"],
-            max_budget=50.0,
-        )
-
-        create_response = await new_project(
-            data=project_data,
-            http_request=Request(scope={"type": "http"}),
-            user_api_key_dict=UserAPIKeyAuth(
-                user_role=LitellmUserRoles.PROXY_ADMIN,
-                api_key=MASTER_KEY,
-                user_id="1234",
-            ),
-        )
-
-        print("Created project:", create_response)
-        project_id = create_response.project_id
-
-        # Delete the project
-        delete_data = DeleteProjectRequest(project_ids=[project_id])
-
-        delete_response = await delete_project(
-            data=delete_data,
-            http_request=Request(scope={"type": "http"}),
-            user_api_key_dict=UserAPIKeyAuth(
-                user_role=LitellmUserRoles.PROXY_ADMIN,
-                api_key=MASTER_KEY,
-                user_id="1234",
-            ),
-        )
-
-        print("Delete project response:", delete_response)
-
-        # Assertions - delete_project returns a list of deleted project objects
-        assert isinstance(delete_response, list)
-        assert len(delete_response) == 1
-        assert delete_response[0].project_id == project_id
-
-        # Try to get info on the deleted project - should fail or return None
-        try:
-            await project_info(
-                project_id=project_id,
-                user_api_key_dict=UserAPIKeyAuth(
-                    user_role=LitellmUserRoles.PROXY_ADMIN,
-                    api_key=MASTER_KEY,
-                    user_id="1234",
-                ),
-            )
-            pytest.fail("Expected to fail when fetching deleted project")
-        except Exception as e:
-            print("Expected error when fetching deleted project:", e)
-            # This is expected behavior
-
-    except Exception as e:
-        print("Got Exception", e)
-        traceback.print_exc()
-        pytest.fail(f"Got exception {e}")
-
-
-@pytest.mark.skip(reason="Requires reliable external DB connection (prisma).")
-@pytest.mark.asyncio
-async def test_project_info(prisma_client):
-    """
-    Test getting project info.
-    """
-    try:
-        print("prisma client=", prisma_client)
-
-        setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
-        setattr(litellm.proxy.proxy_server, "master_key", MASTER_KEY)
-
-        await litellm.proxy.proxy_server.prisma_client.connect()
-
-        # Create a team first
-        _team_id = f"project-test-team_{uuid.uuid4()}"
-        await new_team(
-            NewTeamRequest(
-                team_id=_team_id,
-            ),
-            http_request=Request(scope={"type": "http"}),
-            user_api_key_dict=UserAPIKeyAuth(
-                user_role=LitellmUserRoles.PROXY_ADMIN,
-                api_key=MASTER_KEY,
-                user_id="1234",
-            ),
-        )
-
-        # Create a project
-        project_data = NewProjectRequest(
-            project_alias="test-project-info",
-            description="Test project info endpoint",
-            team_id=_team_id,
-            metadata={"use_case_id": "TEST-003", "cost_center": "engineering"},
-            models=["gpt-5.5", "claude-3"],
-            max_budget=150.0,
-            model_rpm_limit={"gpt-5.5": 150},
-            model_tpm_limit={"gpt-5.5": 1500},
-        )
-
-        create_response = await new_project(
-            data=project_data,
-            http_request=Request(scope={"type": "http"}),
-            user_api_key_dict=UserAPIKeyAuth(
-                user_role=LitellmUserRoles.PROXY_ADMIN,
-                api_key=MASTER_KEY,
-                user_id="1234",
-            ),
-        )
-
-        print("Created project:", create_response)
-        project_id = create_response.project_id
-
-        # Get project info
-        info_response = await project_info(
-            project_id=project_id,
-            user_api_key_dict=UserAPIKeyAuth(
-                user_role=LitellmUserRoles.PROXY_ADMIN,
-                api_key=MASTER_KEY,
-                user_id="1234",
-            ),
-        )
-
-        print("Project info response:", info_response)
-
-        # Assertions - project_info returns the project object directly
-        assert info_response.project_id == project_id
-        assert info_response.project_alias == "test-project-info"
-        assert info_response.description == "Test project info endpoint"
-        assert info_response.team_id == _team_id
-        assert info_response.models == ["gpt-5.5", "claude-3"]
-        # model_rpm_limit and model_tpm_limit are stored in metadata
-        assert info_response.metadata["use_case_id"] == "TEST-003"
-        assert info_response.metadata["cost_center"] == "engineering"
-        assert info_response.metadata["model_rpm_limit"] == {"gpt-5.5": 150}
-        assert info_response.metadata["model_tpm_limit"] == {"gpt-5.5": 1500}
-        assert info_response.litellm_budget_table is not None
-        assert info_response.litellm_budget_table.max_budget == 150.0
-
-    except Exception as e:
-        print("Got Exception", e)
-        traceback.print_exc()
-        pytest.fail(f"Got exception {e}")
+proxy_logging_obj = ProxyLogging(user_api_key_cache=UserApiKeyCache())
 
 
 ### VALIDATION TESTS ###
@@ -894,12 +509,11 @@ async def test_update_project_invalidates_cached_project_object(monkeypatch):
     project_id = f"project-{uuid.uuid4()}"
     cache = UserApiKeyCache()
 
-    stale_row = MagicMock()
-    stale_row.model_dump = lambda: {"project_id": project_id, "team_id": None, "models": []}
+    stores = install_rust_auth_stores(monkeypatch)
+    stores.project.seed(project_id, LiteLLM_ProjectTable(project_id=project_id, team_id=None, models=[]))
 
     mock_prisma = MagicMock()
     mock_prisma.jsonify_object = lambda data: data
-    mock_prisma.db.litellm_projecttable.find_unique = AsyncMock(return_value=stale_row)
 
     seeded = await get_project_object(
         project_id=project_id, prisma_client=mock_prisma, user_api_key_cache=cache
@@ -932,7 +546,7 @@ async def test_update_project_invalidates_cached_project_object(monkeypatch):
         ),
     )
 
-    mock_prisma.db.litellm_projecttable.find_unique = AsyncMock(return_value=updated_row)
+    stores.project.seed(project_id, LiteLLM_ProjectTable(project_id=project_id, team_id=None, models=updated_models))
     refreshed = await get_project_object(
         project_id=project_id, prisma_client=mock_prisma, user_api_key_cache=cache
     )
@@ -954,6 +568,8 @@ async def test_delete_project_invalidates_cached_project_object(monkeypatch):
     project_id = f"project-{uuid.uuid4()}"
     cache = UserApiKeyCache()
 
+    stores = install_rust_auth_stores(monkeypatch)
+    stores.project.seed(project_id, LiteLLM_ProjectTable(project_id=project_id, team_id=None, models=["gpt-5.5"]))
     row = MagicMock()
     row.model_dump = lambda: {"project_id": project_id, "team_id": None, "models": ["gpt-5.5"]}
 
@@ -982,7 +598,8 @@ async def test_delete_project_invalidates_cached_project_object(monkeypatch):
         ),
     )
 
-    mock_prisma.db.litellm_projecttable.find_unique = AsyncMock(return_value=None)
+    stores.project.reader.pop(project_id)
+    stores.project.writer.pop(project_id)
     assert (
         await get_project_object(
             project_id=project_id, prisma_client=mock_prisma, user_api_key_cache=cache
@@ -1027,7 +644,10 @@ async def test_update_project_succeeds_when_cache_eviction_fails(monkeypatch):
     )
 
     assert response is updated_row
-    failing_cache.async_delete_cache.assert_awaited_once()
+    assert failing_cache.async_delete_cache.await_args_list == [
+        mock.call(key=f"project_id:{project_id}"),
+        mock.call(key=f'customer_app:["project", "{project_id}"]'),
+    ]
 
 
 @pytest.mark.asyncio
@@ -1044,14 +664,17 @@ async def test_project_eviction_publishes_cross_worker_invalidation(monkeypatch)
 
     project_id = f"project-{uuid.uuid4()}"
     with patch(
-        "litellm.proxy.common_utils.auth_cache_invalidation_pubsub.publish_auth_cache_invalidation",
+        "litellm.proxy.common_utils.cache_invalidation_pubsub.publish_cache_invalidation",
         new=AsyncMock(),
     ) as mock_publish:
         await delete_cached_project_object(
             project_id=project_id, user_api_key_cache=UserApiKeyCache()
         )
 
-    mock_publish.assert_awaited_once_with(cache_key=f"project_id:{project_id}")
+    assert mock_publish.await_args_list == [
+        mock.call(cache_key=AuthObject.project(project_id).key),
+        mock.call(cache_key=AuthObject.customer_app("project", project_id).key),
+    ]
 
 
 def test_enforce_project_model_quota_missing_both_raises():
@@ -1205,7 +828,9 @@ def test_update_quota_existing_quotaless_model_rejected():
         _raise_on_missing_project_model_quota_on_update(data, existing)
 
 
-def _enforced_new_project_mocks(monkeypatch, team_models: list[str], llm_router: mock.MagicMock | None) -> None:
+def _enforced_new_project_mocks(
+    monkeypatch: pytest.MonkeyPatch, team_models: list[str], llm_router: object, quota_setting: object = True
+) -> None:
     from litellm.proxy._types import LiteLLM_TeamTable
     from litellm_enterprise.proxy.management_endpoints import project_endpoints as pe
 
@@ -1213,7 +838,7 @@ def _enforced_new_project_mocks(monkeypatch, team_models: list[str], llm_router:
     monkeypatch.setattr(litellm.proxy.proxy_server, "prisma_client", mock.MagicMock())
     monkeypatch.setattr(litellm.proxy.proxy_server, "premium_user", True)
     monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", llm_router)
-    monkeypatch.setattr(litellm.proxy.proxy_server, "general_settings", {"enforce_project_model_quota": True})
+    monkeypatch.setattr(litellm.proxy.proxy_server, "general_settings", {"enforce_project_model_quota": quota_setting})
     monkeypatch.setattr(pe, "_validate_team_exists", mock.AsyncMock(return_value=team))
     monkeypatch.setattr(pe, "_check_user_permission_for_project", mock.AsyncMock(return_value=True))
 
@@ -1238,9 +863,9 @@ async def test_new_project_flag_on_missing_rpm_tpm_returns_400(monkeypatch):
     assert "rpm/tpm quota" in str(exc_info.value)
 
 
-def _project_update_mocks(monkeypatch, stored_metadata: dict) -> mock.MagicMock:
+def _project_update_mocks(monkeypatch, stored_metadata: dict, team_id: str | None = None) -> mock.MagicMock:
     existing_row = mock.MagicMock(
-        team_id=None, budget_id=None, object_permission_id=None, metadata=stored_metadata
+        team_id=team_id, budget_id=None, object_permission_id=None, metadata=stored_metadata
     )
     mock_prisma = mock.MagicMock()
     mock_prisma.jsonify_object = lambda data: data
@@ -1248,7 +873,7 @@ def _project_update_mocks(monkeypatch, stored_metadata: dict) -> mock.MagicMock:
     mock_prisma.db.litellm_projecttable.update = mock.AsyncMock(return_value=mock.MagicMock())
     mock_prisma.writer_db = mock.MagicMock()
     mock_prisma.writer_db.litellm_projecttable.find_unique = mock.AsyncMock(
-        return_value={"project_id": "project-update-test", "team_id": None}
+        return_value={"project_id": "project-update-test", "team_id": team_id}
     )
     mock_prisma.writer_db.litellm_verificationtoken.count = mock.AsyncMock(return_value=0)
 
@@ -1588,7 +1213,7 @@ def test_update_quota_rejects_wildcard_left_on_project():
 async def test_new_project_flag_on_access_group_model_returns_400(monkeypatch):
     """End-to-end: the router's access groups reach the check, so an access-group entry is rejected."""
     llm_router = mock.MagicMock()
-    llm_router.get_model_access_groups.return_value = {"prod-models": ["gpt-5.5"]}
+    llm_router.registry.return_value.access_groups.return_value = {"prod-models": ["gpt-5.5"]}
     _enforced_new_project_mocks(monkeypatch, team_models=["prod-models"], llm_router=llm_router)
     data = NewProjectRequest(
         team_id="test-team",
@@ -1602,6 +1227,559 @@ async def test_new_project_flag_on_access_group_model_returns_400(monkeypatch):
 
     assert "prod-models" in str(exc_info.value)
     assert "expand to multiple models at request time" in str(exc_info.value)
+
+
+_CUSTOMER_QUOTA_POLICY: Final = {
+    "providers": {"vertex_ai": ["rpm", "tpm"], "runwayml": []},
+    "models": {"veo-*": ["rpm"], "jev-latest": []},
+}
+
+_CUSTOMER_MODEL_PROVIDERS: Final = {
+    "gemini-3.8-flash": frozenset({"vertex_ai"}),
+    "veo-3.1-lite-generate-001": frozenset({"vertex_ai"}),
+    "runway-gen4-turbo": frozenset({"runwayml"}),
+}
+
+
+def _customer_route_of(model: str) -> ModelRoute:
+    return ModelRoute(providers=_CUSTOMER_MODEL_PROVIDERS.get(model, frozenset()))
+
+
+def _quota_error(
+    models: list[str],
+    rpm: dict[str, int] | None = None,
+    tpm: dict[str, int] | None = None,
+    setting: object = _CUSTOMER_QUOTA_POLICY,
+    route_of: Callable[[str], ModelRoute] = _customer_route_of,
+) -> str | None:
+    from litellm_enterprise.proxy.management_endpoints.project_endpoints import (
+        _raise_on_missing_project_model_quota,
+    )
+    from litellm.proxy.management_helpers.model_quota_policy import parse_model_quota_setting
+
+    policy: Final = parse_model_quota_setting(setting)
+    assert policy is not None
+    data: Final = NewProjectRequest(team_id="test-team", models=models, model_rpm_limit=rpm, model_tpm_limit=tpm)
+    try:
+        _raise_on_missing_project_model_quota(data, frozenset(), policy, route_of)
+    except HTTPException as e:
+        rejection: Final = e
+    else:
+        return None
+    assert rejection.status_code == 400
+    return str(rejection.detail)
+
+
+def test_quota_policy_exempts_provider_and_passthrough_name_but_keeps_vertex_strict():
+    assert _quota_error(["runway-gen4-turbo", "jev-latest"]) is None
+    error: Final = _quota_error(["gemini-3.8-flash"], rpm={"gemini-3.8-flash": 10})
+    assert error is not None
+    assert "gemini-3.8-flash (model_tpm_limit)" in error
+
+
+def test_quota_policy_model_pattern_overrides_its_provider_per_limit():
+    assert _quota_error(["veo-3.1-lite-generate-001"], rpm={"veo-3.1-lite-generate-001": 5}) is None
+    error: Final = _quota_error(["veo-3.1-lite-generate-001"], tpm={"veo-3.1-lite-generate-001": 5000})
+    assert error is not None
+    assert "veo-3.1-lite-generate-001 (model_rpm_limit)" in error
+    assert "model_tpm_limit" not in error
+
+
+@pytest.mark.parametrize(
+    ("model", "rpm", "tpm", "expected_missing"),
+    [
+        ("runway-gen4-turbo", {"runway-gen4-turbo": 0}, None, "runway-gen4-turbo (model_rpm_limit)"),
+        ("jev-latest", None, {"jev-latest": -5}, "jev-latest (model_tpm_limit)"),
+        (
+            "veo-3.1-lite-generate-001",
+            {"veo-3.1-lite-generate-001": 5},
+            {"veo-3.1-lite-generate-001": 0},
+            "veo-3.1-lite-generate-001 (model_tpm_limit)",
+        ),
+    ],
+)
+def test_quota_policy_rejects_a_non_positive_limit_set_on_an_exempt_model(
+    model: str, rpm: dict[str, int] | None, tpm: dict[str, int] | None, expected_missing: str
+):
+    error: Final = _quota_error([model], rpm=rpm, tpm=tpm)
+    assert error is not None
+    assert expected_missing in error
+
+
+def test_quota_policy_error_names_each_model_with_the_limits_it_misses():
+    error: Final = _quota_error(["gemini-3.8-flash", "veo-3.1-lite-generate-001", "runway-gen4-turbo"])
+    assert error is not None
+    assert "gemini-3.8-flash (model_rpm_limit and model_tpm_limit)" in error
+    assert "veo-3.1-lite-generate-001 (model_rpm_limit)" in error
+    assert "runway-gen4-turbo" not in error
+
+
+@pytest.mark.parametrize(
+    "setting, model, expected_missing",
+    [
+        ({"default": ["tpm"]}, "unrouted-name", "unrouted-name (model_tpm_limit)"),
+        ({"default": [], "providers": {"runwayml": ["rpm"]}}, "runway-gen4-turbo", "(model_rpm_limit)"),
+        (
+            {"providers": {"runwayml": []}, "models": {"runway-gen4-turbo": ["tpm"]}},
+            "runway-gen4-turbo",
+            "(model_tpm_limit)",
+        ),
+        ({"models": {"runway-*": [], "runway-gen4-turbo": ["rpm"]}}, "runway-gen4-turbo", "(model_rpm_limit)"),
+        ({"models": {"veo-*": [], "veo-3.1-lite-*": ["rpm"]}}, "veo-3.1-lite-generate-001", "(model_rpm_limit)"),
+        ({"models": {"gpt-5-mini*": [], "gpt-*-*-*": ["rpm"]}}, "gpt-5-mini-fast", "(model_rpm_limit)"),
+    ],
+)
+def test_quota_policy_precedence_is_model_then_pattern_then_provider_then_default(
+    setting: object, model: str, expected_missing: str
+):
+    error: Final = _quota_error([model], setting=setting)
+    assert error is not None
+    assert expected_missing in error
+
+
+def test_quota_policy_model_entry_matches_names_literally_apart_from_star():
+    setting: Final = {"models": {"claude-opus-5-5[1m]": [], "gpt.5": []}}
+    assert _quota_error(["claude-opus-5-5[1m]"], setting=setting) is None
+    assert _quota_error(["claude-opus-5-51"], setting=setting) is not None
+    assert _quota_error(["gptx5"], setting=setting) is not None
+
+
+def test_quota_policy_model_on_several_providers_needs_every_required_limit():
+    def mixed_providers(_model: str) -> ModelRoute:
+        return ModelRoute(providers=frozenset({"runwayml", "vertex_ai"}))
+
+    error: Final = _quota_error(["video-pool"], rpm={"video-pool": 10}, route_of=mixed_providers)
+    assert error is not None
+    assert "video-pool (model_tpm_limit)" in error
+
+
+def test_quota_policy_model_pattern_matches_from_the_start_like_the_router():
+    setting: Final = {"providers": {"vertex_ai": ["rpm", "tpm"]}, "models": {"*-lite": []}}
+    assert _quota_error(["veo-3.1-lite-generate-001"], setting=setting) is None
+    assert _quota_error(["gemini-3.8-flash"], setting=setting) is not None
+
+
+def _team_vertex_route(called_model: str) -> Callable[[str], ModelRoute]:
+    def route_of(_model: str) -> ModelRoute:
+        return ModelRoute(team_deployments=frozenset({TeamDeployment(provider="vertex_ai", called_model=called_model)}))
+
+    return route_of
+
+
+def test_quota_policy_matches_a_team_model_by_the_model_it_calls():
+    borrowed_name: Final = _quota_error(["jev-latest"], route_of=_team_vertex_route("gemini-3.8-flash"))
+    veo_call: Final = _quota_error(
+        ["video-team"], rpm={"video-team": 5}, route_of=_team_vertex_route("veo-3.1-generate-001")
+    )
+    assert borrowed_name is not None and "jev-latest (model_rpm_limit and model_tpm_limit)" in borrowed_name
+    assert veo_call is None
+
+
+def test_quota_policy_team_model_beside_a_shared_one_needs_both_routes_limits():
+    def team_vertex_beside_shared_runway(_model: str) -> ModelRoute:
+        return ModelRoute(
+            providers=frozenset({"runwayml"}),
+            team_deployments=frozenset({TeamDeployment(provider="vertex_ai", called_model="gemini-3.8-flash")}),
+        )
+
+    error: Final = _quota_error(["media-latest"], rpm={"media-latest": 5}, route_of=team_vertex_beside_shared_runway)
+    assert error is not None and "media-latest (model_tpm_limit)" in error
+
+
+@pytest.mark.parametrize("setting", [True, "true", "false", 1, ["rpm"], {"enabled": True}, {"provider": {"runwayml": []}}])
+def test_quota_setting_truthy_non_policy_value_still_requires_both_limits(setting: object):
+    error: Final = _quota_error(["runway-gen4-turbo"], setting=setting)
+    assert error is not None
+    assert "runway-gen4-turbo (model_rpm_limit and model_tpm_limit)" in error
+
+
+@pytest.mark.parametrize("setting", [False, None, {}, "", 0, []])
+def test_quota_setting_off_enforces_nothing(setting: object):
+    from litellm.proxy.management_helpers.model_quota_policy import parse_model_quota_setting
+
+    assert parse_model_quota_setting(setting) is None
+
+
+def test_update_quota_policy_resolves_providers_for_the_resulting_models():
+    import types
+
+    from litellm_enterprise.proxy.management_endpoints.project_endpoints import (
+        _raise_on_missing_project_model_quota_on_update,
+    )
+    from litellm.proxy.management_helpers.model_quota_policy import parse_model_quota_setting
+
+    policy: Final = parse_model_quota_setting(_CUSTOMER_QUOTA_POLICY)
+    assert policy is not None
+    existing: Final = types.SimpleNamespace(models=["runway-gen4-turbo"], metadata={})
+    assert (
+        _raise_on_missing_project_model_quota_on_update(
+            UpdateProjectRequest(project_id="p", description="unrelated change"),
+            existing,
+            frozenset(),
+            policy,
+            _customer_route_of,
+        )
+        is None
+    )
+    with pytest.raises(HTTPException) as exc_info:
+        _raise_on_missing_project_model_quota_on_update(
+            UpdateProjectRequest(project_id="p", models=["runway-gen4-turbo", "gemini-3.8-flash"]),
+            existing,
+            frozenset(),
+            policy,
+            _customer_route_of,
+        )
+    assert "gemini-3.8-flash (model_rpm_limit and model_tpm_limit)" in str(exc_info.value.detail)
+
+
+def _customer_router() -> "litellm.Router":
+    return litellm.Router(
+        model_list=[
+            {
+                "model_name": "gemini-3.8-flash",
+                "litellm_params": {"model": "vertex_ai/gemini-3.8-flash", "vertex_project": "qa-project"},
+            },
+            {
+                "model_name": "veo-3.1-lite-generate-001",
+                "litellm_params": {"model": "vertex_ai/veo-3.1-lite-generate-001", "vertex_project": "qa-project"},
+            },
+            {
+                "model_name": "runway-gen4-turbo",
+                "litellm_params": {"model": "runwayml/gen4_turbo", "api_key": "qa-runway-key"},
+            },
+        ]
+    )
+
+
+def test_quota_providers_come_from_the_one_wildcard_route_requests_use():
+    router: Final = litellm.Router(
+        model_list=[
+            {"model_name": "gen4*", "litellm_params": {"model": "runwayml/gen4*", "api_key": "qa-runway-key"}},
+            {
+                "model_name": "media-team-gen",
+                "litellm_params": {"model": "vertex_ai/*", "vertex_project": "qa-project"},
+                "model_info": {"team_id": "media-team", "team_public_model_name": "gen*"},
+            },
+        ]
+    )
+
+    assert router_model_routes(router, "media-team")("gen4_turbo") == ModelRoute(
+        team_deployments=frozenset({TeamDeployment(provider="vertex_ai", called_model="4_turbo")})
+    )
+    assert router_model_routes(router, None)("gen4_turbo") == ModelRoute(providers=frozenset({"runwayml"}))
+
+
+def test_quota_providers_read_the_provider_behind_a_known_api_base():
+    groq_api_base: Final = "https://api.groq.com/openai/v1"
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "qa-llama",
+                "litellm_params": {"model": "qa-llama", "api_base": groq_api_base, "api_key": "qa-groq-key"},
+            },
+            {
+                "model_name": "qa-runway",
+                "litellm_params": {"model": "gen4_turbo", "custom_llm_provider": "runwayml", "api_base": groq_api_base},
+            },
+        ]
+    )
+    route_of: Final = router_model_routes(router, None)
+
+    assert route_of("qa-llama").providers == frozenset({"groq"})
+    assert route_of("qa-runway").providers == frozenset({"runwayml"})
+
+
+def test_quota_policy_rejects_an_unknown_provider_id():
+    from pydantic import ValidationError
+
+    from litellm.proxy.management_helpers.model_quota_policy import parse_model_quota_setting
+
+    with pytest.raises(ValidationError, match=r"unknown provider ids \['runway'\]"):
+        parse_model_quota_setting({"providers": {"vertex_ai": ["rpm"], "runway": []}})
+
+
+def test_quota_policy_accepts_a_provider_registered_at_runtime(monkeypatch: pytest.MonkeyPatch):
+    from litellm.proxy.management_helpers.model_quota_policy import parse_model_quota_setting
+
+    monkeypatch.setattr(litellm, "provider_list", [*litellm.provider_list, "qa-custom-llm"])
+    policy: Final = parse_model_quota_setting({"providers": {"qa-custom-llm": []}})
+
+    assert policy is not None
+    assert policy.providers["qa-custom-llm"] == frozenset()
+
+
+_TEAM_WRITE_POLICY: Final = {"providers": {"vertex_ai": ["rpm", "tpm"], "runwayml": []}, "models": {"jev-latest": []}}
+_VERTEX_PARAMS: Final = {"model": "vertex_ai/gemini-3.8-flash", "vertex_project": "qa-project"}
+_RUNWAY_PARAMS: Final = {"model": "gen4_turbo", "custom_llm_provider": "runwayml"}
+
+
+def _team_deployment(public_name: str, model_id: str, litellm_params: Mapping[str, object]) -> dict[str, object]:
+    return {
+        "model_name": f"model_name_media-team_{model_id}",
+        "litellm_params": dict(litellm_params),
+        "model_info": {"id": model_id, "team_id": "media-team", "team_public_model_name": public_name},
+    }
+
+
+@pytest.mark.parametrize(
+    ("setting", "public_name", "proxy_params", "team_routes", "replaced_id", "written_params", "added"),
+    [
+        pytest.param(
+            _TEAM_WRITE_POLICY,
+            "jev-latest",
+            {"model": "openai/jev-latest"},
+            (),
+            None,
+            _VERTEX_PARAMS,
+            {"rpm", "tpm"},
+            id="team-add-on-vertex-behind-an-exempt-proxy-name",
+        ),
+        pytest.param(
+            _TEAM_WRITE_POLICY,
+            "jev-latest",
+            {"model": "openai/jev-latest"},
+            (),
+            None,
+            _RUNWAY_PARAMS,
+            set(),
+            id="team-add-on-an-exempt-provider",
+        ),
+        pytest.param(
+            _TEAM_WRITE_POLICY,
+            "jev-latest",
+            {"model": "openai/jev-latest"},
+            (),
+            None,
+            {"model": "aihubmix/jev-latest"},
+            set(),
+            id="team-add-through-a-json-provider-matches-the-model-it-calls",
+        ),
+        pytest.param(
+            _TEAM_WRITE_POLICY,
+            "media-latest",
+            _VERTEX_PARAMS,
+            (("t1", _RUNWAY_PARAMS),),
+            "t1",
+            None,
+            {"rpm", "tpm"},
+            id="team-delete-falls-back-to-the-proxy-vertex-route",
+        ),
+        pytest.param(
+            _TEAM_WRITE_POLICY,
+            "media-latest",
+            _VERTEX_PARAMS,
+            (("t1", _RUNWAY_PARAMS), ("t2", _RUNWAY_PARAMS)),
+            "t1",
+            None,
+            set(),
+            id="team-delete-keeps-a-sibling-team-route",
+        ),
+        pytest.param(
+            _TEAM_WRITE_POLICY,
+            "media-latest",
+            _VERTEX_PARAMS,
+            (("t1", _RUNWAY_PARAMS),),
+            "t1",
+            _VERTEX_PARAMS,
+            {"rpm", "tpm"},
+            id="team-update-moves-the-route-to-vertex",
+        ),
+        pytest.param(
+            True,
+            "jev-latest",
+            {"model": "openai/jev-latest"},
+            (),
+            None,
+            _VERTEX_PARAMS,
+            set(),
+            id="true-already-requires-both-limits",
+        ),
+    ],
+)
+def test_team_model_write_adds_only_the_limits_its_new_route_requires(
+    setting: object,
+    public_name: str,
+    proxy_params: Mapping[str, object],
+    team_routes: tuple[tuple[str, Mapping[str, object]], ...],
+    replaced_id: str | None,
+    written_params: Mapping[str, object] | None,
+    added: set[str],
+):
+    from litellm.proxy.management_helpers.model_quota_policy import (
+        limits_added_by_team_write,
+        parse_model_quota_setting,
+    )
+
+    policy: Final = parse_model_quota_setting(setting)
+    router: Final = litellm.Router(
+        model_list=[
+            {"model_name": public_name, "litellm_params": dict(proxy_params)},
+            *(_team_deployment(public_name, model_id, params) for model_id, params in team_routes),
+        ]
+    )
+
+    assert policy is not None
+    assert limits_added_by_team_write(
+        policy, router, "media-team", public_name, replaced_id, written_params, public_name
+    ) == frozenset(added)
+
+
+def test_quota_route_of_an_alias_reads_the_team_deployments_its_target_routes_to():
+    router: Final = litellm.Router(
+        model_list=[
+            {"model_name": "media-latest", "litellm_params": dict(_RUNWAY_PARAMS)},
+            _team_deployment("media-latest", "t1", _VERTEX_PARAMS),
+        ],
+        model_group_alias={"media": "media-latest"},
+    )
+    route_of: Final = router_model_routes(router, "media-team")
+
+    assert route_of("media") == route_of("media-latest")
+    assert TeamDeployment(provider="vertex_ai", called_model="gemini-3.8-flash") in route_of("media").team_deployments
+
+
+def _team_pattern_router() -> "litellm.Router":
+    return litellm.Router(
+        model_list=[
+            {"model_name": "media-latest", "litellm_params": dict(_VERTEX_PARAMS)},
+            {"model_name": "video-named", "litellm_params": dict(_VERTEX_PARAMS)},
+            _team_deployment("video-*", "t1", {"model": "runwayml/*"}),
+            _team_deployment("video-veo-*", "t2", {"model": "vertex_ai/veo-*", "vertex_project": "qa-project"}),
+            _team_deployment("clip-*x", "t3", {"model": "runwayml/*"}),
+            _team_deployment("clip-x*", "t4", {"model": "vertex_ai/*", "vertex_project": "qa-project"}),
+        ],
+        model_group_alias={"media": "media-latest"},
+    )
+
+
+@pytest.mark.parametrize(
+    ("public_name", "model", "served"),
+    [
+        pytest.param("media-latest", "media-latest", True, id="the-name-itself"),
+        pytest.param("media-latest", "media", True, id="an-alias-of-the-name"),
+        pytest.param("media-latest", "video-named", False, id="another-name"),
+        pytest.param("video-*", "video-gen-1", True, id="a-name-the-pattern-matches"),
+        pytest.param("video-*", "video-veo-3", False, id="a-more-specific-team-pattern-takes-it"),
+        pytest.param("video-veo-*", "video-veo-3", True, id="the-most-specific-team-pattern"),
+        pytest.param("video-*", "video-named", False, id="a-named-deployment-shadows-the-pattern"),
+        pytest.param("video-*", "image-gen-1", False, id="a-name-the-pattern-misses"),
+        pytest.param("audio-*", "audio-gen-1", True, id="a-pattern-the-write-adds"),
+        pytest.param("clip-*x", "clip-xx", True, id="the-first-registered-of-two-tied-team-patterns"),
+        pytest.param("clip-x*", "clip-xx", False, id="a-tied-team-pattern-registered-first-takes-it"),
+        pytest.param("cli*-xx", "clip-xx", False, id="a-new-pattern-tied-with-a-registered-one"),
+    ],
+)
+def test_team_write_serves_the_project_names_a_team_request_routes_through_it(
+    public_name: str, model: str, served: bool
+):
+    from litellm.proxy.management_helpers.model_quota_policy import team_write_serves
+
+    assert team_write_serves(_team_pattern_router(), "media-team", public_name, model) is served
+
+
+@pytest.mark.parametrize(
+    ("model", "added"),
+    [
+        pytest.param("video-gen-1", {"rpm", "tpm"}, id="vertex-requires-both"),
+        pytest.param("video-veo-3", {"rpm"}, id="the-called-veo-model-entry-wins"),
+    ],
+)
+def test_team_pattern_write_reads_each_served_name_by_the_model_it_calls(model: str, added: set[str]):
+    from litellm.proxy.management_helpers.model_quota_policy import (
+        limits_added_by_team_write,
+        parse_model_quota_setting,
+    )
+
+    policy: Final = parse_model_quota_setting(
+        {"default": [], "providers": {"vertex_ai": ["rpm", "tpm"]}, "models": {"veo-*": ["rpm"]}}
+    )
+
+    assert policy is not None
+    assert limits_added_by_team_write(
+        policy,
+        litellm.Router(model_list=[]),
+        "media-team",
+        "video-*",
+        None,
+        {"model": "vertex_ai/*", "vertex_project": "qa-project"},
+        model,
+    ) == frozenset(added)
+
+
+@pytest.mark.asyncio
+async def test_new_project_quota_policy_reads_providers_from_router_deployments(monkeypatch: pytest.MonkeyPatch):
+    team_models: Final = ["gemini-3.8-flash", "veo-3.1-lite-generate-001", "runway-gen4-turbo", "jev-latest"]
+    _enforced_new_project_mocks(
+        monkeypatch, team_models=team_models, llm_router=_customer_router(), quota_setting=_CUSTOMER_QUOTA_POLICY
+    )
+
+    with pytest.raises(ProxyException) as exc_info:
+        await _run_new_project(NewProjectRequest(team_id="test-team", models=team_models))
+
+    assert exc_info.value.code == "400"
+    assert (
+        "gemini-3.8-flash (model_rpm_limit and model_tpm_limit), veo-3.1-lite-generate-001 (model_rpm_limit)."
+        in str(exc_info.value.message)
+    )
+    assert "runway-gen4-turbo" not in str(exc_info.value.message)
+    assert "jev-latest" not in str(exc_info.value.message)
+
+
+@pytest.mark.asyncio
+async def test_new_project_rejects_malformed_quota_setting_instead_of_skipping_it(monkeypatch: pytest.MonkeyPatch):
+    _enforced_new_project_mocks(
+        monkeypatch,
+        team_models=["runway-gen4-turbo"],
+        llm_router=_customer_router(),
+        quota_setting={"providers": {"runwayml": []}, "model": {"jev-latest": []}},
+    )
+
+    with pytest.raises(ProxyException) as exc_info:
+        await _run_new_project(NewProjectRequest(team_id="test-team", models=["runway-gen4-turbo"]))
+
+    assert exc_info.value.code == "500"
+    assert "general_settings.enforce_project_model_quota is invalid" in str(exc_info.value.message)
+
+
+@pytest.mark.asyncio
+async def test_new_project_checks_permission_before_reading_the_quota_setting(monkeypatch: pytest.MonkeyPatch):
+    from litellm_enterprise.proxy.management_endpoints import project_endpoints as pe
+
+    _enforced_new_project_mocks(
+        monkeypatch,
+        team_models=["runway-gen4-turbo"],
+        llm_router=_customer_router(),
+        quota_setting={"providers": {"runwayml": []}, "model": {"jev-latest": []}},
+    )
+    monkeypatch.setattr(pe, "_check_user_permission_for_project", mock.AsyncMock(return_value=False))
+
+    with pytest.raises(ProxyException) as exc_info:
+        await _run_new_project(NewProjectRequest(team_id="test-team", models=["runway-gen4-turbo"]))
+
+    assert exc_info.value.code == "403"
+    assert "enforce_project_model_quota" not in str(exc_info.value.message)
+
+
+@pytest.mark.asyncio
+async def test_new_project_quota_policy_ignores_model_entries_for_a_team_model_name(monkeypatch: pytest.MonkeyPatch):
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "model_name_test-team_qa",
+                "litellm_params": {"model": "vertex_ai/gemini-3.8-flash", "vertex_project": "qa-project"},
+                "model_info": {"team_id": "test-team", "team_public_model_name": "jev-latest"},
+            },
+        ]
+    )
+    _enforced_new_project_mocks(
+        monkeypatch, team_models=["jev-latest"], llm_router=router, quota_setting=_CUSTOMER_QUOTA_POLICY
+    )
+
+    with pytest.raises(ProxyException) as exc_info:
+        await _run_new_project(NewProjectRequest(team_id="test-team", models=["jev-latest"]))
+
+    assert exc_info.value.code == "400"
+    assert "jev-latest (model_rpm_limit and model_tpm_limit)" in str(exc_info.value.message)
 
 
 _ACCESS_NOW: Final = datetime.now(timezone.utc)
@@ -1713,7 +1891,7 @@ def project_access_db(monkeypatch):
 async def _team_access_over_cached_users() -> TeamAccess:
     cache = UserApiKeyCache()
     for user in _USERS.values():
-        await cache.async_set_cache(key=user.user_id, value=user)
+        await cache.async_set_cache(key=AuthObject.user(user.user_id), value=user)
     return TeamAccess(org_roles=PrismaOrgRoles(None, cache, proxy_logging_obj))
 
 
@@ -1807,3 +1985,211 @@ async def test_project_info_missing_project_is_404_even_for_org_admins(project_a
         )
 
     assert str(exc_info.value.code) == "404"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ("create", "update"))
+async def test_project_writes_reject_an_unregistered_guardrail(monkeypatch, operation):
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.proxy._types import ProxyException
+
+    team_row = MagicMock()
+    team_row.model_dump = lambda: {"team_id": "team-1"}
+    existing_row = MagicMock(team_id="team-1", budget_id=None, object_permission_id=None)
+    existing_row.metadata = {"guardrails": ["stale"]}
+
+    mock_prisma = MagicMock()
+    mock_prisma.jsonify_object = lambda data: data
+    mock_prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=team_row)
+    mock_prisma.db.litellm_projecttable.find_unique = AsyncMock(return_value=existing_row)
+    mock_prisma.db.litellm_projecttable.create = AsyncMock()
+    mock_prisma.db.litellm_projecttable.update = AsyncMock()
+    mock_prisma.writer_db.litellm_guardrailstable.find_many = AsyncMock(return_value=[])
+
+    monkeypatch.setattr(litellm.proxy.proxy_server, "premium_user", True)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "prisma_client", mock_prisma)
+    admin = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, api_key=MASTER_KEY, user_id="1234")
+
+    write: Final = (
+        new_project(
+            data=NewProjectRequest(team_id="team-1", guardrails=["typo"]),
+            http_request=Request(scope={"type": "http"}),
+            user_api_key_dict=admin,
+        )
+        if operation == "create"
+        else update_project(
+            data=UpdateProjectRequest(project_id="project-1", guardrails=["stale", "typo"]),
+            http_request=Request(scope={"type": "http"}),
+            user_api_key_dict=admin,
+        )
+    )
+    with pytest.raises((HTTPException, ProxyException)) as exc:
+        await write
+
+    message: Final = str(getattr(exc.value, "message", None) or getattr(exc.value, "detail", ""))
+    assert "typo" in message
+    assert "stale" not in message
+    assert str(getattr(exc.value, "code", None) or getattr(exc.value, "status_code", "")) == "400"
+    mock_prisma.db.litellm_projecttable.create.assert_not_awaited()
+    mock_prisma.db.litellm_projecttable.update.assert_not_awaited()
+
+
+_TEAM_ADMIN: Final = UserAPIKeyAuth(
+    user_role=LitellmUserRoles.INTERNAL_USER, api_key="hashed-team-admin-key", user_id="team-admin"
+)
+_PROXY_ADMIN: Final = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, api_key=MASTER_KEY, user_id="1234")
+_PROJECT_BATCH_LIMIT_REFUSAL: Final = "Only proxy admins can set model_batch_enqueued_token_limit on a project"
+
+
+def _stored_project_metadata() -> dict[str, object]:
+    return {"owner": "platform", "model_batch_enqueued_token_limit": {"gpt-5.5": 1000}}
+
+
+def _team_admins_manage_projects(monkeypatch: pytest.MonkeyPatch, prisma: mock.MagicMock) -> None:
+    team: Final = LiteLLM_TeamTable(
+        team_id="test-team", members_with_roles=[Member(user_id=_TEAM_ADMIN.user_id, role="admin")]
+    )
+    prisma.db.litellm_teamtable.find_unique = mock.AsyncMock(return_value=team)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "general_settings", {"team_admin_editable_team_fields": ["projects"]})
+
+
+@pytest.mark.asyncio
+async def test_team_admin_cannot_put_a_model_batch_enqueued_token_limit_on_a_new_project(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    prisma: Final = mock.MagicMock()
+    _team_admins_manage_projects(monkeypatch, prisma)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "prisma_client", prisma)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "premium_user", True)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", None)
+
+    with pytest.raises(ProxyException) as exc:
+        await new_project(
+            data=NewProjectRequest(
+                team_id="test-team", metadata={"model_batch_enqueued_token_limit": {"gpt-5.5": 1000}}
+            ),
+            http_request=Request(scope={"type": "http"}),
+            user_api_key_dict=_TEAM_ADMIN,
+        )
+
+    assert exc.value.code == "403"
+    assert _PROJECT_BATCH_LIMIT_REFUSAL in exc.value.message
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "requested_metadata",
+    [{"owner": "platform", "model_batch_enqueued_token_limit": {"gpt-5.5": 999_999}}, {"owner": "platform"}],
+    ids=["raises the limit", "drops the limit"],
+)
+async def test_team_admin_cannot_change_a_project_model_batch_enqueued_token_limit(
+    monkeypatch: pytest.MonkeyPatch, requested_metadata: dict[str, object]
+) -> None:
+    mock_prisma: Final = _project_update_mocks(monkeypatch, _stored_project_metadata(), team_id="test-team")
+    _team_admins_manage_projects(monkeypatch, mock_prisma)
+
+    with pytest.raises(ProxyException) as exc:
+        await update_project(
+            data=UpdateProjectRequest(project_id=f"project-{uuid.uuid4()}", metadata=requested_metadata),
+            http_request=Request(scope={"type": "http"}),
+            user_api_key_dict=_TEAM_ADMIN,
+        )
+
+    assert exc.value.code == "403"
+    assert _PROJECT_BATCH_LIMIT_REFUSAL in exc.value.message
+    mock_prisma.db.litellm_projecttable.update.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("caller", "requested_limit"),
+    [(_TEAM_ADMIN, {"gpt-5.5": 1000}), (_PROXY_ADMIN, {"gpt-5.5": 5000})],
+    ids=["team admin resends the stored limit", "proxy admin changes the limit"],
+)
+async def test_project_update_keeps_an_allowed_model_batch_enqueued_token_limit(
+    monkeypatch: pytest.MonkeyPatch, caller: UserAPIKeyAuth, requested_limit: dict[str, int]
+) -> None:
+    mock_prisma: Final = _project_update_mocks(monkeypatch, _stored_project_metadata(), team_id="test-team")
+    _team_admins_manage_projects(monkeypatch, mock_prisma)
+
+    await update_project(
+        data=UpdateProjectRequest(
+            project_id=f"project-{uuid.uuid4()}",
+            metadata={"owner": "renamed", "model_batch_enqueued_token_limit": requested_limit},
+        ),
+        http_request=Request(scope={"type": "http"}),
+        user_api_key_dict=caller,
+    )
+
+    written_metadata: Final = _written_project_data(mock_prisma)["metadata"]
+    assert written_metadata["owner"] == "renamed"
+    assert written_metadata["model_batch_enqueued_token_limit"] == requested_limit
+
+
+@pytest.mark.asyncio
+async def test_team_admin_can_write_batch_keys_a_project_does_not_enforce(monkeypatch: pytest.MonkeyPatch) -> None:
+    mock_prisma: Final = _project_update_mocks(monkeypatch, _stored_project_metadata(), team_id="test-team")
+    _team_admins_manage_projects(monkeypatch, mock_prisma)
+    requested_metadata: Final = {
+        **_stored_project_metadata(),
+        "batch_enqueued_token_limit": 50,
+        "max_batch_file_records": 10,
+        "allowed_s3_buckets": ["team-bucket"],
+    }
+
+    await update_project(
+        data=UpdateProjectRequest(project_id=f"project-{uuid.uuid4()}", metadata=requested_metadata),
+        http_request=Request(scope={"type": "http"}),
+        user_api_key_dict=_TEAM_ADMIN,
+    )
+
+    assert _written_project_data(mock_prisma)["metadata"] == requested_metadata
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "requested_limit",
+    [{"gpt-5.5": 1000, "gpt-5.4": 0}, {"gpt-5.5": "lots"}, [1000], {"gpt-5.5": True}, {"gpt-5.5": "2000"}],
+    ids=["one model at zero", "a non-numeric limit", "not a model map", "a boolean limit", "a numeric string limit"],
+)
+async def test_project_update_rejects_a_model_batch_enqueued_token_limit_it_cannot_enforce(
+    monkeypatch: pytest.MonkeyPatch, requested_limit: object
+) -> None:
+    mock_prisma: Final = _project_update_mocks(monkeypatch, _stored_project_metadata(), team_id="test-team")
+    _team_admins_manage_projects(monkeypatch, mock_prisma)
+
+    with pytest.raises(ProxyException) as exc:
+        await update_project(
+            data=UpdateProjectRequest(
+                project_id=f"project-{uuid.uuid4()}", metadata={"model_batch_enqueued_token_limit": requested_limit}
+            ),
+            http_request=Request(scope={"type": "http"}),
+            user_api_key_dict=_PROXY_ADMIN,
+        )
+
+    assert exc.value.code == "400"
+    assert "model_batch_enqueued_token_limit must map each model name to a positive integer" in exc.value.message
+    mock_prisma.db.litellm_projecttable.update.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "top_level_fields",
+    [{"model_tpm_limit": {"gpt-5.5": 2000}}, {"tags": ["batch"]}],
+    ids=["a per-model limit", "a premium metadata field"],
+)
+@pytest.mark.parametrize("caller", [_TEAM_ADMIN, _PROXY_ADMIN], ids=["team admin", "proxy admin"])
+async def test_project_update_with_only_top_level_fields_keeps_the_stored_metadata(
+    monkeypatch: pytest.MonkeyPatch, top_level_fields: dict[str, object], caller: UserAPIKeyAuth
+) -> None:
+    mock_prisma: Final = _project_update_mocks(monkeypatch, _stored_project_metadata(), team_id="test-team")
+    _team_admins_manage_projects(monkeypatch, mock_prisma)
+
+    await update_project(
+        data=UpdateProjectRequest(project_id=f"project-{uuid.uuid4()}", **top_level_fields),
+        http_request=Request(scope={"type": "http"}),
+        user_api_key_dict=caller,
+    )
+
+    assert _written_project_data(mock_prisma)["metadata"] == {**_stored_project_metadata(), **top_level_fields}

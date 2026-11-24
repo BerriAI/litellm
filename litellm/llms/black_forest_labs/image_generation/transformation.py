@@ -40,6 +40,7 @@ else:
     LiteLLMLoggingObj = Any
 
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class BlackForestLabsImageGenerationConfig(BaseImageGenerationConfig):
@@ -80,10 +81,10 @@ class BlackForestLabsImageGenerationConfig(BaseImageGenerationConfig):
     def map_openai_params(
         self,
         non_default_params: dict,
-        optional_params: dict,
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Map OpenAI parameters to Black Forest Labs parameters.
 
@@ -118,7 +119,7 @@ class BlackForestLabsImageGenerationConfig(BaseImageGenerationConfig):
 
         return optional_params
 
-    def _map_size_param(self, size: str, optional_params: dict) -> None:
+    def _map_size_param(self, size: str, optional_params: dict[str, object]) -> None:
         """Map OpenAI size parameter to BFL width/height."""
         # Common size mappings
         size_mapping: Final = {
@@ -144,14 +145,14 @@ class BlackForestLabsImageGenerationConfig(BaseImageGenerationConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, object],
         model: str,
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Validate environment and set up headers for Black Forest Labs.
 
@@ -214,8 +215,8 @@ class BlackForestLabsImageGenerationConfig(BaseImageGenerationConfig):
         prompt: str,
         optional_params: dict,
         litellm_params: dict,
-        headers: dict,
-    ) -> dict:
+        headers: Mapping[str, object],
+    ) -> dict[str, object]:
         """
         Transform OpenAI-style request to Black Forest Labs request format.
 
@@ -258,7 +259,7 @@ class BlackForestLabsImageGenerationConfig(BaseImageGenerationConfig):
         raw_response: httpx.Response,
         model_response: ImageResponse,
         logging_obj: LiteLLMLoggingObj,
-        request_data: dict,
+        request_data: Mapping[str, object],
         optional_params: dict,
         litellm_params: dict,
         encoding: "Tokenizer | None",
@@ -272,7 +273,7 @@ class BlackForestLabsImageGenerationConfig(BaseImageGenerationConfig):
         The response contains: {"status": "Ready", "result": {"sample": "https://..."}}
         """
         try:
-            response_data: Final = raw_response.json()
+            response_data: Final = _DECODED_JSON.validate_python(raw_response.json())
         except Exception as e:
             raise BlackForestLabsError(
                 status_code=raw_response.status_code,
@@ -305,7 +306,7 @@ class BlackForestLabsImageGenerationConfig(BaseImageGenerationConfig):
         return model_response
 
     def get_error_class(
-        self, error_message: str, status_code: int, headers: dict | httpx.Headers
+        self, error_message: str, status_code: int, headers: Mapping[str, object] | httpx.Headers
     ) -> BlackForestLabsError:
         """Return the appropriate error class for Black Forest Labs."""
         return BlackForestLabsError(

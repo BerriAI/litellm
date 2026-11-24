@@ -6,10 +6,13 @@ import base64
 import json
 from abc import ABC, abstractmethod
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any, Final, Generic, Protocol, TypeVar, cast, runtime_checkable
+from typing import TYPE_CHECKING, Any, Final, Generic, Literal, Protocol, TypeVar, cast, runtime_checkable
+
+from pydantic import TypeAdapter
 
 from litellm import verbose_logger
 from litellm._internal_context import with_service_target
+from litellm.litellm_core_utils.core_helpers import require_attributes
 from litellm.llms.base_llm.managed_resources.isolation import (
     build_list_page,
     build_owner_filter,
@@ -40,6 +43,16 @@ else:
 
 # Generic type for resource objects
 ResourceObjectType = TypeVar("ResourceObjectType")
+
+_UNTYPED_VALUE: Final = TypeAdapter(object)
+
+
+def _decoded_model_mappings(model_mappings: object) -> object:
+    return (
+        _UNTYPED_VALUE.validate_python(json.loads(model_mappings))
+        if isinstance(model_mappings, str)
+        else model_mappings
+    )
 
 
 @runtime_checkable
@@ -92,8 +105,14 @@ class BaseManagedResource(ABC, Generic[ResourceObjectType]):
         self.internal_usage_cache = internal_usage_cache
         self.prisma_client = prisma_client
 
-    def _resource_table(self) -> _ManagedResourceTable[ResourceObjectType]:
-        return getattr(self.prisma_client.db, self.table_name)
+    def _resource_table(
+        self, method: Literal["create", "find_first", "find_many"]
+    ) -> _ManagedResourceTable[ResourceObjectType]:
+        return require_attributes(
+            _UNTYPED_VALUE.validate_python(getattr(self.prisma_client.db, self.table_name)),
+            _ManagedResourceTable[ResourceObjectType],
+            method,
+        )
 
     # ============================================================================
     #                          ABSTRACT METHODS
@@ -141,7 +160,7 @@ class BaseManagedResource(ABC, Generic[ResourceObjectType]):
         self,
         llm_router: Router,
         model: str,
-        request_data: dict[str, Any],
+        request_data: dict[str, object],
         litellm_parent_otel_span: Span,
     ) -> ResourceObjectType:
         """
@@ -237,7 +256,7 @@ class BaseManagedResource(ABC, Generic[ResourceObjectType]):
             db_data.update(additional_db_fields)
 
         # Store in database
-        table: Final = self._resource_table()
+        table: Final = self._resource_table("create")
         result: Final = await table.create(data=db_data)
 
         verbose_logger.debug(
@@ -249,7 +268,7 @@ class BaseManagedResource(ABC, Generic[ResourceObjectType]):
         self,
         unified_resource_id: str,
         litellm_parent_otel_span: Span | None = None,
-    ) -> dict[str, Any] | None:
+    ) -> dict[str, object] | None:
         """
         Retrieve unified resource by ID from cache or database.
 
@@ -273,7 +292,7 @@ class BaseManagedResource(ABC, Generic[ResourceObjectType]):
             return result
 
         # Check database
-        table: Final = self._resource_table()
+        table: Final = self._resource_table("find_first")
         db_object: Final = await table.find_first(where={"unified_resource_id": unified_resource_id})
 
         if db_object:
@@ -298,7 +317,7 @@ class BaseManagedResource(ABC, Generic[ResourceObjectType]):
             The deleted resource object or None if not found
         """
         # Get old value from database
-        table: Final = self._resource_table()
+        table: Final = self._resource_table("find_first")
         initial_value: Final = await table.find_first(where={"unified_resource_id": unified_resource_id})
 
         if initial_value is None:
@@ -356,7 +375,7 @@ class BaseManagedResource(ABC, Generic[ResourceObjectType]):
         self,
         resource_ids: list[str],
         litellm_parent_otel_span: Span,
-    ) -> dict[str, dict[str, str]]:
+    ) -> dict[str, object]:
         """
         Get model-specific resource IDs for a list of unified resource IDs.
 
@@ -375,20 +394,16 @@ class BaseManagedResource(ABC, Generic[ResourceObjectType]):
                 }
             }
         """
-        resource_id_mapping: Final[dict[str, dict[str, str]]] = {}
+        resource_id_mapping: Final[dict[str, object]] = {}
 
         for resource_id in resource_ids:
             # Get unified resource from cache/db
             unified_resource_object = await self.get_unified_resource_id(resource_id, litellm_parent_otel_span)
 
             if unified_resource_object:
-                model_mappings = unified_resource_object.get("model_mappings", {})
-
-                # Handle both JSON string and dict
-                if isinstance(model_mappings, str):
-                    model_mappings = json.loads(model_mappings)
-
-                resource_id_mapping[resource_id] = model_mappings
+                resource_id_mapping[resource_id] = _decoded_model_mappings(
+                    unified_resource_object.get("model_mappings", {})
+                )
 
         return resource_id_mapping
 
@@ -399,7 +414,7 @@ class BaseManagedResource(ABC, Generic[ResourceObjectType]):
     async def create_resource_for_each_model(
         self,
         llm_router: Router,
-        request_data: dict[str, Any],
+        request_data: dict[str, object],
         target_model_names_list: list[str],
         litellm_parent_otel_span: Span,
     ) -> list[ResourceObjectType]:
@@ -418,7 +433,7 @@ class BaseManagedResource(ABC, Generic[ResourceObjectType]):
         if llm_router is None:
             raise Exception("LLM Router not initialized. Ensure models added to proxy.")
 
-        responses: Final = []
+        responses: Final[list[ResourceObjectType]] = []
         for model in target_model_names_list:
             individual_response = await self.create_resource_for_model(
                 llm_router=llm_router,
@@ -578,7 +593,7 @@ class BaseManagedResource(ABC, Generic[ResourceObjectType]):
 
         # Fetch resources
         fetch_limit: Final = limit or 20
-        table: Final = self._resource_table()
+        table: Final = self._resource_table("find_many")
         resources: Final = await table.find_many(
             where=where_clause,
             take=fetch_limit,

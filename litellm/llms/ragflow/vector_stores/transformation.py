@@ -41,13 +41,18 @@ class _RAGFlowCreateResponseRoot(RootModel[_RAGFlowCreateResponse]):
     model_config = ConfigDict(frozen=True, hide_input_in_errors=True)
 
 
+class _RAGFlowStatus(TypedDict):
+    code: ReadOnly[NotRequired[int]]
+    message: ReadOnly[NotRequired[str]]
+
+
 _RAGFLOW_EMPTY_DATA: Final[_RAGFlowDataset] = {}
 
 
 class RAGFlowVectorStoreConfig(BaseVectorStoreConfig):
     """Vector store configuration for RAGFlow datasets."""
 
-    def get_auth_credentials(self, litellm_params: dict) -> BaseVectorStoreAuthCredentials:
+    def get_auth_credentials(self, litellm_params: Mapping[str, object]) -> BaseVectorStoreAuthCredentials:
         api_key = litellm_params.get("api_key")
         if api_key is None:
             # Try to get from environment variable
@@ -86,7 +91,7 @@ class RAGFlowVectorStoreConfig(BaseVectorStoreConfig):
     def get_complete_url(
         self,
         api_base: str | None,
-        litellm_params: dict,
+        litellm_params: Mapping[str, object],
     ) -> str:
         """
         Get the complete URL for RAGFlow datasets API.
@@ -114,9 +119,9 @@ class RAGFlowVectorStoreConfig(BaseVectorStoreConfig):
         vector_store_search_optional_params: VectorStoreSearchOptionalRequestParams,
         api_base: str,
         litellm_logging_obj: LiteLLMLoggingObj,
-        litellm_params: dict,
+        litellm_params: Mapping[str, object],
         extra_body: Mapping[str, object] | None = None,
-    ) -> tuple[str, dict]:
+    ) -> tuple[str, dict[str, object]]:
         """RAGFlow vector stores are management-only, search is not supported."""
         raise NotImplementedError("RAGFlow vector stores support dataset management only, not search/retrieval")
 
@@ -130,7 +135,7 @@ class RAGFlowVectorStoreConfig(BaseVectorStoreConfig):
         self,
         vector_store_create_optional_params: VectorStoreCreateOptionalRequestParams,
         api_base: str,
-    ) -> tuple[str, dict]:
+    ) -> tuple[str, dict[str, object]]:
         """
         Transform create request to RAGFlow POST /api/v1/datasets format.
 
@@ -197,7 +202,7 @@ class RAGFlowVectorStoreConfig(BaseVectorStoreConfig):
         }
         """
         try:
-            response_json: Final = response.json()
+            response_json: Final[_RAGFlowStatus] = response.json()
 
             # Check for RAGFlow error response
             if response_json.get("code") != 0:

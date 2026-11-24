@@ -23,13 +23,15 @@ from litellm.exceptions import GuardrailRaisedException
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.llms.anthropic.pass_through.messages.streaming_iterator import (
+from litellm.llms.anthropic.messages.native.streaming_iterator import (
     BaseAnthropicMessagesStreamingIterator,
 )
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.utils import ProxyLogging
+from litellm.responses.streaming_iterator import drain_logging_tasks
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import Usage
+from tests.unit.litellm_core_utils.weakly_parked_logger import weakly_parked_logger
 
 
 @pytest.fixture(autouse=True)
@@ -563,8 +565,12 @@ async def test_native_messages_stream_logging_fires_after_guardrail_end_of_strea
         request_data=request_data,
     ):
         pass
-    await asyncio.sleep(0)
-    await asyncio.sleep(0)
+
+    async def logging_dispatched() -> None:
+        while len(events) < 2:
+            await asyncio.sleep(0.01)
+
+    await asyncio.wait_for(logging_dispatched(), timeout=5)
 
     assert events == ["scan_appended", ("logging_dispatched", "post_call_entry_visible", True)]
 
@@ -759,6 +765,24 @@ async def test_fire_deferred_stream_logging_fires_callback():
         "args_cleared": logging_obj._deferred_stream_complete_args is None,
     }
     assert snapshot == {"arg": "payload", "callback_cleared": True, "args_cleared": True}
+
+
+@pytest.mark.asyncio
+async def test_fired_deferred_stream_logging_survives_garbage_collection_while_pending():
+    async with weakly_parked_logger() as parked:
+        logging_obj: Final = MagicMock()
+
+        async def deferred(assembled_response: object, cache_hit: object) -> None:
+            await parked.park()
+
+        logging_obj._on_deferred_stream_complete = deferred
+        logging_obj._deferred_stream_complete_args = ("assembled", None)
+
+        ProxyLogging.fire_deferred_stream_logging(request_data={"litellm_logging_obj": logging_obj})
+        survived: Final = await parked.survives_collection()
+        await drain_logging_tasks()
+
+        assert (survived, parked.parks, parked.finished.is_set()) == (True, 1, True)
 
 
 def test_fire_deferred_stream_logging_no_logging_obj_no_error():

@@ -6,11 +6,14 @@ It uses the field targeting configuration from litellm_logging_obj
 to extract specific fields for guardrail processing.
 """
 
-from collections.abc import AsyncIterable, AsyncIterator, Callable, Mapping, Sequence
+from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from typing import TYPE_CHECKING, Final, Optional, Protocol, runtime_checkable
+
+from pydantic import TypeAdapter
 
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_guardrail import without_server_streaming_classification
+from litellm.litellm_core_utils.core_helpers import has_attributes
 from litellm.llms.base_llm.guardrail_translation.base_translation import (
     BaseTranslation,
     StreamingScanKey,
@@ -57,7 +60,7 @@ class PassThroughEndpointHandler(BaseTranslation):
 
     def _extract_text_for_guardrail(
         self,
-        data: dict,
+        data: dict[str, object],
         field_expressions: list[str] | None,
     ) -> str:
         """
@@ -87,7 +90,7 @@ class PassThroughEndpointHandler(BaseTranslation):
         payload_to_check: Final = {
             k: v
             for k, v in without_server_streaming_classification(data).items()
-            if not k.startswith("_") and k not in ("metadata", "litellm_logging_obj")
+            if not k.startswith("_") and k not in ("metadata", "litellm_metadata", "litellm_logging_obj")
         }
         verbose_proxy_logger.debug("PassThroughEndpointHandler: Using full payload for guardrail")
         return safe_dumps(payload_to_check)
@@ -139,7 +142,7 @@ class PassThroughEndpointHandler(BaseTranslation):
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: Optional["LiteLLMLoggingObj"] = None,
         user_api_key_dict: Optional["UserAPIKeyAuth"] = None,
-        request_data: dict | None = None,
+        request_data: dict[str, object] | None = None,
     ) -> object:
         """
         Process output response by applying guardrails to targeted fields.
@@ -215,6 +218,19 @@ class _EventStreamEndpointChecker(Protocol):
     def event_stream_endpoint_is_de_anonymizable(self, endpoint: str, model: str, body: object) -> bool: ...
 
 
+class _EventStreamDeAnonymizer(Protocol):
+    async def de_anonymize_event_stream(
+        self,
+        body_bytes: bytes,
+        proxy_logging_obj: "ProxyLogging",
+        user_api_key_dict: "UserAPIKeyAuth",
+        data: Mapping[str, object],
+    ) -> bytes: ...
+
+
+_TRANSLATION_RESULT: Final = TypeAdapter(object)
+
+
 _PROVIDER_HANDLERS: dict[str, type[BaseTranslation]] = {}
 
 
@@ -260,10 +276,12 @@ class LlmPassthroughRouteHandler(BaseTranslation):
                 provider,
             )
             return data
-        return await handler_cls().process_input_messages(
-            data=data,
-            guardrail_to_apply=guardrail_to_apply,
-            litellm_logging_obj=litellm_logging_obj,
+        return _TRANSLATION_RESULT.validate_python(
+            await handler_cls().process_input_messages(
+                data=data,
+                guardrail_to_apply=guardrail_to_apply,
+                litellm_logging_obj=litellm_logging_obj,
+            )
         )
 
     async def process_output_response(
@@ -282,12 +300,14 @@ class LlmPassthroughRouteHandler(BaseTranslation):
                 provider,
             )
             return response
-        return await handler_cls().process_output_response(
-            response=response,
-            guardrail_to_apply=guardrail_to_apply,
-            litellm_logging_obj=litellm_logging_obj,
-            user_api_key_dict=user_api_key_dict,
-            request_data=request_data,
+        return _TRANSLATION_RESULT.validate_python(
+            await handler_cls().process_output_response(
+                response=response,
+                guardrail_to_apply=guardrail_to_apply,
+                litellm_logging_obj=litellm_logging_obj,
+                user_api_key_dict=user_api_key_dict,
+                request_data=request_data,
+            )
         )
 
     @staticmethod
@@ -332,6 +352,12 @@ class LlmPassthroughRouteHandler(BaseTranslation):
     def get_streaming_scan_key(self, responses_so_far: Sequence[object]) -> StreamingScanKey | None:
         translation: Final = self._event_stream_translation(responses_so_far)
         return translation.get_streaming_scan_key(responses_so_far) if translation is not None else None
+
+    def starts_client_tool_call(self, item: object) -> bool:
+        """The answer of the provider translation that reads this event stream. A stream no translation reads is
+        not scanned at all, so there is no verdict to hold it for."""
+        translation: Final = self._event_stream_translation((item,))
+        return translation is not None and translation.starts_client_tool_call(item)
 
     def needs_ended_stream_scan(self, guardrail: "CustomGuardrail", responses_so_far: Sequence[object]) -> bool:
         translation: Final = self._event_stream_translation(responses_so_far)
@@ -399,9 +425,11 @@ class LlmPassthroughRouteHandler(BaseTranslation):
         return handler_cls.event_stream_media_type()
 
     @staticmethod
-    def _resolve_event_stream_de_anonymizer(provider: str | None):
+    def _resolve_event_stream_de_anonymizer(provider: str | None) -> Callable[..., Awaitable[bytes]] | None:
         handler_cls: Final = _get_provider_handlers().get(provider or "")
-        return getattr(handler_cls, "de_anonymize_event_stream", None)
+        if not has_attributes(handler_cls, _EventStreamDeAnonymizer, "de_anonymize_event_stream"):
+            return None
+        return handler_cls.de_anonymize_event_stream
 
     @staticmethod
     def supports_event_stream_relay(provider: object, endpoint: object, model: object, body: object) -> bool:

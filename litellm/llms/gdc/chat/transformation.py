@@ -10,12 +10,16 @@ from collections.abc import Callable
 from typing import Final, Protocol
 from urllib.parse import urlsplit
 
+from pydantic import TypeAdapter
 from typing_extensions import ReadOnly, TypedDict, Unpack
 
 import litellm
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.openai_like.chat.transformation import OpenAILikeChatConfig
 from litellm.types.llms.openai import AllMessageValues
+
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class _OpenAIGPTConfigOptions(TypedDict, total=False):
@@ -56,7 +60,7 @@ class GDCGeminiConfig(OpenAILikeChatConfig):
         self._creds_lock = threading.Lock()
         self._gdch_creds_cache: dict[tuple[str, str], _GDCHAudienceCredentials] = {}
 
-    def get_supported_openai_params(self, model: str) -> list:
+    def get_supported_openai_params(self, model: str) -> list[str]:
         return [
             "vertex_project",
             "vertex_location",
@@ -100,8 +104,8 @@ class GDCGeminiConfig(OpenAILikeChatConfig):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         stream: bool | None = None,
     ) -> str:
         api_base = api_base or litellm.gdc_api_base or litellm.api_base
@@ -203,10 +207,10 @@ class GDCGeminiConfig(OpenAILikeChatConfig):
         import google.auth
 
         try:
-            json_obj: Final = json.loads(api_key)
+            json_obj: Final = as_str_mapping(_DECODED_JSON.validate_python(json.loads(api_key)))
         except json.JSONDecodeError:
             return None, False
-        if not isinstance(json_obj, dict) or json_obj.get("type") != self._GDCH_CREDENTIAL_TYPE:
+        if json_obj is None or json_obj.get("type") != self._GDCH_CREDENTIAL_TYPE:
             raise ValueError(
                 "GDC only accepts a GDCH service account credential as a JSON api_key "
                 '(expected "type": "gdch_service_account"). Other Google credential types are '
@@ -217,14 +221,14 @@ class GDCGeminiConfig(OpenAILikeChatConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, object],
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
+        optional_params: dict[str, object],
         litellm_params: dict,
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         import google.auth.exceptions
 
         api_base = api_base or litellm.gdc_api_base or litellm.api_base
@@ -297,10 +301,10 @@ class GDCGeminiConfig(OpenAILikeChatConfig):
         self,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
-        headers: dict,
-    ) -> dict:
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
+        headers: dict[str, object],
+    ) -> dict[str, object]:
         """
         Transforms the request to the GDC provider
         """

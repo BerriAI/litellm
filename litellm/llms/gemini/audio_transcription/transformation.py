@@ -3,6 +3,7 @@ from collections.abc import Mapping, Sequence
 from typing import Final
 
 from httpx import Headers, Response
+from pydantic import TypeAdapter
 
 from litellm.litellm_core_utils.audio_utils.subtitle_utils import SUBTITLE_RESPONSE_FORMATS
 from litellm.litellm_core_utils.audio_utils.utils import (
@@ -36,6 +37,7 @@ from litellm.types.utils import (
 
 INTERACTIONS_API_REVISION: Final = "2026-05-20"
 WORD_INFO_ANNOTATION_TYPE: Final = "word_info"
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class GeminiAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
@@ -60,7 +62,7 @@ class GeminiAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         optional_params: Mapping[str, object],
         model: str,
         drop_params: bool,
-    ) -> dict:  # mutable-ok: BaseAudioTranscriptionConfig signature
+    ) -> dict[str, object]:  # mutable-ok: BaseAudioTranscriptionConfig signature
         supported_params: Final = frozenset(self.get_supported_openai_params(model))
         accepted: Final = tuple((k, v) for k, v in non_default_params.items() if k in supported_params)
         return dict((*optional_params.items(), *accepted))
@@ -82,7 +84,7 @@ class GeminiAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         litellm_params: Mapping[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:  # mutable-ok: BaseAudioTranscriptionConfig signature
+    ) -> dict[str, str]:  # mutable-ok: BaseAudioTranscriptionConfig signature
         resolved_api_key: Final = GeminiModelInfo.get_api_key(api_key)
         if not resolved_api_key:
             raise GeminiError(
@@ -132,17 +134,17 @@ class GeminiAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         raw_response: Response,
     ) -> TranscriptionResponse:
         try:
-            response_json: Final = raw_response.json()
+            response_json: Final = _DECODED_JSON.validate_python(raw_response.json())
         except ValueError:
             raise GeminiError(
                 status_code=raw_response.status_code,
-                message=f"Received non-JSON response from Gemini Interactions API: {raw_response.text}",
+                message="Received non-JSON response from Gemini Interactions API",
             )
         parsed: Final = GeminiTranscriptionInteractionResponse.model_validate(response_json)
         if parsed.status != "completed":
             raise GeminiError(
                 status_code=raw_response.status_code,
-                message=f"Gemini transcription interaction did not complete (status={parsed.status}): {raw_response.text}",
+                message=f"Gemini transcription interaction did not complete (status={parsed.status})",
             )
         text_contents: Final = tuple(
             content

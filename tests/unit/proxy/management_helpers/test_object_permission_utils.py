@@ -19,13 +19,15 @@ from litellm.proxy.management_helpers.object_permission_utils import (
     _extract_requested_mcp_access_groups,
     _extract_requested_mcp_server_ids,
     _resolve_team_allowed_mcp_servers,
-    set_object_permission,
     enforce_all_proxy_mcp_servers_grant_is_admin_only,
     prepare_object_permission_upsert,
+    reject_clearing_app_grants,
+    set_object_permission,
     validate_key_mcp_servers_against_team,
     validate_key_search_tools_against_team,
     validate_key_vector_stores_against_team,
 )
+from tests.unit.proxy.rust_auth_stores import RustAuthStores
 
 
 @pytest.mark.asyncio
@@ -43,9 +45,7 @@ async def test_set_object_permission():
     mock_created_permission = MagicMock()
     mock_created_permission.object_permission_id = "test_perm_id_123"
 
-    mock_prisma_client.db.litellm_objectpermissiontable.create = AsyncMock(
-        return_value=mock_created_permission
-    )
+    mock_prisma_client.db.litellm_objectpermissiontable.create = AsyncMock(return_value=mock_created_permission)
     mock_prisma_client.db.litellm_mcpservertable.find_many = AsyncMock(return_value=[])
 
     # Test data with object_permission
@@ -62,9 +62,7 @@ async def test_set_object_permission():
     }
 
     # Call the function
-    result = await set_object_permission(
-        data_json=data_json, prisma_client=mock_prisma_client
-    )
+    result = await set_object_permission(data_json=data_json, prisma_client=mock_prisma_client)
 
     # Verify object_permission_id was added to result
     assert result["object_permission_id"] == "test_perm_id_123"
@@ -105,9 +103,7 @@ async def test_set_object_permission_persists_mcp_tool_search_enabled():
     mock_prisma_client = MagicMock()
     mock_created_permission = MagicMock()
     mock_created_permission.object_permission_id = "perm_id"
-    mock_prisma_client.db.litellm_objectpermissiontable.create = AsyncMock(
-        return_value=mock_created_permission
-    )
+    mock_prisma_client.db.litellm_objectpermissiontable.create = AsyncMock(return_value=mock_created_permission)
 
     data_json = {
         "object_permission": {
@@ -118,11 +114,7 @@ async def test_set_object_permission_persists_mcp_tool_search_enabled():
 
     await set_object_permission(data_json=data_json, prisma_client=mock_prisma_client)
 
-    created_data = (
-        mock_prisma_client.db.litellm_objectpermissiontable.create.call_args.kwargs[
-            "data"
-        ]
-    )
+    created_data = mock_prisma_client.db.litellm_objectpermissiontable.create.call_args.kwargs["data"]
     assert created_data["mcp_tool_search_enabled"] is True
 
 
@@ -131,9 +123,7 @@ async def test_set_object_permission_persists_skills():
     mock_prisma_client = MagicMock()
     mock_created_permission = MagicMock()
     mock_created_permission.object_permission_id = "perm_id"
-    mock_prisma_client.db.litellm_objectpermissiontable.create = AsyncMock(
-        return_value=mock_created_permission
-    )
+    mock_prisma_client.db.litellm_objectpermissiontable.create = AsyncMock(return_value=mock_created_permission)
 
     data_json = {
         "object_permission": LiteLLM_ObjectPermissionBase(skills=["private-skill"]).model_dump(),
@@ -141,11 +131,7 @@ async def test_set_object_permission_persists_skills():
 
     await set_object_permission(data_json=data_json, prisma_client=mock_prisma_client)
 
-    created_data = (
-        mock_prisma_client.db.litellm_objectpermissiontable.create.call_args.kwargs[
-            "data"
-        ]
-    )
+    created_data = mock_prisma_client.db.litellm_objectpermissiontable.create.call_args.kwargs["data"]
     assert created_data["skills"] == ["private-skill"]
 
 
@@ -228,11 +214,7 @@ def _make_team_obj(
     mock_team.team_id = team_id
     mock_team.access_group_ids = access_group_ids or []
 
-    if (
-        mcp_servers is not None
-        or mcp_access_groups is not None
-        or mcp_tool_permissions is not None
-    ):
+    if mcp_servers is not None or mcp_access_groups is not None or mcp_tool_permissions is not None:
         mock_team.object_permission = MagicMock(spec=LiteLLM_ObjectPermissionTable)
         mock_team.object_permission.mcp_servers = mcp_servers or []
         mock_team.object_permission.mcp_access_groups = mcp_access_groups or []
@@ -277,7 +259,7 @@ def _make_mock_mcp_manager(*existing_ids: str, servers=None):
     return_value=set(),
 )
 @patch(
-    "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler.get_mcp_servers_from_access_groups",
+    "litellm.proxy.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler.get_mcp_servers_from_access_groups",
     new_callable=AsyncMock,
     return_value=[],
 )
@@ -291,7 +273,7 @@ async def test_validate_no_object_permission(mock_access_groups, mock_allow_all)
 
 @pytest.mark.asyncio
 @patch(
-    "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+    "litellm.proxy.mcp_server.mcp_server_manager.global_mcp_server_manager",
     new=_make_mock_mcp_manager("server-1", "server-2"),
 )
 @patch(
@@ -299,13 +281,11 @@ async def test_validate_no_object_permission(mock_access_groups, mock_allow_all)
     return_value=set(),
 )
 @patch(
-    "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler.get_mcp_servers_from_access_groups",
+    "litellm.proxy.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler.get_mcp_servers_from_access_groups",
     new_callable=AsyncMock,
     return_value=[],
 )
-async def test_validate_key_servers_within_team_scope(
-    mock_access_groups, mock_allow_all
-):
+async def test_validate_key_servers_within_team_scope(mock_access_groups, mock_allow_all):
     """Key requests servers that are in the team's scope — should pass."""
     team_obj = _make_team_obj(mcp_servers=["server-1", "server-2", "server-3"])
     await validate_key_mcp_servers_against_team(
@@ -316,7 +296,7 @@ async def test_validate_key_servers_within_team_scope(
 
 @pytest.mark.asyncio
 @patch(
-    "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+    "litellm.proxy.mcp_server.mcp_server_manager.global_mcp_server_manager",
     new=_make_mock_mcp_manager("server-1", "server-outside"),
 )
 @patch(
@@ -324,13 +304,11 @@ async def test_validate_key_servers_within_team_scope(
     return_value=set(),
 )
 @patch(
-    "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler.get_mcp_servers_from_access_groups",
+    "litellm.proxy.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler.get_mcp_servers_from_access_groups",
     new_callable=AsyncMock,
     return_value=[],
 )
-async def test_validate_key_servers_outside_team_scope_raises(
-    mock_access_groups, mock_allow_all
-):
+async def test_validate_key_servers_outside_team_scope_raises(mock_access_groups, mock_allow_all):
     """Key requests a server that exists but is NOT in the team's scope — should raise 403."""
     team_obj = _make_team_obj(mcp_servers=["server-1"])
     with pytest.raises(HTTPException) as exc_info:
@@ -344,7 +322,7 @@ async def test_validate_key_servers_outside_team_scope_raises(
 
 @pytest.mark.asyncio
 @patch(
-    "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+    "litellm.proxy.mcp_server.mcp_server_manager.global_mcp_server_manager",
     new=_make_mock_mcp_manager("server-1", "global-server"),
 )
 @patch(
@@ -352,13 +330,11 @@ async def test_validate_key_servers_outside_team_scope_raises(
     return_value={"global-server"},
 )
 @patch(
-    "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler.get_mcp_servers_from_access_groups",
+    "litellm.proxy.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler.get_mcp_servers_from_access_groups",
     new_callable=AsyncMock,
     return_value=[],
 )
-async def test_validate_allow_all_keys_servers_always_allowed(
-    mock_access_groups, mock_allow_all
-):
+async def test_validate_allow_all_keys_servers_always_allowed(mock_access_groups, mock_allow_all):
     """allow_all_keys servers should be accessible even if not in team scope."""
     team_obj = _make_team_obj(mcp_servers=["server-1"])
     await validate_key_mcp_servers_against_team(
@@ -369,7 +345,7 @@ async def test_validate_allow_all_keys_servers_always_allowed(
 
 @pytest.mark.asyncio
 @patch(
-    "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+    "litellm.proxy.mcp_server.mcp_server_manager.global_mcp_server_manager",
     new=_make_mock_mcp_manager("global-server"),
 )
 @patch(
@@ -377,7 +353,7 @@ async def test_validate_allow_all_keys_servers_always_allowed(
     return_value={"global-server"},
 )
 @patch(
-    "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler.get_mcp_servers_from_access_groups",
+    "litellm.proxy.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler.get_mcp_servers_from_access_groups",
     new_callable=AsyncMock,
     return_value=[],
 )
@@ -391,7 +367,7 @@ async def test_validate_no_team_only_allow_all_keys(mock_access_groups, mock_all
 
 @pytest.mark.asyncio
 @patch(
-    "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+    "litellm.proxy.mcp_server.mcp_server_manager.global_mcp_server_manager",
     new=_make_mock_mcp_manager("private-server"),
 )
 @patch(
@@ -399,13 +375,11 @@ async def test_validate_no_team_only_allow_all_keys(mock_access_groups, mock_all
     return_value={"global-server"},
 )
 @patch(
-    "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler.get_mcp_servers_from_access_groups",
+    "litellm.proxy.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler.get_mcp_servers_from_access_groups",
     new_callable=AsyncMock,
     return_value=[],
 )
-async def test_validate_no_team_non_global_server_raises(
-    mock_access_groups, mock_allow_all
-):
+async def test_validate_no_team_non_global_server_raises(mock_access_groups, mock_allow_all):
     """Key without a team requesting an existing non-global server — should raise 403."""
     with pytest.raises(HTTPException) as exc_info:
         await validate_key_mcp_servers_against_team(
@@ -418,7 +392,7 @@ async def test_validate_no_team_non_global_server_raises(
 
 @pytest.mark.asyncio
 @patch(
-    "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+    "litellm.proxy.mcp_server.mcp_server_manager.global_mcp_server_manager",
     new=_make_mock_mcp_manager("private-server"),
 )
 @patch(
@@ -426,13 +400,11 @@ async def test_validate_no_team_non_global_server_raises(
     return_value=set(),
 )
 @patch(
-    "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler.get_mcp_servers_from_access_groups",
+    "litellm.proxy.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler.get_mcp_servers_from_access_groups",
     new_callable=AsyncMock,
     return_value=[],
 )
-async def test_validate_no_team_proxy_admin_can_assign_private_server(
-    mock_access_groups, mock_allow_all
-):
+async def test_validate_no_team_proxy_admin_can_assign_private_server(mock_access_groups, mock_allow_all):
     """Proxy admin assigning a non-global server to a teamless key — should pass (LIT-3815)."""
     result = await validate_key_mcp_servers_against_team(
         object_permission={"mcp_servers": ["private-server"]},
@@ -444,7 +416,7 @@ async def test_validate_no_team_proxy_admin_can_assign_private_server(
 
 @pytest.mark.asyncio
 @patch(
-    "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+    "litellm.proxy.mcp_server.mcp_server_manager.global_mcp_server_manager",
     new=_make_mock_mcp_manager("private-server"),
 )
 @patch(
@@ -452,13 +424,11 @@ async def test_validate_no_team_proxy_admin_can_assign_private_server(
     return_value=set(),
 )
 @patch(
-    "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler.get_mcp_servers_from_access_groups",
+    "litellm.proxy.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler.get_mcp_servers_from_access_groups",
     new_callable=AsyncMock,
     return_value=[],
 )
-async def test_validate_no_team_non_admin_private_server_still_raises(
-    mock_access_groups, mock_allow_all
-):
+async def test_validate_no_team_non_admin_private_server_still_raises(mock_access_groups, mock_allow_all):
     """The teamless override is gated on proxy admin — a non-admin still gets 403."""
     with pytest.raises(HTTPException) as exc_info:
         await validate_key_mcp_servers_against_team(
@@ -475,13 +445,11 @@ async def test_validate_no_team_non_admin_private_server_still_raises(
     return_value=set(),
 )
 @patch(
-    "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler.get_mcp_servers_from_access_groups",
+    "litellm.proxy.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler.get_mcp_servers_from_access_groups",
     new_callable=AsyncMock,
     return_value=[],
 )
-async def test_validate_no_team_proxy_admin_can_assign_access_group(
-    mock_access_groups, mock_allow_all
-):
+async def test_validate_no_team_proxy_admin_can_assign_access_group(mock_access_groups, mock_allow_all):
     """Proxy admin assigning an access group to a teamless key — should pass (LIT-3815)."""
     result = await validate_key_mcp_servers_against_team(
         object_permission={"mcp_access_groups": ["group-1"]},
@@ -493,7 +461,7 @@ async def test_validate_no_team_proxy_admin_can_assign_access_group(
 
 @pytest.mark.asyncio
 @patch(
-    "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+    "litellm.proxy.mcp_server.mcp_server_manager.global_mcp_server_manager",
     new=_make_mock_mcp_manager("server-1", "server-outside"),
 )
 @patch(
@@ -501,13 +469,11 @@ async def test_validate_no_team_proxy_admin_can_assign_access_group(
     return_value=set(),
 )
 @patch(
-    "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler.get_mcp_servers_from_access_groups",
+    "litellm.proxy.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler.get_mcp_servers_from_access_groups",
     new_callable=AsyncMock,
     return_value=[],
 )
-async def test_validate_proxy_admin_still_bounded_by_team_scope(
-    mock_access_groups, mock_allow_all
-):
+async def test_validate_proxy_admin_still_bounded_by_team_scope(mock_access_groups, mock_allow_all):
     """The override is scoped to teamless keys — an admin assigning beyond a team's scope still raises."""
     team_obj = _make_team_obj(mcp_servers=["server-1"])
     with pytest.raises(HTTPException) as exc_info:
@@ -522,7 +488,7 @@ async def test_validate_proxy_admin_still_bounded_by_team_scope(
 
 @pytest.mark.asyncio
 @patch(
-    "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+    "litellm.proxy.mcp_server.mcp_server_manager.global_mcp_server_manager",
     new=_make_mock_mcp_manager("some-server"),
 )
 @patch(
@@ -530,13 +496,11 @@ async def test_validate_proxy_admin_still_bounded_by_team_scope(
     return_value=set(),
 )
 @patch(
-    "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler.get_mcp_servers_from_access_groups",
+    "litellm.proxy.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler.get_mcp_servers_from_access_groups",
     new_callable=AsyncMock,
     return_value=[],
 )
-async def test_validate_team_no_mcp_config_blocks_all(
-    mock_access_groups, mock_allow_all
-):
+async def test_validate_team_no_mcp_config_blocks_all(mock_access_groups, mock_allow_all):
     """Team with no object_permission — key can't use any non-global MCP servers."""
     team_obj = _make_team_obj()  # No object_permission
     with pytest.raises(HTTPException) as exc_info:
@@ -548,16 +512,17 @@ async def test_validate_team_no_mcp_config_blocks_all(
 
 
 @pytest.fixture
-def unified_mcp_prisma() -> Iterator[MagicMock]:
+def unified_mcp_prisma(rust_auth_stores: RustAuthStores) -> Iterator[MagicMock]:
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 
     prisma: Final = MagicMock()
-    prisma.db.litellm_accessgrouptable.find_unique = AsyncMock(
-        return_value=LiteLLM_AccessGroupTable(
+    rust_auth_stores.access_group.seed(
+        "ag-1",
+        LiteLLM_AccessGroupTable(
             access_group_id="ag-1",
             access_group_name="group one",
             access_mcp_server_ids=["server-1"],
-        )
+        ),
     )
     prisma.db.litellm_mcpservertable.find_many = AsyncMock(return_value=[])
     manager: Final = _make_mock_mcp_manager(
@@ -569,7 +534,7 @@ def unified_mcp_prisma() -> Iterator[MagicMock]:
     manager.get_allow_all_keys_server_ids.return_value = []
     with (
         patch(  # test-quality-ok: management helpers read this module singleton without a registry injection seam
-            "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+            "litellm.proxy.mcp_server.mcp_server_manager.global_mcp_server_manager",
             new=manager,
         ),
         patch(  # test-quality-ok: unified group resolver obtains its cache from the proxy singleton
@@ -641,17 +606,20 @@ async def test_team_allowed_servers_union_object_permission_and_unified_access_g
 @pytest.mark.parametrize("group_state", ["empty", "missing", "unresolved"])
 async def test_team_unified_access_group_without_servers_preserves_direct_grants(
     unified_mcp_prisma: MagicMock,
+    rust_auth_stores: RustAuthStores,
     group_state: Literal["empty", "missing", "unresolved"],
 ) -> None:
-    unified_mcp_prisma.db.litellm_accessgrouptable.find_unique.return_value = (
-        LiteLLM_AccessGroupTable(
-            access_group_id="ag-1",
-            access_group_name="empty or stale group",
-            access_mcp_server_ids=["deleted-server"] if group_state == "unresolved" else [],
+    if group_state == "missing":
+        del rust_auth_stores.access_group.reader["ag-1"], rust_auth_stores.access_group.writer["ag-1"]
+    else:
+        rust_auth_stores.access_group.seed(
+            "ag-1",
+            LiteLLM_AccessGroupTable(
+                access_group_id="ag-1",
+                access_group_name="empty or stale group",
+                access_mcp_server_ids=["deleted-server"] if group_state == "unresolved" else [],
+            ),
         )
-        if group_state != "missing"
-        else None
-    )
     team: Final = LiteLLM_TeamTableCachedObj(
         team_id="team-1",
         access_group_ids=["ag-1"],
@@ -675,7 +643,7 @@ async def test_team_unified_access_group_without_servers_preserves_direct_grants
 
 @pytest.mark.asyncio
 @patch(
-    "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+    "litellm.proxy.mcp_server.mcp_server_manager.global_mcp_server_manager",
     new=_make_mock_mcp_manager("server-outside"),
 )
 @patch(
@@ -683,13 +651,11 @@ async def test_team_unified_access_group_without_servers_preserves_direct_grants
     return_value=set(),
 )
 @patch(
-    "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler.get_mcp_servers_from_access_groups",
+    "litellm.proxy.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler.get_mcp_servers_from_access_groups",
     new_callable=AsyncMock,
     return_value=[],
 )
-async def test_validate_tool_permissions_validated_against_team(
-    mock_access_groups, mock_allow_all
-):
+async def test_validate_tool_permissions_validated_against_team(mock_access_groups, mock_allow_all):
     """Server IDs in mcp_tool_permissions should also be validated when they exist."""
     team_obj = _make_team_obj(mcp_servers=["server-1"])
     with pytest.raises(HTTPException) as exc_info:
@@ -703,7 +669,7 @@ async def test_validate_tool_permissions_validated_against_team(
 
 @pytest.mark.asyncio
 @patch(
-    "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+    "litellm.proxy.mcp_server.mcp_server_manager.global_mcp_server_manager",
     new=_make_mock_mcp_manager(),  # empty registry — all IDs are stale
 )
 @patch(
@@ -711,13 +677,11 @@ async def test_validate_tool_permissions_validated_against_team(
     return_value=set(),
 )
 @patch(
-    "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler.get_mcp_servers_from_access_groups",
+    "litellm.proxy.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler.get_mcp_servers_from_access_groups",
     new_callable=AsyncMock,
     return_value=[],
 )
-async def test_validate_stale_mcp_server_ids_are_silently_dropped(
-    mock_access_groups, mock_allow_all
-):
+async def test_validate_stale_mcp_server_ids_are_silently_dropped(mock_access_groups, mock_allow_all):
     """
     Stale MCP server IDs (servers deleted and no longer in the registry) must not
     block a key save with a 403. They are silently stripped instead.
@@ -735,7 +699,7 @@ async def test_validate_stale_mcp_server_ids_are_silently_dropped(
 
 @pytest.mark.asyncio
 @patch(
-    "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+    "litellm.proxy.mcp_server.mcp_server_manager.global_mcp_server_manager",
     new=_make_mock_mcp_manager(),  # empty registry — all IDs are stale
 )
 @patch(
@@ -743,13 +707,11 @@ async def test_validate_stale_mcp_server_ids_are_silently_dropped(
     return_value=set(),
 )
 @patch(
-    "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler.get_mcp_servers_from_access_groups",
+    "litellm.proxy.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler.get_mcp_servers_from_access_groups",
     new_callable=AsyncMock,
     return_value=[],
 )
-async def test_validate_stale_ids_in_mcp_tool_permissions_silently_dropped(
-    mock_access_groups, mock_allow_all
-):
+async def test_validate_stale_ids_in_mcp_tool_permissions_silently_dropped(mock_access_groups, mock_allow_all):
     """
     Stale server IDs referenced only as keys in mcp_tool_permissions (not in
     mcp_servers) must also be silently stripped rather than raising a 403.
@@ -765,7 +727,7 @@ async def test_validate_stale_ids_in_mcp_tool_permissions_silently_dropped(
 
 @pytest.mark.asyncio
 @patch(
-    "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+    "litellm.proxy.mcp_server.mcp_server_manager.global_mcp_server_manager",
     new=_make_mock_mcp_manager(),  # empty registry — all IDs are stale
 )
 @patch(
@@ -773,13 +735,11 @@ async def test_validate_stale_ids_in_mcp_tool_permissions_silently_dropped(
     return_value=set(),
 )
 @patch(
-    "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler.get_mcp_servers_from_access_groups",
+    "litellm.proxy.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler.get_mcp_servers_from_access_groups",
     new_callable=AsyncMock,
     return_value=[],
 )
-async def test_validate_stale_mcp_server_ids_are_removed_from_object_permission(
-    mock_access_groups, mock_allow_all
-):
+async def test_validate_stale_mcp_server_ids_are_removed_from_object_permission(mock_access_groups, mock_allow_all):
     team_obj = _make_team_obj(mcp_servers=["s3", "s4"])
     object_permission = {"mcp_servers": ["s1-stale", "s2-stale"]}
     await validate_key_mcp_servers_against_team(
@@ -791,7 +751,7 @@ async def test_validate_stale_mcp_server_ids_are_removed_from_object_permission(
 
 @pytest.mark.asyncio
 @patch(
-    "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+    "litellm.proxy.mcp_server.mcp_server_manager.global_mcp_server_manager",
     new=_make_mock_mcp_manager(
         "team-server",
         servers=[
@@ -808,13 +768,11 @@ async def test_validate_stale_mcp_server_ids_are_removed_from_object_permission(
     return_value=set(),
 )
 @patch(
-    "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler.get_mcp_servers_from_access_groups",
+    "litellm.proxy.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler.get_mcp_servers_from_access_groups",
     new_callable=AsyncMock,
     return_value=[],
 )
-async def test_validate_mcp_server_alias_outside_team_scope_raises(
-    mock_access_groups, mock_allow_all
-):
+async def test_validate_mcp_server_alias_outside_team_scope_raises(mock_access_groups, mock_allow_all):
     team_obj = _make_team_obj(mcp_servers=["team-server"])
     with pytest.raises(HTTPException) as exc_info:
         await validate_key_mcp_servers_against_team(
@@ -827,7 +785,7 @@ async def test_validate_mcp_server_alias_outside_team_scope_raises(
 
 @pytest.mark.asyncio
 @patch(
-    "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+    "litellm.proxy.mcp_server.mcp_server_manager.global_mcp_server_manager",
     new=_make_mock_mcp_manager(
         servers=[
             _make_mock_mcp_server(
@@ -843,7 +801,7 @@ async def test_validate_mcp_server_alias_outside_team_scope_raises(
     return_value=set(),
 )
 @patch(
-    "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler.get_mcp_servers_from_access_groups",
+    "litellm.proxy.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler.get_mcp_servers_from_access_groups",
     new_callable=AsyncMock,
     return_value=[],
 )
@@ -878,7 +836,7 @@ def test_alias_grant_expands_on_other_region_after_save():
     _drop_stale_object_permission_mcp_servers(object_permission, {"github-mcp": {"west-id"}})
     assert object_permission["mcp_servers"] == ["github-mcp"]
 
-    from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServerManager
+    from litellm.proxy.mcp_server.mcp_server_manager import MCPServerManager
 
     expand = MCPServerManager.expand_permission_list
     assert expand(west_mgr, object_permission["mcp_servers"]) == ["west-id"]
@@ -887,7 +845,7 @@ def test_alias_grant_expands_on_other_region_after_save():
 
 @pytest.mark.asyncio
 @patch(
-    "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+    "litellm.proxy.mcp_server.mcp_server_manager.global_mcp_server_manager",
     new=_make_mock_mcp_manager(),
 )
 @patch(
@@ -895,7 +853,7 @@ def test_alias_grant_expands_on_other_region_after_save():
     return_value=set(),
 )
 @patch(
-    "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler.get_mcp_servers_from_access_groups",
+    "litellm.proxy.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler.get_mcp_servers_from_access_groups",
     new_callable=AsyncMock,
     return_value=[],
 )
@@ -907,9 +865,7 @@ async def test_validate_db_mcp_server_alias_outside_team_scope_raises_when_regis
     mock_db_server.server_id = "private-server-id"
     mock_db_server.alias = "private-alias"
     mock_db_server.server_name = "Private Server"
-    mock_prisma_client.db.litellm_mcpservertable.find_many = AsyncMock(
-        return_value=[mock_db_server]
-    )
+    mock_prisma_client.db.litellm_mcpservertable.find_many = AsyncMock(return_value=[mock_db_server])
 
     team_obj = _make_team_obj(mcp_servers=[])
     with pytest.raises(HTTPException) as exc_info:
@@ -929,13 +885,11 @@ async def test_validate_db_mcp_server_alias_outside_team_scope_raises_when_regis
     return_value=set(),
 )
 @patch(
-    "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler.get_mcp_servers_from_access_groups",
+    "litellm.proxy.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler.get_mcp_servers_from_access_groups",
     new_callable=AsyncMock,
     return_value=[],
 )
-async def test_validate_access_groups_within_team_scope(
-    mock_access_groups, mock_allow_all
-):
+async def test_validate_access_groups_within_team_scope(mock_access_groups, mock_allow_all):
     """Key requests access groups that are in the team's scope — should pass."""
     team_obj = _make_team_obj(mcp_access_groups=["group-a", "group-b"])
     await validate_key_mcp_servers_against_team(
@@ -950,13 +904,11 @@ async def test_validate_access_groups_within_team_scope(
     return_value=set(),
 )
 @patch(
-    "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler.get_mcp_servers_from_access_groups",
+    "litellm.proxy.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler.get_mcp_servers_from_access_groups",
     new_callable=AsyncMock,
     return_value=[],
 )
-async def test_validate_access_groups_outside_team_scope_raises(
-    mock_access_groups, mock_allow_all
-):
+async def test_validate_access_groups_outside_team_scope_raises(mock_access_groups, mock_allow_all):
     """Key requests access groups NOT in the team's scope — should raise 403."""
     team_obj = _make_team_obj(mcp_access_groups=["group-a"])
     with pytest.raises(HTTPException) as exc_info:
@@ -974,13 +926,11 @@ async def test_validate_access_groups_outside_team_scope_raises(
     return_value=set(),
 )
 @patch(
-    "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler.get_mcp_servers_from_access_groups",
+    "litellm.proxy.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler.get_mcp_servers_from_access_groups",
     new_callable=AsyncMock,
     return_value=[],
 )
-async def test_validate_access_groups_no_team_raises(
-    mock_access_groups, mock_allow_all
-):
+async def test_validate_access_groups_no_team_raises(mock_access_groups, mock_allow_all):
     """Key without a team requesting access groups — should raise 403."""
     with pytest.raises(HTTPException) as exc_info:
         await validate_key_mcp_servers_against_team(
@@ -997,13 +947,11 @@ async def test_validate_access_groups_no_team_raises(
     return_value=set(),
 )
 @patch(
-    "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler.get_mcp_servers_from_access_groups",
+    "litellm.proxy.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler.get_mcp_servers_from_access_groups",
     new_callable=AsyncMock,
     return_value=["server-from-group"],
 )
-async def test_validate_team_access_groups_resolve_to_servers(
-    mock_access_groups, mock_allow_all
-):
+async def test_validate_team_access_groups_resolve_to_servers(mock_access_groups, mock_allow_all):
     """Team access groups should resolve to server IDs and be included in allowed set."""
     team_obj = _make_team_obj(mcp_access_groups=["group-a"])
     # Key requests a server that comes from the team's access group
@@ -1018,7 +966,7 @@ async def test_validate_team_access_groups_resolve_to_servers(
 
 @pytest.mark.asyncio
 @patch(
-    "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler.get_mcp_servers_from_access_groups",
+    "litellm.proxy.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler.get_mcp_servers_from_access_groups",
     new_callable=AsyncMock,
     return_value=[],
 )
@@ -1037,7 +985,7 @@ async def test_resolve_team_allowed_mcp_servers_string_tool_permissions(
 
 @pytest.mark.asyncio
 @patch(
-    "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler.get_mcp_servers_from_access_groups",
+    "litellm.proxy.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler.get_mcp_servers_from_access_groups",
     new_callable=AsyncMock,
     return_value=[],
 )
@@ -1054,12 +1002,32 @@ async def test_resolve_team_allowed_mcp_servers_dict_tool_permissions(
     assert result == {"server-a"}
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stored_tool_permissions", ["[]", "null", '"server-2"'], ids=["array", "null", "string"])
+@patch(
+    "litellm.proxy.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler.get_mcp_servers_from_access_groups",
+    new_callable=AsyncMock,
+    return_value=[],
+)
+async def test_resolve_team_allowed_mcp_servers_rejects_stored_tool_permissions_that_are_not_an_object(
+    mock_access_groups,
+    stored_tool_permissions: str,
+):
+    mock_perm = MagicMock(spec=LiteLLM_ObjectPermissionTable)
+    mock_perm.mcp_servers = ["server-1"]
+    mock_perm.mcp_access_groups = []
+    mock_perm.mcp_tool_permissions = stored_tool_permissions
+
+    with pytest.raises(AttributeError, match="object has no attribute 'keys'"):
+        await _resolve_team_allowed_mcp_servers(mock_perm)
+
+
 # ---- Tests for the all-proxy-mcpservers sentinel (team scoped to every server) ----
 
 
 @pytest.mark.asyncio
 @patch(
-    "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler.get_mcp_servers_from_access_groups",
+    "litellm.proxy.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler.get_mcp_servers_from_access_groups",
     new_callable=AsyncMock,
     return_value=[],
 )
@@ -1081,7 +1049,7 @@ async def test_resolve_team_all_proxy_sentinel_resolves_dynamically(mock_access_
     team_perm.mcp_tool_permissions = {}
 
     with patch(
-        "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+        "litellm.proxy.mcp_server.mcp_server_manager.global_mcp_server_manager",
         mock_mgr,
     ):
         assert await _resolve_team_allowed_mcp_servers(team_perm) == {"srv-x", "srv-y"}
@@ -1096,7 +1064,7 @@ async def test_resolve_team_all_proxy_sentinel_resolves_dynamically(mock_access_
 
 @pytest.mark.asyncio
 @patch(
-    "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+    "litellm.proxy.mcp_server.mcp_server_manager.global_mcp_server_manager",
     new=_make_mock_mcp_manager("srv-x", "srv-y", "srv-z"),
 )
 @patch(
@@ -1104,13 +1072,11 @@ async def test_resolve_team_all_proxy_sentinel_resolves_dynamically(mock_access_
     return_value=set(),
 )
 @patch(
-    "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler.get_mcp_servers_from_access_groups",
+    "litellm.proxy.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler.get_mcp_servers_from_access_groups",
     new_callable=AsyncMock,
     return_value=[],
 )
-async def test_validate_key_scoped_to_server_added_after_team_all_proxy(
-    mock_access_groups, mock_allow_all
-):
+async def test_validate_key_scoped_to_server_added_after_team_all_proxy(mock_access_groups, mock_allow_all):
     """The exact user scenario: a team scoped to the all-proxy sentinel, a server
     (srv-z) registered afterwards, and a key scoped to just srv-z. Because the
     team ceiling resolves to every registered server, the key passes validation
@@ -1127,7 +1093,7 @@ async def test_validate_key_scoped_to_server_added_after_team_all_proxy(
 
 @pytest.mark.asyncio
 @patch(
-    "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+    "litellm.proxy.mcp_server.mcp_server_manager.global_mcp_server_manager",
     new=_make_mock_mcp_manager("srv-x", "srv-z"),
 )
 @patch(
@@ -1135,13 +1101,11 @@ async def test_validate_key_scoped_to_server_added_after_team_all_proxy(
     return_value=set(),
 )
 @patch(
-    "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler.get_mcp_servers_from_access_groups",
+    "litellm.proxy.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler.get_mcp_servers_from_access_groups",
     new_callable=AsyncMock,
     return_value=[],
 )
-async def test_validate_key_scoped_to_server_rejected_when_team_not_all_proxy(
-    mock_access_groups, mock_allow_all
-):
+async def test_validate_key_scoped_to_server_rejected_when_team_not_all_proxy(mock_access_groups, mock_allow_all):
     """Contrast with the sentinel case: a team scoped to a concrete server list
     (srv-x, not the sentinel) does NOT unlock srv-z for a key. It is the sentinel
     specifically, not a blanket allow, that widens the team ceiling."""
@@ -1278,13 +1242,11 @@ async def test_validate_search_tools_raises_when_not_subset():
     return_value=set(),
 )
 @patch(
-    "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler.get_mcp_servers_from_access_groups",
+    "litellm.proxy.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler.get_mcp_servers_from_access_groups",
     new_callable=AsyncMock,
     return_value=[],
 )
-async def test_personal_non_admin_cannot_assign_mcp_toolsets(
-    mock_access_groups, mock_allow_all
-):
+async def test_personal_non_admin_cannot_assign_mcp_toolsets(mock_access_groups, mock_allow_all):
     with pytest.raises(HTTPException) as exc:
         await validate_key_mcp_servers_against_team(
             object_permission={"mcp_toolsets": ["ts-private"]},
@@ -1301,13 +1263,11 @@ async def test_personal_non_admin_cannot_assign_mcp_toolsets(
     return_value=set(),
 )
 @patch(
-    "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler.get_mcp_servers_from_access_groups",
+    "litellm.proxy.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler.get_mcp_servers_from_access_groups",
     new_callable=AsyncMock,
     return_value=[],
 )
-async def test_personal_admin_can_assign_mcp_toolsets(
-    mock_access_groups, mock_allow_all
-):
+async def test_personal_admin_can_assign_mcp_toolsets(mock_access_groups, mock_allow_all):
     await validate_key_mcp_servers_against_team(
         object_permission={"mcp_toolsets": ["ts-private"]},
         team_obj=None,
@@ -1403,7 +1363,7 @@ def _make_grandfather_fixtures(mcp_servers=None, mcp_tool_permissions=None):
 
 def _patch_grandfather_env(monkeypatch, mock_mgr):
     monkeypatch.setattr(
-        "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+        "litellm.proxy.mcp_server.mcp_server_manager.global_mcp_server_manager",
         mock_mgr,
     )
     monkeypatch.setattr(
@@ -1476,9 +1436,7 @@ async def test_validate_key_update_grandfathers_tool_permission_keys(monkeypatch
     (stored as a JSON string) are grandfathered too."""
     _patch_grandfather_env(monkeypatch, _make_mock_mcp_manager("server-a"))
     team_obj = _make_team_obj(mcp_servers=[])
-    mock_prisma, existing_row = _make_grandfather_fixtures(
-        mcp_tool_permissions=json.dumps({"server-a": ["tool1"]})
-    )
+    mock_prisma, existing_row = _make_grandfather_fixtures(mcp_tool_permissions=json.dumps({"server-a": ["tool1"]}))
     result = await validate_key_mcp_servers_against_team(
         object_permission={"mcp_servers": ["server-a"]},
         team_obj=team_obj,
@@ -1636,3 +1594,57 @@ def test_object_permission_dict_mirrors_pydantic_model():
         f"Only in Pydantic model: {sorted(pydantic_fields - typeddict_fields)}\n"
         f"Only in TypedDict:      {sorted(typeddict_fields - pydantic_fields)}"
     )
+
+
+def _stored_apps_prisma(stored_apps: tuple[str, ...]) -> MagicMock:
+    """Prisma double whose one object permission row grants the given customer management apps."""
+    prisma: Final = MagicMock()
+    prisma.db.litellm_mcpservertable.find_many = AsyncMock(return_value=[])
+    row: Final = MagicMock(apps=list(stored_apps))
+    row.model_dump.return_value = {"object_permission_id": "perm-id", "apps": list(stored_apps)}
+    prisma.db.litellm_objectpermissiontable.find_unique = AsyncMock(return_value=row)
+    return prisma
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("requested", (["chat", "search"], ["search"], []))
+async def test_only_a_proxy_admin_can_change_the_apps_an_object_permission_grants(requested: list[str]) -> None:
+    prisma: Final = _stored_apps_prisma(("chat",))
+    with pytest.raises(HTTPException) as denied:
+        await prepare_object_permission_upsert({"apps": requested}, "perm-id", prisma)
+    assert denied.value.status_code == 403
+    granted: Final = await prepare_object_permission_upsert({"apps": requested}, "perm-id", prisma, can_grant_apps=True)
+    assert granted.record["apps"] == requested
+
+
+@pytest.mark.asyncio
+async def test_a_non_admin_edit_never_writes_the_stored_apps_back() -> None:
+    resent: Final = await prepare_object_permission_upsert(
+        {"apps": ["chat"], "vector_stores": ["docs"]}, "perm-id", _stored_apps_prisma(("chat",))
+    )
+    untouched: Final = await prepare_object_permission_upsert(
+        {"vector_stores": ["docs"]}, "perm-id", _stored_apps_prisma(("chat",))
+    )
+    assert [("apps" in upsert.record, upsert.record["vector_stores"]) for upsert in (resent, untouched)] == [
+        (False, ["docs"]),
+        (False, ["docs"]),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_a_non_admin_cannot_create_an_object_permission_that_grants_apps() -> None:
+    prisma: Final = _stored_apps_prisma(())
+    with pytest.raises(HTTPException) as denied:
+        await set_object_permission({"object_permission": {"apps": ["chat"]}}, prisma)
+    assert denied.value.status_code == 403
+    prisma.db.litellm_objectpermissiontable.create.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_a_non_admin_cannot_unlink_an_object_permission_that_grants_apps() -> None:
+    with pytest.raises(HTTPException) as denied:
+        await reject_clearing_app_grants("perm-id", False, _stored_apps_prisma(("chat",)))
+    assert denied.value.status_code == 403
+    await reject_clearing_app_grants("perm-id", True, _stored_apps_prisma(("chat",)))
+    await reject_clearing_app_grants("perm-id", False, _stored_apps_prisma(()))
+    await reject_clearing_app_grants(None, False, _stored_apps_prisma(("chat",)))

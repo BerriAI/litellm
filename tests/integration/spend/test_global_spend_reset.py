@@ -50,11 +50,11 @@ def _team_spend(team_id: str) -> list[dict[str, object]]:
     return read_rows('SELECT spend FROM "LiteLLM_TeamTable" WHERE team_id = %s', (team_id,))
 
 
-def _spend_log_totals(keys: tuple[str, ...]) -> list[dict[str, object]]:
+def _spend_logs(keys: tuple[str, ...]) -> list[dict[str, object]]:
     digests: Final = tuple(sha256(key.encode()).hexdigest() for key in keys)
     return read_rows(
-        'SELECT COUNT(*) AS rows, COALESCE(SUM(spend), 0) AS total_spend FROM "LiteLLM_SpendLogs" '
-        "WHERE api_key = ANY(%s::text[])",
+        'SELECT request_id, status, spend FROM "LiteLLM_SpendLogs" '
+        "WHERE api_key = ANY(%s::text[]) ORDER BY request_id",
         ("{" + ",".join(digests) + "}",),
     )
 
@@ -87,16 +87,12 @@ def test_global_spend_reset_zeroes_token_and_team_spend_but_keeps_logs(gateway: 
         internal_user: Final = scenario.user(user_role="internal_user")
         internal_key: Final = scenario.key(user_id=internal_user, models=[model])
         _seed_spend(gateway, model, team_id, key_a, key_b)
-        before: Final = eventually(
-            lambda: _spend_log_totals((key_a, key_b)),
-            lambda rows: (
-                len(rows) == 1
-                and int(str(rows[0]["rows"])) == 2
-                and float(str(rows[0]["total_spend"])) == pytest.approx(0.12)
-            ),
+        successful_logs: Final = eventually(
+            lambda: _spend_logs((key_a, key_b)),
+            lambda rows: len(rows) == 2 and sum(float(str(row["spend"])) for row in rows) == pytest.approx(0.12),
             seconds=70,
         )
-        assert float(str(before[0]["total_spend"])) == pytest.approx(0.12), before
+        assert sum(float(str(row["spend"])) for row in successful_logs) == pytest.approx(0.12), successful_logs
 
         refused: Final = gateway.request("POST", "/global/spend/reset", key=internal_key)
         assert refused.status_code == 401, refused.text
@@ -104,7 +100,7 @@ def test_global_spend_reset_zeroes_token_and_team_spend_but_keeps_logs(gateway: 
             "error": {
                 "message": "Authentication Error, Tried to access route=/global/spend/reset, which is only for MASTER KEY",
                 "type": "auth_error",
-                "param": "None",
+                "param": None,
                 "code": "401",
             }
         }, refused.text
@@ -117,6 +113,15 @@ def test_global_spend_reset_zeroes_token_and_team_spend_but_keeps_logs(gateway: 
         assert denied.status_code == 422, denied.text
         assert object_value(denied.json()["error"])["type"] == "budget_exceeded", denied.text
         assert _observed(upstream) == [], denied.text
+        before_reset: Final = eventually(
+            lambda: _spend_logs((key_a, key_b)),
+            lambda rows: (
+                len(rows) == 3
+                and [row for row in rows if row["status"] != "failure"] == successful_logs
+                and [row["spend"] for row in rows if row["status"] == "failure"] == [0.0]
+            ),
+            seconds=70,
+        )
 
         reset: Final = gateway.request("POST", "/global/spend/reset")
         assert reset.status_code == 200, reset.text
@@ -128,7 +133,7 @@ def test_global_spend_reset_zeroes_token_and_team_spend_but_keeps_logs(gateway: 
             rows: Final = _token_spend(key)
             assert float(str(rows[0]["spend"])) == 0, rows
         assert float(str(_team_spend(team_id)[0]["spend"])) == 0
-        assert _spend_log_totals((key_a, key_b)) == before
+        assert _spend_logs((key_a, key_b)) == before_reset
 
 
 def test_reset_exhausted_key_is_served_again(gateway: Gateway) -> None:

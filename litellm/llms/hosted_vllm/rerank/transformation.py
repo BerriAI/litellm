@@ -7,7 +7,7 @@ from types import MappingProxyType
 from typing import Final
 
 import httpx
-from pydantic import ValidationError
+from pydantic import TypeAdapter, ValidationError
 
 from litellm._uuid import uuid
 from litellm.exceptions import UnsupportedParamsError
@@ -15,6 +15,7 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig
+from litellm.llms.openai.common_utils import decoded_json_object
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.rerank import (
     HostedVLLMRerankTruncationParams,
@@ -27,6 +28,8 @@ from litellm.types.rerank import (
     RerankResponseResult,
     RerankTokens,
 )
+
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class HostedVLLMRerankError(BaseLLMException):
@@ -54,7 +57,7 @@ class HostedVLLMRerankConfig(BaseRerankConfig):
         self,
         api_base: str | None,
         model: str,
-        optional_params: dict | None = None,
+        optional_params: Mapping[str, object] | None = None,
     ) -> str:
         if api_base:
             # Remove trailing slashes and ensure clean base URL
@@ -67,7 +70,7 @@ class HostedVLLMRerankConfig(BaseRerankConfig):
             return api_base
         raise ValueError("api_base must be provided for Hosted VLLM rerank")
 
-    def get_supported_cohere_rerank_params(self, model: str) -> list:
+    def get_supported_cohere_rerank_params(self, model: str) -> list[str]:
         return [
             "query",
             "documents",
@@ -83,7 +86,7 @@ class HostedVLLMRerankConfig(BaseRerankConfig):
 
     def map_cohere_rerank_params(
         self,
-        non_default_params: dict | None,
+        non_default_params: Mapping[str, object] | None,
         model: str,
         drop_params: bool,
         query: str,
@@ -95,7 +98,7 @@ class HostedVLLMRerankConfig(BaseRerankConfig):
         max_chunks_per_doc: int | None = None,
         max_tokens_per_doc: int | None = None,
         instruction: str | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Map parameters for Hosted VLLM rerank
         """
@@ -128,16 +131,16 @@ class HostedVLLMRerankConfig(BaseRerankConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: Mapping[str, object],
         model: str,
         api_key: str | None = None,
-        optional_params: dict | None = None,
+        optional_params: Mapping[str, object] | None = None,
         litellm_params: Mapping[str, object] | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         if api_key is None:
             api_key = get_secret_str("HOSTED_VLLM_API_KEY") or "fake-api-key"
 
-        default_headers: Final = {
+        default_headers: Final[dict[str, object]] = {
             "Authorization": f"Bearer {api_key}",
             "accept": "application/json",
             "content-type": "application/json",
@@ -154,9 +157,9 @@ class HostedVLLMRerankConfig(BaseRerankConfig):
         self,
         model: str,
         optional_rerank_params: dict,
-        headers: dict,
-        litellm_params: dict | None = None,
-    ) -> dict:
+        headers: Mapping[str, object],
+        litellm_params: Mapping[str, object] | None = None,
+    ) -> dict[str, object]:
         if "query" not in optional_rerank_params:
             raise ValueError("query is required for Hosted VLLM rerank")
         if "documents" not in optional_rerank_params:
@@ -185,19 +188,19 @@ class HostedVLLMRerankConfig(BaseRerankConfig):
         model_response: RerankResponse,
         logging_obj: LiteLLMLoggingObj,
         api_key: str | None = None,
-        request_data: dict = {},
-        optional_params: dict = {},
-        litellm_params: dict = {},
+        request_data: Mapping[str, object] = {},
+        optional_params: Mapping[str, object] = {},
+        litellm_params: Mapping[str, object] = {},
     ) -> RerankResponse:
         """
         Process response from Hosted VLLM rerank API
         """
         try:
-            raw_response_json: Final = raw_response.json()
+            raw_response_json: Final = _DECODED_JSON.validate_python(raw_response.json())
         except Exception:
             raise ValueError(f"Error parsing response: {raw_response.text}, status_code={raw_response.status_code}")
 
-        return self._transform_response(raw_response_json)
+        return self._transform_response(dict(decoded_json_object(raw_response_json)))
 
     def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
         return HostedVLLMRerankError(message=error_message, status_code=status_code, headers=headers)
@@ -241,5 +244,7 @@ class HostedVLLMRerankConfig(BaseRerankConfig):
         return RerankResponse(
             id=response.get("id") or str(uuid.uuid4()),
             results=rerank_results,
-            meta=rerank_meta,
+            meta=TypeAdapter(RerankResponseMeta).validate_python(response["meta"])
+            if "meta" in response and response["meta"] is not None
+            else rerank_meta,
         )

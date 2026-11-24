@@ -13,6 +13,7 @@ from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final, Optional, Union
 
 import httpx
+from pydantic import TypeAdapter
 
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
@@ -21,6 +22,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.llms.langgraph.chat.sse_iterator import LangGraphSSEStreamIterator
+from litellm.llms.openai.common_utils import decoded_json_object
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import Choices, Message, ModelResponse, Usage
 
@@ -37,6 +39,8 @@ else:
     AsyncHTTPHandler = Any
     CustomStreamWrapper = Any
 
+_DECODED_JSON: Final = TypeAdapter(object)
+
 
 class LangGraphError(BaseLLMException):
     """Exception class for LangGraph API errors."""
@@ -50,7 +54,7 @@ class LangGraphConfig(BaseConfig):
     It provides a streaming and non-streaming API for running agents.
     """
 
-    def __init__(self, **kwargs):
+    def __init__(self, **kwargs: object) -> None:
         super().__init__(**kwargs)
 
     def _get_openai_compatible_provider_info(
@@ -87,11 +91,11 @@ class LangGraphConfig(BaseConfig):
 
     def map_openai_params(
         self,
-        non_default_params: dict,
-        optional_params: dict,
+        non_default_params: dict[str, object],
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Map OpenAI params to LangGraph params.
         """
@@ -102,8 +106,8 @@ class LangGraphConfig(BaseConfig):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         stream: bool | None = None,
     ) -> str:
         """
@@ -188,10 +192,10 @@ class LangGraphConfig(BaseConfig):
         self,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
-        headers: dict,
-    ) -> dict:
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
+        headers: dict[str, object],
+    ) -> dict[str, object]:
         """
         Transform the request to LangGraph format.
 
@@ -233,7 +237,7 @@ class LangGraphConfig(BaseConfig):
         verbose_logger.debug("LangGraph request payload: %s", payload)
         return payload
 
-    def _extract_content_from_response(self, response_json: dict) -> str:
+    def _extract_content_from_response(self, response_json: Mapping[str, object]) -> str:
         """
         Extract content from LangGraph non-streaming response.
 
@@ -285,9 +289,9 @@ class LangGraphConfig(BaseConfig):
         custom_llm_provider: str,
         logging_obj: LiteLLMLoggingObj,
         api_base: str,
-        headers: dict,
-        data: dict,
-        messages: list,
+        headers: dict[str, object],
+        data: dict[str, object],
+        messages: list[object],
         client: Union[HTTPHandler, "AsyncHTTPHandler"] | None = None,
         json_mode: bool | None = None,
         signed_json_body: bytes | None = None,
@@ -347,9 +351,9 @@ class LangGraphConfig(BaseConfig):
         custom_llm_provider: str,
         logging_obj: LiteLLMLoggingObj,
         api_base: str,
-        headers: dict,
-        data: dict,
-        messages: list,
+        headers: dict[str, object],
+        data: dict[str, object],
+        messages: list[object],
         client: Optional["AsyncHTTPHandler"] = None,
         json_mode: bool | None = None,
         signed_json_body: bytes | None = None,
@@ -422,10 +426,10 @@ class LangGraphConfig(BaseConfig):
         raw_response: httpx.Response,
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
-        request_data: dict,
+        request_data: dict[str, object],
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
@@ -434,10 +438,10 @@ class LangGraphConfig(BaseConfig):
         Transform the LangGraph response to LiteLLM ModelResponse format.
         """
         try:
-            response_json: Final = raw_response.json()
+            response_json: Final = _DECODED_JSON.validate_python(raw_response.json())
             verbose_logger.debug("LangGraph response: %s", response_json)
 
-            content: Final = self._extract_content_from_response(response_json)
+            content: Final = self._extract_content_from_response(decoded_json_object(response_json))
 
             # Create the message
             message: Final = Message(content=content, role="assistant")
@@ -477,14 +481,14 @@ class LangGraphConfig(BaseConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, object],
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Validate and set up environment for LangGraph requests.
         """
@@ -496,7 +500,9 @@ class LangGraphConfig(BaseConfig):
 
         return headers
 
-    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: dict[str, object] | httpx.Headers
+    ) -> BaseLLMException:
         return LangGraphError(status_code=status_code, message=error_message)
 
     def should_fake_stream(

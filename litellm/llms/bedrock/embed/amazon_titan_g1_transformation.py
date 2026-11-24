@@ -35,9 +35,10 @@ class AmazonTitanG1Config:
 
     @classmethod
     def get_config(cls):
+        class_attributes: Final[Mapping[str, object]] = types.MappingProxyType(cls.__dict__)
         return {
             k: v
-            for k, v in cls.__dict__.items()
+            for k, v in class_attributes.items()
             if not k.startswith("__")
             and not isinstance(
                 v,
@@ -54,10 +55,12 @@ class AmazonTitanG1Config:
     def get_supported_openai_params(self) -> list[str]:
         return []
 
-    def map_openai_params(self, non_default_params: dict, optional_params: dict) -> dict:
+    def map_openai_params(
+        self, non_default_params: Mapping[str, object], optional_params: dict[str, object]
+    ) -> dict[str, object]:
         return optional_params
 
-    def _transform_request(self, input: str, inference_params: dict) -> AmazonTitanG1EmbeddingRequest:
+    def _transform_request(self, input: str, inference_params: Mapping[str, object]) -> AmazonTitanG1EmbeddingRequest:
         return AmazonTitanG1EmbeddingRequest(inputText=input)
 
     def transform_request(

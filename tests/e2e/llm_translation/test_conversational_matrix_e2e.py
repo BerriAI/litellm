@@ -1,5 +1,5 @@
 """The same conversation contract on every (endpoint, deployment, auth) cell.
-A deployment is one provider model (openai/gpt-4o-mini, anthropic/claude-haiku-4-5, ...).
+A deployment is one provider model (openai/gpt-5.4-mini, anthropic/claude-haiku-4-5, ...).
 
 /chat/completions, /v1/messages and /v1/responses each have their own
 translation code in the proxy, so a bug fixed on one surface tends to survive

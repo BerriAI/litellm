@@ -2,16 +2,105 @@
 DeepSeek Anthropic-compatible messages transformation config.
 """
 
-from collections.abc import Sequence
-from typing import Any, Final
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
+from typing import Final
+
+from pydantic import TypeAdapter
 
 import litellm
+from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
 from litellm.litellm_core_utils.url_utils import join_api_base
-from litellm.llms.anthropic.pass_through.messages.transformation import (
+from litellm.llms.anthropic.common_utils import AnthropicError
+from litellm.llms.anthropic.messages.native.transformation import (
     AnthropicMessagesConfig,
 )
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.router import GenericLiteLLMParams
+from litellm.utils import is_known_non_reasoning_model
+
+_TOOL_LIST: Final = TypeAdapter(list[object])
+_FIELDS: Final = TypeAdapter(dict[str, object])
+_TOOL_FIELDS: Final = TypeAdapter(dict[object, object])
+DEEPSEEK_EFFORT_LEVELS: Final = ("none", "minimal", "low", "medium", "high", "xhigh", "ultra", "max")
+
+
+@dataclass(frozen=True, slots=True)
+class _InvalidEffort:
+    field: str
+    effort: object
+
+
+def _without(params: Mapping[str, object], key: str) -> Mapping[str, object]:
+    return {name: value for name, value in params.items() if name != key}
+
+
+def _with_output_config_effort(
+    params: Mapping[str, object], alias_effort: str | None, drop_params: bool
+) -> Mapping[str, object] | _InvalidEffort:
+    output_config: Final = params.get("output_config")
+    if output_config is not None and not isinstance(output_config, dict):
+        return params
+    fields: Final = _FIELDS.validate_python(output_config or {})
+    caller_effort: Final = fields.get("effort")
+    if caller_effort is None and alias_effort is None:
+        return params
+    alias_decides: Final = caller_effort not in DEEPSEEK_EFFORT_LEVELS
+    if alias_decides and caller_effort is not None and not drop_params:
+        return _InvalidEffort(field="output_config.effort", effort=caller_effort)
+    effort: Final = alias_effort if alias_decides else caller_effort
+    remaining: Final = {**_without(fields, "effort"), **({} if effort is None else {"effort": effort})}
+    alias_clears_thinking: Final = alias_decides and effort == "none"
+    kept: Final = _without(params, "thinking") if alias_clears_thinking else params
+    return {**_without(kept, "output_config"), **({"output_config": remaining} if remaining else {})}
+
+
+def _deepseek_effort_params(params: Mapping[str, object], drop_params: bool) -> Mapping[str, object] | _InvalidEffort:
+    alias: Final = params.get("reasoning_effort")
+    if not isinstance(alias, str):
+        return _with_output_config_effort(params, None, drop_params)
+    if alias in DEEPSEEK_EFFORT_LEVELS:
+        return _with_output_config_effort(_without(params, "reasoning_effort"), alias, drop_params)
+    if not drop_params:
+        return _InvalidEffort(field="reasoning_effort", effort=alias)
+    return _with_output_config_effort(_without(params, "reasoning_effort"), None, drop_params)
+
+
+def _deepseek_request_params(
+    model: str, custom_llm_provider: str, params: Mapping[str, object], drop_params: bool
+) -> Mapping[str, object] | _InvalidEffort:
+    if is_known_non_reasoning_model(model, custom_llm_provider):
+        return params
+    return _deepseek_effort_params(params, drop_params)
+
+
+def _custom_tool_without_type(tool: object) -> Mapping[object, object] | None:
+    if not isinstance(tool, dict):
+        return None
+    fields: Final = _TOOL_FIELDS.validate_python(tool)
+    if fields.get("type") == "custom":
+        fields.pop("type", None)
+        return fields
+    return None
+
+
+def _sanitized_tool(tool: object) -> object:
+    stripped: Final = _custom_tool_without_type(tool)
+    return tool if stripped is None else stripped
+
+
+def sanitize_tools_for_deepseek(tools: Sequence[object]) -> Sequence[object]:
+    return [_sanitized_tool(tool) for tool in tools]
+
+
+def deepseek_anthropic_base(api_base: str | None) -> str:
+    configured: Final = DeepSeekAnthropicMessagesConfig.get_api_base(api_base=api_base).rstrip("/")
+    if configured.endswith("/v1/messages") and "/anthropic/" in configured:
+        return configured.removesuffix("/v1/messages")
+    stripped: Final = configured.removesuffix("/v1/messages").removesuffix("/v1").removesuffix("/beta")
+    if stripped.endswith("/anthropic") or "/anthropic/" in stripped:
+        return stripped
+    return join_api_base(stripped, "anthropic")
 
 
 class DeepSeekAnthropicMessagesConfig(AnthropicMessagesConfig):
@@ -22,6 +111,11 @@ class DeepSeekAnthropicMessagesConfig(AnthropicMessagesConfig):
     It accepts the native Anthropic Messages conversation shape, including
     thinking blocks in assistant history, but rejects Anthropic's explicit
     custom-tool discriminator (`{"type": "custom"}`).
+
+    Its reasoning models read `output_config.effort` natively, ignore
+    `budget_tokens`, and accept any `temperature`, so the Claude-specific
+    effort and temperature reshaping only applies to models the cost map
+    lists without reasoning.
     """
 
     @property
@@ -50,7 +144,7 @@ class DeepSeekAnthropicMessagesConfig(AnthropicMessagesConfig):
         model: str,
         messages: Sequence[object],
         optional_params: dict,
-        litellm_params: dict,
+        litellm_params: object,
         api_key: str | None = None,
         api_base: str | None = None,
     ) -> tuple[dict, str | None]:
@@ -78,37 +172,41 @@ class DeepSeekAnthropicMessagesConfig(AnthropicMessagesConfig):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: object,
+        litellm_params: object,
         stream: bool | None = None,
     ) -> str:
-        base_url = self.get_api_base(api_base=api_base).rstrip("/")
-
-        if base_url.endswith("/v1/messages") and "/anthropic/" in base_url:
-            return base_url
-        base_url = base_url.removesuffix("/v1/messages")
-        base_url = base_url.removesuffix("/v1")
-        base_url = base_url.removesuffix("/beta")
-
-        if not base_url.endswith("/anthropic") and "/anthropic/" not in base_url:
-            base_url = join_api_base(base_url, "anthropic")
-
-        return join_api_base(base_url, "v1/messages")
+        return join_api_base(deepseek_anthropic_base(api_base), "v1/messages")
 
     @staticmethod
-    def _sanitize_tools_for_deepseek(tools: Any) -> object:
-        if not isinstance(tools, list):
-            return tools
+    def _translate_adaptive_effort_for_non_adaptive_model(
+        model: str,
+        optional_params: dict[str, object],  # mutable-ok: the base hook edits the request params in place
+        max_tokens: int | None,
+        custom_llm_provider: str,
+    ) -> None:
+        if not is_known_non_reasoning_model(model, custom_llm_provider):
+            return None
+        return AnthropicMessagesConfig._translate_adaptive_effort_for_non_adaptive_model(  # pyright: ignore[reportUnknownMemberType]  # the base hook takes a bare dict
+            model=model,
+            optional_params=optional_params,
+            max_tokens=max_tokens,
+            custom_llm_provider=custom_llm_provider,
+        )
 
-        sanitized_tools: Final = []
-        for tool in tools:
-            if isinstance(tool, dict) and tool.get("type") == "custom":
-                sanitized_tool = dict(tool)
-                sanitized_tool.pop("type", None)
-                sanitized_tools.append(sanitized_tool)
-            else:
-                sanitized_tools.append(tool)
-        return sanitized_tools
+    @staticmethod
+    def _drop_incompatible_temperature_for_thinking(
+        model: str,
+        optional_params: dict[str, object],  # mutable-ok: the base hook edits the request params in place
+        custom_llm_provider: str,
+    ) -> None:
+        if not is_known_non_reasoning_model(model, custom_llm_provider):
+            return None
+        return AnthropicMessagesConfig._drop_incompatible_temperature_for_thinking(  # pyright: ignore[reportUnknownMemberType]  # the base hook takes a bare dict
+            model=model,
+            optional_params=optional_params,
+            custom_llm_provider=custom_llm_provider,
+        )
 
     def transform_anthropic_messages_request(
         self,
@@ -117,14 +215,35 @@ class DeepSeekAnthropicMessagesConfig(AnthropicMessagesConfig):
         anthropic_messages_optional_request_params: dict,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> dict:
-        anthropic_messages_request: Final = super().transform_anthropic_messages_request(
-            model=model,
-            messages=messages,
-            anthropic_messages_optional_request_params=anthropic_messages_optional_request_params,
-            litellm_params=litellm_params,
-            headers=headers,
+    ) -> dict[str, object]:
+        effort_params: Final = _deepseek_request_params(
+            model,
+            self._resolved_provider,
+            _FIELDS.validate_python(anthropic_messages_optional_request_params),
+            drops_unsupported_params(litellm_params.drop_params),
         )
-        if "tools" in anthropic_messages_request:
-            anthropic_messages_request["tools"] = self._sanitize_tools_for_deepseek(anthropic_messages_request["tools"])
-        return anthropic_messages_request
+        if isinstance(effort_params, _InvalidEffort):
+            raise AnthropicError(
+                message=(
+                    f"Invalid {effort_params.field}: {effort_params.effort!r}. DeepSeek accepts one of: "
+                    f"{', '.join(repr(level) for level in DEEPSEEK_EFFORT_LEVELS)}"
+                ),
+                status_code=400,
+            )
+        anthropic_messages_request: Final = _FIELDS.validate_python(
+            super().transform_anthropic_messages_request(
+                model=model,
+                messages=messages,
+                anthropic_messages_optional_request_params=dict(effort_params),
+                litellm_params=litellm_params,
+                headers=headers,
+            )
+        )
+        tools: Final = anthropic_messages_request.get("tools")
+        if not isinstance(tools, list):
+            return anthropic_messages_request
+        sanitized: Final = {
+            **anthropic_messages_request,
+            "tools": sanitize_tools_for_deepseek(_TOOL_LIST.validate_python(tools)),
+        }
+        return sanitized

@@ -1,5 +1,6 @@
 import json
 import uuid
+from collections.abc import Iterator
 from contextlib import ExitStack
 from hashlib import sha256
 from typing import Final, Literal
@@ -8,6 +9,7 @@ import httpx
 import pytest
 from integration._support.client import Gateway, Scenario, eventually, object_value, string_value
 from integration._support.database import read_rows
+from integration._support.process import isolated_gateway
 from integration._support.wire import Reply, Request, wire_server
 from openai import OpenAI
 from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter
@@ -74,6 +76,15 @@ class _ChatChoice(BaseModel):
 
 class _ChatResponse(BaseModel):
     choices: list[_ChatChoice]
+
+
+@pytest.fixture(scope="module")
+def gateway(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Gateway]:
+    with (
+        pytest.MonkeyPatch.context() as environment,
+        isolated_gateway(tmp_path_factory.mktemp("policy-gateway"), environment) as owned,
+    ):
+        yield owned
 
 
 def _delete_guardrail(gateway: Gateway, guardrail_id: str) -> None:

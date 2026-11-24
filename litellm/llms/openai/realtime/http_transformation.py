@@ -1,5 +1,7 @@
 """OpenAI realtime HTTP transformation config (client_secrets + realtime_calls)."""
 
+from collections.abc import Mapping
+
 import litellm
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.realtime.http_transformation import BaseRealtimeHTTPConfig
@@ -7,10 +9,10 @@ from litellm.secret_managers.main import get_secret_str
 
 
 class OpenAIRealtimeHTTPConfig(BaseRealtimeHTTPConfig):
-    def get_api_base(self, api_base: str | None, **kwargs) -> str:
+    def get_api_base(self, api_base: str | None, **kwargs: object) -> str:
         return api_base or litellm.api_base or get_secret_str("OPENAI_API_BASE") or "https://api.openai.com"
 
-    def get_api_key(self, api_key: str | None, **kwargs) -> str:
+    def get_api_key(self, api_key: str | None, **kwargs: object) -> str:
         return api_key or litellm.api_key or litellm.openai_key or get_secret_str("OPENAI_API_KEY") or ""
 
     def get_complete_url(self, api_base: str | None, model: str, api_version: str | None = None) -> str:
@@ -28,12 +30,24 @@ class OpenAIRealtimeHTTPConfig(BaseRealtimeHTTPConfig):
         base = base.removesuffix("/v1")
         return join_api_base(base, "v1/realtime/transcription_sessions")
 
+    def get_translation_client_secret_url(
+        self, api_base: str | None, model: str, api_version: str | None = None
+    ) -> str:
+        base = self.get_api_base(api_base).rstrip("/")
+        base = base.removesuffix("/v1")
+        return f"{base}/v1/realtime/translations/client_secrets"
+
+    def get_translation_calls_url(self, api_base: str | None, model: str, api_version: str | None = None) -> str:
+        base = self.get_api_base(api_base).rstrip("/")
+        base = base.removesuffix("/v1")
+        return f"{base}/v1/realtime/translations/calls"
+
     def validate_environment(
         self,
-        headers: dict,
+        headers: Mapping[str, object],
         model: str,
         api_key: str | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         return {
             **headers,
             "Authorization": f"Bearer {api_key or ''}",

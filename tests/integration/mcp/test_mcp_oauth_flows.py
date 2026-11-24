@@ -19,12 +19,13 @@ import jwt
 import pytest
 import yaml
 from cryptography.hazmat.primitives.asymmetric.rsa import RSAPrivateKey, generate_private_key
-from integration._support.client import Gateway, eventually, gateway_from_environment
+from integration._support.client import Gateway, Scenario, eventually, gateway_from_environment
 from integration._support.database import read_rows
 from integration._support.mcp import (
     ENTRY_POINTS,
     INITIALIZE,
     EntryPoint,
+    JsonRpcFailure,
     McpCaller,
     McpPeer,
     Outcome,
@@ -39,7 +40,7 @@ from integration._support.mcp import (
 )
 from integration._support.mcp_grants import create_toolset
 from integration._support.oauth_server import AuthorizationServer, oauth_server
-from integration._support.process import owned_proxy
+from integration._support.process import OwnedState, owned_proxy
 from integration._support.wire import Reply, Request, Wire, wire_server
 from pydantic import TypeAdapter
 
@@ -48,6 +49,7 @@ pytestmark: Final = pytest.mark.shares_worker_state
 ADD: Final = {"a": 2, "b": 3}
 CLIENT_REDIRECT: Final = "http://127.0.0.1:9/cb"
 ACCEPT: Final = {"Accept": "application/json, text/event-stream"}
+_DCR_GATEWAY_BASE_URL: Final = "https://mcp-gateway.example.test"
 
 
 def _base(gateway: Gateway) -> str:
@@ -87,6 +89,25 @@ def _authorizations(peer: McpPeer) -> tuple[bytes | None, ...]:
         for call in tool_calls(peer.drain())
         if isinstance(call["headers"], dict)
     )
+
+
+def _assert_bridge_peer_authorization(
+    peer: McpPeer, key: str, upstream_token: str, envelope: str
+) -> None:
+    observed: Final = peer.drain()
+    assert len(tool_calls(observed)) == 1
+    expected_authorization: Final = f"Bearer {upstream_token}".encode()
+    for request in observed:
+        headers: Final = TypeAdapter(dict[bytes, bytes]).validate_python(request["headers"])
+        if headers.get(b"authorization") != expected_authorization:
+            pytest.fail("MCP peer did not receive the upstream OAuth bearer")
+        if b"x-litellm-api-key" in headers:
+            pytest.fail("MCP peer received the LiteLLM API-key header")
+        header_values: Final = b"\n".join(headers.values())
+        if key.encode() in header_values:
+            pytest.fail("MCP peer received the LiteLLM API-key value")
+        if envelope.encode() in header_values:
+            pytest.fail("MCP peer received the gateway OAuth envelope")
 
 
 def _issued_token(issued: dict[str, object]) -> str:
@@ -699,6 +720,50 @@ def test_per_user_authorization_code_with_pkce_binds_the_token_to_the_authorizin
         )
 
 
+URL_ELICITATION: Final = {
+    "code": -32042,
+    "message": "This request requires more information.",
+    "data": {"elicitations": [{"mode": "url", "elicitationId": "el-1", "url": "https://consent.example.invalid/a"}]},
+}
+
+
+def test_per_user_authorization_code_server_relays_url_elicitation_required_with_the_vaulted_token(
+    gateway: Gateway,
+) -> None:
+    consent: Final = ScriptedTool("consent", lambda _: JsonRpcFailure(URL_ELICITATION))
+    with scripted_peer(consent) as peer, oauth_server() as auth, gateway.scenario() as scenario:
+        alias: Final = "ac" + uuid.uuid4().hex[:8]
+        identity: Final = _register_oauth(
+            scenario,
+            peer,
+            auth,
+            alias,
+            auth_type="oauth2",
+            oauth2_flow="authorization_code",
+            credentials={"client_id": "ac-client", "client_secret": "ac-secret", "scopes": ["tools.call"]},
+        )
+        owner: Final = scenario.key(user_id=scenario.user(), object_permission={"mcp_servers": [identity]})
+        registered: Final = gateway.client.post(
+            f"/{alias}/register", json={"redirect_uris": [CLIENT_REDIRECT], "client_name": "integration"}
+        )
+        assert registered.status_code in (200, 201), registered.text
+        client_id: Final = str(_response_object(registered)["client_id"])
+        pkce: Final = _Pkce(secrets.token_urlsafe(32))
+        code, _ = _authorize_through_gateway(gateway, auth, alias, owner, client_id, pkce)
+        redeemed: Final = _redeem(gateway, alias, owner, client_id, code, pkce)
+        assert redeemed.status_code == 200, redeemed.text
+        vaulted: Final = f"Bearer {_issued_token(redeemed.json())}"
+        peer.drain()
+        relayed: Final = McpCaller(gateway, owner, "server_mcp", alias).call(f"{alias}-consent", {})
+        assert relayed.status == 200 and relayed.error, relayed.raw
+        assert json.loads(relayed.error) == URL_ELICITATION, relayed.raw
+        assert [call["headers"]["authorization"] for call in tool_calls(peer.drain())] == [vaulted]
+        flattened: Final = McpCaller(gateway, owner, "rest", alias).call(f"{alias}-consent", {}, identity)
+        assert flattened.status == 200, flattened.raw
+        assert flattened.error == "MCPError: This request requires more information.", flattened.raw
+        assert [call["headers"]["authorization"] for call in tool_calls(peer.drain())] == [vaulted]
+
+
 @pytest.mark.timeout(600)
 def test_per_user_authorization_code_token_is_read_back_from_the_database_by_a_fresh_proxy_without_redis(
     gateway: Gateway, tmp_path: Path
@@ -786,23 +851,193 @@ def test_dcr_bridge_relays_client_registration_and_advertises_gateway_endpoints(
         assert "S256" in issuer.json()["code_challenge_methods_supported"]
 
 
-def _ui_session_cookie(gateway: Gateway, user_id: str) -> dict[str, str]:
-    claims: Final = {"user_id": user_id, "login_method": "username_password", "exp": int(time.time()) + 600}
-    return {"token": jwt.encode(claims, gateway.key, algorithm="HS256")}
+def _ui_session_cookie(scenario: Scenario, user_id: str) -> dict[str, str]:
+    session_key: Final = scenario.key(user_id=user_id, duration="10m")
+    claims: Final = {
+        "user_id": user_id,
+        "key": session_key,
+        "login_method": "username_password",
+        "exp": int(time.time()) + 600,
+    }
+    return {"token": jwt.encode(claims, scenario.gateway.key, algorithm="HS256")}
+
+
+@pytest.fixture(scope="module")
+def clientless_dcr_gateway(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Gateway]:
+    directory: Final = tmp_path_factory.mktemp("mcp-clientless-dcr")
+    with (
+        gateway_from_environment() as source,
+        owned_proxy(
+            source,
+            directory,
+            {"PROXY_BASE_URL": _DCR_GATEWAY_BASE_URL},
+            remove_environment=("LITELLM_MCP_DCR_GATEWAY_CLIENT",),
+            workers=2,
+            state=OwnedState.SHARED_WITH_WORKER,
+        ) as candidate,
+    ):
+        yield candidate
+
+
+def test_clientless_dcr_bridge_relays_and_binds_the_token_to_the_service_key(
+    clientless_dcr_gateway: Gateway,
+) -> None:
+    with mcp_peer() as peer, oauth_server() as auth, clientless_dcr_gateway.scenario() as scenario:
+        alias: Final = "dr" + uuid.uuid4().hex[:8]
+        _register_oauth(
+            scenario, peer, auth, alias, auth_type="oauth_delegate", dcr_bridge=True, allow_all_keys=True
+        )
+        browser_user_id: Final = scenario.user()
+        service_user_id: Final = scenario.user()
+        other_user_id: Final = scenario.user()
+        service_key: Final = scenario.key(user_id=service_user_id)
+        other_key: Final = scenario.key(user_id=other_user_id)
+
+        registered: Final = clientless_dcr_gateway.client.post(
+            f"/{alias}/register", json={"redirect_uris": [CLIENT_REDIRECT], "client_name": "integration"}
+        )
+        assert registered.status_code == 200, registered.status_code
+        registration: Final = _response_object(registered)
+        client_id_value: Final = registration["client_id"]
+        assert isinstance(client_id_value, str)
+        client_id: Final = client_id_value
+        assert registration["redirect_uris"] == [CLIENT_REDIRECT]
+        registration_requests: Final = auth.drain()
+        assert len(registration_requests) == 1
+        registration_request: Final = registration_requests[0]
+        assert (registration_request.method, urlsplit(registration_request.target).path) == ("POST", "/register")
+        upstream_registration: Final = TypeAdapter(dict[str, object]).validate_json(registration_request.body)
+        assert upstream_registration["redirect_uris"] == [CLIENT_REDIRECT]
+
+        pkce: Final = _Pkce(secrets.token_urlsafe(48))
+        state: Final = "client-state-" + uuid.uuid4().hex
+        with httpx.Client(
+            base_url=str(clientless_dcr_gateway.client.base_url),
+            cookies=_ui_session_cookie(scenario, browser_user_id),
+            trust_env=False,
+        ) as browser:
+            started: Final = browser.get(
+                f"/{alias}/authorize",
+                params={
+                    "client_id": client_id,
+                    "redirect_uri": CLIENT_REDIRECT,
+                    "response_type": "code",
+                    "state": state,
+                    "code_challenge": pkce.challenge,
+                    "code_challenge_method": "S256",
+                },
+            )
+        assert started.status_code == 307, started.status_code
+        authorize_url: Final = started.headers["location"]
+        assert authorize_url.startswith(auth.issuer + "/authorize")
+        authorize_query: Final = parse_qs(urlsplit(authorize_url).query)
+        assert authorize_query["client_id"] == [client_id]
+        assert authorize_query["redirect_uri"] == [CLIENT_REDIRECT]
+        assert authorize_query["state"] == [state]
+        assert authorize_query["code_challenge"] == [pkce.challenge]
+        assert authorize_query["code_challenge_method"] == ["S256"]
+
+        consent: Final = httpx.get(authorize_url, follow_redirects=False, trust_env=False)
+        assert consent.status_code == 302, consent.status_code
+        client_callback: Final = consent.headers["location"]
+        assert client_callback.startswith(CLIENT_REDIRECT)
+        callback_query: Final = parse_qs(urlsplit(client_callback).query)
+        assert callback_query["state"] == [state]
+        authorization_code: Final = callback_query["code"][0]
+        authorize_requests: Final = auth.drain()
+        assert tuple(
+            (request.method, urlsplit(request.target).path) for request in authorize_requests
+        ) == (("GET", "/authorize"),)
+
+        redeemed: Final = _redeem(
+            clientless_dcr_gateway, alias, service_key, client_id, authorization_code, pkce
+        )
+        assert redeemed.status_code == 200, redeemed.status_code
+        issued: Final = _response_object(redeemed)
+        envelope: Final = _issued_token(issued)
+        refresh_token_value: Final = issued["refresh_token"]
+        assert isinstance(refresh_token_value, str)
+        assert tuple(request["grant_type"] for request in auth.token_requests()) == ("authorization_code",)
+        upstream_tokens: Final = tuple(auth.access_tokens)
+        assert len(upstream_tokens) == 1
+        upstream_token: Final = upstream_tokens[0]
+        assert auth.is_live(upstream_token)
+
+        caller: Final = McpCaller(
+            clientless_dcr_gateway,
+            service_key,
+            "server_mcp",
+            alias,
+            headers={"Authorization": f"Bearer {envelope}"},
+        )
+        assert caller.initialize().ok
+        assert caller.list_tools().ok
+        called: Final = caller.call(f"{alias}-add", ADD)
+        assert called.ok, called.raw
+        _assert_bridge_peer_authorization(peer, service_key, upstream_token, envelope)
+
+        mismatched: Final = McpCaller(
+            clientless_dcr_gateway,
+            other_key,
+            "server_mcp",
+            alias,
+            headers={"Authorization": f"Bearer {envelope}"},
+        ).initialize()
+        assert mismatched.status == 403, mismatched.status
+        assert "oauth_principal_mismatch" in mismatched.raw
+        assert peer.drain() == ()
+
+        refreshed: Final = clientless_dcr_gateway.client.post(
+            f"/{alias}/token",
+            headers={"x-litellm-api-key": service_key},
+            data={
+                "grant_type": "refresh_token",
+                "refresh_token": refresh_token_value,
+                "client_id": client_id,
+            },
+        )
+        assert refreshed.status_code == 200, refreshed.status_code
+        refreshed_issued: Final = _response_object(refreshed)
+        refreshed_envelope: Final = _issued_token(refreshed_issued)
+        assert tuple(request["grant_type"] for request in auth.token_requests()) == ("refresh_token",)
+        refreshed_upstream_tokens: Final = tuple(auth.access_tokens)
+        assert len(refreshed_upstream_tokens) == 2
+        refreshed_upstream_token: Final = refreshed_upstream_tokens[-1]
+        assert auth.is_live(refreshed_upstream_token)
+
+        refreshed_caller: Final = McpCaller(
+            clientless_dcr_gateway,
+            service_key,
+            "server_mcp",
+            alias,
+            headers={"Authorization": f"Bearer {refreshed_envelope}"},
+        )
+        assert refreshed_caller.initialize().ok
+        assert refreshed_caller.list_tools().ok
+        refreshed_call: Final = refreshed_caller.call(f"{alias}-add", ADD)
+        assert refreshed_call.ok, refreshed_call.raw
+        _assert_bridge_peer_authorization(peer, service_key, refreshed_upstream_token, refreshed_envelope)
 
 
 def _gateway_session_sign_in(
-    gateway: Gateway, user_id: str, resource: str | None = None
+    gateway: Gateway,
+    scenario: Scenario,
+    user_id: str,
+    resource: str | None = None,
+    *,
+    registration_endpoint: str = "/register",
+    authorization_endpoint: str = "/authorize",
+    token_endpoint: str = "/token",
 ) -> tuple[dict[str, object], str]:
     registered: Final = gateway.client.post(
-        "/register", json={"redirect_uris": [CLIENT_REDIRECT], "client_name": "integration"}
+        registration_endpoint, json={"redirect_uris": [CLIENT_REDIRECT], "client_name": "integration"}
     )
     assert registered.status_code in (200, 201), registered.text
     client_id: Final = str(_response_object(registered)["client_id"])
     pkce: Final = _Pkce(secrets.token_urlsafe(48))
-    cookies: Final = _ui_session_cookie(gateway, user_id)
+    cookies: Final = _ui_session_cookie(scenario, user_id)
     started: Final = gateway.client.get(
-        "/authorize",
+        authorization_endpoint,
         params={
             "client_id": client_id,
             "redirect_uri": CLIENT_REDIRECT,
@@ -823,21 +1058,22 @@ def _gateway_session_sign_in(
     callback: Final = parse_qs(urlsplit(completed.headers["location"]).query)
     assert "code" in callback, completed.headers["location"]
     issued: Final = gateway.client.post(
-        "/token",
+        token_endpoint,
         data={
             "grant_type": "authorization_code",
             "code": callback["code"][0],
             "redirect_uri": CLIENT_REDIRECT,
             "client_id": client_id,
             "code_verifier": pkce.verifier,
+            **({} if resource is None else {"resource": resource}),
         },
     )
     assert issued.status_code == 200, issued.text
     return _response_object(issued), client_id
 
 
-def _gateway_session_bearer(gateway: Gateway, user_id: str, resource: str | None = None) -> str:
-    issued, _ = _gateway_session_sign_in(gateway, user_id, resource)
+def _gateway_session_bearer(gateway: Gateway, scenario: Scenario, user_id: str, resource: str | None = None) -> str:
+    issued, _ = _gateway_session_sign_in(gateway, scenario, user_id, resource)
     return _issued_token(issued)
 
 
@@ -880,7 +1116,7 @@ def test_spec_client_discovers_the_aggregate_authorization_server_and_signs_in_t
         assert registered.status_code in (200, 201), registered.text
         client_id: Final = str(_response_object(registered)["client_id"])
         pkce: Final = _Pkce(secrets.token_urlsafe(48))
-        cookies: Final = _ui_session_cookie(gateway, member)
+        cookies: Final = _ui_session_cookie(scenario, member)
         started: Final = gateway.client.get(
             authorization_endpoint,
             params={
@@ -990,7 +1226,7 @@ def test_per_server_resource_scopes_the_session_bearer_to_the_named_server(gatew
         assert registered.status_code in (200, 201), registered.text
         client_id: Final = str(_response_object(registered)["client_id"])
         pkce: Final = _Pkce(secrets.token_urlsafe(48))
-        cookies: Final = _ui_session_cookie(gateway, member)
+        cookies: Final = _ui_session_cookie(scenario, member)
         started: Final = gateway.client.get(
             "/authorize/mcp-session",
             params={
@@ -1103,7 +1339,7 @@ def test_rotated_session_refresh_token_cannot_be_replayed_after_revocation(gatew
         alias: Final = "rt6" + uuid.uuid4().hex[:10]
         identity: Final = register_mcp(scenario, peer, alias)
         member: Final = scenario.member(scenario.team(object_permission={"mcp_servers": [identity]}))
-        issued, client_id = _gateway_session_sign_in(gateway, member)
+        issued, client_id = _gateway_session_sign_in(gateway, scenario, member)
         r1: Final = str(issued["refresh_token"])
         a1: Final = str(issued["access_token"])
         assert r1.startswith("llm_srefresh_"), r1
@@ -1200,7 +1436,7 @@ def test_lite_logout_revokes_the_cli_refresh_token_sent_the_way_the_cli_sends_it
         assert registered.status_code in (200, 201), registered.text
         client_id: Final = str(_response_object(registered)["client_id"])
         pkce: Final = _Pkce(secrets.token_urlsafe(64))
-        cookies: Final = _ui_session_cookie(gateway, member)
+        cookies: Final = _ui_session_cookie(scenario, member)
         consent: Final = gateway.client.get(
             str(contract["authorization_endpoint"]),
             params={
@@ -1292,10 +1528,18 @@ def test_lite_logout_revokes_the_cli_refresh_token_sent_the_way_the_cli_sends_it
         assert completion.status_code == 200, completion.text
 
 
-def _toolset_rpc(gateway: Gateway, bearer: str, name: str, method: str, params: dict[str, object]) -> Outcome:
+def _toolset_rpc(
+    gateway: Gateway,
+    bearer: str,
+    name: str,
+    method: str,
+    params: dict[str, object],
+    *,
+    route: str = "/toolset/{name}/mcp",
+) -> Outcome:
     def post(rpc_method: str, rpc_params: dict[str, object]) -> httpx.Response:
         return gateway.client.post(
-            f"/toolset/{name}/mcp",
+            route.format(name=name),
             json={"jsonrpc": "2.0", "id": 1, "method": rpc_method, "params": rpc_params},
             headers={"Authorization": f"Bearer {bearer}", "Accept": "application/json, text/event-stream"},
         )
@@ -1306,7 +1550,12 @@ def _toolset_rpc(gateway: Gateway, bearer: str, name: str, method: str, params: 
     return _outcome_from_rpc(post(method, params))
 
 
-def test_gateway_session_bearer_of_a_team_member_is_served_the_team_toolset_on_its_route(gateway: Gateway) -> None:
+@pytest.mark.parametrize("route", ["/toolset/{name}/mcp", "/{name}/mcp"])
+def test_gateway_session_bearer_of_a_team_member_is_served_the_team_toolset_on_its_route(
+    gateway: Gateway, route: str
+) -> None:
+    from mcp.shared.auth_utils import check_resource_allowed
+
     with mcp_peer() as peer, gateway.scenario() as scenario:
         alias: Final = "lit6029sess" + uuid.uuid4().hex[:6]
         server_id: Final = register_mcp(scenario, peer, alias)
@@ -1315,19 +1564,70 @@ def test_gateway_session_bearer_of_a_team_member_is_served_the_team_toolset_on_i
         granted_id: Final = create_toolset(scenario, ((server_id, "add"),), toolset_name=granted_name)
         create_toolset(scenario, ((server_id, "multiply"),), toolset_name=withheld_name)
         member: Final = scenario.member(scenario.team(object_permission={"mcp_toolsets": [granted_id]}))
-        bearer: Final = _gateway_session_bearer(gateway, member)
+        path: Final = route.format(name=granted_name)
+        anonymous: Final = gateway.client.post(
+            path,
+            headers=ACCEPT,
+            json={"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": dict(INITIALIZE)},
+        )
+        assert anonymous.status_code == 401, anonymous.text
+        metadata_url: Final = anonymous.headers["www-authenticate"].split('resource_metadata="', 1)[1].split('"', 1)[0]
+        protected: Final = gateway.client.get(metadata_url)
+        assert protected.status_code == 200, protected.text
+        protected_body: Final = _response_object(protected)
+        resource: Final = str(protected_body["resource"])
+        assert check_resource_allowed(
+            requested_resource=f"{_base(gateway)}{path}", configured_resource=resource
+        ), protected.text
+        issuers: Final = TypeAdapter(tuple[str, ...]).validate_python(protected_body["authorization_servers"])
+        assert len(issuers) == 1, protected.text
+        issuer: Final = urlsplit(issuers[0])
+        authorization: Final = gateway.client.get(
+            f"{issuer.scheme}://{issuer.netloc}/.well-known/oauth-authorization-server{issuer.path}"
+        )
+        assert authorization.status_code == 200, authorization.text
+        authorization_body: Final = _response_object(authorization)
+        assert authorization_body["issuer"] == issuers[0], authorization.text
+        token_endpoint: Final = str(authorization_body["token_endpoint"])
+        issued, client_id = _gateway_session_sign_in(
+            gateway,
+            scenario,
+            member,
+            resource,
+            registration_endpoint=str(authorization_body["registration_endpoint"]),
+            authorization_endpoint=str(authorization_body["authorization_endpoint"]),
+            token_endpoint=token_endpoint,
+        )
+        bearer: Final = _issued_token(issued)
         assert bearer.startswith("llm_session_"), bearer[:16]
-        listed: Final = _toolset_rpc(gateway, bearer, granted_name, "tools/list", {})
+        listed: Final = _toolset_rpc(gateway, bearer, granted_name, "tools/list", {}, route=route)
         assert listed.tools == (f"{alias}-add",), listed.raw
         peer.drain()
         called: Final = _toolset_rpc(
-            gateway, bearer, granted_name, "tools/call", {"name": f"{alias}-add", "arguments": {"a": 4, "b": 5}}
+            gateway, bearer, granted_name, "tools/call",
+            {"name": f"{alias}-add", "arguments": {"a": 4, "b": 5}}, route=route
         )
         assert called.ok and called.text == "9", called.raw
         assert len(tool_calls(peer.drain())) == 1
-        denied: Final = _toolset_rpc(gateway, bearer, withheld_name, "tools/list", {})
+        denied: Final = _toolset_rpc(gateway, bearer, withheld_name, "tools/list", {}, route=route)
         assert denied.status == 403, denied.raw
         assert tool_calls(peer.drain()) == ()
+        rotated: Final = gateway.client.post(
+            token_endpoint,
+            data={
+                "grant_type": "refresh_token",
+                "refresh_token": str(issued["refresh_token"]),
+                "client_id": client_id,
+                "resource": resource,
+            },
+        )
+        assert rotated.status_code == 200, rotated.text
+        rotated_body: Final = _response_object(rotated)
+        assert rotated_body["refresh_token"] != issued["refresh_token"], rotated.text
+        refreshed: Final = _toolset_rpc(
+            gateway, _issued_token(rotated_body), granted_name, "tools/list", {}, route=route
+        )
+        assert refreshed.tools == listed.tools, refreshed.raw
 
 
 def test_resource_scoped_session_bearer_opens_a_team_toolset_inside_its_server_and_none_outside(
@@ -1343,7 +1643,7 @@ def test_resource_scoped_session_bearer_opens_a_team_toolset_inside_its_server_a
         inside_id: Final = create_toolset(scenario, ((inside_server, "add"),), toolset_name=inside_name)
         outside_id: Final = create_toolset(scenario, ((outside_server, "add"),), toolset_name=outside_name)
         member: Final = scenario.member(scenario.team(object_permission={"mcp_toolsets": [inside_id, outside_id]}))
-        bearer: Final = _gateway_session_bearer(gateway, member, resource=f"{_base(gateway)}/{inside}/mcp")
+        bearer: Final = _gateway_session_bearer(gateway, scenario, member, resource=f"{_base(gateway)}/{inside}/mcp")
         assert bearer.startswith("llm_session_"), bearer[:16]
         listed: Final = _toolset_rpc(gateway, bearer, inside_name, "tools/list", {})
         assert listed.tools == (f"{inside}-add",), listed.raw
@@ -1360,7 +1660,6 @@ def test_resource_scoped_session_bearer_opens_a_team_toolset_inside_its_server_a
 
 _PROBE: Final = "catalog-probe"
 _ECHO: Final = "catalog-echo"
-_UNLISTED: Final = ""
 _GUARDRAIL_CODE: Final = (
     "def apply_guardrail(inputs, request_data, input_type):\n"
     f'    if "{_PROBE}" not in list(inputs.get("texts") or []):\n'
@@ -1396,8 +1695,22 @@ def _echoed_description(outcome: Outcome) -> str:
     return found.group(1)
 
 
+def _add_described_for_the_exchanged_subject(auth: AuthorizationServer) -> ScriptedTool:
+    def described(headers: Mapping[str, str]) -> str:
+        token: Final = headers.get("authorization", "").removeprefix("Bearer ")
+        with auth.lock:
+            grant: Final = auth.access_tokens.get(token, {})
+        return "Add for " + grant.get("subject", "nobody")
+
+    return ScriptedTool("add", lambda _: text_result("must not run"), description=described)
+
+
 def test_token_exchange_callers_with_different_subject_tokens_own_separate_listings(echo_rig: Gateway) -> None:
-    with mcp_peer() as peer, oauth_server() as auth, echo_rig.scenario() as scenario:
+    with (
+        oauth_server() as auth,
+        scripted_peer(_add_described_for_the_exchanged_subject(auth)) as peer,
+        echo_rig.scenario() as scenario,
+    ):
         alias: Final = "te" + uuid.uuid4().hex[:8]
         identity: Final = register_mcp(
             scenario,
@@ -1409,19 +1722,20 @@ def test_token_exchange_callers_with_different_subject_tokens_own_separate_listi
         )
         key: Final = scenario.key(object_permission={"mcp_servers": [identity]})
         first_subject: Final = "subject-" + uuid.uuid4().hex
+        second_subject: Final = "subject-" + uuid.uuid4().hex
         first: Final = McpCaller(echo_rig, key, "mcp", alias, {"Authorization": f"Bearer {first_subject}"})
-        second: Final = McpCaller(echo_rig, key, "mcp", alias, {"Authorization": "Bearer subject-" + uuid.uuid4().hex})
+        second: Final = McpCaller(echo_rig, key, "mcp", alias, {"Authorization": f"Bearer {second_subject}"})
         auth.drain()
         assert first.list_tools().ok
         assert [request["subject_token"] for request in auth.token_requests()] == [first_subject]
         probe: Final = {"probe": _PROBE}
         own: Final = _echoed_description(first.call(f"{alias}-add", probe))
         other: Final = _echoed_description(second.call(f"{alias}-add", probe))
-        assert (own, other) == ("Add two integers", _UNLISTED), (
+        assert (own, other) == (f"Add for exchanged:{first_subject}", f"Add for exchanged:{second_subject}"), (
             "the caller bearer is part of the identity on a token-exchange server: one subject, one slot"
         )
         assert second.list_tools().ok
-        assert _echoed_description(second.call(f"{alias}-add", probe)) == "Add two integers"
+        assert _echoed_description(second.call(f"{alias}-add", probe)) == f"Add for exchanged:{second_subject}"
         assert tool_calls(peer.drain()) == (), "a blocked probe reached the peer"
 
 

@@ -25,6 +25,7 @@ from litellm.types.guardrails import GuardrailEventHooks
 
 if TYPE_CHECKING:
     from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
+    from litellm.types.utils import LLMResponseTypes
 
 
 class GuardrailsAIResponse(TypedDict):
@@ -83,7 +84,8 @@ class GuardrailsAI(CustomGuardrail):
             timeout=self.timeout,
         )
         verbose_proxy_logger.debug("guardrails_ai response: %s", response)
-        _json_response: Final = GuardrailsAIResponse(**response.json())
+        decoded_response: Final[GuardrailsAIResponse] = response.json()
+        _json_response: Final = GuardrailsAIResponse(**decoded_response)
         if _json_response.get("validationPassed") is False:
             raise HTTPException(
                 status_code=400,
@@ -130,7 +132,8 @@ class GuardrailsAI(CustomGuardrail):
                 },
             )
 
-        _json_response: Final = GuardrailsAIResponsePreCall(**response.json())
+        decoded_response: Final[GuardrailsAIResponsePreCall] = response.json()
+        _json_response: Final = GuardrailsAIResponsePreCall(**decoded_response)
         response = _json_response.get("outputs", [])[0].get("data", [])[0]
         return response
 
@@ -194,7 +197,7 @@ class GuardrailsAI(CustomGuardrail):
         self,
         data: dict,
         user_api_key_dict: UserAPIKeyAuth,
-        response,
+        response: "LLMResponseTypes",
     ):
         """
         Runs on response from LLM API call

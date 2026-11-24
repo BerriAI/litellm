@@ -18,7 +18,8 @@ from litellm.litellm_core_utils.secret_redaction import (
     python_redact_string,
     python_redact_structured_value,
 )
-from litellm.rust_bridge import diagnostics, logger
+from litellm.rust_bridge import diagnostics
+from litellm.rust_bridge.host import logger
 
 
 def test_native_records_preserve_metadata_and_redact_before_custom_handlers(
@@ -29,7 +30,14 @@ def test_native_records_preserve_metadata_and_redact_before_custom_handlers(
     message: Final = f"Authorization: Bearer {secret}"
     with caplog.at_level(logging.WARNING, logger="LiteLLM"):
         logger.emit(
-            logging.WARNING, message, "native.rs", 42, "litellm_http", {"retry": True, "api_key": secret}, ("", "")
+            "LiteLLM",
+            logging.WARNING,
+            message,
+            "native.rs",
+            42,
+            "litellm_http",
+            {"retry": True, "api_key": secret},
+            ("", ""),
         )
 
     record: Final = caplog.records[0]
@@ -45,11 +53,11 @@ def test_native_context_is_scoped_and_respects_correlation_setting(
     caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(litellm, "request_correlation_in_logs", True)
-    context_before: Final = logger.context()
+    context_before: Final = logger.context(("LiteLLM",))[0]
     with caplog.at_level(logging.WARNING, logger="LiteLLM"):
-        logger.emit(logging.WARNING, "native", "native.rs", 1, "litellm_http", {}, ("session", "trace"))
+        logger.emit("LiteLLM", logging.WARNING, "native", "native.rs", 1, "litellm_http", {}, ("session", "trace"))
         monkeypatch.setattr(litellm, "request_correlation_in_logs", False)
-        logger.emit(logging.WARNING, "disabled", "native.rs", 2, "litellm_http", {}, ("hidden", "hidden"))
+        logger.emit("LiteLLM", logging.WARNING, "disabled", "native.rs", 2, "litellm_http", {}, ("hidden", "hidden"))
 
     first, second = caplog.records
     assert (first.__dict__["session_id"], first.__dict__["trace_id"]) == ("session", "trace")
@@ -59,14 +67,70 @@ def test_native_context_is_scoped_and_respects_correlation_setting(
 
 
 def test_native_logging_observes_level_changes(caplog: pytest.LogCaptureFixture) -> None:
-    with caplog.at_level(logging.ERROR, logger="LiteLLM"):
-        assert not logger.enabled(logging.WARNING)
-        logger.emit(logging.WARNING, "filtered", "native.rs", 1, "litellm_http", {}, ("", ""))
+    loggers: Final = ("LiteLLM", "LiteLLM Proxy")
+    with caplog.at_level(logging.ERROR, logger="LiteLLM"), caplog.at_level(logging.DEBUG, logger="LiteLLM Proxy"):
+        assert logger.context(loggers)[1] == (logging.ERROR, logging.DEBUG)
+        logger.emit("LiteLLM", logging.WARNING, "filtered", "native.rs", 1, "litellm_http", {}, ("", ""))
     with caplog.at_level(logging.WARNING, logger="LiteLLM"):
-        assert logger.enabled(logging.WARNING)
-        logger.emit(logging.WARNING, "visible", "native.rs", 1, "litellm_http", {}, ("", ""))
+        assert logger.context(loggers)[1][0] == logging.WARNING
+        logger.emit("LiteLLM", logging.WARNING, "visible", "native.rs", 1, "litellm_http", {}, ("", ""))
 
     assert [record.getMessage() for record in caplog.records] == ["visible"]
+
+
+def test_a_disabled_logger_takes_no_native_level(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(verbose_logger, "disabled", True)
+
+    assert logger.context(("LiteLLM",))[1] == (logging.CRITICAL + 1,)
+
+
+def test_native_records_reach_the_logger_rust_names(caplog: pytest.LogCaptureFixture) -> None:
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"), caplog.at_level(logging.DEBUG, logger="LiteLLM Proxy"):
+        logger.emit("LiteLLM Proxy", logging.DEBUG, "limiter", "hosted.rs", 1, "litellm_limiter", {}, ("", ""))
+        logger.emit("LiteLLM", logging.DEBUG, "http", "http.rs", 1, "litellm_http", {}, ("", ""))
+
+    assert [(record.name, record.levelno, record.getMessage()) for record in caplog.records] == [
+        ("LiteLLM Proxy", logging.DEBUG, "limiter")
+    ]
+
+
+def test_native_redis_timeouts_share_the_redis_py_timeout_throttle(
+    caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from redis.exceptions import TimeoutError as RedisTimeoutError
+
+    from litellm.caching import redis_cache as redis_cache_module
+    from litellm.caching.redis_cache import RedisTimeoutLogThrottle, log_redis_failure
+
+    monkeypatch.setattr(
+        redis_cache_module, "redis_timeout_log_throttle", RedisTimeoutLogThrottle(interval=5.0, clock=lambda: 1_000.0)
+    )
+    store: Final = "litellm_redis_store::rate_limits"
+    with caplog.at_level(logging.DEBUG, logger="LiteLLM"):
+        logger.emit(
+            "LiteLLM", logging.WARNING, "native timeout", "mod.rs", 1, store, {"redis.failure": "timeout"}, ("", "")
+        )
+        log_redis_failure(verbose_logger, logging.WARNING, "redis-py timeout", RedisTimeoutError("timed out"))
+        logger.emit(
+            "LiteLLM",
+            logging.WARNING,
+            "native timeout again",
+            "mod.rs",
+            2,
+            store,
+            {"redis.failure": "timeout"},
+            ("", ""),
+        )
+        logger.emit(
+            "LiteLLM", logging.WARNING, "native refused", "mod.rs", 3, store, {"redis.failure": "transport"}, ("", "")
+        )
+
+    assert [(record.getMessage(), record.levelno) for record in caplog.records] == [
+        ("native timeout", logging.WARNING),
+        ("redis-py timeout: timed out", logging.DEBUG),
+        ("native timeout again", logging.DEBUG),
+        ("native refused", logging.WARNING),
+    ]
 
 
 @pytest.mark.parametrize(
@@ -80,7 +144,6 @@ def test_native_logging_observes_level_changes(caplog: pytest.LogCaptureFixture)
     ),
 )
 def test_native_credential_patterns_match_python(text: str) -> None:
-    pytest.importorskip("litellm.rust_bridge._native")
     from litellm.rust_bridge._native import NativeDiagnosticProcessor
 
     processor: Final = NativeDiagnosticProcessor(MINIMUM_CUSTOM_KEY_LENGTH)
@@ -91,7 +154,6 @@ def test_native_credential_patterns_match_python(text: str) -> None:
 
 
 def test_native_client_redaction_matches_python() -> None:
-    pytest.importorskip("litellm.rust_bridge._native")
     from litellm.rust_bridge._native import NativeDiagnosticProcessor
 
     text: Final = "error at /etc/secrets/config on db.internal\nTraceback (most recent call last):\nsecret"
@@ -100,7 +162,6 @@ def test_native_client_redaction_matches_python() -> None:
 
 
 def test_native_diagnostic_batch_matches_python() -> None:
-    pytest.importorskip("litellm.rust_bridge._native")
     from litellm.rust_bridge._native import NativeDiagnosticProcessor
 
     message: Final = "é" * 110 + "sk-" + "q" * 48 + "界" * 1000

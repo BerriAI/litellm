@@ -3,15 +3,19 @@ Tests for gateway repository layer.
 """
 
 import json
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from typing import Any, Dict, Final, List, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
+from zoneinfo import ZoneInfo
 
 import pytest
 from prisma import models as prisma_models
 from prisma.builder import QueryBuilder
 from pydantic import ValidationError
+from litellm.repositories import rust_database
+from litellm.repositories.spend_logs_repository import SpendLogOwner, SpendLogsRepository
+from tests.unit.proxy.rust_auth_stores import install_rust_auth_stores
 
 from litellm.models.base import DomainModel
 from litellm.models.budget import LiteLLM_BudgetTable
@@ -23,13 +27,22 @@ from litellm.repositories.budget_repository import BudgetRepository
 from litellm.repositories.chunked_in import IN_LIST_CHUNK_SIZE
 from litellm.repositories.config_repository import ConfigRepository
 from litellm.repositories.credentials_repository import CredentialsRepository
-from litellm.repositories.deployment_warning_ignore_repository import DeploymentWarningIgnoreRepository
+from litellm.models.deployment_warning import AdminIgnore
+from litellm.repositories.deployment_warning_ignore_repository import (
+    DeploymentWarningIgnoreRepository,
+    parse_ignores,
+)
 from litellm.repositories.model_repository import ModelRepository
 from litellm.repositories.object_permission_repository import (
     ObjectPermissionRepository,
 )
 from litellm.repositories.organization_repository import OrganizationRepository
 from litellm.repositories.project_repository import ProjectRepository
+from litellm.repositories.subscription_account_repository import (
+    SetLabel,
+    SubscriptionAccountFeeChanges,
+    SubscriptionAccountRepository,
+)
 from litellm.repositories.team_repository import TeamRepository
 from litellm.repositories.user_repository import UserRepository
 from litellm.repositories.verification_token_repository import (
@@ -140,6 +153,7 @@ class MockPrismaClient:
         self.db.litellm_projecttable = MockTable(pk_field="project_id")
         self.db.litellm_objectpermissiontable = MockTable(pk_field="object_permission_id")
         self.db.litellm_credentialstable = MockTable()
+        self.db.litellm_subscriptionaccounttable = MockTable(pk_field="subscription_account_id")
 
 
 class TestBaseRepository:
@@ -1612,14 +1626,26 @@ class TestDeploymentWarningIgnoreRepository:
         }
         writer_table._records.update({row_id: dict(row) for row_id, row in other_rows.items()})
         repo = DeploymentWarningIgnoreRepository(client, use_writer=True)
+        ignored_at = datetime(2026, 10, 14, 12, tzinfo=timezone.utc)
+        snoozed = AdminIgnore(ignored_by="admin", ignored_at=ignored_at, ignored_until=ignored_at + timedelta(hours=1))
 
-        assert await repo.get_raw_ignores() is None
-        await repo.upsert_ignores('{"no_redis": {}}')
-        await repo.upsert_ignores('{"detailed_debug": {}}')
+        assert await repo.get_ignores() == {}
+        await repo.save_ignores({"no_redis": AdminIgnore(ignored_by="admin", ignored_at=ignored_at)})
+        await repo.save_ignores({"detailed_debug": snoozed})
 
-        assert await repo.get_raw_ignores() == '{"detailed_debug": {}}'
+        assert await repo.get_ignores() == {"detailed_debug": snoozed}
         assert {row_id: writer_table._records[row_id] for row_id in other_rows} == other_rows
         assert len(writer_table._records) == len(other_rows) + 1
+
+    @pytest.mark.parametrize(
+        "stored",
+        [
+            "{not json",
+            {"detailed_debug": {"ignored_by": "a", "ignored_at": "2026-10-14T12:00:00", "ignored_until": None}},
+        ],
+    )
+    def test_unreadable_rows_read_as_no_ignores(self, stored):
+        assert parse_ignores(stored) == {}
 
 
 class TestVerificationTokenRepositoryExtended:
@@ -2240,7 +2266,7 @@ class TestPrismaTableRepository:
         assert agents.table._actions is not policy.table._actions
 
     def test_table_access_raises_without_db(self):
-        from litellm.repositories.table_repositories import SpendLogsRepository
+        from litellm.repositories.spend_logs_repository import SpendLogsRepository
 
         repo = SpendLogsRepository(None)
         with pytest.raises(RuntimeError, match="No DB Connected"):
@@ -2461,3 +2487,77 @@ class TestAutoRouterSessionRepository:
         assert AutoRouterSessionRepository(client).table is client.db.litellm_autoroutersession
         with pytest.raises(RuntimeError, match="No DB Connected"):
             _ = AutoRouterSessionRepository(None).table
+
+
+class TestSubscriptionAccountRepository:
+    @pytest.mark.asyncio
+    async def test_update_fee_writes_only_the_named_columns(self):
+        client = MockPrismaClient()
+        stored_at = datetime(2026, 10, 1)
+        await client.db.litellm_subscriptionaccounttable.create(
+            data={
+                "subscription_account_id": "sub-1",
+                "custom_llm_provider": "chatgpt",
+                "account_id": "acct_123",
+                "label": "Team plan (test value)",
+                "monthly_fee": 25.0,
+                "currency": "USD",
+                "billing_period_start": "2026-10-01",
+                "created_at": stored_at,
+                "created_by": "admin-a",
+                "updated_at": stored_at,
+                "updated_by": "admin-a",
+            }
+        )
+        repo = SubscriptionAccountRepository(client)
+
+        fee_only = await repo.update_fee("sub-1", SubscriptionAccountFeeChanges(monthly_fee=30.0), "admin-b")
+        label_cleared = await repo.update_fee("sub-1", SubscriptionAccountFeeChanges(label=SetLabel(None)), "admin-c")
+        missing = await repo.update_fee("sub-2", SubscriptionAccountFeeChanges(monthly_fee=1.0), "admin-b")
+
+        assert fee_only is not None and label_cleared is not None
+        assert (fee_only.monthly_fee, fee_only.currency, fee_only.label, fee_only.updated_by) == (
+            30.0,
+            "USD",
+            "Team plan (test value)",
+            "admin-b",
+        )
+        assert (label_cleared.monthly_fee, label_cleared.label, label_cleared.updated_by) == (30.0, None, "admin-c")
+        assert missing is None
+
+
+class TestSpendLogsWindowSpend:
+    """``SpendLogsRepository.window_spend`` hands the Rust repository the bound the Prisma ``group_by`` used."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("owner", list(SpendLogOwner))
+    @pytest.mark.parametrize(
+        "since",
+        [
+            datetime(2026, 8, 1, 0, 0, 0, 123000),
+            datetime(2026, 8, 1, 0, 0, 0, 123000, tzinfo=timezone.utc),
+            datetime(2026, 7, 31, 20, 0, 0, 123999, tzinfo=ZoneInfo("America/New_York")),
+            datetime(2026, 8, 1, 2, 0, 0, 123456, tzinfo=timezone(timedelta(hours=2))),
+        ],
+        ids=["naive_is_utc", "utc", "named_zone", "fixed_offset_microseconds"],
+    )
+    async def test_reads_the_rust_repository_from_the_utc_millisecond(self, monkeypatch, owner, since):
+        stores = install_rust_auth_stores(monkeypatch)
+        stores.spend_log.totals[(owner.value, "owner-1")] = 2.5
+
+        spend = await SpendLogsRepository(MagicMock()).window_spend(owner, "owner-1", since)
+
+        assert spend == 2.5
+        assert stores.spend_log.lookups == [
+            (owner.value, "owner-1", datetime(2026, 8, 1, 0, 0, 0, 123000, tzinfo=timezone.utc))
+        ]
+        assert stores.spend_log.lookups[0][2].tzinfo is timezone.utc
+
+    @pytest.mark.asyncio
+    async def test_without_a_rust_database_is_no_db_connected(self, monkeypatch):
+        monkeypatch.setattr(rust_database, "repository", lambda kind: None)
+
+        with pytest.raises(rust_database.NoDatabaseConnected):
+            await SpendLogsRepository(MagicMock()).window_spend(
+                SpendLogOwner.KEY, "owner-1", datetime(2026, 8, 1, tzinfo=timezone.utc)
+            )

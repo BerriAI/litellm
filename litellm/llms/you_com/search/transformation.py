@@ -5,10 +5,13 @@ You.com API Reference: https://you.com/docs/api-reference/search/v1-search
 OpenAPI spec:          https://you.com/specs/openapi_search_v1.yaml
 """
 
+from collections.abc import Mapping, Sequence
 from typing import Final, TypedDict
 
 import httpx
+from pydantic import TypeAdapter
 
+from litellm.litellm_core_utils.core_helpers import decoded_json_object, iter_items, subscript
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.search.transformation import (
@@ -17,6 +20,8 @@ from litellm.llms.base_llm.search.transformation import (
     SearchResult,
 )
 from litellm.secret_managers.main import get_secret_str
+
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class _YouComSearchRequestRequired(TypedDict):
@@ -56,7 +61,7 @@ class YouComSearchConfig(BaseSearchConfig):
         headers: dict,
         api_key: str | None = None,
         api_base: str | None = None,
-        **kwargs,
+        **kwargs: object,
     ) -> dict:
         """
         Set headers for the You.com Search API.
@@ -85,9 +90,9 @@ class YouComSearchConfig(BaseSearchConfig):
     def get_complete_url(
         self,
         api_base: str | None,
-        optional_params: dict,
-        data: dict | list[dict] | None = None,
-        **kwargs,
+        optional_params: Mapping[str, object],
+        data: Mapping[str, object] | Sequence[Mapping[str, object]] | None = None,
+        **kwargs: object,
     ) -> str:
         """
         Pick the endpoint based on whether an API key is configured.
@@ -118,8 +123,8 @@ class YouComSearchConfig(BaseSearchConfig):
         self,
         query: str | list[str],
         optional_params: dict,
-        **kwargs,
-    ) -> dict:
+        **kwargs: object,
+    ) -> dict[str, object]:
         """
         Transform Search request to You.com API format.
 
@@ -158,7 +163,7 @@ class YouComSearchConfig(BaseSearchConfig):
         self,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
-        **kwargs,
+        **kwargs: object,
     ) -> SearchResponse:
         """
         Transform You.com API response to LiteLLM unified SearchResponse format.
@@ -169,23 +174,26 @@ class YouComSearchConfig(BaseSearchConfig):
         - snippets[0] → SearchResult.snippet (falls back to `description`)
         - page_age    → SearchResult.date
         """
-        response_json: Final = raw_response.json()
-        raw_results: Final = response_json.get("results") or {}
+        response_json: Final = decoded_json_object(_DECODED_JSON.validate_python(raw_response.json()))
+        raw_results: Final = decoded_json_object(response_json.get("results") or {})
 
-        web_results: Final = raw_results.get("web") or []
-        news_results: Final = raw_results.get("news") or []
+        web_results: Final[object] = raw_results.get("web") or []
+        news_results: Final[object] = raw_results.get("news") or []
 
         results: Final[list[SearchResult]] = []
-        for item in list(web_results) + list(news_results):
+        for entry in list(iter_items(web_results)) + list(iter_items(news_results)):
+            item = decoded_json_object(entry)
             snippets = item.get("snippets") or []
-            snippet = snippets[0] if snippets else item.get("description", "")
+            snippet = subscript(snippets, 0) if snippets else item.get("description", "")
             results.append(
-                SearchResult(
-                    title=item.get("title", ""),
-                    url=item.get("url", ""),
-                    snippet=snippet,
-                    date=item.get("page_age"),
-                    last_updated=None,
+                SearchResult.model_validate(
+                    {
+                        "title": item.get("title", ""),
+                        "url": item.get("url", ""),
+                        "snippet": snippet,
+                        "date": item.get("page_age"),
+                        "last_updated": None,
+                    }
                 )
             )
 

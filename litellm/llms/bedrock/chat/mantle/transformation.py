@@ -11,16 +11,17 @@ from collections.abc import AsyncIterator, Iterator, Mapping
 from typing import TYPE_CHECKING, Any, Final
 
 from litellm.litellm_core_utils.prompt_templates.image_handling import async_inline_remote_media
-from litellm.llms.anthropic.chat.transformation import JsonModeRequest
-from litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude3_transformation import (
+from litellm.llms.anthropic.chat.transformation import AnthropicConfig, JsonModeRequest
+from litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude_transformation import (
     AmazonAnthropicClaudeConfig,
 )
-from litellm.llms.bedrock.common_utils import build_mantle_messages_url
+from litellm.llms.bedrock.common_utils import bedrock_chat_opts_into_native_structured_output, build_mantle_messages_url
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponse
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
+    from litellm.llms.anthropic.chat.handler import ModelResponseIterator
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
@@ -52,6 +53,16 @@ class AmazonMantleConfig(AmazonAnthropicClaudeConfig):
             aws_bedrock_runtime_endpoint=optional_params.get("aws_bedrock_runtime_endpoint"),
             region=region,
         )
+
+    def chat_uses_native_structured_output(
+        self, model: str, request_params: Mapping[str, object], model_info: Mapping[str, object] | None
+    ) -> bool:
+        return bedrock_chat_opts_into_native_structured_output(
+            model, self.will_think(model, "bedrock", request_params), model_info=model_info
+        )
+
+    def _default_max_tokens_models(self, model: str, litellm_params: Mapping[str, object]) -> tuple[str, ...]:
+        return (f"bedrock_mantle/{model}", *super()._default_max_tokens_models(model, litellm_params))
 
     def validate_environment(
         self,
@@ -120,9 +131,22 @@ class AmazonMantleConfig(AmazonAnthropicClaudeConfig):
             headers=headers,
         )
 
+    def transform_extra_body(
+        self,
+        extra_body: Mapping[str, object],
+        request: Mapping[str, object],
+        model: str,
+        litellm_params: Mapping[str, object],
+    ) -> Mapping[str, object]:
+        return AnthropicConfig.transform_extra_body(
+            self, extra_body=extra_body, request=request, model=model, litellm_params=litellm_params
+        )
+
     @staticmethod
-    def _restore_mantle_body_fields(request: dict, model_id: str, optional_params: dict) -> dict:
-        stream_fields: Final[dict] = {"stream": True} if optional_params.get("stream") is True else {}
+    def _restore_mantle_body_fields(
+        request: Mapping[str, object], model_id: str, optional_params: Mapping[str, object]
+    ) -> dict[str, object]:
+        stream_fields: Final[dict[str, bool]] = {"stream": True} if optional_params.get("stream") is True else {}
         return {**request, "model": model_id, **stream_fields}
 
     @property
@@ -134,7 +158,7 @@ class AmazonMantleConfig(AmazonAnthropicClaudeConfig):
         streaming_response: Iterator[str] | AsyncIterator[str] | ModelResponse,
         sync_stream: bool,
         json_mode: bool | None = False,
-    ) -> Any:
+    ) -> "ModelResponseIterator":
         return self.get_model_response_iterator_for_request(
             streaming_response=streaming_response, sync_stream=sync_stream, json_mode=json_mode, optional_params={}
         )
@@ -145,7 +169,8 @@ class AmazonMantleConfig(AmazonAnthropicClaudeConfig):
         sync_stream: bool,
         json_mode: bool | None,
         optional_params: Mapping[str, object],
-    ) -> object:
+        logging_obj: LiteLLMLoggingObj | None = None,
+    ) -> "ModelResponseIterator":
         from litellm.llms.anthropic.chat.handler import ModelResponseIterator
 
         return ModelResponseIterator(

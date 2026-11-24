@@ -1,10 +1,13 @@
 import json
 import time
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence, Sized
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
+from pydantic import TypeAdapter
+from typing_extensions import TypedDict
 
+from litellm.litellm_core_utils.core_helpers import sum_of
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     convert_content_list_to_str,
 )
@@ -21,6 +24,19 @@ if TYPE_CHECKING:
     LoggingClass = LiteLLMLoggingObj
 else:
     LoggingClass = Any
+
+
+_DECODED_JSON: Final = TypeAdapter(object)
+
+
+class _KeywordFields(TypedDict, total=False, extra_items=object):
+    pass
+
+
+def _json_len(value: object) -> int:
+    if isinstance(value, Sized):
+        return len(value)
+    raise TypeError(f"object of type '{type(value).__name__}' has no len()")
 
 
 class NLPCloudConfig(BaseConfig):
@@ -72,7 +88,7 @@ class NLPCloudConfig(BaseConfig):
         end_sequence: str | None = None,
         remove_end_sequence: bool | None = None,
         remove_input: bool | None = None,
-        bad_words: list | None = None,
+        bad_words: Sequence[object] | None = None,
         temperature: float | None = None,
         top_p: float | None = None,
         top_k: int | None = None,
@@ -94,11 +110,11 @@ class NLPCloudConfig(BaseConfig):
         headers: dict,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, str]:
         headers = {
             "accept": "application/json",
             "content-type": "application/json",
@@ -107,7 +123,7 @@ class NLPCloudConfig(BaseConfig):
             headers["Authorization"] = f"Token {api_key}"
         return headers
 
-    def get_supported_openai_params(self, model: str) -> list:
+    def get_supported_openai_params(self, model: str) -> list[str]:
         return [
             "max_tokens",
             "stream",
@@ -121,7 +137,7 @@ class NLPCloudConfig(BaseConfig):
 
     def map_openai_params(
         self,
-        non_default_params: dict,
+        non_default_params: Mapping[str, object],
         optional_params: dict,
         model: str,
         drop_params: bool,
@@ -152,10 +168,10 @@ class NLPCloudConfig(BaseConfig):
         self,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         headers: dict,
-    ) -> dict:
+    ) -> dict[str, object]:
         text: Final = " ".join(convert_content_list_to_str(message) for message in messages)
 
         data: Final = {
@@ -171,10 +187,10 @@ class NLPCloudConfig(BaseConfig):
         raw_response: httpx.Response,
         model_response: ModelResponse,
         logging_obj: LoggingClass,
-        request_data: dict,
+        request_data: Mapping[str, object],
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
@@ -199,7 +215,7 @@ class NLPCloudConfig(BaseConfig):
             )
         else:
             try:
-                if len(completion_response["generated_text"]) > 0:
+                if _json_len(_DECODED_JSON.validate_python(completion_response["generated_text"])) > 0:
                     model_response.choices[0].message.content = completion_response["generated_text"]
             except Exception:
                 raise NLPCloudError(
@@ -208,15 +224,17 @@ class NLPCloudConfig(BaseConfig):
                 )
 
         ## CALCULATING USAGE - baseten charges on time, not tokens - have some mapping of cost here.
-        prompt_tokens: Final = completion_response["nb_input_tokens"]
-        completion_tokens: Final = completion_response["nb_generated_tokens"]
+        prompt_tokens: Final = _DECODED_JSON.validate_python(completion_response["nb_input_tokens"])
+        completion_tokens: Final = _DECODED_JSON.validate_python(completion_response["nb_generated_tokens"])
 
         model_response.created = int(time.time())
         model_response.model = model
         usage: Final = Usage(
-            prompt_tokens=prompt_tokens,
-            completion_tokens=completion_tokens,
-            total_tokens=prompt_tokens + completion_tokens,
+            **_KeywordFields(
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+                total_tokens=sum_of(prompt_tokens, completion_tokens),
+            )
         )
         setattr(model_response, "usage", usage)
         return model_response

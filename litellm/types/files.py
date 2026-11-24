@@ -1,7 +1,7 @@
 from collections.abc import Mapping
 from enum import Enum
 from types import MappingProxyType
-from typing import Any, Final, Literal
+from typing import Final, Literal
 
 from typing_extensions import Required, TypedDict
 
@@ -29,6 +29,7 @@ class FileType(Enum):
     JSON = "JSON"
     M4A = "M4A"
     M4V = "M4V"
+    MD = "MD"
     MOV = "MOV"
     MP3 = "MP3"
     MP4 = "MP4"
@@ -75,6 +76,7 @@ FILE_EXTENSIONS: Final[Mapping[FileType, list[str]]] = MappingProxyType(
         FileType.JSON: ["json"],
         FileType.M4A: ["m4a"],
         FileType.M4V: ["m4v"],
+        FileType.MD: ["md", "markdown"],
         FileType.MOV: ["mov"],
         FileType.MP3: ["mp3"],
         FileType.MP4: ["mp4"],
@@ -122,6 +124,7 @@ FILE_MIME_TYPES: Final[Mapping[FileType, str]] = MappingProxyType(
         FileType.JSON: "application/json",
         FileType.M4A: "audio/x-m4a",
         FileType.M4V: "video/x-m4v",
+        FileType.MD: "text/markdown",
         FileType.MOV: "video/quicktime",
         FileType.MP3: "audio/mpeg",
         FileType.MP4: "video/mp4",
@@ -197,7 +200,7 @@ IMAGE_FILE_TYPES: Final = {
 }
 
 
-def is_image_file_type(file_type):
+def is_image_file_type(file_type: object):
     return file_type in IMAGE_FILE_TYPES
 
 
@@ -216,7 +219,7 @@ VIDEO_FILE_TYPES: Final = {
 }
 
 
-def is_video_file_type(file_type):
+def is_video_file_type(file_type: object):
     return file_type in VIDEO_FILE_TYPES
 
 
@@ -233,15 +236,15 @@ AUDIO_FILE_TYPES: Final = {
 }
 
 
-def is_audio_file_type(file_type):
+def is_audio_file_type(file_type: object):
     return file_type in AUDIO_FILE_TYPES
 
 
 # Text
-TEXT_FILE_TYPES: Final = {FileType.CSV, FileType.HTML, FileType.RTF, FileType.TXT}
+TEXT_FILE_TYPES: Final = {FileType.CSV, FileType.HTML, FileType.MD, FileType.RTF, FileType.TXT}
 
 
-def is_text_file_type(file_type):
+def is_text_file_type(file_type: object):
     return file_type in TEXT_FILE_TYPES
 
 
@@ -306,7 +309,7 @@ class TwoStepFileUploadRequest(TypedDict):
     method: Required[str]
     url: Required[str]
     headers: Required[dict[str, str]]
-    data: Required[str | bytes | dict[str, Any]]
+    data: Required[str | bytes | dict[str, object]]
 
 
 class TwoStepFileUploadConfig(TypedDict, total=False):
@@ -335,9 +338,9 @@ class StreamingMediaUploadConfig(TypedDict, total=False):
     round-trips, so a multi-GB upload finishes in one continuous transfer instead
     of hundreds of sequential PUTs that overrun client/LB timeouts.
 
-    ``body_stream`` is a ``BaseFileUploadStream``; it is typed ``Any`` here to
+    ``body_stream`` is a ``BaseFileUploadStream``; it is typed ``object`` here to
     avoid importing the llms layer into types.
     """
 
-    body_stream: Required[Any]
+    body_stream: Required[object]
     content_type: str

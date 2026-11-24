@@ -1,12 +1,12 @@
 import reprlib
-from collections.abc import Mapping, MutableMapping
+from collections.abc import Mapping
 from dataclasses import dataclass, fields
 from types import MappingProxyType
 from typing import Final, cast
 
 from pydantic import TypeAdapter, ValidationError
 
-from litellm.constants import CONTROL_OPTIONS_KEY
+from litellm.constants import CONTROL_OPTIONS_KEY, SESSION_ID_FROM_TRACE_ID_PARAM_KEY
 from litellm.litellm_core_utils.core_helpers import normalize_drop_params
 from litellm.llms.openai.data_residency import infer_openai_data_residency
 from litellm.types.litellm_params import MAX_CONTROL_INT_DIGITS, ControlOptions
@@ -33,6 +33,10 @@ AWS_CREDENTIAL_KWARGS_KEYS: Final = frozenset(
 )
 
 PROVIDER_AFFINITY_HEADER_KWARG_KEY: Final = "provider_affinity_header"
+AGENTIC_LOOP_TOOL_CHOICE_KEY: Final = "_agentic_loop_tool_choice"
+AGENTIC_LOOP_CONTROL_KWARGS_KEYS: Final = frozenset(
+    {"_agentic_loop_depth", "_agentic_loop_fingerprints", "max_agentic_loops", AGENTIC_LOOP_TOOL_CHOICE_KEY}
+)
 OAUTH_TOKEN_EXCHANGE_KWARGS_KEYS: Final = frozenset(
     {
         "token_exchange_endpoint",
@@ -58,6 +62,10 @@ OPTIONAL_KWARGS_KEYS: Final = (
             "client_side_timeout",
             "gcs_bucket_name",
             "bucket_name",
+            "s3_bucket_name",
+            "s3_output_bucket_name",
+            "stored_s3_bucket_name",
+            "allow_legacy_cloud_file_ids",
             "s3_endpoint_url",
             "s3_region_name",
             "s3_access_key_id",
@@ -75,12 +83,21 @@ OPTIONAL_KWARGS_KEYS: Final = (
             "rpm",
             "itpm",
             "otpm",
+            "tpd",
+            "rpd",
+            "daily_reset_time",
             "use_xai_oauth",
+            "chatgpt_auth_file",
             "github_copilot_auth_type",
             "github_copilot_host",
+            "github_copilot_app_id",
+            "github_copilot_app_installation_id",
+            "github_copilot_app_private_key_ref",
             "github_copilot_user_session",
             "fireworks_forward_user_id",
+            "thought_signature_in_tool_call_id",
             "responses_api_version",
+            "allowed_openai_params",
             PROVIDER_AFFINITY_HEADER_KWARG_KEY,
         }
     )
@@ -88,16 +105,24 @@ OPTIONAL_KWARGS_KEYS: Final = (
     | ANTHROPIC_WIF_KWARGS_KEYS
     | OPENAI_WIF_KWARGS_KEYS
     | OAUTH_TOKEN_EXCHANGE_KWARGS_KEYS
+    | AGENTIC_LOOP_CONTROL_KWARGS_KEYS
     | frozenset(CustomPricingLiteLLMParams.model_fields)
 )
 
 # Backward-compatible alias for existing imports/tests.
 _OPTIONAL_KWARGS_KEYS: Final = OPTIONAL_KWARGS_KEYS
 
+SUPPLEMENTAL_KWARGS_KEYS: Final = OPTIONAL_KWARGS_KEYS | {"provider_specific_header", "extra_headers"}
+
 _CONTROL_OPTIONS: Final = TypeAdapter(ControlOptions)
 _CONTROL_OPTION_NAMES: Final = tuple(field.name for field in fields(ControlOptions))
 _MAX_SHOWN_INT_BITS: Final = 64
-_EXPECTED: Final = f"expected a positive integer of at most {MAX_CONTROL_INT_DIGITS} digits"
+_EXPECTED: Final = MappingProxyType(
+    {
+        "stream_chunk_size": f"expected a positive integer of at most {MAX_CONTROL_INT_DIGITS} digits",
+        "fake_stream": "expected true or false",
+    }
+)
 
 
 class _BoundedRepr(reprlib.Repr):
@@ -123,8 +148,17 @@ def parse_control_options(kwargs: Mapping[str, object]) -> ControlOptions | Inva
     except ValidationError as e:
         param: Final = str(e.errors(include_url=False)[0]["loc"][0])
         return InvalidControlOption(
-            param=param, message=f"Invalid {param}={_BOUNDED_REPR.repr(given[param])}: {_EXPECTED}"
+            param=param, message=f"Invalid {param}={_BOUNDED_REPR.repr(given[param])}: {_EXPECTED[param]}"
         )
+
+
+def valid_control_options(kwargs: Mapping[str, object]) -> ControlOptions:
+    valid: Final = {
+        name: kwargs[name]
+        for name in _CONTROL_OPTION_NAMES
+        if name in kwargs and isinstance(parse_control_options({name: kwargs[name]}), ControlOptions)
+    }
+    return _CONTROL_OPTIONS.validate_python(valid)
 
 
 def stored_control_options(litellm_params: Mapping[str, object]) -> ControlOptions:
@@ -157,46 +191,46 @@ _get_base_model_from_litellm_call_metadata = get_base_model_from_litellm_call_me
 
 def get_litellm_params(
     api_key: str | None = None,
-    force_timeout=600,
-    azure=False,
-    logger_fn=None,
-    verbose=False,
-    hugging_face=False,
-    replicate=False,
-    together_ai=False,
+    force_timeout: object = 600,
+    azure: object = False,
+    logger_fn: object = None,
+    verbose: object = False,
+    hugging_face: object = False,
+    replicate: object = False,
+    together_ai: object = False,
     custom_llm_provider: str | None = None,
     api_base: str | None = None,
-    litellm_call_id=None,
-    model_alias_map=None,
-    completion_call_id=None,
+    litellm_call_id: object = None,
+    model_alias_map: object = None,
+    completion_call_id: object = None,
     metadata: dict | None = None,
-    model_info=None,
-    proxy_server_request=None,
-    acompletion=None,
-    aembedding=None,
-    allm_passthrough_route=None,
-    preset_cache_key=None,
-    no_log=None,
+    model_info: object = None,
+    proxy_server_request: object = None,
+    acompletion: object = None,
+    aembedding: object = None,
+    allm_passthrough_route: object = None,
+    preset_cache_key: object = None,
+    no_log: object = None,
     cost_per_second: float | None = None,
-    input_cost_per_second=None,
-    input_cost_per_token=None,
-    output_cost_per_token=None,
-    output_cost_per_second=None,
-    cost_per_query=None,
-    cooldown_time=None,
-    text_completion=None,
-    azure_ad_token_provider=None,
-    user_continue_message=None,
+    input_cost_per_second: object = None,
+    input_cost_per_token: object = None,
+    output_cost_per_token: object = None,
+    output_cost_per_second: object = None,
+    cost_per_query: object = None,
+    cooldown_time: object = None,
+    text_completion: object = None,
+    azure_ad_token_provider: object = None,
+    user_continue_message: object = None,
     base_model: str | None = None,
     litellm_trace_id: str | None = None,
     litellm_session_id: str | None = None,
     hf_model_name: str | None = None,
-    custom_prompt_dict: dict | None = None,
+    custom_prompt_dict: Mapping[str, object] | None = None,
     litellm_metadata: dict | None = None,
     disable_add_transform_inline_image_block: bool | None = None,
     drop_params: bool | str | None = None,
     prompt_id: str | None = None,
-    prompt_variables: dict | None = None,
+    prompt_variables: Mapping[str, object] | None = None,
     async_call: bool | None = None,
     ssl_verify: bool | None = None,
     merge_reasoning_content_in_choices: bool | None = None,
@@ -204,13 +238,16 @@ def get_litellm_params(
     api_version: str | None = None,
     max_retries: int | None = None,
     litellm_request_debug: bool | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> dict:
     _litellm_metadata_dict: Final = litellm_metadata if isinstance(litellm_metadata, dict) else None
     resolved_metadata: Final = _litellm_metadata_dict.copy() if not metadata and _litellm_metadata_dict else metadata
 
     # Derive litellm_session_id / litellm_trace_id from metadata when not provided (call chaining)
     _meta: Final = resolved_metadata or {}
+    session_id_from_trace_id: Final = (
+        litellm_session_id is None and not _meta.get("session_id") and bool(_meta.get("trace_id"))
+    )
     if litellm_session_id is None:
         litellm_session_id = _meta.get("session_id") or _meta.get("trace_id")
     if litellm_trace_id is None:
@@ -253,6 +290,7 @@ def get_litellm_params(
         or (get_base_model_from_litellm_call_metadata(metadata=metadata) if metadata else None),
         "litellm_trace_id": litellm_trace_id,
         "litellm_session_id": litellm_session_id,
+        **({SESSION_ID_FROM_TRACE_ID_PARAM_KEY: True} if session_id_from_trace_id else {}),
         "hf_model_name": hf_model_name,
         "custom_prompt_dict": custom_prompt_dict,
         "litellm_metadata": litellm_metadata,
@@ -276,19 +314,3 @@ def get_litellm_params(
                 litellm_params[key] = kwargs[key]
 
     return litellm_params
-
-
-def add_trusted_model_credentials_to_litellm_params(
-    litellm_params_dict: MutableMapping[str, object], kwargs: Mapping[str, object]
-) -> None:
-    """
-    Carry the immutable server-side credential snapshot into litellm_params.
-
-    get_litellm_params has a fixed signature, so callers that need the snapshot to
-    survive into the logging object and the downstream file read have to re-add it. Only
-    a MappingProxyType is accepted, since providers resolve trusted configuration such
-    as a Bedrock file bucket from it and must not read a request-supplied mapping.
-    """
-    trusted_model_credentials: Final = kwargs.get("_litellm_internal_model_credentials")
-    if isinstance(trusted_model_credentials, MappingProxyType):
-        litellm_params_dict["_litellm_internal_model_credentials"] = trusted_model_credentials

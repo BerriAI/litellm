@@ -9,6 +9,7 @@ from fastapi import HTTPException
 from litellm.constants import UI_SESSION_TOKEN_TEAM_ID
 from litellm.models.verification_token import LiteLLM_VerificationToken
 from litellm.proxy._types import (
+    LiteLLM_BudgetTable,
     LiteLLM_TeamTableCachedObj,
     LitellmUserRoles,
     Member,
@@ -28,6 +29,7 @@ from litellm.proxy.management_endpoints.key_budget_change import (
 )
 from litellm.proxy.management_endpoints.key_management_endpoints import _validate_update_key_data
 from litellm.types.proxy.management_endpoints.ui_sso import LiteLLM_UpperboundKeyGenerateParams
+from tests.unit.proxy.rust_auth_stores import FakeTeamStore, RustAuthStores, install_rust_auth_stores
 
 _OWNER: Final = "owner-1"
 _TEAM_ADMIN: Final = "team-admin"
@@ -45,6 +47,7 @@ def _key(
     max_budget: float | None = None,
     budget_limits: Sequence[Mapping[str, object]] | None = None,
     budget_id: str | None = None,
+    budget_duration: str | None = None,
 ) -> LiteLLM_VerificationToken:
     return LiteLLM_VerificationToken(
         token="hashed-owner-key",
@@ -54,6 +57,7 @@ def _key(
         max_budget=max_budget,
         budget_limits=None if budget_limits is None else [dict(window) for window in budget_limits],
         budget_id=budget_id,
+        budget_duration=budget_duration,
         metadata={},
     )
 
@@ -127,6 +131,56 @@ def _window(duration: str, cap: float) -> Mapping[str, object]:
         (UpdateKeyRequest(key="sk-1", spend=0.0), _key(), KeyBudgetAdminOnly()),
         (UpdateKeyRequest(key="sk-1", soft_budget=1.0), _key(), KeyBudgetAdminOnly()),
         (UpdateKeyRequest(key="sk-1", soft_budget=None, max_budget=5.0), _key(max_budget=10.0), KeyBudgetAdminOnly()),
+        (
+            UpdateKeyRequest(key="sk-1", budget_duration="1s"),
+            _key(max_budget=10.0, budget_duration="30d"),
+            KeyBudgetLoosened(),
+        ),
+        (
+            UpdateKeyRequest(key="sk-1", budget_duration="60d"),
+            _key(max_budget=10.0, budget_duration="30d"),
+            KeyBudgetLoosened(),
+        ),
+        (UpdateKeyRequest(key="sk-1", budget_duration="1d"), _key(max_budget=10.0), KeyBudgetLoosened()),
+        (
+            UpdateKeyRequest(key="sk-1", budget_duration=None),
+            _key(max_budget=10.0, budget_duration="30d"),
+            KeyBudgetTightened(),
+        ),
+        (
+            UpdateKeyRequest(key="sk-1", budget_duration="30d"),
+            _key(max_budget=10.0, budget_duration="30d"),
+            KeyBudgetUnchanged(),
+        ),
+        (
+            UpdateKeyRequest(key="sk-1", budget_duration="30d"),
+            _key(max_budget=10.0, budget_duration="Monthly"),
+            KeyBudgetUnchanged(),
+        ),
+        (UpdateKeyRequest(key="sk-1", budget_duration="1s"), _key(budget_duration="30d"), KeyBudgetUnchanged()),
+        (UpdateKeyRequest(key="sk-1", max_budget=5.0, budget_duration="1s"), _key(), KeyBudgetTightened()),
+        (
+            UpdateKeyRequest(key="sk-1", budget_duration="1s"),
+            _key(budget_id="shared-tier-10", budget_duration="30d"),
+            KeyBudgetAdminOnly(),
+        ),
+        (
+            UpdateKeyRequest(key="sk-1", budget_duration=None),
+            _key(budget_id="shared-tier-10", budget_duration="30d"),
+            KeyBudgetAdminOnly(),
+        ),
+        (
+            UpdateKeyRequest(key="sk-1", budget_id="shared-tier-100"),
+            _key(budget_id="shared-tier-10"),
+            KeyBudgetAdminOnly(),
+        ),
+        (UpdateKeyRequest(key="sk-1", budget_id=None), _key(budget_id="shared-tier-10"), KeyBudgetAdminOnly()),
+        (UpdateKeyRequest(key="sk-1", budget_id="shared-tier-10"), _key(), KeyBudgetAdminOnly()),
+        (
+            UpdateKeyRequest(key="sk-1", budget_id="shared-tier-10"),
+            _key(budget_id="shared-tier-10"),
+            KeyBudgetUnchanged(),
+        ),
     ],
 )
 def test_classify_key_budget_change(
@@ -188,8 +242,12 @@ async def _update(
     )
     prisma: Final = MagicMock()
     prisma.db.litellm_verificationtoken.find_unique = AsyncMock(return_value=existing)
-    prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=team)
-    prisma.writer_db.litellm_teamtable.find_unique = AsyncMock(return_value=team)
+    install_rust_auth_stores(
+        monkeypatch, RustAuthStores(team=FakeTeamStore(rows={} if team is None else {team.team_id: team}))
+    )
+    prisma.writer_db.litellm_budgettable.find_unique = AsyncMock(
+        return_value=LiteLLM_BudgetTable(budget_id=data.budget_id)
+    )
     await _validate_update_key_data(
         data=data,
         existing_key_row=existing,
@@ -463,5 +521,62 @@ async def test_owner_cannot_clear_max_budget_by_default(monkeypatch: pytest.Monk
             policy=policy,
             data=UpdateKeyRequest(key="sk-1", max_budget=None),
             existing=_key(max_budget=10.0),
+        )
+    assert exc.value.status_code == 403
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("policy", "data", "existing"),
+    [
+        (None, UpdateKeyRequest(key="sk-1", budget_duration="1s"), _key(max_budget=10.0, budget_duration="30d")),
+        (
+            "lower_only",
+            UpdateKeyRequest(key="sk-1", budget_duration="1s"),
+            _key(max_budget=10.0, budget_duration="30d"),
+        ),
+        ("ceiling", UpdateKeyRequest(key="sk-1", budget_id="shared-tier-100"), _key(budget_id="shared-tier-10")),
+        ("ceiling", UpdateKeyRequest(key="sk-1", budget_duration="1s"), _key(budget_id="shared-tier-10")),
+    ],
+)
+async def test_owner_cannot_restart_or_relink_a_key_budget_without_admin(
+    monkeypatch: pytest.MonkeyPatch, policy: str | None, data: UpdateKeyRequest, existing: LiteLLM_VerificationToken
+) -> None:
+    with pytest.raises(HTTPException) as exc:
+        await _update(monkeypatch, policy=policy, data=data, existing=existing)
+    assert exc.value.status_code == 403
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("policy", "data", "existing"),
+    [
+        (None, UpdateKeyRequest(key="sk-1", budget_duration="1d"), _key(budget_duration="30d")),
+        (None, UpdateKeyRequest(key="sk-1", budget_duration="24h"), _key(max_budget=10.0, budget_duration="daily")),
+        (
+            "lower_only",
+            UpdateKeyRequest(key="sk-1", budget_duration=None),
+            _key(max_budget=10.0, budget_duration="30d"),
+        ),
+        ("ceiling", UpdateKeyRequest(key="sk-1", budget_duration="1s"), _key(max_budget=10.0, budget_duration="30d")),
+    ],
+)
+async def test_owner_changes_budget_duration_when_it_cannot_restart_a_cap_or_policy_allows(
+    monkeypatch: pytest.MonkeyPatch, policy: str | None, data: UpdateKeyRequest, existing: LiteLLM_VerificationToken
+) -> None:
+    assert await _denial(monkeypatch, policy=policy, data=data, existing=existing) is None
+
+
+@pytest.mark.asyncio
+async def test_team_member_cannot_restart_a_team_key_budget_created_by_someone_else(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with pytest.raises(HTTPException) as exc:
+        await _update(
+            monkeypatch,
+            policy=None,
+            data=UpdateKeyRequest(key="sk-1", budget_duration="1s"),
+            existing=_key(created_by=_TEAM_ADMIN, team_id=_TEAM, max_budget=10.0, budget_duration="30d"),
+            team=_team(["/key/update"]),
         )
     assert exc.value.status_code == 403

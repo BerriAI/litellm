@@ -12,6 +12,7 @@ class DailyActivityTable(str, Enum):
     TAG = "litellm_dailytagspend"
     ORGANIZATION = "litellm_dailyorganizationspend"
     CUSTOMER = "litellm_dailyenduserspend"
+    CUSTOMER_MEMBER = "litellm_dailycustomermemberspend"
     AGENT = "litellm_dailyagentspend"
 
 
@@ -22,6 +23,7 @@ _ENTITY_FIELDS: Mapping[DailyActivityTable, frozenset[str]] = MappingProxyType(
         DailyActivityTable.TAG: frozenset(("tag",)),
         DailyActivityTable.ORGANIZATION: frozenset(("organization_id",)),
         DailyActivityTable.CUSTOMER: frozenset(("end_user_id",)),
+        DailyActivityTable.CUSTOMER_MEMBER: frozenset(("customer_org_id", "customer_team_id", "customer_member_id")),
         DailyActivityTable.AGENT: frozenset(("agent_id",)),
     }
 )
@@ -39,8 +41,13 @@ class DailyActivityScope:
     model: str | None
     timezone_offset_minutes: int | None
     include_current_utc_day: bool = False
+    team_ids: tuple[str, ...] | None = None
+    app_id: str | None = None
+    app_group_id: str | None = None
 
     def __post_init__(self) -> None:
+        if self.app_id is not None and self.table is not DailyActivityTable.CUSTOMER_MEMBER:
+            raise ValueError("App filtering is supported only on customer hierarchy activity")
         if self.entity_id_field not in _ENTITY_FIELDS[self.table]:
             raise ValueError(f"Invalid entity_id_field {self.entity_id_field!r} for {self.table.value}")
 
@@ -126,6 +133,8 @@ class ExportRow:
     failed_requests: int
     cache_read_input_tokens: int
     cache_creation_input_tokens: int
+    key_metadata: Mapping[str, object]
+    user_metadata: Mapping[str, object]
 
 
 @dataclass(frozen=True, slots=True)
@@ -138,11 +147,15 @@ class RollupMetricsRow:
     completion_tokens: int | None
     cache_read_input_tokens: int | None
     cache_creation_input_tokens: int | None
+    cache_cost: float | None = field(default=None, kw_only=True)
+    priced_cache_tokens: int | None = field(default=None, kw_only=True)
     compression_saved_tokens: int | None
     compression_savings_spend: float | None
     prompt_caching_savings_spend: float | None
     gateway_injected_caching_savings_spend: float | None
     autorouter_savings_spend: float | None
+    guardrail_spend: float | None = field(default=None, kw_only=True)
+    customer_margin_spend: float | None = field(default=None, kw_only=True)
     api_requests: int | None
     successful_requests: int | None
     failed_requests: int | None
@@ -166,6 +179,22 @@ class EntityRollupRow(RollupMetricsRow):
     entity_id: str | None
     api_key_rolled: int
     distinct_api_keys: int | None
+
+
+@dataclass(frozen=True, slots=True)
+class CustomerTeamRollupRow(RollupMetricsRow):
+    team_id: str
+    team_alias: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class GuardrailSpendRow:
+    date: str
+    guardrail_id: str
+    guardrail_name: str
+    api_key: str
+    spend: float
+    untracked_units: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -202,6 +231,8 @@ class DailyActivityRow(Protocol):
     prompt_caching_savings_spend: float
     gateway_injected_caching_savings_spend: float
     autorouter_savings_spend: float
+    guardrail_spend: float
+    customer_margin_spend: float
     spend: float
     api_requests: int
     successful_requests: int

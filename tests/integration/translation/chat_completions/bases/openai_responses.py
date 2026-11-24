@@ -1,6 +1,7 @@
 from typing import Final
 from unittest.mock import ANY
 
+from integration._support.responses_prompt import with_leading_system_message
 from integration.translation.case import TranslationTestCase
 from integration.translation.chat_completions.templates import CHAT_COMPLETIONS_REQUEST, CHAT_COMPLETIONS_RESPONSE
 from integration.translation.templates.openai import (
@@ -22,13 +23,15 @@ GPT_5_6_SOL_TEST_CASE: Final = TranslationTestCase(
     },
     expected_provider_endpoint="/responses",
     expected_provider_headers={"authorization": "Bearer synthetic-openai-key", "content-type": "application/json"},
-    expected_provider_request={
-        "model": "gpt-5.6-sol",
-        "input": [{"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Say hello."}]}],
-        "instructions": "You are a terse assistant.",
-        "max_output_tokens": 64,
-        "stream": False,
-    },
+    expected_provider_request=with_leading_system_message(
+        {
+            "model": "gpt-5.6-sol",
+            "input": [{"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Say hello."}]}],
+            "instructions": "You are a terse assistant.",
+            "max_output_tokens": 64,
+            "stream": False,
+        }
+    ),
     mock_provider_response={
         "id": "resp_0c11adb5b3fcca34006ac3f043a44087d0ba76b3b869764314",
         "object": "response",
@@ -97,7 +100,17 @@ GPT_5_6_SOL_TEST_CASE: Final = TranslationTestCase(
         "created": ANY,
         "model": "openai/responses/gpt-5.6-sol",
         "object": "chat.completion",
-        "choices": [{"finish_reason": "stop", "index": 0, "message": {"content": "Hello!", "role": "assistant"}}],
+        "choices": [
+            {
+                "finish_reason": "stop",
+                "index": 0,
+                "message": {
+                    "content": "Hello!",
+                    "role": "assistant",
+                    "provider_specific_fields": {"phase": "final_answer", "openai_responses_replay": ANY},
+                },
+            }
+        ],
         "usage": {
             "completion_tokens": 6,
             "prompt_tokens": 19,
@@ -252,6 +265,7 @@ GPT_6_1_SOL_TEST_CASE: Final = TranslationTestCase(
                             "summary": [],
                         }
                     ],
+                    "provider_specific_fields": {"phase": "commentary", "openai_responses_replay": ANY},
                 },
             }
         ],

@@ -10,13 +10,12 @@ from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from itertools import chain
 from types import MappingProxyType
-from typing import Final, Protocol, TypeAlias
+from typing import TYPE_CHECKING, Final, Protocol, TypeAlias
 
 from fastapi import HTTPException
 from pydantic import TypeAdapter, ValidationError
 
 from litellm._logging import verbose_logger
-from litellm.proxy._experimental.mcp_server.ui_session_utils import build_effective_auth_contexts
 from litellm.proxy._types import (
     UI_TEAM_ID,
     LiteLLM_ObjectPermissionTable,
@@ -30,8 +29,12 @@ from litellm.proxy.agent_endpoints.auth.agent_access_groups import (
 )
 from litellm.proxy.agent_endpoints.auth.agent_caller import agent_caller_auth
 from litellm.proxy.agent_endpoints.auth.managed_authorization import managed_agent_policy
+from litellm.proxy.mcp_server.ui_session_utils import build_effective_auth_contexts
 from litellm.repositories.table_repositories import AgentsRepository
 from litellm.types.agents import AgentResponse
+
+if TYPE_CHECKING:
+    from litellm.proxy.utils import PrismaClient
 
 
 @dataclass(frozen=True, slots=True)
@@ -244,7 +247,7 @@ class AgentRequestHandler:
                     or user_api_key_auth is None
                 ):
                     return False
-                from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import MCPRequestHandler
+                from litellm.proxy.mcp_server.auth.user_api_key_auth_mcp import MCPRequestHandler
 
                 key_hash: Final = user_api_key_auth.api_key or user_api_key_auth.token
                 authority: Final = (
@@ -660,7 +663,7 @@ class AgentRequestHandler:
 
     @staticmethod
     async def _get_db_agent_ids_for_access_groups(
-        prisma_client, access_groups: Sequence[str], *, check_db_only: bool = False
+        prisma_client: "PrismaClient | None", access_groups: Sequence[str], *, check_db_only: bool = False
     ) -> set[str]:
         """
         Helper to get agent_ids from DB agents that match any of the given access groups.
@@ -836,7 +839,7 @@ async def _granted_agent_ids(
     accesses: Final = await asyncio.gather(
         *(resolve_access(auth_context) for auth_context in await effective_contexts(user_api_key_auth))
     )
-    return frozenset().union(*(_granted_ids(access) for access in accesses))
+    return frozenset[str]().union(*(_granted_ids(access) for access in accesses))
 
 
 async def accessible_agents(
@@ -905,7 +908,7 @@ async def _managed_actor_agent_access(auth: UserAPIKeyAuth) -> AgentAccess:
 async def _verified_human_agent_sources(
     user_id: str | None, *, allowed_team_ids: frozenset[str] | None = None
 ) -> tuple[tuple[str | None, frozenset[str]], ...]:
-    from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import MCPRequestHandler
+    from litellm.proxy.mcp_server.auth.user_api_key_auth_mcp import MCPRequestHandler
 
     if user_id is None:
         return ()
@@ -919,7 +922,7 @@ async def verified_human_agent_grants(user_id: str | None, team_id: str | None =
     sources: Final = await _verified_human_agent_sources(
         user_id, allowed_team_ids=frozenset((team_id,)) if team_id else frozenset()
     )
-    return frozenset().union(*(grants for source, grants in sources if source is None or source == team_id))
+    return frozenset[str]().union(*(grants for source, grants in sources if source is None or source == team_id))
 
 
 async def resolve_delegated_agent_team(

@@ -54,7 +54,7 @@ class BaseVideoConfig(ABC):
         }
 
     @abstractmethod
-    def get_supported_openai_params(self, model: str) -> list:
+    def get_supported_openai_params(self, model: str) -> list[str]:
         pass
 
     @abstractmethod
@@ -81,7 +81,7 @@ class BaseVideoConfig(ABC):
         self,
         model: str,
         api_base: str | None,
-        litellm_params: dict,
+        litellm_params: dict[str, object],
     ) -> str:
         """
         OPTIONAL
@@ -108,7 +108,7 @@ class BaseVideoConfig(ABC):
         model: str,
         prompt: str,
         api_base: str,
-        video_create_optional_request_params: dict,
+        video_create_optional_request_params: dict[str, object],
         litellm_params: GenericLiteLLMParams,
         headers: dict,
     ) -> tuple[dict, RequestFiles, str]:
@@ -121,7 +121,7 @@ class BaseVideoConfig(ABC):
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
         custom_llm_provider: str | None = None,
-        request_data: dict | None = None,
+        request_data: dict[str, object] | None = None,
     ) -> VideoObject:
         pass
 
@@ -235,7 +235,7 @@ class BaseVideoConfig(ABC):
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
         custom_llm_provider: str | None = None,
-    ) -> dict[str, str]:
+    ) -> object:
         pass
 
     @abstractmethod
@@ -389,7 +389,7 @@ class BaseVideoConfig(ABC):
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
         custom_llm_provider: str | None = None,
-        request_data: dict | None = None,
+        request_data: dict[str, object] | None = None,
     ) -> VideoObject:
         raise NotImplementedError("video edit is not supported for this provider")
 

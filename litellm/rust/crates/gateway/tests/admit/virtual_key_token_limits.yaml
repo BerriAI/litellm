@@ -1,0 +1,47 @@
+# A key with a token limit reserves what the body asks for before the call. The native app estimates
+# text as the proxy does, and a body that carries media goes to Python, whose estimator prices it.
+config:
+  model_list:
+    - model_name: claude
+      litellm_params:
+        model: anthropic/claude-haiku-5-5
+        api_key: provider-key
+  general_settings:
+    master_key: gateway-key
+
+keys:
+  sk-tpm: []
+  sk-any: []
+
+tpm_limits:
+  sk-tpm: 100
+
+requests:
+  - name: text under a token limit
+    headers: {authorization: Bearer sk-tpm}
+    body: {model: claude, max_tokens: 16, messages: [{role: user, content: hi}]}
+    expect: rust
+
+  - name: an image under a token limit
+    headers: {authorization: Bearer sk-tpm}
+    body:
+      model: claude
+      max_tokens: 16
+      messages:
+        - role: user
+          content:
+            - {type: image, source: {type: base64, media_type: image/png, data: AA==}}
+    expect: python
+    reason: body
+    over: media_under_a_token_limit
+
+  - name: an image without a token limit
+    headers: {authorization: Bearer sk-any}
+    body:
+      model: claude
+      max_tokens: 16
+      messages:
+        - role: user
+          content:
+            - {type: image, source: {type: base64, media_type: image/png, data: AA==}}
+    expect: rust

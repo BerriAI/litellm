@@ -1,4 +1,3 @@
-import itertools
 import re
 from collections.abc import Collection, Iterable, Mapping
 from typing import Final, cast
@@ -7,13 +6,24 @@ from fastapi import HTTPException, Request, status
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import (
+    MODEL_LIST_ROUTES,
     UI_TEAM_ID,
     CommonProxyErrors,
     KeyManagementRoutes,
     LiteLLM_UserTable,
     LiteLLMRoutes,
     LitellmUserRoles,
+    ProxyErrorTypes,
+    ProxyException,
     UserAPIKeyAuth,
+)
+from litellm.rust_bridge._native import (
+    auth_allowed_routes_grant,
+    auth_first_denied_route,
+    auth_jwt_team_routes_grant,
+    auth_route_matches_denied,
+    auth_route_matches_prefix,
+    auth_route_matches_wildcard,
 )
 
 from .auth_checks_organization import (  # noqa: F401  # legacy module exports
@@ -70,6 +80,7 @@ _PROXY_ADMIN_VIEW_ONLY_BLOCKED_ROUTES: Final = frozenset(
 _PROXY_ADMIN_VIEW_ONLY_BLOCKED_KEY_SUFFIXES: Final = ("/regenerate", "/reset_spend")
 
 _LLM_API_ROUTE_GROUPS: Final = frozenset(("llm_api_routes", "llm_api_routes_without_mcp"))
+_EU_JEV_DECISION_ROUTE: Final = "/eu_jev/v1/systemone"
 _AUTH_ENFORCED_PASS_THROUGH_ROUTE_GROUPS: Final = frozenset(("openai_routes", *_LLM_API_ROUTE_GROUPS))
 
 # Writes that only touch the caller's own credential row (BYOK connections and
@@ -91,10 +102,11 @@ _SELF_SCOPED_CREDENTIAL_ROUTES: Final = (
 )
 
 
+_QUEUED_INFERENCE_ROUTES: Final = frozenset({"/queue/chat/completions"})
+
 _UNBILLED_ROUTES: Final[frozenset[str]] = frozenset(
     {
-        "/models",
-        "/v1/models",
+        *MODEL_LIST_ROUTES,
         "/utils/token_counter",
         "/utils/transform_request",
         "/responses/input_tokens",
@@ -106,16 +118,13 @@ _TOKEN_COUNTING_SEGMENTS: Final[frozenset[str]] = frozenset({"count_tokens", "co
 _TOKEN_COUNTING_ACTION: Final = "countTokens"
 
 
+def _allowed_passthrough_routes(metadata: Mapping[str, object] | None) -> object:
+    return (metadata or {}).get("allowed_passthrough_routes")
+
+
 class RouteChecks:
     @staticmethod
-    def should_call_route(
-        route: str,
-        valid_token: UserAPIKeyAuth,
-        request: Request | None = None,
-    ):
-        """
-        Check if management route is disabled and raise exception
-        """
+    def check_route_enabled(route: str) -> None:
         try:
             from litellm_enterprise.proxy.auth.route_checks import EnterpriseRouteChecks
 
@@ -125,6 +134,16 @@ class RouteChecks:
         except Exception:
             pass
 
+    @staticmethod
+    def should_call_route(
+        route: str,
+        valid_token: UserAPIKeyAuth,
+        request: Request | None = None,
+    ):
+        """
+        Check if management route is disabled and raise exception
+        """
+        RouteChecks.check_route_enabled(route)
         # Check if Virtual Key is allowed to call the route - Applies to all Roles
         RouteChecks.is_virtual_key_allowed_to_call_route(route=route, valid_token=valid_token, request=request)
         return True
@@ -138,6 +157,27 @@ class RouteChecks:
         """
         Raises Exception if Virtual Key is not allowed to call the route
         """
+        if route in LiteLLMRoutes.own_spend_log_routes.value and not RouteChecks._password_reset_required(valid_token):
+            return True
+        return RouteChecks.assert_key_allowed_routes_grant(route=route, valid_token=valid_token, request=request)
+
+    @staticmethod
+    def _password_reset_required(valid_token: UserAPIKeyAuth) -> bool:
+        return valid_token.metadata.get("password_reset_required") is True
+
+    @staticmethod
+    def key_allowed_routes_grant(route: str, valid_token: UserAPIKeyAuth) -> bool:
+        try:
+            return RouteChecks.assert_key_allowed_routes_grant(route=route, valid_token=valid_token)
+        except HTTPException:
+            return False
+
+    @staticmethod
+    def assert_key_allowed_routes_grant(
+        route: str,
+        valid_token: UserAPIKeyAuth,
+        request: Request | None = None,
+    ) -> bool:
 
         # Only check if valid_token.allowed_routes is set and is a list with at least one item
         if valid_token.allowed_routes is None:
@@ -160,7 +200,7 @@ class RouteChecks:
                 if allowed_route in LiteLLMRoutes._member_names_:
                     if RouteChecks.check_route_access(
                         route=route,
-                        allowed_routes=LiteLLMRoutes._member_map_[allowed_route].value,
+                        allowed_routes=LiteLLMRoutes[allowed_route].value,
                     ):
                         if (
                             allowed_route in _AUTH_ENFORCED_PASS_THROUGH_ROUTE_GROUPS
@@ -235,7 +275,7 @@ class RouteChecks:
         if denied_auth_enforced_pass_through_route:
             raise RouteChecks._auth_pass_through_denied_exception(route=route)
 
-        if valid_token.metadata.get("password_reset_required") is True:
+        if RouteChecks._password_reset_required(valid_token):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail=(
@@ -284,7 +324,7 @@ class RouteChecks:
             route (str): The route being accessed
 
         Raises:
-            Exception: With user role and masked user_id information
+            ProxyException: 401 with user role and masked user_id information
         """
         user_role = "unknown"
         user_id = "unknown"
@@ -293,8 +333,14 @@ class RouteChecks:
             user_id = user_obj.user_id or "unknown"
 
         masked_user_id: Final = RouteChecks._mask_user_id(user_id)
-        raise Exception(
-            f"Only proxy admin can be used to generate, delete, update info for new keys/users/teams. Route={route}. Your role={user_role}. Your user_id={masked_user_id}"
+        raise ProxyException(
+            message=(
+                "Authentication Error, Only proxy admin can be used to generate, delete, update info for new "
+                f"keys/users/teams. Route={route}. Your role={user_role}. Your user_id={masked_user_id}"
+            ),
+            type=ProxyErrorTypes.auth_error,
+            param=None,
+            code=status.HTTP_401_UNAUTHORIZED,
         )
 
     @staticmethod
@@ -428,9 +474,30 @@ class RouteChecks:
                 )
 
     @staticmethod
+    def is_allowed_on_proxy(route: str) -> bool:
+        from litellm.proxy.proxy_server import general_settings, premium_user
+
+        if "allowed_routes" not in general_settings:
+            return True
+        if premium_user is not True:
+            verbose_proxy_logger.error(
+                "Trying to set allowed_routes. This is an Enterprise feature. %s",
+                CommonProxyErrors.not_premium_user.value,
+            )
+        return route in general_settings["allowed_routes"]
+
+    @staticmethod
     def is_unbilled_route(route: str) -> bool:
-        resource, _, action = route.rsplit("/", 1)[-1].partition(":")
-        return route in _UNBILLED_ROUTES or resource in _TOKEN_COUNTING_SEGMENTS or action == _TOKEN_COUNTING_ACTION
+        segment: Final = route.rsplit("/", 1)[-1]
+        return (
+            route in _UNBILLED_ROUTES
+            or segment.partition(":")[0] in _TOKEN_COUNTING_SEGMENTS
+            or segment.endswith(f":{_TOKEN_COUNTING_ACTION}")
+        )
+
+    @staticmethod
+    def runs_inference_checks(route: str) -> bool:
+        return route in _QUEUED_INFERENCE_ROUTES or RouteChecks.is_llm_api_route(route=route)
 
     @staticmethod
     def is_llm_api_route(route: str) -> bool:
@@ -495,7 +562,19 @@ class RouteChecks:
         for _llm_passthrough_route in LiteLLMRoutes.mapped_pass_through_routes.value:
             if route == _llm_passthrough_route or route.startswith(_llm_passthrough_route + "/"):
                 return True
-        return False
+        return RouteChecks.is_builtin_eu_jev_decision_route(route=route)
+
+    @staticmethod
+    def is_builtin_eu_jev_decision_route(route: str) -> bool:
+        if route.rstrip("/") != _EU_JEV_DECISION_ROUTE:
+            return False
+        from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (  # noqa: PLC0415  # pass_through_endpoints imports the auth stack
+            InitPassThroughEndpointHelpers,
+        )
+
+        return not InitPassThroughEndpointHelpers.has_configured_route_ignoring_trailing_slash(
+            route=_EU_JEV_DECISION_ROUTE
+        )
 
     @staticmethod
     def _is_get_mcp_server_discovery_route(route: str, request: Request | None) -> bool:
@@ -579,7 +658,7 @@ class RouteChecks:
         if not isinstance(route, str):
             return False
 
-        def _placeholder_to_regex(match: re.Match) -> str:
+        def _placeholder_to_regex(match: re.Match[str]) -> str:
             placeholder: Final = match.group(0).strip("{}")
             if not placeholder.endswith(":path"):
                 return r"[^/]+"
@@ -587,16 +666,16 @@ class RouteChecks:
             # converter takes, slashes and colons alike, so an id spelled with
             # either (or both) still matches the template it was mounted under.
             #
-            # Unless the template puts a ":" literal of its own after the
-            # placeholder: the Google routes end in ":generateContent" and
-            # friends, and there the value has to stop before that suffix
-            # rather than swallow it and match a different verb.
+            # Before a ":" literal of the template's own (the Google routes end
+            # in ":generateContent" and friends) the value may also be empty,
+            # since those routes then take the model from the body. The "$"
+            # anchor below keeps that suffix from matching a different verb.
             #
             # "[\s\S]" rather than ".", because "." stops at a newline and the
             # path converter does not: a %0A anywhere in the value would leave
             # the route unmatched here while still reaching the handler, which
             # turns this gate into a bypass for the lists built on it.
-            return r"[^:]+" if ":" in match.string[match.end() :] else r"[\s\S]+"
+            return r"[\s\S]*" if ":" in match.string[match.end() :] else r"[\s\S]+"
 
         pattern = re.sub(r"\{[^}]+\}", _placeholder_to_regex, pattern)
         # Anchor the pattern to match the entire string
@@ -616,58 +695,13 @@ class RouteChecks:
 
     @staticmethod
     def route_matches_wildcard_pattern(route: str, pattern: str) -> bool:
-        """
-        Check if route matches the wildcard pattern
-
-        eg.
-
-        pattern: "/scim/v2/*"
-        route: "/scim/v2/Users"
-        - returns: True
-
-        pattern: "/scim/v2/*"
-        route: "/chat/completions"
-        - returns: False
-
-
-        pattern: "/scim/v2/*"
-        route: "/scim/v2/Users/123"
-        - returns: True
-
-        """
-        if pattern.endswith("*"):
-            # Get the prefix (everything before the wildcard)
-            prefix: Final = pattern[:-1]
-            return route.startswith(prefix)
-        else:
-            # If there's no wildcard, the pattern and route should match exactly
-            return route == pattern
+        """A trailing `*` matches by prefix, anything else exactly."""
+        return auth_route_matches_wildcard(route, pattern)
 
     @staticmethod
     def _route_matches_allowed_route(route: str, allowed_route: str) -> bool:
-        """
-        Check if route matches the allowed_route pattern.
-        Supports both exact match and prefix match.
-
-        Examples:
-        - allowed_route="/fake-openai-proxy-6", route="/fake-openai-proxy-6" -> True (exact match)
-        - allowed_route="/fake-openai-proxy-6", route="/fake-openai-proxy-6/v1/chat/completions" -> True (prefix match)
-        - allowed_route="/fake-openai-proxy-6", route="/fake-openai-proxy-600" -> False (not a valid prefix)
-
-        Args:
-            route: The actual route being accessed
-            allowed_route: The allowed route pattern
-
-        Returns:
-            bool: True if route matches (exact or prefix), False otherwise
-        """
-        # Exact match
-        if route == allowed_route:
-            return True
-        # Prefix match - ensure we add "/" to prevent false matches like /fake-openai-proxy-600
-        if route.startswith(allowed_route + "/"):
-            return True
-        return False
+        """The route itself or anything under it, never a sibling that only shares the prefix."""
+        return auth_route_matches_prefix(route, allowed_route)
 
     @staticmethod
     def check_route_access(route: str, allowed_routes: Collection[str]) -> bool:
@@ -770,12 +804,15 @@ class RouteChecks:
     @staticmethod
     def _route_matches_denied_route(route: str, denied_route: str) -> bool:
         """A `/` entry denies every route, since every route sits under the root."""
-        normalized_denied_route: Final = denied_route.rstrip("/") or "/"
-        return (
-            normalized_denied_route == "/"
-            or RouteChecks._route_matches_allowed_route(route=route, allowed_route=normalized_denied_route)
-            or RouteChecks.route_matches_wildcard_pattern(route=route, pattern=denied_route)
+        return auth_route_matches_denied(route, denied_route)
+
+    @staticmethod
+    def forwarded_pass_through_routes(route: str) -> tuple[str, ...]:
+        from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (  # noqa: PLC0415  # pass-through endpoints import this module
+            InitPassThroughEndpointHelpers,
         )
+
+        return InitPassThroughEndpointHelpers.forwarded_routes(route)
 
     @staticmethod
     def matching_denied_passthrough_route(
@@ -785,32 +822,10 @@ class RouteChecks:
         First ``denied_passthrough_routes`` entry across ``metadata_sources`` that matches ``route``.
         Unlike the allowlist (key list, else team list), every source's deny list applies.
         """
-        denied_routes: Final = tuple(
-            itertools.chain.from_iterable(
-                cast(  # cast-ok: management endpoints validate this metadata key as a list of route strings on write
-                    "list[str]", (metadata or {}).get("denied_passthrough_routes") or []
-                )
-                for metadata in metadata_sources
-            )
-        )
-        if not denied_routes:
+        denied_sources: Final = [(metadata or {}).get("denied_passthrough_routes") for metadata in metadata_sources]
+        if not any(denied_sources):
             return None
-        from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
-            InitPassThroughEndpointHelpers,
-        )
-
-        forwarded_routes: Final = InitPassThroughEndpointHelpers.forwarded_routes(route)
-        return next(
-            (
-                denied_route
-                for denied_route in denied_routes
-                if any(
-                    RouteChecks._route_matches_denied_route(route=candidate, denied_route=denied_route)
-                    for candidate in forwarded_routes
-                )
-            ),
-            None,
-        )
+        return auth_first_denied_route(list(RouteChecks.forwarded_pass_through_routes(route)), denied_sources)
 
     @staticmethod
     def passthrough_route_denied_exception(route: str, denied_route: str) -> HTTPException:
@@ -838,11 +853,7 @@ class RouteChecks:
         a named route group like ``openai_routes`` is only ever compared as a path, and an entry that names
         no path segment (``*``, ``/*``) is skipped.
         """
-        return any(
-            RouteChecks.route_matches_wildcard_pattern(route=route, pattern=allowed_route)
-            for allowed_route in team_allowed_routes
-            if allowed_route.rstrip("*").strip("/")
-        )
+        return auth_jwt_team_routes_grant(route, team_allowed_routes)
 
     @staticmethod
     def _jwt_team_allowed_routes(valid_token: UserAPIKeyAuth) -> Collection[str]:
@@ -850,9 +861,9 @@ class RouteChecks:
         if valid_token.jwt_claims is None or valid_token.token is not None or valid_token.team_id is None:
             return ()
 
-        from litellm.proxy.proxy_server import jwt_handler
+        from litellm.proxy.proxy_server import litellm_jwtauth
 
-        return jwt_handler.litellm_jwtauth.team_allowed_routes
+        return litellm_jwtauth.team_allowed_routes
 
     @staticmethod
     def _require_auth_pass_through_access(
@@ -874,32 +885,12 @@ class RouteChecks:
 
     @staticmethod
     def check_passthrough_route_access(route: str, user_api_key_dict: UserAPIKeyAuth) -> bool:
-        """
-        Check if route is a passthrough route.
-        Supports both exact match and prefix match.
-        """
-        metadata: Final = user_api_key_dict.metadata
-        team_metadata: Final = user_api_key_dict.team_metadata or {}
-        if metadata is None and team_metadata is None:
-            return False
-        if "allowed_passthrough_routes" not in metadata and "allowed_passthrough_routes" not in team_metadata:
-            return False
-        if (
-            metadata.get("allowed_passthrough_routes") is None
-            and team_metadata.get("allowed_passthrough_routes") is None
-        ):
-            return False
-
-        allowed_passthrough_routes: Final = (
-            metadata.get("allowed_passthrough_routes") or team_metadata.get("allowed_passthrough_routes") or []
+        """The key's ``allowed_passthrough_routes`` when it lists any, otherwise the team's, matched by prefix."""
+        return auth_allowed_routes_grant(
+            route,
+            key=_allowed_passthrough_routes(user_api_key_dict.metadata),
+            team=_allowed_passthrough_routes(user_api_key_dict.team_metadata),
         )
-
-        # Check if route matches any allowed passthrough route (exact or prefix match)
-        for allowed_route in allowed_passthrough_routes:
-            if RouteChecks._route_matches_allowed_route(route=route, allowed_route=allowed_route):
-                return True
-
-        return False
 
     @staticmethod
     def is_assistants_api_request(request: Request) -> bool:
@@ -977,7 +968,7 @@ class RouteChecks:
     def _check_proxy_admin_viewer_access(
         route: str,
         _user_role: str,
-        request_data: dict,
+        request_data: Mapping[str, object],
         request: Request | None = None,
     ) -> None:
         """

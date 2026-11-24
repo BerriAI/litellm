@@ -1,12 +1,15 @@
 import base64
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from io import BufferedReader, BytesIO
-from typing import TYPE_CHECKING, Any, Final, cast
+from typing import TYPE_CHECKING, Any, Final, Protocol, cast
 
 import httpx
 from httpx._types import RequestFiles
 
+import litellm
+from litellm.images.fan_out import image_request_count
 from litellm.images.utils import ImageEditRequestUtils
+from litellm.litellm_core_utils.core_helpers import decoded_json_object
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.image_edit.transformation import BaseImageEditConfig
 from litellm.llms.gemini.common_utils import (
@@ -18,6 +21,7 @@ from litellm.llms.gemini.image_usage_transformation import (
 )
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.images.main import ImageEditOptionalRequestParams
+from litellm.types.llms.vertex_ai import GenerateContentResponseBody
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import (
     FileTypes,
@@ -32,6 +36,14 @@ if TYPE_CHECKING:
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+
+class _JsonResponse(Protocol):
+    def json(self) -> object: ...
+
+
+def _json_body(response: _JsonResponse) -> object:
+    return response.json()
 
 
 class GeminiImageEditConfig(BaseImageEditConfig):
@@ -54,14 +66,19 @@ class GeminiImageEditConfig(BaseImageEditConfig):
             parse_image_config_string=True,
         )
 
+    def get_request_count(self, model: str, image_edit_optional_request_params: Mapping[str, object]) -> int:
+        return image_request_count(
+            image_edit_optional_request_params.get("sampleCount"), model=model, llm_provider="gemini"
+        )
+
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, object],
         model: str,
         api_key: str | None = None,
-        litellm_params: dict | None = None,
+        litellm_params: Mapping[str, object] | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         final_api_key: Final[str | None] = api_key or get_secret_str("GEMINI_API_KEY")
         if not final_api_key:
             raise ValueError("GEMINI_API_KEY is not set")
@@ -78,7 +95,7 @@ class GeminiImageEditConfig(BaseImageEditConfig):
         self,
         model: str,
         api_base: str | None,
-        litellm_params: dict,
+        litellm_params: Mapping[str, object],
     ) -> str:
         base_url: Final = api_base or get_secret_str("GEMINI_API_BASE") or self.DEFAULT_BASE_URL
         return join_api_base(base_url, f"models/{model}:generateContent")
@@ -87,14 +104,18 @@ class GeminiImageEditConfig(BaseImageEditConfig):
         self,
         model: str,
         prompt: str | None,
-        image: FileTypes | None,
+        image: FileTypes | Sequence[FileTypes | None] | None,
         image_edit_optional_request_params: Mapping[str, object],
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
+        headers: Mapping[str, object],
     ) -> tuple[dict[str, object], RequestFiles | None]:
         inline_parts: Final = self._prepare_inline_image_parts(image) if image else []
         if not inline_parts:
-            raise ValueError("Gemini image edit requires at least one image.")
+            raise litellm.BadRequestError(
+                message="Gemini image edit requires at least one image.",
+                model=model,
+                llm_provider="gemini",
+            )
 
         # Build parts list with image and prompt (if provided)
         parts: Final = inline_parts.copy()
@@ -125,7 +146,7 @@ class GeminiImageEditConfig(BaseImageEditConfig):
     ) -> ImageResponse:
         model_response: Final = ImageResponse()
         try:
-            response_json: Final = raw_response.json()
+            response_json: Final = _json_body(raw_response)
         except Exception as exc:
             raise self.get_error_class(
                 error_message=f"Error transforming image edit response: {exc}",
@@ -133,7 +154,10 @@ class GeminiImageEditConfig(BaseImageEditConfig):
                 headers=raw_response.headers,
             )
 
-        candidates: Final = response_json.get("candidates", [])
+        payload: Final = cast(  # cast-ok: the body passes through unvalidated, as before it was typed
+            GenerateContentResponseBody, response_json
+        )
+        candidates: Final = payload.get("candidates", [])
         data_list: Final[list[ImageObject]] = []
 
         for candidate in candidates:
@@ -141,21 +165,22 @@ class GeminiImageEditConfig(BaseImageEditConfig):
             parts = content.get("parts", [])
             for part in parts:
                 inline_data = part.get("inlineData")
-                if inline_data and inline_data.get("data"):
+                image_data = inline_data.get("data") if inline_data else None
+                if image_data:
                     data_list.append(
                         ImageObject(
-                            b64_json=inline_data["data"],
+                            b64_json=image_data,
                             url=None,
                         )
                     )
 
         model_response.data = cast(list[OpenAIImage], data_list)
-        if "usageMetadata" in response_json:
-            model_response.usage = transform_gemini_image_usage(response_json["usageMetadata"])
+        if "usageMetadata" in payload:
+            model_response.usage = transform_gemini_image_usage(dict(decoded_json_object(payload["usageMetadata"])))
         return model_response
 
-    def _prepare_inline_image_parts(self, image: FileTypes | list[FileTypes]) -> list[dict[str, object]]:
-        images: list[FileTypes]
+    def _prepare_inline_image_parts(self, image: FileTypes | Sequence[FileTypes | None]) -> list[dict[str, object]]:
+        images: Sequence[object]
         if isinstance(image, list):
             images = image
         else:
@@ -179,7 +204,7 @@ class GeminiImageEditConfig(BaseImageEditConfig):
 
         return inline_parts
 
-    def _read_all_bytes(self, image: FileTypes) -> bytes:
+    def _read_all_bytes(self, image: object) -> bytes:
         if isinstance(image, bytes):
             return image
         if isinstance(image, BytesIO):

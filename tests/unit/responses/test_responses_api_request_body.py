@@ -10,9 +10,10 @@ import json
 import logging
 import math
 from collections.abc import Awaitable, Callable, Mapping
-from pathlib import Path
+from datetime import datetime, timezone
 from importlib import import_module
-from typing import Final
+from pathlib import Path
+from typing import Final, cast
 from unittest.mock import AsyncMock, patch
 
 import httpx
@@ -22,6 +23,7 @@ from pydantic import TypeAdapter
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.types.llms.openai import ResponsesAPIResponse
 from tests.unit.llms.bedrock.slow_upstream import (
@@ -252,6 +254,80 @@ async def test_aresponses_forwards_non_enum_reasoning_effort(
     request_body: Final = json.loads(upstream.calls[0].request.read())
     assert request_body["reasoning"] == {"effort": 5}
     assert response.output[0].content[0].text == "Done."
+
+
+@pytest.mark.asyncio
+async def test_aresponses_forwards_moderation(monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "fake-api-key")
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    upstream: Final = respx_mock.post("https://api.openai.com/v1/responses").mock(
+        return_value=httpx.Response(200, json=_minimal_responses_api_payload("resp_moderation", "gpt-5.4"))
+    )
+    moderation: Final = {"model": "omni-moderation-latest"}
+
+    await litellm.aresponses(model="openai/gpt-5.4", input="hi", moderation=moderation)
+
+    request_body: Final = TypeAdapter(dict[str, object]).validate_python(
+        cast(object, json.loads(upstream.calls[0].request.read()))
+    )
+    assert upstream.call_count == 1
+    assert request_body.get("moderation") == moderation
+
+
+@pytest.mark.asyncio
+async def test_aresponses_omits_null_moderation(monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "fake-api-key")
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    upstream: Final = respx_mock.post("https://api.openai.com/v1/responses").mock(
+        return_value=httpx.Response(200, json=_minimal_responses_api_payload("resp_null_moderation", "gpt-5.4"))
+    )
+
+    await litellm.aresponses(model="openai/gpt-5.4", input="hi", moderation=None)
+
+    request_body: Final = TypeAdapter(dict[str, object]).validate_python(
+        cast(object, json.loads(upstream.calls[0].request.read()))
+    )
+    assert upstream.call_count == 1
+    assert "moderation" not in request_body
+
+
+@pytest.mark.asyncio
+async def test_aresponses_stream_forwards_moderation(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "fake-api-key")
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    received: Final[asyncio.Queue[httpx.Request]] = asyncio.Queue()
+    payload: Final = _minimal_responses_api_payload("resp_stream_moderation", "gpt-5.4")
+    moderation: Final = {"model": "omni-moderation-latest"}
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        received.put_nowait(request)
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            text="".join(
+                f"event: {kind}\ndata: {json.dumps({'type': kind, 'response': payload})}\n\n"
+                for kind in ("response.created", "response.completed")
+            ),
+        )
+
+    async_client: Final = AsyncHTTPHandler(transport=httpx.MockTransport(respond))
+    try:
+        response: Final = await litellm.aresponses(
+            model="openai/gpt-5.4", input="hi", moderation=moderation, stream=True, client=async_client
+        )
+        events: Final = tuple([event.type async for event in response])
+        assert "response.completed" in events
+    finally:
+        await async_client.close()
+
+    request_body: Final = TypeAdapter(dict[str, object]).validate_python(
+        cast(object, json.loads(received.get_nowait().content))
+    )
+    assert request_body.get("moderation") == moderation
+    assert received.empty()
 
 
 @pytest.mark.asyncio
@@ -667,6 +743,41 @@ async def test_aresponses_websocket_keeps_routing_hints_out_of_the_relay_kwargs(
         mock_ws.assert_awaited_once()
         assert "input" not in mock_ws.call_args.kwargs
         assert "previous_response_id" not in mock_ws.call_args.kwargs
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("model", "provider"),
+    (("openai/provider-label-model", "openai"), ("azure/provider-label-model", "azure")),
+    ids=("openai", "azure"),
+)
+async def test_aresponses_websocket_logs_the_provider_inferred_from_the_model(model: str, provider: str) -> None:
+    from unittest.mock import MagicMock
+
+    from litellm.responses.main import (
+        _aresponses_websocket,  # pyright: ignore[reportPrivateUsage, reportUnknownVariableType]  # the private entry is what the proxy calls
+        base_llm_http_handler,
+    )
+
+    logging_obj: Final = LiteLLMLogging(
+        model=model,
+        messages=[],
+        stream=True,
+        call_type="_aresponses_websocket",
+        start_time=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        litellm_call_id="websocket-provider-label",
+        function_id="websocket-provider-label",
+    )
+
+    with patch.object(base_llm_http_handler, "async_responses_websocket", new_callable=AsyncMock):
+        await _aresponses_websocket(
+            model=model,
+            websocket=MagicMock(),
+            api_key="sk-test",
+            litellm_logging_obj=logging_obj,
+        )
+
+    assert logging_obj.model_call_details["litellm_params"]["custom_llm_provider"] == provider
 
 
 _STRIPPED_WS_INPUT = [{"role": "user", "content": "hi"}]

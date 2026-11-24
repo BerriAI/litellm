@@ -18,6 +18,7 @@ else:
     LiteLLMLoggingObj = Any
 
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class FalAIRecraftV3Config(FalAIBaseConfig):
@@ -46,10 +47,10 @@ class FalAIRecraftV3Config(FalAIBaseConfig):
     def map_openai_params(
         self,
         non_default_params: dict,
-        optional_params: dict,
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Map OpenAI parameters to Recraft v3 parameters.
 
@@ -139,10 +140,10 @@ class FalAIRecraftV3Config(FalAIBaseConfig):
         self,
         model: str,
         prompt: str,
-        optional_params: dict,
-        litellm_params: dict,
-        headers: dict,
-    ) -> dict:
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
+        headers: dict[str, object],
+    ) -> dict[str, object]:
         """
         Transform the image generation request to Recraft v3 request body.
 
@@ -172,9 +173,9 @@ class FalAIRecraftV3Config(FalAIBaseConfig):
         raw_response: httpx.Response,
         model_response: ImageResponse,
         logging_obj: LiteLLMLoggingObj,
-        request_data: dict,
-        optional_params: dict,
-        litellm_params: dict,
+        request_data: dict[str, object],
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
@@ -195,7 +196,7 @@ class FalAIRecraftV3Config(FalAIBaseConfig):
         }
         """
         try:
-            response_data: Final = raw_response.json()
+            response_data: Final = _DECODED_JSON.validate_python(raw_response.json())
         except Exception as e:
             raise self.get_error_class(
                 error_message=f"Error transforming image generation response: {e}",

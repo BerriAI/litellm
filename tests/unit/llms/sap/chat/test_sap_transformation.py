@@ -1,4 +1,7 @@
+import json
 import warnings
+from typing import Final
+
 import pytest
 from pydantic import ValidationError
 
@@ -908,6 +911,22 @@ class TestCacheControl:
         assert "cache_control" not in content[0]
         assert content[1].get("cache_control") == {"type": "ephemeral"}
 
+    def test_pdf_file_part_reaches_sap_as_an_image_url_data_url(self) -> None:
+        pdf_data_url: Final = "data:application/pdf;base64,JVBERi0xLjQK"
+        messages: Final = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Summarize this."},
+                    {"type": "file", "file": {"filename": "report.pdf", "file_data": pdf_data_url}},
+                ],
+            }
+        ]
+        body: Final = self._transform("anthropic--claude-3-5-sonnet", messages)
+        content: Final = self._template(body)[0]["content"]
+        assert content[1]["type"] == "image_url"
+        assert content[1]["image_url"]["url"] == pdf_data_url
+
     def test_message_level_cache_control_folded_onto_trailing_image_block(self):
         messages = [
             {
@@ -923,3 +942,220 @@ class TestCacheControl:
         content = self._template(body)[0]["content"]
         assert "cache_control" not in content[0]
         assert content[1].get("cache_control") == {"type": "ephemeral"}
+
+
+class TestTransformResponseGeminiThoughtSignatures:
+    """Gemini 3.x returns list-shaped reasoning_content (signed thought blocks) on tool-call follow-ups."""
+
+    @staticmethod
+    def _transform(message: dict[str, object]):
+        from unittest.mock import MagicMock
+
+        from litellm.llms.sap.chat.transformation import GenAIHubOrchestrationConfig
+        from litellm.types.utils import ModelResponse
+
+        raw_response: Final = MagicMock()
+        raw_response.json.return_value = {
+            "final_result": {
+                "id": "test-id",
+                "object": "chat.completion",
+                "created": 1,
+                "model": "gemini-3.5-flash",
+                "choices": [
+                    {"index": 0, "message": message, "finish_reason": "stop"},
+                ],
+            }
+        }
+        raw_response.text = '{"final_result": {...}}'
+
+        return GenAIHubOrchestrationConfig().transform_response(
+            model="gemini-3.5-flash",
+            raw_response=raw_response,
+            model_response=ModelResponse(id="test", model="test"),
+            logging_obj=MagicMock(),
+            request_data={},
+            messages=[{"role": "user", "content": "test"}],
+            optional_params={},
+            litellm_params={},
+            encoding=None,
+        )
+
+    def test_list_shaped_reasoning_content_is_flattened_and_signatures_kept(self):
+        result: Final = self._transform(
+            {
+                "role": "assistant",
+                "content": "Ticket ABC-123 is open.",
+                "reasoning_content": [
+                    {"content": "Checking the ticket. ", "signature": "sig-one"},
+                    {"content": "It is open.", "signature": "sig-two"},
+                ],
+            }
+        )
+
+        message: Final = result.choices[0].message
+        assert message.content == "Ticket ABC-123 is open."
+        assert message.reasoning_content == "Checking the ticket. It is open."
+        assert [block["signature"] for block in message.thinking_blocks] == [
+            "sig-one",
+            "sig-two",
+        ]
+        assert [block["thinking"] for block in message.thinking_blocks] == [
+            "Checking the ticket. ",
+            "It is open.",
+        ]
+        assert all(block["type"] == "thinking" for block in message.thinking_blocks)
+
+    def test_signature_only_block_with_empty_text(self):
+        result: Final = self._transform(
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {
+                            "name": "get_ticket_status",
+                            "arguments": '{"ticket_id": "ABC-123"}',
+                        },
+                    }
+                ],
+                "reasoning_content": [{"content": "", "signature": "CtMHAdHtim920NjKZTfLS9W/gDXBihg="}],
+            }
+        )
+
+        message: Final = result.choices[0].message
+        assert getattr(message, "reasoning_content", None) is None
+        assert message.thinking_blocks[0]["signature"] == "CtMHAdHtim920NjKZTfLS9W/gDXBihg="
+        assert message.tool_calls[0].function.name == "get_ticket_status"
+
+    def test_string_reasoning_content_is_untouched(self):
+        result: Final = self._transform(
+            {
+                "role": "assistant",
+                "content": "hi",
+                "reasoning_content": "plain gemini 2.5 style reasoning",
+            }
+        )
+
+        message: Final = result.choices[0].message
+        assert message.reasoning_content == "plain gemini 2.5 style reasoning"
+        assert getattr(message, "thinking_blocks", None) is None
+
+
+def _stream_event(shape: str, delta: dict[str, object]) -> str:
+    chunk: Final = {
+        "id": "chatcmpl-1",
+        "object": "chat.completion.chunk",
+        "created": 1,
+        "model": "gemini-3.5-flash",
+        "choices": [{"index": 0, "delta": delta}],
+    }
+    events: Final = {
+        "final_result": {"request_id": "r1", "final_result": chunk},
+        "orchestration_result": {"request_id": "r1", "orchestration_result": chunk},
+        "openai_chunk": chunk,
+    }
+    return "data: " + json.dumps(events[shape])
+
+
+class TestStreamGeminiThoughtSignatures:
+    @pytest.mark.parametrize("shape", ["final_result", "orchestration_result", "openai_chunk"])
+    def test_list_shaped_reasoning_content_in_stream_delta(self, shape: str):
+        from litellm.llms.sap.chat.handler import SAPStreamIterator
+
+        lines: Final = [
+            _stream_event(
+                shape,
+                {
+                    "role": "assistant",
+                    "content": "OPEN",
+                    "reasoning_content": [
+                        {"content": "Checking the ticket. ", "signature": "sig-one"},
+                        {"content": "It is open.", "signature": "sig-two"},
+                    ],
+                },
+            ),
+            "data: [DONE]",
+        ]
+
+        chunks: Final = list(SAPStreamIterator(response=iter(lines)))
+
+        assert len(chunks) == 1
+        delta: Final = chunks[0].choices[0].delta
+        assert delta.content == "OPEN"
+        assert delta.reasoning_content == "Checking the ticket. It is open."
+        assert delta.thinking_blocks == [
+            {"type": "thinking", "thinking": "Checking the ticket. ", "signature": "sig-one"},
+            {"type": "thinking", "thinking": "It is open.", "signature": "sig-two"},
+        ]
+
+    def test_signature_only_block_in_stream_delta(self):
+        from litellm.llms.sap.chat.handler import SAPStreamIterator
+
+        lines: Final = [
+            _stream_event(
+                "final_result",
+                {
+                    "content": "OPEN",
+                    "reasoning_content": [{"content": "", "signature": "CtMHAdHtim920NjKZTfLS9W/gDXBihg="}],
+                },
+            )
+        ]
+
+        delta: Final = next(SAPStreamIterator(response=iter(lines))).choices[0].delta
+
+        assert delta.reasoning_content is None
+        assert delta.thinking_blocks == [
+            {"type": "thinking", "thinking": "", "signature": "CtMHAdHtim920NjKZTfLS9W/gDXBihg="}
+        ]
+
+    def test_string_reasoning_content_in_stream_delta_is_untouched(self):
+        from litellm.llms.sap.chat.handler import SAPStreamIterator
+
+        lines: Final = [_stream_event("final_result", {"content": "OPEN", "reasoning_content": "plain reasoning"})]
+
+        delta: Final = next(SAPStreamIterator(response=iter(lines))).choices[0].delta
+
+        assert delta.reasoning_content == "plain reasoning"
+        assert getattr(delta, "thinking_blocks", None) is None
+
+    def test_non_object_stream_line_is_skipped(self):
+        from litellm.llms.sap.chat.handler import SAPStreamIterator
+
+        lines: Final = ["data: [1, 2]", _stream_event("final_result", {"content": "OPEN"})]
+
+        chunks: Final = list(SAPStreamIterator(response=iter(lines)))
+
+        assert [chunk.choices[0].delta.content for chunk in chunks] == ["OPEN"]
+
+    @pytest.mark.asyncio
+    async def test_list_shaped_reasoning_content_in_async_stream_delta(self):
+        from litellm.llms.sap.chat.handler import AsyncSAPStreamIterator
+
+        async def lines():
+            yield _stream_event(
+                "final_result",
+                {"content": "OPEN", "reasoning_content": [{"content": "It is open.", "signature": "sig-one"}]},
+            )
+
+        chunks: Final = [chunk async for chunk in AsyncSAPStreamIterator(response=lines())]
+
+        delta: Final = chunks[0].choices[0].delta
+        assert delta.reasoning_content == "It is open."
+        assert delta.thinking_blocks == [{"type": "thinking", "thinking": "It is open.", "signature": "sig-one"}]
+
+    @pytest.mark.parametrize(
+        "result",
+        [
+            None,
+            {"choices": None},
+            {"choices": ["not a choice"]},
+            {"choices": [{"index": 0}]},
+            {"choices": [{"delta": "not a delta"}]},
+        ],
+    )
+    def test_results_without_reasoning_blocks_pass_through(self, result: object):
+        from litellm.llms.sap.chat.reasoning import normalize_reasoning_blocks
+
+        assert normalize_reasoning_blocks(result, "delta") == result

@@ -1,15 +1,12 @@
-import base64
-import os
-from collections.abc import Mapping
-from pathlib import Path
+from collections.abc import Mapping, Sequence
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Final
 
 import httpx
 from httpx._types import RequestFiles
 from pydantic import ConfigDict, TypeAdapter
 
-from litellm.images.utils import ImageEditRequestUtils
+from litellm.images.utils import image_to_data_url
 from litellm.llms.base_llm.image_edit.transformation import BaseImageEditConfig
 from litellm.llms.fal_ai.image_generation.gpt_image_2_transformation import (
     map_gpt_image_quality,
@@ -39,39 +36,6 @@ PARAM_TRANSLATION: Final[Mapping[str, str]] = MappingProxyType(
 )
 
 
-@runtime_checkable
-class _SeekableBinaryReader(Protocol):
-    def tell(self) -> int: ...
-
-    def seek(self, offset: int) -> int: ...
-
-    def read(self) -> bytes: ...
-
-
-def _read_image_bytes(image: object) -> bytes:
-    if isinstance(image, bytes):
-        return image
-    if isinstance(image, tuple):
-        return _read_image_bytes(image[1])
-    if isinstance(image, os.PathLike):
-        return Path(image).read_bytes()
-    if isinstance(image, _SeekableBinaryReader):
-        position: Final = image.tell()
-        image.seek(0)
-        data: Final = image.read()
-        image.seek(position)
-        return data
-    raise ValueError(f"Unsupported image type for Fal AI image edit: {type(image).__name__}")
-
-
-def to_data_url(image: object) -> str:
-    if isinstance(image, str):
-        return image
-    image_bytes: Final = _read_image_bytes(image)
-    mime_type: Final = ImageEditRequestUtils.get_image_content_type(image_bytes)
-    return f"data:{mime_type};base64,{base64.b64encode(image_bytes).decode('utf-8')}"
-
-
 def _first(value: object) -> object:
     return value[0] if isinstance(value, list) and value else value
 
@@ -84,7 +48,7 @@ class FalAIImageEditConfig(BaseImageEditConfig):
     uploads, so local files are sent inline as base64 data URLs.
     """
 
-    def get_supported_openai_params(self, model: str) -> list:  # mutable-ok: base class contract returns a list
+    def get_supported_openai_params(self, model: str) -> list[str]:  # mutable-ok: base class contract returns a list
         return list(SUPPORTED_OPENAI_PARAMS)
 
     def map_openai_params(
@@ -92,7 +56,7 @@ class FalAIImageEditConfig(BaseImageEditConfig):
         image_edit_optional_params: ImageEditOptionalRequestParams,
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:
         return {
             PARAM_TRANSLATION.get(key, key): self._translate_value(key, value, model)
             for key, value in image_edit_optional_params.items()
@@ -108,12 +72,12 @@ class FalAIImageEditConfig(BaseImageEditConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: Mapping[str, object],
         model: str,
         api_key: str | None = None,
-        litellm_params: dict | None = None,
+        litellm_params: Mapping[str, object] | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         final_api_key: Final = api_key or get_secret_str("FAL_AI_API_KEY")
         if not final_api_key:
             raise ValueError("FAL_AI_API_KEY is not set")
@@ -126,7 +90,7 @@ class FalAIImageEditConfig(BaseImageEditConfig):
         self,
         model: str,
         api_base: str | None,
-        litellm_params: dict,
+        litellm_params: dict[str, object],
     ) -> str:
         base_url: Final = (api_base or get_secret_str("FAL_AI_API_BASE") or DEFAULT_BASE_URL).rstrip("/")
         endpoint: Final = model if model.endswith(EDIT_SUFFIX) else f"{model}{EDIT_SUFFIX}"
@@ -136,24 +100,24 @@ class FalAIImageEditConfig(BaseImageEditConfig):
         self,
         model: str,
         prompt: str | None,
-        image: FileTypes | None,
-        image_edit_optional_request_params: dict,
+        image: FileTypes | Sequence[FileTypes | None] | None,
+        image_edit_optional_request_params: dict[str, object],
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> tuple[dict, RequestFiles]:
+    ) -> tuple[dict[str, object], RequestFiles]:
         images: Final = tuple(img for img in (image if isinstance(image, list) else (image,)) if img is not None)
         if not images:
             raise ValueError("Fal AI image edit requires at least one input image")
         mask: Final = _first(image_edit_optional_request_params.get("mask"))
         mask_field: Final[Mapping[str, str]] = (
-            MappingProxyType({"mask_url": to_data_url(mask)}) if mask is not None else MappingProxyType({})
+            MappingProxyType({"mask_url": image_to_data_url(mask)}) if mask is not None else MappingProxyType({})
         )
         provider_params: Final[Mapping[str, object]] = MappingProxyType(
             {key: value for key, value in image_edit_optional_request_params.items() if key != "mask"}
         )
         request_body: Final[dict[str, object]] = {  # mutable-ok: base class contract returns a dict
             "prompt": prompt,
-            "image_urls": tuple(to_data_url(img) for img in images),
+            "image_urls": tuple(image_to_data_url(img) for img in images),
             **mask_field,
             **provider_params,
         }

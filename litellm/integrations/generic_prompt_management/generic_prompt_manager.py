@@ -8,12 +8,14 @@ from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
+from pydantic import TypeAdapter
 
 from litellm.integrations.custom_prompt_management import CustomPromptManagement
 from litellm.integrations.prompt_management_base import (
     PromptManagementBase,
     PromptManagementClient,
 )
+from litellm.litellm_core_utils.core_helpers import require_attributes
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     get_httpx_client,
@@ -25,6 +27,8 @@ from litellm.types.utils import StandardCallbackDynamicParams
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class GenericPromptManager(CustomPromptManagement):
@@ -93,7 +97,7 @@ class GenericPromptManager(CustomPromptManagement):
             headers["Authorization"] = f"Bearer {self.api_key}"
         return headers
 
-    def _fetch_prompt_from_api(self, prompt_id: str | None, prompt_spec: PromptSpec | None) -> dict[str, object]:
+    def _fetch_prompt_from_api(self, prompt_id: str | None, prompt_spec: PromptSpec | None) -> Mapping[str, object]:
         """
         Fetch a prompt from the API.
 
@@ -124,7 +128,7 @@ class GenericPromptManager(CustomPromptManagement):
             )
 
             response.raise_for_status()
-            return response.json()
+            return require_attributes(_DECODED_JSON.validate_python(response.json()), dict[str, object], "get")
         except httpx.HTTPError as e:
             raise Exception(f"Failed to fetch prompt '{prompt_id}' from API: {e}")
         except json.JSONDecodeError as e:
@@ -132,7 +136,7 @@ class GenericPromptManager(CustomPromptManagement):
 
     async def async_fetch_prompt_from_api(
         self, prompt_id: str | None, prompt_spec: PromptSpec | None
-    ) -> dict[str, Any]:
+    ) -> Mapping[str, object]:
         """
         Fetch a prompt from the API asynchronously.
         """
@@ -160,7 +164,7 @@ class GenericPromptManager(CustomPromptManagement):
                 headers=self._get_headers(),
             )
             response.raise_for_status()
-            return response.json()
+            return require_attributes(_DECODED_JSON.validate_python(response.json()), dict[str, object], "get")
         except httpx.HTTPError as e:
             raise Exception(f"Failed to fetch prompt '{prompt_id}' from API: {e}")
         except json.JSONDecodeError as e:
@@ -170,7 +174,7 @@ class GenericPromptManager(CustomPromptManagement):
         self,
         prompt_id: str | None,
         prompt_spec: PromptSpec | None,
-        api_response: dict[str, Any],
+        api_response: Mapping[str, Any],
     ) -> PromptManagementClient:
         """
         Parse the API response into a PromptManagementClient structure.
@@ -235,7 +239,7 @@ class GenericPromptManager(CustomPromptManagement):
         prompt_id: str | None,
         prompt_label: str | None = None,
         prompt_version: int | None = None,
-        prompt_variables: dict | None = None,
+        prompt_variables: Mapping[str, object] | None = None,
     ) -> PromptManagementClient | None:
         """
         Common caching logic for the prompt manager.
@@ -254,7 +258,7 @@ class GenericPromptManager(CustomPromptManagement):
         self,
         prompt_id: str | None,
         prompt_spec: PromptSpec | None,
-        prompt_variables: dict | None,
+        prompt_variables: Mapping[str, object] | None,
         dynamic_callback_params: StandardCallbackDynamicParams,
         prompt_label: str | None = None,
         prompt_version: int | None = None,
@@ -309,7 +313,7 @@ class GenericPromptManager(CustomPromptManagement):
     async def async_compile_prompt_helper(
         self,
         prompt_id: str | None,
-        prompt_variables: dict | None,
+        prompt_variables: Mapping[str, object] | None,
         dynamic_callback_params: StandardCallbackDynamicParams,
         prompt_spec: PromptSpec | None = None,
         prompt_label: str | None = None,

@@ -11,9 +11,12 @@ import json
 from collections.abc import Mapping
 from typing import Final, SupportsInt, TypeAlias, cast  # noqa: TID251  # int() re-checks the cast below at runtime
 
+from pydantic import TypeAdapter
+
 from litellm.constants import STREAM_SSE_DONE_STRING
 
 _MAX_CONTENT_INDEX: Final = 1024
+_DECODED_JSON: Final = TypeAdapter(object)
 
 _ConvertibleToInt: TypeAlias = SupportsInt | str
 
@@ -33,7 +36,7 @@ def parse_sse_json_chunk(chunk: str) -> dict[str, object] | None:
     if not stripped_chunk or stripped_chunk == STREAM_SSE_DONE_STRING or stripped_chunk.startswith("event:"):
         return None
     try:
-        parsed_chunk: Final[object] = json.loads(stripped_chunk)
+        parsed_chunk: Final = _DECODED_JSON.validate_python(json.loads(stripped_chunk))
     except json.JSONDecodeError:
         return None
     if not isinstance(parsed_chunk, dict):
@@ -90,7 +93,7 @@ def record_output_text_chunk(
             "id": parsed_chunk.get("item_id") or f"msg_{output_index}",
             "role": "assistant",
             "status": "completed",
-            "content": [],
+            "content": list[object](),
         }
         text_only_items[output_index] = item
 

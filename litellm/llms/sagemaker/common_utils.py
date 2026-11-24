@@ -1,3 +1,4 @@
+import builtins
 import codecs
 import functools
 import json
@@ -11,11 +12,13 @@ from pydantic import BaseModel, ConfigDict, Field, RootModel, TypeAdapter, Valid
 from typing_extensions import ReadOnly, Required, TypedDict
 
 from litellm import verbose_logger
+from litellm.litellm_core_utils.aws_event_stream import EventStreamTally
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.types.utils import GenericStreamingChunk as GChunk
-from litellm.types.utils import StreamingChatCompletionChunk
+from litellm.types.utils import LlmProviders, StreamingChatCompletionChunk
 
 STR_KEYED_MAPPING: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
+OBJECT_KEYED_MAPPING: Final = TypeAdapter(Mapping[object, object], config=ConfigDict(hide_input_in_errors=True))
 
 
 @with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
@@ -32,6 +35,14 @@ class _SageMakerChunkData(TypedDict, total=False):
 @with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
 class _SageMakerMessagesChunkData(TypedDict, total=False):
     choices: ReadOnly[Required[list[Mapping[str, object]]]]
+
+
+class _SageMakerPayloadPart(TypedDict, total=False):
+    bytes: ReadOnly[builtins.bytes]
+
+
+class _SageMakerStreamEvent(TypedDict, total=False):
+    chunk: ReadOnly[_SageMakerPayloadPart]
 
 
 class _SageMakerChunkDataRoot(RootModel[_SageMakerChunkData]):
@@ -158,6 +169,36 @@ def get_sagemaker_response_stream_shape():
     return _load_sagemaker_response_stream_shape()
 
 
+INFERENCE_COMPONENT_HEADER: Final = "X-Amzn-SageMaker-Inference-Component"
+
+
+_SAGEMAKER_PROVIDERS: Final = frozenset(
+    provider.value for provider in (LlmProviders.SAGEMAKER, LlmProviders.SAGEMAKER_CHAT, LlmProviders.SAGEMAKER_NOVA)
+)
+
+
+def _deployment_provider(litellm_params: Mapping[str, object]) -> str | None:
+    custom_llm_provider: Final = litellm_params.get("custom_llm_provider")
+    if isinstance(custom_llm_provider, str) and custom_llm_provider:
+        return custom_llm_provider
+    model: Final = litellm_params.get("model")
+    return model.split("/", 1)[0] if isinstance(model, str) else None
+
+
+def deployment_inference_component(litellm_params: Mapping[str, object]) -> str | None:
+    headers: Final = litellm_params.get("extra_headers")
+    if _deployment_provider(litellm_params) not in _SAGEMAKER_PROVIDERS or not isinstance(headers, Mapping):
+        return None
+    return next(
+        (
+            value
+            for name, value in OBJECT_KEYED_MAPPING.validate_python(headers).items()
+            if isinstance(name, str) and name.lower() == INFERENCE_COMPONENT_HEADER.lower() and isinstance(value, str)
+        ),
+        None,
+    )
+
+
 def with_inference_component_hint(error_message: str) -> str:
     if "Inference Component Name header is required" in error_message:
         return f"{error_message}\n pass in via `litellm.embedding(..., model_id={{InferenceComponentName}})`"
@@ -220,6 +261,12 @@ def _stream_exception_error(headers: Mapping[str, object], body: object) -> Sage
         )
     code: Final = f" ({detail.error_code})" if detail.error_code else ""
     return SagemakerError(status_code=500, message=f"SageMaker stream failed with {name}{code}: {detail.message}")
+
+
+def _raise_undecoded_stream(tally: EventStreamTally, response_headers: Mapping[str, str] | None) -> None:
+    undecoded: Final = tally.undecoded_stream(response_headers)
+    if undecoded is not None:
+        raise SagemakerError(status_code=undecoded.status_code, message=undecoded.message, headers=undecoded.headers)
 
 
 class AWSEventStreamDecoder:
@@ -291,19 +338,19 @@ class AWSEventStreamDecoder:
             if outcome is not None:
                 yield outcome
 
-    def iter_bytes(self, iterator: Iterator[bytes]) -> Iterator[GChunk | StreamingChatCompletionChunk | None]:
+    def iter_bytes(
+        self, iterator: Iterator[bytes], *, response_headers: Mapping[str, str] | None = None
+    ) -> Iterator[GChunk | StreamingChatCompletionChunk | None]:
         """Given an iterator that yields lines, iterate over it & yield every event encountered"""
-        from botocore.eventstream import EventStreamBuffer
-
-        event_stream_buffer: Final = EventStreamBuffer()
         records: Final = _StreamRecordBuffer()
+        tally: Final = EventStreamTally("SageMaker")
 
-        for chunk in iterator:
-            event_stream_buffer.add_data(chunk)
-            for event in event_stream_buffer:
-                if payload := self._parse_message_from_event(event):
-                    yield from self._chunks(records.feed(payload))
+        for event in tally.decode(iterator):
+            tally.add_event(event)
+            if payload := self._parse_message_from_event(event):
+                yield from self._chunks(records.feed(payload))
 
+        _raise_undecoded_stream(tally, response_headers)
         unparsed: Final = records.close()
         if isinstance(unparsed, SagemakerError):
             raise unparsed
@@ -312,21 +359,19 @@ class AWSEventStreamDecoder:
             yield None
 
     async def aiter_bytes(
-        self, iterator: AsyncIterator[bytes]
+        self, iterator: AsyncIterator[bytes], *, response_headers: Mapping[str, str] | None = None
     ) -> AsyncIterator[GChunk | StreamingChatCompletionChunk | None]:
         """Given an async iterator that yields lines, iterate over it & yield every event encountered"""
-        from botocore.eventstream import EventStreamBuffer
-
-        event_stream_buffer: Final = EventStreamBuffer()
         records: Final = _StreamRecordBuffer()
+        tally: Final = EventStreamTally("SageMaker")
 
-        async for chunk in iterator:
-            event_stream_buffer.add_data(chunk)
-            for event in event_stream_buffer:
-                if payload := self._parse_message_from_event(event):
-                    for parsed_chunk in self._chunks(records.feed(payload)):
-                        yield parsed_chunk
+        async for event in tally.adecode(iterator):
+            tally.add_event(event)
+            if payload := self._parse_message_from_event(event):
+                for parsed_chunk in self._chunks(records.feed(payload)):
+                    yield parsed_chunk
 
+        _raise_undecoded_stream(tally, response_headers)
         unparsed: Final = records.close()
         if isinstance(unparsed, SagemakerError):
             raise unparsed
@@ -345,7 +390,7 @@ class AWSEventStreamDecoder:
                 ),
             )
         response_dict: Final = event.to_response_dict()
-        parsed_response: Final = self.parser.parse(response_dict, response_stream_shape)
+        parsed_response: Final[_SageMakerStreamEvent] = self.parser.parse(response_dict, response_stream_shape)
         body: Final = response_dict.get("body")
 
         if response_dict["status_code"] != 200:

@@ -1,10 +1,10 @@
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from datetime import datetime
 from enum import Enum
 from types import MappingProxyType
 from typing import Annotated, Final, Literal, TypeAlias, cast
 
-from pydantic import ConfigDict, Field, field_validator, model_validator
+from pydantic import ConfigDict, Field, JsonValue, TypeAdapter, field_validator, model_validator
 from pydantic.fields import FieldInfo
 from typing_extensions import ReadOnly, Required, TypedDict
 
@@ -58,6 +58,9 @@ from litellm.types.proxy.guardrails.guardrail_hooks.qohash import (
 )
 from litellm.types.proxy.guardrails.guardrail_hooks.qualifire import (
     QualifireGuardrailConfigModel,
+)
+from litellm.types.proxy.guardrails.guardrail_hooks.reco import (
+    RecoConfigModel,
 )
 from litellm.types.proxy.guardrails.guardrail_hooks.repelloai import (
     RepelloAIGuardrailConfigModel,
@@ -153,12 +156,14 @@ class SupportedGuardrailIntegrations(Enum):
     TYPESAFE = "typesafe"
     STRAIKER = "straiker"
     ALICE = "alice"
+    RECO = "reco"
     AGENT_365 = "agent_365"
     LLM_SHIELD_PROXY = "llm_shield_proxy"
     CONDUCT = "conduct"
     AIRIA = "airia"
     WINGBACK = "wingback"
     DECISION_MODEL = "decision_model"
+    COLLIEAI = "collieai"
 
 
 class Role(Enum):
@@ -600,6 +605,11 @@ class BedrockChecksConfigModel(LiteLLMBaseModel):
         return self
 
 
+class BedrockGuardrailOutputScope(Enum):
+    INTERVENTIONS = "INTERVENTIONS"
+    FULL = "FULL"
+
+
 class BedrockGuardrailConfigModel(LiteLLMBaseModel):
     """Configuration parameters for the AWS Bedrock guardrail"""
 
@@ -607,6 +617,11 @@ class BedrockGuardrailConfigModel(LiteLLMBaseModel):
     guardrailVersion: str | None = Field(
         default=None,
         description="The version of your Bedrock guardrail (e.g., DRAFT or version number)",
+    )
+    outputScope: BedrockGuardrailOutputScope | None = Field(
+        default=None,
+        description="ApplyGuardrail response scope. FULL includes detected and non-detected findings. "
+        "Omit to retain Bedrock's default of returning detected findings only.",
     )
     disable_exception_on_block: bool | None = Field(
         default=False,
@@ -705,6 +720,12 @@ class BedrockGuardrailStreamingParams(LiteLLMBaseModel):
         "and release the withheld chunks once the scan passes, instead of holding everything to end of stream. "
         "Flagged content is never released. Ignored when streaming_end_of_stream_only is true.",
     )
+    streaming_scan_in_background: bool = Field(
+        default=False,
+        description="When not buffering and not end-of-stream-only, run each sampled ApplyGuardrail scan in the "
+        "background so the sampled chunk and the ones after it stream while the scan runs. One scan runs at a time. "
+        "A flagged scan ends the stream before the next chunk, so content streamed while it ran reaches the client.",
+    )
 
     @classmethod
     def from_extras(cls, extras: Mapping[str, object] | None) -> "BedrockGuardrailStreamingParams":
@@ -728,9 +749,10 @@ class LakeraV2GuardrailConfigModel(LiteLLMBaseModel):
         default=True,
         description="Whether to include developer information in the response",
     )
-    on_flagged: Literal["block", "monitor", "inject_system_message"] | None = Field(
+    on_flagged: Literal["block", "mask", "monitor", "inject_system_message"] | None = Field(
         default="block",
-        description="Action to take when content is flagged: 'block' (raise exception), 'monitor' (log only), "
+        description="Action to take when content is flagged: 'block' (raise exception), 'mask' (mask PII-only "
+        "detections and allow, block anything else), 'monitor' (log only), "
         "or 'inject_system_message' (append an advisory system message and let the LLM decide)",
     )
     advisory_system_message: str | None = Field(
@@ -1006,10 +1028,13 @@ def _is_blank(value: object) -> bool:
     return isinstance(value, str) and not value.strip()
 
 
+_OPAQUE_VALUE: Final = TypeAdapter(object)
+
+
 def _default_if_blank(field: FieldInfo | None, value: object) -> object:
     if field is None or field.is_required() or not _is_blank(value):
         return value
-    return field.get_default(call_default_factory=True)
+    return _OPAQUE_VALUE.validate_python(field.get_default(call_default_factory=True))
 
 
 GuardrailNumRetries: TypeAlias = Annotated[
@@ -1029,6 +1054,14 @@ GuardrailNumRetries: TypeAlias = Annotated[
 
 
 class BaseLitellmParams(ContentFilterConfigModel):  # works for new and patch update guardrails
+    mcp_block_behavior: Literal["tool_result", "raise"] | None = Field(
+        default=None,
+        description=(
+            "How to handle guardrail blocks when executing MCP tools for an LLM request. "
+            "'raise' propagates the guardrail error to the client. 'tool_result' or None "
+            "returns the block as a tool result and lets the LLM continue."
+        ),
+    )
     api_key: str | None = Field(default=None, description="API key for the guardrail service")
     api_base: str | None = Field(default=None, description="Base URL for the guardrail service API")
 
@@ -1079,6 +1112,29 @@ class BaseLitellmParams(ContentFilterConfigModel):  # works for new and patch up
             "agent feeds back into the model, and skip system, user, and assistant content. "
             "Intended for agent harnesses whose own prompt scaffolding is trusted but often "
             "trips prompt-attack detectors."
+        ),
+    )
+
+    scan_tool_descriptions_as_text: bool | None = Field(
+        default=None,
+        description=(
+            "For text-only guardrails (panw_prisma_airs, presidio, bedrock). Guardrails whose APIs accept the "
+            "request's tools[] already scan it natively. When True, a pre_call guardrail also scans "
+            "every description string in tools[] (tool and parameter descriptions) as text, blocking "
+            "or masking them like message text. Costs one extra guardrail call per tool that has a "
+            "description."
+        ),
+    )
+
+    scan_tool_calls_as_text: bool | None = Field(
+        default=None,
+        description=(
+            "For the bedrock guardrail, whose ApplyGuardrail API has no tool-call content type. When "
+            "True, the name and arguments of every tool call are also scanned as text: tool calls in "
+            "the request history as input, tool calls generated by the model as output. A blocked "
+            "tool call blocks the request or response. A tool call the policy masks is blocked too: "
+            "masked text is never written into the arguments, so they stay valid JSON. Costs one "
+            "extra guardrail call when tool calls are present."
         ),
     )
 
@@ -1141,12 +1197,13 @@ class BaseLitellmParams(ContentFilterConfigModel):  # works for new and patch up
         description=(
             "For /v1/realtime sessions: 'warn' speaks the violation message and continues; "
             "'end_session' speaks the message and closes the connection. "
+            "Bedrock Nova Sonic cannot cancel a spoken turn's answer, so a blocked spoken turn always ends its session. "
             "For guardrail='mcp_security': 'block' rejects the request; 'alert' only logs a warning."
         ),
     )
     realtime_violation_message: str | None = Field(
         default=None,
-        description="The message the bot speaks aloud when a /v1/realtime guardrail fires. Falls back to violation_message_template if not set.",
+        description="The message the bot speaks aloud when a /v1/realtime guardrail fires. Falls back to the guardrail's block reason if not set.",
     )
 
     # Model Armor params
@@ -1346,7 +1403,7 @@ class BaseLitellmParams(ContentFilterConfigModel):  # works for new and patch up
         check_fields=False,
     )
     @classmethod
-    def normalize_lowercase(cls, v):
+    def normalize_lowercase(cls, v: object) -> object:
         """Normalize string and list fields to lowercase for ALL guardrail types."""
         if isinstance(v, str):
             return v.lower()
@@ -1398,6 +1455,7 @@ class LitellmParams(  # pyright: ignore[reportIncompatibleVariableOverride]  # o
     QostodianNexusConfigModel,
     VigilGuardGuardrailConfigModel,
     SingulrGuardrailConfigModel,
+    RecoConfigModel,
     Agent365GuardrailConfigModel,
     WingbackGuardrailConfigModel,
 ):
@@ -1459,11 +1517,11 @@ class LitellmParams(  # pyright: ignore[reportIncompatibleVariableOverride]  # o
         # Define custom behavior for the 'in' operator
         return hasattr(self, key)
 
-    def get(self, key, default=None):
+    def get(self, key: str, default: object = None):
         # Custom .get() method to access attributes with a default value if the attribute doesn't exist
         return getattr(self, key, default)
 
-    def __getitem__(self, key):
+    def __getitem__(self, key: str):
         # Allow dictionary-style access to attributes
         return getattr(self, key)
 
@@ -1500,7 +1558,7 @@ class GuardrailInfoResponse(LiteLLMBaseModel):
     updated_at: datetime | None = None
     guardrail_definition_location: GUARDRAIL_DEFINITION_LOCATION = GUARDRAIL_DEFINITION_LOCATION.CONFIG
 
-    def __init__(self, **kwargs) -> None:
+    def __init__(self, **kwargs: object) -> None:
         super().__init__(**kwargs)
 
 
@@ -1528,14 +1586,34 @@ class PresidioPerRequestConfig(LiteLLMBaseModel):
     entities: list[PiiEntityType] | None = None
 
 
+NativeGuardrailResponse: TypeAlias = Mapping[str, JsonValue] | Sequence[JsonValue]
+
+
+class GuardrailResponseFormat(Enum):
+    STANDARD = "standard"
+    NATIVE = "native"
+
+
 class ApplyGuardrailRequest(LiteLLMBaseModel):
     guardrail_name: str
-    text: str
+    text: str = ""
+    images: tuple[str, ...] | None = Field(
+        default=None,
+        max_length=1,
+        description="One image to scan, as a base64 data URI. Only Bedrock guardrails scan images.",
+    )
     language: str | None = None
     entities: list[PiiEntityType] | None = None
     input_type: str = "request"
     messages: list[dict[str, object]] | None = None
     metadata: dict[str, object] | None = None
+    response_format: GuardrailResponseFormat = GuardrailResponseFormat.STANDARD
+
+    @model_validator(mode="after")
+    def _require_text_or_images(self) -> "ApplyGuardrailRequest":
+        if "text" not in self.model_fields_set and not self.images:
+            raise ValueError("Provide 'text', 'images', or both.")
+        return self
 
 
 class ApplyGuardrailResponse(LiteLLMBaseModel):

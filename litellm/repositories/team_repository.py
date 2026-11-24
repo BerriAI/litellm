@@ -10,13 +10,16 @@ from typing import TYPE_CHECKING, Final, Protocol
 
 from pydantic import TypeAdapter
 
-from litellm.models.team import LiteLLM_TeamTable, Member
+from litellm.litellm_core_utils.core_helpers import require_attributes
+from litellm.models.team import LiteLLM_TeamTable, LiteLLM_TeamTableCachedObj, Member
+from litellm.repositories import rust_database
 from litellm.repositories.base_repository import (
     BaseRepository,
     DbRecord,
     record_to_dict,
 )
 from litellm.repositories.prisma_protocols import TableActions
+from litellm.rust_bridge._native import RustTeamRepository
 
 if TYPE_CHECKING:
     from prisma import Prisma
@@ -66,15 +69,18 @@ class _PrismaTeamDb(_TeamTables, Protocol):
     def tx(self) -> _TeamTransactionManager: ...
 
 
-class _PrismaClientView(Protocol):
+class _PrismaReaderClientView(Protocol):
     @property
     def db(self) -> _PrismaTeamDb: ...
 
+
+class _PrismaWriterClientView(Protocol):
     @property
     def writer_db(self) -> _PrismaTeamDb: ...
 
 
 _MEMBERS_WITH_ROLES_ADAPTER: Final = TypeAdapter(list[Member])
+_RAW_COLUMN: Final = TypeAdapter(object)
 _JSON_ENCODED_TEAM_FIELDS: Final = (
     "metadata",
     "model_spend",
@@ -94,8 +100,10 @@ class TeamRepository(BaseRepository[LiteLLM_TeamTable]):
 
     @property
     def _db(self) -> _PrismaTeamDb:
-        client: Final[_PrismaClientView] = self.prisma_client
-        return client.writer_db if self._use_writer else client.db
+        client: Final = self._connected_client()
+        if self._use_writer:
+            return require_attributes(client, _PrismaWriterClientView, "writer_db").writer_db
+        return require_attributes(client, _PrismaReaderClientView, "db").db
 
     @property
     def table(self) -> TableActions["prisma_models.LiteLLM_TeamTable"]:
@@ -142,7 +150,7 @@ class TeamRepository(BaseRepository[LiteLLM_TeamTable]):
         )
         if not rows:
             return None
-        raw_value: Final[object] = rows[0]["members_with_roles"]
+        raw_value: Final = _RAW_COLUMN.validate_python(rows[0]["members_with_roles"])
         parsed: Final[object] = json.loads(raw_value) if isinstance(raw_value, str) else raw_value
         if not parsed:
             return []
@@ -150,6 +158,20 @@ class TeamRepository(BaseRepository[LiteLLM_TeamTable]):
 
     async def find_by_id(self, team_id: str, id_field: str = "team_id") -> LiteLLM_TeamTable | None:
         return await super().find_by_id(team_id, id_field)
+
+    async def find_with_model_aliases(
+        self, team_id: str, *, use_writer: bool = False
+    ) -> LiteLLM_TeamTableCachedObj | None:
+        """A team with its model aliases, from the writer when asked."""
+        found: Final = await rust_database.required_repository(RustTeamRepository).find_with_model_aliases(
+            team_id, use_writer=use_writer
+        )
+        return rust_database.decode(LiteLLM_TeamTableCachedObj, found)
+
+    async def find_up_to_two_by_alias(self, team_alias: str) -> tuple[LiteLLM_TeamTableCachedObj, ...]:
+        """At most two teams with this alias, so the caller can refuse an ambiguous alias."""
+        found: Final = await rust_database.required_repository(RustTeamRepository).find_up_to_two_by_alias(team_alias)
+        return tuple(LiteLLM_TeamTableCachedObj.model_validate_json(team) for team in found)
 
     async def find_by_alias(self, team_alias: str) -> LiteLLM_TeamTable | None:
         """Find a team by alias."""

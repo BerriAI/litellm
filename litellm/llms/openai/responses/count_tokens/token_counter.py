@@ -5,8 +5,9 @@ OpenAI Token Counter implementation using the Responses API /input_tokens endpoi
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Any, Final
+from typing import Final
 
+import httpx
 import openai
 from pydantic import JsonValue
 from typing_extensions import assert_never
@@ -15,12 +16,17 @@ from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.tool_fields import DropPolicy
-from litellm.llms.anthropic.pass_through.convertible_blocks import deployment_drops_params, unconvertible_blocks_error
-from litellm.llms.anthropic.pass_through.responses_adapters.transformation import (
+from litellm.llms.anthropic.messages.context_management import AnthropicContextManagementError
+from litellm.llms.anthropic.messages.convertible_blocks import deployment_drops_params, unconvertible_blocks_error
+from litellm.llms.anthropic.messages.responses_adapters.handler import (
+    count_messages_as_sent,
+    preserves_system_instructions,
+)
+from litellm.llms.anthropic.messages.responses_adapters.transformation import (
     LiteLLMAnthropicToResponsesAPIAdapter,
 )
-from litellm.llms.base_llm.base_utils import BaseTokenCounter
-from litellm.llms.openai.common_utils import OpenAIError, get_openai_credentials
+from litellm.llms.base_llm.base_utils import BaseTokenCounter, deployment_timeout
+from litellm.llms.openai.common_utils import OpenAIError, decoded_json_object, get_openai_credentials
 from litellm.llms.openai.responses.count_tokens.handler import (
     OpenAICountTokensHandler,
 )
@@ -59,6 +65,7 @@ def _workload_identity_config(
 class _CountCredential:
     api_base: str | None
     credential: str | OpenAIWorkloadIdentityConfig
+    timeout: float | httpx.Timeout | None
 
 
 def _count_credential(deployment: Mapping[str, object] | None, model_label: str) -> _CountCredential | OpenAIError:
@@ -80,7 +87,9 @@ def _count_credential(deployment: Mapping[str, object] | None, model_label: str)
                 "workload identity on the deployment, or OPENAI_API_KEY in the proxy environment."
             ),
         )
-    return _CountCredential(api_base=credentials.api_base, credential=credential)
+    return _CountCredential(
+        api_base=credentials.api_base, credential=credential, timeout=deployment_timeout(litellm_params)
+    )
 
 
 def _count_error(model_to_use: str, request_model: str, message: str, status_code: int) -> TokenCountResponse:
@@ -105,12 +114,6 @@ class OpenAITokenCounter(BaseTokenCounter):
         return custom_llm_provider == LlmProviders.OPENAI.value
 
     @staticmethod
-    def _system_instructions(system: object) -> str | None:
-        if system is None or isinstance(system, str):
-            return system
-        return LiteLLMAnthropicToResponsesAPIAdapter.system_blocks_to_instructions(system) or None
-
-    @staticmethod
     def _responses_request_parts(
         model_to_use: str,
         messages: Sequence[Mapping[str, object]],
@@ -118,17 +121,23 @@ class OpenAITokenCounter(BaseTokenCounter):
         system: object,
         messages_format: TokenCountMessagesFormat,
         output_format: JsonValue,
+        request_params: Mapping[str, object] = MappingProxyType({}),
     ) -> ResponsesCountRequestParts:
         match messages_format:
             case "anthropic":
                 return OpenAICountTokensConfig.anthropic_messages_to_responses_input(
-                    model=model_to_use, messages=messages, system=system, tools=tools, output_format=output_format
+                    model=model_to_use,
+                    messages=messages,
+                    system=system,
+                    tools=tools,
+                    output_format=output_format,
+                    preserve_system_instructions=preserves_system_instructions(request_params),
                 )
             case "openai":
                 input_items, instructions = OpenAICountTokensConfig.messages_to_responses_input(
                     [dict(message) for message in messages]
                 )
-                fallback_instructions: Final = OpenAITokenCounter._system_instructions(system)
+                fallback_instructions: Final = LiteLLMAnthropicToResponsesAPIAdapter.system_instructions(system)
                 return OpenAICountTokensConfig.count_request_parts(
                     input_items, instructions if instructions is not None else fallback_instructions, tools
                 )
@@ -140,7 +149,7 @@ class OpenAITokenCounter(BaseTokenCounter):
         model_to_use: str,
         messages: list[dict[str, object]] | None,
         contents: list[dict[str, object]] | None,
-        deployment: dict[str, Any] | None = None,
+        deployment: Mapping[str, object] | None = None,
         request_model: str = "",
         tools: list[dict[str, object]] | None = None,
         system: object = None,
@@ -148,6 +157,7 @@ class OpenAITokenCounter(BaseTokenCounter):
         output_format: JsonValue = None,
         context_management: CountContextManagement | None = None,
         chat_params: Mapping[str, JsonValue] = MappingProxyType({}),
+        count_options: Mapping[str, JsonValue] = MappingProxyType({}),
     ) -> TokenCountResponse | None:
         """
         Count tokens using OpenAI's Responses API /input_tokens endpoint.
@@ -175,17 +185,38 @@ class OpenAITokenCounter(BaseTokenCounter):
                 rejected_before_provider_call=True,
             )
 
+        sent_messages: Final = await count_messages_as_sent(
+            model=model_to_use,
+            messages=messages,
+            tools=tools,
+            system=system,
+            messages_format=messages_format,
+            context_management=context_management,
+        )
+        if isinstance(sent_messages, AnthropicContextManagementError):
+            return TokenCountResponse(
+                total_tokens=0,
+                request_model=request_model,
+                model_used=model_to_use,
+                tokenizer_type="openai_api",
+                error=True,
+                error_message=sent_messages.message,
+                status_code=sent_messages.status_code,
+                rejected_before_provider_call=True,
+            )
+
         resolved: Final = _count_credential(deployment, request_model or model_to_use)
         if isinstance(resolved, OpenAIError):
             return _count_error(model_to_use, request_model, resolved.message, resolved.status_code)
 
         input_items, instructions, counted_tools, text = self._responses_request_parts(
             model_to_use=model_to_use,
-            messages=messages,
+            messages=sent_messages,
             tools=tools,
             system=system,
             messages_format=messages_format,
             output_format=output_format,
+            request_params=as_str_mapping(None if deployment is None else deployment.get("litellm_params")) or {},
         )
 
         # If no input items were produced (e.g., system-only messages), fall back to local counting
@@ -202,6 +233,7 @@ class OpenAITokenCounter(BaseTokenCounter):
                 tools=counted_tools,
                 instructions=instructions,
                 text=text,
+                timeout=resolved.timeout,
             ),
             model_to_use,
             request_model,
@@ -221,7 +253,9 @@ class OpenAITokenCounter(BaseTokenCounter):
         body: Final = native_count_request(request, model_to_use, policy)
         return await self._counted(
             resolved,
-            lambda api_key, api_base: openai_count_tokens_handler.post_count_request(body, api_key, api_base),
+            lambda api_key, api_base: openai_count_tokens_handler.post_count_request(
+                body, api_key, api_base, resolved.timeout
+            ),
             model_to_use,
             request_model,
         )
@@ -229,7 +263,7 @@ class OpenAITokenCounter(BaseTokenCounter):
     @staticmethod
     async def _counted(
         resolved: _CountCredential,
-        send: Callable[[str, str | None], Awaitable[Mapping[str, object]]],
+        send: Callable[[str, str | None], Awaitable[object]],
         model_to_use: str,
         request_model: str,
     ) -> TokenCountResponse | None:
@@ -244,7 +278,7 @@ class OpenAITokenCounter(BaseTokenCounter):
             if result is not None:
                 return TokenCountResponse.model_validate(
                     {
-                        "total_tokens": result.get("input_tokens", 0),
+                        "total_tokens": decoded_json_object(result).get("input_tokens", 0),
                         "request_model": request_model,
                         "model_used": model_to_use,
                         "tokenizer_type": "openai_api",

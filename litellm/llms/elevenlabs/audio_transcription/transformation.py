@@ -3,7 +3,7 @@ Translates from OpenAI's `/v1/audio/transcriptions` to ElevenLabs's `/v1/speech-
 """
 
 from collections.abc import Iterable, Mapping
-from typing import Final
+from typing import Final, Protocol
 
 from httpx import Headers, Response
 from pydantic import ConfigDict, TypeAdapter
@@ -27,6 +27,15 @@ from ..common_utils import ElevenLabsException
 
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
 _JSON_OBJECTS: Final = TypeAdapter(Iterable[Mapping[str, object]], config=ConfigDict(hide_input_in_errors=True))
+_HIDDEN_PARAMS: Final = TypeAdapter(dict[str, object])
+
+
+class _JsonResponse(Protocol):
+    def json(self) -> object: ...
+
+
+def _json_body(response: _JsonResponse) -> object:
+    return response.json()
 
 
 class ElevenLabsAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
@@ -39,11 +48,11 @@ class ElevenLabsAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
 
     def map_openai_params(
         self,
-        non_default_params: dict,
-        optional_params: dict,
+        non_default_params: Mapping[str, object],
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:
         supported_params: Final = self.get_supported_openai_params(model)
         for k, v in non_default_params.items():
             if k in supported_params:
@@ -61,8 +70,8 @@ class ElevenLabsAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         self,
         model: str,
         audio_file: FileTypes,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: Mapping[str, object],
     ) -> AudioTranscriptionRequestData:
         """
         Transforms the audio transcription request for ElevenLabs API.
@@ -120,7 +129,7 @@ class ElevenLabsAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         Transforms the raw response from ElevenLabs to the TranscriptionResponse format
         """
         try:
-            response_json: Final = raw_response.json()
+            response_json: Final = _json_body(raw_response)
             response_object: Final = _JSON_OBJECT.validate_python(response_json)
 
             # Extract the main transcript text
@@ -135,33 +144,31 @@ class ElevenLabsAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
 
             # Map ElevenLabs words to OpenAI format
             if "words" in response_object:
-                response["words"] = []
-                for word_data in _JSON_OBJECTS.validate_python(response_object["words"]):
-                    # Only include actual words, skip spacing and audio events
-                    if word_data.get("type") == "word":
-                        response["words"].append(
-                            {
-                                "word": word_data.get("text", ""),
-                                "start": word_data.get("start", 0),
-                                "end": word_data.get("end", 0),
-                            }
-                        )
+                response["words"] = [
+                    {
+                        "word": word_data.get("text", ""),
+                        "start": word_data.get("start", 0),
+                        "end": word_data.get("end", 0),
+                    }
+                    for word_data in _JSON_OBJECTS.validate_python(response_object["words"])
+                    if word_data.get("type") == "word"
+                ]
 
             # Store full response in hidden params
-            response.hidden_params = response_json
+            response.hidden_params = _HIDDEN_PARAMS.validate_python(response_json)
 
             return response
 
         except Exception as e:
-            raise ValueError(f"Error transforming ElevenLabs response: {e}\nResponse: {raw_response.text}")
+            raise ValueError(f"Error transforming ElevenLabs response: {e}") from None
 
     def get_complete_url(
         self,
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         stream: bool | None = None,
     ) -> str:
         if api_base is None:
@@ -170,14 +177,14 @@ class ElevenLabsAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, object],
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         api_key = api_key or get_secret_str("ELEVENLABS_API_KEY")
         if api_key is None:
             raise ValueError("ElevenLabs API key is required. Set ELEVENLABS_API_KEY environment variable.")

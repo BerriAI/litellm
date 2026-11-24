@@ -53,7 +53,7 @@ from litellm.proxy.auth.auth_checks import (  # noqa: F401  # legacy module expo
     delete_cache_team_object,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
+from litellm.proxy.common_utils.cache_invalidation_pubsub import (
     broadcast_evictions,
     evict_and_broadcast,
     evict_local,
@@ -65,6 +65,7 @@ from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # leg
 )
 from litellm.proxy.litellm_pre_call_utils import sanitize_for_log
 from litellm.proxy.management_endpoints.internal_user_endpoints import new_user
+from litellm.proxy.management_endpoints.scim.scim_errors import ScimRoute, scim_detail_of
 from litellm.proxy.management_endpoints.scim.scim_transformations import (
     ScimTransformations,
 )
@@ -229,7 +230,11 @@ class UserProvisionerHelpers:
             return None
 
         requested_teams: Final = list(dict.fromkeys(new_user_request.teams or []))
-        new_teams: Final = requested_teams if requested_teams else list(existing_user.teams or [])
+        new_teams: Final = (
+            list(_keep_record_team_order(existing_user.teams or [], requested_teams))
+            if requested_teams
+            else list(existing_user.teams or [])
+        )
 
         if new_user_request.user_id != existing_user.user_id:
             verbose_proxy_logger.info(
@@ -290,7 +295,9 @@ scim_router: Final = APIRouter(
     prefix="/scim/v2",
     tags=["✨ SCIM v2 (Enterprise Only)"],
     dependencies=[Depends(premium_user_check)],
+    route_class=ScimRoute,
 )
+placeholder_router: Final = APIRouter()
 
 SCIM_MAX_PAGE_SIZE: Final = 100
 
@@ -904,10 +911,6 @@ class _UserIdWhere(TypedDict):
     user_id: ReadOnly[str]
 
 
-class _ScimErrorDetail(TypedDict):
-    error: ReadOnly[str]
-
-
 async def _ensure_group_member_user(
     user_id: str,
     created_via: str,
@@ -928,7 +931,7 @@ async def _ensure_group_member_user(
     existing: Final = await _table(UserRepository(prisma_client)).find_unique(where=where)
     if existing is not None:
         return None
-    detail: Final[_ScimErrorDetail] = {
+    detail: Final[ScimErrorDetail] = {
         "error": f"Failed to create user '{user_id}' while provisioning group membership."
     }
     raise HTTPException(status_code=500, detail=detail)
@@ -943,14 +946,14 @@ async def _raise_if_batch_over_license_limit(new_user_count: int, prisma_client:
         return
     billable_users: Final = await UserRepository(prisma_client).count_billable_users()
     if _license_check.is_over_limit(total_users=billable_users + new_user_count):
-        detail: Final[_ScimErrorDetail] = {
+        detail: Final[ScimErrorDetail] = {
             "error": "License is over limit. Please contact support@berri.ai to upgrade your license."
         }
         raise HTTPException(status_code=403, detail=detail)
 
 
 def _member_not_provisioned_error(user_id: str) -> HTTPException:
-    detail: Final[_ScimErrorDetail] = {
+    detail: Final[ScimErrorDetail] = {
         "error": f"User with ID '{user_id}' does not exist. "
         "Please create the user first via POST /Users before adding to group."
     }
@@ -1110,9 +1113,9 @@ async def _resolve_group_member_ids(
     created_users: Final = await _create_group_member_users(unique_unknown_ids, created_via, prisma_client)
 
     return GroupMemberExtractionResult(
-        existing_member_ids=partition.resolved_ids,
-        created_users=created_users,
-        all_member_ids=_admitted_member_ids(classified, frozenset(unique_unknown_ids)),
+        existing_member_ids=list(partition.resolved_ids),
+        created_users=list(created_users),
+        all_member_ids=list(_admitted_member_ids(classified, frozenset(unique_unknown_ids))),
     )
 
 
@@ -1165,7 +1168,7 @@ async def _handle_team_membership_changes(
     existing_teams_set: Final = set(existing_teams)
     new_teams_set: Final = set(new_teams)
 
-    teams_to_add: Final = new_teams_set - existing_teams_set
+    teams_to_add: Final = tuple(team for team in dict.fromkeys(new_teams) if team not in existing_teams_set)
     teams_to_remove: Final = existing_teams_set - new_teams_set
 
     if teams_to_add or teams_to_remove:
@@ -1175,6 +1178,41 @@ async def _handle_team_membership_changes(
             teams_ids_to_remove_user_from=list(teams_to_remove),
             raise_on_error=True,
         )
+
+
+async def _sync_requested_teams(
+    prisma_client: PrismaClient,
+    user_id: str,
+    record_teams: Sequence[str],
+    requested_teams: Sequence[str],
+) -> tuple[str, ...]:
+    """Write the roster change and return the teams to persist, leaving out groups that have no team row.
+
+    A group the IdP pushed before LiteLLM has a team for it must not hold back the rest of the
+    request, since that same request may be the one that deactivates the user.
+    """
+    changed: Final = frozenset(record_teams) ^ frozenset(requested_teams)
+    rows: Final = await find_many_in(
+        _table(TeamRepository(prisma_client, use_writer=True)),
+        "team_id",
+        changed,
+        chunk_size=SCIM_GROUP_MEMBER_LOOKUP_BATCH_SIZE,
+    )
+    teamless: Final = changed - frozenset(team.team_id for team in rows)
+    if teamless:
+        verbose_proxy_logger.warning(
+            "SCIM: ignoring groups with no LiteLLM team for user %s: %s",
+            sanitize_for_log(user_id),
+            sanitize_for_log(sorted(teamless)),
+        )
+
+    teams_to_keep: Final = tuple(team for team in requested_teams if team not in teamless)
+    await _handle_team_membership_changes(
+        user_id=user_id,
+        existing_teams=[team for team in record_teams if team not in teamless],
+        new_teams=list(teams_to_keep),
+    )
+    return teams_to_keep
 
 
 SCIM_BLOCKED_METADATA_KEY: Final = "scim_blocked"
@@ -1290,7 +1328,7 @@ async def _create_user_if_not_exists(user_id: str, created_via: str = "scim_grou
         if litellm.default_internal_user_params:
             default_role = litellm.default_internal_user_params.get("user_role")
 
-        new_user_request: Final = NewUserRequest(
+        new_user_request: Final = SCIMNewUserRequest(
             user_id=user_id,
             user_email=user_id,  # We don't have email from group membership
             user_alias=None,
@@ -1715,11 +1753,12 @@ async def get_service_provider_config(request: Request):
         request.url,
         safe_get_request_headers(request),
     )
-    meta: Final = {
-        "resourceType": "ServiceProviderConfig",
-        "location": str(request.url),
-    }
-    return SCIMServiceProviderConfig(meta=meta)
+    return SCIMServiceProviderConfig(
+        meta={
+            "resourceType": "ServiceProviderConfig",
+            "location": str(request.url),
+        }
+    )
 
 
 def _parse_scim_eq_filter(scim_filter: str) -> tuple[str, str] | None:
@@ -1869,7 +1908,7 @@ async def create_user(
         admin_group: Final = await _get_scim_admin_group()
         resolved_role: Final = _resolve_scim_user_role(user.groups or [], admin_group, default_role)
 
-        new_user_request: Final = NewUserRequest(
+        new_user_request: Final = SCIMNewUserRequest(
             user_id=user_id,
             user_email=user_data["user_email"],
             user_alias=user_data["user_alias"],
@@ -1948,18 +1987,23 @@ async def update_user(
 
         # SCIM User.groups is readOnly (RFC 7643 4.1.2): IdPs sync membership via /Groups and send
         # no groups or `groups: []` on profile PUTs, so empty means unspecified, not "remove from every team"
-        target_teams: Final = user_data["teams"] or existing_user.teams
-        await _handle_team_membership_changes(
+        target_teams: Final = (
+            list(_keep_record_team_order(existing_user.teams, user_data["teams"]))
+            if user_data["teams"]
+            else existing_user.teams
+        )
+        synced_teams: Final = await _sync_requested_teams(
+            prisma_client=prisma_client,
             user_id=user_id,
-            existing_teams=existing_user.teams,
-            new_teams=target_teams,
+            record_teams=existing_user.teams,
+            requested_teams=target_teams,
         )
 
         update_data: Final = {
             "user_email": user_data["user_email"],
             "user_alias": user_data["user_alias"],
             "sso_user_id": user_data["sso_user_id"],
-            "teams": target_teams,
+            "teams": list(synced_teams),
             "metadata": safe_dumps(metadata),
         }
 
@@ -2052,7 +2096,7 @@ async def delete_user(
         raise handle_exception_on_proxy(e)
 
 
-@scim_router.get(
+@placeholder_router.get(
     "/placeholders",
     response_model=tuple[SCIMPlaceholder, ...],
     dependencies=(Depends(user_api_key_auth),),
@@ -2090,7 +2134,7 @@ def _placeholder_rejection(placeholder: LiteLLM_UserTable, resolved: tuple[str, 
     return None
 
 
-@scim_router.post(
+@placeholder_router.post(
     "/placeholders/{user_id}/merge",
     response_model=SCIMPlaceholderMergeResult,
     dependencies=(Depends(user_api_key_auth),),
@@ -2116,7 +2160,7 @@ async def merge_placeholder(
         keys: Final = await _table(VerificationTokenRepository(prisma_client)).find_many(where=owned_keys)
         rejection: Final = _placeholder_rejection(placeholder, resolved, len(keys))
         if rejection is not None:
-            detail: Final[_ScimErrorDetail] = {"error": rejection}
+            detail: Final[ScimErrorDetail] = {"error": rejection}
             raise HTTPException(status_code=409, detail=detail)
 
         target_user_id: Final = resolved[0]
@@ -2133,6 +2177,9 @@ async def merge_placeholder(
         )
     except Exception as e:
         raise handle_exception_on_proxy(e)
+
+
+scim_router.include_router(placeholder_router)
 
 
 def _parse_member_entry(entry: object) -> SCIMMember | None:
@@ -2241,19 +2288,35 @@ def _handle_name_update(path: str, op_type: str, value: object, scim_metadata: d
             scim_metadata["familyName"] = str(value)
 
 
-def _handle_group_operations(op_type: str, value: object, teams_set: set[str], path: str | None) -> set[str] | None:
-    """Handle group/team membership operations."""
-    group_values = _extract_group_values(value)
-    if not group_values and value is None:
-        group_values = _extract_ids_from_path_filter(path, "groups")
-    if op_type == "replace":
-        return set(group_values)
-    elif op_type == "add":
-        teams_set.update(group_values)
-    elif op_type == "remove":
-        for gid in group_values:
-            teams_set.discard(gid)
-    return None
+def _is_group_path(path: str | None) -> bool:
+    return isinstance(path, str) and path.lower().startswith("groups")
+
+
+def _removes_every_value(op: SCIMPatchOperation, attribute: str) -> bool:
+    return op.op == "remove" and op.value is None and (op.path or "").lower() == attribute
+
+
+def _apply_group_operation(teams: tuple[str, ...], op: SCIMPatchOperation) -> tuple[str, ...]:
+    if _removes_every_value(op, "groups"):
+        return ()
+    listed: Final = _extract_group_values(op.value)
+    group_values: Final = listed if listed or op.value is not None else _extract_ids_from_path_filter(op.path, "groups")
+    if op.op == "replace":
+        return tuple(dict.fromkeys(group_values))
+    if op.op == "add":
+        return tuple(dict.fromkeys((*teams, *group_values)))
+    removed: Final = frozenset(group_values)
+    return tuple(team for team in teams if team not in removed)
+
+
+def _keep_record_team_order(record_teams: Sequence[str], target_teams: Sequence[str]) -> tuple[str, ...]:
+    target: Final = frozenset(target_teams)
+    record: Final = tuple(dict.fromkeys(record_teams))
+    known: Final = frozenset(record)
+    return (
+        *(team for team in record if team in target),
+        *(team for team in dict.fromkeys(target_teams) if team not in known),
+    )
 
 
 def _multi_valued_attribute_base(path: str) -> str:
@@ -2520,8 +2583,8 @@ def _handle_generic_metadata(path: str, op_type: str, value: object, metadata: d
 def _apply_patch_ops(
     existing_user: LiteLLM_UserTable,
     patch_ops: SCIMPatchOp,
-) -> tuple[dict[str, object], set[str]]:
-    """Apply patch operations and return update data and final team set."""
+) -> tuple[dict[str, object], tuple[str, ...]]:
+    """Apply patch operations and return update data and the final teams in order."""
     update_data: Final[dict[str, object]] = {}
     stored_metadata: Final[object] = TypeAdapter(object).validate_python(existing_user.model_dump().get("metadata"))
     metadata: Final = _JSON_OBJECT_ADAPTER.validate_python(stored_metadata) if isinstance(stored_metadata, dict) else {}
@@ -2540,9 +2603,6 @@ def _apply_patch_ops(
     )
     if isinstance(enterprise, _InvalidEnterpriseValue):
         _raise_invalid_enterprise_value(enterprise)
-
-    teams_set: Final[set[str]] = set(existing_user.teams or [])
-    replace_team_set: set[str] | None = None
 
     for op in patch_ops.Operations:
         path = op.path.lower() if isinstance(op.path, str) else ""
@@ -2585,16 +2645,17 @@ def _apply_patch_ops(
             _handle_name_update(path, op_type, value, scim_metadata)
         elif _multi_valued_attribute_base(path) in SCIM_MULTI_VALUED_ATTRIBUTE_METADATA_KEYS:
             _handle_multi_valued_attribute_update(path, op_type, value, metadata)
-        elif path.startswith("groups"):
-            new_replace_set = _handle_group_operations(op_type, value, teams_set, op.path)
-            if new_replace_set is not None:
-                replace_team_set = new_replace_set
-        elif _enterprise_extension_sub_path(path) is not None:
+        elif _is_group_path(path) or _enterprise_extension_sub_path(path) is not None:
             continue
         else:
             _handle_generic_metadata(path, op_type, value, metadata)
 
-    final_team_set: Final = replace_team_set if replace_team_set is not None else teams_set
+    record_teams: Final = tuple(existing_user.teams or [])
+    group_ops: Final = tuple(op for op in patch_ops.Operations if _is_group_path(op.path))
+    final_teams: Final = _keep_record_team_order(
+        record_teams,
+        reduce(_apply_group_operation, group_ops, record_teams),
+    )
     final_metadata: Final = (
         {
             **{key: metadata_value for key, metadata_value in metadata.items() if key != SCIM_ENTERPRISE_METADATA_KEY},
@@ -2605,7 +2666,7 @@ def _apply_patch_ops(
         else {**metadata, "scim_metadata": scim_metadata}
     )
     update_data["metadata"] = final_metadata
-    return update_data, final_team_set
+    return update_data, final_teams
 
 
 def _is_user_not_in_team_error(exc: HTTPException) -> bool:
@@ -2658,7 +2719,7 @@ async def _attempt_roster_write(label: str, write: Callable[[], Awaitable[object
         return e.failures
     except Exception as e:  # noqa: BLE001  # this boundary turns any write failure into a value so the batch continues
         verbose_proxy_logger.exception("SCIM roster write failed (%s): %s", label, e)
-        return (RosterWriteFailure(description=f"{label}: {e}", status_code=_roster_write_status(e)),)
+        return (RosterWriteFailure(description=f"{label}: {scim_detail_of(e)}", status_code=_roster_write_status(e)),)
     return ()
 
 
@@ -2758,7 +2819,7 @@ async def patch_user(
 
         prev_active: Final = _user_scim_active(existing_user)
 
-        update_data, final_team_set = _apply_patch_ops(
+        update_data, final_teams = _apply_patch_ops(
             existing_user=existing_user,
             patch_ops=patch_ops,
         )
@@ -2766,19 +2827,19 @@ async def patch_user(
         patched_metadata: Final = update_data.get("metadata")
         new_active: Final = _scim_active_value(patched_metadata if isinstance(patched_metadata, Mapping) else None)
 
-        # Handle team membership changes
-        await _handle_team_membership_changes(
+        synced_teams: Final = await _sync_requested_teams(
+            prisma_client=prisma_client,
             user_id=user_id,
-            existing_teams=existing_user.teams or [],
-            new_teams=list(final_team_set),
+            record_teams=existing_user.teams or [],
+            requested_teams=final_teams,
         )
 
-        update_data["teams"] = list(final_team_set)
+        update_data["teams"] = list(synced_teams)
 
         admin_group: Final = await _get_scim_admin_group()
         if admin_group is not None:
             update_data["user_role"] = _resolve_scim_user_role(
-                await _scim_groups_from_team_ids(prisma_client, list(final_team_set)),
+                await _scim_groups_from_team_ids(prisma_client, list(synced_teams)),
                 admin_group,
                 _default_scim_user_role(),
             )
@@ -3130,7 +3191,7 @@ def _pathless_group_resource(op: SCIMPatchOperation) -> Mapping[str, object] | N
     resource: Final = _json_object_fields(op.value)
     if op.op != "remove" and resource is not None:
         return resource
-    detail: Final[_ScimErrorDetail] = {
+    detail: Final[ScimErrorDetail] = {
         "error": (
             "A remove operation requires a 'path' (RFC 7644 Section 3.5.2.2)"
             if op.op == "remove"
@@ -3152,7 +3213,9 @@ def _group_patch_attribute_values(op: SCIMPatchOperation) -> tuple[tuple[str, ob
     )
 
 
-def _replaces_members(op: SCIMPatchOperation) -> bool:
+def _sets_member_roster(op: SCIMPatchOperation) -> bool:
+    if _removes_every_value(op, "members"):
+        return True
     if op.op != "replace":
         return False
     return any(attribute.startswith("members") for attribute, _ in _group_patch_attribute_values(op))
@@ -3187,13 +3250,13 @@ async def _process_group_patch_operations(
     patch_ops: SCIMPatchOp, existing_team: LiteLLM_TeamTable, prisma_client: PrismaClient
 ) -> tuple[dict[str, object], set[str], set[str] | None]:
     """Process patch operations for a group and return update data, final members
-    and, when the request contained a member ``replace`` op, the absolute target
-    roster it declared (``None`` otherwise).
+    and, when the request contained a member ``replace`` op or a ``remove`` of every
+    member, the absolute target roster it declared (``None`` otherwise).
 
     ``add``/``remove`` are deltas relative to the current roster, but ``replace``
-    is absolute: it declares the roster is exactly this set, so the caller must
-    reconcile against it as a set-to-target rather than rebasing it onto a
-    concurrently-mutated roster.
+    and a ``remove`` on ``members`` with no value or filter are absolute: they
+    declare the roster is exactly this set, so the caller must reconcile against it
+    as a set-to-target rather than rebasing it onto a concurrently-mutated roster.
 
     A ``remove`` drops the ids it names without resolving them first. Removal is
     idempotent and cannot put anything on a roster, while resolving would make it
@@ -3251,8 +3314,11 @@ async def _process_group_patch_operations(
                 )
 
                 if op_type == "remove":
-                    final_members = final_members - await _member_ids_to_drop(
-                        patched_members, frozenset(final_members), prisma_client
+                    final_members = (
+                        set[str]()
+                        if _removes_every_value(op, "members")
+                        else final_members
+                        - await _member_ids_to_drop(patched_members, frozenset(final_members), prisma_client)
                     )
                 else:
                     member_result = await _resolve_group_member_ids(
@@ -3289,8 +3355,8 @@ async def _process_group_patch_operations(
 
     update_data["metadata"] = metadata
 
-    member_replace_present: Final = any(map(_replaces_members, patch_ops.Operations))
-    replace_target: Final = set(final_members) if member_replace_present else None
+    roster_set_present: Final = any(map(_sets_member_roster, patch_ops.Operations))
+    replace_target: Final = set(final_members) if roster_set_present else None
 
     return update_data, final_members, replace_target
 

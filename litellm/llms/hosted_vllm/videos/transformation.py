@@ -8,14 +8,17 @@ from typing import Final
 from urllib.parse import urlparse
 
 from httpx._types import FileTypes, RequestFiles
+from pydantic import TypeAdapter
 
 from litellm.images.utils import ImageEditRequestUtils
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.url_utils import SSRFError, join_api_base, validate_url
 from litellm.llms.openai.videos.transformation import OpenAIVideoConfig
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.videos.main import VideoCreateOptionalRequestParams
 
+_DECODED_JSON: Final = TypeAdapter(object)
 _EXCLUDED_FORM_KEYS: Final = frozenset(
     {
         "model",
@@ -82,7 +85,7 @@ def _maybe_json(value: object) -> object:
     stripped: Final = value.strip()
     if not stripped or stripped[0] not in "{[":
         return value
-    return json.loads(stripped)
+    return _DECODED_JSON.validate_python(json.loads(stripped))
 
 
 def _reject_unsafe_media_url(url: str) -> None:
@@ -95,9 +98,10 @@ def _reject_unsafe_media_url(url: str) -> None:
 
 
 def _reject_unsafe_urls_in_item(url_key: str, item: object) -> None:
-    if not isinstance(item, Mapping):
+    mapping: Final = as_str_mapping(item)
+    if mapping is None:
         return
-    url: Final = item.get(url_key)
+    url: Final = mapping.get(url_key)
     if isinstance(url, str):
         _reject_unsafe_media_url(url)
 
@@ -111,8 +115,7 @@ def _reject_unsafe_media_urls(field_name: str, value: object) -> None:
         for item in parsed:
             _reject_unsafe_urls_in_item(url_key, item)
         return
-    if isinstance(parsed, Mapping):
-        _reject_unsafe_urls_in_item(url_key, parsed)
+    _reject_unsafe_urls_in_item(url_key, parsed)
 
 
 def _form_value(key: str, value: object) -> str:
@@ -134,7 +137,7 @@ class HostedVLLMVideoConfig(OpenAIVideoConfig):
     https://docs.vllm.ai/projects/vllm-omni/en/latest/serving/videos_api/
     """
 
-    def get_supported_openai_params(self, model: str) -> list:  # mutable-ok: BaseVideoConfig contract
+    def get_supported_openai_params(self, model: str) -> list[str]:  # mutable-ok: BaseVideoConfig contract
         return [
             *super().get_supported_openai_params(model),
             *_VLLM_OMNI_VIDEO_PARAMS,
@@ -145,16 +148,16 @@ class HostedVLLMVideoConfig(OpenAIVideoConfig):
         video_create_optional_params: VideoCreateOptionalRequestParams,
         model: str,
         drop_params: bool,
-    ) -> dict:  # mutable-ok: BaseVideoConfig contract; extra_body merge mutates this dict
+    ) -> dict[str, object]:  # mutable-ok: BaseVideoConfig contract; extra_body merge mutates this dict
         return {key: value for key, value in video_create_optional_params.items() if value is not None}
 
     def validate_environment(
         self,
-        headers: dict,  # mutable-ok: BaseVideoConfig contract
+        headers: dict[str, object],  # mutable-ok: BaseVideoConfig contract
         model: str,
         api_key: str | None = None,
         litellm_params: GenericLiteLLMParams | None = None,
-    ) -> dict:  # mutable-ok: BaseVideoConfig contract
+    ) -> dict[str, object]:  # mutable-ok: BaseVideoConfig contract
         resolved_key: Final = (
             (litellm_params.api_key if litellm_params is not None else None)
             or api_key
@@ -167,7 +170,7 @@ class HostedVLLMVideoConfig(OpenAIVideoConfig):
         self,
         model: str,
         api_base: str | None,
-        litellm_params: dict,  # mutable-ok: BaseVideoConfig contract
+        litellm_params: dict[str, object],  # mutable-ok: BaseVideoConfig contract
     ) -> str:
         resolved_api_base: Final = api_base or get_secret_str("HOSTED_VLLM_API_BASE")
         if resolved_api_base is None:
@@ -185,10 +188,10 @@ class HostedVLLMVideoConfig(OpenAIVideoConfig):
         model: str,
         prompt: str,
         api_base: str,
-        video_create_optional_request_params: dict,  # mutable-ok: BaseVideoConfig contract
+        video_create_optional_request_params: dict[str, object],  # mutable-ok: BaseVideoConfig contract
         litellm_params: GenericLiteLLMParams,
-        headers: dict,  # mutable-ok: BaseVideoConfig contract
-    ) -> tuple[dict, RequestFiles, str]:  # mutable-ok: BaseVideoConfig contract
+        headers: dict[str, object],  # mutable-ok: BaseVideoConfig contract
+    ) -> tuple[dict[str, str], RequestFiles, str]:  # mutable-ok: BaseVideoConfig contract
         data: Final = {
             "model": model,
             "prompt": prompt,

@@ -9,7 +9,7 @@ from respx import MockRouter
 import litellm
 from litellm.google_genai import agenerate_content_stream
 from litellm.llms.gemini.google_genai.transformation import GoogleGenAIConfig
-from litellm.llms.vertex_ai.common_utils import GEMINI_MAX_ENUM_CHARACTERS
+from litellm.llms.vertex_ai.common_utils import GEMINI_MAX_ENUM_BYTES
 
 _JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 _PROMPT: Final = "Hello, can you tell me a short joke?"
@@ -104,6 +104,26 @@ def test_generate_content_response_parses_function_call() -> None:
         },
         "finishReason": "STOP",
     }
+
+
+@pytest.mark.parametrize(
+    ("body", "message"),
+    [
+        ([], r"argument after \*\* must be a mapping, not list"),
+        (["candidates"], "list indices must be integers or slices, not str"),
+    ],
+)
+def test_generate_content_response_non_object_body_raises_the_error_of_the_failing_lookup(
+    body: JsonValue, message: str
+) -> None:
+    with pytest.raises(TypeError, match=message) as raised:
+        GoogleGenAIConfig().transform_generate_content_response(
+            model="gemini-2.5-flash",
+            raw_response=httpx.Response(200, json=body),
+            logging_obj=SimpleNamespace(model_call_details={}),
+        )
+
+    assert raised.type is TypeError
 
 
 def test_generate_content_request_preserves_tool_declarations() -> None:
@@ -263,7 +283,7 @@ def test_normalize_response_schema_sends_integer_enums_to_gemini_3(
 
 @pytest.mark.parametrize(
     ("value_count", "integer_enum_sent"),
-    [(GEMINI_MAX_ENUM_CHARACTERS // 10, True), (GEMINI_MAX_ENUM_CHARACTERS // 10 + 1, False)],
+    [(GEMINI_MAX_ENUM_BYTES // 10, True), (GEMINI_MAX_ENUM_BYTES // 10 + 1, False)],
 )
 def test_normalize_response_schema_drops_integer_enums_past_the_enum_budget(
     value_count: int, integer_enum_sent: bool

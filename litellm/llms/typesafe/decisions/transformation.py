@@ -6,19 +6,21 @@ from types import MappingProxyType
 from typing import Final, Literal
 
 from litellm.constants import TYPESAFE_DANGER_ZONE_HEADER_PREFIX
-from litellm.llms.base_llm.decisions.transformation import BaseDecisionsConfig, image_media_type
+from litellm.llms.base_llm.decisions.transformation import BaseDecisionsConfig, DecisionsInputLimits, image_media_type
 from litellm.types.decisions import (
     DecisionsAsset,
     DecisionsIRMessages,
     DecisionsIRRequest,
     DecisionsIRState,
     OpenAIDecisionInputImage,
+    OpenAIDecisionInputJSON,
     OpenAIDecisionInputMessage,
     OpenAIDecisionInputText,
     UnsupportedDecisionsRequest,
 )
 
 _IMAGES_HEADER: Final = f"{TYPESAFE_DANGER_ZONE_HEADER_PREFIX}images"
+_LONG_CONTEXT_HEADER: Final = f"{TYPESAFE_DANGER_ZONE_HEADER_PREFIX}long-context"
 _ASSET_FORMATS: Final[Mapping[str, Literal["png", "jpg"]]] = MappingProxyType(
     {"image/png": "png", "image/jpeg": "jpg", "image/jpg": "jpg"}
 )
@@ -49,7 +51,7 @@ def _part_text(part: OpenAIDecisionInputText | OpenAIDecisionInputImage) -> str:
 def _message_texts(message: OpenAIDecisionInputMessage) -> tuple[str, ...]:
     if isinstance(message.content, str):
         return (message.content,)
-    return tuple(map(_part_text, message.content))
+    return tuple(_part_text(part) for part in message.content if not isinstance(part, OpenAIDecisionInputJSON))
 
 
 def _message_assets(message: OpenAIDecisionInputMessage) -> Mapping[str, DecisionsAsset]:
@@ -83,6 +85,16 @@ class TypeSafeDecisionsConfig(BaseDecisionsConfig):
 
     def get_default_api_base(self) -> str | None:
         return "https://api.typesafe.ai"
+
+    def get_input_limits(
+        self, model: str, custom_llm_provider: str, headers: Mapping[str, str]
+    ) -> DecisionsInputLimits:
+        long_context_values: Final = tuple(
+            value.strip().lower() for name, value in headers.items() if name.lower() == _LONG_CONTEXT_HEADER
+        )
+        if long_context_values and all(value == "true" for value in long_context_values):
+            return DecisionsInputLimits(max_request_tokens=262144, max_question_tokens=262144)
+        return DecisionsInputLimits(max_request_tokens=65536, max_question_tokens=32768)
 
     def supports_images_in(
         self, decision_input: DecisionsIRState | DecisionsIRMessages, headers: Mapping[str, str]

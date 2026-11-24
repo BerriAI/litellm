@@ -44,6 +44,7 @@ class _FireworksAIResultFields(LiteLLMBaseModel):
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
 _JSON_OBJECTS: Final = TypeAdapter(Iterable[Mapping[str, object]], config=ConfigDict(hide_input_in_errors=True))
 _STR: Final = TypeAdapter(str)
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class FireworksAIRerankConfig(FireworksAIMixin, BaseRerankConfig):
@@ -55,7 +56,7 @@ class FireworksAIRerankConfig(FireworksAIMixin, BaseRerankConfig):
         self,
         api_base: str | None,
         model: str,
-        optional_params: dict | None = None,
+        optional_params: Mapping[str, object] | None = None,
     ) -> str:
         if api_base:
             # Remove trailing slashes and ensure clean base URL
@@ -68,7 +69,7 @@ class FireworksAIRerankConfig(FireworksAIMixin, BaseRerankConfig):
             return api_base
         return "https://api.fireworks.ai/inference/v1/rerank"
 
-    def get_supported_cohere_rerank_params(self, model: str) -> list:
+    def get_supported_cohere_rerank_params(self, model: str) -> list[str]:
         return [
             "query",
             "documents",
@@ -78,7 +79,7 @@ class FireworksAIRerankConfig(FireworksAIMixin, BaseRerankConfig):
 
     def map_cohere_rerank_params(
         self,
-        non_default_params: dict | None,
+        non_default_params: Mapping[str, object] | None,
         model: str,
         drop_params: bool,
         query: str,
@@ -122,19 +123,19 @@ class FireworksAIRerankConfig(FireworksAIMixin, BaseRerankConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: Mapping[str, object],
         model: str,
         api_key: str | None = None,
-        optional_params: dict | None = None,
+        optional_params: Mapping[str, object] | None = None,
         litellm_params: Mapping[str, object] | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         api_key = self._get_api_key(api_key)
         if api_key is None:
             raise ValueError(
                 "FIREWORKS_API_KEY is not set. Please set 'FIREWORKS_API_KEY' or 'FIREWORKS_AI_API_KEY' in your environment"
             )
 
-        default_headers: Final = {
+        default_headers: Final[dict[str, object]] = {
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
         }
@@ -149,10 +150,10 @@ class FireworksAIRerankConfig(FireworksAIMixin, BaseRerankConfig):
     def transform_rerank_request(
         self,
         model: str,
-        optional_rerank_params: dict,
-        headers: dict,
-        litellm_params: dict | None = None,
-    ) -> dict:
+        optional_rerank_params: Mapping[str, object],
+        headers: Mapping[str, object],
+        litellm_params: Mapping[str, object] | None = None,
+    ) -> dict[str, object]:
         """
         Transform request to Fireworks AI rerank format
         """
@@ -171,7 +172,7 @@ class FireworksAIRerankConfig(FireworksAIMixin, BaseRerankConfig):
         if not model.startswith("fireworks/"):
             model = f"fireworks/{model}"
 
-        request_data: Final = {
+        request_data: Final[dict[str, object]] = {
             "model": model,
             "query": optional_rerank_params["query"],
             "documents": optional_rerank_params["documents"],
@@ -192,15 +193,15 @@ class FireworksAIRerankConfig(FireworksAIMixin, BaseRerankConfig):
         model_response: RerankResponse,
         logging_obj: LiteLLMLoggingObj,
         api_key: str | None = None,
-        request_data: dict = {},
-        optional_params: dict = {},
-        litellm_params: dict = {},
+        request_data: Mapping[str, object] = {},
+        optional_params: Mapping[str, object] = {},
+        litellm_params: Mapping[str, object] = {},
     ) -> RerankResponse:
         """
         Transform Fireworks AI rerank response to LiteLLM RerankResponse format
         """
         try:
-            raw_response_json: Final = raw_response.json()
+            raw_response_json: Final = _DECODED_JSON.validate_python(raw_response.json())
         except Exception as e:
             raise self.get_error_class(
                 error_message=f"Failed to parse response: {e}",
