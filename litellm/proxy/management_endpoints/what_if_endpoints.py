@@ -13,9 +13,11 @@ import httpx
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
+from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.proxy._types import CommonProxyErrors, UserAPIKeyAuth, user_api_key_has_admin_view
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.utils import query_raw_within_statement_timeout
+from litellm.types.llms.custom_http import httpxSpecialProvider
 from litellm.types.utils import CallTypes
 
 router: Final = APIRouter(prefix="/what_if", tags=["what-if"])
@@ -443,9 +445,11 @@ async def _play(
 async def _play_all(
     base: str, api_key: str, upstream_headers: Mapping[str, str], exchanges: Sequence[Exchange]
 ) -> tuple[str, tuple[Exchange, ...]]:
-    async with httpx.AsyncClient(timeout=30) as client:
-        spec: Final = await client.get(base + "/openapi.json")
-        played: Final = await asyncio.gather(*(_play(client, base, api_key, upstream_headers, e) for e in exchanges))
+    client: Final = get_async_httpx_client(
+        llm_provider=httpxSpecialProvider.PassThroughEndpoint, params={"timeout": 30.0}
+    ).client
+    spec: Final = await client.get(base + "/openapi.json")
+    played: Final = await asyncio.gather(*(_play(client, base, api_key, upstream_headers, e) for e in exchanges))
     return str(_as_dict(_as_dict(spec.text).get("info")).get("version", "unknown")), tuple(played)
 
 
