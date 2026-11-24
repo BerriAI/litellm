@@ -182,7 +182,10 @@ def resize_image_high_res(
     max_long_side: Final = MAX_LONG_SIDE_FOR_IMAGE_HIGH_RES
 
     # Return early if no resizing is needed
-    if width <= MAX_SHORT_SIDE_FOR_IMAGE_HIGH_RES and height <= MAX_SHORT_SIDE_FOR_IMAGE_HIGH_RES:
+    if (
+        min(width, height) <= MAX_SHORT_SIDE_FOR_IMAGE_HIGH_RES
+        and max(width, height) <= MAX_LONG_SIDE_FOR_IMAGE_HIGH_RES
+    ):
         return width, height
 
     # Determine the longer and shorter sides

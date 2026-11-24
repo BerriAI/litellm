@@ -43,6 +43,7 @@ from litellm.litellm_core_utils.token_counter import (
     _get_tiktoken_count_function,
     _resolve_exact_count,
     calculate_img_tokens,
+    calculate_tiles_needed,
     estimate_image_tokens,
     has_only_text_content,
     high_detail_image_token_upper_bound,
@@ -51,6 +52,7 @@ from litellm.litellm_core_utils.token_counter import (
     is_openai_model,
     messages_reach_token_count,
     offload_token_count,
+    resize_image_high_res,
 )
 from litellm.litellm_core_utils.token_counter import token_counter as token_counter_new
 from litellm.llms.anthropic.messages.adapters.transformation import LiteLLMAnthropicMessagesAdapter
@@ -3591,6 +3593,24 @@ def test_inline_auto_images_count_high_detail_tiles(width: int, height: int, exp
     messages = [{"role": "user", "content": [{"type": "image_url", "image_url": image_url}]}]
 
     assert token_counter_new(model="gpt-4o", messages=messages) == expected
+
+
+@pytest.mark.parametrize(
+    ("width", "height", "expected_dims", "expected_tiles"),
+    [
+        (1000, 700, (1000, 700), 4),
+        (700, 1000, (700, 1000), 4),
+        (3000, 700, (2000, 466), 4),
+        (2000, 1000, (1536, 768), 6),
+    ],
+)
+def test_resize_image_high_res_never_scales_short_side_up(
+    width: int, height: int, expected_dims: tuple[int, int], expected_tiles: int
+) -> None:
+    resized = resize_image_high_res(width=width, height=height)
+
+    assert resized == expected_dims
+    assert calculate_tiles_needed(resized[0], resized[1]) == expected_tiles
 
 
 @pytest.mark.parametrize("image_format", ["PNG", "JPEG", "GIF", "WEBP"])
