@@ -5988,13 +5988,15 @@ def _map_params_with_provider_config(
             base_model=base_model,
             allowed_openai_params=allowed_openai_param_names(allowed_openai_params),
         )
-    if isinstance(provider_config, (litellm.ChatGPTConfig, litellm.GithubCopilotConfig)):
+    if isinstance(provider_config, litellm.OpenAIConfig):
         return provider_config.map_openai_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
             model=model,
             drop_params=drop_params,
             reasoning_drop_logger=reasoning_drop_logger,
+            declared_reasoning_efforts=_declared_reasoning_efforts(model_info),
+            allowed_openai_params=allowed_openai_param_names(allowed_openai_params),
         )
     from litellm.llms.openai_like.dynamic_config import MapsAllowedOpenAIParams
 
@@ -6601,6 +6603,8 @@ def get_optional_params(
                 model=model,
                 drop_params=bool(drop_params),
                 declared_reasoning_efforts=_declared_reasoning_efforts(model_info),
+                allowed_openai_params=allowed_openai_param_names(allowed_openai_params),
+                reasoning_drop_logger=_litellm_reasoning_drop_logger,
             )
             if litellm.openaiOSeriesConfig.is_model_o_series_model(model=model)
             else litellm.OpenAIGPT5Config().map_openai_params(
@@ -6635,6 +6639,8 @@ def get_optional_params(
                 model=_azure_detection_model,
                 drop_params=bool(drop_params),
                 declared_reasoning_efforts=_declared_reasoning_efforts(model_info),
+                allowed_openai_params=allowed_openai_param_names(allowed_openai_params),
+                reasoning_drop_logger=_litellm_reasoning_drop_logger,
             )
         elif litellm.AzureOpenAIGPT5Config.is_model_gpt_5_model(model=_azure_detection_model):
             optional_params = litellm.AzureOpenAIGPT5Config().map_openai_params(
