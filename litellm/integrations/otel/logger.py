@@ -277,7 +277,7 @@ class OpenTelemetryV2(CustomLogger):
     #  Proxy global registration
     # ====================================================================== #
 
-    def _register_in_callback_list(self, callbacks: list) -> None:
+    def _register_in_callback_list(self, callbacks: list[str | Callable[..., object] | CustomLogger]) -> None:
         already_otel: Final = any(
             cb.__class__.__module__.startswith(_OTEL_MODULES) for cb in callbacks if hasattr(cb, "__class__")
         )

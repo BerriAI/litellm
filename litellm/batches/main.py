@@ -1099,7 +1099,9 @@ def cancel_batch(
         raise e
 
 
-def _handle_async_invoke_status(batch_id: str, aws_region_name: str, logging_obj=None, **kwargs) -> "LiteLLMBatch":
+def _handle_async_invoke_status(
+    batch_id: str, aws_region_name: str, logging_obj: LiteLLMLoggingObj | None = None, **kwargs: object
+) -> "LiteLLMBatch":
     """
     Handle async invoke status check for AWS Bedrock.
 

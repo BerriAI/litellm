@@ -153,7 +153,7 @@ def initialize_callbacks_on_proxy(
     premium_user: bool,
     config_file_path: str,
     litellm_settings: dict,
-    callback_specific_params: dict | None = None,
+    callback_specific_params: Mapping[str, object] | None = None,
 ):
     if not isinstance(callback_specific_params, dict):
         callback_specific_params = {}
@@ -531,7 +531,7 @@ def get_logging_caching_headers(request_data: Mapping[str, object]) -> dict[str,
         # Batch/file routes store proxy tracking in litellm_metadata while
         # user-facing metadata stays in metadata; merge both for headers.
         _metadata.update(litellm_metadata_bucket)
-    headers: Final = {}
+    headers: Final[dict[str, str]] = {}
     if "applied_guardrails" in _metadata:
         headers["x-litellm-applied-guardrails"] = ",".join(_metadata["applied_guardrails"])
 
@@ -637,7 +637,7 @@ def sanitize_openai_provider_metadata(
     return None if metadata and not sanitized else sanitized
 
 
-def add_guardrail_to_applied_guardrails_header(request_data: dict, guardrail_name: str | None):
+def add_guardrail_to_applied_guardrails_header(request_data: dict[str, object], guardrail_name: str | None):
     if guardrail_name is None:
         return
     _, _metadata = get_or_create_metadata_bucket(request_data)
@@ -683,7 +683,7 @@ def add_guardrail_scan_id(
         _metadata[GUARDRAIL_SCAN_METADATA_METADATA_KEY] = (*entries, entry)
 
 
-def add_policy_to_applied_policies_header(request_data: dict, policy_name: str | None):
+def add_policy_to_applied_policies_header(request_data: dict[str, object], policy_name: str | None):
     """
     Add a policy name to the applied_policies list in request metadata.
 
@@ -700,7 +700,7 @@ def add_policy_to_applied_policies_header(request_data: dict, policy_name: str |
         _metadata["applied_policies"] = [policy_name]
 
 
-def add_policy_sources_to_metadata(request_data: dict, policy_sources: dict[str, str]):
+def add_policy_sources_to_metadata(request_data: dict[str, object], policy_sources: dict[str, str]):
     """
     Store policy match reasons in metadata for x-litellm-policy-sources header.
 

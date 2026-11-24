@@ -150,8 +150,8 @@ class BaseLLMModelInfo(ABC):
         headers: dict,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
     ) -> dict:
@@ -473,9 +473,9 @@ def _dict_to_response_format_helper(response_format: dict, ref_template: str | N
         schema: Final = modified_format["json_schema"]["schema"]
 
         # Update all $ref values in the schema
-        def update_refs(schema):
-            stack: Final = [(schema, [])]
-            visited: Final = set()
+        def update_refs(schema: object) -> None:
+            stack: Final[list[tuple[object, list[object]]]] = [(schema, [])]
+            visited: Final[set[int]] = set()
 
             while stack:
                 obj, path = stack.pop()

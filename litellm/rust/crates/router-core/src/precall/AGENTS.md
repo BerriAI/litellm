@@ -1,0 +1,6 @@
+- This folder is `enable_pre_call_checks` (Python `Router._pre_call_checks`), one switch over a fixed set of filters run on the whole candidate group before a pick. `optional_pre_call_checks` lives in `../pre_call_checks/`, never here
+- `mod.rs` holds the facts (`PreCallFacts`, `DeploymentFacts`) and `filter`, which runs the stages in order and then picks the error. Each stage is its own file here: `context_window.rs`, `region.rs` and `params.rs`
+- A stage is a pure function of the facts and the deployments it is handed. It makes no host call, touches no cache and is not async. Live data such as the token count, context windows and supported params arrives through `RouterHost::pre_call_facts`
+- Stage order is behavior. A deployment the context window drops is never checked for region, params run only on what is left, and `UnsupportedParams` wins only when nothing overflowed and every pool deployment rejects the param
+- A new stage is a new file plus one call in `filter`, with its cases as `filter` behavior tests in `mod.rs`
+- The gateway answers these facts in `gateway/src/host/precall.rs`, and `admit` sends to Python any request whose facts it cannot report (a key's `allowed_model_region`, a body with `response_format`)

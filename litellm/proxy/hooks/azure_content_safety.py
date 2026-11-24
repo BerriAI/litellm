@@ -1,4 +1,5 @@
 import traceback
+from collections.abc import Mapping
 from typing import Final
 
 from fastapi import HTTPException
@@ -113,7 +114,7 @@ class _PROXY_AzureContentSafety(
         self,
         user_api_key_dict: UserAPIKeyAuth,
         cache: DualCache,
-        data: dict,
+        data: Mapping[str, object],
         call_type: str,  # "completion", "embeddings", "image_generation", "moderation"
     ) -> None:
         verbose_proxy_logger.debug("Inside Azure Content-Safety Pre-Call Hook")
@@ -132,7 +133,7 @@ class _PROXY_AzureContentSafety(
 
     async def async_post_call_success_hook(
         self,
-        data: dict,
+        data: Mapping[str, object],
         user_api_key_dict: UserAPIKeyAuth,
         response: object,
     ) -> None:

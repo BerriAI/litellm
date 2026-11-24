@@ -101,12 +101,15 @@ async fn gateway(python: SocketAddr, admits: bool, root_path: &str) -> SocketAdd
                 keys: None,
                 entitlements: Arc::new(Entitlements::Community),
                 environment: Arc::new(litellm_env::ProcessEnvironment),
+                gateway_requests: None,
+                gateway_requests_flush: None,
             },
             &config,
         ),
         &middleware::Settings::default(),
         Arc::new(Entitlements::Community),
         &middleware::InFlight::new(),
+        None,
     ));
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
@@ -251,12 +254,14 @@ async fn holding_keys(python: SocketAddr, config: &str, keys: Option<AuthStore>)
         &config,
         &Environment::default(),
         &state,
+        litellm_gateway::StoredConfig::Unused,
     ));
     let native = middleware::global(
         litellm_gateway::router(state, &config),
         &middleware::Settings::default(),
         Arc::new(Entitlements::Community),
         &middleware::InFlight::new(),
+        None,
     );
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();

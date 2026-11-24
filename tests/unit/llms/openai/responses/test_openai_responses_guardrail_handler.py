@@ -5573,6 +5573,34 @@ class TestCompactionOutputSummaryReachesOutputGuardrails:
         assert self._summary(result.output[0]) == "The user lives at 1 [MASKED]."
 
     @pytest.mark.asyncio
+    async def test_spreading_one_rewrite_over_message_text_leaves_the_summary_alone(self) -> None:
+        response: Final = ResponsesAPIResponse(
+            id="resp_1",
+            created_at=1,
+            model="claude-sonnet-5-5",
+            object="response",
+            status="completed",
+            output=[
+                self._compaction_item(),
+                {
+                    "type": "message",
+                    "id": "msg_1",
+                    "status": "completed",
+                    "role": "assistant",
+                    "content": [
+                        {"type": "output_text", "text": "first", "annotations": []},
+                        {"type": "refusal", "refusal": "second"},
+                    ],
+                },
+            ],
+        )
+
+        await OpenAIResponsesHandler().spread_text_rewrite(response, "rewritten")
+
+        assert self._summary(response.output[0]) == self.SUMMARY
+        assert [response.output[1].content[0].text, response.output[1].content[1].refusal] == ["rewritten", ""]
+
+    @pytest.mark.asyncio
     async def test_ended_stream_summary_is_masked_in_the_done_item_and_the_envelope(self) -> None:
         events: Final = [
             {
@@ -6674,13 +6702,6 @@ class TestReasoningOutputReachesOutputGuardrails:
         "stray_event",
         [
             {
-                "type": "response.refusal.delta",
-                "item_id": "msg_1",
-                "output_index": 1,
-                "content_index": 0,
-                "delta": "the persimmon",
-            },
-            {
                 "type": "response.code_interpreter_call_code.delta",
                 "item_id": "ci_1",
                 "output_index": 1,
@@ -6703,7 +6724,6 @@ class TestReasoningOutputReachesOutputGuardrails:
             {"type": "response.reasoning_summary_text.delta", "item_id": "rs_2", "delta": "the persimmon"},
         ],
         ids=[
-            "refusal",
             "code-interpreter",
             "unannounced-tool-call",
             "answer-at-the-reasoning-index",
@@ -6728,6 +6748,28 @@ class TestReasoningOutputReachesOutputGuardrails:
             await _deliver([reasoning, stray_event], guardrail)
 
         assert guardrail.scanned_texts == ["I think of a fig the persimmon"]
+
+    @pytest.mark.asyncio
+    async def test_a_refusal_streamed_next_to_reasoning_carries_the_mask(self) -> None:
+        events: Final = [
+            {
+                "type": "response.reasoning_summary_text.delta",
+                "item_id": "rs_1",
+                "output_index": 0,
+                "delta": "I think of a fig ",
+            },
+            {
+                "type": "response.refusal.delta",
+                "item_id": "msg_1",
+                "output_index": 1,
+                "content_index": 0,
+                "delta": "the persimmon",
+            },
+        ]
+
+        await _deliver(events)
+
+        assert [event["delta"] for event in events] == ["I think of a fig ", "the [MASKED]"]
 
     @pytest.mark.asyncio
     async def test_a_streamed_tool_call_next_to_reasoning_stays_on_the_released_envelope(self) -> None:
@@ -7632,3 +7674,11 @@ class TestRefusalPartsReachTextGuardrails:
         )
 
         assert (events[0].delta, events[1].refusal) == (_MASKED_REFUSAL, _MASKED_REFUSAL)
+
+
+
+def test_a_refusal_done_event_alone_supplies_the_text_to_scan() -> None:
+    refusal: Final = "I cannot help alice@example.com"
+    done_event: Final = {"type": "response.refusal.done", "output_index": 0, "content_index": 0, "refusal": refusal}
+
+    assert OpenAIResponsesHandler().get_streaming_string_so_far([done_event]) == refusal

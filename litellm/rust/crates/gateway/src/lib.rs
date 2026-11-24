@@ -3,14 +3,17 @@ mod boot;
 mod callbacks;
 mod db;
 mod error;
+mod gateway_requests;
 mod health;
 pub mod host;
 mod license;
 mod live;
 pub mod middleware;
+mod periodic;
 mod redis;
 mod resources;
 mod state;
+mod stored;
 #[cfg(test)]
 mod test_support;
 pub use admit::{Admit, Reason, Refused};
@@ -20,10 +23,13 @@ pub use callbacks::{
     parallel_request_limiter::{self, KeyLimiter},
 };
 pub use error::Error;
+pub use gateway_requests::{Category, GatewayRequests};
 pub use live::{Live, Served};
+pub use periodic::PeriodicJob;
 pub use redis::RedisClients;
 pub use resources::Resources;
 pub use state::AppState;
+pub use stored::{Loaded, StoredConfig};
 
 /// The gateway served through the native host.
 pub type Gateway = litellm_gateway_inference::Gateway<host::NativeHost>;
@@ -41,16 +47,20 @@ use litellm_http::{
 };
 use litellm_model_catalog::{BUNDLED_REGISTRY, Catalog};
 use litellm_redis_store::{Remote, active_teams::ActiveTeams};
+use litellm_router_core::registry::DeploymentFilter;
 use litellm_secrets::{OidcResolver, SecretManagerState, SecretResolver};
 
-/// The config at `path`, its `os.environ/` references read from the process environment.
-pub async fn load_config(path: impl AsRef<Path>) -> Result<Config, Error> {
+/// The config at `path`, its `os.environ/` references read from the process environment, with
+/// the config the proxy stores in its database layered in when `store_model_in_db` is on.
+pub async fn load_config(path: impl AsRef<Path>) -> Result<Loaded, Error> {
     let pool = HttpClientPool::new(Arc::new(PublicDnsResolver));
     let lookup = |name: &str| std::env::var(name).ok();
     let settings = HttpSettings::from_layers([HttpSettingsLayer::from_environment(&lookup)]);
     let client = pool.client(&Resolution::from(&settings).config, ClientVariant::Provider)?;
-    let secrets = environment_secrets(Arc::new(ProcessEnvironment), client);
-    Ok(litellm_config_load::load(path, secrets).await?)
+    Box::pin(stored::load(path.as_ref(), || {
+        environment_secrets(Arc::new(ProcessEnvironment), client.clone())
+    }))
+    .await
 }
 
 pub(crate) fn environment_secrets(
@@ -88,6 +98,8 @@ pub async fn build_inference(
 ) -> Result<Inference, Error> {
     let catalog = Catalog::parse(BUNDLED_REGISTRY)?.value;
     let (router, shaping) = boot::router(config, &catalog).await?;
+    let deployments = router.registry().deployments(&DeploymentFilter::default());
+    let windows = host::ContextWindows::read(&catalog, &deployments).await;
     let limits = parallel_request_limiter::Settings::read(config, environment);
     let counters = parallel_request_limiter::counters(redis.coordination.clone());
     let key_limiter = KeyLimiter::new(limits, counters.clone(), router.clone());
@@ -113,7 +125,7 @@ pub async fn build_inference(
         router,
         shaping,
         routing,
-        host::NativeHost::new(Arc::new(callbacks)),
+        host::NativeHost::new(Arc::new(callbacks), Arc::new(windows)),
     )?;
     Ok(Inference {
         gateway: Arc::new(gateway),

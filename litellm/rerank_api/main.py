@@ -1,6 +1,6 @@
 import asyncio
 import contextvars
-from collections.abc import Awaitable, Coroutine
+from collections.abc import Awaitable, Coroutine, Mapping
 from functools import partial
 from typing import Final, Literal
 
@@ -144,7 +144,7 @@ def rerank(
     # typed named param there would trip the basedpyright budget gate without
     # adding real safety; it stays typed downstream via get_optional_rerank_params.
     instruction: Final[str | None] = kwargs.get("instruction", None)
-    headers: Final[dict | None] = kwargs.get("headers")
+    headers: Final[Mapping[str, object] | None] = kwargs.get("headers")
     litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
     litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id", None)
     proxy_server_request: Final = kwargs.get("proxy_server_request", None)
@@ -181,7 +181,7 @@ def rerank(
             present_version_params=present_version_params,
         )
 
-        optional_rerank_params: Final[dict] = get_optional_rerank_params(
+        optional_rerank_params: Final[dict[str, object]] = get_optional_rerank_params(
             rerank_provider_config=rerank_provider_config,
             model=model,
             drop_params=kwargs.get("drop_params") or litellm.drop_params or False,

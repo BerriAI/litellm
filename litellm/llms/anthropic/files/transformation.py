@@ -88,7 +88,7 @@ class AnthropicFilesConfig(BaseFilesConfig):
         self,
         error_message: str,
         status_code: int,
-        headers: dict | httpx.Headers,
+        headers: dict[str, object] | httpx.Headers,
     ) -> BaseLLMException:
         return AnthropicError(
             status_code=status_code,
@@ -102,7 +102,7 @@ class AnthropicFilesConfig(BaseFilesConfig):
         model: str,
         messages: Sequence[object],
         optional_params: Mapping[str, object],
-        litellm_params: dict,
+        litellm_params: dict[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
     ) -> dict:
@@ -117,8 +117,8 @@ class AnthropicFilesConfig(BaseFilesConfig):
         headers: dict,  # mutable-ok: mirrors the sync validate_environment contract this overrides
         model: str,
         messages: list,  # mutable-ok: mirrors the sync validate_environment contract this overrides
-        optional_params: dict,  # mutable-ok: mirrors the sync validate_environment contract this overrides
-        litellm_params: dict,  # mutable-ok: mirrors the sync validate_environment contract this overrides
+        optional_params: dict[str, object],  # mutable-ok: mirrors the sync validate_environment contract this overrides
+        litellm_params: dict[str, object],  # mutable-ok: mirrors the sync validate_environment contract this overrides
         api_key: str | None = None,
         api_base: str | None = None,
     ) -> dict:  # mutable-ok: mirrors the sync validate_environment contract this overrides
@@ -161,7 +161,7 @@ class AnthropicFilesConfig(BaseFilesConfig):
     def map_openai_params(
         self,
         non_default_params: Mapping[str, object],
-        optional_params: dict,
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
     ) -> dict:
@@ -173,7 +173,7 @@ class AnthropicFilesConfig(BaseFilesConfig):
         create_file_data: CreateFileRequest,
         optional_params: Mapping[str, object],
         litellm_params: Mapping[str, object],
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Transform to multipart form data for Anthropic file upload.
 
@@ -225,7 +225,7 @@ class AnthropicFilesConfig(BaseFilesConfig):
         file_id: str,
         optional_params: Mapping[str, object],
         litellm_params: dict,
-    ) -> tuple[str, dict]:
+    ) -> tuple[str, dict[str, str]]:
         api_base: Final = AnthropicModelInfo.get_api_base(litellm_params.get("api_base")) or ANTHROPIC_FILES_API_BASE
         encoded_file_id: Final = encode_url_path_segment(file_id, field_name="file_id")
         return join_api_base(api_base, f"v1/files/{encoded_file_id}"), {}
@@ -244,7 +244,7 @@ class AnthropicFilesConfig(BaseFilesConfig):
         file_id: str,
         optional_params: Mapping[str, object],
         litellm_params: dict,
-    ) -> tuple[str, dict]:
+    ) -> tuple[str, dict[str, str]]:
         api_base: Final = AnthropicModelInfo.get_api_base(litellm_params.get("api_base")) or ANTHROPIC_FILES_API_BASE
         encoded_file_id: Final = encode_url_path_segment(file_id, field_name="file_id")
         return join_api_base(api_base, f"v1/files/{encoded_file_id}"), {}
@@ -264,7 +264,7 @@ class AnthropicFilesConfig(BaseFilesConfig):
         purpose: str | None,
         optional_params: Mapping[str, object],
         litellm_params: dict,
-    ) -> tuple[str, dict]:
+    ) -> tuple[str, dict[str, str]]:
         api_base: Final = AnthropicModelInfo.get_api_base(litellm_params.get("api_base")) or ANTHROPIC_FILES_API_BASE
         url: Final = join_api_base(api_base, "v1/files")
         params: Final[dict[str, str]] = {}
@@ -296,7 +296,7 @@ class AnthropicFilesConfig(BaseFilesConfig):
         file_content_request: FileContentRequest,
         optional_params: Mapping[str, object],
         litellm_params: dict,
-    ) -> tuple[str, dict]:
+    ) -> tuple[str, dict[str, str]]:
         file_id: Final = file_content_request.get("file_id")
         api_base: Final = AnthropicModelInfo.get_api_base(litellm_params.get("api_base")) or ANTHROPIC_FILES_API_BASE
         encoded_file_id: Final = encode_url_path_segment(file_id, field_name="file_id")

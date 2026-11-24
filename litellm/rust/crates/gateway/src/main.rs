@@ -15,7 +15,9 @@ use axum::{
 };
 use litellm_config::{Config, Environment};
 use litellm_env::Lookup;
-use litellm_gateway::{Admit, AppState, Live, Refused, Resources, Served, middleware::InFlight};
+use litellm_gateway::{
+    Admit, AppState, Live, Loaded, Refused, Resources, Served, StoredConfig, middleware::InFlight,
+};
 use litellm_tracing::{KeyLength, Level, Logger, Metadata, Record, Scrubbed, Sink};
 use serde_json::json;
 use tower::{Layer, Service};
@@ -98,10 +100,10 @@ async fn standalone(
     log_level: Level,
     key_length: &KeyLength,
 ) -> Result<(), Box<dyn Error>> {
-    let config = litellm_gateway::load_config(settings.litellm_config).await?;
+    let Loaded { config, stored } = litellm_gateway::load_config(settings.litellm_config).await?;
     let state = AppState::build(&config, environment).await?;
     scrub_at_the_configs_key_length(key_length, &*state.environment);
-    let admit = Arc::new(Admit::new(&config, environment, &state));
+    let admit = Arc::new(Admit::new(&config, environment, &state, stored));
     let live = Arc::new(Live::new(served(
         state,
         Some(admit),
@@ -157,14 +159,15 @@ fn not_served(why: Refused) -> Response {
 
 /// The config Python runs with. `None` when Python loads no local file, and when the gateway cannot
 /// load that file, because failing here would stop Python too.
-async fn pythons_config(path: Option<&Path>) -> Option<Config> {
+async fn pythons_config(path: Option<&Path>) -> Option<Loaded> {
     match litellm_gateway::load_config(path?).await {
-        Ok(config) => {
+        Ok(loaded) => {
             tracing::info!(
-                models = config.model_list.len(),
+                models = loaded.config.model_list.len(),
+                stored = ?loaded.stored,
                 "loaded the config file python runs with"
             );
-            Some(config)
+            Some(loaded)
         }
         Err(error) => {
             tracing::error!(
@@ -181,11 +184,11 @@ async fn pythons_config(path: Option<&Path>) -> Option<Config> {
 /// from an empty config and Python answers every request, because failing here would stop Python
 /// too.
 async fn native_state(
-    loaded: Option<Config>,
+    loaded: Option<Loaded>,
     environment: &Environment,
 ) -> Result<(Config, AppState, Option<Arc<Admit>>), litellm_gateway::Error> {
-    if let Some(config) = loaded {
-        match admitted_state(&config, environment).await {
+    if let Some(Loaded { config, stored }) = loaded {
+        match admitted_state(&config, environment, stored).await {
             Ok((state, admit)) => return Ok((config, state, Some(Arc::new(admit)))),
             Err(error) => tracing::error!(
                 error = %litellm_error::Report::new(&error),
@@ -201,10 +204,11 @@ async fn native_state(
 async fn admitted_state(
     config: &Config,
     environment: &Environment,
+    stored: StoredConfig,
 ) -> Result<(AppState, Admit), litellm_gateway::Error> {
     let resources = Resources::build(config)?;
     let state = AppState::over(config, environment, &resources).await?;
-    let admit = Admit::new(config, environment, &state);
+    let admit = Admit::new(config, environment, &state, stored);
     Ok((state, admit))
 }
 
@@ -268,12 +272,14 @@ fn native(
 + use<> {
     use litellm_gateway::middleware::{global, root_path};
     let entitlements = state.entitlements.clone();
+    let requests = state.gateway_requests.clone();
     let settings = middleware_settings(config, environment, &*state.environment);
     root_path::layer(root_path::Settings::from_environment(environment)).layer(global(
         litellm_gateway::router(state, config),
         &settings,
         entitlements,
         in_flight,
+        requests,
     ))
 }
 
@@ -348,9 +354,10 @@ mod tests {
             "model_list:\n  - model_name: claude\n    litellm_params:\n      model: anthropic/claude-haiku-5-5\n",
         );
 
-        let config = pythons_config(Some(file.path())).await.unwrap();
+        let loaded = pythons_config(Some(file.path())).await.unwrap();
 
-        assert_eq!(config.model_list.len(), 1);
+        assert_eq!(loaded.config.model_list.len(), 1);
+        assert_eq!(loaded.stored, StoredConfig::Unused);
     }
 
     #[rstest]
@@ -461,15 +468,23 @@ mod tests {
     #[rstest]
     #[case::a_setting_the_native_app_does_not_honor(
         "litellm_settings:\n  cache: true\n",
+        StoredConfig::Unused,
         "settings"
     )]
     #[case::a_config_the_native_app_cannot_be_built_from(
         "general_settings:\n  coordination_redis:\n    host: coord\n    port: not-a-port\n",
+        StoredConfig::Unused,
         "configuration"
+    )]
+    #[case::a_stored_config_the_gateway_could_not_read(
+        "general_settings:\n  store_model_in_db: true\n",
+        StoredConfig::Unread,
+        "db_config_not_loaded"
     )]
     #[tokio::test]
     async fn python_answers_every_request_of_a_config_the_native_app_does_not_run(
         #[case] settings: &str,
+        #[case] stored: StoredConfig,
         #[case] why: &str,
     ) {
         litellm_gateway::install_crypto_provider();
@@ -478,33 +493,47 @@ mod tests {
         ))
         .unwrap();
 
-        let (_, state, admit) = native_state(Some(config), &Environment::default())
-            .await
-            .unwrap();
+        let (_, state, admit) =
+            native_state(Some(Loaded { config, stored }), &Environment::default())
+                .await
+                .unwrap();
 
         assert_eq!(refused(&state, admit).await, Some(why));
         state.close().await;
     }
 
     #[rstest]
-    #[case::an_admitted_request("/v1/messages", (StatusCode::OK, None))]
+    #[case::an_admitted_request("/v1/messages", StoredConfig::Unused, (StatusCode::OK, None))]
+    #[case::a_stored_config_layered_in(
+        "/v1/messages",
+        StoredConfig::Loaded,
+        (StatusCode::OK, None)
+    )]
     #[case::a_refused_request(
         "/v1/chat/completions",
+        StoredConfig::Unused,
         (StatusCode::NOT_IMPLEMENTED, Some("route"))
+    )]
+    #[case::a_stored_config_the_gateway_could_not_read(
+        "/v1/messages",
+        StoredConfig::Unread,
+        (StatusCode::NOT_IMPLEMENTED, Some("db_config_not_loaded"))
     )]
     #[tokio::test]
     async fn standalone_answers_a_request_admit_refuses_with_a_501_that_says_why(
         #[case] path: &str,
+        #[case] stored: StoredConfig,
         #[case] expected: (StatusCode, Option<&str>),
     ) {
         litellm_gateway::install_crypto_provider();
         let config = Config::from_yaml(
-            "model_list:\n  - model_name: claude\n    litellm_params:\n      model: anthropic/claude-haiku-5-5\n      api_key: provider-key\ngeneral_settings:\n  master_key: gateway-key\n",
+            "model_list:\n  - model_name: claude\n    litellm_params:\n      model: anthropic/claude-haiku-5-5\n      api_key: provider-key\ngeneral_settings:\n  master_key: gateway-key\n  supported_db_objects: [models]\n",
         )
         .unwrap();
-        let (_, state, admit) = native_state(Some(config), &Environment::default())
-            .await
-            .unwrap();
+        let (_, state, admit) =
+            native_state(Some(Loaded { config, stored }), &Environment::default())
+                .await
+                .unwrap();
         let native = tower::service_fn(|_: Request| async {
             Ok::<_, Infallible>(Response::new(axum::body::Body::empty()))
         });
