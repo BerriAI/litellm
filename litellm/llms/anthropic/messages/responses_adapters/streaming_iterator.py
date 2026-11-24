@@ -140,8 +140,10 @@ class AnthropicResponsesStreamWrapper:
         litellm_logging_obj: "LiteLLMLoggingObject | None" = None,
         safeguards_evaluator: "SafeguardsEvaluator | None" = None,
         applied_edits: Sequence[AppliedEdit] | None = None,
+        reasoning_stamp: str | None = None,
     ) -> None:
         self.responses_stream = responses_stream
+        self._reasoning_stamp: Final = reasoning_stamp
         self._applied_edits: Final = tuple(applied_edits or ())
         self.model = model
         self.litellm_logging_obj = litellm_logging_obj
@@ -213,6 +215,7 @@ class AnthropicResponsesStreamWrapper:
         block: Final = LiteLLMAnthropicToResponsesAPIAdapter.thinking_block_from_reasoning_item(
             iter_items(self._field(item, "summary") or self._field(item, "content") or ()),
             self._field(item, "encrypted_content"),
+            self._reasoning_stamp,
         )
         if block is None:
             return
@@ -244,7 +247,7 @@ class AnthropicResponsesStreamWrapper:
             return
         encrypted_content: Final = self._field(item, "encrypted_content")
         signature: Final = (
-            encrypted_reasoning_signature(encrypted_content)
+            encrypted_reasoning_signature(encrypted_content, self._reasoning_stamp)
             if isinstance(encrypted_content, str) and encrypted_content
             else None
         )

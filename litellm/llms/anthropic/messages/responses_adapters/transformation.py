@@ -262,6 +262,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         cls,
         summary: Iterable[object],
         encrypted_content: object,
+        reasoning_stamp: str | None = None,
     ) -> dict[str, object] | None:  # mutable-ok: API message payload
         """The one Anthropic block for a Responses reasoning item.
 
@@ -277,7 +278,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
             if not text:
                 return None
             return AnthropicResponseContentBlockThinking(type="thinking", thinking=text, signature="").model_dump()
-        signature: Final = encrypted_reasoning_signature(encrypted_content)
+        signature: Final = encrypted_reasoning_signature(encrypted_content, reasoning_stamp)
         if not text:
             return AnthropicResponseContentBlockRedactedThinking(type="redacted_thinking", data=signature).model_dump()
         return AnthropicResponseContentBlockThinking(type="thinking", thinking=text, signature=signature).model_dump()
@@ -759,6 +760,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
     def translate_response(
         self,
         response: ResponsesAPIResponse,
+        reasoning_stamp: str | None = None,
     ) -> AnthropicMessagesResponse:
         """
         Translate an OpenAI ResponsesAPIResponse to AnthropicMessagesResponse.
@@ -790,6 +792,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                 reasoning_block = self.thinking_block_from_reasoning_item(
                     iter_items(item.get("summary") or item.get("content") or ()),
                     item.get("encrypted_content"),
+                    reasoning_stamp,
                 )
                 if reasoning_block is not None:
                     content.append(reasoning_block)

@@ -270,6 +270,23 @@ class TestRawReasoningTextIsStreamedAsThinking:
 _ENCRYPTED_REASONING = "gAAAAABp_encrypted_reasoning_bytes_only_openai_can_read"
 
 
+_REASONING_ITEM_WITHOUT_SUMMARY: Final[dict[str, object]] = {
+    "type": "reasoning",
+    "id": "rs_1",
+    "encrypted_content": _ENCRYPTED_REASONING,
+}
+
+
+def _streamed_signature(chunk: Mapping[str, object]) -> str | None:
+    match chunk:
+        case {"type": "content_block_delta", "delta": {"type": "signature_delta", "signature": str() as signature}}:
+            return signature
+        case {"type": "content_block_start", "content_block": {"type": "redacted_thinking", "data": str() as data}}:
+            return data
+        case _:
+            return None
+
+
 class TestEncryptedReasoningIsStreamedForReplay:
     """Regression for https://github.com/BerriAI/litellm/issues/40288.
 
@@ -291,6 +308,62 @@ class TestEncryptedReasoningIsStreamedForReplay:
             ("content_block_stop", 0, None),
         ]
         assert chunks[3]["delta"]["signature"] == encrypted_reasoning_signature(_ENCRYPTED_REASONING)
+
+    @pytest.mark.parametrize(
+        "item_events",
+        [
+            pytest.param(
+                (
+                    {"type": "response.output_item.added", "item": {"type": "reasoning", "id": "rs_1"}},
+                    {"type": "response.reasoning_summary_text.delta", "item_id": "rs_1", "delta": "Weighing options"},
+                    {"type": "response.output_item.done", "item": _REASONING_ITEM_WITHOUT_SUMMARY},
+                ),
+                id="streamed-thinking",
+            ),
+            pytest.param(
+                (
+                    {"type": "response.output_item.added", "item": {"type": "reasoning", "id": "rs_1"}},
+                    {"type": "response.output_item.done", "item": _REASONING_ITEM_WITHOUT_SUMMARY},
+                ),
+                id="redacted",
+            ),
+            pytest.param(
+                (
+                    {
+                        "type": "response.output_item.done",
+                        "item": {
+                            **_REASONING_ITEM_WITHOUT_SUMMARY,
+                            "summary": [{"type": "summary_text", "text": "Plan."}],
+                        },
+                    },
+                ),
+                id="whole-item-on-done",
+            ),
+        ],
+    )
+    def test_the_request_stamp_rides_every_streamed_reasoning_signature(
+        self, item_events: tuple[dict[str, object], ...]
+    ) -> None:
+        stamp: Final = "eyJ2IjoxLCJuIjowfQ"
+        events: Final[tuple[dict[str, object], ...]] = (
+            {"type": "response.created"},
+            *item_events,
+            {"type": "response.completed"},
+        )
+
+        async def _run() -> tuple[Mapping[str, object], ...]:
+            async def _gen() -> AsyncIterator[dict[str, object]]:
+                for event in events:
+                    yield event
+
+            wrapper: Final = AnthropicResponsesStreamWrapper(responses_stream=_gen(), model="m", reasoning_stamp=stamp)
+            return tuple([chunk async for chunk in wrapper])
+
+        signatures: Final = tuple(
+            signature for chunk in asyncio.run(_run()) if (signature := _streamed_signature(chunk)) is not None
+        )
+
+        assert signatures == (encrypted_reasoning_signature(_ENCRYPTED_REASONING, stamp),)
 
     def test_reasoning_without_summary_streams_a_redacted_thinking_block(self):
         chunks = _drain_async(
