@@ -1549,16 +1549,16 @@ def _definitions_named(blocks: tuple[Mapping[str, object], ...], name: str) -> I
 def _reached_def_names(
     body: Mapping[str, object], definition_blocks: tuple[Mapping[str, object], ...]
 ) -> frozenset[str] | None:
-    reached: frozenset[str] = frozenset()  # rebind-ok: grows by the definitions the last round's refs name
+    reached: Final[set[str]] = set()  # mutable-ok: copying the visited set every round is quadratic on long ref chains
     frontier: tuple[Mapping[str, object], ...] = (body,)  # rebind-ok: the schemas the last round reached
     while frontier:
         found = tuple(chain.from_iterable(_schema_ref_def_names(node) for node in frontier))
         if None in found:
             return None
         new_names = frozenset(chain.from_iterable(names for names in found if names is not None)) - reached
-        reached = reached | new_names
+        reached.update(new_names)
         frontier = tuple(chain.from_iterable(_definitions_named(definition_blocks, name) for name in new_names))
-    return reached
+    return frozenset(reached)
 
 
 def schema_without_unreferenced_defs(schema: Mapping[str, object]) -> Mapping[str, object]:

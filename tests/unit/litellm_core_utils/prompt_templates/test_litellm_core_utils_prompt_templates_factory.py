@@ -2615,6 +2615,30 @@ def test_bedrock_tools_pt_keeps_the_arguments_of_a_root_ref_chain_past_the_hop_l
     assert sent["required"] == _ADDRESS_SCHEMA["required"]
 
 
+def _claude_defs_chain_seconds(length: int) -> float:
+    chain_defs: Final = {
+        f"Step{i}": {"type": "object", "properties": {"next": {"$ref": f"#/$defs/Step{i + 1}"}}} for i in range(length)
+    }
+    defs: Final = {**chain_defs, f"Step{length}": {"type": "string"}}
+    parameters: Final = {"type": "object", "properties": {"start": {"$ref": "#/$defs/Step0"}}, "$defs": defs}
+    tools: Final = [{"type": "function", "function": {"name": "walk", "parameters": parameters}}]
+
+    def once() -> float:
+        started: Final = time.perf_counter()
+        sent: Final = _bedrock_tools_pt(tools, model="us.anthropic.claude-sonnet-5-5")[0]["toolSpec"]["inputSchema"]["json"]
+        elapsed: Final = time.perf_counter() - started
+        assert sent["$defs"] == defs
+        return elapsed
+
+    return min(once() for _ in range(2))
+
+
+def test_bedrock_tools_pt_cost_grows_linearly_with_a_chain_of_claude_defs() -> None:
+    growth: Final = _claude_defs_chain_seconds(12000) / _claude_defs_chain_seconds(3000)
+
+    assert growth < 8.0, f"cost grew {growth:.1f}x for 4x the chained $defs"
+
+
 _ORDER_SCHEMA: Final = {
     "type": "object",
     "properties": {"street": {"type": "string"}, "city": {"type": "string"}},
