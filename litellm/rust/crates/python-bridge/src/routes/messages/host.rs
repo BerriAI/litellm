@@ -1,10 +1,5 @@
-use crate::cache::{CacheCall, PythonCache, Selection};
+use crate::cache::PythonCache;
 use litellm_host_python::{PythonHostCalls, PythonOwned};
-
-use std::sync::{
-    Arc,
-    atomic::{AtomicBool, Ordering},
-};
 
 use parking_lot::Mutex;
 
@@ -14,8 +9,8 @@ use litellm_host_python::{
     InvokeError, PythonBinding, effective_py_args, from_py, json_from_py, to_py,
 };
 use litellm_inference_messages::{
-    DecodingError, Error, MessagesCall, MessagesSettings, MessagesShaping, UnencodableHeader,
-    UnsendableUrl, VertexShaping, litellm_params, messages_body,
+    DecodingError, Error, MessagesCall, MessagesHostCall, MessagesSettings, MessagesShaping,
+    UnencodableHeader, UnsendableUrl, VertexShaping, litellm_params, messages_body,
     route::{Messages, MessagesStreamHead},
 };
 use litellm_llms::{
@@ -43,8 +38,9 @@ use pyo3::{
 use serde_json::{Map, Value};
 
 use super::agentic::HookedRequest;
-use super::safeguards::{SafeguardsCall, SafeguardsHost};
-use super::transport::{HostedTransport, Selected, TransportCall, python_failure};
+use super::plan::MessagesPlan;
+use super::safeguards::SafeguardsHost;
+use super::transport::{HostedTransport, python_failure};
 use crate::{
     errors::{RequestMarker, raises_bad_request, route_failure},
     marshal::{
@@ -507,48 +503,6 @@ fn azure_module_settings<'py>(
     })
 }
 
-pub(super) struct MessagesHosted;
-
-impl litellm_host::protocol::Protocol for MessagesHosted {
-    type Request = (MessagesCall, Selection, Selected);
-    type Response = <Messages as litellm_host::protocol::Protocol>::Response;
-    type Error = Error;
-    type HostCall = MessagesHostCall;
-    type Chunk = Bytes;
-    type StreamHead = MessagesStreamHead;
-
-    fn detached_drain(head: &MessagesStreamHead) -> Option<litellm_host::protocol::DetachedDrain> {
-        <Messages as litellm_host::protocol::Protocol>::detached_drain(head)
-    }
-
-    fn unobserved_tail(
-        head: &MessagesStreamHead,
-    ) -> Option<litellm_host::protocol::UnobservedTail> {
-        <Messages as litellm_host::protocol::Protocol>::unobserved_tail(head)
-    }
-}
-
-pub(super) enum MessagesHostCall {
-    Answer { stream: bool, reply: Reply<()> },
-    Intercept { stream: bool, reply: Reply<bool> },
-    Cache(CacheCall),
-    PreRequest(Reply<Result<MessagesCall, Error>>),
-    Safeguards(SafeguardsCall),
-    Transport(TransportCall),
-}
-
-impl From<CacheCall> for MessagesHostCall {
-    fn from(call: CacheCall) -> Self {
-        Self::Cache(call)
-    }
-}
-
-impl From<TransportCall> for MessagesHostCall {
-    fn from(call: TransportCall) -> Self {
-        Self::Transport(call)
-    }
-}
-
 enum Answered {
     Stream,
     Whole { verbatim: bool },
@@ -570,7 +524,6 @@ pub(super) struct MessagesPythonHost {
     cache: PythonCache,
     transport: HostedTransport,
     safeguards: SafeguardsHost,
-    classifies: Arc<AtomicBool>,
     awaiting_safeguards: bool,
     stream_cost_model: Option<String>,
     asynchronous: bool,
@@ -593,14 +546,12 @@ impl MessagesPythonHost {
         view: RequestView,
         asynchronous: bool,
         hooked_request: HookedRequest,
-        classifies: Arc<AtomicBool>,
     ) -> Self {
         Self {
             view,
             cache: PythonCache::new(asynchronous),
             transport: HostedTransport::default(),
             safeguards: SafeguardsHost::default(),
-            classifies,
             awaiting_safeguards: false,
             stream_cost_model: None,
             asynchronous,
@@ -850,6 +801,8 @@ impl MessagesPythonHost {
             _ => None,
         };
         let bedrock = custom_llm_provider.as_deref() == Some(BEDROCK_PROVIDER) || mantle.is_some();
+        let base_model: Option<String> =
+            argument("base_model")?.and_then(|value| value.extract().ok());
         let capabilities = match &mantle {
             Some(_) => super::model_catalog::route_capabilities(
                 py,
@@ -864,6 +817,7 @@ impl MessagesPythonHost {
                         super::model_catalog::bedrock_capabilities(
                             py,
                             &model,
+                            base_model.as_deref(),
                             argument("model_info")?,
                         )?,
                         &requested,
@@ -884,12 +838,14 @@ impl MessagesPythonHost {
             vertex,
             settings: MessagesSettings {
                 whole_sse_frames: settings.stream_cost_model.is_some(),
+                inject_stream_cost: settings.stream_cost_model.is_some()
+                    && settings.settings.pricing.is_some(),
                 presanitized,
                 intercepted: self.may_intercept(py)?,
                 unencodable_request_header,
                 module_api_key: azure.as_ref().and_then(|azure| azure.api_key.clone()),
                 global_drop_params: global_drop_params(py)?,
-                base_model: argument("base_model")?.and_then(|value| value.extract().ok()),
+                base_model,
                 ..settings.settings
             },
         };
@@ -1211,6 +1167,13 @@ impl MessagesPythonHost {
     }
 }
 
+fn runs_pre_request_hooks(py: Python<'_>) -> PyResult<bool> {
+    py.import(ROUTE_HOST_MODULE)?
+        .getattr("runs_pre_request_hooks")?
+        .call0()?
+        .extract()
+}
+
 /// The models a Mantle route's errors name: the one Python's handler logs the call under before
 /// its config transforms the request, and the model id that transform sends.
 struct MantleModels {
@@ -1241,7 +1204,10 @@ impl MessagesPythonHost {
         let settings = self
             .host_settings(py, arguments)
             .map_err(InvokeError::Python)?;
-        self.stream_cost_model = settings.stream_cost_model.clone();
+        self.stream_cost_model = settings
+            .stream_cost_model
+            .clone()
+            .filter(|_| settings.settings.pricing.is_none());
         self.projection(py, arguments, settings)
             .map_err(|error| InvokeError::Python(self.map_failure(py, error)))?
             .map_err(InvokeError::Native)
@@ -1297,14 +1263,15 @@ impl MessagesPythonHost {
 }
 
 impl PythonBinding for MessagesPythonHost {
-    type Protocol = MessagesHosted;
+    type Protocol = Messages;
     type Failure = PyErr;
+    type Decoded = MessagesPlan;
 
     fn decode_request(
         &mut self,
         py: Python<'_>,
         arguments: &Bound<'_, PyDict>,
-    ) -> Result<(MessagesCall, Selection, Selected), InvokeError<Error>> {
+    ) -> Result<MessagesPlan, InvokeError<Error>> {
         self.view
             .resolve(py, arguments)
             .map_err(InvokeError::Python)?;
@@ -1312,29 +1279,35 @@ impl PythonBinding for MessagesPythonHost {
             .import(ROUTE_HOST_MODULE)
             .and_then(|module| module.call_method0("cached_function"))
             .map_err(InvokeError::Python)?;
-        let selection = crate::cache::configure(&mut self.cache, py, arguments, &function)
+        let cache = crate::cache::configure(&mut self.cache, py, arguments, &function)
             .map_err(InvokeError::Python)?;
         let effective = self
             .view
             .request(py)
             .and_then(|request| effective_py_args(request, arguments))
             .map_err(InvokeError::Python)?;
-        let classifies = self
+        let safeguards = self
             .safeguards
             .configure(py, &effective)
             .map_err(InvokeError::Python)?;
-        self.classifies.store(classifies, Ordering::Release);
         self.requested_stream = arguments
             .get_item("stream")
             .map_err(InvokeError::Python)?
             .is_some_and(|stream| stream.is(pyo3::types::PyBool::new(py, true)));
         self.arguments = Some(arguments.clone().unbind());
-        let request = self.decode_call(py, arguments)?;
+        let call = self.decode_call(py, arguments)?;
         let transport = self
             .transport
             .select(py, self.view.request(py).map_err(InvokeError::Python)?)
             .map_err(InvokeError::Python)?;
-        Ok((request, selection, transport))
+        let pre_request_hooks = runs_pre_request_hooks(py).map_err(InvokeError::Python)?;
+        Ok(MessagesPlan {
+            call,
+            cache,
+            transport,
+            safeguards,
+            pre_request_hooks,
+        })
     }
 
     fn encode_response(
@@ -1419,7 +1392,7 @@ impl PythonBinding for MessagesPythonHost {
     }
 }
 
-impl PythonHostCalls<MessagesHosted> for MessagesPythonHost {
+impl PythonHostCalls<Messages> for MessagesPythonHost {
     fn handle_host_call(
         &mut self,
         py: Python<'_>,

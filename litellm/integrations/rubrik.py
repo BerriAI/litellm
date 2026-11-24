@@ -845,7 +845,9 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
                 exc_info=True,
             )
 
-    async def async_log_success_event(self, kwargs, response_obj: object, start_time: object, end_time: object):
+    async def async_log_success_event(
+        self, kwargs: _LogEventKwargs, response_obj: object, start_time: object, end_time: object
+    ):
         # Blocked requests are logged via async_post_call_failure_hook;
         # skip here to avoid double-logging the pre-block response.
         if kwargs.get("_rubrik_blocked"):
@@ -856,7 +858,9 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
             return
         await self._enqueue_log_event(kwargs, "success")
 
-    async def async_log_failure_event(self, kwargs, response_obj: object, start_time: object, end_time: object):
+    async def async_log_failure_event(
+        self, kwargs: _LogEventKwargs, response_obj: object, start_time: object, end_time: object
+    ):
         # Log regular LLM failures (timeouts, upstream errors, etc.) to Rubrik.
         # NOTE: ``ModifyResponseException`` blocks are NOT routed here; they
         # bypass ``Logging.async_failure_handler`` entirely and reach

@@ -138,12 +138,12 @@ def build_request_data_from_managed_vector_store(
 
 
 async def _update_request_data_with_litellm_managed_vector_store_registry(
-    data: dict,
+    data: dict[str, object] | dict[str, str],
     vector_store_id: str,
     user_api_key_dict: UserAPIKeyAuth | None = None,
     *,
     include_search_defaults: bool = True,
-) -> dict:
+) -> dict[str, object] | dict[str, str]:
     """
     Update the request data with the litellm managed vector store registry.
 
@@ -490,7 +490,7 @@ async def vector_store_list(
         version,
     )
 
-    data: Final[dict] = {}
+    data: Final[dict[str, object]] = {}
     if after is not None:
         data["after"] = after
     if before is not None:

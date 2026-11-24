@@ -5,7 +5,7 @@ Validates that MCP servers referenced in request tools are registered
 on the LiteLLM gateway. Blocks or alerts when unregistered servers are found.
 """
 
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal
 
@@ -92,9 +92,9 @@ class MCPSecurityGuardrail(CustomGuardrail):
         self,
         user_api_key_dict: UserAPIKeyAuth,
         cache: "DualCache",
-        data: dict,
+        data: dict[str, object],
         call_type: str,
-    ) -> Exception | str | dict | None:
+    ) -> Exception | str | dict[str, object] | None:
         if self.should_run_guardrail(data=data, event_type=GuardrailEventHooks.pre_call) is not True:
             return data
 
@@ -114,7 +114,7 @@ class MCPSecurityGuardrail(CustomGuardrail):
         return data
 
     @staticmethod
-    def _extract_mcp_server_names_from_tools(tools: list[dict]) -> set[str]:
+    def _extract_mcp_server_names_from_tools(tools: Iterable[object]) -> set[str]:
         """Extract MCP server names from tools with type=mcp and litellm_proxy server_url."""
         server_names: Final[set[str]] = set()
         for tool in tools:

@@ -252,6 +252,7 @@ def transform_openai_messages_to_gemini_context_caching(
         model=model,
         litellm_params={"drop_params": drop_params},
         custom_llm_provider=custom_llm_provider,
+        ends_request=False,
     )
 
     model_name = f"models/{model}"
