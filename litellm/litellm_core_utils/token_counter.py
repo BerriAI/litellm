@@ -1782,6 +1782,15 @@ def _pdf_page_tokens(page: _PdfPage, count_function: TokenCounterFunction, pdf_p
             return _claude_pdf_page_tokens(page, count_function)
 
 
+def _pdf_or_none(operation: Callable[[], T_Retval]) -> T_Retval | None:
+    """`operation`'s result, or None when pypdf or the page pricing fails, which prices the document like one image."""
+    try:
+        return operation()
+    except Exception as e:
+        verbose_logger.debug("Could not read the PDF document's pages (%s), so it is priced like one image", e)
+        return None
+
+
 def _inline_pdf_reader(data_url: str) -> "_PdfReader | None":
     if not data_url.startswith(PDF_DATA_URL_PREFIX) or data_url.startswith(
         TRUNCATED_BASE64_MARKER, len(PDF_DATA_URL_PREFIX)
@@ -1792,13 +1801,11 @@ def _inline_pdf_reader(data_url: str) -> "_PdfReader | None":
     except ImportError:
         verbose_logger.debug("pypdf is not installed, so the PDF document is priced like one image")
         return None
-    try:
-        return cast(  # cast-ok: pypdf's PdfReader satisfies _PdfReader, typed only where pypdf is installed
+    return _pdf_or_none(
+        lambda: cast(  # cast-ok: pypdf's PdfReader satisfies _PdfReader, typed only where pypdf is installed
             _PdfReader, PdfReader(io.BytesIO(base64.b64decode(data_url[len(PDF_DATA_URL_PREFIX) :])))
         )
-    except Exception as e:
-        verbose_logger.debug("Could not read the PDF document's pages (%s), so it is priced like one image", e)
-        return None
+    )
 
 
 def _count_inline_pdf_tokens(
@@ -1809,11 +1816,7 @@ def _count_inline_pdf_tokens(
     reader: Final = _inline_pdf_reader(data_url)
     if reader is None:
         return None
-    try:
-        return sum(_pdf_page_tokens(page, count_function, pdf_pricing) for page in reader.pages)
-    except Exception as e:
-        verbose_logger.debug("Could not read the PDF document's pages (%s), so it is priced like one image", e)
-        return None
+    return _pdf_or_none(lambda: sum(_pdf_page_tokens(page, count_function, pdf_pricing) for page in reader.pages))
 
 
 @dataclass(frozen=True, slots=True)
@@ -1829,12 +1832,12 @@ def _read_pdf_pages(data_url: str, count_function: TokenCounterFunction) -> tupl
     reader: Final = _inline_pdf_reader(data_url)
     if reader is None:
         return None
-    try:
-        texts: Final = tuple((page, page.extract_text() or "") for page in reader.pages)
-        return tuple(_ReadPdfPage(page, text, count_function(text)) for page, text in texts)
-    except Exception as e:
-        verbose_logger.debug("Could not read the PDF document's pages (%s), so it is priced like one image", e)
-        return None
+    return _pdf_or_none(
+        lambda: tuple(
+            _ReadPdfPage(page, text, count_function(text))
+            for page, text in tuple((page, page.extract_text() or "") for page in reader.pages)
+        )
+    )
 
 
 def _read_claude_page_tokens(page: _ReadPdfPage) -> int:
@@ -1854,11 +1857,7 @@ def _read_page_tokens(page: _ReadPdfPage, pdf_pricing: PdfPagePricing) -> int:
 def _read_pdf_tokens(pages: tuple[_ReadPdfPage, ...] | None, pdf_pricing: PdfDocumentPricing) -> int | None:
     if pages is None or pdf_pricing == "single_image":
         return None
-    try:
-        return sum(_read_page_tokens(page, pdf_pricing) for page in pages)
-    except Exception as e:
-        verbose_logger.debug("Could not read the PDF document's pages (%s), so it is priced like one image", e)
-        return None
+    return _pdf_or_none(lambda: sum(_read_page_tokens(page, pdf_pricing) for page in pages))
 
 
 def _inline_pdf_prices(
@@ -1866,13 +1865,17 @@ def _inline_pdf_prices(
 ) -> Mapping[PdfDocumentPricing, int]:
     """What `_count_opaque_document_tokens` prices one inline PDF at under each pricing, reading it once."""
     pages: Final = _read_pdf_pages(data_url, count_function)
-    priced: Final = tuple((pricing, _read_pdf_tokens(pages, pricing)) for pricing in pdf_pricings)
+    priced: Final[tuple[tuple[PdfDocumentPricing, int | None], ...]] = tuple(
+        (pricing, _read_pdf_tokens(pages, pricing)) for pricing in pdf_pricings
+    )
     as_image: Final = (
         calculate_img_tokens(data=data_url, mode="auto", use_default_image_token_count=False)
         if any(tokens is None for _, tokens in priced)
         else 0
     )
-    return MappingProxyType({pricing: as_image if tokens is None else tokens for pricing, tokens in priced})
+    return MappingProxyType[PdfDocumentPricing, int](
+        {pricing: as_image if tokens is None else tokens for pricing, tokens in priced}
+    )
 
 
 def _count_opaque_document_tokens(

@@ -4537,7 +4537,11 @@ def _base64_pdf_document() -> dict[str, object]:
 
 def _server_tool_prompt(wrap: Callable[[Mapping[str, object]], dict[str, object]]) -> list[dict[str, object]]:
     fetched: Final = wrap(_base64_pdf_document())
-    return [{"role": "user", "content": [{"type": "text", "text": "summarize what was fetched"}, fetched]}]
+    return [
+        {"role": "user", "content": "fetch the report"},
+        {"role": "assistant", "content": [fetched]},
+        {"role": "user", "content": "summarize what was fetched"},
+    ]
 
 
 @pytest.mark.parametrize("wrap", [_web_fetched, _web_fetched_document], ids=["web_fetch_result", "document_content"])
@@ -4553,6 +4557,7 @@ async def test_a_pdf_a_server_tool_returned_reaches_the_deployment_its_own_pdf_p
 
     assert own < litellm.token_counter(model="", messages=prompt)
     assert _kept_models(router, messages=prompt) == [fitting]
+    assert router.completion(model="docs", messages=prompt).choices[0].message.content == fitting
     assert (await router.acompletion(model="docs", messages=prompt)).choices[0].message.content == fitting
 
 
