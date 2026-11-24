@@ -65,11 +65,17 @@ class _RequestTraceExclusionMiddleware:
             request_trace_scope,
             request_traces_excluded,
         )
+        from litellm.integrations.otel.plumbing.named_trace import named_trace_scope, read_named_trace
 
         url: Final = str(get_host_port_url_tuple(scope)[2])  # pyright: ignore[reportUnknownArgumentType]  # upstream constructs a str URL but leaves its return type unannotated
         excluded: Final = request_traces_excluded() or self.excluded_urls.url_disabled(url)
-        with request_trace_scope(excluded):
-            await self.app(scope, receive, send)
+        if excluded or scope["type"] != "http":
+            with request_trace_scope(excluded):
+                await self.app(scope, receive, send)
+            return
+        named, request_receive = await read_named_trace(scope, receive)
+        with request_trace_scope(excluded), named_trace_scope(named):
+            await self.app(scope, request_receive, send)
 
 
 # Passthrough routes are catch-alls (e.g. "/openai/{endpoint:path}"), so the
@@ -171,12 +177,14 @@ def instrument_fastapi_app(app: "FastAPI", tracer_provider: "TracerProvider | No
             set_global_response_propagator,  # pyright: ignore[reportUnknownVariableType]  # upstream leaves its parameter unannotated
         )
 
+        from litellm.integrations.otel.plumbing.named_trace import forget_named_trace
         from litellm.integrations.otel.trace_response import (
             UpstreamFirstTraceResponsePropagator,
             claim_server_span,
         )
 
         def server_request_hook(span: "Span | None", scope: Mapping[str, object]) -> None:
+            forget_named_trace()
             if span is not None:
                 claim_server_span(span)
             _passthrough_span_name_hook(span, scope)

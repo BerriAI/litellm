@@ -76,6 +76,7 @@ from litellm.integrations.otel.plumbing.context import (
     request_traces_excluded,
     suppressed_backends,
 )
+from litellm.integrations.otel.plumbing.named_trace import NamedTraceIdGenerator
 from litellm.integrations.otel.plumbing.otlp_tls import resolve_otlp_http_tls
 
 if TYPE_CHECKING:
@@ -1687,7 +1688,7 @@ def build_tracer_provider(
     prints only under ``console_default``, which the ``otel`` callback passes: a
     vendor preset or the proxy's background global logger was never asked to print.
     """
-    provider: Final = TracerProvider(resource=build_resource(config))
+    provider: Final = TracerProvider(resource=build_resource(config), id_generator=NamedTraceIdGenerator())
     provider.sampler = _RequestExclusionSampler(provider.sampler)
     if baggage_processor is None:
         baggage_processor = LiteLLMBaggageSpanProcessor(allowed_keys=config.baggage_promoted_keys)
