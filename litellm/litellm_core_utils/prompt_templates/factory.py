@@ -2352,7 +2352,9 @@ def _block_id(block: Mapping[str, object]) -> object:
 
 
 def _is_replayed_server_tool_block(block: Mapping[str, object]) -> bool:
-    block_type: Final = string_field(block, "type") or ""
+    block_type: Final = block.get("type", "")
+    if not isinstance(block_type, str):
+        raise TypeError(f"content block type must be a string, got {type(block_type).__name__}")
     return block_type in ("server_tool_use", "mcp_tool_use") or block_type.endswith("_tool_result")
 
 

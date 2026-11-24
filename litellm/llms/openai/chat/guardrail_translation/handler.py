@@ -270,7 +270,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                         scanned=tool_calls_with_server_calls,
                         client_count=len(tool_calls_to_check),
                         server_call_count=len(server_tool_call_tasks) + len(raw_server_tool_use_tasks),
-                        guardrail_name=guardrail_to_apply.guardrail_name,
+                        guardrail=guardrail_to_apply,
                     )
                     await self._apply_guardrail_responses_to_input_tool_calls(
                         messages=messages,
@@ -1699,12 +1699,12 @@ def _require_appliable_input_tool_calls(
     scanned: Sequence[object],
     client_count: int,
     server_call_count: int,
-    guardrail_name: str | None,
+    guardrail: "CustomGuardrail",
 ) -> None:
     if server_call_count and not _fits_scanned_tool_calls(
         guardrailed_tool_calls, scanned=scanned, client_count=client_count
     ):
-        raise unappliable_request_rewrite(guardrail_name)
+        raise unappliable_request_rewrite(guardrail.guardrail_name)
 
 
 def _fits_scanned_tool_calls(returned: Sequence[object], *, scanned: Sequence[object], client_count: int) -> bool:

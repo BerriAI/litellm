@@ -4001,12 +4001,12 @@ class TestToolPermissionGuardrailAnthropicMessages:
     ERROR_WITH_CR_LINE_ENDS: Final = f"event: error\rdata: {json.dumps(UPSTREAM_ERROR)}\r\r".encode()
     DENIED_CALLS_ASSEMBLY_CANNOT_READ: Final = {
         "reused-block-index": (*DENIED_CALL[:2], THINKING_AT_THE_SAME_INDEX),
-        "finished-mcp-call": tuple(frame.replace(b'"tool_use"', b'"mcp_tool_use"') for frame in DENIED_CALL),
         "behind-a-form-feed": tuple(
             b'data: {"type": "ping"}\x0c' + frame.split(b"\n", 1)[1] for frame in DENIED_CALL
         ),
     }
     DENIED_CALLS_IN_FRAMES_A_CLIENT_READS: Final = {
+        "finished-mcp-call": tuple(frame.replace(b'"tool_use"', b'"mcp_tool_use"') for frame in DENIED_CALL),
         "cr-line-ends": tuple(frame.replace(b"\n", b"\r") for frame in DENIED_CALL),
         "behind-a-glued-crlf-ping": (b'event: ping\r\ndata: {"type": "ping"}\r\n\r\n' + b"".join(DENIED_CALL),),
         "over-two-data-lines": tuple(frame.replace(b", ", b",\ndata: ", 1) for frame in DENIED_CALL),
