@@ -122,10 +122,7 @@ from litellm.litellm_core_utils.llm_response_utils.get_headers import (
 )
 from litellm.litellm_core_utils.routing_common_utils import resolve_model_group_alias
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
-from litellm.litellm_core_utils.served_output_texts import (
-    record_served_output_texts,
-    served_output_texts,
-)
+from litellm.litellm_core_utils.served_output_texts import async_record_served_response_output
 from litellm.litellm_core_utils.streaming_chunk_builder_utils import ChunkProcessor
 from litellm.litellm_core_utils.streaming_handler import (
     backfill_missing_cache_usage_fields,
@@ -4305,7 +4302,7 @@ class ProxyBaseLLMRequestProcessing:
                 user_api_key_dict=user_api_key_dict,
                 response=response,
             )
-            record_served_output_texts(logging_obj.model_call_details, served_output_texts(response))
+            await async_record_served_response_output(logging_obj.model_call_details, response)
             request_metadata_bucket: Final[object] = get_or_create_metadata_bucket(self.data)[1]  # pyright: ignore[reportUnknownVariableType, reportUnknownMemberType]  # self.data is an untyped dict
             await finalize_proxy_response_cost(
                 logging_obj,

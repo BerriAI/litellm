@@ -307,3 +307,22 @@ def initialize_panw_prisma_airs(litellm_params, guardrail):
     litellm.logging_callback_manager.add_litellm_callback(_panw_callback)
 
     return _panw_callback
+
+
+def initialize_ztds(litellm_params: LitellmParams, guardrail: Guardrail) -> CustomGuardrail:
+    from litellm.proxy.guardrails.guardrail_hooks.ztds import ZTDSGuardrail
+
+    raw_entities: Final[object] = getattr(litellm_params, "enabled_entities", None)
+    enabled_entities: Final = ZTDSGuardrail.coerce_entities(raw_entities)
+    raw_reverse: Final[object] = getattr(litellm_params, "reverse_on_output", True)
+    reverse_on_output: Final[bool] = raw_reverse if isinstance(raw_reverse, bool) else True
+
+    _ztds_object: Final = ZTDSGuardrail(
+        guardrail_name=guardrail.get("guardrail_name", "ztds"),  # pyright: ignore[reportUnknownMemberType]  # Guardrail TypedDict .get overload includes untyped guardrail_info
+        event_hook=litellm_params.mode,
+        default_on=bool(litellm_params.default_on),
+        enabled_entities=enabled_entities,
+        reverse_on_output=reverse_on_output,
+    )
+    litellm.logging_callback_manager.add_litellm_callback(_ztds_object)
+    return _ztds_object

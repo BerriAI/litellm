@@ -215,7 +215,7 @@ from litellm.litellm_core_utils.routing_common_utils import resolve_model_group_
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.litellm_core_utils.served_output_texts import (
-    record_served_output_texts,
+    async_record_served_output_texts,
     served_stream_output_texts,
 )
 from litellm.litellm_core_utils.token_counter import offload_token_count, usage_tokenizer_model
@@ -5691,7 +5691,7 @@ class ProxyLogging:
         if not isinstance(logging_obj, Logging):
             return
         texts: Final = await offload_token_count(served_stream_output_texts)(served_chunks)
-        record_served_output_texts(logging_obj.model_call_details, texts)
+        await async_record_served_output_texts(logging_obj.model_call_details, texts)
 
     @staticmethod
     async def _log_served_stream(
