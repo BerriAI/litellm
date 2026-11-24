@@ -8986,15 +8986,35 @@ async def test_foundry_chat_keeps_the_pin_when_a_configured_credential_can_authe
     ],
     ids=["configured_api_key_replaces_the_caller_key", "caller_key_alone"],
 )
+@pytest.mark.parametrize(
+    "sent,request_headers",
+    [
+        ({}, {USER_PROFILE_ID_HEADER: "uprof_client"}),
+        (
+            {
+                "provider_specific_header": {
+                    "custom_llm_provider": "azure_ai",
+                    "extra_headers": {"Anthropic-User-Profile-Id": "uprof_client"},
+                }
+            },
+            {},
+        ),
+    ],
+    ids=["profile_header", "mixed_case_provider_specific_header"],
+)
 async def test_foundry_messages_keeps_the_pin_when_a_configured_api_key_authenticates(
-    deployment_headers: dict[str, str], sent_key: str, sent_profile: str
+    deployment_headers: dict[str, str],
+    sent_key: str,
+    sent_profile: str,
+    sent: dict[str, object],
+    request_headers: dict[str, str],
 ) -> None:
     import httpx
 
     from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 
     updated: Final = await _request_data_added_by_the_proxy(
-        {"api_key": "foundry-caller"}, {USER_PROFILE_ID_HEADER: "uprof_client"}, {}, _PINNED_KEY
+        {"api_key": "foundry-caller", **sent}, request_headers, {}, _PINNED_KEY
     )
     received: Final[list[httpx.Request]] = []  # mutable-ok: the fake Foundry endpoint records what the proxy sent
 
