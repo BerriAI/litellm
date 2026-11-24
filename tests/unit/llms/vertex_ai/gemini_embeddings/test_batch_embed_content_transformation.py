@@ -650,9 +650,9 @@ class TestFileContentBlocks:
             ({"end_offset": "0.4s"}, r"\(0\.4s\) at 1 fps rounds to 0 frames"),
             ({"start_offset": "-10s", "end_offset": " 0.3s"}, r"\(0\.3s\) at 1 fps rounds to 0 frames"),
             ({"start_offset": "5.s", "end_offset": "+5.2s"}, r"\(0\.2s\) at 1 fps rounds to 0 frames"),
-            ({"start_offset": "0s", "end_offset": "0s"}, r"end_offset \(0s\) must be later than the window start \(0s\)"),
-            ({"start_offset": "10s", "end_offset": "0s"}, r"must be later than the window start \(10s\)"),
-            ({"start_offset": "-0s", "end_offset": "-1s"}, r"end_offset \(-1s\) must be later than the window start \(0s\)"),
+            ({"start_offset": "0s", "end_offset": "0s"}, r": end_offset \(0s\) must be later than the window start \(0s\)"),
+            ({"start_offset": "10s", "end_offset": "0s"}, r": end_offset \(0s\) must be later than the window start \(10s\)"),
+            ({"start_offset": "-0s", "end_offset": "-1s"}, r": end_offset \(-1s\) must be later than the window start \(0s\)"),
             ({"fps": 0, "start_offset": "0s", "end_offset": "10s"}, r"\.fps: must be greater than 0, got 0"),
             ({"fps": -1}, r"\.fps: must be greater than 0, got -1"),
             ({"fps": float("nan")}, r"\.fps: Input should be a finite number"),
@@ -694,7 +694,9 @@ class TestFileContentBlocks:
 
     def test_a_window_that_ends_before_it_starts_answers_400_on_audio_too(self) -> None:
         block: Final = _file_block(file_data=AUDIO_DATA_URI, video_metadata={"start_offset": "5s", "end_offset": "2s"})
-        with pytest.raises(BadRequestError, match=r"end_offset \(2s\) must be later than the window start \(5s\)"):
+        with pytest.raises(
+            BadRequestError, match=r"file\.video_metadata: end_offset \(2s\) must be later than the window start \(5s\)"
+        ):
             _build_part_for_input(block)
 
     @pytest.mark.parametrize(

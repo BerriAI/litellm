@@ -10,6 +10,7 @@ from decimal import Decimal
 from typing import Annotated, Final, Literal, TypeAlias, cast
 
 from pydantic import ConfigDict, Field, TypeAdapter, ValidationError, model_validator
+from pydantic_core import PydanticCustomError
 from typing_extensions import Self
 
 from litellm.exceptions import BadRequestError
@@ -174,7 +175,11 @@ class _EmbeddingVideoMetadata(LiteLLMBaseModel):
     def _window_ends_after_it_starts(self) -> Self:
         window: Final = _window_seconds(self.start_offset, self.end_offset)
         if window is not None and window[1] <= window[0]:
-            raise ValueError(f"end_offset ({self.end_offset}) must be later than the window start ({window[0]:g}s)")
+            raise PydanticCustomError(
+                "window_ends_before_it_starts",
+                "end_offset ({end_offset}) must be later than the window start ({start})",
+                {"end_offset": self.end_offset, "start": f"{window[0]:g}s"},
+            )
         return self
 
 
