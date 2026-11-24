@@ -13,7 +13,7 @@ from pydantic import BaseModel, ConfigDict
 
 import litellm
 from litellm.constants import LITELLM_TRUNCATED_PAYLOAD_FIELD
-from litellm.litellm_core_utils.tool_fields import truncate_tool_name
+from litellm.litellm_core_utils.tool_fields import chat_member_name, truncate_tool_name
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy.spend_tracking.spend_tracking_utils import (
     _get_proxy_server_request_for_spend_logs_payload,
@@ -1011,20 +1011,19 @@ def _long_member_response_id() -> str:
     )
 
 
-async def _sent_tool_names(
-    stored_turn: Mapping[str, object], response_id: str, placement: Callable[[Mapping[str, object]], SentTools]
+async def _names_sent_to_gemini(
+    stored_turn: Mapping[str, object],
+    response_id: str,
+    tools: list[Mapping[str, object]],
+    request_input: list[Mapping[str, object]],
 ) -> tuple[list[str], list[str], list[str]]:
     fake_prisma_client: Final = _FakePrismaClient(results=[[stored_turn]])
-    tools, input_items = placement(LONG_NAMESPACE_TOOL)
 
     with patch("litellm.proxy.proxy_server.prisma_client", fake_prisma_client), respx.mock:
         route: Final = respx.post(url__regex=GEMINI_URL_PATTERN).mock(return_value=_gemini_answer())
         await litellm.aresponses(
             model="gemini/gemini-3.5-flash",
-            input=[
-                *input_items,
-                {"type": "function_call_output", "call_id": "call_1", "output": "schema for N-42"},
-            ],
+            input=request_input,
             previous_response_id=response_id,
             tools=tools,
             api_key="test-gemini-key",
@@ -1039,6 +1038,18 @@ async def _sent_tool_names(
     called: Final = [part["function_call"]["name"] for part in parts if "function_call" in part]
     answered: Final = [part["function_response"]["name"] for part in parts if "function_response" in part]
     return declared, called, answered
+
+
+async def _sent_tool_names(
+    stored_turn: Mapping[str, object], response_id: str, placement: Callable[[Mapping[str, object]], SentTools]
+) -> tuple[list[str], list[str], list[str]]:
+    tools, input_items = placement(LONG_NAMESPACE_TOOL)
+    return await _names_sent_to_gemini(
+        stored_turn,
+        response_id,
+        tools,
+        [*input_items, {"type": "function_call_output", "call_id": "call_1", "output": "schema for N-42"}],
+    )
 
 
 async def _answer_the_long_member_call(
@@ -1136,6 +1147,64 @@ async def test_previous_response_replays_a_stored_input_call_from_a_turn_kept_in
 
     assert declared == [sent_name]
     assert called == answered == [sent_name, sent_name]
+
+
+SELF_NAMED_NAMESPACE_TOOL: Final = {
+    "type": "namespace",
+    "name": "lookup_document",
+    "description": "Document lookup",
+    "tools": [{"type": "function", "name": "lookup_document", "parameters": {"type": "object"}}],
+}
+SELF_NAMED_MEMBER_CALL_REPLAY: Final = (
+    {
+        "type": "function_call",
+        "call_id": "call_0",
+        "name": "lookup_document",
+        "namespace": "lookup_document",
+        "arguments": '{"doc_id": "N-41"}',
+    },
+    {"type": "function_call_output", "call_id": "call_0", "output": "document N-41"},
+)
+
+
+async def test_previous_response_replays_a_stored_self_named_member_call_from_a_turn_kept_in_cold_storage(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "cold_storage_custom_logger", "s3_v2")
+    response_id: Final = ResponsesAPIRequestUtils._build_responses_api_response_id(
+        custom_llm_provider="gemini", model_id=None, response_id="chatcmpl-self-named-cold"
+    )
+    stored_turn: Final = _kept_in_cold_storage(
+        {
+            "request_id": response_id,
+            "call_type": "aresponses",
+            "session_id": "self-named-cold-session",
+            "response": {
+                "id": "chatcmpl-self-named-cold",
+                "object": "chat.completion",
+                "choices": [
+                    {
+                        "index": 0,
+                        "finish_reason": "stop",
+                        "message": {"role": "assistant", "content": "Document N-41 is a lease."},
+                    }
+                ],
+            },
+        }
+    )
+    sent_name: Final = chat_member_name("lookup_document", "lookup_document")
+
+    with patch.object(session_handler, "COLD_STORAGE_HANDLER") as cold_storage:
+        cold_storage.get_proxy_server_request_from_cold_storage_with_object_key = AsyncMock(
+            return_value=_cold_storage_object(sent_name, SELF_NAMED_MEMBER_CALL_REPLAY)
+        )
+        declared, called, answered = await _names_sent_to_gemini(
+            stored_turn, response_id, [SELF_NAMED_NAMESPACE_TOOL], [{"role": "user", "content": "Summarize it"}]
+        )
+
+    assert sent_name in declared
+    assert called == answered == [sent_name]
 
 
 LONG_FUNCTION: Final = "lookup_" + "document_tool_schema_" * 4

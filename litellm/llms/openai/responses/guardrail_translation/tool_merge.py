@@ -1,6 +1,7 @@
 import json
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
+from functools import partial, reduce
 from itertools import accumulate, chain, groupby, repeat
 from types import MappingProxyType
 from typing import Final, TypeAlias
@@ -8,6 +9,7 @@ from typing import Final, TypeAlias
 from pydantic import BaseModel, TypeAdapter, ValidationError
 
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.responses.litellm_completion_transformation.custom_tools import custom_tool_grammar_suffix
 from litellm.responses.litellm_completion_transformation.transformation import (
     NAMESPACE_DESCRIPTION_SEPARATOR,
@@ -83,6 +85,30 @@ def _view(tool: Tool, *, with_description: bool) -> str:
     return json.dumps(_comparable(tool, with_description=with_description), sort_keys=True, default=str)
 
 
+def _field_leaves(key: str, value: object) -> tuple[tuple[str, object], ...]:
+    children: Final = as_str_mapping(value)
+    if not children:
+        return ((key, value),)
+    return tuple((f"{key}.{child_key}", child) for child_key, child in children.items())
+
+
+def _leaves(tool: Tool) -> Mapping[str, object]:
+    return dict(chain.from_iterable(_field_leaves(key, value) for key, value in tool.items()))
+
+
+def _difference(left: Tool, right: Tool) -> int:
+    left_leaves: Final = _leaves(_comparable(left, with_description=True))
+    right_leaves: Final = _leaves(_comparable(right, with_description=True))
+    return sum(left_leaves.get(key) != right_leaves.get(key) for key in left_leaves.keys() | right_leaves.keys())
+
+
+def _kept_distance(guardrailed: Sequence[Tool], originals: Sequence[Tool], kept: int, candidate: int) -> int:
+    return _difference(guardrailed[kept], originals[candidate])
+
+
+Distance: TypeAlias = Callable[[int, int], int]
+
+
 @dataclass(frozen=True, slots=True)
 class _Match:
     ordinal: int
@@ -100,8 +126,25 @@ def _paired(kept: Sequence[int], candidates: Sequence[int], *, rebuilt: bool) ->
     return tuple((index, _Match(ordinal, rebuilt)) for index, ordinal in zip(kept, candidates))
 
 
+Pairs: TypeAlias = tuple[tuple[int, int], ...]
+
+
+def _with_nearest(candidates: Sequence[int], distance: Distance, pairs: Pairs, index: int) -> Pairs:
+    claimed: Final = frozenset(candidate for _, candidate in pairs)
+    nearest: Final = min(
+        (candidate for candidate in candidates if candidate not in claimed),
+        key=lambda candidate: (distance(index, candidate), candidate),
+    )
+    return (*pairs, (index, nearest))
+
+
+def _nearest_pairs(kept: Sequence[int], candidates: Sequence[int], distance: Distance) -> Pairs:
+    no_pairs: Final[Pairs] = ()
+    return reduce(partial(_with_nearest, candidates, distance), kept, no_pairs)
+
+
 def _class_resolution(
-    kept: tuple[int, ...], candidates: tuple[int, ...], rebuildable: Sequence[Tool | None]
+    kept: tuple[int, ...], candidates: tuple[int, ...], rebuildable: Sequence[Tool | None], distance: Distance
 ) -> _Resolution | None:
     if not kept or len(kept) >= len(candidates):
         return _Resolution(
@@ -112,7 +155,12 @@ def _class_resolution(
     if any(rebuildable[candidate] is None for candidate in candidates):
         return None
     rebuilt: Final = any(rebuildable[candidate] != rebuildable[candidates[0]] for candidate in candidates)
-    return _Resolution(pairs=_paired(kept, candidates, rebuilt=rebuilt), remaining=candidates[len(kept) :])
+    pairs: Final = _nearest_pairs(kept, candidates, distance)
+    claimed: Final = frozenset(candidate for _, candidate in pairs)
+    return _Resolution(
+        pairs=tuple((index, _Match(candidate, rebuilt)) for index, candidate in pairs),
+        remaining=tuple(candidate for candidate in candidates if candidate not in claimed),
+    )
 
 
 def _classes(tools: Sequence[Tool], indexes: Sequence[int], *, with_description: bool) -> Mapping[str, tuple[int, ...]]:
@@ -127,13 +175,15 @@ def _round(
     guardrailed: Sequence[Tool],
     rebuildable: Sequence[Tool | None],
     previous: _Resolution,
+    distance: Distance,
     *,
     with_description: bool,
 ) -> _Resolution | None:
     candidate_classes: Final = _classes(originals, previous.remaining, with_description=with_description)
     kept_classes: Final = _classes(guardrailed, previous.passed, with_description=with_description)
     resolved: Final = tuple(
-        _class_resolution(kept, candidate_classes.get(view, ()), rebuildable) for view, kept in kept_classes.items()
+        _class_resolution(kept, candidate_classes.get(view, ()), rebuildable, distance)
+        for view, kept in kept_classes.items()
     )
     if any(resolution is None for resolution in resolved):
         return None
@@ -150,13 +200,14 @@ def _content_matches(
     originals: Sequence[Tool], guardrailed: Sequence[Tool], rebuildable: Sequence[Tool | None]
 ) -> tuple[_Match | None, ...] | None:
     start: Final = _Resolution(passed=tuple(range(len(guardrailed))), remaining=tuple(range(len(originals))))
-    exact: Final = _round(originals, guardrailed, rebuildable, start, with_description=True)
+    distance: Final = partial(_kept_distance, guardrailed, originals)
+    exact: Final = _round(originals, guardrailed, rebuildable, start, distance, with_description=True)
     if exact is None:
         return None
-    loose: Final = _round(originals, guardrailed, rebuildable, exact, with_description=False)
+    loose: Final = _round(originals, guardrailed, rebuildable, exact, distance, with_description=False)
     if loose is None:
         return None
-    leftover: Final = _class_resolution(loose.passed, loose.remaining, rebuildable)
+    leftover: Final = _class_resolution(loose.passed, loose.remaining, rebuildable, distance)
     if leftover is None:
         return None
     match_by_index: Final = MappingProxyType(dict(chain(loose.pairs, leftover.pairs)))

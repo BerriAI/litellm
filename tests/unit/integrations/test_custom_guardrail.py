@@ -4,6 +4,7 @@ import datetime as dt
 import json
 import pickle
 import threading
+from itertools import chain
 from typing import TYPE_CHECKING, ClassVar, Final, Literal, Optional
 from unittest.mock import AsyncMock
 
@@ -3806,8 +3807,8 @@ def test_default_on_guardrail() -> None:
     )
 
 def test_responses_guardrail_messages_name_namespaced_calls_by_their_full_name() -> None:
-    namespace = "mcp__codex_apps__github_enterprise_connector_prod"
-    data = {
+    namespace: Final = "mcp__codex_apps__github_enterprise_connector_prod"
+    data: Final = {
         "input": [
             {"type": "message", "role": "user", "content": "find the open issues"},
             {
@@ -3821,10 +3822,11 @@ def test_responses_guardrail_messages_name_namespaced_calls_by_their_full_name()
         ]
     }
 
-    messages = CustomGuardrail(guardrail_name="g").get_guardrails_messages_for_call_type(
+    messages: Final = CustomGuardrail(guardrail_name="g").get_guardrails_messages_for_call_type(
         call_type=CallTypes.aresponses, data=data
     )
+    tool_calls: Final = tuple(chain.from_iterable(message.get("tool_calls") or () for message in messages))
 
-    assert [call["function"]["name"] for message in messages for call in message.get("tool_calls") or ()] == [
+    assert [call["function"]["name"] for call in tool_calls] == [
         "mcp__codex_apps__github_enterprise_connector_prod__search_issues_in_repository"
     ]
