@@ -1695,6 +1695,18 @@ _SONNET_4_5: Final = "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
         (_SONNET_4_5, {"drop_params": True, "model_info": {"supports_safeguards": False}}, False, False),
         ("us.anthropic.claude-opus-9-v1:0", {"drop_params": True}, False, True),
         ("arn:aws:bedrock:us-east-1:000000000000:application-inference-profile/qa", {"drop_params": True}, False, True),
+        (
+            "arn:aws:bedrock:us-east-1:000000000000:application-inference-profile/qa",
+            {"drop_params": True, "base_model": _OPUS_4_1},
+            False,
+            False,
+        ),
+        (
+            "arn:aws:bedrock:us-east-1:000000000000:application-inference-profile/qa",
+            {"drop_params": True, "base_model": f"bedrock/{_SONNET_4_5}"},
+            False,
+            True,
+        ),
     ],
     ids=[
         "old_model_drop_params",
@@ -1705,6 +1717,8 @@ _SONNET_4_5: Final = "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
         "flagged_model_deployment_opts_out",
         "unlisted_new_model",
         "unresolvable_profile_arn",
+        "profile_arn_on_old_base_model",
+        "profile_arn_on_flagged_base_model",
     ],
 )
 def test_bedrock_messages_drops_safeguards_and_beta_under_drop_params_only_on_models_that_reject_them(

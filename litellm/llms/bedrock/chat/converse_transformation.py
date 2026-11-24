@@ -2359,7 +2359,7 @@ class AmazonConverseConfig(BaseConfig):
         )
         safeguards_beta: Final = ANTHROPIC_BETA_HEADER_VALUES.DANGEROUS_TOOL_USE_2026_09_03.value
         if SAFEGUARDS in additional_request_params and drops_safeguards_bedrock_rejects(
-            model,
+            bedrock_capability_model(model, self._deployment_base_model(litellm_params or {})),
             deployment_model_info(litellm_params),
             drop_params,
             "bedrock_converse",

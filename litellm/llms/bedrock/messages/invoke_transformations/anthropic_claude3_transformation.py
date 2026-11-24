@@ -39,6 +39,7 @@ from litellm.llms.bedrock.common_utils import (
     SAFEGUARDS,
     BedrockError,
     apply_bedrock_invoke_structured_output,
+    bedrock_capability_model,
     bedrock_supports_per_turn_control,
     bedrock_supports_tool_search,
     drops_safeguards_bedrock_rejects,
@@ -732,7 +733,7 @@ class AmazonAnthropicClaudeMessagesConfig(
     ) -> dict:
         params: Final = _OPTIONAL_PARAMS.validate_python(anthropic_messages_optional_request_params)
         drops_safeguards: Final = SAFEGUARDS in params and drops_safeguards_bedrock_rejects(
-            model,
+            bedrock_capability_model(model, getattr(litellm_params, "base_model", None)),
             _MODEL_INFO.validate_python(getattr(litellm_params, "model_info", None)),
             getattr(litellm_params, "drop_params", None),
             "bedrock_invoke",

@@ -11711,6 +11711,28 @@ def test_converse_drops_safeguards_under_drop_params_unless_the_beta_rides_along
     assert request["messages"] == [{"role": "user", "content": [{"text": "hi"}]}]
 
 
+@pytest.mark.parametrize(
+    ("base_model", "forwarded"),
+    [("us.anthropic.claude-opus-4-1-20250805-v1:0", False), (f"bedrock/{_SONNET_4_5_PROFILE}", True)],
+    ids=["old_base_model", "flagged_base_model"],
+)
+def test_converse_safeguards_on_an_application_profile_follow_its_base_model(
+    monkeypatch: pytest.MonkeyPatch, local_model_cost_map: None, base_model: str, forwarded: bool
+) -> None:
+    monkeypatch.setenv("LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS", "true")
+    safeguards: Final = [{"type": "dangerous_tool_use"}]
+
+    request: Final = AmazonConverseConfig().transform_request(
+        model="arn:aws:bedrock:us-east-1:000000000000:application-inference-profile/qa",
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={"safeguards": safeguards},
+        litellm_params={"drop_params": True, "base_model": base_model},
+        headers={"anthropic-beta": "dangerous-tool-use-2026-09-03"},
+    )
+
+    assert (request.get("additionalModelRequestFields", {}).get("safeguards") == safeguards) is forwarded
+
+
 def test_converse_safeguards_drop_keeps_the_other_betas_the_client_sent(
     monkeypatch: pytest.MonkeyPatch, local_model_cost_map: None
 ) -> None:
