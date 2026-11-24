@@ -8758,7 +8758,7 @@ class TestAccessGroupModelSync:
         async def query_raw(sql, *params):
             if sql.startswith("SELECT COUNT(*)"):
                 return [{"deployment_count": deployment_count}]
-            if sql.startswith('UPDATE "LiteLLM_AccessGroupTable"'):
+            if 'UPDATE "LiteLLM_AccessGroupTable"' in sql:
                 return [{"access_group_id": "ag-1"}]
             if sql.startswith(("SELECT 1 AS locked FROM", 'SELECT team_id FROM "LiteLLM_TeamTable"')):
                 return []
@@ -8784,7 +8784,7 @@ class TestAccessGroupModelSync:
         return [
             call
             for call in mock_prisma.db.query_raw.await_args_list
-            if call.args[0].startswith('UPDATE "LiteLLM_AccessGroupTable"')
+            if 'UPDATE "LiteLLM_AccessGroupTable"' in call.args[0]
         ]
 
     @staticmethod

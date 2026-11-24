@@ -37,15 +37,15 @@ class VideoObject(LiteLLMBaseModel):
     def hidden_params(self, hidden_params: dict[str, builtins.object]) -> None:  # mutable-ok: API requires mutation
         self._hidden_params = hidden_params
 
-    def __contains__(self, key) -> bool:
+    def __contains__(self, key: str) -> bool:
         # Define custom behavior for the 'in' operator
         return hasattr(self, key)
 
-    def get(self, key, default=None):
+    def get(self, key: str, default: builtins.object = None):
         # Custom .get() method to access attributes with a default value if the attribute doesn't exist
         return getattr(self, key, default)
 
-    def __getitem__(self, key) -> builtins.object:
+    def __getitem__(self, key: str) -> builtins.object:
         # Allow dictionary-style access to attributes
         return _ATTRIBUTE_VALUE.validate_python(getattr(self, key))
 
@@ -63,13 +63,13 @@ class VideoResponse(LiteLLMBaseModel):
     data: list[VideoObject]
     hidden_params: dict[str, object] = Field(default={})
 
-    def __contains__(self, key) -> bool:
+    def __contains__(self, key: str) -> bool:
         return hasattr(self, key)
 
-    def get(self, key, default=None):
+    def get(self, key: str, default: builtins.object = None):
         return getattr(self, key, default)
 
-    def __getitem__(self, key) -> object:
+    def __getitem__(self, key: str) -> object:
         return _ATTRIBUTE_VALUE.validate_python(getattr(self, key))
 
     def json(self, **kwargs):
@@ -156,13 +156,13 @@ class CharacterObject(LiteLLMBaseModel):
     def hidden_params(self, hidden_params: dict[str, builtins.object]) -> None:  # mutable-ok: API requires mutation
         self._hidden_params = hidden_params
 
-    def __contains__(self, key) -> bool:
+    def __contains__(self, key: str) -> bool:
         return hasattr(self, key)
 
-    def get(self, key, default=None):
+    def get(self, key: str, default: builtins.object = None):
         return getattr(self, key, default)
 
-    def __getitem__(self, key) -> builtins.object:
+    def __getitem__(self, key: str) -> builtins.object:
         return _ATTRIBUTE_VALUE.validate_python(getattr(self, key))
 
     def json(self, **kwargs):

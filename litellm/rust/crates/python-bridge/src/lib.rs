@@ -5,6 +5,7 @@ mod cache;
 mod callable;
 mod callbacks_model_capacity;
 mod coercion;
+mod cost;
 mod credentials;
 mod db;
 mod db_repository;
@@ -54,6 +55,13 @@ mod _native {
     use crate::budgets::budget_check_decision;
     #[pymodule_export]
     use crate::callbacks_model_capacity::{NativeModelCapacity, NativeModelCapacityState};
+    #[pymodule_export]
+    use crate::cost::billable_service_tier;
+    #[pymodule_export]
+    use crate::cost::{
+        NativeCallContext, NativePriced, NativePrices, NativeQuote, NativeRateCard,
+        NativeTokenUsage,
+    };
     #[pymodule_export]
     use crate::db::{DatabaseEndpoint, NativeDatabase, NativeDatabaseFailure};
     #[pymodule_export]
@@ -157,6 +165,8 @@ mod _native {
     use crate::tokenizer::HuggingFaceEncoding;
     #[pymodule_export]
     use crate::tokenizer::Tokenizer;
+    #[pymodule_export]
+    use litellm_callbacks_legacy_python::{NativeBilledRates, NativeReceipt};
 
     #[pymodule_init]
     fn init(module: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -165,6 +175,10 @@ mod _native {
         module.add(
             "JWT_ID_JAG_TYP",
             litellm_gateway_auth_core::authn::jwt::ID_JAG_TYP,
+        )?;
+        module.add(
+            "BOUND_DEFAULT_MAX_OUTPUT_TOKENS",
+            litellm_cost::bound::DEFAULT_MAX_OUTPUT_TOKENS,
         )?;
         let py = module.py();
         let dict = module.dict();
@@ -271,6 +285,14 @@ mod tests {
                 "trace_encode_error",
                 "bundled_model_cost_map",
                 "NativeModelCostMap",
+                "NativePrices",
+                "NativeTokenUsage",
+                "NativeCallContext",
+                "NativePriced",
+                "NativeQuote",
+                "NativeReceipt",
+                "NativeBilledRates",
+                "NativeRateCard",
                 "NativeModelCostMapState",
                 "NativeInstalled",
                 "NativeRejected",
@@ -291,6 +313,7 @@ mod tests {
                 "reserve_process_for_forking",
                 "unsupported_tls_settings",
                 "NativeBudgets",
+                "billable_service_tier",
                 "budget_check_decision",
                 "NativeModelCapacity",
                 "NativeModelCapacityState",
@@ -306,6 +329,7 @@ mod tests {
                 "auth_route_matches_prefix",
                 "auth_route_matches_wildcard",
                 "JWT_ID_JAG_TYP",
+                "BOUND_DEFAULT_MAX_OUTPUT_TOKENS",
                 "RustAuth",
                 "RustAuthOutcome",
                 "RustAuthSettings",

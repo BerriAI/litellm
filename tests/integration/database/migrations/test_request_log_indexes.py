@@ -1823,3 +1823,42 @@ def test_the_partition_runbook_creates_the_partitions_the_cleanup_job_would_so_a
     }
     assert _partition_bounds(scratch_database) == expected | {DEFAULT_PARTITION: "DEFAULT"}
     assert landed == (f'"{upcoming_partitions(RUNBOOK_DAY, interval, 0)[0][0]}"',)
+
+
+@pytest.fixture
+def sql_ascii_database(monkeypatch: pytest.MonkeyPatch) -> Iterator[str]:
+    admin_url: Final = _base_url()
+    name: Final = f"sql_ascii_{uuid.uuid4().hex[:8]}"
+    with psycopg.connect(admin_url, autocommit=True) as conn:
+        conn.execute(
+            sql.SQL(
+                "CREATE DATABASE {} ENCODING 'SQL_ASCII' LC_COLLATE 'C' LC_CTYPE 'C' TEMPLATE template0"
+            ).format(sql.Identifier(name))
+        )
+    database_url: Final = f"{admin_url.rsplit('/', 1)[0]}/{name}"
+    try:
+        monkeypatch.delenv("DIRECT_URL", raising=False)
+        monkeypatch.delenv("PGCLIENTENCODING", raising=False)
+        monkeypatch.setenv("DATABASE_URL", database_url)
+        yield database_url
+    finally:
+        with psycopg.connect(admin_url, autocommit=True) as conn:
+            conn.execute(sql.SQL("DROP DATABASE {} WITH (FORCE)").format(sql.Identifier(name)))
+
+
+@requires_db
+@RESOLVERS
+def test_a_sql_ascii_database_migrates_on_every_boot_and_gets_its_request_log_indexes(
+    sql_ascii_database: str, use_v2_resolver: bool
+) -> None:
+    assert _migration_job(use_v2_resolver) is True
+    assert _migration_job(use_v2_resolver) is True
+
+    assert ensure_request_log_indexes(sql_ascii_database, "public") is True
+    with psycopg.connect(sql_ascii_database, client_encoding="utf8") as conn:
+        valid: Final = conn.execute(
+            "SELECT c.relname, i.indisvalid FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid "
+            "WHERE c.relname IN (%s, %s)",
+            (API_KEY_INDEX, CALL_ID_INDEX),
+        ).fetchall()
+    assert sorted(valid) == sorted([(API_KEY_INDEX, True), (CALL_ID_INDEX, True)])

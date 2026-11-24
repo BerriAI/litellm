@@ -26,6 +26,7 @@ from litellm.responses.litellm_completion_transformation.compaction_trigger impo
     with_trailing_compaction_trigger_as_summary_prompt,
     without_a_forced_tool,
 )
+from litellm.responses.litellm_completion_transformation.error_param import error_param_named_as_a_responses_field
 from litellm.responses.litellm_completion_transformation.session_handler import ResponsesSessionHandler, StoredTurns
 from litellm.responses.litellm_completion_transformation.streaming_iterator import (
     LiteLLMCompletionStreamingIterator,
@@ -259,9 +260,10 @@ class LiteLLMCompletionTransformationHandler:
                 custom_llm_provider,
             )
         _log_full_tool_names(_REQUEST_KWARGS_ADAPTER.validate_python(kwargs), echoed_request)
-        litellm_completion_response: Final[ModelResponse | litellm.CustomStreamWrapper] = litellm.completion(
-            **{**kwargs, **litellm_completion_request, "_skip_responses_api_bridge": True},
-        )
+        with error_param_named_as_a_responses_field(_REQUEST_KWARGS_ADAPTER.validate_python(kwargs), bridged_request):
+            litellm_completion_response: Final[ModelResponse | litellm.CustomStreamWrapper] = litellm.completion(
+                **{**kwargs, **litellm_completion_request, "_skip_responses_api_bridge": True},
+            )
         return _bridged_reply(
             litellm_completion_response,
             model=model,
@@ -364,9 +366,12 @@ class LiteLLMCompletionTransformationHandler:
             "_skip_responses_api_bridge": True,
         }
         _log_full_tool_names(_REQUEST_KWARGS_ADAPTER.validate_python(kwargs), responses_api_request)
-        litellm_completion_response: Final[ModelResponse | litellm.CustomStreamWrapper] = await litellm.acompletion(
-            **completion_kwargs
-        )
+        with error_param_named_as_a_responses_field(
+            _REQUEST_KWARGS_ADAPTER.validate_python(kwargs), responses_api_request
+        ):
+            litellm_completion_response: Final[ModelResponse | litellm.CustomStreamWrapper] = await litellm.acompletion(
+                **completion_kwargs
+            )
         provider: Final = completion_request.get("custom_llm_provider")
         return _bridged_reply(
             litellm_completion_response,
