@@ -446,3 +446,54 @@ def test_an_agent_rejecting_the_exchanged_token_on_resubscribe_streams_the_refus
         _assert_rejected_frame(forbidden, 403, "permission_error", caller, exchanged)
         assert [form["subject_token"] for form in rig.exchanges()] == [caller, caller]
         assert _agent_authorizations(agent) == (f"Bearer {exchanged}",) * 2
+
+
+def test_a_refused_exchange_counts_against_the_keys_rpm_limit(rig: _Rig) -> None:
+    with peer("oborpm", "langgraph") as agent, rig.proxy.scenario() as scenario:
+        identity: Final = _agent(rig, scenario, agent, {"token_exchange": _block(rig, "claims-client")})
+        key: Final = scenario.key(rpm_limit=2)
+        headers: Final = {"x-litellm-api-key": key, "Authorization": f"Bearer garbage-{uuid.uuid4().hex}"}
+        rig.exchanges()
+        for marker in ("obo-rpm-1", "obo-rpm-2"):
+            refused = _send(rig, identity, marker, headers)
+            _assert_refused(refused, 401, key)
+            assert 'error="insufficient_claims"' in refused.headers["www-authenticate"], refused.headers
+        assert len(rig.exchanges()) == 2
+        _assert_refused(_send(rig, identity, "obo-rpm-3", headers), 429, key)
+        assert rig.exchanges() == ()
+        assert _agent_authorizations(agent) == ()
+
+
+def test_a_refused_exchange_releases_the_keys_parallel_slot(rig: _Rig) -> None:
+    with wire_server(lambda request: Reply()) as closed:
+        unreachable: Final = closed.url + "/token"
+    with peer("oboslot", "langgraph") as agent, rig.proxy.scenario() as scenario:
+        claims_agent: Final = _agent(rig, scenario, agent, {"token_exchange": _block(rig, "claims-client")})
+        down_agent: Final = _agent(
+            rig,
+            scenario,
+            agent,
+            {"token_exchange": {**_block(rig), "token_exchange_endpoint": unreachable}},
+            agent_name=agent.marker + "-down",
+        )
+        bridge_agent: Final = _agent(
+            rig,
+            scenario,
+            agent,
+            {"token_exchange": _block(rig), "custom_llm_provider": "databricks_agent", "model": "databricks/agent"},
+            agent_name=agent.marker + "-bridge",
+        )
+        good_agent: Final = _agent(
+            rig, scenario, agent, {"token_exchange": _block(rig)}, agent_name=agent.marker + "-ok"
+        )
+        key: Final = scenario.key(max_parallel_requests=1)
+        subject: Final = "opaque-subject-" + uuid.uuid4().hex
+        headers: Final = {"x-litellm-api-key": key, "Authorization": f"Bearer {subject}"}
+        rig.exchanges()
+        _assert_refused(_send(rig, claims_agent, "obo-slot-claims", headers), 401, key, subject)
+        _assert_refused(_send(rig, down_agent, "obo-slot-down", headers), 503, key, subject)
+        _assert_refused(_send(rig, bridge_agent, "obo-slot-bridge", headers), 400, key, subject)
+        _assert_refused(_send(rig, good_agent, "obo-slot-no-subject", {"Authorization": f"Bearer {key}"}), 401, key)
+        _assert_answered(_send(rig, good_agent, "obo-slot-ok", headers), "obo-slot-ok")
+        assert [form["client_id"] for form in rig.exchanges()] == ["claims-client", "a2a-obo-client"]
+        assert _agent_authorizations(agent) == (f"Bearer {_exchanged(subject, '')}",)

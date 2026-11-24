@@ -265,6 +265,28 @@ async def _relaying_rejection(call: Awaitable[_Reply], exchanged: ExchangedAgent
         raise rejection from error
 
 
+async def _failing_the_call_on_refusal(
+    call: Awaitable[_Reply],
+    *,
+    proxy_logging_obj: ProxyLogging,
+    request_data: dict[str, object],  # mutable-ok: the failure hook stamps its logging state onto the request data
+    user_api_key_dict: UserAPIKeyAuth,
+) -> _Reply:
+    try:
+        return await call
+    except HTTPException as refusal:
+        try:
+            await proxy_logging_obj.post_call_failure_hook(  # pyright: ignore[reportUnknownMemberType]  # bare dict in sig
+                request_data=request_data,
+                original_exception=refusal,
+                user_api_key_dict=user_api_key_dict,
+                route="/a2a/{agent_id}",
+            )
+        except Exception:  # noqa: BLE001  # a logging failure must not change the refusal the caller gets
+            verbose_proxy_logger.exception("Failed to record refused A2A token exchange")
+        raise
+
+
 async def _stream_relaying_rejection(
     events: AsyncIterator[_Event], exchanged: ExchangedAgentToken
 ) -> AsyncGenerator[_Event, None]:
@@ -383,7 +405,7 @@ class _JsonRpcRequestId(BaseModel):
 async def _jsonrpc_request_id(request: Request) -> str | int | None:
     try:
         return _JsonRpcRequestId.model_validate_json(await request.body()).id
-    except ValidationError:
+    except (ValidationError, RuntimeError):
         return None
 
 
@@ -1044,18 +1066,6 @@ async def invoke_agent_a2a(
         if not agent_url and not custom_llm_provider:
             return _jsonrpc_error(request_id, -32000, f"Agent '{agent_id}' has no URL configured", 500)
 
-        exchanged_token: Final = (
-            await _exchange_agent_token(
-                litellm_params,
-                custom_llm_provider,
-                agent=agent,
-                request_headers=request.headers,
-                user_api_key_auth=user_api_key_dict,
-            )
-            if has_token_exchange(litellm_params)
-            else None
-        )
-
         verbose_proxy_logger.info(
             "Proxying A2A request to agent '%s' at %s", agent_id, agent_url or "completion-bridge"
         )
@@ -1103,6 +1113,23 @@ async def invoke_agent_a2a(
             version=version,
         )
         request_data = data
+
+        exchanged_token: Final = (
+            await _failing_the_call_on_refusal(
+                _exchange_agent_token(
+                    litellm_params,
+                    custom_llm_provider,
+                    agent=agent,
+                    request_headers=request.headers,
+                    user_api_key_auth=user_api_key_dict,
+                ),
+                proxy_logging_obj=proxy_logging_obj,
+                request_data=data,
+                user_api_key_dict=user_api_key_auth_for_call,
+            )
+            if has_token_exchange(litellm_params)
+            else None
+        )
 
         # Build merged headers for the backend agent
         static_headers: Final[Mapping[str, str]] = dict(agent.static_headers or {})
