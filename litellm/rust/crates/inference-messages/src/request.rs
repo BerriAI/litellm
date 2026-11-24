@@ -154,6 +154,7 @@ pub(super) async fn provider_call(
     model: String,
     call: MessagesCall,
     secrets: &(dyn Lookup + Send + Sync),
+    host_transport: bool,
     context: &CallContext<'_, impl Interceptors<Error>>,
 ) -> Result<ProviderCall, Error> {
     let MessagesCall {
@@ -270,6 +271,7 @@ pub(super) async fn provider_call(
         optional_params: logged_params,
         secret_fields: Vec::new(),
         api_key: api_key.map(SecretValue::new),
+        host_transport,
     };
     let authenticated = resolve_auth(
         auth_services,
@@ -470,7 +472,7 @@ fn requested_optional_params(
         return Ok(request);
     }
     if request.params.service_tier.is_some() {
-        litellm_tracing::warn!(
+        tracing::warn!(
             "Dropping `service_tier` for model={} on provider={}. Only the Anthropic API routes accept it.",
             request.model,
             provider.as_str()
@@ -777,6 +779,7 @@ mod tests {
             model,
             call,
             secrets,
+            false,
             &context,
         )
         .await

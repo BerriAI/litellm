@@ -56,6 +56,7 @@ from litellm.constants import (
     MAXIMUM_TRACEBACK_LINES_TO_LOG,
     MCP_TOOL_LISTING_TIMEOUT,
 )
+from litellm.integrations.lens.policy import LENS_LOGGING_POLICY_PARAM, LensLoggingPolicy, lens_logging_enabled
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.proxy._types import (
     UserAPIKeyAuth,
@@ -3007,7 +3008,10 @@ async def log_mcp_sdk_rejection(
         metadata=metadata,
     )
     logging_obj.update_environment_variables(  # pyright: ignore[reportUnknownMemberType]  # untyped legacy signature
-        litellm_params={"metadata": metadata},
+        litellm_params={
+            "metadata": metadata,
+            LENS_LOGGING_POLICY_PARAM: LensLoggingPolicy(enabled=lens_logging_enabled(user_api_key_auth)),
+        },
         optional_params={},
         user=user_api_key_auth.user_id,
     )

@@ -11,6 +11,7 @@ from typing_extensions import NotRequired, ReadOnly, TypedDict
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
+from litellm.litellm_core_utils.allowed_tools_tool_choice import HostedMcpToolHandling
 from litellm.litellm_core_utils.model_cost_table import Uncached
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_str_from_messages,
@@ -227,6 +228,9 @@ class OllamaConfig(BaseConfig):
             "max_completion_tokens",
             "reasoning_effort",
         ]
+
+    def hosted_mcp_tool_handling(self, model: str) -> HostedMcpToolHandling:
+        return "drops"
 
     def map_openai_params(
         self,

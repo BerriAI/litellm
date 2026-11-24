@@ -44,6 +44,7 @@ from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import (
     LIST_BATCHES_SUPPORTED_PROVIDERS,
     OPENAI_COMPATIBLE_BATCH_AND_FILES_PROVIDERS,
+    CallTypes,
     ListBatchesSupportedProvider,
     LiteLLMBatch,
     LlmProviders,
@@ -53,6 +54,7 @@ from litellm.utils import (
     client,
     get_litellm_params,
     get_llm_provider,
+    load_credentials_from_list,
     supports_httpx_timeout,
 )
 
@@ -134,7 +136,7 @@ async def acreate_batch(
     extra_headers: dict[str, str] | None = None,
     extra_body: dict[str, str] | None = None,
     output_expires_after: FileExpiresAfter | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> LiteLLMBatch:
     """
     Async: Creates and executes a batch from an uploaded file of request
@@ -392,7 +394,7 @@ async def aretrieve_batch(
     metadata: dict[str, str] | None = None,
     extra_headers: dict[str, str] | None = None,
     extra_body: dict[str, str] | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> LiteLLMBatch:
     """
     Async: Retrieves a batch.
@@ -431,7 +433,7 @@ def _handle_retrieve_batch_providers_without_provider_config(
     batch_id: str,
     optional_params: GenericLiteLLMParams,
     timeout: float | httpx.Timeout,
-    litellm_params: dict,
+    litellm_params: dict[str, object],
     _retrieve_batch_request: RetrieveBatchRequest,
     _is_async: bool,
     custom_llm_provider: Literal[
@@ -714,7 +716,7 @@ async def alist_batches(
     metadata: dict[str, str] | None = None,
     extra_headers: dict[str, str] | None = None,
     extra_body: dict[str, str] | None = None,
-    **kwargs,
+    **kwargs: object,
 ):
     """
     Async: List your organization's batches.
@@ -957,6 +959,7 @@ def cancel_batch(
     LiteLLM Equivalent of POST https://api.openai.com/v1/batches/{batch_id}/cancel
     """
     try:
+        load_credentials_from_list(kwargs, CallTypes.cancel_batch.value)  # pyright: ignore[reportUnknownArgumentType]  # **kwargs is untyped
         try:
             if model is not None:
                 _, custom_llm_provider, _, _ = get_llm_provider(

@@ -469,6 +469,7 @@ class _VllmCompletionOutputLike(Protocol):
 class _ParsedChunkHiddenParams(LiteLLMBaseModel):
     provider_specific_fields: Mapping[str, object] | None = None
     upstream_provider: str | None = None
+    anthropic_message_start: bool = False
 
 
 _DECODED_JSON: Final = TypeAdapter(object)
@@ -515,6 +516,7 @@ def _provider_hidden_params(
                     "upstream_provider",
                     parsed.upstream_provider if parsed is not None and parsed.upstream_provider else upstream_provider,
                 ),
+                ("anthropic_message_start", True if parsed is not None and parsed.anthropic_message_start else None),
             )
             if value is not None
         }

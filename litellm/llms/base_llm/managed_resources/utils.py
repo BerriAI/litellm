@@ -7,7 +7,10 @@ different managed resource types (files, vector stores, etc.).
 
 import base64
 import re
+from collections.abc import Mapping
 from typing import Final, Literal
+
+from typing_extensions import ReadOnly, TypedDict
 
 PASSTHROUGH_MANAGED_ID_AZURE_PROVIDERS: Final = ("azure", "azure_ai")
 
@@ -272,7 +275,7 @@ def generate_unified_id_string(
     target_model_names: list[str],
     provider_resource_id: str,
     model_id: str,
-    additional_fields: dict | None = None,
+    additional_fields: Mapping[str, object] | None = None,
 ) -> str:
     """
     Generate a unified ID string (before base64 encoding).
@@ -354,9 +357,19 @@ def decode_unified_id(encoded_unified_id: str) -> str | None:
         return None
 
 
+class _ParsedUnifiedId(TypedDict):
+    """Components `parse_unified_id` extracts from a unified ID."""
+
+    resource_type: ReadOnly[str | None]
+    unified_uuid: ReadOnly[str | None]
+    target_model_names: ReadOnly[list[str]]
+    provider_resource_id: ReadOnly[str | None]
+    model_id: ReadOnly[str | None]
+
+
 def parse_unified_id(
     unified_id: str,
-) -> dict | None:
+) -> _ParsedUnifiedId | None:
     """
     Parse a unified ID into its components.
 

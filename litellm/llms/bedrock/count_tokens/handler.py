@@ -7,7 +7,7 @@ Simplified handler leveraging existing LiteLLM Bedrock infrastructure.
 from typing import Any, Final
 
 import httpx
-from pydantic import TypeAdapter
+from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
 import litellm
 from litellm._logging import verbose_logger
@@ -19,6 +19,7 @@ from litellm.llms.bedrock.count_tokens.transformation import BedrockCountTokensC
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, get_async_httpx_client
 
 _DECODED_JSON: Final = TypeAdapter(object)
+_CANNOT_COUNT_MODEL_MESSAGE: Final = "The provided model doesn't support counting tokens."
 _SSO_LOGIN_FIX: Final = (
     "Run `aws sso login` for the deployment's aws_profile_name on the proxy host, or set other AWS credentials on "
     "the deployment."
@@ -28,6 +29,23 @@ _SSO_LOGIN_FIX: Final = (
 class BedrockCountTokensRequestError(BedrockError):
     def __init__(self, problem: str) -> None:
         super().__init__(status_code=400, message=problem)
+
+
+class _BedrockErrorBody(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    message: str
+
+
+def _bedrock_error_message(body: str) -> str | None:
+    try:
+        return _BedrockErrorBody.model_validate_json(body).message
+    except ValidationError:
+        return None
+
+
+def is_caller_refusal(status_code: int, body: str, invalid_request: bool) -> bool:
+    return invalid_request or status_code == 429 or _bedrock_error_message(body) == _CANNOT_COUNT_MODEL_MESSAGE
 
 
 class BedrockCountTokensCredentialsError(BedrockError):
