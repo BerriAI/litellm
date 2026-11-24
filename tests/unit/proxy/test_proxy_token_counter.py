@@ -7255,6 +7255,7 @@ def _post_count(
     return TestClient(app, raise_server_exceptions=False).post(path, json=dict(body), headers=dict(headers))
 
 
+
 def _utils_token_counter(
     monkeypatch: pytest.MonkeyPatch, body: Mapping[str, JsonValue], headers: Mapping[str, str]
 ) -> httpx.Response:
@@ -7334,12 +7335,16 @@ def test_utils_token_counter_answers_400_naming_a_content_block_the_local_counte
     assert response.status_code == 400, response.text
     error: Final = response.json()["error"]
     assert (error["type"], error["param"], error["code"]) == ("invalid_request_error", "messages", "400"), error
-    assert error["message"].startswith("The token counter can't count content blocks of type future_block."), error
+    assert error["message"] == "The token counter can't count content blocks of type future_block", error
     assert [line["status_code"] for line in token_count_log_lines()] == [400]
 
 
 def test_utils_token_counter_answers_400_naming_a_malformed_server_tool_block(monkeypatch: pytest.MonkeyPatch) -> None:
-    block: Final[JsonValue] = {"type": "web_search_tool_result", "tool_use_id": "srv_1", "content": [{"type": "image"}]}
+    block: Final[JsonValue] = {
+        "type": "web_search_tool_result",
+        "tool_use_id": "srv_1",
+        "content": [{"url": "https://example.invalid"}],
+    }
 
     response: Final = _utils_token_counter(
         monkeypatch, {"model": "count-log-gpt", "messages": [{"role": "user", "content": [block]}]}, {}
@@ -7351,6 +7356,29 @@ def test_utils_token_counter_answers_400_naming_a_malformed_server_tool_block(mo
     assert error["message"].startswith(
         "The token counter can't read the content field of a web_search_tool_result block: "
     ), error
+
+
+@pytest.mark.parametrize(
+    ("system", "user_content", "param"),
+    [
+        ([{"type": "future_block", "data": "opaque"}], "hi", "system"),
+        ("Be brief.", [{"type": "future_block", "data": "opaque"}], "messages"),
+        ([{"type": "text", "text": "Be brief."}], [{"type": "future_block", "data": "opaque"}], None),
+    ],
+    ids=["block-in-system", "block-in-messages", "blocks-in-both-fields"],
+)
+def test_utils_token_counter_points_param_only_at_the_one_field_that_can_hold_the_block(
+    monkeypatch: pytest.MonkeyPatch, system: JsonValue, user_content: JsonValue, param: str | None
+) -> None:
+    response: Final = _utils_token_counter(
+        monkeypatch,
+        {"model": "count-log-gpt", "system": system, "messages": [{"role": "user", "content": user_content}]},
+        {},
+    )
+
+    assert response.status_code == 400, response.text
+    error: Final = response.json()["error"]
+    assert (error["type"], error["param"]) == ("invalid_request_error", param), error
 
 
 def test_utils_token_counter_keeps_500_for_a_known_block_it_fails_to_count(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -7381,7 +7409,7 @@ def test_responses_input_tokens_points_param_at_input_for_a_content_block_the_lo
     assert response.status_code == 400, response.text
     error: Final = response.json()["error"]
     assert (error["type"], error["param"]) == ("invalid_request_error", "input"), error
-    assert error["message"].startswith("The token counter can't count content blocks of type input_audio."), error
+    assert error["message"] == "The token counter can't count content blocks of type input_audio", error
 
 
 def test_utils_token_counter_failed_count_logs_its_status_in_place_of_a_count(

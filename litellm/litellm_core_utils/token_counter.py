@@ -2051,11 +2051,7 @@ def _count_content_list(
             else:
                 content_type = c.get("type", type(c).__name__) if isinstance(c, dict) else type(c).__name__
                 raise UnsupportedContentTypeError(
-                    f"The token counter can't count content blocks of type {content_type}. "
-                    f"It counts strings and blocks of type "
-                    f"text, image_url, image, document, file, tool_use, tool_result, thinking, redacted_thinking, "
-                    f"compaction, tool_reference, tool_addition, tool_removal, search_result, "
-                    f"and Anthropic server tool results"
+                    f"The token counter can't count content blocks of type {content_type}"
                 )
         return num_tokens
     except Exception as e:

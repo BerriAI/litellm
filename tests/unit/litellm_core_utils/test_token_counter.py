@@ -2201,22 +2201,20 @@ def test_token_counter_with_tool_reference_block():
 
 def test_count_content_list_rejects_unknown_type():
     """
-    An unrecognized content block type must raise, and the error message must
-    enumerate the supported types (including `tool_reference`). This pins the
-    catch-all contract so a future block type isn't silently dropped.
+    An unrecognized content block type must raise, naming the type, so a
+    future block type isn't silently dropped.
     """
     from litellm.litellm_core_utils.token_counter import _count_content_list
 
-    with pytest.raises(ValueError, match="can't count content blocks of type totally_unknown_block") as exc_info:
+    with pytest.raises(
+        ValueError, match=r"^The token counter can't count content blocks of type totally_unknown_block$"
+    ):
         _count_content_list(
             count_function=len,
             content_list=[{"type": "totally_unknown_block"}],
             use_default_image_token_count=False,
             default_token_count=None,
         )
-
-    message = str(exc_info.value)
-    assert "tool_reference" in message
 
 
 _CLAUDE: Final = "anthropic/claude-sonnet-5-5"
@@ -2713,7 +2711,7 @@ def test_unknown_content_type_remains_a_value_error_with_an_optional_fallback(co
     unknown: Final = {"type": "future_block"}
     content: Final = [{"type": container, "tool_use_id": "toolu_1", "content": [unknown]}] if container else [unknown]
 
-    with pytest.raises(ValueError, match=r"^The token counter can't count content blocks of type future_block\."):
+    with pytest.raises(ValueError, match=r"^The token counter can't count content blocks of type future_block$"):
         _count_content_list(len, content, False, None)
     assert _count_content_list(len, content, False, 7) == 7
 
