@@ -1053,6 +1053,39 @@ async def test_openai_turn_is_sent_again_once_without_replayed_reasoning_the_bac
     assert events[-1]["type"] in ("message", "message_stop")
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "message",
+    [
+        "The encrypted content for item rs_1 could not be verified.",
+        "Encrypted content could not be decrypted or parsed.",
+    ],
+)
+async def test_openai_turn_is_sent_again_when_only_the_error_code_names_the_rejected_reasoning(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, message: str
+) -> None:
+    rejection: Final = {
+        "error": {
+            "message": message,
+            "type": "invalid_request_error",
+            "param": None,
+            "code": "invalid_encrypted_content",
+        }
+    }
+    upstream: Final = _upstream(respx_mock, monkeypatch, httpx.Response(400, json=rejection), False)
+
+    await LiteLLMMessagesToResponsesAPIHandler.async_anthropic_messages_handler(
+        max_tokens=64,
+        messages=_history(replayed_reasoning=True),
+        model="openai/gpt-5.6-luna",
+        tools=[dict(BASH_TOOL)],
+        stream=False,
+        custom_llm_provider="openai",
+    )
+
+    assert _replayed_reasoning_counts(upstream) == [1, 0]
+
+
 def test_sync_openai_turn_is_sent_again_once_without_replayed_reasoning_the_backend_cannot_decrypt(
     respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
 ) -> None:
