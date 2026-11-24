@@ -5,7 +5,7 @@ use std::sync::Arc;
 use litellm_env::Lookup;
 use litellm_gateway_auth::Authenticated;
 use litellm_gateway_auth_core::Caller;
-use litellm_repositories::{ConfigParam, Credential, ProxyModel, RawJson};
+use litellm_repositories::{ConfigParam, Credential, ProxyModel, RawJson, StoredObjects};
 use litellm_secrets::{OidcResolver, SecretManagerState, SecretResolver};
 
 use crate::{host::NativeRows, stored::StoredRows};
@@ -24,6 +24,8 @@ pub(crate) struct Rows {
     pub(crate) credentials: Option<Vec<Credential>>,
     /// The UI settings column, `Err(())` for a read that fails.
     pub(crate) ui_settings: Result<Option<&'static str>, ()>,
+    /// Which other stored objects the database holds, `Err(())` for a read that fails.
+    pub(crate) objects: Result<StoredObjects, ()>,
 }
 
 impl Default for Rows {
@@ -33,6 +35,7 @@ impl Default for Rows {
             models: None,
             credentials: None,
             ui_settings: Ok(None),
+            objects: Ok(StoredObjects::default()),
         }
     }
 }
@@ -57,6 +60,11 @@ impl StoredRows for Rows {
     async fn ui_settings(&self) -> Result<Option<RawJson>, litellm_db::Error> {
         self.ui_settings
             .map(|column| column.map(json))
+            .map_err(|()| litellm_db::Error::TransactionTimedOut)
+    }
+
+    async fn objects(&self) -> Result<StoredObjects, litellm_db::Error> {
+        self.objects
             .map_err(|()| litellm_db::Error::TransactionTimedOut)
     }
 }
