@@ -123,7 +123,7 @@ class BaseModelResponseIterator:
         if self.http_response is not None:
             self.http_response.close()
 
-    def chunk_parser(self, chunk: dict[str, object]) -> GenericStreamingChunk | ModelResponseStream:
+    def chunk_parser(self, chunk: dict) -> GenericStreamingChunk | ModelResponseStream:
         return GenericStreamingChunk(
             text="",
             is_finished=False,
@@ -275,7 +275,7 @@ class MockResponseIterator:  # for returning ai21 streaming responses
 
 
 class FakeStreamResponseIterator:
-    def __init__(self, model_response: dict[str, object], json_mode: bool | None = False):
+    def __init__(self, model_response, json_mode: bool | None = False):
         self.model_response = model_response
         self.json_mode = json_mode
         self.is_done = False
@@ -285,7 +285,7 @@ class FakeStreamResponseIterator:
         return self
 
     @abstractmethod
-    def chunk_parser(self, chunk: dict[str, object]) -> GenericStreamingChunk:
+    def chunk_parser(self, chunk: dict) -> GenericStreamingChunk:
         pass
 
     def __next__(self):
