@@ -258,7 +258,7 @@ def rate_limit_retry_delay(
     return min(max_delay, base_delay * 2.0**attempt * (1 + jitter))
 
 
-T: Final = TypeVar("T")
+T = TypeVar("T")
 
 
 async def retry_upstream_rate_limit(

@@ -7,14 +7,20 @@ here and update the Notion plan.
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import os
 import sys
+from collections.abc import Awaitable
+from concurrent.futures import ThreadPoolExecutor
+from functools import partial
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, AsyncIterator, Callable, Dict, Final, Iterator, List, Optional
+from typing import TYPE_CHECKING, Any, AsyncIterator, Callable, Dict, Final, Iterator, List, Optional, ParamSpec, TypeVar
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+
+import litellm.proxy.utils as proxy_utils
 
 if TYPE_CHECKING:
     import respx
@@ -22,6 +28,31 @@ if TYPE_CHECKING:
     from litellm import Router
 
 from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stubs
+
+_OffloadParams = ParamSpec("_OffloadParams")
+_OffloadResult = TypeVar("_OffloadResult")
+
+
+@pytest.fixture
+def failure_fields_executor(monkeypatch: pytest.MonkeyPatch) -> Iterator[ThreadPoolExecutor]:
+    original_offload: Final = proxy_utils.offload_token_count
+    with ThreadPoolExecutor(max_workers=1, thread_name_prefix="failure-fields-test") as executor:
+        def offload(
+            function: Callable[_OffloadParams, _OffloadResult],
+        ) -> Callable[_OffloadParams, Awaitable[_OffloadResult]]:
+            if function is not proxy_utils._failure_fields_to_lift:
+                return original_offload(function)
+
+            async def run(
+                *args: _OffloadParams.args,
+                **kwargs: _OffloadParams.kwargs,  # kwargs-ok: ParamSpec preserves the real offload's arguments
+            ) -> _OffloadResult:
+                return await asyncio.get_running_loop().run_in_executor(executor, partial(function, *args, **kwargs))
+
+            return run
+
+        monkeypatch.setattr(proxy_utils, "offload_token_count", offload)
+        yield executor
 
 # Repo root, anchored to this file (not CWD) so the path is correct no
 # matter where pytest is invoked from. With the project installed via

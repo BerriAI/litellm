@@ -921,6 +921,7 @@ describe("managed keys survive an untouched open-and-save", () => {
     local_heuristic: "heuristic",
     heuristic_v2_success_threshold: 0.89,
     heuristic_first_max_tier: "SIMPLE",
+    heuristic_first_max_context_tokens: 8000,
     classifier_llm_config: { model: "gpt-4o-mini", timeout_ms: 3000, reasoning_effort: "low" },
     classifier_context_window_size: 5,
     classifier_context_budget_chars: 4000,
@@ -1305,4 +1306,23 @@ describe("untouched save round trip", () => {
     });
     expect(saved.reminder_markers).toEqual([{ open: "<other>", close: "</other>" }]);
   });
+});
+
+it("edits and clears the stored heuristic-first conversation limit", () => {
+  const stored = {
+    tiers: { SIMPLE: ["simple"], MEDIUM: ["medium"] },
+    classifier_type: "heuristic_first",
+    heuristic_first_max_tier: "SIMPLE",
+    classifier_llm_config: { model: "judge" },
+    heuristic_first_max_context_tokens: 8000,
+  };
+  const hydrated = hydrateComplexityRouterConfig(stored, undefined);
+  expect(hydrated.heuristic_first_max_context_tokens).toBe(8000);
+  expect(
+    buildUpdatedComplexityRouterConfig(stored, { ...hydrated, heuristic_first_max_context_tokens: 12000 })
+      .heuristic_first_max_context_tokens,
+  ).toBe(12000);
+  expect(
+    buildUpdatedComplexityRouterConfig(stored, { ...hydrated, heuristic_first_max_context_tokens: undefined }),
+  ).not.toHaveProperty("heuristic_first_max_context_tokens");
 });

@@ -1,5 +1,6 @@
 import userEvent from "@testing-library/user-event";
-import { chooseSelectOption, fireEvent, screen } from "./test-utils";
+import { vi } from "vitest";
+import { act, chooseSelectOption, fireEvent, screen } from "./test-utils";
 
 const groups: Record<string, string> = {
   "Heuristic Keyword Overrides": "Heuristic tuning",
@@ -37,4 +38,15 @@ export const selectAutoRouterOption = async (field: string, option: string) => {
 export const selectAutoRouterApproach = async (option: string) => {
   await userEvent.click(screen.getByRole("radio", { name: "LLM" }));
   await selectAutoRouterOption("Routing approach", option);
+};
+
+export const withSettledRouterAvailability = async (changeForm: () => void) => {
+  vi.useFakeTimers();
+  try {
+    changeForm();
+    await act(() => vi.advanceTimersByTimeAsync(300));
+    await act(() => vi.runOnlyPendingTimersAsync());
+  } finally {
+    vi.useRealTimers();
+  }
 };

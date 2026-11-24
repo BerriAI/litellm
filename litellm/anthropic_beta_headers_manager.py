@@ -26,11 +26,11 @@ import asyncio
 import json
 import os
 import threading
-from collections.abc import Mapping
+from collections.abc import Mapping, MutableMapping
 from concurrent.futures import ThreadPoolExecutor
 from functools import cache
 from importlib.resources import files
-from typing import Final, Literal, TypeAlias
+from typing import Final, Literal, TypeAlias, TypeVar
 from urllib.parse import urlparse
 
 import httpx
@@ -40,9 +40,10 @@ from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.offline_mode import is_offline_mode
 
 # Cache for the loaded configuration
-_BETA_HEADERS_CONFIG: dict | None = None
+_BETA_HEADERS_CONFIG: dict[str, object] | None = None
 _BETA_HEADERS_CONFIG_LOCK: Final = threading.Lock()
 _BETA_HEADERS_CONFIG_LOADER: Final = ThreadPoolExecutor(max_workers=1, thread_name_prefix="litellm-beta-headers-config")
+_BACKGROUND_LOAD_IN_FLIGHT: Final = threading.Lock()
 
 BetaHeadersConfig: TypeAlias = Mapping[str, str | Mapping[str, str | None]]
 _BETA_HEADERS_CONFIG_ADAPTER: Final = TypeAdapter(BetaHeadersConfig)
@@ -50,6 +51,7 @@ _DECODED_JSON: Final = TypeAdapter(object)
 
 BetaPlacement: TypeAlias = Literal["header", "body"]
 _HEADER_ONLY_COLUMN_SUFFIX: Final = "_header_only"
+_HeadersT = TypeVar("_HeadersT", bound=MutableMapping[str, str])
 
 
 class GetAnthropicBetaHeadersConfig:
@@ -208,6 +210,22 @@ def _load_beta_headers_config() -> dict:
 async def aload_beta_headers_config() -> None:
     if _BETA_HEADERS_CONFIG is None:
         await asyncio.get_running_loop().run_in_executor(_BETA_HEADERS_CONFIG_LOADER, _load_beta_headers_config)
+
+
+def loaded_beta_headers_config() -> Mapping[str, object] | None:
+    return _BETA_HEADERS_CONFIG
+
+
+def _cache_beta_headers_config() -> None:
+    try:
+        _load_beta_headers_config()
+    finally:
+        _BACKGROUND_LOAD_IN_FLIGHT.release()
+
+
+def load_beta_headers_config_in_background() -> None:
+    if _BETA_HEADERS_CONFIG is None and _BACKGROUND_LOAD_IN_FLIGHT.acquire(blocking=False):
+        _ = _BETA_HEADERS_CONFIG_LOADER.submit(_cache_beta_headers_config)
 
 
 @cache
@@ -416,11 +434,11 @@ def resolve_beta_provider(provider: str, api_base: str | None = None) -> str:
 
 
 def update_headers_with_filtered_beta(
-    headers: dict,
+    headers: _HeadersT,
     provider: str,
     api_base: str | None = None,
     keep: frozenset[str] = frozenset(),
-) -> dict:
+) -> _HeadersT:
     """
     Update headers dict by filtering and transforming anthropic-beta header values.
     Modifies the headers dict in place and returns it.
@@ -465,7 +483,7 @@ def update_headers_with_filtered_beta(
 
 
 def update_request_with_filtered_beta(
-    headers: dict,
+    headers: dict[str, str],
     request_data: dict,
     provider: str,
     api_base: str | None = None,

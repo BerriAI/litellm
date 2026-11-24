@@ -1510,13 +1510,16 @@ async def test_a_failed_redis_delete_still_clears_this_workers_counter(monkeypat
 @pytest.mark.asyncio
 async def test_counters_do_not_share_the_key_authentication_cache(monkeypatch):
     """Regression: throttle entries must not evict cached credentials from user_api_key_cache."""
-    from litellm.constants import LOGIN_THROTTLE_CACHE_KEY_PREFIX
     from litellm.proxy import proxy_server as ps
+    from litellm.proxy._types import UserAPIKeyAuth, hash_token
     from litellm.proxy.auth.login_throttle import LoginThrottle
+    from litellm.redis.stores.auth_cache import AuthObject
 
     monkeypatch.setenv("UI_USERNAME", "admin")
     monkeypatch.setenv("UI_PASSWORD", "right")
-    auth_cache_keys_before = set(ps.user_api_key_cache.in_memory_cache.cache_dict)
+    credential: Final = AuthObject.virtual_key(hash_token("sk-throttle-regression"))
+    ps.user_api_key_cache.set_cache(credential, UserAPIKeyAuth(user_id="kept"), model_type=UserAPIKeyAuth)
+    auth_cache_sizes_before: Final = ps.user_api_key_cache.store.len_local()
 
     request = MagicMock()
     request.headers = {}
@@ -1527,8 +1530,9 @@ async def test_counters_do_not_share_the_key_authentication_cache(monkeypatch):
     for i in range(25):
         assert await _fail(throttle, username=f"made-up-{i}@example.com") == "401"
 
-    added = set(ps.user_api_key_cache.in_memory_cache.cache_dict) - auth_cache_keys_before
-    assert not [k for k in added if str(k).startswith(LOGIN_THROTTLE_CACHE_KEY_PREFIX)]
+    assert ps.user_api_key_cache.store.len_local() == auth_cache_sizes_before
+    cached: Final = ps.user_api_key_cache.get_local(credential)
+    assert isinstance(cached, dict) and cached["user_id"] == "kept"
 
 
 def test_settings_that_arrive_as_environment_strings_are_honored():

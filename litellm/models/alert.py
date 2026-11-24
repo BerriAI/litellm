@@ -5,10 +5,12 @@ from typing import Annotated, Final, Literal, Protocol, TypeAlias
 from pydantic import AfterValidator, AwareDatetime, BaseModel, ConfigDict, Field, field_validator, model_validator
 from typing_extensions import Self
 
-AlertType: TypeAlias = Literal["spend", "traffic", "latency", "reliability", "model_deprecation"]
+MetricAlertType: TypeAlias = Literal["spend", "traffic", "latency", "reliability"]
+AlertType: TypeAlias = MetricAlertType | Literal["model_deprecation", "prompt_cache"]
 AlertFilter: TypeAlias = AlertType | Literal["performance"]
 AlertStatus: TypeAlias = Literal["open", "resolved", "dismissed"]
-AlertResourceType: TypeAlias = Literal["gateway", "key", "team", "user", "model"]
+AlertResourceType: TypeAlias = Literal["gateway", "key", "team", "user", "model", "deployment"]
+METRIC_ALERT_TYPES: Final[tuple[MetricAlertType, ...]] = ("spend", "traffic", "latency", "reliability")
 MAX_ALERT_ID: Final = 2**63 - 1
 
 
@@ -39,6 +41,22 @@ class DeprecationEvidence(BaseModel):
     replacement_model: str | None = Field(
         default=None, min_length=1, max_length=1024, description="Suggested replacement."
     )
+
+
+class PromptCacheEvidence(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    config_fingerprint: str = Field(min_length=1, max_length=64, description="Cache-relevant deployment settings.")
+    prefix_fingerprint: str = Field(min_length=1, max_length=64, description="Keyed hash of the cached prefix.")
+    provider: Literal["anthropic"] = Field(description="Provider that served the requests.")
+    provider_model: str = Field(min_length=1, max_length=1024, description="Model the provider served.")
+    consecutive_misses: int = Field(
+        ge=1,
+        le=MAX_ALERT_ID,
+        description="Observed requests that reported no cache read or write, not necessarily consecutive.",
+    )
+    proven_write_tokens: int = Field(ge=1, le=MAX_ALERT_ID, description="Tokens the proving cache write stored.")
+    ttl_seconds: Literal[300] = Field(description="Cache lifetime of the prefix's breakpoint.")
 
 
 class AlertSummary(BaseModel):
@@ -75,7 +93,9 @@ class AlertDetection(BaseModel):
     window_end: AwareDatetime = Field(
         description="Exclusive end of the observed window, normalized to UTC milliseconds."
     )
-    evidence: MetricEvidence | DeprecationEvidence = Field(description="Small saved snapshot explaining the alert.")
+    evidence: MetricEvidence | DeprecationEvidence | PromptCacheEvidence = Field(
+        description="Small saved snapshot explaining the alert."
+    )
 
     @field_validator("window_start", "window_end")
     @classmethod
@@ -96,6 +116,12 @@ class AlertDetection(BaseModel):
             if not isinstance(self.evidence, DeprecationEvidence) or self.resource_type != "model":
                 raise ValueError("Model deprecations require a model resource and deprecation evidence")
             return self
+        if self.type == "prompt_cache":
+            if not isinstance(self.evidence, PromptCacheEvidence) or self.resource_type != "deployment":
+                raise ValueError("Prompt cache alerts require a deployment resource and prompt cache evidence")
+            return self
+        if self.resource_type == "deployment":
+            raise ValueError("Only prompt cache alerts use a deployment resource")
         expected_unit: Final = {
             "spend": "usd",
             "traffic": "requests",
@@ -109,6 +135,10 @@ class AlertDetection(BaseModel):
         return self
 
     def identity(self) -> tuple[str, ...]:
+        """One prompt cache incident per deployment and configuration, whatever window or prefix found it, so a
+        dismissed or resolved one is never reopened by a later detection."""
+        if isinstance(self.evidence, PromptCacheEvidence):
+            return (self.type, self.resource_type, self.resource_id, self.evidence.config_fingerprint)
         return (
             self.type,
             self.resource_type,
@@ -148,6 +178,21 @@ class AlertUpdate(BaseModel):
     status: AlertStatus = Field(description="Mark resolved, dismiss, or reopen the alert.")
 
 
+class AlertBulkUpdate(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    status: Literal["resolved", "dismissed"] = Field(description="Status to apply to every matching open saved alert.")
+    type: AlertFilter | None = Field(
+        default=None, description="Only update this category, or all saved alerts if omitted."
+    )
+
+
+class AlertBulkResult(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    updated: int = Field(ge=0, description="Number of open saved alerts changed.")
+
+
 class AlertPage(BaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -176,3 +221,5 @@ class AlertStore(Protocol):
     async def get(self, alert_id: int) -> Alert | None: ...
 
     async def set_status(self, alert_id: int, status: AlertStatus, actor: str) -> Alert | None: ...
+
+    async def set_open_status(self, data: AlertBulkUpdate, actor: str) -> int: ...

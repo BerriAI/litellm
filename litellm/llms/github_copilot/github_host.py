@@ -44,6 +44,11 @@ def normalized_github_host(raw: object) -> str | None:
     return host if _GHE_SUBDOMAIN_PATTERN.fullmatch(subdomain) is not None else None
 
 
+def custom_github_copilot_client_id() -> str | None:
+    client_id: Final = os.getenv("GITHUB_COPILOT_CLIENT_ID")
+    return client_id if client_id and client_id != DEFAULT_GITHUB_CLIENT_ID else None
+
+
 def github_host_endpoints(host: str) -> GithubHostEndpoints:
     normalized: Final = normalized_github_host(host)
     if normalized is None:

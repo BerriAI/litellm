@@ -17,7 +17,7 @@ from pydantic import TypeAdapter
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.batches.main import CancelBatchRequest, RetrieveBatchRequest
-from litellm.litellm_core_utils.core_helpers import attribute_or_none, has_attributes, iter_items
+from litellm.litellm_core_utils.core_helpers import attribute_or_none, has_attributes, int_of, iter_items
 from litellm.litellm_core_utils.hidden_params import get_hidden_params, set_hidden_param
 from litellm.llms.openai.workload_identity import resolve_openai_workload_identity_config
 from litellm.proxy._types import *
@@ -84,6 +84,7 @@ if TYPE_CHECKING:
 
 router: Final = APIRouter()
 _REQUEST_BODY_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+_JSON_VALUE_ADAPTER: Final = TypeAdapter(object)
 
 
 class _UserBatchLister(Protocol):
@@ -362,7 +363,7 @@ async def create_batch(
                 )
             _create_batch_data["output_expires_after"] = {
                 "anchor": "created_at",
-                "seconds": int(enforced_batch_expiry["seconds"]),
+                "seconds": int_of(_JSON_VALUE_ADAPTER.validate_python(enforced_batch_expiry["seconds"])),
             }
 
         input_file_id: Final = _create_batch_data.get("input_file_id", None)
@@ -514,7 +515,7 @@ async def create_batch(
                 verbose_proxy_logger.debug("Created batch using model: %s", model_param)
             else:
                 # SCENARIO 3: Fallback to custom_llm_provider (uses env variables)
-                apply_team_provider_credentials(
+                await apply_team_provider_credentials(
                     data=cast(dict, _create_batch_data),  # cast-ok: TypedDict is a dict at runtime
                     llm_router=llm_router,
                     user_api_key_dict=user_api_key_dict,
@@ -791,7 +792,7 @@ async def retrieve_batch(
                 or get_custom_llm_provider_from_request_query(request=request)
             )
             custom_llm_provider: Final = requested_provider or "openai"
-            apply_team_provider_credentials(
+            await apply_team_provider_credentials(
                 data=data,
                 llm_router=llm_router,
                 user_api_key_dict=user_api_key_dict,
@@ -1005,7 +1006,7 @@ async def list_batches(
                 or get_custom_llm_provider_from_request_query(request=request)
                 or "openai"
             )
-            apply_team_provider_credentials(
+            await apply_team_provider_credentials(
                 data=data,
                 llm_router=llm_router,
                 user_api_key_dict=user_api_key_dict,
@@ -1228,7 +1229,7 @@ async def cancel_batch(
             # Extract batch_id from data to avoid "multiple values for keyword argument" error
             # data was cast from CancelBatchRequest which already contains batch_id
             data.pop("batch_id", None)
-            apply_team_provider_credentials(
+            await apply_team_provider_credentials(
                 data=data,
                 llm_router=llm_router,
                 user_api_key_dict=user_api_key_dict,

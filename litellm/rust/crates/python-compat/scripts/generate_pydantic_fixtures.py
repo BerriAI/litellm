@@ -9,9 +9,12 @@ JSON-shaped setting can carry: None, booleans, integers, floats, strings, lists 
 
 import json
 import sys
+from typing import TypeVar
 
 import pydantic
 from pydantic import TypeAdapter, ValidationError
+
+T = TypeVar("T")
 
 TEXTS = [
     "",
@@ -147,14 +150,14 @@ VALUES = [
 ]
 
 
-def validated(adapter, value):
+def validated(adapter: TypeAdapter[T], value: object) -> T | None:
     try:
         return adapter.validate_python(value)
     except ValidationError:
         return None
 
 
-def row(value):
+def row(value: object) -> dict[str, str | bool | None]:
     as_int = validated(TypeAdapter(int), value)
     return {
         "input": json.dumps(value),

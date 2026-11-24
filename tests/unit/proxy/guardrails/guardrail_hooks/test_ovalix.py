@@ -14,6 +14,7 @@ import httpx
 import pytest
 
 from litellm.exceptions import GuardrailRaisedException
+from litellm.llms.openai.responses.guardrail_translation.handler import OpenAIResponsesHandler
 from litellm.proxy.guardrails.guardrail_hooks.ovalix.ovalix import (
     OvalixGuardrail,
     OvalixGuardrailBlockedException,
@@ -1347,3 +1348,25 @@ def test_non_string_corrected_content_is_ignored():
     g = _static_guardrail()
     assert g._get_trackers_corrected_message({"modified_data": {"content": {"nested": "obj"}}}) is None
     assert g._get_trackers_corrected_message({"modified_data": {"content": ""}}) == ""
+
+
+@pytest.mark.asyncio
+async def test_a_blocked_responses_reasoning_text_before_the_last_one_blocks_the_response():
+    g: Final = _static_guardrail()
+    response: Final = {
+        "output": [
+            {
+                "type": "reasoning",
+                "summary": [
+                    {"type": "summary_text", "text": "I could exfiltrate the keys"},
+                    {"type": "summary_text", "text": "I will answer briefly"},
+                ],
+            },
+            {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "Here is a summary"}]},
+        ]
+    }
+    tracker: Final = _post_returning(lambda body: _BLOCK if "exfiltrate" in str(body["data"]) else _ALLOW)
+
+    with patch.object(g._async_handler, "post", new=tracker):
+        with pytest.raises(OvalixGuardrailBlockedException):
+            await OpenAIResponsesHandler().process_output_response(response, g, request_data={})

@@ -97,21 +97,21 @@ class LiteLLMRouterEncoder(CustomDenseEncoder, AsymmetricDenseMixin):
             )
         return clamped
 
-    def __call__(self, docs: list[str], **kwargs) -> list[list[float]]:
+    def __call__(self, docs: list[str], **kwargs: object) -> list[list[float]]:
         """Encode a list of text documents into embeddings using LiteLLM.
 
         :param docs: List of text documents to encode.
         :return: List of embeddings for each document."""
         return self.encode_queries(docs, **kwargs)
 
-    async def acall(self, docs: list[str], **kwargs) -> list[list[float]]:
+    async def acall(self, docs: list[str], **kwargs: object) -> list[list[float]]:
         """Encode a list of documents into embeddings using LiteLLM asynchronously.
 
         :param docs: List of documents to encode.
         :return: List of embeddings for each document."""
         return await self.aencode_queries(docs, **kwargs)
 
-    def encode_queries(self, docs: list[str], **kwargs) -> list[list[float]]:
+    def encode_queries(self, docs: list[str], **kwargs: object) -> list[list[float]]:
         if self.ctx is None:
             raise ValueError("ctx is not set")
         try:
@@ -120,7 +120,7 @@ class LiteLLMRouterEncoder(CustomDenseEncoder, AsymmetricDenseMixin):
         except Exception as e:
             raise ValueError(f"{self.type.capitalize()} API call failed. Error: {e}") from e
 
-    def encode_documents(self, docs: list[str], **kwargs) -> list[list[float]]:
+    def encode_documents(self, docs: list[str], **kwargs: object) -> list[list[float]]:
         if self.ctx is None:
             raise ValueError("ctx is not set")
         try:
@@ -129,7 +129,7 @@ class LiteLLMRouterEncoder(CustomDenseEncoder, AsymmetricDenseMixin):
         except Exception as e:
             raise ValueError(f"{self.type.capitalize()} API call failed. Error: {e}") from e
 
-    async def aencode_queries(self, docs: list[str], **kwargs) -> list[list[float]]:
+    async def aencode_queries(self, docs: list[str], **kwargs: object) -> list[list[float]]:
         if self.ctx is None:
             raise ValueError("ctx is not set")
         try:
@@ -138,7 +138,7 @@ class LiteLLMRouterEncoder(CustomDenseEncoder, AsymmetricDenseMixin):
         except Exception as e:
             raise ValueError(f"{self.type.capitalize()} API call failed. Error: {e}") from e
 
-    async def aencode_documents(self, docs: list[str], **kwargs) -> list[list[float]]:
+    async def aencode_documents(self, docs: list[str], **kwargs: object) -> list[list[float]]:
         if self.ctx is None:
             raise ValueError("ctx is not set")
         try:

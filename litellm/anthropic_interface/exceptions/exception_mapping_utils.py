@@ -95,7 +95,7 @@ class AnthropicExceptionMapping:
         return raw_message
 
     @staticmethod
-    def _is_anthropic_error_dict(parsed: dict) -> bool:
+    def _is_anthropic_error_dict(parsed: Mapping[str, object]) -> bool:
         """
         Check if a parsed dict is in Anthropic error format.
 
@@ -105,12 +105,10 @@ class AnthropicExceptionMapping:
             "error": {"type": "...", "message": "..."}
         }
         """
-        return (
-            parsed.get("type") == "error"
-            and isinstance(parsed.get("error"), dict)
-            and "type" in parsed["error"]
-            and "message" in parsed["error"]
-        )
+        if parsed.get("type") != "error":
+            return False
+        error: Final = parsed.get("error")
+        return isinstance(error, dict) and "type" in error and "message" in error
 
     @staticmethod
     def _extract_message_from_dict(parsed: dict, raw_message: str) -> str:
@@ -194,8 +192,8 @@ class AnthropicExceptionMapping:
         if start < 0:
             return None
         try:
-            embedded, _ = _JSON_DECODER.raw_decode(raw_message, start)
-        except ValueError:
+            embedded: Final = _PARSED_ERROR_BODY.validate_python(_JSON_DECODER.raw_decode(raw_message, start)[0])
+        except (ValueError, RecursionError):
             return None
         try:
             envelope: Final = _ERROR_DETAILS.validate_python(embedded, strict=True)
@@ -232,8 +230,16 @@ class AnthropicErrorSseFrame(str):
         return body
 
 
-def anthropic_error_sse_frame(status_code: int, raw_message: str) -> AnthropicErrorSseFrame:
-    return AnthropicErrorSseFrame(
-        status_code,
-        AnthropicExceptionMapping.transform_to_anthropic_error(status_code=status_code, raw_message=raw_message),
+def anthropic_error_sse_frame(
+    status_code: int,
+    raw_message: str,
+    provider_specific_fields: Mapping[str, object] | None = None,
+) -> AnthropicErrorSseFrame:
+    response: Final = AnthropicExceptionMapping.transform_to_anthropic_error(
+        status_code=status_code, raw_message=raw_message
     )
+    if not provider_specific_fields:
+        return AnthropicErrorSseFrame(status_code, response)
+    detail: Final[AnthropicErrorDetail] = {**response["error"], "provider_specific_fields": provider_specific_fields}
+    with_fields: Final[AnthropicErrorResponse] = {**response, "error": detail}
+    return AnthropicErrorSseFrame(status_code, with_fields)
