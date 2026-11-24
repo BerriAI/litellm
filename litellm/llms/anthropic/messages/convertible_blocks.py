@@ -1,16 +1,17 @@
 import json
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
-from functools import partial
-from itertools import chain, groupby
+from functools import partial, reduce
+from itertools import chain, dropwhile, groupby
 from types import MappingProxyType
-from typing import Final, TypeAlias
+from typing import Final, TypeAlias, TypeVar
 
 from pydantic import JsonValue, TypeAdapter, ValidationError
 from typing_extensions import assert_never
 
 import litellm
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, drops_unsupported_params
+from litellm.litellm_core_utils.prompt_templates.common_utils import is_unrendered_block_without_text
 from litellm.litellm_core_utils.prompt_templates.factory import sanitize_anthropic_tool_use_id
 from litellm.llms.anthropic.messages.native.utils import normalize_native_messages
 from litellm.types.utils import TokenCountMessagesFormat
@@ -57,6 +58,8 @@ def _block_label(block: JsonValue, convertible: frozenset[str]) -> str | None:
     block_type: Final = block.get("type")
     if not isinstance(block_type, str):
         return "a block without a type"
+    if is_unrendered_block_without_text(block):
+        return None
     if block_type not in convertible:
         return block_type
     return _source_label(block_type, block.get("source")) if block_type in _SOURCED_BLOCK_TYPES else None
@@ -251,12 +254,8 @@ def _non_string_text_parts(content: object) -> _KeptParts:
     )
 
 
-def _tool_result_non_string_texts(block: object) -> tuple[tuple[str, _KeptParts], ...]:
-    match as_str_mapping(block):
-        case {"type": "tool_result", "tool_use_id": str(tool_use_id)} as tool_result:
-            return ((sanitize_anthropic_tool_use_id(tool_use_id), _non_string_text_parts(tool_result.get("content"))),)
-        case _:
-            return ()
+def _kept_parts_of(tool_result: Mapping[str, object]) -> _KeptParts:
+    return _non_string_text_parts(tool_result.get("content"))
 
 
 def _content_blocks(content: object) -> tuple[object, ...]:
@@ -271,47 +270,229 @@ def _restored_part(block: object, kept: _KeptPart | None) -> object:
     return kept.block if kept is not None and tool_result_text_part(block) == kept.scanned_text else block
 
 
-def _with_kept_parts(block: object, tool_result: Mapping[str, object], parts: _KeptParts) -> object:
+def _with_kept_parts(tool_result: Mapping[str, object], parts: _KeptParts) -> object:
     if not parts:
-        return block
+        return tool_result
     blocks: Final = _content_blocks(tool_result.get("content"))
     return {**tool_result, "content": [_restored_part(part, parts.get(index)) for index, part in enumerate(blocks)]}
 
 
-def _entry_tool_use_id(entry: tuple[str, _KeptParts]) -> str:
+_V = TypeVar("_V")  # rebind-ok: a TypeVar cannot be Final
+_ToolResultValues: TypeAlias = tuple[tuple[str, _V], ...]
+
+
+def _entry_tool_use_id(entry: tuple[str, object]) -> str:
     return entry[0]
 
 
-def _entry_kept_parts(entry: tuple[str, _KeptParts]) -> _KeptParts:
+def _entry_value(entry: tuple[str, _V]) -> _V:
     return entry[1]
 
 
-def _restored_block(block: object, kept: Mapping[str, Iterator[_KeptParts]]) -> object:
+def _tool_result_value(block: object, value_of: Callable[[Mapping[str, object]], _V]) -> tuple[tuple[str, _V], ...]:
+    match as_str_mapping(block):
+        case {"type": "tool_result", "tool_use_id": str(tool_use_id)} as tool_result:
+            return ((sanitize_anthropic_tool_use_id(tool_use_id), value_of(tool_result)),)
+        case _:
+            return ()
+
+
+def _values_by_tool_use_id(original: object, value_of: Callable[[Mapping[str, object]], _V]) -> _ToolResultValues[_V]:
+    blocks: Final = chain.from_iterable(map(_user_content_blocks, _list_items(original)))
+    values: Final = chain.from_iterable(_tool_result_value(block, value_of) for block in blocks)
+    return tuple(sorted(values, key=_entry_tool_use_id))
+
+
+def _restored_tool_result(
+    block: object,
+    queues: Mapping[str, Iterator[_V]],
+    restore: Callable[[Mapping[str, object], _V], object],
+    missing: _V,
+) -> object:
     match as_str_mapping(block):
         case {"type": "tool_result", "tool_use_id": str(tool_use_id)} as tool_result if (
-            sanitize_anthropic_tool_use_id(tool_use_id) in kept
-        ):
-            return _with_kept_parts(
-                block, tool_result, next(kept[sanitize_anthropic_tool_use_id(tool_use_id)], _NO_KEPT_PARTS)
-            )
+            sanitized := sanitize_anthropic_tool_use_id(tool_use_id)
+        ) in queues:
+            return restore(tool_result, next(queues[sanitized], missing))
         case _:
             return block
 
 
-def keep_non_string_tool_result_texts(rewritten: Sequence[object], original: object) -> Sequence[object]:
-    blocks: Final = chain.from_iterable(map(_user_content_blocks, _list_items(original)))
-    by_id: Final = tuple(
-        sorted(chain.from_iterable(map(_tool_result_non_string_texts, blocks)), key=_entry_tool_use_id)
-    )
-    if not any(parts for _, parts in by_id):
-        return rewritten
-    kept_in_order: Final = MappingProxyType(
+def _with_tool_result_values(
+    rewritten: Sequence[object],
+    values: _ToolResultValues[_V],
+    restore: Callable[[Mapping[str, object], _V], object],
+    missing: _V,
+) -> Sequence[object]:
+    queues: Final = MappingProxyType(
         {
-            tool_use_id: iter(tuple(map(_entry_kept_parts, group)))
-            for tool_use_id, group in groupby(by_id, key=_entry_tool_use_id)
+            tool_use_id: iter(tuple(map(_entry_value, group)))
+            for tool_use_id, group in groupby(values, key=_entry_tool_use_id)
         }
     )
-    return [_with_user_blocks(message, partial(_restored_block, kept=kept_in_order)) for message in rewritten]
+    restore_block: Final = partial(_restored_tool_result, queues=queues, restore=restore, missing=missing)
+    return [_with_user_blocks(message, restore_block) for message in rewritten]
+
+
+def keep_non_string_tool_result_texts(rewritten: Sequence[object], original: object) -> Sequence[object]:
+    values: Final = _values_by_tool_use_id(original, _kept_parts_of)
+    if not any(parts for _, parts in values):
+        return rewritten
+    return _with_tool_result_values(rewritten, values, _with_kept_parts, _NO_KEPT_PARTS)
+
+
+def _url_source_url(block: object) -> str | None:
+    match as_str_mapping(block):
+        case {"type": "image" | "document", "source": {"type": "url", "url": str(url)}}:
+            return url
+        case _:
+            return None
+
+
+def _is_document(block: object) -> bool:
+    match as_str_mapping(block):
+        case {"type": "document"}:
+            return True
+        case _:
+            return False
+
+
+@dataclass(frozen=True, slots=True, order=True)
+class _UrlBlockPlace:
+    in_tool_result: bool
+    url: str
+
+
+def _url_sourced_blocks(block: object, in_tool_result: bool = False) -> tuple[tuple[_UrlBlockPlace, object], ...]:
+    url: Final = _url_source_url(block)
+    if url is not None:
+        return ((_UrlBlockPlace(in_tool_result, url), block),)
+    match as_str_mapping(block):
+        case {"type": "tool_result", "content": list() as content}:
+            in_this_tool_result: Final = partial(_url_sourced_blocks, in_tool_result=True)
+            return tuple(chain.from_iterable(map(in_this_tool_result, _list_items(content))))
+        case _:
+            return ()
+
+
+def _entry_place(entry: tuple[_UrlBlockPlace, object]) -> _UrlBlockPlace:
+    return entry[0]
+
+
+def _entry_block(entry: tuple[_UrlBlockPlace, object]) -> object:
+    return entry[1]
+
+
+def _restored_url_document(
+    block: object, originals: Mapping[_UrlBlockPlace, Iterator[object]], in_tool_result: bool = False
+) -> object:
+    url: Final = _url_source_url(block)
+    if url is not None:
+        remaining: Final = originals.get(_UrlBlockPlace(in_tool_result, url))
+        original: Final = None if remaining is None else next(remaining, None)
+        return original if _is_document(original) else block
+    match as_str_mapping(block):
+        case {"type": "tool_result", "content": list() as content} as tool_result:
+            restore: Final = partial(_restored_url_document, originals=originals, in_tool_result=True)
+            return {**tool_result, "content": list(map(restore, _list_items(content)))}
+        case _:
+            return block
+
+
+def keep_url_documents(rewritten: Sequence[object], original: object) -> Sequence[object]:
+    blocks: Final = chain.from_iterable(map(_user_content_blocks, _list_items(original)))
+    by_place: Final = tuple(sorted(chain.from_iterable(map(_url_sourced_blocks, blocks)), key=_entry_place))
+    if not any(_is_document(block) for _, block in by_place):
+        return rewritten
+    originals_in_order: Final = MappingProxyType(
+        {place: iter(tuple(map(_entry_block, group))) for place, group in groupby(by_place, key=_entry_place)}
+    )
+    restore: Final = partial(_restored_url_document, originals=originals_in_order)
+    return [_with_user_blocks(message, restore) for message in rewritten]
+
+
+def _is_error_of(tool_result: Mapping[str, object]) -> bool | None:
+    match tool_result:
+        case {"is_error": bool(is_error)}:
+            return is_error
+        case _:
+            return None
+
+
+def _with_is_error(tool_result: Mapping[str, object], is_error: bool | None) -> object:
+    return tool_result if is_error is None else {**tool_result, "is_error": is_error}
+
+
+def keep_tool_result_errors(rewritten: Sequence[object], original: object) -> Sequence[object]:
+    values: Final = _values_by_tool_use_id(original, _is_error_of)
+    if not any(is_error is not None for _, is_error in values):
+        return rewritten
+    return _with_tool_result_values(rewritten, values, _with_is_error, None)
+
+
+_NO_EXTRAS: Final[Mapping[str, object]] = MappingProxyType({})
+
+
+def _is_system_row(message: object) -> bool:
+    match as_str_mapping(message):
+        case {"role": "system"}:
+            return True
+        case _:
+            return False
+
+
+def is_non_empty_text_block(block: object) -> bool:
+    match as_str_mapping(block):
+        case {"type": "text", "text": str(text)}:
+            return bool(text)
+        case _:
+            return False
+
+
+def _has_text(content: object) -> bool:
+    match content:
+        case str():
+            return bool(content)
+        case _:
+            return any(map(is_non_empty_text_block, _list_items(content)))
+
+
+def _system_row_extras(message: object) -> Mapping[str, object] | None:
+    match as_str_mapping(message):
+        case {"role": "system", "content": content} as row if _has_text(content):
+            return MappingProxyType({key: value for key, value in row.items() if key not in ("role", "content")})
+        case _:
+            return None
+
+
+def _with_system_extras(message: object, extras: Iterator[Mapping[str, object]]) -> object:
+    match as_str_mapping(message):
+        case {"role": "system"} as row:
+            return {**row, **next(extras, _NO_EXTRAS)}
+        case _:
+            return message
+
+
+def keep_system_message_fields(rewritten: Sequence[object], original: object) -> Sequence[object]:
+    in_sequence: Final = dropwhile(_is_system_row, _list_items(original))
+    extras: Final = tuple(extra for message in in_sequence if (extra := _system_row_extras(message)) is not None)
+    if not any(extras) or sum(map(_is_system_row, rewritten)) != len(extras):
+        return rewritten
+    remaining: Final = iter(extras)
+    return [_with_system_extras(message, remaining) for message in rewritten]
+
+
+_Restorer: TypeAlias = Callable[[Sequence[object], object], Sequence[object]]
+_RESTORERS: Final[tuple[_Restorer, ...]] = (
+    keep_non_string_tool_result_texts,
+    keep_url_documents,
+    keep_tool_result_errors,
+    keep_system_message_fields,
+)
+
+
+def keep_original_fields(rewritten: Sequence[object], original: object) -> Sequence[object]:
+    return reduce(lambda kept, restore: restore(kept, original), _RESTORERS, rewritten)
 
 
 def _without_non_string_text(block: object) -> object:

@@ -1086,7 +1086,7 @@ async def test_model_cost_map_reload_does_not_publish_config_change() -> None:
     from litellm.proxy import proxy_server
     from litellm.proxy.proxy_server import ProxyConfig, _set_redis_usage_cache
     from litellm.proxy.utils import litellm_config_cache
-    from litellm.utils import _invalidate_model_cost_lowercase_map
+    from litellm.litellm_core_utils.model_cost_table import publish
 
     litellm_config_cache.flush_cache()
     prisma_client = _reload_config_prisma_client()
@@ -1100,13 +1100,12 @@ async def test_model_cost_map_reload_does_not_publish_config_change() -> None:
         with patch(
             "litellm.litellm_core_utils.get_model_cost_map.refetch_model_cost_map",
             new=AsyncMock(
-                return_value=ModelCostMapReloaded(model_cost_map={"gpt-5.2": {"input_cost_per_token": 0.001}})
+                return_value=ModelCostMapReloaded(model_count=len({"gpt-5.2": {"input_cost_per_token": 0.001}}))
             ),
         ):
             await ProxyConfig()._check_and_reload_model_cost_map(prisma_client=prisma_client)
     finally:
-        litellm.model_cost = original_model_cost
-        _invalidate_model_cost_lowercase_map()
+        publish(original_model_cost)
         _set_redis_usage_cache(previous_cache)
 
     prisma_client.db.litellm_config.update_many.assert_awaited_once()
@@ -1185,8 +1184,9 @@ async def test_proxy_config_subscriber_applies_published_model_ids_from_the_db(
     router.registry.return_value.deployments.return_value = ["deployment"]
     installed: List[object] = []
 
-    def install(db_models: object) -> None:
+    def install(db_models: object) -> int:
         installed.append(db_models)
+        return 0
 
     monkeypatch.setattr(proxy_server, "prisma_client", prisma_client)
     monkeypatch.setattr(proxy_server, "store_model_in_db", True)

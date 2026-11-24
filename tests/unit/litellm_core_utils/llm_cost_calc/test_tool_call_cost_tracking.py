@@ -677,6 +677,32 @@ def test_responses_web_search_and_image_generation_costs_are_additive(local_mode
     assert combined == pytest.approx(web_search_only + image_only)
 
 
+def test_responses_web_search_and_file_search_costs_are_additive(local_model_cost_map: None) -> None:
+    model: Final = "gpt-4o-search-preview"
+    tools: Final = StandardBuiltInToolsParams(file_search=FileSearchTool(type="file_search"))
+    web_search: Final[dict[str, object]] = {"type": "web_search_call", "id": "ws_1", "status": "completed"}
+    file_search: Final[dict[str, object]] = {
+        "type": "file_search_call",
+        "id": "fs_1",
+        "status": "completed",
+        "queries": ["test"],
+    }
+
+    def tool_cost(*output: dict[str, object]) -> float:
+        return StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
+            model=model,
+            response_object=_openai_responses_response(model, list(output)),
+            custom_llm_provider="openai",
+            standard_built_in_tools_params=tools,
+        )
+
+    web_cost: Final = tool_cost(web_search)
+    file_cost: Final = tool_cost(file_search)
+    assert web_cost > 0
+    assert file_cost > 0
+    assert tool_cost(web_search, file_search) == pytest.approx(web_cost + file_cost)
+
+
 def test_responses_incomplete_image_generation_call_not_billed(local_model_cost_map):
     """A failed image_generation_call produced no billable image, so it must cost $0."""
     response = _openai_responses_response(
@@ -1230,3 +1256,27 @@ def test_vertex_gemini_deployment_priced_web_search_stays_per_prompt(
 def test_built_in_tool_lookups_ignore_malformed_request_values(kwargs: dict[str, object]) -> None:
     assert StandardBuiltInToolCostTracking.get_web_search_options(kwargs) is None
     assert StandardBuiltInToolCostTracking.get_file_search_tool_call(kwargs) is None
+
+
+def test_per_call_web_search_path_bills_the_count_the_usage_reports(local_model_cost_map):
+    """
+    A provider with no web search calculator of its own (an OpenAI-compatible JSON provider) that
+    reports server_tool_use.web_search_requests is billed that many per-call searches, not one.
+    """
+    from litellm.types.utils import ServerToolUse, Usage
+
+    model = "empiriolabs/qwen3-7-plus"
+    per_search = litellm.model_cost[model]["search_context_cost_per_query"]["search_context_size_medium"]
+    response = ModelResponse(model="qwen3-7-plus")
+    usage = Usage(
+        prompt_tokens=4, completion_tokens=5, total_tokens=9, server_tool_use=ServerToolUse(web_search_requests=3)
+    )
+
+    cost = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
+        model=model,
+        response_object=response,
+        usage=usage,
+        custom_llm_provider="empiriolabs",
+        standard_built_in_tools_params=None,
+    )
+    assert cost == pytest.approx(3 * per_search)

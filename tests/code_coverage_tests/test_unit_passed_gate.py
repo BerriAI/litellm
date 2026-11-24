@@ -11,7 +11,7 @@ _WORKFLOWS_DIR: Final = Path(__file__).resolve().parents[2] / ".github" / "workf
 _TIERS: Final = (
     ("test-linting.yml", "lint-passed", frozenset()),
     ("test-unit.yml", "unit-passed", frozenset({"coverage"})),
-    ("test-merge-smoke.yml", "smoke-passed", frozenset()),
+    ("test-merge-smoke.yml", "smoke-passed", frozenset({"windows-sdk", "proxy-build-from-pip"})),
 )
 _Tier = tuple[str, str, frozenset[str]]
 
@@ -76,3 +76,29 @@ def test_the_gate_waits_for_every_other_job_and_reports_even_when_they_fail(tier
     assert set(_needed_jobs(tier)) == set(jobs) - {tier[1]} - set(tier[2])
     assert gate["if"] == "always()"
     assert gate["permissions"] == {}
+
+
+@pytest.mark.parametrize(
+    ("skipped_by_plan", "passes"),
+    ((["unit", "docs"], True), (["docs"], False), ([], False)),
+    ids=("planned skips pass", "an unplanned skip fails", "no plan fails"),
+)
+def test_the_unit_gate_accepts_a_skipped_job_only_when_the_plan_skipped_it(skipped_by_plan: list[str], passes: bool) -> None:
+    tier: Final = _TIERS[1]
+    needs: Final = {
+        **{job: {"result": "success", "outputs": {}} for job in _needed_jobs(tier)},
+        "plan": {"result": "success", "outputs": {"skipped": json.dumps(skipped_by_plan)}},
+        "unit": {"result": "skipped", "outputs": {}},
+        "docs": {"result": "skipped", "outputs": {}},
+    }
+
+    result: Final = subprocess.run(
+        ("bash", "--noprofile", "--norc", "-eo", "pipefail", "-c", _gate_script(tier)),
+        env={**os.environ, "NEEDS": json.dumps(needs)},
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+
+    assert (result.returncode == 0) is passes, result.stdout + result.stderr

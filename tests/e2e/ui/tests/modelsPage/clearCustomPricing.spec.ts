@@ -34,7 +34,7 @@ test.describe("Clear custom pricing on a deployment", () => {
       data: {
         model_name: modelName,
         litellm_params: {
-          model: "openai/gpt-4o",
+          model: "openai/gpt-6.1-sol",
           api_key: "sk-e2e-not-used",
           input_cost_per_token: SEED_INPUT_PER_TOKEN,
           output_cost_per_token: SEED_OUTPUT_PER_TOKEN,
@@ -65,7 +65,7 @@ test.describe("Clear custom pricing on a deployment", () => {
   test("UI sends null for cleared pricing and backend removes the override", async ({ page }) => {
     // Navigate to the model detail view.
     await page.goto("/ui");
-    await page.getByText("Models + Endpoints").click();
+    await page.getByText("Model Management").click();
 
     // The Model ID cell is the drill-in control; the row itself is not clickable.
     const modelIdCell = page.getByTestId(`model-id-${createdModelId}`);

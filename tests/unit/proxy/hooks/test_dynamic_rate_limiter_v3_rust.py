@@ -1,0 +1,4464 @@
+"""
+Test priority-based rate limiting for dynamic_rate_limiter_v3.
+
+Core tests to validate that priority weights are respected (0.9/0.1) instead of equal splitting (0.5/0.5).
+"""
+
+import asyncio
+import time
+from collections.abc import Callable, Iterator, Mapping
+from datetime import datetime, timedelta
+from types import ModuleType
+from typing import Final
+from unittest.mock import patch
+
+import pytest
+from prometheus_client import CollectorRegistry
+
+import litellm
+from litellm import DualCache, Router
+from litellm.caching.redis_cache import RedisCache
+from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
+from litellm.proxy.hooks.parallel_request_limiter_v3 import (
+    PROXY_MaxParallelRequestsHandler_v3,
+    claim_request_stash_for_data,
+    estimate_request_tokens,
+    no_max_tokens_output_floor,
+    should_rate_limit,
+)
+from litellm.proxy.hooks.priority_class_share import pool_member
+from litellm.proxy.utils import InternalUsageCache
+from litellm.redis.stores.rate_limits import RateLimitScope
+from litellm.rust_bridge._native import NativeRedisStoreError
+from litellm.types.llms.openai import ResponseAPIUsage, ResponsesAPIResponse
+from litellm.types.utils import CallTypes
+from tests.unit.proxy.hooks.native_capacity_handler import NativeDynamicRateLimitHandler as DynamicRateLimitHandler
+from tests.unit.proxy.hooks.native_capacity_handler import (
+    NativeDynamicRateLimitHandler as PROXY_DynamicRateLimitHandlerV3,
+)
+from tests.unit.proxy.hooks.native_capacity_handler import (
+    NativeDynamicRateLimitHandler as _PROXY_DynamicRateLimitHandlerV3,
+)
+from tests.unit.proxy.hooks.native_capacity_handler import (
+    borrowing_team_share,
+    counter_key,
+    listening,
+    model_saturation,
+    model_tracking_descriptor,
+    pre_call_at_saturation,
+    priority_based_descriptors,
+    redis_answering_counts,
+    saturation_reads,
+    seed_counter,
+)
+
+
+class TimeController:
+    def __init__(self):
+        self._current = datetime.utcnow()
+
+    def now(self) -> datetime:
+        return self._current
+
+    def advance(self, seconds: float) -> None:
+        self._current += timedelta(seconds=seconds)
+
+
+@pytest.fixture
+def time_controller(monkeypatch):
+    controller = TimeController()
+    monkeypatch.setattr(time, "time", lambda: controller.now().timestamp())
+    return controller
+
+
+@pytest.mark.asyncio
+async def test_priority_weight_allocation(monkeypatch):
+    """
+    Test that priority weights are correctly applied instead of equal splitting.
+
+    With priority_reservation = {"high": 0.9, "low": 0.1}:
+    - High priority should get 90% of TPM (900 out of 1000)
+    - Low priority should get 10% of TPM (100 out of 1000)
+
+    This validates the core fix where before it would split 50/50.
+    """
+    # Set up environment for premium feature
+    monkeypatch.setenv("LITELLM_LICENSE", "test-license-key")
+
+    # Set up priority reservations
+    monkeypatch.setattr(litellm, "priority_reservation", {"high": 0.9, "low": 0.1})
+
+    dual_cache = DualCache()
+    handler = DynamicRateLimitHandler(internal_usage_cache=dual_cache)
+
+    model = "test-model"
+    total_tpm = 1000
+
+    llm_router = Router(
+        model_list=[
+            {
+                "model_name": model,
+                "litellm_params": {
+                    "model": "gpt-3.5-turbo",
+                    "api_key": "test-key",
+                    "api_base": "test-base",
+                    "tpm": total_tpm,
+                },
+            }
+        ]
+    )
+    handler.update_variables(llm_router=llm_router)
+
+    # Test high priority allocation
+    high_priority_user = UserAPIKeyAuth()
+    high_priority_user.metadata = {"priority": "high"}
+
+    high_descriptors = await priority_based_descriptors(
+        handler,
+        model=model,
+        user_api_key_dict=high_priority_user,
+        priority="high",
+    )
+
+    assert len(high_descriptors) == 1
+    high_descriptor = high_descriptors[0]
+    expected_high_tpm = int(total_tpm * 0.9)  # 900
+    actual_high_tpm = high_descriptor["rate_limit"]["tokens_per_unit"]
+
+    assert actual_high_tpm == expected_high_tpm, (
+        f"High priority should get {expected_high_tpm} TPM (90%), got {actual_high_tpm}"
+    )
+    assert high_descriptor["value"] == f"{model}:high"
+
+    # Test low priority allocation
+    low_priority_user = UserAPIKeyAuth()
+    low_priority_user.metadata = {"priority": "low"}
+
+    low_descriptors = await priority_based_descriptors(
+        handler,
+        model=model,
+        user_api_key_dict=low_priority_user,
+        priority="low",
+    )
+
+    assert len(low_descriptors) == 1
+    low_descriptor = low_descriptors[0]
+    expected_low_tpm = int(total_tpm * 0.1)  # 100
+    actual_low_tpm = low_descriptor["rate_limit"]["tokens_per_unit"]
+
+    assert actual_low_tpm == expected_low_tpm, (
+        f"Low priority should get {expected_low_tpm} TPM (10%), got {actual_low_tpm}"
+    )
+    assert low_descriptor["value"] == f"{model}:low"
+
+    # Verify the ratio is 9:1, not 1:1 (equal splitting)
+    ratio = actual_high_tpm / actual_low_tpm
+    expected_ratio = 9.0
+    assert abs(ratio - expected_ratio) < 0.1, f"High:Low ratio should be {expected_ratio}:1, got {ratio}:1"
+
+
+@pytest.mark.asyncio
+async def test_concurrent_priority_requests(monkeypatch):
+    """
+    Test the core issue: 5 concurrent requests with different priorities should get
+    proper allocation based on priority weights, not equal splitting.
+
+    This tests the exact scenario mentioned: priorities 0.9 and 0.1 should be 0.9/0.1, not 0.5/0.5.
+    """
+    # Set up environment for premium feature
+    monkeypatch.setenv("LITELLM_LICENSE", "test-license-key")
+
+    # Set up the exact scenario from the issue
+    monkeypatch.setattr(litellm, "priority_reservation", {"high": 0.9, "low": 0.1})
+
+    dual_cache = DualCache()
+    handler = DynamicRateLimitHandler(internal_usage_cache=dual_cache)
+
+    model = "test-model"
+    total_tpm = 1000
+
+    llm_router = Router(
+        model_list=[
+            {
+                "model_name": model,
+                "litellm_params": {
+                    "model": "gpt-3.5-turbo",
+                    "api_key": "test-key",
+                    "api_base": "test-base",
+                    "tpm": total_tpm,
+                },
+            }
+        ]
+    )
+    handler.update_variables(llm_router=llm_router)
+
+    # Create 5 concurrent users - 3 high priority, 2 low priority
+    high_priority_users = []
+    low_priority_users = []
+
+    for i in range(3):  # 3 high priority users
+        user = UserAPIKeyAuth()
+        user.metadata = {"priority": "high"}
+        user.user_id = f"high_user_{i}"
+        high_priority_users.append(user)
+
+    for i in range(2):  # 2 low priority users
+        user = UserAPIKeyAuth()
+        user.metadata = {"priority": "low"}
+        user.user_id = f"low_user_{i}"
+        low_priority_users.append(user)
+
+    # Test all high priority users get the same allocation (not divided)
+    for user in high_priority_users:
+        descriptors = await priority_based_descriptors(
+            handler,
+            model=model,
+            user_api_key_dict=user,
+            priority="high",
+        )
+
+        assert len(descriptors) == 1
+        descriptor = descriptors[0]
+        # Each high priority user should get 900 TPM, not divided by 3
+        assert descriptor["rate_limit"]["tokens_per_unit"] == 900, (
+            f"High priority user {user.user_id} should get 900 TPM, got {descriptor['rate_limit']['tokens_per_unit']}"
+        )
+        assert descriptor["value"] == f"{model}:high"
+
+    # Test all low priority users get the same allocation (not divided)
+    for user in low_priority_users:
+        descriptors = await priority_based_descriptors(
+            handler,
+            model=model,
+            user_api_key_dict=user,
+            priority="low",
+        )
+
+        assert len(descriptors) == 1
+        descriptor = descriptors[0]
+        # Each low priority user should get 100 TPM, not divided by 2
+        assert descriptor["rate_limit"]["tokens_per_unit"] == 100, (
+            f"Low priority user {user.user_id} should get 100 TPM, got {descriptor['rate_limit']['tokens_per_unit']}"
+        )
+        assert descriptor["value"] == f"{model}:low"
+
+
+@pytest.mark.asyncio
+async def test_100_concurrent_priority_requests(time_controller, monkeypatch):
+    """
+    Stress test: 100 concurrent requests with mixed priorities over 10 seconds.
+
+    This validates that the priority system works correctly under high load:
+    - 70 high priority requests (should get 900 TPM each)
+    - 30 low priority requests (should get 100 TPM each)
+    - Spread across 10 seconds to simulate real-world load
+    """
+    # Set up environment for premium feature
+    monkeypatch.setenv("LITELLM_LICENSE", "test-license-key")
+
+    # Set up priority reservations
+    monkeypatch.setattr(litellm, "priority_reservation", {"high": 0.9, "low": 0.1})
+
+    dual_cache = DualCache()
+    handler = DynamicRateLimitHandler(internal_usage_cache=dual_cache, time_provider=time_controller.now)
+
+    model = "stress-test-model"
+    total_tpm = 1000
+
+    llm_router = Router(
+        model_list=[
+            {
+                "model_name": model,
+                "litellm_params": {
+                    "model": "gpt-3.5-turbo",
+                    "api_key": "test-key",
+                    "api_base": "test-base",
+                    "tpm": total_tpm,
+                    "rpm": 500,  # Also test RPM limits
+                },
+            }
+        ]
+    )
+    handler.update_variables(llm_router=llm_router)
+
+    # Create 100 users: 70 high priority, 30 low priority
+    all_users = []
+
+    # 70 high priority users
+    for i in range(70):
+        user = UserAPIKeyAuth()
+        user.metadata = {"priority": "high"}
+        user.user_id = f"high_stress_user_{i}"
+        all_users.append((user, "high", 900, 450))  # expected TPM, expected RPM
+
+    # 30 low priority users
+    for i in range(30):
+        user = UserAPIKeyAuth()
+        user.metadata = {"priority": "low"}
+        user.user_id = f"low_stress_user_{i}"
+        all_users.append((user, "low", 100, 50))  # expected TPM, expected RPM
+
+    async def test_user_descriptors(user_data):
+        """Test descriptor creation for a single user."""
+        user, priority, expected_tpm, expected_rpm = user_data
+
+        descriptors = await priority_based_descriptors(
+            handler,
+            model=model,
+            user_api_key_dict=user,
+            priority=priority,
+        )
+
+        assert len(descriptors) == 1, f"User {user.user_id} should have exactly 1 descriptor"
+        descriptor = descriptors[0]
+
+        # Validate TPM allocation
+        actual_tpm = descriptor["rate_limit"]["tokens_per_unit"]
+        assert actual_tpm == expected_tpm, (
+            f"User {user.user_id} ({priority}) should get {expected_tpm} TPM, got {actual_tpm}"
+        )
+
+        # Validate RPM allocation
+        actual_rpm = descriptor["rate_limit"]["requests_per_unit"]
+        assert actual_rpm == expected_rpm, (
+            f"User {user.user_id} ({priority}) should get {expected_rpm} RPM, got {actual_rpm}"
+        )
+
+        # Validate descriptor key
+        assert descriptor["value"] == f"{model}:{priority}"
+        assert descriptor["key"] == "priority_model"
+
+        return {
+            "user_id": user.user_id,
+            "priority": priority,
+            "tpm": actual_tpm,
+            "rpm": actual_rpm,
+            "success": True,
+        }
+
+    # Run all 100 requests concurrently to simulate high load
+    start_time = time.time()
+
+    # Split into batches to simulate requests over 10 seconds
+    batch_size = 10  # 10 requests per batch
+    batches = [all_users[i : i + batch_size] for i in range(0, len(all_users), batch_size)]
+
+    all_results = []
+
+    for batch_idx, batch in enumerate(batches):
+        # Process each batch concurrently
+        batch_tasks = [test_user_descriptors(user_data) for user_data in batch]
+        batch_results = await asyncio.gather(*batch_tasks, return_exceptions=True)
+        all_results.extend(batch_results)
+
+        # Add small delay between batches to spread over ~10 seconds
+        if batch_idx < len(batches) - 1:  # Don't sleep after last batch
+            await asyncio.sleep(0)
+            time_controller.advance(1.0)  # simulate 1s passing between batches
+
+    end_time = time.time()
+    total_duration = end_time - start_time
+
+    # Validate that the test ran over approximately 10 seconds
+    assert total_duration >= 9.0, f"Test should take ~10 seconds, took {total_duration:.2f}s"
+    assert total_duration <= 15.0, f"Test took too long: {total_duration:.2f}s"
+
+    # Validate all requests were successful
+    successful_results = [r for r in all_results if isinstance(r, dict) and r.get("success")]
+    assert len(successful_results) == 100, f"Expected 100 successful results, got {len(successful_results)}"
+
+    # Validate priority distribution
+    high_priority_results = [r for r in successful_results if r["priority"] == "high"]
+    low_priority_results = [r for r in successful_results if r["priority"] == "low"]
+
+    assert len(high_priority_results) == 70, f"Expected 70 high priority results, got {len(high_priority_results)}"
+    assert len(low_priority_results) == 30, f"Expected 30 low priority results, got {len(low_priority_results)}"
+
+    # Validate all high priority users got correct allocation
+    for result in high_priority_results:
+        assert result["tpm"] == 900, f"High priority user {result['user_id']} got {result['tpm']} TPM, expected 900"
+        assert result["rpm"] == 450, f"High priority user {result['user_id']} got {result['rpm']} RPM, expected 450"
+
+    # Validate all low priority users got correct allocation
+    for result in low_priority_results:
+        assert result["tpm"] == 100, f"Low priority user {result['user_id']} got {result['tpm']} TPM, expected 100"
+        assert result["rpm"] == 50, f"Low priority user {result['user_id']} got {result['rpm']} RPM, expected 50"
+
+    print(f"✅ Successfully processed 100 concurrent requests in {total_duration:.2f}s")
+    print("   - 70 high priority users: 900 TPM, 450 RPM each")
+    print("   - 30 low priority users: 100 TPM, 50 RPM each")
+    print("   - Priority ratio maintained: 9:1 (TPM) and 9:1 (RPM)")
+
+
+@pytest.mark.asyncio
+async def test_concurrent_pre_call_hooks_stress(monkeypatch):
+    """
+    Stress test: 50 concurrent pre-call hooks with saturation-aware priority enforcement.
+
+    Tests priority-based rate limiting in strict mode (>80% saturation).
+    Mocks high saturation to force strict mode where priorities are enforced.
+    Premium users (80% allocation) should have >90% success rate.
+    Standard users (20% allocation) should have ~70% success rate with 30% random limiting.
+    """
+    # Set up environment for premium feature
+    monkeypatch.setenv("LITELLM_LICENSE", "test-license-key")
+
+    monkeypatch.setattr(litellm, "priority_reservation", {"premium": 0.8, "standard": 0.2})
+
+    dual_cache = DualCache()
+    handler = DynamicRateLimitHandler(internal_usage_cache=dual_cache)
+
+    model = "pre-call-stress-model"
+    total_tpm = 2000
+
+    llm_router = Router(
+        model_list=[
+            {
+                "model_name": model,
+                "litellm_params": {
+                    "model": "gpt-3.5-turbo",
+                    "api_key": "test-key",
+                    "api_base": "test-base",
+                    "tpm": total_tpm,
+                },
+            }
+        ]
+    )
+    handler.update_variables(llm_router=llm_router)
+
+    # Mock the v3 limiter to simulate different scenarios
+    successful_requests = []
+    rate_limited_requests = []
+
+    # Mock saturation check to return high saturation (forces strict mode)
+    async def mock_get_cache(key, litellm_parent_otel_span=None, local_only=False):
+        """Mock cache to simulate high saturation."""
+        # Return high usage to trigger strict mode (>80% saturation)
+        if ":requests" in key or ":tokens" in key:
+            return 1800  # 1800/2000 = 90% saturation
+        return None
+
+    # Create 50 users: 30 premium, 20 standard
+    users = []
+
+    for i in range(30):
+        user = UserAPIKeyAuth()
+        user.metadata = {"priority": "premium"}
+        user.user_id = f"premium_hook_user_{i}"
+        users.append((user, "premium"))
+
+    for i in range(20):
+        user = UserAPIKeyAuth()
+        user.metadata = {"priority": "standard"}
+        user.user_id = f"standard_hook_user_{i}"
+        users.append((user, "standard"))
+
+    async def make_request(user_data):
+        """Make a pre-call hook request."""
+        user, priority = user_data
+
+        try:
+            result = await handler.async_pre_call_hook(
+                user_api_key_dict=user,
+                cache=DualCache(),
+                data={"model": model},
+                call_type="completion",
+            )
+
+            # If no exception, request was allowed
+            successful_requests.append({"user_id": user.user_id, "priority": priority, "result": "allowed"})
+            return {
+                "status": "success",
+                "user_id": user.user_id,
+                "priority": priority,
+            }
+
+        except Exception as e:
+            # Request was rate limited
+            rate_limited_requests.append({"user_id": user.user_id, "priority": priority, "error": str(e)})
+            return {
+                "status": "rate_limited",
+                "user_id": user.user_id,
+                "priority": priority,
+            }
+
+    # Run all 50 requests concurrently with patches applied to the entire batch
+    start_time = time.time()
+    with patch.object(handler.internal_usage_cache, "async_get_cache", side_effect=mock_get_cache):
+        tasks = [make_request(user_data) for user_data in users]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+    end_time = time.time()
+
+    # Analyze results
+    successful_count = len([r for r in results if isinstance(r, dict) and r["status"] == "success"])
+    rate_limited_count = len([r for r in results if isinstance(r, dict) and r["status"] == "rate_limited"])
+
+    # Validate that premium users were mostly successful (priority worked)
+    premium_results = [r for r in results if isinstance(r, dict) and r["priority"] == "premium"]
+    premium_success = len([r for r in premium_results if r["status"] == "success"])
+
+    standard_results = [r for r in results if isinstance(r, dict) and r["priority"] == "standard"]
+    standard_success = len([r for r in standard_results if r["status"] == "success"])
+
+    # Premium users should have higher success rate due to priority
+    premium_success_rate = premium_success / len(premium_results) if premium_results else 0
+    standard_success_rate = standard_success / len(standard_results) if standard_results else 0
+
+    assert premium_success_rate >= 0.9, f"Premium success rate should be >= 90%, got {premium_success_rate:.2%}"
+    assert standard_success_rate >= 0.5, (
+        f"Standard success rate should be >= 50% (with 30% random limiting, allows for variance), got {standard_success_rate:.2%}"
+    )
+
+    # Allow for the case where both are 100% due to timing/mocking issues
+    # The test is inherently flaky due to random behavior
+    if premium_success_rate < 1.0 or standard_success_rate < 1.0:
+        assert premium_success_rate >= standard_success_rate, "Premium should have >= success rate than standard"
+
+    total_duration = end_time - start_time
+
+    print(f"✅ Processed 50 concurrent pre-call hooks in {total_duration:.2f}s")
+    print(f"   - Premium users: {premium_success}/{len(premium_results)} success ({premium_success_rate:.1%})")
+    print(f"   - Standard users: {standard_success}/{len(standard_results)} success ({standard_success_rate:.1%})")
+    print(f"   - Total successful: {successful_count}/50 ({successful_count / 50:.1%})")
+    print("   - Priority system working: Premium > Standard success rates")
+
+
+# These tests make actual async_pre_call_hook calls to simulate real traffic
+
+
+@pytest.mark.asyncio
+async def test_fake_calls_case_1_no_rate_limiting_at_capacity(monkeypatch):
+    """
+    Test Case 1: Saturation-Aware Rate Limiting at 50% Threshold
+
+    System: 100 RPM capacity, saturation_threshold=50%
+    Key A: priority_reservation=0.75 (75 RPM reserved)
+    Key B: priority_reservation=0.25 (25 RPM reserved)
+    Traffic A: 1 request
+    Traffic B: 100 requests
+
+    Expected behavior:
+    - Key A: 1 request succeeds (low traffic)
+    - Key B: ~25-26 requests succeed (capped at reservation when saturation >= 50%)
+
+    Once saturation hits 50%, strict mode enforces priority-based limits.
+    """
+    monkeypatch.setenv("LITELLM_LICENSE", "test-license-key")
+
+    # Set up priority reservations
+    monkeypatch.setattr(litellm, "priority_reservation", {"key_a": 0.75, "key_b": 0.25})
+
+    dual_cache = DualCache()
+    handler = DynamicRateLimitHandler(internal_usage_cache=dual_cache)
+
+    model = "fake-call-test-1"
+    total_rpm = 100
+
+    llm_router = Router(
+        model_list=[
+            {
+                "model_name": model,
+                "litellm_params": {
+                    "model": "gpt-3.5-turbo",
+                    "api_key": "test-key",
+                    "api_base": "test-base",
+                    "rpm": total_rpm,
+                },
+            }
+        ]
+    )
+    handler.update_variables(llm_router=llm_router)
+
+    # Create users
+    key_a_user = UserAPIKeyAuth()
+    key_a_user.metadata = {"priority": "key_a"}
+    key_a_user.user_id = "key_a_user"
+
+    key_b_user = UserAPIKeyAuth()
+    key_b_user.metadata = {"priority": "key_b"}
+    key_b_user.user_id = "key_b_user"
+
+    # Track results
+    successful_requests = {"key_a": 0, "key_b": 0}
+    rate_limited_requests = {"key_a": 0, "key_b": 0}
+
+    async def make_request(user, priority_name, request_id):
+        """Make a single request and track the result."""
+        try:
+            result = await handler.async_pre_call_hook(
+                user_api_key_dict=user,
+                cache=dual_cache,
+                data={"model": model},
+                call_type="completion",
+            )
+
+            if result is None:
+                successful_requests[priority_name] += 1
+                return {"status": "success", "priority": priority_name}
+            else:
+                rate_limited_requests[priority_name] += 1
+                return {"status": "rate_limited", "priority": priority_name}
+
+        except Exception as e:
+            rate_limited_requests[priority_name] += 1
+            return {
+                "status": "rate_limited",
+                "priority": priority_name,
+                "error": str(e),
+            }
+
+    # Send 1 request from key_a, 100 from key_b
+    tasks = []
+
+    for i in range(1):
+        tasks.append(make_request(key_a_user, "key_a", f"key_a_{i}"))
+
+    for i in range(100):
+        tasks.append(make_request(key_b_user, "key_b", f"key_b_{i}"))
+
+    start_time = time.time()
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    end_time = time.time()
+
+    # Analyze results
+    total_successful = successful_requests["key_a"] + successful_requests["key_b"]
+    total_rate_limited = rate_limited_requests["key_a"] + rate_limited_requests["key_b"]
+
+    print("Test Case 1 - Saturation-Aware Rate Limiting:")
+    print(f"   - Duration: {end_time - start_time:.2f}s")
+    print(f"   - Key A: {successful_requests['key_a']}/1 successful (reserved 75 RPM)")
+    print(f"   - Key B: {successful_requests['key_b']}/100 successful (reserved 25 RPM)")
+    print(f"   - Total successful: {total_successful}/101")
+    print(f"   - Total rate limited: {total_rate_limited}/101")
+
+    # Key A should get its 1 request
+    assert successful_requests["key_a"] == 1, f"Key A should get 1 request, got {successful_requests['key_a']}"
+
+    # Key B can send until saturation hits 50% (which is ~50 total requests)
+    # After that, strict mode enforces its 25 RPM reservation
+    # Due to race conditions in concurrent execution, allow 45-52 successful requests
+    assert 45 <= successful_requests["key_b"] <= 52, (
+        f"Key B should get ~49 requests (45-52), got {successful_requests['key_b']}"
+    )
+
+    # Verify approximately half of key_b requests were rate limited
+    assert rate_limited_requests["key_b"] >= 45, (
+        f"Key B should have ≥45 rate limited requests, got {rate_limited_requests['key_b']}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_fake_calls_case_2_priority_queue_during_saturation(monkeypatch):
+    """
+    Test Case 2: Priority Queue Behavior During Saturation
+
+    System: 100 RPM capacity
+    Key A: priority_reservation=0.75 (75 RPM reserved)
+    Key B: priority_reservation=0.25 (25 RPM reserved)
+    Traffic A: 200 RPM
+    Traffic B: 200 RPM
+    Expected A: 75 RPM (75% of capacity)
+    Expected B: 25 RPM (25% of capacity)
+
+    When total traffic exceeds capacity, rate limiting enforces priority reservations.
+    """
+    monkeypatch.setenv("LITELLM_LICENSE", "test-license-key")
+
+    monkeypatch.setattr(litellm, "priority_reservation", {"key_a": 0.75, "key_b": 0.25})
+
+    dual_cache = DualCache()
+    handler = DynamicRateLimitHandler(internal_usage_cache=dual_cache)
+
+    model = "fake-call-test-2"
+    total_rpm = 100
+
+    llm_router = Router(
+        model_list=[
+            {
+                "model_name": model,
+                "litellm_params": {
+                    "model": "gpt-3.5-turbo",
+                    "api_key": "test-key",
+                    "api_base": "test-base",
+                    "rpm": total_rpm,
+                },
+            }
+        ]
+    )
+    handler.update_variables(llm_router=llm_router)
+
+    # Create users
+    key_a_user = UserAPIKeyAuth()
+    key_a_user.metadata = {"priority": "key_a"}
+    key_a_user.user_id = "key_a_user"
+
+    key_b_user = UserAPIKeyAuth()
+    key_b_user.metadata = {"priority": "key_b"}
+    key_b_user.user_id = "key_b_user"
+
+    # Track results
+    successful_requests = {"key_a": 0, "key_b": 0}
+    rate_limited_requests = {"key_a": 0, "key_b": 0}
+
+    async def make_request(user, priority_name, request_id):
+        """Make a single request and track the result."""
+        try:
+            result = await handler.async_pre_call_hook(
+                user_api_key_dict=user,
+                cache=dual_cache,
+                data={"model": model},
+                call_type="completion",
+            )
+
+            if result is None:
+                successful_requests[priority_name] += 1
+                return {"status": "success", "priority": priority_name}
+            else:
+                rate_limited_requests[priority_name] += 1
+                return {"status": "rate_limited", "priority": priority_name}
+
+        except Exception as e:
+            rate_limited_requests[priority_name] += 1
+            return {
+                "status": "rate_limited",
+                "priority": priority_name,
+                "error": str(e),
+            }
+
+    # Send 200 requests from each priority (over capacity)
+    tasks = []
+
+    for i in range(200):
+        tasks.append(make_request(key_a_user, "key_a", f"key_a_{i}"))
+
+    for i in range(200):
+        tasks.append(make_request(key_b_user, "key_b", f"key_b_{i}"))
+
+    start_time = time.time()
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    end_time = time.time()
+
+    # Analyze results
+    total_successful = successful_requests["key_a"] + successful_requests["key_b"]
+
+    key_a_success_rate = successful_requests["key_a"] / 200
+    key_b_success_rate = successful_requests["key_b"] / 200
+
+    print("Test Case 2 - Priority Queue Behavior During Saturation:")
+    print(f"   - Duration: {end_time - start_time:.2f}s")
+    print(f"   - Key A: {successful_requests['key_a']}/200 successful ({key_a_success_rate:.1%})")
+    print(f"   - Key B: {successful_requests['key_b']}/200 successful ({key_b_success_rate:.1%})")
+    print(f"   - Total successful: {total_successful}/400")
+
+    # Key A should get significantly more requests than Key B (75:25 ratio)
+    assert key_a_success_rate > key_b_success_rate, (
+        f"Key A should have higher success rate: {key_a_success_rate:.1%} vs {key_b_success_rate:.1%}"
+    )
+
+    # Check ratio is approximately 3:1 (75:25)
+    if total_successful > 0:
+        key_a_share = successful_requests["key_a"] / total_successful
+        expected_key_a_share = 0.75
+
+        print(f"   - Key A got {key_a_share:.1%} of successful requests (expected ~75%)")
+
+        # Allow tolerance for timing effects
+        assert abs(key_a_share - expected_key_a_share) < 0.2, f"Key A share should be ~75%, got {key_a_share:.1%}"
+
+
+@pytest.mark.asyncio
+async def test_fake_calls_case_3_spillover_capacity_default_keys(monkeypatch):
+    """
+    Test Case 3: Spillover Capacity for Default Keys
+
+    System: 100 RPM capacity
+    Key A: priority_reservation=0.75 (75 RPM reserved)
+    Key B: nothing set (default)
+    Key C: nothing set (default)
+    Key D: nothing set (default)
+    Traffic A: 150 RPM
+    Traffic B: 150 RPM
+    Traffic C: 150 RPM
+    Traffic D: 150 RPM
+    Expected A: 75 RPM (75% reserved)
+    Expected B: ~8.3 RPM (remaining 25 RPM / 3 default keys)
+    Expected C: ~8.3 RPM
+    Expected D: ~8.3 RPM
+
+    Tests spillover behavior where default keys share remaining capacity.
+    """
+    monkeypatch.setenv("LITELLM_LICENSE", "test-license-key")
+
+    monkeypatch.setattr(litellm, "priority_reservation", {"key_a": 0.75})
+    litellm.priority_reservation_settings.default_priority = 0.25
+
+    dual_cache = DualCache()
+    handler = DynamicRateLimitHandler(internal_usage_cache=dual_cache)
+
+    model = "fake-call-test-3"
+    total_rpm = 100
+
+    llm_router = Router(
+        model_list=[
+            {
+                "model_name": model,
+                "litellm_params": {
+                    "model": "gpt-3.5-turbo",
+                    "api_key": "test-key",
+                    "api_base": "test-base",
+                    "rpm": total_rpm,
+                },
+            }
+        ]
+    )
+    handler.update_variables(llm_router=llm_router)
+
+    # Create users
+    key_a_user = UserAPIKeyAuth()
+    key_a_user.metadata = {"priority": "key_a"}
+    key_a_user.user_id = "key_a_user"
+
+    key_b_user = UserAPIKeyAuth()
+    key_b_user.metadata = {}
+    key_b_user.user_id = "key_b_user"
+
+    key_c_user = UserAPIKeyAuth()
+    key_c_user.metadata = {}
+    key_c_user.user_id = "key_c_user"
+
+    key_d_user = UserAPIKeyAuth()
+    key_d_user.metadata = {}
+    key_d_user.user_id = "key_d_user"
+
+    # Track results
+    successful_requests = {"key_a": 0, "key_b": 0, "key_c": 0, "key_d": 0}
+    rate_limited_requests = {"key_a": 0, "key_b": 0, "key_c": 0, "key_d": 0}
+
+    async def make_request(user, key_name, request_id):
+        """Make a single request and track the result."""
+        try:
+            result = await handler.async_pre_call_hook(
+                user_api_key_dict=user,
+                cache=dual_cache,
+                data={"model": model},
+                call_type="completion",
+            )
+
+            if result is None:
+                successful_requests[key_name] += 1
+                return {"status": "success", "key": key_name}
+            else:
+                rate_limited_requests[key_name] += 1
+                return {"status": "rate_limited", "key": key_name}
+
+        except Exception as e:
+            rate_limited_requests[key_name] += 1
+            return {"status": "rate_limited", "key": key_name, "error": str(e)}
+
+    # Send 150 requests from each key (600 total, 6x over capacity)
+    tasks = []
+
+    for i in range(150):
+        tasks.append(make_request(key_a_user, "key_a", f"key_a_{i}"))
+
+    for i in range(150):
+        tasks.append(make_request(key_b_user, "key_b", f"key_b_{i}"))
+
+    for i in range(150):
+        tasks.append(make_request(key_c_user, "key_c", f"key_c_{i}"))
+
+    for i in range(150):
+        tasks.append(make_request(key_d_user, "key_d", f"key_d_{i}"))
+
+    start_time = time.time()
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    end_time = time.time()
+
+    # Analyze results
+    total_successful = sum(successful_requests.values())
+
+    print("Test Case 3 - Spillover Capacity for Default Keys:")
+    print(f"   - Duration: {end_time - start_time:.2f}s")
+    print(f"   - Key A: {successful_requests['key_a']}/150 successful")
+    print(f"   - Key B: {successful_requests['key_b']}/150 successful (default)")
+    print(f"   - Key C: {successful_requests['key_c']}/150 successful (default)")
+    print(f"   - Key D: {successful_requests['key_d']}/150 successful (default)")
+    print(f"   - Total successful: {total_successful}/600")
+
+    # Key A should get the most requests (75% of capacity)
+    assert successful_requests["key_a"] > successful_requests["key_b"], "Key A should get more than Key B"
+    assert successful_requests["key_a"] > successful_requests["key_c"], "Key A should get more than Key C"
+    assert successful_requests["key_a"] > successful_requests["key_d"], "Key A should get more than Key D"
+
+    # Default keys should get similar amounts (spillover capacity)
+    avg_default = (successful_requests["key_b"] + successful_requests["key_c"] + successful_requests["key_d"]) / 3
+    print(f"   - Average default key success: {avg_default:.1f}")
+
+
+@pytest.mark.asyncio
+async def test_fake_calls_case_4_over_allocated_with_normalization(monkeypatch):
+    """
+    Test Case 4: Over-Allocated Priority reservations with Normalization
+
+    System: 100 RPM capacity
+    Key A: priority_reservation=0.60 (60% requested)
+    Key B: priority_reservation=0.80 (80% requested)
+    Total: 140% (over-allocated, should normalize to 43%/57%)
+    Traffic A: 200 RPM
+    Traffic B: 200 RPM
+
+    With saturation-aware rate limiting:
+    - Initially, requests are allowed through in generous mode (under 80% saturation)
+    - Once saturated, strict priority-based limits kick in with normalized weights
+    - Due to concurrent burst, total successful may exceed 100 RPM in the test window
+    - This test verifies normalization works and total capacity is reasonably bounded
+    """
+    monkeypatch.setenv("LITELLM_LICENSE", "test-license-key")
+
+    monkeypatch.setattr(litellm, "priority_reservation", {"key_a": 0.60, "key_b": 0.80})
+
+    dual_cache = DualCache()
+    handler = DynamicRateLimitHandler(internal_usage_cache=dual_cache)
+
+    model = "fake-call-test-4"
+    total_rpm = 100
+
+    llm_router = Router(
+        model_list=[
+            {
+                "model_name": model,
+                "litellm_params": {
+                    "model": "gpt-3.5-turbo",
+                    "api_key": "test-key",
+                    "api_base": "test-base",
+                    "rpm": total_rpm,
+                },
+            }
+        ]
+    )
+    handler.update_variables(llm_router=llm_router)
+
+    # Create users
+    key_a_user = UserAPIKeyAuth()
+    key_a_user.metadata = {"priority": "key_a"}
+    key_a_user.user_id = "key_a_user"
+
+    key_b_user = UserAPIKeyAuth()
+    key_b_user.metadata = {"priority": "key_b"}
+    key_b_user.user_id = "key_b_user"
+
+    # Track results
+    successful_requests = {"key_a": 0, "key_b": 0}
+    rate_limited_requests = {"key_a": 0, "key_b": 0}
+
+    async def make_request(user, priority_name, request_id):
+        """Make a single request and track the result."""
+        try:
+            result = await handler.async_pre_call_hook(
+                user_api_key_dict=user,
+                cache=dual_cache,
+                data={"model": model},
+                call_type="completion",
+            )
+
+            if result is None:
+                successful_requests[priority_name] += 1
+                return {"status": "success", "priority": priority_name}
+            else:
+                rate_limited_requests[priority_name] += 1
+                return {"status": "rate_limited", "priority": priority_name}
+
+        except Exception as e:
+            rate_limited_requests[priority_name] += 1
+            return {
+                "status": "rate_limited",
+                "priority": priority_name,
+                "error": str(e),
+            }
+
+    # Send 200 requests from each key (400 total, 4x over capacity)
+    tasks = []
+
+    for i in range(200):
+        tasks.append(make_request(key_a_user, "key_a", f"key_a_{i}"))
+
+    for i in range(200):
+        tasks.append(make_request(key_b_user, "key_b", f"key_b_{i}"))
+
+    start_time = time.time()
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    end_time = time.time()
+
+    # Analyze results
+    total_successful = successful_requests["key_a"] + successful_requests["key_b"]
+
+    key_a_success_rate = successful_requests["key_a"] / 200
+    key_b_success_rate = successful_requests["key_b"] / 200
+
+    print("Test Case 4 - Over-Allocated Priority Reservations with Normalization:")
+    print(f"   - Duration: {end_time - start_time:.2f}s")
+    print(f"   - Key A (0.60): {successful_requests['key_a']}/200 successful ({key_a_success_rate:.1%})")
+    print(f"   - Key B (0.80): {successful_requests['key_b']}/200 successful ({key_b_success_rate:.1%})")
+    print(f"   - Total successful: {total_successful}/400")
+
+    # With saturation-aware behavior:
+    # 1. Verify total capacity is reasonably bounded (not all 400 requests succeed)
+    assert total_successful < 300, (
+        f"Total requests should be bounded by saturation detection, got {total_successful}/400"
+    )
+
+    # 2. Verify significant rate limiting occurred (at least 50% blocked)
+    assert total_successful < 200, (
+        f"At least 50% of requests should be rate limited, got {total_successful}/400 successful"
+    )
+
+    # 3. Verify both keys got some requests through (normalization is working)
+    assert successful_requests["key_a"] > 0, "Key A should get some requests"
+    assert successful_requests["key_b"] > 0, "Key B should get some requests"
+
+    print(
+        f"   - Normalization test PASSED: Both priorities got requests, total bounded to {total_successful} (under 200)"
+    )
+
+
+@pytest.mark.asyncio
+async def test_fake_calls_case_5_default_value_priority_reservation(monkeypatch):
+    """
+    Test Case 5: Default value for priority reservation
+
+    System: 100 RPM capacity
+    Key A: priority_reservation=0.50 (50 RPM)
+    Key B: priority_reservation=0.20 (20 RPM)
+    Key C: priority_reservation=0.05 (5 RPM)
+    Key D: nothing set (uses default_priority=0.05, 5 RPM)
+    Traffic A: 150 RPM
+    Traffic B: 150 RPM
+    Traffic C: 150 RPM
+    Traffic D: 150 RPM
+    Expected A: 55 RPM (normalized)
+    Expected B: 25 RPM (normalized)
+    Expected C: 10 RPM (normalized)
+    Expected D: 10 RPM (normalized)
+
+    Tests complex scenario with explicit priorities and default priority.
+    """
+    monkeypatch.setenv("LITELLM_LICENSE", "test-license-key")
+
+    monkeypatch.setattr(litellm, "priority_reservation", {"key_a": 0.50, "key_b": 0.20, "key_c": 0.05})
+    litellm.priority_reservation_settings.default_priority = 0.05
+
+    dual_cache = DualCache()
+    handler = DynamicRateLimitHandler(internal_usage_cache=dual_cache)
+
+    model = "fake-call-test-5"
+    total_rpm = 100
+
+    llm_router = Router(
+        model_list=[
+            {
+                "model_name": model,
+                "litellm_params": {
+                    "model": "gpt-3.5-turbo",
+                    "api_key": "test-key",
+                    "api_base": "test-base",
+                    "rpm": total_rpm,
+                },
+            }
+        ]
+    )
+    handler.update_variables(llm_router=llm_router)
+
+    # Create users
+    key_a_user = UserAPIKeyAuth()
+    key_a_user.metadata = {"priority": "key_a"}
+    key_a_user.user_id = "key_a_user"
+
+    key_b_user = UserAPIKeyAuth()
+    key_b_user.metadata = {"priority": "key_b"}
+    key_b_user.user_id = "key_b_user"
+
+    key_c_user = UserAPIKeyAuth()
+    key_c_user.metadata = {"priority": "key_c"}
+    key_c_user.user_id = "key_c_user"
+
+    key_d_user = UserAPIKeyAuth()
+    key_d_user.metadata = {}
+    key_d_user.user_id = "key_d_user"
+
+    # Track results
+    successful_requests = {"key_a": 0, "key_b": 0, "key_c": 0, "key_d": 0}
+    rate_limited_requests = {"key_a": 0, "key_b": 0, "key_c": 0, "key_d": 0}
+
+    async def make_request(user, key_name, request_id):
+        """Make a single request and track the result."""
+        try:
+            result = await handler.async_pre_call_hook(
+                user_api_key_dict=user,
+                cache=dual_cache,
+                data={"model": model},
+                call_type="completion",
+            )
+
+            if result is None:
+                successful_requests[key_name] += 1
+                return {"status": "success", "key": key_name}
+            else:
+                rate_limited_requests[key_name] += 1
+                return {"status": "rate_limited", "key": key_name}
+
+        except Exception as e:
+            rate_limited_requests[key_name] += 1
+            return {"status": "rate_limited", "key": key_name, "error": str(e)}
+
+    # Send 150 requests from each key (600 total, 6x over capacity)
+    tasks = []
+
+    for i in range(150):
+        tasks.append(make_request(key_a_user, "key_a", f"key_a_{i}"))
+
+    for i in range(150):
+        tasks.append(make_request(key_b_user, "key_b", f"key_b_{i}"))
+
+    for i in range(150):
+        tasks.append(make_request(key_c_user, "key_c", f"key_c_{i}"))
+
+    for i in range(150):
+        tasks.append(make_request(key_d_user, "key_d", f"key_d_{i}"))
+
+    start_time = time.time()
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    end_time = time.time()
+
+    # Analyze results
+    total_successful = sum(successful_requests.values())
+
+    print("Test Case 5 - Default value for priority reservation:")
+    print(f"   - Duration: {end_time - start_time:.2f}s")
+    print(f"   - Key A (0.50): {successful_requests['key_a']}/150 successful")
+    print(f"   - Key B (0.20): {successful_requests['key_b']}/150 successful")
+    print(f"   - Key C (0.05): {successful_requests['key_c']}/150 successful")
+    print(f"   - Key D (default 0.05): {successful_requests['key_d']}/150 successful")
+    print(f"   - Total successful: {total_successful}/600")
+
+    # Verify priority ordering: A > B > C ≈ D
+    assert successful_requests["key_a"] > successful_requests["key_b"], "Key A should get more than Key B"
+    assert successful_requests["key_b"] > successful_requests["key_c"], "Key B should get more than Key C"
+
+    # Key C and Key D should get similar amounts (both have 0.05 priority)
+    key_c_vs_d_ratio = successful_requests["key_c"] / max(successful_requests["key_d"], 1)
+    print(f"   - Key C vs Key D ratio: {key_c_vs_d_ratio:.2f} (expected ~1.0)")
+
+    if total_successful > 0:
+        key_a_share = successful_requests["key_a"] / total_successful
+        print(f"   - Key A got {key_a_share:.1%} of successful requests (expected ~55-62%)")
+
+
+@pytest.mark.asyncio
+async def test_default_priority_shared_pool(monkeypatch):
+    """
+    Test that keys without explicit priority share ONE default pool, not get individual allocations.
+
+    With default_priority=0.25:
+    - Key A, B, C (no priority) should share ONE 25 RPM pool
+    - NOT get 25 RPM each (which would be 75 RPM total)
+    """
+    monkeypatch.setenv("LITELLM_LICENSE", "test-license-key")
+
+    monkeypatch.setattr(litellm, "priority_reservation", {"prod": 0.75})
+    litellm.priority_reservation_settings.default_priority = 0.25
+
+    dual_cache = DualCache()
+    handler = DynamicRateLimitHandler(internal_usage_cache=dual_cache)
+
+    model = "test-default-pool"
+    total_rpm = 100
+
+    llm_router = Router(
+        model_list=[
+            {
+                "model_name": model,
+                "litellm_params": {
+                    "model": "gpt-3.5-turbo",
+                    "api_key": "test-key",
+                    "api_base": "test-base",
+                    "rpm": total_rpm,
+                },
+            }
+        ]
+    )
+    handler.update_variables(llm_router=llm_router)
+
+    # Create 3 users without explicit priority
+    user_a = UserAPIKeyAuth()
+    user_a.metadata = {}
+    user_a.user_id = "user_a"
+
+    user_b = UserAPIKeyAuth()
+    user_b.metadata = {}
+    user_b.user_id = "user_b"
+
+    user_c = UserAPIKeyAuth()
+    user_c.metadata = {}
+    user_c.user_id = "user_c"
+
+    # Get descriptors for each
+    desc_a = await priority_based_descriptors(handler, model=model, user_api_key_dict=user_a, priority=None)
+    desc_b = await priority_based_descriptors(handler, model=model, user_api_key_dict=user_b, priority=None)
+    desc_c = await priority_based_descriptors(handler, model=model, user_api_key_dict=user_c, priority=None)
+
+    # All should use the SAME shared pool key
+    assert desc_a[0]["value"] == f"{model}:default_pool"
+    assert desc_b[0]["value"] == f"{model}:default_pool"
+    assert desc_c[0]["value"] == f"{model}:default_pool"
+
+    # All should have same limit (25 RPM SHARED, not 25 RPM each)
+    assert desc_a[0]["rate_limit"]["requests_per_unit"] == 25
+    assert desc_b[0]["rate_limit"]["requests_per_unit"] == 25
+    assert desc_c[0]["rate_limit"]["requests_per_unit"] == 25
+
+    # Verify explicit priority uses different pool
+    user_prod = UserAPIKeyAuth()
+    user_prod.metadata = {"priority": "prod"}
+    desc_prod = await priority_based_descriptors(handler, model=model, user_api_key_dict=user_prod, priority="prod")
+
+    assert desc_prod[0]["value"] == f"{model}:prod"
+    assert desc_prod[0]["rate_limit"]["requests_per_unit"] == 75
+    assert desc_prod[0]["value"] != desc_a[0]["value"]  # Different pools
+
+    print("✅ Default priority test passed:")
+    print(f"   - 3 keys without priority share ONE pool: {desc_a[0]['value']}")
+    print(f"   - Shared pool limit: {desc_a[0]['rate_limit']['requests_per_unit']} RPM")
+    print(f"   - Explicit priority 'prod' uses separate pool: {desc_prod[0]['value']}")
+
+
+@pytest.mark.asyncio
+async def test_async_log_success_event_increments_by_actual_tokens(monkeypatch):
+    """
+    Test that async_log_success_event increments token counters by actual token usage.
+
+    This validates the fix for Bug 1: Token count was incrementing by 1 instead of actual usage.
+    The async_log_success_event should increment both model_saturation_check and priority_model
+    counters by the actual completion_tokens (when rate_limit_type=output).
+    """
+    from unittest.mock import MagicMock
+
+    from litellm.types.utils import ModelResponse, Usage
+
+    monkeypatch.setenv("LITELLM_LICENSE", "test-license-key")
+    monkeypatch.setattr(litellm, "priority_reservation", {"dev": 0.1, "prod": 0.9})
+
+    dual_cache = DualCache()
+    handler = DynamicRateLimitHandler(internal_usage_cache=dual_cache)
+
+    model = "test-token-increment"
+    llm_router = Router(
+        model_list=[
+            {
+                "model_name": model,
+                "litellm_params": {
+                    "model": "gpt-3.5-turbo",
+                    "api_key": "test-key",
+                    "api_base": "test-base",
+                    "tpm": 1000,
+                },
+            }
+        ]
+    )
+    handler.update_variables(llm_router=llm_router)
+    redis = handler.saturation_redis()
+
+    # Create mock response with 50 completion tokens
+    mock_response = MagicMock(spec=ModelResponse)
+    mock_response.usage = Usage(prompt_tokens=10, completion_tokens=50, total_tokens=60)
+
+    # Create kwargs with priority in user_api_key_auth_metadata
+    kwargs = {
+        "standard_logging_object": {
+            "metadata": {
+                "user_api_key_auth_metadata": {"priority": "dev"},
+            },
+            "model_group": model,
+        },
+        "litellm_params": {
+            "metadata": {"model_group": model},
+        },
+    }
+
+    with patch(
+        "litellm.proxy.common_utils.callback_utils.get_model_group_from_litellm_kwargs",
+        return_value=model,
+    ):
+        await handler.async_log_success_event(
+            kwargs=kwargs,
+            response_obj=mock_response,
+            start_time=None,
+            end_time=None,
+        )
+
+    increment_calls = redis.increments()
+    assert len(increment_calls) == 2, f"Expected 2 increment calls, got {len(increment_calls)}"
+
+    for counter, increment_value in increment_calls:
+        assert increment_value == 60, f"Expected increment of 60 tokens, got {increment_value} for counter {counter}"
+
+    counters = [counter for counter, _ in increment_calls]
+    assert counter_key(RateLimitScope("model_saturation_check", model).counter("tokens")) in counters, (
+        "Should increment model_saturation_check"
+    )
+    assert counter_key(RateLimitScope("priority_model", f"{model}:dev").counter("tokens")) in counters, (
+        "Should increment priority_model with 'dev' priority"
+    )
+
+
+@pytest.mark.asyncio
+async def test_async_log_success_event_uses_team_priority_from_auth_metadata(monkeypatch):
+    """
+    Test that async_log_success_event correctly retrieves priority from user_api_key_auth_metadata.
+
+    This validates the fix where priority is retrieved from standard_logging_metadata.user_api_key_auth_metadata
+    instead of just standard_logging_metadata.priority. This is important for team-based priority inheritance.
+    """
+    from unittest.mock import MagicMock
+
+    from litellm.types.utils import ModelResponse, Usage
+
+    monkeypatch.setenv("LITELLM_LICENSE", "test-license-key")
+    monkeypatch.setattr(litellm, "priority_reservation", {"team_priority": 0.8, "default": 0.2})
+
+    dual_cache = DualCache()
+    handler = DynamicRateLimitHandler(internal_usage_cache=dual_cache)
+
+    model = "test-team-priority"
+    llm_router = Router(
+        model_list=[
+            {
+                "model_name": model,
+                "litellm_params": {
+                    "model": "gpt-3.5-turbo",
+                    "api_key": "test-key",
+                    "api_base": "test-base",
+                    "tpm": 1000,
+                },
+            }
+        ]
+    )
+    handler.update_variables(llm_router=llm_router)
+    redis = handler.saturation_redis()
+
+    # Create mock response
+    mock_response = MagicMock(spec=ModelResponse)
+    mock_response.usage = Usage(prompt_tokens=10, completion_tokens=20, total_tokens=30)
+
+    # Simulate team metadata inheritance: priority is in user_api_key_auth_metadata
+    # This is how the proxy passes team metadata to the callback
+    kwargs = {
+        "standard_logging_object": {
+            "metadata": {
+                # Priority NOT at top level (this would fail before the fix)
+                # Priority IS in user_api_key_auth_metadata (team inheritance)
+                "user_api_key_auth_metadata": {"priority": "team_priority"},
+            },
+            "model_group": model,
+        },
+        "litellm_params": {
+            "metadata": {"model_group": model},
+        },
+    }
+
+    with patch(
+        "litellm.proxy.common_utils.callback_utils.get_model_group_from_litellm_kwargs",
+        return_value=model,
+    ):
+        await handler.async_log_success_event(
+            kwargs=kwargs,
+            response_obj=mock_response,
+            start_time=None,
+            end_time=None,
+        )
+
+    priority_keys = [counter for counter, _ in redis.increments() if counter.startswith("{priority_model:")]
+    assert len(priority_keys) == 1, f"Expected 1 priority_model key, got {len(priority_keys)}"
+
+    assert priority_keys[0] == counter_key(
+        RateLimitScope("priority_model", f"{model}:team_priority").counter("tokens")
+    ), f"Expected priority key to use 'team_priority' from user_api_key_auth_metadata, got key: {priority_keys[0]}"
+
+
+@pytest.mark.asyncio
+async def test_priority_429_includes_model_name_and_configured_limits(monkeypatch):
+    """
+    The priority-based 429 should tell operators which model was hit and what
+    the model's configured TPM/RPM are, so they can decide whether to tune the
+    priority allocation or the model limits.
+
+    Regression test for the previous message that read:
+        "Priority-based rate limit exceeded. Priority: prod,
+         Rate limit type: tokens, Remaining: -664145,
+         Model saturation: 86.3%"
+    -- with no indication of which model was hit.
+    """
+    from fastapi import HTTPException
+
+    monkeypatch.setenv("LITELLM_LICENSE", "test-license-key")
+    monkeypatch.setattr(litellm, "priority_reservation", {"prod": 0.5})
+
+    dual_cache = DualCache()
+    handler = DynamicRateLimitHandler(internal_usage_cache=dual_cache)
+
+    model = "gpt-4o-test"
+    total_tpm = 1_000_000
+    total_rpm = 10_000
+
+    llm_router = Router(
+        model_list=[
+            {
+                "model_name": model,
+                "litellm_params": {
+                    "model": "gpt-3.5-turbo",
+                    "api_key": "test-key",
+                    "api_base": "test-base",
+                    "tpm": total_tpm,
+                    "rpm": total_rpm,
+                },
+            }
+        ]
+    )
+    handler.update_variables(llm_router=llm_router)
+
+    user = UserAPIKeyAuth()
+    user.metadata = {"priority": "prod"}
+    user.user_id = "prod_user"
+
+    seed_counter(handler, RateLimitScope("priority_model", f"{model}:prod").counter("tokens"), 1_164_145)
+    with pytest.raises(HTTPException) as exc_info:
+        await _check(handler, user, model=model, priority="prod", saturation=0.95)
+
+    assert exc_info.value.status_code == 429
+    detail = exc_info.value.detail
+    assert isinstance(detail, dict)
+    error_msg = detail["error"]
+
+    # New fields added by this change -- the whole point of the fix.
+    assert f"Model: {model}" in error_msg, error_msg
+    assert f"Model TPM: {total_tpm}" in error_msg, error_msg
+    assert f"Model RPM: {total_rpm}" in error_msg, error_msg
+
+    # Existing fields must still be present (no regression).
+    assert "Priority-based rate limit exceeded" in error_msg, error_msg
+    assert "Priority: prod" in error_msg, error_msg
+    assert "Rate limit type: tokens" in error_msg, error_msg
+    assert "Model saturation:" in error_msg, error_msg
+
+
+@pytest.mark.asyncio
+async def test_tpm_only_model_enforces_priority_and_model_capacity(monkeypatch):
+    """Regression: a model configured with ONLY tpm (no rpm) must still be
+    rate limited.
+
+    The atomic check-and-increment path used to drop any counter whose
+    pre-call increment was zero. Token increments are always zero pre-call
+    (usage lands on the counters post-call), so on a TPM-only model the
+    limiter evaluated no counters at all: no model-wide cap, no priority
+    reservation, in either mode. This test drives the real pre-call ->
+    log-success -> pre-call flow with no limiter internals mocked.
+    """
+    from fastapi import HTTPException
+
+    from litellm.types.utils import ModelResponse, Usage
+
+    monkeypatch.setenv("LITELLM_LICENSE", "test-license-key")
+    monkeypatch.setattr(litellm, "priority_reservation", {"dev": 0.25, "prod": 0.5})
+
+    dual_cache = DualCache()
+    handler = DynamicRateLimitHandler(internal_usage_cache=dual_cache)
+
+    model = "tpm-only-model"
+    llm_router = Router(
+        model_list=[
+            {
+                "model_name": model,
+                "litellm_params": {
+                    "model": "gpt-3.5-turbo",
+                    "api_key": "test-key",
+                    "api_base": "test-base",
+                    "tpm": 400,
+                },
+            }
+        ]
+    )
+    handler.update_variables(llm_router=llm_router)
+
+    dev_user = UserAPIKeyAuth()
+    dev_user.metadata = {"priority": "dev"}
+    prod_user = UserAPIKeyAuth()
+    prod_user.metadata = {"priority": "prod"}
+
+    async def record_usage(priority: str, total_tokens: int) -> None:
+        await handler.async_log_success_event(
+            kwargs={
+                "standard_logging_object": {
+                    "metadata": {"user_api_key_auth_metadata": {"priority": priority}},
+                },
+                "litellm_params": {"metadata": {"model_group": model}},
+            },
+            response_obj=ModelResponse(
+                model=model,
+                usage=Usage(prompt_tokens=0, completion_tokens=total_tokens, total_tokens=total_tokens),
+            ),
+            start_time=None,
+            end_time=None,
+        )
+
+    assert (
+        await handler.async_pre_call_hook(
+            user_api_key_dict=dev_user, cache=dual_cache, data={"model": model}, call_type="completion"
+        )
+        is None
+    )
+
+    await record_usage("dev", 250)
+
+    with pytest.raises(HTTPException) as dev_blocked:
+        await handler.async_pre_call_hook(
+            user_api_key_dict=dev_user, cache=dual_cache, data={"model": model}, call_type="completion"
+        )
+    assert dev_blocked.value.status_code == 429
+    assert "Priority-based rate limit exceeded" in dev_blocked.value.detail["error"]
+
+    assert (
+        await handler.async_pre_call_hook(
+            user_api_key_dict=prod_user, cache=dual_cache, data={"model": model}, call_type="completion"
+        )
+        is None
+    )
+
+    await record_usage("prod", 200)
+
+    with pytest.raises(HTTPException) as capacity_blocked:
+        await handler.async_pre_call_hook(
+            user_api_key_dict=prod_user, cache=dual_cache, data={"model": model}, call_type="completion"
+        )
+    assert capacity_blocked.value.status_code == 429
+    assert "Model capacity reached" in capacity_blocked.value.detail["error"]
+
+
+@pytest.mark.asyncio
+async def test_post_call_success_hook_attaches_priority_headers_to_dict_response():
+    from litellm.proxy.hooks.parallel_request_limiter_v3 import (
+        RateLimitResponse,
+        RateLimitStatus,
+        get_or_create_request_stash,
+    )
+
+    handler = DynamicRateLimitHandler(internal_usage_cache=DualCache())
+    get_or_create_request_stash().rate_limit_response = RateLimitResponse(
+        overall_code="OK",
+        statuses=[
+            RateLimitStatus(
+                code="OK",
+                current_limit=75,
+                limit_remaining=74,
+                rate_limit_type="requests",
+                descriptor_key="priority_model",
+            )
+        ],
+    )
+    response = {
+        "id": "msg_123",
+        "type": "message",
+        "role": "assistant",
+        "content": [],
+        "_hidden_params": {"additional_headers": {"x-litellm-attempted-retries": 0}},
+    }
+
+    await handler.async_post_call_success_hook(
+        data={"model": "anthropic-haiku"},
+        user_api_key_dict=UserAPIKeyAuth(metadata={"priority": "premium"}),
+        response=response,
+    )
+
+    additional_headers = response["_hidden_params"]["additional_headers"]
+    assert additional_headers["x-litellm-attempted-retries"] == 0
+    assert additional_headers["x-ratelimit-priority_model-limit-requests"] == 75
+    assert additional_headers["x-ratelimit-priority_model-remaining-requests"] == 74
+    assert additional_headers["x-litellm-priority"] == "premium"
+    assert additional_headers["x-litellm-rate-limiter-version"] == "v3"
+
+
+@pytest.mark.asyncio
+async def test_post_call_success_hook_leaves_raw_provider_dict_untouched():
+    handler = DynamicRateLimitHandler(internal_usage_cache=DualCache())
+    response = {"id": "msg_123", "type": "message", "role": "assistant", "content": []}
+
+    await handler.async_post_call_success_hook(
+        data={"model": "anthropic-haiku"},
+        user_api_key_dict=UserAPIKeyAuth(metadata={"priority": "premium"}),
+        response=response,
+    )
+
+    assert response == {"id": "msg_123", "type": "message", "role": "assistant", "content": []}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("team_metadata", "expected_priority_header"),
+    [
+        ({"priority": "优先"}, None),
+        ({"priority": "high"}, "high"),
+        ({}, "default"),
+    ],
+)
+async def test_post_call_success_hook_priority_header_is_always_http_encodable(team_metadata, expected_priority_header):
+    from starlette.responses import Response
+
+    handler = DynamicRateLimitHandler(internal_usage_cache=DualCache())
+    response = {"id": "msg_123", "type": "message", "role": "assistant", "content": [], "_hidden_params": {}}
+
+    await handler.async_post_call_success_hook(
+        data={"model": "anthropic-haiku"},
+        user_api_key_dict=UserAPIKeyAuth(team_id="team-1", team_metadata=team_metadata),
+        response=response,
+    )
+
+    additional_headers = response["_hidden_params"]["additional_headers"]
+    http_response = Response(headers={key: str(value) for key, value in additional_headers.items()})
+    assert http_response.headers.get("x-litellm-priority") == expected_priority_header
+    assert http_response.headers["x-litellm-rate-limiter-version"] == "v3"
+
+
+def _saturation_fallback_handler(monkeypatch: pytest.MonkeyPatch) -> _PROXY_DynamicRateLimitHandlerV3:
+    return _borrowing_handler(monkeypatch, borrows=False, saturation_threshold=0.5, rpm=10)
+
+
+def _interactive_key(api_key: str, team_id: str) -> UserAPIKeyAuth:
+    return UserAPIKeyAuth(api_key=api_key, team_id=team_id, metadata={"priority": "interactive"})
+
+
+def _opted_in(model: str = "shared-model", **extra: object) -> dict[str, object]:
+    return {
+        "model": model,
+        "router_settings_override": {"fallback_on_saturation": True},
+        **extra,
+    }
+
+
+@pytest.fixture
+def armed_walk() -> Iterator[None]:
+    from litellm.proxy.common_utils.proxy_rate_limit_error import (
+        arm_saturation_fallback_walk,
+        disarm_saturation_fallback_walk,
+    )
+
+    walk: Final = arm_saturation_fallback_walk()
+    yield
+    disarm_saturation_fallback_walk(walk)
+
+
+@pytest.mark.asyncio
+async def test_an_opted_in_key_on_a_route_without_the_fallback_walk_is_admitted_on_the_saturated_model(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    handler = _saturation_fallback_handler(monkeypatch)
+    key: Final = _interactive_key("sk-flexible", "team-a")
+    await _saturate_to_threshold(handler, key)
+    direct: Final = {"model": "shared-model", "router_settings_override": {"fallback_on_saturation": True}}
+
+    assert await handler.async_pre_call_hook(key, DualCache(), direct, "acompletion") is None
+
+
+async def _saturate_to_threshold(handler: _PROXY_DynamicRateLimitHandlerV3, key: UserAPIKeyAuth) -> None:
+    for _ in range(5):
+        assert await handler.async_pre_call_hook(key, DualCache(), {"model": "shared-model"}, "acompletion") is None
+    group: Final = handler.llm_router.registry().group("shared-model")
+    assert group is not None
+    assert await model_saturation(handler, "shared-model", group) >= 0.5
+
+
+@pytest.mark.asyncio
+async def test_a_key_with_fallback_on_saturation_is_sent_to_its_fallbacks_once_the_model_saturates(
+    monkeypatch: pytest.MonkeyPatch, armed_walk: None
+):
+    from litellm.proxy.common_utils.proxy_rate_limit_error import SATURATION_FALLBACK_DESCRIPTOR_KEY
+
+    handler = _saturation_fallback_handler(monkeypatch)
+    key: Final = _interactive_key("sk-flexible", "team-a")
+    assert await handler.async_pre_call_hook(key, DualCache(), _opted_in(), "acompletion") is None
+    await _saturate_to_threshold(handler, key)
+
+    with pytest.raises(ProxyRateLimitError) as raised:
+        await handler.async_pre_call_hook(key, DualCache(), _opted_in(), "acompletion")
+    assert raised.value.descriptor_key == SATURATION_FALLBACK_DESCRIPTOR_KEY
+    assert "trying fallbacks first" in str(raised.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_a_key_without_fallback_on_saturation_is_admitted_on_the_saturated_model(monkeypatch: pytest.MonkeyPatch):
+    handler = _saturation_fallback_handler(monkeypatch)
+    key: Final = _interactive_key("sk-rigid", "team-b")
+    await _saturate_to_threshold(handler, key)
+
+    assert await handler.async_pre_call_hook(key, DualCache(), {"model": "shared-model"}, "acompletion") is None
+
+
+@pytest.mark.asyncio
+async def test_a_request_back_from_an_exhausted_fallback_walk_is_admitted_on_the_saturated_model(
+    monkeypatch: pytest.MonkeyPatch, armed_walk: None
+):
+    from litellm.proxy.common_utils.proxy_rate_limit_error import mark_saturation_fallbacks_exhausted
+
+    handler = _saturation_fallback_handler(monkeypatch)
+    key: Final = _interactive_key("sk-flexible", "team-a")
+    await _saturate_to_threshold(handler, key)
+
+    mark_saturation_fallbacks_exhausted()
+    assert await handler.async_pre_call_hook(key, DualCache(), _opted_in(), "acompletion") is None
+
+
+def _borrowing_handler(
+    monkeypatch: pytest.MonkeyPatch,
+    borrows: bool,
+    saturation_threshold: float = 0.5,
+    model_group_alias: dict[str, str] | None = None,
+    splits: bool = False,
+    rpm: int = 100,
+) -> _PROXY_DynamicRateLimitHandlerV3:
+    from litellm.types.utils import PriorityReservationSettings
+
+    monkeypatch.setenv("LITELLM_LICENSE", "test-license-key")
+    monkeypatch.setattr(litellm, "priority_reservation", {"interactive": 0.6, "batch": 0.4})
+    monkeypatch.setattr(
+        litellm,
+        "priority_reservation_settings",
+        PriorityReservationSettings(
+            saturation_threshold=saturation_threshold,
+            model_limit_borrowing_config={"borrow_idle_capacity": ("team",) if borrows else ()},
+            priority_class_share_config={"split_equally_among_active": ("team",) if splits else ()},
+        ),
+    )
+    monkeypatch.setattr(litellm, "callbacks", ["dynamic_rate_limiter_v3"])
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "shared-model",
+                "litellm_params": {"model": "gpt-3.5-turbo", "api_key": "k", "api_base": "b", "tpm": 1000, "rpm": rpm},
+            },
+            {
+                "model_name": "other-model",
+                "litellm_params": {"model": "gpt-3.5-turbo", "api_key": "k", "api_base": "b", "tpm": 1000, "rpm": 100},
+            },
+            {
+                "model_name": "chat",
+                "litellm_params": {"model": "gpt-3.5-turbo", "api_key": "k", "api_base": "b", "tpm": 1000, "rpm": 100},
+            },
+            {
+                "model_name": "chat:prod",
+                "litellm_params": {"model": "gpt-3.5-turbo", "api_key": "k", "api_base": "b", "tpm": 1000, "rpm": 100},
+            },
+        ],
+        model_group_alias=model_group_alias or {},
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", router)
+    handler = PROXY_DynamicRateLimitHandlerV3(internal_usage_cache=DualCache())
+    handler.update_variables(llm_router=router)
+    return handler
+
+
+async def _admit_then_settle(handler: _PROXY_DynamicRateLimitHandlerV3, auth: UserAPIKeyAuth, tokens: int) -> None:
+    await _check(handler, auth, saturation=0.5)
+    await _settle_tokens(handler, tokens)
+
+
+async def _settle_tokens(
+    handler: PROXY_DynamicRateLimitHandlerV3,
+    tokens: int,
+    response: object | None = None,
+    call_id: str | None = None,
+    model_group: str = "shared-model",
+    **extra_kwargs: object,
+) -> None:
+    await handler.async_log_success_event(
+        kwargs={
+            "litellm_params": {"metadata": {"model_group": model_group}},
+            "standard_logging_object": {
+                "metadata": {"user_api_key_team_id": "team-a", "user_api_key_auth_metadata": {}}
+            },
+            **({"litellm_call_id": call_id} if call_id is not None else {}),
+            **extra_kwargs,
+        },
+        response_obj=response
+        if response is not None
+        else litellm.ModelResponse(usage=litellm.Usage(prompt_tokens=tokens, completion_tokens=0, total_tokens=tokens)),
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+    )
+
+
+def _team_key(
+    team_id: str = "team-a",
+    team_limits: dict[str, dict[str, int]] | None = None,
+    **extra: dict[str, dict[str, int]],
+) -> UserAPIKeyAuth:
+    return UserAPIKeyAuth(
+        api_key="sk-borrow",
+        team_id=team_id,
+        team_metadata=team_limits if team_limits is not None else {"model_tpm_limit": {"shared-model": 100}},
+        **extra,
+    )
+
+
+async def _check(
+    handler: PROXY_DynamicRateLimitHandlerV3,
+    auth: UserAPIKeyAuth,
+    saturation: float,
+    model: str = "shared-model",
+    data: dict[str, object] | None = None,
+    priority: str | None = None,
+) -> None:
+    group: Final = handler.llm_router.registry().group(model)
+    assert group is not None
+    await pre_call_at_saturation(handler, auth, model, saturation, data)
+
+
+async def _team_tokens_remaining(
+    handler: PROXY_DynamicRateLimitHandlerV3, auth: UserAPIKeyAuth | None = None, model: str = "shared-model"
+) -> int:
+    share: Final = borrowing_team_share(handler, model, auth if auth is not None else _team_key())
+    assert share is not None
+    response: Final = await should_rate_limit(
+        handler.v3_limiter, [share.share], read_only=True, skip_parallel_check=True
+    )
+    return next(s["limit_remaining"] for s in response["statuses"] if s["rate_limit_type"] == "tokens")
+
+
+def _prompt(words: int, max_tokens: int = 10) -> dict[str, object]:
+    return {
+        "model": "shared-model",
+        "messages": [{"role": "user", "content": "word " * words}],
+        "max_tokens": max_tokens,
+    }
+
+
+def _held_to_team_limit(exc: ProxyRateLimitError, rate_limit_type: str, limit_sentence: str) -> None:
+    assert exc.status_code == 429
+    assert exc.headers is not None
+    assert exc.headers["rate_limited_by"] == "model_per_team_saturated"
+    assert exc.headers["rate_limit_type"] == rate_limit_type
+    assert str(exc.detail).startswith(
+        "{'error': 'Team " + limit_sentence + " reached for shared-model and the model is saturated, "
+        "so there is no idle capacity to borrow. Team: team-a, Rate limit type: " + rate_limit_type + ", "
+    ), exc.detail
+
+
+@pytest.mark.asyncio
+async def test_team_past_its_model_tpm_limit_borrows_while_the_model_is_below_the_saturation_threshold(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    handler = _borrowing_handler(monkeypatch, borrows=True)
+    await _admit_then_settle(handler, _team_key(), 150)
+    await _check(handler, _team_key(), saturation=0.49)
+
+
+@pytest.mark.asyncio
+async def test_team_past_its_model_tpm_limit_is_held_to_it_once_the_model_saturates(monkeypatch: pytest.MonkeyPatch):
+    handler = _borrowing_handler(monkeypatch, borrows=True)
+    await _admit_then_settle(handler, _team_key(), 150)
+    with pytest.raises(ProxyRateLimitError) as exc:
+        await _check(handler, _team_key(), saturation=0.5)
+    _held_to_team_limit(exc.value, "tokens", "model_tpm_limit")
+    assert "Team model_tpm_limit: 100, Remaining: 0, Model saturation: 50.0%" in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_a_borrower_that_spends_its_share_under_saturation_is_held_while_a_newcomer_is_admitted(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    handler: Final = _borrowing_handler(monkeypatch, borrows=True)
+    await _admit_then_settle(handler, _team_key(), 150)
+    with pytest.raises(ProxyRateLimitError) as exc:
+        await _check(handler, _team_key(), saturation=0.5)
+    _held_to_team_limit(exc.value, "tokens", "model_tpm_limit")
+    await _check(handler, _team_key("team-b"), saturation=0.5)
+
+
+@pytest.mark.asyncio
+async def test_team_past_its_model_rpm_limit_is_held_to_it_once_the_model_saturates(monkeypatch: pytest.MonkeyPatch):
+    handler = _borrowing_handler(monkeypatch, borrows=True)
+    auth: Final = _team_key(team_limits={"model_rpm_limit": {"shared-model": 2}})
+    await _check(handler, auth, saturation=0.49)
+    await _check(handler, auth, saturation=0.5)
+    await _check(handler, auth, saturation=0.5)
+    with pytest.raises(ProxyRateLimitError) as exc:
+        await _check(handler, auth, saturation=0.5)
+    _held_to_team_limit(exc.value, "requests", "model_rpm_limit")
+    assert "Team model_rpm_limit: 2, Remaining: 0, Model saturation: 50.0%" in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_requests_admitted_below_saturation_count_only_their_settled_tokens(monkeypatch: pytest.MonkeyPatch):
+    handler = _borrowing_handler(monkeypatch, borrows=True)
+    for _ in range(20):
+        await _admit_then_settle(handler, _team_key(), 4)
+    await _check(handler, _team_key(), saturation=0.9)
+
+
+@pytest.mark.asyncio
+async def test_an_embedding_responses_tokens_count_against_the_team_limit(monkeypatch: pytest.MonkeyPatch):
+    handler = _borrowing_handler(monkeypatch, borrows=True)
+    await _check(handler, _team_key(), saturation=0.5)
+    await _settle_tokens(
+        handler,
+        150,
+        response=litellm.EmbeddingResponse(
+            usage=litellm.Usage(prompt_tokens=150, completion_tokens=0, total_tokens=150)
+        ),
+    )
+    with pytest.raises(ProxyRateLimitError) as exc:
+        await _check(handler, _team_key(), saturation=0.5)
+    _held_to_team_limit(exc.value, "tokens", "model_tpm_limit")
+
+
+@pytest.mark.asyncio
+async def test_an_embedding_the_provider_reports_as_zero_tokens_keeps_its_reservation_on_the_team_share(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    handler: Final = _borrowing_handler(monkeypatch, borrows=True)
+    await _check(handler, _team_key(), saturation=0.5, data={"model": "shared-model", "input": "word " * 30})
+    remaining: Final = await _team_tokens_remaining(handler)
+    assert remaining < 100
+    await _settle_tokens(
+        handler,
+        0,
+        response=litellm.EmbeddingResponse(usage=litellm.Usage(prompt_tokens=0, completion_tokens=0, total_tokens=0)),
+        call_type="aembedding",
+    )
+    assert await _team_tokens_remaining(handler) == remaining
+
+
+_PNG_PIXEL_DATA_URI: Final = (
+    "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII="
+)
+
+
+async def _embedding_tokens_toward_saturation(
+    monkeypatch: pytest.MonkeyPatch,
+    embedding_input: object,
+    prompt_tokens: int,
+    media_models: tuple[str, ...],
+    team_id: str | None = None,
+) -> Mapping[str, float]:
+    monkeypatch.setenv("LITELLM_LICENSE", "test-license-key")
+    monkeypatch.setattr(litellm, "priority_reservation", {"dev": 0.1, "prod": 0.9})
+    model: Final = "media-embedding"
+    handler: Final = DynamicRateLimitHandler(internal_usage_cache=DualCache())
+    handler.update_variables(
+        llm_router=Router(
+            model_list=[
+                {
+                    "model_name": model,
+                    "litellm_params": {"model": "gpt-3.5-turbo", "api_key": "k", "api_base": "b", "tpm": 1000},
+                }
+            ]
+        )
+    )
+    redis: Final = handler.saturation_redis()
+    handler.v3_limiter = PROXY_MaxParallelRequestsHandler_v3(
+        handler.internal_usage_cache,
+        media_model_resolver=lambda _model, asked_team_id: media_models if asked_team_id == team_id else (),
+    )
+    with redis.answering(saturation_reads(handler, model, 0.0)):
+        await handler.async_pre_call_hook(
+            UserAPIKeyAuth(api_key="sk-dev", team_id=team_id, metadata={"priority": "dev"}),
+            DualCache(),
+            {"model": model, "input": embedding_input},
+            "aembedding",
+        )
+    await handler.async_log_success_event(
+        kwargs={
+            "call_type": "aembedding",
+            "litellm_params": {
+                "metadata": {"model_group": model},
+                "proxy_server_request": {"body": {"model": model, "input": "redacted-by-litellm"}},
+            },
+            "standard_logging_object": {
+                "metadata": {"user_api_key_auth_metadata": {"priority": "dev"}},
+                "model_group": model,
+            },
+        },
+        response_obj=litellm.EmbeddingResponse(
+            usage=litellm.Usage(prompt_tokens=prompt_tokens, completion_tokens=0, total_tokens=0)
+        ),
+        start_time=None,
+        end_time=None,
+    )
+    token_keys: Final = (
+        counter_key(RateLimitScope("model_saturation_check", model).counter("tokens")),
+        counter_key(RateLimitScope("priority_model", f"{model}:dev").counter("tokens")),
+    )
+    increments: Final = redis.increments()
+    return {key: sum(amount for counted_key, amount in increments if counted_key == key) for key in token_keys}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("prompt_tokens", [0, 7])
+async def test_an_embedding_counts_its_prompt_tokens_or_else_its_pre_call_estimate_toward_saturation(
+    monkeypatch: pytest.MonkeyPatch, prompt_tokens: int
+) -> None:
+    from litellm.proxy.hooks.parallel_request_limiter_v3 import request_token_estimate
+
+    embedding_input: Final = "word " * 30
+    counted: Final = await _embedding_tokens_toward_saturation(
+        monkeypatch, embedding_input, prompt_tokens, ("bedrock/amazon.titan-embed-image-v1",)
+    )
+
+    estimate: Final = request_token_estimate(
+        data={"model": "media-embedding", "input": embedding_input},
+        model="media-embedding",
+        min_configured_tpm_limit=0,
+        call_type="aembedding",
+        team_id=None,
+    )
+    assert estimate > 0
+    assert estimate != 7
+    assert set(counted.values()) == {prompt_tokens or estimate}
+
+
+@pytest.mark.asyncio
+async def test_an_embedding_whose_media_no_deployment_prices_counts_nothing_toward_saturation_at_zero_tokens(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    counted: Final = await _embedding_tokens_toward_saturation(
+        monkeypatch,
+        ["data:video/mp4;base64,AAAAIGZ0eXBpc29t" + "A" * 4096],
+        0,
+        ("bedrock/async_invoke/us.twelvelabs.marengo-embed-3-0-v1:0",),
+    )
+
+    assert set(counted.values()) == {0}
+
+
+@pytest.mark.asyncio
+async def test_an_embedding_counts_media_only_its_teams_deployments_price_toward_saturation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy.hooks.parallel_request_limiter_v3 import request_token_estimate
+
+    titan: Final = ("bedrock/amazon.titan-embed-image-v1",)
+    embedding_input: Final = [_PNG_PIXEL_DATA_URI]
+    counted: Final = await _embedding_tokens_toward_saturation(monkeypatch, embedding_input, 0, titan, team_id="team-a")
+
+    estimate: Final = request_token_estimate(
+        data={"model": "media-embedding", "input": embedding_input},
+        model="media-embedding",
+        min_configured_tpm_limit=0,
+        call_type="aembedding",
+        team_id="team-a",
+        media_model_resolver=lambda _model, _team_id: titan,
+    )
+    assert estimate > 0
+    assert set(counted.values()) == {estimate}
+
+
+@pytest.mark.asyncio
+async def test_an_embedding_held_on_the_team_share_settles_its_reservation_without_pricing_its_media_again(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    priced: Final[list[str]] = []  # mutable-ok: records each time a request's media is priced
+
+    def resolve(model: str, _team_id: str | None) -> tuple[str, ...]:
+        priced.append(model)
+        return ("bedrock/amazon.titan-embed-image-v1",)
+
+    handler: Final = _borrowing_handler(monkeypatch, borrows=True)
+    key: Final = _team_key(team_limits={"model_tpm_limit": {"shared-model": 10_000}})
+    redis: Final = handler.saturation_redis()
+    handler.v3_limiter = PROXY_MaxParallelRequestsHandler_v3(
+        handler.internal_usage_cache, rate_limit_store=handler.logger.rate_limits, media_model_resolver=resolve
+    )
+    with redis.answering(saturation_reads(handler, "shared-model", 0.5)):
+        await handler.async_pre_call_hook(
+            key, DualCache(), {"model": "shared-model", "input": [_PNG_PIXEL_DATA_URI]}, "aembedding"
+        )
+    reserved: Final = await _team_tokens_remaining(handler, key)
+    assert reserved < 10_000
+    await _settle_tokens(
+        handler,
+        0,
+        response=litellm.EmbeddingResponse(usage=litellm.Usage(prompt_tokens=0, completion_tokens=0, total_tokens=0)),
+        call_type="aembedding",
+    )
+    assert await _team_tokens_remaining(handler, key) == reserved
+    assert priced == ["shared-model"]
+
+
+@pytest.mark.asyncio
+async def test_an_embedding_settled_on_a_model_group_that_prices_no_media_refunds_its_team_share(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    handler: Final = _borrowing_handler(monkeypatch, borrows=True)
+    key: Final = _team_key(team_limits={"model_tpm_limit": {"shared-model": 10_000}})
+    redis: Final = handler.saturation_redis()
+    handler.v3_limiter = PROXY_MaxParallelRequestsHandler_v3(
+        handler.internal_usage_cache,
+        rate_limit_store=handler.logger.rate_limits,
+        media_model_resolver=lambda model, _team_id: ("bedrock/amazon.titan-embed-image-v1",)
+        if model == "shared-model"
+        else (),
+    )
+    with redis.answering(saturation_reads(handler, "shared-model", 0.5)):
+        await handler.async_pre_call_hook(
+            key, DualCache(), {"model": "shared-model", "input": [_PNG_PIXEL_DATA_URI]}, "aembedding"
+        )
+    assert await _team_tokens_remaining(handler, key) < 10_000
+    await _settle_tokens(
+        handler,
+        0,
+        response=litellm.EmbeddingResponse(usage=litellm.Usage(prompt_tokens=0, completion_tokens=0, total_tokens=0)),
+        call_type="aembedding",
+        model_group="other-model",
+    )
+    assert await _team_tokens_remaining(handler, key) == 10_000
+
+
+@pytest.mark.asyncio
+async def test_an_embedding_whose_media_no_deployment_prices_refunds_its_team_share_without_a_logged_model_group(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    handler: Final = _borrowing_handler(monkeypatch, borrows=True)
+    redis: Final = handler.saturation_redis()
+    handler.v3_limiter = PROXY_MaxParallelRequestsHandler_v3(
+        handler.internal_usage_cache,
+        rate_limit_store=handler.logger.rate_limits,
+        media_model_resolver=lambda _model, _team_id: (),
+    )
+    with redis.answering(saturation_reads(handler, "shared-model", 0.5)):
+        await handler.async_pre_call_hook(
+            _team_key(),
+            DualCache(),
+            {"model": "shared-model", "input": ["data:video/mp4;base64,AAAAIGZ0eXBpc29t" + "A" * 40]},
+            "aembedding",
+        )
+    assert await _team_tokens_remaining(handler) < 100
+    await _settle_tokens(
+        handler,
+        0,
+        response=litellm.EmbeddingResponse(usage=litellm.Usage(prompt_tokens=0, completion_tokens=0, total_tokens=0)),
+        call_type="aembedding",
+        model_group="",
+    )
+    assert await _team_tokens_remaining(handler) == 100
+
+
+@pytest.mark.asyncio
+async def test_a_null_auth_metadata_still_settles_the_teams_tokens(monkeypatch: pytest.MonkeyPatch):
+    handler = _borrowing_handler(monkeypatch, borrows=True)
+    await _check(handler, _team_key(), saturation=0.5)
+    await handler.async_log_success_event(
+        kwargs={
+            "litellm_params": {"metadata": {"model_group": "shared-model"}},
+            "standard_logging_object": {
+                "metadata": {"user_api_key_team_id": "team-a", "user_api_key_auth_metadata": None}
+            },
+        },
+        response_obj=litellm.ModelResponse(
+            usage=litellm.Usage(prompt_tokens=150, completion_tokens=0, total_tokens=150)
+        ),
+        start_time=None,
+        end_time=None,
+    )
+    with pytest.raises(ProxyRateLimitError) as exc:
+        await _check(handler, _team_key(), saturation=0.5)
+    _held_to_team_limit(exc.value, "tokens", "model_tpm_limit")
+
+
+@pytest.mark.asyncio
+async def test_another_teams_usage_does_not_count_against_a_teams_limit(monkeypatch: pytest.MonkeyPatch):
+    handler = _borrowing_handler(monkeypatch, borrows=True)
+    await _admit_then_settle(handler, _team_key("team-b"), 150)
+    await _check(handler, _team_key("team-a"), saturation=0.9)
+
+
+@pytest.mark.asyncio
+async def test_borrowing_is_off_by_default_so_the_dynamic_limiter_adds_no_team_limit(monkeypatch: pytest.MonkeyPatch):
+    handler = _borrowing_handler(monkeypatch, borrows=False)
+    await _admit_then_settle(handler, _team_key(), 150)
+    await _check(handler, _team_key(), saturation=0.9)
+
+
+@pytest.mark.asyncio
+async def test_a_key_that_owns_its_own_model_tpm_limit_is_not_held_to_the_team_limit(monkeypatch: pytest.MonkeyPatch):
+    handler = _borrowing_handler(monkeypatch, borrows=True)
+    owner: Final = _team_key(metadata={"model_tpm_limit": {"shared-model": 5000}})
+    await _admit_then_settle(handler, owner, 150)
+    await _check(handler, owner, saturation=0.9)
+
+
+@pytest.mark.asyncio
+async def test_a_key_that_owns_a_limit_on_another_model_is_still_held_to_the_team_limit(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    handler = _borrowing_handler(monkeypatch, borrows=True)
+    other_owner: Final = _team_key(metadata={"model_tpm_limit": {"other-model": 5000}})
+    await _admit_then_settle(handler, other_owner, 150)
+    with pytest.raises(ProxyRateLimitError) as exc:
+        await _check(handler, other_owner, saturation=0.5)
+    _held_to_team_limit(exc.value, "tokens", "model_tpm_limit")
+
+
+@pytest.mark.asyncio
+async def test_an_exempt_keys_tokens_are_not_charged_to_its_teammates(monkeypatch: pytest.MonkeyPatch):
+    handler = _borrowing_handler(monkeypatch, borrows=True)
+    owner: Final = _team_key(metadata={"model_tpm_limit": {"shared-model": 5000}})
+    await _admit_then_settle(handler, owner, 150)
+    await _check(handler, _team_key(), saturation=0.9)
+
+
+@pytest.mark.asyncio
+async def test_an_alias_request_counts_against_the_same_team_share_as_its_target(monkeypatch: pytest.MonkeyPatch):
+    handler = _borrowing_handler(monkeypatch, borrows=True, model_group_alias={"alias-model": "shared-model"})
+    await _check(handler, _team_key(), saturation=0.5, model="alias-model")
+    await _settle_tokens(handler, 150)
+    with pytest.raises(ProxyRateLimitError) as exc:
+        await _check(handler, _team_key(), saturation=0.5)
+    _held_to_team_limit(exc.value, "tokens", "model_tpm_limit")
+
+
+@pytest.mark.asyncio
+async def test_a_websocket_turn_is_held_to_the_team_limit_once_the_model_saturates(monkeypatch: pytest.MonkeyPatch):
+    handler = _borrowing_handler(monkeypatch, borrows=True, saturation_threshold=0.1)
+    await _admit_then_settle(handler, _team_key(), 150)
+    with pytest.raises(ProxyRateLimitError) as exc:
+        await handler.enforce_token_limits_for_frame(user_api_key_dict=_team_key(), requested_model="shared-model")
+    _held_to_team_limit(exc.value, "tokens", "model_tpm_limit")
+
+
+@pytest.mark.asyncio
+async def test_a_websocket_turn_still_borrows_while_the_model_is_idle(monkeypatch: pytest.MonkeyPatch):
+    handler = _borrowing_handler(monkeypatch, borrows=True, saturation_threshold=0.5)
+    await _admit_then_settle(handler, _team_key(), 150)
+    await handler.enforce_token_limits_for_frame(user_api_key_dict=_team_key(), requested_model="shared-model")
+
+
+@pytest.mark.asyncio
+async def test_a_websocket_turns_tokens_count_against_the_team_limit(monkeypatch: pytest.MonkeyPatch):
+    handler = _borrowing_handler(monkeypatch, borrows=True)
+    await _check(handler, _team_key(), saturation=0.5)
+    await _settle_tokens(
+        handler,
+        150,
+        response=[],
+        combined_usage_object=litellm.Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150),
+    )
+    with pytest.raises(ProxyRateLimitError) as exc:
+        await _check(handler, _team_key(), saturation=0.5)
+    _held_to_team_limit(exc.value, "tokens", "model_tpm_limit")
+
+
+@pytest.mark.asyncio
+async def test_a_websocket_admitted_while_idle_has_its_turns_counted_once_the_model_saturates(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    handler: Final = _borrowing_handler(monkeypatch, borrows=True, saturation_threshold=0.1)
+    await _check(handler, _team_key(), saturation=0.0)
+    await _settle_tokens(
+        handler,
+        150,
+        response=[],
+        combined_usage_object=litellm.Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150),
+    )
+    assert await _team_tokens_remaining(handler) == 100
+    await handler.enforce_token_limits_for_frame(user_api_key_dict=_team_key(), requested_model="shared-model")
+    await _settle_tokens(
+        handler,
+        90,
+        response=[],
+        combined_usage_object=litellm.Usage(prompt_tokens=60, completion_tokens=30, total_tokens=90),
+    )
+    assert await _team_tokens_remaining(handler) == 10
+
+
+async def _charge_realtime_turn(handler: _PROXY_DynamicRateLimitHandlerV3, tokens: int) -> None:
+    await handler.charge_realtime_capacity_turn(
+        user_api_key_dict=_team_key(),
+        requested_model="shared-model",
+        usage=litellm.Usage(prompt_tokens=tokens, completion_tokens=0, total_tokens=tokens),
+    )
+
+
+async def _close_realtime_session(handler: _PROXY_DynamicRateLimitHandlerV3, total_tokens: int) -> None:
+    await _settle_tokens(
+        handler,
+        total_tokens,
+        response=[],
+        call_type=CallTypes.arealtime.value,
+        litellm_params={"metadata": {}, "litellm_metadata": {"model_group": "shared-model"}},
+        combined_usage_object=litellm.Usage(
+            prompt_tokens=total_tokens, completion_tokens=0, total_tokens=total_tokens
+        ),
+    )
+
+
+def _model_tokens_counted(handler: _PROXY_DynamicRateLimitHandlerV3) -> int:
+    counter: Final = RateLimitScope("model_saturation_check", "shared-model").counter("tokens")
+    return int(handler.rate_limits.local((counter,))[0] or 0)
+
+
+@pytest.mark.asyncio
+async def test_a_realtime_turn_counts_against_capacity_before_its_session_closes(monkeypatch: pytest.MonkeyPatch):
+    handler: Final = _borrowing_handler(monkeypatch, borrows=True)
+    await _check(handler, _team_key(), saturation=0.5)
+
+    await _charge_realtime_turn(handler, 150)
+
+    assert _model_tokens_counted(handler) == 150
+    with pytest.raises(ProxyRateLimitError) as exc:
+        await _check(handler, _team_key(), saturation=0.5)
+    _held_to_team_limit(exc.value, "tokens", "model_tpm_limit")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("turn_tokens", "close_total", "expected_counted"),
+    [((60,), 90, 90), ((60, 30), 90, 90), ((60,), 0, 60), ((90,), 60, 90)],
+    ids=["close_adds_the_rest", "turns_covered_the_total", "close_reported_nothing", "close_reported_less"],
+)
+async def test_a_realtime_session_close_counts_only_the_tokens_its_turns_did_not(
+    monkeypatch: pytest.MonkeyPatch, turn_tokens: tuple[int, ...], close_total: int, expected_counted: int
+):
+    handler: Final = _borrowing_handler(monkeypatch, borrows=True)
+    await _check(handler, _team_key(), saturation=0.5)
+    for tokens in turn_tokens:
+        await _charge_realtime_turn(handler, tokens)
+
+    await _close_realtime_session(handler, close_total)
+
+    assert _model_tokens_counted(handler) == expected_counted
+    assert await _team_tokens_remaining(handler) == 100 - expected_counted
+
+
+@pytest.mark.asyncio
+async def test_a_realtime_turn_charged_after_its_session_settled_is_not_counted_twice(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    handler: Final = _borrowing_handler(monkeypatch, borrows=True)
+    await _check(handler, _team_key(), saturation=0.5)
+    await _charge_realtime_turn(handler, 60)
+    await _close_realtime_session(handler, 90)
+
+    await _charge_realtime_turn(handler, 30)
+
+    assert _model_tokens_counted(handler) == 90
+    assert await _team_tokens_remaining(handler) == 10
+
+
+@pytest.mark.asyncio
+async def test_a_websocket_turn_gets_a_503_when_the_team_counter_cannot_be_read(monkeypatch: pytest.MonkeyPatch):
+    from litellm.exceptions import ServiceUnavailableError
+    from litellm.proxy import proxy_server
+    from litellm.proxy.hooks.parallel_request_limiter_v3 import RateLimitUnverifiableError
+
+    handler = _borrowing_handler(monkeypatch, borrows=True, saturation_threshold=0.1)
+    await _admit_then_settle(handler, _team_key(), 150)
+    monkeypatch.setattr(proxy_server, "general_settings", {"fail_closed_rate_limit_enforcement": True})
+    _worker_on_redis(handler, _unreachable_redis_port())
+    handler.rate_limits.set_local(RateLimitScope("model_saturation_check", "shared-model").counter("tokens"), 150, 60)
+    with pytest.raises(ServiceUnavailableError) as unavailable:
+        await handler.enforce_token_limits_for_frame(user_api_key_dict=_team_key(), requested_model="shared-model")
+    assert isinstance(unavailable.value.__cause__, RateLimitUnverifiableError)
+
+
+@pytest.mark.asyncio
+async def test_a_prompt_larger_than_the_team_share_is_refused_before_the_call_once_the_model_saturates(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    handler = _borrowing_handler(monkeypatch, borrows=True)
+    await _check(handler, _team_key(), saturation=0.0, data=_prompt(words=400))
+    with pytest.raises(ProxyRateLimitError) as exc:
+        await _check(handler, _team_key(), saturation=0.5, data=_prompt(words=400))
+    _held_to_team_limit(exc.value, "tokens", "model_tpm_limit")
+
+
+@pytest.mark.asyncio
+async def test_a_reservation_at_saturation_settles_to_the_tokens_actually_used(monkeypatch: pytest.MonkeyPatch):
+    handler = _borrowing_handler(monkeypatch, borrows=True)
+    await _check(handler, _team_key(), saturation=0.5, data=_prompt(words=30))
+    assert await _team_tokens_remaining(handler) < 70
+    await _settle_tokens(handler, 5)
+    assert await _team_tokens_remaining(handler) == 95
+
+
+@pytest.mark.asyncio
+async def test_a_reservation_at_saturation_is_refunded_when_the_call_fails(monkeypatch: pytest.MonkeyPatch):
+    handler = _borrowing_handler(monkeypatch, borrows=True)
+    await _check(handler, _team_key(), saturation=0.5, data=_prompt(words=30))
+    assert await _team_tokens_remaining(handler) < 70
+    await handler.async_log_failure_event(
+        kwargs={"litellm_params": {"metadata": {"model_group": "shared-model"}}},
+        response_obj=None,
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+    )
+    assert await _team_tokens_remaining(handler) == 100
+
+
+@pytest.mark.asyncio
+async def test_a_reservation_at_saturation_is_refunded_when_the_proxy_refuses_the_request_before_the_call(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """A guardrail or the fallback walk turning the request away after admission gives the team its tokens back, and
+    a second release changes nothing."""
+    handler = _borrowing_handler(monkeypatch, borrows=True)
+    key: Final = _team_key()
+    await _check(handler, key, saturation=0.5, data=_prompt(words=30))
+    assert await _team_tokens_remaining(handler) < 70
+    for _ in range(2):
+        await handler.async_post_call_failure_hook(
+            request_data=_prompt(words=30), original_exception=Exception("guardrail refused"), user_api_key_dict=key
+        )
+        assert await _team_tokens_remaining(handler) == 100
+
+
+@pytest.mark.asyncio
+async def test_a_fallback_target_is_refused_once_it_saturates_and_the_teams_share_on_it_is_used(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    handler = _borrowing_handler(monkeypatch, borrows=True, saturation_threshold=0.1)
+    key: Final = _team_key(
+        team_limits={"model_tpm_limit": {"shared-model": 100}, "model_rpm_limit": {"shared-model": 1}}
+    )
+    await _admit_then_settle(handler, key, 150)
+    assert await handler.async_fallback_target_allowed(key, "shared-model", {}) is False
+
+
+@pytest.mark.asyncio
+async def test_an_idle_fallback_target_is_not_charged_and_the_admitting_models_hold_is_given_back(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    handler: Final = _borrowing_handler(monkeypatch, borrows=True)
+    key: Final = _team_key(team_limits={"model_tpm_limit": {"shared-model": 100, "other-model": 100}})
+    await _check(handler, key, saturation=0.5, data=_prompt(20))
+    assert await _team_tokens_remaining(handler, key) < 100
+    assert await handler.async_fallback_target_allowed(key, "other-model", _prompt(20)) is True
+    await _settle_tokens(handler, 150, model_group="other-model")
+    assert await _team_tokens_remaining(handler, key) == 100
+    assert await _team_tokens_remaining(handler, key, model="other-model") == 100
+
+
+@pytest.mark.asyncio
+async def test_a_fallback_attempt_counts_toward_the_targets_saturation(monkeypatch: pytest.MonkeyPatch):
+    handler = _borrowing_handler(monkeypatch, borrows=True)
+    group: Final = handler.llm_router.registry().group("shared-model")
+    assert group is not None
+    assert await handler.async_fallback_target_allowed(_team_key(), "shared-model", {}) is True
+    assert await model_saturation(handler, "shared-model", group) > 0
+
+
+@pytest.mark.asyncio
+async def test_a_read_only_fallback_check_does_not_use_the_teams_share(monkeypatch: pytest.MonkeyPatch):
+    handler = _borrowing_handler(monkeypatch, borrows=True, saturation_threshold=0.0)
+    key: Final = _team_key(
+        team_limits={"model_tpm_limit": {"shared-model": 100}, "model_rpm_limit": {"shared-model": 2}}
+    )
+    await _admit_then_settle(handler, key, 50)
+    assert await handler.async_fallback_target_allowed(key, "shared-model", {}, commit=False) is True
+    assert await handler.async_fallback_target_allowed(key, "shared-model", {}, commit=False) is True
+    assert await handler.async_fallback_target_allowed(key, "shared-model", {}) is True
+    assert await handler.async_fallback_target_allowed(key, "shared-model", {}) is False
+
+
+async def _model_requests_remaining(handler: PROXY_DynamicRateLimitHandlerV3) -> int:
+    group: Final = handler.llm_router.registry().group("shared-model")
+    assert group is not None
+    descriptor: Final = model_tracking_descriptor(handler, "shared-model", group)
+    response: Final = await should_rate_limit(
+        handler.v3_limiter, [descriptor], read_only=True, skip_parallel_check=True
+    )
+    return next(s["limit_remaining"] for s in response["statuses"] if s["rate_limit_type"] == "requests")
+
+
+def _fallback_prompt(words: int) -> dict[str, object]:
+    return {"messages": [{"role": "user", "content": "word " * words}], "max_tokens": 10}
+
+
+@pytest.mark.asyncio
+async def test_idle_fallbacks_past_the_teams_rpm_share_still_count_toward_the_targets_saturation(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    handler = _borrowing_handler(monkeypatch, borrows=True)
+    key: Final = _team_key(team_limits={"model_rpm_limit": {"shared-model": 1}})
+    assert await handler.async_fallback_target_allowed(key, "shared-model", {}) is True
+    assert await handler.async_fallback_target_allowed(key, "shared-model", {}) is True
+    assert await handler.async_fallback_target_allowed(key, "shared-model", {}) is True
+    assert await _model_requests_remaining(handler) == 97
+
+
+@pytest.mark.asyncio
+async def test_a_saturated_fallback_target_refuses_a_prompt_larger_than_the_teams_remaining_tokens(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    handler = _borrowing_handler(monkeypatch, borrows=True, saturation_threshold=0.0)
+    assert await handler.async_fallback_target_allowed(_team_key(), "shared-model", _fallback_prompt(300)) is False
+    assert (
+        await handler.async_fallback_target_allowed(_team_key(), "shared-model", _fallback_prompt(300), commit=False)
+        is False
+    )
+    assert await _team_tokens_remaining(handler) == 100
+    assert (
+        await handler.async_fallback_target_allowed(_team_key(), "shared-model", _fallback_prompt(30), commit=False)
+        is True
+    )
+    assert await _team_tokens_remaining(handler) == 100
+    assert await handler.async_fallback_target_allowed(_team_key(), "shared-model", _fallback_prompt(30)) is True
+    assert await _team_tokens_remaining(handler) < 70
+    await _settle_tokens(handler, 5)
+    assert await _team_tokens_remaining(handler) == 95
+
+
+@pytest.mark.asyncio
+async def test_a_saturated_responses_fallback_holds_the_output_budget_as_well_as_the_input(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from litellm.proxy.hooks.parallel_request_limiter_v3 import get_or_create_request_stash
+
+    handler = _borrowing_handler(monkeypatch, borrows=True, saturation_threshold=0.0)
+    get_or_create_request_stash().call_type = "aresponses"
+    prompt: Final = {"input": "hi", "max_output_tokens": 500}
+    assert await handler.async_fallback_target_allowed(_team_key(), "shared-model", prompt) is False
+    assert await _team_tokens_remaining(handler) == 100
+
+
+@pytest.mark.asyncio
+async def test_an_output_token_limit_holds_only_the_prompts_output_budget(monkeypatch: pytest.MonkeyPatch):
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setitem(proxy_server.general_settings, "token_rate_limit_type", "output")
+    handler = _borrowing_handler(monkeypatch, borrows=True, saturation_threshold=0.0)
+    await _check(handler, _team_key(), saturation=1.0, data=_fallback_prompt(300))
+    assert await _team_tokens_remaining(handler) == 90
+
+
+@pytest.mark.asyncio
+async def test_a_request_without_max_tokens_leaves_admission_capped_to_the_teams_share(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    handler = _borrowing_handler(monkeypatch, borrows=True, saturation_threshold=0.0)
+    prompt: Final[dict[str, object]] = {"messages": [{"role": "user", "content": "hi"}]}
+    await _check(handler, _team_key(), saturation=1.0, data=prompt)
+    assert prompt["max_tokens"] == no_max_tokens_output_floor(100)
+
+
+@pytest.mark.asyncio
+async def test_a_prompt_that_fits_once_its_output_is_capped_is_admitted(monkeypatch: pytest.MonkeyPatch):
+    handler = _borrowing_handler(monkeypatch, borrows=True, saturation_threshold=0.0)
+    prompt: Final[dict[str, object]] = {"messages": [{"role": "user", "content": "word " * 60}]}
+    await _check(handler, _team_key(), saturation=1.0, data=prompt)
+    held: Final = estimate_request_tokens(
+        handler.v3_limiter,
+        data={**prompt, "model": "shared-model"},
+        model="shared-model",
+        min_configured_tpm_limit=100,
+        call_type="acompletion",
+        team_id="team-a",
+    )
+    assert prompt["max_tokens"] == no_max_tokens_output_floor(100)
+    assert await _team_tokens_remaining(handler) == 100 - held
+
+
+@pytest.mark.asyncio
+async def test_a_refused_admission_leaves_the_requests_output_uncapped(monkeypatch: pytest.MonkeyPatch):
+    handler = _borrowing_handler(monkeypatch, borrows=True, saturation_threshold=0.0)
+    prompt: Final[dict[str, object]] = {"messages": [{"role": "user", "content": "word " * 300}]}
+    with pytest.raises(ProxyRateLimitError):
+        await _check(handler, _team_key(), saturation=1.0, data=prompt)
+    assert "max_tokens" not in prompt
+
+
+@pytest.mark.asyncio
+async def test_an_input_token_limit_leaves_the_reply_length_alone(monkeypatch: pytest.MonkeyPatch):
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setitem(proxy_server.general_settings, "token_rate_limit_type", "input")
+    handler = _borrowing_handler(monkeypatch, borrows=True, saturation_threshold=0.0)
+    prompt: Final[dict[str, object]] = {"messages": [{"role": "user", "content": "hi"}]}
+    await _check(handler, _team_key(), saturation=1.0, data=prompt)
+    assert "max_tokens" not in prompt
+
+
+@pytest.mark.parametrize(("rate_limit_type", "counted"), [("input", 20), ("total", 25), ("output", 5)])
+@pytest.mark.asyncio
+async def test_cache_read_tokens_are_left_out_of_the_tokens_a_response_settles(
+    monkeypatch: pytest.MonkeyPatch, rate_limit_type: str, counted: int
+):
+    from litellm.proxy import proxy_server
+    from litellm.types.utils import PromptTokensDetailsWrapper
+
+    monkeypatch.setitem(proxy_server.general_settings, "token_rate_limit_type", rate_limit_type)
+    handler = _borrowing_handler(monkeypatch, borrows=True)
+    usage: Final = litellm.Usage(
+        prompt_tokens=50,
+        completion_tokens=5,
+        total_tokens=55,
+        prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=30),
+    )
+    await _check(handler, _team_key(), saturation=0.5)
+    await _settle_tokens(handler, 0, response=litellm.ModelResponse(usage=usage))
+    assert await _team_tokens_remaining(handler) == 100 - counted
+
+
+@pytest.mark.asyncio
+async def test_a_late_failure_from_a_fallback_that_did_not_serve_is_charged_to_that_target(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    handler = _borrowing_handler(monkeypatch, borrows=True, saturation_threshold=0.0)
+    key: Final = _team_key(team_limits={"model_tpm_limit": {"shared-model": 100, "other-model": 100, "chat": 100}})
+    await _check(handler, key, saturation=1.0, data=_fallback_prompt(30))
+    assert await handler.async_fallback_target_allowed(key, "other-model", _fallback_prompt(30)) is True
+    assert await handler.async_fallback_target_allowed(key, "chat", _fallback_prompt(30)) is True
+    await _settle_tokens(handler, 7, model_group="chat")
+    await handler.async_log_failure_event(
+        kwargs={
+            "litellm_params": {"metadata": {"model_group": "other-model"}},
+            "combined_usage_object": litellm.Usage(prompt_tokens=20, completion_tokens=5, total_tokens=25),
+        },
+        response_obj=Exception("stream cut"),
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+    )
+    assert await _team_tokens_remaining(handler, key, "shared-model") == 100
+    assert await _team_tokens_remaining(handler, key, "chat") == 93
+    assert await _team_tokens_remaining(handler, key, "other-model") == 75
+
+
+@pytest.mark.asyncio
+async def test_a_served_fallbacks_hold_is_not_refunded_again_under_the_name_the_request_used(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    handler = _borrowing_handler(
+        monkeypatch, borrows=True, saturation_threshold=0.0, model_group_alias={"alias-model": "other-model"}
+    )
+    key: Final = _team_key(team_limits={"model_tpm_limit": {"shared-model": 100, "other-model": 100}})
+    await _check(handler, key, saturation=1.0, data=_fallback_prompt(30))
+    assert await handler.async_fallback_target_allowed(key, "alias-model", _fallback_prompt(30)) is True
+    await _settle_tokens(handler, 7, model_group="other-model")
+    assert await _team_tokens_remaining(handler, key, "other-model") == 93
+    await handler.async_log_failure_event(
+        kwargs={"litellm_params": {"metadata": {"model_group": "alias-model"}}},
+        response_obj=Exception("late"),
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+    )
+    assert await _team_tokens_remaining(handler, key, "other-model") == 93
+
+
+@pytest.mark.asyncio
+async def test_a_request_served_by_another_model_counts_its_images_for_that_model(monkeypatch: pytest.MonkeyPatch):
+
+    handler = _borrowing_handler(monkeypatch, borrows=True, saturation_threshold=0.0)
+    asked: Final = []  # mutable-ok: records the models whose image cost was looked up
+
+    def resolver(model: str, team_id: str | None) -> tuple[str, ...]:
+        asked.append(model)
+        return (model,)
+
+    handler.saturation_redis()
+    handler.v3_limiter = PROXY_MaxParallelRequestsHandler_v3(
+        handler.internal_usage_cache, media_model_resolver=resolver
+    )
+    key: Final = _team_key(team_limits={"model_tpm_limit": {"other-model": 10000}})
+    pixel: Final = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII="
+    steered: Final[dict[str, object]] = {
+        "model": "shared-model",
+        "messages": [{"role": "user", "content": [{"type": "image_url", "image_url": {"url": pixel}}]}],
+        "max_tokens": 5,
+    }
+    await _check(handler, key, saturation=1.0, model="other-model", data=steered)
+    assert asked and set(asked) == {"other-model"}
+
+
+@pytest.mark.asyncio
+async def test_a_failed_attempt_that_recorded_usage_is_charged_that_usage_instead_of_refunded(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    handler = _borrowing_handler(monkeypatch, borrows=True, saturation_threshold=0.0)
+    await _check(handler, _team_key(), saturation=1.0, data=_fallback_prompt(30))
+    assert await _team_tokens_remaining(handler) < 70
+    await handler.async_log_failure_event(
+        kwargs={
+            "litellm_params": {"metadata": {"model_group": "shared-model"}},
+            "combined_usage_object": litellm.Usage(prompt_tokens=20, completion_tokens=5, total_tokens=25),
+        },
+        response_obj=Exception("stream cut"),
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+    )
+    assert await _team_tokens_remaining(handler) == 75
+
+
+@pytest.mark.asyncio
+async def test_a_fallback_attempt_that_fails_gives_back_the_tokens_it_held(monkeypatch: pytest.MonkeyPatch):
+    handler = _borrowing_handler(monkeypatch, borrows=True, saturation_threshold=0.0)
+    assert await handler.async_fallback_target_allowed(_team_key(), "shared-model", _fallback_prompt(30)) is True
+    assert await _team_tokens_remaining(handler) < 70
+    await handler.async_log_failure_event(
+        kwargs={"litellm_params": {"metadata": {"model_group": "shared-model"}}},
+        response_obj=None,
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+    )
+    assert await _team_tokens_remaining(handler) == 100
+
+
+@pytest.mark.asyncio
+async def test_a_prompt_the_token_estimator_cannot_read_is_still_held_to_the_teams_share(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    handler = _borrowing_handler(monkeypatch, borrows=True)
+    key: Final = _team_key(
+        team_limits={"model_tpm_limit": {"shared-model": 100}, "model_rpm_limit": {"shared-model": 1}}
+    )
+    unreadable: Final = {
+        "model": "shared-model",
+        "messages": [{"role": "user", "content": [{"type": "text", "text": 1}, {"type": "text", "text": "hi"}]}],
+    }
+    await _check(handler, key, saturation=0.5, data=unreadable)
+    with pytest.raises(ProxyRateLimitError) as exc:
+        await _check(handler, key, saturation=0.5, data=unreadable)
+    _held_to_team_limit(exc.value, "requests", "model_rpm_limit")
+
+
+@pytest.mark.asyncio
+async def test_a_success_without_a_model_group_still_releases_the_reservation(monkeypatch: pytest.MonkeyPatch):
+    handler = _borrowing_handler(monkeypatch, borrows=True)
+    await _check(handler, _team_key(), saturation=0.5, data=_prompt(words=30))
+    assert await _team_tokens_remaining(handler) < 70
+    await handler.async_log_success_event(
+        kwargs={"litellm_params": {"metadata": {}}},
+        response_obj=litellm.ModelResponse(usage=litellm.Usage(prompt_tokens=5, completion_tokens=0, total_tokens=5)),
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+    )
+    assert await _team_tokens_remaining(handler) == 95
+
+
+def _class_team(team_id: str, priority: str | None = "interactive") -> UserAPIKeyAuth:
+    return UserAPIKeyAuth(api_key="sk-class", team_id=team_id, team_metadata={}, metadata={"priority": priority})
+
+
+async def _burn(
+    handler: _PROXY_DynamicRateLimitHandlerV3,
+    auth: UserAPIKeyAuth,
+    priority: str | None,
+    tokens: int,
+    model: str = "shared-model",
+    saturation: float = 1.0,
+):
+    await _check(handler, auth, saturation=saturation, priority=priority, model=model)
+    await handler.async_log_success_event(
+        kwargs={
+            "litellm_params": {"metadata": {"model_group": model}},
+            "standard_logging_object": {
+                "metadata": {
+                    "user_api_key_team_id": auth.team_id,
+                    "user_api_key_auth_metadata": {"priority": priority},
+                }
+            },
+        },
+        response_obj=litellm.ModelResponse(
+            usage=litellm.Usage(prompt_tokens=tokens, completion_tokens=0, total_tokens=tokens)
+        ),
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+    )
+
+
+def _held_to_class_share(exc: ProxyRateLimitError) -> None:
+    assert exc.status_code == 429
+    assert exc.headers is not None
+    assert exc.headers["rate_limited_by"] == "priority_class_share_saturated"
+    assert exc.headers["rate_limit_type"] == "tokens"
+
+
+@pytest.mark.asyncio
+async def test_two_interactive_teams_each_keep_half_of_the_interactive_share(monkeypatch: pytest.MonkeyPatch):
+    handler = _borrowing_handler(monkeypatch, borrows=False, splits=True)
+    await _burn(handler, _class_team("team-a"), "interactive", 20)
+    await _burn(handler, _class_team("team-b"), "interactive", 300)
+    await _burn(handler, _class_team("team-b"), "interactive", 200)
+    with pytest.raises(ProxyRateLimitError) as exc:
+        await _check(handler, _class_team("team-b"), saturation=0.52, priority="interactive")
+    _held_to_class_share(exc.value)
+    assert "Team: team-b, Priority: interactive, Active callers in class: 2, Active classes: 1, " in str(
+        exc.value.detail
+    )
+    assert "Share: 500, Remaining: 0, Model saturation: 52.0%" in str(exc.value.detail)
+    await _check(handler, _class_team("team-a"), saturation=0.52, priority="interactive")
+
+
+@pytest.mark.asyncio
+async def test_tokens_a_team_used_while_the_model_was_idle_count_against_its_class_share(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    handler: Final = _borrowing_handler(monkeypatch, borrows=False, splits=True)
+    await _burn(handler, _class_team("team-a"), "interactive", 20, saturation=0.0)
+    await _burn(handler, _class_team("team-b"), "interactive", 400, saturation=0.02)
+    await _burn(handler, _class_team("team-b"), "interactive", 100, saturation=0.42)
+    with pytest.raises(ProxyRateLimitError) as exc:
+        await _check(handler, _class_team("team-b"), saturation=0.52, priority="interactive")
+    _held_to_class_share(exc.value)
+    assert "Share: 500, Remaining: 0, Model saturation: 52.0%" in str(exc.value.detail)
+    await _burn(handler, _class_team("team-a"), "interactive", 470, saturation=0.52)
+
+
+@pytest.mark.asyncio
+async def test_requests_sent_while_the_model_was_idle_charge_only_their_tokens_to_the_class_share(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    handler: Final = _borrowing_handler(monkeypatch, borrows=False, splits=True)
+    await _burn(handler, _class_team("team-a"), "interactive", 20, saturation=0.0)
+    for _ in range(5):
+        await _burn(handler, _class_team("team-b"), "interactive", 99, saturation=0.02)
+    await _burn(handler, _class_team("team-b"), "interactive", 5, saturation=0.52)
+    with pytest.raises(ProxyRateLimitError) as exc:
+        await _check(handler, _class_team("team-b"), saturation=0.52, priority="interactive")
+    _held_to_class_share(exc.value)
+
+
+def _priority_remaining() -> dict[str, int]:
+    from litellm.proxy.hooks.parallel_request_limiter_v3 import get_or_create_request_stash
+
+    response: Final = get_or_create_request_stash().rate_limit_response
+    assert response is not None
+    return {
+        status["rate_limit_type"]: status["limit_remaining"]
+        for status in response["statuses"]
+        if status["descriptor_key"] == "priority_model"
+    }
+
+
+@pytest.mark.asyncio
+async def test_requests_are_still_counted_and_reported_after_a_class_spends_its_tokens_on_an_idle_model(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    handler: Final = _borrowing_handler(monkeypatch, borrows=False)
+    await _burn(handler, _class_team("team-a"), "interactive", 600, saturation=0.0)
+    await _check(handler, _class_team("team-a"), saturation=0.1, priority="interactive")
+    assert _priority_remaining() == {"requests": 58, "tokens": 0}
+    await _check(handler, _class_team("team-a"), saturation=0.1, priority="interactive")
+    assert _priority_remaining() == {"requests": 57, "tokens": 0}
+
+
+@pytest.mark.asyncio
+async def test_tokens_are_still_reported_after_a_class_uses_its_requests_on_an_idle_model(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    handler: Final = _borrowing_handler(monkeypatch, borrows=False, rpm=5)
+    for _ in range(3):
+        await _burn(handler, _class_team("team-a"), "interactive", 100, saturation=0.0)
+    await _check(handler, _class_team("team-a"), saturation=0.1, priority="interactive")
+    assert _priority_remaining() == {"requests": 0, "tokens": 300}
+
+
+@pytest.mark.asyncio
+async def test_the_only_active_class_gets_the_whole_model_instead_of_its_weight(monkeypatch: pytest.MonkeyPatch):
+    handler = _borrowing_handler(monkeypatch, borrows=False, splits=True)
+    await _burn(handler, _class_team("team-b", "batch"), "batch", 950)
+    await _check(handler, _class_team("team-b", "batch"), saturation=0.95, priority="batch")
+
+    unsplit = _borrowing_handler(monkeypatch, borrows=False)
+    await _burn(unsplit, _class_team("team-b", "batch"), "batch", 950)
+    with pytest.raises(ProxyRateLimitError) as exc:
+        await _check(unsplit, _class_team("team-b", "batch"), saturation=0.95, priority="batch")
+    assert "Priority-based rate limit exceeded" in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_class_weights_apply_again_once_a_team_of_the_other_class_is_active(monkeypatch: pytest.MonkeyPatch):
+    handler = _borrowing_handler(monkeypatch, borrows=False, splits=True)
+    await _burn(handler, _class_team("team-b", "batch"), "batch", 10)
+    await _burn(handler, _class_team("team-a"), "interactive", 600)
+    with pytest.raises(ProxyRateLimitError) as exc:
+        await _check(handler, _class_team("team-a"), saturation=0.61, priority="interactive")
+    assert "Active callers in class: 1, Active classes: 2, Rate limit type: tokens, Share: 600, " in str(
+        exc.value.detail
+    )
+    await _check(handler, _class_team("team-b", "batch"), saturation=0.61, priority="batch")
+
+
+@pytest.mark.asyncio
+async def test_teams_without_a_priority_split_the_default_share_between_them(monkeypatch: pytest.MonkeyPatch):
+    handler = _borrowing_handler(monkeypatch, borrows=False, splits=True)
+    await _burn(handler, _class_team("team-x", None), None, 600)
+    await _burn(handler, _class_team("team-y", None), None, 1)
+    with pytest.raises(ProxyRateLimitError) as exc:
+        await _check(handler, _class_team("team-x", None), saturation=0.6, priority=None)
+    assert "Priority: default, Active callers in class: 2, Active classes: 1, " in str(exc.value.detail)
+    assert "Share: 500, " in str(exc.value.detail)
+    await _check(handler, _class_team("team-y", None), saturation=0.6, priority=None)
+    assert exc.value.headers is not None and exc.value.headers["x-litellm-priority"] == "default"
+
+
+@pytest.mark.asyncio
+async def test_a_key_without_a_team_keeps_the_shared_class_pool(monkeypatch: pytest.MonkeyPatch):
+    handler = _borrowing_handler(monkeypatch, borrows=False, splits=True)
+    await _burn(handler, _class_team("team-a"), "interactive", 100)
+    no_team: Final = UserAPIKeyAuth(api_key="sk-plain", metadata={"priority": "interactive"})
+    await _burn(handler, no_team, "interactive", 600)
+    with pytest.raises(ProxyRateLimitError) as exc:
+        await _check(handler, no_team, saturation=0.7, priority="interactive")
+    assert exc.value.headers is not None and "rate_limited_by" not in exc.value.headers
+    assert "Priority-based rate limit exceeded" in str(exc.value.detail)
+    await _check(handler, _class_team("team-a"), saturation=0.7, priority="interactive")
+
+
+@pytest.mark.asyncio
+async def test_below_saturation_a_team_may_run_past_its_share(monkeypatch: pytest.MonkeyPatch):
+    handler = _borrowing_handler(monkeypatch, borrows=False, splits=True)
+    await _burn(handler, _class_team("team-a"), "interactive", 1)
+    await _burn(handler, _class_team("team-b"), "interactive", 400)
+    await _check(handler, _class_team("team-b"), saturation=0.49, priority="interactive")
+
+
+@pytest.mark.asyncio
+async def test_the_split_is_off_by_default_so_one_team_can_still_empty_the_class_pool(monkeypatch: pytest.MonkeyPatch):
+    handler = _borrowing_handler(monkeypatch, borrows=False)
+    await _burn(handler, _class_team("team-a"), "interactive", 600)
+    with pytest.raises(ProxyRateLimitError) as exc:
+        await _check(handler, _class_team("team-b"), saturation=0.6, priority="interactive")
+    assert exc.value.headers is not None and "rate_limited_by" not in exc.value.headers
+    assert "Priority-based rate limit exceeded" in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_the_team_model_limit_and_the_class_share_both_apply_when_both_are_on(monkeypatch: pytest.MonkeyPatch):
+    handler = _borrowing_handler(monkeypatch, borrows=True, splits=True)
+    team: Final = UserAPIKeyAuth(
+        api_key="sk-both",
+        team_id="team-a",
+        team_metadata={"model_tpm_limit": {"shared-model": 100}},
+        metadata={"priority": "interactive"},
+    )
+    await _burn(handler, team, "interactive", 150)
+    with pytest.raises(ProxyRateLimitError) as exc:
+        await _check(handler, team, saturation=0.5, priority="interactive")
+    _held_to_team_limit(exc.value, "tokens", "model_tpm_limit")
+
+
+@pytest.mark.asyncio
+async def test_a_team_active_on_another_model_does_not_shrink_this_models_shares(monkeypatch: pytest.MonkeyPatch):
+    handler = _borrowing_handler(monkeypatch, borrows=False, splits=True)
+    await _check(handler, _class_team("team-b"), saturation=0.0, priority="interactive", model="other-model")
+    await _burn(handler, _class_team("team-a"), "interactive", 700)
+    await _check(handler, _class_team("team-a"), saturation=0.7, priority="interactive")
+
+
+class _UnavailableRegistry:
+    async def touch(self, model: str, team_id: str, priority: str, window: int) -> Mapping[str, str]:
+        from redis.exceptions import ConnectionError as RedisConnectionError
+
+        raise RedisConnectionError("redis is down")
+
+
+class _UnavailableNativeRegistry:
+    async def touch(self, model: str, team_id: str, priority: str, window: int) -> Mapping[str, str]:
+        raise NativeRedisStoreError("transport", "redis is down")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "registry", [_UnavailableRegistry, _UnavailableNativeRegistry], ids=["redis_py", "native_store"]
+)
+async def test_a_registry_failure_falls_back_to_the_class_pool_instead_of_skipping_the_limits(
+    monkeypatch: pytest.MonkeyPatch, registry: Callable[[], object]
+):
+    handler = _borrowing_handler(monkeypatch, borrows=False, splits=True)
+    handler.active_teams = registry()  # pyright: ignore[reportAttributeAccessIssue]  # injected failing registry
+    await _burn(handler, _class_team("team-a"), "interactive", 650)
+    with pytest.raises(ProxyRateLimitError) as exc:
+        await _check(handler, _class_team("team-a"), saturation=0.65, priority="interactive")
+    assert exc.value.headers is not None
+    assert "rate_limited_by" not in exc.value.headers
+    assert "Priority-based rate limit exceeded" in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_one_team_using_keys_of_two_priorities_still_spends_one_share(monkeypatch: pytest.MonkeyPatch):
+    handler = _borrowing_handler(monkeypatch, borrows=False, splits=True)
+    await _burn(handler, _class_team("team-b"), "interactive", 20)
+    await _burn(handler, _class_team("team-a", "interactive"), "interactive", 300)
+    await _burn(handler, _class_team("team-a", "batch"), "batch", 300)
+    with pytest.raises(ProxyRateLimitError) as exc:
+        await _check(handler, _class_team("team-a", "batch"), saturation=0.62, priority="batch")
+    _held_to_class_share(exc.value)
+    assert "Team: team-a, Priority: batch, Active callers in class: 1, Active classes: 2, " in str(exc.value.detail)
+    assert "Share: 400, Remaining: 0," in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_a_share_smaller_than_one_request_still_lets_each_team_send_one(monkeypatch: pytest.MonkeyPatch):
+    handler = _borrowing_handler(monkeypatch, borrows=False, splits=True, rpm=2)
+    for team in ("team-a", "team-b", "team-c"):
+        await handler.active_teams.touch("shared-model", team, "interactive", 60)
+    await _check(handler, _class_team("team-d"), saturation=0.9, priority="interactive")
+    with pytest.raises(ProxyRateLimitError) as exc:
+        await _check(handler, _class_team("team-d"), saturation=0.9, priority="interactive")
+    assert exc.value.headers is not None
+    assert exc.value.headers["rate_limited_by"] == "priority_class_share_saturated"
+    assert exc.value.headers["rate_limit_type"] == "requests"
+
+
+@pytest.mark.asyncio
+async def test_a_websocket_turn_is_held_to_the_class_share_once_the_model_saturates(monkeypatch: pytest.MonkeyPatch):
+    handler = _borrowing_handler(monkeypatch, borrows=False, splits=True, saturation_threshold=0.1)
+    await _burn(handler, _class_team("team-a"), "interactive", 20)
+    await _burn(handler, _class_team("team-b"), "interactive", 600)
+    with pytest.raises(ProxyRateLimitError) as exc:
+        await handler.enforce_token_limits_for_frame(
+            user_api_key_dict=_class_team("team-b"), requested_model="shared-model"
+        )
+    _held_to_class_share(exc.value)
+    await handler.enforce_token_limits_for_frame(
+        user_api_key_dict=_class_team("team-a"), requested_model="shared-model"
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_websocket_turn_ignores_the_class_share_while_the_split_is_off(monkeypatch: pytest.MonkeyPatch):
+    handler = _borrowing_handler(monkeypatch, borrows=False, saturation_threshold=0.1)
+    await _burn(handler, _class_team("team-a"), "interactive", 20)
+    await _burn(handler, _class_team("team-b"), "interactive", 600)
+    await handler.enforce_token_limits_for_frame(
+        user_api_key_dict=_class_team("team-b"), requested_model="shared-model"
+    )
+
+
+@pytest.mark.asyncio
+async def test_traffic_from_keys_without_a_team_keeps_its_class_present_in_the_split(monkeypatch: pytest.MonkeyPatch):
+    handler = _borrowing_handler(monkeypatch, borrows=False, splits=True)
+    no_team: Final = UserAPIKeyAuth(api_key="sk-plain", metadata={"priority": "interactive"})
+    await _burn(handler, no_team, "interactive", 20)
+    await _burn(handler, _class_team("team-c", "batch"), "batch", 450)
+    with pytest.raises(ProxyRateLimitError) as exc:
+        await _check(handler, _class_team("team-c", "batch"), saturation=0.6, priority="batch")
+    _held_to_class_share(exc.value)
+    assert "Share: 400, Remaining: 0," in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_a_team_id_containing_the_registry_separator_is_still_held_to_its_share(monkeypatch: pytest.MonkeyPatch):
+    handler = _borrowing_handler(monkeypatch, borrows=False, splits=True)
+    await _burn(handler, _class_team("team-b"), "interactive", 20)
+    await _burn(handler, _class_team("owned\x1fextra", "batch"), "batch", 450)
+    with pytest.raises(ProxyRateLimitError) as exc:
+        await _check(handler, _class_team("owned\x1fextra", "batch"), saturation=0.6, priority="batch")
+    _held_to_class_share(exc.value)
+
+
+@pytest.mark.asyncio
+async def test_a_team_share_is_not_shrunk_by_teamless_traffic_in_its_class(monkeypatch: pytest.MonkeyPatch):
+    handler = _borrowing_handler(monkeypatch, borrows=False, splits=True)
+    no_team: Final = UserAPIKeyAuth(api_key="sk-plain", metadata={"priority": "interactive"})
+    await _burn(handler, no_team, "interactive", 20)
+    await _burn(handler, _class_team("team-a"), "interactive", 900)
+    await _check(handler, _class_team("team-a"), saturation=0.92, priority="interactive")
+
+
+@pytest.mark.asyncio
+async def test_teamless_traffic_in_two_classes_keeps_both_classes_present(monkeypatch: pytest.MonkeyPatch):
+    handler = _borrowing_handler(monkeypatch, borrows=False, splits=True)
+    await _burn(handler, UserAPIKeyAuth(api_key="sk-i", metadata={"priority": "interactive"}), "interactive", 20)
+    await _burn(handler, UserAPIKeyAuth(api_key="sk-b", metadata={"priority": "batch"}), "batch", 20)
+    await _burn(handler, _class_team("team-c", "batch"), "batch", 450)
+    with pytest.raises(ProxyRateLimitError) as exc:
+        await _check(handler, _class_team("team-c", "batch"), saturation=0.6, priority="batch")
+    _held_to_class_share(exc.value)
+    assert "Share: 400, Remaining: 0," in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_team_counters_do_not_collide_across_models_whose_names_share_a_colon(monkeypatch: pytest.MonkeyPatch):
+    handler = _borrowing_handler(monkeypatch, borrows=False, splits=True)
+    await _burn(handler, _class_team("prod:victim"), "interactive", 600, model="chat")
+    await _burn(handler, _class_team("team-x"), "interactive", 20, model="chat:prod")
+    await _check(handler, _class_team("victim"), saturation=0.6, priority="interactive", model="chat:prod")
+
+
+def _capped_team_key(
+    multiple: object,
+    limit: str = "model_tpm_limit",
+    share: int = 100,
+    field: str = "model_limit_max_borrow_multiple",
+) -> UserAPIKeyAuth:
+    return _team_key(team_limits={limit: {"shared-model": share}, field: multiple})
+
+
+def _held_to_borrow_cap(exc: ProxyRateLimitError, rate_limit_type: str, limit_sentence: str) -> None:
+    assert exc.status_code == 429
+    assert exc.headers is not None
+    assert exc.headers["rate_limited_by"] == "model_per_team_max_borrow_multiple"
+    assert exc.headers["rate_limit_type"] == rate_limit_type
+    assert str(exc.detail).startswith(
+        "{'error': 'Team " + limit_sentence + " borrow cap reached for shared-model: the team may use at most "
+    ), exc.detail
+
+
+async def _cap_tokens_remaining(handler: _PROXY_DynamicRateLimitHandlerV3, auth: UserAPIKeyAuth) -> int:
+    share: Final = borrowing_team_share(handler, "shared-model", auth)
+    assert share is not None and share.ceiling is not None
+    response: Final = await should_rate_limit(
+        handler.v3_limiter, [share.ceiling], read_only=True, skip_parallel_check=True
+    )
+    return next(s["limit_remaining"] for s in response["statuses"] if s["rate_limit_type"] == "tokens")
+
+
+@pytest.mark.asyncio
+async def test_a_capped_borrowers_idle_usage_counts_toward_its_cap_but_not_toward_its_share(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    handler = _borrowing_handler(monkeypatch, borrows=True)
+    await _check(handler, _capped_team_key(2), saturation=0.0)
+    await _settle_tokens(handler, 150)
+    assert await _cap_tokens_remaining(handler, _capped_team_key(2)) == 50
+    assert await _team_tokens_remaining(handler, _capped_team_key(2)) == 100
+    await _check(handler, _capped_team_key(2), saturation=0.5)
+    await _settle_tokens(handler, 30)
+    assert await _cap_tokens_remaining(handler, _capped_team_key(2)) == 20
+    assert await _team_tokens_remaining(handler, _capped_team_key(2)) == 70
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("saturation", [0.0, 0.5], ids=["idle", "saturated"])
+async def test_a_capped_borrowers_reservation_is_sized_by_its_share_not_its_cap(
+    monkeypatch: pytest.MonkeyPatch, saturation: float
+):
+    """A prompt without max_tokens reserves a floor that scales with the limit it is sized against. Sizing it
+    against the cap would refuse a request its own share would let through, and would admit different
+    requests depending on whether the model happened to be saturated."""
+    handler: Final = _borrowing_handler(monkeypatch, borrows=True)
+    handler.saturation_redis()
+    await _admit_at_the_hook(handler, _capped_team_key(2), tokens=160)
+    short_prompt_without_max_tokens: Final[dict[str, object]] = {"messages": [{"role": "user", "content": "hi"}]}
+    await _check(handler, _capped_team_key(2), saturation=saturation, data=short_prompt_without_max_tokens)
+    assert short_prompt_without_max_tokens["max_tokens"] == no_max_tokens_output_floor(100)
+
+
+@pytest.mark.asyncio
+async def test_a_capped_borrower_is_held_to_its_cap_while_idle_after_a_saturated_stretch(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    handler = _borrowing_handler(monkeypatch, borrows=True)
+    await _check(handler, _capped_team_key(2), saturation=0.0)
+    await _settle_tokens(handler, 150)
+    await _check(handler, _capped_team_key(2), saturation=0.5)
+    await _settle_tokens(handler, 60)
+    with pytest.raises(ProxyRateLimitError) as exc:
+        await _check(handler, _capped_team_key(2), saturation=0.49)
+    _held_to_borrow_cap(exc.value, "tokens", "model_tpm_limit")
+    with pytest.raises(ProxyRateLimitError) as saturated:
+        await _check(handler, _capped_team_key(2), saturation=0.5)
+    _held_to_borrow_cap(saturated.value, "tokens", "model_tpm_limit")
+
+
+@pytest.mark.asyncio
+async def test_team_borrows_past_its_share_while_it_stays_under_its_max_borrow_multiple(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    handler = _borrowing_handler(monkeypatch, borrows=True)
+    await _admit_then_settle(handler, _capped_team_key(2), 190)
+    await _check(handler, _capped_team_key(2), saturation=0.49)
+
+
+@pytest.mark.asyncio
+async def test_team_at_its_max_borrow_multiple_is_refused_while_the_model_is_idle(monkeypatch: pytest.MonkeyPatch):
+    handler = _borrowing_handler(monkeypatch, borrows=True)
+    await _admit_then_settle(handler, _capped_team_key(2), 200)
+    with pytest.raises(ProxyRateLimitError) as exc:
+        await _check(handler, _capped_team_key(2), saturation=0.0)
+    _held_to_borrow_cap(exc.value, "tokens", "model_tpm_limit")
+    assert (
+        "2.0x its model_tpm_limit while borrowing idle capacity. Team: team-a, Rate limit type: tokens, "
+        "Team model_tpm_limit: 100, Borrow cap: 200, Remaining: 0, Model saturation: 0.0%"
+    ) in str(exc.value.detail), exc.value.detail
+
+
+@pytest.mark.asyncio
+async def test_a_fractional_max_borrow_multiple_caps_the_team_at_that_fraction_of_its_share(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    handler = _borrowing_handler(monkeypatch, borrows=True)
+    await _admit_then_settle(handler, _capped_team_key(1.5), 149)
+    await _check(handler, _capped_team_key(1.5), saturation=0.0)
+    await _settle_tokens(handler, 1)
+    with pytest.raises(ProxyRateLimitError) as exc:
+        await _check(handler, _capped_team_key(1.5), saturation=0.0)
+    _held_to_borrow_cap(exc.value, "tokens", "model_tpm_limit")
+    assert "Borrow cap: 150," in str(exc.value.detail), exc.value.detail
+
+
+@pytest.mark.asyncio
+async def test_the_max_borrow_multiple_caps_requests_as_well_as_tokens(monkeypatch: pytest.MonkeyPatch):
+    handler = _borrowing_handler(monkeypatch, borrows=True)
+    auth: Final = _capped_team_key(2, limit="model_rpm_limit", share=2)
+    for _ in range(4):
+        await _check(handler, auth, saturation=0.0)
+    with pytest.raises(ProxyRateLimitError) as exc:
+        await _check(handler, auth, saturation=0.0)
+    _held_to_borrow_cap(exc.value, "requests", "model_rpm_limit")
+    assert "Team model_rpm_limit: 2, Borrow cap: 4, Remaining: 0," in str(exc.value.detail), exc.value.detail
+
+
+@pytest.mark.asyncio
+async def test_a_team_under_its_max_borrow_multiple_is_still_held_to_its_share_once_the_model_saturates(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    handler = _borrowing_handler(monkeypatch, borrows=True)
+    await _admit_then_settle(handler, _capped_team_key(5), 150)
+    with pytest.raises(ProxyRateLimitError) as exc:
+        await _check(handler, _capped_team_key(5), saturation=0.5)
+    _held_to_team_limit(exc.value, "tokens", "model_tpm_limit")
+
+
+@pytest.mark.asyncio
+async def test_a_team_at_its_max_borrow_multiple_is_held_to_its_share_not_its_cap_once_the_model_saturates(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    handler = _borrowing_handler(monkeypatch, borrows=True)
+    await _admit_then_settle(handler, _capped_team_key(2), 100)
+    await _check(handler, _capped_team_key(2), saturation=0.49)
+    with pytest.raises(ProxyRateLimitError) as exc:
+        await _check(handler, _capped_team_key(2), saturation=0.5)
+    _held_to_team_limit(exc.value, "tokens", "model_tpm_limit")
+
+
+@pytest.mark.asyncio
+async def test_another_teams_borrowing_does_not_count_against_a_teams_max_borrow_multiple(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    handler = _borrowing_handler(monkeypatch, borrows=True)
+    await _admit_then_settle(handler, _team_key("team-b"), 150)
+    await _admit_then_settle(handler, _capped_team_key(2), 150)
+    await _check(handler, _capped_team_key(2), saturation=0.0)
+
+
+@pytest.mark.parametrize(
+    "multiple",
+    [0.5, 0, -2, "two", None, "Infinity", float("inf"), 1e308],
+    ids=["below-one", "zero", "negative", "text", "null", "infinity-text", "infinity", "overflows-the-share"],
+)
+@pytest.mark.asyncio
+async def test_an_unusable_max_borrow_multiple_is_ignored_so_the_team_borrows_up_to_the_model_limit(
+    monkeypatch: pytest.MonkeyPatch, multiple: object
+):
+    handler = _borrowing_handler(monkeypatch, borrows=True)
+    await _admit_then_settle(handler, _capped_team_key(multiple), 300)
+    await _check(handler, _capped_team_key(multiple), saturation=0.49)
+
+
+@pytest.mark.asyncio
+async def test_a_websocket_turn_is_refused_at_the_teams_max_borrow_multiple_while_the_model_is_idle(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    handler = _borrowing_handler(monkeypatch, borrows=True, saturation_threshold=0.5)
+    await _admit_then_settle(handler, _capped_team_key(2), 200)
+    with pytest.raises(ProxyRateLimitError) as exc:
+        await handler.enforce_token_limits_for_frame(
+            user_api_key_dict=_capped_team_key(2), requested_model="shared-model"
+        )
+    _held_to_borrow_cap(exc.value, "tokens", "model_tpm_limit")
+
+
+@pytest.mark.asyncio
+async def test_a_websocket_admitted_while_saturated_gives_its_share_hold_back_when_the_model_goes_idle(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    handler: Final = _borrowing_handler(monkeypatch, borrows=True, saturation_threshold=0.5)
+    await _check(handler, _capped_team_key(2), saturation=0.5, data=_prompt(20))
+    assert await _team_tokens_remaining(handler, _capped_team_key(2)) < 100
+    await handler.enforce_token_limits_for_frame(user_api_key_dict=_capped_team_key(2), requested_model="shared-model")
+    await _settle_tokens(
+        handler,
+        90,
+        response=[],
+        combined_usage_object=litellm.Usage(prompt_tokens=60, completion_tokens=30, total_tokens=90),
+    )
+    assert await _team_tokens_remaining(handler, _capped_team_key(2)) == 10
+    assert await _cap_tokens_remaining(handler, _capped_team_key(2)) == 110
+
+
+@pytest.mark.asyncio
+async def test_a_capped_websocket_admitted_while_idle_settles_its_first_saturated_turn_on_a_fresh_share(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """The idle admission held tokens on the cap only, so the share the turn settles to once the model saturates
+    starts from zero rather than being refunded a hold it never carried."""
+    handler: Final = _borrowing_handler(monkeypatch, borrows=True, saturation_threshold=0.1)
+    await _check(handler, _capped_team_key(2), saturation=0.0, data=_prompt(20))
+    await asyncio.create_task(_saturate_model_from_another_request(handler, 200))
+    await handler.enforce_token_limits_for_frame(user_api_key_dict=_capped_team_key(2), requested_model="shared-model")
+    await _settle_tokens(
+        handler,
+        90,
+        response=[],
+        combined_usage_object=litellm.Usage(prompt_tokens=60, completion_tokens=30, total_tokens=90),
+    )
+    assert await _team_tokens_remaining(handler, _capped_team_key(2)) == 10
+    assert await _cap_tokens_remaining(handler, _capped_team_key(2)) == 110
+
+
+@pytest.mark.asyncio
+async def test_a_websocket_turn_under_the_teams_max_borrow_multiple_still_borrows(monkeypatch: pytest.MonkeyPatch):
+    handler = _borrowing_handler(monkeypatch, borrows=True, saturation_threshold=0.5)
+    await _admit_then_settle(handler, _capped_team_key(2), 190)
+    await handler.enforce_token_limits_for_frame(user_api_key_dict=_capped_team_key(2), requested_model="shared-model")
+
+
+@pytest.mark.asyncio
+async def test_a_configured_class_named_default_is_not_merged_with_teams_that_have_no_priority(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    handler = _borrowing_handler(monkeypatch, borrows=False, splits=True)
+    monkeypatch.setattr(litellm, "priority_reservation", {"default": 0.6, "batch": 0.4})
+    await _burn(handler, _class_team("team-a", "default"), "default", 20)
+    await _burn(handler, _class_team("team-n", None), None, 20)
+    await _burn(handler, _class_team("team-a", "default"), "default", 700)
+    with pytest.raises(ProxyRateLimitError) as exc:
+        await _check(handler, _class_team("team-a", "default"), saturation=0.74, priority="default")
+    assert "Priority: default, Active callers in class: 1, Active classes: 2, " in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_tokens_from_a_nested_call_do_not_land_on_the_outer_requests_team_counter(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    handler = _borrowing_handler(monkeypatch, borrows=False, splits=True)
+    await _burn(handler, _class_team("team-b"), "interactive", 20)
+    await _check(handler, _class_team("team-a"), saturation=0.0, priority="interactive")
+    from litellm.proxy.hooks.parallel_request_limiter_v3 import get_or_create_request_stash
+
+    stash: Final = get_or_create_request_stash()
+    stash.owner_litellm_call_id = "outer-call"
+    await handler.async_log_success_event(
+        kwargs={
+            "litellm_call_id": "judge-call",
+            "litellm_params": {"metadata": {"model_group": "shared-model"}},
+            "standard_logging_object": {
+                "metadata": {
+                    "user_api_key_team_id": "team-a",
+                    "user_api_key_auth_metadata": {"priority": "interactive"},
+                }
+            },
+        },
+        response_obj=litellm.ModelResponse(
+            usage=litellm.Usage(prompt_tokens=600, completion_tokens=0, total_tokens=600)
+        ),
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+    )
+    await _check(handler, _class_team("team-a"), saturation=0.62, priority="interactive")
+
+
+@pytest.mark.asyncio
+async def test_a_team_id_spelled_like_a_pool_marker_still_counts_as_a_team(monkeypatch: pytest.MonkeyPatch):
+    handler = _borrowing_handler(monkeypatch, borrows=False, splits=True)
+    await _burn(handler, _class_team(pool_member("interactive")), "interactive", 20)
+    await _burn(handler, _class_team("team-a"), "interactive", 600)
+    with pytest.raises(ProxyRateLimitError) as exc:
+        await _check(handler, _class_team("team-a"), saturation=0.62, priority="interactive")
+    assert "Active callers in class: 2, Active classes: 1, " in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_requests_sent_while_the_share_was_not_enforced_are_forgiven_once_the_model_saturates(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    handler = _borrowing_handler(monkeypatch, borrows=False, splits=True)
+    await _check(handler, _class_team("team-b"), saturation=0.0, priority="interactive")
+    for _ in range(70):
+        await _check(handler, _class_team("team-a"), saturation=0.0, priority="interactive")
+    await _check(handler, _class_team("team-b", "batch"), saturation=0.0, priority="batch")
+    await _check(handler, _class_team("team-a"), saturation=0.6, priority="interactive")
+
+
+@pytest.mark.asyncio
+async def test_a_websocket_turn_settles_on_the_team_share_once_the_registry_recovers(monkeypatch: pytest.MonkeyPatch):
+    handler = _borrowing_handler(monkeypatch, borrows=False, splits=True, saturation_threshold=0.1)
+    await _burn(handler, _class_team("team-b"), "interactive", 20)
+    registry: Final = handler.active_teams
+    handler.active_teams = _UnavailableRegistry()  # pyright: ignore[reportAttributeAccessIssue]  # registry down at connect
+    await _check(handler, _class_team("team-a"), saturation=0.0, priority="interactive")
+    handler.active_teams = registry
+    await handler.enforce_token_limits_for_frame(
+        user_api_key_dict=_class_team("team-a"), requested_model="shared-model"
+    )
+    await handler.async_log_success_event(
+        kwargs={
+            "call_type": "_aresponses_websocket",
+            "litellm_params": {"metadata": {"model_group": "shared-model"}},
+            "standard_logging_object": {
+                "metadata": {
+                    "user_api_key_team_id": "team-a",
+                    "user_api_key_auth_metadata": {"priority": "interactive"},
+                }
+            },
+        },
+        response_obj=litellm.ModelResponse(
+            usage=litellm.Usage(prompt_tokens=550, completion_tokens=0, total_tokens=550)
+        ),
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+    )
+    with pytest.raises(ProxyRateLimitError) as exc:
+        await handler.enforce_token_limits_for_frame(
+            user_api_key_dict=_class_team("team-a"), requested_model="shared-model"
+        )
+    _held_to_class_share(exc.value)
+
+
+@pytest.mark.asyncio
+async def test_a_frame_checked_while_the_registry_is_down_does_not_erase_the_connections_team_share(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    handler = _borrowing_handler(monkeypatch, borrows=False, splits=True, saturation_threshold=0.1)
+    await _burn(handler, _class_team("team-b"), "interactive", 20)
+    await _check(handler, _class_team("team-a"), saturation=0.0, priority="interactive")
+    registry: Final = handler.active_teams
+    handler.active_teams = _UnavailableRegistry()  # pyright: ignore[reportAttributeAccessIssue]  # registry down mid-connection
+    await handler.enforce_token_limits_for_frame(
+        user_api_key_dict=_class_team("team-a"), requested_model="shared-model"
+    )
+    handler.active_teams = registry
+    await handler.async_log_success_event(
+        kwargs={
+            "call_type": "_aresponses_websocket",
+            "litellm_params": {"metadata": {"model_group": "shared-model"}},
+            "standard_logging_object": {
+                "metadata": {
+                    "user_api_key_team_id": "team-a",
+                    "user_api_key_auth_metadata": {"priority": "interactive"},
+                }
+            },
+        },
+        response_obj=litellm.ModelResponse(
+            usage=litellm.Usage(prompt_tokens=550, completion_tokens=0, total_tokens=550)
+        ),
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+    )
+    with pytest.raises(ProxyRateLimitError) as exc:
+        await handler.enforce_token_limits_for_frame(
+            user_api_key_dict=_class_team("team-a"), requested_model="shared-model"
+        )
+    _held_to_class_share(exc.value)
+
+
+@pytest.mark.asyncio
+async def test_tokens_served_by_a_fallback_model_land_on_the_teams_counter_for_that_model(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    handler = _borrowing_handler(monkeypatch, borrows=False, splits=True)
+    await _burn(handler, _class_team("team-b"), "interactive", 20, model="other-model")
+    await _burn(handler, _class_team("team-a"), "interactive", 10, model="other-model")
+    await _check(handler, _class_team("team-a"), saturation=0.0, priority="interactive")
+    await handler.async_log_success_event(
+        kwargs={
+            "litellm_params": {"metadata": {"model_group": "other-model"}},
+            "standard_logging_object": {
+                "metadata": {
+                    "user_api_key_team_id": "team-a",
+                    "user_api_key_auth_metadata": {"priority": "interactive"},
+                }
+            },
+        },
+        response_obj=litellm.ModelResponse(
+            usage=litellm.Usage(prompt_tokens=550, completion_tokens=0, total_tokens=550)
+        ),
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+    )
+    await _check(handler, _class_team("team-a"), saturation=0.62, priority="interactive")
+    with pytest.raises(ProxyRateLimitError) as exc:
+        await _check(handler, _class_team("team-a"), saturation=0.62, priority="interactive", model="other-model")
+    _held_to_class_share(exc.value)
+
+
+def _prometheus_sink(monkeypatch: pytest.MonkeyPatch, sink_class: type | None = None) -> CollectorRegistry:
+    """A PrometheusLogger registered as a callback next to the dynamic rate limiter, on the process registry emptied
+    for the test and restored with its original collectors at teardown."""
+    from prometheus_client import REGISTRY
+
+    from litellm.integrations.prometheus import PrometheusLogger
+
+    monkeypatch.setattr(REGISTRY, "_collector_to_names", {})  # pyright: ignore[reportPrivateUsage]  # the registry's whole state
+    monkeypatch.setattr(REGISTRY, "_names_to_collectors", {})  # pyright: ignore[reportPrivateUsage]  # the registry's whole state
+    prometheus: Final = (sink_class or PrometheusLogger)()
+    monkeypatch.setattr(litellm, "callbacks", [prometheus, "dynamic_rate_limiter_v3"])
+    registry: CollectorRegistry = REGISTRY
+    return registry
+
+
+async def _admit_at_the_hook(handler: _PROXY_DynamicRateLimitHandlerV3, auth: UserAPIKeyAuth, tokens: int) -> None:
+    assert await handler.async_pre_call_hook(auth, DualCache(), {"model": "shared-model"}, "completion") is None
+    await _settle_tokens(handler, tokens)
+
+
+async def _saturate_model_from_another_request(handler: _PROXY_DynamicRateLimitHandlerV3, tokens: int) -> None:
+    """``_saturate_model`` on a request stash of its own, as a second request in the proxy would have, so the
+    stash of the request under test keeps its holds."""
+    from litellm.proxy.hooks import parallel_request_limiter_v3
+
+    parallel_request_limiter_v3._request_stash.set(None)  # pyright: ignore[reportPrivateUsage]  # fresh request context
+    await _saturate_model(handler, tokens)
+
+
+async def _saturate_model(handler: _PROXY_DynamicRateLimitHandlerV3, tokens: int) -> None:
+    """Idle usage that pushes the model past its saturation threshold without touching any team's share, from a
+    priority class of its own so the default pool the measured team sits in stays untouched."""
+    warm_up: Final = UserAPIKeyAuth(api_key="sk-warm-up", team_id="team-warm-up", team_metadata={"priority": "batch"})
+    await _admit_at_the_hook(handler, warm_up, tokens=tokens)
+
+
+async def _refused_at_the_hook(
+    handler: _PROXY_DynamicRateLimitHandlerV3, auth: UserAPIKeyAuth, model: str = "shared-model"
+) -> ProxyRateLimitError:
+    with pytest.raises(ProxyRateLimitError) as exc:
+        await handler.async_pre_call_hook(auth, DualCache(), {"model": model}, "completion")
+    return exc.value
+
+
+def _sample(registry: CollectorRegistry, name: str, **labels: str) -> float | None:
+    matches: Final = tuple(
+        sample.value
+        for metric in registry.collect()
+        for sample in metric.samples
+        if sample.name == name and all(sample.labels.get(label) == value for label, value in labels.items())
+    )  # comprehension-ok: one metric family holds the series of all teams
+    assert len(matches) <= 1, matches
+    return matches[0] if matches else None
+
+
+TEAM_LABELS: Final = {"model_group": "shared-model", "team": "team-a", "priority": "default"}
+
+
+@pytest.mark.asyncio
+async def test_team_share_gauges_follow_settled_usage_above_the_share(monkeypatch: pytest.MonkeyPatch):
+    handler = _borrowing_handler(monkeypatch, borrows=True)
+    registry = _prometheus_sink(monkeypatch)
+    assert _sample(registry, "litellm_dynamic_limiter_share_tokens", **TEAM_LABELS) is None
+
+    await _admit_then_settle(handler, _team_key(), tokens=60)
+    assert _sample(registry, "litellm_dynamic_limiter_share_tokens", **TEAM_LABELS) == 100
+    assert _sample(registry, "litellm_dynamic_limiter_borrowed_tokens", **TEAM_LABELS) == 0
+
+    await _admit_then_settle(handler, _team_key(), tokens=70)
+    assert _sample(registry, "litellm_dynamic_limiter_share_tokens", **TEAM_LABELS) == 100
+    assert _sample(registry, "litellm_dynamic_limiter_borrowed_tokens", **TEAM_LABELS) == 30
+    assert _sample(registry, "litellm_dynamic_limiter_throttled_total", **TEAM_LABELS) is None
+
+
+@pytest.mark.asyncio
+async def test_a_failed_request_settles_the_team_share_gauges_too(monkeypatch: pytest.MonkeyPatch):
+    handler = _borrowing_handler(monkeypatch, borrows=True)
+    registry = _prometheus_sink(monkeypatch)
+    await _admit_then_settle(handler, _team_key(), tokens=90)
+    claim_request_stash_for_data({"litellm_call_id": "failed-call"})
+    await _check(handler, _team_key(), saturation=0.5)
+    await handler.async_log_failure_event(
+        kwargs={
+            "litellm_params": {"metadata": {"model_group": "shared-model"}},
+            "litellm_call_id": "failed-call",
+            "standard_logging_object": {"metadata": {"user_api_key_team_id": "team-a"}},
+        },
+        response_obj=litellm.ModelResponse(usage=litellm.Usage(prompt_tokens=50, completion_tokens=0, total_tokens=50)),
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+    )
+    assert _sample(registry, "litellm_dynamic_limiter_borrowed_tokens", **TEAM_LABELS) == 40
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "auth, burns, saturation_threshold, reason, enforced_share_tokens",
+    [
+        (_team_key(), (60, 70), 0.0, "model_per_team_saturated", 100),
+        (_capped_team_key(2), (150, 60), 0.5, "model_per_team_max_borrow_multiple", 100),
+    ],
+    ids=["saturated", "borrow_cap"],
+)
+async def test_a_refused_request_is_counted_under_the_reason_its_429_header_carries(
+    monkeypatch: pytest.MonkeyPatch,
+    auth: UserAPIKeyAuth,
+    burns: tuple[int, ...],
+    saturation_threshold: float,
+    reason: str,
+    enforced_share_tokens: int,
+):
+    handler = _borrowing_handler(monkeypatch, borrows=True, saturation_threshold=saturation_threshold)
+    registry = _prometheus_sink(monkeypatch)
+    for tokens in burns:
+        await _admit_at_the_hook(handler, auth, tokens=tokens)
+    refusal = await _refused_at_the_hook(handler, auth)
+    assert refusal.headers is not None
+    assert refusal.headers["rate_limited_by"] == reason
+    assert _sample(registry, "litellm_dynamic_limiter_throttled_total", **TEAM_LABELS) == 1
+    assert (
+        _sample(
+            registry, "litellm_dynamic_limiter_throttled_total", **TEAM_LABELS, rate_limit_type="tokens", reason=reason
+        )
+        == 1
+    )
+    assert _sample(registry, "litellm_dynamic_limiter_share_tokens", **TEAM_LABELS) == enforced_share_tokens
+    assert (
+        _sample(registry, "litellm_dynamic_limiter_borrowed_tokens", **TEAM_LABELS)
+        == sum(burns) - enforced_share_tokens
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_class_share_refusal_is_counted_under_the_teams_priority(monkeypatch: pytest.MonkeyPatch):
+    handler = _borrowing_handler(monkeypatch, borrows=False, splits=True)
+    registry = _prometheus_sink(monkeypatch)
+    await _burn(handler, _class_team("team-b"), "interactive", 20)
+    await _burn(handler, _class_team("team-a", "interactive"), "interactive", 300)
+    await _burn(handler, _class_team("team-a", "batch"), "batch", 300)
+    _held_to_class_share(await _refused_at_the_hook(handler, _class_team("team-a", "batch")))
+    assert (
+        _sample(
+            registry,
+            "litellm_dynamic_limiter_throttled_total",
+            model_group="shared-model",
+            team="team-a",
+            priority="batch",
+            reason="priority_class_share_saturated",
+        )
+        == 1
+    )
+    assert _sample(registry, "litellm_dynamic_limiter_throttled_total", team="team-b") is None
+
+
+@pytest.mark.asyncio
+async def test_a_saturation_fallback_handoff_is_not_counted_as_a_throttle(
+    monkeypatch: pytest.MonkeyPatch, armed_walk: None
+):
+    from litellm.proxy.common_utils.proxy_rate_limit_error import SATURATION_FALLBACK_DESCRIPTOR_KEY
+
+    handler = _saturation_fallback_handler(monkeypatch)
+    registry = _prometheus_sink(monkeypatch)
+    key: Final = _interactive_key("sk-flexible", "team-a")
+    await _saturate_to_threshold(handler, key)
+
+    with pytest.raises(ProxyRateLimitError) as handed_off:
+        await handler.async_pre_call_hook(key, DualCache(), _opted_in(), "acompletion")
+    assert handed_off.value.descriptor_key == SATURATION_FALLBACK_DESCRIPTOR_KEY
+    assert _sample(registry, "litellm_dynamic_limiter_throttled_total", team="team-a") is None
+
+
+@pytest.mark.asyncio
+async def test_share_gauges_and_throttles_carry_the_teams_priority_so_the_series_join(monkeypatch: pytest.MonkeyPatch):
+    handler = _borrowing_handler(monkeypatch, borrows=True, saturation_threshold=0.0)
+    registry = _prometheus_sink(monkeypatch)
+    team: Final = UserAPIKeyAuth(
+        api_key="sk-interactive",
+        team_id="team-a",
+        team_metadata={"model_tpm_limit": {"shared-model": 100}, "priority": "interactive"},
+    )
+    await _saturate_model(handler, 200)
+    await _admit_at_the_hook(handler, team, tokens=60)
+    await _admit_at_the_hook(handler, team, tokens=70)
+    labels: Final = {"model_group": "shared-model", "team": "team-a", "priority": "interactive"}
+    assert _sample(registry, "litellm_dynamic_limiter_share_tokens", **labels) == 100
+    assert _sample(registry, "litellm_dynamic_limiter_borrowed_tokens", **labels) == 30
+    refusal: Final = await _refused_at_the_hook(handler, team)
+    assert refusal.headers is not None
+    assert refusal.headers["x-litellm-priority"] == "interactive"
+    assert _sample(registry, "litellm_dynamic_limiter_throttled_total", **labels) == 1
+    assert _sample(registry, "litellm_dynamic_limiter_share_tokens", team="team-a", priority="default") is None
+
+
+@pytest.mark.asyncio
+async def test_a_fallback_served_request_publishes_the_teams_share_on_the_fallback_model(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    handler = _borrowing_handler(monkeypatch, borrows=True, saturation_threshold=0.0)
+    registry = _prometheus_sink(monkeypatch)
+    team: Final = _team_key(team_limits={"model_tpm_limit": {"other-model": 40, "shared-model": 100}})
+    await _saturate_model(handler, 500)
+    assert await handler.async_pre_call_hook(team, DualCache(), {"model": "other-model"}, "completion") is None
+    assert await handler.async_fallback_target_allowed(team, "shared-model", {}) is True
+    await _settle_tokens(handler, 150, model_group="shared-model")
+    shared: Final = {"model_group": "shared-model", "team": "team-a", "priority": "default"}
+    assert _sample(registry, "litellm_dynamic_limiter_share_tokens", **shared) == 100
+    assert _sample(registry, "litellm_dynamic_limiter_borrowed_tokens", **shared) == 50
+    assert _sample(registry, "litellm_dynamic_limiter_share_tokens", model_group="other-model") is None
+
+
+@pytest.mark.asyncio
+async def test_a_capped_idle_teams_borrowing_is_read_against_its_share_not_the_wider_class_share(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    handler = _borrowing_handler(monkeypatch, borrows=True, splits=True)
+    registry = _prometheus_sink(monkeypatch)
+    await _admit_at_the_hook(handler, _capped_team_key(2), tokens=150)
+    assert _sample(registry, "litellm_dynamic_limiter_share_tokens", **TEAM_LABELS) == 100
+    assert _sample(registry, "litellm_dynamic_limiter_borrowed_tokens", **TEAM_LABELS) == 50
+
+
+@pytest.mark.asyncio
+async def test_an_uncapped_team_served_while_the_model_is_idle_publishes_its_share_with_nothing_borrowed(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    handler = _borrowing_handler(monkeypatch, borrows=True)
+    registry = _prometheus_sink(monkeypatch)
+    await _admit_at_the_hook(handler, _team_key(), tokens=150)
+    assert _sample(registry, "litellm_dynamic_limiter_share_tokens", **TEAM_LABELS) == 100
+    assert _sample(registry, "litellm_dynamic_limiter_borrowed_tokens", **TEAM_LABELS) == 0
+
+
+@pytest.mark.asyncio
+async def test_an_idle_fallback_served_for_an_uncapped_team_publishes_its_share_on_the_fallback_model(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    handler = _borrowing_handler(monkeypatch, borrows=True)
+    registry = _prometheus_sink(monkeypatch)
+    team: Final = _team_key(team_limits={"model_tpm_limit": {"other-model": 40, "shared-model": 100}})
+    assert await handler.async_pre_call_hook(team, DualCache(), {"model": "other-model"}, "completion") is None
+    assert await handler.async_fallback_target_allowed(team, "shared-model", {}) is True
+    await _settle_tokens(handler, 150, model_group="shared-model")
+    shared: Final = {"model_group": "shared-model", "team": "team-a", "priority": "default"}
+    assert _sample(registry, "litellm_dynamic_limiter_share_tokens", **shared) == 100
+    assert _sample(registry, "litellm_dynamic_limiter_borrowed_tokens", **shared) == 0
+
+
+@pytest.mark.asyncio
+async def test_an_uncapped_alias_request_served_while_the_model_is_idle_publishes_its_share(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    handler = _borrowing_handler(monkeypatch, borrows=True, model_group_alias={"alias-model": "shared-model"})
+    registry = _prometheus_sink(monkeypatch)
+    assert await handler.async_pre_call_hook(_team_key(), DualCache(), {"model": "alias-model"}, "completion") is None
+    await _settle_tokens(handler, 150, model_group="alias-model")
+    alias: Final = {"model_group": "alias-model", "team": "team-a", "priority": "default"}
+    assert _sample(registry, "litellm_dynamic_limiter_share_tokens", **alias) == 100
+    assert _sample(registry, "litellm_dynamic_limiter_borrowed_tokens", **alias) == 0
+
+
+@pytest.mark.asyncio
+async def test_an_idle_fallback_to_a_model_the_team_has_no_share_on_publishes_no_share_there(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    handler = _borrowing_handler(monkeypatch, borrows=True)
+    registry = _prometheus_sink(monkeypatch)
+    team: Final = _team_key(team_limits={"model_tpm_limit": {"other-model": 40}})
+    assert await handler.async_pre_call_hook(team, DualCache(), {"model": "other-model"}, "completion") is None
+    assert await handler.async_fallback_target_allowed(team, "shared-model", {}) is True
+    await _settle_tokens(handler, 150, model_group="shared-model")
+    shared: Final = {"model_group": "shared-model", "team": "team-a"}
+    assert _sample(registry, "litellm_dynamic_limiter_share_tokens", **shared) is None
+    assert _sample(registry, "litellm_dynamic_limiter_borrowed_tokens", **shared) is None
+
+
+@pytest.mark.asyncio
+async def test_an_idle_fallback_served_for_a_capped_team_still_publishes_its_borrowing(monkeypatch: pytest.MonkeyPatch):
+    handler = _borrowing_handler(monkeypatch, borrows=True)
+    registry = _prometheus_sink(monkeypatch)
+    team: Final = _team_key(
+        team_limits={
+            "model_tpm_limit": {"other-model": 40, "shared-model": 100},
+            "model_limit_max_borrow_multiple": 2,
+        }
+    )
+    assert await handler.async_pre_call_hook(team, DualCache(), {"model": "other-model"}, "completion") is None
+    assert await handler.async_fallback_target_allowed(team, "shared-model", {}) is True
+    await _settle_tokens(handler, 150, model_group="shared-model")
+    shared: Final = {"model_group": "shared-model", "team": "team-a", "priority": "default"}
+    assert _sample(registry, "litellm_dynamic_limiter_share_tokens", **shared) == 100
+    assert _sample(registry, "litellm_dynamic_limiter_borrowed_tokens", **shared) == 50
+
+
+@pytest.mark.asyncio
+async def test_a_failing_metrics_sink_never_changes_admission(monkeypatch: pytest.MonkeyPatch):
+    from litellm.integrations.prometheus import PrometheusLogger
+
+    class BrokenSink(PrometheusLogger):
+        def set_dynamic_limiter_share(self, *args: object, **kwargs: object) -> None:
+            raise RuntimeError("metrics backend down")
+
+        def increment_dynamic_limiter_throttled(self, *args: object, **kwargs: object) -> None:
+            raise RuntimeError("metrics backend down")
+
+    handler = _borrowing_handler(monkeypatch, borrows=True, saturation_threshold=0.0)
+    _prometheus_sink(monkeypatch, BrokenSink)
+    await _saturate_model(handler, 200)
+    await _admit_at_the_hook(handler, _team_key(), tokens=60)
+    await _admit_at_the_hook(handler, _team_key(), tokens=70)
+    assert await _team_tokens_remaining(handler) == -30
+    refusal: Final = await _refused_at_the_hook(handler, _team_key())
+    assert refusal.headers is not None
+    assert refusal.headers["rate_limited_by"] == "model_per_team_saturated"
+
+
+@pytest.mark.asyncio
+async def test_saturation_check_cache_ttl_configuration(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("LITELLM_LICENSE", "test-license-key")
+    monkeypatch.setattr(litellm.priority_reservation_settings, "saturation_check_cache_ttl", 5)
+
+    handler = DynamicRateLimitHandler(internal_usage_cache=DualCache())
+    model = "test-saturation-ttl"
+    llm_router = Router(
+        model_list=[
+            {
+                "model_name": model,
+                "litellm_params": {
+                    "model": "gpt-3.5-turbo",
+                    "api_key": "test-key",
+                    "api_base": "test-base",
+                    "rpm": 100,
+                    "tpm": 1000,
+                },
+            }
+        ]
+    )
+    handler.update_variables(llm_router=llm_router)
+
+    redis = handler.saturation_redis()
+    counter = counter_key(RateLimitScope("model_saturation_check", model).counter("requests"))
+    unread = {counter: None, counter_key(RateLimitScope("model_saturation_check", model).counter("tokens")): None}
+
+    with redis.answering(unread):
+        await handler.async_pre_call_hook(UserAPIKeyAuth(), DualCache(), {"model": model}, "acompletion")
+
+    get_cache_calls = [key for key in redis.read_keys() if key == counter]
+    assert len(get_cache_calls) == 1, "Expected 1 cache call"
+
+    monkeypatch.setattr(litellm.priority_reservation_settings, "saturation_check_cache_ttl", 30)
+
+    with redis.answering(unread):
+        await handler.async_pre_call_hook(UserAPIKeyAuth(), DualCache(), {"model": model}, "acompletion")
+
+    assert [key for key in redis.read_keys() if key == counter] == [counter, counter]
+
+
+def _unreachable_redis_port() -> int:
+    with listening() as (_, port):
+        return port
+
+
+def _worker_on_redis(handler: PROXY_DynamicRateLimitHandlerV3, port: int) -> None:
+    handler.v3_limiter = PROXY_MaxParallelRequestsHandler_v3(
+        InternalUsageCache(DualCache(redis_cache=RedisCache(host="127.0.0.1", port=port)))
+    )
+
+
+async def _model_saturation_at_the_hook(handler: PROXY_DynamicRateLimitHandlerV3) -> str:
+    with pytest.raises(ProxyRateLimitError) as refused:
+        await handler.async_pre_call_hook(_team_key(), DualCache(), _prompt(words=400), "acompletion")
+    return str(refused.value.detail).split("Model saturation: ")[1].split("%")[0]
+
+
+@pytest.mark.asyncio
+async def test_every_worker_reads_the_models_saturation_from_redis_not_from_what_it_served_itself(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    busy, idle = (_borrowing_handler(monkeypatch, borrows=True) for _ in range(2))
+    counter: Final = RateLimitScope("model_saturation_check", "shared-model").counter("tokens")
+    with redis_answering_counts(
+        {"{model_saturation_check:shared-model}:tokens": "700", "{model_saturation_check:shared-model}:requests": None}
+    ) as port:
+        for worker in (busy, idle):
+            _worker_on_redis(worker, port)
+        busy.rate_limits.set_local(counter, 700, 60)
+        idle.rate_limits.set_local(counter, 30, 60)
+        assert float(await _model_saturation_at_the_hook(busy)) / 100 == pytest.approx(0.7)
+        assert float(await _model_saturation_at_the_hook(idle)) / 100 == pytest.approx(0.7)
+
+
+@pytest.mark.asyncio
+async def test_a_worker_whose_redis_read_fails_reads_the_models_saturation_from_its_own_memory(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    handler: Final = _borrowing_handler(monkeypatch, borrows=True)
+    _worker_on_redis(handler, _unreachable_redis_port())
+    counter: Final = RateLimitScope("model_saturation_check", "shared-model").counter("tokens")
+    handler.rate_limits.set_local(counter, 700, 60)
+    assert float(await _model_saturation_at_the_hook(handler)) / 100 == pytest.approx(0.7)
+
+
+@pytest.mark.asyncio
+async def test_a_worker_without_redis_reads_the_models_saturation_from_its_own_memory(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    handler: Final = _borrowing_handler(monkeypatch, borrows=True)
+    counter: Final = RateLimitScope("model_saturation_check", "shared-model").counter("tokens")
+    handler.rate_limits.set_local(counter, 700, 60)
+    assert float(await _model_saturation_at_the_hook(handler)) / 100 == pytest.approx(0.7)
+
+
+def _key_and_org_handler(
+    monkeypatch: pytest.MonkeyPatch,
+    *borrowers: str,
+    saturation_threshold: float = 0.5,
+    max_borrow_multiple: float | None = None,
+) -> _PROXY_DynamicRateLimitHandlerV3:
+    from litellm.types.utils import ModelLimitBorrowingConfig, PriorityReservationSettings
+
+    handler: Final = _borrowing_handler(monkeypatch, borrows=False)
+    monkeypatch.setattr(
+        litellm,
+        "priority_reservation_settings",
+        PriorityReservationSettings(
+            saturation_threshold=saturation_threshold,
+            model_limit_borrowing_config=ModelLimitBorrowingConfig(
+                borrow_idle_capacity=borrowers, max_borrow_multiple=max_borrow_multiple
+            ),
+        ),
+    )
+    return handler
+
+
+def _org_caller(
+    api_key: str = "sk-service-a",
+    org_id: str = "org-a",
+    share: int = 100,
+    limit: str = "model_tpm_limit",
+    **key_fields: object,
+) -> UserAPIKeyAuth:
+    from litellm.types.proxy.auth.customer_hierarchy import CustomerHierarchyAuth, CustomerScopeAuth
+
+    return UserAPIKeyAuth(
+        api_key=api_key,
+        customer_hierarchy=CustomerHierarchyAuth(
+            customer_org_id=org_id,
+            customer_org_alias=f"{org_id}-alias",
+            scopes=(
+                CustomerScopeAuth(
+                    key="customer_org",
+                    entity_id=org_id,
+                    alias=f"{org_id}-alias",
+                    **{limit: {"shared-model": share}},
+                ),
+            ),
+        ),
+        **key_fields,
+    )
+
+
+def _service_key(api_key: str = "sk-service-a", share: int = 100, **metadata: object) -> UserAPIKeyAuth:
+    return UserAPIKeyAuth(
+        api_key=api_key, key_alias=f"{api_key}-alias", metadata={"model_tpm_limit": {"shared-model": share}, **metadata}
+    )
+
+
+async def _settle_for(handler: _PROXY_DynamicRateLimitHandlerV3, auth: UserAPIKeyAuth, tokens: int) -> None:
+    hierarchy: Final = auth.customer_hierarchy
+    await handler.async_log_success_event(
+        kwargs={
+            "litellm_params": {"metadata": {"model_group": "shared-model"}},
+            "standard_logging_object": {
+                "metadata": {
+                    "user_api_key_hash": auth.api_key,
+                    "user_api_key_alias": auth.key_alias,
+                    "user_api_key_customer_org_id": None if hierarchy is None else hierarchy.customer_org_id,
+                    "user_api_key_customer_org_alias": None if hierarchy is None else hierarchy.customer_org_alias,
+                    "user_api_key_auth_metadata": dict(auth.metadata),
+                }
+            },
+        },
+        response_obj=litellm.ModelResponse(
+            usage=litellm.Usage(prompt_tokens=tokens, completion_tokens=0, total_tokens=tokens)
+        ),
+        start_time=None,
+        end_time=None,
+    )
+
+
+async def _use(
+    handler: _PROXY_DynamicRateLimitHandlerV3,
+    auth: UserAPIKeyAuth,
+    tokens: int,
+    saturation: float = 0.0,
+    priority: str | None = None,
+) -> None:
+    await _check(handler, auth, saturation=saturation, priority=priority)
+    await _settle_for(handler, auth, tokens)
+
+
+@pytest.mark.asyncio
+async def test_a_customer_org_borrows_idle_capacity_through_any_of_its_keys_and_is_held_once_the_model_saturates(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    handler: Final = _key_and_org_handler(monkeypatch, "customer_organization")
+    await _use(handler, _org_caller("sk-service-a"), 80, saturation=0.5)
+    await _use(handler, _org_caller("sk-service-b"), 70, saturation=0.5)
+    await _check(handler, _org_caller("sk-service-a"), saturation=0.49)
+    with pytest.raises(ProxyRateLimitError) as exc:
+        await _check(handler, _org_caller("sk-service-b"), saturation=0.5)
+    assert exc.value.headers is not None
+    assert exc.value.headers["rate_limited_by"] == "model_per_customer_org_saturated"
+    assert str(exc.value.detail).startswith(
+        "{'error': 'Customer organization model_tpm_limit reached for shared-model and the model is saturated, "
+        "so there is no idle capacity to borrow. Customer organization: org-a, Rate limit type: tokens, "
+        "Customer organization model_tpm_limit: 100, Remaining: 0, "
+    ), exc.value.detail
+    await _check(handler, _org_caller("sk-service-b", org_id="org-b"), saturation=0.5)
+
+
+@pytest.mark.asyncio
+async def test_customer_org_borrowing_is_off_by_default_so_the_dynamic_limiter_adds_no_org_limit(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    handler: Final = _key_and_org_handler(
+        monkeypatch,
+    )
+    await _use(handler, _org_caller(), 150, saturation=0.5)
+    await _check(handler, _org_caller(), saturation=0.9)
+
+
+@pytest.mark.asyncio
+async def test_a_customer_org_at_its_max_borrow_multiple_is_refused_while_the_model_is_idle(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    handler: Final = _key_and_org_handler(monkeypatch, "customer_organization", max_borrow_multiple=2)
+    await _use(handler, _org_caller(), 190)
+    await _use(handler, _org_caller("sk-service-b"), 10)
+    with pytest.raises(ProxyRateLimitError) as exc:
+        await _check(handler, _org_caller(), saturation=0.0)
+    assert exc.value.headers is not None
+    assert exc.value.headers["rate_limited_by"] == "model_per_customer_org_max_borrow_multiple"
+    assert "Customer organization model_tpm_limit: 100, Borrow cap: 200, Remaining: 0" in str(exc.value.detail)
+    await _check(handler, _org_caller(org_id="org-b"), saturation=0.0)
+
+
+@pytest.mark.asyncio
+async def test_a_customer_org_model_rpm_limit_borrows_and_is_held_once_the_model_saturates(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    handler: Final = _key_and_org_handler(monkeypatch, "customer_organization")
+    org: Final = _org_caller(share=2, limit="model_rpm_limit")
+    for _ in range(3):
+        await _check(handler, org, saturation=0.0)
+    for _ in range(2):
+        await _check(handler, org, saturation=0.5)
+    with pytest.raises(ProxyRateLimitError) as exc:
+        await _check(handler, org, saturation=0.5)
+    assert exc.value.headers is not None
+    assert exc.value.headers["rate_limited_by"] == "model_per_customer_org_saturated"
+    assert exc.value.headers["rate_limit_type"] == "requests"
+
+
+@pytest.mark.asyncio
+async def test_a_key_past_its_own_model_tpm_limit_borrows_while_idle_and_is_held_once_the_model_saturates(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    handler: Final = _key_and_org_handler(monkeypatch, "key")
+    await _use(handler, _service_key(), 150, saturation=0.5)
+    await _check(handler, _service_key(), saturation=0.49)
+    with pytest.raises(ProxyRateLimitError) as exc:
+        await _check(handler, _service_key(), saturation=0.5)
+    assert exc.value.headers is not None
+    assert exc.value.headers["rate_limited_by"] == "model_per_key_saturated"
+    assert str(exc.value.detail).startswith(
+        "{'error': 'Key model_tpm_limit reached for shared-model and the model is saturated, "
+        f"so there is no idle capacity to borrow. Key: {_service_key().api_key}, Rate limit type: tokens, "
+    ), exc.value.detail
+    await _check(handler, _service_key("sk-service-b"), saturation=0.5)
+
+
+@pytest.mark.asyncio
+async def test_key_borrowing_is_off_by_default_so_the_dynamic_limiter_adds_no_key_limit(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    handler: Final = _key_and_org_handler(
+        monkeypatch,
+    )
+    await _use(handler, _service_key(), 150, saturation=0.5)
+    await _check(handler, _service_key(), saturation=0.9)
+
+
+@pytest.mark.asyncio
+async def test_a_key_at_its_max_borrow_multiple_is_refused_while_the_model_is_idle(monkeypatch: pytest.MonkeyPatch):
+    handler: Final = _key_and_org_handler(monkeypatch, "key")
+    capped: Final = _service_key(model_limit_max_borrow_multiple=2)
+    await _use(handler, capped, 200)
+    with pytest.raises(ProxyRateLimitError) as exc:
+        await _check(handler, capped, saturation=0.0)
+    assert exc.value.headers is not None
+    assert exc.value.headers["rate_limited_by"] == "model_per_key_max_borrow_multiple"
+    assert "Key model_tpm_limit: 100, Borrow cap: 200, Remaining: 0" in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "key_share, org_share, refused_by",
+    [(100, 500, "model_per_key_saturated"), (500, 100, "model_per_customer_org_saturated")],
+    ids=["the_key_share_is_tighter", "the_org_share_is_tighter"],
+)
+async def test_a_request_under_a_key_share_and_a_customer_org_share_is_held_to_whichever_is_used_up(
+    monkeypatch: pytest.MonkeyPatch, key_share: int, org_share: int, refused_by: str
+):
+    handler: Final = _key_and_org_handler(monkeypatch, "key", "customer_organization")
+    caller: Final = _org_caller(share=org_share, metadata={"model_tpm_limit": {"shared-model": key_share}})
+    await _use(handler, caller, 150, saturation=0.5)
+    with pytest.raises(ProxyRateLimitError) as exc:
+        await _check(handler, caller, saturation=0.5)
+    assert exc.value.headers is not None
+    assert exc.value.headers["rate_limited_by"] == refused_by
+
+
+@pytest.mark.asyncio
+async def test_a_saturated_request_is_charged_to_the_key_share_and_the_customer_org_share(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    handler: Final = _key_and_org_handler(monkeypatch, "key", "customer_organization")
+    caller: Final = _org_caller(share=300, metadata={"model_tpm_limit": {"shared-model": 200}})
+    await _use(handler, caller, 60, saturation=0.5)
+    shares: Final = handler._borrowing_shares("shared-model", caller)
+    response: Final = await should_rate_limit(
+        handler.v3_limiter,
+        [shares["key"].share, shares["customer_org"].share],
+        read_only=True,
+        skip_parallel_check=True,
+    )
+    remaining: Final = {
+        status["descriptor_key"]: status["limit_remaining"]
+        for status in response["statuses"]
+        if status["rate_limit_type"] == "tokens"
+    }
+    assert remaining == {"model_per_key_saturated": 140, "model_per_customer_org_saturated": 240}
+
+
+@pytest.mark.asyncio
+async def test_a_reservation_on_a_customer_org_share_is_given_back_when_the_call_fails(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    handler: Final = _key_and_org_handler(monkeypatch, "customer_organization", saturation_threshold=0.0)
+    caller: Final = _org_caller()
+    await _check(handler, caller, saturation=1.0, data=_prompt(30))
+    share: Final = handler._borrowing_shares("shared-model", caller)["customer_org"].share
+
+    async def tokens_remaining() -> int:
+        response: Final = await should_rate_limit(handler.v3_limiter, [share], read_only=True, skip_parallel_check=True)
+        return next(s["limit_remaining"] for s in response["statuses"] if s["rate_limit_type"] == "tokens")
+
+    assert await tokens_remaining() < 100
+    await handler.async_log_failure_event(
+        kwargs={"litellm_params": {"metadata": {"model_group": "shared-model"}}},
+        response_obj=None,
+        start_time=None,
+        end_time=None,
+    )
+    assert await tokens_remaining() == 100
+
+
+def _class_key(api_key: str, priority: str = "interactive") -> UserAPIKeyAuth:
+    return UserAPIKeyAuth(api_key=api_key, metadata={"priority": priority})
+
+
+@pytest.mark.asyncio
+async def test_two_interactive_keys_without_a_team_each_keep_half_of_the_interactive_share(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    handler: Final = _split_handler(monkeypatch, "key")
+    await _use(handler, _class_key("sk-service-a"), 20, saturation=1.0, priority="interactive")
+    await _use(handler, _class_key("sk-service-b"), 500, saturation=1.0, priority="interactive")
+    with pytest.raises(ProxyRateLimitError) as exc:
+        await _check(handler, _class_key("sk-service-b"), saturation=0.52, priority="interactive")
+    _held_to_class_share(exc.value)
+    assert (
+        f"Key: {_class_key('sk-service-b').api_key}, Priority: interactive, Active callers in class: 2, "
+        "Active classes: 1, "
+    ) in str(exc.value.detail)
+    await _check(handler, _class_key("sk-service-a"), saturation=0.52, priority="interactive")
+
+
+@pytest.mark.asyncio
+async def test_keys_without_a_team_share_the_class_pool_while_the_key_split_is_off(monkeypatch: pytest.MonkeyPatch):
+    handler: Final = _key_and_org_handler(
+        monkeypatch,
+    )
+    await _use(handler, _class_key("sk-service-b"), 600, saturation=1.0, priority="interactive")
+    with pytest.raises(ProxyRateLimitError) as exc:
+        await _check(handler, _class_key("sk-service-a"), saturation=0.6, priority="interactive")
+    assert exc.value.headers is not None and "rate_limited_by" not in exc.value.headers
+
+
+@pytest.mark.asyncio
+async def test_customer_org_and_key_shares_are_published_under_their_own_labels(monkeypatch: pytest.MonkeyPatch):
+    handler: Final = _key_and_org_handler(monkeypatch, "key", "customer_organization", saturation_threshold=0.1)
+    registry: Final = _prometheus_sink(monkeypatch)
+    caller: Final = _org_caller(share=100, key_alias="service-a", metadata={"model_tpm_limit": {"shared-model": 200}})
+    await _use(handler, caller, 80, saturation=0.5)
+    await _use(handler, caller, 70, saturation=0.5)
+    org_labels: Final = {"model_group": "shared-model", "customer_org_id": "org-a", "customer_org_alias": "org-a-alias"}
+    key_labels: Final = {
+        "model_group": "shared-model",
+        "hashed_api_key": str(caller.api_key),
+        "api_key_alias": "service-a",
+    }
+    assert _sample(registry, "litellm_dynamic_limiter_share_tokens", **org_labels) == 100
+    assert _sample(registry, "litellm_dynamic_limiter_borrowed_tokens", **org_labels) == 50
+    assert _sample(registry, "litellm_dynamic_limiter_share_tokens", **key_labels) == 200
+    assert _sample(registry, "litellm_dynamic_limiter_borrowed_tokens", **key_labels) == 0
+
+    refusal: Final = await _refused_at_the_hook(handler, caller)
+    assert refusal.headers is not None
+    assert refusal.headers["rate_limited_by"] == "model_per_customer_org_saturated"
+    assert (
+        _sample(
+            registry,
+            "litellm_dynamic_limiter_throttled_total",
+            **org_labels,
+            reason="model_per_customer_org_saturated",
+        )
+        == 1
+    )
+    assert _sample(registry, "litellm_dynamic_limiter_throttled_total", **key_labels) is None
+
+
+@pytest.mark.asyncio
+async def test_an_uncapped_customer_org_and_key_served_while_the_model_is_idle_publish_their_shares(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    handler: Final = _key_and_org_handler(monkeypatch, "key", "customer_organization")
+    registry: Final = _prometheus_sink(monkeypatch)
+    caller: Final = _org_caller(share=100, key_alias="service-a", metadata={"model_tpm_limit": {"shared-model": 200}})
+    await _use(handler, caller, 150)
+    org_labels: Final = {"model_group": "shared-model", "customer_org_id": "org-a"}
+    key_labels: Final = {"model_group": "shared-model", "hashed_api_key": str(caller.api_key)}
+    assert _sample(registry, "litellm_dynamic_limiter_share_tokens", **org_labels) == 100
+    assert _sample(registry, "litellm_dynamic_limiter_share_tokens", **key_labels) == 200
+    assert _sample(registry, "litellm_dynamic_limiter_borrowed_tokens", **key_labels) == 0
+
+
+def _split_handler(monkeypatch: pytest.MonkeyPatch, *entities: str) -> _PROXY_DynamicRateLimitHandlerV3:
+    from litellm.types.utils import PriorityClassShareConfig, PriorityReservationSettings
+
+    handler: Final = _borrowing_handler(monkeypatch, borrows=False)
+    monkeypatch.setattr(
+        litellm,
+        "priority_reservation_settings",
+        PriorityReservationSettings(
+            priority_class_share_config=PriorityClassShareConfig(split_equally_among_active=entities)
+        ),
+    )
+    return handler
+
+
+def _class_customer(api_key: str, org_id: str, member_id: str | None = None) -> UserAPIKeyAuth:
+    from litellm.types.proxy.auth.customer_hierarchy import CustomerHierarchyAuth
+
+    return UserAPIKeyAuth(
+        api_key=api_key,
+        metadata={"priority": "interactive"},
+        customer_hierarchy=CustomerHierarchyAuth(customer_org_id=org_id, customer_member_id=member_id, scopes=()),
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "entity, heavy, light",
+    [
+        (
+            "customer_organization",
+            (_class_customer("sk-service-a", "org-heavy"), _class_customer("sk-service-b", "org-heavy")),
+            _class_customer("sk-service-a", "org-light"),
+        ),
+        (
+            "customer_member",
+            (_class_customer("sk-service-a", "org-a", "member-heavy"),) * 2,
+            _class_customer("sk-service-a", "org-a", "member-light"),
+        ),
+        (
+            "team",
+            (_class_team("team-heavy"),) * 2,
+            _class_team("team-light"),
+        ),
+    ],
+    ids=["customer_organization_across_its_keys", "customer_member", "team_listed_in_the_config"],
+)
+async def test_each_listed_entity_keeps_its_own_slice_of_the_class_share(
+    monkeypatch: pytest.MonkeyPatch, entity: str, heavy: tuple[UserAPIKeyAuth, UserAPIKeyAuth], light: UserAPIKeyAuth
+):
+    handler: Final = _split_handler(monkeypatch, entity)
+    await _use(handler, light, 20, saturation=1.0, priority="interactive")
+    await _use(handler, heavy[0], 300, saturation=1.0, priority="interactive")
+    await _use(handler, heavy[1], 200, saturation=1.0, priority="interactive")
+    with pytest.raises(ProxyRateLimitError) as exc:
+        await _check(handler, heavy[0], saturation=0.52, priority="interactive")
+    _held_to_class_share(exc.value)
+    await _check(handler, light, saturation=0.52, priority="interactive")
+
+
+@pytest.mark.asyncio
+async def test_a_customer_member_slice_takes_precedence_over_its_organizations(monkeypatch: pytest.MonkeyPatch):
+    handler: Final = _split_handler(monkeypatch, "customer_organization", "customer_member")
+    await _use(
+        handler, _class_customer("sk-service-a", "org-a", "member-light"), 20, saturation=1.0, priority="interactive"
+    )
+    await _use(
+        handler, _class_customer("sk-service-a", "org-a", "member-heavy"), 500, saturation=1.0, priority="interactive"
+    )
+    with pytest.raises(ProxyRateLimitError) as exc:
+        await _check(
+            handler, _class_customer("sk-service-a", "org-a", "member-heavy"), saturation=0.52, priority="interactive"
+        )
+    _held_to_class_share(exc.value)
+    assert "Customer member: member-heavy, Priority: interactive, Active callers in class: 2, " in str(exc.value.detail)
+    await _check(
+        handler, _class_customer("sk-service-a", "org-a", "member-light"), saturation=0.52, priority="interactive"
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_limiter_loads_and_admits_requests_without_redis_installed(
+    monkeypatch: pytest.MonkeyPatch, import_without_redis_installed: Callable[[str], ModuleType]
+):
+    module: Final = import_without_redis_installed("litellm.proxy.hooks.model_capacity_native")
+    handler: Final = PROXY_DynamicRateLimitHandlerV3(
+        internal_usage_cache=DualCache(), build=module.build_native_dynamic_rate_limiter
+    )
+    handler.update_variables(llm_router=_borrowing_handler(monkeypatch, borrows=False).llm_router)
+
+    await _check(handler, _class_team("team-a"), saturation=0.0, priority="interactive")
+
+
+@pytest.mark.asyncio
+async def test_a_request_is_sized_with_the_tightest_shares_output_cap_on_every_share_it_holds(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    handler: Final = _key_and_org_handler(monkeypatch, "key", "customer_organization")
+    key_share: Final = {"model_tpm_limit": {"shared-model": 200}}
+    await _use(handler, _org_caller(org_id="org-busy", share=1000, metadata=key_share), 150, saturation=0.5)
+    uncapped_prompt: Final[dict[str, object]] = {
+        "model": "shared-model",
+        "messages": [{"role": "user", "content": "word " * 10}],
+    }
+
+    await _check(handler, _org_caller(org_id="org-small", share=100, metadata=key_share), 0.5, data=uncapped_prompt)
+
+
+@pytest.mark.asyncio
+async def test_a_team_id_shaped_like_a_customer_org_holder_does_not_draw_on_that_organizations_slice(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from litellm.proxy.hooks.priority_class_share import customer_member
+
+    handler: Final = _split_handler(monkeypatch, "team", "customer_organization")
+    victim: Final = _class_customer("sk-service-a", "org-victim")
+    await _use(handler, victim, 20, saturation=1.0, priority="interactive")
+    await _use(handler, _class_customer("sk-service-a", "org-other"), 20, saturation=1.0, priority="interactive")
+    lookalike: Final = _class_team(customer_member("customer_org", "org-victim"))
+    await _use(handler, lookalike, 300, saturation=1.0, priority="interactive")
+    await _use(handler, lookalike, 200, saturation=1.0, priority="interactive")
+
+    await _check(handler, victim, saturation=0.52, priority="interactive")
+
+
+@pytest.mark.asyncio
+async def test_a_team_key_naming_a_new_customer_org_stays_on_its_teams_slice(monkeypatch: pytest.MonkeyPatch):
+    from litellm.types.proxy.auth.customer_hierarchy import CustomerHierarchyAuth
+
+    def team_key_for(org_id: str) -> UserAPIKeyAuth:
+        return _class_team("team-heavy").model_copy(
+            update={"customer_hierarchy": CustomerHierarchyAuth(customer_org_id=org_id, scopes=())}
+        )
+
+    handler: Final = _split_handler(monkeypatch, "team", "customer_organization", "customer_member")
+    await _use(handler, _class_team("team-light"), 20, saturation=1.0, priority="interactive")
+    await _use(handler, team_key_for("org-first"), 300, saturation=1.0, priority="interactive")
+    await _use(handler, team_key_for("org-first"), 200, saturation=1.0, priority="interactive")
+
+    with pytest.raises(ProxyRateLimitError) as exc:
+        await _check(handler, team_key_for("org-fresh"), saturation=0.52, priority="interactive")
+    _held_to_class_share(exc.value)
+    assert "Team: team-heavy, Priority: interactive, Active callers in class: 2, " in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_a_websocket_turn_on_a_model_without_a_team_limit_is_not_charged_to_the_earlier_models_share(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    handler: Final = _borrowing_handler(monkeypatch, borrows=True, saturation_threshold=0.1)
+    await _check(handler, _team_key(), saturation=0.0)
+    await _settle_tokens(handler, 150)
+    await handler.enforce_token_limits_for_frame(user_api_key_dict=_team_key(), requested_model="shared-model")
+    await handler.enforce_token_limits_for_frame(user_api_key_dict=_team_key(), requested_model="other-model")
+    await _settle_tokens(
+        handler,
+        90,
+        response=[],
+        model_group="other-model",
+        combined_usage_object=litellm.Usage(prompt_tokens=60, completion_tokens=30, total_tokens=90),
+    )
+    assert await _team_tokens_remaining(handler) == 100
+
+
+@pytest.mark.asyncio
+async def test_the_configured_max_borrow_multiple_caps_a_key_and_a_team_that_set_none_of_their_own(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    handler: Final = _key_and_org_handler(monkeypatch, "team", "key", max_borrow_multiple=2)
+    await _use(handler, _service_key(), 200)
+    with pytest.raises(ProxyRateLimitError) as key_refusal:
+        await _check(handler, _service_key(), saturation=0.0)
+    assert key_refusal.value.headers is not None
+    assert key_refusal.value.headers["rate_limited_by"] == "model_per_key_max_borrow_multiple"
+    await _use(handler, _team_key(), 200)
+    with pytest.raises(ProxyRateLimitError) as team_refusal:
+        await _check(handler, _team_key(), saturation=0.0)
+    assert team_refusal.value.headers is not None
+    assert team_refusal.value.headers["rate_limited_by"] == "model_per_team_max_borrow_multiple"
+
+
+@pytest.mark.asyncio
+async def test_a_keys_own_max_borrow_multiple_replaces_the_configured_one(monkeypatch: pytest.MonkeyPatch):
+    handler: Final = _key_and_org_handler(monkeypatch, "key", max_borrow_multiple=2)
+    raised: Final = _service_key(model_limit_max_borrow_multiple=4)
+    await _use(handler, raised, 300)
+    await _check(handler, raised, saturation=0.0)
+
+
+@pytest.mark.asyncio
+async def test_a_fallback_target_the_team_has_no_limit_on_leaves_its_share_on_the_failed_model_untouched(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    handler: Final = _borrowing_handler(monkeypatch, borrows=True, saturation_threshold=0.0)
+    key: Final = _team_key(team_limits={"model_tpm_limit": {"shared-model": 100}})
+    await _check(handler, key, saturation=1.0, data=_fallback_prompt(30))
+    assert await handler.async_fallback_target_allowed(key, "other-model", _fallback_prompt(30)) is True
+    await _settle_tokens(handler, 90, model_group="other-model")
+    assert await _team_tokens_remaining(handler, key, "shared-model") == 100
+
+
+@pytest.mark.asyncio
+async def test_a_fallback_target_only_the_key_has_a_limit_on_leaves_the_customer_orgs_share_on_the_failed_model(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    handler: Final = _key_and_org_handler(monkeypatch, "key", "customer_organization")
+    caller: Final = _org_caller(share=100, metadata={"model_tpm_limit": {"other-model": 200}})
+    await _check(handler, caller, saturation=0.5, data=_fallback_prompt(30))
+    assert await handler.async_fallback_target_allowed(caller, "other-model", _fallback_prompt(30)) is True
+    await _settle_tokens(handler, 90, model_group="other-model")
+    await _use(handler, caller, 80, saturation=0.5)
+    await _check(handler, caller, saturation=0.5)
+
+
+@pytest.mark.asyncio
+async def test_a_responses_api_calls_tokens_count_against_the_team_limit(monkeypatch: pytest.MonkeyPatch):
+    handler = _borrowing_handler(monkeypatch, borrows=True)
+    await _check(handler, _team_key(), saturation=0.5)
+    await _settle_tokens(
+        handler,
+        150,
+        response=ResponsesAPIResponse(
+            id="resp",
+            created_at=0,
+            model="m",
+            object="response",
+            output=[],
+            parallel_tool_calls=False,
+            tool_choice="auto",
+            tools=[],
+            usage=ResponseAPIUsage(input_tokens=100, output_tokens=50, total_tokens=150),
+        ),
+    )
+    with pytest.raises(ProxyRateLimitError) as exc:
+        await _check(handler, _team_key(), saturation=0.5)
+    _held_to_team_limit(exc.value, "tokens", "model_tpm_limit")

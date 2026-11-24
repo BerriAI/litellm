@@ -1,7 +1,12 @@
-import asyncio, httpx, importlib, json, os
+import asyncio
+import copy
+import importlib
+import json
+import os
 import sys
 from typing import Final
 
+import httpx
 import pytest
 from pydantic import TypeAdapter
 
@@ -9,19 +14,23 @@ sys.path.insert(
     0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../.."))
 )
 
-import litellm
-from litellm.litellm_core_utils.prompt_templates.common_utils import TOOL_RESULT_IMAGE_BOUNDARY
-from litellm.llms.azure.chat.gpt_reasoning_transformation import AzureOpenAIGPT5Config
-from litellm.llms.azure.chat.gpt_transformation import AzureOpenAIConfig
-from litellm.utils import _invalidate_model_cost_lowercase_map, get_optional_params
 from datetime import datetime
-from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
-from litellm.router import Router
+from unittest.mock import AsyncMock
+
 from openai.types.chat import ChatCompletionMessage
 from openai.types.chat.chat_completion import ChatCompletion, Choice
 from respx import MockRouter
+
+import litellm
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+from litellm.litellm_core_utils.prompt_templates.common_utils import TOOL_RESULT_IMAGE_BOUNDARY
+from litellm.llms.azure.chat.gpt_reasoning_transformation import AzureOpenAIGPT5Config
+from litellm.llms.azure.chat.gpt_transformation import AzureOpenAIConfig
+from litellm.router import Router
+from litellm.types.llms.openai import AllMessageValues
+from litellm.utils import get_optional_params
+from litellm.litellm_core_utils.model_cost_table import publish
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
-from unittest.mock import AsyncMock
 
 _MAPPED_PARAMS: Final = TypeAdapter(dict[str, object])
 _SUPPORTED_PARAMS: Final = TypeAdapter(list[str])
@@ -73,6 +82,53 @@ def test_map_openai_params_with_preview_api_version():
     assert config.map_openai_params(
         non_default_params, optional_params, model, drop_params, api_version
     )
+
+
+def _map_tool_choice_on_pre_tool_choice_api_version(tool_choice: dict[str, object]) -> dict[str, object]:
+    return AzureOpenAIConfig().map_openai_params(
+        {"tool_choice": tool_choice, "tools": [{"type": "function", "function": {"name": "get_time"}}]},
+        {},
+        "gpt-4o",
+        drop_params=True,
+        api_version="2023-07-01-preview",
+    )
+
+
+def test_map_openai_params_drop_params_still_drops_a_named_tool_choice_on_old_api_version():
+    mapped: Final = _map_tool_choice_on_pre_tool_choice_api_version(
+        {"type": "function", "function": {"name": "get_time"}}
+    )
+    assert "tool_choice" not in mapped
+
+
+def test_map_openai_params_drop_params_drops_allowed_tools_on_old_api_version():
+    mapped: Final = _map_tool_choice_on_pre_tool_choice_api_version(
+        {"type": "allowed_tools", "allowed_tools": {"mode": "auto", "tools": [{"type": "function"}]}}
+    )
+    assert "tool_choice" not in mapped
+
+
+def test_map_openai_params_allowed_tools_on_old_api_version_is_a_400_without_drop_params():
+    with pytest.raises(litellm.UnsupportedParamsError, match="2023-12-01-preview") as exc:
+        AzureOpenAIConfig().map_openai_params(
+            {"tool_choice": {"type": "allowed_tools", "allowed_tools": {"mode": "auto", "tools": [{"type": "function"}]}}},
+            {},
+            "gpt-4o",
+            drop_params=False,
+            api_version="2023-07-01-preview",
+        )
+    assert exc.value.status_code == 400
+
+
+def test_map_openai_params_forwards_allowed_tools_on_current_api_version():
+    tool_choice: Final[dict[str, object]] = {
+        "type": "allowed_tools",
+        "allowed_tools": {"mode": "required", "tools": [{"type": "function", "function": {"name": "get_time"}}]},
+    }
+    mapped: Final = AzureOpenAIConfig().map_openai_params(
+        {"tool_choice": tool_choice}, {}, "gpt-4o", drop_params=True, api_version="2025-04-01-preview"
+    )
+    assert mapped["tool_choice"] == tool_choice
 
 
 def test_transform_request_hoists_tool_message_image():
@@ -140,6 +196,53 @@ def test_transform_request_drops_tool_reference_parts():
     assert request["messages"][2]["content"] == ""
 
 
+def test_transform_request_leaves_the_caller_messages_untouched() -> None:
+    city_arguments: Final = json.dumps({"city": "Copenhagen"})
+    messages: Final[list[AllMessageValues]] = [
+        {"role": "user", "content": "What is the weather where I am?"},
+        {"role": "assistant", "content": None, "function_call": {"name": "get_current_city", "arguments": None}},
+        {"role": "function", "name": "get_current_city", "content": "Copenhagen"},
+        {"role": "assistant", "content": None, "function_call": {"name": "get_weather", "arguments": city_arguments}},
+        {"role": "function", "name": "get_weather", "content": "Sunny"},
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Compare these with the attached report"},
+                {"type": "image_url", "image_url": "https://example.com/forecast.png"},
+                {"type": "image_url", "image_url": {"url": "https://example.com/radar.png", "format": "image/png"}},
+                {"type": "file", "file": {"file_id": "assistant-report", "format": "application/pdf"}},
+            ],
+        },
+    ]
+    snapshot: Final = copy.deepcopy(messages)
+
+    request: Final = AzureOpenAIConfig().transform_request(
+        model="gpt-4o",
+        messages=messages,
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+
+    assert request["messages"] == [
+        {"role": "user", "content": "What is the weather where I am?"},
+        {"role": "assistant", "content": None, "function_call": {"name": "get_current_city", "arguments": ""}},
+        {"role": "function", "name": "get_current_city", "content": "Copenhagen"},
+        {"role": "assistant", "content": None, "function_call": {"name": "get_weather", "arguments": city_arguments}},
+        {"role": "function", "name": "get_weather", "content": "Sunny"},
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Compare these with the attached report"},
+                {"type": "image_url", "image_url": {"url": "https://example.com/forecast.png"}},
+                {"type": "image_url", "image_url": {"url": "https://example.com/radar.png"}},
+                {"type": "file", "file": {"file_id": "assistant-report"}},
+            ],
+        },
+    ]
+    assert messages == snapshot
+
+
 @pytest.mark.parametrize(
     "enabled, expected", [(False, ("hi", "sys", "reply", "more")), (True, ("sys", "hi", "reply", "more"))]
 )
@@ -184,6 +287,16 @@ def test_azure_max_tokens_rename_covers_gpt_5_chat_family(model: str, emitted_ke
     )
     assert mapped[emitted_key] == 5
     assert absent_key not in mapped
+
+
+@pytest.mark.parametrize("model", ["chat-latest", "gpt-chat-latest", "us/gpt-chat-latest", "gpt-chat-latest-gs"])
+def test_azure_base_config_renames_max_tokens_for_chat_latest_deployments(model: str) -> None:
+    mapped: Final = _MAPPED_PARAMS.validate_python(
+        AzureOpenAIConfig().map_openai_params(
+            non_default_params={"max_tokens": 5}, optional_params={}, model=model, drop_params=False
+        )
+    )
+    assert mapped == {"max_completion_tokens": 5}
 
 
 @pytest.mark.parametrize("model", ["gpt-5-chat", "gpt-5-chat-latest"])
@@ -469,7 +582,7 @@ async def test_azure_gpt5_async_transform_drops_tool_choice_without_tools() -> N
 def test_transform_request_strips_litellm_format_from_managed_file_id():
     import base64
 
-    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    from litellm.litellm_core_utils.prompt_templates.file_id_utils import (
         update_messages_with_model_file_ids,
     )
 
@@ -556,7 +669,7 @@ def isolate_litellm_state():
     for attr, original_value in original_state.items():
         if hasattr(litellm, attr):
             setattr(litellm, attr, original_value)
-    _invalidate_model_cost_lowercase_map()
+    publish(litellm.model_cost)
 
 _SCALAR_DEFAULTS = {
     "num_retries": getattr(litellm, "num_retries", None),
@@ -806,3 +919,89 @@ def test_azure_keeps_a_later_developer_message_in_place_as_system(config: AzureO
     )
     assert [message["role"] for message in messages] == ["system", "user", "assistant", "system", "user"]
     assert messages[3]["content"] == "Answer with exactly one word."
+
+
+_MARKED_AZURE_PARTS: Final = (
+    {"type": "text", "text": "Stable prefix", "prompt_cache_breakpoint": {"mode": "explicit", "ttl": "30m"}},
+    {"type": "text", "text": "Implicit", "prompt_cache_breakpoint": {"mode": "implicit"}},
+)
+_TRIMMED_AZURE_PARTS: Final = [
+    {"type": "text", "text": "Stable prefix", "prompt_cache_breakpoint": {"mode": "explicit"}},
+    {"type": "text", "text": "Implicit"},
+]
+
+
+@pytest.fixture
+def registered_azure_breakpoint_reader(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "azure/unit-breakpoint-reader",
+        {"litellm_provider": "azure", "mode": "chat", "supports_prompt_cache_breakpoint": True},
+    )
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "azure/unit-breakpoint-ignorer",
+        {"litellm_provider": "azure", "mode": "chat", "supports_prompt_cache_breakpoint": False},
+    )
+
+
+def _azure_request_parts(
+    config: AzureOpenAIConfig, model: str, litellm_params: dict[str, object]
+) -> object:
+    request: Final = config.transform_request(
+        model=model,
+        messages=[{"role": "user", "content": list(_MARKED_AZURE_PARTS)}],
+        optional_params={},
+        litellm_params=litellm_params,
+        headers={},
+    )
+    return request["messages"][0]["content"]
+
+
+@pytest.mark.parametrize("config", [AzureOpenAIConfig(), AzureOpenAIGPT5Config()])
+@pytest.mark.parametrize(
+    "model, litellm_params",
+    [
+        ("unit-breakpoint-reader", {"drop_params": True}),
+        ("my-azure-alias", {"drop_params": True, "base_model": "azure/unit-breakpoint-reader"}),
+        ("my-azure-alias", {"drop_params": True, "model_info": {"base_model": "azure/unit-breakpoint-reader"}}),
+        ("my-azure-alias", {"drop_params": True}),
+    ],
+    ids=("deployment-name", "litellm-params-base-model", "model-info-base-model", "unknown-deployment"),
+)
+def test_azure_drop_params_cuts_part_breakpoints_down_to_what_azure_chat_accepts(
+    registered_azure_breakpoint_reader: None,
+    config: AzureOpenAIConfig,
+    model: str,
+    litellm_params: dict[str, object],
+) -> None:
+    """Azure OpenAI chat answered 400 for a content part's breakpoint ttl and for implicit mode on 2026-10-29,
+    the same as OpenAI chat completions."""
+    assert _azure_request_parts(config, model, litellm_params) == _TRIMMED_AZURE_PARTS
+
+
+@pytest.mark.parametrize("litellm_params", [{}, {"drop_params": False}], ids=("no-drop-params", "drop-params-false"))
+def test_azure_sends_part_breakpoints_as_written_without_drop_params(
+    registered_azure_breakpoint_reader: None, litellm_params: dict[str, object]
+) -> None:
+    assert _azure_request_parts(AzureOpenAIConfig(), "unit-breakpoint-reader", litellm_params) == list(
+        _MARKED_AZURE_PARTS
+    )
+
+
+@pytest.mark.parametrize(
+    "model, litellm_params",
+    [
+        ("unit-breakpoint-ignorer", {"drop_params": True}),
+        ("unit-breakpoint-reader", {"drop_params": True, "base_model": "azure/unit-breakpoint-ignorer"}),
+        ("my-azure-alias", {"drop_params": True, "model_info": {"base_model": "azure/gpt-4.1"}}),
+    ],
+    ids=("known-non-reader", "base-model-known-non-reader", "model-info-base-model-known-non-reader"),
+)
+def test_azure_drop_params_strips_part_breakpoints_from_a_known_non_reader(
+    registered_azure_breakpoint_reader: None, model: str, litellm_params: dict[str, object]
+) -> None:
+    assert _azure_request_parts(AzureOpenAIConfig(), model, litellm_params) == [
+        {"type": "text", "text": "Stable prefix"},
+        {"type": "text", "text": "Implicit"},
+    ]

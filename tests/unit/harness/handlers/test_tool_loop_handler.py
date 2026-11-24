@@ -418,6 +418,37 @@ async def test_usage_and_cost_accumulate_across_model_calls(tmp_path: Path) -> N
     assert ctx.cost == pytest.approx(0.6)
 
 
+@pytest.mark.parametrize("reported_costs", ((None, 0.2), (0.2, None), (0.0, 0.2)))
+async def test_unknown_model_cost_stays_unknown_across_tool_loop_calls(
+    tmp_path: Path, reported_costs: tuple[float | None, float | None]
+) -> None:
+    completion: Final = ScriptedCompletion(
+        (
+            model_response(
+                tool_calls=(function_call("add", '{"a": 2, "b": 3}'),),
+                prompt_tokens=10,
+                completion_tokens=4,
+                hidden_params={"response_cost": reported_costs[0]},
+            ),
+            model_response(
+                content="done",
+                prompt_tokens=20,
+                completion_tokens=5,
+                hidden_params={"response_cost": reported_costs[1]},
+            ),
+        )
+    )
+    ctx: Final = make_context(tmp_path, tools=(add,))
+    handler: Final = make_handler(completion)
+    await handler.start(ctx)
+
+    await run_turn(handler, ctx, "Add")
+
+    assert ctx.calls == 2
+    assert (ctx.input_tokens, ctx.output_tokens) == (30, 9)
+    assert ctx.cost == (None if any(cost is None for cost in reported_costs) else 0.2)
+
+
 async def test_history_survives_stop_and_start(tmp_path: Path) -> None:
     completion: Final = ScriptedCompletion((model_response(content="first"), model_response(content="second")))
     ctx: Final = make_context(tmp_path, instructions="Keep answers concise")

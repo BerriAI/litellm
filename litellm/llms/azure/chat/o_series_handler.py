@@ -18,27 +18,29 @@ from ..common_utils import BaseAzureLLM
 if TYPE_CHECKING:
     from aiohttp import ClientSession
 
+    from litellm.types.llms.openai import AllMessageValues
+
 
 class AzureOpenAIO1ChatCompletion(BaseAzureLLM, OpenAIChatCompletion):
     def completion(
         self,
         model_response: ModelResponse,
         timeout: float | httpx.Timeout,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         logging_obj: LiteLLMLoggingObj,
         model: str | None = None,
-        messages: list | None = None,
-        print_verbose: Callable | None = None,
+        messages: "list[AllMessageValues] | None" = None,
+        print_verbose: Callable[..., object] | None = None,
         api_key: str | None = None,
         api_base: str | None = None,
         api_version: str | None = None,
         dynamic_params: bool | None = None,
         azure_ad_token: str | None = None,
         acompletion: bool = False,
-        logger_fn=None,
+        logger_fn: object = None,
         headers: dict | None = None,
-        custom_prompt_dict: dict = {},
+        custom_prompt_dict: dict[str, object] = {},
         client=None,
         organization: str | None = None,
         custom_llm_provider: str | None = None,
@@ -49,7 +51,7 @@ class AzureOpenAIO1ChatCompletion(BaseAzureLLM, OpenAIChatCompletion):
             litellm_params=litellm_params,
             api_key=api_key,
             api_base=api_base,
-            api_version=api_version,
+            api_version=self.chat_client_api_version(api_base, api_version),
             client=client,
             _is_async=acompletion,
         )

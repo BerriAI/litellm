@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from abc import abstractmethod
-from collections.abc import Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, NoReturn, Protocol, runtime_checkable
@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any, Final, NoReturn, Protocol, runtime_checka
 import httpx
 from pydantic import TypeAdapter
 
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import EmbeddingResponse
 from litellm.types.vector_stores import (
@@ -62,6 +63,32 @@ class LiteLLMVectorStoreEmbeddingExecutor:
         )
 
 
+class EmbedOnceExecutor:
+    def __init__(self, executor: VectorStoreEmbeddingExecutor) -> None:
+        self._executor: Final = executor
+        self._embedded: tuple[str, str, EmbeddingResponse] | None = None
+
+    def _reused(self, model: str, query: str) -> EmbeddingResponse | None:
+        embedded: Final = self._embedded
+        return embedded[2] if embedded is not None and embedded[:2] == (model, query) else None
+
+    def embed(self, model: str, query: str, configuration: Mapping[str, object]) -> EmbeddingResponse:
+        reused: Final = self._reused(model, query)
+        if reused is not None:
+            return reused
+        response: Final = self._executor.embed(model, query, configuration)
+        self._embedded = (model, query, response)
+        return response
+
+    async def aembed(self, model: str, query: str, configuration: Mapping[str, object]) -> EmbeddingResponse:
+        reused: Final = self._reused(model, query)
+        if reused is not None:
+            return reused
+        response: Final = await self._executor.aembed(model, query, configuration)
+        self._embedded = (model, query, response)
+        return response
+
+
 _REQUEST_METADATA: Final = TypeAdapter(dict[str, object])
 
 
@@ -83,7 +110,7 @@ class RouterVectorStoreEmbeddingExecutor:
     def _embedding_kwargs(self, configuration: Mapping[str, object]) -> Mapping[str, object]:
         configured_metadata: Final = configuration.get("metadata")
         metadata: Final = {
-            **(configured_metadata if isinstance(configured_metadata, Mapping) else {}),
+            **(as_str_mapping(configured_metadata) or {}),
             **self.metadata,
         }
         return {
@@ -124,6 +151,13 @@ class RouterVectorStoreEmbeddingExecutor:
 
 
 class BaseVectorStoreConfig:
+    def combine_search_filters(self, registered: object, requested: object) -> object:
+        if registered is None:
+            return requested
+        if requested is None or registered == requested:
+            return registered
+        return {"type": "and", "filters": [registered, requested]}
+
     def validate_create_vector_store(self) -> None:
         return None
 
@@ -135,14 +169,14 @@ class BaseVectorStoreConfig:
 
     def map_openai_params(
         self,
-        non_default_params: dict,
-        optional_params: dict,
+        non_default_params: dict[str, object],
+        optional_params: dict[str, object],
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:
         return optional_params
 
     @abstractmethod
-    def get_auth_credentials(self, litellm_params: dict) -> BaseVectorStoreAuthCredentials:
+    def get_auth_credentials(self, litellm_params: dict[str, object]) -> BaseVectorStoreAuthCredentials:
         pass
 
     @abstractmethod
@@ -157,9 +191,9 @@ class BaseVectorStoreConfig:
         vector_store_search_optional_params: VectorStoreSearchOptionalRequestParams,
         api_base: str,
         litellm_logging_obj: LiteLLMLoggingObj,
-        litellm_params: dict,
+        litellm_params: dict[str, object],
         extra_body: dict[str, object] | None = None,
-    ) -> tuple[str, dict]:
+    ) -> tuple[str, dict[str, object]]:
         pass
 
     async def atransform_search_vector_store_request(
@@ -169,9 +203,9 @@ class BaseVectorStoreConfig:
         vector_store_search_optional_params: VectorStoreSearchOptionalRequestParams,
         api_base: str,
         litellm_logging_obj: LiteLLMLoggingObj,
-        litellm_params: dict,
+        litellm_params: dict[str, object],
         extra_body: dict[str, object] | None = None,
-    ) -> tuple[str, dict]:
+    ) -> tuple[str, dict[str, object]]:
         """
         Optional async version of transform_search_vector_store_request.
         If not implemented, the handler will fall back to the sync version.
@@ -199,7 +233,7 @@ class BaseVectorStoreConfig:
         self,
         vector_store_create_optional_params: VectorStoreCreateOptionalRequestParams,
         api_base: str,
-    ) -> tuple[str, dict]:
+    ) -> tuple[str, dict[str, object]]:
         pass
 
     @abstractmethod
@@ -214,7 +248,7 @@ class BaseVectorStoreConfig:
     def get_complete_url(
         self,
         api_base: str | None,
-        litellm_params: dict,
+        litellm_params: dict[str, object],
     ) -> str:
         """
         OPTIONAL
@@ -235,7 +269,9 @@ class BaseVectorStoreConfig:
     def get_vector_store_list_url(self, api_base: str) -> str:
         return api_base
 
-    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: dict[str, object] | httpx.Headers
+    ) -> BaseLLMException:
         from ..chat.transformation import BaseLLMException
 
         raise BaseLLMException(
@@ -246,12 +282,12 @@ class BaseVectorStoreConfig:
 
     def sign_request(
         self,
-        headers: dict,
-        optional_params: dict,
-        request_data: dict,
+        headers: dict[str, object],
+        optional_params: dict[str, object],
+        request_data: dict[str, object],
         api_base: str,
         api_key: str | None = None,
-    ) -> tuple[dict, bytes | None]:
+    ) -> tuple[dict[str, object], bytes | None]:
         """Optionally sign or modify the request before sending.
 
         Providers like AWS Bedrock require SigV4 signing. Providers that don't
@@ -259,6 +295,36 @@ class BaseVectorStoreConfig:
         for the signed body.
         """
         return headers, None
+
+    def resolve_search_params(
+        self,
+        vector_store_id: str,
+        vector_store_search_optional_params: VectorStoreSearchOptionalRequestParams,
+        api_base: str,
+        litellm_params: Mapping[str, object],
+        headers: Mapping[str, object],
+        get: Callable[[str, Mapping[str, object]], httpx.Response],
+    ) -> VectorStoreSearchOptionalRequestParams:
+        return vector_store_search_optional_params
+
+    async def aresolve_search_params(
+        self,
+        vector_store_id: str,
+        vector_store_search_optional_params: VectorStoreSearchOptionalRequestParams,
+        api_base: str,
+        litellm_params: Mapping[str, object],
+        headers: Mapping[str, object],
+        get: Callable[[str, Mapping[str, object]], Awaitable[httpx.Response]],
+    ) -> VectorStoreSearchOptionalRequestParams:
+        return vector_store_search_optional_params
+
+    def recover_rejected_search(
+        self,
+        rejection: httpx.Response,
+        vector_store_search_optional_params: VectorStoreSearchOptionalRequestParams,
+        litellm_params: Mapping[str, object],
+    ) -> VectorStoreSearchOptionalRequestParams | BaseLLMException | None:
+        return None
 
     def calculate_vector_store_cost(
         self,

@@ -1,0 +1,61 @@
+{
+  "requests": [
+    {
+      "method": "POST",
+      "target": "/anthropic/v1/messages",
+      "headers": {
+        "accept": [
+          "*/*"
+        ],
+        "accept-encoding": [
+          "gzip,deflate"
+        ],
+        "anthropic-version": [
+          "2023-06-01"
+        ],
+        "authorization": [
+          "Bearer <api-key>"
+        ],
+        "content-length": [
+          "101"
+        ],
+        "content-type": [
+          "application/json"
+        ],
+        "host": [
+          "<upstream-address>"
+        ]
+      },
+      "body": {
+        "messages": [
+          {
+            "role": "user",
+            "content": "hi"
+          }
+        ],
+        "max_tokens": 2048,
+        "model": "anthropic.claude-sonnet-4-5"
+      }
+    }
+  ],
+  "outcome": {
+    "complete": {
+      "id": "msg_1",
+      "type": "message",
+      "role": "assistant",
+      "model": "claude-sonnet-4-5",
+      "content": [
+        {
+          "type": "text",
+          "text": "hi"
+        }
+      ],
+      "stop_reason": "end_turn",
+      "stop_sequence": null,
+      "usage": {
+        "input_tokens": 1,
+        "output_tokens": 2
+      }
+    }
+  }
+}

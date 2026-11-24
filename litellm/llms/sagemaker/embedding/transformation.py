@@ -12,6 +12,7 @@ if TYPE_CHECKING:
     from litellm.types.llms.openai import AllEmbeddingInputValues
 
 from httpx._models import Headers, Response
+from pydantic import TypeAdapter
 
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.embedding.transformation import BaseEmbeddingConfig
@@ -24,6 +25,7 @@ from .cohere_transformation import SagemakerCohereEmbeddingConfig
 from .openai_transformation import SagemakerOpenAIEmbeddingConfig
 
 OPENAI_COMPATIBLE_ROUTE: Final = "openai/"
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 def _model_specific_config(model: str) -> BaseEmbeddingConfig | None:
@@ -70,11 +72,11 @@ class SagemakerEmbeddingConfig(BaseEmbeddingConfig):
 
     def map_openai_params(
         self,
-        non_default_params: dict,
-        optional_params: dict,
+        non_default_params: dict[str, object],
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:
         return optional_params
 
     def get_error_class(self, error_message: str, status_code: int, headers: dict | Headers) -> BaseLLMException:
@@ -84,9 +86,9 @@ class SagemakerEmbeddingConfig(BaseEmbeddingConfig):
         self,
         model: str,
         input: "AllEmbeddingInputValues",
-        optional_params: dict,
-        headers: dict,
-    ) -> dict:
+        optional_params: dict[str, object],
+        headers: dict[str, object],
+    ) -> dict[str, object]:
         """
         Transform embedding request for Hugging Face models on SageMaker
         """
@@ -101,14 +103,14 @@ class SagemakerEmbeddingConfig(BaseEmbeddingConfig):
         logging_obj: "LiteLLMLoggingObj",
         api_key: str | None = None,
         request_data: dict = {},
-        optional_params: dict = {},
-        litellm_params: dict = {},
+        optional_params: dict[str, object] = {},
+        litellm_params: dict[str, object] = {},
     ) -> "EmbeddingResponse":
         """
         Transform embedding response for Hugging Face models on SageMaker
         """
         try:
-            response_data: Final = raw_response.json()
+            response_data: Final = _DECODED_JSON.validate_python(raw_response.json())
         except Exception as e:
             raise SagemakerError(
                 message=f"Failed to parse response: {e}",
@@ -158,14 +160,14 @@ class SagemakerEmbeddingConfig(BaseEmbeddingConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, object],
         model: str,
         messages: Sequence[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, str]:
         """
         Validate environment for SageMaker embeddings
         """

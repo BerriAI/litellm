@@ -1,16 +1,22 @@
 """Support for Azure OpenAI gpt-5 model family."""
 
-from collections.abc import Collection
+from collections.abc import Collection, Mapping
 from typing import ClassVar, Final
 
 import litellm
+from litellm._logging import WarningLogger, verbose_logger
 from litellm.llms.openai.chat.gpt_reasoning_transformation import (
     OpenAIGPT5Config,
+    is_chat_latest_name,
     is_gpt_reasoning_series_name,
 )
 from litellm.types.llms.openai import AllMessageValues
 
 from .gpt_transformation import AzureOpenAIConfig
+
+AZURE_GPT5_DEPLOYMENT_PARAMS: Final = ("tool_choice",)
+AZURE_CHAT_LATEST_DEPLOYMENT_PARAMS: Final = ("tool_choice", "user")
+AZURE_LOGPROB_PARAMS: Final = ("logprobs", "top_logprobs")
 
 
 class AzureOpenAIGPT5Config(AzureOpenAIConfig, OpenAIGPT5Config):
@@ -50,7 +56,7 @@ class AzureOpenAIGPT5Config(AzureOpenAIConfig, OpenAIGPT5Config):
 
     @classmethod
     def is_model_gpt_5_model(cls, model: str) -> bool:
-        return is_gpt_reasoning_series_name(model) or "gpt5_series" in model
+        return is_gpt_reasoning_series_name(model) or is_chat_latest_name(model) or "gpt5_series" in model
 
     def get_supported_openai_params(self, model: str) -> list[str]:
         """Get supported parameters for Azure OpenAI GPT-5 models.
@@ -65,32 +71,35 @@ class AzureOpenAIGPT5Config(AzureOpenAIConfig, OpenAIGPT5Config):
         """
         params = OpenAIGPT5Config.get_supported_openai_params(self, model=model)
 
-        # Azure supports tool_choice for GPT-5 deployments, but the base GPT-5 config
-        # can drop it when the deployment name isn't in the OpenAI model registry.
-        if "tool_choice" not in params:
-            params.append("tool_choice")
+        # Azure supports tool_choice for GPT-5 deployments (and user for chat-latest ones), but the base
+        # GPT-5 config can drop them when the deployment name isn't in the OpenAI model registry.
+        deployment_params: Final = (
+            AZURE_CHAT_LATEST_DEPLOYMENT_PARAMS if is_chat_latest_name(model) else AZURE_GPT5_DEPLOYMENT_PARAMS
+        )
 
         # Only gpt-5.2+ has been verified to support logprobs on Azure.
         # The base OpenAI class includes logprobs for gpt-5.1+, but Azure
         # hasn't verified support for gpt-5.1, so remove them unless gpt-5.2/5.4+.
-        if self._supports_reasoning_effort_level(model, "none") and not self.is_model_gpt_5_2_model(model):
-            params = [p for p in params if p not in ["logprobs", "top_logprobs"]]
-        elif self.is_model_gpt_5_2_model(model):
-            azure_supported_params: Final = ["logprobs", "top_logprobs"]
-            params.extend(azure_supported_params)
+        supports_logprobs: Final = self.is_model_gpt_5_2_model(model)
+        if self._supports_reasoning_effort_level(model, "none") and not supports_logprobs:
+            params = [p for p in params if p not in AZURE_LOGPROB_PARAMS]
+        azure_params: Final = (*deployment_params, *AZURE_LOGPROB_PARAMS) if supports_logprobs else deployment_params
+        missing_azure_params: Final = tuple(param for param in azure_params if param not in params)
+        params.extend(missing_azure_params)
 
         return params
 
     def map_openai_params(
         self,
-        non_default_params: dict,
-        optional_params: dict,
+        non_default_params: dict[str, object],
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
         api_version: str = "",
         *,
         declared_reasoning_efforts: Collection[str] | None = None,
-    ) -> dict:
+        reasoning_drop_logger: WarningLogger = verbose_logger,
+    ) -> dict[str, object]:
         return OpenAIGPT5Config.map_openai_params(
             self,
             non_default_params=non_default_params,
@@ -98,16 +107,17 @@ class AzureOpenAIGPT5Config(AzureOpenAIConfig, OpenAIGPT5Config):
             model=model,
             drop_params=drop_params,
             declared_reasoning_efforts=declared_reasoning_efforts,
+            reasoning_drop_logger=reasoning_drop_logger,
         )
 
     def transform_request(
         self,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
-        headers: dict,
-    ) -> dict:
+        optional_params: dict[str, object],
+        litellm_params: Mapping[str, object],
+        headers: dict[str, object],
+    ) -> dict[str, object]:
         model = model.replace(self.GPT5_SERIES_ROUTE, "")
         return super().transform_request(
             model=model,

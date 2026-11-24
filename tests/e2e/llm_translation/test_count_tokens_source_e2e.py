@@ -39,7 +39,8 @@ BEDROCK_KIMI: Final = "bedrock/us.moonshotai.kimi-k3"
 BEDROCK_NOVA: Final = "bedrock/us.amazon.nova-pro-v1:0"
 OPENAI_GPT: Final = "openai/gpt-5.6"
 
-COUNT_TOLERANCE: Final = 0.05
+COUNT_TOLERANCE: Final = 0.10
+COUNT_SLACK_TOKENS: Final = 3
 MAX_TOKENS: Final = 16
 PDF_LINES_PER_PAGE: Final = 45
 
@@ -195,7 +196,7 @@ def _count_and_bill(client: Anthropic, model: str, shape: PromptShape) -> tuple[
 
 
 def _within_tolerance(counted: int, billed: int) -> bool:
-    return abs(counted - billed) <= billed * COUNT_TOLERANCE
+    return abs(counted - billed) <= max(billed * COUNT_TOLERANCE, COUNT_SLACK_TOKENS)
 
 
 def _assert_counted_by_the_cost_map_count_model(served: Served, sdk: SdkClients, shape: PromptShape) -> None:

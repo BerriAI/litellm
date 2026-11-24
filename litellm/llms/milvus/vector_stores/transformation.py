@@ -57,7 +57,9 @@ class MilvusVectorStoreConfig(BaseQueryEmbeddingVectorStoreConfig):
     def __init__(self):
         super().__init__()
 
-    def validate_environment(self, headers: dict, litellm_params: GenericLiteLLMParams | None) -> dict:
+    def validate_environment(
+        self, headers: dict[str, str], litellm_params: GenericLiteLLMParams | None
+    ) -> dict[str, str]:
         api_key: str | None = None
         if litellm_params is not None:
             api_key = litellm_params.api_key or get_secret_str("MILVUS_API_KEY")
@@ -71,7 +73,7 @@ class MilvusVectorStoreConfig(BaseQueryEmbeddingVectorStoreConfig):
 
         return headers
 
-    def get_auth_credentials(self, litellm_params: dict) -> BaseVectorStoreAuthCredentials:
+    def get_auth_credentials(self, litellm_params: Mapping[str, object]) -> BaseVectorStoreAuthCredentials:
         api_key: Final = litellm_params.get("api_key")
         if not api_key:
             raise ValueError(
@@ -96,7 +98,9 @@ class MilvusVectorStoreConfig(BaseQueryEmbeddingVectorStoreConfig):
             ],
         }
 
-    def map_openai_params(self, non_default_params: dict, optional_params: dict, drop_params: bool) -> dict:
+    def map_openai_params(
+        self, non_default_params: Mapping[str, object], optional_params: dict[str, object], drop_params: bool
+    ) -> dict[str, object]:
         for param, value in non_default_params.items():
             if param in MILVUS_OPTIONAL_PARAMS:
                 optional_params[param] = value
@@ -105,7 +109,7 @@ class MilvusVectorStoreConfig(BaseQueryEmbeddingVectorStoreConfig):
     def get_complete_url(
         self,
         api_base: str | None,
-        litellm_params: dict,
+        litellm_params: Mapping[str, object],
     ) -> str:
         """
         Get the base endpoint for Milvus API
@@ -252,10 +256,11 @@ class MilvusVectorStoreConfig(BaseQueryEmbeddingVectorStoreConfig):
 
                 # Build attributes with all available metadata
                 # Exclude system fields and already-processed fields
-                attributes = {}
-                for key, value in result.items():
-                    if key not in ["id", "content", "distance", text_field]:
-                        attributes[key] = value
+                attributes = {
+                    key: value
+                    for key, value in decoded_json_object(_DECODED_JSON.validate_python(result)).items()
+                    if key not in ["id", "content", "distance", text_field]
+                }
 
                 result_obj = VectorStoreSearchResult(
                     score=score,
@@ -283,7 +288,7 @@ class MilvusVectorStoreConfig(BaseQueryEmbeddingVectorStoreConfig):
         self,
         vector_store_create_optional_params: VectorStoreCreateOptionalRequestParams,
         api_base: str,
-    ) -> tuple[str, dict]:
+    ) -> tuple[str, dict[str, object]]:
         raise NotImplementedError
 
     def transform_create_vector_store_response(self, response: httpx.Response) -> VectorStoreCreateResponse:

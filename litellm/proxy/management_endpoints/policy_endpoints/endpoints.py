@@ -12,7 +12,7 @@ All /policy management endpoints
 import copy
 import json
 import os
-from collections.abc import AsyncGenerator, AsyncIterator, Mapping
+from collections.abc import AsyncGenerator, AsyncIterator, Mapping, Sequence
 from typing import TYPE_CHECKING, Final, Literal, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -28,6 +28,7 @@ from litellm.constants import (
     MAX_COMPETITOR_NAMES,
 )
 from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.integrations.custom_logger import subclass_overrides_hook
 from litellm.litellm_core_utils.offline_mode import is_offline_mode
 from litellm.llms.openai.chat.guardrail_translation.handler import (
     OpenAIChatCompletionsHandler,
@@ -122,7 +123,7 @@ class ApplyPoliciesListResult(TypedDict):
 async def apply_policies(
     policy_names: list[str] | None,
     inputs: GenericGuardrailAPIInputs,
-    request_data: dict,
+    request_data: dict[str, object],
     input_type: Literal["request", "response"],
     proxy_logging_obj: "LiteLLMLoggingObj",
     guardrail_names: list[str] | None = None,
@@ -181,7 +182,7 @@ async def apply_policies(
             continue
         if not isinstance(callback, CustomGuardrail):
             continue
-        if "apply_guardrail" not in type(callback).__dict__:
+        if not subclass_overrides_hook(type(callback), "apply_guardrail", CustomGuardrail):
             verbose_proxy_logger.debug(
                 "apply_policies: guardrail '%s' has no apply_guardrail, skipping",
                 guardrail_name,
@@ -213,7 +214,9 @@ async def apply_policies(
     return {"inputs": current_inputs, "guardrail_errors": guardrail_errors}
 
 
-def _chat_body_from_inputs(inputs: GenericGuardrailAPIInputs, agent_id: str, request_data: dict) -> dict:
+def _chat_body_from_inputs(
+    inputs: GenericGuardrailAPIInputs, agent_id: str, request_data: Mapping[str, object]
+) -> dict[str, object]:
     """Build a chat completion request body from guardrail inputs and agent_id."""
     messages: list[dict]
     structured: Final = inputs.get("structured_messages")
@@ -233,18 +236,18 @@ def _chat_body_from_inputs(inputs: GenericGuardrailAPIInputs, agent_id: str, req
     return body
 
 
-def _request_with_json_body(body: dict) -> Request:
+def _request_with_json_body(body: Mapping[str, object]) -> Request:
     """Create a Starlette Request that will return the given dict as parsed JSON body."""
     body_bytes: Final = json.dumps(body).encode()
     received: Final[list[bool]] = [False]
 
-    async def receive() -> dict:
+    async def receive() -> dict[str, object]:
         if received[0]:
             return {"type": "http.disconnect"}
         received[0] = True
         return {"type": "http.request", "body": body_bytes, "more_body": False}
 
-    scope: Final[dict] = {
+    scope: Final[dict[str, object]] = {
         "type": "http",
         "method": "POST",
         "path": "/v1/chat/completions",
@@ -333,7 +336,7 @@ async def test_policies_and_guardrails(
             item_result = await apply_policies(
                 policy_names=data.policy_names,
                 inputs=inp,
-                request_data=data.request_data,
+                request_data=copy.deepcopy(data.request_data),
                 input_type=data.input_type,
                 proxy_logging_obj=logging_obj,
                 guardrail_names=data.guardrail_names,
@@ -812,6 +815,7 @@ async def _stream_llm_competitor_names(
         model=model,
         messages=[{"role": "user", "content": prompt}],
         temperature=COMPETITOR_LLM_TEMPERATURE,
+        drop_params=True,
         stream=True,
     )
     buffer = ""
@@ -929,7 +933,9 @@ def clean_competitor_line(line: str) -> str | None:
 _clean_competitor_line: Final = clean_competitor_line
 
 
-async def _generate_competitor_variations(competitors: list, model: str = DEFAULT_COMPETITOR_DISCOVERY_MODEL) -> dict:
+async def _generate_competitor_variations(
+    competitors: list[str], model: str = DEFAULT_COMPETITOR_DISCOVERY_MODEL
+) -> dict[str, list[str]]:
     """Generate common misspellings, abbreviations, and alternate names for each competitor."""
     if not competitors:
         return {}
@@ -956,6 +962,7 @@ async def _generate_competitor_variations(competitors: list, model: str = DEFAUL
             model=model,
             messages=[{"role": "user", "content": prompt}],
             temperature=COMPETITOR_LLM_TEMPERATURE,
+            drop_params=True,
         )
         raw: Final = response.choices[0].message.content or ""
         return parse_variations_response(raw, capped)
@@ -964,7 +971,7 @@ async def _generate_competitor_variations(competitors: list, model: str = DEFAUL
         return {}
 
 
-def parse_variations_response(raw: str, competitors: list) -> dict[str, list[str]]:
+def parse_variations_response(raw: str, competitors: Sequence[str]) -> dict[str, list[str]]:
     """Parse the LLM response for competitor variations into a name -> variations map."""
     # Build a lowercase lookup for case-insensitive matching
     lower_to_canonical: Final = {comp.lower(): comp for comp in competitors}
@@ -988,7 +995,7 @@ def parse_variations_response(raw: str, competitors: list) -> dict[str, list[str
 _parse_variations_response: Final = parse_variations_response
 
 
-async def _discover_competitors_via_llm(prompt: str, model: str = DEFAULT_COMPETITOR_DISCOVERY_MODEL) -> list:
+async def _discover_competitors_via_llm(prompt: str, model: str = DEFAULT_COMPETITOR_DISCOVERY_MODEL) -> list[str]:
     """Call an onboarded LLM to discover competitor names."""
     try:
         from litellm.proxy.proxy_server import llm_router
@@ -999,6 +1006,7 @@ async def _discover_competitors_via_llm(prompt: str, model: str = DEFAULT_COMPET
             model=model,
             messages=[{"role": "user", "content": prompt}],
             temperature=COMPETITOR_LLM_TEMPERATURE,
+            drop_params=True,
         )
         raw: Final = response.choices[0].message.content or ""
         competitors: Final = [
@@ -1022,9 +1030,9 @@ _build_all_names_per_competitor: Final = build_all_names_per_competitor
 
 def build_competitor_guardrail_definitions(
     definitions: list,
-    competitors: list,
+    competitors: list[str],
     brand_name: str,
-    variations_map: dict | None = None,
+    variations_map: dict[str, list[str]] | None = None,
 ) -> list:
     """Build enriched guardrailDefinitions with competitor names and variations populated."""
     variations_map = variations_map or {}
@@ -1060,9 +1068,9 @@ def build_competitor_guardrail_definitions(
 _build_competitor_guardrail_definitions: Final = build_competitor_guardrail_definitions
 
 
-def build_name_blocked_words(competitors: list[str], all_names: dict[str, list[str]]) -> list[dict]:
+def build_name_blocked_words(competitors: list[str], all_names: dict[str, list[str]]) -> list[dict[str, str]]:
     """Build blocked word entries for direct competitor name mentions."""
-    result: Final = []
+    result: Final[list[dict[str, str]]] = []
     for comp in competitors:
         for name in all_names[comp]:
             desc = f"Competitor: {comp}" if name == comp else f"Competitor variation ({comp}): {name}"
@@ -1073,9 +1081,9 @@ def build_name_blocked_words(competitors: list[str], all_names: dict[str, list[s
 _build_name_blocked_words: Final = build_name_blocked_words
 
 
-def build_recommendation_blocked_words(competitors: list[str], all_names: dict[str, list[str]]) -> list[dict]:
+def build_recommendation_blocked_words(competitors: list[str], all_names: dict[str, list[str]]) -> list[dict[str, str]]:
     """Build blocked word entries for competitor recommendations."""
-    result: Final = []
+    result: Final[list[dict[str, str]]] = []
     for comp in competitors:
         for name in all_names[comp]:
             for prefix in ["try", "use", "switch to", "consider"]:
@@ -1094,9 +1102,9 @@ _build_recommendation_blocked_words: Final = build_recommendation_blocked_words
 
 def build_comparison_blocked_words(
     competitors: list[str], all_names: dict[str, list[str]], brand_name: str
-) -> list[dict]:
+) -> list[dict[str, str]]:
     """Build blocked word entries for unfavorable competitor comparisons."""
-    result: Final = []
+    result: Final[list[dict[str, str]]] = []
     for comp in competitors:
         for name in all_names[comp]:
             result.append(

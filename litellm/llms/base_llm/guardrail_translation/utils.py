@@ -4,13 +4,30 @@ import json
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from typing import Final, TypeVar, cast  # noqa: TID251  # a rebuilt chat row has no typed constructor across roles
 
+from openai.types.responses import ResponseFunctionWebSearch
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
 from litellm.llms.custom_httpx.sse_lines import split_sse_lines
+from litellm.types.llms.anthropic import ANTHROPIC_SERVER_TOOL_USE_ID_PREFIX
 from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicUsage
+from litellm.types.llms.gemini import GEMINI_SEARCH_TOOL_ID_PREFIX
 from litellm.types.llms.openai import AllMessageValues, ResponseAPIUsage
+from litellm.types.responses.main import hosted_web_tool_call, web_search_call_tool_id, with_hosted_web_tool_arguments
 
 _DECODED_JSON: Final = TypeAdapter(object)
+_SCANNED_HOSTED_SEARCH_TOOL_ID_PREFIXES: Final = (ANTHROPIC_SERVER_TOOL_USE_ID_PREFIX, GEMINI_SEARCH_TOOL_ID_PREFIX)
+
+
+def _dict_or_none(value: object) -> Mapping[object, object] | None:
+    return value if isinstance(value, dict) else None
+
+
+def _list_or_none(value: object) -> Sequence[object] | None:
+    return value if isinstance(value, list) else None
+
+
+def _mapping_or_none(value: object) -> Mapping[object, object] | None:
+    return value if isinstance(value, Mapping) else None
 
 
 def _anthropic_stream_chunk_events(item: object) -> list[dict]:
@@ -34,7 +51,7 @@ def _anthropic_stream_chunk_events(item: object) -> list[dict]:
                 continue
             try:
                 parsed = _DECODED_JSON.validate_python(json.loads(payload))
-            except json.JSONDecodeError:
+            except (ValueError, RecursionError):
                 continue
             if isinstance(parsed, dict):
                 events.append(parsed)
@@ -71,8 +88,9 @@ def _usage_from_anthropic_stream_chunks(original_response: Sequence[object]) -> 
 
 
 def _blocked_usage_obj(original_response: object) -> object:
-    if isinstance(original_response, dict):
-        return original_response.get("usage")
+    fields: Final = _dict_or_none(original_response)
+    if fields is not None:
+        return fields.get("usage")
     if original_response is not None and not isinstance(original_response, list):
         return getattr(original_response, "usage", None)
     return None
@@ -94,8 +112,9 @@ def blocked_response_usage(original_response: object) -> AnthropicUsage:
     discarding it. Pre-call blocks never invoked the LLM (no original_response),
     so usage is zero.
     """
-    if isinstance(original_response, list):
-        stream_usage: Final = _usage_from_anthropic_stream_chunks(original_response)
+    chunks: Final = _list_or_none(original_response)
+    if chunks is not None:
+        stream_usage: Final = _usage_from_anthropic_stream_chunks(chunks)
         if stream_usage is not None:
             return stream_usage
 
@@ -130,9 +149,58 @@ def blocked_responses_api_usage(original_response: object) -> ResponseAPIUsage:
 
 
 def stream_item_field(item: object, field: str) -> object | None:
-    if isinstance(item, dict):
-        return item.get(field)
+    fields: Final = _dict_or_none(item)
+    if fields is not None:
+        return fields.get(field)
     return getattr(item, field, None)
+
+
+def web_search_call(item: object) -> ResponseFunctionWebSearch | None:
+    if isinstance(item, ResponseFunctionWebSearch):
+        return item
+    if stream_item_field(item, "type") != "web_search_call":
+        return None
+    try:
+        return ResponseFunctionWebSearch.model_validate(item.model_dump() if isinstance(item, BaseModel) else item)
+    except ValidationError:
+        return None
+
+
+def scanned_hosted_web_tool_call(item: object) -> tuple[str, str, str] | None:
+    search: Final = web_search_call(item)
+    tool_id: Final = None if search is None else web_search_call_tool_id(search.id)
+    if search is None or tool_id is None or not tool_id.startswith(_SCANNED_HOSTED_SEARCH_TOOL_ID_PREFIXES):
+        return None
+    hosted_call: Final = hosted_web_tool_call(search.action)
+    return None if hosted_call is None else (tool_id, *hosted_call)
+
+
+def hosted_web_tool_arguments(item: object) -> str | None:
+    hosted_call: Final = scanned_hosted_web_tool_call(item)
+    return None if hosted_call is None else hosted_call[2]
+
+
+def with_web_search_call_arguments(item: object, arguments: str) -> object:
+    search: Final = web_search_call(item)
+    if search is None:
+        return item
+    action: Final = with_hosted_web_tool_arguments(search.action, arguments)
+    if isinstance(item, ResponseFunctionWebSearch):
+        return item.model_copy(update={"action": action})
+    if isinstance(item, BaseModel):
+        return item.model_copy(update={"action": action.model_dump()})
+    fields: Final = cast("Mapping[str, object]", item)  # cast-ok: a validated web_search_call dict is str-keyed JSON
+    return {**fields, "action": action.model_dump()}
+
+
+def choice_payload(choice: object) -> object | None:
+    delta: Final = stream_item_field(choice, "delta")
+    return delta if delta is not None else stream_item_field(choice, "message")
+
+
+def choice_refusal(choice: object) -> str | None:
+    refusal: Final = stream_item_field(choice_payload(choice), "refusal")
+    return refusal if isinstance(refusal, str) and refusal else None
 
 
 def stream_item_fingerprint(item: object) -> str:
@@ -155,15 +223,12 @@ def blocked_chat_stream_usage(original_response: object) -> tuple[int, int]:
     (``stream_options.include_usage``). Non-list originals defer to
     ``blocked_response_usage``.
     """
-    if not isinstance(original_response, list):
+    chunks: Final = _list_or_none(original_response)
+    if chunks is None:
         usage: Final = blocked_response_usage(original_response)
         return usage.get("input_tokens", 0), usage.get("output_tokens", 0)
     usage_obj: Final = next(
-        (
-            chunk_usage
-            for item in reversed(original_response)
-            if (chunk_usage := stream_item_field(item, "usage")) is not None
-        ),
+        (chunk_usage for item in reversed(chunks) if (chunk_usage := stream_item_field(item, "usage")) is not None),
         None,
     )
     return (
@@ -177,16 +242,18 @@ def blocked_responses_stream_usage(original_response: object) -> ResponseAPIUsag
     ``ResponseAPIUsage`` for a synthetic guardrail-blocked /v1/responses stream.
 
     A mid-stream block carries the events received so far as a list; real usage
-    rides on the ``response.completed`` event's response when the upstream sent
-    one. Non-list originals defer to ``blocked_responses_api_usage``.
+    rides on the ``response.completed`` or ``response.incomplete`` event's
+    response when the upstream sent one. Non-list originals defer to
+    ``blocked_responses_api_usage``.
     """
-    if not isinstance(original_response, list):
+    events: Final = _list_or_none(original_response)
+    if events is None:
         return blocked_responses_api_usage(original_response)
     completed: Final = next(
         (
             response
-            for item in reversed(original_response)
-            if stream_item_field(item, "type") == "response.completed"
+            for item in reversed(events)
+            if stream_item_field(item, "type") in ("response.completed", "response.incomplete")
             and (response := stream_item_field(item, "response")) is not None
         ),
         None,
@@ -212,8 +279,12 @@ def effective_skip_tool_message_for_guardrail(guardrail_to_apply: object) -> boo
     return bool(getattr(litellm, "skip_tool_message_in_guardrail", False))
 
 
+def _row_field(row: Mapping[str, object], key: str) -> object:
+    return row.get(key)
+
+
 def _message_role(message: AllMessageValues) -> str:
-    return str((message or {}).get("role") or "").lower()
+    return str(_row_field(message or {}, "role") or "").lower()
 
 
 def openai_messages_without_system(
@@ -246,6 +317,10 @@ def filter_messages_by_skip_flags(
 
 def effective_scan_only_tool_results_for_guardrail(guardrail_to_apply: object) -> bool:
     return getattr(guardrail_to_apply, "scan_only_tool_results", None) is True
+
+
+def effective_scan_tool_calls_as_text_for_guardrail(guardrail_to_apply: object) -> bool:
+    return getattr(guardrail_to_apply, "scan_tool_calls_as_text", None) is True
 
 
 def role_out_of_guardrail_scope(
@@ -285,13 +360,14 @@ ToolT = TypeVar("ToolT")
 
 
 def openai_tool_name(tool: object) -> str | None:
-    if not isinstance(tool, dict):
+    fields: Final = _dict_or_none(tool)
+    if fields is None:
         return None
-    function: Final = tool.get("function")
-    if isinstance(function, dict):
+    function: Final = _dict_or_none(fields.get("function"))
+    if function is not None:
         function_name: Final = function.get("name")
         return function_name if isinstance(function_name, str) else None
-    flat_name: Final = tool.get("name")
+    flat_name: Final = fields.get("name")
     return flat_name if isinstance(flat_name, str) else None
 
 
@@ -310,11 +386,12 @@ def anthropic_tool_names(tool: object) -> tuple[str, ...]:
     """Every name a /v1/messages tool dict can act under: the flat Anthropic ``name`` plus
     ``function.name`` for OpenAI-format tools the bridge forwards verbatim. Allowlist checks
     must see both, or a decoy flat name could smuggle a disallowed ``function.name`` through."""
-    if not isinstance(tool, dict):
+    fields: Final = _dict_or_none(tool)
+    if fields is None:
         return ()
-    function: Final = tool.get("function") if tool.get("type") == "function" else None
-    function_name: Final = function.get("name") if isinstance(function, dict) else None
-    return tuple(name for name in (tool.get("name"), function_name) if isinstance(name, str) and name)
+    function: Final = _dict_or_none(fields.get("function")) if fields.get("type") == "function" else None
+    function_name: Final = function.get("name") if function is not None else None
+    return tuple(name for name in (fields.get("name"), function_name) if isinstance(name, str) and name)
 
 
 def anthropic_tool_name(tool: object) -> str | None:
@@ -381,9 +458,10 @@ def merge_guardrailed_scoped_messages(
 
 
 def _content_part_text(part: object) -> str | None:
-    if not isinstance(part, Mapping):
+    fields: Final = _mapping_or_none(part)
+    if fields is None:
         return None
-    text: Final = part.get("text")
+    text: Final = fields.get("text")
     return text if isinstance(text, str) else None
 
 
@@ -391,8 +469,9 @@ def message_slot_texts(message: Mapping[str, object]) -> tuple[str, ...]:
     content: Final = message.get("content")
     if isinstance(content, str):
         return (content,)
-    if isinstance(content, list):
-        return tuple(text for part in content if (text := _content_part_text(part)) is not None)
+    parts: Final = _list_or_none(content)
+    if parts is not None:
+        return tuple(text for part in parts if (text := _content_part_text(part)) is not None)
     return ()
 
 
@@ -401,9 +480,10 @@ def message_text_slot_count(message: AllMessageValues) -> int:
 
 
 def _part_with_text(part: object, text: str) -> object:
-    if not isinstance(part, Mapping):
+    fields: Final = _mapping_or_none(part)
+    if fields is None:
         return part
-    return {**part, "text": text}
+    return {**fields, "text": text}
 
 
 def _content_with_slot_texts(content: Sequence[object], texts: Sequence[str]) -> Sequence[object]:
@@ -423,10 +503,11 @@ def message_with_slot_texts(message: AllMessageValues, texts: Sequence[str]) -> 
     """
     if message_text_slot_count(message) != len(texts):
         return None
-    content: Final = message.get("content")
-    if not isinstance(content, (str, list)):
+    content: Final = _row_field(message, "content")
+    parts: Final = _list_or_none(content)
+    if not isinstance(content, str) and parts is None:
         return message
-    rewritten_content: Final = texts[0] if isinstance(content, str) else _content_with_slot_texts(content, texts)
+    rewritten_content: Final = texts[0] if parts is None else _content_with_slot_texts(parts, texts)
     rewritten: Final = {**message, "content": rewritten_content}
     return cast("AllMessageValues", rewritten)  # cast-ok: the same row with only its text slots swapped
 

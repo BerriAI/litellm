@@ -8,6 +8,7 @@ import litellm
 from litellm.llms.azure.common_utils import (
     BaseAzureLLM,
     cached_azure_ad_token_refresh_provider,
+    entra_token,
 )
 from litellm.llms.openai.decisions.transformation import OpenAIDecisionsConfig
 from litellm.secret_managers.main import get_secret_str
@@ -61,7 +62,7 @@ class AzureDecisionsConfig(OpenAIDecisionsConfig):
         scope: Final = (
             params.azure_scope or get_secret_str("AZURE_SCOPE") or "https://cognitiveservices.azure.com/.default"
         )
-        azure_headers["Authorization"] = f"Bearer {cached_azure_ad_token_refresh_provider(scope)()}"
+        azure_headers["Authorization"] = f"Bearer {entra_token(cached_azure_ad_token_refresh_provider(scope))}"
         return azure_headers
 
     async def avalidate_environment(

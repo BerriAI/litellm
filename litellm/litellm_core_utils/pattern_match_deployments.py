@@ -5,10 +5,12 @@ Class to handle llm wildcard routing and regex pattern matching
 import copy
 import itertools
 import re
+from collections.abc import Mapping, Sequence
 from re import Match
-from typing import Final
+from typing import Final, TypeVar
 
 from pydantic import BaseModel, ConfigDict, TypeAdapter
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_router_logger
 from litellm.litellm_core_utils.get_llm_provider_logic import inferred_provider
@@ -22,6 +24,32 @@ class _RoutedDeployment(BaseModel):
 
 
 _ROUTED_DEPLOYMENTS: Final = TypeAdapter(tuple[_RoutedDeployment, ...])
+_DeploymentsT = TypeVar("_DeploymentsT")
+_PATTERN_WIDE_CACHE_FLAGS: Final = frozenset(
+    (
+        "supports_prompt_cache_breakpoint",
+        "supports_openai_prompt_cache_breakpoint",
+        "supports_bedrock_converse_cache_point",
+        "supports_prompt_caching",
+    )
+)
+_AZURE_AI_PATTERN_CACHE_FLAGS: Final = frozenset(("supports_prompt_caching",))
+
+
+def _cache_flags_left_to_the_catalog(litellm_params: Mapping[str, object]) -> frozenset[str]:
+    model: Final = litellm_params.get("model")
+    provider: Final = litellm_params.get("custom_llm_provider") or inferred_provider(
+        model if isinstance(model, str) else None
+    )
+    return _AZURE_AI_PATTERN_CACHE_FLAGS if provider == "azure_ai" else _PATTERN_WIDE_CACHE_FLAGS
+
+
+class _PatternDeploymentParams(TypedDict):
+    model: ReadOnly[str]
+
+
+class _PatternDeployment(TypedDict):
+    litellm_params: ReadOnly[_PatternDeploymentParams]
 
 
 class PatternUtils:
@@ -45,8 +73,8 @@ class PatternUtils:
 
     @staticmethod
     def sorted_patterns(
-        patterns: dict[str, list[dict]],
-    ) -> list[tuple[str, list[dict]]]:
+        patterns: Mapping[str, _DeploymentsT],
+    ) -> list[tuple[str, _DeploymentsT]]:
         """
         Cached property for patterns sorted by specificity.
 
@@ -73,7 +101,7 @@ class PatternMatchRouter:
         self.patterns: dict[str, list] = {}
         self._pattern_utils: Final = pattern_utils
 
-    def add_pattern(self, pattern: str, llm_deployment: dict):
+    def add_pattern(self, pattern: str, llm_deployment: dict[str, object]):
         """
         Add a regex pattern and the corresponding llm deployments to the patterns
 
@@ -133,6 +161,11 @@ class PatternMatchRouter:
                 matched_pattern=matched_pattern,
                 litellm_deployment_litellm_model=deployment["litellm_params"]["model"],
             )
+            if "*" in deployment["litellm_params"]["model"] and isinstance(new_deployment.get("model_info"), dict):
+                left_to_the_catalog = _cache_flags_left_to_the_catalog(deployment["litellm_params"])
+                new_deployment["model_info"] = {
+                    key: value for key, value in new_deployment["model_info"].items() if key not in left_to_the_catalog
+                }
             new_deployments.append(new_deployment)
 
         return new_deployments
@@ -260,8 +293,10 @@ class PatternMatchRouter:
             return pattern_match
         return []
 
-    def get_models_by_pattern(self, model: str, custom_llm_provider: str | None = None) -> frozenset[str]:
-        """The models get_deployments_by_pattern would route ``model`` to, without copying the deployments."""
+    def get_routed_deployments(
+        self, model: str, custom_llm_provider: str | None = None
+    ) -> tuple[tuple[Mapping[str, object], str], ...]:
+        """Each deployment get_deployments_by_pattern would route ``model`` to, uncopied, with its concrete model."""
         provider: Final = custom_llm_provider or inferred_provider(model)
         requests_by_pattern: Final = itertools.product((model, f"{provider}/{model}"), self.patterns)
         matched: Final = next(
@@ -273,16 +308,27 @@ class PatternMatchRouter:
             None,
         )
         if matched is None:
-            return frozenset()
+            return ()
         pattern_match, pattern = matched
-        return frozenset(
-            PatternMatchRouter.set_deployment_model_name(
-                matched_pattern=pattern_match, litellm_deployment_litellm_model=deployment["litellm_params"]["model"]
+        return tuple(
+            (
+                deployment,
+                PatternMatchRouter.set_deployment_model_name(
+                    matched_pattern=pattern_match,
+                    litellm_deployment_litellm_model=deployment["litellm_params"]["model"],
+                ),
             )
-            for deployment in self.patterns.get(  # pyright: ignore[reportUnknownMemberType]  # untyped deployment dicts
-                pattern, ()
-            )
+            for deployment in self._deployments_of(pattern)
         )
+
+    def _deployments_of(self, pattern: str) -> Sequence[_PatternDeployment]:
+        return self.patterns.get(  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # untyped deployments
+            pattern, ()
+        )
+
+    def get_models_by_pattern(self, model: str, custom_llm_provider: str | None = None) -> frozenset[str]:
+        """The models get_deployments_by_pattern would route ``model`` to, without copying the deployments."""
+        return frozenset(routed_model for _, routed_model in self.get_routed_deployments(model, custom_llm_provider))
 
 
 # Example usage:

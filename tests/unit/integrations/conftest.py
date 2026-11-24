@@ -1,14 +1,18 @@
 import functools
 import http.server
+import importlib.abc
 import ipaddress
 import os
 import queue
 import ssl
+import sys
 import threading
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from importlib.machinery import ModuleSpec
 from pathlib import Path
+from types import ModuleType
 from typing import Final
 
 import pytest
@@ -73,6 +77,36 @@ def write_self_signed_cert(directory: Path, stem: str) -> tuple[Path, Path]:
         )
     )
     return certificate_path, key_path
+
+
+PROXY_ONLY_PACKAGES: Final = frozenset({"fastapi", "starlette"})
+
+
+class _ProxyOnlyPackageBlocker(importlib.abc.MetaPathFinder):
+    def find_spec(
+        self,
+        fullname: str,
+        path: Sequence[str] | None = None,
+        target: ModuleType | None = None,
+    ) -> ModuleSpec | None:
+        if fullname.partition(".")[0] in PROXY_ONLY_PACKAGES:
+            raise ModuleNotFoundError(f"No module named {fullname!r}")
+        return None
+
+
+def _needs_proxy_extras(module_name: str) -> bool:
+    return (
+        module_name.partition(".")[0] in PROXY_ONLY_PACKAGES
+        or module_name == "litellm.proxy"
+        or module_name.startswith("litellm.proxy.")
+    )
+
+
+@pytest.fixture
+def sdk_only_install(monkeypatch: pytest.MonkeyPatch) -> None:
+    for module_name in tuple(filter(_needs_proxy_extras, sys.modules)):
+        monkeypatch.delitem(sys.modules, module_name)
+    monkeypatch.setattr(sys, "meta_path", [_ProxyOnlyPackageBlocker(), *sys.meta_path])
 
 
 @pytest.fixture(autouse=True)

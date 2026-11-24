@@ -64,9 +64,9 @@ class NvidiaNimEmbeddingConfig:
 
     def map_openai_params(
         self,
-        non_default_params: dict,
+        non_default_params: Mapping[str, object],
         optional_params: dict,
-        kwargs: dict | None = None,
+        kwargs: Mapping[str, object] | None = None,
     ):
         if "extra_body" not in optional_params:
             optional_params["extra_body"] = {}
@@ -80,5 +80,11 @@ class NvidiaNimEmbeddingConfig:
 
         if kwargs is not None:
             # pass kwargs in extra_body
-            optional_params["extra_body"].update(kwargs)
+            nested_extra_body: Final = kwargs.get("extra_body")
+            optional_params["extra_body"].update(
+                {
+                    **{k: v for k, v in kwargs.items() if k != "extra_body"},
+                    **(nested_extra_body if isinstance(nested_extra_body, Mapping) else {}),
+                }
+            )
         return optional_params

@@ -1115,12 +1115,14 @@ def test_anthropic_messages_streams_together_tool_call_as_input_json_delta():
 DECLARED_LEVELS_MODEL = "moonshotai/Kimi-K3"
 
 
+@pytest.mark.parametrize("model", [DECLARED_LEVELS_MODEL, "moonshotai/Kimi-K3.1-Pro"])
 @pytest.mark.parametrize("effort", ["low", "high", "max"])
-def test_declared_level_is_sent_unchanged(effort):
-    """Kimi K3 declares low, high and max in the model map and Together accepts all three, but the
-    per-model clamp below only spares deepseek-ai/DeepSeek-V4-Pro, so max used to arrive as high and
-    the caller silently lost half the reasoning budget they asked for."""
-    mapped = _map_reasoning_effort(DECLARED_LEVELS_MODEL, effort)
+def test_declared_level_is_sent_unchanged(model, effort):
+    """Kimi K3 and K3.1 Pro declare low, high and max in the model map and Together accepts all three
+    (K3.1 Pro checked live against api.together.xyz on 2026-11-17, Pylon #11992), but the per-model
+    clamp below only spares deepseek-ai/DeepSeek-V4-Pro, so max used to arrive as high and the
+    caller silently lost half the reasoning budget they asked for."""
+    mapped = _map_reasoning_effort(model, effort)
 
     assert mapped["reasoning_effort"] == effort
 
