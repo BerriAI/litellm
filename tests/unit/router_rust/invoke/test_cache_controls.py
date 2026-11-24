@@ -48,6 +48,18 @@ _OFF = {"no-cache": True, "no-store": True}
             id="a lock without a model rule still ignores controls and keeps other cache fields",
         ),
         pytest.param(
+            {"cache": {"s-maxage": 1}, "allowed_cache_controls": []},
+            {"s-max-age": 3600},
+            ModelCacheControls({"s-maxage": 1}, ("s-max-age",)),
+            id="the s-max-age spelling is locked with s-maxage",
+        ),
+        pytest.param(
+            {"cache": {"s-maxage": 1}, "allowed_cache_controls": ["s-maxage"]},
+            {"s-max-age": 3600},
+            ModelCacheControls({"s-maxage": 1, "s-max-age": 3600}),
+            id="the s-max-age spelling is allowed with s-maxage",
+        ),
+        pytest.param(
             {"cache": {"ttl": 60}, "allowed_cache_controls": []},
             None,
             ModelCacheControls({"ttl": 60}),

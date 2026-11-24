@@ -914,12 +914,12 @@ def attempt_call(
         return _attempt_call(
             core, plan, request, deployment, group=group, requested=requested, fallback_model_group=fallback_model_group
         )
-    controls: Final = {} if cache.controls is None else {"cache": cache.controls}
+    controls: Final = {"cache": cache.controls} if cache.controls else {}
     call: Final = _attempt_call(
         core,
         plan,
-        {**request, **controls},
-        {**deployment, "litellm_params": {**without(params, ALLOWED_CACHE_CONTROLS_PARAM), **controls}},
+        {**without(request, "cache"), **controls},
+        {**deployment, "litellm_params": {**without(params, ALLOWED_CACHE_CONTROLS_PARAM, "cache"), **controls}},
         group=group,
         requested=requested,
         fallback_model_group=fallback_model_group,

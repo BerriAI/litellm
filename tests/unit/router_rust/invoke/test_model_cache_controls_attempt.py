@@ -87,3 +87,22 @@ async def test_fallback_response_reports_only_the_controls_its_own_deployment_ig
     assert primary.kwargs["cache"] == {"ttl": 60}
     assert fallback.kwargs["cache"] == {"ttl": 5}
     assert _HEADER not in headers(response)
+
+
+@pytest.mark.parametrize("request_cache", [None, {"ttl": 600, "no-store": False}])
+@pytest.mark.asyncio
+async def test_a_lock_without_a_model_rule_keeps_the_router_default_cache_controls(
+    request_cache: dict[str, object] | None,
+) -> None:
+    host: Final = ScriptedHost()
+    core: Final = rust_core(
+        host,
+        model_list=[_deployment("a", allowed_cache_controls=[])],
+        num_retries=0,
+        default_litellm_params={"cache": _OFF},
+    )
+
+    await (complete(core) if request_cache is None else complete(core, cache=request_cache))
+
+    (call,) = host.calls_to("acompletion")
+    assert call.kwargs["cache"] == _OFF
