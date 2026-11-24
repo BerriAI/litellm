@@ -1436,6 +1436,59 @@ async def test_openai_chat_completion_stops_searching_at_the_agentic_loop_cap(
     assert {call.request.headers["authorization"] for call in openai_route.calls} == {"Bearer sk-test"}
 
 
+def _chat_function_tool(name: str) -> dict[str, object]:
+    return {"type": "function", "function": {"name": name, "parameters": {"type": "object", "properties": {}}}}
+
+
+def _chat_allowed_tools(*entries: dict[str, object]) -> dict[str, object]:
+    return {"type": "allowed_tools", "allowed_tools": {"mode": "auto", "tools": list(entries)}}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("allowed_client_tools", "last_call_tools", "last_call_tool_choice"),
+    [
+        ((), [], None),
+        (
+            ("get_time",),
+            ["get_time", "delete_records"],
+            _chat_allowed_tools({"type": "function", "function": {"name": "get_time"}}),
+        ),
+    ],
+    ids=["only search allowed", "a client tool allowed"],
+)
+async def test_openai_chat_completion_keeps_the_allowed_tools_limit_on_the_last_call_at_the_cap(
+    allowed_client_tools: tuple[str, ...],
+    last_call_tools: list[str],
+    last_call_tool_choice: object,
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+    perplexity_search: respx.Route,
+):
+    monkeypatch.setattr(litellm, "callbacks", [WebSearchInterceptionLogger(enabled_providers=["openai"])])
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    openai_route: Final = respx_mock.post(f"{OPENAI_COMPATIBLE_API_BASE}/chat/completions").mock(
+        side_effect=_openai_reply_asking_for_another_search_until_enough_results
+    )
+
+    response: Final = await litellm.acompletion(
+        model="openai/gpt-5.6",
+        messages=[{"role": "user", "content": "Who won the last World Cup?"}],
+        tools=[{"type": "web_search"}, _chat_function_tool("get_time"), _chat_function_tool("delete_records")],
+        tool_choice=_chat_allowed_tools(
+            {"type": "web_search"}, *({"type": "function", "function": {"name": name}} for name in allowed_client_tools)
+        ),
+        api_key="sk-test",
+        api_base=OPENAI_COMPATIBLE_API_BASE,
+        max_agentic_loops=1,
+    )
+
+    last_call: Final = json.loads(openai_route.calls.last.request.content)
+    assert offered_tool_names(last_call) == last_call_tools
+    assert last_call.get("tool_choice") == last_call_tool_choice
+    assert response.choices[0].message.content == WORLD_CUP_ANSWER
+
+
 def _round_input_tokens(searches_done: int) -> int:
     return 10 + 1000 * searches_done
 

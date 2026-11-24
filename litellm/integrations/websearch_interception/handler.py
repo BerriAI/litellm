@@ -43,6 +43,7 @@ from litellm.litellm_core_utils.agentic_loop_settings import (
 from litellm.litellm_core_utils.allowed_tools_tool_choice import (
     allowed_tools_tool_choice_kept_on_follow_up,
     allowed_tools_tool_choice_with_builtin_as_function,
+    allowed_tools_tool_choice_without,
 )
 from litellm.litellm_core_utils.core_helpers import qualify_provider_stripped_model
 from litellm.llms.base_llm.search.transformation import SearchResponse
@@ -442,17 +443,19 @@ class WebSearchInterceptionLogger(CustomLogger):
     @classmethod
     def _final_followup_tool_params(
         cls,
-        optional_params: Mapping[str, object],
+        tools: object,
+        tool_choice: object,
         is_search_tool: Callable[[Mapping[str, object]], bool],
         no_tools_choice: str | Mapping[str, str],
     ) -> Mapping[str, object]:
-        remaining_tools: Final = _tools_without_search(optional_params.get("tools"), is_search_tool)
-        if not remaining_tools:
+        remaining_tools: Final = _tools_without_search(tools, is_search_tool)
+        remaining_choice: Final = allowed_tools_tool_choice_without(tool_choice, is_search_tool)
+        if not remaining_tools or remaining_choice == "none":
             return MappingProxyType({"tools": None, "tool_choice": no_tools_choice})
         return MappingProxyType(
             {
                 "tools": [dict(tool) for tool in remaining_tools],
-                "tool_choice": cls._tool_choice_within(optional_params.get("tool_choice"), remaining_tools),
+                "tool_choice": cls._tool_choice_within(remaining_choice, remaining_tools),
             }
         )
 
@@ -1430,7 +1433,7 @@ class WebSearchInterceptionLogger(CustomLogger):
                 {
                     **optional_params_clean,
                     **self._final_followup_tool_params(
-                        _STR_KEYED_MAPPING.validate_python(optional_params), is_web_search_tool_responses, "none"
+                        tools_param, optional_params.get("tool_choice"), is_web_search_tool_responses, "none"
                     ),
                 }
                 if capped
@@ -1608,6 +1611,7 @@ class WebSearchInterceptionLogger(CustomLogger):
             len(follow_up_messages),
             len(final_search_results),
         )
+        anthropic_params: Final = _STR_KEYED_MAPPING.validate_python(optional_params_without_max_tokens)
         patch: Final = AgenticLoopRequestPatch(
             model=full_model_name,
             messages=follow_up_messages,
@@ -1616,7 +1620,8 @@ class WebSearchInterceptionLogger(CustomLogger):
                 {
                     **optional_params_without_max_tokens,
                     **self._final_followup_tool_params(
-                        _STR_KEYED_MAPPING.validate_python(optional_params_without_max_tokens),
+                        anthropic_params.get("tools"),
+                        anthropic_params.get("tool_choice"),
                         is_web_search_tool,
                         {"type": "none"},
                     ),
@@ -2089,7 +2094,9 @@ class WebSearchInterceptionLogger(CustomLogger):
             **_kept_allowed_tools_tool_choice(_OPTIONAL_PARAMS.validate_python(optional_params)),
         }
         tool_params: Final = (
-            self._final_followup_tool_params({"tools": tools_param}, is_web_search_tool_chat_completion, "none")
+            self._final_followup_tool_params(
+                tools_param, optional_params_clean.get("tool_choice"), is_web_search_tool_chat_completion, "none"
+            )
             if capped
             else ({} if tools_param is None else {"tools": tools_param})
         )

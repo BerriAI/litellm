@@ -557,3 +557,45 @@ async def test_responses_last_follow_up_blocks_tool_calls_when_search_was_the_on
     assert _output_text(response) == [FINAL_ANSWER]
     assert "tools" not in last_request
     assert last_request["tool_choice"] == "none"
+
+
+def _responses_function_tool(name: str) -> dict:
+    return {"type": "function", "name": name, "parameters": {"type": "object", "properties": {}}}
+
+
+def _responses_allowed_tools(*names: str) -> dict:
+    return {"type": "allowed_tools", "mode": "auto", "tools": [{"type": "function", "name": name} for name in names]}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("allowed_client_tools", "last_call_tools", "last_call_tool_choice"),
+    [
+        ((), [], "none"),
+        (("get_weather",), ["get_weather", "delete_records"], _responses_allowed_tools("get_weather")),
+    ],
+    ids=["only search allowed", "a client tool allowed"],
+)
+async def test_responses_last_follow_up_keeps_the_allowed_tools_limit(
+    allowed_client_tools, last_call_tools, last_call_tool_choice, monkeypatch, openai_responses_model, perplexity_search
+):
+    monkeypatch.setattr(
+        litellm, "callbacks", [WebSearchInterceptionLogger(enabled_providers=["openai"], max_agentic_loops=1)]
+    )
+
+    response = await litellm.aresponses(
+        model="openai/gpt-5.6",
+        input="What's the latest AI news?",
+        tools=[
+            get_litellm_web_search_tool_responses(),
+            _responses_function_tool("get_weather"),
+            _responses_function_tool("delete_records"),
+        ],
+        tool_choice=_responses_allowed_tools("litellm_web_search", *allowed_client_tools),
+        api_key="test-openai-key-allowed-tools-responses",
+    )
+
+    last_request = request_bodies(openai_responses_model)[-1]
+    assert _output_text(response) == [FINAL_ANSWER]
+    assert offered_tool_names(last_request) == last_call_tools
+    assert last_request["tool_choice"] == last_call_tool_choice
