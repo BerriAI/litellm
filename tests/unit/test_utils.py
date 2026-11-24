@@ -8608,6 +8608,38 @@ async def test_oidc_google_api_key_fails_closed_when_the_metadata_server_fails_a
 
 
 @pytest.mark.asyncio
+async def test_google_token_fetch_does_not_join_done_future() -> None:
+    from litellm.utils import _GoogleTokenFetch
+
+    fetcher = _GoogleTokenFetch("oidc/google/https://example.com")
+    loop = asyncio.get_running_loop()
+    failed_future = loop.create_future()
+    failed_future.set_exception(RuntimeError("metadata server failure"))
+    fetcher.in_flight = failed_future
+
+    # Must start a new fetch instead of reusing the finished/failed future
+    new_fetch = fetcher.start_or_join()
+    try:
+        assert new_fetch is not failed_future
+        assert not new_fetch.done()
+    finally:
+        new_fetch.cancel()
+
+
+@pytest.mark.asyncio
+async def test_google_token_fetch_joins_running_future() -> None:
+    from litellm.utils import _GoogleTokenFetch
+
+    fetcher = _GoogleTokenFetch("oidc/google/https://example.com")
+    loop = asyncio.get_running_loop()
+    running_future = loop.create_future()
+    fetcher.in_flight = running_future
+
+    joined = fetcher.start_or_join()
+    assert joined is running_future
+
+
+@pytest.mark.asyncio
 async def test_an_oidc_google_api_key_token_cached_when_the_call_starts_is_sent_though_it_expires_mid_call(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
