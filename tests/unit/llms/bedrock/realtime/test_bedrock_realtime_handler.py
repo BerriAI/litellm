@@ -2625,16 +2625,15 @@ class TestBedrockRealtimeTurnLimits:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
-        ("response_finished_after_refusal", "refusals_at_close"),
-        [(False, 0), (True, 1)],
-        ids=["same_turn", "later_turn"],
+        ("between_turns", "refusals_at_close"),
+        [("nothing", 0), ("response_done", 1), ("passing_check", 1)],
+        ids=["same_turn", "later_turn", "later_turn_after_a_passing_check"],
     )
     async def test_a_turn_bedrock_starts_after_a_refusal_is_refused_once_per_turn(
-        self, stub_aws_models: None, response_finished_after_refusal: bool, refusals_at_close: int
+        self, stub_aws_models: None, between_turns: str, refusals_at_close: int
     ) -> None:
-        over_limit: Final = _ScriptedTurnLimiter(
-            check_error=RateLimitError(message="tpm limit reached", llm_provider="litellm_proxy", model=_NOVA_SONIC)
-        )
+        over_tpm: Final = RateLimitError(message="tpm limit reached", llm_provider="litellm_proxy", model=_NOVA_SONIC)
+        over_limit: Final = _ScriptedTurnLimiter(check_error=over_tpm)
         turn_limits: Final = _bedrock_turn_limits(over_limit)
         refused_client: Final = DisconnectingClientWS([*_TURN_OPENING, json.dumps({"type": "response.create"})])
         closed_client: Final = RealtimeClientWS()
@@ -2650,8 +2649,12 @@ class TestBedrockRealtimeTurnLimits:
             signals=SessionEndSignals(),
             turn_limits=turn_limits,
         )
-        if response_finished_after_refusal:
+        if between_turns == "response_done":
             await turn_limits.charge({"type": "response.done", "response": {"id": "resp_finished"}})
+        if between_turns == "passing_check":
+            over_limit.check_error = None
+            assert await turn_limits.refusal() is None
+            over_limit.check_error = over_tpm
         async for _ in BedrockRealtime()._forward_bedrock_to_client(
             ScriptedBedrockStream([json.dumps({"event": {"contentStart": {"role": "ASSISTANT", "type": "TEXT"}}})]),
             closed_client,

@@ -2181,11 +2181,10 @@ class RealTimeStreaming:
         if self._over_limit_usage_wait is not None:
             self._over_limit_usage_wait.cancel()
         flushed: Final = self._flush_unbilled_session_usage()
+        if self._turn_limits is not None:
+            for event in flushed:
+                await self._turn_limits.charge(event)
         await self._log_session_end(transport_refusal)
-        if self._turn_limits is None:
-            return
-        for event in flushed:
-            await self._turn_limits.charge(event)
 
     async def _log_session_end(self, transport_refusal: Exception | None) -> None:
         provider_refusal: Final = None if self.provider_config is None else self.provider_config.session_refusal()

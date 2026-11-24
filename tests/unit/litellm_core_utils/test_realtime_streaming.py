@@ -6919,13 +6919,22 @@ async def test_tokens_a_provider_reports_only_at_session_close_count_toward_the_
         None if unbilled_usage is None else dict(unbilled_usage)
     )
     provider_config.session_refusal.return_value = None
-    streaming, _, backend_ws = _scripted_session(limiter, provider_config=provider_config)
+    charged_when_logged: Final = MagicMock()
+
+    def log_session_end(*args: object, **kwargs: object) -> Coroutine[object, object, None]:
+        charged_when_logged(limiter.charges)
+        return asyncio.sleep(0)
+
+    logging_obj: Final = MagicMock(dispatch_success_handlers=log_session_end, dispatch_failure_handlers=log_session_end)
+    streaming, _, backend_ws = _scripted_session(limiter, provider_config=provider_config, logging_obj=logging_obj)
     backend_ws.recv = AsyncMock(side_effect=close_error)
 
     with contextlib.suppress(asyncio.CancelledError):
         await streaming.backend_to_client_send_messages()
 
-    assert limiter.charges == tuple((_TURN_LIMITED_MODEL, tokens) for tokens in expected_tokens)
+    expected_charges: Final = tuple((_TURN_LIMITED_MODEL, tokens) for tokens in expected_tokens)
+    assert limiter.charges == expected_charges
+    charged_when_logged.assert_called_once_with(expected_charges)
 
 
 @dataclass(slots=True)

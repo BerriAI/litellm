@@ -56,6 +56,7 @@ pub struct Stash {
     pub output_cap: Option<(i64, Option<String>)>,
     pub turn_settled_tokens: i64,
     pub session_settled: bool,
+    pub turn_model_group: Option<String>,
 }
 
 impl Stash {

@@ -3083,6 +3083,43 @@ async def test_a_realtime_response_is_refused_once_its_session_turns_used_the_ag
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("metric", "window", "turn_tokens"),
+    [("model_itpm_limit", "model_per_project_itpm", 500), ("model_otpm_limit", "model_per_project_otpm", 450)],
+    ids=["itpm", "otpm"],
+)
+async def test_a_realtime_response_is_refused_once_its_session_turns_used_the_project_io_quota_v3(
+    metric: str, window: str, turn_tokens: int
+) -> None:
+    local_cache: Final = DualCache()
+    handler: Final = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(local_cache))
+    auth: Final = UserAPIKeyAuth(
+        api_key=hash_token("sk-realtime-project"),
+        project_id="project-rt",
+        project_metadata={metric: {_REALTIME_MODEL: 2 * turn_tokens}},
+    )
+    project_window: Final = f"project-rt:{_REALTIME_MODEL}"
+    turn: Final = Usage(
+        prompt_tokens=600, completion_tokens=450, total_tokens=1050, prompt_tokens_details={"cached_tokens": 100}
+    )
+    await _open_realtime_session(handler, local_cache, auth)
+    tokens_at_open: Final = _tokens_counted(handler, window, project_window)
+
+    async def check() -> None:
+        await handler.enforce_token_limits_for_frame(auth, _REALTIME_MODEL, call_type=CallTypes.arealtime.value)
+
+    await handler.charge_realtime_turn_usage(auth, _REALTIME_MODEL, turn)
+    await check()
+    await handler.charge_realtime_turn_usage(auth, _REALTIME_MODEL, turn)
+
+    with pytest.raises(ProxyRateLimitError) as exc_info:
+        await check()
+
+    assert exc_info.value.status_code == 429
+    assert _tokens_counted(handler, window, project_window) - tokens_at_open == 2 * turn_tokens
+
+
+@pytest.mark.asyncio
 async def test_realtime_turns_charge_the_key_model_and_tag_windows_and_keep_the_session_slot_v3(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -3155,11 +3192,19 @@ async def test_a_realtime_session_close_charges_no_tokens_beyond_its_turns_v3(
     monkeypatch.setenv("LITELLM_TPM_TOKEN_RESERVATION_ENABLED", reservation)
     local_cache: Final = DualCache()
     handler: Final = _handler_with_socket_tag_limit(local_cache, 10**9)
-    auth: Final = UserAPIKeyAuth(api_key=hash_token("sk-realtime-close"), tpm_limit=10**9, max_parallel_requests=1)
+    auth: Final = UserAPIKeyAuth(
+        api_key=hash_token("sk-realtime-close"),
+        tpm_limit=10**9,
+        max_parallel_requests=1,
+        project_id="project-close",
+        project_metadata={"model_itpm_limit": {_REALTIME_MODEL: 10**9}},
+    )
+    project_window: Final = f"project-close:{_REALTIME_MODEL}"
     await _open_realtime_session(handler, local_cache, auth)
     session_stash: Final = get_request_stash()
     reserved_at_open: Final = session_stash.reserved_tokens if session_stash is not None else 0
     tokens_at_open: Final = _tokens_counted(handler, "api_key", auth.api_key)
+    project_tokens_at_open: Final = _tokens_counted(handler, "model_per_project_itpm", project_window)
     turn_totals: Final = (320, 480)
     for total_tokens in turn_totals:
         await handler.charge_realtime_turn_usage(auth, _REALTIME_MODEL, _realtime_turn_usage(total_tokens))
@@ -3195,6 +3240,9 @@ async def test_a_realtime_session_close_charges_no_tokens_beyond_its_turns_v3(
     assert (reserved_at_open > 0) == (reservation == "true")
     assert logged_session.usage.total_tokens == sum(turn_totals)
     assert _tokens_counted(handler, "api_key", auth.api_key) == tokens_at_open - reserved_at_open + sum(turn_totals)
+    assert _tokens_counted(handler, "model_per_project_itpm", project_window) == project_tokens_at_open + sum(
+        total_tokens - 10 for total_tokens in turn_totals
+    )
     assert _gauge_in_flight(handler, _local(handler, RateLimitScope("api_key", auth.api_key).gauge)) == 0
 
 

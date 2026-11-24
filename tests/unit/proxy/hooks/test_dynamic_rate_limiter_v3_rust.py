@@ -32,6 +32,7 @@ from litellm.proxy.utils import InternalUsageCache
 from litellm.redis.stores.rate_limits import RateLimitScope
 from litellm.rust_bridge._native import NativeRedisStoreError
 from litellm.types.llms.openai import ResponseAPIUsage, ResponsesAPIResponse
+from litellm.types.utils import CallTypes
 from tests.unit.proxy.hooks.native_capacity_handler import NativeDynamicRateLimitHandler as DynamicRateLimitHandler
 from tests.unit.proxy.hooks.native_capacity_handler import (
     NativeDynamicRateLimitHandler as PROXY_DynamicRateLimitHandlerV3,
@@ -2057,6 +2058,8 @@ async def _close_realtime_session(handler: _PROXY_DynamicRateLimitHandlerV3, tot
         handler,
         total_tokens,
         response=[],
+        call_type=CallTypes.arealtime.value,
+        litellm_params={"metadata": {}, "litellm_metadata": {"model_group": "shared-model"}},
         combined_usage_object=litellm.Usage(
             prompt_tokens=total_tokens, completion_tokens=0, total_tokens=total_tokens
         ),
@@ -2107,6 +2110,7 @@ async def test_a_realtime_turn_charged_after_its_session_settled_is_not_counted_
 ):
     handler: Final = _borrowing_handler(monkeypatch, borrows=True)
     await _check(handler, _team_key(), saturation=0.5)
+    await _charge_realtime_turn(handler, 60)
     await _close_realtime_session(handler, 90)
 
     await _charge_realtime_turn(handler, 30)

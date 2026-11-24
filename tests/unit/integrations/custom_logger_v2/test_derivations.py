@@ -1334,6 +1334,13 @@ _MODEL_GROUP_REQUESTS: Final = (
     pytest.param({"litellm_params": {"metadata": "g"}}, id="metadata_not_a_mapping"),
     pytest.param({"litellm_params": {"metadata": []}}, id="falsy_metadata"),
     pytest.param({}, id="no_params"),
+    pytest.param(
+        {
+            "call_type": "_arealtime",
+            "litellm_params": {"metadata": {"user_api_key": "k"}, "litellm_metadata": {"model_group": "lg"}},
+        },
+        id="realtime_session",
+    ),
 )
 
 
@@ -1342,27 +1349,6 @@ def test_logged_model_group_is_what_the_logging_handlers_helper_returns_or_raise
     request_data: dict[str, object],
 ) -> None:
     assert derivations.logged_model_group(HookArgs(request=request_data)) == _helper_outcome(request_data)
-
-
-@pytest.mark.parametrize(
-    ("call_type", "request_metadata", "expected_group"),
-    [
-        pytest.param("_arealtime", {"user_api_key": "k"}, "routed", id="realtime_reads_the_router_group"),
-        pytest.param("_arealtime", {"model_group": "caller"}, "routed", id="realtime_ignores_a_caller_group"),
-        pytest.param("acompletion", {"user_api_key": "k"}, None, id="other_calls_keep_the_helper_result"),
-    ],
-)
-def test_logged_model_group_of_a_realtime_session_is_the_group_the_router_served(
-    call_type: str, request_metadata: dict[str, object], expected_group: str | None
-) -> None:
-    request: Final = {
-        "call_type": call_type,
-        "litellm_params": {"metadata": request_metadata, "litellm_metadata": {"model_group": "routed"}},
-    }
-
-    assert derivations.logged_model_group(HookArgs(request=request)) == coerce_record(
-        LoggedModelGroup, {"value": expected_group}
-    )
 
 
 def test_logged_model_group_names_the_error_the_helper_raises() -> None:

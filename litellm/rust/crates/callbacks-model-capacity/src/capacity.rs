@@ -1381,6 +1381,7 @@ impl Engine {
             if stash.session_settled {
                 return Ok(());
             }
+            stash.turn_model_group = Some(turn.model_group.to_owned());
             stash.turn_settled_tokens = stash.turn_settled_tokens.saturating_add(turn.tokens);
             let served = served_holds(&stash, Some(turn.model_group));
             let holder = stash

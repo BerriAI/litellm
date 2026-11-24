@@ -299,7 +299,11 @@ impl ModelCapacity {
             return Ok(None);
         };
         let gaps: AttemptGaps = projected(input)?;
-        let group = LoggedGroup::read(input.fields.get::<typed::LoggedModelGroup>()?.as_ref());
+        let turn_group = stash.and_then(|stash| stash.lock().turn_model_group.clone());
+        let group = match turn_group {
+            Some(served) => Ok(Some(LoggedGroup::served(served))),
+            None => LoggedGroup::read(input.fields.get::<typed::LoggedModelGroup>()?.as_ref()),
+        };
         let identity = input.fields.get::<typed::LoggedKeyIdentity>()?;
         let usage = input.fields.get::<typed::Usage>()?;
         let stash = stash.cloned();

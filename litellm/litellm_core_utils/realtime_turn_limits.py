@@ -137,6 +137,7 @@ class RealtimeTurnLimits:
         except Exception as error:  # noqa: BLE001  # a response the limits could not check must not reach the provider
             verbose_logger.exception("Realtime turn token limit check failed: %s", error)
             return _refusal(error)
+        self._turn_refused = False
         return None
 
     async def charge(self, event: Mapping[str, object]) -> None:

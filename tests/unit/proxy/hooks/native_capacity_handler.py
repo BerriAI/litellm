@@ -758,6 +758,7 @@ def fake_redis(
         yield redis
     finally:
         stopped.set()
+        socket.create_connection(("127.0.0.1", port)).close()
         servers.close()
         server.join(timeout=5)
 

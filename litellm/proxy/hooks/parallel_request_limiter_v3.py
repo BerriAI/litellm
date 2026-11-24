@@ -1229,7 +1229,11 @@ class ParallelRequestLimiterHook(CustomLogger):
                 self,
                 user_api_key_dict,
                 MappingProxyType({"model": requested_model, "metadata": {"tags": tags}}),
-                {"kind": "socket_turn", "agent_windows": [dict(window) for window in agent_windows]},
+                {
+                    "kind": "socket_turn",
+                    "agent_windows": [dict(window) for window in agent_windows],
+                    "project_io": call_type == CallTypes.arealtime.value,
+                },
                 {"kind": "check", "read_only": True, "skip_parallel_check": True},
                 call_type=call_type,
             )
@@ -1277,6 +1281,19 @@ class ParallelRequestLimiterHook(CustomLogger):
                 },
                 "combined_usage_object": usage,
             }
+        )
+        prompt_details: Final = usage.prompt_tokens_details
+        cached_tokens: Final = 0 if prompt_details is None else prompt_details.cached_tokens or 0
+        _ = await run_scoped(
+            self,
+            user_api_key_dict,
+            MappingProxyType({"model": requested_model}),
+            {"kind": "project_io"},
+            {
+                "kind": "settle_io",
+                "input_tokens": max(usage.prompt_tokens - cached_tokens, 0),
+                "output_tokens": usage.completion_tokens,
+            },
         )
         await self.native_companion.log_success(
             _native_state(self, connection_stash),

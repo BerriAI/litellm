@@ -2479,3 +2479,11 @@ async def test_a_touch_that_fails_tells_rust_whether_the_registry_was_unavailabl
     answered: Final = await host.touched(pending["ok"])  # pyright: ignore[reportArgumentType]  # the pending answer of a deferred touch
     raised: Final = answered["raised"]
     assert (raised["kind"], raised["message"]) == (kind, message), answered  # pyright: ignore[reportIndexIssue]  # the raised answer of a host call
+
+
+def test_a_fake_redis_stops_at_once_so_collecting_its_handler_never_stalls_another_test() -> None:
+    started: Final = time.monotonic()
+    with fake_redis():
+        pass
+
+    assert time.monotonic() - started < 2
