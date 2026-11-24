@@ -134,6 +134,8 @@ async def fully_unhealthy_model_names(
     unhealthy_by_name: Final[dict[str, bool]] = {}  # mutable-ok: built here
     for deployment in model_list:
         model_info = _model_info(deployment)
+        if model_info.get("blocked") is True:
+            continue
         names = [deployment.get("model_name") or ""]
         team_public_model_name = model_info.get("team_public_model_name")
         if team_public_model_name:

@@ -758,6 +758,23 @@ async def test_health_check_routing_uses_every_deployment_when_all_are_unhealthy
     assert await core.health().fully_unhealthy_model_names() == {"g"}
 
 
+@pytest.mark.asyncio
+async def test_health_check_routing_falls_back_to_unhealthy_deployments_beside_an_unprobed_paused_one(
+    make_core: MakeCore, host: ScriptedHost
+) -> None:
+    core: Final = make_core(
+        model_list=[*group("a"), deployment("g", "p", model_info={"blocked": True})],
+        enable_health_check_routing=True,
+    )
+    core.health().health_checks.set_deployment_health_states(unhealthy("a"))  # pyright: ignore[reportArgumentType]  # health states
+
+    for _ in range(4):
+        await attempt(core)
+
+    assert host.deployments_called("acompletion") == ["a"] * 4
+    assert await core.health().fully_unhealthy_model_names() == {"g"}
+
+
 @pytest.mark.parametrize(
     ("arguments", "age"),
     [
