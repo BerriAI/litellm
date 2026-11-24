@@ -1695,12 +1695,10 @@ class RealTimeStreaming:
         if self._listens_only or event.get("type") != "response.created":
             return False
         refusal: Final = await self._turn_limits.refusal()
-        if refusal is None:
+        if refusal is None or not refusal.over_limit:
             return False
         if await self._send_guardrail_cancel(realtime_response_id(event)):
             await self.websocket.send_text(refusal.event)
-            return False
-        if not refusal.over_limit:
             return False
         await self._end_session_after_refused_response(refusal, client_was_told=self._turn_limits.turn_refused)
         return True

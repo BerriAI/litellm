@@ -752,7 +752,7 @@ def fake_redis(
                 return
             threading.Thread(target=redis.answer, args=(connection,), daemon=True).start()
 
-    server: Final = threading.Thread(target=serve, daemon=True)
+    server: Final = threading.Thread(target=serve, name="fake-redis-accept", daemon=True)
     server.start()
     try:
         yield redis

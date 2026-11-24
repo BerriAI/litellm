@@ -7212,6 +7212,23 @@ async def test_a_turn_the_provider_started_while_limits_cannot_be_checked_runs_a
 
 
 @pytest.mark.asyncio
+async def test_an_openai_turn_the_provider_started_while_limits_cannot_be_checked_is_not_cancelled() -> None:
+    limiter: Final = _ScriptedTurnLimiter(
+        check_error=ServiceUnavailableError(message="limits unreachable", llm_provider="litellm_proxy", model="m")
+    )
+    streaming, client_ws, backend_ws = _scripted_session(
+        limiter, backend_frames=(_response_created("resp_vad"), _response_done(300, "resp_vad"))
+    )
+
+    await streaming.backend_to_client_send_messages()
+
+    backend_ws.send.assert_not_awaited()
+    sent: Final = [json.loads(call.args[0])["type"] for call in client_ws.send_text.await_args_list]
+    assert sent == ["response.created", "response.done"]
+    assert [charge[1] for charge in limiter.charges] == [300]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("limiter", "reaches_the_provider", "client_errors"),
     [(_ScriptedTurnLimiter(), True, []), (_over_limit_turn_limiter(), False, ["rate_limit_exceeded"])],

@@ -1249,10 +1249,6 @@ class ParallelRequestLimiterHook(CustomLogger):
     async def charge_realtime_turn_usage(
         self, user_api_key_dict: UserAPIKeyAuth, requested_model: str | None, usage: Usage
     ) -> None:
-        """Charge one realtime response's tokens to the TPM windows its session's next check reads, keeping
-        the session's parallel slot and RPM untouched. The tokens land before this returns rather than riding the
-        socket's post-call Redis batch, which flushes only after the client may already have sent its next turn.
-        The session's own success log still runs once at close."""
         from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 
         connection_stash: Final = get_request_stash()
@@ -1294,6 +1290,7 @@ class ParallelRequestLimiterHook(CustomLogger):
                 "input_tokens": max(usage.prompt_tokens - cached_tokens, 0),
                 "output_tokens": usage.completion_tokens,
             },
+            batched=False,
         )
         await self.native_companion.log_success(
             _native_state(self, connection_stash),
@@ -2204,6 +2201,7 @@ async def run_scoped(
     call_type: str | None = None,
     state: "NativeParallelRequestLimiterState | None" = None,
     lookups: bool = True,
+    batched: bool = True,
 ) -> _ScopedReply:
     """Build an entry point's descriptors with the native pre-call's builder from the same typed key
     records and lookups, then run ``action`` on them. A Python error the builder reproduces is raised."""
@@ -2218,7 +2216,9 @@ async def run_scoped(
     reply: Final = await limiter.native_companion.scoped(
         {**inputs, "selection": selection, "action": action},
         state=state,
-        request=pre_call_request() if state is not None or limiter.rate_limits.has_request_batch else None,
+        request=pre_call_request()
+        if batched and (state is not None or limiter.rate_limits.has_request_batch)
+        else None,
     )
     raise_wire_abort(reply.get("abort"))
     return _ScopedReply(descriptors=_descriptors().validate_python(reply.get("descriptors")), reply=reply)

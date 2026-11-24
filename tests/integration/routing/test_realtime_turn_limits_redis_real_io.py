@@ -19,11 +19,26 @@ _TPM_LIMIT: Final = 1000
 _MODEL: Final = "gpt-realtime"
 
 
+@pytest.mark.parametrize(
+    ("tpm_limit", "project_metadata"),
+    [
+        (_TPM_LIMIT, {}),
+        (None, {"model_itpm_limit": {_MODEL: _TPM_LIMIT}}),
+        (None, {"model_otpm_limit": {_MODEL: _TPM_LIMIT}}),
+    ],
+    ids=["key-tpm", "project-itpm", "project-otpm"],
+)
 async def test_a_realtime_turn_charged_inside_the_socket_redis_batch_refuses_the_next_response_at_once(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, tpm_limit: int | None, project_metadata: dict[str, dict[str, int]]
 ) -> None:
     monkeypatch.setenv("LITELLM_TPM_TOKEN_RESERVATION_ENABLED", "false")
-    auth: Final = UserAPIKeyAuth(api_key=hash_token(f"sk-realtime-redis-{uuid.uuid4()}"), tpm_limit=_TPM_LIMIT)
+    unique: Final = uuid.uuid4()
+    auth: Final = UserAPIKeyAuth(
+        api_key=hash_token(f"sk-realtime-redis-{unique}"),
+        tpm_limit=tpm_limit,
+        project_id=f"project-rt-{unique}",
+        project_metadata=project_metadata,
+    )
     redis_cache: Final = RedisCache(host=os.environ["REDIS_HOST"], port=int(os.environ["REDIS_PORT"]))
     cache: Final = DualCache(redis_cache=redis_cache)
     handler: Final = PROXY_MaxParallelRequestsHandler_v3(internal_usage_cache=InternalUsageCache(cache))
@@ -36,7 +51,7 @@ async def test_a_realtime_turn_charged_inside_the_socket_redis_batch_refuses_the
             call_type=CallTypes.arealtime.value,
         )
         await handler.charge_realtime_turn_usage(
-            auth, _MODEL, Usage(prompt_tokens=_TPM_LIMIT - 10, completion_tokens=10, total_tokens=_TPM_LIMIT)
+            auth, _MODEL, Usage(prompt_tokens=_TPM_LIMIT, completion_tokens=_TPM_LIMIT, total_tokens=2 * _TPM_LIMIT)
         )
         with pytest.raises(ProxyRateLimitError) as exc_info:
             await handler.enforce_token_limits_for_frame(auth, _MODEL, call_type=CallTypes.arealtime.value)
