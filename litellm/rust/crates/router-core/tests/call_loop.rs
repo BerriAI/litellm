@@ -4523,7 +4523,87 @@ async fn a_refused_deployment_cools_down_for_the_routers_cooldown_time_and_count
                 .collect::<Vec<_>>(),
             fails,
         ),
-        (vec![7.0], 0)
+        (vec![7.0, 7.0], 0)
+    );
+}
+
+/// Puts deployment `id` of [`rate_limiting_among`] at a `rpm` of 1 for the clock's minute.
+async fn at_its_rpm(host: &ScriptedHost, id: &str) {
+    let counter = LimitCounter {
+        deployment_id: id.to_owned(),
+        model: format!("openai/{id}"),
+        kind: LimitKind::Rpm,
+        window: "10-00".to_owned(),
+    };
+    host.cache
+        .add_limit_usage(&counter, 1, Duration::from_secs(60))
+        .await
+        .unwrap();
+}
+
+/// A refused deployment with a sibling cools down, so Python's retry loop moves on to the sibling
+/// at once (`_refused`, then `should_retry_this_error` with a healthy deployment left).
+#[tokio::test]
+async fn a_refused_deployment_with_a_sibling_is_retried_on_the_sibling() {
+    let host = Arc::new(ScriptedHost::default());
+    let ids = ["p1", "p2"];
+    let router = rate_limiting_among(
+        &ids,
+        json!({"rpm": 1}),
+        json!({"pre_call_checks": ["enforce_model_rate_limits"]}),
+        host.clone(),
+    );
+    at_its_rpm(&host, "p1").await;
+
+    let served = router.call(Op::from("acompletion"), request()).await;
+
+    let cooled = router
+        .health()
+        .active_cooldowns(&ids.map(str::to_owned))
+        .await
+        .unwrap();
+    assert_eq!(
+        (
+            served.is_ok(),
+            host.cache.outcomes("p2").await.unwrap().successes,
+            cooled.iter().map(|(id, _)| id.as_str()).collect::<Vec<_>>(),
+            host.retries(),
+        ),
+        (true, 1, vec!["p1"], 1)
+    );
+}
+
+/// When every deployment is past its limit, each is refused once and the call ends on the last
+/// refusal, with no healthy deployment left to retry on.
+#[tokio::test]
+async fn a_group_past_every_limit_is_refused_once_per_deployment() {
+    let host = Arc::new(ScriptedHost::default());
+    let ids = ["p1", "p2"];
+    let router = rate_limiting_among(
+        &ids,
+        json!({"rpm": 1}),
+        json!({"pre_call_checks": ["enforce_model_rate_limits"]}),
+        host.clone(),
+    );
+    at_its_rpm(&host, "p1").await;
+    at_its_rpm(&host, "p2").await;
+
+    let ended = router.call(Op::from("acompletion"), request()).await;
+
+    let cooled = router
+        .health()
+        .active_cooldowns(&ids.map(str::to_owned))
+        .await
+        .unwrap();
+    let refused_with = match ended {
+        Err(error) if error.refused().is_some() => {
+            error.attempt().and_then(|failure| failure.status)
+        }
+        _ => None,
+    };
+    assert_eq!(
+        (refused_with, cooled.len(), host.retries()),
+        (Some(429), 2, 1)
     );
 }
 

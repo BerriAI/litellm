@@ -151,13 +151,15 @@ impl Window {
         }
     }
 
-    /// The `RateLimitError` the check raises for `deployment`, with its message: never retried,
-    /// and tried again once the window starts over.
+    /// The `RateLimitError` the check raises for `deployment`, with its message, tried again once
+    /// the window starts over. It carries the deployment's own `num_retries`, as
+    /// `_set_deployment_num_retries_on_exception` stamps it; the call loop decides whether it is
+    /// retried.
     fn refused(&self, deployment: &Deployment, limit: f64, usage: f64) -> Error {
         let name: &'static str = self.kind.into();
         Error::Attempt {
             failure: AttemptError {
-                num_retries: Some(0),
+                num_retries: deployment.num_retries(),
                 detail: Some(
                     format!(
                         "Model rate limit exceeded. {} limit={}, current usage={}",

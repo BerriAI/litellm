@@ -1308,13 +1308,21 @@ impl<H: RouterHost> Call<'_, H> {
                     ),
                 })
             }
-            Err(error) => {
-                let failed_deployment = match &error {
+            Err(mut error) => {
+                let failed_deployment = match &mut error {
                     Error::Attempt { failure, raised_by } => {
                         match raised_by {
+                            // A refused deployment that cooled down is retried as Python's loop
+                            // retries it, on a healthy sibling at once. One that stayed healthy (a
+                            // lone deployment) would be retried after its `retry-after`, a minute,
+                            // so its refusal is answered now.
                             RaisedBy::PreCallCheck(_) => {
-                                self.cool_down_refused(snapshot, request, &deployment, failure)
+                                let cooled = self
+                                    .cool_down_refused(snapshot, request, &deployment, failure)
                                     .await;
+                                if !cooled {
+                                    failure.num_retries = Some(0);
+                                }
                             }
                             RaisedBy::Host(_) | RaisedBy::Core
                                 if !failure.recorded && !failure.queue_rejected() =>
@@ -1498,13 +1506,14 @@ impl<H: RouterHost> Call<'_, H> {
 
     /// `async_routing_strategy_pre_call_checks`' cooldown for a deployment a pre-call check
     /// refused: `set_cooldown_deployments` alone, as the Python host reports its own refusal.
+    /// Returns whether the deployment was cooled down.
     async fn cool_down_refused(
         &self,
         snapshot: &RouterStateSnapshot,
         request: &RouterRequest,
         deployment: &crate::registry::Deployment,
         failure: &AttemptError,
-    ) {
+    ) -> bool {
         let report = FailureReport {
             uncounted: true,
             batch_api: request.batch_api,
@@ -1521,13 +1530,17 @@ impl<H: RouterHost> Call<'_, H> {
             )
             .await;
         match cooled {
-            Ok(Some(cooldown)) => self.host.observe(&RouterEvent::CooldownSet {
-                deployment_id: deployment.id.clone(),
-                cooldown,
-            }),
-            Ok(None) => {}
+            Ok(Some(cooldown)) => {
+                self.host.observe(&RouterEvent::CooldownSet {
+                    deployment_id: deployment.id.clone(),
+                    cooldown,
+                });
+                true
+            }
+            Ok(None) => false,
             Err(error) => {
                 warn!(deployment_id = %deployment.id, error = %error, "cooldown was not recorded");
+                false
             }
         }
     }
