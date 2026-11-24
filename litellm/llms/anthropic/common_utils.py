@@ -1727,9 +1727,9 @@ def _results_with_unloaded_tools(
 def _is_stale_tool_search_block(block: object, stale_ids: frozenset[str]) -> bool:
     match message_field(block, "type"):
         case "server_tool_use":
-            return message_field(block, "id") in stale_ids
+            return string_field(block, "id") in stale_ids
         case "tool_search_tool_result":
-            return message_field(block, "tool_use_id") in stale_ids
+            return string_field(block, "tool_use_id") in stale_ids
         case _:
             return False
 
@@ -1752,6 +1752,8 @@ def _advisor_result_text(block: object) -> str:
     raw: Final = message_field(block, "content") or ""
     if isinstance(raw, str):
         return raw
+    if message_field(raw, "type") == "advisor_result":
+        return string_field(raw, "text") or ""
     text_parts: Final = (as_str_mapping(part) for part in parts_of(raw))
     return next((string_field(part, "text") or "" for part in text_parts if part and part.get("type") == "text"), "")
 
