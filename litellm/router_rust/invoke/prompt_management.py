@@ -130,4 +130,6 @@ async def prompt_management_acompletion(
         if value is not None
     }
     routed: Final = without(final, "timeout", "stream_timeout")
-    return await core.drive(PLANS["acompletion"], {**routed, **timeouts}, prepared_already=True)
+    routed_response: Final = await core.drive(PLANS["acompletion"], {**routed, **timeouts}, prepared_already=True)
+    report_ignored_cache_controls(routed_response, ignored)
+    return routed_response

@@ -149,31 +149,38 @@ def test_sync_text_completion_reports_the_ignored_cache_controls() -> None:
 
 
 class _RenderedPrompt:
+    def __init__(self, model: str) -> None:
+        self._model = model
+
     def get_chat_completion_prompt(self, **_: object) -> tuple[str, object, Mapping[str, object]]:  # kwargs-ok: stub
-        return "openai/rendered", [{"role": "user", "content": "hi"}], {}
+        return self._model, [{"role": "user", "content": "hi"}], {}
 
 
+@pytest.mark.parametrize(
+    "rendered_model",
+    [
+        pytest.param("openai/rendered", id="rendered model called directly"),
+        pytest.param("b", id="rendered model is a group"),
+    ],
+)
 @pytest.mark.asyncio
-async def test_a_prompt_managed_model_sends_the_merged_cache_controls_and_reports_ignored_ones() -> None:
+async def test_a_prompt_managed_model_sends_the_merged_cache_controls_and_reports_ignored_ones(
+    rendered_model: str,
+) -> None:
     host: Final = ScriptedHost()
+    prompt_params: Final = {"model": "langfuse/a", "prompt_id": "p", "cache": _OFF, "allowed_cache_controls": []}
     core: Final = rust_core(
         host,
         model_list=[
-            {
-                "model_name": "a",
-                "litellm_params": {
-                    "model": "langfuse/a",
-                    "prompt_id": "p",
-                    "cache": _OFF,
-                    "allowed_cache_controls": [],
-                },
-                "model_info": {"id": "a"},
-            }
+            {"model_name": "a", "litellm_params": prompt_params, "model_info": {"id": "a"}},
+            _deployment("b"),
         ],
         num_retries=0,
     )
 
-    response: Final = await complete(core, cache={"ttl": 600, "no-store": False}, litellm_logging_obj=_RenderedPrompt())
+    response: Final = await complete(
+        core, cache={"ttl": 600, "no-store": False}, litellm_logging_obj=_RenderedPrompt(rendered_model)
+    )
 
     (call,) = host.calls_to("acompletion")
     assert call.kwargs["cache"] == _OFF

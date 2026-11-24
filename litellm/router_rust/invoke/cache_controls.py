@@ -62,5 +62,10 @@ def with_model_cache_controls(
 
 
 def report_ignored_cache_controls(response: object, ignored: Sequence[str]) -> None:
-    if ignored:
-        ensure_response_additional_headers(response)[IGNORED_CACHE_CONTROLS_HEADER] = ",".join(ignored)
+    """Adds ``ignored`` to the controls the response already names, each control once."""
+    if not ignored:
+        return
+    headers: Final = ensure_response_additional_headers(response)
+    reported: Final = headers.get(IGNORED_CACHE_CONTROLS_HEADER)
+    already: Final = reported.split(",") if isinstance(reported, str) and reported else []
+    headers[IGNORED_CACHE_CONTROLS_HEADER] = ",".join(dict.fromkeys([*already, *ignored]))
