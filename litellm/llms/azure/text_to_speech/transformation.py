@@ -67,7 +67,7 @@ class AzureAVATextToSpeechConfig(BaseTextToSpeechConfig):
         model: str,
         input: str,
         voice: str | dict | None,
-        optional_params: dict,
+        optional_params: dict[str, object],
         litellm_params_dict: dict,
         logging_obj: "LiteLLMLoggingObj",
         timeout: float | httpx.Timeout,
@@ -233,12 +233,12 @@ class AzureAVATextToSpeechConfig(BaseTextToSpeechConfig):
         optional_params: dict,
         voice: str | dict | None = None,
         drop_params: bool = False,
-        kwargs: dict = {},
-    ) -> tuple[str | None, dict]:
+        kwargs: dict[str, object] = {},
+    ) -> tuple[str | None, dict[str, object]]:
         """
         Map OpenAI parameters to Azure AVA TTS parameters
         """
-        mapped_params: Final = {}
+        mapped_params: Final[dict[str, object]] = {}
         ##########################################################
         # Map voice
         # OpenAI uses voice as a required param, hence not in optional_params
@@ -387,7 +387,7 @@ class AzureAVATextToSpeechConfig(BaseTextToSpeechConfig):
         input: str,
         voice: str | None,
         optional_params: dict,
-        litellm_params: dict,
+        litellm_params: dict[str, object],
         headers: dict,
     ) -> TextToSpeechRequestData:
         """
