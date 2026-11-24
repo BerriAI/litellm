@@ -5,10 +5,11 @@ import json
 import tempfile
 import tracemalloc
 from collections import Counter
-from collections.abc import Callable, Iterator
-from types import SimpleNamespace
+from collections.abc import Callable, Collection, Iterable, Iterator
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from email.parser import BytesParser
+from types import SimpleNamespace
 from typing import IO, Final, List, Optional
 from urllib.parse import quote
 from unittest.mock import ANY, AsyncMock, MagicMock
@@ -1442,7 +1443,7 @@ async def _route_alias_upload(llm_router: Router, file: FileTypes) -> None:
         llm_router=llm_router,
         _create_file_request=CreateFileRequest(file=file, purpose="batch"),
         purpose="batch",
-        proxy_logging_obj=MagicMock(),
+        proxy_logging_obj=MagicMock(get_proxy_hook=MagicMock(return_value=None)),
         user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="test-user"),
         target_model_names_list=[],
         is_router_model=False,
@@ -5521,11 +5522,13 @@ def _managed_file_row(
     team_id: Optional[str] = None,
     model_mappings: Optional[dict[str, str]] = None,
     storage_backend: Optional[str] = None,
+    expires_at: int | None = None,
 ) -> MagicMock:
     file_object = OpenAIFileObject(
         id=stored_file_id or unified_file_id,
         bytes=100,
         created_at=1700000000,
+        expires_at=expires_at,
         filename="batch.jsonl",
         object="file",
         purpose="batch",
@@ -5541,11 +5544,12 @@ def _managed_file_row(
     )
 
 
-def _field_matches(value, expected) -> bool:
-    if isinstance(expected, dict) and "in" in expected:
-        return value in expected["in"]
-    if isinstance(expected, dict) and "hasSome" in expected:
-        return not set(value).isdisjoint(expected["hasSome"])
+def _field_matches(value: object, expected: object) -> bool:
+    match expected:
+        case {"in": Collection() as allowed}:
+            return value in allowed
+        case {"hasSome": Iterable() as wanted} if isinstance(value, Iterable):
+            return not set(value).isdisjoint(wanted)
     return value == expected
 
 
@@ -5578,13 +5582,14 @@ class _ManagedFileTableOverRows:
 
     async def upsert(self, where: dict[str, str], data: dict[str, dict[str, object]]) -> SimpleNamespace:
         created: Final = data["create"]
+        existing_row: Final = next((row for row in self.rows if row.unified_file_id == where["unified_file_id"]), None)
         row: Final = SimpleNamespace(
             unified_file_id=where["unified_file_id"],
             file_object=json.loads(created["file_object"]),
             model_mappings=json.loads(created["model_mappings"]),
             flat_model_file_ids=created["flat_model_file_ids"],
-            created_by=created["created_by"],
-            team_id=created["team_id"],
+            created_by=created["created_by"] if existing_row is None else existing_row.created_by,
+            team_id=created["team_id"] if existing_row is None else existing_row.team_id,
             storage_backend=None,
         )
         self.rows = [row, *(existing for existing in self.rows if existing.unified_file_id != row.unified_file_id)]
@@ -5763,6 +5768,30 @@ def test_scoped_list_files_still_resolves_deployment_credentials_for_an_admin(
     provider_list.assert_awaited_once()
     assert provider_list.await_args.kwargs["custom_llm_provider"] == "openai"
     assert provider_list.await_args.kwargs["api_key"] == "openai_api_key"
+
+
+def test_scoped_list_files_lists_only_the_callers_files_for_a_non_admin(
+    mocker: MockerFixture, monkeypatch: pytest.MonkeyPatch, llm_router: Router
+) -> None:
+    import litellm.proxy.proxy_server as ps
+
+    _, provider_list = _setup_unscoped_list_files_route_over_real_hook(
+        mocker,
+        monkeypatch,
+        llm_router,
+        [
+            _managed_file_row("unified-mine", model_mappings={"gpt-3.5-turbo-id": "file-mine"}),
+            _managed_file_row("unified-theirs", created_by="other-user", model_mappings={"gpt-3.5-turbo-id": "f"}),
+        ],
+    )
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        api_key="test-key", user_role=LitellmUserRoles.INTERNAL_USER, user_id="test-user"
+    )
+
+    response: Final = _get_unscoped_list_files("?target_model_names=gpt-3.5-turbo")
+
+    assert _listed_ids(response) == ["unified-mine"]
+    provider_list.assert_not_awaited()
 
 
 def _post_user_data_file() -> httpx.Response:
@@ -6648,14 +6677,20 @@ _SHARED_ACCOUNTS: Final = pytest.mark.parametrize(
 )
 
 
+_LISTING_NOW: Final = datetime.fromtimestamp(2000000000, tz=timezone.utc)
+
+
 @pytest.fixture
 def plain_upload_proxy(monkeypatch: pytest.MonkeyPatch, llm_router: Router) -> Iterator[_ManagedFileTableOverRows]:
-    """The real managed files hook over an empty table, with require_managed_files left at its default and
-    every upload, list, read and delete answered by one shared provider account."""
-    import litellm.proxy.proxy_server as ps
+    """The real managed files hook over an empty table at a fixed clock, with require_managed_files left at its
+    default and every upload, list, read and delete answered by a shared OpenAI or Anthropic account."""
     from litellm_enterprise.proxy.hooks.managed_files import PROXY_LiteLLMManagedFiles
 
-    managed_files: Final = PROXY_LiteLLMManagedFiles(internal_usage_cache=DualCache(), prisma_client=MagicMock())
+    import litellm.proxy.proxy_server as ps
+
+    managed_files: Final = PROXY_LiteLLMManagedFiles(
+        internal_usage_cache=DualCache(), prisma_client=MagicMock(), clock=lambda: _LISTING_NOW
+    )
     managed_file_table: Final = _ManagedFileTableOverRows([])
     managed_files.prisma_client.db.litellm_managedfiletable = managed_file_table
     managed_files.prisma_client.db.query_raw = managed_file_table.query_raw
@@ -6700,6 +6735,7 @@ def _mock_shared_account(upstream: respx.MockRouter, account: _SharedAccount) ->
                 status_code=200, json={"object": "list", "data": [account.file_body], "has_more": False}
             )
         ),
+        "retrieve": upstream.get(file_url).mock(return_value=httpx.Response(status_code=200, json=account.file_body)),
         "content": upstream.get(f"{file_url}/content").mock(
             return_value=httpx.Response(status_code=200, content=b'{"salary": 100}')
         ),
@@ -6726,12 +6762,15 @@ def _listed_ids(response: httpx.Response) -> list[str]:
 @_SHARED_ACCOUNTS
 def test_another_team_cannot_list_read_or_delete_a_plain_upload(
     plain_upload_proxy: _ManagedFileTableOverRows, account: _SharedAccount
-):
+) -> None:
     with respx.mock(assert_all_called=False) as upstream:
         shared_account: Final = _mock_shared_account(upstream, account)
         uploaded: Final = _upload_payroll_as_team_a(account)
         listed: Final = client.get(
             f"/v1/files?provider={account.provider}", headers=_as_team_member("user-b", "team-b")
+        )
+        retrieved: Final = client.get(
+            f"/v1/files/{_PLAIN_UPLOAD_ID}?provider={account.provider}", headers=_as_team_member("user-b", "team-b")
         )
         read: Final = client.get(
             f"/v1/files/{_PLAIN_UPLOAD_ID}/content?provider={account.provider}",
@@ -6744,6 +6783,8 @@ def test_another_team_cannot_list_read_or_delete_a_plain_upload(
     assert uploaded.status_code == 200, uploaded.text
     assert _listed_ids(listed) == []
     assert shared_account["list"].call_count == 0
+    assert retrieved.status_code == 403, retrieved.text
+    assert shared_account["retrieve"].call_count == 0
     assert read.status_code == 403, read.text
     assert deleted.status_code == 403, deleted.text
     assert shared_account["content"].call_count == 0
@@ -6753,16 +6794,16 @@ def test_another_team_cannot_list_read_or_delete_a_plain_upload(
 @_SHARED_ACCOUNTS
 def test_the_uploading_team_lists_reads_and_deletes_its_plain_upload(
     plain_upload_proxy: _ManagedFileTableOverRows, account: _SharedAccount
-):
+) -> None:
     with respx.mock(assert_all_called=False) as upstream:
         shared_account: Final = _mock_shared_account(upstream, account)
         uploaded: Final = _upload_payroll_as_team_a(account)
         listed: Final = client.get(
-            f"/v1/files?provider={account.provider}", headers=_as_team_member("user-a", "team-a")
+            f"/v1/files?provider={account.provider}", headers=_as_team_member("user-c", "team-a")
         )
         read: Final = client.get(
             f"/v1/files/{_PLAIN_UPLOAD_ID}/content?provider={account.provider}",
-            headers=_as_team_member("user-a", "team-a"),
+            headers=_as_team_member("user-c", "team-a"),
         )
         deleted: Final = client.delete(
             f"/v1/files/{_PLAIN_UPLOAD_ID}?provider={account.provider}", headers=_as_team_member("user-a", "team-a")
@@ -6790,10 +6831,85 @@ def _upload_payroll_through_the_shared_model_as_team_a() -> httpx.Response:
     )
 
 
+def test_wildcard_upload_is_listed_for_its_model_and_provider(
+    plain_upload_proxy: _ManagedFileTableOverRows, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.llm_router",
+        Router(
+            model_list=[
+                {"model_name": "*", "litellm_params": {"model": "openai/*", "api_key": "test-key"}},
+                {"model_name": "explicit", "litellm_params": {"model": "anthropic/test", "api_key": "test-key"}},
+            ]
+        ),
+    )
+    owner: Final = _as_team_member("user-a", "team-a")
+    with respx.mock(assert_all_called=False) as upstream:
+        _mock_shared_account(upstream, _OPENAI_ACCOUNT)
+        _mock_shared_account(upstream, _ANTHROPIC_ACCOUNT)
+
+        def upload(model: str) -> str:
+            response: Final = client.post(
+                "/v1/files",
+                data={"purpose": "user_data", "model": model},
+                files={"file": ("test.txt", b"test", "text/plain")},
+                headers=owner,
+            )
+            assert response.status_code == 200, response.text
+            return str(response.json()["id"])
+
+        older, explicit, newer = (upload(model) for model in ("routed-a", "explicit", "routed-b"))
+        assert _listed_ids(client.get("/v1/files?model=routed-a", headers=owner)) == [older]
+        assert _listed_ids(client.get("/v1/files?provider=anthropic", headers=owner)) == [explicit]
+        first: Final = client.get("/v1/files?provider=openai&limit=1", headers=owner)
+        assert _listed_ids(first) == [newer]
+        assert first.json()["has_more"] is True
+        next_page: Final = client.get("/v1/files", params={"provider": "openai", "after": newer}, headers=owner)
+        assert _listed_ids(next_page) == [older]
+        assert next_page.json()["has_more"] is False
+        assert _listed_ids(client.get("/v1/files?provider=openai", headers=_as_team_member("user-b", "team-b"))) == []
+
+
+def test_managed_listing_skips_expired_rows_in_both_cursor_directions(
+    plain_upload_proxy: _ManagedFileTableOverRows,
+) -> None:
+    now: Final = int(_LISTING_NOW.timestamp())
+    plain_upload_proxy.rows.extend(
+        _managed_file_row(f"f{index}", model_mappings={"gpt-3.5-turbo-id": f"p{index}"}, expires_at=expiry)
+        for index, expiry in enumerate((now - 1, None, now, now + 1, now - 1))
+    )
+    owner: Final = _as_team_member("test-user", "team-a")
+
+    def page(**params: str) -> tuple[list[str], bool]:
+        response: Final = client.get("/v1/files", params={"provider": "openai", "limit": "1", **params}, headers=owner)
+        return _listed_ids(response), response.json()["has_more"]
+
+    assert page() == (["f1"], True)
+    assert page(after="f1") == (["f3"], False)
+    assert page(before_id="f3") == (["f1"], False)
+    assert page(after="f3") == ([], False)
+
+
+def test_managed_listing_keeps_an_expired_first_copy_while_another_copy_lives(
+    plain_upload_proxy: _ManagedFileTableOverRows,
+) -> None:
+    plain_upload_proxy.rows.append(
+        _managed_file_row(
+            "two-copies",
+            model_mappings={"gpt-3.5-turbo-id": "p1", "other-deployment-id": "p2"},
+            expires_at=int(_LISTING_NOW.timestamp()) - 1,
+        )
+    )
+
+    listed: Final = client.get("/v1/files?provider=openai", headers=_as_team_member("test-user", "team-a"))
+
+    assert _listed_ids(listed) == ["two-copies"]
+
+
 @pytest.mark.parametrize("id_kind", ["raw provider id", "model-routed id"])
 def test_another_team_cannot_read_or_delete_a_model_routed_upload(
     plain_upload_proxy: _ManagedFileTableOverRows, id_kind: str
-):
+) -> None:
     with respx.mock(assert_all_called=False) as upstream:
         shared_account: Final = _mock_shared_account(upstream, _OPENAI_ACCOUNT)
         uploaded: Final = _upload_payroll_through_the_shared_model_as_team_a()
@@ -6806,17 +6922,52 @@ def test_another_team_cannot_read_or_delete_a_model_routed_upload(
         deleted: Final = client.delete(
             f"/v1/files/{file_id}?model=gpt-3.5-turbo", headers=_as_team_member("user-b", "team-b")
         )
-        owner_read: Final = client.get(
-            f"/v1/files/{routed_id}/content?model=gpt-3.5-turbo", headers=_as_team_member("user-a", "team-a")
+        teammate_read: Final = client.get(
+            f"/v1/files/{routed_id}/content?model=gpt-3.5-turbo", headers=_as_team_member("user-c", "team-a")
+        )
+        owner_listed: Final = client.get("/v1/files?model=gpt-3.5-turbo", headers=_as_team_member("user-a", "team-a"))
+        owner_deleted: Final = client.delete(
+            f"/v1/files/{file_id}?model=gpt-3.5-turbo", headers=_as_team_member("user-a", "team-a")
+        )
+        listed_after_delete: Final = client.get(
+            "/v1/files?model=gpt-3.5-turbo", headers=_as_team_member("user-a", "team-a")
         )
 
     assert routed_id != _PLAIN_UPLOAD_ID
     assert read.status_code == 403, read.text
     assert deleted.status_code == 403, deleted.text
-    assert shared_account["delete"].call_count == 0
-    assert owner_read.status_code == 200, owner_read.text
-    assert owner_read.content == b'{"salary": 100}'
+    assert teammate_read.status_code == 200, teammate_read.text
+    assert teammate_read.content == b'{"salary": 100}'
     assert shared_account["content"].call_count == 1
+    assert _listed_ids(owner_listed) == [routed_id]
+    assert owner_deleted.status_code == 200, owner_deleted.text
+    assert shared_account["delete"].call_count == 1
+    assert _listed_ids(listed_after_delete) == []
+
+
+def test_another_team_cannot_read_a_load_balanced_batch_upload(
+    plain_upload_proxy: _ManagedFileTableOverRows, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "enable_loadbalancing_on_batch_endpoints", True)
+    batch_row: Final = (
+        b'{"custom_id": "r", "method": "POST", "url": "/v1/chat/completions", "body": {"model": "gpt-3.5-turbo"}}'
+    )
+    with respx.mock(assert_all_called=False) as upstream:
+        shared_account: Final = _mock_shared_account(upstream, _OPENAI_ACCOUNT)
+        uploaded: Final = client.post(
+            "/v1/files?provider=openai",
+            files={"file": ("payroll-private.jsonl", batch_row, "application/jsonl")},
+            data={"purpose": "batch"},
+            headers=_as_team_member("user-a", "team-a"),
+        )
+        read: Final = client.get(
+            f"/v1/files/{_PLAIN_UPLOAD_ID}/content?provider=openai", headers=_as_team_member("user-b", "team-b")
+        )
+
+    assert uploaded.status_code == 200, uploaded.text
+    assert uploaded.json()["id"] == _PLAIN_UPLOAD_ID
+    assert read.status_code == 403, read.text
+    assert shared_account["content"].call_count == 0
 
 
 @_retrieve_and_delete_provider_bodies(_unified_managed_file_id())

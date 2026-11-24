@@ -133,7 +133,7 @@ from litellm.types.llms.openai import (
     OpenAIFileObject,
     OpenAIFilesPurpose,
 )
-from litellm.types.passthrough_endpoints.managed_id_rewriter import ManagedFileIdWriter
+from litellm.types.passthrough_endpoints.managed_id_rewriter import ManagedFileIdForgetter, ManagedFileIdWriter
 from litellm.types.proxy.auth.user_api_key_auth import user_api_key_has_admin_view
 from litellm.types.router import Deployment
 from litellm.types.utils import LlmProviders
@@ -453,11 +453,14 @@ async def _with_recorded_owner(
     return response
 
 
-async def _forget_recorded_owner(proxy_logging_obj: ProxyLogging, file_id: str) -> None:
+async def _forget_recorded_owner(
+    proxy_logging_obj: ProxyLogging, file_id: str, user_api_key_dict: UserAPIKeyAuth
+) -> None:
     managed_files_obj: Final = proxy_logging_obj.get_proxy_hook("managed_files")
-    if not has_attributes(managed_files_obj, _CarriesPrismaClient, "prisma_client"):
-        return
-    await ManagedFileRepository(managed_files_obj.prisma_client).table.delete_many(where={"unified_file_id": file_id})
+    if isinstance(managed_files_obj, ManagedFileIdForgetter):
+        await managed_files_obj.forget_unified_file_id(
+            file_id=file_id, litellm_parent_otel_span=user_api_key_dict.parent_otel_span
+        )
 
 
 async def route_create_file(
@@ -556,14 +559,15 @@ async def route_create_file(
             )
 
             # Create the file with model credentials
-            response = await litellm.acreate_file(
+            routed_upload: Final[OpenAIFileObject] = await litellm.acreate_file(
                 **upload_request,
                 custom_llm_provider=credentials["custom_llm_provider"],
             )
 
-        original_id: Final = response.id
-        response.id = encode_file_id_with_model(file_id=original_id, model=model)
-        return await _with_recorded_owner(response, original_id, model, proxy_logging_obj, user_api_key_dict)
+        routed_file: Final = routed_upload.model_copy(
+            update={"id": encode_file_id_with_model(file_id=routed_upload.id, model=model)}
+        )
+        return await _with_recorded_owner(routed_file, routed_upload.id, model, proxy_logging_obj, user_api_key_dict)
 
     # Handle managed files (supports loadbalancing via llm_router.acreate_file)
     # Priority: Check for managed files BEFORE deprecated loadbalancing
@@ -615,17 +619,16 @@ async def route_create_file(
         custom_llm_provider=custom_llm_provider,
         keep_request_buckets=True,
     )
-    # get configs for custom_llm_provider
     llm_provider_config: Final = get_files_provider_config(custom_llm_provider=custom_llm_provider)
     if llm_provider_config is not None:
-        # add llm_provider_config to data
         _create_file_request.update(llm_provider_config)
     _create_file_request.pop("custom_llm_provider", None)
-    # for now use custom_llm_provider=="openai" -> this will change as LiteLLM adds more providers for acreate_batch
     provider_upload_request: Final = cast(  # cast-ok: files_settings and router defaults add undeclared keys
         CreateFileRequest, {**_create_file_request, **router_default_drop_params(llm_router, _create_file_request)}
     )
-    provider_file: Final = await litellm.acreate_file(**provider_upload_request, custom_llm_provider=custom_llm_provider)
+    provider_file: Final[OpenAIFileObject] = await litellm.acreate_file(
+        **provider_upload_request, custom_llm_provider=custom_llm_provider
+    )
     return await _with_recorded_owner(
         provider_file,
         provider_file.id,
@@ -1678,7 +1681,7 @@ async def delete_file(
                 custom_llm_provider=credentials["custom_llm_provider"],
                 **data,
             )
-            await _forget_recorded_owner(proxy_logging_obj, file_id)
+            await _forget_recorded_owner(proxy_logging_obj, file_id, user_api_key_dict)
 
             verbose_proxy_logger.debug(
                 f"Deleted file using model: {model_used}"
@@ -1731,7 +1734,7 @@ async def delete_file(
                 file_id=file_id,
                 **data,
             )
-            await _forget_recorded_owner(proxy_logging_obj, file_id)
+            await _forget_recorded_owner(proxy_logging_obj, file_id, user_api_key_dict)
 
         ### ALERTING ###
         asyncio.create_task(
@@ -1913,6 +1916,12 @@ def _files_on_provider(llm_router: Router | None, custom_llm_provider: str) -> _
     )
     if llm_router is None:
         return _ListedFiles(FileListModelScope(model_mapping_keys), custom_llm_provider)
+
+    @functools.lru_cache(maxsize=256)
+    def routes_uploaded_model_name(model: str) -> bool:
+        deployment: Final = llm_router.registry().credentials(model, form="deployment")
+        return deployment is not None and _resolved_deployment_provider(deployment) == custom_llm_provider
+
     return _ListedFiles(
         FileListModelScope(
             model_mapping_keys,
@@ -1921,6 +1930,9 @@ def _files_on_provider(llm_router: Router | None, custom_llm_provider: str) -> _
                 llm_router,
                 custom_llm_provider,
                 frozenset(deployment.model_name for deployment in deployments),
+            ),
+            routes_uploaded_model_name=(
+                routes_uploaded_model_name if any("*" in deployment.model_name for deployment in deployments) else None
             ),
         ),
         custom_llm_provider,
@@ -2042,11 +2054,8 @@ async def list_files(
             user_api_key_dict=user_api_key_dict,
             check_file_id_encoding=False,
         )
-        lists_a_provider_account: Final = (
-            should_route
-            or bool(target_model_names)
-            or await _requested_custom_llm_provider(request=request, provider=provider) is not None
-        )
+        requested_provider: Final = await _requested_custom_llm_provider(request=request, provider=provider)
+        lists_a_provider_account: Final = should_route or bool(target_model_names) or requested_provider is not None
         list_owned_files_only: Final = not user_api_key_has_admin_view(user_api_key_dict) and (
             litellm.require_managed_files is True
             or (lists_a_provider_account and isinstance(owned_files_hook, BaseFileEndpoints))
@@ -2066,7 +2075,7 @@ async def list_files(
             listed_files: Final = await _listed_files(
                 llm_router=llm_router,
                 user_api_key_dict=user_api_key_dict,
-                custom_llm_provider=await _requested_custom_llm_provider(request=request, provider=provider),
+                custom_llm_provider=requested_provider,
                 target_model_names=target_model_names,
                 routed_model=model_used if should_route else None,
             )
@@ -2117,7 +2126,7 @@ async def list_files(
                 )
             )
         else:
-            custom_llm_provider: Final = await _requested_custom_llm_provider(request=request, provider=provider)
+            custom_llm_provider: Final = requested_provider
             managed_files_obj: Final = proxy_logging_obj.get_proxy_hook("managed_files")
             if custom_llm_provider is None and isinstance(managed_files_obj, BaseFileEndpoints):
                 response = await _list_owned_managed_files(  # rebind-ok: each dispatch branch binds response
