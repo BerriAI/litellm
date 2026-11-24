@@ -17,6 +17,7 @@ _EMPTY_SCHEMA: Final[Mapping[str, object]] = MappingProxyType({})
 _ROOT_DEFS_POINTER: Final = "#/$defs/"
 _DYNAMIC_REF_KEYWORDS: Final = ("$dynamicRef", "$recursiveRef")
 _DEFS_CONTAINERS: Final = ("$defs", "definitions")
+_DEFINITION_BLOCKS: Final = frozenset({"$defs", "definitions", "components"})
 
 
 def _schema_properties(schema: Mapping[str, object]) -> Mapping[str, object]:
@@ -160,7 +161,21 @@ def _schema_ref_def_names(schema: Mapping[str, object]) -> Iterator[frozenset[st
     return chain.from_iterable(_node_ref_def_names(node) for node in _json_objects(schema))
 
 
-def _reached_def_names(body: Mapping[str, object], defs: Mapping[str, object]) -> frozenset[str] | None:
+def _legacy_definitions(schema: Mapping[str, object]) -> Mapping[str, object]:
+    components: Final = _schema_at(schema, "components") or _EMPTY_SCHEMA
+    return {
+        **(_schema_at(components, "schemas") or _EMPTY_SCHEMA),
+        **(_schema_at(schema, "definitions") or _EMPTY_SCHEMA),
+    }
+
+
+def _definitions_named(blocks: tuple[Mapping[str, object], ...], name: str) -> Iterator[Mapping[str, object]]:
+    return (definition for block in blocks if (definition := _schema_at(block, name)) is not None)
+
+
+def _reached_def_names(
+    body: Mapping[str, object], definition_blocks: tuple[Mapping[str, object], ...]
+) -> frozenset[str] | None:
     reached: frozenset[str] = frozenset()  # rebind-ok: grows by the definitions the last round's refs name
     frontier: tuple[Mapping[str, object], ...] = (body,)  # rebind-ok: the schemas the last round reached
     while frontier:
@@ -169,7 +184,7 @@ def _reached_def_names(body: Mapping[str, object], defs: Mapping[str, object]) -
             return None
         new_names = frozenset(chain.from_iterable(names for names in found if names is not None)) - reached
         reached = reached | new_names
-        frontier = tuple(definition for name in new_names if (definition := _schema_at(defs, name)) is not None)
+        frontier = tuple(chain.from_iterable(_definitions_named(definition_blocks, name) for name in new_names))
     return reached
 
 
@@ -177,12 +192,13 @@ def schema_without_unreferenced_defs(schema: Mapping[str, object]) -> Mapping[st
     defs: Final = _schema_at(schema, "$defs")
     if defs is None:
         return schema
-    body: Final = {key: value for key, value in schema.items() if key != "$defs"}
-    reached: Final = _reached_def_names(body, defs)
+    body: Final = {key: value for key, value in schema.items() if key not in _DEFINITION_BLOCKS}
+    reached: Final = _reached_def_names(body, (defs, _legacy_definitions(schema)))
     if reached is None:
         return schema
     kept: Final = {name: definition for name, definition in defs.items() if name in reached}
-    return {**body, "$defs": kept} if kept else body
+    rest: Final = {key: value for key, value in schema.items() if key != "$defs"}
+    return {**rest, "$defs": kept} if kept else rest
 
 
 def _mergeable_branch(

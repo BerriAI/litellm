@@ -3381,6 +3381,13 @@ _ZIP_ONLY: Final = {"type": "object", "properties": {"zip": {"type": "string"}},
         },
         {
             "type": "object",
+            "properties": {"ship": {"$ref": "#/definitions/Ship"}},
+            "required": ["ship"],
+            "definitions": {"Ship": _SHIP_TO},
+            "$defs": {"Address": _ADDRESS_SCHEMA},
+        },
+        {
+            "type": "object",
             "properties": {"ship": {**_SHIP_TO, "$defs": {"Address": _ADDRESS_SCHEMA}}},
             "required": ["ship"],
             "$defs": {"Unused": {"type": "string"}},
@@ -3414,6 +3421,7 @@ _ZIP_ONLY: Final = {"type": "object", "properties": {"zip": {"type": "string"}},
         "root_ref_target_with_its_own_defs",
         "percent_encoded_defs_pointer",
         "definitions_pointer_into_root_defs",
+        "property_ref_into_definitions_that_refs_defs",
         "property_with_its_own_defs",
         "ref_under_dependencies",
         "property_defs_shadowing_a_root_name",
@@ -3442,6 +3450,23 @@ def test_bedrock_tools_pt_spends_no_inlining_budget_on_unused_claude_defs() -> N
         "required": ["a"],
         "$defs": unused,
         "definitions": {"Big": big},
+    }
+    tools: Final = [{"type": "function", "function": {"name": "t", "parameters": parameters}}]
+
+    sent: Final = _bedrock_tools_pt(tools, model="us.anthropic.claude-sonnet-5-5")[0]["toolSpec"]["inputSchema"]["json"]
+
+    assert sent == {"type": "object", "properties": {"a": {"type": "string"}}, "required": ["a"]}
+
+
+def test_bedrock_tools_pt_spends_no_inlining_budget_on_claude_defs_only_unused_definitions_reach() -> None:
+    big: Final = {"type": "string", "description": "x" * 1_000_000}
+    heavy: Final = {"type": "object", "properties": {f"p{i}": {"$ref": "#/definitions/Big"} for i in range(11)}}
+    parameters: Final = {
+        "type": "object",
+        "properties": {"a": {"type": "string"}},
+        "required": ["a"],
+        "$defs": {"Heavy": heavy},
+        "definitions": {"Big": big, "Unused": {"$ref": "#/$defs/Heavy"}},
     }
     tools: Final = [{"type": "function", "function": {"name": "t", "parameters": parameters}}]
 
