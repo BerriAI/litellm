@@ -8,13 +8,14 @@ the same precedence and the same oddities. Nothing here reads a Python router.
 """
 
 import dataclasses
-from collections.abc import Mapping, MutableMapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, MutableMapping, Sequence
 from functools import partial
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 
 from pydantic import TypeAdapter, ValidationError
 
+import litellm
 from litellm import exceptions as litellm_exceptions
 from litellm.constants import (
     BAGGAGE_MAPPED_TAGS_METADATA_KEY,
@@ -29,12 +30,16 @@ from litellm.litellm_core_utils.clientside_credential_handler import (
     is_clientside_credential,  # pyright: ignore[reportUnknownVariableType]  # litellm's untyped helpers and request values
 )
 from litellm.litellm_core_utils.completion_timeout import CompletionTimeout
-from litellm.litellm_core_utils.core_helpers import allowed_openai_param_names, without
+from litellm.litellm_core_utils.core_helpers import allowed_openai_param_names, as_str_mapping, without
 from litellm.litellm_core_utils.get_litellm_params import SUPPLEMENTAL_KWARGS_KEYS
 from litellm.litellm_core_utils.get_llm_provider_logic import declared_authenticating_provider, inferred_provider
 from litellm.litellm_core_utils.reasoning_effort_capability import deployment_reasoning_effort_levels
 from litellm.litellm_core_utils.request_timeout_resolver import get_service_tier_timeout
-from litellm.litellm_core_utils.routing_common_utils import deployment_model_id_pin, metadata_defaults_under_request
+from litellm.litellm_core_utils.routing_common_utils import (
+    deployment_model_id_pin,
+    metadata_defaults_under_request,
+    request_user_api_key_auth,
+)
 from litellm.litellm_core_utils.tool_fields import TOOL_FIELDS, drop_policy
 from litellm.responses.retrieve_stream_query import requests_streamed_retrieval, without_retrieve_stream_defaults
 from litellm.router_api import deployment_id as generate_deployment_id
@@ -50,12 +55,20 @@ from litellm.router_utils.pre_call_checks.io_token_rate_limit_check import (
 )
 from litellm.router_utils.stream_usage_injection import router_config_requests_stream_usage
 from litellm.types.litellm_params import STREAM_USAGE_INJECTED_FIELD
-from litellm.types.router import Deployment, GenericLiteLLMParams, LiteLLM_Params, validate_litellm_params_strictly
+from litellm.types.router import (
+    FORWARDED_CLIENT_HEADERS_KEY,
+    Deployment,
+    ForwardedClientHeaders,
+    GenericLiteLLMParams,
+    LiteLLM_Params,
+    validate_litellm_params_strictly,
+)
 from litellm.types.utils import AUTOROUTER_CLASSIFIER_CALL_ORIGIN, LlmProviders
 from litellm.utils import ProviderConfigManager
 
 if TYPE_CHECKING:
     from litellm.redis.stores.router_usage import RouterUsage
+    from litellm.router_api import RegistryReader
     from litellm.router_python_host import PythonHost
 
 # The SDK-client and max_parallel_requests reads of the routing cache: process-local, so the family
@@ -63,6 +76,8 @@ if TYPE_CHECKING:
 ROUTER_CLIENTS_TARGET: Final = "router_clients"
 _MAPPING: Final = TypeAdapter(Mapping[str, object])
 _FORWARDED_CREDENTIAL_ISOLATION_PROVIDERS: Final = frozenset({"chatgpt", "anthropic"})
+_CALLER_KEY_ORIGIN_PROVIDERS: Final = frozenset({LlmProviders.ANTHROPIC.value})
+_AWS_SIGNED_FALLBACK_PROVIDERS: Final = frozenset({LlmProviders.BEDROCK.value, LlmProviders.BEDROCK_MANTLE.value})
 _ALIAS_MARKER_FORWARDED_PARAMS_KWARG: Final = "_alias_marker_forwarded_params"
 # Generic handlers whose stream timeout is split from the request timeout.
 STREAM_TIMEOUT_AWARE_GENERIC_HANDLERS: Final = frozenset({"anthropic_messages", "aresponses", "responses"})
@@ -446,21 +461,103 @@ def _clientside_deployment(
 # --- the deployment --------------------------------------------------------------------------
 
 
+def deployment_provider(deployment_params: Mapping[str, object]) -> str | None:
+    declared: Final = deployment_params.get("custom_llm_provider")
+    if isinstance(declared, str):
+        return declared
+    model: Final = deployment_params.get("model")
+    return inferred_provider(model if isinstance(model, str) else None)
+
+
+def sole_provider(deployments: Iterable[Mapping[str, object]]) -> str | None:
+    """The provider every deployment of a group shares, or None when they differ or there are none."""
+    providers: Final = frozenset(
+        deployment_provider(as_dict(deployment.get("litellm_params"))) for deployment in deployments
+    )
+    return next(iter(providers)) if len(providers) == 1 else None
+
+
+def leaves_caller_key_behind(
+    request: Mapping[str, object], origin_provider: str | None, deployment_params: Mapping[str, object]
+) -> bool:
+    """Whether a fallback onto ``deployment_params`` must not send the caller's ``api_key``: the key was meant for
+    Anthropic, the fallback signs with AWS, and the caller did not point the call at a base URL of its own."""
+    return (
+        origin_provider in _CALLER_KEY_ORIGIN_PROVIDERS
+        and deployment_provider(deployment_params) in _AWS_SIGNED_FALLBACK_PROVIDERS
+        and request.get("api_key") is not None
+        and "api_base" not in request
+        and "base_url" not in request
+    )
+
+
+def forwarded_client_headers(request: Mapping[str, object]) -> ForwardedClientHeaders | None:
+    stamp: Final = (as_str_mapping(request.get("proxy_server_request")) or {}).get(FORWARDED_CLIENT_HEADERS_KEY)
+    if stamp is None:
+        return None
+    try:
+        return ForwardedClientHeaders.model_validate(stamp)
+    except ValidationError:
+        return None
+
+
+def client_header_forwarding_admits(group: str, request: Mapping[str, object], router: "RegistryReader") -> bool:
+    """Whether ``model_group_settings.forward_client_headers_to_llm_api`` covers ``group``, as the proxy decided it
+    for the requested group."""
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.auth.auth_checks import check_model_access_helper
+
+    settings: Final = litellm.model_group_settings
+    scope: Final = settings.forward_client_headers_to_llm_api if settings is not None else None
+    if scope is None:
+        return False
+    auth: Final = request_user_api_key_auth(request)
+    caller: Final = auth if isinstance(auth, UserAPIKeyAuth) else None
+    return check_model_access_helper(
+        model=group,
+        llm_router=router,
+        models=scope,
+        team_model_aliases=caller.team_model_aliases if caller is not None else None,
+        team_id=caller.team_id if caller is not None else None,
+    )
+
+
+def _without_headers_named(request: Mapping[str, object], names: frozenset[str]) -> Mapping[str, object]:
+    headers: Final = as_str_mapping(request.get("headers"))
+    if headers is None or not names:
+        return request
+    kept: Final = {name: value for name, value in headers.items() if name.lower() not in names}
+    rest: Final = without(request, "headers")
+    return {**rest, "headers": kept} if kept else rest
+
+
+def fallback_inherited_request(
+    request: Mapping[str, object],
+    *,
+    origin_provider: str | None,
+    deployment_params: Mapping[str, object],
+    header_forwarding_admits: Callable[[], bool],
+) -> Mapping[str, object]:
+    """The caller's request as a fallback attempt inherits it, before the fallback target's own params apply: without
+    a caller key meant for Anthropic on an AWS-signed deployment, and without the client headers the proxy forwarded
+    when the fallback group is outside their forwarding scope (or, for ``x-api-key``, when the key is left behind)."""
+    drops_key: Final = leaves_caller_key_behind(request, origin_provider, deployment_params)
+    stamp: Final = forwarded_client_headers(request)
+    forwarded: Final = frozenset(name.lower() for name in stamp.names) if stamp is not None else frozenset[str]()
+    out_of_scope: Final = stamp is not None and stamp.model_group_scoped and not header_forwarding_admits()
+    removed: Final = forwarded if out_of_scope else (forwarded & {"x-api-key"} if drops_key else frozenset[str]())
+    return _without_headers_named(without(request, "api_key") if drops_key else request, removed)
+
+
 def forwarded_caller_authorization(kwargs: Mapping[str, object], deployment_params: Mapping[str, object]) -> str | None:
     """The caller's ``Authorization`` a credential-isolating provider sends instead of the deployment's key."""
     from litellm.litellm_core_utils.get_provider_specific_headers import ProviderSpecificHeaderUtils
 
-    declared_provider: Final = deployment_params.get("custom_llm_provider")
-    declared_model: Final = deployment_params.get("model")
-    deployment_provider: Final = (
-        declared_provider
-        if isinstance(declared_provider, str)
-        else inferred_provider(declared_model if isinstance(declared_model, str) else None)
-    )
-    if deployment_provider not in _FORWARDED_CREDENTIAL_ISOLATION_PROVIDERS:
+    provider: Final = deployment_provider(deployment_params)
+    if provider not in _FORWARDED_CREDENTIAL_ISOLATION_PROVIDERS:
         return None
     header: Final = kwargs.get("provider_specific_header")
-    return ProviderSpecificHeaderUtils.forwarded_authorization(header, deployment_provider)
+    return ProviderSpecificHeaderUtils.forwarded_authorization(header, provider)
 
 
 def serves_caller_credentials(kwargs: Mapping[str, object], deployment: Mapping[str, object]) -> bool:

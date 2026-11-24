@@ -14,6 +14,7 @@ import litellm
 from litellm import Router
 import os
 from tests.fake_openai_endpoint import FAKE_OPENAI_API_BASE
+from tests.unit.llms.bedrock.slow_upstream import CONVERSE_ANSWER
 from litellm.integrations.custom_logger import CustomLogger
 from litellm._logging import verbose_logger, verbose_proxy_logger, verbose_router_logger
 from litellm.llms.custom_httpx.async_client_cleanup import close_litellm_async_clients
@@ -1360,3 +1361,247 @@ async def test_ordered_fallback_failures_preserve_the_original_context_error(
     assert tuple(json.loads(call.request.content)["model"] for call in route.calls) == ("primary", "ordered", "generic")
     assert raised.value.status_code == (400 if context_error else backup_status)
     assert (original_message if context_error else "generic deployment unavailable") in str(raised.value)
+
+
+_CALLER_ANTHROPIC_KEY: Final = "sk-ant-api03-caller-key"
+_AWS_DEPLOYMENT_CREDENTIALS: Final = {
+    "aws_access_key_id": "AKIAEXAMPLEEXAMPLE00",
+    "aws_secret_access_key": "example-secret",
+    "aws_region_name": "us-east-1",
+}
+_AWS_FALLBACK_TARGETS: Final = {
+    "bedrock": ("bedrock/converse/anthropic.claude-haiku-4-5-20251001-v1:0", "bedrock-runtime.us-east-1.amazonaws.com"),
+    "bedrock_mantle": ("bedrock_mantle/openai.gpt-oss-120b", "bedrock-mantle.us-east-1.api.aws"),
+}
+
+
+def _anthropic_overloaded() -> httpx.Response:
+    return httpx.Response(529, json={"type": "error", "error": {"type": "overloaded_error", "message": "overloaded"}})
+
+
+def _anthropic_answer() -> httpx.Response:
+    return httpx.Response(
+        200,
+        json={
+            "id": "msg_fallback",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-haiku-4-5",
+            "content": [{"type": "text", "text": "served by anthropic"}],
+            "stop_reason": "end_turn",
+            "stop_sequence": None,
+            "usage": {"input_tokens": 1, "output_tokens": 1},
+        },
+    )
+
+
+def _aws_answer(target: str) -> httpx.Response:
+    if target == "bedrock":
+        return httpx.Response(200, content=CONVERSE_ANSWER, headers={"content-type": "application/json"})
+    return _fallback_chat_response("openai.gpt-oss-120b", "served by mantle")
+
+
+def _aws_unavailable() -> httpx.Response:
+    return httpx.Response(500, json={"message": "bedrock unavailable"})
+
+
+def _anthropic_to_aws_router(target: str, fallbacks: list[dict[str, list[object]]], **settings: object) -> Router:
+    anthropic_params: Final = {"model": "anthropic/claude-haiku-4-5", "api_key": "sk-ant-deployment"}
+    return Router(
+        model_list=[
+            {"model_name": "claude", "litellm_params": dict(anthropic_params), "model_info": {"max_input_tokens": 8}},
+            {"model_name": "claude-backup", "litellm_params": dict(anthropic_params)},
+            {
+                "model_name": "claude-aws",
+                "litellm_params": {"model": _AWS_FALLBACK_TARGETS[target][0], **_AWS_DEPLOYMENT_CREDENTIALS},
+            },
+        ],
+        fallbacks=fallbacks,
+        num_retries=0,
+        **settings,
+    )
+
+
+def _carries_caller_key(request: httpx.Request) -> bool:
+    return any(_CALLER_ANTHROPIC_KEY in value for value in request.headers.values())
+
+
+@pytest.fixture
+def _aws_without_env_bearer(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_aws_without_env_bearer")
+@pytest.mark.parametrize("target", ("bedrock", "bedrock_mantle"))
+async def test_anthropic_fallback_onto_aws_signs_with_the_deployment_credentials_not_the_caller_key(
+    respx_mock: respx.MockRouter, target: str
+) -> None:
+    router: Final = _anthropic_to_aws_router(target, [{"claude": ["claude-aws"]}])
+    anthropic: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(
+        return_value=_anthropic_overloaded()
+    )
+    aws: Final = respx_mock.post(host=_AWS_FALLBACK_TARGETS[target][1]).mock(return_value=_aws_answer(target))
+
+    await router.acompletion(
+        model="claude", messages=[{"role": "user", "content": "hi"}], api_key=_CALLER_ANTHROPIC_KEY
+    )
+
+    assert anthropic.calls[0].request.headers["x-api-key"] == _CALLER_ANTHROPIC_KEY
+    sent_to_aws: Final = aws.calls[0].request
+    assert sent_to_aws.headers["authorization"].startswith("AWS4-HMAC-SHA256 "), sent_to_aws.headers
+    assert not _carries_caller_key(sent_to_aws), sent_to_aws.headers
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_aws_without_env_bearer")
+async def test_anthropic_fallback_after_an_aws_hop_still_sends_the_caller_key_to_anthropic(
+    respx_mock: respx.MockRouter,
+) -> None:
+    router: Final = _anthropic_to_aws_router("bedrock", [{"claude": ["claude-aws", "claude-backup"]}])
+    anthropic: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(
+        side_effect=(_anthropic_overloaded(), _anthropic_answer())
+    )
+    aws: Final = respx_mock.post(host=_AWS_FALLBACK_TARGETS["bedrock"][1]).mock(return_value=_aws_unavailable())
+
+    response: Final = await router.acompletion(
+        model="claude", messages=[{"role": "user", "content": "hi"}], api_key=_CALLER_ANTHROPIC_KEY
+    )
+
+    assert response.choices[0].message.content == "served by anthropic"
+    assert aws.calls[0].request.headers["authorization"].startswith("AWS4-HMAC-SHA256 ")
+    assert tuple(call.request.headers["x-api-key"] for call in anthropic.calls) == (
+        _CALLER_ANTHROPIC_KEY,
+        _CALLER_ANTHROPIC_KEY,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_aws_without_env_bearer")
+async def test_context_window_fallback_that_never_reached_anthropic_still_leaves_its_key_behind(
+    respx_mock: respx.MockRouter,
+) -> None:
+    router: Final = _anthropic_to_aws_router(
+        "bedrock", [], enable_pre_call_checks=True, context_window_fallbacks=[{"claude": ["claude-aws"]}]
+    )
+    anthropic: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(return_value=_anthropic_answer())
+    aws: Final = respx_mock.post(host=_AWS_FALLBACK_TARGETS["bedrock"][1]).mock(return_value=_aws_answer("bedrock"))
+
+    await router.acompletion(
+        model="claude",
+        messages=[{"role": "user", "content": "a prompt far longer than the eight tokens claude accepts " * 4}],
+        api_key=_CALLER_ANTHROPIC_KEY,
+    )
+
+    assert anthropic.call_count == 0
+    assert aws.calls[0].request.headers["authorization"].startswith("AWS4-HMAC-SHA256 ")
+    assert not _carries_caller_key(aws.calls[0].request)
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_aws_without_env_bearer")
+async def test_aws_bearer_sent_to_bedrock_is_kept_on_a_bedrock_mantle_fallback(respx_mock: respx.MockRouter) -> None:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "bedrock-primary",
+                "litellm_params": {"model": _AWS_FALLBACK_TARGETS["bedrock"][0], **_AWS_DEPLOYMENT_CREDENTIALS},
+            },
+            {
+                "model_name": "mantle",
+                "litellm_params": {"model": _AWS_FALLBACK_TARGETS["bedrock_mantle"][0], **_AWS_DEPLOYMENT_CREDENTIALS},
+            },
+        ],
+        fallbacks=[{"bedrock-primary": ["mantle"]}],
+        num_retries=0,
+    )
+    bedrock: Final = respx_mock.post(host=_AWS_FALLBACK_TARGETS["bedrock"][1]).mock(return_value=_aws_unavailable())
+    mantle: Final = respx_mock.post(host=_AWS_FALLBACK_TARGETS["bedrock_mantle"][1]).mock(
+        return_value=_aws_answer("bedrock_mantle")
+    )
+
+    await router.acompletion(
+        model="bedrock-primary", messages=[{"role": "user", "content": "hi"}], api_key="caller-aws-bearer"
+    )
+
+    assert (
+        bedrock.calls[0].request.headers["authorization"],
+        mantle.calls[0].request.headers["authorization"],
+    ) == ("Bearer caller-aws-bearer", "Bearer caller-aws-bearer")
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_aws_without_env_bearer")
+async def test_dict_fallback_target_api_key_is_sent_to_aws_in_place_of_the_caller_key(
+    respx_mock: respx.MockRouter,
+) -> None:
+    router: Final = _anthropic_to_aws_router(
+        "bedrock", [{"claude": [{"model": "claude-aws", "api_key": "target-key"}]}]
+    )
+    respx_mock.post("https://api.anthropic.com/v1/messages").mock(return_value=_anthropic_overloaded())
+    aws: Final = respx_mock.post(host=_AWS_FALLBACK_TARGETS["bedrock"][1]).mock(return_value=_aws_answer("bedrock"))
+
+    await router.acompletion(
+        model="claude", messages=[{"role": "user", "content": "hi"}], api_key=_CALLER_ANTHROPIC_KEY
+    )
+
+    assert aws.calls[0].request.headers["authorization"] == "Bearer target-key"
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_aws_without_env_bearer")
+async def test_caller_api_base_keeps_the_caller_key_on_an_aws_fallback(respx_mock: respx.MockRouter) -> None:
+    router: Final = _anthropic_to_aws_router("bedrock", [{"claude": ["claude-aws"]}])
+    gateway: Final = respx_mock.post(host="caller-gateway.local").mock(
+        side_effect=(_anthropic_overloaded(), _aws_answer("bedrock"))
+    )
+
+    await router.acompletion(
+        model="claude",
+        messages=[{"role": "user", "content": "hi"}],
+        api_key=_CALLER_ANTHROPIC_KEY,
+        api_base="https://caller-gateway.local",
+    )
+
+    assert gateway.calls[1].request.headers["authorization"] == f"Bearer {_CALLER_ANTHROPIC_KEY}"
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_aws_without_env_bearer")
+@pytest.mark.parametrize(
+    ("forwarding_scope", "expected_headers"),
+    (
+        pytest.param(["claude"], (None, False, "trace-1"), id="fallback-group-out-of-scope"),
+        pytest.param(["claude", "claude-aws"], ("cli", False, "trace-1"), id="fallback-group-in-scope"),
+    ),
+)
+async def test_aws_fallback_drops_only_the_proxy_forwarded_headers_its_group_may_not_receive(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    forwarding_scope: list[str],
+    expected_headers: tuple[str | None, bool, str | None],
+) -> None:
+    from litellm.router_rust.invoke import shaping
+    from litellm.types.router import FORWARDED_CLIENT_HEADERS_KEY, ModelGroupSettings
+
+    monkeypatch.setattr(
+        shaping.litellm, "model_group_settings", ModelGroupSettings(forward_client_headers_to_llm_api=forwarding_scope)
+    )
+    router: Final = _anthropic_to_aws_router("bedrock", [{"claude": ["claude-aws"]}])
+    respx_mock.post("https://api.anthropic.com/v1/messages").mock(return_value=_anthropic_overloaded())
+    aws: Final = respx_mock.post(host=_AWS_FALLBACK_TARGETS["bedrock"][1]).mock(return_value=_aws_answer("bedrock"))
+
+    await router.acompletion(
+        model="claude",
+        messages=[{"role": "user", "content": "hi"}],
+        api_key=_CALLER_ANTHROPIC_KEY,
+        headers={"x-app": "cli", "x-api-key": _CALLER_ANTHROPIC_KEY, "x-trace": "trace-1"},
+        proxy_server_request={
+            FORWARDED_CLIENT_HEADERS_KEY: {"names": ["x-app", "x-api-key"], "model_group_scoped": True}
+        },
+    )
+
+    sent: Final = aws.calls[0].request.headers
+    assert (sent.get("x-app"), "x-api-key" in sent, sent.get("x-trace")) == expected_headers
+    assert sent["authorization"].startswith("AWS4-HMAC-SHA256 ")

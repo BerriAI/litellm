@@ -1610,3 +1610,17 @@ def server_owned_param_kind(param: str) -> str:
     if param in _github_copilot_oauth_litellm_params:
         return "GitHub Copilot authentication"
     return "workload identity federation or OAuth token exchange"
+
+
+FORWARDED_CLIENT_HEADERS_KEY: Final = "forwarded_client_headers"
+
+
+class ForwardedClientHeaders(BaseModel):
+    """The client header names the proxy copied into a request's ``headers``, stamped on its
+    ``proxy_server_request``. ``model_group_scoped`` is true when only a model group's
+    ``forward_client_headers_to_llm_api`` scope admitted them, so a fallback group re-checks that scope."""
+
+    model_config = ConfigDict(frozen=True)
+
+    names: tuple[str, ...]
+    model_group_scoped: bool

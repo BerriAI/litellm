@@ -12332,3 +12332,53 @@ def test_stale_team_alias_bypass_flag_is_read_once_per_process(monkeypatch: pyte
     monkeypatch.setenv("LITELLM_ENABLE_TEAM_STALE_ALIAS_BYPASS", "false")
 
     assert (first, pre_call_utils._stale_team_alias_bypass_enabled()) == (True, True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("general_settings", "model_group_scope", "expected_stamp"),
+    (
+        pytest.param(
+            {"forward_client_headers_to_llm_api": True},
+            None,
+            {"names": ("x-app",), "model_group_scoped": False},
+            id="global",
+        ),
+        pytest.param({}, ["claude"], {"names": ("x-app",), "model_group_scoped": True}, id="model-group"),
+        pytest.param({}, None, None, id="not-forwarded"),
+    ),
+)
+async def test_add_litellm_data_to_request_stamps_only_the_client_headers_it_forwards(
+    monkeypatch: pytest.MonkeyPatch,
+    general_settings: dict[str, object],
+    model_group_scope: list[str] | None,
+    expected_stamp: dict[str, object] | None,
+):
+    import litellm.proxy.litellm_pre_call_utils as pre_call_utils
+    from litellm.types.router import FORWARDED_CLIENT_HEADERS_KEY, ModelGroupSettings
+
+    monkeypatch.setattr(
+        pre_call_utils.litellm,
+        "model_group_settings",
+        ModelGroupSettings(forward_client_headers_to_llm_api=model_group_scope),
+    )
+    forged_stamp: Final = {"names": ["x-forged"], "model_group_scoped": True}
+
+    updated = await pre_call_utils.add_litellm_data_to_request(
+        data={
+            "model": "claude",
+            "messages": [{"role": "user", "content": "hello"}],
+            "proxy_server_request": {FORWARDED_CLIENT_HEADERS_KEY: forged_stamp},
+        },
+        request=_make_request_mock(
+            "/v1/chat/completions",
+            {"Content-Type": "application/json", "x-litellm-api-key": "Bearer sk-virtual-key", "x-app": "cli"},
+        ),
+        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+        proxy_config=MagicMock(),
+        general_settings=general_settings,
+        version="test-version",
+    )
+
+    assert updated["proxy_server_request"].get(FORWARDED_CLIENT_HEADERS_KEY) == expected_stamp
+    assert updated.get("headers") == ({"x-app": "cli"} if expected_stamp is not None else None)

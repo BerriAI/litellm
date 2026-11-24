@@ -118,7 +118,15 @@ from litellm.router_rust.invoke.endpoints import (
     stamp_error,
     unrouted_fields,
 )
-from litellm.router_rust.invoke.shaping import Shaping, non_stream_timeout, serves_caller_credentials
+from litellm.router_rust.invoke.shaping import (
+    Shaping,
+    client_header_forwarding_admits,
+    deployment_provider,
+    fallback_inherited_request,
+    non_stream_timeout,
+    serves_caller_credentials,
+    sole_provider,
+)
 from litellm.router_rust.invoke.slots import enter_deployment_slot, max_parallel_requests_limit
 from litellm.router_rust.invoke.streaming import (
     StreamAttempt,
@@ -4630,6 +4638,7 @@ class _Driver:
         self._request: Final = request
         self._cut_deployment: Final = cut_deployment if isinstance(cut_deployment, str) else None
         self._last_response: object = None
+        self._caller_key_origin: str | None = None
         self._last_error: BaseException | None = None
         # The level the call raises from: a fallback walk re-entered from a failed stream starts at
         # the level that stream served, on the failure ``async_function_with_fallbacks_common_utils``
@@ -5134,7 +5143,7 @@ class _Driver:
         call: Final = attempt_call(
             self._core._port,  # pyright: ignore[reportPrivateUsage]  # the driver serves its own core
             self._plan,
-            self._attempt_request(step),
+            self._attempt_request(step, self._inherited_request(deployment, shape, requested)),
             deployment,
             group=requested,
             requested=requested,
@@ -5458,16 +5467,43 @@ class _Driver:
             )
         return None
 
-    def _attempt_request(self, step: Mapping[str, object]) -> Mapping[str, object]:
+    def _attempt_request(
+        self, step: Mapping[str, object], inherited: Mapping[str, object] | None = None
+    ) -> Mapping[str, object]:
         """The request as the attempt sends it: with the params a fallback's dict target sets (``kwargs.update``)."""
+        request: Final = self._request if inherited is None else inherited
         params: Final = as_str_mapping(step.get("params"))
         if params is None:
-            return self._request
+            return request
         policy: Final = semantic_cache_policy(self._request) if "cache" in params else None
         if policy is None:
-            return {**self._request, **params}
+            return {**request, **params}
         cache: Final = {**(as_str_mapping(params["cache"]) or {}), SEMANTIC_CACHE_POLICY_KEY: policy}
-        return {**self._request, **params, "cache": cache}
+        return {**request, **params, "cache": cache}
+
+    def _inherited_request(
+        self, deployment: Mapping[str, object], shape: "AttemptShape", group: str
+    ) -> Mapping[str, object]:
+        """The caller's request for this attempt, before a dict fallback target's params: a fallback hop leaves behind
+        the caller credentials and forwarded headers that belong to where the request was first sent."""
+        params: Final = as_str_mapping(deployment.get("litellm_params")) or {}
+        if not shape.is_fallback:
+            if self._caller_key_origin is None:
+                self._caller_key_origin = deployment_provider(params)
+            return self._request
+        return fallback_inherited_request(
+            self._request,
+            origin_provider=self._caller_key_origin or self._requested_group_provider(),
+            deployment_params=params,
+            header_forwarding_admits=partial(client_header_forwarding_admits, group, self._request, self._core),
+        )
+
+    def _requested_group_provider(self) -> str | None:
+        """The provider of the requested group when no attempt reached it, if all its deployments share one."""
+        model: Final = self._request.get("model")
+        if not isinstance(model, str):
+            return None
+        return sole_provider(self._core.registry().deployments(model_name=model, source="group") or ())
 
     async def _slot_or_turn_back(
         self, port: "_EndpointPort", deployment: Mapping[str, object], call: "AttemptCall", admission: Admission | None

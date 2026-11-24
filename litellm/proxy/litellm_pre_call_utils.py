@@ -458,7 +458,12 @@ from litellm.types.litellm_params import (
     STREAM_USAGE_INJECTED_FIELD,
 )
 from litellm.types.llms.anthropic import ANTHROPIC_API_HEADERS
-from litellm.types.router import BaggageMappedTagsStamp, holds_api_key_secret_reference
+from litellm.types.router import (
+    FORWARDED_CLIENT_HEADERS_KEY,
+    BaggageMappedTagsStamp,
+    ForwardedClientHeaders,
+    holds_api_key_secret_reference,
+)
 from litellm.types.services import ServiceTypes
 from litellm.types.utils import (
     API_KEY_SECRET_REFERENCE_REJECTION,
@@ -3121,14 +3126,13 @@ async def add_litellm_data_to_request(
     if data.get(_metadata_variable_name, None) is None:
         data[_metadata_variable_name] = {}
 
-    data.update(
-        LiteLLMProxyRequestSetup.add_litellm_data_for_backend_llm_call(
-            headers=_headers,
-            request_data=data,
-            user_api_key_dict=user_api_key_dict,
-            general_settings=general_settings,
-        )
+    _backend_llm_call_data: Final = LiteLLMProxyRequestSetup.add_litellm_data_for_backend_llm_call(
+        headers=_headers,
+        request_data=data,
+        user_api_key_dict=user_api_key_dict,
+        general_settings=general_settings,
     )
+    data.update(_backend_llm_call_data)
 
     LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
         headers=_headers,
@@ -3154,8 +3158,14 @@ async def add_litellm_data_to_request(
         data[_metadata_variable_name]["headers"] = _logging_safe_headers
 
     # check for forwardable headers
+    _headers_before_model_group_forwarding: Final = data.get("headers")
     data = LiteLLMProxyRequestSetup.add_headers_to_llm_call_by_model_group(
         data=data, headers=_headers, user_api_key_dict=user_api_key_dict
+    )
+    _stamp_forwarded_client_headers(
+        data,
+        forwarded_globally="headers" in _backend_llm_call_data,
+        forwarded_for_model_group=data.get("headers") is not _headers_before_model_group_forwarding,
     )
 
     # Header mappings can overwrite user_id below; the key/JWT identity is the only
@@ -4976,6 +4986,22 @@ _NATIVE_MESSAGES_ANTHROPIC_API_HEADER_PROVIDERS: Final = ",".join(
 )
 _ANTHROPIC_OAUTH_CREDENTIAL_PROVIDERS: Final = ",".join(sorted(ANTHROPIC_OAUTH_FORWARD_PROVIDERS))
 _CHATGPT_OAUTH_CREDENTIAL_PROVIDERS: Final = LlmProviders.CHATGPT.value
+
+
+def _stamp_forwarded_client_headers(
+    data: dict[str, object], *, forwarded_globally: bool, forwarded_for_model_group: bool
+) -> None:
+    """Record which ``headers`` entries the proxy forwarded from the client, by name only since the
+    ``proxy_server_request`` reaches the logs, so a router fallback can tell them from headers a caller set."""
+    forwarded: Final = as_str_mapping(data.get("headers"))
+    proxy_server_request: Final = data.get("proxy_server_request")
+    if not (forwarded_globally or forwarded_for_model_group) or forwarded is None:
+        return
+    if not isinstance(proxy_server_request, dict):
+        return
+    proxy_server_request[FORWARDED_CLIENT_HEADERS_KEY] = ForwardedClientHeaders(
+        names=tuple(forwarded), model_group_scoped=not forwarded_globally
+    ).model_dump()
 
 
 def add_provider_specific_headers_to_request(
