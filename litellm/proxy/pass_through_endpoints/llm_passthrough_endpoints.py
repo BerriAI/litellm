@@ -17,9 +17,10 @@ import re
 import sys
 from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
-from functools import partial
+from functools import partial, reduce
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Annotated, Final, Literal, Protocol, TypeAlias, cast
+from typing import TYPE_CHECKING, Annotated, Final, Literal, Protocol, TypeAlias, cast, runtime_checkable
+from urllib.parse import unquote
 
 import httpx
 import openai
@@ -391,6 +392,53 @@ async def llm_passthrough_factory_proxy_route(
     return received_value
 
 
+_GEMINI_SINGLE_FILE_PATH: Final = re.compile(r"(?:^|/)files/([^/:]+)(?::download)?/?$")
+
+
+@runtime_checkable
+class _ProviderFileAccessGuard(Protocol):
+    async def enforce_provider_file_access(self, file_id: str, user_api_key_dict: UserAPIKeyAuth) -> None: ...
+
+
+_METHOD_OVERRIDE_HEADERS: Final = ("x-http-method-override", "x-pass-x-http-method-override")
+
+
+_MAX_PATH_DECODE_ROUNDS: Final = 8
+
+
+def _fully_decoded_path(path: str) -> str | None:
+    decoded: Final = reduce(lambda current, _: unquote(current), range(_MAX_PATH_DECODE_ROUNDS), path)
+    return decoded if unquote(decoded) == decoded else None
+
+
+def _is_gemini_get_or_delete(method: str, headers: Mapping[str, str]) -> bool:
+    methods: Final = {method.upper(), *(headers.get(name, "").upper() for name in _METHOD_OVERRIDE_HEADERS)}
+    return not methods.isdisjoint(("GET", "DELETE"))
+
+
+def _gemini_passthrough_file_id(decoded_path: str) -> str | None:
+    single_file: Final = _GEMINI_SINGLE_FILE_PATH.search(posixpath.normpath(f"/{decoded_path}".replace("\\", "/")))
+    return single_file.group(1) if single_file is not None else None
+
+
+async def _enforce_gemini_passthrough_file_ownership(
+    request: Request, path: str, user_api_key_dict: UserAPIKeyAuth
+) -> None:
+    if not _is_gemini_get_or_delete(request.method, request.headers):
+        return
+    decoded_path: Final = _fully_decoded_path(path)
+    if decoded_path is None:
+        raise HTTPException(status_code=400, detail="The request path is percent-encoded too many times")
+    file_id: Final = _gemini_passthrough_file_id(decoded_path)
+    if file_id is None:
+        return
+    from litellm.proxy.proxy_server import proxy_logging_obj
+
+    hook: Final = proxy_logging_obj.get_proxy_hook("managed_files")
+    if isinstance(hook, _ProviderFileAccessGuard):
+        await hook.enforce_provider_file_access(file_id, user_api_key_dict)
+
+
 @router.api_route(
     "/gemini/{endpoint:path}",
     methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
@@ -422,6 +470,7 @@ async def gemini_proxy_route(
     updated_url: Final = base_url.copy_with(
         path=HttpPassThroughEndpointHelpers.join_base_and_endpoint_path(base_url, encoded_endpoint)
     )
+    await _enforce_gemini_passthrough_file_ownership(request, updated_url.path, user_api_key_dict)
 
     # Add or update query parameters
     gemini_api_key: Final[str | None] = passthrough_endpoint_router.get_credentials(
