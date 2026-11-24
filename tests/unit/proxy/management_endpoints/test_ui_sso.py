@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import email_validator
 import httpx
 import pytest
 import respx
@@ -1269,6 +1270,29 @@ def test_generic_response_convertor_accepts_directory_email(suffix: str) -> None
         role_mappings=None,
     )
     assert result.email == f"dan@büro.{suffix}"
+
+
+@pytest.mark.parametrize("prefix", ["", "büro."])
+def test_generic_response_convertor_follows_library_special_use_domains(
+    monkeypatch: pytest.MonkeyPatch, prefix: str
+) -> None:
+    from litellm.proxy.management_endpoints.ui_sso import generic_response_convertor
+
+    special_use_name: Final = f"{'d' * 32}.{'n' * 32}"
+    monkeypatch.setattr(
+        email_validator, "SPECIAL_USE_DOMAIN_NAMES", [*email_validator.SPECIAL_USE_DOMAIN_NAMES, special_use_name]
+    )
+    email: Final = f"Dan@{prefix.upper()}{special_use_name.upper()}"
+    with pytest.raises(ValidationError, match="email"):
+        CustomOpenID(email=email, team_ids=[])
+
+    result: Final = generic_response_convertor(
+        response={"email": email},
+        jwt_handler=_claim_reading(),
+        sso_jwt_handler=None,
+        role_mappings=None,
+    )
+    assert result.email == f"dan@{prefix}{special_use_name}"
 
 
 @pytest.mark.parametrize(

@@ -7,6 +7,7 @@ Might include fastapi/proxy requirements.txt related imports
 from collections.abc import Callable, Iterable, Sequence
 from typing import Final, cast
 
+import email_validator
 from fastapi_sso.sso.base import OpenID
 from pydantic import field_validator
 
@@ -100,9 +101,6 @@ class CustomOpenID(OpenID):
     email_verified: bool | None = None
 
 
-_SPECIAL_USE_SUFFIXES: Final = frozenset({"arpa", "invalid", "local", "localhost", "onion", "test"})
-
-
 class GenericOpenID(CustomOpenID):
     @field_validator("email", mode="wrap")
     @classmethod
@@ -110,15 +108,25 @@ class GenericOpenID(CustomOpenID):
         if not isinstance(value, str):
             return validate(value)
         local, _, domain = value.partition("@")
-        domain_name, _, suffix = domain.rpartition(".")
-        if not domain_name or suffix.lower() not in _SPECIAL_USE_SUFFIXES:
-            return validate(value)
         if "@" in domain or value != value.strip() or any(char in value for char in "<>"):
             return validate(value)
 
-        # An equal-length public-style label preserves EmailStr's syntax, IDNA and length checks.
-        validation_suffix: Final = "." + "a" * len(suffix)
-        normalized: Final = validate(f"{local}@{domain_name}{validation_suffix}")
+        lower_domain: Final = domain.lower()
+        special_use_name: Final = max(
+            (
+                name
+                for name in email_validator.SPECIAL_USE_DOMAIN_NAMES
+                if lower_domain == name or lower_domain.endswith("." + name)
+            ),
+            key=len,
+            default=None,
+        )
+        if special_use_name is None:
+            return validate(value)
+
+        validation_suffix: Final = ".".join("a" * len(label) for label in special_use_name.split("."))
+        domain_prefix: Final = domain[: -len(special_use_name)]
+        normalized: Final = validate(f"{local}@{domain_prefix}{validation_suffix}")
         if normalized is None or not normalized.endswith(validation_suffix):
             raise ValueError("Invalid email domain")
-        return normalized.removesuffix(validation_suffix) + "." + suffix.lower()
+        return normalized.removesuffix(validation_suffix) + special_use_name
