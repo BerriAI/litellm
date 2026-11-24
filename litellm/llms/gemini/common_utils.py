@@ -390,11 +390,11 @@ class GeminiError(BaseLLMException):
 class GeminiModelInfo(BaseLLMModelInfo):
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, str],
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
     ) -> dict:

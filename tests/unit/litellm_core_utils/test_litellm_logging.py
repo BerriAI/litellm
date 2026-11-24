@@ -1,15 +1,18 @@
 import asyncio
+import base64
 import contextlib
 import copy
 import datetime
 import gc
 import importlib.abc
+import io
 import json
 import logging
 import os
 import sys
 import types
 import threading
+import wave
 from concurrent.futures import Future
 import time
 import traceback
@@ -888,6 +891,23 @@ def test_pre_call_tolerates_missing_api_base(logging_obj):
     logging_obj.pre_call(input="", api_key="", additional_args={"api_base": None, "headers": {}})
 
     assert logging_obj.model_call_details["litellm_params"]["api_base"] == ""
+
+
+def test_pre_call_without_a_model_still_logs_the_call() -> None:
+    files_api_logging_obj: Final = LitellmLogging(
+        model=cast(str, None),
+        messages=[],
+        stream=False,
+        call_type="adelete_file",
+        start_time=time.time(),
+        litellm_call_id="12345",
+        function_id="1245",
+    )
+    files_api_logging_obj.update_environment_variables(litellm_params={}, optional_params={})
+
+    files_api_logging_obj.pre_call(input="", api_key="call-key", additional_args={"api_base": None, "headers": {}})
+
+    assert files_api_logging_obj.model_call_details["log_event_type"] == "pre_api_call"
 
 
 _Callback: TypeAlias = str | Callable[..., object] | CustomLogger
@@ -5226,6 +5246,51 @@ def test_response_cost_calculator_native_generate_content_body_uses_usage_metada
 
     cost = logging_obj.response_cost_calculator(result=native_body)
     assert cost == pytest.approx(expected_cost)
+
+
+def _gemini_tts_wav_base64() -> str:
+    buffer: Final = io.BytesIO()
+    with wave.open(buffer, "wb") as wav:
+        wav.setnchannels(1)
+        wav.setsampwidth(2)
+        wav.setframerate(24000)
+        wav.writeframes(bytes(range(256)) * 8)
+    return base64.b64encode(buffer.getvalue()).decode()
+
+
+def _gemini_tts_reply(wav_base64: str) -> dict[str, object]:
+    return {
+        "candidates": [
+            {
+                "content": {"parts": [{"inlineData": {"mimeType": "audio/wav", "data": wav_base64}}], "role": "model"},
+                "finishReason": "STOP",
+                "index": 0,
+            }
+        ],
+        "usageMetadata": {"promptTokenCount": 7, "candidatesTokenCount": 40, "totalTokenCount": 47},
+        "modelVersion": "gemini-3.8-flash-tts",
+    }
+
+
+def test_native_generate_content_logs_the_tts_audio_the_caller_received():
+    wav_base64: Final = _gemini_tts_wav_base64()
+    reply: Final = _gemini_tts_reply(wav_base64)
+    logging_obj: Final = LitellmLogging(
+        model="gemini-3.8-flash-tts",
+        messages=[{"role": "user", "content": "Say hello"}],
+        stream=False,
+        call_type="agenerate_content",
+        start_time=time.time(),
+        litellm_call_id="tts-wav",
+        function_id="tts-wav",
+    )
+    logging_obj.update_environment_variables(litellm_params={}, optional_params={}, model="gemini-3.8-flash-tts")
+    logging_obj.model_call_details["httpx_response"] = httpx.Response(200, json=reply)
+
+    logged: Final = logging_obj.normalize_endpoint_logging_result(reply)
+
+    assert isinstance(logged, litellm.ModelResponse)
+    assert logged.choices[0].message.audio.data == wav_base64
 
 
 def test_response_cost_calculator_does_not_transform_non_generate_content_dict():

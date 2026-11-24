@@ -2090,6 +2090,55 @@ async def test_enforce_project_io_token_quota_for_frame_blocks_over_limit_otpm()
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("limit", ["model_itpm_limit", "model_otpm_limit"])
+async def test_refunding_a_frame_charge_returns_exactly_that_charge(limit: str) -> None:
+    handler: Final = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(DualCache()))
+    auth: Final = UserAPIKeyAuth(
+        api_key=hash_token(f"sk-ws-frame-refund-{limit}"),
+        project_id=f"proj-ws-refund-{limit}",
+        project_metadata={limit: {"gpt-4o": 50}},
+    )
+
+    async def charge():
+        return await handler.enforce_project_io_token_quota_for_frame(auth, "gpt-4o", 30, 30)
+
+    refund: Final = await charge()
+    assert refund is not None
+    await refund()
+
+    await charge()
+    with pytest.raises(HTTPException) as over_limit:
+        await charge()
+
+    assert over_limit.value.status_code == 429
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("limit", ["model_itpm_limit", "model_otpm_limit"])
+async def test_refunding_more_than_was_counted_leaves_no_credit_against_the_limit(limit: str) -> None:
+    handler: Final = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(DualCache()))
+    auth: Final = UserAPIKeyAuth(
+        api_key=hash_token(f"sk-ws-frame-overrefund-{limit}"),
+        project_id=f"proj-ws-overrefund-{limit}",
+        project_metadata={limit: {"gpt-4o": 50}},
+    )
+
+    async def charge():
+        return await handler.enforce_project_io_token_quota_for_frame(auth, "gpt-4o", 30, 30)
+
+    refund: Final = await charge()
+    assert refund is not None
+    await refund()
+    await refund()
+
+    await charge()
+    with pytest.raises(HTTPException) as over_limit:
+        await charge()
+
+    assert over_limit.value.status_code == 429
+
+
+@pytest.mark.asyncio
 async def test_enforce_project_io_token_quota_for_frame_noop_without_project_limits():
     """A key with no project ITPM/OTPM configured must never be blocked by
     the per-frame check (no descriptors to reserve against)."""
@@ -2976,6 +3025,276 @@ async def test_the_socket_turn_check_ignores_request_limits_and_charges_nothing_
         await handler.enforce_token_limits_for_frame(user_api_key_dict=user_api_key_dict, requested_model="gpt-5.4")
 
     assert _tokens_counted(handler, "api_key", api_key) == tokens_after_open
+
+
+_REALTIME_MODEL: Final = "gpt-realtime"
+
+
+async def _open_realtime_session(
+    handler: PROXY_MaxParallelRequestsHandler_v3, local_cache: DualCache, auth: UserAPIKeyAuth
+) -> None:
+    await handler.async_pre_call_hook(
+        user_api_key_dict=auth,
+        cache=local_cache,
+        data={
+            "model": _REALTIME_MODEL,
+            "litellm_call_id": "realtime-session",
+            "metadata": {"tags": [_SOCKET_TURN_TAG]},
+        },
+        call_type=CallTypes.arealtime.value,
+    )
+
+
+def _realtime_turn_usage(total_tokens: int) -> Usage:
+    return Usage(prompt_tokens=total_tokens - 10, completion_tokens=10, total_tokens=total_tokens)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("auth_limits", "tag_tpm_limit"),
+    [
+        ({"tpm_limit": _SOCKET_TURN_TPM_LIMIT}, None),
+        ({"team_id": "team-rt", "team_tpm_limit": _SOCKET_TURN_TPM_LIMIT}, None),
+        ({"user_id": "user-rt", "user_tpm_limit": _SOCKET_TURN_TPM_LIMIT}, None),
+        ({"end_user_id": "end-user-rt", "end_user_tpm_limit": _SOCKET_TURN_TPM_LIMIT}, None),
+        ({"metadata": {"model_tpm_limit": {_REALTIME_MODEL: _SOCKET_TURN_TPM_LIMIT}}}, None),
+        ({}, _SOCKET_TURN_TPM_LIMIT),
+    ],
+    ids=["key", "team", "user", "end-user", "key-model", "tag"],
+)
+async def test_a_realtime_response_is_refused_once_its_session_turns_used_a_tpm_window_v3(
+    auth_limits: dict[str, object], tag_tpm_limit: int | None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("LITELLM_TPM_TOKEN_RESERVATION_ENABLED", "false")
+    local_cache: Final = DualCache()
+    handler: Final = _handler_with_socket_tag_limit(local_cache, tag_tpm_limit)
+    auth: Final = UserAPIKeyAuth(api_key=hash_token("sk-realtime-turns"), **auth_limits)
+    await _open_realtime_session(handler, local_cache, auth)
+
+    async def check() -> None:
+        await handler.enforce_token_limits_for_frame(auth, _REALTIME_MODEL, call_type=CallTypes.arealtime.value)
+
+    await handler.charge_realtime_turn_usage(auth, _REALTIME_MODEL, _realtime_turn_usage(_SOCKET_TURN_TPM_LIMIT // 2))
+    await check()
+    await handler.charge_realtime_turn_usage(auth, _REALTIME_MODEL, _realtime_turn_usage(_SOCKET_TURN_TPM_LIMIT // 2))
+
+    with pytest.raises(ProxyRateLimitError) as exc_info:
+        await check()
+
+    assert exc_info.value.status_code == 429
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("agent_limits", "key_agent_id", "metadata_agent_id"),
+    [
+        ({"tpm_limit": _SOCKET_TURN_TPM_LIMIT}, None, "agent-rt"),
+        ({"session_tpm_limit": _SOCKET_TURN_TPM_LIMIT}, None, "agent-rt"),
+        ({"tpm_limit": _SOCKET_TURN_TPM_LIMIT}, "agent-rt", None),
+    ],
+    ids=["agent", "agent-session", "key-owned-agent"],
+)
+async def test_a_realtime_response_is_refused_once_its_session_turns_used_the_agent_tpm_window_v3(
+    agent_limits: dict[str, int], key_agent_id: str | None, metadata_agent_id: str | None
+) -> None:
+    from litellm.types.agents import AgentResponse
+
+    local_cache: Final = DualCache()
+    handler: Final = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(local_cache))
+    auth: Final = UserAPIKeyAuth(api_key=hash_token("sk-realtime-agent-turns"), agent_id=key_agent_id)
+    agent: Final = AgentResponse(
+        agent_id="agent-rt", agent_name="rt-agent", agent_card_params={"name": "RT Agent"}, **agent_limits
+    )
+
+    async def check() -> None:
+        await handler.enforce_token_limits_for_frame(auth, _REALTIME_MODEL, call_type=CallTypes.arealtime.value)
+
+    with patch(
+        "litellm.proxy.agent_endpoints.agent_registry.global_agent_registry.get_agent_by_id",
+        side_effect=lambda agent_id: agent if agent_id == "agent-rt" else None,
+    ):
+        await handler.async_pre_call_hook(
+            user_api_key_dict=auth,
+            cache=local_cache,
+            data={
+                "model": _REALTIME_MODEL,
+                "litellm_call_id": "realtime-agent-session",
+                "metadata": {"agent_id": metadata_agent_id, "session_id": "sess-rt"},
+            },
+            call_type=CallTypes.arealtime.value,
+        )
+        await handler.charge_realtime_turn_usage(auth, _REALTIME_MODEL, _realtime_turn_usage(_SOCKET_TURN_TPM_LIMIT // 2))
+        await check()
+        await handler.charge_realtime_turn_usage(auth, _REALTIME_MODEL, _realtime_turn_usage(_SOCKET_TURN_TPM_LIMIT // 2))
+
+        with pytest.raises(ProxyRateLimitError) as exc_info:
+            await check()
+
+    assert exc_info.value.status_code == 429
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("metric", "window", "turn_tokens"),
+    [("model_itpm_limit", "model_per_project_itpm", 500), ("model_otpm_limit", "model_per_project_otpm", 450)],
+    ids=["itpm", "otpm"],
+)
+async def test_a_realtime_response_is_refused_once_its_session_turns_used_the_project_io_quota_v3(
+    metric: str, window: str, turn_tokens: int
+) -> None:
+    local_cache: Final = DualCache()
+    handler: Final = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(local_cache))
+    auth: Final = UserAPIKeyAuth(
+        api_key=hash_token("sk-realtime-project"),
+        project_id="project-rt",
+        project_metadata={metric: {_REALTIME_MODEL: 2 * turn_tokens}},
+    )
+    project_window: Final = f"project-rt:{_REALTIME_MODEL}"
+    turn: Final = Usage(
+        prompt_tokens=600, completion_tokens=450, total_tokens=1050, prompt_tokens_details={"cached_tokens": 100}
+    )
+    await _open_realtime_session(handler, local_cache, auth)
+    tokens_at_open: Final = _tokens_counted(handler, window, project_window)
+
+    async def check() -> None:
+        await handler.enforce_token_limits_for_frame(auth, _REALTIME_MODEL, call_type=CallTypes.arealtime.value)
+
+    await handler.charge_realtime_turn_usage(auth, _REALTIME_MODEL, turn)
+    await check()
+    await handler.charge_realtime_turn_usage(auth, _REALTIME_MODEL, turn)
+
+    with pytest.raises(ProxyRateLimitError) as exc_info:
+        await check()
+
+    assert exc_info.value.status_code == 429
+    assert _tokens_counted(handler, window, project_window) - tokens_at_open == 2 * turn_tokens
+
+
+@pytest.mark.asyncio
+async def test_realtime_turns_charge_the_key_model_and_tag_windows_and_keep_the_session_slot_v3(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LITELLM_TPM_TOKEN_RESERVATION_ENABLED", "false")
+    local_cache: Final = DualCache()
+    handler: Final = _handler_with_socket_tag_limit(local_cache, 10**9)
+    auth: Final = UserAPIKeyAuth(
+        api_key=hash_token("sk-realtime-windows"),
+        max_parallel_requests=1,
+        metadata={"model_tpm_limit": {_REALTIME_MODEL: 10**9}},
+    )
+    await _open_realtime_session(handler, local_cache, auth)
+    slot: Final = RateLimitScope("api_key", auth.api_key).gauge
+    slots_while_open: Final = _gauge_in_flight(handler, _local(handler, slot))
+    windows: Final = (
+        ("api_key", auth.api_key),
+        ("model_per_key", f"{auth.api_key}:{_REALTIME_MODEL}"),
+        ("tag", _SOCKET_TURN_TAG),
+    )
+    tokens_at_open: Final = tuple(_tokens_counted(handler, key, value) for key, value in windows)
+
+    for total_tokens in (300, 450):
+        await handler.charge_realtime_turn_usage(auth, _REALTIME_MODEL, _realtime_turn_usage(total_tokens))
+
+    assert tuple(_tokens_counted(handler, key, value) for key, value in windows) == tuple(
+        opened + 750 for opened in tokens_at_open
+    )
+    assert slots_while_open == 1
+    assert _gauge_in_flight(handler, _local(handler, slot)) == slots_while_open
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("key_limits", "team_window_tokens"),
+    [
+        ({}, 300),
+        ({"metadata": {"model_tpm_limit": {_REALTIME_MODEL: 10**9}}}, 0),
+        ({"model_max_budget": {_REALTIME_MODEL: {"tpm_limit": 10**9}}}, 0),
+    ],
+    ids=["team-owned-model-limit", "key-owned-model-limit", "key-owned-model-budget-limit"],
+)
+async def test_a_realtime_turn_charges_the_team_model_window_unless_the_key_owns_the_model_limit_v3(
+    key_limits: dict[str, object], team_window_tokens: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("LITELLM_TPM_TOKEN_RESERVATION_ENABLED", "false")
+    local_cache: Final = DualCache()
+    handler: Final = _handler_with_socket_tag_limit(local_cache, None)
+    auth: Final = UserAPIKeyAuth(
+        api_key=hash_token("sk-realtime-team-model"),
+        team_id="team-rt",
+        team_metadata={"model_tpm_limit": {_REALTIME_MODEL: 10**9}},
+        **key_limits,
+    )
+    await _open_realtime_session(handler, local_cache, auth)
+    team_window: Final = f"team-rt:{_REALTIME_MODEL}"
+    tokens_at_open: Final = _tokens_counted(handler, "model_per_team", team_window)
+
+    await handler.charge_realtime_turn_usage(auth, _REALTIME_MODEL, _realtime_turn_usage(300))
+
+    assert _tokens_counted(handler, "model_per_team", team_window) - tokens_at_open == team_window_tokens
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reservation", ("true", "false"))
+async def test_a_realtime_session_close_charges_no_tokens_beyond_its_turns_v3(
+    reservation: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from litellm.cost_calculator import RealtimeAPITokenUsageProcessor
+
+    monkeypatch.setenv("LITELLM_TPM_TOKEN_RESERVATION_ENABLED", reservation)
+    local_cache: Final = DualCache()
+    handler: Final = _handler_with_socket_tag_limit(local_cache, 10**9)
+    auth: Final = UserAPIKeyAuth(
+        api_key=hash_token("sk-realtime-close"),
+        tpm_limit=10**9,
+        max_parallel_requests=1,
+        project_id="project-close",
+        project_metadata={"model_itpm_limit": {_REALTIME_MODEL: 10**9}},
+    )
+    project_window: Final = f"project-close:{_REALTIME_MODEL}"
+    await _open_realtime_session(handler, local_cache, auth)
+    session_stash: Final = get_request_stash()
+    reserved_at_open: Final = session_stash.reserved_tokens if session_stash is not None else 0
+    tokens_at_open: Final = _tokens_counted(handler, "api_key", auth.api_key)
+    project_tokens_at_open: Final = _tokens_counted(handler, "model_per_project_itpm", project_window)
+    turn_totals: Final = (320, 480)
+    for total_tokens in turn_totals:
+        await handler.charge_realtime_turn_usage(auth, _REALTIME_MODEL, _realtime_turn_usage(total_tokens))
+    session_events: Final = [
+        {
+            "type": "response.done",
+            "response": {
+                "id": f"resp_{total_tokens}",
+                "usage": {"input_tokens": total_tokens - 10, "output_tokens": 10, "total_tokens": total_tokens},
+            },
+        }
+        for total_tokens in turn_totals
+    ]
+    logged_session: Final = RealtimeAPITokenUsageProcessor.create_logging_realtime_object(
+        usage=RealtimeAPITokenUsageProcessor.collect_and_combine_usage_from_realtime_stream_results(
+            results=session_events  # pyright: ignore[reportArgumentType]  # response.done events as the relay stores them
+        ),
+        results=session_events,  # pyright: ignore[reportArgumentType]  # response.done events as the relay stores them
+    )
+
+    await handler.async_log_success_event(
+        kwargs={
+            "litellm_call_id": "realtime-session",
+            "call_type": CallTypes.arealtime.value,
+            "litellm_params": {"metadata": {"model_group": _REALTIME_MODEL}},
+            "standard_logging_object": {"metadata": {"user_api_key_hash": auth.api_key}},
+        },
+        response_obj=logged_session,
+        start_time=None,
+        end_time=None,
+    )
+
+    assert (reserved_at_open > 0) == (reservation == "true")
+    assert logged_session.usage.total_tokens == sum(turn_totals)
+    assert _tokens_counted(handler, "api_key", auth.api_key) == tokens_at_open - reserved_at_open + sum(turn_totals)
+    assert _tokens_counted(handler, "model_per_project_itpm", project_window) == project_tokens_at_open + sum(
+        total_tokens - 10 for total_tokens in turn_totals
+    )
+    assert _gauge_in_flight(handler, _local(handler, RateLimitScope("api_key", auth.api_key).gauge)) == 0
 
 
 @pytest.mark.asyncio

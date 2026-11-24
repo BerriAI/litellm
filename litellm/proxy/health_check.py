@@ -882,11 +882,11 @@ def _deployment_model_string_for_health_check(litellm_params: dict) -> str:
     return litellm_params.get("model") or ""
 
 
-def _health_check_deployment_is_wildcard(litellm_params: dict) -> bool:
+def _health_check_deployment_is_wildcard(litellm_params: dict[str, object]) -> bool:
     return "*" in _deployment_model_string_for_health_check(litellm_params)
 
 
-def _resolve_health_check_max_tokens(model_info: dict, litellm_params: dict) -> int | None:
+def _resolve_health_check_max_tokens(model_info: dict, litellm_params: dict[str, object]) -> int | None:
     """
     Pick max_tokens for the health check request.
 

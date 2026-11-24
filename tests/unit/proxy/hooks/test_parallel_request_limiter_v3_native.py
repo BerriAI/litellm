@@ -46,10 +46,12 @@ from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     PARALLEL_REQUEST_SLOT_TTL_SECONDS,
     PROXY_MaxParallelRequestsHandler_v3,
     RateLimitDescriptor,
+    RequestTokenEstimate,
     _request_stash,
     atomic_check_and_increment_by_n,
     current_time,
     estimate_input_and_output_tokens,
+    estimate_tokens_and_unpriced_media,
     estimate_tokens_for_request,
     fallback_target_allowed,
     get_request_stash,
@@ -1766,13 +1768,13 @@ _IMAGE_CHAT: Final = {
 async def test_tokens_are_estimated_only_after_the_first_pass_admits_like_python(
     raises: bool, backend: int | None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    def failing(**kwargs: object) -> tuple[int, int]:
+    def failing(**kwargs: object) -> RequestTokenEstimate:
         if raises:
             raise RuntimeError("tokenizer failed")
-        return estimate_input_and_output_tokens(**kwargs)  # pyright: ignore[reportArgumentType]  # forwarded as the host passed them
+        return estimate_tokens_and_unpriced_media(**kwargs)  # pyright: ignore[reportArgumentType]  # forwarded as the host passed them
 
     # An image's tokens are priced by the Python estimator the native's media host call runs.
-    monkeypatch.setattr("litellm.proxy.hooks.parallel_request_limiter_v3.estimate_input_and_output_tokens", failing)
+    monkeypatch.setattr("litellm.proxy.hooks.parallel_request_limiter_v3.estimate_tokens_and_unpriced_media", failing)
     auth: Final = _auth(rpm_limit=2, tpm_limit=4000)
     observed: Final = await _differential(
         [Request(auth, {**_IMAGE_CHAT, "max_tokens": 30}) for _ in range(4)], [("api_key", _KEY)], backend

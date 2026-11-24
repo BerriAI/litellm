@@ -53,7 +53,7 @@ class GigaChatPassthroughConfig(BasePassthroughConfig):
 
     def validate_environment(
         self,
-        headers: dict,  # mutable-ok: mutates in place to set OAuth headers
+        headers: dict[str, object],  # mutable-ok: mutates in place to set OAuth headers
         model: str,
         messages: Sequence[AllMessageValues],
         optional_params: Mapping[str, object],

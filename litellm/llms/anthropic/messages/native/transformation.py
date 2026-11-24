@@ -376,8 +376,8 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         headers: dict,
         model: str,
         messages: Sequence[object],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
     ) -> tuple[dict, str | None]:
@@ -396,7 +396,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
 
     async def avalidate_anthropic_messages_environment(
         self,
-        headers: dict,  # mutable-ok: mirrors the sync validate_anthropic_messages_environment contract
+        headers: dict[str, object],  # mutable-ok: mirrors the sync validate_anthropic_messages_environment contract
         model: str,
         messages: Sequence[object],
         optional_params: dict,  # mutable-ok: mirrors the sync validate_anthropic_messages_environment contract
@@ -799,7 +799,9 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         if not _has_advisor and not continues_message_thread(
             anthropic_messages_optional_request_params.get("thread")  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # the request params arrive as a bare dict
         ):
-            messages = strip_advisor_blocks_from_messages(messages)
+            messages = strip_advisor_blocks_from_messages(
+                messages, drop_params=getattr(litellm_params, "drop_params", None)
+            )
 
         gated: Final = (
             strip_beta_gated_native_request(

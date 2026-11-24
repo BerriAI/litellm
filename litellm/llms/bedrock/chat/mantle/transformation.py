@@ -66,7 +66,7 @@ class AmazonMantleConfig(AmazonAnthropicClaudeConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, str],
         model: str,
         messages: list[AllMessageValues],
         optional_params: dict,
@@ -92,9 +92,9 @@ class AmazonMantleConfig(AmazonAnthropicClaudeConfig):
         self,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
-        headers: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
+        headers: dict[str, object],
     ) -> dict:
         # Strip the "mantle/" routing prefix to get the real model ID
         model_id: Final = model.replace("mantle/", "", 1)
@@ -119,9 +119,9 @@ class AmazonMantleConfig(AmazonAnthropicClaudeConfig):
         self,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
-        headers: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
+        headers: dict[str, object],
     ) -> dict:
         return self.transform_request(
             model=model,

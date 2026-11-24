@@ -159,6 +159,15 @@ def _configured_deployment_id(deployment: Mapping[str, object]) -> str | None:
     return deployment_id if isinstance(deployment_id, str) else None
 
 
+def _widest_limit(model_infos: Sequence[Mapping[str, object]], field: str) -> int | None:
+    limits: Final = tuple(
+        limit
+        for limit in (coerce_token_limit(model_info.get(field)) for model_info in model_infos)
+        if limit is not None
+    )
+    return max(limits) if limits else None
+
+
 def _operator_max_input_tokens(deployment: Mapping[str, object]) -> int | None:
     """``_operator_max_input_tokens``: the deployment's own limit, skipping one a saved
     ``/model/info`` response copied from the cost map."""
@@ -265,6 +274,7 @@ class HostModelInfo:
     """Mixed into ``HostRegistry``, which holds the model list, the indexes and the host."""
 
     _core_usage_store: RouterUsage
+    _has_wildcard_catalog: bool
     _group_counters_cache: dict[str, "GroupCounters"]  # mutable-ok: by model group
 
     def _live_handle(self) -> "RouterCoreHandle | None": ...  # the registry's: the handle ``RustCore`` set
@@ -566,6 +576,15 @@ class HostModelInfo:
             )
             return wire.to_wire(user_model_info)
 
+        configured_model_info: Final = deployment.get("model_info") or {}
+        routed_model: Final = (
+            self._routed_wildcard_model(
+                configured_model_info.get("id"), configured_model_info.get("team_id"), received_model_name
+            )
+            if "*" in litellm_params.model
+            else litellm_params.model
+        )
+
         def answer(step: Mapping[str, object]) -> object:
             if step["lookup"] == "provider":
                 _model, custom_llm_provider, _, _ = self._host.invoke("get_llm_provider")(
@@ -575,7 +594,7 @@ class HostModelInfo:
                 return [_model, custom_llm_provider]
             if step["lookup"] == "user_model_info":
                 return read_user_model_info()
-            return self._answer_model_info_lookup(step, wire)
+            return self._answer_model_info_lookup(step, wire, routed_model)
 
         query: Final = {
             "deployment_id": wire.to_wire((deployment.get("model_info") or {}).get("id")),
@@ -606,10 +625,22 @@ class HostModelInfo:
         """
         wire: Final = _Wire()
         call: Final = self._core_handle().deployment_model_info(model_id, wire.to_wire(model_name))
-        done: Final = _drive_model_info(call, partial(self._answer_model_info_lookup, wire=wire))
+        done: Final = _drive_model_info(call, partial(self._answer_model_info_lookup, wire=wire, model=model_name))
         return wire.from_wire(done["info"])  # pyright: ignore[reportReturnType]  # the merged map, as the core builds it
 
-    def _answer_model_info_lookup(self, step: Mapping[str, object], wire: "_Wire") -> object:
+    def _routed_wildcard_model(self, deployment_id: object, team_id: object, received_model_name: str) -> str | None:
+        team_router: Final = self._core_team_pattern_routers.get(team_id) if isinstance(team_id, str) else None
+        pattern_router: Final = team_router if team_router is not None else self._core_pattern_router
+        return next(
+            (
+                routed_model
+                for candidate, routed_model in pattern_router.get_routed_deployments(received_model_name)
+                if _configured_deployment_id(candidate) == deployment_id
+            ),
+            None,
+        )
+
+    def _answer_model_info_lookup(self, step: Mapping[str, object], wire: "_Wire", model: str | None = None) -> object:
         """One cost-map lookup of a model-info merge, answered from this process."""
         match step["lookup"]:
             case "model_info":
@@ -627,7 +658,7 @@ class HostModelInfo:
             case "bedrock_base":
                 return get_bedrock_base_model(str(step["model_id"]))
             case "discovered":
-                return wire.to_wire(dict(self._core_get_discovered_model_info(wire.from_wire(step["id"]))))  # pyright: ignore[reportArgumentType]  # the deployment's id, as configured
+                return wire.to_wire(dict(self._core_get_discovered_model_info(wire.from_wire(step["id"]), model)))  # pyright: ignore[reportArgumentType]  # the deployment's id, as configured
             case "log":
                 log: Final = verbose_router_logger.error if step["level"] == "error" else verbose_router_logger.debug
                 log("%s", step["message"])
@@ -668,41 +699,51 @@ class HostModelInfo:
                 verbose_router_logger.debug("model info lookup failed; ignored as the core ignores it")
         return routed
 
-    def _core_get_discovered_model_info(self, model_id: str | None) -> Mapping[str, int]:
+    def _core_get_discovered_model_info(self, model_id: str | None, model: str | None = None) -> Mapping[str, int]:
+        from litellm.llms.openrouter.common_utils import openrouter_catalog_limits_for_model
+
         cached: Final[object] = self._discovered_model_info_cache.get_cache(model_id)
         if (
             model_id is not None
             and isinstance(cached, DiscoveredDeploymentModelInfo)
             and cached.deployment is self._core_get_model_info(model_id)
         ):
-            configured: Final = TypeAdapter(Mapping[str, object]).validate_python(cached.deployment["model_info"])
-            return MappingProxyType({key: value for key, value in cached.limits.items() if configured.get(key) is None})
+            configured: Final = _MODEL_INFO_ADAPTER.validate_python(cached.deployment["model_info"])
+            limits: Final = (
+                openrouter_catalog_limits_for_model(cached.limits_by_model, model)
+                if model is not None and cached.limits_by_model
+                else cached.limits
+            )
+            return MappingProxyType({key: value for key, value in limits.items() if configured.get(key) is None})
         return MappingProxyType({})
 
-    def _core_get_model_listing_info(self, model_name: str) -> DeploymentModelListingInfo | None:
+    def _core_get_model_listing_info(
+        self, model_name: str, team_id: str | None = None
+    ) -> DeploymentModelListingInfo | None:
         """
         Return what the concrete deployments behind model_name contribute to its
         /v1/models entry: the cost-map keys for their underlying models, plus the widest
         configured or discovered token limits. Resolved via O(1) index
         lookup.
 
-        Returns None for wildcard-expanded or unknown names, where the listed name is the
-        real model name and no deployment-specific information exists, and treats a
-        malformed configured limit as absent rather than failing the listing.
+        Returns None for unknown names and for wildcard-expanded names whose wildcard
+        deployment holds no catalog row for them, where the listed name is the real model
+        name and no deployment-specific information exists, and treats a malformed
+        configured limit as absent rather than failing the listing.
 
         The whole group is read rather than just its first deployment, so a group that
         mixes models does not advertise a window that depends on config order; the widest
         one is reported, which is what get_model_group_info already shows the Admin UI.
         Keys are deduplicated, so the ordinary group of interchangeable deployments of one
         model still costs the caller a single cost-map lookup. Unlike get_model_group_info,
-        this never triggers pattern matching or deep copies, so it is safe to call per
-        listed model on the /v1/models hot path.
+        this never deep copies a deployment, so it is safe to call per listed model on the
+        /v1/models hot path.
 
         router-core combines the deployments (``router-core/src/group_info.rs``).
         """
         deployments: Final = self._core_deployments_named(model_name)
         if not deployments:
-            return None
+            return self._core_get_wildcard_listing_info(model_name, team_id)
         wire: Final = _Wire()
         call: Final = self._core_handle().model_listing_info([wire.to_wire(deployment) for deployment in deployments])
         done: Final = _drive_model_info(call, partial(self._answer_model_info_lookup, wire=wire))
@@ -712,6 +753,35 @@ class HostModelInfo:
             max_input_tokens=cast("int | None", listing["max_input_tokens"]),  # cast-ok: router-core's limit
             max_output_tokens=cast("int | None", listing["max_output_tokens"]),  # cast-ok: router-core's limit
         )
+
+    def _core_get_wildcard_listing_info(
+        self, model_name: str, team_id: str | None
+    ) -> DeploymentModelListingInfo | None:
+        model_infos: Final = self._wildcard_catalog_model_infos(model_name, team_id)
+        if not model_infos:
+            return None
+        return DeploymentModelListingInfo(
+            cost_map_keys=(),
+            max_input_tokens=_widest_limit(model_infos, "max_input_tokens"),
+            max_output_tokens=_widest_limit(model_infos, "max_output_tokens"),
+        )
+
+    def _wildcard_catalog_model_infos(self, model_name: str, team_id: str | None) -> tuple[Mapping[str, object], ...]:
+        if not self._has_wildcard_catalog:
+            return ()
+        team_router: Final = self._core_team_pattern_routers.get(team_id) if team_id is not None else None
+        team_routed: Final = team_router.get_routed_deployments(model_name) if team_router is not None else ()
+        routed: Final = team_routed or self._core_pattern_router.get_routed_deployments(model_name)
+        visible: Final = (
+            (configured, deployment, routed_model)
+            for deployment, routed_model in routed
+            if (configured := _configured_model_info(deployment)).get("team_id") in (None, team_id)
+        )
+        rows: Final = (
+            (configured, self._core_get_discovered_model_info(_configured_deployment_id(deployment), routed_model))
+            for configured, deployment, routed_model in visible
+        )
+        return tuple(MappingProxyType({**configured, **discovered}) for configured, discovered in rows if discovered)
 
     def _core_get_configured_token_limits(self, model_name: str) -> "tuple[int | None, int | None]":
         """

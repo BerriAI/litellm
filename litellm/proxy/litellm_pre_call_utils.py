@@ -1382,7 +1382,7 @@ def parse_litellm_settings_drop_params(value: object) -> bool:
     return normalized is True
 
 
-def safe_add_api_version_from_query_params(data: dict, request: Request):
+def safe_add_api_version_from_query_params(data: dict[str, object], request: Request):
     try:
         if hasattr(request, "query_params"):
             query_params: Final = dict(request.query_params)
@@ -2722,7 +2722,7 @@ class LiteLLMProxyRequestSetup:
     def add_request_tag_to_metadata(
         llm_router: Router | None,
         headers: Mapping[str, str],
-        data: dict,
+        data: dict[str, object],
     ) -> list[str] | None:
         tags = None
 
@@ -2873,7 +2873,7 @@ class LiteLLMProxyRequestSetup:
 
     @staticmethod
     def apply_key_tags_pre_auth(
-        request_data: dict,
+        request_data: dict[str, object],
         user_api_key_dict: UserAPIKeyAuth,
     ) -> None:
         """Merge key metadata tags into request_data before _tag_max_budget_check."""
@@ -2897,7 +2897,7 @@ class LiteLLMProxyRequestSetup:
     @staticmethod
     def apply_client_tag_policy_pre_auth(
         request: Request,
-        request_data: dict,
+        request_data: dict[str, object],
         user_api_key_dict: UserAPIKeyAuth,
     ) -> None:
         """
@@ -4979,7 +4979,7 @@ _CHATGPT_OAUTH_CREDENTIAL_PROVIDERS: Final = LlmProviders.CHATGPT.value
 
 
 def add_provider_specific_headers_to_request(
-    data: dict,
+    data: dict[str, object],
     headers: Mapping[str, str],
 ) -> bool:
     from litellm.llms.anthropic.common_utils import anthropic_oauth_token_from_header, is_anthropic_oauth_key

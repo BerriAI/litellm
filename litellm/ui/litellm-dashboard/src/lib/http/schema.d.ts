@@ -6364,7 +6364,6 @@ export interface paths {
         /**
          * Get Ui Settings
          * @description Get UI-specific configuration flags.
-         *     All authenticated users can fetch these settings for client-side behavior.
          */
         get: operations["get_ui_settings_get_ui_settings_get"];
         put?: never;
@@ -33269,6 +33268,12 @@ export interface components {
              * @default 300
              */
             health_check_interval: number;
+            /**
+             * Health Check Skip Blocked Background Models
+             * @description When true, deployments with model_info.blocked set to true are skipped by background health checks. With background checks enabled, GET /health reads cached results and can return 503 for a skipped deployment because there is no healthy result. On-demand checks and Test Connection are unaffected.
+             * @default false
+             */
+            health_check_skip_blocked_background_models: boolean;
             /**
              * Health Check Skip Disabled Background Models
              * @description When true, deployments with model_info.disable_background_health_check are skipped for on-demand GET /health as well as the background health loop.

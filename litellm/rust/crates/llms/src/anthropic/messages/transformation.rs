@@ -34,12 +34,13 @@ use crate::{
         ANTHROPIC_API_BASE_ENV, ANTHROPIC_API_KEY_ENV, ANTHROPIC_AUTH_TOKEN_ENV,
         ANTHROPIC_BASE_URL_ENV, OauthHandling, OauthToken,
         anthropic_request_errors_on_thinking_binding_mismatch, complete_anthropic_url,
-        drop_non_string_user_texts, drop_raw_non_string_user_texts, existing_betas, get_api_key,
-        get_auth_header, has_advisor_tool, has_anthropic_credential,
-        is_anthropic_invalid_thinking_block_error, is_anthropic_thinking_binding_mismatch_error,
-        is_claude_strict_tools_rejection, is_tool_search_used, map_messages,
-        map_messages_rejecting_emptied, merge_beta_headers, minted_oauth_environment,
-        optionally_handle_anthropic_oauth, requires_native_compaction_beta, strip_advisor_blocks,
+        drop_advisor_blocks, drop_non_string_user_texts, drop_raw_advisor_blocks,
+        drop_raw_non_string_user_texts, existing_betas, get_api_key, get_auth_header,
+        has_advisor_tool, has_anthropic_credential, is_anthropic_invalid_thinking_block_error,
+        is_anthropic_thinking_binding_mismatch_error, is_claude_strict_tools_rejection,
+        is_tool_search_used, map_messages, map_messages_rejecting_emptied, merge_beta_headers,
+        minted_oauth_environment, optionally_handle_anthropic_oauth,
+        requires_native_compaction_beta, strip_advisor_blocks,
         strip_encrypted_reasoning_blocks_restoring_redacted_data, strip_raw_advisor_blocks,
         strip_raw_encrypted_reasoning_blocks, strip_raw_unsigned_thinking_blocks,
         strip_thinking_blocks_from_anthropic_messages_request, strip_unsigned_thinking_blocks,
@@ -403,6 +404,8 @@ pub(crate) fn transform_messages_request(
         || continues_message_thread(&request.params)
     {
         messages
+    } else if context.drops_unsupported_params {
+        map_messages(messages, drop_advisor_blocks, drop_raw_advisor_blocks)
     } else {
         map_messages(messages, strip_advisor_blocks, strip_raw_advisor_blocks)
     };
@@ -1539,6 +1542,66 @@ mod tests {
                 false
             ),
             Ok(body(merged(tools, json!({"messages": stripped}))))
+        );
+    }
+
+    fn web_search_use() -> Value {
+        json!({"type": "server_tool_use", "id": "srvtoolu_ws", "name": "web_search", "input": {"query": "pools"}})
+    }
+
+    #[rstest]
+    #[case::list_id_kept_without_drop_params(
+        json!([{"type": "advisor_tool_result", "tool_use_id": ["srvtoolu_1"], "content": "Advice."}]),
+        false,
+        json!([{"type": "advisor_tool_result", "tool_use_id": ["srvtoolu_1"], "content": "Advice."}])
+    )]
+    #[case::list_id_dropped_under_drop_params(
+        json!([{"type": "advisor_tool_result", "tool_use_id": ["srvtoolu_1"], "content": "Advice."}]),
+        true,
+        json!([])
+    )]
+    #[case::unmatched_result_kept_without_drop_params(
+        json!([{"type": "advisor_tool_result", "tool_use_id": "srvtoolu_2", "content": "Advice."}]),
+        false,
+        json!([{"type": "advisor_tool_result", "tool_use_id": "srvtoolu_2", "content": "Advice."}])
+    )]
+    #[case::unmatched_result_dropped_under_drop_params(
+        json!([{"type": "advisor_tool_result", "tool_use_id": "srvtoolu_2", "content": "Advice."}]),
+        true,
+        json!([])
+    )]
+    fn advisor_history_left_unpaired_is_dropped_only_under_drop_params(
+        #[case] unpaired: Value,
+        #[case] drops_unsupported_params: bool,
+        #[case] kept: Value,
+        unmapped: MessagesModelCapabilities,
+    ) {
+        let context = MessagesTransformContext {
+            drops_unsupported_params,
+            ..MessagesTransformContext::with_lookup(unmapped, false, &no_env)
+        };
+        let content = [
+            vec![json!({"type": "server_tool_use", "id": "srvtoolu_1", "name": "advisor", "input": {}})],
+            unpaired.as_array().unwrap().clone(),
+            vec![web_search_use(), json!({"type": "text", "text": "Done."})],
+        ]
+        .concat();
+        let history = json!([
+            {"role": "user", "content": "Build a worker pool."},
+            {"role": "assistant", "content": content}
+        ]);
+        let transformed = ANTHROPIC_MESSAGES_CONFIG
+            .transform_anthropic_messages_request(request(json!({"messages": history})), &context)
+            .unwrap();
+        assert_eq!(
+            serde_json::to_value(transformed).unwrap()["messages"][1]["content"],
+            json!(
+                [
+                    kept.as_array().unwrap().clone(),
+                    vec![web_search_use(), json!({"type": "text", "text": "Done."})]
+                ]
+                .concat()
+            )
         );
     }
 

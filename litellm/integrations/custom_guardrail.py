@@ -1552,7 +1552,7 @@ class CustomGuardrail(CustomLogger):
             return False
         return self.event_hook == event_type.value
 
-    def get_guardrail_dynamic_request_body_params(self, request_data: dict) -> dict:
+    def get_guardrail_dynamic_request_body_params(self, request_data: dict[str, object]) -> dict:
         """
         Returns `extra_body` to be added to the request body for the Guardrail API call
 
@@ -1684,7 +1684,7 @@ class CustomGuardrail(CustomLogger):
             **(tracing_detail or {}),
         )
 
-        def _append_guardrail_info(container: dict) -> None:
+        def _append_guardrail_info(container: dict[str, object]) -> None:
             key: Final = "standard_logging_guardrail_information"
             existing: Final = container.get(key)
             if existing is None:
@@ -1714,7 +1714,7 @@ class CustomGuardrail(CustomLogger):
     async def apply_guardrail(
         self,
         inputs: GenericGuardrailAPIInputs,
-        request_data: dict,
+        request_data: dict[str, object],
         input_type: Literal["request", "response"],
         logging_obj: Optional["LiteLLMLoggingObj"] = None,
     ) -> GenericGuardrailAPIInputs:
@@ -1744,12 +1744,12 @@ class CustomGuardrail(CustomLogger):
     def _process_response(
         self,
         response: dict | None,
-        request_data: dict,
+        request_data: dict[str, object],
         start_time: float | None = None,
         end_time: float | None = None,
         duration: float | None = None,
         event_type: GuardrailEventHooks | None = None,
-        original_inputs: dict | None = None,
+        original_inputs: dict[str, object] | None = None,
     ):
         """
         Add StandardLoggingGuardrailInformation to the request data
@@ -1811,7 +1811,7 @@ class CustomGuardrail(CustomLogger):
     def _process_error(
         self,
         e: Exception,
-        request_data: dict,
+        request_data: dict[str, object],
         start_time: float | None = None,
         end_time: float | None = None,
         duration: float | None = None,
