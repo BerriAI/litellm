@@ -1566,6 +1566,7 @@ class HostRegistry(HostModelInfo):
             discovered: Final = self._live_discovered_model_info(model_id)
             self._install_deployment(deployment, replace_existing=True)
             if discovered is not None and on_router is not None and _same_backend(on_router, served):
+                self._discovered_model_info_cache.delete_cache(model_id)
                 self._discovered_model_info_cache.set_cache(
                     model_id, dataclasses.replace(discovered, deployment=self._core_get_model_info(model_id))
                 )

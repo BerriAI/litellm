@@ -724,6 +724,25 @@ async def test_editing_an_openrouter_deployment_keeps_its_limits_while_it_reache
     assert _group_limits(router, "named") == expected
 
 
+@pytest.mark.parametrize("edited_id", ("capped-id", "uncapped-id"))
+async def test_editing_one_openrouter_deployment_keeps_the_other_deployments_limits(
+    edited_id: str, openrouter_settings_cleared: None
+) -> None:
+    deployments: Final = (
+        _openrouter_deployment("capped", "openrouter/vendor/capped", "capped-id"),
+        _openrouter_deployment("uncapped", "openrouter/vendor/uncapped", "uncapped-id"),
+    )
+    router: Final = Router(model_list=list(deployments))
+    await _refresh_against(router, _openrouter_catalog_response)
+    edited: Final = next(deployment for deployment in deployments if deployment["model_info"]["id"] == edited_id)
+
+    _ = router.upsert_deployment(
+        Deployment.model_validate({**edited, "litellm_params": {**edited["litellm_params"], "tpm": 5000}})
+    )
+
+    assert (_group_limits(router, "capped"), _group_limits(router, "uncapped")) == ((4096, 1024), (8192, None))
+
+
 async def test_openrouter_discovery_without_a_key_makes_no_call(openrouter_settings_cleared: None) -> None:
     router: Final = Router(
         model_list=[
