@@ -3470,15 +3470,8 @@ async def test_get_config_from_file(tmp_path, monkeypatch):
     # Test Case 3: No file path provided (should return default config)
     monkeypatch.setattr("litellm.proxy.proxy_server.user_config_file_path", None)
 
-    expected_default = {
-        "model_list": [],
-        "general_settings": {},
-        "router_settings": {},
-        "litellm_settings": {},
-    }
-
     result = await proxy_config._get_config_from_file(None)
-    assert result == expected_default
+    assert result == {"model_list": []}
 
     # Test Case 4: Empty YAML file (should raise exception for None config)
     empty_file = tmp_path / "empty_config.yaml"

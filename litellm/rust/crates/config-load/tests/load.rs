@@ -155,3 +155,72 @@ async fn a_key_the_config_leaves_unset_is_read_from_a_variable_it_exports(
         (Some(true), Some("LITELLM_DROP_PARAMS"))
     );
 }
+
+#[rstest]
+#[tokio::test]
+async fn an_empty_settings_section_in_an_included_file_keeps_the_section_the_config_sets(
+    directory: TempDir,
+    secrets: SecretResolver,
+    #[values("", "[]", "{}", "false", "0", "''")] empty: &str,
+) {
+    let root = directory.path();
+    std::fs::write(
+        root.join("config.yaml"),
+        "include: [shared.yaml]\ngeneral_settings: {master_key: root}\nlitellm_settings: {drop_params: true}\nrouter_settings: {num_retries: 2}\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("shared.yaml"),
+        format!("general_settings: {empty}\nlitellm_settings: {empty}\nrouter_settings: {empty}\n"),
+    )
+    .unwrap();
+
+    let config = litellm_config_load::load(root.join("config.yaml"), secrets)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        (
+            config.general_settings.master_key.unwrap().expose(),
+            config.litellm_settings.drop_params,
+            config.router_settings.num_retries
+        ),
+        ("root", Some(true), Some(2))
+    );
+}
+
+#[rstest]
+#[tokio::test]
+async fn an_empty_settings_section_in_the_config_loads_as_no_section(
+    directory: TempDir,
+    secrets: SecretResolver,
+    #[values("general_settings", "litellm_settings", "router_settings")] section: &str,
+    #[values("", "[]", "{}", "false", "0", "''")] empty: &str,
+) {
+    let path = directory.path().join("config.yaml");
+    std::fs::write(&path, format!("model_list: []\n{section}: {empty}\n")).unwrap();
+
+    let config = litellm_config_load::load(path, secrets).await.unwrap();
+
+    assert_eq!(
+        (
+            config.general_settings.master_key.is_none(),
+            config.litellm_settings.drop_params,
+            config.router_settings.num_retries
+        ),
+        (true, None, None)
+    );
+}
+
+#[rstest]
+#[tokio::test]
+async fn a_settings_section_set_to_text_still_fails_the_load(
+    directory: TempDir,
+    secrets: SecretResolver,
+    #[values("general_settings", "litellm_settings", "router_settings")] section: &str,
+) {
+    let path = directory.path().join("config.yaml");
+    std::fs::write(&path, format!("{section}: callbacks\n")).unwrap();
+
+    assert!(litellm_config_load::load(path, secrets).await.is_err());
+}

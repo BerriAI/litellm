@@ -951,7 +951,6 @@ async def test_ProxyConfig__get_config_from_file_loads_yaml(tmp_path):
     result = await pc._get_config_from_file(config_file_path=str(f))
     assert result == {
         "model_list": [],
-        "general_settings": {},
         "litellm_settings": {"drop_params": True},
     }
 
@@ -975,10 +974,7 @@ async def test_ProxyConfig__process_includes_merges_files(tmp_path):
     pc = ProxyConfig()
     cfg = {"include": ["models.yaml"], "model_list": [], "litellm_settings": {}}
     result = await pc._process_includes(cfg, config_file_path=str(tmp_path / "config.yaml"))
-    assert result == {
-        "model_list": [{"model_name": "gpt-4"}],
-        "litellm_settings": {},
-    }
+    assert result == {"model_list": [{"model_name": "gpt-4"}]}
 
 
 @pytest.mark.asyncio
@@ -1811,11 +1807,7 @@ async def test_ProxyConfig_get_config_loads_from_file(tmp_path, monkeypatch):
     monkeypatch.delenv("LITELLM_CONFIG_BUCKET_NAME", raising=False)
     pc = ProxyConfig()
     cfg = await pc.get_config(config_file_path=str(f))
-    assert cfg == {
-        "model_list": [],
-        "general_settings": {},
-        "litellm_settings": {},
-    }
+    assert cfg == {"model_list": []}
 
 
 @pytest.mark.asyncio

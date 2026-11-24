@@ -232,7 +232,7 @@ class TestBucketConfigIncludes:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("section", ["general_settings", "router_settings", "litellm_settings"])
-    @pytest.mark.parametrize("empty", [[], None, "", False])
+    @pytest.mark.parametrize("empty", [[], None, "", False, {}])
     async def test_an_empty_settings_section_in_an_included_object_keeps_the_section_the_config_sets(
         self, section, empty
     ):
@@ -246,7 +246,7 @@ class TestBucketConfigIncludes:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("section", ["general_settings", "router_settings", "litellm_settings"])
-    @pytest.mark.parametrize("empty", [[], None, "", 0, False])
+    @pytest.mark.parametrize("empty", [[], None, "", 0, False, {}])
     async def test_an_empty_settings_section_in_the_config_object_reads_as_no_section(self, section, empty):
         merged = await resolve_bucket_includes(
             config={"model_list": [], section: empty},

@@ -382,7 +382,7 @@ async def test_proxy_config_model_fallbacks_never_becomes_the_sdk_global_fallbac
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("empty", [[], None])
+@pytest.mark.parametrize("empty", [[], None, {}])
 async def test_get_config_keeps_the_general_settings_a_config_sets_over_an_empty_included_section(
     tmp_path: Path, empty: object
 ) -> None:
@@ -399,8 +399,8 @@ async def test_get_config_keeps_the_general_settings_a_config_sets_over_an_empty
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("settings", ["callbacks", [{"callbacks": ["prometheus"]}], {}])
-async def test_get_config_keeps_a_set_litellm_settings_that_is_not_empty_or_a_mapping(
+@pytest.mark.parametrize("settings", ["callbacks", [{"callbacks": ["prometheus"]}]])
+async def test_get_config_keeps_a_set_litellm_settings_that_is_not_a_mapping(
     tmp_path: Path, settings: object
 ) -> None:
     config_path: Final = tmp_path / "config.yaml"

@@ -72,7 +72,7 @@ def _without_include(config: Mapping[str, object]) -> Mapping[str, object]:
 
 
 def is_empty_settings_section(key: str, value: object) -> bool:
-    return key in _SETTINGS_SECTIONS and not isinstance(value, Mapping) and not value
+    return key in _SETTINGS_SECTIONS and not value
 
 
 def _without_empty_settings_sections(config: Mapping[str, object]) -> Mapping[str, object]:
