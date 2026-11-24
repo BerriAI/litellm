@@ -12,6 +12,7 @@ import httpx
 import pytest
 
 import litellm
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 
 
 @pytest.mark.asyncio
@@ -84,7 +85,13 @@ async def test_responses_api_rate_limit_marks_deployment_for_cooldown():
 
 
 @pytest.mark.asyncio
-async def test_openrouter_responses_connection_failure_cools_down_the_deployment() -> None:
+async def test_openrouter_responses_connection_failure_cools_down_the_deployment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def refuse_connection(*_args: object, **_kwargs: object) -> httpx.Response:
+        raise httpx.ConnectError("connection refused")
+
+    monkeypatch.setattr(AsyncHTTPHandler, "post", refuse_connection)
     deployment_ids = ("deployment-a", "deployment-b")
     router = litellm.Router(
         model_list=[
@@ -93,7 +100,7 @@ async def test_openrouter_responses_connection_failure_cools_down_the_deployment
                 "litellm_params": {
                     "model": "openrouter/openai/gpt-6.2-sol",
                     "api_key": "sk-or-test",
-                    "api_base": "http://127.0.0.1:9/api/v1",
+                    "api_base": "https://backend.example.test/api/v1",
                 },
                 "model_info": {"id": deployment_id},
             }
