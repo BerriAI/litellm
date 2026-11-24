@@ -271,9 +271,6 @@ def test_jwt_result_carries_every_row_the_identity_names(
 ) -> None:
     team: Final = LiteLLM_TeamTable(team_id="t2", models=["gpt-b"], tpm_limit=9)
     membership: Final = LiteLLM_TeamMembership(user_id="u", team_id="t2")
-    org: Final = LiteLLM_OrganizationTable(
-        organization_id="o1", budget_id="b", models=[], created_by="x", updated_by="x"
-    )
     end_user: Final = LiteLLM_EndUserTable(user_id="eu", blocked=False)
 
     result: Final = proxy_jwt.jwt_result(
@@ -283,7 +280,6 @@ def test_jwt_result_carries_every_row_the_identity_names(
             end_user_id="eu",
             team=team,
             membership=membership,
-            org=org,
             end_user=EndUserRow(end_user_id="eu", end_user=end_user, params={}),
         ),
         "jwt",
@@ -293,9 +289,9 @@ def test_jwt_result_carries_every_row_the_identity_names(
         result["token"],
         result["team_object"],
         result.get("team_membership"),
-        result["org_object"],
+        result["org_id"],
         result["end_user_object"],
-    ) == ("jwt", team, membership, org, end_user)
+    ) == ("jwt", team, membership, "o1", end_user)
     assert proxy_jwt.auth_from_result(result).team_tpm_limit == 9
 
 

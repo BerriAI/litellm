@@ -32,7 +32,6 @@ impl Rows for Held {
     type ObjectPermission = ();
     type Project = ();
     type Membership = ();
-    type Org = ();
 }
 
 fn stored_key() -> Caller<Held> {

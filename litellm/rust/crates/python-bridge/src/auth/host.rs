@@ -60,7 +60,6 @@ impl Rows for PyRows {
     type ObjectPermission = PyRow;
     type Project = PyRow;
     type Membership = PyRow;
-    type Org = PyRow;
 }
 
 /// `UserLookup`, owned so it outlives the core's borrow.
@@ -315,11 +314,11 @@ pub(crate) enum Ask {
     },
     Org {
         org_id: String,
-        reply: Reply<Option<Org<PyRow>>>,
+        reply: Reply<Option<Org>>,
     },
     OrgByAlias {
         alias: String,
-        reply: Reply<Option<Org<PyRow>>>,
+        reply: Reply<Option<Org>>,
     },
     JwtEndUser {
         end_user_id: String,
@@ -663,11 +662,11 @@ impl AuthHost for PythonAuthHost {
         })
         .await
     }
-    async fn org(&self, org_id: &str) -> Result<Option<Org<PyRow>>, Error> {
+    async fn org(&self, org_id: &str) -> Result<Option<Org>, Error> {
         let org_id = org_id.to_owned();
         self.ask(|reply| Ask::Org { org_id, reply }).await
     }
-    async fn org_by_alias(&self, alias: &str) -> Result<Option<Org<PyRow>>, Error> {
+    async fn org_by_alias(&self, alias: &str) -> Result<Option<Org>, Error> {
         let alias = alias.to_owned();
         self.ask(|reply| Ask::OrgByAlias { alias, reply }).await
     }

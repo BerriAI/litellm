@@ -4974,7 +4974,6 @@ class JWTAuthBuilderResult(TypedDict):
     team_object: LiteLLM_TeamTable | None
     user_object: LiteLLM_UserTable | None
     end_user_object: LiteLLM_EndUserTable | None
-    org_object: LiteLLM_OrganizationTable | None
     token: str
     team_id: str | None
     user_id: str | None

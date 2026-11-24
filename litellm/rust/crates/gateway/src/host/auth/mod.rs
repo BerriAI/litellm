@@ -53,7 +53,6 @@ impl Rows for NativeRows {
     type ObjectPermission = Infallible;
     type Project = Infallible;
     type Membership = Infallible;
-    type Org = Infallible;
 }
 
 pub struct NativeAuthHost {
@@ -281,11 +280,11 @@ impl AuthHost for NativeAuthHost {
         declined("load_team_membership")
     }
 
-    async fn org(&self, _: &str) -> Result<Option<Org<Infallible>>, Error> {
+    async fn org(&self, _: &str) -> Result<Option<Org>, Error> {
         declined("org")
     }
 
-    async fn org_by_alias(&self, _: &str) -> Result<Option<Org<Infallible>>, Error> {
+    async fn org_by_alias(&self, _: &str) -> Result<Option<Org>, Error> {
         declined("org_by_alias")
     }
 

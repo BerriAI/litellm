@@ -738,7 +738,6 @@ pub(crate) enum IdentityView {
         user: Option<Py<PyAny>>,
         team: Option<Py<PyAny>>,
         membership: Option<Py<PyAny>>,
-        org: Option<Py<PyAny>>,
         end_user: Option<Py<PyAny>>,
     },
 }
@@ -778,7 +777,6 @@ impl IdentityView {
             user: rows(py, belongs.user.as_ref()),
             team,
             membership: rows(py, belongs.membership.as_ref()),
-            org: rows(py, belongs.org.as_ref()),
             end_user: rows(py, belongs.end_user.as_ref()),
         })
     }
@@ -1792,20 +1790,9 @@ impl AuthCall {
             })
     }
 
-    #[pyo3(signature = (org_id = None, row = None))]
-    fn org(&self, org_id: Option<String>, row: Option<Py<PyAny>>) -> PyResult<()> {
-        let org = match (org_id, row) {
-            (Some(organization_id), Some(row)) => Some(Org {
-                organization_id,
-                row: PyRow::new(row),
-            }),
-            (None, None) => None,
-            _ => {
-                return Err(PyValueError::new_err(
-                    "an org is answered with both its id and its row",
-                ));
-            }
-        };
+    #[pyo3(signature = (org_id = None))]
+    fn org(&self, org_id: Option<String>) -> PyResult<()> {
+        let org = org_id.map(|organization_id| Org { organization_id });
         self.stepper.answer("an org", |ask| match ask {
             Ask::Org { reply, .. } | Ask::OrgByAlias { reply, .. } => {
                 reply.send(org);

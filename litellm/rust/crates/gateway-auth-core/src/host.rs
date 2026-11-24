@@ -32,7 +32,6 @@ pub trait Rows: Row {
     type ObjectPermission: Row;
     type Project: Row;
     type Membership: Row;
-    type Org: Row;
 }
 
 pub type KeyRow<H> = <<H as AuthHost>::Rows as Rows>::Key;
@@ -42,7 +41,6 @@ pub type EndUserRow<H> = <<H as AuthHost>::Rows as Rows>::EndUser;
 pub type ObjectPermissionRow<H> = <<H as AuthHost>::Rows as Rows>::ObjectPermission;
 pub type ProjectRow<H> = <<H as AuthHost>::Rows as Rows>::Project;
 pub type MembershipRow<H> = <<H as AuthHost>::Rows as Rows>::Membership;
-pub type OrgRow<H> = <<H as AuthHost>::Rows as Rows>::Org;
 
 /// Code the operator wrote, which only a host that embeds their Python can run.
 pub trait OperatorHooks: Send + Sync {
@@ -260,15 +258,9 @@ pub trait AuthHost: Send + Sync {
         team_id: &str,
     ) -> impl Future<Output = Result<Option<MembershipRow<Self>>, Error>> + Send;
 
-    fn org(
-        &self,
-        org_id: &str,
-    ) -> impl Future<Output = Result<Option<Org<OrgRow<Self>>>, Error>> + Send;
+    fn org(&self, org_id: &str) -> impl Future<Output = Result<Option<Org>, Error>> + Send;
 
-    fn org_by_alias(
-        &self,
-        alias: &str,
-    ) -> impl Future<Output = Result<Option<Org<OrgRow<Self>>>, Error>> + Send;
+    fn org_by_alias(&self, alias: &str) -> impl Future<Output = Result<Option<Org>, Error>> + Send;
 
     /// `get_end_user_object` for the JWT's end user.
     fn jwt_end_user(
