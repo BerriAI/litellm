@@ -28,6 +28,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
+import respx
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
 from cryptography.hazmat.primitives.asymmetric.rsa import RSAPrivateKey, RSAPublicKey
@@ -109,6 +110,48 @@ async def test_proxy_config_adds_and_deletes_stale_deployment(tmp_path: Path, mo
     assert router.get_deployment(model_id="db-deployment").litellm_params.model == "openai/gpt-3.5-turbo"
     await ProxyConfig()._delete_deployment(db_models=[])
     assert router.get_model_ids() == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("db_general_settings", "discovered_max_input_tokens"),
+    [({}, 8192), ({"disable_model_info_refresh": True}, None)],
+    ids=["refresh-on", "refresh-disabled"],
+)
+async def test_a_deployment_the_db_sync_adds_gets_its_backend_limits_without_waiting_for_the_next_refresh(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+    db_general_settings: Mapping[str, object],
+    discovered_max_input_tokens: int | None,
+) -> None:
+    from litellm.proxy import proxy_server
+
+    router: Final = litellm.Router(model_list=[])
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(proxy_server, "general_settings", dict(db_general_settings))
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-proxy-config-test-salt")
+    backend: Final = respx_mock.get("https://backend.invalid/v1/models").respond(
+        200, json={"data": [{"id": "local-model", "max_model_len": 8192}]}
+    )
+    model: Final = SimpleNamespace(
+        model_id="db-vllm",
+        model_name="local",
+        model_info={"id": "db-vllm"},
+        litellm_params={
+            "model": encrypt_value_helper("hosted_vllm/local-model"),
+            "api_base": encrypt_value_helper("https://backend.invalid/v1"),
+        },
+        blocked=False,
+    )
+
+    assert ProxyConfig().add_deployments_and_refresh_model_info(db_models=[model]) == 1
+    pending: Final = asyncio.all_tasks() - {asyncio.current_task()}
+    if pending:
+        await asyncio.wait(pending, timeout=5)
+
+    assert router.registry().discovered_model_info("db-vllm").get("max_input_tokens") == discovered_max_input_tokens
+    assert backend.call_count == (0 if discovered_max_input_tokens is None else 1)
 
 
 def test_proxy_config_upserts_existing_deployment_without_duplicating_it(monkeypatch: pytest.MonkeyPatch) -> None:

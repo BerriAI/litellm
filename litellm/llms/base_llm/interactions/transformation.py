@@ -86,7 +86,9 @@ class BaseInteractionsAPIConfig(ABC):
         """
 
     @abstractmethod
-    def validate_environment(self, headers: dict, model: str, litellm_params: GenericLiteLLMParams | None) -> dict:
+    def validate_environment(
+        self, headers: dict[str, str], model: str, litellm_params: GenericLiteLLMParams | None
+    ) -> dict[str, str]:
         """
         Validate and prepare environment settings including headers.
         """
@@ -192,7 +194,7 @@ class BaseInteractionsAPIConfig(ABC):
         interaction_id: str,
         api_base: str,
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
+        headers: dict[str, str],
     ) -> tuple[str, dict]:
         """
         Transform the get interaction request into URL and query params.
@@ -223,7 +225,7 @@ class BaseInteractionsAPIConfig(ABC):
         interaction_id: str,
         api_base: str,
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
+        headers: dict[str, str],
     ) -> tuple[str, dict]:
         """
         Transform the delete interaction request into URL and body.
@@ -255,7 +257,7 @@ class BaseInteractionsAPIConfig(ABC):
         interaction_id: str,
         api_base: str,
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
+        headers: dict[str, str],
     ) -> tuple[str, dict]:
         """
         Transform the cancel interaction request into URL and body.

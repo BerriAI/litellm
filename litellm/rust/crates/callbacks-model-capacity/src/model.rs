@@ -425,6 +425,15 @@ impl LoggedGroup {
         }))
     }
 
+    pub fn served(text: String) -> Self {
+        Self {
+            truthy: !text.is_empty(),
+            keyed: true,
+            hash_error: None,
+            text,
+        }
+    }
+
     pub fn key(&self) -> Result<Option<&str>, CapacityError> {
         if let Some(error) = &self.hash_error {
             return Err(CapacityError::Type(error.clone()));

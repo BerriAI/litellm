@@ -4125,6 +4125,9 @@ class TestNativeWebSocketGuardrails:
                 {"type": "response.output_text.done", "text": "alice@example.com"}
             ),
             json.dumps(
+                {"type": "response.refusal.done", "refusal": "alice@example.com"}
+            ),
+            json.dumps(
                 {
                     "type": "response.content_part.done",
                     "part": {"type": "output_text", "text": "alice@example.com"},
@@ -4655,6 +4658,69 @@ class TestNativeWebSocketGuardrailMasking:
         assert (
             masked["response"]["output"][0]["content"][0]["text"]
             == "contact <EMAIL_ADDRESS_1>"
+        )
+
+    @pytest.mark.asyncio
+    async def test_mask_response_completed_masks_a_refusal_part(self):
+        handler: Final = _make_streaming(
+            request_data={}, output_guardrail_callbacks=[_FakeWSGuardrail()]
+        )
+        event: Final = json.dumps(
+            {
+                "type": "response.completed",
+                "response": {
+                    "output": [
+                        {
+                            "content": [
+                                {
+                                    "type": "refusal",
+                                    "refusal": "no help for alice@example.com",
+                                }
+                            ]
+                        }
+                    ]
+                },
+            }
+        )
+
+        masked: Final = json.loads(await handler._mask_response_completed(event))
+
+        assert (
+            masked["response"]["output"][0]["content"][0]["refusal"]
+            == "no help for <EMAIL_ADDRESS_1>"
+        )
+
+    @pytest.mark.asyncio
+    async def test_unmask_response_event_restores_a_refusal_part(self):
+        handler: Final = _make_streaming(
+            request_data={
+                "metadata": {"pii_tokens": {"<EMAIL_ADDRESS_1>": "alice@example.com"}}
+            },
+            guardrail_callbacks=[_FakeWSGuardrail()],
+        )
+        event: Final = json.dumps(
+            {
+                "type": "response.completed",
+                "response": {
+                    "output": [
+                        {
+                            "content": [
+                                {
+                                    "type": "refusal",
+                                    "refusal": "no help for <EMAIL_ADDRESS_1>",
+                                }
+                            ]
+                        }
+                    ]
+                },
+            }
+        )
+
+        unmasked: Final = json.loads(handler._unmask_response_event(event))
+
+        assert (
+            unmasked["response"]["output"][0]["content"][0]["refusal"]
+            == "no help for alice@example.com"
         )
 
     @pytest.mark.asyncio

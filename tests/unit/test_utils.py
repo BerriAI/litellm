@@ -1249,6 +1249,7 @@ _COST_MAP_ROW_SCHEMA: Final = {
             "supports_nova_canvas_image_edit": {"type": "boolean"},
             "supports_parallel_function_calling": {"type": "boolean"},
             "supports_parallel_tool_use_config": {"type": "boolean"},
+            "supports_tool_schema_defs": {"type": "boolean"},
             "supports_pdf_input": {"type": "boolean"},
             "supports_part_media_resolution": {"type": "boolean"},
             "supports_media_in_tool_response": {"type": "boolean"},
