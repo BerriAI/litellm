@@ -737,9 +737,9 @@ fn positive(value: &Value) -> bool {
     }
 }
 
-/// The row's `session_id`: the stamped session, else the session the caller sent, when missing
-/// sessions are omitted, the batch id for batch calls, the caller's session under request
-/// correlation, else the trace id.
+/// The row's `session_id`: the stamped session, else the parent session a proxy sub-call
+/// inherited, when missing sessions are omitted, the batch id for batch calls, the caller's
+/// session under request correlation, else the trace id.
 fn session_id(
     builder: &SpendLogRowBuilder,
     input: &RowInput,
@@ -751,7 +751,7 @@ fn session_id(
             .auth
             .session_id
             .clone()
-            .or_else(|| stamps::sent_caller_session(&input.litellm_params));
+            .or_else(|| stamps::inherited_parent_session(&input.litellm_params));
     }
     if let (Some(kind), Some(id)) = (input.call_type.as_deref(), request_id)
         && BATCH_TRACE_CALL_TYPES.contains(&kind)

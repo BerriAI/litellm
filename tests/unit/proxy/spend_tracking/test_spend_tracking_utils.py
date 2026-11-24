@@ -26,6 +26,7 @@ from litellm.constants import (
     MAX_SPEND_LOG_MODEL_NAME_LENGTH,
     REDACTED_BY_LITELM_STRING,
     SESSION_ID_GENERATED_METADATA_KEY,
+    SESSION_ID_INHERITED_METADATA_KEY,
     SESSION_ID_OMITTED_METADATA_KEY,
     UNKNOWN_MODEL_SPEND_LOG_MODEL,
 )
@@ -689,6 +690,26 @@ def test_omit_records_metadata_session_id():
         omit_when_missing=True,
     )
     assert session_id == "chain-1"
+
+
+@pytest.mark.parametrize(
+    ("request_metadata", "expected"),
+    [
+        ({SESSION_ID_INHERITED_METADATA_KEY: True}, "parent-session"),
+        ({}, None),
+    ],
+    ids=["proxy-sub-call", "caller-request"],
+)
+def test_omit_records_a_sent_session_only_for_a_sub_call_inheriting_it(
+    request_metadata: dict[str, object], expected: str | None
+):
+    session_id: Final = _get_session_id_for_spend_log(
+        kwargs={"litellm_params": {"litellm_session_id": "parent-session", "metadata": request_metadata}},
+        metadata={},
+        standard_logging_payload=None,
+        omit_when_missing=True,
+    )
+    assert session_id == expected
 
 
 def test_legacy_policy_keeps_trace_id_fallback():

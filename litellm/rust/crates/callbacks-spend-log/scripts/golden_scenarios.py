@@ -351,6 +351,17 @@ _EXTRA_SCENARIOS: Final[dict[str, tuple[dict[str, object], dict[str, object], di
             "litellm_params": {"metadata": {"user_api_key": "sk-scenario"}, "litellm_session_id": "parent-session"},
         },
     ),
+    "inherited_session_under_omit": (
+        {"missing_session_id": "omit"},
+        {},
+        {
+            **_scenario_kwargs(),
+            "litellm_params": {
+                "metadata": {"user_api_key": "sk-scenario", "litellm_session_id_inherited": True},
+                "litellm_session_id": "parent-session",
+            },
+        },
+    ),
     "caller_session_echoes_trace": (
         {},
         {"request_correlation_in_logs": True},
