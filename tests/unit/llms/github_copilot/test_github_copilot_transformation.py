@@ -1,4 +1,6 @@
 import json
+import math
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Final
 from unittest.mock import MagicMock, patch
@@ -941,6 +943,85 @@ def test_transform_response_carries_upstream_usage():
     assert result.usage.prompt_tokens == 11
     assert result.usage.completion_tokens == 7
     assert result.usage.total_tokens == 18
+
+
+@pytest.mark.parametrize(
+    ("usage", "expected_read", "expected_audio"),
+    (
+        ({"prompt_tokens": 110, "completion_tokens": 5, "total_tokens": 115}, 80, None),
+        (
+            {
+                "prompt_tokens": 110,
+                "completion_tokens": 5,
+                "total_tokens": 115,
+                "prompt_tokens_details": {"cached_tokens": 70, "audio_tokens": 3},
+            },
+            70,
+            3,
+        ),
+    ),
+    ids=("missing-standard-cache-usage", "keep-standard-cache-usage"),
+)
+def test_chat_carries_copilot_cache_counts_without_adding_to_prompt_tokens(
+    usage: Mapping[str, object], expected_read: int, expected_audio: int | None
+) -> None:
+    config = GithubCopilotConfig()
+    raw_response = httpx.Response(
+        200,
+        json={
+            "id": "chatcmpl-cache",
+            "object": "chat.completion",
+            "created": 1,
+            "model": "claude-sonnet-5.5",
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
+            "usage": usage,
+            "copilot_usage": {
+                "token_details": [
+                    {"token_type": "input", "token_count": 10},
+                    {"token_type": "cache_read", "token_count": 80},
+                    {"token_type": "cache_write", "token_count": 20},
+                ]
+            },
+        },
+    )
+    model = "github_copilot/claude-sonnet-5.5"
+    result = config.transform_response(
+        model=model,
+        raw_response=raw_response,
+        model_response=ModelResponse(),
+        logging_obj=MagicMock(model_call_details={}),
+        request_data={},
+        messages=[],
+        optional_params={},
+        litellm_params={},
+        encoding=None,
+    )
+    actual: Final[object] = getattr(result, "usage", None)
+    assert isinstance(actual, litellm.Usage)
+    assert actual.prompt_tokens == 110
+    assert (getattr(actual, "cache_read_input_tokens", None), getattr(actual, "cache_creation_input_tokens", None)) == (
+        expected_read,
+        20,
+    )
+    assert actual.prompt_tokens_details is not None
+    assert actual.prompt_tokens_details.cached_tokens == expected_read
+    assert actual.prompt_tokens_details.audio_tokens == expected_audio
+    input_cost, output_cost = litellm.cost_per_token(
+        model=model,
+        prompt_tokens=actual.prompt_tokens,
+        completion_tokens=actual.completion_tokens,
+        usage_object=actual,
+        custom_cost_per_token={
+            "input_cost_per_token": 0.001,
+            "output_cost_per_token": 0.002,
+            "cache_read_input_token_cost": 0.0001,
+            "cache_creation_input_token_cost": 0.003,
+        },
+    )
+    assert math.isclose(
+        input_cost + output_cost,
+        (110 - expected_read - 20) * 0.001 + expected_read * 0.0001 + 20 * 0.003 + 5 * 0.002,
+    )
 
 
 def _config_signed_in_through(

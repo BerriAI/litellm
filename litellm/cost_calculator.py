@@ -576,6 +576,12 @@ def cost_per_token(
     if model is None:
         raise Exception("Invalid arg. Model cannot be none.")
 
+    # `model` is normally a string, but callers that mock the transport can pass
+    # non-string objects. Only run the string-based dedup/prefix-join when it is
+    # actually a string — e.g. a MagicMock's `.startswith()` is always truthy and
+    # its slices return new mocks, which would spin the dedup loop forever.
+    model_is_str: Final = isinstance(model, str)
+
     ## RECONSTRUCT USAGE BLOCK ##
     if usage_object is not None:
         usage_block = usage_object
@@ -627,9 +633,13 @@ def cost_per_token(
 
     # Anthropic reports prompt_tokens as input_tokens (excluding cache tokens).
     # Adjust so the helper's "prompt_tokens includes cache tokens" invariant holds.
-    _normalized_prompt_tokens = float(prompt_tokens)
-    if _is_anthropic_style:
-        _normalized_prompt_tokens += _cache_read_tokens + _cache_creation_tokens
+    copilot_chat_usage: Final = usage_object is not None and (
+        custom_llm_provider == "github_copilot"
+        or (custom_llm_provider is None and model_is_str and model.startswith("github_copilot/"))
+    )
+    _normalized_prompt_tokens: Final = float(prompt_tokens) + (
+        _cache_read_tokens + _cache_creation_tokens if _is_anthropic_style and not copilot_chat_usage else 0
+    )
 
     response_cost: Final = _cost_per_token_custom_pricing_helper(
         prompt_tokens=_normalized_prompt_tokens,
@@ -670,12 +680,6 @@ def cost_per_token(
     # behavior: `model_with_provider` stays equal to the raw `model` string
     # (provider is detected below for downstream use only).
     caller_supplied_provider: Final = custom_llm_provider is not None
-
-    # `model` is normally a string, but callers that mock the transport can pass
-    # non-string objects. Only run the string-based dedup/prefix-join when it is
-    # actually a string — e.g. a MagicMock's `.startswith()` is always truthy and
-    # its slices return new mocks, which would spin the dedup loop forever.
-    model_is_str: Final = isinstance(model, str)
 
     # Router/proxy deployments may repeat the provider segment (e.g. model_name
     # "openai/openai/gpt-5.5"). Strip duplicated `{provider}/` chains before joining.
