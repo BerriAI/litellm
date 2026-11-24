@@ -595,6 +595,20 @@ def is_model_cost_zero(model: str | Sequence[str] | None, llm_router: RegistryRe
                         zero_cost_cache[model_name] = False
                     return False
 
+                try:
+                    team_public_names = llm_router.registry().names(kind="team_public")
+                except Exception:
+                    team_public_names = frozenset()
+
+                if model_name in team_public_names:
+                    verbose_proxy_logger.debug(
+                        "Backend model %s has team-specific route taking precedence, retaining budget enforcement",
+                        model_name,
+                    )
+                    if zero_cost_cache is not None:
+                        zero_cost_cache[model_name] = False
+                    return False
+
                 served_candidates = _deployments_served_for(model_name, llm_router)
                 if not served_candidates:
                     verbose_proxy_logger.debug("No model group info found for %s, assuming it has cost", model_name)
@@ -753,7 +767,19 @@ def _deployments_served_for(model: str, llm_router: RegistryReader) -> Sequence[
         return pattern_deployments
     if _is_pass_through_all_models_enabled(llm_router):
         return ()
-    backend_matches = tuple(d for d in registry.deployments() if d.get("litellm_params", {}).get("model") == model)
+    try:
+        team_public_names = registry.names(kind="team_public")
+    except Exception:
+        team_public_names = frozenset()
+    if model in team_public_names:
+        return ()
+    backend_matches = tuple(
+        d
+        for d in registry.deployments()
+        if d.get("litellm_params", {}).get("model") == model
+        and not (d.get("model_info") or {}).get("team_id")
+        and not d.get("team_id")
+    )
     if backend_matches:
         return backend_matches
     return ()

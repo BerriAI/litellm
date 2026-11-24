@@ -1060,3 +1060,42 @@ def test_backend_model_waiver_rejected_when_pass_through_all_models_enabled() ->
     assert is_model_cost_zero("free-group", router) is True
     # Unmapped backend name routes directly to provider with pass_through_all_models, so waiver is rejected
     assert is_model_cost_zero("openai/gpt-4o-mini", router) is False
+
+
+def test_backend_model_waiver_rejected_when_team_public_route_exists() -> None:
+    """When a model name matches a team_public_model_name, team routing takes precedence and the backend waiver is rejected."""
+    router = Router(
+        model_list=[
+            {
+                "model_name": "free-group",
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "api_key": "sk-test",
+                    "input_cost_per_token": 0.0,
+                    "output_cost_per_token": 0.0,
+                },
+                "model_info": {
+                    "id": "free-group-id",
+                    "input_cost_per_token": 0.0,
+                    "output_cost_per_token": 0.0,
+                },
+            },
+            {
+                "model_name": "team-paid-group",
+                "litellm_params": {
+                    "model": "azure/paid-deployment",
+                    "api_key": "sk-test",
+                },
+                "model_info": {
+                    "id": "team-paid-id",
+                    "team_id": "team-1",
+                    "team_public_model_name": "openai/gpt-4o-mini",
+                },
+            },
+        ]
+    )
+
+    # Configured free group still gets zero-cost waiver
+    assert is_model_cost_zero("free-group", router) is True
+    # openai/gpt-4o-mini is claimed by a team_public_model_name, so backend waiver is rejected
+    assert is_model_cost_zero("openai/gpt-4o-mini", router) is False
