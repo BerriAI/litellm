@@ -23,6 +23,7 @@ mod stream_hold;
 mod stream_outcome;
 #[cfg(test)]
 mod test_support;
+mod worker_outcomes;
 
 use std::{collections::HashMap, sync::Arc};
 

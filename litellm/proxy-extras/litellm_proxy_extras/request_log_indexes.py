@@ -183,7 +183,7 @@ def _without_comments(statement: str) -> str:
 def _connect(database_url: str) -> "psycopg.Connection[tuple[object, ...]]":
     import psycopg
 
-    return psycopg.connect(database_url, connect_timeout=10, autocommit=True)
+    return psycopg.connect(database_url, connect_timeout=10, autocommit=True, client_encoding="utf8")
 
 
 def ensure_request_log_indexes(

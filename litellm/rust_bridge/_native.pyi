@@ -2171,6 +2171,7 @@ class NativeBudgets:
         /,
     ) -> Execution: ...
 
+def billable_service_tier(requested: str | None, served: str | None) -> str | None: ...
 def budget_check_decision(check: BudgetCheck) -> JsonValue: ...
 
 @final
@@ -2783,6 +2784,7 @@ __all__ = [
     "auth_route_matches_denied",
     "auth_route_matches_prefix",
     "auth_route_matches_wildcard",
+    "billable_service_tier",
     "budget_check_decision",
     "bundled_model_cost_map",
     "completion",

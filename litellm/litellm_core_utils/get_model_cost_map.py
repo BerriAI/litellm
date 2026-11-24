@@ -52,6 +52,7 @@ from litellm.rust_bridge._native import (
 
 _CLI_ENTRYPOINT_NAMES: Final = frozenset({"lite", "litellm-proxy"})
 _CATALOG_ADAPTER: Final = TypeAdapter(dict[str, dict[str, object]])
+_BUNDLED_DOCUMENT_ADAPTER: Final = TypeAdapter(dict[str, object])
 FALLBACK_GENERALIZATIONS_KEY: Final = "fallback_generalizations"
 RESERVED_TOP_LEVEL_KEYS: Final = frozenset({"sample_spec", FALLBACK_GENERALIZATIONS_KEY})
 RETRYABLE_FETCH_STATUS_CODES: Final = frozenset({429, 500, 502, 503, 504})
@@ -105,7 +106,7 @@ class GetModelCostMap:
     @staticmethod
     def load_local_model_cost_map() -> dict:
         """Load the local backup model cost map bundled with the package."""
-        return json.loads(GetModelCostMap.read_local_model_cost_map_bytes())
+        return _BUNDLED_DOCUMENT_ADAPTER.validate_json(GetModelCostMap.read_local_model_cost_map_bytes())
 
     @staticmethod
     def loaded_model_cost_map() -> Mapping[str, Mapping[str, object]]:
