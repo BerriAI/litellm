@@ -333,6 +333,12 @@ def _reasoning_effort_params(
             assert_never(outcome)
 
 
+def _without_tool_choice_when_no_tools(optional_params: Mapping[str, object]) -> Mapping[str, object]:
+    if optional_params.get("tools") or optional_params.get("functions"):
+        return optional_params
+    return {key: value for key, value in optional_params.items() if key != "tool_choice"}
+
+
 class AzureAIStudioConfig(OpenAIConfig):
     def get_supported_openai_params(self, model: str) -> list[str]:
         model_supports_tool_choice = True  # azure ai supports this by default
@@ -670,7 +676,7 @@ class AzureAIStudioConfig(OpenAIConfig):
                 bool(litellm_params.get("drop_params") or litellm.drop_params),
                 base_model if isinstance(base_model, str) else None,
             ),
-            **optional_params,
+            **_without_tool_choice_when_no_tools(optional_params),
         }
 
     def transform_response(
