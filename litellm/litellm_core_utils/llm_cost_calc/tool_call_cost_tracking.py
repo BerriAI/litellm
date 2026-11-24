@@ -43,6 +43,10 @@ def _output_item_type(output_item: object) -> str | None:
     return item_type if isinstance(item_type, str) else None
 
 
+def _response_output_items(response_object: ResponsesAPIResponse) -> Sequence[object]:
+    return response_object.output
+
+
 def _responses_tool_usage(response_object: ResponsesAPIResponse) -> ResponsesToolUsage | None:
     top_level: Final = getattr(response_object, "tool_usage", None)
     raw: Final = (
@@ -252,7 +256,9 @@ class StandardBuiltInToolCostTracking:
         if reported is not None:
             return reported
         count: Final = sum(
-            1 for output_item in response_object.output if _output_item_type(output_item) == "web_search_call"
+            1
+            for output_item in _response_output_items(response_object)
+            if _output_item_type(output_item) == "web_search_call"
         )
         return max(count, 1)
 
@@ -649,7 +655,9 @@ class StandardBuiltInToolCostTracking:
         Returns:
             True if the ResponsesAPIResponse includes one of the specified output types, False otherwise.
         """
-        return any(_output_item_type(output_item) == output_type for output_item in response_object.output)
+        return any(
+            _output_item_type(output_item) == output_type for output_item in _response_output_items(response_object)
+        )
 
     @staticmethod
     def _safe_get_model_info(model: str, custom_llm_provider: str | None = None) -> ModelInfo | None:

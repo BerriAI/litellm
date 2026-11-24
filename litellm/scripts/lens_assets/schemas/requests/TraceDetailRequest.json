@@ -1,29 +1,45 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "TraceDetailRequest",
+  "type": "object",
   "properties": {
-    "cursor": {
-      "default": null,
-      "maxLength": 512,
+    "team_id": {
       "type": [
         "string",
         "null"
-      ]
+      ],
+      "maxLength": 256,
+      "default": null
+    },
+    "api_key_hash": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "maxLength": 256,
+      "default": null
+    },
+    "trace_ref": {
+      "type": "string",
+      "default": ""
+    },
+    "cursor": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "maxLength": 512,
+      "default": null
     },
     "page_size": {
-      "default": null,
-      "format": "uint16",
-      "maximum": 500,
-      "minimum": 1,
       "type": [
         "integer",
         "null"
-      ]
-    },
-    "trace_ref": {
-      "default": "",
-      "type": "string"
+      ],
+      "format": "uint16",
+      "minimum": 1,
+      "maximum": 500,
+      "default": null
     }
-  },
-  "title": "TraceDetailRequest",
-  "type": "object"
+  }
 }

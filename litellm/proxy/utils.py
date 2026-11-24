@@ -138,8 +138,6 @@ import litellm
 import litellm.litellm_core_utils
 import litellm.litellm_core_utils.litellm_logging
 from litellm import (
-    EmbeddingResponse,
-    ImageResponse,
     ModelResponse,
     ModelResponseStream,
     Router,
@@ -209,6 +207,7 @@ from litellm.litellm_core_utils.litellm_logging import (
     Logging,
     deployment_pricing_model_info,
 )
+from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import is_str_keyed_dict
 from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
 from litellm.litellm_core_utils.redact_messages import drop_token_ids
 from litellm.litellm_core_utils.routing_common_utils import resolve_model_group_alias
@@ -3424,7 +3423,7 @@ class ProxyLogging:
         if not pipelines:
             return data, None
 
-        current_response = response  # rebind-ok: chains each pipeline's replacement response into the next
+        current_response: LLMResponseTypes | None = response  # rebind-ok: chains each pipeline's replacement response
         steps_that_ran: frozenset[str] = frozenset()  # rebind-ok: a later pipeline keeps a step an earlier one ran
         request: Final = cast(dict[str, object], data)  # cast-ok: request payload, updated in place by every pipeline
         log_waits: Final = event_hook == "post_call" and _whole_response_log_waits_for_its_pipelines(request, call_type)
@@ -5202,10 +5201,10 @@ class ProxyLogging:
     async def async_post_call_streaming_hook(
         self,
         data: dict,
-        response: ModelResponse | EmbeddingResponse | ImageResponse | ModelResponseStream,
+        response: object,
         user_api_key_dict: UserAPIKeyAuth,
         str_so_far: str | None = None,
-    ):
+    ) -> object:
         """
         Allow user to modify outgoing streaming data -> per chunk
 
@@ -5227,7 +5226,7 @@ class ProxyLogging:
         response_str: str | None = None
         if isinstance(response, (ModelResponse, ModelResponseStream)):
             response_str = litellm.get_response_string(response_obj=response)
-        elif isinstance(response, dict) and self.is_a2a_streaming_response(response):
+        elif is_str_keyed_dict(response) and self.is_a2a_streaming_response(response):
             from litellm.llms.a2a.common_utils import extract_text_from_a2a_response
 
             response_str = extract_text_from_a2a_response(response)
@@ -5276,9 +5275,6 @@ class ProxyLogging:
                             complete_response = str_so_far + response_str
                         else:
                             complete_response = response_str
-                        callback_response: (
-                            ModelResponse | EmbeddingResponse | ImageResponse | ModelResponseStream | None
-                        )
                         callback_response = await _callback.async_post_call_streaming_hook(
                             user_api_key_dict=user_api_key_dict,
                             response=complete_response,
@@ -5791,6 +5787,14 @@ class ProxyLogging:
         if not isinstance(limiter, (ParallelRequestLimiterHook, _PROXY_MaxParallelRequestsHandler)):
             return
         await limiter.async_release_max_parallel_requests_on_disconnect(user_api_key_dict)
+
+    async def arelease_refused_responses_websocket_slot(self, user_api_key_dict: UserAPIKeyAuth) -> None:
+        """Release the slot of a Responses WebSocket refused while opening, only when its admission got that far."""
+        limiter: Final = self.get_proxy_hook("parallel_request_limiter")
+        if isinstance(limiter, _PROXY_MaxParallelRequestsHandler):
+            await limiter.async_release_admitted_max_parallel_requests(user_api_key_dict)
+        elif isinstance(limiter, ParallelRequestLimiterHook):
+            await limiter.async_release_max_parallel_requests_on_disconnect(user_api_key_dict)
 
     async def enforce_mcp_server_rate_limits(
         self,
@@ -8625,7 +8629,7 @@ async def cache_user_row(user_id: str, cache: DualCache, db: PrismaClient) -> No
     cache_key: Final = f"{user_id}_user_api_key_user_id"
     response: Final = cache.get_cache(key=cache_key)
     if response is None:  # Cache miss
-        user_row: Final = await db.get_data(user_id=user_id)
+        user_row: Final[object] = await db.get_data(user_id=user_id)
         if user_row is not None:
             print_verbose(f"User Row: {user_row}, type = {type(user_row)}")
             if has_attributes(user_row, _JsonDumpableRow, "model_dump_json") and callable(user_row.model_dump_json):
@@ -10067,29 +10071,9 @@ def get_error_message_str(e: Exception) -> str:
     return error_message
 
 
-def get_redoc_url() -> str | None:
-    """
-    Get the Redoc URL from the environment variables.
-
-    - If REDOC_URL is set, return it.
-    - If NO_REDOC is True, return None.
-    - Otherwise, default to "/redoc".
-    """
-    if redoc_url := os.getenv("REDOC_URL"):
-        return redoc_url
-
-    if str_to_bool(os.getenv("NO_REDOC")) is True:
-        return None
-
-    return "/redoc"
-
-
-_get_redoc_url: Final = get_redoc_url
-
-
 def get_docs_url() -> str | None:
     """
-    Get the docs (Swagger UI) URL from the environment variables.
+    Get the default API reference URL from the environment variables.
 
     - If DOCS_URL is set, return it.
     - If NO_DOCS is True, return None.
@@ -10105,6 +10089,18 @@ def get_docs_url() -> str | None:
 
 
 _get_docs_url: Final = get_docs_url
+
+
+def get_swagger_url() -> str | None:
+    """Use SWAGGER_URL, or default to /swagger unless NO_SWAGGER or NO_DOCS disables it."""
+    if swagger_url := os.getenv("SWAGGER_URL"):
+        return swagger_url
+    docs_url: Final = get_docs_url()
+    if docs_url is None or str_to_bool(os.getenv("NO_SWAGGER")) is True:
+        return None
+    if "/swagger" in (docs_url, get_openapi_url()):
+        return "/swagger/ui"
+    return "/swagger"
 
 
 def get_openapi_url() -> str | None:
