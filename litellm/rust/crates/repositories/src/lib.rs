@@ -1,7 +1,7 @@
 //! Rust repositories for the objects the proxy reads from Postgres: the auth objects it reads when its auth cache
-//! misses, and the spend log sums it reseeds cold budget window counters from. The spend log repository also writes
-//! the spend logs and their ledger deliveries, and the gateway request repository adds the daily gateway request
-//! counts.
+//! misses, the customer hierarchy rows its spend counters reseed from, and the spend log sums it reseeds cold budget
+//! window counters from. The spend log repository also writes the spend logs and their ledger deliveries, and the
+//! gateway request repository adds the daily gateway request counts.
 //!
 //! Each repository is a folder that owns its queries, the shaping of their rows into what their callers consume,
 //! and any memory tier private to that object. Queries are private to their folder, so every read goes through a
@@ -15,8 +15,14 @@ macro_rules_attribute::attribute_alias! {
 
 mod access_group;
 mod agent_identity;
+mod app;
+mod app_customer_member;
+mod app_customer_organization;
 mod audit_log;
 mod budget;
+mod customer_member;
+mod customer_organization;
+mod customer_team;
 mod database;
 mod end_user;
 mod gateway_request;
@@ -39,8 +45,14 @@ mod utc_timestamp;
 
 pub use access_group::{AccessGroup, AccessGroupRepository};
 pub use agent_identity::AgentIdentityRepository;
+pub use app::{App, AppRepository};
+pub use app_customer_member::{AppCustomerMember, AppCustomerMemberRepository};
+pub use app_customer_organization::{AppCustomerOrganization, AppCustomerOrganizationRepository};
 pub use audit_log::{AuditLogRepository, NewAuditLog};
 pub use budget::{Budget, BudgetRepository};
+pub use customer_member::{CustomerMember, CustomerMemberRepository};
+pub use customer_organization::{CustomerOrganization, CustomerOrganizationRepository};
+pub use customer_team::{CustomerTeam, CustomerTeamRepository};
 pub use database::{Database, Side};
 pub use end_user::{EndUserRecord, EndUserRepository};
 pub use gateway_request::{GatewayRequestCount, GatewayRequestRepository};

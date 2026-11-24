@@ -45,8 +45,8 @@ from litellm.proxy.management_helpers.customer_hierarchy import (
     utc_now,
 )
 from litellm.redis.stores.auth_cache import AuthObject
+from litellm.repositories.customer_team_repository import CustomerTeamRepository
 from litellm.repositories.prisma_protocols import TableActions
-from litellm.repositories.table_repositories import CustomerTeamRepository
 from litellm.rust_bridge._native import jwt_claims
 from litellm.types.proxy.auth.customer_hierarchy import (
     CustomerHierarchyAuth,

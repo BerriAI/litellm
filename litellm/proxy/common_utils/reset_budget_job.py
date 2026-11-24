@@ -86,16 +86,14 @@ from litellm.repositories.budget_limits_repository import (
     compare_and_swap_budget_limits,
 )
 from litellm.repositories.budget_repository import BudgetRepository
+from litellm.repositories.customer_member_repository import CustomerMemberRepository
+from litellm.repositories.customer_organization_repository import CustomerOrganizationRepository
+from litellm.repositories.customer_team_repository import CustomerTeamRepository
 from litellm.repositories.end_user_repository import EndUserRepository
 from litellm.repositories.model_access_group_budget_repository import ModelAccessGroupBudgetRepository
 from litellm.repositories.organization_repository import OrganizationRepository
 from litellm.repositories.prisma_protocols import PrismaBatch, SpendLinkedTable
 from litellm.repositories.project_repository import ProjectRepository
-from litellm.repositories.table_repositories import (
-    CustomerMemberRepository,
-    CustomerOrganizationRepository,
-    CustomerTeamRepository,
-)
 from litellm.repositories.tag_repository import TagRepository
 from litellm.repositories.team_membership_repository import TeamMembershipRepository
 from litellm.repositories.unit_of_work import (

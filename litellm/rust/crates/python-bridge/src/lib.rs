@@ -69,8 +69,10 @@ mod _native {
     use crate::db::{DatabaseEndpoint, NativeDatabase, NativeDatabaseFailure};
     #[pymodule_export]
     use crate::db_repository::{
-        RustAccessGroupRepository, RustAgentIdentityRepository, RustAuditLogRepository,
-        RustBudgetRepository, RustEndUserRepository, RustJwtKeyMappingRepository,
+        RustAccessGroupRepository, RustAgentIdentityRepository, RustAppCustomerMemberRepository,
+        RustAppCustomerOrganizationRepository, RustAppRepository, RustAuditLogRepository,
+        RustBudgetRepository, RustCustomerMemberRepository, RustCustomerOrganizationRepository,
+        RustCustomerTeamRepository, RustEndUserRepository, RustJwtKeyMappingRepository,
         RustKeyRepository, RustModelAccessGroupRepository, RustObjectPermissionRepository,
         RustOrganizationRepository, RustProjectRepository, RustSpendLogRepository,
         RustTagRepository, RustTeamMembershipRepository, RustTeamRepository, RustUserRepository,
@@ -285,6 +287,12 @@ mod tests {
                 "RustProjectRepository",
                 "RustTagRepository",
                 "RustSpendLogRepository",
+                "RustCustomerOrganizationRepository",
+                "RustCustomerTeamRepository",
+                "RustCustomerMemberRepository",
+                "RustAppRepository",
+                "RustAppCustomerOrganizationRepository",
+                "RustAppCustomerMemberRepository",
                 "trace_encode_error",
                 "bundled_model_cost_map",
                 "NativeModelCostMap",

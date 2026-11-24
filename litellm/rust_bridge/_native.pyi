@@ -2416,6 +2416,36 @@ class RustSpendLog:
     ) -> Execution: ...
 
 @final
+class RustCustomerOrganizationRepository:
+    def __new__(cls, database: NativeDatabase) -> RustCustomerOrganizationRepository: ...
+    def find_with_budget(self, customer_org_id: str) -> Future[str | None]: ...
+
+@final
+class RustCustomerTeamRepository:
+    def __new__(cls, database: NativeDatabase) -> RustCustomerTeamRepository: ...
+    def find_with_budgets(self, customer_team_id: str) -> Future[str | None]: ...
+
+@final
+class RustCustomerMemberRepository:
+    def __new__(cls, database: NativeDatabase) -> RustCustomerMemberRepository: ...
+    def find_with_budgets(self, customer_member_id: str) -> Future[str | None]: ...
+
+@final
+class RustAppRepository:
+    def __new__(cls, database: NativeDatabase) -> RustAppRepository: ...
+    def find(self, app_id: str) -> Future[str | None]: ...
+
+@final
+class RustAppCustomerOrganizationRepository:
+    def __new__(cls, database: NativeDatabase) -> RustAppCustomerOrganizationRepository: ...
+    def find(self, app_id: str, customer_org_id: str) -> Future[str | None]: ...
+
+@final
+class RustAppCustomerMemberRepository:
+    def __new__(cls, database: NativeDatabase) -> RustAppCustomerMemberRepository: ...
+    def find(self, app_id: str, customer_member_id: str) -> Future[str | None]: ...
+
+@final
 class NativeTokenRedactor:
     def __new__(cls, minimum_custom_key_length: int, word_ranges: Sequence[tuple[int, int]]) -> NativeTokenRedactor: ...
     def redact(self, text: str, replacement: str) -> str | None: ...
@@ -2755,6 +2785,9 @@ __all__ = [
     "RouterCoreHandle",
     "RustAccessGroupRepository",
     "RustAgentIdentityRepository",
+    "RustAppCustomerMemberRepository",
+    "RustAppCustomerOrganizationRepository",
+    "RustAppRepository",
     "RustAuditLogRepository",
     "RustAuth",
     "RustAuthOutcome",
@@ -2763,6 +2796,9 @@ __all__ = [
     "RustBridgeDeclined",
     "RustBudgetRepository",
     "RustClaimIdentity",
+    "RustCustomerMemberRepository",
+    "RustCustomerOrganizationRepository",
+    "RustCustomerTeamRepository",
     "RustDenial",
     "RustEndUserRepository",
     "RustIdentity",

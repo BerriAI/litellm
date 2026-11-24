@@ -33,6 +33,9 @@ from litellm.proxy.management_helpers.customer_hierarchy import (
     utc_datetime,
 )
 from litellm.redis.stores.auth_cache import AuthObject
+from litellm.repositories.app_customer_member_repository import AppCustomerMemberRepository
+from litellm.repositories.app_customer_organization_repository import AppCustomerOrganizationRepository
+from litellm.repositories.app_repository import AppRepository
 from litellm.repositories.chunked_in import find_many_in
 from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.table_repositories import PrismaTableRepository
@@ -107,18 +110,6 @@ _PARENT_ORG_ID: Final = TypeAdapter(str)
 AppEntity = TypeVar("AppEntity", App, AppOrganization, AppMember, AppGroup, AppGroupOrganization)
 AppAssociation = TypeVar("AppAssociation", AppOrganization, AppMember)
 CachedModel = TypeVar("CachedModel", bound=BaseModel)
-
-
-class AppRepository(PrismaTableRepository[PrismaRecord]):
-    table_name = "litellm_apptable"
-
-
-class AppCustomerOrganizationRepository(PrismaTableRepository[PrismaRecord]):
-    table_name = "litellm_appcustomerorgtable"
-
-
-class AppCustomerMemberRepository(PrismaTableRepository[PrismaRecord]):
-    table_name = "litellm_appcustomermembertable"
 
 
 class _ConfigRepository(PrismaTableRepository[PrismaRecord]):
