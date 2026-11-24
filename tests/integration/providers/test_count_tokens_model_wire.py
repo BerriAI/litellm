@@ -254,6 +254,7 @@ def counting_proxy(tmp_path_factory: pytest.TempPathFactory, mantle_port: int) -
                 "BEDROCK_MANTLE_API_BASE": _url(mantle_port),
                 "LITELLM_LOCAL_MODEL_COST_MAP": "True",
                 "HF_HUB_OFFLINE": "1",
+                "LITELLM_OFFLINE_MODE": "true",
             },
             workers=1,
             remove_environment=("AWS_BEARER_TOKEN_BEDROCK",),
