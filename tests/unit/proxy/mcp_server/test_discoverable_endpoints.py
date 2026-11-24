@@ -8532,9 +8532,7 @@ async def test_resolve_active_litellm_key_rejects_blocked_key(proxy_globals, rus
 
 
 @pytest.mark.asyncio
-async def test_resolve_active_litellm_key_fails_closed_on_malformed_expiry(
-    proxy_globals, rust_auth_stores: RustAuthStores
-):
+async def test_resolve_active_litellm_key_fails_closed_on_malformed_expiry(proxy_globals, rust_auth_stores: RustAuthStores):
     """A key whose stored expires string does not parse must fail closed to no-hash (the mint then
     returns invalid_request), not surface an unhandled 500. The active-state check runs outside the
     resolver's try, so it must be total over a bad expires rather than letting datetime.fromisoformat
@@ -8591,9 +8589,7 @@ async def test_resolve_active_litellm_key_db_outage_is_unavailable(proxy_globals
 
 
 @pytest.mark.asyncio
-async def test_resolve_active_litellm_key_permanent_engine_fault_is_faulted(
-    proxy_globals, rust_auth_stores: RustAuthStores
-):
+async def test_resolve_active_litellm_key_permanent_engine_fault_is_faulted(proxy_globals, rust_auth_stores: RustAuthStores):
     """A query engine that is missing or version-skewed cannot resolve any key until the deployment is
     repaired, so the resolver reports "faulted" (still statused 503 by the mint) rather than "unavailable",
     whose wording promises the outage is transient and asks the client to retry."""
@@ -8605,9 +8601,7 @@ async def test_resolve_active_litellm_key_permanent_engine_fault_is_faulted(
         _resolve_active_litellm_key,
     )
 
-    rust_auth_stores.key.rows[hash_token("sk-during-engine-fault")] = BinaryNotFoundError(
-        "query engine binary not found"
-    )
+    rust_auth_stores.key.rows[hash_token("sk-during-engine-fault")] = BinaryNotFoundError("query engine binary not found")
 
     proxy_globals.user_api_key_cache = UserApiKeyCache()
     proxy_globals.prisma_client = object()
@@ -10056,7 +10050,12 @@ async def test_hydrate_config_server_applies_stored_dcr_client(monkeypatch, lega
     malformed: Final = server.model_copy(update={"server_id": "malformed"})
     configured: Final = server.model_copy(update={"server_id": "configured", "client_id": "admin-client"})
     store: Final = _ConfigOAuthClientStore(
-        {"second": stored_blob, "malformed": "{invalid-json", server.server_id: stored_blob, "configured": stored_blob}
+        {
+            "second": encrypt_credentials({"client_id": "second-client"}, encryption_key="salt-hydrate-key"),
+            "malformed": "{invalid-json",
+            server.server_id: stored_blob,
+            "configured": stored_blob,
+        }
     )
     prisma: Final = SimpleNamespace(db=SimpleNamespace(litellm_mcpserveroauthclient=store))
     with patch("litellm.proxy.proxy_server.prisma_client", prisma):
@@ -10065,7 +10064,7 @@ async def test_hydrate_config_server_applies_stored_dcr_client(monkeypatch, lega
     assert server.client_id == "stored-client"
     assert server.client_secret == "stored-secret"
     assert server.token_endpoint_auth_method == "client_secret_basic"
-    assert second.client_id == "stored-client"
+    assert second.client_id == "second-client"
     assert malformed.client_id is None
     assert configured.client_id == "admin-client"
     assert store.reads == ((server.server_id, "malformed", "second"),)
