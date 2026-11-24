@@ -23,7 +23,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 from litellm.litellm_core_utils.prompt_templates.reasoning_utils import encrypted_reasoning_signature
 from litellm.llms.anthropic.messages.responses_adapters.handler import (
     LiteLLMMessagesToResponsesAPIHandler,
-    _build_responses_kwargs,
+    responses_plan,
 )
 from litellm.llms.openai.responses.count_tokens.token_counter import OpenAITokenCounter
 from litellm.router import Router
@@ -57,13 +57,13 @@ CHAT_COMPLETIONS_SSE_BODY = (
 def test_chained_turn_keeps_system_out_of_stored_input(nested: bool) -> None:
     continuation: Final = {"conversation": "conv_prior"}
     forwarded: Final = {"extra_body": continuation} if nested else continuation
-    kwargs: Final = _build_responses_kwargs(
+    kwargs: Final = responses_plan(
         max_tokens=1024,
         messages=MESSAGES,
         model="openai/gpt-6.2-sol",
         system="Be brief.",
         extra_kwargs={"custom_llm_provider": "openai", **forwarded},
-    )
+    ).kwargs
     assert kwargs["instructions"] == "Be brief."
     assert kwargs["input"] == [
         {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hello"}]}
@@ -74,13 +74,13 @@ def test_chained_turn_keeps_system_out_of_stored_input(nested: bool) -> None:
 def test_auto_truncation_keeps_system_prompt_in_instructions(nested: bool) -> None:
     truncation: Final = {"truncation": "auto"}
     forwarded: Final = {"extra_body": truncation} if nested else truncation
-    kwargs: Final = _build_responses_kwargs(
+    kwargs: Final = responses_plan(
         max_tokens=1024,
         messages=MESSAGES,
         model="openai/gpt-6.2-sol",
         system="Be brief.",
         extra_kwargs={"custom_llm_provider": "openai", **forwarded},
-    )
+    ).kwargs
     assert kwargs.get("instructions") == "Be brief."
     assert kwargs["input"] == [
         {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hello"}]}
@@ -97,13 +97,13 @@ def test_explicit_caller_instructions_are_combined_with_preserved_system_text(
 ) -> None:
     caller: Final = {"instructions": "Caller instructions"}
     forwarded: Final = {"extra_body": caller} if nested else caller
-    kwargs: Final = _build_responses_kwargs(
+    kwargs: Final = responses_plan(
         max_tokens=1024,
         messages=MESSAGES,
         model="openai/gpt-6.2-sol",
         system="Be brief.",
         extra_kwargs={"custom_llm_provider": "openai", "store": False, **forwarded, **request_params},
-    )
+    ).kwargs
     instructions: Final = kwargs["extra_body"]["instructions"] if nested else kwargs["instructions"]
     assert instructions == ("Be brief.\nCaller instructions" if request_params else "Caller instructions")
     assert kwargs["input"] == [
@@ -282,72 +282,72 @@ async def test_messages_rejects_previous_response_id_before_calling_the_provider
 
 
 def test_build_responses_kwargs_never_asks_the_nested_call_to_replay_a_stream():
-    responses_kwargs: Final = _build_responses_kwargs(
+    responses_kwargs: Final = responses_plan(
         max_tokens=1024,
         messages=MESSAGES,
         model="azure/gpt-5.6-luna",
         extra_kwargs={"custom_llm_provider": "azure", **{key: True for key in CONVERTED_STREAM_KEYS}},
-    )
+    ).kwargs
 
     assert not converted_stream_requested(responses_kwargs)
     assert responses_kwargs["custom_llm_provider"] == "azure"
 
 
 def test_build_responses_kwargs_derives_prompt_cache_key_from_claude_code_session_id():
-    responses_kwargs = _build_responses_kwargs(
+    responses_kwargs = responses_plan(
         max_tokens=1024,
         messages=MESSAGES,
         model="openai/gpt-5.6-luna",
         metadata={"user_id": CLAUDE_CODE_USER_ID},
         extra_kwargs={"custom_llm_provider": "openai"},
-    )
+    ).kwargs
     assert responses_kwargs["user"] == CLAUDE_CODE_USER_ID[:64]
     assert responses_kwargs["prompt_cache_key"] == "session-abc"
 
 
 def test_build_responses_kwargs_sets_no_prompt_cache_key_for_plain_user_id():
-    responses_kwargs = _build_responses_kwargs(
+    responses_kwargs = responses_plan(
         max_tokens=1024,
         messages=MESSAGES,
         model="openai/gpt-5.6-luna",
         metadata={"user_id": "session-abc"},
         extra_kwargs={"custom_llm_provider": "openai"},
-    )
+    ).kwargs
     assert responses_kwargs["user"] == "session-abc"
     assert "prompt_cache_key" not in responses_kwargs
 
 
 def test_build_responses_kwargs_prefers_explicit_prompt_cache_key_over_derived():
-    responses_kwargs = _build_responses_kwargs(
+    responses_kwargs = responses_plan(
         max_tokens=1024,
         messages=MESSAGES,
         model="openai/gpt-5.6-luna",
         metadata={"user_id": CLAUDE_CODE_USER_ID},
         extra_kwargs={"custom_llm_provider": "openai", "prompt_cache_key": "explicit-key"},
-    )
+    ).kwargs
     assert responses_kwargs["user"] == CLAUDE_CODE_USER_ID[:64]
     assert responses_kwargs["prompt_cache_key"] == "explicit-key"
 
 
 def test_build_responses_kwargs_asks_openai_for_encrypted_reasoning_without_thinking():
-    responses_kwargs = _build_responses_kwargs(
+    responses_kwargs = responses_plan(
         max_tokens=1024,
         messages=MESSAGES,
         model="openai/gpt-5.6-luna",
         extra_kwargs={"custom_llm_provider": "openai"},
-    )
+    ).kwargs
     assert responses_kwargs["include"] == ["reasoning.encrypted_content"]
     assert "reasoning" not in responses_kwargs
 
 
 def test_build_responses_kwargs_skips_include_for_a_responses_provider_that_rejects_it():
-    responses_kwargs = _build_responses_kwargs(
+    responses_kwargs = responses_plan(
         max_tokens=1024,
         messages=MESSAGES,
         model="perplexity/sonar",
         thinking={"type": "enabled", "budget_tokens": 4096},
         extra_kwargs={"custom_llm_provider": "perplexity"},
-    )
+    ).kwargs
     assert "include" not in responses_kwargs
     assert "reasoning" in responses_kwargs
 
@@ -363,33 +363,33 @@ def test_build_responses_kwargs_auto_summary_asks_each_target_for_a_level_it_acc
     monkeypatch: pytest.MonkeyPatch, model: str, provider: str, summary: str
 ) -> None:
     monkeypatch.setenv("LITELLM_REASONING_AUTO_SUMMARY", "true")
-    responses_kwargs: Final = _build_responses_kwargs(
+    responses_kwargs: Final = responses_plan(
         max_tokens=1024,
         messages=MESSAGES,
         model=model,
         thinking={"type": "enabled", "budget_tokens": 4096},
         extra_kwargs={"custom_llm_provider": provider},
-    )
+    ).kwargs
     assert cast(Mapping[str, object], responses_kwargs["reasoning"])["summary"] == summary
 
 
 def test_build_responses_kwargs_keeps_the_deployment_include_next_to_encrypted_reasoning():
-    responses_kwargs = _build_responses_kwargs(
+    responses_kwargs = responses_plan(
         max_tokens=1024,
         messages=MESSAGES,
         model="openai/gpt-5.6-luna",
         extra_kwargs={"custom_llm_provider": "openai", "include": ["file_search_call.results"]},
-    )
+    ).kwargs
     assert responses_kwargs["include"] == ["reasoning.encrypted_content", "file_search_call.results"]
 
 
 def test_build_responses_kwargs_without_metadata_sets_no_prompt_cache_key():
-    responses_kwargs = _build_responses_kwargs(
+    responses_kwargs = responses_plan(
         max_tokens=1024,
         messages=MESSAGES,
         model="openai/gpt-5.6-luna",
         extra_kwargs={"custom_llm_provider": "openai"},
-    )
+    ).kwargs
     assert "user" not in responses_kwargs
     assert "prompt_cache_key" not in responses_kwargs
 
@@ -666,11 +666,11 @@ def _request_with_client_cache_marks(cache_control: dict[str, str] | None) -> di
 def test_client_cache_control_reaches_gpt_5_6_as_a_prompt_cache_breakpoint_on_the_same_block(
     extra_kwargs: dict[str, object],
 ) -> None:
-    responses_kwargs: Final = _build_responses_kwargs(
+    responses_kwargs: Final = responses_plan(
         model="openai/gpt-5.6",
         extra_kwargs=extra_kwargs,
         **_request_with_client_cache_marks({**EPHEMERAL, "ttl": "1h"}),
-    )
+    ).kwargs
 
     assert "instructions" not in responses_kwargs
     assert responses_kwargs["input"] == [
@@ -694,7 +694,7 @@ def test_client_cache_control_reaches_gpt_5_6_as_a_prompt_cache_breakpoint_on_th
 
 
 def test_client_cache_control_on_a_screenshot_inside_a_tool_result_reaches_gpt_5_6_on_that_screenshot() -> None:
-    responses_kwargs: Final = _build_responses_kwargs(
+    responses_kwargs: Final = responses_plan(
         model="openai/gpt-5.6",
         extra_kwargs=OPENAI_API,
         max_tokens=1024,
@@ -716,7 +716,7 @@ def test_client_cache_control_on_a_screenshot_inside_a_tool_result_reaches_gpt_5
                 ],
             }
         ],
-    )
+    ).kwargs
 
     assert responses_kwargs["input"] == [
         {"type": "function_call_output", "call_id": "toolu_shot", "output": TOOL_RESULT_IMAGE_PLACEHOLDER},
@@ -773,7 +773,7 @@ RAW_QUESTION: Final = {"type": "input_text", "text": "q", "prompt_cache_breakpoi
 def test_raw_prompt_cache_breakpoints_reach_a_deployment_unless_drop_params_drops_them_for_a_model_that_takes_none(
     model: str, extra_kwargs: dict[str, object], log_output: object, question: dict[str, object]
 ) -> None:
-    responses_kwargs: Final = _build_responses_kwargs(
+    responses_kwargs: Final = responses_plan(
         model=model,
         extra_kwargs=extra_kwargs,
         max_tokens=1024,
@@ -790,7 +790,7 @@ def test_raw_prompt_cache_breakpoints_reach_a_deployment_unless_drop_params_drop
                 ],
             }
         ],
-    )
+    ).kwargs
 
     assert responses_kwargs["input"] == [
         {"type": "function_call_output", "call_id": "toolu_log", "output": log_output},
@@ -799,14 +799,14 @@ def test_raw_prompt_cache_breakpoints_reach_a_deployment_unless_drop_params_drop
 
 
 def _gpt_5_6_input_for_a_cached_block(drop_params: bool, raw_mark: Mapping[str, object]) -> object:
-    responses_kwargs: Final = _build_responses_kwargs(
+    responses_kwargs: Final = responses_plan(
         model="openai/gpt-5.6",
         extra_kwargs={**OPENAI_API, "drop_params": drop_params},
         max_tokens=1024,
         messages=[
             {"role": "user", "content": [{"type": "text", "text": "look", "cache_control": EPHEMERAL, **raw_mark}]}
         ],
-    )
+    ).kwargs
     return responses_kwargs["input"]
 
 
@@ -832,12 +832,12 @@ def test_a_malformed_raw_marker_beside_cache_control_gives_way_to_it_only_under_
 def test_client_cache_control_changes_nothing_for_a_deployment_that_does_not_read_prompt_cache_breakpoint(
     model: str, extra_kwargs: dict[str, object]
 ) -> None:
-    marked: Final = _build_responses_kwargs(
+    marked: Final = responses_plan(
         model=model, extra_kwargs=extra_kwargs, **_request_with_client_cache_marks(EPHEMERAL)
-    )
-    unmarked: Final = _build_responses_kwargs(
+    ).kwargs
+    unmarked: Final = responses_plan(
         model=model, extra_kwargs=extra_kwargs, **_request_with_client_cache_marks(None)
-    )
+    ).kwargs
 
     assert marked == unmarked
 
@@ -866,7 +866,7 @@ def _tool_result_turn_with(text_block: Mapping[str, object]) -> list[dict[str, o
 @pytest.mark.parametrize("text_block", MALFORMED_TEXT_BLOCKS)
 def test_malformed_tool_result_text_answers_400_naming_the_block(text_block: Mapping[str, object]) -> None:
     with pytest.raises(litellm.BadRequestError) as rejected:
-        _build_responses_kwargs(
+        responses_plan(
             model="openai/gpt-5.6",
             extra_kwargs=OPENAI_API,
             max_tokens=1024,
@@ -893,7 +893,7 @@ def test_many_malformed_tool_result_texts_answer_one_bounded_error() -> None:
     ]
 
     with pytest.raises(litellm.BadRequestError) as rejected:
-        _build_responses_kwargs(model="openai/gpt-5.6", extra_kwargs=OPENAI_API, max_tokens=1024, messages=messages)
+        responses_plan(model="openai/gpt-5.6", extra_kwargs=OPENAI_API, max_tokens=1024, messages=messages)
 
     assert rejected.value.status_code == 400
     assert f"tool_result {tool_use_id} content.0.text: Input should be a valid string" in rejected.value.message
@@ -902,12 +902,12 @@ def test_many_malformed_tool_result_texts_answer_one_bounded_error() -> None:
 
 @pytest.mark.parametrize("text_block", MALFORMED_TEXT_BLOCKS)
 def test_drop_params_drops_a_malformed_tool_result_text(text_block: Mapping[str, object]) -> None:
-    responses_kwargs: Final = _build_responses_kwargs(
+    responses_kwargs: Final = responses_plan(
         model="openai/gpt-5.6",
         extra_kwargs={**OPENAI_API, "drop_params": True},
         max_tokens=1024,
         messages=_tool_result_turn_with(text_block),
-    )
+    ).kwargs
 
     assert responses_kwargs["input"] == [
         {"type": "function_call_output", "call_id": "toolu_log", "output": "build ok\ndone"},
@@ -915,12 +915,12 @@ def test_drop_params_drops_a_malformed_tool_result_text(text_block: Mapping[str,
 
 
 def test_tool_result_text_block_without_text_still_reaches_the_model_as_empty_text() -> None:
-    responses_kwargs: Final = _build_responses_kwargs(
+    responses_kwargs: Final = responses_plan(
         model="openai/gpt-5.6",
         extra_kwargs=OPENAI_API,
         max_tokens=1024,
         messages=_tool_result_turn_with({"type": "text"}),
-    )
+    ).kwargs
 
     assert responses_kwargs["input"] == [
         {"type": "function_call_output", "call_id": "toolu_log", "output": "build ok\n\ndone"},
@@ -1013,7 +1013,7 @@ _DEEPWIKI_SERVER: Final = {"type": "url", "url": "https://mcp.deepwiki.com/mcp",
 def test_mcp_servers_the_responses_bridge_cannot_run_answer_400(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(litellm, "drop_params", False)
     with pytest.raises(litellm.UnsupportedParamsError) as rejected:
-        _build_responses_kwargs(
+        responses_plan(
             model="gpt-5.6",
             extra_kwargs={**OPENAI_API, "mcp_servers": [_DEEPWIKI_SERVER]},
             max_tokens=1024,
@@ -1033,12 +1033,12 @@ def test_drop_params_keeps_mcp_servers_off_the_responses_request(
     monkeypatch: pytest.MonkeyPatch, drop_form: Mapping[str, object]
 ) -> None:
     monkeypatch.setattr(litellm, "drop_params", False)
-    responses_kwargs: Final = _build_responses_kwargs(
+    responses_kwargs: Final = responses_plan(
         model="gpt-5.6",
         extra_kwargs={**OPENAI_API, "mcp_servers": [_DEEPWIKI_SERVER], **drop_form},
         max_tokens=1024,
         messages=MESSAGES,
-    )
+    ).kwargs
 
     assert "mcp_servers" not in responses_kwargs
     assert responses_kwargs["input"]
@@ -1047,13 +1047,13 @@ def test_drop_params_keeps_mcp_servers_off_the_responses_request(
 def test_drop_params_drops_the_mcp_toolset_tools_of_dropped_mcp_servers(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(litellm, "drop_params", False)
     weather_tool: Final = {"name": "get_weather", "input_schema": {"type": "object", "properties": {}}}
-    responses_kwargs: Final = _build_responses_kwargs(
+    responses_kwargs: Final = responses_plan(
         model="gpt-5.6",
         extra_kwargs={**OPENAI_API, "mcp_servers": [_DEEPWIKI_SERVER], "drop_params": True},
         max_tokens=1024,
         messages=MESSAGES,
         tools=[{"type": "mcp_toolset", "mcp_server_name": "deepwiki"}, weather_tool],
-    )
+    ).kwargs
 
     assert [tool["name"] for tool in responses_kwargs["tools"]] == ["get_weather"]
 

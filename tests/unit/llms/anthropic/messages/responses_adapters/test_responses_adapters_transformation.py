@@ -2575,15 +2575,15 @@ class TestPromptCacheBreakpointToResponses:
 
     def test_prompt_cache_options_forwarded_to_responses_kwargs(self):
         from litellm.llms.anthropic.messages.responses_adapters.handler import (
-            _build_responses_kwargs,
+            responses_plan,
         )
 
-        kwargs = _build_responses_kwargs(
+        kwargs = responses_plan(
             max_tokens=16,
             messages=[{"role": "user", "content": "hi"}],
             model="openai/gpt-5.6",
             extra_kwargs={"prompt_cache_options": {"mode": "explicit"}},
-        )
+        ).kwargs
         assert kwargs["prompt_cache_options"] == {"mode": "explicit"}
 
 

@@ -13,6 +13,8 @@ from litellm.litellm_core_utils.prompt_templates.reasoning_utils import (
     is_encrypted_reasoning_block,
     native_redacted_thinking_data,
     responses_reasoning_items_from_thinking_blocks,
+    stamp_from_signature,
+    stamp_of_block,
     strip_encrypted_reasoning_from_messages,
 )
 
@@ -258,3 +260,37 @@ def test_malformed_turn_settings_envelope_never_yields_the_marker(signature: str
         from_signature,
         from_blocks,
     )
+
+
+_STAMP: Final = "eyJ2IjoxLCJuIjowfQ"
+
+
+@pytest.mark.parametrize("encrypted_content", ["gAAAA_turn_blob", "litellm_enc:abc;def"])
+@pytest.mark.parametrize("block_type", ["thinking", "redacted_thinking"])
+def test_a_stamped_signature_yields_both_its_stamp_and_its_blob(block_type: str, encrypted_content: str) -> None:
+    signature: Final = encrypted_reasoning_signature(encrypted_content, _STAMP)
+    block: Final = (
+        {"type": "thinking", "thinking": "Plan.", "signature": signature}
+        if block_type == "thinking"
+        else {"type": "redacted_thinking", "data": signature}
+    )
+    assert stamp_of_block(block) == _STAMP
+    assert encrypted_content_of_block(block) == encrypted_content
+
+
+def test_a_signature_written_without_a_stamp_carries_none() -> None:
+    assert stamp_from_signature(encrypted_reasoning_signature("gAAAA_blob")) is None
+
+
+_FORGED_STAMPS: Final = (
+    pytest.param(encrypted_reasoning_signature("gAAAA_one", _STAMP).replace("gAAAA_one", "gAAAA_two"), id="moved"),
+    pytest.param(encrypted_reasoning_signature("gAAAA_one", _STAMP).replace(_STAMP, "eyJ2IjoxLCJuIjoxfQ"), id="edited"),
+    pytest.param(_enveloped_signature(_STAMP, "gAAAA_one"), id="no-digest"),
+    pytest.param("ErcBCkgIValidAnthropicSignature", id="anthropic"),
+    pytest.param(None, id="missing"),
+)
+
+
+@pytest.mark.parametrize("signature", _FORGED_STAMPS)
+def test_a_stamp_whose_digest_does_not_match_its_blob_is_not_read(signature: object) -> None:
+    assert stamp_from_signature(signature) is None

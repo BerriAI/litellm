@@ -562,6 +562,15 @@ def targets_openai_api(api_base: object) -> bool:
     return host is not None and (host == OPENAI_API_HOST or host.endswith(f".{OPENAI_API_HOST}"))
 
 
+def serves_openai_dialect(
+    model: str, custom_llm_provider: str | None, api_base: object, prompt_cache_options: object
+) -> bool:
+    """An OpenAI deployment that reaches OpenAI itself, or whose operator vouched for its host with prompt_cache_options."""
+    if (custom_llm_provider or _served_provider_for_model(model)) != "openai":
+        return False
+    return prompt_cache_options is not None or targets_openai_api(api_base)
+
+
 def _carries_cache_breakpoint(block: object) -> bool:
     return any(_attribute_or_key(block, key) is not None for key in CACHE_BREAKPOINT_KEYS)
 
@@ -976,9 +985,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
             return hosted_flag and not _translates_prompt_cache_breakpoint(model, custom_llm_provider)
         if not supports_openai_prompt_cache_breakpoint(model, model_info=model_info):
             return False
-        if (custom_llm_provider or AnthropicCacheControlHook._resolve_provider(model)) != "openai":
-            return False
-        return prompt_cache_options is not None or targets_openai_api(api_base)
+        return serves_openai_dialect(model, custom_llm_provider, api_base, prompt_cache_options)
 
     @staticmethod
     def _resolve_provider(model: str, api_base: object = None) -> str | None:

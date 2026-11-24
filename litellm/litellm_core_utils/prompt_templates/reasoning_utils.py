@@ -1,5 +1,6 @@
 import base64
 import binascii
+import hashlib
 import re
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from itertools import groupby
@@ -65,18 +66,56 @@ TURN_SETTINGS_MARKER: Final = "litellm_turn_settings:"
 TURN_SETTINGS_END: Final = ";"
 
 
-def encrypted_reasoning_signature(encrypted_content: str) -> str:
+_TURN_SETTINGS_DIGEST_SEPARATOR: Final = "."
+_SHORT_DIGEST_LENGTH: Final = 16
+
+
+def short_digest(text: str) -> str:
+    return hashlib.sha256(text.encode()).hexdigest()[:_SHORT_DIGEST_LENGTH]
+
+
+def _turn_settings_digest(stamp: str, encrypted_content: str) -> str:
+    return short_digest(f"{stamp}{TURN_SETTINGS_END}{encrypted_content}")
+
+
+def encrypted_reasoning_signature(encrypted_content: str, stamp: str | None = None) -> str:
     """The opaque value a Responses API reasoning item's `encrypted_content` travels in.
 
     Anthropic clients echo a thinking block's `signature` and a redacted block's `data`
     back verbatim, so either field can carry the encrypted reasoning across turns; the
-    prefix tells the two apart from a signature Anthropic minted.
+    prefix tells the two apart from a signature Anthropic minted. A `stamp` (base64url,
+    so never `;`) rides ahead of the blob with a digest of both, which catches a corrupted
+    stamp or one copied onto another blob. Anyone can compute it, so it is no proof of origin.
     """
-    return f"{ENCRYPTED_REASONING_SIGNATURE_PREFIX}{encrypted_content}"
+    if stamp is None:
+        return f"{ENCRYPTED_REASONING_SIGNATURE_PREFIX}{encrypted_content}"
+    digest: Final = _turn_settings_digest(stamp, encrypted_content)
+    return (
+        f"{ENCRYPTED_REASONING_SIGNATURE_PREFIX}{TURN_SETTINGS_MARKER}{stamp}{_TURN_SETTINGS_DIGEST_SEPARATOR}"
+        f"{digest}{TURN_SETTINGS_END}{encrypted_content}"
+    )
 
 
 def _carries_encrypted_reasoning(signature: object) -> bool:
     return isinstance(signature, str) and signature.startswith(ENCRYPTED_REASONING_SIGNATURE_PREFIX)
+
+
+def stamp_from_signature(signature: object) -> str | None:
+    """The stamp `encrypted_reasoning_signature` put on this signature, None when it is absent or its digest fails."""
+    if not isinstance(signature, str) or not _carries_encrypted_reasoning(signature):
+        return None
+    payload: Final = signature.removeprefix(ENCRYPTED_REASONING_SIGNATURE_PREFIX)
+    if not payload.startswith(TURN_SETTINGS_MARKER):
+        return None
+    settings, separator, encrypted_content = payload.removeprefix(TURN_SETTINGS_MARKER).partition(TURN_SETTINGS_END)
+    stamp, _, digest = settings.rpartition(_TURN_SETTINGS_DIGEST_SEPARATOR)
+    if not separator or not stamp or digest != _turn_settings_digest(stamp, encrypted_content):
+        return None
+    return stamp
+
+
+def stamp_of_block(block: Mapping[str, object]) -> str | None:
+    return stamp_from_signature(_encrypted_reasoning_field(block))
 
 
 def _without_turn_settings(payload: str) -> str:
