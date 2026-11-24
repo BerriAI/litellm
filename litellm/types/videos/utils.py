@@ -42,7 +42,7 @@ CHARACTER_ID_PREFIX: Final = "character_"
 CHARACTER_ID_TEMPLATE: Final = "litellm:custom_llm_provider:{};model_id:{};character_id:{}"
 
 
-class DecodedCharacterId(dict):
+class DecodedCharacterId(dict[str, str | None]):
     """Structure representing a decoded character ID."""
 
     custom_llm_provider: str | None
@@ -249,4 +249,7 @@ def decode_character_id_with_provider(encoded_character_id: str) -> DecodedChara
 def extract_original_character_id(encoded_character_id: str) -> str:
     """Extract original character ID without encoding."""
     decoded: Final = decode_character_id_with_provider(encoded_character_id)
-    return decoded.get("character_id", encoded_character_id)
+    character_id: Final = decoded.get("character_id", encoded_character_id)
+    if character_id is None:
+        return encoded_character_id
+    return character_id
