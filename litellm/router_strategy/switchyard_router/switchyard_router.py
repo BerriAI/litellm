@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 from collections.abc import Awaitable, Callable, Mapping, Sequence
+from functools import cached_property
 from typing import TYPE_CHECKING, Final, Literal, TypeAlias, TypeVar
 
 from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY
@@ -31,6 +32,9 @@ from litellm.types.utils import AUTOROUTER_CLASSIFIER_CALL_ORIGIN, ModelResponse
 
 if TYPE_CHECKING:
     from switchyard_rust.libsy import Algorithm, DecisionCall, ModelCall, RoutingOutcome
+
+    from litellm.router_api import RoutingContext
+    from litellm.router_strategy.savings_baseline import Baseline
 
 JudgeCompletion: TypeAlias = Callable[[Mapping[str, object]], Awaitable[ModelResponse]]
 DecisionCompletion: TypeAlias = Callable[[Mapping[str, object]], Awaitable[OpenAIDecisionResponse]]
@@ -101,12 +105,36 @@ class SwitchyardRouter:
         algorithm: Algorithm,
         completion: JudgeCompletion,
         decide: DecisionCompletion,
+        ctx: RoutingContext | None = None,
+        *,
+        derive_savings_baseline: bool = True,
     ) -> None:
         self.model_name = model_name
         self.config = config
         self.algorithm = algorithm
         self.completion = completion
         self.decide = decide
+        self.ctx = ctx
+        self._derive_savings_baseline = derive_savings_baseline
+
+    @cached_property
+    def savings_baseline(self) -> Baseline | None:
+        from litellm.router_strategy.savings_baseline import resolve_baseline
+
+        if not self._derive_savings_baseline or self.ctx is None:
+            return None
+        return resolve_baseline(self.ctx, (self.config.models.capable,))
+
+    def _savings_baseline_fields(self) -> StandardLoggingRoutingDecision:
+        baseline: Final = self.savings_baseline
+        if baseline is None:
+            return {}
+        if baseline.deployment_id is None:
+            return {"savings_baseline_model": baseline.model}
+        return {
+            "savings_baseline_model": baseline.model,
+            "savings_baseline_deployment_id": baseline.deployment_id,
+        }
 
     def _fallback(
         self, reason: FallbackReason, messages: Sequence[Mapping[str, object]] | None
@@ -115,6 +143,7 @@ class SwitchyardRouter:
             model=self.config.models.capable,
             messages=[dict(message) for message in messages] if messages is not None else None,
             routing_decision={
+                **self._savings_baseline_fields(),
                 "router_type": "switchyard",
                 "router_model_name": self.model_name,
                 "routed_model": self.config.models.capable,
@@ -146,6 +175,7 @@ class SwitchyardRouter:
         self, pick: str, evidence: object, messages: Sequence[Mapping[str, object]] | None
     ) -> PreRoutingHookResponse:
         decision: Final[StandardLoggingRoutingDecision] = {
+            **self._savings_baseline_fields(),
             "router_type": "switchyard",
             "router_model_name": self.model_name,
             "routed_model": pick,

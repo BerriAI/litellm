@@ -741,7 +741,7 @@ def _savings_cohort(
 
 def _compared_row(row: _SessionAggRow) -> _SessionAggRow:
     _, baseline_spend = _savings_cohort(row.turns, row.savings_estimated_turns, row.spend, row.saved_spend)
-    compared: Final = row.router_type == "complexity" and baseline_spend is not None
+    compared: Final = row.router_type in ("complexity", "switchyard") and baseline_spend is not None
     return row.model_copy(
         update={
             "savings_estimated_turns": row.turns if compared else 0,

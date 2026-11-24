@@ -892,6 +892,64 @@ class TestAutoRouterBenchmarks:
         assert totals.savings_estimated_classifier_cost == 0.4
 
     @pytest.mark.asyncio
+    async def test_switchyard_routers_enter_the_compared_totals(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        switchyard: Final = self.ROW.model_copy(
+            update={
+                "router_name": "switchyard-auto",
+                "router_type": "switchyard",
+                "turns": 20,
+                "spend": 4.0,
+                "saved_spend": 6.0,
+                "savings_estimated_turns": 20,
+                "savings_estimated_actual_spend": 4.0,
+                "savings_estimated_saved_spend": 6.0,
+                "classifier_cost": 0.0,
+                "classifier_cost_recorded_turns": 20,
+            }
+        )
+        response: Final = await self._benchmarks(
+            monkeypatch, rows=[self.ROW.model_dump(), switchyard.model_dump()], model_list=[]
+        )
+        sw_group: Final = response.groups[1]
+        assert (sw_group.saved_spend, sw_group.baseline_spend, sw_group.saved_pct) == (6.0, 10.0, 60.0)
+        assert (sw_group.savings_estimated_turns, sw_group.savings_estimated_actual_spend) == (20, 4.0)
+        totals: Final = response.totals
+        assert (totals.turns, totals.spend) == (60, 14.0)
+        assert (totals.savings_estimated_turns, totals.savings_estimated_actual_spend) == (60, 14.0)
+        assert totals.unattributed_saved_spend is None
+        assert (totals.saved_spend, totals.baseline_spend, totals.saved_pct) == (36.0, 50.0, 72.0)
+        assert totals.savings_estimated_classifier_cost == 0.4
+
+    @pytest.mark.asyncio
+    async def test_unbaselined_switchyard_router_stays_out_of_compared_totals(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        unbaselined_sw: Final = self.ROW.model_copy(
+            update={
+                "router_name": "switchyard-unbaselined",
+                "router_type": "switchyard",
+                "turns": 10,
+                "spend": 3.0,
+                "saved_spend": 0.0,
+                "savings_estimated_turns": 0,
+                "savings_estimated_actual_spend": 0.0,
+                "savings_estimated_saved_spend": 0.0,
+                "classifier_cost": 0.0,
+                "classifier_cost_recorded_turns": 10,
+            }
+        )
+        response: Final = await self._benchmarks(
+            monkeypatch, rows=[self.ROW.model_dump(), unbaselined_sw.model_dump()], model_list=[]
+        )
+        sw_group: Final = response.groups[1]
+        assert (sw_group.saved_spend, sw_group.baseline_spend, sw_group.saved_pct) == (None, None, None)
+        assert sw_group.savings_estimated_turns == 0
+        totals: Final = response.totals
+        assert (totals.turns, totals.spend) == (50, 13.0)
+        assert (totals.savings_estimated_turns, totals.savings_estimated_actual_spend) == (40, 10.0)
+        assert (totals.saved_spend, totals.baseline_spend, totals.saved_pct) == (30.0, 40.0, 75.0)
+
+    @pytest.mark.asyncio
     @pytest.mark.parametrize("recorded, unattributed", [(30.0, None), (33.0, 3.0), (27.0, -3.0)])
     async def test_the_headline_is_the_overall_daily_total_and_untracked_savings_void_the_baseline(
         self, recorded: float, unattributed: float | None, monkeypatch: pytest.MonkeyPatch

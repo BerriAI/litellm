@@ -519,7 +519,14 @@ class PreRoutingStrategies:
                 raise TypeError("Switchyard decision judge must return an OpenAI-shaped decision response")
             return result
 
-        router: Final = SwitchyardRouter(deployment.model_name, config, build_algorithm(config), complete_judge, decide)
+        router: Final = SwitchyardRouter(
+            deployment.model_name,
+            config,
+            build_algorithm(config),
+            complete_judge,
+            decide,
+            ctx=ctx,  # pyright: ignore[reportArgumentType]  # the core's RoutingContext
+        )
         self._register(self.switchyard, deployment, router, "Switchyard", replace_existing=replace_existing)
 
     def _init_adaptive_router(self, deployment: Deployment) -> None:
