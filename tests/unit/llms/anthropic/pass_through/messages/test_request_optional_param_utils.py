@@ -167,3 +167,9 @@ def test_param_missing_from_the_drop_list_still_raises_the_unsupported_param_400
         )
 
     assert raised.value.status_code == 400
+
+
+def test_billing_policy_reaches_the_provider_request():
+    params = {"billing_policy": {"type": "billing_policy"}}
+    result = AnthropicMessagesRequestUtils.get_requested_anthropic_messages_optional_param(params)
+    assert result == params

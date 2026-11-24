@@ -121,6 +121,18 @@ class TestAnthropicBetaHeadersFiltering:
                 unknown not in filtered
             ), f"Unknown header '{unknown}' should be filtered out for {provider}"
 
+    @pytest.mark.parametrize("provider", ["anthropic", "azure_ai"])
+    def test_linked_billing_beta_forwarded(self, provider: str) -> None:
+        """user-profiles-billing-2026-10-01 gates the `billing_policy` request field. Anthropic documents it for the
+        Claude API (https://platform.claude.com/docs/en/release-notes/overview, 2026-11-17 entry, fetched
+        2026-11-22)."""
+        filtered = filter_and_transform_beta_headers(
+            beta_headers=["user-profiles-billing-2026-10-01"],
+            provider=provider,
+        )
+
+        assert filtered == ["user-profiles-billing-2026-10-01"]
+
     def test_update_request_with_filtered_beta_vertex_ai(self):
         """Test combined filtering for both HTTP headers and request body betas."""
         headers = {
