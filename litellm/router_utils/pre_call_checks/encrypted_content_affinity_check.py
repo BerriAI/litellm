@@ -49,7 +49,11 @@ import litellm
 from litellm._logging import verbose_router_logger
 from litellm.exceptions import AuthenticationError, BadRequestError
 from litellm.integrations.custom_logger import CustomLogger, Span
-from litellm.litellm_core_utils.core_helpers import get_metadata_variable_name_from_kwargs
+from litellm.litellm_core_utils.core_helpers import (
+    as_object_list,
+    as_str_mapping,
+    get_metadata_variable_name_from_kwargs,
+)
 from litellm.litellm_core_utils.get_llm_provider_logic import declared_provider, get_llm_provider
 from litellm.litellm_core_utils.litellm_logging import has_sensitive_keyword
 from litellm.litellm_core_utils.prompt_templates.reasoning_utils import (
@@ -174,13 +178,14 @@ class EncryptedContentAffinityCheck(CustomLogger):
         - a plain string  -> no encoded markers
         - a list of items -> check each item's ``id`` and ``encrypted_content`` fields
         """
-        if not isinstance(request_input, list):
+        items: Final = as_object_list(request_input)
+        if items is None:
             return None
 
         return next(
             (
                 model_id
-                for item in request_input
+                for item in items
                 if (model_id := EncryptedContentAffinityCheck._model_id_of_input_item(item)) is not None
             ),
             None,
@@ -188,16 +193,17 @@ class EncryptedContentAffinityCheck(CustomLogger):
 
     @staticmethod
     def _model_id_of_input_item(item: object) -> str | None:
-        if not isinstance(item, dict):
+        fields: Final = as_str_mapping(item)
+        if fields is None or not isinstance(item, dict):
             return None
 
-        item_id: Final = item.get("id")
+        item_id: Final = fields.get("id")
         if item_id and isinstance(item_id, str):
             decoded: Final = ResponsesAPIRequestUtils.decode_encrypted_item_id(item_id)
             if decoded:
                 return decoded.get("model_id")
 
-        encrypted_content: Final = item.get("encrypted_content")
+        encrypted_content: Final = fields.get("encrypted_content")
         if encrypted_content and isinstance(encrypted_content, str):
             model_id: Final = EncryptedContentAffinityCheck._model_id_from_wrapped_encrypted_content(encrypted_content)
             if model_id:
@@ -252,8 +258,9 @@ class EncryptedContentAffinityCheck(CustomLogger):
         healthy_deployments: list[dict[str, object]], model_id: str
     ) -> dict[str, object] | None:
         for deployment in healthy_deployments:
-            model_info = deployment.get("model_info")
-            if not isinstance(model_info, dict):
+            raw_model_info = deployment.get("model_info")
+            model_info = as_str_mapping(raw_model_info)
+            if model_info is None or not isinstance(raw_model_info, dict):
                 continue
             deployment_model_id = model_info.get("id")
             if deployment_model_id is not None and str(deployment_model_id) == str(model_id):
@@ -499,7 +506,7 @@ class EncryptedContentAffinityCheck(CustomLogger):
         target_ids: Final = frozenset(
             str(model_info["id"])
             for target in target_deployments
-            if isinstance((model_info := target.get("model_info")), Mapping) and model_info.get("id") is not None
+            if (model_info := as_str_mapping(target.get("model_info"))) is not None and model_info.get("id") is not None
         )
 
         @cache

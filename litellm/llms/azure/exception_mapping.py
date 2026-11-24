@@ -1,8 +1,10 @@
+from collections.abc import Mapping
 from typing import Final
 
 import httpx
 
 from litellm.exceptions import ContentPolicyViolationError
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 
 
 class AzureOpenAIExceptionMapping:
@@ -57,7 +59,7 @@ class AzureOpenAIExceptionMapping:
     @staticmethod
     def _extract_azure_error(
         original_exception: Exception,
-    ) -> tuple[dict[str, object], object]:
+    ) -> tuple[Mapping[str, object], object]:
         """Extract Azure OpenAI error payload and inner error details.
 
         Azure error formats can vary by endpoint/version. Common shapes:
@@ -65,16 +67,16 @@ class AzureOpenAIExceptionMapping:
         - {"error": {"code": "...", "message": "...", "type": "...", "inner_error": {...}}}
         - {"code": "...", "message": "...", "type": "..."} (already flattened)
         """
-        body_dict: Final = getattr(original_exception, "body", None) or {}
-        if not isinstance(body_dict, dict):
+        body: Final[object] = getattr(original_exception, "body", None) or {}
+        body_dict: Final = as_str_mapping(body)
+        if body_dict is None or not isinstance(body, dict):
             return {}, None
 
         # Some SDKs place the payload under "error".
-        azure_error: dict[str, object]
-        if isinstance(body_dict.get("error"), dict):
-            azure_error = body_dict.get("error", {})
-        else:
-            azure_error = body_dict
+        nested_error: Final = as_str_mapping(body_dict.get("error"))
+        azure_error: Final = (
+            nested_error if nested_error is not None and isinstance(body_dict.get("error"), dict) else body_dict
+        )
 
         inner_error: Final[object] = (
             azure_error.get("inner_error")
