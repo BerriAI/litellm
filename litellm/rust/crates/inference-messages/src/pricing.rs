@@ -10,7 +10,7 @@ use futures_util::{StreamExt, stream::BoxStream};
 use litellm_cost::candidates::{AdjustFacts, CallIdentity, Named, PricingTable, TokenCall, priced};
 use litellm_cost::query::TokenUsage;
 use litellm_cost::receipt::Receipt;
-use litellm_framer::sse::SseCodec;
+use litellm_framer::sse::{SseCodec, SseEvent};
 use litellm_host::interceptors::{Cost, PricedCost, StreamMeter};
 use litellm_llms_types::formats::messages::{MessagesResponse, MessagesUsage};
 use serde::{Deserialize, Serialize};
@@ -282,21 +282,34 @@ struct StreamWatch {
 }
 
 impl StreamWatch {
+    /// Decodes each event's JSON once. A chunk that cannot carry an injected cost reads the typed event straight from
+    /// the text, which skips the content it does not name. One that can parses each event into a `Value` that both the
+    /// meter and the injection read
     fn observe(&mut self, chunk: Bytes) -> Bytes {
         self.pending.extend_from_slice(&chunk);
-        while let Ok(Some(event)) = self.codec.decode(&mut self.pending) {
-            self.read(&event.data);
+        let events: Vec<SseEvent> =
+            std::iter::from_fn(|| self.codec.decode(&mut self.pending).ok().flatten()).collect();
+        if !(self.pricing.inject_stream_cost && ends_on_a_frame(&chunk)) {
+            events
+                .iter()
+                .filter_map(|event| serde_json::from_str::<StreamEvent>(&event.data).ok())
+                .for_each(|event| self.read(event));
+            return chunk;
         }
-        match self.pricing.inject_stream_cost {
-            true => self.with_injected_cost(chunk),
-            false => chunk,
-        }
+        let parsed: Vec<(String, Value)> = events
+            .into_iter()
+            .filter_map(|event| {
+                let value = serde_json::from_str::<Value>(&event.data).ok()?;
+                if let Ok(typed) = StreamEvent::deserialize(&value) {
+                    self.read(typed);
+                }
+                Some((event.data, value))
+            })
+            .collect();
+        self.with_injected_cost(chunk, &parsed)
     }
 
-    fn read(&mut self, data: &str) {
-        let Ok(event) = serde_json::from_str::<StreamEvent>(data) else {
-            return;
-        };
+    fn read(&mut self, event: StreamEvent) {
         match event {
             StreamEvent::MessageStart { message } => {
                 self.response_model = message.model;
@@ -346,22 +359,18 @@ impl StreamWatch {
         }
     }
 
-    /// `process_chunk_with_cost_injection` for a chunk of whole SSE frames: the first `message_delta` whose own usage
-    /// prices gets that cost as `usage.cost`, written back the way Python's `json.dumps` writes it
-    fn with_injected_cost(&self, chunk: Bytes) -> Bytes {
+    /// `process_chunk_with_cost_injection` for a chunk of whole SSE frames: the first `message_delta` line whose own
+    /// usage prices gets that cost as `usage.cost`, written back the way Python's `json.dumps` writes it. Each line is
+    /// matched to the event `observe` already parsed, so nothing is decoded twice
+    fn with_injected_cost(&self, chunk: Bytes, parsed: &[(String, Value)]) -> Bytes {
         let Ok(text) = std::str::from_utf8(&chunk) else {
             return chunk;
         };
-        if !text.ends_with("\n\n") && !text.ends_with("\r\n\r\n") {
-            return chunk;
-        }
         let lines: Vec<&str> = text.split('\n').collect();
         let injected = lines.iter().enumerate().find_map(|(index, line)| {
             let data = line.trim().strip_prefix("data:")?.trim();
-            if data.is_empty() || data == "[DONE]" {
-                return None;
-            }
-            let rewritten = self.priced_event(data)?;
+            let (_, event) = parsed.iter().find(|(raw, _)| raw.trim() == data)?;
+            let rewritten = self.priced_event(event)?;
             let carriage = if line.ends_with('\r') { "\r" } else { "" };
             Some((index, format!("data: {rewritten}{carriage}")))
         });
@@ -384,32 +393,33 @@ impl StreamWatch {
 
     /// The event with its usage's cost, for a `message_delta` whose own usage prices. Main reads that usage alone,
     /// without the request's speed or the stream's thinking, and names the requested model as the response's
-    fn priced_event(&self, data: &str) -> Option<String> {
-        let Ok(Value::Object(event)) = serde_json::from_str::<Value>(data) else {
+    fn priced_event(&self, event: &Value) -> Option<String> {
+        let Value::Object(fields) = event else {
             return None;
         };
-        if event.get("type").and_then(Value::as_str) != Some("message_delta") {
+        if fields.get("type").and_then(Value::as_str) != Some("message_delta") {
             return None;
         }
-        let Some(Value::Object(usage)) = event.get("usage") else {
+        let usage_value = fields.get("usage")?;
+        let Value::Object(usage) = usage_value else {
             return None;
         };
-        let read = serde_json::from_value::<MessagesUsage>(Value::Object(usage.clone())).ok()?;
+        let read = MessagesUsage::deserialize(usage_value).ok()?;
         let priced = metered(&read, UsageContext::default()).and_then(|metered| {
             self.pricing
                 .priced(metered, Some(self.pricing.request_model.clone()))
         })?;
         let cost = serde_json::Number::from_f64(priced.receipt.total)?;
         let usage: Map<String, Value> = usage
-            .clone()
-            .into_iter()
+            .iter()
+            .map(|(key, value)| (key.clone(), value.clone()))
             .chain([("cost".to_owned(), Value::Number(cost))])
             .collect();
-        let event: Map<String, Value> = event
-            .into_iter()
+        let event: Map<String, Value> = fields
+            .iter()
             .map(|(key, value)| match key.as_str() {
-                "usage" => (key, Value::Object(usage.clone())),
-                _ => (key, value),
+                "usage" => (key.clone(), Value::Object(usage.clone())),
+                _ => (key.clone(), value.clone()),
             })
             .collect();
         litellm_python_compat::json::dumps(&litellm_python_compat::json::from_json(Value::Object(
@@ -417,6 +427,10 @@ impl StreamWatch {
         )))
         .ok()
     }
+}
+
+fn ends_on_a_frame(chunk: &[u8]) -> bool {
+    chunk.ends_with(b"\n\n") || chunk.ends_with(b"\r\n\r\n")
 }
 
 #[cfg(test)]
@@ -580,13 +594,21 @@ mod tests {
     async fn a_stream_settles_its_meter_on_the_usage_main_billed(
         recording: Arc<Recording>,
         #[case] name: &str,
+        #[values(false, true)] inject_stream_cost: bool,
     ) {
         let case = case(name);
         let sse = case.sse.clone().unwrap();
         let meter = StreamMeter::default();
 
         let delivered = read(
-            call_pricing(&recording, &case, RequestedPricing::default()),
+            call_pricing(
+                &recording,
+                &case,
+                RequestedPricing {
+                    inject_stream_cost,
+                    ..RequestedPricing::default()
+                },
+            ),
             meter.clone(),
             &sse,
         )
