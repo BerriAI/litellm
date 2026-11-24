@@ -47,7 +47,7 @@ class BaseRerankConfig(ABC):
         model_response: RerankResponse,
         logging_obj: LiteLLMLoggingObj,
         api_key: str | None = None,
-        request_data: dict = {},
+        request_data: dict[str, object] = {},
         optional_params: dict[str, object] = {},
         litellm_params: dict[str, object] = {},
     ) -> RerankResponse:

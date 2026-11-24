@@ -1447,7 +1447,7 @@ class BaseLLMHTTPHandler:
         provider_config: BaseConfig,
         api_base: str,
         headers: dict[str, object],
-        data: dict,
+        data: dict[str, object],
         signed_json_body: bytes | None,
         original_data: dict,
         model: str,
@@ -1588,7 +1588,7 @@ class BaseLLMHTTPHandler:
         provider_config: BaseConfig,
         api_base: str,
         headers: dict[str, object],
-        data: dict,
+        data: dict[str, object],
         messages: list,
         logging_obj: LiteLLMLoggingObj,
         timeout: float | httpx.Timeout,
@@ -1811,7 +1811,7 @@ class BaseLLMHTTPHandler:
 
     async def aembedding(
         self,
-        request_data: dict,
+        request_data: dict[str, object],
         api_base: str,
         headers: dict[str, object],
         model: str,
@@ -1957,7 +1957,7 @@ class BaseLLMHTTPHandler:
     async def arerank(
         self,
         model: str,
-        request_data: dict,
+        request_data: dict[str, object],
         custom_llm_provider: str,
         provider_config: BaseRerankConfig,
         logging_obj: LiteLLMLoggingObj,
@@ -13275,7 +13275,7 @@ class BaseLLMHTTPHandler:
     def create_skill_handler(
         self,
         url: str,
-        request_body: dict,
+        request_body: dict[str, object],
         skills_api_provider_config: "BaseSkillsAPIConfig",
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,
@@ -13341,7 +13341,7 @@ class BaseLLMHTTPHandler:
     async def async_create_skill_handler(
         self,
         url: str,
-        request_body: dict,
+        request_body: dict[str, object],
         skills_api_provider_config: "BaseSkillsAPIConfig",
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,
@@ -13713,7 +13713,7 @@ class BaseLLMHTTPHandler:
     def create_eval_handler(
         self,
         url: str,
-        request_body: dict,
+        request_body: dict[str, object],
         evals_api_provider_config: "BaseEvalsAPIConfig",
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,
@@ -13772,7 +13772,7 @@ class BaseLLMHTTPHandler:
     async def async_create_eval_handler(
         self,
         url: str,
-        request_body: dict,
+        request_body: dict[str, object],
         evals_api_provider_config: "BaseEvalsAPIConfig",
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,
@@ -14030,7 +14030,7 @@ class BaseLLMHTTPHandler:
     def update_eval_handler(
         self,
         url: str,
-        request_body: dict,
+        request_body: dict[str, object],
         evals_api_provider_config: "BaseEvalsAPIConfig",
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,
@@ -14089,7 +14089,7 @@ class BaseLLMHTTPHandler:
     async def async_update_eval_handler(
         self,
         url: str,
-        request_body: dict,
+        request_body: dict[str, object],
         evals_api_provider_config: "BaseEvalsAPIConfig",
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,
@@ -14342,7 +14342,7 @@ class BaseLLMHTTPHandler:
     def create_run_handler(
         self,
         url: str,
-        request_body: dict,
+        request_body: dict[str, object],
         evals_api_provider_config: "BaseEvalsAPIConfig",
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,
@@ -14401,7 +14401,7 @@ class BaseLLMHTTPHandler:
     async def async_create_run_handler(
         self,
         url: str,
-        request_body: dict,
+        request_body: dict[str, object],
         evals_api_provider_config: "BaseEvalsAPIConfig",
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,

@@ -80,7 +80,7 @@ class FirecrawlSearchConfig(BaseSearchConfig):
         self,
         api_base: str | None,
         optional_params: dict,
-        data: dict | list[dict] | None = None,
+        data: dict[str, object] | list[dict] | None = None,
         **kwargs,
     ) -> str:
         """

@@ -130,7 +130,7 @@ class AmazonAnthropicClaudeMessagesConfig(
         self,
         headers: dict[str, object],
         optional_params: dict,
-        request_data: dict,
+        request_data: dict[str, object],
         api_base: str,
         api_key: str | None = None,
         model: str | None = None,
