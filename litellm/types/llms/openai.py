@@ -133,6 +133,15 @@ class BinaryResponseSummary(TypedDict):
 _ResponseT = TypeVar("_ResponseT", bound=httpx.Response | SDKResponse, default=httpx.Response)
 
 
+class BatchInputFormat(str, Enum):
+    """Expected layout of batch input retrieved from a file reader."""
+
+    OPENAI = "openai"
+    VERTEX = "vertex"
+    BEDROCK = "bedrock"
+    UNKNOWN = "unknown"
+
+
 def _header_value(headers: Mapping[str, str], name: str) -> str | None:
     return headers.get(name)
 
@@ -150,10 +159,17 @@ class HttpxBinaryResponseContent(_HttpxBinaryResponseContent, Generic[_ResponseT
     def hidden_params(self, hidden_params: dict[str, builtins.object]) -> None:  # mutable-ok: API requires mutation
         self._hidden_params = hidden_params
 
-    def __init__(self, response: _ResponseT, usage: "Usage | None" = None) -> None:
+    def __init__(
+        self,
+        response: _ResponseT,
+        usage: "Usage | None" = None,
+        *,
+        batch_input_format: BatchInputFormat = BatchInputFormat.UNKNOWN,
+    ) -> None:
         super().__init__(response)  # pyright: ignore[reportArgumentType]  # SDK accepts both backends at runtime
         self._hidden_params = {}
         self.usage = usage
+        self.batch_input_format = batch_input_format
 
     @property
     def content_type(self) -> str | None:
@@ -1401,18 +1417,24 @@ class ResponsesAPIModeration(TypedDict, total=False):
     model: Required[ReadOnly[str]]
 
 
+class ResponsesAPIBackgroundOptions(TypedDict, total=False):
+    completion_window: ReadOnly[Literal["soonest", "2h", "8h"]]
+    continuation_id: ReadOnly[str]
+
+
 class ResponsesAPIOptionalRequestParams(TypedDict, total=False):
     """TypedDict for Optional parameters supported by the responses API."""
 
     include: list[ResponseIncludable] | None
     instructions: str | None
     max_output_tokens: int | None
-    metadata: dict[str, Any] | None
+    metadata: Mapping[str, object] | None
     parallel_tool_calls: bool | None
     previous_response_id: str | None
     reasoning: Reasoning | None
     store: bool | None
     background: bool | None
+    background_options: ReadOnly[ResponsesAPIBackgroundOptions | None]
     stream: bool | None
     temperature: float | None
     text: Optional["ResponseText"]

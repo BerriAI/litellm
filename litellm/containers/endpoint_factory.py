@@ -54,7 +54,7 @@ def _load_endpoints_config() -> dict:
         return _ENDPOINTS_DOCUMENT.validate_python(json.load(f))
 
 
-def create_sync_endpoint_function(endpoint_config: EndpointConfig) -> Callable:
+def create_sync_endpoint_function(endpoint_config: EndpointConfig) -> Callable[..., object]:
     """
     Create a sync SDK function from endpoint config.
 
@@ -151,9 +151,9 @@ def create_sync_endpoint_function(endpoint_config: EndpointConfig) -> Callable:
 
 
 def create_async_endpoint_function(
-    sync_func: Callable,
-    endpoint_config: dict,
-) -> Callable:
+    sync_func: Callable[..., object],
+    endpoint_config: Mapping[str, object],
+) -> Callable[..., object]:
     """Create an async SDK function that wraps the sync function."""
 
     @client
@@ -202,14 +202,14 @@ def create_async_endpoint_function(
     return async_endpoint_func
 
 
-def generate_container_endpoints() -> dict[str, Callable]:
+def generate_container_endpoints() -> dict[str, Callable[..., object]]:
     """
     Generate all container endpoint functions from the JSON config.
 
     Returns a dict mapping function names to their implementations.
     """
     config: Final = _load_endpoints_config()
-    endpoints: Final = {}
+    endpoints: Final[dict[str, Callable[..., object]]] = {}
 
     for endpoint_config in config["endpoints"]:
         # Create sync function
@@ -226,7 +226,7 @@ def generate_container_endpoints() -> dict[str, Callable]:
 def get_all_endpoint_names() -> list[str]:
     """Get all endpoint names (sync and async) from config."""
     config: Final = _load_endpoints_config()
-    names: Final = []
+    names: Final[list[str]] = []
     for endpoint in config["endpoints"]:
         names.append(endpoint["name"])
         names.append(endpoint["async_name"])

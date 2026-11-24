@@ -12,6 +12,7 @@ from typing_extensions import NotRequired, TypedDict
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.core_helpers import (
     as_object_list,
+    as_str_mapping,
     attribute_or_none,
     decoded_json_object,
     int_of,
@@ -321,10 +322,9 @@ class PurviewGuardrailBase:
         if hasattr(user_api_key_dict, "end_user_id") and user_api_key_dict.end_user_id:
             return str(user_api_key_dict.end_user_id)
 
-        metadata_value: Final[object] = data.get("metadata") or data.get("litellm_metadata") or {}
-        if not isinstance(metadata_value, Mapping):
+        metadata: Final = as_str_mapping(data.get("metadata") or data.get("litellm_metadata") or {})
+        if metadata is None:
             return None
-        metadata: Final[Mapping[str, object]] = metadata_value
         uid = metadata.get("user_api_key_user_id")
         if uid:
             return str(uid)
@@ -414,7 +414,7 @@ class PurviewGuardrailBase:
         for x in prompt_items:
             if isinstance(x, int):
                 return True
-            if isinstance(x, list) and x and any(isinstance(y, int) for y in x):
+            if any(isinstance(y, int) for y in as_object_list(x) or ()):
                 return True
         return False
 

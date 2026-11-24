@@ -169,12 +169,12 @@ class MistralConfig(OpenAIGPTConfig):
         temperature: int | None = None,
         top_p: int | None = None,
         max_tokens: int | None = None,
-        tools: list | None = None,
+        tools: Sequence[object] | None = None,
         tool_choice: Literal["auto", "any", "none"] | ChatCompletionToolChoiceObjectParam | None = None,
         random_seed: int | None = None,
         safe_prompt: bool | None = None,
-        response_format: dict | None = None,
-        stop: str | list | None = None,
+        response_format: Mapping[str, object] | None = None,
+        stop: str | Sequence[object] | None = None,
     ) -> None:
         locals_: Final[Mapping[str, object]] = dict(locals())
         for key, value in locals_.items():
@@ -934,7 +934,7 @@ class MistralConfig(OpenAIGPTConfig):
                         for block in content:
                             if block.get("type") == "thinking":
                                 thinking_blocks = block.get("thinking", [])
-                                thinking_texts = []
+                                thinking_texts: list[str] = []
                                 for thinking_block in thinking_blocks:
                                     if thinking_block.get("type") == "text":
                                         thinking_texts.append(thinking_block.get("text", ""))
@@ -953,7 +953,7 @@ class MistralConfig(OpenAIGPTConfig):
         self,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
+        optional_params: Mapping[str, object],
         litellm_params: dict,
         headers: dict,
     ) -> dict:
@@ -989,10 +989,10 @@ class MistralConfig(OpenAIGPTConfig):
         raw_response: httpx.Response,
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
-        request_data: dict,
+        request_data: Mapping[str, object],
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
@@ -1067,12 +1067,12 @@ class MistralChatResponseIterator(OpenAIChatCompletionStreamingHandler):
     @staticmethod
     def _normalize_content_blocks(
         content_blocks: list[dict],
-    ) -> tuple[str | None, list[dict], str | None]:
+    ) -> tuple[str | None, list[dict[str, str]], str | None]:
         """
         Convert Mistral magistral content blocks into OpenAI-compatible content + thinking_blocks.
         """
         text_segments: Final[list[str]] = []
-        thinking_blocks: Final[list[dict]] = []
+        thinking_blocks: Final[list[dict[str, str]]] = []
         reasoning_segments: Final[list[str]] = []
 
         for block in content_blocks:

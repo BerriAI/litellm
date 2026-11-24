@@ -2117,7 +2117,11 @@ class HostRegistry(HostModelInfo):
         candidates: Final = team_models or global_models
         if not candidates:
             return None
-        return Deployment(**candidates[0])  # a pattern router holds stored entry dicts
+        deployment: Final = Deployment(**candidates[0])  # a pattern router holds stored entry dicts
+        live: Final = self.live_params(deployment.model_info.id)
+        if not live:
+            return deployment
+        return deployment.model_copy(update={"litellm_params": deployment.litellm_params.model_copy(update=live)})
 
     def _core_get_credential_deployment(self, model_id: str, team_id: str | None = None) -> Deployment | None:
         deployment: Final = (

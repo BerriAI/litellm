@@ -1037,7 +1037,7 @@ impl Registry {
     }
 
     /// The group `model_group_alias` rewrites `name` to.
-    pub(crate) fn alias_of(&self, name: &str) -> Option<&str> {
+    pub fn alias_of(&self, name: &str) -> Option<&str> {
         self.aliases.get(name).map(String::as_str)
     }
 

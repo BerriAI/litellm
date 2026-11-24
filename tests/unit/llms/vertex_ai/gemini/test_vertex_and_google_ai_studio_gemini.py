@@ -8,6 +8,7 @@ from copy import deepcopy
 from dataclasses import dataclass
 from itertools import chain, pairwise
 from pathlib import Path
+from types import MappingProxyType
 from typing import Final, List, Literal, cast, get_args
 from unittest.mock import MagicMock, Mock, patch
 
@@ -16,6 +17,7 @@ import pytest
 import respx
 from google.oauth2.credentials import Credentials
 from pydantic import BaseModel, TypeAdapter
+from openai.types.responses.response_function_web_search import ResponseFunctionWebSearch
 
 import litellm
 from litellm import ModelResponse, completion, embedding, image_generation
@@ -51,6 +53,7 @@ from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outco
 
 
 from litellm.llms.vertex_ai.context_caching.transformation import (
+    cached_block_ttl,
     separate_cached_messages,
     transform_openai_messages_to_gemini_context_caching,
 )
@@ -2496,6 +2499,160 @@ async def test_gemini_image_generation_async_stream(respx_mock: respx.MockRouter
     assert chunks[-1].choices[0].finish_reason == "stop"
 
 
+GEMINI_IMAGE_MODEL: Final = "gemini-3.1-flash-image"
+N_AND_IMAGE_MODALITIES_IN_EITHER_ORDER: Final = (
+    pytest.param({"modalities": ["image", "text"], "n": 2}, id="modalities_before_n"),
+    pytest.param({"n": 2, "modalities": ["image", "text"]}, id="n_before_modalities"),
+)
+
+
+def _gemini_chat_config(custom_llm_provider: Literal["vertex_ai", "gemini"]) -> VertexGeminiConfig:
+    return GoogleAIStudioGeminiConfig() if custom_llm_provider == "gemini" else VertexGeminiConfig()
+
+
+@pytest.mark.parametrize("custom_llm_provider", ["vertex_ai", "gemini"])
+@pytest.mark.parametrize(
+    "non_default_params",
+    [
+        *N_AND_IMAGE_MODALITIES_IN_EITHER_ORDER,
+        pytest.param({"modalities": ["image"], "n": 2}, id="image_only"),
+        pytest.param({"modalities": ["text", "image"], "n": 2}, id="image_after_text"),
+        pytest.param({"modalities": ["image", "x" * 50_000], "n": 2}, id="long_modalities"),
+    ],
+)
+def test_n_above_one_with_image_modalities_answers_a_400_naming_n(
+    custom_llm_provider: Literal["vertex_ai", "gemini"],
+    non_default_params: dict[str, object],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+
+    with pytest.raises(litellm.UnsupportedParamsError) as excinfo:
+        _gemini_chat_config(custom_llm_provider).map_openai_params(
+            non_default_params=non_default_params, optional_params={}, model=GEMINI_IMAGE_MODEL, drop_params=False
+        )
+
+    assert excinfo.value.status_code == 400
+    assert excinfo.value.llm_provider == custom_llm_provider
+    assert "n=2" in excinfo.value.message
+    assert "drop_params" in excinfo.value.message
+    assert len(excinfo.value.message) < 1_000
+
+
+@pytest.mark.parametrize("custom_llm_provider", ["vertex_ai", "gemini"])
+@pytest.mark.parametrize("non_default_params", N_AND_IMAGE_MODALITIES_IN_EITHER_ORDER)
+def test_drop_params_drops_n_above_one_with_image_modalities_and_warns_once(
+    custom_llm_provider: Literal["vertex_ai", "gemini"],
+    non_default_params: dict[str, object],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+        mapped: Final = _gemini_chat_config(custom_llm_provider).map_openai_params(
+            non_default_params=non_default_params, optional_params={}, model=GEMINI_IMAGE_MODEL, drop_params=True
+        )
+
+    assert "candidate_count" not in mapped
+    assert mapped["responseModalities"] == ["IMAGE", "TEXT"]
+    assert len([record for record in caplog.records if "n=2" in record.getMessage()]) == 1
+
+
+@pytest.mark.parametrize("custom_llm_provider", ["vertex_ai", "gemini"])
+@pytest.mark.parametrize(
+    ("n", "modalities", "drop_params", "allowed_openai_params", "candidate_count"),
+    [
+        pytest.param(2, ["image", "text"], True, None, None, id="drop_params_drops_n"),
+        pytest.param(2, ["image", "text"], False, ["n"], 2, id="allowed_openai_params_forwards_n"),
+        pytest.param(2, ["image", "text"], True, ["n"], 2, id="allowed_openai_params_wins_over_drop_params"),
+        pytest.param(2, None, False, None, 2, id="no_modalities"),
+        pytest.param(2, ["text"], False, None, 2, id="text_modalities"),
+        pytest.param(2, ["audio"], False, None, 2, id="audio_modalities"),
+        pytest.param(1, ["image", "text"], False, None, 1, id="one_image_candidate"),
+    ],
+)
+def test_n_reaches_gemini_as_candidate_count_unless_it_asks_for_several_image_candidates(
+    custom_llm_provider: Literal["vertex_ai", "gemini"],
+    n: int,
+    modalities: list[str] | None,
+    drop_params: bool,
+    allowed_openai_params: list[str] | None,
+    candidate_count: int | None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.utils import get_optional_params
+
+    monkeypatch.setattr(litellm, "drop_params", False)
+
+    optional_params: Final = get_optional_params(
+        model=GEMINI_IMAGE_MODEL,
+        custom_llm_provider=custom_llm_provider,
+        n=n,
+        modalities=modalities,
+        drop_params=drop_params,
+        allowed_openai_params=allowed_openai_params,
+    )
+
+    assert optional_params.get("candidate_count") == candidate_count
+
+
+@pytest.mark.respx(assert_all_called=False)
+def test_completion_with_n_above_one_and_image_modalities_answers_a_400_before_calling_gemini(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    respx_mock.route().mock(return_value=httpx.Response(200, json=GEMINI_IMAGE_RESPONSE))
+
+    with pytest.raises(litellm.UnsupportedParamsError) as excinfo:
+        completion(
+            model=f"gemini/{GEMINI_IMAGE_MODEL}",
+            messages=[{"role": "user", "content": "Draw a red square"}],
+            modalities=["image", "text"],
+            n=2,
+            api_key="test-api-key",
+            client=HTTPHandler(),
+        )
+
+    assert excinfo.value.status_code == 400
+    assert "n=2" in excinfo.value.message
+    assert not respx_mock.calls
+
+
+@pytest.mark.respx(assert_all_called=True)
+@pytest.mark.parametrize(
+    ("modalities", "drop_params", "generation_config"),
+    [
+        pytest.param(["image", "text"], True, {"responseModalities": ["IMAGE", "TEXT"]}, id="drop_params_drops_n"),
+        pytest.param(None, False, {"candidate_count": 2}, id="no_modalities_keeps_n"),
+    ],
+)
+def test_completion_sends_n_above_one_to_gemini_only_without_image_modalities(
+    modalities: list[str] | None,
+    drop_params: bool,
+    generation_config: dict[str, object],
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    route: Final = respx_mock.post(
+        url__regex=(
+            rf"https://generativelanguage\.googleapis\.com/v1\w+/models/{re.escape(GEMINI_IMAGE_MODEL)}"
+            r":generateContent"
+        )
+    ).mock(return_value=httpx.Response(200, json=GEMINI_IMAGE_RESPONSE))
+
+    response: Final = completion(
+        model=f"gemini/{GEMINI_IMAGE_MODEL}",
+        messages=[{"role": "user", "content": "Draw a red square"}],
+        modalities=modalities,
+        n=2,
+        drop_params=drop_params,
+        api_key="test-api-key",
+        client=HTTPHandler(),
+    )
+
+    assert json.loads(route.calls.last.request.content)["generationConfig"] == generation_config
+    assert response.choices[0].message.images[0]["image_url"]["url"] == "data:image/png;base64,iVBORw0KGgoAAAANSUhEUg=="
+
+
 def _gemini_tts_audio_event(audio_base64: str) -> dict[str, object]:
     return {
         "candidates": [
@@ -3271,6 +3428,196 @@ def test_gemini_with_grounding(respx_mock: respx.MockRouter) -> None:
     assert json.loads(route.calls.last.request.content)["tools"] == [{"googleSearch": {}}]
     assert complete_response.choices[0].message.content == "The capital of France is Paris."
     assert complete_response.usage.prompt_tokens_details.web_search_requests == 1
+
+
+_GEMINI_3_STUDIO_URL: Final = "https://generativelanguage.googleapis.com/v1alpha/models/gemini-3-flash-preview"
+_SEARCHED_RESPONSE_ID: Final = "searched-response-1"
+_SEARCHED_USAGE: Final = {"promptTokenCount": 30, "candidatesTokenCount": 9, "totalTokenCount": 39}
+_SHELL_CALL_PART: Final = {
+    "functionCall": {"name": "shell", "args": {"command": "echo 1.2.3"}},
+    "thoughtSignature": "c2ln",
+}
+_URL_CONTEXT_CALL_PART: Final = {
+    "toolCall": {"toolType": "URL_CONTEXT", "args": {"urls": ["https://docs.litellm.ai"]}, "id": "call_url"}
+}
+_MAPS_CALL_PART: Final = {
+    "toolCall": {"toolType": "GOOGLE_MAPS", "args": {"queries": ["coffee near the litellm office"]}, "id": "call_maps"}
+}
+_SEARCH_WEB_ITEMS: Final = TypeAdapter(list[ResponseFunctionWebSearch])
+
+
+def _search_tool_call_parts(call_id: str, queries: Sequence[str]) -> tuple[dict[str, object], ...]:
+    return (
+        {
+            "toolCall": {"toolType": "GOOGLE_SEARCH_WEB", "args": {"queries": list(queries)}, "id": call_id},
+            "thoughtSignature": f"sig-{call_id}",
+        },
+        {"toolResponse": {"toolType": "GOOGLE_SEARCH_WEB", "response": {}, "id": call_id}},
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class _SearchedTurn:
+    tool_call_parts: tuple[dict[str, object], ...]
+    grounding: Mapping[str, object] | None
+    searched_queries: tuple[str, ...]
+
+    def _closing_candidate(self, parts: Sequence[dict[str, object]]) -> dict[str, object]:
+        grounding: Final = {} if self.grounding is None else {"groundingMetadata": self.grounding}
+        return {"content": {"role": "model", "parts": list(parts)}, "finishReason": "STOP", "index": 0, **grounding}
+
+    def response(self) -> dict[str, object]:
+        return {
+            "candidates": [self._closing_candidate([*self.tool_call_parts, _SHELL_CALL_PART])],
+            "usageMetadata": _SEARCHED_USAGE,
+            "responseId": _SEARCHED_RESPONSE_ID,
+        }
+
+    def stream_events(self) -> tuple[dict[str, object], ...]:
+        return (
+            {
+                "candidates": [{"content": {"role": "model", "parts": list(self.tool_call_parts)}, "index": 0}],
+                "responseId": _SEARCHED_RESPONSE_ID,
+            },
+            {
+                "candidates": [self._closing_candidate([_SHELL_CALL_PART])],
+                "usageMetadata": _SEARCHED_USAGE,
+                "responseId": _SEARCHED_RESPONSE_ID,
+            },
+        )
+
+
+_SEARCHED_TURNS: Final = {
+    "tool_calls_only": _SearchedTurn(
+        tool_call_parts=(
+            *_search_tool_call_parts("call_1", ["litellm latest release", "litellm pypi version"]),
+            _URL_CONTEXT_CALL_PART,
+            _MAPS_CALL_PART,
+            *_search_tool_call_parts("call_2", ["litellm pypi version", "", "litellm github releases"]),
+        ),
+        grounding=None,
+        searched_queries=("litellm latest release", "litellm pypi version", "litellm github releases"),
+    ),
+    "tool_calls_and_grounding": _SearchedTurn(
+        tool_call_parts=(
+            *_search_tool_call_parts(
+                "call_1", ["site:github.com/BerriAI/litellm releases latest", "litellm pypi version"]
+            ),
+            _URL_CONTEXT_CALL_PART,
+        ),
+        grounding={
+            "webSearchQueries": ["releases latest", "litellm pypi version"],
+            "groundingChunks": [{"web": {"uri": "https://pypi.org/project/litellm/", "title": "pypi.org"}}],
+        },
+        searched_queries=("site:github.com/BerriAI/litellm releases latest", "litellm pypi version"),
+    ),
+}
+_SEARCHED_REQUEST: Final = {
+    "model": "gemini/gemini-3-flash-preview",
+    "messages": [{"role": "user", "content": "Find the newest LiteLLM release, then echo it"}],
+    "tools": [
+        {"type": "web_search"},
+        {
+            "type": "function",
+            "function": {
+                "name": "shell",
+                "parameters": {"type": "object", "properties": {"command": {"type": "string"}}},
+            },
+        },
+    ],
+    "api_key": "test-api-key",
+}
+
+
+def _mock_searched_turn(respx_mock: respx.MockRouter, turn: _SearchedTurn) -> None:
+    respx_mock.post(f"{_GEMINI_3_STUDIO_URL}:generateContent").mock(
+        return_value=httpx.Response(200, json=turn.response())
+    )
+    respx_mock.post(f"{_GEMINI_3_STUDIO_URL}:streamGenerateContent?alt=sse").mock(
+        return_value=_gemini_sse(*turn.stream_events())
+    )
+
+
+def _delta_search_calls(chunk: ModelResponseStream) -> Sequence[object]:
+    if not chunk.choices:
+        return ()
+    return (chunk.choices[0].delta.provider_specific_fields or {}).get("web_search_calls", ())
+
+
+def _streamed_search_calls_and_usage(
+    chunks: Sequence[ModelResponseStream],
+) -> tuple[Mapping[str, ResponseFunctionWebSearch], Usage]:
+    calls: Final = _SEARCH_WEB_ITEMS.validate_python(list(chain.from_iterable(map(_delta_search_calls, chunks))))
+    return {call.id: call for call in calls}, next(
+        chunk.usage for chunk in reversed(chunks) if getattr(chunk, "usage", None)
+    )
+
+
+@pytest.mark.usefixtures("_gemini_httpx_transport")
+@pytest.mark.parametrize("turn", list(_SEARCHED_TURNS.values()), ids=list(_SEARCHED_TURNS))
+def test_gemini_reports_and_bills_each_distinct_search_query_once(
+    respx_mock: respx.MockRouter, turn: _SearchedTurn
+) -> None:
+    _mock_searched_turn(respx_mock, turn)
+
+    response: Final = litellm.completion(**_SEARCHED_REQUEST)
+    streamed_calls, streamed_usage = _streamed_search_calls_and_usage(
+        list(litellm.completion(**_SEARCHED_REQUEST, stream=True, stream_options={"include_usage": True}))
+    )
+
+    calls: Final = _SEARCH_WEB_ITEMS.validate_python(
+        response.choices[0].message.provider_specific_fields["web_search_calls"]
+    )
+    assert [call.action.query for call in calls] == list(turn.searched_queries)
+    assert {call.status for call in calls} == {"completed"}
+    assert {call.id: call.action.query for call in calls} == {
+        call_id: call.action.query for call_id, call in streamed_calls.items()
+    }
+    assert response.usage.prompt_tokens_details.web_search_requests == len(calls) == len(turn.searched_queries)
+    assert streamed_usage.prompt_tokens_details.web_search_requests == len(streamed_calls)
+    assert response.choices[0].message.tool_calls[0].function.name == "shell"
+
+
+@pytest.mark.usefixtures("_gemini_httpx_transport")
+def test_gemini_search_call_ids_differ_for_the_same_query_in_another_response(respx_mock: respx.MockRouter) -> None:
+    turn: Final = _SEARCHED_TURNS["tool_calls_only"]
+    respx_mock.post(f"{_GEMINI_3_STUDIO_URL}:generateContent").mock(
+        side_effect=[
+            httpx.Response(200, json={**turn.response(), "responseId": response_id})
+            for response_id in ("resp_first", "resp_second")
+        ]
+    )
+
+    first, second = (
+        _SEARCH_WEB_ITEMS.validate_python(
+            litellm.completion(**_SEARCHED_REQUEST).choices[0].message.provider_specific_fields["web_search_calls"]
+        )
+        for _ in range(2)
+    )
+
+    assert [call.action.query for call in first] == [call.action.query for call in second]
+    assert not {call.id.rsplit("_", 1)[1] for call in first} & {call.id.rsplit("_", 1)[1] for call in second}
+
+
+@pytest.mark.usefixtures("_gemini_httpx_transport")
+def test_gemini_bills_server_side_search_tool_calls_like_grounded_searches(respx_mock: respx.MockRouter) -> None:
+    searched_queries: Final = _SEARCHED_TURNS["tool_calls_only"].searched_queries
+    turns: Final = (
+        _SEARCHED_TURNS["tool_calls_only"],
+        _SearchedTurn(tool_call_parts=(), grounding={"webSearchQueries": list(searched_queries)}, searched_queries=()),
+        _SearchedTurn(tool_call_parts=(), grounding=None, searched_queries=()),
+    )
+    route: Final = respx_mock.post(f"{_GEMINI_3_STUDIO_URL}:generateContent").mock(
+        side_effect=[httpx.Response(200, json=turn.response()) for turn in turns]
+    )
+
+    tool_call_cost, grounded_cost, unsearched_cost = (
+        litellm.completion_cost(completion_response=litellm.completion(**_SEARCHED_REQUEST)) for _ in turns
+    )
+
+    assert route.call_count == len(turns)
+    assert tool_call_cost == pytest.approx(grounded_cost)
+    assert tool_call_cost > unsearched_cost
 
 
 @pytest.mark.parametrize(
@@ -6904,7 +7251,7 @@ def test_vertex_ai_mixed_tools_and_web_search_options_drops_search():
     result = v.map_openai_params(
         non_default_params=non_default_params,
         optional_params=optional_params,
-        model="gemini-3.5-flash",
+        model="gemini-2.5-flash",
         drop_params=True,
     )
 
@@ -6914,6 +7261,326 @@ def test_vertex_ai_mixed_tools_and_web_search_options_drops_search():
         tool_keys.update(tool.keys())
     assert "function_declarations" in tool_keys
     assert "googleSearch" not in tool_keys
+
+
+_EXEC_FUNCTION: Final = {
+    "name": "exec_command",
+    "description": "Run a command",
+    "parameters": {"type": "object", "properties": {"cmd": {"type": "string"}}},
+}
+_EXEC_TOOL: Final = {"type": "function", "function": _EXEC_FUNCTION}
+_SEARCH_NEXT_TO_FUNCTIONS: Final = {
+    "web_search_tool": ({"tools": [{"type": "web_search"}, _EXEC_TOOL]}, "googleSearch"),
+    "web_search_preview_tool": ({"tools": [_EXEC_TOOL, {"type": "web_search_preview"}]}, "googleSearch"),
+    "google_search_tool": ({"tools": [{"googleSearch": {}}, _EXEC_TOOL]}, "googleSearch"),
+    "url_context_tool": ({"tools": [_EXEC_TOOL, {"urlContext": {}}]}, "url_context"),
+    "enterprise_web_search_tool": ({"tools": [{"enterpriseWebSearch": {}}, _EXEC_TOOL]}, "enterpriseWebSearch"),
+    "web_search_options": ({"tools": [_EXEC_TOOL], "web_search_options": {}}, "googleSearch"),
+    "functions_with_web_search_options": ({"functions": [_EXEC_FUNCTION], "web_search_options": {}}, "googleSearch"),
+}
+_PROVIDER_FOR_ROUTE: Final[Mapping[str, Literal["vertex_ai", "gemini"]]] = {"vertex": "vertex_ai", "studio": "gemini"}
+
+
+def _mapped_request_body(
+    route: Literal["vertex", "studio"],
+    model: str,
+    params: Mapping[str, object],
+    drop_params: bool = False,
+    preset: Mapping[str, object] = MappingProxyType({}),
+) -> RequestBody:
+    from litellm.llms.vertex_ai.gemini.transformation import transform_request_body
+
+    optional_params: Final = _gemini_config(route).map_openai_params(
+        non_default_params=deepcopy(dict(params)), optional_params=dict(preset), model=model, drop_params=drop_params
+    )
+    return transform_request_body(
+        messages=[{"role": "user", "content": "Find the newest LiteLLM release, then echo it"}],
+        model=model,
+        optional_params=optional_params,
+        custom_llm_provider=_PROVIDER_FOR_ROUTE[route],
+        litellm_params={},
+        cached_content=None,
+    )
+
+
+def _completion_request_body(route: Literal["vertex", "studio"], model: str, params: Mapping[str, object]) -> RequestBody:
+    from litellm.llms.vertex_ai.gemini.transformation import transform_request_body
+    from litellm.utils import get_optional_params
+
+    optional_params: Final = get_optional_params(
+        model=model, custom_llm_provider=_PROVIDER_FOR_ROUTE[route], **deepcopy(dict(params))
+    )
+    return transform_request_body(
+        messages=[{"role": "user", "content": "Find the newest LiteLLM release, then echo it"}],
+        model=model,
+        optional_params=optional_params,
+        custom_llm_provider=_PROVIDER_FOR_ROUTE[route],
+        litellm_params={},
+        cached_content=None,
+    )
+
+
+def _tool_keys(body: RequestBody) -> frozenset[str]:
+    return frozenset(key for tool in body.get("tools", []) for key in tool)
+
+
+@pytest.mark.parametrize("model", ["gemini-3-flash-preview", "gemini-3.1-pro-preview"])
+@pytest.mark.parametrize(("params", "search_key"), _SEARCH_NEXT_TO_FUNCTIONS.values(), ids=_SEARCH_NEXT_TO_FUNCTIONS)
+@pytest.mark.parametrize("route", ["vertex", "studio"])
+def test_gemini_3_keeps_search_tools_next_to_function_tools(
+    route: Literal["vertex", "studio"],
+    params: Mapping[str, object],
+    search_key: str,
+    model: str,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    with caplog.at_level(logging.WARNING):
+        body: Final = _mapped_request_body(route, model, params)
+
+    assert _tool_keys(body) == {"function_declarations", search_key}
+    assert body.get("toolConfig") == {"includeServerSideToolInvocations": True}
+    assert "Dropping search tools" not in caplog.text
+
+
+@pytest.mark.parametrize("route", ["vertex", "studio"])
+def test_gemini_3_adds_the_server_side_flag_next_to_an_auto_tool_choice(route: Literal["vertex", "studio"]) -> None:
+    function_only: Final = _mapped_request_body(
+        route, "gemini-3-flash-preview", {"tools": [_EXEC_TOOL], "tool_choice": "auto"}
+    )
+    mixed: Final = _mapped_request_body(
+        route,
+        "gemini-3-flash-preview",
+        {"tools": [_EXEC_TOOL], "web_search_options": {}, "tool_choice": "auto"},
+    )
+
+    assert _tool_keys(mixed) == {"function_declarations", "googleSearch"}
+    assert mixed.get("toolConfig") == {**function_only.get("toolConfig", {}), "includeServerSideToolInvocations": True}
+
+
+@pytest.mark.parametrize(
+    "params", [params for params, _search_key in _SEARCH_NEXT_TO_FUNCTIONS.values()], ids=_SEARCH_NEXT_TO_FUNCTIONS
+)
+@pytest.mark.parametrize(
+    "tool_choice",
+    ["required", "none", {"type": "function", "function": {"name": "exec_command"}}],
+    ids=["required", "none", "named_function"],
+)
+@pytest.mark.parametrize("build", [_mapped_request_body, _completion_request_body], ids=["mapped", "completion"])
+@pytest.mark.parametrize("route", ["vertex", "studio"])
+def test_gemini_3_drops_search_next_to_functions_when_tool_choice_pins_the_function_mode(
+    route: Literal["vertex", "studio"],
+    build: Callable[[Literal["vertex", "studio"], str, Mapping[str, object]], RequestBody],
+    tool_choice: object,
+    params: Mapping[str, object],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    function_only: Final = build(
+        route, "gemini-3-flash-preview", {"tools": [_EXEC_TOOL], "tool_choice": tool_choice}
+    )
+    with caplog.at_level(logging.WARNING):
+        mixed: Final = build(route, "gemini-3-flash-preview", {**params, "tool_choice": tool_choice})
+
+    assert _tool_keys(mixed) == {"function_declarations"}
+    assert mixed.get("toolConfig") == function_only.get("toolConfig")
+    assert "Dropping search tools" in caplog.text
+
+
+@pytest.mark.parametrize("route", ["vertex", "studio"])
+@pytest.mark.parametrize(
+    "params",
+    [{"tools": [_EXEC_TOOL]}, {"tools": [{"type": "web_search"}]}, {"web_search_options": {}}],
+    ids=["function_tools_only", "search_tool_only", "web_search_options_only"],
+)
+def test_gemini_3_sends_no_server_side_flag_when_tools_do_not_mix(
+    route: Literal["vertex", "studio"], params: Mapping[str, object]
+) -> None:
+    body: Final = _mapped_request_body(route, "gemini-3-flash-preview", params)
+
+    assert body.get("tools")
+    assert "toolConfig" not in body
+
+
+@pytest.mark.parametrize(("params", "search_key"), _SEARCH_NEXT_TO_FUNCTIONS.values(), ids=_SEARCH_NEXT_TO_FUNCTIONS)
+@pytest.mark.parametrize(
+    ("route", "model"),
+    [("vertex", "gemini-2.5-flash"), ("studio", "gemini-2.5-pro"), ("vertex", "4965075652664360960")],
+    ids=["vertex_gemini_2", "studio_gemini_2", "vertex_fine_tuned_id"],
+)
+def test_search_tools_next_to_function_tools_still_drop_below_gemini_3(
+    route: Literal["vertex", "studio"], model: str, params: Mapping[str, object], search_key: str
+) -> None:
+    body: Final = _mapped_request_body(route, model, params)
+
+    assert _tool_keys(body) == {"function_declarations"}
+    assert "toolConfig" not in body
+
+
+_SEARCH_WITH_FUNCTIONS_MODEL: Final = "gemini-3.9-zeta"
+_SEARCH_WITH_FUNCTIONS: Final = "supports_search_tools_with_functions"
+
+
+@pytest.mark.parametrize(
+    ("rows", "keeps_search"),
+    [
+        ({"{bare}": {_SEARCH_WITH_FUNCTIONS: False}}, False),
+        ({"{provider}/{bare}": {_SEARCH_WITH_FUNCTIONS: False}}, False),
+        ({"{provider}/{bare}": {"mode": "chat"}, "{bare}": {_SEARCH_WITH_FUNCTIONS: True}}, True),
+        ({"{provider}/{bare}": {_SEARCH_WITH_FUNCTIONS: True}, "{bare}": {_SEARCH_WITH_FUNCTIONS: False}}, True),
+        ({"{provider}/{bare}": {_SEARCH_WITH_FUNCTIONS: False}, "{bare}": {_SEARCH_WITH_FUNCTIONS: True}}, False),
+        ({"{bare}": {"supports_function_calling": True}}, False),
+        ({}, False),
+    ],
+    ids=[
+        "bare_row_false",
+        "route_row_false",
+        "route_row_silent",
+        "route_row_true_wins",
+        "route_row_false_wins",
+        "function_calling_alone",
+        "no_rows",
+    ],
+)
+@pytest.mark.parametrize("route", ["vertex", "studio"])
+def test_search_stays_next_to_functions_only_when_the_cost_map_flags_the_model(
+    route: Literal["vertex", "studio"],
+    rows: Mapping[str, Mapping[str, object]],
+    keeps_search: bool,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    for key, row in rows.items():
+        monkeypatch.setitem(
+            litellm.model_cost,
+            key.format(provider=_PROVIDER_FOR_ROUTE[route], bare=_SEARCH_WITH_FUNCTIONS_MODEL),
+            dict(row),
+        )
+
+    body: Final = _mapped_request_body(
+        route, _SEARCH_WITH_FUNCTIONS_MODEL, {"tools": [{"type": "web_search"}, _EXEC_TOOL]}
+    )
+
+    assert _tool_keys(body) == (
+        {"function_declarations", "googleSearch"} if keeps_search else {"function_declarations"}
+    )
+    assert ("toolConfig" in body) is keeps_search
+
+
+def _bills_searches_per_query(row: Mapping[str, object]) -> bool:
+    return row.get("web_search_billing_unit") == "per_query" and bool(row.get("search_context_cost_per_query"))
+
+
+@pytest.mark.parametrize(
+    "cost_map", ["model_prices_and_context_window.json", "litellm/model_prices_and_context_window_backup.json"]
+)
+def test_every_row_that_keeps_search_next_to_functions_bills_each_search_query(cost_map: str) -> None:
+    rows: Final = _MODEL_MAP_ADAPTER.validate_json((_REPO_ROOT / cost_map).read_bytes())
+    flagged: Final = {name: row for name, row in rows.items() if row.get(_SEARCH_WITH_FUNCTIONS) is True}
+
+    # Google bills Gemini 3+ grounding per search query, cloud.google.com/vertex-ai/generative-ai/pricing, 2026-11-21
+    assert [name for name, row in flagged.items() if not _bills_searches_per_query(row)] == []
+
+
+@pytest.fixture
+def search_with_functions_model(monkeypatch: pytest.MonkeyPatch) -> str:
+    monkeypatch.setitem(litellm.model_cost, _SEARCH_WITH_FUNCTIONS_MODEL, {_SEARCH_WITH_FUNCTIONS: True})
+    return _SEARCH_WITH_FUNCTIONS_MODEL
+
+
+@pytest.mark.parametrize("opt_out_key", ["include_server_side_tool_invocations", "includeServerSideToolInvocations"])
+@pytest.mark.parametrize("opt_out_in", ["completion", "optional_params"])
+@pytest.mark.parametrize("route", ["vertex", "studio"])
+def test_gemini_3_drops_search_next_to_functions_when_the_caller_turns_server_side_tools_off(
+    route: Literal["vertex", "studio"], opt_out_in: str, opt_out_key: str, search_with_functions_model: str
+) -> None:
+    tools: Final = {"tools": [{"type": "web_search"}, _EXEC_TOOL]}
+    opt_out: Final = MappingProxyType({opt_out_key: False})
+    body: Final = (
+        _completion_request_body(route, search_with_functions_model, {**tools, **opt_out})
+        if opt_out_in == "completion"
+        else _mapped_request_body(route, search_with_functions_model, tools, preset=opt_out)
+    )
+
+    assert _tool_keys(body) == {"function_declarations"}
+    assert "toolConfig" not in body
+
+
+@pytest.mark.parametrize(
+    "extra_body",
+    [
+        {"toolConfig": {"includeServerSideToolInvocations": False}},
+        {"tool_config": {"include_server_side_tool_invocations": False}},
+        {"toolConfig": {"functionCallingConfig": {"mode": "ANY"}}},
+        {"toolConfig": {"function_calling_config": {"mode": "NONE"}}},
+    ],
+    ids=["flag_off", "snake_case_flag_off", "mode_any", "mode_none"],
+)
+@pytest.mark.parametrize("route", ["vertex", "studio"])
+def test_gemini_3_drops_search_next_to_functions_when_the_extra_body_tool_config_opts_out(
+    route: Literal["vertex", "studio"], extra_body: Mapping[str, object], search_with_functions_model: str
+) -> None:
+    body: Final = _completion_request_body(
+        route, search_with_functions_model, {"tools": [{"type": "web_search"}, _EXEC_TOOL], "extra_body": extra_body}
+    )
+
+    assert _tool_keys(body) == {"function_declarations"}
+    assert {key: value for key, value in body.items() if key in extra_body} == extra_body
+
+
+@pytest.mark.parametrize(
+    "extra_body",
+    [
+        {"toolConfig": {"includeServerSideToolInvocations": True}},
+        {"toolConfig": {"functionCallingConfig": {"mode": "AUTO"}}},
+        {"toolConfig": {"functionCallingConfig": {"mode": ["ANY"]}}},
+        {"toolConfig": "ANY"},
+    ],
+    ids=["flag_on", "mode_auto", "unhashable_mode", "non_object_tool_config"],
+)
+@pytest.mark.parametrize("route", ["vertex", "studio"])
+def test_gemini_3_keeps_search_next_to_functions_beside_an_extra_body_tool_config_that_does_not_opt_out(
+    route: Literal["vertex", "studio"], extra_body: Mapping[str, object], search_with_functions_model: str
+) -> None:
+    body: Final = _completion_request_body(
+        route, search_with_functions_model, {"tools": [{"type": "web_search"}, _EXEC_TOOL], "extra_body": extra_body}
+    )
+
+    assert _tool_keys(body) == {"function_declarations", "googleSearch"}
+
+
+@pytest.mark.parametrize(
+    ("tools", "kept_keys", "flagged"),
+    [
+        (
+            ({"googleSearchRetrieval": {}}, {"googleSearch": {}}, _EXEC_TOOL),
+            frozenset({"function_declarations", "googleSearch"}),
+            True,
+        ),
+        (({"googleSearchRetrieval": {}}, _EXEC_TOOL), frozenset({"function_declarations"}), False),
+    ],
+    ids=["retrieval_and_search", "retrieval_only"],
+)
+@pytest.mark.parametrize("caller_flag", [False, True], ids=["no_caller_flag", "caller_flag_on"])
+@pytest.mark.parametrize("drop_params_set", ["off", "per_call", "globally"])
+@pytest.mark.parametrize("route", ["vertex", "studio"])
+def test_gemini_3_keeps_search_retrieval_next_to_functions_only_for_a_caller_flag_without_drop_params(
+    route: Literal["vertex", "studio"],
+    tools: tuple[object, ...],
+    kept_keys: frozenset[str],
+    flagged: bool,
+    caller_flag: bool,
+    drop_params_set: str,
+    search_with_functions_model: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    params: Final = {"tools": list(tools), **({"include_server_side_tool_invocations": True} if caller_flag else {})}
+    if drop_params_set == "globally":
+        monkeypatch.setattr(litellm, "drop_params", True)
+    body: Final = _mapped_request_body(
+        route, search_with_functions_model, params, drop_params=drop_params_set == "per_call"
+    )
+
+    keeps_retrieval: Final = caller_flag and drop_params_set == "off"
+    assert _tool_keys(body) == kept_keys | ({"googleSearchRetrieval"} if keeps_retrieval else frozenset())
+    assert ("toolConfig" in body) is (flagged or caller_flag)
 
 
 def test_vertex_ai_openai_web_search_tool_transformation():
@@ -10412,6 +11079,7 @@ def test_gemini_context_caching_with_ttl():
         model="gemini-1.5-pro",
         messages=messages_with_ttl,
         cache_key="test-ttl-cache-key",
+        ttl=cached_block_ttl(messages_with_ttl),
         custom_llm_provider="gemini",
         vertex_project=None,
         vertex_location=None,
@@ -10439,6 +11107,7 @@ def test_gemini_context_caching_with_ttl():
         model="gemini-1.5-pro",
         messages=messages_invalid_ttl,
         cache_key="test-invalid-ttl",
+        ttl=cached_block_ttl(messages_invalid_ttl),
         custom_llm_provider="gemini",
         vertex_project=None,
         vertex_location=None,
@@ -10465,6 +11134,7 @@ def test_gemini_context_caching_with_ttl():
         model="gemini-1.5-pro",
         messages=messages_no_ttl,
         cache_key="test-no-ttl",
+        ttl=cached_block_ttl(messages_no_ttl),
         custom_llm_provider="gemini",
         vertex_project=None,
         vertex_location=None,
@@ -10516,6 +11186,7 @@ def test_gemini_context_caching_with_ttl():
         model="gemini-1.5-pro",
         messages=messages_mixed,
         cache_key="test-mixed-ttl",
+        ttl=cached_block_ttl(messages_mixed),
         custom_llm_provider="gemini",
         vertex_project=None,
         vertex_location=None,
@@ -13256,6 +13927,22 @@ def test_gemini_keeps_tool_choice_none_for_legacy_functions_after_dropping_every
     assert "deepwiki" not in json.dumps(mapped)
     assert "get_weather" in json.dumps(mapped["tools"])
     assert mapped["tool_choice"] == {"functionCallingConfig": {"mode": "NONE"}}
+
+
+@pytest.mark.parametrize(("config_class", "route"), _GEMINI_ROUTES)
+def test_gemini_clears_a_tool_choice_naming_the_hosted_mcp_tool_drop_params_dropped(monkeypatch, config_class, route):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    mapped: Final = config_class().map_openai_params(
+        non_default_params={
+            "tools": [_HOSTED_MCP_TOOL, _WEATHER_FUNCTION_TOOL],
+            "tool_choice": {"type": "function", "function": {"name": "deepwiki"}},
+        },
+        optional_params={},
+        model="gemini-3.8-flash",
+        drop_params=True,
+    )
+    assert "get_weather" in json.dumps(mapped["tools"])
+    assert "deepwiki" not in json.dumps(mapped)
 
 
 class _BodyInChunks(httpx.SyncByteStream, httpx.AsyncByteStream):

@@ -6,12 +6,18 @@ const fileDay = (date: Date | undefined): string =>
     ? `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`
     : "all";
 
+export const exportBasename = (
+  entityType: EntityType,
+  exportType: ExportType,
+  dateRange: DateRangePickerValue,
+): string => `${entityType}_usage_${exportType}_${fileDay(dateRange.from)}_${fileDay(dateRange.to)}`;
+
 export const exportFilename = (
   entityType: EntityType,
   exportType: ExportType,
   format: ExportFormat,
   dateRange: DateRangePickerValue,
-): string => `${entityType}_usage_${exportType}_${fileDay(dateRange.from)}_${fileDay(dateRange.to)}.${format}`;
+): string => `${exportBasename(entityType, exportType, dateRange)}.${format}`;
 
 export const downloadBlob = (blob: Blob, filename: string): void => {
   const url = window.URL.createObjectURL(blob);

@@ -36,7 +36,7 @@ from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError,
 from typing_extensions import assert_never
 
 from litellm._internal_context import request_parent_otel_span, service_target
-from litellm.constants import DEFAULT_COOLDOWN_TIME_SECONDS
+from litellm.constants import DEFAULT_COOLDOWN_TIME_SECONDS, SEMANTIC_CACHE_POLICY_KEY
 from litellm.integrations.custom_guardrail import is_guardrail_intervention
 from litellm.litellm_core_utils.add_retry_fallback_headers import (
     add_fallback_headers_to_response,
@@ -281,6 +281,7 @@ from litellm.types.router import (
     RoutingGroup,
     RoutingStrategy,
 )
+from litellm.types.semantic_cache import semantic_cache_policy
 from litellm.types.utils import CooldownDeploymentInfo, LlmProviders
 
 if TYPE_CHECKING:
@@ -505,6 +506,7 @@ _DELETABLE_ATTRIBUTES: Final = frozenset({"model_group_alias", "num_retries", "s
 # Calls whose pick least-busy does not hold (`picks_reserve(False)`): a batch cancel makes no
 # call that logs a start.
 _UNRESERVED_OPS: Final = frozenset({"acancel_batch"})
+_IN_PASS_THROUGH_CALL: Final[ContextVar[bool]] = ContextVar("router_in_pass_through_call", default=False)
 
 
 # Settings converted by `Resolved._selection_setting`.
@@ -1479,6 +1481,10 @@ class _EndpointPort:
 
     def group_members(self, model_name: str) -> Sequence[tuple[object, object]] | None:
         return self._core._hosted._group_members(model_name)  # pyright: ignore[reportPrivateUsage]  # see the class docstring
+
+    def served_deployments(self) -> tuple[Mapping[str, object], ...]:
+        records: Final = self._core._handle.deployments()  # pyright: ignore[reportPrivateUsage]  # see the class docstring
+        return tuple(_with_live_params(self._core, as_str_mapping(record) or {}) for record in records)
 
     def routed_name(self, model: object) -> str:
         return self._core.routed_name(model)
@@ -2617,11 +2623,23 @@ class RustCore(
             batch_api=batch_api,
             override_pre_call_check=override_pre_call_check,
         )
+        if kind == "pass_through":
+            with picks_reserve(_IN_PASS_THROUGH_CALL.get()):
+                return selection.run_sync()
         # A pick that makes no call holds no least-busy reservation (`select` on the Python core).
         with picks_reserve(False):
-            if kind == "pass_through":
-                return selection.run_sync()
             return await selection.run()
+
+    @contextlib.contextmanager
+    def reserving_picks(self, call_id: str) -> Generator[None, None, None]:
+        """A pass-through call's scope: only its ``select(kind="pass_through")`` picks hold a least-busy
+        reservation until the call starts, and a pick it never started is freed on exit."""
+        with owning_picks(self._selectors.reservations, call_id):
+            token: Final = _IN_PASS_THROUGH_CALL.set(True)
+            try:
+                yield
+            finally:
+                _IN_PASS_THROUGH_CALL.reset(token)
 
     async def async_get_available_deployment_for_pass_through(
         self,
@@ -3863,7 +3881,7 @@ class RustCore(
             return frozenset()
         tag_request: Final = {**request, field: {**metadata}} if isinstance(metadata, Mapping) else dict(request)
         found = frozenset[str]()  # rebind-ok: gains each pass's tag routing picks
-        remaining = [  # rebind-ok: each pass drops what tag routing just picked
+        remaining: list[Mapping[str, object]] = [  # rebind-ok: each pass drops what tag routing just picked
             record for record in routable if picked_id(record) in among
         ]
         while remaining:
@@ -5439,7 +5457,13 @@ class _Driver:
     def _attempt_request(self, step: Mapping[str, object]) -> Mapping[str, object]:
         """The request as the attempt sends it: with the params a fallback's dict target sets (``kwargs.update``)."""
         params: Final = as_str_mapping(step.get("params"))
-        return self._request if params is None else {**self._request, **params}
+        if params is None:
+            return self._request
+        policy: Final = semantic_cache_policy(self._request) if "cache" in params else None
+        if policy is None:
+            return {**self._request, **params}
+        cache: Final = {**(as_str_mapping(params["cache"]) or {}), SEMANTIC_CACHE_POLICY_KEY: policy}
+        return {**self._request, **params, "cache": cache}
 
     async def _slot_or_turn_back(
         self, port: "_EndpointPort", deployment: Mapping[str, object], call: "AttemptCall", admission: Admission | None
