@@ -397,7 +397,7 @@ def _translation_audio_bytes_per_second(audio_format: "str | RealtimeAudioFormat
 
 class RealtimeEventNormalizer(Protocol):
     def should_drop(self, event: object) -> bool: ...
-    def normalize(self, event: dict) -> dict: ...
+    def normalize(self, event: dict[str, object]) -> dict[str, object]: ...
     def patch_outgoing_session(self, session: dict[str, object]) -> dict[str, object]: ...
     def gate_turn_detection(self, turn_detection: object, /) -> Mapping[str, object]: ...
     @property
@@ -518,10 +518,10 @@ class RealTimeStreaming:
         self.messages: list[OpenAIRealtimeEvents] = []
         self._backend_sent_frames: bool = False
         self._backend_sent_non_error_frames: bool = False
-        self.input_message: dict = {}
+        self.input_message: dict[str, object] = {}
         self.input_messages: list[dict[str, str]] = []
-        self.session_tools: list[dict] = []
-        self.tool_calls: list[dict] = []
+        self.session_tools: list[dict[str, object]] = []
+        self.tool_calls: list[dict[str, object]] = []
         self._is_translation_session = translation_session
         self._bridges_beta_client_to_ga: Final = bridges_beta_client_to_ga
         self._remaps_all_beta_fields_to_ga: Final = bridges_beta_client_to_ga or translation_session
@@ -661,7 +661,7 @@ class RealTimeStreaming:
             return True
         return False
 
-    def store_message(self, message: str | bytes | dict | OpenAIRealtimeEvents):
+    def store_message(self, message: str | bytes | dict[str, object] | OpenAIRealtimeEvents):
         """Store message in list"""
         if isinstance(message, bytes):
             message = message.decode("utf-8")
@@ -819,7 +819,7 @@ class RealTimeStreaming:
         except (AttributeError, TypeError):
             pass
 
-    def store_input(self, message: str | dict):
+    def store_input(self, message: str | dict[str, object]):
         """Store input message"""
         self.input_message = message if isinstance(message, dict) else {}
         self._collect_user_input_from_client_event(message)
@@ -1517,13 +1517,13 @@ class RealTimeStreaming:
             return self._event_normalizer.should_drop(event)
         return False
 
-    def _normalize_event_for_ga_client(self, event: dict) -> dict:
+    def _normalize_event_for_ga_client(self, event: dict[str, object]) -> dict[str, object]:
         """Apply per-provider GA normalization before forwarding to clients."""
         if self._event_normalizer is not None:
             return self._event_normalizer.normalize(event)
         return event
 
-    def _event_to_client_json(self, event: dict) -> str:
+    def _event_to_client_json(self, event: dict[str, object]) -> str:
         return json.dumps(self._session_event_for_client(self._normalize_event_for_ga_client(event)))
 
     def _session_event_for_client(self, event: Mapping[str, object]) -> Mapping[str, object]:
@@ -1593,7 +1593,7 @@ class RealTimeStreaming:
         self._guardrail_cancel_event_ids = self._guardrail_cancel_event_ids | {event_id}
         await self._send_to_backend(json.dumps({"type": "response.cancel", "event_id": event_id}))
 
-    async def _send_blocked_turn_to_backend(self, pre_block_backend_message: str | None, item_id: str | None) -> None:
+    async def _send_blocked_turn_to_backend(self, pre_block_backend_message: str | None, item_id: object) -> None:
         if pre_block_backend_message is None and self._is_transcription_session:
             return
         await self._send_setup_before_content("conversation.item.create")
@@ -1607,7 +1607,7 @@ class RealTimeStreaming:
         if not self._is_transcription_session:
             await self._withdraw_blocked_turn(item_id)
 
-    async def _withdraw_blocked_turn(self, item_id: str | None) -> None:
+    async def _withdraw_blocked_turn(self, item_id: object) -> None:
         await self._send_guardrail_cancel()
         if item_id is not None and self._deletes_conversation_items:
             await self._send_to_backend(json.dumps({"type": "conversation.item.delete", "item_id": item_id}))
@@ -1715,7 +1715,7 @@ class RealTimeStreaming:
     async def run_realtime_guardrails(
         self,
         transcript: object,
-        item_id: str | None = None,
+        item_id: object = None,
         pre_block_backend_message: str | None = None,
         event_hooks: Sequence["GuardrailEventHooks"] | None = None,
     ) -> bool:
@@ -1759,7 +1759,7 @@ class RealTimeStreaming:
         self,
         texts: tuple[str, ...],
         role: str,
-        item_id: str | None = None,
+        item_id: object = None,
         pre_block_backend_message: str | None = None,
         event_hooks: Sequence["GuardrailEventHooks"] | None = None,
     ) -> RealtimeGuardrailVerdict:
@@ -1911,7 +1911,7 @@ class RealTimeStreaming:
             return None
         return event if isinstance(event, dict) else None
 
-    async def _handle_raw_backend_message(self, event_obj: dict, raw_response: str) -> bool:
+    async def _handle_raw_backend_message(self, event_obj: dict[str, object], raw_response: str) -> bool:
         """Process a backend message without provider_config (raw path).
 
         Returns True if the caller should skip the default store+forward (i.e. continue the loop).
