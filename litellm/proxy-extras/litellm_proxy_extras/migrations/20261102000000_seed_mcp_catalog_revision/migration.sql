@@ -1,6 +1,5 @@
 SET LOCAL lock_timeout = '10s';
 
--- Keep the reload fallback if the database was baselined without the trigger.
 DO $$
 BEGIN
   IF EXISTS (
