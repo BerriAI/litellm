@@ -2000,16 +2000,16 @@ def strip_advisor_blocks_from_messages(
 
 
 def _message_without_advisor_blocks(message: _MessageT, replace_with_text: bool, drops_unpaired: bool) -> _MessageT:
-    if not isinstance(message, dict) or message.get("role") != "assistant":
-        return message
-    content: Final = message.get("content")
-    if not isinstance(content, list):
-        return message
-    new_content: Final = _without_advisor_blocks(content, replace_with_text, drops_unpaired)
+    fields: Final = as_str_mapping(message)
+    content: Final = as_object_list(fields.get("content")) if fields and fields.get("role") == "assistant" else None
+    new_content: Final = (
+        None if content is None else _without_advisor_blocks(content, replace_with_text, drops_unpaired)
+    )
     if new_content is None:
         return message
     stripped: Final = copy.copy(message)
-    stripped["content"] = new_content
+    if isinstance(stripped, dict):
+        stripped["content"] = new_content
     return stripped
 
 
