@@ -1,10 +1,11 @@
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from typing import Final
 
 import pytest
 from pydantic import TypeAdapter, ValidationError
 
-from litellm.models.budget import BudgetLimitList, TeamBudgetLimitList
+from litellm.models.budget import BudgetLimit, BudgetLimitList, TeamBudgetLimitList
 from litellm.models.budget_schedule import BudgetSchedule, resolve_schedules_at, scheduled_period, window_counter_name
 
 BERLIN: Final = "Europe/Berlin"
@@ -15,8 +16,11 @@ def _utc(text: str) -> datetime:
     return datetime.fromisoformat(text).replace(tzinfo=timezone.utc)
 
 
-def _team_limits(*windows: dict[str, object]) -> list[object]:
-    return list(TypeAdapter(TeamBudgetLimitList).validate_python(list(windows)))
+TEAM_LIMITS: Final[TypeAdapter[list[BudgetLimit]]] = TypeAdapter(TeamBudgetLimitList)
+
+
+def _team_limits(*windows: Mapping[str, object]) -> list[BudgetLimit]:
+    return TEAM_LIMITS.validate_python(list(windows))
 
 
 WORKDAY_MORNING: Final = BudgetSchedule(timezone=BERLIN, days=WEEKDAYS, start="08:00", end="13:00")
@@ -102,7 +106,7 @@ def test_scheduled_window_derives_a_stable_budget_duration() -> None:
 def test_full_workday_and_weekend_schedule_is_accepted() -> None:
     limits: Final = _team_limits(
         *(
-            {"max_budget": budget, "schedule": schedule.model_dump(mode="json")}
+            {"max_budget": budget, "schedule": schedule}
             for budget, schedule in (
                 (10, WORKDAY_MORNING),
                 (10, WORKDAY_AFTERNOON),
@@ -150,7 +154,7 @@ def test_full_workday_and_weekend_schedule_is_accepted() -> None:
             "Unknown timezone",
         ),
         (
-            [{"max_budget": 1, "schedule": {"timezone": BERLIN, "days": [], "start": "08:00", "end": "13:00"}}],
+            [{"max_budget": 1, "schedule": {"timezone": BERLIN, "days": (), "start": "08:00", "end": "13:00"}}],
             "weekday",
         ),
         (
